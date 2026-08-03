@@ -348,6 +348,20 @@ test/gate:
   operation_ru: Проверка актуальности .env.example
   description: 'Drift gate — fail if .env.example diverges from SoT. Repair: make
     sync-env-defaults.'
+- make_target: generate-requirements
+  mechanism: python-script
+  delegates_to: core/internal/scripts/sync_requirements.py → core/requirements.txt
+  signature: make generate-requirements
+  operation_ru: Генерация requirements.txt из pyproject.toml
+  description: GENERATED requirements.txt from pyproject.toml [project].dependencies
+    (DevPlan 123 T11) — never edit manually (invariant 11).
+- make_target: check-requirements
+  mechanism: python-script
+  delegates_to: core/internal/scripts/sync_requirements.py --check
+  signature: make check-requirements
+  operation_ru: Проверка актуальности requirements.txt
+  description: 'Drift gate — fail if requirements.txt diverges from pyproject.toml
+    [project].dependencies. Repair: make generate-requirements.'
 - script: pre-push-gate.sh
   mechanism: pre-push-hook
   delegates_to: core/entrypoints/pre-push-gate.sh
@@ -832,6 +846,7 @@ allowed_verbs:
 - check-file-lines
 - check-manifests
 - check-profiles-parity
+- check-requirements
 - compose-safe-up
 - context-promote
 - converge
@@ -853,6 +868,7 @@ allowed_verbs:
 - generate-litellm-config
 - generate-manifests
 - generate-platform-env
+- generate-requirements
 - generate-secrets-manifest
 - healthcheck
 - hermes-build-context
@@ -905,6 +921,15 @@ gates:
 - id: test_shared_audit_writes_valid_jsonl
   test_file: test_gate_audit_format.py
   description: 'Auto-discovered gate: test_shared_audit_writes_valid_jsonl'
+- id: test_no_strict_bool_string_comparisons
+  test_file: test_gate_bool_string_literals.py
+  description: 'Auto-discovered gate: test_no_strict_bool_string_comparisons'
+- id: test_normalized_comparisons_not_detected
+  test_file: test_gate_bool_string_literals.py
+  description: 'Auto-discovered gate: test_normalized_comparisons_not_detected'
+- id: test_r5_negative_strict_bool_comparison_detected
+  test_file: test_gate_bool_string_literals.py
+  description: 'Auto-discovered gate: test_r5_negative_strict_bool_comparison_detected'
 - id: test_no_done_file_references_in_bootstrap
   test_file: test_gate_bootstrap_no_duplicate_steps.py
   description: 'Auto-discovered gate: test_no_done_file_references_in_bootstrap'
@@ -1382,6 +1407,15 @@ gates:
 - id: loc_allowlist
   test_file: test_gate_loc_allowlist.py
   description: 'Auto-discovered gate: loc_allowlist'
+- id: test_no_local_path_in_remote_passthrough
+  test_file: test_gate_local_path_in_remote.py
+  description: 'Auto-discovered gate: test_no_local_path_in_remote_passthrough'
+- id: test_r5_negative_passthrough_path_var_detected
+  test_file: test_gate_local_path_in_remote.py
+  description: 'Auto-discovered gate: test_r5_negative_passthrough_path_var_detected'
+- id: test_r5_negative_remote_flag_local_path_detected
+  test_file: test_gate_local_path_in_remote.py
+  description: 'Auto-discovered gate: test_r5_negative_remote_flag_local_path_detected'
 - id: test_all_modules_included
   test_file: test_gate_local_stack.py
   description: 'Auto-discovered gate: test_all_modules_included'
@@ -2141,6 +2175,12 @@ gates:
 - id: test_entrypoint_no_direct_binary_calls
   test_file: test_gate_thin_wrapper.py
   description: 'Auto-discovered gate: test_entrypoint_no_direct_binary_calls'
+- id: test_apt_subprocess_without_timeout_detected_negative
+  test_file: test_gate_timeout_literals.py
+  description: 'Auto-discovered gate: test_apt_subprocess_without_timeout_detected_negative'
+- id: test_apt_timeouts_use_canon
+  test_file: test_gate_timeout_literals.py
+  description: 'Auto-discovered gate: test_apt_timeouts_use_canon'
 - id: test_converge_infra_timeouts_from_shared
   test_file: test_gate_timeout_literals.py
   description: 'Auto-discovered gate: test_converge_infra_timeouts_from_shared'

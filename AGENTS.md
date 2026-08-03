@@ -130,6 +130,7 @@
 | ✅ | `check-file-lines` | Проверка длины файлов |
 | ✅ | `check-manifests` | Проверка актуальности сгенерированных манифестов |
 | ✅ | `check-profiles-parity` | Parity-гейт COMPOSE_PROFILES (единый SoT platform-infra.yaml) |
+| ✅ | `check-requirements` | Проверка актуальности requirements.txt |
 | ✅ | `compose-safe-up` | Deprecated alias for up-safe |
 | ✅ | `context-promote` | Промоут платформы в контекст |
 | ✅ | `converge` | Реконсиляция ноды |
@@ -151,6 +152,7 @@
 | ✅ | `generate-litellm-config` | Генерация litellm-config.yml |
 | ✅ | `generate-manifests` | Генерация всех манифестов |
 | ✅ | `generate-platform-env` | Генерация platform-env.yaml + Python env files |
+| ✅ | `generate-requirements` | Генерация requirements.txt из pyproject.toml |
 | ✅ | `generate-secrets-manifest` | Генерация secrets-manifest.yaml |
 | ✅ | `healthcheck` | Проверка здоровья |
 | ✅ | `hermes-build-context` | Сборка L1→L2 образа |

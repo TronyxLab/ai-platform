@@ -2,17 +2,21 @@
 # STRUCTURE: ┌Chain A (G1→G2→G5)┐ → ◇ Chain B (G3→G4) → ◇ Chain C (G6) → ⊕ check → ⎋ sync-env-defaults
 # region MODULE_CONTRACT
 ## @purpose  Manifest generation targets — DAG of 3 independent chains
-## @scope    All generate-*, check-manifests, sync-env-defaults, check-env-defaults targets
+## @scope    All generate-*, check-manifests, sync-env-defaults, check-env-defaults,
+##           generate-requirements, check-requirements targets
 ## @invariants
 ##   - Three independent chains: A (secrets→platform-env→env-example), B (entrypoint→AGENTS.md), C (litellm-config)
 ##   - check-manifests runs --check on all 6 generators without producing output
 ##   - generate-manifests-atomic УДАЛЁН (волна 118 B4) — сломанная mv-семантика (затирал root
 ##     AGENTS.md), TRAP[DEBT] 2026-08-01 признал dead; 0 вызовов в Makefile/manifest/глоссарии
 ##   - sync-env-defaults and check-env-defaults are standalone (also part of Chain A via dependencies)
+##   - generate-requirements/check-requirements standalone (G1-G6 контракт НЕ меняется, DevPlan 123 T11)
 ## @rationale Extracted from root Makefile (DevPlan 090) to keep root <150 lines per AC-5b.
 ##            Separate file makes DAG structure navigable and reduces merge conflict surface.
 ## @changes 2026-07-30 | Extracted from Makefile lines 49-248 to makefiles/manifest.mk
 ##           2026-08-02 | Волна 118 B4 — generate-manifests-atomic удалён (dead target)
+##           2026-08-03 | DevPlan 123 T11 (FL7) — +generate-requirements/check-requirements
+##                      (requirements.txt GENERATED из pyproject.toml [project].dependencies)
 # endregion MODULE_CONTRACT
 
 # === Manifest generation targets — DAG (3 independent chains) ===
@@ -23,6 +27,7 @@
 # generate-manifests покрывает ВСЕ 6 генераторов (DevPlan 116 T5, U-44) — fix-gate
 # (repair.mk → generate-manifests) чинит check-manifests полностью (G1-G6).
 .PHONY: generate-manifests check-manifests sync-env-defaults check-env-defaults
+.PHONY: generate-requirements check-requirements
 .PHONY: generate-secrets-manifest generate-platform-env generate-env-example
 .PHONY: generate-entrypoint-manifest generate-agents-md generate-litellm-config render-monitoring
 .PHONY: check-profiles-parity check-domain-parity
@@ -161,6 +166,13 @@ check-manifests:
 		echo ">>> REPAIR_RECIPE_START >>>" >&2; \
 		echo "make fix-gate && git add -u && make gate MODE=fast" >&2; \
 		echo "<<< REPAIR_RECIPE_END <<<" >&2; \
+		echo "=== [CI-DIAG][check-manifests] FULL git diff по генерируемым путям (DevPlan 123 T2/P-14) ===" >&2; \
+		git --no-pager diff -- core/secrets-manifest.yaml platform-env.yaml core/entrypoint-manifest.yaml core/AGENTS.md AGENTS.md .env.example core/modules/litellm/config/litellm-config.yml 2>&1 | head -400; \
+		echo "=== [CI-DIAG] окружение ===" >&2; \
+		echo "make: $$(make --version 2>/dev/null | head -1) | gmake: $$(which gmake 2>/dev/null && gmake --version 2>/dev/null | head -1 || echo not-found)" >&2; \
+		echo "python3: $$(python3 --version 2>&1)" >&2; \
+		echo "which gmake/make: $$(which gmake 2>/dev/null || echo no-gmake) / $$(which make)" >&2; \
+		echo "GITHUB_REPOSITORY_OWNER=$${GITHUB_REPOSITORY_OWNER:-<unset>}" >&2; \
 		exit 1; \
 	fi; \
 	echo "[IMP:9][check-manifests] All generated manifests are up to date."
@@ -185,6 +197,29 @@ check-env-defaults:
 		 echo "make sync-env-defaults && git add .env.example && make check-env-defaults" && \
 		 echo "<<< REPAIR_RECIPE_END <<<" && exit 1)
 	@echo "[IMP:9][check-env-defaults] .env.example is up to date."
+
+## generate-requirements: core/requirements.txt GENERATED из pyproject.toml [project].dependencies
+##   (единый SoT runtime-зависимостей, DevPlan 123 T11 FL7). Отдельный таргет — НЕ входит
+##   в generate-manifests/check-manifests цепочку (G1-G6 контракт не меняется).
+generate-requirements:
+	@echo "[IMP:7][generate-requirements] Generating core/requirements.txt from pyproject.toml [project].dependencies..."
+	@python3 core/internal/scripts/sync_requirements.py \
+		--pyproject pyproject.toml \
+		--output core/requirements.txt
+	@echo "[IMP:9][generate-requirements] core/requirements.txt regenerated from pyproject.toml SoT."
+
+## check-requirements: byte-level проверка актуальности requirements.txt (--check, exit 1 на divergence).
+check-requirements:
+	@echo "[IMP:7][check-requirements] Checking core/requirements.txt is up to date..."
+	@python3 core/internal/scripts/sync_requirements.py \
+		--pyproject pyproject.toml \
+		--output core/requirements.txt \
+		--check || \
+		(echo "[GATE:FAIL][id:check-requirements][class:L1]" && \
+		 echo ">>> REPAIR_RECIPE_START >>>" && \
+		 echo "make generate-requirements && git add core/requirements.txt && make check-requirements" && \
+		 echo "<<< REPAIR_RECIPE_END <<<" && exit 1)
+	@echo "[IMP:9][check-requirements] core/requirements.txt is up to date."
 
 ## check-profiles-parity: COMPOSE_PROFILES — единый SoT (platform-infra.yaml), 0 хардкод-копий (DevPlan 116 T9)
 check-profiles-parity:

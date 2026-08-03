@@ -112,6 +112,11 @@ jobs:
           fi
 
       # ─── Step 5: Build L1 from sources (source org / pull-fallback) ────
+      # ⚠️ TRAP[DECISION] · 2026-08-03 · — · cache-backend=gha (DevPlan 123 T1, P-13)
+      # · Rejected: registry-cache дефолт (type=registry в ghcr.io/<owner>/ai-platform-build-cache)
+      # · Reason: 403 на запись кэша (прецедент 2026-07-18) — GITHUB_TOKEN не имеет write
+      # ·   на пакет ai-platform-build-cache. gha-кэш не требует ghcr-прав (P-13 случай б).
+      # · Rev: если packages:write на ai-platform-build-cache восстановлен — вернуть registry
       - name: Build hermes-agent-base image
         if: github.repository_owner == 'tronyx161' || steps.pull-l1.outputs.pulled != 'true'
         uses: ./.github/actions/docker-build-cache
@@ -120,6 +125,7 @@ jobs:
           file: core/modules/hermes-agent/build/Dockerfile
           tags: hermes-agent-base:latest
           cache-scope: hermes-agent-base
+          cache-backend: gha
 
       # ─── Step 6: Smoke test (L1 standalone = «базовая платформа без контекста для тестирования») ──
       - name: Pull dependency images
@@ -183,6 +189,12 @@ jobs:
       # ─── Step 7: Push L1 to ghcr.io (SOURCE ORG ONLY — DR backup + distribution base) ───
       # Context orgs must NOT push L1 — they pull the public base (D1). GHCR_OWNER default
       # resolves to github.repository_owner in tronyx161; guarded here explicitly.
+      # ⚠️ TRAP[DECISION] · 2026-08-03 · — · strict push в CI (DevPlan 123 T1, P-13)
+      # · Rejected: legacy non-fatal push (make hermes-push-l1 без CI: -docker push || echo)
+      # · Reason: non-fatal маскировал 403 на push L1 (P-13 случай а). GitHub Actions
+      # ·   экспортирует CI=true автоматически → make hermes-push-l1 в строгом режиме:
+      # ·   docker push с проверкой rc и логом ошибки. Локальный DR-backup остаётся non-fatal.
+      # · Rev: если L1 push станет необязательным в CI — вернуть best-effort
       - name: Push L1 to ghcr.io (source org — backup + distribution base)
         if: success() && github.repository_owner == 'tronyx161'
         run: make hermes-push-l1

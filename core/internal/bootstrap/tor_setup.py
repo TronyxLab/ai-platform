@@ -18,6 +18,7 @@
 ## @rationale D2 (DevPlan 119): install_packages() — деградационная state-machine с >3 if-веток
 ##   бизнес-логики (Tier-1 Strangler trigger). Python + unit-тесты ПЕРЕД миграцией (test-first).
 ## @changes  2026-08-02 | DevPlan 119 D2 — Created (test-first: tests/unit/test_tor_setup.py)
+## @changes  2026-08-03 | DevPlan 123 T7 — apt_update/apt_install: +timeout=APT_TIMEOUT (300)
 ## @see      core/internal/bootstrap/install-tor-proxy.sh (install_packages → тонкий фасад)
 # endregion MODULE_CONTRACT
 
@@ -27,6 +28,8 @@ import argparse
 import logging
 import subprocess
 import sys
+
+from core.internal.shared.timeouts import APT_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -66,8 +69,17 @@ def apt_cache_has(pkg: str) -> bool:
 
 # region FUNC_apt_update
 def apt_update() -> None:
-    """apt-get update -qq — обновление индексов перед установкой (канон shell)."""
-    result = subprocess.run(["apt-get", "update", "-qq"], capture_output=True, text=True)
+    """apt-get update -qq — обновление индексов перед установкой (канон shell).
+
+    timeout=APT_TIMEOUT (300) — канон bootstrap-цепи (DevPlan 123 T7), защита от hang
+    apt-get на слабых VPS (аналогично system.py install_apt_packages / install-acme.sh).
+    """
+    result = subprocess.run(
+        ["apt-get", "update", "-qq"],
+        capture_output=True,
+        text=True,
+        timeout=APT_TIMEOUT,
+    )
     if result.returncode != 0:
         logger.warning(
             "[IMP:8][tor-setup][update] apt-get update rc=%d: %s", result.returncode, result.stderr.strip()[:200]
@@ -83,8 +95,14 @@ def apt_install(packages: list[str]) -> None:
 
     ## @purpose  Единственная точка apt-установки — деградационный retry без webtunnel в
     ##            install_tor_packages ловит TorSetupError.
+    timeout=APT_TIMEOUT (300) — канон bootstrap-цепи (DevPlan 123 T7), защита от hang.
     """
-    result = subprocess.run(["apt-get", "install", "-y", "-qq", *packages], capture_output=True, text=True)
+    result = subprocess.run(
+        ["apt-get", "install", "-y", "-qq", *packages],
+        capture_output=True,
+        text=True,
+        timeout=APT_TIMEOUT,
+    )
     if result.returncode != 0:
         logger.error(
             "[IMP:10][tor-setup][install] apt-get install failed (%s): %s",

@@ -14,11 +14,14 @@
 ##   - install_cron_metrics: идемпотентен (content match → no-op), атомарен (temp+mv),
 ##     non-fatal (False при сбое, никогда не raise) — φ3 контракт нефатальности (U-03, DevPlan 116 B3 T1)
 ##   - Все subprocess через shared/subprocess_io.run_subprocess (единый канон, B4)
+##   - apt-get таймауты — канон APT_TIMEOUT (300) из shared/timeouts (DevPlan 123 T7)
 ## @rationale Strangler-Fig: извлечение I/O из state_machine-монолита в публичные helpers
 ##            (DevPlan 116 B9 D1) — state_machine остаётся оркестрацией.
 ## @changes  2026-08-01 · Extracted from state_machine (B9 T1)
 ## @changes  2026-08-01 · DevPlan 116 B3 T1 (U-03): +install_cron_metrics — /etc/cron.d/platform-metrics
 ##           (flock -n + timeout 50 + absolute path), вызывается из φ3 phase_platform_setup шаг 2.5
+## @changes  2026-08-03 · DevPlan 123 T7 — install_apt_packages: timeout=120 legacy →
+##           timeout=APT_TIMEOUT (300, канон shared/timeouts)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -32,6 +35,7 @@ from core.internal.shared.atomic_writer import atomic_write_text as _atomic_writ
 from core.internal.shared.docker_auth import ghcr_login as _shared_ghcr_login
 from core.internal.shared.exceptions import PlatformError
 from core.internal.shared.subprocess_io import run_subprocess
+from core.internal.shared.timeouts import APT_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -68,10 +72,10 @@ def install_apt_packages(packages: list[str]) -> None:
     if to_install:
         logger.info("[IMP:9][apt] Installing %d packages: %s", len(to_install), " ".join(to_install))
         # B4: единый канон shared/subprocess_io (check=True = lifecycle raise-семантика);
-        # apt-get update/install на свежей VPS (deadnsakes PPA) может занимать >30s —
-        # явный timeout=120 (legacy lifecycle default) вместо канонного дефолта 30.
-        run_subprocess(["apt-get", "update", "-qq"], check=True, timeout=120)
-        run_subprocess(["apt-get", "install", "-y", "-qq", *to_install], check=True, timeout=120)
+        # apt-get update/install на свежей VPS (deadsnakes PPA) может занимать >30s —
+        # канон APT_TIMEOUT (300) из shared/timeouts (DevPlan 123 T7), legacy 120 убран.
+        run_subprocess(["apt-get", "update", "-qq"], check=True, timeout=APT_TIMEOUT)
+        run_subprocess(["apt-get", "install", "-y", "-qq", *to_install], check=True, timeout=APT_TIMEOUT)
         for pkg in to_install:
             run_subprocess(["dpkg", "-s", pkg], check=True)
     else:

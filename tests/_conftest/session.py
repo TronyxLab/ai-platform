@@ -16,6 +16,8 @@
 ##             Path adjusted from __file__ (conftest/) → (conftest/../..) so core/ resolves correctly.
 ## @changes
 ##   LAST_CHANGE: 2026-07-12 | Extracted from tests/conftest.py — ESCALATION_DISPATCH + PYTEST_SESSION_HOOKS regions
+##   DevPlan 123 T5: added _final_hermes_test_cleanup() — name-based sweep for hermes-test-*
+##   containers (label-free), called from pytest_sessionfinish (false-lead #10, 503 on /health)
 # endregion MODULE_CONTRACT
 
 import importlib.util
@@ -203,6 +205,54 @@ def _final_compose_cleanup() -> None:
         print(f"[IMP:8][conftest][sessionfinish] Final cleanup error: {exc}", file=sys.stderr)
 
 
+def _final_hermes_test_cleanup() -> None:
+    """Final cleanup: remove ALL hermes-test-* containers regardless of compose labels.
+
+    ## @purpose — DevPlan 123 T5 (false-lead #10): hermes-init tests (test_hermes_init.py)
+    ##            create containers named hermes-test-l1-*/hermes-test-l2-* WITHOUT the
+    ##            com.docker.compose.project=ai-platform-test label, so the label-based
+    ##            _final_compose_cleanup() sweep misses them. Exited containers then cause
+    ##            503 on the status-page /health endpoint. This second sweep matches by name
+    ##            prefix and force-removes every leftover, independent of labels.
+    ## @io — ⎋ None (side-effect: Docker containers removed)
+    ## @complexity — O(N) where N = containers matching the name filter
+    ## @rationale — Name-prefix filter is file-path-agnostic and label-independent; the
+    ##              hermes-test- prefix is unique to this test suite (see _run_container_detached
+    ##              in test_hermes_init.py), so no unrelated container is ever touched.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "docker",
+                "ps",
+                "-a",
+                "--filter",
+                "name=hermes-test-",
+                "--format",
+                "{{.ID}}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        container_ids = [cid.strip() for cid in result.stdout.strip().splitlines() if cid.strip()]
+        if container_ids:
+            subprocess.run(
+                ["docker", "rm", "-f", *container_ids],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            print(
+                f"[IMP:7][conftest][sessionfinish] Hermes-test cleanup: removed {len(container_ids)} container(s)",
+                file=sys.stderr,
+            )
+        else:
+            print("[IMP:8][conftest][sessionfinish] Hermes-test cleanup: no containers to remove", file=sys.stderr)
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        print(f"[IMP:8][conftest][sessionfinish] Hermes-test cleanup error: {exc}", file=sys.stderr)
+
+
 def _force_release_test_networks() -> None:
     """Force-release all test networks via NetworkLeaseManager session cleanup.
 
@@ -225,13 +275,17 @@ def _force_release_test_networks() -> None:
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     """
     Session finish hook: reset counter on 100% PASS, else increment escalation.
-    Also runs final Docker compose cleanup (DevPlan 040 Wave 3) + NetworkLeaseManager cleanup.
+    Also runs final Docker compose cleanup (DevPlan 040 Wave 3), the hermes-test-*
+    container sweep (DevPlan 123 T5) and NetworkLeaseManager cleanup.
 
     - exitstatus == 0 → all passed → reset counter to 0
     - exitstatus != 0 → failures → keep incremented counter, print escalation
     """
     # ── Final compose cleanup (DevPlan 040 Wave 3) ──────────────────────────
     _final_compose_cleanup()
+
+    # ── Hermes-test-* sweep (DevPlan 123 T5, false-lead #10) ─────────────────
+    _final_hermes_test_cleanup()
 
     # ── NetworkLeaseManager cleanup (DevPlan 041 W3) ─────────────────────────
     _force_release_test_networks()

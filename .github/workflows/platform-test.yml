@@ -95,11 +95,13 @@ jobs:
       - name: Fetch origin/main for inventory baseline
         run: git fetch origin main:refs/remotes/origin/main --depth=1 || true
 
+      # DevPlan 123 T2 (P-14): ключ включает pyproject.toml hash (ruff-версия) —
+      # прежний ключ только по .pre-commit-config.yaml давал cache-hit со старым venv.
       - name: Cache pre-commit venv
         uses: actions/cache@v6
         with:
           path: ~/.cache/pre-commit
-          key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
+          key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}-${{ hashFiles('pyproject.toml') }}
 
       - name: Run pre-commit hooks (gitleaks + check-doc-headers + code quality)
         run: make pre-commit-run
@@ -173,12 +175,16 @@ jobs:
           echo "[IMP:9][pre-pull] Base image pulled — build step will reuse"
           echo "::endgroup::"
 
+      # ⚠️ TRAP[DECISION] · 2026-08-03 · — · cache-backend=gha (DevPlan 123 T1, P-13)
+      # · Rejected: registry-cache дефолт (403 на запись ai-platform-build-cache, прецедент 2026-07-18)
+      # · Reason: gha-кэш не требует ghcr-прав — устраняет 403-риск обоих сборок (backup-cron, L1)
       - name: Build backup-cron image (scoped GHA cache)
         uses: ./.github/actions/docker-build-cache
         with:
           context: core/modules/backup-cron
           tags: backup-cron:latest
           cache-scope: backup-cron
+          cache-backend: gha
 
       - name: Build hermes-agent-base image (scoped GHA cache)
         uses: ./.github/actions/docker-build-cache
@@ -187,6 +193,7 @@ jobs:
           file: core/modules/hermes-agent/build/Dockerfile
           tags: hermes-agent-base:latest
           cache-scope: hermes-agent-base
+          cache-backend: gha
 
       - name: Diagnostic — verify built images
         run: |

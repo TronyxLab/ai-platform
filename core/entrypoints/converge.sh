@@ -72,8 +72,14 @@ main() {
     echo "[IMP:9][converge][entrypoint] Starting converge for NODE=${NODE_NAME}" >&2
 
     # ── SSH proxy (preferred) ──
-    execute_remote_converge "${NODE_NAME}" "${PASSTHROUGH_ARGS[@]}"
-    local remote_rc=$?
+    # ⚠️ TRAP[BUG] · 2026-08-03 · P0 · set -e убивал скрипт на rc=2 (локальный fallback-сигнал)
+    # · Symptom: execute_remote_converge возвращает 2 (self-detect: мы на VPS) → set -euo pipefail
+    # ·   завершал entrypoint ДО локального fallback (строки 79-95) → reconcile не выполнялся.
+    # · Root: plain-вызов без || в set -e контексте (тот же класс, что node-update.sh:89-90 TRAP 2026-07-23).
+    # · Fix: идиома `local rc=0; cmd || rc=$?` — захват non-zero без триггера set -e (копия node-update.sh:89-90).
+    # · Prevention: remote-прокси-вызовы в entrypoints всегда через || rc=$? при set -e.
+    local remote_rc=0
+    execute_remote_converge "${NODE_NAME}" "${PASSTHROUGH_ARGS[@]}" || remote_rc=$?
 
     # ── Local exec fallback (no SSH host) ──
     if [[ $remote_rc -eq 2 ]]; then

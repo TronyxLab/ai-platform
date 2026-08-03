@@ -25,7 +25,10 @@ while [[ $# -gt 0 ]]; do case "$1" in
     --docker-hub-username) [[ -z "${DOCKER_HUB_USERNAME:-}" ]] && export DOCKER_HUB_USERNAME="$2"; shift 2 ;;
     --docker-hub-token) [[ -z "${DOCKER_HUB_TOKEN:-}" ]] && export DOCKER_HUB_TOKEN="$2"; shift 2 ;;
     --postgres-password) [[ -z "${POSTGRES_PASSWORD:-}" ]] && export POSTGRES_PASSWORD="$2"; shift 2 ;;
-    --age-secret-key-file) [[ -f "$2" ]] || { echo "[IMP:10][args] file not found: $2" >&2; exit 1; }; AGE_SECRET_KEY="$(<"$2")"; export AGE_SECRET_KEY; shift 2 ;;
+    # 🧐 TRAP[DECISION] · 2026-08-03 · — · --age-secret-key-file удалён (ловушка passthrough, T9/FL6)
+    # · Rejected: приём пути на remote-стороне (локальный путь форвардится и читается НА VPS — false-lead 6)
+    # · Reason: bootstrap.sh/node-update.sh читают ключ ЛОКАЛЬНО, в remote уходит только ключ-контент
+    # · Rev: легитимный форвард — только через гейт tests/gates/test_gate_local_path_in_remote.py (allowlist пуст)
     --docker-hub-username-file) [[ -f "$2" ]] || { echo "[IMP:10][args] file not found: $2" >&2; exit 1; }; DOCKER_HUB_USERNAME="$(<"$2")"; export DOCKER_HUB_USERNAME; shift 2 ;;
     --docker-hub-token-file) [[ -f "$2" ]] || { echo "[IMP:10][args] file not found: $2" >&2; exit 1; }; DOCKER_HUB_TOKEN="$(<"$2")"; export DOCKER_HUB_TOKEN; shift 2 ;;
     --postgres-password-file) [[ -f "$2" ]] || { echo "[IMP:10][args] file not found: $2" >&2; exit 1; }; POSTGRES_PASSWORD="$(<"$2")"; export POSTGRES_PASSWORD; shift 2 ;;
@@ -41,18 +44,14 @@ esac; done
 [[ -z "${AGE_SECRET_KEY:-}" && -n "${SOPS_AGE_KEY:-}" ]] && export AGE_SECRET_KEY="$SOPS_AGE_KEY" && echo "[IMP:8][node-lifecycle][args] AGE_SECRET_KEY from SOPS_AGE_KEY" >&2
 source "${SCRIPT_DIR}/../../lib/paths.sh"; CORE_DIR="${PATHS_CORE_DIR}"
 source "${CORE_DIR}/lib/logging.sh"; source "${CORE_DIR}/lib/secrets.sh"
-# Волна 117 D16: мёртвые определения step_start/step_done/step_skip/step_warn + STEP/STEP_ERRORS
-# удалены — ни один актуальный code path их не вызывает (main() делегирует в lifecycle/cli.py);
-# secrets.sh имеет собственные stub-определения с guard `declare -f step_start`.
+# 117 D16: step_start/step_done/step_skip/step_warn мёртвые — удалены (secrets.sh имеет stub с guard declare -f)
 _delegate() { python3 "${SM_SCRIPT}" "$@"; }
 detect_tor_enabled(){
     # ⚠️ TRAP[BUG] · 2026-07-31 · P1 · set -e убивал bootstrap при tor.enabled=false — [[ ]] && в конце функции = rc1; Fix: if-форма без else = rc0
     # Волна 117 D8: stderr не глотаем — ключ отсутствует = rc 0 + default (OK), файл не читается = rc 2/3/4 (WARN)
     TOR_ENABLED=false; local val
     [[ -n "${NODE_YAML:-}" && -f "$NODE_YAML" ]] && val="$(python3 -m core.internal.shared.node_yaml --file "$NODE_YAML" --get tor.enabled --default "false" 2>&1)" || { local _tor_rc=$?; log_imp 7 "node-yaml" "tor.enabled read failed (rc=${_tor_rc}): ${val:0:150} — fallback false"; val="false"; }
-    # ⚠️ TRAP[BUG] · 2026-08-03 · P1 · node_yaml CLI возвращает Python-bool "True" (не "true") — RC 121 прод
-    # · Symptom: node.yaml tor.enabled: true → TOR_ENABLED=false → tor не устанавливался
-    # · Fix: case-insensitive сравнение (bash 3.2-совместимо — без ${var,,})
+    # ⚠️ TRAP[BUG] · 2026-08-03 · P1 · CLI отдавал "True" (Python-bool) → TOR_ENABLED=false; Fix: case-insensitive (T6: CLI теперь отдаёт lowercase)
     if [[ "${val:-false}" == "true" || "${val:-false}" == "True" || "${val:-false}" == "TRUE" ]]; then TOR_ENABLED=true; fi
 }
 main() {

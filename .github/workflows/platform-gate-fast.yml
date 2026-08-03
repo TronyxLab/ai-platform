@@ -61,11 +61,13 @@ jobs:
           run-provisioner: 'false'
 
       # ─── Step 2b: Cache pre-commit venv (D67 — mirror platform-test.yml) ──
+      # DevPlan 123 T2 (P-14): ключ включает pyproject.toml hash (ruff-версия) —
+      # прежний ключ только по .pre-commit-config.yaml давал cache-hit со старым venv.
       - name: Cache pre-commit venv
         uses: actions/cache@v6
         with:
           path: ~/.cache/pre-commit
-          key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
+          key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}-${{ hashFiles('pyproject.toml') }}
 
       # ─── Step 3: Export COMPOSE_PROFILES (SoT platform-env.yaml) ──────
       - name: Export COMPOSE_PROFILES from platform-env.yaml

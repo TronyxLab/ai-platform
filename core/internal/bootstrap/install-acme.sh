@@ -17,6 +17,7 @@
 ##            Split from original monolithic ssl-provision script per D3: install-acme needed once at bootstrap,
 ##            issue-cert.sh needed at each update. Decoupling reduces update latency.
 ## @changes  CREATED: 2026-07-17 · T3 — Extracted from original monolithic ssl-provision script (DevPlan 005)
+## @changes  2026-08-03 · DevPlan 123 T7 — apt-get install git под GNU timeout 300 (hang-защита)
 # endregion MODULE_CONTRACT
 
 set -euo pipefail
@@ -55,7 +56,9 @@ install_acme() {
     fi
 
     log_step "acme" "START" "Installing acme.sh to ${acme_home}"
-    apt-get install -y -qq git 2>/dev/null || true
+    # GNU timeout 300s — защита от hang apt-get на свежей VPS (DevPlan 123 T7);
+    # VPS = Linux (GNU coreutils timeout доступен), скрипт выполняется только на ноде.
+    timeout 300 apt-get install -y -qq git 2>/dev/null || true
 
     # Proxy vars not needed here: unset_platform_proxy() in bootstrap.sh ran before any
     # module install step, so HTTP_PROXY/HTTPS_PROXY are already clean on the host level.

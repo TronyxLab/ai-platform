@@ -126,11 +126,21 @@ hermes-build-platform:
 	@echo "  L1: hermes-agent-base:latest (local build — push via hermes-push-l1)"
 
 ## hermes-push-l1: Push L1 hermes-agent image to ghcr.io (disaster recovery backup)
+##   CI=1 (GitHub Actions экспортирует CI=true автоматически) → СТРОГИЙ режим:
+##   docker push с проверкой rc — 403/registry-fail = FATAL (DevPlan 123 T1, P-13).
+##   Локально (CI != 1) — non-fatal DR-backup (legacy parity).
 GHCR_OWNER ?= $(shell echo "${GITHUB_REPOSITORY_OWNER:-tronyx161}" | tr '[:upper:]' '[:lower:]')
 hermes-push-l1:
-	@echo "[IMP:7][make][hermes-push-l1] Pushing L1 hermes-agent-base to ghcr.io/${GHCR_OWNER} (non-fatal)..."
+	@echo "[IMP:7][make][hermes-push-l1] Pushing L1 hermes-agent-base to ghcr.io/${GHCR_OWNER} (CI=${CI:-0})..."
 	@docker tag hermes-agent-base:latest "ghcr.io/${GHCR_OWNER}/hermes-agent-base:latest" 2>/dev/null || true
-	-docker push "ghcr.io/${GHCR_OWNER}/hermes-agent-base:latest" 2>/dev/null || echo "[IMP:7][make][hermes-push-l1] Push skipped — permission denied or registry unavailable (DR backup)"
+	@if [ "${CI:-0}" = "1" ]; then \
+		docker push "ghcr.io/${GHCR_OWNER}/hermes-agent-base:latest" 2>&1 || { \
+			echo "[IMP:10][make][hermes-push-l1] FATAL: docker push FAILED (403?) — проверь packages:write + публичность пакета hermes-agent-base (DevPlan 123 O2)" >&2; \
+			exit 1; \
+		}; \
+	else \
+		-docker push "ghcr.io/${GHCR_OWNER}/hermes-agent-base:latest" 2>/dev/null || echo "[IMP:7][make][hermes-push-l1] Push skipped — permission denied or registry unavailable (DR backup)"; \
+	fi
 	@echo "[IMP:9][make][hermes-push-l1] L1 push complete (or skipped)"
 
 ## 🧐 TRAP[DECISION] · 2026-07-25 · — · L2 НИКОГДА не пушится в базовый репозиторий (tronyx161)

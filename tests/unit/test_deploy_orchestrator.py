@@ -615,8 +615,20 @@ def test_deploy_sequential_iterates_modules(tmp_path, caplog) -> None:
 
     assert mock_env.call_count == 3, f"env check must run per module, got {mock_env.call_count}"
     assert mock_docker.call_count == 2, f"docker deploy must run for 2 docker modules, got {mock_docker.call_count}"
-    mock_docker.assert_any_call("postgres", modules_dir=str(tmp_path / "modules"), overlay_dir=None)
-    mock_docker.assert_any_call("redis", modules_dir=str(tmp_path / "modules"), overlay_dir=None)
+    mock_docker.assert_any_call(
+        "postgres",
+        modules_dir=str(tmp_path / "modules"),
+        overlay_dir=None,
+        secrets_env_file=None,
+        platform_root=None,
+    )
+    mock_docker.assert_any_call(
+        "redis",
+        modules_dir=str(tmp_path / "modules"),
+        overlay_dir=None,
+        secrets_env_file=None,
+        platform_root=None,
+    )
     # nginx (system): install + healthcheck liveness
     assert mock_invoke.call_count >= 2, (
         f"system module needs install + healthcheck invocations, got {mock_invoke.call_count}"

@@ -52,6 +52,8 @@
 | `make generate-litellm-config` | Генерация litellm-config.yml | make generate-litellm-config | python3 core/internal/llm/config_renderer.py → litellm-config.yml |
 | `make sync-env-defaults` | Генерация .env.example из SoT | make sync-env-defaults | core/internal/scripts/sync_env_defaults.py → .env.example |
 | `make check-env-defaults` | Проверка актуальности .env.example | make check-env-defaults | core/internal/scripts/sync_env_defaults.py --check |
+| `make generate-requirements` | Генерация requirements.txt из pyproject.toml | make generate-requirements | core/internal/scripts/sync_requirements.py → core/requirements.txt |
+| `make check-requirements` | Проверка актуальности requirements.txt | make check-requirements | core/internal/scripts/sync_requirements.py --check |
 | `make new-project` | Создание проекта из шаблона | make new-project NAME=\<n\> TEMPLATE=\<t\> | core/entrypoints/scaffold.sh → core/internal/scaffold/add-project.sh → core/internal/scaffold/add-vhost.sh |
 | `make new-context` | Создание контекста деплоя | make new-context NODE=\<n\> | core/entrypoints/scaffold.sh → core/internal/scaffold/context-init.sh |
 | `make project-sync-env` | Синхронизация .env.platform | make project-sync-env [NAME=\<name\>] | core/entrypoints/scaffold.sh → core/internal/scaffold/gen_env_platform.py |
@@ -122,6 +124,8 @@
 
 Рациональность: deploy — нижележащий транспортный слой (channels/orchestrator — канонический forced-command канал, DevPlan 116 B1); bootstrap — оркестратор жизненного цикла ноды, которому deploy-слой нужен как сервис. Инверсия (deploy → bootstrap) создала бы цикл и размыла бы границу «transport vs orchestration».
 
+**Remote-команды никогда не получают локальные пути (DevPlan 123 T9, FL6):** ни одна строка passthrough / `build_*_ssh_cmd` / `execute_remote_*` НЕ должна форвардить переменные-пути с локальными значениями (`AGE_SECRET_KEY_FILE`, `PLATFORM_ROOT`, `NODE_CONFIGS_DIR`, `PROJECTS_BASE`, `NODE_YAML` — в форме `$VAR`/`${VAR}`) или флаг `--age-secret-key-file` в remote-аргументы. Ключи/секреты читаются ЛОКАЛЬНО (node_detect-цепочка), в remote уходит только КОНТЕНТ (`--age-secret-key` / `AGE_SECRET_KEY` env). Remote-сторона (`node-lifecycle.sh`) НЕ принимает пути. Enforcement: `tests/gates/test_gate_local_path_in_remote.py` (allowlist пуст).
+
 ---
 
 <!-- GENERATED:START:canon_table-forbidden -->
@@ -182,6 +186,24 @@
 
 ---
 
+## node_yaml CLI контракт --get / --get-many (DevPlan 123 T6)
+
+`python3 -m core.internal.shared.node_yaml --get <dotted.key>` / `--get-many alias:key,...` — единая точка
+чтения node.yaml для shell-фасадов. **Скалярный вывод нормализован** (единая точка — `_format_cli_value`
+в `core/internal/shared/node_yaml_cli.py`):
+
+- **bool** → lowercase `"true"` / `"false"` (НЕ Python `"True"`/`"False"`)
+- **числа** (int/float) → десятичные строки (`str(value)`, без кавычек)
+- **прочие типы** (str/None/list/dict) → как есть (Python `str()`/repr)
+- **JSON-режимы** (`--items`, `--json-output`) → сырые Python-типы (НЕ нормализуются)
+
+**Потребители** сравнивают значения ТОЛЬКО через нормализованные выражения: `[ "$(node_yaml --get ...)" = "true" ]`
+(CLI уже отдаёт lowercase) или Python `(x or "").lower() == "true"` / нормализация на входе функции.
+Строгие сравнения с булевыми литералами без `.lower()` запрещены гейтом `tests/gates/test_gate_bool_string_literals.py`
+(DevPlan 123 T6; per-line allowlist: deploy_orchestrator.py:314 — вход нормализован в `parse_modules_from_node_yaml`).
+
+---
+
 ## Exit-коды (контракт)
 
 Единый контракт exit-кодов на весь core (DevPlan 116 B4, U-29). Машиночитаемые константы — `core/internal/shared/contracts.py`; runtime-классы исключений — `core/internal/shared/exceptions.py`.
@@ -230,3 +252,7 @@
 | `subprocess_io` | `core/internal/shared/subprocess_io.py` | Единый канон run_subprocess — run_subprocess(cmd, *, timeout, check, non_fatal). Дедупликация lifecycle (raise) и converge (graceful rc 127/124) семантик через параметры (DevPlan 118 C10). |
 | `env_requires` | `core/internal/shared/env_requires.py` | Единый env-requires чекер — check_requires_presence (module.yaml-driven) + check_runtime_env (manifest-driven) + check_env_requires (унифицированный). Устраняет расхождение вердиктов validate_module_yaml vs secrets_validator (DevPlan 118 D4). |
 | `project_yaml` | `core/internal/shared/project_yaml.py` | Общий читатель ai-platform.yaml + auto-detect — read_project_yaml (target_node/domain, PyYAML не grep) + derive_org_from_path + detect_project_config (org-from-path, casing vs node.yaml). Кандидат из аудита монолитов (18 парсеров ai-platform.yaml в vhost_renderer); потребитель project_adopter (DevPlan 118 E11). |
+
+**requirements.txt — GENERATED из pyproject.toml [project].dependencies (DevPlan 123 T11):**
+ручные правки запрещены (инвариант 11); регенерация: `make generate-requirements`;
+проверка актуальности: `make check-requirements` (byte-level, exit 1 на divergence).

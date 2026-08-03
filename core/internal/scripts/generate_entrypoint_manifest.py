@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: generate_entrypoint_manifest, extract_phony_targets, collect_gate_tests, merge, load_structural_sections, manifest-generator, CI, g3-cycle-break
-# STRUCTURE: ▶ gmake -np —▸ extract .PHONY targets → ▶ pytest --collect-only —▸ gate tests → ◇ load_structural_sections (allowed_verbs/gates EXCLUDED — G3 cycle break) → ⊕ merge (replace allowed_verbs + gates[], preserve rest) → ⎋ write YAML
+# GREP_SUMMARY: generate_entrypoint_manifest, extract_phony_targets, collect_gate_tests, merge, load_structural_sections, manifest-generator, CI, g3-cycle-break, static-phony-parsing
+# STRUCTURE: ▶ статический .PHONY-парсинг (Makefile+makefiles/*.mk, детерминированный — P-14) → ▶ pytest --collect-only —▸ gate tests → ◇ load_structural_sections (allowed_verbs/gates EXCLUDED — G3 cycle break) → ⊕ merge (replace allowed_verbs + gates[], preserve rest) → ⎋ write YAML
 # region MODULE_CONTRACT
-## @purpose  Generator for entrypoint-manifest.yaml — extracts .PHONY targets from Makefile via gmake -np,
+## @purpose  Generator for entrypoint-manifest.yaml — extracts .PHONY targets from Makefile
+##           via СТАТИЧЕСКИЙ парсинг (DevPlan 123 T2/P-14 — детерминированный, заменил make -np),
 ##           collects gate tests via pytest --collect-only, loads STRUCTURAL sections from existing manifest
 ##           (NEVER allowed_verbs or gates — G3 cycle break), merges by replacing allowed_verbs and gates[]
 ##           while preserving all other sections.
@@ -11,7 +12,9 @@
 ##   - G3 CYCLE BREAK (DevPlan 090 T6): allowed_verbs and gates are NEVER loaded from existing manifest.
 ##     They come EXCLUSIVELY from Makefile .PHONY targets and pytest gate markers.
 ##   - load_structural_sections() explicitly excludes allowed_verbs and gates keys.
-##   - gmake -np preferred; falls back to grep-based .PHONY parsing if gmake unavailable
+##   - PRIMARY extraction: СТАТИЧЕСКИЙ парсинг .PHONY-строк из Makefile + makefiles/*.mk —
+##     детерминированный между машинами (P-14: make -np вывод отличался gmake 4.4.1 vs make 4.4 CI).
+##     make -np остаётся только fallback при пустом статическом результате.
 ##   - system_exceptions filtered out: help, venv, pre-commit-*, test-*, gate-*
 ##   - All other sections preserved verbatim from existing manifest
 ##   - Empty lists are written as [] in YAML (never null)
@@ -21,11 +24,16 @@
 ##            output (allowed_verbs/gates) from the manifest, because this creates a self-reinforcing
 ##            drift mask. If a target is deleted from Makefile but remains in YAML, the old value
 ##            would be perpetuated. Atomic generation requires each section from authoritative sources.
+##            DevPlan 123 T2 (P-14): make -np был главным кандидатом недетерминизма G3 —
+##            статический парсинг устраняет класс (воспроизведение: make 3.81/4.4.1 локально
+##            дают одинаковый .PHONY-вывод, но CI-окружение отличалось; статика одинакова везде).
 ## @see      core/entrypoint-manifest.yaml — target manifest file
 ## @changes 2026-07-22 | Created (DevPlan 051 Wave 2)
 ##           2026-07-30 | Added --check mode: byte-level comparison, exit 0/1, stderr diff
 ##           2026-07-30 | G3 CYCLE BREAK: load_structural_sections() replaces load_existing_manifest()
 ##                        in main(). allowed_verbs and gates NEVER read from manifest (DevPlan 090 T6).
+##           2026-08-03 | DevPlan 123 T2 (P-14): статический .PHONY-парсинг → PRIMARY;
+##                        make -np → fallback; diff в --check — полный (не 20 строк)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -78,73 +86,90 @@ logger = logging.getLogger(__name__)
 # region PUBLIC_API
 
 
+# region FUNC_extract_phony_targets
+## @purpose  Извлечение .PHONY-таргетов из Makefile + makefiles/*.mk.
+##           СТАТИЧЕСКИЙ парсинг — PRIMARY (детерминированный, DevPlan 123 T2/P-14):
+##           make -np вывод зависел от версии/окружения make (gmake 4.4.1 локально vs
+##           make 4.4 в ubuntu-latest CI) → check-manifests RED в CI при локально GREEN.
+##           Статический парсинг одинаков на любой машине — устраняет класс навсегда.
+## @io       ⇥ makefile_dir: path to directory with Makefile
+##           ⇥ gmake_path: path to GNU make binary (аргумент сохранён для обратной совместимости
+##           CLI; НЕ используется в primary-пути)
+##           → ⎋ list[str]: sorted unique .PHONY target names
+## @complexity O(F * L) где F = число makefiles, L = строк на файл
+## @invariants
+##   - PRIMARY: статический парсинг .PHONY-строк из Makefile + makefiles/*.mk (grep-паттерн)
+##   - fallback: gmake -np --dry-run (только если статический парсинг вернул пусто)
+##   - system_exceptions excluded from result
+##   - Targets matching system_prefixes excluded from result
+##   - Returns sorted, deduplicated list
+##   - ⚠️ .PHONY-строки с переменными ($(VAR)) статическим парсингом НЕ раскрываются —
+##     в Makefile+makefiles/*.mk таких нет (проверено 2026-08-03); при появлении —
+##     гейт/тест должен поймать, а строка перейти в явный .PHONY-список
+## @changes 2026-08-03 | DevPlan 123 T2 (P-14): статический парсинг → PRIMARY;
+##            make -np → fallback (устранён недетерминизм версии/окружения make)
 def extract_phony_targets(makefile_dir: str, gmake_path: str) -> list[str]:
-    """Extract .PHONY targets from Makefile using gmake -np (with grep fallback).
-
-    ## @purpose  Run gmake -np --dry-run to extract .PHONY targets.
-    ##            Fallback: grep-based .PHONY line parsing if gmake unavailable.
-    ##            Filters out system_exceptions: help, venv, pre-commit-*, test-*, gate-*.
-    ## @io       ⇥ makefile_dir: path to directory with Makefile
-    ##           ⇥ gmake_path: path to GNU make binary
-    ##           → ⎋ list[str]: sorted unique .PHONY target names
-    ## @complexity O(T) where T = number of .PHONY targets in output
-    ## @invariants
-    ##   - system_exceptions excluded from result
-    ##   - Targets matching system_prefixes excluded from result
-    ##   - Returns sorted, deduplicated list
-    ##   - grep fallback extracts targets declared after '.PHONY:' lines
-    """
     print(f"[IMP:7][extract_phony_targets] Extracting .PHONY targets from {makefile_dir}", file=sys.stderr)
     targets: list[str] = []
 
-    # Strategy 1: gmake -np --dry-run
-    try:
-        result = subprocess.run(
-            [gmake_path, "-np", "--dry-run"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            cwd=makefile_dir,
-        )
-        if result.returncode == 0:
-            phony_match = re.search(r"^\.PHONY:(.*)", result.stdout, re.MULTILINE)
-            if phony_match:
-                raw = phony_match.group(1).strip()
-                targets = raw.split()
-                print(f"[IMP:8][extract_phony_targets] gmake -np parsed {len(targets)} raw targets", file=sys.stderr)
-        else:
-            print(
-                f"[IMP:6][extract_phony_targets] gmake exit code {result.returncode}, stderr: {result.stderr[:200]}",
-                file=sys.stderr,
-            )
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as e:
-        print(f"[IMP:6][extract_phony_targets] gmake unavailable ({e}), falling back to grep", file=sys.stderr)
+    # Strategy 1 (PRIMARY): статический парсинг .PHONY-строк — детерминированный (P-14).
+    # Find all .PHONY: declarations and extract targets from Makefile + makefiles/*.mk
+    makefile_root = Path(makefile_dir)
+    phony_lines: list[str] = []
+    for mk_file in sorted(makefile_root.glob("Makefile")) + sorted(makefile_root.glob("makefiles/*.mk")):
+        if mk_file.is_file():
+            try:
+                content = mk_file.read_text()
+                for line in content.splitlines():
+                    stripped = line.strip()
+                    if re.match(r"^\.PHONY\s*:", stripped):
+                        phony_lines.append(stripped)
+            except OSError:
+                continue
 
-    # Strategy 2: grep fallback — find all .PHONY: declarations and extract targets
-    if not targets:
-        makefile_path = Path(makefile_dir)
-        phony_lines: list[str] = []
-        # Collect all lines starting with .PHONY:
-        for mk_file in sorted(makefile_path.glob("Makefile")) + sorted(makefile_path.glob("makefiles/*.mk")):
-            if mk_file.is_file():
-                try:
-                    content = mk_file.read_text()
-                    for line in content.splitlines():
-                        stripped = line.strip()
-                        if re.match(r"^\.PHONY\s*:", stripped):
-                            phony_lines.append(stripped)
-                except OSError:
-                    continue
+    for line in phony_lines:
+        # Remove .PHONY: prefix and split
+        rest = re.sub(r"^\.PHONY\s*:\s*", "", line).strip()
+        targets.extend(rest.split())
 
-        for line in phony_lines:
-            # Remove .PHONY: prefix and split
-            rest = re.sub(r"^\.PHONY\s*:\s*", "", line).strip()
-            targets.extend(rest.split())
-
+    if targets:
         print(
-            f"[IMP:8][extract_phony_targets] grep fallback parsed {len(targets)} raw targets from {len(phony_lines)} .PHONY lines",
+            f"[IMP:8][extract_phony_targets] static parsing parsed {len(targets)} raw targets from {len(phony_lines)} .PHONY lines",
             file=sys.stderr,
         )
+    else:
+        print(
+            "[IMP:6][extract_phony_targets] static parsing returned 0 targets — falling back to gmake -np",
+            file=sys.stderr,
+        )
+
+    # Strategy 2 (fallback): gmake -np --dry-run — только если статический парсинг пуст.
+    # DevPlan 123 T2: make -np вывод недетерминирован между make 4.4.1 (Homebrew) и make 4.4
+    # (ubuntu-latest CI) — больше НЕ используется как primary (P-14).
+    if not targets:
+        try:
+            result = subprocess.run(
+                [gmake_path, "-np", "--dry-run"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                cwd=makefile_dir,
+            )
+            if result.returncode == 0:
+                phony_match = re.search(r"^\.PHONY:(.*)", result.stdout, re.MULTILINE)
+                if phony_match:
+                    raw = phony_match.group(1).strip()
+                    targets = raw.split()
+                    print(
+                        f"[IMP:8][extract_phony_targets] gmake -np parsed {len(targets)} raw targets", file=sys.stderr
+                    )
+            else:
+                print(
+                    f"[IMP:6][extract_phony_targets] gmake exit code {result.returncode}, stderr: {result.stderr[:200]}",
+                    file=sys.stderr,
+                )
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as e:
+            print(f"[IMP:6][extract_phony_targets] gmake unavailable ({e})", file=sys.stderr)
 
     # Filter: exclude system_exceptions and system_prefixes (with exceptions)
     filtered: list[str] = []
@@ -460,6 +485,8 @@ def merge(allowed_verbs: list[str], gates: list[dict], existing: dict) -> dict:
     return result
 
 
+# endregion FUNC_extract_phony_targets
+
 # endregion PUBLIC_API
 
 
@@ -507,7 +534,9 @@ def _check_generated_content(content: str, path: Path) -> int:
     """Compare generated content with existing file byte-by-byte.
 
     ## @purpose  Byte-level comparison for --check mode. Returns 0 if match,
-    ##            1 if divergence. Prints first 20 lines of unified diff on stderr.
+    ##            1 if divergence. Prints FULL unified diff on stderr
+    ##            (DevPlan 123 T2/P-14: полный diff — CI-самодиагностика; первые 20 строк
+    ##            скрывали источник расхождения в check-manifests RED).
     ## @io        ⇥ content: generated string, path: existing file
     ##           → ⎋ int: 0=match, 1=diverges
     ## @complexity O(N) where N = file size
@@ -515,6 +544,7 @@ def _check_generated_content(content: str, path: Path) -> int:
     ##   - Reads file as text (UTF-8)
     ##   - Prints diff only on divergence
     ##   - Never writes to disk
+    ##   - Полный unified_diff без обрезки (P-14)
     """
     logger.info("[IMP:7][check][START] Checking against %s", path)
 
@@ -538,10 +568,8 @@ def _check_generated_content(content: str, path: Path) -> int:
             tofile=f"{path.name} (generated)",
         )
     )
-    for line in diff_lines[:20]:
+    for line in diff_lines:
         print(line, end="", file=sys.stderr)
-    if len(diff_lines) > 20:
-        print(f"[IMP:6][check] ... truncated ({len(diff_lines) - 20} more lines)", file=sys.stderr)
     return 1
 
 

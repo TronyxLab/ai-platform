@@ -151,6 +151,9 @@ def cleanup_secrets_env(
     No-op if file doesn't exist (returns empty dict).
     Never raises — logs warnings on I/O errors.
     """
+    # DevPlan 123 T6: вход нормализуется в единой точке (Python-bool "True" из node_yaml CLI
+    # → lowercase) — сравнение ниже и логи оперируют нормализованным значением.
+    tor_enabled = (tor_enabled or "").strip().lower()
     env_path = Path(secrets_env_path)
     if not env_path.is_file():
         logger.info("[IMP:7][secrets_manager] cleanup: %s not found — no-op", secrets_env_path)
@@ -572,7 +575,9 @@ if __name__ == "__main__":
             print(f"ERROR: cannot read {args.secrets_env}: {e}", file=sys.stderr)
             sys.exit(1)
         after = cleanup_secrets_env(args.secrets_env, args.tor_enabled)
-        if args.tor_enabled != "true" and ("HTTP_PROXY" in before or "HTTPS_PROXY" in before):
+        # DevPlan 123 T6: args.tor_enabled приходит из shell-строки (lib/secrets.sh --tor-enabled
+        # "${TOR_ENABLED:-false}") — нормализуем сравнение вместо строгого ==/!=
+        if (args.tor_enabled or "").lower() != "true" and ("HTTP_PROXY" in before or "HTTPS_PROXY" in before):
             if "HTTP_PROXY" in after or "HTTPS_PROXY" in after:
                 print(f"ERROR: proxy vars still present after cleanup: {args.secrets_env}", file=sys.stderr)
                 sys.exit(1)

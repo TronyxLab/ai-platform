@@ -217,12 +217,22 @@ pre-commit-install:
 	@echo "[IMP:8][make][pre-commit-install] Run 'pre-commit run --all-files' to validate all files"
 
 ## pre-commit-run: Run all pre-commit hooks against all files (CI use)
+##   DevPlan 123 T12 (FL9): при RED выводится ПОЛНЫЙ список Failed-хуков
+##   (парсинг вывода pre-commit — имя хука до первой группы точек).
 pre-commit-run:
 	@echo "[IMP:7][make][pre-commit-run] Running all pre-commit hooks..."
-	@pre-commit run --all-files 2>&1 || { \
-		echo "[IMP:9][make][pre-commit-run] Some pre-commit hooks failed — review output above"; \
+	@set -o pipefail; out=$$(pre-commit run --all-files 2>&1); rc=$$?; printf '%s\n' "$$out"; \
+	if [ $$rc -ne 0 ]; then \
+		echo "" >&2; \
+		echo "[IMP:10][make][pre-commit-run] FAILED hooks (полный список):" >&2; \
+		failed=$$(printf '%s\n' "$$out" | grep -E '\.{3,}Failed' | sed 's/^\([^.]*\)\.\{3,\}.*/\1/' | sort -u); \
+		if [ -n "$$failed" ]; then \
+			printf '%s\n' "$$failed" | sed 's/^/  ✗ /' >&2; \
+		else \
+			echo "  (не удалось распарсить список хуков — см. вывод выше)" >&2; \
+		fi; \
 		exit 1; \
-	}
+	fi
 	@echo "[IMP:9][make][pre-commit-run] All pre-commit hooks passed"
 
 ## scripts-audit: Проверить регистрацию всех shebang-скриптов в manifest или exceptions

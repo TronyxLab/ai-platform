@@ -483,3 +483,161 @@ def test_project_name_validation_rejects_traversal(tmp_path):
 
 
 # endregion
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DevPlan 123 T4 (P0-класс, 2026-08-03): converge.sh entrypoint rc=2 passthrough.
+# · Last fail: RC-121 e2e — execute_remote_converge без `|| remote_rc=$?` при set -euo pipefail:
+# ·   rc=2 (VPS self-detect) убивал entrypoint ДО локального fallback → reconcile не выполнялся.
+# · Fix: идиома node-update.sh:89-90 (`local rc=0; cmd || rc=$?`).
+# · Тест: mock execute_remote_converge → rc=2; assert локальный internal converge.sh ВЫПОЛНЕН.
+# ══════════════════════════════════════════════════════════════════════════════
+
+import shutil
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_REAL_CONVERGE_ENTRYPOINT = _REPO_ROOT / "core" / "entrypoints" / "converge.sh"
+
+
+# region FUNC__make_converge_harness
+def _make_converge_harness(tmp_path, remote_rc: int) -> Path:
+    """Build a minimal core/ tree in tmp_path: real converge.sh entrypoint + mocks.
+
+    ## @purpose — Isolate the entrypoint logic: real converge.sh (from repo), mocked
+    ##            lib/{paths,args}.sh + remote-cmd.sh (execute_remote_converge → remote_rc)
+    ##            + internal converge.sh (marker — «локальный fallback выполнен»).
+    ## @io — ⇥ tmp_path, remote_rc → ⎋ Path к entrypoint converge.sh
+    ## @complexity — O(F) — копирование одного файла + запись 4 моков
+    """
+    core = tmp_path / "core"
+    entrypoints = core / "entrypoints"
+    lib = core / "lib"
+    internal = core / "internal" / "bootstrap"
+    entrypoints.mkdir(parents=True)
+    lib.mkdir(parents=True)
+    internal.mkdir(parents=True)
+
+    # Real entrypoint — тестируем ACTUAL logic converge.sh
+    shutil.copy2(_REAL_CONVERGE_ENTRYPOINT, entrypoints / "converge.sh")
+
+    # Mock paths.sh — минимальные PATHS_* (converge.sh использует PATHS_INTERNAL_DIR)
+    (lib / "paths.sh").write_text(
+        'if [[ -n "${PATHS_LIB_DIR:-}" ]]; then return 0; fi\n'
+        'readonly PATHS_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"\n'
+        'readonly PATHS_CORE_DIR="${PATHS_LIB_DIR}/.."\n'
+        'readonly PATHS_INTERNAL_DIR="${PATHS_CORE_DIR}/internal"\n'
+    )
+
+    # Mock args.sh — converge.sh вызывает usage() только на --help
+    (lib / "args.sh").write_text('usage() { echo "usage: $1"; exit 0; }\n')
+
+    # Mock remote-cmd.sh — execute_remote_converge возвращает заданный rc (self-detect сигнал)
+    (internal / "remote-cmd.sh").write_text(f"execute_remote_converge() {{ return {remote_rc}; }}\n")
+
+    # Mock internal converge.sh — маркер локального fallback + passthrough args
+    (internal / "converge.sh").write_text(
+        "#!/usr/bin/env bash\n"
+        'echo "LOCAL-FALLBACK-EXECUTED args: $*" >&2\n'
+        'echo "[IMP:9][mock-internal-converge] internal converge ran with: $*" >&2\n'
+        'exit "${MOCK_INTERNAL_EXIT:-0}"\n'
+    )
+    (internal / "converge.sh").chmod(0o755)
+    return entrypoints / "converge.sh"
+
+
+# endregion FUNC__make_converge_harness
+
+
+# region TEST_CONVERGE_ENTRYPOINT_RC2_FALLBACK
+## @purpose  Verify rc=2 (no SSH host / VPS self-detect) triggers LOCAL fallback — entrypoint
+##           does NOT die under set -e (P0 TRAP 2026-08-03).
+## @scenario mock execute_remote_converge → rc=2 → assert internal converge.sh executed with args
+## 🧪 TRAP[TEST] · 2026-08-03 · REGRESSION · converge.sh entrypoint rc=2 passthrough (DevPlan 123 T4)
+##   · Last fail: RC-121 e2e — set -e killed entrypoint before local fallback (rc=2 self-detect)
+##   · Remove if: converge entrypoint no longer has local-fallback path
+def test_converge_entrypoint_rc2_falls_back_locally(tmp_path):
+    """rc=2 (self-detect) → локальный fallback ВЫПОЛНЕН (не set -e смерть)."""
+    entrypoint = _make_converge_harness(tmp_path, remote_rc=2)
+    result = subprocess.run(
+        ["bash", str(entrypoint), "--node", "test-node"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    print("--- LDD TRAJECTORY (IMP:7-10) ---")
+    imp_found = False
+    for line in (result.stderr + result.stdout).splitlines():
+        if "[IMP:" in line:
+            print(line)
+            if "[IMP:9]" in line:
+                imp_found = True
+    print("--- END LDD TRAJECTORY ---")
+
+    assert result.returncode == 0, f"Expected exit 0 (local fallback ok), got {result.returncode}: {result.stderr}"
+    assert "LOCAL-FALLBACK-EXECUTED" in result.stderr, (
+        f"P0 regression: local fallback NOT executed (set -e killed entrypoint?): {result.stderr}"
+    )
+    assert "--node" in result.stderr and "test-node" in result.stderr, (
+        f"Local fallback must receive delegated args (--node test-node): {result.stderr}"
+    )
+    assert imp_found, "IMP:9 log not found"
+
+
+# endregion
+
+
+# region TEST_CONVERGE_ENTRYPOINT_RC1_PASSTHROUGH
+## @purpose  Verify rc=1 (warnings) passes through WITHOUT local fallback (TRAP 2026-08-03 rc-семантика).
+## 🧪 TRAP[TEST] · 2026-08-03 · REGRESSION · converge.sh entrypoint rc=1 passthrough (DevPlan 123 T4)
+##   · Last fail: RC-121 — неявный rc=1 от [[ ]] вместо проброса remote_rc; make получал 2 на warnings
+##   · Remove if: converge entrypoint rc semantics fundamentally change
+def test_converge_entrypoint_rc1_passthrough(tmp_path):
+    """rc=1 (warnings) → entrypoint exit 1, local fallback НЕ вызывается."""
+    entrypoint = _make_converge_harness(tmp_path, remote_rc=1)
+    result = subprocess.run(
+        ["bash", str(entrypoint), "--node", "test-node"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    print("--- LDD TRAJECTORY (IMP:7-10) ---")
+    for line in (result.stderr + result.stdout).splitlines():
+        if "[IMP:" in line:
+            print(line)
+    print("--- END LDD TRAJECTORY ---")
+
+    assert result.returncode == 1, f"Expected exit 1 (warnings passthrough), got {result.returncode}"
+    assert "LOCAL-FALLBACK-EXECUTED" not in result.stderr, (
+        "rc=1 must NOT trigger local fallback (only rc=2 = no SSH host)"
+    )
+
+
+# endregion
+
+
+# region TEST_CONVERGE_ENTRYPOINT_RC0_PASSTHROUGH
+## @purpose  Verify rc=0 (converged) passes through cleanly.
+## 🧪 TRAP[TEST] · 2026-08-03 · REGRESSION · converge.sh entrypoint rc=0 passthrough (DevPlan 123 T4)
+##   · Last fail: RC-121 — remote converge rc=0 возвращал 1 (ложный fail из-за [[ ]] rc)
+##   · Remove if: converge entrypoint rc semantics fundamentally change
+def test_converge_entrypoint_rc0_passthrough(tmp_path):
+    """rc=0 (converged) → entrypoint exit 0, local fallback НЕ вызывается."""
+    entrypoint = _make_converge_harness(tmp_path, remote_rc=0)
+    result = subprocess.run(
+        ["bash", str(entrypoint), "--node", "test-node"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    print("--- LDD TRAJECTORY (IMP:7-10) ---")
+    for line in (result.stderr + result.stdout).splitlines():
+        if "[IMP:" in line:
+            print(line)
+    print("--- END LDD TRAJECTORY ---")
+
+    assert result.returncode == 0, f"Expected exit 0, got {result.returncode}"
+    assert "LOCAL-FALLBACK-EXECUTED" not in result.stderr, "rc=0 must not trigger local fallback"
+
+
+# endregion

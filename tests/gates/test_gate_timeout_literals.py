@@ -43,6 +43,9 @@
 ## @changes 2026-08-02 | DevPlan 119 A2 (AUDIT-4 T1) — слепое пятно: +reconciler_projects.py,
 ##                      +bootstrap/docker_registry_auth.py (domain), +circuit_breaker.py (module);
 ##                      +3 теста (2 канон-проверки + 1 R5 negative)
+## @changes 2026-08-03 | DevPlan 123 T7 — P-11 аудит apt-домена: +test_apt_timeouts_use_canon
+##                      (APT_TIMEOUT в shared/timeouts; system.py/tor_setup.py/install-acme.sh)
+##                      + R5 negative (apt-get subprocess.run без timeout детектится)
 # endregion MODULE_CONTRACT
 
 import ast
@@ -687,3 +690,126 @@ def test_vps_readiness_ssh_connect_timeout(caplog) -> None:
     assert "SSH_CONNECT_TIMEOUT" in content, "[IMP:10][B8] vps_readiness не использует SSH_CONNECT_TIMEOUT"
     assert "SSH_TIMEOUT" not in content, "[IMP:10][B8] локальный SSH_TIMEOUT остался (SoT drift)"
     logger.info("[IMP:9][timeout_literals][B8] PASS: vps_readiness использует SSH_CONNECT_TIMEOUT")
+
+
+# ── DevPlan 123 T7: apt-get в bootstrap-цепи → APT_TIMEOUT (канон shared/timeouts) ──
+# P-11 аудит apt-домена: system.py (install_apt_packages, legacy 120) + tor_setup.py
+# (apt_update/apt_install, БЕЗ timeout — hang-риск) + install-acme.sh (без timeout).
+
+
+def _apt_subprocess_without_timeout(source: str) -> list[int]:
+    """AST-скан: subprocess.run вызовы с apt-get в cmd БЕЗ timeout kwarg → номера строк.
+
+    ▶ ┌source┐ → ○ AST walk → ◇ subprocess.run + "apt-get" в cmd + нет timeout kwarg
+      → ⊕ lineno list → ⎋ list[int] (пусто = все apt-вызовы имеют таймаут)
+    ## @purpose  Проверка T7: каждый subprocess.run apt-get обязан иметь timeout=
+    ##            (канон APT_TIMEOUT). Формат-независима (многострочные вызовы тоже ловятся).
+    """
+    tree = ast.parse(source)
+    bad: list[int] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        fn = node.func
+        if not (isinstance(fn, ast.Attribute) and isinstance(fn.value, ast.Name) and fn.value.id == "subprocess"):
+            continue
+        if fn.attr != "run":
+            continue
+        cmd_node = node.args[0] if node.args else None
+        if not isinstance(cmd_node, ast.List):
+            continue
+        strs = [e.value for e in cmd_node.elts if isinstance(e, ast.Constant) and isinstance(e.value, str)]
+        if "apt-get" not in strs:
+            continue
+        has_timeout = any(kw.arg == "timeout" for kw in node.keywords)
+        if not has_timeout:
+            bad.append(node.lineno)
+    return bad
+
+
+@pytest.mark.gate
+@ldd_trajectory
+# 🧪 TRAP[TEST] · 2026-08-03 · REGRESSION · apt-get домен использует APT_TIMEOUT канон (DevPlan 123 T7)
+# · Scenario: system.py (install_apt_packages) и tor_setup.py (apt_update/apt_install) используют
+# ·   timeout=APT_TIMEOUT из shared/timeouts; install-acme.sh — timeout 300 apt-get install
+# · Last fail: system.py:73-74 timeout=120 legacy, tor_setup.py:70/87 БЕЗ timeout (hang-риск),
+# ·   install-acme.sh:58 без timeout
+# · Remove if: apt-get вызовы удаляются из bootstrap-цепи
+def test_apt_timeouts_use_canon(caplog) -> None:
+    """apt-get в bootstrap-цепи: канон APT_TIMEOUT из shared/timeouts (DevPlan 123 T7)."""
+    caplog.set_level(logging.INFO)
+
+    # (а) канон определён в shared/timeouts.py
+    timeouts_path = _CORE_INTERNAL / "shared" / "timeouts.py"
+    assert timeouts_path.is_file(), f"[IMP:10][T7] timeouts.py not found: {timeouts_path}"
+    timeouts_content = timeouts_path.read_text(errors="replace")
+    assert "APT_TIMEOUT = 300" in timeouts_content, "[IMP:10][T7] APT_TIMEOUT = 300 отсутствует в shared/timeouts"
+
+    # (б) lifecycle/helpers/system.py — install_apt_packages: канон вместо legacy 120
+    system_path = _CORE_INTERNAL / "bootstrap" / "lifecycle" / "helpers" / "system.py"
+    assert system_path.is_file(), f"[IMP:10][T7] system.py not found: {system_path}"
+    system_content = system_path.read_text(errors="replace")
+    assert "from core.internal.shared.timeouts import APT_TIMEOUT" in system_content, (
+        "[IMP:10][T7] system.py не импортирует APT_TIMEOUT из shared/timeouts"
+    )
+    # Только строки реальных вызовов (комментарии с упоминанием apt-get не считаются)
+    system_apt_lines = [ln for ln in system_content.splitlines() if "apt-get" in ln and "run_subprocess(" in ln]
+    assert system_apt_lines, "[IMP:10][T7] в system.py не найдены run_subprocess apt-get вызовы"
+    system_violations = [
+        ln.strip() for ln in system_apt_lines if "timeout=APT_TIMEOUT" not in ln or "timeout=120" in ln
+    ]
+    assert not system_violations, f"[IMP:10][T7] apt-get строки system.py вне канона: {system_violations}"
+
+    # (в) tor_setup.py — apt_update/apt_install: timeout=APT_TIMEOUT на каждом apt-get
+    tor_path = _CORE_INTERNAL / "bootstrap" / "tor_setup.py"
+    assert tor_path.is_file(), f"[IMP:10][T7] tor_setup.py not found: {tor_path}"
+    tor_content = tor_path.read_text(errors="replace")
+    assert "from core.internal.shared.timeouts import APT_TIMEOUT" in tor_content, (
+        "[IMP:10][T7] tor_setup.py не импортирует APT_TIMEOUT из shared/timeouts"
+    )
+    assert tor_content.count("timeout=APT_TIMEOUT") >= 2, (
+        "[IMP:10][T7] timeout=APT_TIMEOUT должен быть и в apt_update, и в apt_install"
+    )
+    assert "timeout=120" not in tor_content, "[IMP:10][T7] tor_setup.py содержит legacy timeout=120"
+    assert _apt_subprocess_without_timeout(tor_content) == [], (
+        "[IMP:10][T7] tor_setup.py содержит subprocess.run apt-get без timeout"
+    )
+
+    # (г) install-acme.sh — apt-get install git под GNU timeout 300
+    acme_path = ROOT / "core" / "internal" / "bootstrap" / "install-acme.sh"
+    assert acme_path.is_file(), f"[IMP:10][T7] install-acme.sh not found: {acme_path}"
+    acme_content = acme_path.read_text(errors="replace")
+    assert "timeout 300 apt-get install" in acme_content, (
+        "[IMP:10][T7] install-acme.sh не использует 'timeout 300 apt-get install'"
+    )
+
+    logger.info("[IMP:9][timeout_literals][T7] PASS: apt-get домен использует APT_TIMEOUT канон (300)")
+
+
+@pytest.mark.gate
+@ldd_trajectory
+# 🧪 TRAP[TEST] · 2026-08-03 · NEGATIVE (R5) · apt-get subprocess.run без timeout детектится (T7)
+# · Scenario: probe (tmp_path) с subprocess.run(["apt-get", ...]) без timeout → AST-скан ловит
+# · Last fail: tor_setup.py:70/87 — apt-get update/install без timeout (исходный вход T7, hang-риск)
+# · Remove if: apt-timeout канон-гейт отменяется
+def test_apt_subprocess_without_timeout_detected_negative(caplog, tmp_path) -> None:
+    """R5 negative: subprocess.run apt-get без timeout (исходный вход T7) детектируется."""
+    caplog.set_level(logging.INFO)
+    import textwrap
+
+    probe = tmp_path / "_gate_probe_apt_timeout.py"
+    probe.write_text(
+        textwrap.dedent(
+            """\
+            import subprocess
+            def apt_update():
+                return subprocess.run(["apt-get", "update", "-qq"], capture_output=True, text=True)
+            """
+        )
+    )
+    try:
+        bad = _apt_subprocess_without_timeout(probe.read_text(errors="replace"))
+        assert bad, "R5 FAIL: apt-get subprocess.run без timeout не обнаружен"
+        logger.info("[IMP:9][timeout_literals][T7][R5] PASS: probe:%d apt-get без timeout detected", bad[0])
+    finally:
+        probe.unlink(missing_ok=True)

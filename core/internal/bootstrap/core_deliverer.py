@@ -75,8 +75,9 @@ class CoreDeliveryError(Exception):
 
 
 # region FUNC_resolve_remote_base
-## @purpose  Единая точка резолюции remote platform base: PLATFORM_REMOTE_BASE → PLATFORM_ROOT → /opt/platform.
-## @io  input: env PLATFORM_REMOTE_BASE / PLATFORM_ROOT, output: str remote platform base
+## @purpose  Единая точка резолюции remote platform base: PLATFORM_REMOTE_BASE → /opt/platform
+##           (PLATFORM_ROOT УБРАН из remote-цепочки — TRAP[BUG] 2026-08-03 в deploy_paths.platform_remote_base).
+## @io  input: env PLATFORM_REMOTE_BASE, output: str remote platform base
 ## @complexity  O(1) — env chain lookup
 ## ⚠️ TRAP[BUG] · 2026-07-31 · P1 · Единый источник remote base (мигрирован из overlay_deliverer.py:197)
 ## · Symptom: `make node-update NODE=<host>` доставлял core в /opt/platform/core, а bootstrap —
@@ -85,9 +86,11 @@ class CoreDeliveryError(Exception):
 ## · Fix: ЕДИНАЯ функция резолюции — resolve_remote_base() (та же цепочка, что scp-deliver.sh:129).
 ## ·   sync_core_to_vps (overlay) и scp_to_server (фасад) делегируют сюда через deliver_core().
 ## · Prevention: любой код, доставляющий core на VPS, использует resolve_remote_base() из core_deliverer.
-## @invariants  Та же цепочка, что scp-deliver.sh:129 и build_ssh_cmd (remote-cmd.sh:40-43)
+## · Note (2026-08-03, DevPlan 123 T8): актуальная цепочка — PLATFORM_REMOTE_BASE → /opt/platform;
+## ·   PLATFORM_ROOT исключён из remote-резолюции (см. TRAP[BUG] 2026-08-03 в deploy_paths.py:190-194).
+## @invariants  Делегирует в deploy_paths.platform_remote_base() — единый канон remote-базы
 def resolve_remote_base() -> str:
-    """Resolve remote platform base: PLATFORM_REMOTE_BASE → PLATFORM_ROOT → /opt/platform (C7)."""
+    """Resolve remote platform base: PLATFORM_REMOTE_BASE → /opt/platform (C7; PLATFORM_ROOT excluded — TRAP 2026-08-03)."""
     return str(platform_remote_base())
 
 

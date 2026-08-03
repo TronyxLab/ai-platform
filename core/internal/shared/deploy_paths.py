@@ -139,7 +139,7 @@ DEFAULT_NODE_CONFIGS_REMOTE: str = "/opt/node-configs"
 """## @invariant Каноническая remote-директория node-configs (core_deliverer NODE_CONFIGS_REMOTE_BASE)."""
 
 DEFAULT_PLATFORM_BASE: str = "/opt/platform"
-"""## @invariant Канонический remote platform base (core_deliverer PLATFORM_REMOTE_BASE→PLATFORM_ROOT→/opt/platform)."""
+"""## @invariant Канонический remote platform base (PLATFORM_REMOTE_BASE → /opt/platform; PLATFORM_ROOT исключён из remote-цепочки — TRAP[BUG] 2026-08-03)."""
 
 
 # region FUNC_letsencrypt_live
@@ -177,12 +177,13 @@ def node_configs_remote(env: dict | None = None) -> Path:
 
 # region FUNC_platform_remote_base
 ## @purpose — Резолвер remote platform base (DevPlan 118 C7). Цепочка:
-##            PLATFORM_REMOTE_BASE → PLATFORM_ROOT → /opt/platform (тот же канон, что
-##            core_deliverer.resolve_remote_base / scp-deliver.sh:129).
+##            PLATFORM_REMOTE_BASE → /opt/platform (тот же канон, что
+##            core_deliverer.resolve_remote_base / scp-deliver.sh:129; PLATFORM_ROOT
+##            исключён из remote-цепочки — TRAP[BUG] 2026-08-03 ниже).
 ## @io — ⇥ env: dict | None (None = os.environ) → ⎋ Path
 ## @complexity — O(1)
 ## @invariants
-##   - env PLATFORM_REMOTE_BASE приоритетнее PLATFORM_ROOT, оба приоритетнее дефолта
+##   - env PLATFORM_REMOTE_BASE — единственный env-override remote-базы (PLATFORM_ROOT НЕ участвует)
 ##   - Никогда не raise — всегда возвращает Path
 def platform_remote_base(env: dict | None = None) -> Path:
     """Resolve remote platform base (PLATFORM_REMOTE_BASE → /opt/platform, C7).

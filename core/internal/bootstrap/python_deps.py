@@ -24,6 +24,9 @@
 ##   2026-07-25  Initial port from node-lifecycle.sh:_ensure_python_deps()
 ##   2026-08-01  Python 3.14 via deadsnakes PPA; pip via /usr/local/bin/python3 -m pip;
 ##               hash marker now includes python version (old-format marker = mismatch)
+##   2026-08-03  DevPlan 123 T11 (FL7) — Step 2 аудит: остальные пакеты requirements.txt
+##               НЕ конфликтуют с apt python3-* (python3-yaml/jinja2/cryptography удовлетворяют
+##               пины; boto3/botocore/httpx/pydantic не ставятся apt; httpcore — транзитив httpx)
 # endregion MODULE_CONTRACT
 
 # 🧐 TRAP[DECISION] · 2026-08-01 · HI · Python 3.14 через deadsnakes PPA (Ubuntu 24.04)
@@ -439,7 +442,16 @@ def _install_requirements(core_dir: str) -> bool:
     if not _run(pip_openssl, label="pip pyopenssl"):
         return False
 
-    # Step 2: full requirements.txt
+    # Step 2: full requirements.txt — аудит DevPlan 123 T11 (FL7): остальные пакеты НЕ
+    # конфликтуют с apt python3-* пакетами bare Ubuntu 24.04 (φ1 + cloud-init):
+    #   · python3-yaml (6.0.1, φ1 system.py:76) / python3-jinja2 (3.1.4, cloud-init) /
+    #     python3-cryptography (41.0.7, cloud-init via python3-openssl) — УДОВЛЕТВОРЯЮТ пины
+    #     pyyaml>=6.0 / jinja2>=3.1.0 / cryptography>=41.0.0 → pip "already satisfied",
+    #     uninstall не пытается → RECORD-конфликт невозможен
+    #   · jsonschema — apt 4.10.3 < >=4.17 → RECORD-конфликт → уже вынесен в Step 1b
+    #   · boto3/botocore/httpx/pydantic — apt-аналогов НЕТ на bare VPS (не в φ1, не в cloud-init)
+    #   · httpcore/requests/python-dotenv УДАЛЕНЫ из requirements.txt (T11): httpcore —
+    #     транзитивная зависимость httpx (поставится автоматически), requests/dotenv — dev-only
     logger.info("[IMP:9][_install_requirements] Installing -r requirements.txt")
     pip_reqs = [
         python_bin,

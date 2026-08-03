@@ -192,22 +192,25 @@ def test_entrypoint_flags_contract(caplog) -> None:
     )
     logger.info("[IMP:8][test_entrypoint_flags_contract] Check 4 PASS: explicit --dry-run case")
 
-    # ── Check 5: --age-secret-key-file accepted by node-lifecycle.sh parser ──
-    assert "--age-secret-key-file" in lifecycle_content, (
-        "[IMP:9][test] FAIL: --age-secret-key-file not in node-lifecycle.sh parser"
+    # ── Check 5: --age-secret-key-file NOT accepted by node-lifecycle.sh parser (DevPlan 123 T9) ──
+    # DevPlan 123 T9 (FL6): приём --age-secret-key-file на remote-стороне — ловушка passthrough
+    # (локальный путь читался НА VPS). Флаг больше никуда не форвардится (bootstrap.sh/node-update.sh
+    # читают ключ ЛОКАЛЬНО через node_detect-цепочку, в remote уходит ключ-контент через
+    # --age-secret-key/AGE_SECRET_KEY). Приём пути удалён из node-lifecycle.sh — negative-guard ниже
+    # защищает от повторного ввода ловушки. Форвард пути в remote-аргументы — RED по гейту
+    # tests/gates/test_gate_local_path_in_remote.py (FL6, allowlist пуст).
+    assert not any("--age-secret-key-file)" in line for line in lifecycle_content.splitlines()), (
+        "[IMP:9][test] FAIL: case --age-secret-key-file) должен быть УДАЛЁН из node-lifecycle.sh parser "
+        "(remote-сторона не принимает локальные пути — DevPlan 123 T9, FL6)"
     )
-    # Verify that the area around --age-secret-key-file references AGE_SECRET_KEY.
-    # The flag line itself only has `--age-secret-key-file)`, but the handling
-    # block reads file content into AGE_SECRET_KEY. Check the context after it.
-    age_key_idx = lifecycle_content.find("--age-secret-key-file")
-    assert age_key_idx >= 0, "[IMP:9][test] FAIL: --age-secret-key-file not found in lifecycle"
-    context_after = lifecycle_content[age_key_idx : age_key_idx + 500]
-    assert "AGE_SECRET_KEY" in context_after, (
-        "[IMP:9][test] FAIL: --age-secret-key-file case must read file into AGE_SECRET_KEY"
+    logger.info(
+        "[IMP:8][test_entrypoint_flags_contract] Check 5 PASS: --age-secret-key-file удалён из lifecycle parser "
+        "(ловушка passthrough, DevPlan 123 T9)"
     )
-    logger.info("[IMP:8][test_entrypoint_flags_contract] Check 5 PASS: --age-secret-key-file in lifecycle parser")
 
     # ── Check 6: --age-secret-key-file accepted by node-update.sh entrypoint ──
+    # DevPlan 123 T9: node-update.sh — ЛОКАЛЬНЫЙ entrypoint — флаг ОСТАЁТСЯ (легитимный локальный
+    # приём: AGE_SECRET_KEY_FILE передаётся в node_detect-цепочку, НЕ форвардится в remote).
     assert "--age-secret-key-file" in entrypoint_content, (
         "[IMP:9][test] FAIL: --age-secret-key-file not in node-update.sh parser"
     )

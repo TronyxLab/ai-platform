@@ -1,5 +1,5 @@
 # GREP_SUMMARY: gates anti-drift CI tests __init__ package
-# STRUCTURE: Package marker for tests/gates/ — 36 anti-drift CI gate test files
+# STRUCTURE: Package marker for tests/gates/ — 123 anti-drift CI gate test files (DevPlan 123 T9: +test_gate_local_path_in_remote)
 # region MODULE_CONTRACT
 ## @purpose  Package init for anti-drift CI gates test suite
 ## @scope    Tests in tests/gates/ validate: manifest registration, naming conventions,

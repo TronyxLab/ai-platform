@@ -182,6 +182,9 @@ def sync_core_to_vps(host: str, core_src: str, node_name: str = "", node_yaml: s
     # ·   (цепочка PLATFORM_REMOTE_BASE → PLATFORM_ROOT → /opt/platform, та же, что scp-deliver.sh:129).
     # ·   sync_core_to_vps ДЕЛЕГИРУЕТ core/ rsync в core_deliverer.deliver_core() — дублирование устранено.
     # · Prevention: любой код, доставляющий core на VPS, использует core_deliverer.deliver_core().
+    # · Note (2026-08-03, DevPlan 123 T8): актуальная remote-цепочка — PLATFORM_REMOTE_BASE → /opt/platform
+    # ·   (PLATFORM_ROOT УБРАН из remote-резолюции — TRAP[BUG] 2026-08-03 в deploy_paths.platform_remote_base);
+    # ·   единый resolve_remote_base() сохраняется; история выше описывает состояние ДО фикса DevPlan 108.
     try:
         deliver_core(host=host, core_dir=core_src, remote_user="root", dry_run=dry_run)
     except CoreDeliveryError as exc:

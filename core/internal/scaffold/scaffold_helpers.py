@@ -153,7 +153,11 @@ def gen_ai_platform_yaml(
             "domain": domain if domain else False,
             "expose": bool(domain),
         }
-        if database and database != "false":
+        # DevPlan 123 T6: database приходит из argparse --database (project_scaffolder, default "")
+        # — shell-строка, типизированного accessor'а project_yaml для него нет (проверено: shared/
+        # project_yaml.py get_* не покрывает database). Нормализуем сравнение: bool False →
+        # str "False" → lower "false" → skip (семантика сохраняется), "False"/"false" → skip.
+        if database and str(database).lower() != "false":
             data["needs"]["database"] = database
         if ptype == "fullstack":
             data["needs"]["llm"] = "remote"

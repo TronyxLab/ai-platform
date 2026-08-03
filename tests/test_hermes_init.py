@@ -9,7 +9,7 @@
 ## @invariants
 ##   - docker CLI must be available for any test to execute
 ##   - Images are built only once (skip if already present via docker image inspect)
-##   - All containers are cleaned up after each test (docker rm -f)
+##   - All containers are cleaned up after each test (docker rm -f in finally — even on failure)
 ##   - Tests are atomic and independent (each test uses unique container names)
 ##   - tmp_path fixture used for any temporary files (no hardcoded paths)
 ##   - L1 image (hermes-agent-base) has no CONTEXT guard
@@ -24,6 +24,8 @@
 ##              Ensures the CONTEXT guard prevents silent misconfiguration of L2 containers.
 ##              Acceptance criteria AC-0.7: Unit tests init-скриптов проходят (3 passed).
 ## @changes — CREATED: 2026-07-09 | TASK-0.5: Unit tests for L1/L2 init scripts
+## @changes — 2026-08-03 | DevPlan 123 T5: container creation/verify wrapped in try/finally —
+##            _cleanup_container() guarantees removal on ANY outcome (false-lead #10, 503 on /health)
 # endregion MODULE_CONTRACT
 
 import logging
@@ -66,6 +68,30 @@ def _image_exists(tag: str) -> bool:
         timeout=15,
     )
     return result.returncode == 0
+
+
+def _cleanup_container(container_name: str) -> None:
+    """Best-effort removal of a test container — never masks the test's original error.
+
+    ## @purpose — DevPlan 123 T5 (false-lead #10): guarantee removal of exited
+    ##            hermes-test-l1/l2-* containers even when a test fails mid-way.
+    ##            Called from the finally block of every hermes-init test; a leftover
+    ##            exited container causes 503 on the status-page /health endpoint.
+    ## @io — ⇥ container_name: str → ⎋ None (side-effect: docker rm -f)
+    ## @complexity — O(1) — single docker rm -f call
+    ## @invariants — Cleanup failures (OSError) are logged, never raised, so the
+    ##              original test error is never masked by cleanup.
+    """
+    try:
+        subprocess.run(
+            ["docker", "rm", "-f", container_name],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        logger.info("[IMP:7][_cleanup_container] Container '%s' removed", container_name)
+    except OSError as exc:
+        logger.error("[IMP:8][_cleanup_container] Failed to remove container '%s': %s", container_name, exc)
 
 
 def _print_docker_imp_logs(output: str) -> None:
@@ -279,46 +305,49 @@ def test_l1_without_context_ok(caplog: pytest.LogCaptureFixture, tmp_path: pathl
 
     # region BLOCK_Run
     container_name = f"hermes-test-l1-{uuid.uuid4().hex[:8]}"
-    logger.info("[IMP:7][test_l1_without_context_ok] Starting L1 container '%s' with CONTEXT='' ...", container_name)
-    _run_container_detached(_L1_TAG, env_vars={"CONTEXT": ""}, name=container_name)
-    logger.info("[IMP:9][test_l1_without_context_ok] Container '%s' created", container_name)
-    # endregion
-
-    # region BLOCK_WaitAndVerify
-    # Poll docker ps until container appears (max 30s, interval 2s)
-    _container_ready = False
-    for _attempt in range(15):  # 15 × 2s = 30s
-        _ps_result = subprocess.run(
-            ["docker", "ps", "--filter", f"name={container_name}", "--format", "{{.Names}}"],
-            capture_output=True,
-            text=True,
-            timeout=15,
+    try:
+        logger.info(
+            "[IMP:7][test_l1_without_context_ok] Starting L1 container '%s' with CONTEXT='' ...", container_name
         )
-        if container_name in _ps_result.stdout:
-            _container_ready = True
-            break
-        time.sleep(2)
-    assert _container_ready, f"Container '{container_name}' not running after 30s — init script may have failed"
-    logger.info("[IMP:9][test_l1_without_context_ok] Container is running — L1 init passed")
-    # endregion
+        _run_container_detached(_L1_TAG, env_vars={"CONTEXT": ""}, name=container_name)
+        logger.info("[IMP:9][test_l1_without_context_ok] Container '%s' created", container_name)
+        # endregion
 
-    # region BLOCK_StopAndAssert
-    exit_code, oom_killed = _stop_and_verify(container_name)
-    logger.info("[IMP:9][test_l1_without_context_ok] Container exit code: %d, OOMKilled=%s", exit_code, oom_killed)
-    # ⚠️ TRAP[BUG] · 2026-07-27 · exit 137 + OOM=false tolerated — docker stop timeout, not OOM
-    if exit_code == 137 and not oom_killed:
-        logger.info("[IMP:9][test_l1_without_context_ok] Exit 137 accepted: container ran OK, shutdown timed out")
-    else:
-        assert exit_code == 0, (
-            f"Expected exit code 0, got {exit_code}"
-            f"{' (137 + OOM=true — insufficient Docker memory)' if exit_code == 137 and oom_killed else ''}"
-        )
-    # endregion
+        # region BLOCK_WaitAndVerify
+        # Poll docker ps until container appears (max 30s, interval 2s)
+        _container_ready = False
+        for _attempt in range(15):  # 15 × 2s = 30s
+            _ps_result = subprocess.run(
+                ["docker", "ps", "--filter", f"name={container_name}", "--format", "{{.Names}}"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            if container_name in _ps_result.stdout:
+                _container_ready = True
+                break
+            time.sleep(2)
+        assert _container_ready, f"Container '{container_name}' not running after 30s — init script may have failed"
+        logger.info("[IMP:9][test_l1_without_context_ok] Container is running — L1 init passed")
+        # endregion
 
-    # region BLOCK_Cleanup
-    subprocess.run(["docker", "rm", "-f", container_name], capture_output=True, text=True, timeout=30)
-    logger.info("[IMP:9][test_l1_without_context_ok] L1 test passed — container removed")
-    # endregion
+        # region BLOCK_StopAndAssert
+        exit_code, oom_killed = _stop_and_verify(container_name)
+        logger.info("[IMP:9][test_l1_without_context_ok] Container exit code: %d, OOMKilled=%s", exit_code, oom_killed)
+        # ⚠️ TRAP[BUG] · 2026-07-27 · exit 137 + OOM=false tolerated — docker stop timeout, not OOM
+        if exit_code == 137 and not oom_killed:
+            logger.info("[IMP:9][test_l1_without_context_ok] Exit 137 accepted: container ran OK, shutdown timed out")
+        else:
+            assert exit_code == 0, (
+                f"Expected exit code 0, got {exit_code}"
+                f"{' (137 + OOM=true — insufficient Docker memory)' if exit_code == 137 and oom_killed else ''}"
+            )
+        # endregion
+    finally:
+        # region BLOCK_Cleanup
+        _cleanup_container(container_name)
+        logger.info("[IMP:9][test_l1_without_context_ok] L1 container cleanup complete")
+        # endregion
 
 
 # endregion FUNC_test_l1_without_context_ok
@@ -377,33 +406,42 @@ def test_l2_without_context_exit1(caplog: pytest.LogCaptureFixture, tmp_path: pa
     # We pass -e CONTEXT="" at runtime to override the baked-in value and trigger the guard.
     # s6-overlay will NOT propagate the cont-init.d exit code 1 to the container exit code,
     # so we verify the guard FATAL message appears in stdout instead.
-    logger.info("[IMP:7][test_l2_without_context_exit1] Running L2 container with empty CONTEXT...")
-    run_result = subprocess.run(
-        ["docker", "run", "--rm", "--memory", "1g", "-e", "CONTEXT=", _L2_TAG],
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-    _print_docker_imp_logs(run_result.stdout)
-    _print_docker_imp_logs(run_result.stderr)
-    logger.info(
-        "[IMP:9][test_l2_without_context_exit1] Container exit code: %d (s6 absorbs init script exit)",
-        run_result.returncode,
-    )
-    # endregion
+    # Container is named (--rm still auto-removes on exit) so finally can force-remove
+    # a leaked container if `docker run` times out mid-startup (would 503 status-page /health).
+    container_name = f"hermes-test-l2-guard-{uuid.uuid4().hex[:8]}"
+    try:
+        logger.info("[IMP:7][test_l2_without_context_exit1] Running L2 container with empty CONTEXT...")
+        run_result = subprocess.run(
+            ["docker", "run", "--rm", "--name", container_name, "--memory", "1g", "-e", "CONTEXT=", _L2_TAG],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        _print_docker_imp_logs(run_result.stdout)
+        _print_docker_imp_logs(run_result.stderr)
+        logger.info(
+            "[IMP:9][test_l2_without_context_exit1] Container exit code: %d (s6 absorbs init script exit)",
+            run_result.returncode,
+        )
+        # endregion
 
-    # region BLOCK_VerifyGuardMessage
-    # 🧐 TRAP[DECISION] — s6-overlay absorbs cont-init.d exit codes
-    # The guard script (04-context-init) exits 1, but s6-overlay treats
-    # cont-init.d failures as non-fatal and continues starting main services.
-    # Container exit code is 0 even though guard triggered.
-    # We verify the guard FATAL message as evidence of correct guard behavior.
-    assert "[IMP:10][CONTEXT_INIT][FATAL]" in run_result.stdout, (
-        "Expected guard FATAL message '[IMP:10][CONTEXT_INIT][FATAL]' "
-        "in container output — guard script did not trigger"
-    )
-    logger.info("[IMP:9][test_l2_without_context_exit1] ✅ Guard FATAL message confirmed in stdout")
-    # endregion
+        # region BLOCK_VerifyGuardMessage
+        # 🧐 TRAP[DECISION] — s6-overlay absorbs cont-init.d exit codes
+        # The guard script (04-context-init) exits 1, but s6-overlay treats
+        # cont-init.d failures as non-fatal and continues starting main services.
+        # Container exit code is 0 even though guard triggered.
+        # We verify the guard FATAL message as evidence of correct guard behavior.
+        assert "[IMP:10][CONTEXT_INIT][FATAL]" in run_result.stdout, (
+            "Expected guard FATAL message '[IMP:10][CONTEXT_INIT][FATAL]' "
+            "in container output — guard script did not trigger"
+        )
+        logger.info("[IMP:9][test_l2_without_context_exit1] ✅ Guard FATAL message confirmed in stdout")
+        # endregion
+    finally:
+        # region BLOCK_Cleanup
+        _cleanup_container(container_name)
+        logger.info("[IMP:9][test_l2_without_context_exit1] L2 guard container cleanup complete")
+        # endregion
 
 
 # endregion FUNC_test_l2_without_context_exit1
@@ -447,46 +485,51 @@ def test_l2_with_context_ok(caplog: pytest.LogCaptureFixture, tmp_path: pathlib.
 
     # region BLOCK_Run
     container_name = f"hermes-test-l2-{uuid.uuid4().hex[:8]}"
-    logger.info("[IMP:7][test_l2_with_context_ok] Starting L2 container '%s' with CONTEXT=ci-test ...", container_name)
-    _run_container_detached(_L2_TAG, env_vars={"CONTEXT": "ci-test"}, name=container_name)
-    logger.info("[IMP:9][test_l2_with_context_ok] Container '%s' created", container_name)
-    # endregion
-
-    # region BLOCK_WaitAndVerify
-    # Poll docker ps until container appears (max 30s, interval 2s)
-    _container_ready = False
-    for _attempt in range(15):  # 15 × 2s = 30s
-        _ps_result = subprocess.run(
-            ["docker", "ps", "--filter", f"name={container_name}", "--format", "{{.Names}}"],
-            capture_output=True,
-            text=True,
-            timeout=15,
+    try:
+        logger.info(
+            "[IMP:7][test_l2_with_context_ok] Starting L2 container '%s' with CONTEXT=ci-test ...", container_name
         )
-        if container_name in _ps_result.stdout:
-            _container_ready = True
-            break
-        time.sleep(2)
-    assert _container_ready, f"Container '{container_name}' not running after 30s — CONTEXT guard may have triggered"
-    logger.info("[IMP:9][test_l2_with_context_ok] Container is running — L2 init passed")
-    # endregion
+        _run_container_detached(_L2_TAG, env_vars={"CONTEXT": "ci-test"}, name=container_name)
+        logger.info("[IMP:9][test_l2_with_context_ok] Container '%s' created", container_name)
+        # endregion
 
-    # region BLOCK_StopAndAssert
-    exit_code, oom_killed = _stop_and_verify(container_name)
-    logger.info("[IMP:9][test_l2_with_context_ok] Container exit code: %d, OOMKilled=%s", exit_code, oom_killed)
-    # ⚠️ TRAP[BUG] · 2026-07-27 · exit 137 + OOM=false tolerated — docker stop timeout, not OOM
-    if exit_code == 137 and not oom_killed:
-        logger.info("[IMP:9][test_l2_with_context_ok] Exit 137 accepted: container ran OK, shutdown timed out")
-    else:
-        assert exit_code == 0, (
-            f"Expected exit code 0, got {exit_code}"
-            f"{' (137 + OOM=true — insufficient Docker memory)' if exit_code == 137 and oom_killed else ''}"
+        # region BLOCK_WaitAndVerify
+        # Poll docker ps until container appears (max 30s, interval 2s)
+        _container_ready = False
+        for _attempt in range(15):  # 15 × 2s = 30s
+            _ps_result = subprocess.run(
+                ["docker", "ps", "--filter", f"name={container_name}", "--format", "{{.Names}}"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            if container_name in _ps_result.stdout:
+                _container_ready = True
+                break
+            time.sleep(2)
+        assert _container_ready, (
+            f"Container '{container_name}' not running after 30s — CONTEXT guard may have triggered"
         )
-    # endregion
+        logger.info("[IMP:9][test_l2_with_context_ok] Container is running — L2 init passed")
+        # endregion
 
-    # region BLOCK_Cleanup
-    subprocess.run(["docker", "rm", "-f", container_name], capture_output=True, text=True, timeout=30)
-    logger.info("[IMP:9][test_l2_with_context_ok] L2 test passed — container removed")
-    # endregion
+        # region BLOCK_StopAndAssert
+        exit_code, oom_killed = _stop_and_verify(container_name)
+        logger.info("[IMP:9][test_l2_with_context_ok] Container exit code: %d, OOMKilled=%s", exit_code, oom_killed)
+        # ⚠️ TRAP[BUG] · 2026-07-27 · exit 137 + OOM=false tolerated — docker stop timeout, not OOM
+        if exit_code == 137 and not oom_killed:
+            logger.info("[IMP:9][test_l2_with_context_ok] Exit 137 accepted: container ran OK, shutdown timed out")
+        else:
+            assert exit_code == 0, (
+                f"Expected exit code 0, got {exit_code}"
+                f"{' (137 + OOM=true — insufficient Docker memory)' if exit_code == 137 and oom_killed else ''}"
+            )
+        # endregion
+    finally:
+        # region BLOCK_Cleanup
+        _cleanup_container(container_name)
+        logger.info("[IMP:9][test_l2_with_context_ok] L2 container cleanup complete")
+        # endregion
 
 
 # endregion FUNC_test_l2_with_context_ok

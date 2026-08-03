@@ -16,6 +16,10 @@
 ##   3=ConfigParseError, 4=ConfigValidationError, 10=PlatformFatalError.
 ##   --get with missing key exits 1 (not 4) for shell || compatibility.
 ##   --get-many: empty/malformed spec → ConfigValidationError (exit 4); missing key → empty value (exit 0).
+##   Scalar output contract (DevPlan 123 T6 — единая точка нормализации): bool → lowercase
+##   "true"/"false" (НЕ Python "True"/"False"), числа (int/float) → десятичные строки str(value),
+##   прочие типы (str/None/list/dict) — как есть (str()/Python repr). JSON-режимы
+##   (--items, --json-output) возвращают СЫРЫЕ Python-типы (json.dumps — НЕ нормализуются).
 ##   --resolve: stdout contains EXACTLY ONE line (the resolved path) — shell $() consumers.
 ##   --file is NOT argparse-required: --resolve (3-path search) legitimately runs without it.
 ## @rationale  DevPlan 117 G T51 — CLI is fully DI-isolated (all functions take NodeYaml as a parameter,
@@ -125,10 +129,37 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _format_cli_value(value: Any) -> str:
+    """Normalize a node.yaml value for --get / --get-many scalar output.
+
+    ## @purpose  Единая точка нормализации вывода CLI (DevPlan 123 T6). Python-bool →
+    ##            lowercase "true"/"false" (раньше print() давал "True" — ломал shell
+    ##            `== "true"` сравнения, TRAP[BUG] node-lifecycle.sh:53 2026-08-03);
+    ##            int/float → десятичная строка (числа без кавычек); прочие типы
+    ##            (str/None/list/dict) — str()/Python repr как раньше. JSON-режимы
+    ##            (--items/--json-output) этот хелпер НЕ используют — сырые типы.
+    ## @io — ⇥ value: Any → ⎋ str (CLI-безопасное представление)
+    ## @complexity — O(1)
+    ## @invariants
+    ##   - isinstance(value, bool) проверяется ПЕРЕД (int, float) — bool является subclass int
+    ##   - bool True → "true", False → "false" (никогда "True"/"False")
+    ##   - int/float → str(value) (напр. 3 → "3", 2.5 → "2.5")
+    ##   - str/None/list/dict → str(value) (совпадает с прежним print()-поведением)
+    """
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    return str(value)
+
+
 def _cli_get(node: NodeYaml, args: argparse.Namespace) -> int:
     """Handle --get CLI operation.
 
     ## @purpose  Execute --get with optional --default and --items.
+    ##            Scalar output проходит через _format_cli_value (DevPlan 123 T6): булевы →
+    ##            lowercase "true"/"false", числа → десятичные строки; --items (JSON) —
+    ##            сырые Python-типы без нормализации.
     ## @io — ⇥ node: NodeYaml, args → ⎋ exit_code: int
     ## @complexity — O(1) after load
     """
@@ -142,7 +173,7 @@ def _cli_get(node: NodeYaml, args: argparse.Namespace) -> int:
     if args.items:
         print(json.dumps(value, indent=2) if isinstance(value, (list, dict)) else json.dumps([value]))
     else:
-        print(value)
+        print(_format_cli_value(value))
     return 0
 
 
@@ -192,6 +223,8 @@ def _cli_get_many(node: NodeYaml, spec: str) -> int:
     ##   - Entry without ':' → ConfigValidationError (exit 4)
     ##   - Missing key or non-dict traversal → empty value (exit 0), like --default ""
     ##   - stdout carries ONLY alias<TAB>value lines — machine-parseable by `while IFS=$'\t' read`
+    ##   - Значения проходят _format_cli_value (DevPlan 123 T6): bool → "true"/"false",
+    ##     числа → str; пустая строка (missing key) печатается как есть (alias<TAB>)
     """
     if not spec or not spec.strip():
         logger.error("[IMP:10][NodeYaml._cli_get_many] Empty --get-many spec")
@@ -218,7 +251,7 @@ def _cli_get_many(node: NodeYaml, spec: str) -> int:
         except ConfigValidationError:
             # Missing key / non-dict traversal → empty value (exit 0), shell-compatible
             value = ""
-        print(f"{alias}\t{value}")
+        print(f"{alias}\t{_format_cli_value(value)}")
 
     logger.info("[IMP:9][NodeYaml._cli_get_many] Batch-extracted %d field(s)", len(pairs))
     return 0

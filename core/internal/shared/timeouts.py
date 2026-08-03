@@ -19,7 +19,8 @@
 ##      (экспоненциальное поведение сохраняется).
 ##   4. Значения канонизированы: up=180, pull=300, build=300, healthcheck-poll=60,
 ##      ssh-connect=30, deploy=600, ssh-read=60, image-check=60, docker-cmd=10,
-##      docker-stop=30, rsync=600, healthcheck-ports=[3000,4000,8000,8080,9000] (B6).
+##      docker-stop=30, apt=300 (bootstrap-цепь: python_deps/lifecycle/tor_setup/install-acme),
+##      rsync=600, healthcheck-ports=[3000,4000,8000,8080,9000] (B6).
 ## @rationale U-11: 226 литералов timeout= (30/120/180/300/600) без констант. Единый реестр
 ##            делает значения grepable, гейт — enforce-емым. Значения стандартизированы из
 ##            существующих канонов (docker_orchestrator up=180, deploy-дефолт ssh.sh=600,
@@ -33,6 +34,8 @@
 ## @changes  2026-08-02 | DevPlan 119 B7 — +CONVERGE_DOCKER_TIMEOUT (30), +FILE_OP_TIMEOUT (15)
 ## @changes  2026-08-03 | RC 121 — watchdog-домен (WATCHDOG_*, TOR_PROXY сохранён) удалён
 ##                      (converge/infra локальные константы удалены — импорт из канона)
+## @changes  2026-08-03 | DevPlan 123 T7 — +APT_TIMEOUT (300): apt-get update/install
+##                      bootstrap-цепи (system.py legacy 120 → канон, tor_setup/install-acme)
 # endregion MODULE_CONTRACT
 
 # ── Docker domain ────────────────────────────────────────────────────────────
@@ -62,6 +65,11 @@ DOCKER_CMD_TIMEOUT = 10
 # apt-get install/update docker-пакетов (docker_installer, RC 121 e2e fix):
 #   скачивание docker-ce на fresh VPS занимает >10s — DOCKER_CMD_TIMEOUT молча убивал install
 DOCKER_APT_TIMEOUT = 300
+
+# apt-get update/install в bootstrap-цепи (python_deps φ1, lifecycle/helpers/system,
+#   tor_setup, install-acme, DevPlan 123 T7): отдельный от DOCKER_APT_TIMEOUT для
+#   читаемости, то же значение 300
+APT_TIMEOUT = 300
 
 # visudo -c -f <file> — валидация sudoers (sudoers_generator, отдельный от docker домен;
 #   visudo на слабых VPS может занимать >DOCKER_CMD_TIMEOUT)

@@ -27,6 +27,9 @@
 ##            already live in deploy/ package. D2: shell facade uses `exec python3` — same PID,
 ##            automatic exit-code propagation. D3: JSON interop via native json.loads/json.dumps (Python).
 ## @changes   2026-07-31 · Created (DevPlan 100 TASK-1)
+## @changes   2026-08-03 · DevPlan 123 T8 — контракт sequential/parallel: _deploy_sequential прокидывает
+##            secrets_env_file/platform_root в deploy_docker_module (паритет с parallel_runner);
+##            docstring-инварианты приведены к фактическому поведению (overlay передаётся, не «NOT passed»)
 ## @modulemap
 ##   ModuleDeployResult [W:1] — dataclass: deployed, failed, crit_count, warn_count, exit_code
 ##   ModuleLists [W:1] — dataclass: all_names, enabled_names, overlays
@@ -306,6 +309,8 @@ def _parse_modules(node_yaml: str, modules_dir: str, modules_filter: str) -> Mod
     for name, enabled, overlay in raw:
         if name not in all_names:
             all_names.append(name)
+        # input normalized by parse_modules_from_node_yaml (secrets_validator) — DevPlan 123 T6:
+        # enabled уже lowercase "true"/"false" (str(value).lower()), строгое сравнение безопасно
         if enabled == "true" and name not in enabled_names:
             enabled_names.append(name)
         # config_overlay из node.yaml (fallback для NGINX_OVERLAY_DIR — RC 121: прод-nginx не
@@ -621,21 +626,29 @@ def _deploy_orchestrator(docker_names: list[str]) -> tuple[int, list[str]]:
 # region FUNC__deploy_sequential
 ## @purpose  Legacy sequential path (DEPLOY_PARALLEL != true): for-loop over enabled modules —
 ##           check-env → detect-type → deploy_docker_module | invoke_module_interface.
-## @io       ⇥ enabled_names, modules_dir, core_dir → ⎋ tuple[int, list[str]] — (deployed, failed)
+## @io       ⇥ enabled_names, modules_dir, core_dir, overlays, secrets_env_file, platform_root
+##           ⎋ tuple[int, list[str]] — (deployed, failed)
 ## @complexity 3 — linear for-loop with per-module env/type/deploy dispatch
 ## @invariants
 ##   - Missing env vars → module FAILED + skipped (legacy parity)
 ##   - install_type "system" → invoke_module_interface install + best-effort healthcheck liveness
 ##   - Everything else (docker/unknown) → deploy_docker_module (module.yaml missing → docker path,
 ##     legacy parity — compose resolution fails there)
-##   - Overlay dir NOT passed in sequential path (legacy parity — overlay was computed but unused)
+##   - Overlay dir IS passed in sequential path: overlay_dir=(overlays or {}).get(m_name) — паритет
+##     с параллельным путём (deploy_docker_group), DevPlan 121 fix 812592b
+##   - secrets_env_file/platform_root прокидываются в deploy_docker_module (паритет с
+##     parallel_runner.deploy_docker_group, DevPlan 123 T8). Оба пути сходятся на одних и тех же
+##     дефолтах _build_compose_args на ноде: platform_root or platform_remote_base() == /opt/platform,
+##     secrets_env_file or "/run/platform/secrets.env" — значения идентичны (дефолты совпадают).
 def _deploy_sequential(
     enabled_names: list[str],
     modules_dir: str,
     core_dir: str,
     overlays: dict[str, str] | None = None,
+    secrets_env_file: str | None = None,
+    platform_root: str | None = None,
 ) -> tuple[int, list[str]]:
-    """Sequential deploy for-loop (legacy path — unchanged semantics)."""
+    """Sequential deploy for-loop (legacy path — contract parity with parallel_runner, DevPlan 123 T8)."""
     secrets_manifest = os.path.join(core_dir, "secrets-manifest.yaml")
     deployed = 0
     failed: list[str] = []
@@ -671,7 +684,11 @@ def _deploy_sequential(
         else:
             try:
                 ok = docker_orchestrator.deploy_docker_module(
-                    m_name, modules_dir=modules_dir, overlay_dir=(overlays or {}).get(m_name)
+                    m_name,
+                    modules_dir=modules_dir,
+                    overlay_dir=(overlays or {}).get(m_name),
+                    secrets_env_file=secrets_env_file,
+                    platform_root=platform_root,
                 )
             except Exception as exc:  # noqa: EXC — docker deploy failure → module failed, continue (best-effort: DEPLOY_BEST_EFFORT policy)
                 logger.warning("[IMP:8][_deploy_sequential][docker] deploy error for %s: %s", m_name, exc)
@@ -961,14 +978,19 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stderr)
     logger.info("[IMP:7][main][start] node_yaml=%s", args.node_yaml)
 
+    # DevPlan 123 T6: --deploy-parallel/--deploy-orchestrator приходят из shell-строк
+    # (deploy-modules.sh прокидывает DEPLOY_PARALLEL/DEPLOY_ORCHESTRATOR env). argparse
+    # choices=["true","false"] уже ограничивает регистр, но нормализация сравнения
+    # (вместо строгого == "true") устойчива к любому регистру и проходит гейт булевых
+    # литералов — обоснование выбора: нормализация предпочтительнее per-line allowlist.
     result = orchestrate(
         node_yaml=args.node_yaml,
         modules_dir=args.modules_dir,
         core_dir=args.core_dir,
         templates_dir=args.templates_dir,
         modules_filter=args.modules_filter,
-        deploy_parallel=args.deploy_parallel == "true",
-        deploy_orchestrator=args.deploy_orchestrator == "true",
+        deploy_parallel=(args.deploy_parallel or "").lower() == "true",
+        deploy_orchestrator=(args.deploy_orchestrator or "").lower() == "true",
     )
     logger.info("[IMP:9][main][exit] exit_code=%d", result.exit_code)
     return result.exit_code
