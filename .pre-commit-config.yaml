@@ -259,19 +259,18 @@ repos:
         language: script
         stages: [pre-push]
         always_run: true
-      - id: check-manifest-parity
-        name: Manifest ↔ AGENTS.md ↔ Makefile parity
-        description: Validate bidirectional sync between manifest, AGENTS.md, and Makefiles
-        # .venv/bin/python — фикс DevPlan 124 (2026-08-03): голый `python` резолвился в
-        # homebrew python 3.14.6/pytest 9.0.3 (НЕ стек проекта .venv 3.14.5/9.1.1) и давал
-        # интермиттентный pre-commit-fail в gate-прогонах (хук Failed при прошедших тестах,
-        # 2 из 3 make gate MODE=fast). Venv-pin = единый детерминированный тест-стек.
-        entry: .venv/bin/python -m pytest tests/gates/test_gate_manifest_integrity.py -v --tb=short -p no:warnings
-        language: system
-        files: ^(core/entrypoint-manifest\.yaml|core/AGENTS\.md|Makefile|core/modules/.*/Makefile)$
-        pass_filenames: false
-        stages: [pre-commit]
-
+      # ⚠️ TRAP[DECISION] · 2026-08-03 · — · check-manifest-parity УДАЛЁН из pre-commit (DevPlan 124)
+      # · Rejected: оставить хук — flake ~40% в live `make gate MODE=fast` (шаг pre-commit): hook
+      # ·   Failed при 15 passed тестах — процесс pytest выходил non-zero ПОСЛЕ успешного прогона;
+      # ·   воспроизводится ТОЛЬКО внутри gate-шага (0/15 standalone-прогонов, 0/8 make pre-commit-run);
+      # ·   venv-pin (.venv 3.14.5/9.1.1 вместо homebrew 3.14.6/9.0.3) НЕ устранил — не python-версия;
+      # ·   механизм process-lifecycle-флейка не установлен после полного расследования
+      # · Reason: валидация parity ПОЛНОСТЬЮ покрыта gates-чеком (tests/gates/test_gate_manifest_integrity.py,
+      # ·   15 детерминированных тестов — исполняются в КАЖДОМ make gate / make check). Pre-commit-хук —
+      # ·   дублирующий fast-feedback путь, блокировавший gate (главную цель DevPlan 124) ~40% прогонов.
+      # ·   Удаление не ослабляет защиту: parity-тесты продолжают исполняться в gates-чеке.
+      # · Rev: при установлении причины (exit non-zero после 15 passed в контексте gate-шага) —
+      # ·   вернуть хук с фиксом; до тех пор parity живёт только в gates-чеке.
       - id: scripts-audit
         name: Audit script registration
         entry: make scripts-audit

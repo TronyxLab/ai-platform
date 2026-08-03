@@ -1112,10 +1112,11 @@ def run_gate(
                 print(f"[IMP:9][gate] FAIL: {spec.id} (exit {r.exit_code})", file=sys.stderr)
                 # ⚠️ TRAP[BUG] 2026-08-03 · stdout pytest вытеснялся скипами из stderr
                 # · Symptom: gate-fast CI «gates exit 1» без деталей — FAILED-строки pytest
-                #   не видны (conftest automatic_skip_gate логирует 16 скипов в stderr;
-                #   прежний выбор (r.stderr or r.stdout) показывал только хвост скипов).
+                # ·   не видны (conftest automatic_skip_gate логирует 16 скипов в stderr;
+                # ·   прежний выбор (r.stderr or r.stdout) показывал только хвост скипов).
                 # · Fix: приоритет stdout (pytest short summary с FAILED), stderr — fallback.
-                print(((r.stdout or r.stderr) or "")[-3000:], file=sys.stderr)
+                # TEMP-DIAG-2026-08-03: полный вывод для диагностики флейка pre-commit-шага
+                print(((r.stdout or r.stderr) or ""), file=sys.stderr)
         outcomes.append(r)
         if gate_failed and gate_mode == "fast":
             break  # fail-fast: первый блокирующий провал стопит fast-режим
