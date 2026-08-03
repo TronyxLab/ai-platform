@@ -7,9 +7,9 @@
 
 | # | Долг | Severity | Почему отложено | Rev |
 |---|------|----------|-----------------|-----|
-| D-2 | P-13: Build Hermes L1 push 403 (ghcr.io/tronyx161) | HIGH | Операторская проверка GHCR-токена/пакета | 2026-08-10 |
-| D-12 | Локальный status-metrics/htpasswd cron отсутствует (dev-локали) — файлы генерируются вручную | LOW | Документировано в Fix Recipe | 2026-08-31 |
-| D-15 | P-23: e2e φ8 deploy_context «No module named 'pydantic'» (non-fatal, error-path) | LOW | На проде не воспроизвёлся; ошибка обработки деплоя stub | 2026-08-31 |
+| D-2 | P-13: Build Hermes L1 push 403 (ghcr.io/tronyx161) | HIGH | ~~Операторская проверка GHCR-токена/пакета~~ → **FIXED пользователем 2026-08-03** (верификация: `make hermes-push-l1`). | FIXED 2026-08-03 |
+| D-12 | Локальный status-metrics/htpasswd cron отсутствует (dev-локали) — файлы генерируются вручную | LOW | Спланировано: **план 130 W1** (`make dev-metrics` на базе platform_export_metrics.py + secrets_manager) | 2026-08-31 (план 130 W1) |
+| D-15 | P-23: e2e φ8 deploy_context «No module named 'pydantic'» (non-fatal, error-path) | LOW | На проде не воспроизвёлся; pydantic в requirements.txt (RC-сессия). Спланировано: **план 130 W2** (FIXED-верификация, снятие) | 2026-08-31 (план 130 W2) |
 
 ## Закрытые долги из .ai/plans/118 (учёт при удалении плана)
 
@@ -20,4 +20,9 @@
 
 | Status | Rev |
 |--------|-----|
-| OPEN (3 записи) | D-2: 2026-08-10; D-12/D-15: 2026-08-31 |
+| OPEN (2 записи) / FIXED (D-2) | D-2: FIXED 2026-08-03 (пользователь); D-12/D-15: план 130 (2026-08-31) |
+
+## Планирование (2026-08-03, решение пользователя «закрыть все долги»)
+
+Все записи перенесены в план **130-debt-ops** (D-12 W1, D-15 W2). После реализации
+реестр `.ai/debt/` удаляется целиком (план **131-debt-cleanup**).

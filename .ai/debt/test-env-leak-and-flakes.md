@@ -77,4 +77,4 @@
 
 | Status | Rev |
 |--------|-----|
-| OPEN (частично fixed) | 2026-08-09 — верификация reload-гонки monkeypatch/sys.modules; решение по pytest-timeout |
+| OPEN (частично fixed) | **План 129 W4** (2026-08-09): reload-гонка monkeypatch/sys.modules + pytest-timeout; W2/W3 — xdist-race и env-утечки. После реализации реестр удаляется (план 131). |

@@ -30,6 +30,7 @@
 ## @changes  UPDATED: 2026-08-02 | DevPlan 119 C2/C6 — +P3-6 (watchdog undelivered, решение на 120) +P3-7 (letsencrypt path hardcode); отдельные файлы .ai/debt/watchdog-undelivered.md, .ai/debt/letsencrypt-path-hardcode.md
 ## @changes  UPDATED: 2026-08-03 | RC-сессия (pre-v1.0.0-rc3) — stale-закрытие: P2-3 → FIXED (волна 117 D5, execute_grouped_phase удалён из state_machine и e2e), P2-4 → FIXED (DevPlan 116 T5, generate-manifests покрывает G1-G6), P3-6 → FIXED (решение пользователя 2026-08-03: watchdog удалён полностью — см. watchdog-undelivered.md), P3-7 → FIXED (миграция vhost_renderer/nginx_harness на letsencrypt_live — см. letsencrypt-path-hardcode.md), T7 → FIXED (вместе с 117 D5); T3 путь → tests/unit/test_spool_dir.py
 ## @changes  UPDATED: 2026-08-03 | Cleanup .ai/plans — выполненные планы 036-125 удалены (история в git); открытые долги 121 (D-2 L1 push 403 HIGH / D-12 / D-15) перенесены в .ai/debt/121-rc-deferred.md; 118 D2 (node_yaml миксины) → FIXED 119-H, 118 D7 (jinja) → CLOSED 125 T12 — учтены в 121-rc-deferred.md
+## @changes  UPDATED: 2026-08-03 | Debt-планирование (решение пользователя «закрыть все долги»): ВСЕ долги спланированы в .ai/plans/127-debt-shell-migration (S2/S8 миграция; S4/S5/S6 верифицированы FIXED 117/118 — install-docker.sh 23 LOC, setup-node.sh 110, platform-secrets/install.sh 25), 128-debt-python-refactor (P2-5/D6, D3, D1/D2, D7, D8, D10, D12-hc, nginx-dual, manifest.mk, jsonschema-FIXED, D9-FIXED), 129-debt-test-infra (T2-T6, P3-5/D18, D13/D14, xdist-race, env-leak, pytest-timeout), 130-debt-ops (D-12, D-15-FIXED, P3-4, D24), 131-debt-cleanup (удаление .ai/debt/ и TRAP[DEBT] после реализации). D-2 (121) → FIXED пользователем 2026-08-03.
 
 ---
 
@@ -45,14 +46,14 @@
 
 | # | Файл | LOC | Обоснование исключения | Status | Rev |
 |---|------|-----|------------------------|--------|-----|
-| S1 | `core/internal/bootstrap/issue-cert.sh` | 704 | acme.sh executor (DNS-01/HTTP-01). Осознанно пропущен в Wave 5a — shell subprocess by design (U-85 justified). TRAP[DECISION] 2026-07-26. | OPEN | 2026-12-31 |
-| S2 | `core/internal/bootstrap/install-tor-proxy.sh` | 422 | Одноразовый bootstrap. Не содержит бизнес-логики для извлечения в Python. TRAP[DECISION] webtunnel degradation. | OPEN | При росте >500 LOC |
-| S3 | `core/lib/healthcheck.sh` | 388 | STABLE библиотека. Исключена политикой (AGENTS.md: языковая политика п.2 — lib-функции низкого уровня). | OPEN | Бессрочно (стабильное API) |
-| S4 | `core/modules/platform-secrets/install.sh` | 223 | Bootstrap-установка systemd unit для SOPS/age. P3-кандидат. | OPEN | При росте >300 LOC |
-| S5 | `core/internal/bootstrap/install-docker.sh` | 218 | Bootstrap-установка Docker. P3-кандидат. | OPEN | При росте >300 LOC |
-| S6 | `core/internal/bootstrap/setup-node.sh` | 215 | Bootstrap-инициализация ноды (пользователи, директории). P3-кандидат. | OPEN | При росте >300 LOC |
-| S7 | `core/lib/module-interface.sh` | 206 | STABLE библиотека. Исключена политикой (AGENTS.md: языковая политика п.2). | OPEN | Бессрочно (стабильное API) |
-| S8 | `core/lib/node-resolver.sh` | 271 | Thin facade для NodeYaml Python CLI. 271 LOC > порога фасада (150 LOC). Inline python3 -c мигрирован (строки 214/254 — «Replaces», DevPlan 116 B11 T5 U-58). Включён в P2-BACKLOG. | OPEN | 2026-09-30 |
+| S1 | `core/internal/bootstrap/issue-cert.sh` | 700 | acme.sh executor (DNS-01/HTTP-01). Осознанно пропущен в Wave 5a — shell subprocess by design (U-85 justified). TRAP[DECISION] 2026-07-26. Планирование: 127 W3 (keep подтверждён). | SUPERSEDED | Keep by design (AGENTS.md; закрыто 127) |
+| S2 | `core/internal/bootstrap/install-tor-proxy.sh` | 321 | Одноразовый bootstrap. Бизнес-логика мигрирована (tor_transport 118 E1, tor_setup/privoxy_config 119 D2/D3) — остаток apt/systemd-оркестрация. Планирование: 127 W1 (миграция в Python). | OPEN | 2026-09-30 (план 127) |
+| S3 | `core/lib/healthcheck.sh` | 251 | STABLE библиотека. Исключена политикой (AGENTS.md: языковая политика п.2). Планирование: 127 W3 (keep подтверждён). | SUPERSEDED | Keep by design (AGENTS.md; закрыто 127) |
+| S4 | `core/modules/platform-secrets/install.sh` | 25 | Тонкий фасад (118 E7) — бизнес-логика в installer.py. Планирование: 127 W3 (верификация FIXED). | FIXED | 2026-08-03 (118 E7; верифицировано 127) |
+| S5 | `core/internal/bootstrap/install-docker.sh` | 23 | Тонкий фасад (118 E2) — бизнес-логика в docker_installer.py. Планирование: 127 W3 (верификация FIXED). | FIXED | 2026-08-03 (118 E2; верифицировано 127) |
+| S6 | `core/internal/bootstrap/setup-node.sh` | 110 | Только generate_sudoers (117 D1, дубли φ2 удалены); <150 LOC фасада. Планирование: 127 W3 (верификация FIXED). | FIXED | 2026-08-03 (117 D1; верифицировано 127) |
+| S7 | `core/lib/module-interface.sh` | 26 | STABLE библиотека → тонкий фасад (119 D4, invoke через python3 -m shared.module_interface). Исключена политикой (AGENTS.md п.2). | SUPERSEDED | Keep by design (AGENTS.md; закрыто 127) |
+| S8 | `core/lib/node-resolver.sh` | 215 | Thin facade для NodeYaml Python CLI (актуальный LOC 215, был 271). Планирование: 127 W2 (миграция резолва в Python, фасад <100). | OPEN | 2026-09-30 (план 127 W2) |
 
 **Примечание (относительно Brief 111):** P2-кандидаты из Brief (validate.sh, scp-deliver.sh, check-dead-code.sh, lint.sh) ЗАКРЫТЫ волнами 106-109 — все стали thin-фасадами <100 LOC и не входят в SHELL-RESIDUAL. Новый кандидат — node-resolver.sh (S8), не был в Brief.
 
@@ -62,11 +63,11 @@
 
 | # | Задача | Файл | LOC/Scope | Обоснование | Status | Rev |
 |---|--------|------|-----------|-------------|--------|-----|
-| P2-1 | Strangler-Fig node-resolver.sh | `core/lib/node-resolver.sh` | 271 | >150 LOC facade; inline python3 -c мигрирован (214/254, U-58). Кандидат на декомпозицию: shell facade <100 LOC + Python-модуль (U-86 backlog подтверждён). | OPEN | 2026-09-30 |
+| P2-1 | Strangler-Fig node-resolver.sh | `core/lib/node-resolver.sh` | 215 | >150 LOC facade (актуальный LOC 215). Кандидат на декомпозицию: shell facade <100 LOC + Python-модуль. Планирование: 127 W2. | OPEN | 2026-09-30 (план 127 W2) |
 | P2-2 | Починить test_add_vhost.py | `tests/test_add_vhost.py` | 7 тестов | FIXED волной B10 (116): test_add_vhost 7 passed (main() exit 1 устранён). См. TEST-DEBT T1. | FIXED | 2026-08-01 |
 | P2-3 | Удалить мёртвый код state_machine | `core/internal/bootstrap/lifecycle/state_machine.py:213` | ~100 LOC | resume_phase()/execute_grouped_phase()/_grouped_phases — мёртвый код (TRAP[DEBT] MED 2026-07-31). Ни один тест не покрывает. | FIXED | 2026-08-01 (волна 117 D5) |
 | P2-4 | Починить manifest.mk G2/G4/G5 | `makefiles/manifest.mk:25` | ~20 LOC | generate-manifests не fully repairs stale manifests (TRAP[DEBT] MED 2026-07-31). | FIXED | 2026-08-01 (DevPlan 116 T5, G1-G6) |
-| P2-5 | Docker operations → shared module | `core/internal/deploy/deploy_engine.py:76` | ~200 LOC | Дублирование docker-операций между deploy_engine, docker_orchestrator, docker.sh (TRAP[DEBT] MED 2026-07-26). | OPEN | 2026-09-30 |
+| P2-5 | Docker operations → shared module | `core/internal/deploy/deploy_engine.py:76` | ~200 LOC | Дублирование docker-операций между deploy_engine, docker_orchestrator, docker.sh (TRAP[DEBT] MED 2026-07-26). Планирование: 128 W1. | OPEN | 2026-09-30 (план 128 W1) |
 
 ---
 
@@ -74,11 +75,11 @@
 
 | # | Файл | Суть | Status | Rev |
 |---|------|------|--------|-----|
-| P3-1 | `core/internal/bootstrap/install-docker.sh` (218 LOC) | Bootstrap, кандидат при росте >300 LOC | OPEN | При росте >300 LOC |
-| P3-2 | `core/internal/bootstrap/setup-node.sh` (215 LOC) | Bootstrap, кандидат при росте >300 LOC | OPEN | При росте >300 LOC |
-| P3-3 | `core/modules/platform-secrets/install.sh` (223 LOC) | Bootstrap, кандидат при росте >300 LOC | OPEN | При росте >300 LOC |
-| P3-4 | `core/modules/postgres/docker-compose.base.yml:50` | POSTGRES_PASSWORD rotation risk (TRAP[DEBT] MED) | OPEN | 2026-12-31 |
-| P3-5 | `tests/_conftest/networks.py:90` | Parallel test teardown destroys shared external networks (TRAP[DEBT] MED) | OPEN | 2026-12-31 |
+| P3-1 | `core/internal/bootstrap/install-docker.sh` (23 LOC) | FIXED (118 E2) — тонкий фасад, docker_installer.py. Закрыто 127 W3. | FIXED | 2026-08-03 |
+| P3-2 | `core/internal/bootstrap/setup-node.sh` (110 LOC) | FIXED (117 D1) — только generate_sudoers. Закрыто 127 W3. | FIXED | 2026-08-03 |
+| P3-3 | `core/modules/platform-secrets/install.sh` (25 LOC) | FIXED (118 E7) — тонкий фасад, installer.py. Закрыто 127 W3. | FIXED | 2026-08-03 |
+| P3-4 | `core/modules/postgres/docker-compose.base.yml:50` | POSTGRES_PASSWORD rotation risk (TRAP[DEBT] MED) — планирование: 130 W3 (runbook/автоматизация). | OPEN | 2026-12-31 (план 130 W3) |
+| P3-5 | `tests/_conftest/networks.py:90` | Parallel test teardown destroys shared external networks (TRAP[DEBT] MED) — планирование: 129 W3. | OPEN | 2026-12-31 (план 129 W3) |
 | P3-6 | `core/modules/hermes-agent/watchdog/*` (3 файла) | Watchdog-подсистема не доставляется (0 в Dockerfile/compose/systemd/CI) — решение пользователя на 120 (DevPlan 119 C2, D-1). TRAP[DEBT] HI на agent_watchdog/circuit_breaker/docker_ops. См. `.ai/debt/watchdog-undelivered.md`. | FIXED | 2026-08-03 (решение пользователя: удалено полностью) |
 | P3-7 | `core/internal/scaffold/vhost_renderer.py`, `core/internal/scaffold/nginx_harness.py` | `/etc/letsencrypt/live` хардкод вне `letsencrypt_live()` (DevPlan 119 C6, AUDIT-4 T7). cert_orchestrator мигрирован (118 C7). TRAP[DEBT] на оба файла. См. `.ai/debt/letsencrypt-path-hardcode.md`. | FIXED | 2026-08-03 (миграция на letsencrypt_live) |
 
@@ -89,11 +90,11 @@
 | # | Файл | Суть | Severity | Status | Rev |
 |---|------|------|----------|--------|-----|
 | T1 | `tests/test_add_vhost.py` | FIXED волной B10 (116): все 7 тестов проходят (main() exit 1 после миграции add-vhost.sh → vhost_renderer.py устранён). | **HI** | FIXED | 2026-08-01 |
-| T2 | `tests/test_smoke_litellm.py:72` | litellm first-start crash (httpx.ConnectError) — TRAP[DEBT] MED | MED | OPEN | 2026-09-30 |
-| T3 | `tests/unit/test_spool_dir.py:18` | 3 модуля без spool_volume: litellm, langfuse, infra-metrics — TRAP[DEBT] MED | MED | OPEN | 2026-09-30 |
-| T4 | `tests/test_volume_spool_consistency.py:82` | Vacuous Check 3 — TRAP[DEBT] MED | MED | OPEN | 2026-09-30 |
-| T5 | `tests/test_lib_node_resolver.py:258` | No cleanup of /opt/node-configs/ test files — TRAP[DEBT] LO | LO | OPEN | 2026-12-31 |
-| T6 | `tests/_conftest/skip_gate.py:36` | _handle_e2e_error не используется uniformly — TRAP[DEBT] LO | LO | OPEN | 2026-12-31 |
+| T2 | `tests/test_smoke_litellm.py:72` | litellm first-start crash (httpx.ConnectError) — TRAP[DEBT] MED. Mitigated retry+backoff (2026-07-23). Планирование: 129 W1 (закрыть mitigated, снять TRAP). | MED | OPEN | 2026-09-30 (план 129 W1) |
+| T3 | `tests/unit/test_spool_dir.py:18` | 3 модуля без spool_volume: litellm, langfuse, infra-metrics — TRAP[DEBT] MED. Планирование: 129 W1. | MED | OPEN | 2026-09-30 (план 129 W1) |
+| T4 | `tests/test_volume_spool_consistency.py:82` | Vacuous Check 3 — TRAP[DEBT] MED. Планирование: 129 W1. | MED | OPEN | 2026-09-30 (план 129 W1) |
+| T5 | `tests/test_lib_node_resolver.py:258` | No cleanup of /opt/node-configs/ test files — TRAP[DEBT] LO. Планирование: 129 W1. | LO | OPEN | 2026-12-31 (план 129 W1) |
+| T6 | `tests/_conftest/skip_gate.py:36` | _handle_e2e_error не используется uniformly — TRAP[DEBT] LO. Планирование: 129 W1. | LO | OPEN | 2026-12-31 (план 129 W1) |
 | T7 | `tests/e2e/test_failure_scenarios.py:23` | Мёртвый код (resume_phase) — см. P2-3 | MED | FIXED | 2026-08-01 (волна 117 D5) |
 
 ---
