@@ -628,10 +628,11 @@ lifecycle:
 - make_target: verify
   mechanism: shell-script
   delegates_to: core/entrypoints/verify.sh → core/internal/verify/verify-domains.sh
-  signature: make verify NODE=<node>
+  signature: make verify NODE=<node> [PROJECT=<name>]
   operation_ru: HTTPS-верификация
-  description: Post-deploy HTTPS verification — curl all expose:true domains from
-    node.yaml, exit 0 if all HTTP 200
+  description: Post-deploy HTTPS verification — curl expose:true domains from node.yaml,
+    exit 0 if all HTTP 200; PROJECT=<name> (DevPlan 125 T1, P-22) — verify per-project
+    (только домен деплоящегося проекта)
 provision:
 - make_target: provision
   mechanism: shell-script
@@ -1137,6 +1138,12 @@ gates:
 - id: test_deploy_make_targets_registered
   test_file: test_gate_deploy_channel.py
   description: 'Auto-discovered gate: test_deploy_make_targets_registered'
+- id: test_workflow_no_platform_dependencies
+  test_file: test_gate_deploy_channel.py
+  description: 'Auto-discovered gate: test_workflow_no_platform_dependencies'
+- id: test_workflow_platform_dependencies_negative
+  test_file: test_gate_deploy_channel.py
+  description: 'Auto-discovered gate: test_workflow_platform_dependencies_negative'
 - id: test_workflow_uses_only_channel_verbs
   test_file: test_gate_deploy_channel.py
   description: 'Auto-discovered gate: test_workflow_uses_only_channel_verbs'

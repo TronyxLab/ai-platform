@@ -25,7 +25,12 @@ import subprocess
 from unittest.mock import MagicMock, patch
 
 # ── Module under test ─────────────────────────────────────────────
-from core.internal.shared.docker_auth import configure_docker_auth, docker_login, ghcr_login
+from core.internal.shared.docker_auth import (
+    configure_docker_auth,
+    docker_login,
+    ghcr_login,
+    resolve_user_home,
+)
 from tests._conftest.ldd import ldd_trajectory
 
 logger = logging.getLogger(__name__)
@@ -282,6 +287,70 @@ def test_configure_docker_auth_empty_creds(caplog) -> None:
     assert result["auths"]["https://index.docker.io/v1/"]["auth"] == expected_b64
 
     logger.critical("[IMP:9][test] configure_docker_auth — empty creds produce colon-only encoding — OK")
+
+
+# endregion
+
+# ═══════════════════════════════════════════════════════════════════
+# region Tests: resolve_user_home (DevPlan 125 T6 — HOME-резолв)
+# ═══════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · DevPlan 125 T6 · user с записью в passwd → pw_dir
+# · Scenario: pwd.getpwnam(user).pw_dir = /home/ci-deploy → HOME резолвится из passwd
+# · Last fail: 2026-08-03 — f"/home/{user}" хардкод (не-стандартный home ломал creds-путь молча)
+# · Remove if: resolve_user_home удалён
+@ldd_trajectory
+def test_resolve_user_home_from_passwd(caplog) -> None:
+    """resolve_user_home: getpwnam(user).pw_dir — канонический HOME (T6)."""
+    caplog.set_level(logging.INFO)
+    with patch("core.internal.shared.docker_auth.pwd.getpwnam") as mock_getpwnam:
+        mock_getpwnam.return_value.pw_dir = "/home/ci-deploy"
+        home = resolve_user_home("ci-deploy")
+
+    assert home == "/home/ci-deploy"
+    logger.critical("[IMP:9][test] resolve_user_home — passwd-резолв — OK")
+
+
+# 🧪 TRAP[TEST] · DevPlan 125 T6 · user БЕЗ записи в passwd → fallback /home/<user>
+# · Scenario: pwd.getpwnam KeyError → fallback /home/<user> (прежнее поведение, WARN)
+# · Last fail: 2026-08-03 — f"/home/{user}" хардкод без fallback-семантики (T6)
+# · Remove if: resolve_user_home удалён
+@ldd_trajectory
+def test_resolve_user_home_fallback(caplog) -> None:
+    """resolve_user_home: KeyError → fallback /home/<user> (не raise)."""
+    caplog.set_level(logging.INFO)
+    with patch("core.internal.shared.docker_auth.pwd.getpwnam", side_effect=KeyError("nope")):
+        home = resolve_user_home("ghost-user")
+
+    assert home == "/home/ghost-user"
+    assert any("HOME fallback" in r.message for r in caplog.records), "должен быть WARN-лог fallback"
+    logger.critical("[IMP:9][test] resolve_user_home — KeyError fallback — OK")
+
+
+# 🧪 TRAP[TEST] · DevPlan 125 T6 · ghcr_login использует passwd-резолв HOME
+# · Scenario: mock pwd.getpwnam + subprocess → env HOME = pw_dir (не хардкод)
+# · Last fail: 2026-08-03 — creds в /root/.docker (unauthorized у receive) — TRAP[BUG]
+# · Remove if: ghcr_login HOME-логика изменена
+@ldd_trajectory
+def test_ghcr_login_home_resolved_from_passwd(caplog) -> None:
+    """ghcr_login: HOME в env = passwd pw_dir (T6), а не хардкод /home/<user>."""
+    caplog.set_level(logging.INFO)
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+
+    with (
+        patch("core.internal.shared.docker_auth.subprocess.run", return_value=mock_result) as mock_run,
+        patch("core.internal.shared.docker_auth.pwd.getpwnam") as mock_getpwnam,
+        patch("core.internal.shared.docker_auth.os.path.isdir", return_value=True),
+    ):
+        mock_getpwnam.return_value.pw_dir = "/custom/home/ci-deploy"
+        ok = ghcr_login(token="ghp_test_token", user="ci-deploy")
+
+    assert ok is True
+    _pos_args, kw_args = mock_run.call_args
+    assert kw_args["env"]["HOME"] == "/custom/home/ci-deploy", "HOME должен браться из passwd, не из хардкода"
+    logger.critical("[IMP:9][test] ghcr_login — HOME из passwd — OK")
 
 
 # endregion

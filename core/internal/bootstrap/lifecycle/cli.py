@@ -26,6 +26,7 @@ import logging
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 from core.internal.bootstrap.lifecycle.helpers.reporting import send_telegram, write_audit_log
 from core.internal.bootstrap.lifecycle.state_machine import (
@@ -235,6 +236,78 @@ def main() -> int:
 # endregion FUNC_main
 
 
+# region FUNC_forced_command_smoke
+## @purpose  Post-bootstrap forced-command ping smoke (DevPlan 125 T3, FL20) — проверить,
+##           что CI-деплой канал не мёртв СРАЗУ после bootstrap, а не при первом CI-деплое.
+##           Проверки: (1) статика — ci-deploy authorized_keys содержит forced-command entry
+##           (orchestrator_cli dispatch + restrict — единственный писатель users.py, 117 D1);
+##           (2) runtime — `python3 -m core.internal.deploy.orchestrator_cli dispatch ping`
+##           локально: тот же код-путь, что sshd exec под forced-command (SSH-слой покрыт
+##           vps_readiness pre-flight в deploy.mk).
+## @io       ⇥ None → ⎋ bool (True = канал готов; НЕ блокирует bootstrap при False — warning)
+## @complexity O(1) + 1 subprocess
+## @invariants
+##   - Non-blocking: FAIL → warning + КРУПНЫЙ print в stderr, exit-код bootstrap не меняется
+##   - Статика падает gracefull: authorized_keys не читается → warning, канал считается dead
+##   - Runtime использует платформенный python (sys.executable) — тот же интерпретатор
+def _forced_command_smoke() -> bool:
+    """Smoke forced-command ping после bootstrap (FL20, DevPlan 125 T3)."""
+    base = str(platform_remote_base())
+    ok = True
+
+    # ── 1. Статика: authorized_keys entry ──
+    # ~ci-deploy резолвится через passwd (os.path.expanduser) — без хардкод-литерала
+    # (гейт test_gate_no_hardcoded_local_paths: /home/<user> — RED)
+    auth_keys = os.path.join(os.path.expanduser("~ci-deploy"), ".ssh", "authorized_keys")
+    try:
+        content = Path(auth_keys).read_text()
+        if "orchestrator_cli dispatch" in content and "restrict" in content:
+            logger.info("[IMP:9][smoke] forced-command authorized_keys: entry OK (%s)", auth_keys)
+        else:
+            logger.warning(
+                "[IMP:7][smoke] forced-command authorized_keys: entry MISSING (%s) — CI-деплой канал мёртв",
+                auth_keys,
+            )
+            ok = False
+    except OSError as e:
+        logger.warning("[IMP:7][smoke] forced-command authorized_keys unreadable: %s — %s", auth_keys, e)
+        ok = False
+
+    # ── 2. Runtime: dispatch ping (тот же код-путь, что sshd forced-command) ──
+    try:
+        r = subprocess.run(
+            [sys.executable, "-m", "core.internal.deploy.orchestrator_cli", "dispatch", "ping"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=base,
+        )
+        if "pong" in r.stdout:
+            logger.info("[IMP:9][smoke] forced-command ping: OK (dispatch ping → pong)")
+        else:
+            logger.warning(
+                "[IMP:7][smoke] forced-command ping: FAIL (rc=%s out=%r) — orchestrator_cli dispatch не отвечает",
+                r.returncode,
+                r.stdout[:80],
+            )
+            ok = False
+    except (OSError, subprocess.TimeoutExpired) as e:
+        logger.warning("[IMP:7][smoke] forced-command ping: ERROR — %s", e)
+        ok = False
+
+    if ok:
+        print("[IMP:9][smoke] FORCED-COMMAND PING: OK — CI-деплой канал готов", file=sys.stderr)
+    else:
+        # КРУПНО, но не блокирует bootstrap (vps_readiness pre-flight перепроверит при деплое)
+        print(
+            "🚨 [IMP:10][smoke] FORCED-COMMAND PING: FAIL — CI-деплой будет невозможен (см. лог выше)", file=sys.stderr
+        )
+    return ok
+
+
+# endregion FUNC_forced_command_smoke
+
+
 # region FUNC_run_init_mode
 ## @purpose — Execute all init mode phases (9 phases from BootstrapPhase enum).
 ## @io — ⇥ sm: StateMachine → ⎋ int exit code
@@ -303,6 +376,11 @@ def run_init_mode(sm: StateMachine) -> int:
                 entry.status = "failed"
             sm.save()
             return e.exit_code
+
+    # ── Post-run: forced-command ping smoke (DevPlan 125 T3, FL20) ──
+    # Мёртвый CI-канал обнаруживается в финале bootstrap, а не при первом CI-деплое.
+    # Non-blocking: FAIL → warning + КРУПНЫЙ stderr-print, exit 0 сохраняется.
+    _forced_command_smoke()
 
     # ── Post-run: audit log + Telegram notification ──
     write_audit_log(sm)

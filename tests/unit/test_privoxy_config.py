@@ -143,6 +143,23 @@ def test_write_privoxy_config(caplog: pytest.LogCaptureFixture, tmp_path) -> Non
     _assert_imp9(caplog)
 
 
+# 🧪 TRAP[TEST] · DevPlan 125 T9 (D-6) · privoxy config mode 0644 (сервис user privoxy читает)
+# · Regression: tempfile.mkstemp (0600) + os.replace → root-only конфиг → privoxy.service
+# ·   «Fatal error: can't open configuration file ... Permission denied» (rc=1)
+# · Scenario: запись конфига → mode == 0644 (world-readable, канон dpkg — конфиг без секретов)
+# · Last fail: 2026-08-03 — прод tronyx-vps privoxy failed 7h (D-6)
+# · Remove if: privoxy_config writer изменён
+def test_write_privoxy_config_mode_0644(caplog: pytest.LogCaptureFixture, tmp_path) -> None:
+    """write_privoxy_config: файл записывается с mode 0644 (D-6, DevPlan 125 T9)."""
+    caplog.set_level(logging.INFO)
+    config_path = tmp_path / "config"
+    assert privoxy_config.write_privoxy_config(str(config_path)) is True
+
+    mode = config_path.stat().st_mode & 0o777
+    assert mode == 0o644, f"ожидался mode 0644 (читаемость сервисом privoxy), got {oct(mode)}"
+    _assert_imp9(caplog)
+
+
 # 🧪 TRAP[TEST] · NEGATIVE (R5) · test_privoxy_config_idempotent — двойной вызов = no-op (D3)
 # · Scenario: второй вызов write_privoxy_config → False (никаких изменений), конфиг не повреждён
 # · Last fail: N/A (new — D3 test-first; R5: идемпотентность shell grep-guard сохраняется в Python)

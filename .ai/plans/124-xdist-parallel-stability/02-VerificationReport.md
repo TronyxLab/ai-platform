@@ -193,3 +193,32 @@ A2 решает intra-process гонку, но не межсессионную (
 $START_VERIFICATION_REPORT
 План 124 — ревью завершено, вердикт DRIFTED (WARNING), рекомендуемые правки в Разделе 5.
 $END_VERIFICATION_REPORT
+
+---
+
+# Финальный вердикт ПОСЛЕ реализации (DevPlan 125 T15, 2026-08-03)
+
+## Метод
+
+Рантайм-верификация реализации A2+ (код вошёл в 95fb62c/35c0c71) + статическое подтверждение каждого пункта:
+
+| Пункт A2+ | Evidence | Вердикт |
+|-----------|----------|---------|
+| test_runner.py `_xdist_args` docker-exclusion | test_runner.py:113-117 — docker-маркеры {smoke, component, integration, predeploy-docker} исключены из `-n auto` (single-process стек) | ✅ PASS |
+| flock `tests/.docker-suite.lock` (мастер-процесс) | test_runner.py:37 + check_suite.py:462-483 `_docker_suite_lock` — процессный advisory flock, ЕДИНЫЙ lock-файл машины (T2c) | ✅ PASS |
+| session.py master-guard (PYTEST_XDIST_WORKER) | session.py:124-132 `_is_xdist_worker()` — counter increment/reset и docker-cleanup только на master | ✅ PASS |
+| check-suite.yaml gates-docker xdist:false | core/check-suite.yaml: xdist: false на docker-чеках (строки 103, 137) | ✅ PASS |
+| tests/gates/*.py эксклюзии `_b11_negative_*_tmp`/`_gate_probe_marker_tmp` + FileNotFoundError-обработка | 7 файлов gates/ + test_cross_layer_imports.py содержат probe-эксклюзии | ✅ PASS |
+| counter-семантика (2 файла, writer'ы) | `tests/.test_counter.json` (ключ `attempts`, writer: `_conftest/counter.py` + session.py); `tests/gates/.test_counter.json` (ключ `failed_runs`, writer: tests/gates/conftest.py) — раздельные ключи/файлы, оба под flock + master-only | ✅ PASS |
+
+## Регрессионный критерий 124
+
+`make check` (WORKERS=6) 2× подряд без флаков — исполнен в рамках финальной верификации DevPlan 125
+(см. VR 125: «make check до чистоты → make gate MODE=fast»). Оба прогона зелёные, 0 флаков.
+
+## Вердикт
+
+**FIXED.** Решение A2+ реализовано полностью (6/6 пунктов PASS), per-wave audit-trail восстановлен
+документально: T16 (DevPlan 125) — факт атрибуции «реализация A2+ вошла в 95fb62c (общий коммит
+дневной RC-сессии 121)» зафиксирован; незакоммиченные остатки 124 (pre-commit flake closure)
+оформлены отдельным `feat(124)`-коммитом 35c0c71.

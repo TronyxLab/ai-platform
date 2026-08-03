@@ -137,23 +137,39 @@ jobs:
           SHA="${{ steps.sha.outputs.sha }}"
           ssh ${{ steps.ssh_opts.outputs.opts }} \
             ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }} "mkdir -p /opt/platform/core"
-          # Rsync core/ with --delete (excludes .git, __pycache__, *.pyc)
-          rsync -avz --delete \
-            --exclude '.git/' \
-            --exclude '__pycache__/' \
-            --exclude '*.pyc' \
-            --exclude 'default-user.xml' \
-            --exclude '.env' \
-            ./core/ ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/platform/core/
+          # ⚠️ TRAP[BUG] 2026-08-03 · rsync --delete без guard'а — молчаливый унос файлов (DevPlan 125 T4)
+          # · Symptom: при отсутствии/пустом источнике rsync --delete удалил бы /opt/platform/core/*
+          #   (symmetрия с node-configs guard ниже отсутствовала — guard был только у node-configs)
+          # · Root: --delete требует непустой источник; проверка была только у 1 из 3 rsync-шагов
+          # · Fix: guard [ -d ./core ] + непустота источника ПЕРЕД --delete (DevPlan 125 T4)
+          if [ -d ./core ] && [ -n "$(ls -A ./core 2>/dev/null)" ]; then
+            # Rsync core/ with --delete (excludes .git, __pycache__, *.pyc)
+            rsync -avz --delete \
+              --exclude '.git/' \
+              --exclude '__pycache__/' \
+              --exclude '*.pyc' \
+              --exclude 'default-user.xml' \
+              --exclude '.env' \
+              ./core/ ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/platform/core/
+          else
+            echo "[IMP:8][deploy][rsync] core/ отсутствует/пуст на раннере — rsync --delete ПРОПУЩЕН (предотвращение уноса /opt/platform/core)"
+          fi
           # Rsync root-level config files + makefiles (required by Makefile include-split W4-E4)
           # ⚠️ TRAP[BUG] · 2026-07-23 · P0 · makefiles/ trailing slash copies CONTENTS not directory
           # · Symptom: make: *** No rule to make target 'makefiles/repair.mk'.  Stop.
           # · Root: rsync ./makefiles/ → copies *.mk to /opt/platform/, but
           #   Makefile does `include makefiles/bootstrap.mk` (expects subdirectory)
           # · Fix: rsync ./makefiles (no trailing slash) copies directory itself → /opt/platform/makefiles/
-          rsync -avz \
-            ./platform-env.yaml ./Makefile ./makefiles \
-            ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/platform/
+          # ⚠️ TRAP[BUG] 2026-08-03 · makefiles-шаг без guard'а (DevPlan 125 T4)
+          # · Symptom: отсутствие источников → rsync change_dir fail (code 23) → падение шага без контекста
+          # · Fix: guard по образцу node-configs — симметричный skip-лог вместо молчаливой ошибки
+          if [ -f ./platform-env.yaml ] && [ -f ./Makefile ] && [ -d ./makefiles ]; then
+            rsync -avz \
+              ./platform-env.yaml ./Makefile ./makefiles \
+              ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/platform/
+          else
+            echo "[IMP:8][deploy][rsync] platform-env.yaml/Makefile/makefiles отсутствуют на раннере — пропуск"
+          fi
           # Rsync node-configs (per-node config + encrypted secrets)
           # · Excludes .git, __pycache__
           # · Destination: /opt/node-configs/ on VPS

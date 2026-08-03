@@ -41,7 +41,9 @@ from core.internal.shared.exceptions import (
 from core.internal.shared.secrets_env_parser import parse as parse_secrets_env
 from core.internal.shared.ssl_certs import (
     DEFAULT_OPENSSL_TIMEOUT,  # B5: канон openssl-таймаута (литерал 30 удалён)
+    cert_get_subject,  # FL15 (DevPlan 125 T5): SAN/subject-разбор для wildcard-покрытия
     cert_is_valid,  # C9: единая комбинация «cert валиден» (DevPlan 118 C9); _is_cert_valid удалён
+    cert_subject_matches_domain,  # FL15 (DevPlan 125 T5): CN-матчинг direct/wildcard
 )
 
 logger = logging.getLogger(__name__)
@@ -247,6 +249,12 @@ def _process_single_domain(
         result = _issue_cert(domain, issue_cert_script)
         if result.status == "issued":
             _upload_to_s3(domain)  # Upload after successful issue (DevPlan 052 §4.5)
+            # ── FL15 (DevPlan 125 T5): покрытие домена после issue ──
+            # issue-cert.sh SKIP'ает поддомены уже выпущенного wildcard'а с rc=0 →
+            # «issued successfully» без сертификата live/<domain>/ → ложный alarm «Missing cert».
+            # Проверяем реальное покрытие (direct | wildcard родителя); только отсутствие
+            # покрытия → WARN (не alarm): INFO «covered by wildcard» — НЕ alarm (FL15).
+            _log_post_issue_coverage(domain)
             return result
         # issue failed — fall through to self-signed
         logger.warning("[IMP:8][cert_orchestrator] %s — issue-cert.sh failed, trying self-signed fallback", domain)
@@ -550,8 +558,60 @@ def migrate_cron_if_needed(acme_home: str = "/opt/acme.sh") -> bool:
 # region HELPERS
 
 
+# region FUNC_log_post_issue_coverage
+## @purpose  Проверить покрытие домена после issue-cert.sh (FL15, DevPlan 125 T5):
+##            direct-сертификат live/{domain}/ ИЛИ wildcard родителя (*.tronyx.ru покрывает
+##            botanika.tronyx.ru). issue-cert.sh SKIP'ает поддомены wildcard'а с rc=0 —
+##            прежняя проверка только rc давала ложный alarm «Missing cert».
+## @io       ⇥ domain: str → ⎋ str («direct» | «wildcard:parent» | «none»)
+## @complexity — O(ancestors) — до 2 openssl subject-проверок
+## @invariants
+##   - direct: live/{domain}/fullchain.pem с subject, покрывающим domain (exact CN)
+##   - wildcard: live/{parent}/fullchain.pem с CN = *.parent (cert_subject_matches_domain)
+##   - INFO «covered by wildcard» — НЕ alarm; только реальное отсутствие покрытия → WARN (FL15)
+##   - Non-fatal: openssl ошибки → «none» (WARN-путь, никогда не raise)
+def _log_post_issue_coverage(domain: str) -> str:
+    """Проверить покрытие домена (direct или wildcard родителя) и залогировать вердикт (FL15)."""
+    # 1. Direct: сертификат самого домена
+    direct = os.path.join(CERT_VALIDITY_PATH, domain, "fullchain.pem")
+    if os.path.isfile(direct):
+        subject = cert_get_subject(direct)
+        if subject and cert_subject_matches_domain(subject, domain):
+            logger.info(
+                "[IMP:9][cert_orchestrator] %s — covered by direct cert (live/%s/fullchain.pem)", domain, domain
+            )
+            return "direct"
+
+    # 2. Wildcard: *.parent покрывает поддомен (только для subdomains — parent != domain)
+    labels = domain.split(".")
+    for i in range(1, len(labels) - 1):
+        parent = ".".join(labels[i:])
+        wildcard_path = os.path.join(CERT_VALIDITY_PATH, parent, "fullchain.pem")
+        if not os.path.isfile(wildcard_path):
+            continue
+        subject = cert_get_subject(wildcard_path)
+        if subject and cert_subject_matches_domain(subject, parent):
+            logger.info(
+                "[IMP:9][cert_orchestrator] %s — covered by wildcard %s (issue-cert SKIP поддомена), НЕ alarm (FL15)",
+                domain,
+                f"*.{parent}",
+            )
+            return f"wildcard:{parent}"
+
+    logger.warning(
+        "[IMP:7][cert_orchestrator] %s — NO cert coverage after issue (ни direct, ни wildcard родителя) — "
+        "возможен «Missing cert» alarm; проверьте каталог сертификатов %s",
+        domain,
+        CERT_VALIDITY_PATH,
+    )
+    return "none"
+
+
+# endregion FUNC_log_post_issue_coverage
+
+
 # region FUNC_source_secrets_env
-## @purpose — Source secrets.env file to load WEBNAMES_API_KEY into environment.
+## @purpose  Source secrets.env file to load WEBNAMES_API_KEY into environment.
 ##            Required for acme.sh DNS-01 challenges.
 ## @io — ⇥ secrets_env_path: str → ⎋ None (side-effect: env vars set)
 ## @complexity — O(1)

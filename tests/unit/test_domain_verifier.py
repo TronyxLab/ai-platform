@@ -225,6 +225,35 @@ def test_get_expose_domains_no_expose(node_yaml_no_expose, caplog):
     # · Last fail: never · Remove if: get_expose_domains contract changes
 
 
+@ldd_trajectory
+def test_get_expose_domains_project_filter(sample_node_yaml, caplog):
+    """Node.yaml with expose:true projects + project filter → только домен проекта (P-22)."""
+    caplog.set_level(logging.DEBUG)
+
+    domains = dv.get_expose_domains(sample_node_yaml, project="frontend")
+
+    assert domains == ["app.test.example.com"]
+    # 🧪 TRAP[TEST] · DevPlan 125 T1 (P-22) · verify per-project scope
+    # · Regression: --project игнорируется / фильтр не по projects[].name
+    # · Scenario: 2 expose:true проекта, project="frontend" → только его домен
+    # · Last fail: 2026-08-03 — domain_verifier брал ВСЕ expose-домены ноды (verify-race)
+    # · Remove if: verify-скоуп меняется архитектурно
+
+
+@ldd_trajectory
+def test_get_expose_domains_project_filter_no_match(sample_node_yaml, caplog):
+    """Project filter без совпадения → пустой список (не паника)."""
+    caplog.set_level(logging.DEBUG)
+
+    domains = dv.get_expose_domains(sample_node_yaml, project="ghost-project")
+
+    assert domains == []
+    # 🧪 TRAP[TEST] · DevPlan 125 T1 · project filter no-match
+    # · Regression: неизвестный project бросает исключение
+    # · Scenario: project="ghost-project" → [] (ничего не верифицируется)
+    # · Last fail: never (new test) · Remove if: get_expose_domains contract changes
+
+
 # endregion
 
 
@@ -367,6 +396,103 @@ projects:
     assert exit_code == 0
     # 🧪 TRAP[TEST] · Regression: full CLI integration · Scenario: all domains pass, status-page skipped
     # · Last fail: never · Remove if: main() CLI contract changes
+
+
+@ldd_trajectory
+def test_main_verify_per_project_ignores_neighbor_502(tmp_path, caplog, monkeypatch):
+    """P-22 (DevPlan 125 T1): verify --project проверяет ТОЛЬКО домен проекта — 502 соседа не фейлит.
+
+    # ▶ ┌node.yaml (2 expose-проекта)┐ → ◇ main --project frontend → ○ curl только app.* → ⎋ exit 0
+    """
+    caplog.set_level(logging.DEBUG)
+    monkeypatch.delenv("PLATFORM_DOMAIN", raising=False)
+    monkeypatch.delenv("PLATFORM_MASTER_EMAIL", raising=False)
+    monkeypatch.delenv("PLATFORM_MASTER_PASSWORD", raising=False)
+
+    node_name = "test-node"
+    platform_root = tmp_path / "platform"
+    yaml_dir = platform_root / "node-configs" / node_name
+    yaml_dir.mkdir(parents=True)
+    yaml_path = yaml_dir / "node.yaml"
+    yaml_path.write_text("""\
+projects:
+  - name: frontend
+    expose: true
+    domain: app.test.example.com
+  - name: api
+    expose: true
+    domain: api.test.example.com
+""")
+
+    curled_urls: list[str] = []
+
+    def _run(cmd, *args, **kwargs):
+        url = next((a for a in cmd if str(a).startswith("https://")), "")
+        curled_urls.append(url)
+        # Соседний домен (api) в момент verify параллельного деплоя = 502
+        code = "200" if url == "https://app.test.example.com" else "502"
+        return _mock_curl(code)
+
+    with patch("subprocess.run", side_effect=_run):
+        exit_code = dv.main(
+            ["verify", "--node", node_name, "--platform-root", str(platform_root), "--project", "frontend"]
+        )
+
+    assert exit_code == 0, "verify per-project должен PASS при 502 соседнего домена (P-22)"
+    assert "https://app.test.example.com" in curled_urls
+    assert "https://api.test.example.com" not in curled_urls, (
+        "соседний домен вне скоупа --project — не должен curl'иться"
+    )
+    # 🧪 TRAP[TEST] · DevPlan 125 T1 (P-22) · verify per-project — verify-race закрыт
+    # · Regression: --project не сужает скоуп (вернётся verify-race: параллельный деплой = ложный FAIL)
+    # · Scenario: --project frontend + api 502 → PASS; curl только app.test.example.com
+    # · Last fail: 2026-08-03 — tronyx-site/dance-site CI «failure» при зелёном деплое
+    # · Remove if: CI-verify перестаёт использовать per-project скоуп
+
+
+@ldd_trajectory
+def test_main_verify_without_project_checks_all_domains_negative(tmp_path, caplog, monkeypatch):
+    """R5 negative (P-22): verify БЕЗ --project по-прежнему проверяет ВСЕ домены ноды.
+
+    # ▶ ┌node.yaml (2 expose-проекта)┐ → ◇ main без --project → ○ curl оба → ◇ api 502 → ⎋ exit 1
+    """
+    caplog.set_level(logging.DEBUG)
+    monkeypatch.delenv("PLATFORM_DOMAIN", raising=False)
+    monkeypatch.delenv("PLATFORM_MASTER_EMAIL", raising=False)
+    monkeypatch.delenv("PLATFORM_MASTER_PASSWORD", raising=False)
+
+    node_name = "test-node"
+    platform_root = tmp_path / "platform"
+    yaml_dir = platform_root / "node-configs" / node_name
+    yaml_dir.mkdir(parents=True)
+    yaml_path = yaml_dir / "node.yaml"
+    yaml_path.write_text("""\
+projects:
+  - name: frontend
+    expose: true
+    domain: app.test.example.com
+  - name: api
+    expose: true
+    domain: api.test.example.com
+""")
+
+    curled_urls: list[str] = []
+
+    def _run(cmd, *args, **kwargs):
+        url = next((a for a in cmd if str(a).startswith("https://")), "")
+        curled_urls.append(url)
+        code = "200" if url == "https://app.test.example.com" else "502"
+        return _mock_curl(code)
+
+    with patch("subprocess.run", side_effect=_run):
+        exit_code = dv.main(["verify", "--node", node_name, "--platform-root", str(platform_root)])
+
+    assert exit_code == 1, "без --project 502 соседа должен фейлить verify (прежнее поведение)"
+    assert set(curled_urls) == {"https://app.test.example.com", "https://api.test.example.com"}
+    # 🧪 TRAP[TEST] · NEGATIVE (R5) · P-22 — detector не сломан
+    # · Regression: --project-фильтр сломал all-domains поведение (make verify NODE=... = фиктивный PASS)
+    # · Scenario: без --project оба домена проверяются; 502 → exit 1 (гейт честный)
+    # · Last fail: никогда (R5 anti-survivorship для T1) · Remove if: main() контракт изменён
 
 
 # endregion

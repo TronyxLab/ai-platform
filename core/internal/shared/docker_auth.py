@@ -37,9 +37,34 @@
 import base64
 import logging
 import os
+import pwd
 import subprocess
 
 logger = logging.getLogger(__name__)
+
+
+# region FUNC_resolve_user_home
+## @purpose  Резолв домашней директории пользователя (DevPlan 125 T6): pwd.getpwnam(user).pw_dir
+##            с fallback на /home/{user} при отсутствии записи в passwd. Системное закрытие
+##            конвенции f"/home/{user}" — не-стандартный home (или отсутствующий каталог)
+##            молча ломал creds-путь docker config.
+## @io       ⇥ user: str → ⎋ str (HOME пользователя)
+## @complexity — O(1) — один passwd-лукап
+## @invariants
+##   - getpwnam(user).pw_dir — канонический HOME (системная запись passwd)
+##   - KeyError (нет записи) → fallback /home/{user} (прежнее поведение) + WARN
+##   - Никогда не raise
+def resolve_user_home(user: str) -> str:
+    """Resolve user home dir via passwd, fallback /home/{user} (T6, DevPlan 125)."""
+    try:
+        return pwd.getpwnam(user).pw_dir
+    except KeyError:
+        fallback = f"/home/{user}"
+        logger.warning("[IMP:7][resolve_user_home] user %r not found in passwd — HOME fallback %s", user, fallback)
+        return fallback
+
+
+# endregion FUNC_resolve_user_home
 
 # ═══════════════════════════════════════════════════════════════════
 # region FUNC_docker_login
@@ -152,8 +177,10 @@ def ghcr_login(token: str | None = None, user: str = "ci-deploy") -> bool:
     #   creds писались в /root/.docker/config.json (HOME процесса), а receive читает
     #   /home/ci-deploy/.docker/config.json.
     # · Fix: HOME=<user-home> в env subprocess (creds — в docker config пользователя receive).
+    # · DevPlan 125 T6: f"/home/{user}" → pwd.getpwnam(user).pw_dir (системное закрытие
+    #   конвенции — не-стандартный home молча ломал creds-путь); fallback /home/<user> при KeyError.
     docker_env = dict(os.environ)
-    user_home = f"/home/{user}"
+    user_home = resolve_user_home(user)
     if user != "root" and os.path.isdir(user_home):
         docker_env["HOME"] = user_home
 

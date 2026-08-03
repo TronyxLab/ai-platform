@@ -24,8 +24,8 @@
 ## ⚠️ TRAP[DECISION] · 2026-08-01 · HI · Bootstrap forced-command → orchestrator_cli dispatch (DevPlan 116 B8 D2, волна 117 D1)
 ## · Rejected: оставить forced-command на удалённый legacy deploy-скрипт (риск: новые ноды получают сломанные authorized_keys)
 ## · Reason: единственный писатель ci-deploy ключа — Python lifecycle φ2 (helpers/users.py add_ssh_key,
-##   phases/system.py): `command="python3 -m core.internal.deploy.orchestrator_cli dispatch",restrict`
-##   (SSH_ORIGINAL_COMMAND-диспетчер verbs, DevPlan 116 B1). setup-node.sh — ТОЛЬКО generate_sudoers
+##   phases/system.py): `command="cd {base} && PYTHONPATH={base} python3 -m core.internal.deploy.orchestrator_cli dispatch",restrict`
+##   (SSH_ORIGINAL_COMMAND-диспетчер verbs, DevPlan 116 B1; base = platform_remote_base() канон, DevPlan 125 T3). setup-node.sh — ТОЛЬКО generate_sudoers
 ##   (visudo -c + atomic mv); create_user/add_owner_key/add_ci_deploy_command удалены (дубли φ2, волна 117 D1).
 ## · Rev: — (B1 реализован; dispatch — канонический канал. Rev-условие снято волной 117 D1.)
 ## ⚠️ TRAP[DECISION] · 2026-08-01 · HI · Строгий гейт фантомов — 0 упоминаний 4 удалённых имён (DevPlan 116 B8 D3)

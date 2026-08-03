@@ -75,7 +75,7 @@
 | `make backup` | Резервное копирование | make backup | backup-cron module make backup |
 | `make restore` | Восстановление из бэкапа | make restore DUMP_FILE=\<path\> | backup-cron module make restore DUMP_FILE=\<path\> |
 | `make node-update` | Обновление provisioned ноды | make node-update NODE=\<name\> | core/entrypoints/node-update.sh → core/internal/bootstrap/node-lifecycle.sh --mode update → core/internal/bootstrap/lifecycle/cli.py → core/internal/bootstrap/lifecycle/state_machine.py (B9 state machine — UPDATE mode — 5 фаз — φ9 secrets_update · φ10 node_config_update · φ11 registry_update → provision · llm-keys · healthcheck · φ12 deploy_update → core/internal/bootstrap/issue-cert.sh → core/internal/bootstrap/deploy-modules.sh · φ13 converge_update) |
-| `make verify` | HTTPS-верификация | make verify NODE=\<node\> | core/entrypoints/verify.sh → core/internal/verify/verify-domains.sh |
+| `make verify` | HTTPS-верификация | make verify NODE=\<node\> [PROJECT=\<name\>] | core/entrypoints/verify.sh → core/internal/verify/verify-domains.sh |
 | `make provision` | Provision окружения | make provision [SCOPE=...] | core/internal/provision-environment.sh → core/internal/provisioner.py |
 | `make provision-llm` | Provision LiteLLM virtual keys | make provision-llm | core/entrypoints/provision-llm.sh → core/internal/llm/key_provisioner.py |
 | `make discover-modules` | Авто-обнаружение модулей | make discover-modules | core/internal/bootstrap/discover_modules.py |

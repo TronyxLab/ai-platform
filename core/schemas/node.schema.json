@@ -240,6 +240,11 @@
             "type": "boolean",
             "description": "Expose project via nginx (vhost renderer); prod node.yaml использует expose: true"
           },
+          "branch": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Git branch to deploy (e.g. main) — DevPlan 125 T7 (D-4 остаток): branch: main в node.yaml валидируется без warning"
+          },
           "database": {
             "type": "string",
             "description": "Database name in postgres (required for backend/bot types)"

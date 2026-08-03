@@ -153,6 +153,15 @@ def write_privoxy_config(
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(new_content)
         os.replace(tmp_name, path)
+        # ⚠️ TRAP[BUG] · 2026-08-03 · D-6 (DevPlan 125 T9) · privoxy config root-only 0600
+        # · Symptom: systemctl status privoxy → «Fatal error: can't open configuration file
+        # ·   '/etc/privoxy/config': Permission denied» — сервис (user privoxy) не читает конфиг.
+        # · Root: tempfile.mkstemp создаёт файл с mode 0600; os.replace сохраняет 0600 (владелец root) —
+        # ·   dpkg-шаблон /etc/privoxy/config (0644, world-readable) заменялся root-only файлом.
+        # · Fix: явный chmod 0644 после replace — privoxy-конфиг не содержит секретов
+        # ·   (listen-address 127.0.0.1:8118, forward-socks5t на локальный tor), канон dpkg.
+        # · Prevention: writer'ы конфигов для systemd-сервисов обязаны задавать режим явно.
+        os.chmod(path, 0o644)
     except BaseException:
         with suppress(OSError):
             os.unlink(tmp_name)

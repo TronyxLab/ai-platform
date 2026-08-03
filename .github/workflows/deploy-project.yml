@@ -155,7 +155,10 @@ jobs:
           echo "[IMP:9][deliver] Receive completed (exit=$?)"
 
       # ─── Post-deploy verify ────────────────────────────────────────────
+      # DevPlan 125 T1 (P-22): verify per-project — проверяем ТОЛЬКО expose-домен
+      # деплоящегося проекта. Прежний `verify <node>` брал все домены ноды —
+      # параллельный деплой соседнего проекта давал 502 в момент verify → ложный FAIL.
       - name: Post-deploy verify
         run: |
           set -euo pipefail
-          ssh -i ${{ steps.setup-ssh.outputs.ssh-key-path }} -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o UserKnownHostsFile=${{ steps.setup-ssh.outputs.ssh-known-hosts-path }} ci-deploy@${{ env.ssh_host }} "verify ${{ env.target_node }}"
+          ssh -i ${{ steps.setup-ssh.outputs.ssh-key-path }} -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o UserKnownHostsFile=${{ steps.setup-ssh.outputs.ssh-known-hosts-path }} ci-deploy@${{ env.ssh_host }} "verify ${{ env.target_node }} ${{ inputs.project_name }}"

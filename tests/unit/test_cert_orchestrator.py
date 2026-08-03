@@ -411,3 +411,94 @@ def test_domain_cert_result_includes_challenge_field(caplog, tmp_path, monkeypat
 
 
 # endregion
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region FL15 (DevPlan 125 T5): wildcard-покрытие после issue
+# ═══════════════════════════════════════════════════════════════════
+
+
+# region FUNC_test_post_issue_coverage_wildcard
+# 🧪 TRAP[TEST] · DevPlan 125 T5 (FL15) · wildcard-покрытие — домен под *.parent → covered, НЕ alarm
+# · Regression: issue-cert.sh SKIP'ает поддомены wildcard'а (rc=0) — проверка только rc
+# ·   даёт «issued successfully» без сертификата → ложный alarm «Missing cert»
+# · Scenario: botanika.tronyx.ru; live/tronyx.ru/fullchain.pem с subject CN = *.tronyx.ru → covered by wildcard
+# · Last fail: 2026-08-03 — «botanika issued successfully» без сертификата (false-lead #15)
+# · Remove if: issue-cert.sh начинает выпускать direct-сертификаты поддоменов (архитектурно)
+@ldd_trajectory
+def test_post_issue_coverage_wildcard(caplog, tmp_path, monkeypatch) -> None:
+    """Домен под wildcard'ом родителя → covered (INFO, НЕ alarm) — FL15."""
+    caplog.set_level(logging.INFO)
+    monkeypatch.setattr(cert, "CERT_VALIDITY_PATH", str(tmp_path))
+
+    # live/<domain>/fullchain.pem отсутствует; live/tronyx.ru/fullchain.pem — wildcard
+    wildcard_dir = tmp_path / "tronyx.ru"
+    wildcard_dir.mkdir()
+    (wildcard_dir / "fullchain.pem").write_text("FAKE-PEM")
+
+    def _fake_subject(path: str) -> str:
+        if path.endswith("/tronyx.ru/fullchain.pem"):
+            return "subject=CN = *.tronyx.ru"
+        return None
+
+    with patch.object(cert, "cert_get_subject", side_effect=_fake_subject):
+        coverage = cert._log_post_issue_coverage("botanika.tronyx.ru")
+
+    assert coverage == "wildcard:tronyx.ru", f"ожидалось wildcard-покрытие, got {coverage}"
+    assert any("covered by wildcard" in r.message for r in caplog.records), "должен быть INFO-лог covered by wildcard"
+    logger.critical("[IMP:9][test] wildcard-покрытие детектировано — НЕ alarm (FL15)")
+
+
+# endregion FUNC_test_post_issue_coverage_wildcard
+
+
+# region FUNC_test_post_issue_coverage_direct
+# 🧪 TRAP[TEST] · DevPlan 125 T5 (FL15) · direct-покрытие — обычный выпуск не регрессирует
+# · Regression: покрытие-проверка ломает штатный direct-путь
+# · Scenario: live/example.com/fullchain.pem с CN = example.com → covered (direct)
+# · Last fail: never (new test) · Remove if: _log_post_issue_coverage удалён
+@ldd_trajectory
+def test_post_issue_coverage_direct(caplog, tmp_path, monkeypatch) -> None:
+    """Direct-сертификат домена → covered (direct) — штатный путь без регрессии."""
+    caplog.set_level(logging.INFO)
+    monkeypatch.setattr(cert, "CERT_VALIDITY_PATH", str(tmp_path))
+
+    direct_dir = tmp_path / "example.com"
+    direct_dir.mkdir()
+    (direct_dir / "fullchain.pem").write_text("FAKE-PEM")
+
+    with patch.object(cert, "cert_get_subject", return_value="subject=CN = example.com"):
+        coverage = cert._log_post_issue_coverage("example.com")
+
+    assert coverage == "direct"
+    logger.critical("[IMP:9][test] direct-покрытие детектировано — OK")
+
+
+# endregion FUNC_test_post_issue_coverage_direct
+
+
+# region FUNC_test_post_issue_coverage_none
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · FL15 — реальное отсутствие покрытия → WARN (не вечнозелёный INFO)
+# · Regression: покрытие-проверка всегда говорит «covered» (гейт вечнозелёный)
+# · Scenario: домен вне wildcard'а (другой apex), direct отсутствует → coverage = none
+# · Last fail: 2026-08-03 — ложный «Missing cert» alarm (FL15 false-lead #15)
+# · Remove if: _log_post_issue_coverage удалён
+@ldd_trajectory
+def test_post_issue_coverage_none(caplog, tmp_path, monkeypatch) -> None:
+    """Домен без покрытия (ни direct, ни wildcard) → 'none' + WARN — детектор честен (R5)."""
+    caplog.set_level(logging.INFO)
+    monkeypatch.setattr(cert, "CERT_VALIDITY_PATH", str(tmp_path))
+
+    # live/other.com/fullchain.pem НЕ существует; домен apex (other.com) — wildcard не применим
+    with patch.object(cert, "cert_get_subject", return_value=None):
+        coverage = cert._log_post_issue_coverage("other.com")
+
+    assert coverage == "none", f"ожидалось отсутствие покрытия, got {coverage}"
+    assert any("NO cert coverage" in r.message for r in caplog.records), "должен быть WARN-лог NO cert coverage"
+    logger.critical("[IMP:9][test] отсутствие покрытия детектируется — WARN, НЕ alarm (R5)")
+
+
+# endregion FUNC_test_post_issue_coverage_none
+
+
+# endregion

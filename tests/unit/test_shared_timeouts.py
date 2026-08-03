@@ -19,7 +19,6 @@
 
 import inspect
 import logging
-import os
 
 import pytest
 
@@ -136,21 +135,41 @@ def test_shared_function_defaults(caplog: pytest.LogCaptureFixture) -> None:
 # region FUNC_test_channels_defaults
 ## @purpose — Verify канальные дефолты (channels) — из timeouts (T1/T7).
 ## @complexity — O(1)
-def test_channels_defaults(caplog: pytest.LogCaptureFixture) -> None:
+def test_channels_defaults(caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch) -> None:
     """Канальные дефолты (channels) должны импортироваться из timeouts."""
     caplog.set_level(logging.INFO)
 
     # 🧪 TRAP[TEST] · Regression · Scenario: DEFAULT_DEPLOY_TIMEOUT/RETRY_COUNT/RETRY_BACKOFF
     # · Last fail: N/A (T1.3 — константы канала перенесены в timeouts)
     # · Remove if: канальные дефолты меняются
+    # 📝 TRAP[DEBT] · 2026-08-03 · LO · env-leak: тест читал PLATFORM_DEPLOY_TIMEOUT dev-машины (D-11)
+    # · Observed: assert int(os.environ.get("PLATFORM_DEPLOY_TIMEOUT", ...)) — если dev-машина
+    # ·   экспортирует переменную (старый .env в shell), тест падал бы без причины
+    # · Suspected: источник — gitignored .env, sourced в окружение оператора
+    # · Impact: флейк/ложный FAIL на машинах с остаточным env (паттерн AGE_SECRET_KEY-fix 8cd8c38)
+    # · When: DevPlan 125 T13 аудит os.environ в tests/unit; фикс — monkeypatch-детерминизм (канон)
+    # · Fix-канон: env-зависимость теста закрыта monkeypatch.setenv/delenv — детерминированные fixture
     from core.internal.deploy import channels
 
     assert channels.DEFAULT_RETRY_COUNT == timeouts.RETRY_COUNT
     assert timeouts.RETRY_BACKOFF_SECONDS[0] == channels.DEFAULT_RETRY_BACKOFF
-    # DEFAULT_DEPLOY_TIMEOUT может быть переопределён через PLATFORM_DEPLOY_TIMEOUT env —
-    # базовое значение должно совпадать с DEPLOY_TIMEOUT
-    assert int(os.environ.get("PLATFORM_DEPLOY_TIMEOUT", str(timeouts.DEPLOY_TIMEOUT))) == timeouts.DEPLOY_TIMEOUT
-    logger.info("[IMP:9][test_channels_defaults] Канальные дефолты == timeouts")
+    # DEFAULT_DEPLOY_TIMEOUT переопределяется через PLATFORM_DEPLOY_TIMEOUT env (env-override механизм).
+    # D-11 (DevPlan 125 T13): детерминизм — env принудительно очищен, проверяем оба пути:
+    # (а) env отсутствует → базовое значение == DEPLOY_TIMEOUT
+    monkeypatch.delenv("PLATFORM_DEPLOY_TIMEOUT", raising=False)
+    import importlib
+
+    channels = importlib.reload(channels)
+    assert channels.DEFAULT_DEPLOY_TIMEOUT == timeouts.DEPLOY_TIMEOUT
+    # (б) env задан контролируемо → env-override работает (значение не из dev-машины)
+    monkeypatch.setenv("PLATFORM_DEPLOY_TIMEOUT", "12345")
+    channels = importlib.reload(channels)
+    assert channels.DEFAULT_DEPLOY_TIMEOUT == 12345
+    # (в) восстановить каноническое состояние модуля (без cross-test pollution: reload с env)
+    monkeypatch.delenv("PLATFORM_DEPLOY_TIMEOUT", raising=False)
+    channels = importlib.reload(channels)
+    assert channels.DEFAULT_DEPLOY_TIMEOUT == timeouts.DEPLOY_TIMEOUT
+    logger.info("[IMP:9][test_channels_defaults] Канальные дефолты == timeouts (env-детерминизм, D-11)")
     _assert_imp9(caplog)
 
 

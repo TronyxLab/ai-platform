@@ -11,7 +11,8 @@
 ##           Called from verify-domains.sh shell facade or directly from Python tests.
 ## @invariants
 ##   - resolve_node_yaml: searches 3 paths (platform-local → org repos → VPS fallback)
-##   - get_expose_domains: only extracts projects with `expose: true` (strict boolean)
+##   - get_expose_domains: only extracts projects with `expose: true` (strict boolean);
+##     `project` аргумент сужает скоуп до одного проекта (verify per-project, P-22)
 ##   - verify_domain: uses subprocess.run(["curl", ...]) — preserves same TLS stack as shell
 ##   - verify_status_page: Basic Auth via curl -u, URL = platform.{domain}/health
 ##   - Exit code 0: ALL domains + status-page respond HTTP 200
@@ -20,7 +21,10 @@
 ## @rationale Strangler-Fig migration per DevPlan 036A D1. Full Python port eliminates 2 inline
 ##            python3 -c blocks and enables unit-testing of all domain verification logic.
 ##            curl kept as subprocess (not requests) for TLS stack parity (DevPlan 036A D3).
+##            DevPlan 125 T1 (P-22): --project — CI-verify деплоящегося проекта не зависит
+##            от 502 соседа при параллельном деплое (verify-race закрыт системно).
 ## @changes  2026-07-26 | Wave 5a — Created via Strangler-Fig from verify-domains.sh (281→59 LOC)
+##           2026-08-03 | DevPlan 125 T1 — +--project (verify per-project, P-22)
 # endregion MODULE_CONTRACT
 """
 
@@ -140,12 +144,15 @@ def resolve_node_yaml(node_name: str, platform_root: Path) -> Path:
 # region FUNC_GET_EXPOSE_DOMAINS
 
 
-def get_expose_domains(yaml_path: Path) -> list[str]:
+def get_expose_domains(yaml_path: Path, project: str | None = None) -> list[str]:
     """Parse node.yaml and extract domains from projects with expose:true.
 
     ## @purpose  Read YAML file, filter projects where expose==True (strict boolean),
-    ##            collect their domain values.
+    ##            collect their domain values. Optional `project` restricts the scope
+    ##            to a single project's expose domain (verify per-project, P-22).
     ## @param yaml_path Path to node.yaml file
+    ## @param project   Project name (registry-имя из node.yaml projects[].name) —
+    ##                  None = прежнее поведение (все expose:true домены ноды)
     ## @returns List of domain strings (may be empty)
     ## @complexity O(n) where n = number of projects in YAML
     ## @invariants
@@ -153,13 +160,26 @@ def get_expose_domains(yaml_path: Path) -> list[str]:
     ##   - Projects without a `domain` key are silently skipped
     ##   - Returns empty list if YAML is empty or has no projects key
     ##   - YAML parse errors propagate as exceptions
+    ##   - project != None → фильтр по projects[].name (параллельный деплой соседнего
+    ##     проекта не даёт ложный FAIL: 502 соседа в момент verify вне скоупа)
+    ## @rationale DevPlan 125 T1 (P-22/D-14): domain_verifier брал ВСЕ expose-домены
+    ##            ноды → параллельный деплой соседнего проекта = 502 → ложный FAIL CI.
+    ##            CI-verify теперь сужает скоуп до деплоящегося проекта; `make verify`
+    ##            без PROJECT сохраняет прежнее поведение (обратная совместимость).
     """
-    logger.info("[IMP:8][get_expose_domains][parse] Reading: %s", yaml_path)
+    logger.info("[IMP:8][get_expose_domains][parse] Reading: %s (project=%s)", yaml_path, project)
     node = NodeYaml(yaml_path)
     projects = node.get_projects()
     domains: list[str] = []
     for p in projects:
         if p.get("expose", False) is True:
+            if project is not None and p.get("name") != project:
+                logger.info(
+                    "[IMP:8][get_expose_domains][filter] Project %s вне скоупа verify (scope=%s) — skip",
+                    p.get("name"),
+                    project,
+                )
+                continue
             domain = p.get("domain")
             if domain:
                 domains.append(domain)
@@ -372,6 +392,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Domain verification tool (Wave 5a)")
     parser.add_argument("command", choices=["verify"], help="Subcommand (only 'verify' supported)")
     parser.add_argument("--node", required=True, help="Node name")
+    parser.add_argument(
+        "--project",
+        default=None,
+        help="Project name — restrict verification to this project's expose domain "
+        "(verify per-project, DevPlan 125 T1; без --project — все expose:true домены ноды)",
+    )
     parser.add_argument("--platform-root", default=str(platform_remote_base()), help="Platform root path")
     parser.add_argument("--curl-timeout", type=int, default=CURL_TIMEOUT_DEFAULT, help="Curl timeout in seconds")
 
@@ -380,8 +406,13 @@ def main(argv: list[str] | None = None) -> int:
     node_name = args.node
     platform_root = Path(args.platform_root)
     curl_timeout = args.curl_timeout
+    project = args.project
 
-    logger.info("[IMP:7][main][start] Starting post-deploy verification for node=%s", node_name)
+    logger.info(
+        "[IMP:7][main][start] Starting post-deploy verification for node=%s project=%s",
+        node_name,
+        project or "(all)",
+    )
 
     # Step 1: Resolve node.yaml
     try:
@@ -394,7 +425,7 @@ def main(argv: list[str] | None = None) -> int:
     # Step 2: Parse expose:true domains
     logger.info("[IMP:7][main][parse] Parsing projects with expose:true from %s", yaml_path)
     try:
-        domains = get_expose_domains(yaml_path)
+        domains = get_expose_domains(yaml_path, project=project)
     except (ConfigNotFoundError, ConfigParseError, OSError) as e:
         logger.error("[IMP:10][main][parse] Failed to parse YAML: %s — %s", yaml_path, e)
         return 1
@@ -403,7 +434,8 @@ def main(argv: list[str] | None = None) -> int:
     all_ok = True
 
     if not domains:
-        logger.info("[IMP:9][main][ok] No expose:true domains found — nothing to verify")
+        scope_note = f" for project {project!r}" if project else ""
+        logger.info("[IMP:9][main][ok] No expose:true domains found%s — nothing to verify", scope_note)
         print("")
         logger.info("[IMP:9][main][ok] ALL DOMAINS PASS — 0 domain(s) to check")
     else:

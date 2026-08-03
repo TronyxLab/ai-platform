@@ -28,6 +28,7 @@
 
 import logging
 import re
+from pathlib import Path
 
 import pytest
 import yaml
@@ -55,6 +56,61 @@ _AFFECTED_MAKE_TARGETS = ("deploy", "deploy-project", "context-promote")
 # Run-строки, где ожидаются verb'ы (ssh-вызовы); сужает скоуп regex (TRAP[DECISION]).
 # Границы: начало строки / пробел / кавычка — verb'ы приходят после `ssh ... "verb ..."`.
 _RUN_VERB_RE = re.compile(r'(?:^|[\s"])(ping|receive|verify|status|remove|exit|deploy|platform-deliver)(?:[\s"]|$)')
+
+# DevPlan 125 T2: платформенные зависимости в deploy-project.yml → RED.
+# (а) `uses:` — только стандартные actions (actions/*); relative actions (./.github/actions/*)
+#     резолвятся в caller'е (проектная org), где платформы НЕТ — молча ломают канал (TRAP[BUG] 2026-08-03)
+# (б) run-строки без `python3 -m core` / `make gate` / `make deploy` — платформенный код
+#     недоступен в caller-контексте
+_ALLOWED_USES_PREFIXES = ("actions/",)
+_FORBIDDEN_RUN_PATTERNS = ("python3 -m core", "make gate", "make deploy")
+
+
+# region HELPER__scan_platform_dependencies
+def _scan_platform_dependencies(yaml_path: Path | None = None) -> list[str]:
+    """Сканировать workflow на платформенные зависимости (DevPlan 125 T2).
+
+    ## @purpose — Детектор повторного заноса платформенных зависимостей в deploy-project.yml:
+    ##            relative actions (`uses: ./.github/actions/*`) и run-строки с
+    ##            `python3 -m core` / `make gate` / `make deploy`.
+    ## @io — ⇥ yaml_path: Path | None (None = канонический deploy-project.yml) → ⎋ list[str] (violations)
+    ## @complexity — O(steps + run-lines)
+    ## @invariants
+    ##   - `uses:` allowlist: только префикс actions/ (стандартные GitHub actions)
+    ##   - run-строки сканируются ВСЕ (не только ssh/tar — платформенные паттерны не verb'ы)
+    ##   - Пустой результат = workflow чист; violation'ы — человекочитаемые строки
+    """
+    target = yaml_path or _DEPLOY_PROJECT_YML
+    if not target.is_file():
+        pytest.fail(f"Missing {target.relative_to(ROOT)} — единый канал обязателен (T4)")
+
+    with open(target) as f:
+        data = yaml.safe_load(f)
+
+    violations: list[str] = []
+    jobs = (data or {}).get("jobs", {})
+    for job_name, job in jobs.items():
+        for step in job.get("steps", []):
+            uses = step.get("uses")
+            if uses and not str(uses).startswith(_ALLOWED_USES_PREFIXES):
+                violations.append(
+                    f"{job_name}: step '{step.get('name', '?')}' uses '{uses}' — "
+                    f"нестандартный/relative action (allowlist: {_ALLOWED_USES_PREFIXES})"
+                )
+            run = step.get("run")
+            if not run or not isinstance(run, str):
+                continue
+            for line in run.splitlines():
+                violations.extend(
+                    f"{job_name}: step '{step.get('name', '?')}' run содержит '{pat}' "
+                    f"(платформенная зависимость, недоступна в caller-контексте)"
+                    for pat in _FORBIDDEN_RUN_PATTERNS
+                    if pat in line
+                )
+    return violations
+
+
+# endregion HELPER__scan_platform_dependencies
 
 
 # region HELPER__extract_workflow_run_verbs
@@ -332,3 +388,101 @@ def test_canonical_verbs_no_legacy(caplog) -> None:
 
 
 # endregion FUNC_test_canonical_verbs_no_legacy
+
+
+# ── DevPlan 125 T2: платформенные зависимости в deploy-project.yml ────────────
+
+
+# region FUNC_test_workflow_no_platform_dependencies
+@pytest.mark.gate
+@ldd_trajectory
+def test_workflow_no_platform_dependencies(caplog) -> None:
+    """deploy-project.yml чист от платформенных зависимостей (relative actions / python3 -m core / make gate).
+
+    # ▶ scan platform dependencies → ◇ violations? → ⎋ PASS|FAIL
+
+    ## @purpose — DevPlan 125 T2: защита от повторного заноса платформенных зависимостей
+    ##            (TRAP[BUG] 2026-08-03: relative actions + python3 -m core + make gate ломались
+    ##            в caller-контексте, где платформы нет). Гейт делает занос структурно
+    ##            невозможным — не только комментарием-инвариантом.
+    ## @io — caplog → ⎋ None (pytest.fail со списком violation'ов)
+    ## @complexity — O(steps + run-lines)
+    """
+    # 🧪 TRAP[TEST] · DevPlan 125 T2 · платформенные зависимости в CI-канале
+    # · Regression: relative actions (uses: ./.github/actions/*) или python3 -m core /
+    # ·   make gate / make deploy в run-шагах deploy-project.yml — сломает все caller-контексты молча
+    # · Scenario: _scan_platform_dependencies() по текущему workflow → 0 violations
+    # · Last fail: 2026-08-03 — deploy-project.yml защищался только комментариями (TRAP[BUG])
+    # · Remove if: caller-контекст начинает поставлять платформу (архитектурно)
+    caplog.set_level(logging.INFO)
+
+    violations = _scan_platform_dependencies()
+
+    logger.info("[IMP:8][deploy_channel_gate][platform-deps] Проверено uses+run: %d violation(ов)", len(violations))
+    for v in violations:
+        logger.warning("[IMP:10][deploy_channel_gate][platform-deps] %s", v)
+
+    assert not violations, (
+        f"[IMP:10][deploy_channel_gate] deploy-project.yml содержит платформенные зависимости: {violations} "
+        "(reusable workflow исполняется в caller'е, где платформы нет — DevPlan 125 T2)"
+    )
+    logger.info("[IMP:9][deploy_channel_gate] PASS: workflow чист от платформенных зависимостей")
+
+
+# endregion FUNC_test_workflow_no_platform_dependencies
+
+
+# region FUNC_test_workflow_platform_dependencies_negative
+@pytest.mark.gate
+@ldd_trajectory
+def test_workflow_platform_dependencies_negative(tmp_path, caplog) -> None:
+    """Falsifiability: probe-workflow с платформенными зависимостями детектируется (R5).
+
+    # ▶ tmp probe workflow → ◇ scan → ◇ violations ≥ 1 → ⎋ RED (детектор жив)
+
+    ## @purpose — Anti-survivorship (R5): гейт, который не может упасть, — не гейт.
+    ##            Probe-workflow с relative action + python3 -m core + make gate должен
+    ##            детектироваться — иначе T2-гейт вечнозелёный.
+    ## @io — tmp_path → ⎋ None (assert детекта)
+    ## @complexity — O(1) — один фиктивный workflow
+    """
+    # 🧪 TRAP[TEST] · DevPlan 125 T2 · NEGATIVE (R5) — detector не сломан
+    # · Regression: если детектор платформенных зависимостей перестанет ловить занос — гейт вечнозелёный
+    # · Scenario: probe-workflow с `uses: ./.github/actions/setup-platform`, run с
+    # ·   `python3 -m core.internal...` и `make gate` → ≥1 violation
+    # · Last fail: 2026-08-03 — исходный занос relative actions (TRAP[BUG] caller-контекст)
+    # · Remove if: гейт канала удалён
+    caplog.set_level(logging.INFO)
+
+    probe = tmp_path / "deploy-project.yml"
+    probe.write_text(
+        """\
+jobs:
+  deploy:
+    steps:
+      - name: Setup platform
+        uses: ./.github/actions/setup-platform
+      - name: Bad run
+        run: |
+          python3 -m core.internal.deploy.orchestrator_cli dispatch status x
+          make gate MODE=fast
+          make deploy PROJECT=x
+      - name: Good run
+        uses: actions/setup-python@v5
+        run: pip install pyyaml
+"""
+    )
+
+    violations = _scan_platform_dependencies(probe)
+
+    logger.info("[IMP:8][deploy_channel_gate][negative] Violations из probe-workflow: %s", violations)
+    assert violations, "CRITICAL: детектор не поймал платформенные зависимости в probe — гейт вечнозелёный (R5)"
+    joined = "\n".join(violations)
+    assert "./.github/actions/setup-platform" in joined, "relative action должен детектироваться"
+    assert "python3 -m core" in joined, "python3 -m core должен детектироваться"
+    assert "make gate" in joined, "make gate должен детектироваться"
+    assert "make deploy" in joined, "make deploy должен детектироваться"
+    logger.info("[IMP:9][deploy_channel_gate][negative] PASS: детектор ловит все 4 класса платформенных зависимостей")
+
+
+# endregion FUNC_test_workflow_platform_dependencies_negative

@@ -632,3 +632,43 @@ def test_phase_user_accounts_forced_command_dispatch(caplog) -> None:
 
 
 # endregion FUNC_test_phase_user_accounts_forced_command_dispatch
+
+
+# region FUNC_test_phase_user_accounts_forced_command_canonical_base
+# 🧪 TRAP[TEST] · DevPlan 125 T3 (FL20) · forced-command command= использует канон platform_remote_base
+# · Regression: литерал /opt/platform возвращается в command= (хардкод без единого источника)
+# · Scenario: phase_user_accounts (mocks helpers_users) → add_ssh_key forced_command_prefix
+# ·   содержит cd <platform_remote_base()> && PYTHONPATH=<base> + orchestrator_cli dispatch + restrict
+# · Last fail: 2026-08-03 — phases/system.py:230 захардкожен '/opt/platform' без теста на строку command=
+# · Remove if: forced-command канал заменён другим CI-механизмом доставки
+@ldd_trajectory
+def test_phase_user_accounts_forced_command_canonical_base(caplog, monkeypatch) -> None:
+    """DevPlan 125 T3: forced_command_prefix = канонический platform_remote_base (не литерал)."""
+    caplog.set_level(logging.INFO)
+
+    from core.internal.bootstrap.lifecycle.phases import system as phases_system
+    from core.internal.shared.deploy_paths import platform_remote_base
+
+    captured: dict[str, object] = {}
+
+    def _fake_add_ssh_key(username: str, key: str, forced_command_prefix: str | None = None) -> None:
+        captured["username"] = username
+        captured["forced_command_prefix"] = forced_command_prefix
+
+    monkeypatch.setenv("PLATFORM_OWNER_KEY", "ssh-ed25519 AAAA test-owner-key")
+    monkeypatch.setenv("PLATFORM_CI_DEPLOY_KEY", "ssh-ed25519 AAAA test-ci-key")
+    monkeypatch.setattr(phases_system.helpers_users, "create_user", lambda *a, **k: None)
+    monkeypatch.setattr(phases_system.helpers_users, "add_ssh_key", _fake_add_ssh_key)
+    monkeypatch.setattr(phases_system.helpers_users, "ensure_projects_base", lambda *a, **k: None)
+
+    phases_system.phase_user_accounts("/opt/platform/core", "test-node", "/opt/node-configs/test-node/node.yaml")
+
+    assert captured["username"] == "ci-deploy", "forced-command ключ добавляется пользователю ci-deploy"
+    prefix = str(captured.get("forced_command_prefix"))
+    base = str(platform_remote_base())
+    assert base in prefix, f"command= должен содержать канонический base {base}"
+    assert f"cd {base}" in prefix, f"command= должен cd в канонический base: {prefix}"
+    assert f"PYTHONPATH={base}" in prefix, f"command= должен ставить PYTHONPATH=<base>: {prefix}"
+    assert "orchestrator_cli dispatch" in prefix, "forced-command = orchestrator_cli dispatch (K1/117 D1)"
+    assert "restrict" in prefix, "forced-command должен содержать restrict (ssh security)"
+    logger.critical("[IMP:9][test] forced-command command= использует канон platform_remote_base — OK")

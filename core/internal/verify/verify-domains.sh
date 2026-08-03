@@ -27,21 +27,23 @@ CURL_TIMEOUT="${CURL_TIMEOUT:-10}"
 ## @purpose  Parse args, call Python domain_verifier, pipe exit code back
 ## @param $1  Node name
 ## @param $2  Platform root (optional, defaults to PLATFORM_ROOT or /opt/platform)
+## @param $3  Project name (optional, DevPlan 125 T1 — verify per-project, P-22)
 ## @exitcode  0 all pass, 1 any fail (propagated from Python)
 main() {
-    local node_name="${1:-}" platform_root="${2:-${PLATFORM_ROOT:-/opt/platform}}"
+    local node_name="${1:-}" platform_root="${2:-${PLATFORM_ROOT:-/opt/platform}}" project="${3:-}"
 
     if [[ -z "${node_name}" ]]; then
-        log_imp 10 "verify" "Node name required — usage: verify-domains.sh <node> [platform_root]"
-        echo "Usage: $0 <node_name> [platform_root]" >&2
+        log_imp 10 "verify" "Node name required — usage: verify-domains.sh <node> [platform_root] [project]"
+        echo "Usage: $0 <node_name> [platform_root] [project]" >&2
         exit 1
     fi
 
-    log_imp 7 "verify" "Delegating to domain_verifier.py: node=${node_name} root=${platform_root}"
+    log_imp 7 "verify" "Delegating to domain_verifier.py: node=${node_name} root=${platform_root} project=${project:-all}"
     python3 "${__VERIFY_DIR}/domain_verifier.py" verify \
         --node "${node_name}" \
         --platform-root "${platform_root}" \
-        --curl-timeout "${CURL_TIMEOUT}"
+        --curl-timeout "${CURL_TIMEOUT}" \
+        ${project:+--project "${project}"}
     exit $?
 }
 # endregion FUNC_MAIN

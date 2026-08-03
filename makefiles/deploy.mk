@@ -189,11 +189,13 @@ hermes-build-context:
 	@echo "[IMP:9][make][hermes-build-context] L2 build complete"
 	@echo "  L2: ghcr.io/$(CONTEXT)/hermes-agent-context:latest"
 
-## verify: Post-deploy HTTPS verification for all expose:true domains on a node
-##   Usage: make verify NODE=<node>
-##   Reads node.yaml → curl all domains with expose:true → exit 0 if all 200, exit 1 otherwise
+## verify: Post-deploy HTTPS verification for expose:true domains on a node
+##   Usage: make verify NODE=<node> [PROJECT=<name>]
+##   Reads node.yaml → curl domains with expose:true → exit 0 if all 200, exit 1 otherwise
+##   PROJECT=<name> (DevPlan 125 T1, P-22) — сузить скоуп до одного проекта
+##   (CI-verify деплоящегося проекта не падает от 502 соседа при параллельном деплое)
 ##   Delegates to core/entrypoints/verify.sh
 verify:
-	@if [ -z "$(NODE)" ]; then echo "[IMP:9][make][verify] ERROR: NODE not set — usage: make verify NODE=<node>" >&2; exit 1; fi
-	@echo "[IMP:7][make][verify] Running post-deploy verification for NODE=$(NODE)..."
-	@PLATFORM_ROOT="$(_platform_root)" bash $(_platform_root)/core/entrypoints/verify.sh "$(NODE)"
+	@if [ -z "$(NODE)" ]; then echo "[IMP:9][make][verify] ERROR: NODE not set — usage: make verify NODE=<node> [PROJECT=<name>]" >&2; exit 1; fi
+	@echo "[IMP:7][make][verify] Running post-deploy verification for NODE=$(NODE) PROJECT=$(PROJECT)"
+	@PLATFORM_ROOT="$(_platform_root)" bash $(_platform_root)/core/entrypoints/verify.sh "$(NODE)" "$(PROJECT)"

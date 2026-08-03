@@ -224,10 +224,13 @@ def phase_user_accounts(core_dir: str, node_name: str, node_yaml: str) -> bool:
             # · Symptom: SSH forced-command receive падал «ModuleNotFoundError: No module
             #   named 'core'» — sshd исполняет command с cwd=HOME(ci-deploy), python3 -m
             #   core.internal... не находит core (sys.path[0]='' → cwd, а не /opt/platform).
-            # · Fix: cd /opt/platform (канон platform_remote_base) + PYTHONPATH — паттерн
+            # · Fix: cd {base} (канон platform_remote_base) + PYTHONPATH — паттерн
             #   deliver_payload (cd {remote_root} && PYTHONPATH={remote_root} python3 -m ...).
+            # · DevPlan 125 T3 (FL20): литерал /opt/platform заменён каноном
+            #   shared/deploy_paths.platform_remote_base() — единый источник remote base.
+            remote_base = str(deploy_paths.platform_remote_base())
             forced_command = (
-                'command="cd /opt/platform && PYTHONPATH=/opt/platform '
+                f'command="cd {remote_base} && PYTHONPATH={remote_base} '
                 'python3 -m core.internal.deploy.orchestrator_cli dispatch",restrict'
             )
             helpers_users.add_ssh_key("ci-deploy", ci_deploy_key, forced_command_prefix=forced_command)

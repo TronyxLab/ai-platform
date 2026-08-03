@@ -263,6 +263,15 @@ def load_ci_defaults(secret_defs_path: Path | str) -> dict[str, str]:
 
 
 # region FUNC_generate_platform_env_yaml
+# 🧐 TRAP[DECISION] · 2026-08-03 · — · D-10 (DevPlan 125 T12): Jinja2-миграция ОТКЛОНЕНА — keep by design
+# · Rejected: миграция рендера на Jinja2 (долг D-10: «f-string → jinja», LOW, опциональный)
+# · Reason: рендер УЖЕ структурный — dict-композиция + yaml.dump (sort_keys=False, allow_unicode),
+# ·   не f-string-интерполяция (долг описывал более раннюю версию). Jinja2 не добавит
+# ·   ценности: циклов/условий нет (плоские секции), byte-детерминизм обеспечивается
+# ·   yaml.dump, тестовое покрытие — 11 unit-тестов + гейт test_gate_yaml_deterministic_output.
+# ·   Миграция = риск изменения вывода без выгоды (инвариант 2: прод-рендер byte-for-byte).
+# · Rev: если появятся условные/циклические секции в platform-env.yaml (Jinja2-домен
+# ·   по шаблонной политике AGENTS.md) — пересмотреть; до тех пор рендер остаётся as-is.
 def generate_platform_env_yaml(
     infra: dict[str, Any],
     profiles: list[str],
