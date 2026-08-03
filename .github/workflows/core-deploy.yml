@@ -157,11 +157,20 @@ jobs:
           # Rsync node-configs (per-node config + encrypted secrets)
           # · Excludes .git, __pycache__
           # · Destination: /opt/node-configs/ on VPS
-          rsync -avz \
-            --exclude '.git/' \
-            --exclude '__pycache__/' \
-            --exclude '*.pyc' \
-            ./node-configs/ ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/node-configs/
+          # ⚠️ TRAP[BUG] 2026-08-03 · node-configs gitignored (орг-репозиторий) —
+          #   отсутствует на CI-раннере → rsync change_dir fail (code 23), core-deploy
+          #   падал после первого зелёного gate-fast. node-configs на VPS доставляются
+          #   операторским каналом (bootstrap SCP / орг-репозиторий) — CI НЕ должен
+          #   перетирать /opt/node-configs. Условный rsync: источник есть → синхронизировать.
+          if [ -d ./node-configs ]; then
+            rsync -avz \
+              --exclude '.git/' \
+              --exclude '__pycache__/' \
+              --exclude '*.pyc' \
+              ./node-configs/ ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/node-configs/
+          else
+            echo "[IMP:8][deploy][rsync] node-configs/ отсутствует (gitignored, орг-репозиторий) — пропуск (доставлен bootstrap'ом)"
+          fi
           echo "[IMP:9][deploy][rsync] Core + config + makefiles + node-configs rsync complete — SHA $SHA"
 
       # ─── Step 5: Provision networks + volumes on VPS via make provision (Invariant 1) ───

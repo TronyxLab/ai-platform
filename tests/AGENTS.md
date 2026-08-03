@@ -15,6 +15,8 @@
 ##   7. Wave-Pipeline: тесты сортируются по волнам из module.yaml#depends_on (T5).
 ##   8. Gate Trinity: файл tests/gates/ + @pytest.mark.gate + entrypoint-manifest.yaml (T11).
 ##   9. Repair Contract: gates в manifest получают repair-поля (DevPlan 060). L1-ошибки → make fix-gate.
+##   10. xdist-безопасность: параллельный запуск (-n auto) — СТАНДАРТ, не исключение.
+##       Каждый новый тест обязан работать корректно при параллельном запуске (см. §Параллельный запуск).
 ## @rationale Единый source of truth. Предотвращает повторение: hardcoded контейнеры, skip-as-fail,
 ##            дублирование хелперов. Repair Contract = основа AI-self-healing gate-ошибок.
 ##            Полные правила тестирования (R1-R5, LDD, Anti-Loop) — в .kilo/rules/testing.md.
@@ -170,6 +172,23 @@ Module-scoped фикстуры **переиспользуют** контейне
 ### LDD Trajectory (T6)
 
 `@ldd_trajectory` декоратор (`tests/_conftest/ldd.py`) — автоматическая проверка `[IMP:9]` лога. Для тестов без декоратора: `gate_helpers.assert_ldd_imp9(caplog)`.
+
+---
+
+## Параллельный запуск (pytest-xdist) — правила для новых тестов
+
+Платформа запускает тесты через `-n auto` (test_runner.py / core/check-suite.yaml, DevPlan 120 §3.3): **каждый новый тест обязан работать корректно параллельно.** Одиночный прогон — не исключение, а частный случай. Параллельный прогон с флаком = баг теста, а не «фантом»: диагностика по DevPlan 124 (`.ai/plans/124-xdist-parallel-stability/`).
+
+Правила:
+
+1. **Файлы — только `tmp_path`.** Запрещены общие пути: `/tmp/*.log`, файлы в `tests/`, репо-файлы (кроме read-only). Общий файл без flock = гонка воркеров (прецедент: `/tmp/clickhouse-compose-up-failed.log`, T6).
+2. **Docker — только канонические фикстуры** (`platform_services`, модульные фикстуры из `_conftest/smoke.py`). Прямой `docker compose up` в тесте запрещён: несколько воркеров конкурентно поднимают один стек (прецедент: 5 passed / 7 errors при `-n 2`, эксперимент 2026-08-03). Стек и сети живут под `DockerStackLock`; session-хуки docker-cleanup выполняются ТОЛЬКО в master-воркере (`PYTEST_XDIST_WORKER`), не в воркерах.
+3. **env — через monkeypatch.** Глобальные `os.environ[...]` без отката — межтестовая гонка внутри воркера.
+4. **cwd — не менять.** Если нужен chdir — `monkeypatch.chdir`, иначе параллельные тесты в воркере видят чужой cwd.
+5. **Ожидания — канонические wait-фикстуры** (`wait_for_containers_healthy`), не голые `time.sleep`.
+6. **`xdist_group("serial")` НЕ работает** при `-n auto` (load): требует `--dist loadgroup` (test_gate_timeout_literals.py:66). Не использовать; при реальной необходимости serial — поднимать вопрос с архитектором.
+7. **git-операции — только в tmp-репозитории** (`tmp_path` + `git init`). Мутации рабочего репо (git add/commit/checkout, правка tracked-файлов) — запрещены: параллельные гейты (manifests `git diff`) и pre-commit увидят чужие изменения.
+8. **Общие глобальные ресурсы** (счётчик `.test_counter.json`, docker-сети, docker-стек) — только через существующие механизмы: flock (`_conftest/counter.py`, `_conftest/docker_lock.py`) + master-семантику session-хуков.
 
 ---
 
