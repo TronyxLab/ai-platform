@@ -54,6 +54,10 @@ REMOTE_CMD_CONVERGE = (
     "set -euo pipefail && export PLATFORM_ROOT=/opt/platform && "
     "bash /opt/platform/core/internal/bootstrap/converge.sh --node test-node"
 )
+REMOTE_CMD_CHECK_SECURITY = (
+    "set -euo pipefail && export PLATFORM_ROOT=/opt/platform && export PYTHONPATH=/opt/platform && "
+    "python3 /opt/platform/core/internal/bootstrap/security_posture.py --node test-node"
+)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -243,6 +247,73 @@ def test_execute_reconcile_adds_reconcile_flag(executor, monkeypatch: pytest.Mon
 
 
 # endregion FUNC_test_execute_reconcile_adds_reconcile_flag
+
+# ═══════════════════════════════════════════════════════════════════
+# execute-check-security (DevPlan 134 W2)
+# ═══════════════════════════════════════════════════════════════════
+
+
+# region FUNC_test_execute_check_security_no_sync_core
+# 🧪 TRAP[TEST] · Regression · check-security не синхронизирует core
+# · Scenario: execute_check_security выполняет ssh (security_posture.py), но НЕ вызывает
+# ·            sync_core_to_vps (read-only диагностика — remote core уже доставлен, DevPlan 134 D3)
+# · Last fail: N/A (new module — зеркало execute_converge)
+# · Remove if: check-security sync-core семантика меняется
+def test_execute_check_security_no_sync_core(executor, monkeypatch: pytest.MonkeyPatch, caplog) -> None:
+    run_mock = mock.Mock(return_value=mock.Mock(returncode=0))
+    monkeypatch.setattr(remote_executor.subprocess, "run", run_mock)
+    rc = executor.execute_check_security("test-node", REMOTE_CMD_CHECK_SECURITY)
+    assert _print_ldd_trajectory(caplog)
+    assert rc == 0
+    executor.sync_mock.assert_not_called()  # ключевое отличие от execute_update
+    run_mock.assert_called_once()
+
+
+# endregion FUNC_test_execute_check_security_no_sync_core
+
+
+# region FUNC_test_execute_check_security_vps_self_ssh_returns_2
+# 🧪 TRAP[TEST] · Regression · VPS self-SSH detect (RC 121)
+# · Scenario: на VPS (маркер node-lifecycle.sh существует) → return 2 (local fallback), ssh НЕ вызывается
+# · Last fail: N/A (зеркало execute_converge TRAP[BUG] 2026-08-03 RC 121)
+# · Remove if: VPS self-detect семантика меняется
+def test_execute_check_security_vps_self_ssh_returns_2(
+    executor, monkeypatch: pytest.MonkeyPatch, tmp_path, caplog
+) -> None:
+    vps_marker = tmp_path / "opt" / "platform" / "core" / "internal" / "bootstrap" / "node-lifecycle.sh"
+    vps_marker.parent.mkdir(parents=True)
+    vps_marker.write_text("#!/usr/bin/env bash\n")
+    monkeypatch.setattr(remote_executor, "VPS_NODE_LIFECYCLE", str(vps_marker))
+    run_mock = mock.Mock()
+    monkeypatch.setattr(remote_executor.subprocess, "run", run_mock)
+    rc = executor.execute_check_security("test-node", REMOTE_CMD_CHECK_SECURITY)
+    assert _print_ldd_trajectory(caplog)
+    assert rc == 2
+    run_mock.assert_not_called()
+    assert any("[vps-detect]" in r.message for r in caplog.records)
+
+
+# endregion FUNC_test_execute_check_security_vps_self_ssh_returns_2
+
+
+# region FUNC_test_execute_check_security_dry_run_exits_0
+# 🧪 TRAP[TEST] · Regression · DRY_RUN печатает команду без ssh
+# · Scenario: dry_run=True → IMP:8 dry-run лог, exit 0, subprocess.run НЕ вызывается
+# · Last fail: N/A (зеркало execute_converge)
+# · Remove if: dry-run семантика меняется
+def test_execute_check_security_dry_run_exits_0(executor, monkeypatch: pytest.MonkeyPatch, caplog) -> None:
+    executor.dry_run = True
+    run_mock = mock.Mock()
+    monkeypatch.setattr(remote_executor.subprocess, "run", run_mock)
+    rc = executor.execute_check_security("test-node", REMOTE_CMD_CHECK_SECURITY)
+    assert _print_ldd_trajectory(caplog)
+    assert rc == 0
+    run_mock.assert_not_called()
+    assert any("[dry-run]" in r.message for r in caplog.records)
+
+
+# endregion FUNC_test_execute_check_security_dry_run_exits_0
+
 
 # ═══════════════════════════════════════════════════════════════════
 # LDD / error propagation

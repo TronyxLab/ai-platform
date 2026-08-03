@@ -52,6 +52,17 @@ execute_remote_reconcile() {
     return $?
 }
 # endregion FUNC_execute_remote_reconcile
+# region FUNC_execute_remote_check_security
+execute_remote_check_security() {
+    local node_name="$1"; shift 1; local passthrough_args=("$@")
+    local remote_cmd; remote_cmd="$(build_check_security_ssh_cmd "${node_name}" "${passthrough_args[@]}")"
+    local dry_flag=(); if ${DRY_RUN:-false}; then dry_flag=(--dry-run); fi
+    python3 -m core.internal.bootstrap.remote_executor execute-check-security \
+        --node "${node_name}" --remote-cmd "${remote_cmd}" \
+        --passthrough-args "${passthrough_args[*]}" "${dry_flag[@]}"
+    return $?
+}
+# endregion FUNC_execute_remote_check_security
 # region FUNC_deliver_vhost_overlays
 deliver_vhost_overlays() {
     local node_name="$1"

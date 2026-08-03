@@ -559,6 +559,16 @@ lifecycle:
   operation_ru: Реконсиляция ноды
   description: Idempotent reconcile with 9 R-units (R1-R9) and --units filter — конвергирует
     ноду с desired state из node.yaml; standalone или из node-lifecycle
+- make_target: check-security
+  mechanism: ssh+script
+  delegates_to: core/entrypoints/check-security.sh → remote_executor.py execute-check-security
+    → core/internal/bootstrap/security_posture.py (S1-S7, DevPlan 134 L2)
+  signature: make check-security NODE=<name>
+  operation_ru: Проверка security-постурa ноды
+  description: Security posture check (S1-S7) — unattended-upgrades активность, pending
+    security-апдейты, ufw, sshd -T, docker live-restore/iptables/API-порты, world-writable
+    файлы и права секретов, forced-command целостность ci-deploy ключа. Exit — 0=healthy
+    1=warnings 2=errors
 - make_target: healthcheck
   mechanism: shell-script
   delegates_to: core/entrypoints/healthcheck.sh → Module healthcheck.sh scripts +
@@ -850,6 +860,7 @@ allowed_verbs:
 - check-manifests
 - check-profiles-parity
 - check-requirements
+- check-security
 - compose-safe-up
 - context-promote
 - converge

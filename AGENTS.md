@@ -131,6 +131,7 @@
 | ✅ | `check-manifests` | Проверка актуальности сгенерированных манифестов |
 | ✅ | `check-profiles-parity` | Parity-гейт COMPOSE_PROFILES (единый SoT platform-infra.yaml) |
 | ✅ | `check-requirements` | Проверка актуальности requirements.txt |
+| ✅ | `check-security` | Проверка security-постурa ноды |
 | ✅ | `compose-safe-up` | Deprecated alias for up-safe |
 | ✅ | `context-promote` | Промоут платформы в контекст |
 | ✅ | `converge` | Реконсиляция ноды |

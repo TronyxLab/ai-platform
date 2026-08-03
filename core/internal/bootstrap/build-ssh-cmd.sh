@@ -120,3 +120,24 @@ build_converge_ssh_cmd() {
     echo "${cmd}"
 }
 # endregion FUNC_build_converge_ssh_cmd
+
+# ══════════════════════════════════════════════════════════════════════
+# BUILD CHECK-SECURITY SSH CMD (printf %q) — DevPlan 134 L2
+# ══════════════════════════════════════════════════════════════════════
+# region FUNC_build_check_security_ssh_cmd
+build_check_security_ssh_cmd() {
+    local node_name="$1"; shift 1; local passthrough_args=("$@")
+    # PLATFORM_ROOT export — same convention as build_ssh_cmd (remote_root = scp-deliver base)
+    local remote_root="${PLATFORM_REMOTE_BASE:-/opt/platform}"  # RC 121: PLATFORM_ROOT исключён из remote-цепочки
+    local remote_posture="${remote_root}/core/internal/bootstrap/security_posture.py"
+    local cmd="set -euo pipefail"
+    local q; q="$(printf '%q' "${remote_root}")"; cmd+=" && export PLATFORM_ROOT=${q}"
+    # ⚠️ security_posture.py импортирует core.internal.* (firewall, shared/timeouts) — PYTHONPATH
+    # · канон TRAP[BUG] 2026-07-31 (converge.sh:66): shell-фасад/SSH-команда экспортирует PYTHONPATH.
+    q="$(printf '%q' "${remote_root}")"; cmd+=" && export PYTHONPATH=${q}"
+    cmd+=" && python3 $(printf '%q' "${remote_posture}")"
+    cmd+=" $(printf '%q' '--node') $(printf '%q' "${node_name}")"
+    for arg in "${passthrough_args[@]}"; do cmd+=" $(printf '%q' "${arg}")"; done
+    echo "${cmd}"
+}
+# endregion FUNC_build_check_security_ssh_cmd

@@ -405,11 +405,13 @@ def test_init_flow_all_phases(caplog, state_file, mock_subprocess, env_vars, mon
     (core_bootstrap_dir / "converge.sh").write_text("#!/bin/bash\necho ok\n")
     # Волна 117 D5 (WARN-семантика): фаза, вернувшая False → done_with_warnings (НЕ done).
     # Создаём все bootstrap-скрипты, которые проверяют фазы — happy path = все True.
+    # DevPlan 134 W1: security_updates.py проверяется в φ1 шаг 5.5 (иначе фаза → False).
     for script in (
         "python_deps.py",
         "install-docker.sh",
         "install-tor-proxy.sh",
         "firewall.sh",
+        "security_updates.py",
         "setup-node.sh",
         "install-acme.sh",
     ):
@@ -547,6 +549,8 @@ def test_update_flow_all_phases(caplog, state_file, mock_subprocess, env_vars, m
     (core_bootstrap_dir / "deploy-modules.sh").write_text("#!/bin/bash\necho ok\n")
     # All phase_*() functions also need converge.sh for φ13 converge_update
     (core_bootstrap_dir / "converge.sh").write_text("#!/bin/bash\necho ok\n")
+    # DevPlan 134 W1: security_updates.py проверяется в φ12 deploy_update (иначе фаза → False)
+    (core_bootstrap_dir / "security_updates.py").write_text("#!/bin/bash\nexit 0\n")
     # Волна 117 D5: φ11 (registry_update) проверяет internal/provision-environment.sh — happy path
     (Path(state_file).parent / "internal" / "provision-environment.sh").write_text("#!/bin/bash\nexit 0\n")
 
@@ -803,11 +807,13 @@ def test_tor_conditional_runs(caplog, state_file, mock_subprocess, env_vars, mon
     (core_bootstrap_dir / "deploy-modules.sh").write_text("#!/bin/bash\necho ok\n")
     (core_bootstrap_dir / "converge.sh").write_text("#!/bin/bash\necho ok\n")
     # Волна 117 D5: happy path — создаём все скрипты, проверяемые фазами (TOR=true → нужен install-tor-proxy.sh)
+    # DevPlan 134 W1: security_updates.py проверяется в φ1 шаг 5.5 (иначе фаза → False)
     for script in (
         "python_deps.py",
         "install-docker.sh",
         "install-tor-proxy.sh",
         "firewall.sh",
+        "security_updates.py",
         "setup-node.sh",
         "install-acme.sh",
     ):

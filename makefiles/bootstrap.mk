@@ -11,7 +11,7 @@
 ##            DevPlan 047: added deploy-context target for standalone context project deploy.
 # endregion MODULE_CONTRACT
 
-.PHONY: bootstrap-node node-update converge render-vhosts deploy-context
+.PHONY: bootstrap-node node-update converge render-vhosts deploy-context check-security
 
 ## bootstrap-node: Idempotent node bootstrap
 ##   Usage: make bootstrap-node [NODE=<name>] [AGE_SECRET_KEY_FILE=<file>] [DRY_RUN=1] [AUTO_RECONCILE=1]
@@ -80,6 +80,27 @@ converge:
 	fi; \
 	exit "$${_conv_rc:-0}"
 	@echo "[IMP:9][make][converge] Node reconciliation complete"
+
+## check-security: Security posture check ноды (S1-S7, DevPlan 134 L2)
+##   Usage: make check-security NODE=<name> [DRY_RUN=1] [JSON=1]
+##   JSON=1: JSON-отчёт security_posture.py (L5-мониторинг)
+##   Delegates to core/entrypoints/check-security.sh → remote_executor.py execute-check-security
+##     → core/internal/bootstrap/security_posture.py (на ноде, root)
+##   Exit codes: 0=healthy 1=warnings (pending security-апдейты) 2=errors — НЕ маскируются
+##   (в отличие от converge: это check-таргет, оператор должен видеть warning).
+##   ⚠️ TRAP[BUG] · 2026-07-31 · P1 · PLATFORM_ROOT не экспортировался → REMOTE converge падал
+##   · Prevention (тот же канон): любой remote-таргет экспортирует PLATFORM_ROOT.
+check-security:
+	@echo "[IMP:7][make][check-security] Running security posture check..."
+	@if [[ -z "$(NODE)" ]]; then \
+		echo "[IMP:9][make][check-security] ERROR: NODE not set — usage: make check-security NODE=<name> [DRY_RUN=1] [JSON=1]" >&2; \
+		exit 1; \
+	fi
+	@PLATFORM_ROOT="$(_platform_root)" bash $(_platform_root)/core/entrypoints/check-security.sh \
+		--node $(NODE) \
+		$(if $(DRY_RUN),--dry-run,) \
+		$(if $(filter 1,$(JSON)),--json)
+	@echo "[IMP:9][make][check-security] Security posture check complete"
 
 ## render-vhosts: Regenerate Nginx vhost configs from node.yaml
 ##   Usage: make render-vhosts NODE=<name>

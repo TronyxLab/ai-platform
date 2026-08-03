@@ -42,6 +42,7 @@ from core.internal.bootstrap.lifecycle.helpers import system as helpers_system
 from core.internal.shared import (
     subprocess_io as helpers_subprocess,  # B4: единый канон (копия lifecycle/helpers удалена)
 )
+from core.internal.shared.timeouts import APT_TIMEOUT
 
 
 # region FUNC_phase_registry_auth
@@ -433,6 +434,28 @@ def phase_deploy_update(core_dir: str, node_name: str, node_yaml: str) -> bool:
         logger.info("[IMP:9][phase:deploy_update] Context projects deployed incrementally")
     except Exception as e:  # noqa: EXC — non-fatal (best-effort: DEPLOY_BEST_EFFORT policy)
         logger.warning("[IMP:7][phase:deploy_update] Context deploy failed (non-fatal): %s", e)
+        non_fatal_issues = True
+
+    # ── 4. Apply unattended-upgrades security policy (DevPlan 134 L1) ──
+    # Пропагация политики при node-update: ensure() идемпотентен (content-match no-op) —
+    # на актуальной ноде = 0 записей на диск, на устаревшей — применяет security-конфиг.
+    # Non-fatal (best-effort): policy-сбой не должен ронять update-цикл.
+    security_script = os.path.join(core_dir, "internal", "bootstrap", "security_updates.py")
+    if os.path.isfile(security_script):
+        auto_reboot = os.environ.get("SECURITY_AUTO_REBOOT", "true").lower() == "true"
+        try:
+            helpers_subprocess.run_subprocess(
+                ["python3", security_script, "--auto-reboot", "true" if auto_reboot else "false"],
+                non_fatal=True,
+                fatal_rc=(127,),
+                timeout=APT_TIMEOUT,
+            )
+            logger.info("[IMP:9][phase:deploy_update] Unattended-upgrades security policy applied")
+        except Exception as e:  # noqa: EXC — non-fatal: security updates are best-effort
+            logger.warning("[IMP:7][phase:deploy_update] Security updates setup failed (non-fatal): %s", e)
+            non_fatal_issues = True
+    else:
+        logger.warning("[IMP:7][phase:deploy_update] security_updates.py not found at %s — skipping", security_script)
         non_fatal_issues = True
 
     if non_fatal_issues:

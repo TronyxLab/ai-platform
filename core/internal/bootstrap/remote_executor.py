@@ -256,12 +256,51 @@ class RemoteExecutor:
 
     # endregion FUNC_execute_reconcile
 
+    # region FUNC_execute_check_security
+    ## @purpose  Удалённая security-проверка: resolve → VPS self-detect → ssh exec security_posture.py.
+    ##           БЕЗ sync-core (read-only диагностика — remote core уже доставлен, DevPlan 134 D3).
+    ## @io  input: node_name, remote_cmd (build_check_security_ssh_cmd output), passthrough_args (info);
+    ##      output: exit code 0/1/2/124 (0=healthy 1=warnings 2=errors)
+    ## @complexity  O(1) — resolve + ssh exec
+    ## @invariants  НЕ вызывает sync_core_to_vps (зеркало execute_converge)
+    ##              VPS self-SSH detect — тот же VPS_NODE_LIFECYCLE probe (TRAP[BUG] RC 121)
+    def execute_check_security(self, node_name: str, remote_cmd: str, passthrough_args: str = "") -> int:
+        """Execute remote security posture check (resolve → VPS detect → ssh exec, no sync-core)."""
+        try:
+            _, host = self._resolve_host(node_name)
+        except NodeYamlNotFoundError as exc:
+            logger.info(
+                "[IMP:10][execute_check_security][resolve] FATAL: Cannot resolve node.yaml for node=%s: %s",
+                node_name,
+                exc,
+            )
+            return 1
+        if passthrough_args:
+            logger.info("[IMP:8][execute_check_security][input] passthrough args: %s", passthrough_args)
+        if not host:
+            logger.info("[IMP:9][execute_check_security][resolve] No SSH host — local fallback")
+            return 2
+        # ⚠️ TRAP[BUG] RC 121: self-SSH loop — мы уже на VPS → local exec
+        if os.path.isfile(VPS_NODE_LIFECYCLE):
+            logger.info("[IMP:9][execute_check_security][vps-detect] Local VPS detected — skipping SSH proxy")
+            return 2
+        logger.info("[IMP:9][execute_check_security][resolve] SSH host: %s — REMOTE check", host)
+        _prepare_ssh_opts(host, "update")
+
+        if self.dry_run:
+            logger.info("[IMP:8][execute_check_security][dry-run] DRY-RUN: ssh ... root@%s", host)
+            return 0
+        logger.info("[IMP:9][execute_check_security][ssh] Executing security_posture.py on root@%s", host)
+        return self._ssh_exec(host, remote_cmd)
+
+    # endregion FUNC_execute_check_security
+
 
 # endregion CLS_RemoteExecutor
 
 
 # region FUNC_cli
-## @purpose  CLI entrypoint: execute-update | execute-converge | execute-reconcile.
+## @purpose  CLI entrypoint: execute-update | execute-converge | execute-reconcile | execute-check-security.
 ##           Argparse: --node, --remote-cmd, --dry-run, --passthrough-args.
 ## @io  input: argv (Optional[list[str]], default sys.argv[1:]), output: exit code int
 ## @complexity  O(1) — dispatch-only
@@ -270,7 +309,7 @@ def cli(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="remote_executor — execute remote node commands over SSH")
     sp = p.add_subparsers(dest="command", required=True)
 
-    for name in ("execute-update", "execute-converge", "execute-reconcile"):
+    for name in ("execute-update", "execute-converge", "execute-reconcile", "execute-check-security"):
         c = sp.add_parser(name, help=f"Execute remote {name.removeprefix('execute-')} command")
         c.add_argument("--node", required=True, dest="node_name")
         c.add_argument("--remote-cmd", required=True, dest="remote_cmd")
@@ -283,6 +322,8 @@ def cli(argv: list[str] | None = None) -> int:
         return executor.execute_update(args.node_name, args.remote_cmd, args.passthrough_args)
     if args.command == "execute-converge":
         return executor.execute_converge(args.node_name, args.remote_cmd, args.passthrough_args)
+    if args.command == "execute-check-security":
+        return executor.execute_check_security(args.node_name, args.remote_cmd, args.passthrough_args)
     return executor.execute_reconcile(args.node_name, args.remote_cmd, args.passthrough_args)
 
 

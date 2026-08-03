@@ -31,6 +31,7 @@ from core.internal.shared.exceptions import (
     PlatformError,
     PlatformFatalError,
 )
+from core.internal.shared.timeouts import APT_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -160,6 +161,30 @@ def phase_system_bootstrap(core_dir: str, node_name: str, node_yaml: str) -> boo
             non_fatal_issues = True
     else:
         logger.warning("[IMP:7][phase:system_bootstrap] firewall.sh not found at %s — skipping", firewall_script)
+        non_fatal_issues = True
+
+    # ── 5.5 Apply unattended-upgrades security policy (DevPlan 134 L1) ──
+    # security_updates.py ensure — идемпотентно (content-match no-op). Non-fatal (best-effort,
+    # как firewall/tor): security-политика не должна ронять bootstrap. SECURITY_AUTO_REBOOT=false
+    # отключает Automatic-Reboot (04:30) — для нод, где ночной ребут недопустим.
+    security_script = os.path.join(core_dir, "internal", "bootstrap", "security_updates.py")
+    if os.path.isfile(security_script):
+        auto_reboot = os.environ.get("SECURITY_AUTO_REBOOT", "true").lower() == "true"
+        try:
+            helpers_subprocess.run_subprocess(
+                ["python3", security_script, "--auto-reboot", "true" if auto_reboot else "false"],
+                non_fatal=True,
+                fatal_rc=(127,),
+                timeout=APT_TIMEOUT,
+            )
+            logger.info("[IMP:9][phase:system_bootstrap] Unattended-upgrades security policy applied")
+        except Exception as e:  # noqa: EXC — non-fatal: security updates are best-effort
+            logger.warning("[IMP:7][phase:system_bootstrap] Security updates setup failed (non-fatal): %s", e)
+            non_fatal_issues = True
+    else:
+        logger.warning(
+            "[IMP:7][phase:system_bootstrap] security_updates.py not found at %s — skipping", security_script
+        )
         non_fatal_issues = True
 
     if non_fatal_issues:
