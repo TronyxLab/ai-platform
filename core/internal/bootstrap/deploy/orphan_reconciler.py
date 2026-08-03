@@ -185,11 +185,12 @@ def _get_compose_services(compose_path: str, module_name: str) -> list[str]:
     logger.info("[IMP:7][_get_compose_services] Resolving services for %s from %s", module_name, compose_path)
     # Shared docker_compose_config — sole path (DevPlan 116 B5 T3, гейт docker_sole_path).
     # Shared возвращает CompletedProcess (никогда не raise) — try/except TimeoutExpired/OSError удалены.
-    # ⚠️ TRAP[BUG] 2026-08-03 (RC 121, U-49): root compose первым -f — volumes SoT в root compose
+    # ⚠️ TRAP[BUG] 2026-08-03 (RC 121, U-49): root compose ЕДИНСТВЕННЫЙ -f (он include'ит модульные
+    # base.yml; двойное включение конкатенирует списки — security_opt dup)
     _root_compose = os.path.join(str(platform_remote_base()), "docker-compose.yml")
     _compose_args = ["-f", compose_path, "--profile", module_name]
     if os.path.isfile(_root_compose):
-        _compose_args = ["-f", _root_compose] + _compose_args
+        _compose_args = ["-f", _root_compose, "--profile", module_name]
     cfg_r = _shared_docker_compose_config(
         os.path.dirname(compose_path),
         compose_args=_compose_args,
