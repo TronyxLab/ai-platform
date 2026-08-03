@@ -356,6 +356,22 @@ def test_t03_network_partition_outbound(requires_node: str, node_ssh: NodeSSHCli
             reverted = True
             break
         time.sleep(5)
+    # ⚠️ Safety-net (находка W3, 2026-08-03): снапшот iptables МОЖЕТ не содержать
+    # docker-цепочек (если взят после повреждённого revert'а iptables-apply) →
+    # FORWARD DROP без DOCKER-USER ломает container outbound. Проверка + рестарт docker.
+    docker_chains = node_ssh.ssh_read("iptables -S | grep -cE 'DOCKER-USER|DOCKER'", timeout=30)
+    if int(docker_chains.stdout.strip() or "0") == 0:
+        logger.warning("[IMP:8][T3][safety] docker iptables chains missing after restore — restart docker")
+        node_ssh.ssh_exec("systemctl restart docker", timeout=300)
+        ok_after, missing_after, _ = wait_all_containers(node_ssh, timeout_s=240)
+        assert ok_after, f"T3 safety-net FAIL: containers after docker restart: {missing_after}"
+    outbound_probe_check = node_ssh.ssh_exec(
+        "docker exec backup-cron curl -s -m 10 -o /dev/null -w '%{http_code}' https://s3.timeweb.cloud 2>&1",
+        timeout=60,
+    )
+    assert outbound_probe_check.stdout.strip() == "200", (
+        f"T3 safety-net FAIL: container outbound broken: {outbound_probe_check.stdout}"
+    )
     ttr = int(time.monotonic() - t0) + 120
     recovered_probe = node_ssh.ssh_read(
         "curl -s --noproxy '*' -o /dev/null -w '%{http_code}' -m 15 https://api.telegram.org/ 2>&1; echo C=$?",
