@@ -1498,3 +1498,12 @@ removed:
     reason: "DevPlan 119 F2 (AUDIT-5 DUP-3): побайтовая копия test_gate_platform_env_schema.py::test_no_duplicate_volumes. Канон в gates-файле сохранён (R5 test_provision_coverage_preserved)."
     issue: "119-wave2-synthesis F2"
     approved_by: "@tronyx"
+
+  # ── DevPlan 126 (chaos-resilience W1): rename pg_restore validation → text-format validation ──
+  - nodeid: "tests/unit/test_backup_postgres.py::test_pg_restore_validation_failure"
+    reason: "DevPlan 126 chaos W1: pg_restore --list НЕ работает с text-форматом pg_dumpall
+      (input file appears to be a text format dump) — валидация заменена на text-маркерную
+      (zcat header + SQL statement scan); тест переименован в test_dump_structure_validation_failure
+      (R5-negative: дамп без header-маркера отвергается)"
+    issue: "126-chaos-resilience"
+    approved_by: "@sysadmin"
