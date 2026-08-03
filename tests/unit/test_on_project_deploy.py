@@ -368,4 +368,5 @@ def test_r5_pgbouncer_wildcard_routing_not_hardcoded_list(caplog):
 
     logger.critical("[IMP:9][test] R5-negative OK — pgbouncer wildcard URL, hardcoded DB list отсутствует")
 
+
 # endregion Tests: R5-negative
