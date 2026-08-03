@@ -28,6 +28,7 @@
 ## @changes  CREATED: 2026-07-31 | DevPlan 111 Wave 1 | TASK-A (реестр) + TASK-B (.gitignore) + TASK-C (check-file-lines) + TASK-D (git add -f)
 ## @changes  UPDATED: 2026-08-01 | DevPlan 116 B11 T7 (U-82, D4) — формат записей: Status (OPEN/FIXED/SUPERSEDED) + Rev (дата ИЛИ условие); T1/P2-2 → FIXED (B10); AD8-AD12 (U-83..88 решения); гейт свежести test_gate_debt_registry.py
 ## @changes  UPDATED: 2026-08-02 | DevPlan 119 C2/C6 — +P3-6 (watchdog undelivered, решение на 120) +P3-7 (letsencrypt path hardcode); отдельные файлы .ai/debt/watchdog-undelivered.md, .ai/debt/letsencrypt-path-hardcode.md
+## @changes  UPDATED: 2026-08-03 | RC-сессия (pre-v1.0.0-rc3) — stale-закрытие: P2-3 → FIXED (волна 117 D5, execute_grouped_phase удалён из state_machine и e2e), P2-4 → FIXED (DevPlan 116 T5, generate-manifests покрывает G1-G6), P3-6 → FIXED (решение пользователя 2026-08-03: watchdog удалён полностью — см. watchdog-undelivered.md), P3-7 → FIXED (миграция vhost_renderer/nginx_harness на letsencrypt_live — см. letsencrypt-path-hardcode.md), T7 → FIXED (вместе с 117 D5); T3 путь → tests/unit/test_spool_dir.py
 
 ---
 
@@ -62,8 +63,8 @@
 |---|--------|------|-----------|-------------|--------|-----|
 | P2-1 | Strangler-Fig node-resolver.sh | `core/lib/node-resolver.sh` | 271 | >150 LOC facade; inline python3 -c мигрирован (214/254, U-58). Кандидат на декомпозицию: shell facade <100 LOC + Python-модуль (U-86 backlog подтверждён). | OPEN | 2026-09-30 |
 | P2-2 | Починить test_add_vhost.py | `tests/test_add_vhost.py` | 7 тестов | FIXED волной B10 (116): test_add_vhost 7 passed (main() exit 1 устранён). См. TEST-DEBT T1. | FIXED | 2026-08-01 |
-| P2-3 | Удалить мёртвый код state_machine | `core/internal/bootstrap/lifecycle/state_machine.py:213` | ~100 LOC | resume_phase()/execute_grouped_phase()/_grouped_phases — мёртвый код (TRAP[DEBT] MED 2026-07-31). Ни один тест не покрывает. | OPEN | 2026-08-31 |
-| P2-4 | Починить manifest.mk G2/G4/G5 | `makefiles/manifest.mk:25` | ~20 LOC | generate-manifests не fully repairs stale manifests (TRAP[DEBT] MED 2026-07-31). | OPEN | 2026-08-31 |
+| P2-3 | Удалить мёртвый код state_machine | `core/internal/bootstrap/lifecycle/state_machine.py:213` | ~100 LOC | resume_phase()/execute_grouped_phase()/_grouped_phases — мёртвый код (TRAP[DEBT] MED 2026-07-31). Ни один тест не покрывает. | FIXED | 2026-08-01 (волна 117 D5) |
+| P2-4 | Починить manifest.mk G2/G4/G5 | `makefiles/manifest.mk:25` | ~20 LOC | generate-manifests не fully repairs stale manifests (TRAP[DEBT] MED 2026-07-31). | FIXED | 2026-08-01 (DevPlan 116 T5, G1-G6) |
 | P2-5 | Docker operations → shared module | `core/internal/deploy/deploy_engine.py:76` | ~200 LOC | Дублирование docker-операций между deploy_engine, docker_orchestrator, docker.sh (TRAP[DEBT] MED 2026-07-26). | OPEN | 2026-09-30 |
 
 ---
@@ -77,8 +78,8 @@
 | P3-3 | `core/modules/platform-secrets/install.sh` (223 LOC) | Bootstrap, кандидат при росте >300 LOC | OPEN | При росте >300 LOC |
 | P3-4 | `core/modules/postgres/docker-compose.base.yml:50` | POSTGRES_PASSWORD rotation risk (TRAP[DEBT] MED) | OPEN | 2026-12-31 |
 | P3-5 | `tests/_conftest/networks.py:90` | Parallel test teardown destroys shared external networks (TRAP[DEBT] MED) | OPEN | 2026-12-31 |
-| P3-6 | `core/modules/hermes-agent/watchdog/*` (3 файла) | Watchdog-подсистема не доставляется (0 в Dockerfile/compose/systemd/CI) — решение пользователя на 120 (DevPlan 119 C2, D-1). TRAP[DEBT] HI на agent_watchdog/circuit_breaker/docker_ops. См. `.ai/debt/watchdog-undelivered.md`. | OPEN | 2026-08-31 (решение на 120) |
-| P3-7 | `core/internal/scaffold/vhost_renderer.py`, `core/internal/scaffold/nginx_harness.py` | `/etc/letsencrypt/live` хардкод вне `letsencrypt_live()` (DevPlan 119 C6, AUDIT-4 T7). cert_orchestrator мигрирован (118 C7). TRAP[DEBT] на оба файла. См. `.ai/debt/letsencrypt-path-hardcode.md`. | OPEN | При касании vhost_renderer/nginx_harness |
+| P3-6 | `core/modules/hermes-agent/watchdog/*` (3 файла) | Watchdog-подсистема не доставляется (0 в Dockerfile/compose/systemd/CI) — решение пользователя на 120 (DevPlan 119 C2, D-1). TRAP[DEBT] HI на agent_watchdog/circuit_breaker/docker_ops. См. `.ai/debt/watchdog-undelivered.md`. | FIXED | 2026-08-03 (решение пользователя: удалено полностью) |
+| P3-7 | `core/internal/scaffold/vhost_renderer.py`, `core/internal/scaffold/nginx_harness.py` | `/etc/letsencrypt/live` хардкод вне `letsencrypt_live()` (DevPlan 119 C6, AUDIT-4 T7). cert_orchestrator мигрирован (118 C7). TRAP[DEBT] на оба файла. См. `.ai/debt/letsencrypt-path-hardcode.md`. | FIXED | 2026-08-03 (миграция на letsencrypt_live) |
 
 ---
 
@@ -88,11 +89,11 @@
 |---|------|------|----------|--------|-----|
 | T1 | `tests/test_add_vhost.py` | FIXED волной B10 (116): все 7 тестов проходят (main() exit 1 после миграции add-vhost.sh → vhost_renderer.py устранён). | **HI** | FIXED | 2026-08-01 |
 | T2 | `tests/test_smoke_litellm.py:72` | litellm first-start crash (httpx.ConnectError) — TRAP[DEBT] MED | MED | OPEN | 2026-09-30 |
-| T3 | `tests/test_spool_dir.py:18` | 3 модуля без spool_volume: litellm, langfuse, infra-metrics — TRAP[DEBT] MED | MED | OPEN | 2026-09-30 |
+| T3 | `tests/unit/test_spool_dir.py:18` | 3 модуля без spool_volume: litellm, langfuse, infra-metrics — TRAP[DEBT] MED | MED | OPEN | 2026-09-30 |
 | T4 | `tests/test_volume_spool_consistency.py:82` | Vacuous Check 3 — TRAP[DEBT] MED | MED | OPEN | 2026-09-30 |
 | T5 | `tests/test_lib_node_resolver.py:258` | No cleanup of /opt/node-configs/ test files — TRAP[DEBT] LO | LO | OPEN | 2026-12-31 |
 | T6 | `tests/_conftest/skip_gate.py:36` | _handle_e2e_error не используется uniformly — TRAP[DEBT] LO | LO | OPEN | 2026-12-31 |
-| T7 | `tests/e2e/test_failure_scenarios.py:23` | Мёртвый код (resume_phase) — см. P2-3 | MED | OPEN | 2026-08-31 |
+| T7 | `tests/e2e/test_failure_scenarios.py:23` | Мёртвый код (resume_phase) — см. P2-3 | MED | FIXED | 2026-08-01 (волна 117 D5) |
 
 ---
 
