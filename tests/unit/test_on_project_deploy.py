@@ -148,6 +148,8 @@ def test_successful_creation(caplog, tmp_path, monkeypatch):
     assert _invoke_hook(str(tmp_path), "myproj") == 0
 
 
+# endregion Tests: базовые сценарии
+
 # ═══════════════════════════════════════════════════════════════════
 # region Tests: негативные (D65)
 # ═══════════════════════════════════════════════════════════════════
@@ -216,6 +218,8 @@ def test_main_missing_args_exits_zero(caplog):
     finally:
         _sys.argv = ["pytest"]
 
+
+# endregion Tests: негативные
 
 # ═══════════════════════════════════════════════════════════════════
 # region Tests: DevPlan 133 W2 — роль + GRANT + credentials
@@ -333,6 +337,8 @@ def test_credentials_regen_env_platform_on_first_role(caplog, tmp_path, monkeypa
     logger.critical("[IMP:9][test] .env.platform regen OK — CLI вызван с --project-dir/--name")
 
 
+# endregion Tests: W2 (роль + GRANT + credentials)
+
 # ═══════════════════════════════════════════════════════════════════
 # region Tests: R5-negative (DevPlan 133 — баг «pgbouncer no such database»)
 # ═══════════════════════════════════════════════════════════════════
@@ -361,3 +367,5 @@ def test_r5_pgbouncer_wildcard_routing_not_hardcoded_list(caplog):
     assert "5432/langfuse" not in text
 
     logger.critical("[IMP:9][test] R5-negative OK — pgbouncer wildcard URL, hardcoded DB list отсутствует")
+
+# endregion Tests: R5-negative
