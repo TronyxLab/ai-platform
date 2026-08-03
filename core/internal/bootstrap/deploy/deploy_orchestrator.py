@@ -402,7 +402,7 @@ def _route_deploy(
             deploy_orchestrator,
         )
     logger.info("[IMP:9][_route_deploy][route] SEQUENTIAL route (DEPLOY_PARALLEL != true) — legacy for-loop")
-    deployed, failed = _deploy_sequential(enabled_names, modules_dir, core_dir)
+    deployed, failed = _deploy_sequential(enabled_names, modules_dir, core_dir, overlays)
     return deployed, failed, {}
 
 
@@ -455,7 +455,7 @@ def _deploy_parallel(
             "[IMP:5][_deploy_parallel][topo_sort] topo_sort failed (%s) — falling back to sequential deploy",
             exc,
         )
-        deployed, failed = _deploy_sequential(enabled_names, modules_dir, core_dir)
+        deployed, failed = _deploy_sequential(enabled_names, modules_dir, core_dir, overlays)
         return deployed, failed, {}
 
     # ── 2. pre-pull docker images (best-effort — compose up retries pull) ──
@@ -627,6 +627,7 @@ def _deploy_sequential(
     enabled_names: list[str],
     modules_dir: str,
     core_dir: str,
+    overlays: dict[str, str] | None = None,
 ) -> tuple[int, list[str]]:
     """Sequential deploy for-loop (legacy path — unchanged semantics)."""
     secrets_manifest = os.path.join(core_dir, "secrets-manifest.yaml")
@@ -663,7 +664,9 @@ def _deploy_sequential(
             _invoke_module_interface(m_name, "healthcheck", "liveness")  # best-effort, non-fatal
         else:
             try:
-                ok = docker_orchestrator.deploy_docker_module(m_name, modules_dir=modules_dir)
+                ok = docker_orchestrator.deploy_docker_module(
+                    m_name, modules_dir=modules_dir, overlay_dir=(overlays or {}).get(m_name)
+                )
             except Exception as exc:  # noqa: EXC — docker deploy failure → module failed, continue (best-effort: DEPLOY_BEST_EFFORT policy)
                 logger.warning("[IMP:8][_deploy_sequential][docker] deploy error for %s: %s", m_name, exc)
                 ok = False

@@ -108,7 +108,7 @@ def test_orchestrate_sequential_routing(caplog) -> None:
             ["postgres", "redis"], {}, "/mods", "/core", deploy_parallel=False, deploy_orchestrator=False
         )
 
-    mock_seq.assert_called_once_with(["postgres", "redis"], "/mods", "/core")
+    mock_seq.assert_called_once_with(["postgres", "redis"], "/mods", "/core", {})
     mock_par.assert_not_called()
     assert deployed == 2, f"Sequential route should return deployed=2, got {deployed}"
     assert failed == [], f"Sequential route should return no failures, got {failed}"
@@ -615,8 +615,8 @@ def test_deploy_sequential_iterates_modules(tmp_path, caplog) -> None:
 
     assert mock_env.call_count == 3, f"env check must run per module, got {mock_env.call_count}"
     assert mock_docker.call_count == 2, f"docker deploy must run for 2 docker modules, got {mock_docker.call_count}"
-    mock_docker.assert_any_call("postgres", modules_dir=str(tmp_path / "modules"))
-    mock_docker.assert_any_call("redis", modules_dir=str(tmp_path / "modules"))
+    mock_docker.assert_any_call("postgres", modules_dir=str(tmp_path / "modules"), overlay_dir=None)
+    mock_docker.assert_any_call("redis", modules_dir=str(tmp_path / "modules"), overlay_dir=None)
     # nginx (system): install + healthcheck liveness
     assert mock_invoke.call_count >= 2, (
         f"system module needs install + healthcheck invocations, got {mock_invoke.call_count}"
