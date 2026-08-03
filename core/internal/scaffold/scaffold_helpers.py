@@ -380,7 +380,7 @@ node: {node_val}
 ## @purpose  Generate AI-PLATFORM.md (platform contract, DevPlan 133 D2/D3) — единая точка
 ##           вызова генератора gen_project_platform_md.py из scaffold-слоя (аналог
 ##           gen_project_agents/gen_project_makefile). Разрешает node.yaml
-##           (PROJECTS_ROOT/<org>/node-configs/<node>/node.yaml) и platform-env.yaml
+##           (PROJECTS_ROOT/org/node-configs/node/node.yaml) и platform-env.yaml
 ##           (repo root). Не перезаписывает существующий файл без маркеров (без force).
 ## @param name         Project name
 ## @param org          Organization name
@@ -392,7 +392,7 @@ node: {node_val}
 ## @return   "generated" | "updated" | "exists" | "skipped"
 ## @complexity O(M + S) — delegate to gen_project_platform_md
 ## @invariants
-##   - Node.yaml resolution: PROJECTS_ROOT/<org>/node-configs/<node>/node.yaml
+##   - Node.yaml resolution: PROJECTS_ROOT/org/node-configs/node/node.yaml
 ##   - platform-env.yaml: repo root (тот же канон, что project_scaffolder.gen_env_platform)
 ##   - Без PROJECTS_ROOT → node_yaml_path="" → генератор рендерит warning-секцию (graceful)
 def gen_project_platform_md(
@@ -413,7 +413,7 @@ def gen_project_platform_md(
 
     target = Path(output_path)
 
-    # ── Resolve node.yaml: PROJECTS_ROOT/<org>/node-configs/<node>/node.yaml ──
+    # ── Resolve node.yaml: PROJECTS_ROOT/org/node-configs/node/node.yaml ──
     node_yaml_path = ""
     projects_root = os.environ.get("PROJECTS_ROOT", "")
     if projects_root and org and node:

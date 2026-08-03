@@ -153,7 +153,8 @@ def validate_provides(data: dict, profiles: list[str]) -> dict:
 ##           (из .platform-db.env) в DSN-шаблон. Заменяет ${NAME}_user/${NAME}_db на
 ##           фактические роль/БД (если заданы) и '***' на реальный пароль.
 ##           Без credentials → шаблон возвращается без изменений (обратная совместимость).
-## @param dsn_tmpl     DSN template из platform-env.yaml (напр. postgresql://${NAME}_user:***@pgbouncer:6432/${NAME}_db)
+## @param dsn_tmpl     DSN template из platform-env.yaml (postgres-сервис: DSN вида
+##                     postgresql://NAME_user:***\@pgbouncer:6432/NAME_db)
 ## @param project_name Project name (${NAME} подстановка — если credentials не покрывают)
 ## @param credentials  dict из .platform-db.env (PLATFORM_POSTGRES_DB/USER/PASSWORD) | None
 ## @return  str — DSN с подставленными credentials
@@ -188,7 +189,7 @@ def _apply_credentials_to_dsn(dsn_tmpl: str, project_name: str, credentials: dic
 ## @purpose  Load DB credentials from .platform-db.env (project_dir) или явного файла
 ##           (--credentials-file). Канонический парсер — shared/secrets_env_parser.
 ##           Файл отсутствует → {} (без изменений поведения генератора).
-## @param project_dir        Project directory (ищет <dir>/.platform-db.env)
+## @param project_dir        Project directory (ищет dir/.platform-db.env)
 ## @param credentials_file   Explicit credentials file (приоритетнее project_dir)
 ## @return  dict[str, str] — {} если файла нет
 ## @complexity O(N) — N = строки файла

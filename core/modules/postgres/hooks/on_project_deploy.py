@@ -326,7 +326,7 @@ def _write_credentials(project_dir: str, db_name: str, role: str, password: str)
 # region FUNC_regenerate_env_platform
 ## @purpose  Regenerate .env.platform of the project on the node with real DB password
 ##           (password-injection, DevPlan 133 W2.3/D4). Subprocess CLI: gen_env_platform.py
-##           --project-dir читает <project_dir>/.platform-db.env автоматически.
+##           --project-dir читает project_dir/.platform-db.env автоматически.
 ##           Best-effort: сбой → WARN, не блокирует (non-fatal).
 ## @param project_dir  Project directory on the node
 ## @param project      Project name (--name для ${NAME} подстановки)

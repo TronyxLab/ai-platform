@@ -69,7 +69,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 # ═══════════════════════════════════════════════════════════════════
 # region FUNC_render_static
 ## @purpose  Render the STATIC part of AI-PLATFORM.md (stable template — not per-node).
-##           Ссылки на канон: URL GitHub (<org>/ai-platform) + локальный путь.
+##           Ссылки на канон: URL GitHub (org/ai-platform) + локальный путь.
 ## @param project_name  Project name
 ## @param org           GitHub org / context (для URL канона)
 ## @return  Static markdown (без GENERATED-секции — добавляется в generate())
@@ -323,10 +323,9 @@ def generate(
 
 # ═══════════════════════════════════════════════════════════════════
 # region FUNC_write_project_platform_md
-## @purpose  Idempotent atomic write of AI-PLATFORM.md into project_dir.
-##           - missing file → create full content
-##           - existing file WITH markers → replace ONLY the section (static edits preserved)
-##           - existing file WITHOUT markers and not force → skip (return False)
+## @purpose  Idempotent atomic write of AI-PLATFORM.md into project_dir: missing file → create
+##           full content; existing WITH markers → replace ONLY the section; existing WITHOUT
+##           markers and not force → skip.
 ## @param project_dir        Project directory (target: project_dir/AI-PLATFORM.md)
 ## @param node_name          Node name (logs; node.yaml is authoritative)
 ## @param node_yaml_path     Path to node.yaml (optional)
@@ -402,7 +401,7 @@ def _project_name(proj_path: Path, project_yaml_path: str = "") -> str:
 
 
 def _default_node_yaml_path(proj_path: Path, node_name: str = "") -> str:
-    """Default node.yaml resolution: PROJECTS_ROOT/<org>/node-configs/<node>/node.yaml."""
+    """Default node.yaml resolution: PROJECTS_ROOT/org/node-configs/node/node.yaml."""
     projects_root = os.environ.get("PROJECTS_ROOT", "")
     if not projects_root or not proj_path.parent.is_dir():
         return ""
