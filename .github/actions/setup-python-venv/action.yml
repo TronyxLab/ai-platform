@@ -92,10 +92,12 @@ runs:
         # ⚠️ TRAP[BUG] 2026-08-03 · хардкод DEPS расходился с pyproject.toml (инвариант 11)
         # · Symptom: CI gate-fast check-manifests G6 — ModuleNotFoundError: pydantic
         #   (config_renderer → policy_schema → pydantic); pydantic не было в хардкод-списке.
-        # · Root: setup-python-venv ставил фиксированный список вместо generated
-        #   core/requirements.txt (SoT — pyproject.toml [project].dependencies).
-        # · Fix: pip install -r core/requirements.txt (runtime) + pytest (dev).
-        .venv/bin/pip install -r core/requirements.txt pytest
+        # · Затем: gates exit 1 — 39 «undocumented removals» test_inventory: тесты с
+        #   requires_docker импортируют requests/python-dotenv (dev-deps pyproject) —
+        #   их отсутствие давало collection error → тесты не собирались.
+        # · Fix: runtime из generated core/requirements.txt (SoT pyproject) + dev-пакеты
+        #   pytest/requests/python-dotenv (dev extra pyproject, D4: «только тесты»).
+        .venv/bin/pip install -r core/requirements.txt pytest requests python-dotenv
         if [ "${{ inputs.install-pre-commit }}" = "true" ]; then
           .venv/bin/pip install pre-commit
         fi
