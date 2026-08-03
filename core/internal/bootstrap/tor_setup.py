@@ -5,7 +5,8 @@
 ## @purpose  Деградационная state-machine установки Tor+Privoxy пакетов (DevPlan 119 D2, AUDIT-1 F4).
 ##           Перенос install_packages() из install-tor-proxy.sh (52-116): webtunnel→obfs4 fallback.
 ##           Shell-фасад получает список установленных пакетов через CLI `python3 tor_setup.py --install`.
-## @scope    Вызывается install-tor-proxy.sh install_packages (тонкий фасад <20 LOC). Чистая логика
+## @scope    Вызывается install_tor_proxy.py install_packages (DevPlan 127 W1: native import;
+##           ранее — install-tor-proxy.sh фасад <20 LOC). Чистая логика
 ##           планирования (plan_install) + apt I/O (dpkg -s / apt-cache show / apt-get) — тестируемо.
 ## @invariants
 ##   - plan_install: чистая функция — webtunnel деградируется если НЕ в apt-репозиториях
@@ -19,7 +20,7 @@
 ##   бизнес-логики (Tier-1 Strangler trigger). Python + unit-тесты ПЕРЕД миграцией (test-first).
 ## @changes  2026-08-02 | DevPlan 119 D2 — Created (test-first: tests/unit/test_tor_setup.py)
 ## @changes  2026-08-03 | DevPlan 123 T7 — apt_update/apt_install: +timeout=APT_TIMEOUT (300)
-## @see      core/internal/bootstrap/install-tor-proxy.sh (install_packages → тонкий фасад)
+## @see      core/internal/bootstrap/install_tor_proxy.py (install_packages → native import, 127 W1)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations

@@ -6,8 +6,9 @@
 #           (install-tor-proxy.sh:147-196). Вынесен в Python по DevPlan 118 E1 (D19):
 #           тестируемая бизнес-логика (parsing, degradation, dedup, fail-fast) —
 #           shell остаётся apt/systemd-оркестратором.
-## @scope    Вызывается install-tor-proxy.sh write_torrc через CLI `python3 tor_transport.py emit --bridges-file X`
-##           (тонкий канал — shell аппендит секцию в torrc).
+## @scope    Вызывается install_tor_proxy.py write_torrc (DevPlan 127 W1: native import;
+##           ранее — install-tor-proxy.sh через CLI emit, тонкий канал).
+##           Секция аппендится в torrc напрямую (без shell-прокладки).
 ## @invariants
 ##   - Bridge line: ^Bridge\s+([a-zA-Z0-9_-]+) — первый токен = transport
 ##   - Unknown transport (нет в TRANSPORT_BIN) → TorTransportError (fail-fast, shell exit 1 канон)
@@ -19,7 +20,7 @@
 ## @rationale D19 (мега-DevPlan): >3 if-веток бизнес-логики (Tier-1) + >150 LOC (Tier-2) в write_torrc.
 ##   Strangler: парсинг/деградация → Python с unit-тестами ПЕРЕД миграцией (test-first условие выполнено).
 ## @changes  2026-08-02 | DevPlan 118 E1 — Created (test-first: tests/unit/test_tor_transport.py написан ПЕРЕД)
-## @see      core/internal/bootstrap/install-tor-proxy.sh (write_torrc использует CLI emit)
+## @see      core/internal/bootstrap/install_tor_proxy.py (write_torrc использует parse_bridges, 127 W1)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations

@@ -35,6 +35,8 @@
 ##                      B4 — subprocess_io +fatal_rc, lifecycle/helpers/subprocess_io.py удалён
 ##           2026-08-02 | DevPlan 119 C3 — verbs.validate_not_verb удалён (0 ссылок)
 ##           2026-08-02 | DevPlan 119 E5 — +atomic_writer.py (33-й); канон атомарной записи
+##           2026-08-04 | DevPlan 127 W2 — +node_resolver.py (34-й); Python-резолв node.yaml
+##                      (миграция core/lib/node-resolver.sh, S8/P2-1)
 # endregion MODULE_CONTRACT
 
 # core/internal/shared/ — инвентарь модулей
@@ -58,6 +60,7 @@
 | `module_interface.py` | Единая bash-обёртка invoke_module_interface (DevPlan 118 C5 — дедупликация docker_orchestrator._invoke_healthcheck_full + deploy_orchestrator._invoke_module_interface; **вход для B8 wire module-hooks**) | `invoke(module, interface, *args, timeout=...) → (bool, output)` | docker_orchestrator, deploy_orchestrator |
 | `node_detect.py` | Детекция AGE-ключа (env-цепочка + default key file ~/.config/age/keys.txt — age CLI локация, на dev-машине symlink на ~/.ssh/age-key-personal.txt; только при пустой env, E2E auto-detect 2026-08-02, единый default-путь 2026-08-03) + авто-детекция имени ноды из node-configs (DevPlan 104 — дедупликация bootstrap/converge/node-update) | `detect_age_key()`, `auto_detect_node_name()`, CLI `--detect-age-key` / `--detect-node-name` | bootstrap, converge, node-update |
 | `node_yaml/` | Единый фасад чтения node.yaml (DevPlan 119 H1: монолит node_yaml.py 1164 LOC → пакет node_yaml/ — агрегатор + миксины domains/projects/modules/node/validation/resolve; мутации с TRAP[BUG] 2026-07-30) | `NodeYaml(path).get(...)`, CLI `--get/--set` | vhost_renderer, reconciler, converge, scaffold, context_deployer, preflight |
+| `node_resolver.py` | Python-резолв node.yaml (DevPlan 127 W2 — миграция core/lib/node-resolver.sh, S8/P2-1): 3-path search через NodeYaml.resolve + host-извлечение; CLI resolve/host с exit-контрактом 0/1; shell-фасад node-resolver.sh <100 LOC | `resolve_node_yaml()`, `extract_node_host()`, CLI `resolve --node X` / `host --file F` | node-resolver.sh (фасад: bootstrap.sh, node-update.sh, node-lifecycle.sh, converge.sh, deploy-context.sh, deploy.mk) |
 | `project_registry.py` | Реестр проектов: регистрация/дерегистрация/список поверх NodeYaml | `validate_project_name()`, `register/unregister/list`, `discover_llm_projects()` (DevPlan 117 D24 — LLM-проекты по ai-platform.yaml llm.enabled=true) | DeployEngine, scaffold, lifecycle, key_provisioner (discover_projects shim → делегирование) |
 | `s3_client.py` | Единая boto3 S3-фабрика платформенного домена (DevPlan 117 D26 — дедупликация s3_ssl_cache._get_s3_client + preflight инлайн; backup-cron upload/retention вне скоупа) | `get_s3_client(endpoint=None, access_key=None, secret_key=None, max_attempts=3, region=None)` | s3_ssl_cache, preflight |
 | `schema_validator.py` | Единый schema-валидатор YAML↔JSON-Schema (draft-07) — единственная Draft7Validator-точка (DevPlan 116 B6 T5, дедупликация jsonschema_validate.py + node_yaml.validate) | `validate_yaml_against_schema()`, `validate_dict_against_schema()` | jsonschema_validate, node_yaml.validate |

@@ -257,14 +257,17 @@
 | Скрипт | LOC | Keep-причина | Rev-условие |
 |--------|-----|--------------|-------------|
 | `core/internal/bootstrap/issue-cert.sh` | 700 | acme.sh CLI interaction executor (DNS-01/HTTP-01, API-key shred протокол) — battle-tested shell; оркестрация/валидация уже в Python (cert_orchestrator + ssl_certs CLI, D1). DEFER-2 | после стабилизации acme.sh API ≥6 мес (2027-02) |
-| `core/entrypoints/deploy.sh` | 172 | Переходный SSH forced-command entrypoint — канонический канал уже orchestrator_cli dispatch; удаление ломает legacy-ноды (authorized_keys). D7 | после верификации brief A на production |
-| `core/internal/bootstrap/install-tor-proxy.sh` | 321 | Чистая apt/systemd оркестрация (остаток); бизнес-логика мигрирована: tor_transport (118 E1), tor_setup/privoxy_config (119 D2/D3) | при появлении новой бизнес-логики → Tier-1 извлечение |
-| `core/lib/healthcheck.sh`, `logging.sh`, `paths.sh` | ~100-200 | Стабильные shell-библиотеки — API стабилен, замена не даст прироста (языковая политика, явное исключение) | при смене API |
-| `core/lib/ssh.sh` | ~100 | Тонкий фасад над `python3 -m core.internal.shared.ssh_opts --shell` (116 B5 D1) | при втором shell-потребителе флагов |
-| `core/lib/audit.sh` | ~30 | Тонкий фасад над `shared.audit_logger` (единственный writer, 116 B11 T2) | при изменении схемы аудита |
+| `core/entrypoints/deploy.sh` | 175 | Переходный SSH forced-command entrypoint — канонический канал уже orchestrator_cli dispatch; удаление ломает legacy-ноды (authorized_keys). D7 | после верификации brief A на production |
+| `core/lib/healthcheck.sh`, `logging.sh`, `paths.sh` | 251 / 116 / 46 | Стабильные shell-библиотеки — API стабилен, замена не даст прироста (языковая политика, явное исключение) | при смене API |
+| `core/lib/ssh.sh` | 188 | Тонкий фасад над `python3 -m core.internal.shared.ssh_opts --shell` (116 B5 D1) | при втором shell-потребителе флагов |
+| `core/lib/audit.sh` | 83 | Тонкий фасад над `shared.audit_logger` (единственный writer, 116 B11 T2) | при изменении схемы аудита |
 | `core/lib/module-interface.sh` | 26 | Тонкий фасад над `python3 -m core.internal.shared.module_interface invoke` (119 D4) | при новом канале dispatch |
-| `core/lib/yaml_read.sh` | legacy | Исторический YAML-reader; вытеснен `yaml_query.py` CLI — сохранён для обратной совместимости (0 активных source-потребителей после 119 D4) | при 0 ссылок в течение 90 дней → удалить |
-| `core/lib/vps-readiness.sh`, `node-resolver.sh` | фасады | Тонкие фасады над Python CLI (node_detect/vps_readiness) | — |
+| `core/lib/yaml_read.sh` | 100 | Исторический YAML-reader; вытеснен `yaml_query.py` CLI — сохранён для обратной совместимости (0 активных source-потребителей после 119 D4) | при 0 ссылок в течение 90 дней → удалить |
+| `core/lib/vps-readiness.sh` | 23 | Тонкий фасад над `python3 -m core.internal.shared.vps_readiness` (105) | — |
+
+**Мигрированы (DevPlan 127, W1/W2 — больше НЕ исключения):**
+- `core/internal/bootstrap/install-tor-proxy.sh` (было 321 LOC) → фасад 25 LOC + `core/internal/bootstrap/install_tor_proxy.py` (оркестрация, LDD IMP:9, идемпотентность).
+- `core/lib/node-resolver.sh` (было 215 LOC) → фасад 99 LOC + `core/internal/shared/node_resolver.py` (резолв, CLI exit 0/1).
 
 ---
 

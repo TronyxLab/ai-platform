@@ -201,8 +201,11 @@ def test_debt_registry_all_sections(caplog: pytest.LogCaptureFixture) -> None:
 
 
 # region FUNC_test_debt_registry_shell_residual_entries
-## @purpose — AC3: SHELL-RESIDUAL has exactly 8 entries, each with 6 columns
+## @purpose — AC3: SHELL-RESIDUAL has exactly 2 entries (post-DevPlan 127: S1 issue-cert.sh,
+##            S3 healthcheck.sh — keep by design), each with 6 columns
 ##            (file, LOC, обоснование, Status, Rev) — Status добавлен B11 T7 (D4).
+##            До 127 было 8 записей; S2/S4/S5/S6/S7/S8 УДАЛЕНЫ (мигрированы на Python,
+##            канон «история удаляется вместе с именами»).
 ## @io — ⇥ caplog → ⎋ None (pytest.fail on count/column mismatch)
 ## @complexity — O(R) where R = SHELL-RESIDUAL rows
 
@@ -211,12 +214,12 @@ def test_debt_registry_all_sections(caplog: pytest.LogCaptureFixture) -> None:
 @ldd_trajectory
 
 # 🧪 TRAP[TEST] · 2026-07-31 · REGRESSION · SHELL-RESIDUAL entries count/columns drift
-# · Scenario: AC3 — 8 rows with file/LOC/обоснование/Status/Rev columns (B11 T7: +Status)
-# · Last fail: N/A (preventive)
+# · Scenario: AC3 — 2 rows (S1/S3 keep by design, DevPlan 127 W3) with file/LOC/обоснование/Status/Rev columns
+# · Last fail: 2026-08-04 — 8-записная таблица после миграции S2/S4-S8 (127 W1/W2) → count обновлён до 2
 # · Remove if: SHELL-RESIDUAL structure changes by approved amendment
 def test_debt_registry_shell_residual_entries(caplog: pytest.LogCaptureFixture) -> None:
     """
-    # ▶ section SHELL-RESIDUAL → ○ split rows → ◇ 8 rows? → ◇ each 6 cols? → ⎋ pass | fail
+    # ▶ section SHELL-RESIDUAL → ○ split rows → ◇ 2 rows? → ◇ each 6 cols? → ⎋ pass | fail
     """
     # region BLOCK_Extract
     content = _read_registry()
@@ -228,7 +231,9 @@ def test_debt_registry_shell_residual_entries(caplog: pytest.LogCaptureFixture) 
     # endregion
 
     # region BLOCK_Assert
-    assert len(rows) == 8, f"SHELL_RESIDUAL_ENTRY_COUNT: expected 8, got {len(rows)}"
+    assert len(rows) == 2, (
+        f"SHELL_RESIDUAL_ENTRY_COUNT: expected 2 (S1/S3 keep by design, DevPlan 127), got {len(rows)}"
+    )
     for row in rows:
         cols = [c.strip() for c in row.strip("|").split("|")]
         assert len(cols) == 6, (
@@ -240,7 +245,7 @@ def test_debt_registry_shell_residual_entries(caplog: pytest.LogCaptureFixture) 
         assert cols[4] in _VALID_STATUSES, f"SHELL_RESIDUAL_INVALID_STATUS: {cols[4]} in {row}"
         assert cols[5], f"SHELL_RESIDUAL_REV_EMPTY: {row}"
     logger.info(
-        "[IMP:9][test_debt_registry_shell_residual_entries] ✅ 8 entries × 6 columns (file/LOC/rationale/Status/Rev)"
+        "[IMP:9][test_debt_registry_shell_residual_entries] ✅ 2 entries × 6 columns (file/LOC/rationale/Status/Rev)"
     )
     # endregion
 

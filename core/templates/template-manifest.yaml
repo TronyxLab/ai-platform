@@ -154,22 +154,27 @@ templates:
         required: false
         source: standard
 
-  # ── Tor proxy templates (cp-потребители — install-tor-proxy.sh) ──────────
+  # ── Tor proxy templates (cp-потребители — install_tor_proxy.py, DevPlan 127 W1) ──────────
   # ⚠️ TRAP[DECISION] · 2026-07-31 · — · Путь `../bootstrap/tor/` (НЕ `../../bootstrap/tor/`)
   # · Rejected: литерал DevPlan 116 T6 `../../bootstrap/tor/torrc.template` — резолвится
   # ·   в root/bootstrap/ (не существует). Манифест-пути относительны core/templates/ →
   # ·   `../bootstrap/tor/...` = core/bootstrap/tor/... (фактическое расположение).
   # · Rev: если tor-шаблоны переедут — обновить пути.
+  # · 2026-08-04 (127 W1): write_torrc()/write_privoxy_config() мигрированы в Python —
+  # ·   TORRC_TEMPLATE = core/bootstrap/tor/torrc.template (install_tor_proxy.py) — потребляется;
+  # ·   privoxy-config.template: privoxy_config.TEMPLATE_PATH указывает на
+  # ·   core/internal/bootstrap/tor/privoxy-config.template (не существует) → всегда
+  # ·   mutation-fallback. Потенциальный DEBT (вне скоупа 127) — см. отчёт волны.
   - template: ../bootstrap/tor/torrc.template
     output: null
     type: single
-    consumer: core/internal/bootstrap/install-tor-proxy.sh:write_torrc() (cp torrc.template → /etc/tor/torrc)
+    consumer: core/internal/bootstrap/install_tor_proxy.py:write_torrc() (TORRC_TEMPLATE → /etc/tor/torrc)
     vars: {}
 
   - template: ../bootstrap/tor/privoxy-config.template
     output: null
     type: single
-    consumer: core/internal/bootstrap/install-tor-proxy.sh:write_privoxy_config() (cp privoxy-config.template → /etc/privoxy/config)
+    consumer: core/internal/bootstrap/privoxy_config.py:write_privoxy_config() (template-ветка; fallback mutation)
     vars: {}
 
   # ── Alert rules (dual-role: template + live config) ──────────────────────

@@ -5,8 +5,9 @@
 ## @purpose  Идемпотентный Python-мутатор конфигурации Privoxy (DevPlan 119 D3, AUDIT-1 F5).
 ##           Перенос write_privoxy_config() из install-tor-proxy.sh (172-213): grep-guard + sed
 ##           мутации → тестируемый mutate_config + write_privoxy_config (no-op при повторном вызове).
-## @scope    Вызывается install-tor-proxy.sh write_privoxy_config (тонкий фасад) через CLI
-##           `python3 privoxy_config.py --config <path>`. Шаблон tor/privoxy-config.template —
+## @scope    Вызывается install_tor_proxy.py write_privoxy_config (DevPlan 127 W1: native import;
+##           ранее — install-tor-proxy.sh через CLI `python3 privoxy_config.py --config <path>`).
+##           Шаблон tor/privoxy-config.template —
 ##           авторитетный конфиг, если существует (ветка shell cp); иначе идемпотентная мутация.
 ## @invariants
 ##   - Идемпотентность: если конфиг уже содержит нужные строки → no-op (возврат False, без записи)
@@ -20,7 +21,7 @@
 ##   Шаблонная ветка (cp template) сохранена для parity — но идемпотентна: повторный вызов с тем же
 ##   содержимым шаблона = no-op (shell перезаписывал без проверки).
 ## @changes  2026-08-02 | DevPlan 119 D3 — Created (test-first: tests/unit/test_privoxy_config.py)
-## @see      core/internal/bootstrap/install-tor-proxy.sh (write_privoxy_config → тонкий фасад)
+## @see      core/internal/bootstrap/install_tor_proxy.py (write_privoxy_config → native import, 127 W1)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations

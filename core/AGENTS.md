@@ -253,6 +253,7 @@
 | `subprocess_io` | `core/internal/shared/subprocess_io.py` | Единый канон run_subprocess — run_subprocess(cmd, *, timeout, check, non_fatal). Дедупликация lifecycle (raise) и converge (graceful rc 127/124) семантик через параметры (DevPlan 118 C10). |
 | `env_requires` | `core/internal/shared/env_requires.py` | Единый env-requires чекер — check_requires_presence (module.yaml-driven) + check_runtime_env (manifest-driven) + check_env_requires (унифицированный). Устраняет расхождение вердиктов validate_module_yaml vs secrets_validator (DevPlan 118 D4). |
 | `project_yaml` | `core/internal/shared/project_yaml.py` | Общий читатель ai-platform.yaml + auto-detect — read_project_yaml (target_node/domain, PyYAML не grep) + derive_org_from_path + detect_project_config (org-from-path, casing vs node.yaml). Кандидат из аудита монолитов (18 парсеров ai-platform.yaml в vhost_renderer); потребитель project_adopter (DevPlan 118 E11). |
+| `node_resolver` | `core/internal/shared/node_resolver.py` | Python-резолв node.yaml (DevPlan 127 W2, S8/P2-1 — миграция core/lib/node-resolver.sh): resolve_node_yaml()/extract_node_host() поверх NodeYaml.resolve (3-path search) + CLI resolve/host (exit 0/1). Shell-фасад node-resolver.sh <100 LOC; потребители: bootstrap.sh, node-update.sh, node-lifecycle.sh, converge.sh, deploy-context.sh. |
 
 **requirements.txt — GENERATED из pyproject.toml [project].dependencies (DevPlan 123 T11):**
 ручные правки запрещены (инвариант 11); регенерация: `make generate-requirements`;
