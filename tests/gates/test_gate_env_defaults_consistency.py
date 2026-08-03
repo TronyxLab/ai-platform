@@ -30,8 +30,19 @@ from tests.conftest import ldd_trajectory
 logger = logging.getLogger(__name__)
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# ⚠️ TRAP[BUG] 2026-08-03 · CI: .env / hermes-agent/.env gitignored → тест падал
+# · Symptom: CI gate-fast gates — «4 consistency error(s)» ([.env] NEXTAUTH_SECRET
+#   is MISSING и т.д.); локально PASS (файлы существуют на dev-машине).
+# · Root: тест читал gitignored файлы (.env, hermes-agent/.env) — на CI-раннере
+#   (fresh checkout) их нет → пустые dict → MISSING.
+# · Fix: канонический CI-источник — .env.example (G5, в git, генерируется из
+#   platform-env.yaml + secret-definitions.yaml); .env — локальный override.
 ROOT_ENV_PATH = os.path.join(ROOT_DIR, ".env")
+if not os.path.isfile(ROOT_ENV_PATH):
+    ROOT_ENV_PATH = os.path.join(ROOT_DIR, ".env.example")
 HERMES_ENV_PATH = os.path.join(ROOT_DIR, "core", "modules", "hermes-agent", ".env")
+if not os.path.isfile(HERMES_ENV_PATH):
+    HERMES_ENV_PATH = os.path.join(ROOT_DIR, "core", "modules", "hermes-agent", ".env.example")
 SECRET_DEFINITIONS_PATH = os.path.join(ROOT_DIR, "core", "secret-definitions.yaml")
 
 UNIFIED_PG_PASSWORD = "test-pg-pwd"
