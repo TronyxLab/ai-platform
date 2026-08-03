@@ -269,3 +269,13 @@ make healthcheck && make status
 # - P-6/P-7: обновить entrypoint-manifest.yaml (make generate-entrypoint-manifest) — НЕ вручную
 # - P-12: перепроверить манифест на collapse (3+ расхождения = CRITICAL)
 ```
+
+---
+
+## Результаты ночной RC-сессии 2026-08-03 (Фаза 1)
+
+| Проверка | Результат | Детали |
+|----------|-----------|--------|
+| 4.2 `make check` | ✅ GREEN (13/13) | 1-й прогон: ruff-format FAIL на 3 файлах (sync_requirements.py, test_gate_bool_string_literals.py, test_gate_local_path_in_remote.py) → `ruff format` → 2-й прогон ALL PASS, 156.1s |
+| 4.1 `make gate MODE=fast` | ✅ ALL PASS (10/10) | 163.0s, включая static_audit (101.1s) и predeploy (8.3s) |
+| Вердикт | Готово к e2e/прод | 0 открытых gate-блокеров |

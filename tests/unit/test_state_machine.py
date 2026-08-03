@@ -153,6 +153,70 @@ def test_load_corrupt_state(caplog, state_file):
     logger.critical("[IMP:9][test] StateMachine handled corrupt state — OK")
 
 
+# 🧪 TRAP[TEST] · REGRESSION (R5 negative) · setup_state node-switch сбрасывает фазы
+# · Scenario: state.json от ноды A (все фазы done) → setup_state(node=B) — фазы должны
+#   сброситься в pending (иначе bootstrap ноды B = ложный no-op, прод-бустрап 2026-08-03)
+# · Last fail: прод-бустрап tronyx-vps на VPS после e2e test-e2e — «already done — skipping»
+#   для всех 9 фаз (state.json: node=test-e2e) → bootstrap tronyx-vps не выполнился
+# · Remove if: node-identity проверка в setup_state удалена
+@ldd_trajectory
+def test_setup_state_node_switch_resets_phases(caplog, state_file):
+    """setup_state с другим node — сброс фаз в pending (не ложный no-op)."""
+    initial_data = {
+        "mode": "init",
+        "node": "test-e2e",
+        "current_step": 9,
+        "steps": {
+            "system_bootstrap": {"name": "system_bootstrap", "status": "done"},
+            "user_accounts": {"name": "user_accounts", "status": "done"},
+        },
+        "errors": ["old-error"],
+        "warnings": ["old-warn"],
+    }
+    state_file.write_text(json.dumps(initial_data))
+
+    m = sm.StateMachine(state_file_path=str(state_file))
+    m.setup_state(mode="init", node="tronyx-vps")
+
+    assert m.state.node == "tronyx-vps"
+    assert m.state.current_step == 0
+    assert m.state.errors == []
+    assert m.state.warnings == []
+    # Все фазы pending — ни одна не унаследовала done от другой ноды
+    for phase_val in m._step_list():
+        assert m.state.steps[phase_val].status == "pending", f"{phase_val} не сброшена"
+    logger.critical("[IMP:9][test] setup_state node-switch reset phases — OK")
+
+
+# 🧪 TRAP[TEST] · Regression · setup_state той же ноды сохраняет done (идемпотентность)
+# · Scenario: state.json от той же ноды (фазы done) → setup_state(same node) — done остаются
+# · Last fail: N/A (new test)
+# · Remove if: node-identity проверка в setup_state удалена
+@ldd_trajectory
+def test_setup_state_same_node_preserves_done(caplog, state_file):
+    """setup_state с тем же node — existing preserved (идемпотентный повторный bootstrap)."""
+    initial_data = {
+        "mode": "init",
+        "node": "tronyx-vps",
+        "current_step": 5,
+        "steps": {
+            "system_bootstrap": {"name": "system_bootstrap", "status": "done"},
+            "user_accounts": {"name": "user_accounts", "status": "done"},
+        },
+        "errors": [],
+        "warnings": [],
+    }
+    state_file.write_text(json.dumps(initial_data))
+
+    m = sm.StateMachine(state_file_path=str(state_file))
+    m.setup_state(mode="init", node="tronyx-vps")
+
+    assert m.state.node == "tronyx-vps"
+    assert m.state.steps["system_bootstrap"].status == "done"
+    assert m.state.steps["user_accounts"].status == "done"
+    logger.critical("[IMP:9][test] setup_state same-node preserves done — OK")
+
+
 # 🧪 TRAP[TEST] · Regression · StateMachine save persists state to JSON file
 # · Scenario: Modify state, call save() → JSON file written with correct content
 # · Last fail: N/A (new test)

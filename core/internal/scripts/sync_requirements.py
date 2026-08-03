@@ -86,7 +86,9 @@ def load_dependencies(pyproject_path: Path) -> list[str]:
         )
     deps = project["dependencies"]
     if not isinstance(deps, list):
-        raise ConfigValidationError(f"[IMP:10][sync_req] [project].dependencies must be a list, got {type(deps).__name__}")
+        raise ConfigValidationError(
+            f"[IMP:10][sync_req] [project].dependencies must be a list, got {type(deps).__name__}"
+        )
     result = [str(d) for d in deps]
     logger.info("[IMP:9][sync_req][load] Loaded %d runtime dependencies from %s", len(result), pyproject_path)
     return result

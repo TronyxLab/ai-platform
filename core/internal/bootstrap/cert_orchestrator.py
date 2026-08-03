@@ -50,8 +50,14 @@ logger = logging.getLogger(__name__)
 # Replaces subprocess calls to the legacy shell S3 cache with direct Python calls.
 # Eliminates subshell credential propagation bug — S3_* env vars are read
 # directly by s3_ssl_cache functions from os.environ (no subshell).
+# ⚠️ TRAP[BUG] 2026-08-03 · top-level `import s3_ssl_cache` ломался на VPS
+# · Symptom: прод-бустрап φ7 — «s3_ssl_cache module not available» при работающем
+#   boto3 (s3_ssl_cache.py сам использует ТОЛЬКО dotted core.internal импорты).
+# · Root: top-level import требует bootstrap-директорию в sys.path; cli.py (VPS)
+#   запускается без неё → ImportError → s3_ssl_cache=None → S3 cache выключен.
+# · Fix: канонический dotted-импорт from core.internal.bootstrap import s3_ssl_cache.
 try:
-    import s3_ssl_cache
+    from core.internal.bootstrap import s3_ssl_cache
 except ImportError:
     s3_ssl_cache = None  # type: ignore[assignment]
     logger.warning("[IMP:7][cert_orchestrator] s3_ssl_cache module not available — S3 operations disabled")
@@ -338,6 +344,14 @@ def _try_s3_restore(domain: str) -> DomainCertResult:
 ##           (skip, restore, issue) prevents cert loss for platform domain.
 def _upload_to_s3(domain: str) -> bool:
     """Upload cert to S3 via s3_ssl_cache (direct import)."""
+    # ⚠️ TRAP[BUG] 2026-08-03 · NoneType.upload_cert (прод-бустрап φ7)
+    # · Symptom: 'SSL provision failed (non-fatal): 'NoneType' object has no attribute
+    #   'upload_cert'' — после успешного issue cert (bootstrap tronyx-vps run3).
+    # · Root: guard s3_ssl_cache is None был только в try_s3_restore, НЕ в _upload_to_s3.
+    # · Fix: ранний return False при недоступном s3_ssl_cache (S3 опциональна).
+    if s3_ssl_cache is None:
+        logger.warning("[IMP:7][cert_orchestrator] %s — S3 upload skipped (module unavailable)", domain)
+        return False
     s3_bucket = os.environ.get("S3_BUCKET", platform_config.default_s3_bucket_sentinel())
     if not s3_bucket:
         return False

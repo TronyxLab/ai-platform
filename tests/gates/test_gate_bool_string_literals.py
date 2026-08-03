@@ -218,12 +218,8 @@ def test_r5_negative_strict_bool_comparison_detected(caplog, tmp_path) -> None:
         )
     )
     try:
-        hits = [
-            (rel, ln, expr)
-            for rel, ln, expr in _find_offenders(root=tmp_path)
-            if "_gate_probe_bool" in rel
-        ]
-        assert hits, "R5 FAIL: strict `enabled == \"true\"` (исходный вход T6) не обнаружен"
+        hits = [(rel, ln, expr) for rel, ln, expr in _find_offenders(root=tmp_path) if "_gate_probe_bool" in rel]
+        assert hits, 'R5 FAIL: strict `enabled == "true"` (исходный вход T6) не обнаружен'
         logger.info("[IMP:9][bool_string_literals][R5] PASS: probe %s:%d %s detected", *hits[0])
     finally:
         probe.unlink(missing_ok=True)
@@ -261,11 +257,7 @@ def test_normalized_comparisons_not_detected(caplog, tmp_path) -> None:
         )
     )
     try:
-        hits = [
-            (rel, ln, expr)
-            for rel, ln, expr in _find_offenders(root=tmp_path)
-            if "_gate_probe_bool_ok" in rel
-        ]
+        hits = [(rel, ln, expr) for rel, ln, expr in _find_offenders(root=tmp_path) if "_gate_probe_bool_ok" in rel]
         assert not hits, f"PASS-control FAIL: нормализованные сравнения ошибочно RED: {hits}"
         logger.info(
             "[IMP:9][bool_string_literals][control] PASS: normalized comparisons (inline .lower() + "

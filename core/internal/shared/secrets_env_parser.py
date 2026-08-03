@@ -133,7 +133,12 @@ def _parse_line(line: str) -> tuple[str, str] | None:
         logger.debug("[IMP:4][_parse_line] Stripped surrounding quotes from value")
         value = inner
 
-    logger.info("[IMP:7][_parse_line] Parsed: %s='%.80s'", key, value[:80])
+    # ⚠️ TRAP[BUG] 2026-08-03 · SECRET LEAK в логи: значение выводилось в INFO-лог
+    # · Symptom: bootstrap-лог печатал 'ROOT_PASS=...', 'GHCR_PULL_TOKEN=...' и т.д.
+    #   (secrets.env парсится на каждой ноде — утечка всех секретов в syslog/CI-логи)
+    # · Fix: логируется только ключ + длина значения (маскирование значений).
+    # · Rev: если потребуется отладка значений — DEBUG-уровень с явным флагом.
+    logger.info("[IMP:7][_parse_line] Parsed key: %s (value len=%d)", key, len(value))
     return (key, value)
 
 

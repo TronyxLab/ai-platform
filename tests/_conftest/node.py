@@ -34,7 +34,7 @@ from typing import Any
 import pytest
 
 from core.internal.bootstrap.lifecycle.state_machine import BootstrapPhase
-from tests.helpers.gate_helpers import repo_root
+from core.internal.shared.deploy_paths import platform_remote_base
 
 logger = logging.getLogger(__name__)
 
@@ -359,20 +359,21 @@ def deliver_payload_via_ssh(
     ## @invariants
     ##   - Remote command: cd {remote_root} && PYTHONPATH={remote_root} python3 -m core.internal.deploy.orchestrator_cli receive
     ##   - stdin = tar.gz bytes; stdout = DeployResult JSON
-    ##   - remote_root resolution: PLATFORM_REMOTE_BASE → PLATFORM_ROOT → repo_root() —
-    ##     единая конвенция с scp-deliver.sh:129 / remote-cmd.sh / overlay_deliverer.sync_core_to_vps
-    ##     (core на VPS лежит по {remote_root}/core — mirror пути локального репозитория,
-    ##     т.к. make bootstrap-node задаёт PLATFORM_ROOT=_platform_root)
-    ## 🧐 TRAP[DECISION] · 2026-07-31 · HI · remote_root вместо hardcoded /opt/platform
-    ## · Rejected: /opt/platform — DevPlan-эскиз предполагал классическую базу, но bootstrap
-    ##   на dev-машине доставляет core в mirror-путь PLATFORM_ROOT (scp-deliver.sh:129),
-    ##   /opt/platform на VPS отсутствует → receive падал "cd: /opt/platform: No such file".
-    ## · Reason: тест должен делить remote-базу с фактической доставкой (AC4), не с эскизом.
-    ## · Rev: если bootstrap перейдёт на PLATFORM_REMOTE_BASE=/opt/platform по умолчанию —
-    ##   конвенция сохранится (env имеет приоритет).
+    ##   - remote_root resolution: канон platform_remote_base() (shared/deploy_paths, C7) —
+    ##     env PLATFORM_REMOTE_BASE → /opt/platform; PLATFORM_ROOT/repo_root() НЕ участвуют
+    ##     (TRAP[BUG] 2026-08-03: локальный корень утекал в remote-cd → "cd: No such file")
+    ##   - core на VPS лежит по {remote_root}/core — bootstrap-node SCP доставляет в /opt/platform
+    ## 🧐 TRAP[DECISION] · 2026-08-03 · HI · remote_root = канонический platform_remote_base()
+    ## · Rejected: прежняя цепочка PLATFORM_REMOTE_BASE → PLATFORM_ROOT → repo_root() —
+    ##   локальный repo_root() попадал в REMOTE-cd на VPS (e2e 2026-08-03: 3 фейла
+    ##   "cd: /Users/tronyx/projects/ai-platform: No such file or directory")
+    ## · Reason: bootstrap-node доставляет core в /opt/platform (подтверждено логом e2e:
+    ##   python3 /opt/platform/core/...); deploy_paths.platform_remote_base() — канон с
+    ##   2026-08-03 (f222847), conftest не мигрировал — drift закрыт.
+    ## · Rev: если bootstrap вернётся к mirror-путям — пересмотреть канон в deploy_paths.
     """
     if remote_root is None:
-        remote_root = os.environ.get("PLATFORM_REMOTE_BASE") or os.environ.get("PLATFORM_ROOT") or str(repo_root())
+        remote_root = str(platform_remote_base())
     logger.info(
         "[IMP:8][deliver_payload] Streaming %s to receive on %s (remote_root=%s)",
         tar_path.name,

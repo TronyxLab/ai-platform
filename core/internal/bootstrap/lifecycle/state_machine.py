@@ -530,7 +530,22 @@ class StateMachine:
         # Волна 117 D5: TRAP[BUG] (2026-07-31, «current_step всегда 0») снят — root-причина
         # устранена: (а) setdefault-семантика сохранена (done остаётся done), (б) cli.py
         # run_init/run_update обновляют current_step при успешном выполнении фазы.
+        # ⚠️ TRAP[BUG] 2026-08-03 · node switch на той же VPS: state.json от ДРУГОЙ ноды
+        # · Symptom: прод-бустрап tronyx-vps на VPS после e2e (test-e2e) — ВСЕ 9 фаз
+        #   «already done — skipping» (state.json: node=test-e2e) → ложный no-op bootstrap.
+        # · Root: setup_state сохранял existing (setdefault) без проверки node identity.
+        # · Fix: node mismatch → сброс фаз/ошибок (fresh lifecycle для новой ноды);
+        #   идемпотентность для ТОЙ ЖЕ ноды сохранена (совпадение node → existing preserved).
         self.state.mode = mode
+        if node and self.state.node and self.state.node != node:
+            logger.warning(
+                "[IMP:7][StateMachine][setup_state] Node switch %s → %s — resetting phase state",
+                self.state.node,
+                node,
+            )
+            self.state.steps = {}
+            self.state.errors = []
+            self.state.warnings = []
         self.state.node = node
         self.state.current_step = 0
         phase_list = self._step_list()  # now returns BootstrapPhase phase list

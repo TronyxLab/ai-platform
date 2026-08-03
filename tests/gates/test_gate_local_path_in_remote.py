@@ -78,6 +78,8 @@ def _line_has_forbidden_path(line: str) -> bool:
     if _FORBIDDEN_FLAG in line:
         return True
     return _FORBIDDEN_VAR_REF.search(line) is not None
+
+
 # endregion FUNC__line_has_forbidden_path
 
 
@@ -117,6 +119,8 @@ def _scan_violations(root: Path | None = None) -> list[tuple[str, int, str]]:
             violations.append((rel, i, line.strip()))
             logger.warning("[IMP:7][scan][local-path-remote] %s:%d — %s", rel, i, line.strip())
     return violations
+
+
 # endregion FUNC__scan_violations
 
 
@@ -146,6 +150,8 @@ def test_no_local_path_in_remote_passthrough(caplog) -> None:
         )
 
     logger.info("[IMP:9][local-path-remote] PASS: 0 локальных путей в remote-аргументах (passthrough/build_ssh_cmd)")
+
+
 # endregion FUNC_test_no_local_path_in_remote_passthrough
 
 
@@ -176,6 +182,8 @@ def test_r5_negative_passthrough_path_var_detected(caplog, tmp_path) -> None:
         logger.info("[IMP:9][local-path-remote][R5][passthrough] PASS: probe %s:%d %s", *hits[0])
     finally:
         probe.unlink(missing_ok=True)
+
+
 # endregion FUNC_test_r5_negative_passthrough_path_var_detected
 
 
@@ -207,4 +215,6 @@ def test_r5_negative_remote_flag_local_path_detected(caplog, tmp_path) -> None:
         logger.info("[IMP:9][local-path-remote][R5][remote-flag] PASS: probe %s:%d %s", *hits[0])
     finally:
         probe.unlink(missing_ok=True)
+
+
 # endregion FUNC_test_r5_negative_remote_flag_local_path_detected
