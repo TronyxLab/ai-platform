@@ -58,6 +58,7 @@ volumes:
 - path: /var/lib/platform/postgres-data
 - path: /var/lib/platform/prometheus-data
 - path: /var/lib/platform/wal-archive
+  owner: 999:999
 - path: /var/log/platform/backup
 proxy:
   consumers:

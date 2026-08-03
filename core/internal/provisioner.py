@@ -51,9 +51,16 @@ class NetworkConfig:
 
 @dataclass
 class VolumeConfig:
-    """Single volume directory definition from platform-env.yaml."""
+    """Single volume directory definition from platform-env.yaml.
+
+    ## @purpose — Host directory (bind-mount source) + optional владелец.
+    ## @invariants
+    ##   - owner: "uid:gid" или "" — применяется chown при создании/несовпадении
+    ##   - Постgres wal-archive требует владельца postgres (999:999) — TRAP[BUG] 2026-08-03
+    """
 
     path: str
+    owner: str = ""
 
 
 @dataclass
@@ -108,7 +115,10 @@ def load_platform_env(yaml_path: Path) -> PlatformEnv:
     ]
 
     volumes_raw = data.get("volumes") or []
-    volumes = [VolumeConfig(path=v["path"]) for v in volumes_raw]
+    volumes = [
+        VolumeConfig(path=v["path"], owner=str(v.get("owner", "") or "").strip())
+        for v in volumes_raw
+    ]
 
     env_defaults = dict(data.get("env_defaults") or {})
     profiles = list(data.get("profiles") or [])
@@ -212,6 +222,9 @@ def provision_volumes(
 
     IDEMPOTENT: os.path.isdir → exists → skip, else mkdir -p.
     On permission error: log warning, add to skipped count (non-fatal).
+    Owner: если VolumeConfig.owner задан ("uid:gid") — chown применяется и при
+    создании, и при несовпадении владельца существующей директории (TRAP[BUG]
+    2026-08-03: wal-archive root:root → postgres archive_command Permission denied).
     """
     result = ProvisionResult(scope="volumes")
 
@@ -235,11 +248,15 @@ def provision_volumes(
         if os.path.isdir(vol_path):
             logger.info("[IMP:7][provision][volumes] SKIP: directory already exists: %s", vol_path)
             result.skipped += 1
+            if vol.owner and not _owner_matches(vol_path, vol.owner):
+                _chown_dir(vol_path, vol.owner, result)
         else:
             logger.info("[IMP:7][provision][volumes] Creating directory: %s", vol_path)
             try:
                 os.makedirs(vol_path, exist_ok=True)
                 result.created += 1
+                if vol.owner:
+                    _chown_dir(vol_path, vol.owner, result)
             except PermissionError:
                 logger.warning(
                     "[IMP:7][provision][volumes] WARN: Cannot create %s (permission denied)",
@@ -253,6 +270,32 @@ def provision_volumes(
         result.skipped,
     )
     return result
+
+
+# ── Owner helpers (TRAP[BUG] 2026-08-03: wal-archive postgres-owner) ──────────
+def _owner_matches(path: str, owner: str) -> bool:
+    """Совпадает ли владелец директории с owner="uid:gid" (числовым или именным)."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return False
+    user, _, group = owner.partition(":")
+    uid = int(user) if user.isdigit() else None
+    gid = int(group) if group.isdigit() else None
+    return (uid is None or st.st_uid == uid) and (gid is None or st.st_gid == gid)
+
+
+def _chown_dir(path: str, owner: str, result: ProvisionResult) -> None:
+    """chown директории (uid:gid); ошибка → warning + errors (non-fatal)."""
+    user, _, group = owner.partition(":")
+    uid = int(user) if user.isdigit() else user
+    gid = int(group) if group.isdigit() else group
+    try:
+        shutil.chown(path, user=uid, group=gid)
+        logger.info("[IMP:9][provision][volumes] chown %s → %s", path, owner)
+    except (PermissionError, OSError) as exc:
+        logger.warning("[IMP:7][provision][volumes] WARN: chown %s failed: %s", path, exc)
+        result.errors.append(f"chown {path}: {exc}")
 
 
 # ── Scope: Env ────────────────────────────────────────────────────────────────

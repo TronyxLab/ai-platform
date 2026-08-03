@@ -50,6 +50,14 @@ SITE_URLS = [
 ]
 _SITE_OK_CODES = (200, 201, 301, 302, 307, 308, 401, 403)
 
+
+def _http_code_ok(code: str) -> bool:
+    """HTTP-код из curl (str) считается «сайт жив» (2xx/3xx/401/403)."""
+    try:
+        return int(code) in _SITE_OK_CODES
+    except ValueError:
+        return False
+
 # Эталонный список контейнеров (docker ps baseline, W1) — заполняется из файла
 _BASELINE_CONTAINERS = [
     "backup-cron",
@@ -275,12 +283,9 @@ class LogAuditManifest:
 
     def _check_http(self, ssh: NodeSSHClient, marker: LogMarker) -> MarkerResult:
         url = marker.regex  # для source=http regex поле = URL
-        codes = []
-        for u in (url,):
-            res = ssh.ssh_read(f"curl -s -L --noproxy '*' -o /dev/null -w '%{{http_code}}' -m 15 '{u}'", timeout=30)
-            codes.append((u, res.stdout.strip()))
-        ok = all(code in _SITE_OK_CODES for _, code in codes)
-        return MarkerResult(marker, found=ok, detail=str(codes))
+        res = ssh.ssh_read(f"curl -s -L --noproxy '*' -o /dev/null -w '%{{http_code}}' -m 15 '{url}'", timeout=30)
+        code = res.stdout.strip()
+        return MarkerResult(marker, found=_http_code_ok(code), detail=f"{url} → {code}")
 
     def _check_state(self, ssh: NodeSSHClient, marker: LogMarker) -> MarkerResult:
         container = marker.container or marker.regex
@@ -465,7 +470,7 @@ def wait_sites_up(ssh: NodeSSHClient, timeout_s: int, interval_s: float = 5.0) -
     last_status: dict[str, str] = {}
     while time.monotonic() < deadline:
         last_status = sites_status(ssh)
-        if all(code in _SITE_OK_CODES for code in last_status.values()) and last_status:
+        if last_status and all(_http_code_ok(code) for code in last_status.values()):
             return True, last_status
         time.sleep(interval_s)
     return False, last_status

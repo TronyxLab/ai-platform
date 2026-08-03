@@ -95,14 +95,30 @@ def _marker_stack_healthy(manifest: LogAuditManifest) -> None:
 def test_t01_docker_daemon_restart(requires_node: str, node_ssh: NodeSSHClient, caplog) -> None:
     """T1: systemctl restart docker → стек самовосстанавливается ≤3 мин, сайты 200.
 
-    # 🧪 TRAP[TEST] · Scenario: daemon restart (all containers stop+start) · Last fail: N/A
-    # · Regression: restart policy unless-stopped НЕ поднимает контейнеры после
-    # ·   docker daemon restart (ожидается: поднимает — unless-stopped ≠ manual stop)
+    Наблюдение W2 (2026-08-03, tronyx-vps): рестарт docker daemon НЕ перезапускает
+    контейнеры — containerd держит их живыми; daemon переподключается (StartedAt
+    контейнеров не меняется). Инъекция проверяет: daemon restart залогирован,
+    контейнеры НЕ пересозданы (uptime-непрерывность), стек здоров, сайты 200.
+
+    # 🧪 TRAP[TEST] · Scenario: daemon restart (docker API downtime) · Last fail: N/A
+    # · Regression: restart policy unless-stopped поднимает контейнеры после
+    # ·   docker daemon restart ТОЛЬКО если они упали; живые контейнеры не трогаются
     # · Remove if: restart-политики заменены на другой механизм автозапуска
     """
     caplog.set_level(logging.DEBUG)
     incident_start = host_epoch_seconds(node_ssh)
     logger.info("[IMP:9][T1][inject] systemctl restart docker (incident_start=%d)", incident_start)
+
+    # uptime-эталон: StartedAt ключевых контейнеров ДО инъекции
+    started_before = node_ssh.ssh_read(
+        "for c in postgres nginx litellm clickhouse; do echo -n \"$c \"; "
+        "docker inspect --format '{{.State.StartedAt}}' $c; done",
+        timeout=30,
+    )
+    started_before_map = dict(
+        line.split() for line in started_before.stdout.strip().splitlines() if line.strip()
+    )
+    logger.info("[IMP:9][T1][pre] container StartedAt: %s", started_before_map)
 
     inject = node_ssh.ssh_exec("systemctl restart docker", timeout=300)
     assert inject.exit_code == 0, f"restart docker failed: {inject.stderr}"
@@ -113,10 +129,27 @@ def test_t01_docker_daemon_restart(requires_node: str, node_ssh: NodeSSHClient, 
     sites_ok, site_status = wait_sites_up(node_ssh, timeout_s=120)
     logger.info("[IMP:9][T1][recovery] ttr=%ss containers_ok=%s sites_ok=%s", ttr, ok, sites_ok)
 
+    # контейнеры НЕ пересозданы (StartedAt совпадает) — resilience-факт
+    started_after = node_ssh.ssh_read(
+        "for c in postgres nginx litellm clickhouse; do echo -n \"$c \"; "
+        "docker inspect --format '{{.State.StartedAt}}' $c; done",
+        timeout=30,
+    )
+    started_after_map = dict(
+        line.split() for line in started_after.stdout.strip().splitlines() if line.strip()
+    )
+    no_recreate = all(started_after_map.get(c) == v for c, v in started_before_map.items())
+    logger.info("[IMP:9][T1][recovery] containers NOT recreated (uptime continuity): %s", no_recreate)
+
     manifest = LogAuditManifest("T1")
-    manifest.add("journald", "Started Docker Application Container Engine", label="journald:docker-started")
-    manifest.add("journald", "Stopped Docker Application Container Engine", label="journald:docker-stopped")
-    manifest.add("docker", "database system is ready", container="postgres", label="docker:postgres-ready")
+    manifest.add(
+        "journald", r"(Stopped|Stopping) docker\.service.*Docker Application Container Engine",
+        label="journald:docker-stopped",
+    )
+    manifest.add(
+        "journald", r"(Starting|Started) docker\.service.*Docker Application Container Engine",
+        label="journald:docker-started",
+    )
     manifest.add("docker", "no upstream", container="nginx", negate=True, label="docker:nginx-no-upstream-errors")
     _marker_stack_healthy(manifest)
     _marker_http_sites(manifest)
@@ -128,6 +161,7 @@ def test_t01_docker_daemon_restart(requires_node: str, node_ssh: NodeSSHClient, 
     assert ok, f"T1 FAIL: containers not recovered within 240s: {missing}"
     assert sites_ok, f"T1 FAIL: sites not recovered: {site_status}"
     assert ttr <= 180, f"T1 FAIL: TTR {ttr}s > 180s limit"
+    assert no_recreate, f"T1 FAIL: containers were recreated by daemon restart: {started_after_map}"
     record_verdict("T1", _out_dir("T1"), verdict, ttr, results, incident_start)
     logger.info("[IMP:9][T1][verdict] %s ttr=%ss reasons=%s", verdict, ttr, reasons)
     assert verdict != "FAIL", f"T1 log audit FAIL: {reasons}"

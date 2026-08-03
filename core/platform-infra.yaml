@@ -80,7 +80,11 @@ volumes:
   - path: /var/lib/platform/postgres-data
   - path: /var/lib/platform/prometheus-data
   # Logs
+  # ⚠️ TRAP[BUG] · 2026-08-03 · P1 · wal-archive root:root → postgres archive_command
+  #   «Permission denied» (обнаружено на chaos-прогоне W1, 126). fix: owner=999:999 —
+  #   chown применяется provisioner'ом при создании и при несовпадении владельца.
   - path: /var/lib/platform/wal-archive
+    owner: "999:999"
   - path: /var/log/platform/backup
 
 proxy:
