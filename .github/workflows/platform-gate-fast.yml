@@ -77,6 +77,11 @@ jobs:
       - name: Run fast gate (syntax + JSON + gates + static + predeploy — no Docker)
         run: make gate MODE=fast
 
+      # ─── Step 4b: Диагностика state_machine фейлов (временный, RC-121) ──
+      - name: Diagnose state_machine CI failures (temporary)
+        if: always()
+        run: .venv/bin/pytest tests/unit/test_state_machine.py::test_init_flow_all_phases tests/unit/test_state_machine.py::test_tor_conditional_runs -s --log-cli-level=INFO --no-header 2>&1 | tail -60
+
       # ─── Step 5: Manifest generation contract (G1-G6 + G4-root glossary) ──
       - name: Check generated manifests up to date
         run: make check-manifests
