@@ -166,7 +166,7 @@
 | ✅ | `preflight` | Deprecated-алиас — диагностика через make check |
 | ✅ | `project-list` | Список проектов |
 | ✅ | `project-status` | Статус проекта |
-| ✅ | `project-sync-env` | Синхронизация .env.platform |
+| ✅ | `project-sync-env` | Синхронизация .env.platform и AI-PLATFORM.md |
 | ✅ | `provision` | Provision окружения |
 | ✅ | `provision-llm` | Provision LiteLLM virtual keys |
 | ✅ | `remove-project` | Удаление проекта из lifecycle |
@@ -303,6 +303,8 @@
 | [`core/internal/template_engine.py`](core/internal/template_engine.py) | Python-ядро template engine | Вспомогательный |
 | [`core/templates/template-manifest.yaml`](core/templates/template-manifest.yaml) | Единый манифест шаблонов | Вспомогательный |
 | [`core/internal/bootstrap/AGENTS.md`](core/internal/bootstrap/AGENTS.md) | Bootstrap pipeline, node lifecycle | Вспомогательный |
+| [`docs/platform-project-contract.md`](docs/platform-project-contract.md) | Канон окружения проекта (AI-PLATFORM.md, DevPlan 133 D1) | Вспомогательный |
+| [`docs/projects-root-AGENTS.md`](docs/projects-root-AGENTS.md) | Корневой контракт ~/projects/ (walk-up, symlink) | Вспомогательный |
 | [`tests/gates/AGENTS.md`](tests/gates/AGENTS.md) | Gate test conventions, invariant testing | Вспомогательный |
 | [`templates/template-backend/AGENTS.md`](templates/template-backend/AGENTS.md) | Payload шаблона new-project | Вне скоупа инварианта |
 | [`templates/template-frontend/AGENTS.md`](templates/template-frontend/AGENTS.md) | Payload шаблона new-project | Вне скоупа инварианта |

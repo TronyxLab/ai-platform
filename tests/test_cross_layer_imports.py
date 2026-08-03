@@ -159,10 +159,11 @@ _RE_DOTTED_NAME = re.compile(r"^[a-z_][\w]*(\.[a-z_][\w]*)+$")
 _CROSS_LAYER_ALLOWLIST: tuple[tuple[str, int, str], ...] = (
     (
         "core/modules/postgres/hooks/on_project_deploy.py",
-        40,
+        57,
         "postgres-hook; shared.node_yaml — by design (D1); Python-канон D65. Волна 118 B8: "
         "shell-фасад on-project-deploy.sh удалён (hook-регистрация убрана), Python-модуль "
-        "остаётся канонической реализацией (unit-тесты, operator-инвокация)",
+        "остаётся канонической реализацией (unit-тесты, operator-инвокация). DevPlan 133 W2: "
+        "строка 40 → 57 (роль/GRANT/credentials расширение, 2026-08-03)",
     ),
 )
 

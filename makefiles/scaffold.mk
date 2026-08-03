@@ -35,14 +35,16 @@ new-context:
 	@$(_platform_root)/core/entrypoints/scaffold.sh new-context "$(NODE)"
 	@echo "[IMP:9][make][new-context] Context created"
 
-## project-sync-env: Sync .env.platform from platform-env.yaml
-##   Usage: make project-sync-env [NAME=<project_name>] [DOMAIN=<domain>]
+## project-sync-env: Sync .env.platform + AI-PLATFORM.md (DevPlan 133)
+##   Usage: make project-sync-env [NAME=<project_name>] [DOMAIN=<domain>] [PROJECT_DIR=<project_dir>]
 ##   Delegates to core/entrypoints/scaffold.sh sync-env
+##   PROJECT_DIR: генерирует .env.platform в директории проекта и пересобирает AI-PLATFORM.md
 project-sync-env:
 	@echo "[IMP:7][make][project-sync-env] Syncing .env.platform..."
 	@$(_platform_root)/core/entrypoints/scaffold.sh sync-env \
 		$(if $(NAME),--name '$(NAME)') \
-		$(if $(DOMAIN),--domain '$(DOMAIN)')
+		$(if $(DOMAIN),--domain '$(DOMAIN)') \
+		$(if $(PROJECT_DIR),--project-dir '$(PROJECT_DIR)')
 	@echo "[IMP:9][make][project-sync-env] Sync complete"
 
 ## remove-project: Remove project from lifecycle (safe — no data loss)

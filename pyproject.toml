@@ -60,6 +60,7 @@ markers = [
     "predeploy: container/config/network validation (needs Docker)",
     "contract: contract tests for entrypoint scripts (no Docker)",
     "e2e: manual end-to-end tests against external *.tronyx.ru (no Docker, dev-only)",
+    "integration: integration tests against the local docker stack (needs Docker, single-process, DevPlan 133 W2.5)",
     "requires_node: E2E pipeline tests against a recreatable test-VPS (needs NODE env, SSH, Docker)",
     "chaos: chaos-engineering fault injection tests on the test-VPS (126-chaos-resilience; needs NODE env, SSH, operator window; NOT in regular gate)",
     "gate: CI gate tests",

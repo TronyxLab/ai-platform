@@ -24,10 +24,11 @@
 ## Контракт для работы в папке проекта
 
 1. **Платформа уже предоставляет сервисы** — узнай списком: `grep PLATFORM_ .env.platform`. Postgres подключай через `PLATFORM_POSTGRES_DSN` (façade `pgbouncer:6432`), redis/litellm/langfuse/minio/clickhouse — через `PLATFORM_*_URL`.
-2. **НЕ устанавливай** postgres, redis, прокси или свой TLS в проект — это сервисы платформы.
-3. **НЕ публикуй порты** в docker-compose — ingress и TLS делает nginx-модуль платформы (сеть `proxy-net`, external).
-4. **`.env.platform` — GENERATED, не редактировать.** Устарел → `make sync-env` из папки проекта.
-5. **Домен**: авто `<project>.tronyx.ru` (wildcard-cert) или личный — задан в `ai-platform.yaml`.
+2. **`AI-PLATFORM.md` в корне проекта** — контракт проекта с платформой (DevPlan 133): статичные рамки + GENERATED-секция окружения ноды (enabled-модули, сервисы, сети, needs). Канон инструкций — `docs/platform-project-contract.md` (ссылка в файле). Регенерируется `make sync-env`; ручные правки — только вне GENERATED-секции.
+3. **НЕ устанавливай** postgres, redis, прокси или свой TLS в проект — это сервисы платформы.
+4. **НЕ публикуй порты** в docker-compose — ingress и TLS делает nginx-модуль платформы (сеть `proxy-net`, external).
+5. **`.env.platform` — GENERATED, не редактировать.** Устарел → `make sync-env` из папки проекта.
+6. **Домен**: авто `<project>.tronyx.ru` (wildcard-cert) или личный — задан в `ai-platform.yaml`.
 
 ## Команды
 

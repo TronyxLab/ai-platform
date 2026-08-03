@@ -1,18 +1,23 @@
 """
-# GREP_SUMMARY: test_gen_env_platform, generate, validate_provides, argparse, platform-env, provides, profiles
-# STRUCTURE: ▶ generate 1× (provides→PLATFORM_* vars) → ▶ argparse CLI args 1× → ⎋ LDD trajectory
+# GREP_SUMMARY: test_gen_env_platform, generate, validate_provides, argparse, platform-env, provides, profiles, credentials, password-injection, DSN
+# STRUCTURE: ▶ generate 1× (provides→PLATFORM_* vars) → ▶ password-injection (DSN *** → реальный пароль) ×3 → ▶ argparse CLI args 2× → ⎋ LDD trajectory
 # region MODULE_CONTRACT
-## @purpose  Unit tests for gen_env_platform.py — generate(), validate_provides(), and CLI arg parsing.
+## @purpose  Unit tests for gen_env_platform.py — generate(), validate_provides(), CLI arg parsing,
+##           and DevPlan 133 W2.3 password-injection (credentials → DSN '***' → реальный пароль).
 ##           No subprocess calls. Direct Python imports (strangler tier-1 Python module).
 ## @scope    Tests output structure contract (header, PLATFORM_DOMAIN, PLATFORM_PROVIDES,
-##           PLATFORM_*_HOST/PORT/DSN/URL, PLATFORM_NO_PROXY) and argparse CLI argument parsing.
+##           PLATFORM_*_HOST/PORT/DSN/URL, PLATFORM_NO_PROXY), CLI argument parsing,
+##           and credentials injection (DSN with *** / with password / without file).
 ## @invariants
 ##   - All tests import the module directly via sys.path.insert
 ##   - Each test is decorated with @ldd_trajectory and asserts IMP:9 log presence
 ##   - tmp_path used for temp file creation
 ##   - No subprocess calls — tests call Python functions directly
-## @rationale DevPlan 082 §9: Unit coverage for gen_env_platform.py per F3 (VerificationReport 082)
+## @rationale DevPlan 082 §9: Unit coverage for gen_env_platform.py per F3 (VerificationReport 082).
+##            DevPlan 133 W2.4: password-injection coverage (AC 4 — .env.platform (пере)генерация
+##            подставляет реальный пароль роли в DSN при наличии .platform-db.env).
 ## @changes 2026-07-26 | Created (VerificationReport 082 F3)
+## @changes 2026-08-03 | DevPlan 133 W2 — +password-injection tests (credentials param)
 # endregion MODULE_CONTRACT
 """
 
@@ -104,6 +109,93 @@ def test_generate_output_matches_original(caplog):
 
 
 # ═══════════════════════════════════════════════════════════════════
+# region Tests: password-injection (DevPlan 133 W2.3)
+# ═══════════════════════════════════════════════════════════════════
+
+_POSTGRES_DSN_DATA = {
+    "profiles": ["postgres"],
+    "provides": {
+        "postgres": {
+            "host": "pgbouncer",
+            "port": 6432,
+            "dsn_template": "postgresql://${NAME}_user:***@pgbouncer:6432/${NAME}_db",
+            "networks": ["shared-db-net"],
+        },
+    },
+    "proxy": {},
+}
+
+
+# 🧪 TRAP[TEST] · Regression · DSN with '***' placeholder without credentials (backward compat)
+# · Scenario: no credentials → DSN keeps '***' exactly as before (tronyx-site compat)
+# · Last fail: N/A (new test)
+# · Remove if: password-injection logic changes
+@ldd_trajectory
+def test_dsn_without_credentials_keeps_placeholder(caplog):
+    """Without credentials → DSN unchanged (*** placeholder, backward compatibility)."""
+    lines = gep.generate(_POSTGRES_DSN_DATA, domain="test.local", project_name="myapp")
+    dsn = next(line for line in lines if line.startswith("PLATFORM_POSTGRES_DSN="))
+    assert dsn == "PLATFORM_POSTGRES_DSN=postgresql://myapp_user:***@pgbouncer:6432/myapp_db"
+    assert "***" in dsn
+
+    logger.critical("[IMP:9][test] no-credentials OK — DSN keeps *** placeholder")
+
+
+# 🧪 TRAP[TEST] · Regression · DSN with credentials → real password injected (*** replaced)
+# · Scenario: credentials dict (PLATFORM_POSTGRES_*) → password replaces '***', user/db substituted
+# · Last fail: 2026-08-03 — .env.platform на ноде содержал *** → приложения не могли подключиться
+# · Remove if: password-injection logic changes
+@ldd_trajectory
+def test_dsn_with_credentials_injects_password(caplog):
+    """With credentials → real password replaces '***', actual role/db substituted in DSN."""
+    creds = {
+        "PLATFORM_POSTGRES_DB": "myapp_db",
+        "PLATFORM_POSTGRES_USER": "myapp_user",
+        "PLATFORM_POSTGRES_PASSWORD": "real-secret-password",
+    }
+    lines = gep.generate(_POSTGRES_DSN_DATA, domain="test.local", project_name="myapp", credentials=creds)
+    dsn = next(line for line in lines if line.startswith("PLATFORM_POSTGRES_DSN="))
+    assert dsn == "PLATFORM_POSTGRES_DSN=postgresql://myapp_user:real-secret-password@pgbouncer:6432/myapp_db"
+    assert "***" not in dsn
+
+    logger.critical("[IMP:9][test] credentials OK — password injected into DSN, *** removed")
+
+
+# 🧪 TRAP[TEST] · Regression · credentials file absent → load_credentials returns {} (no crash)
+# · Scenario: load_credentials() with missing .platform-db.env → {} → DSN unchanged
+# · Last fail: N/A (new test)
+# · Remove if: load_credentials() logic changes
+@ldd_trajectory
+def test_load_credentials_missing_file_returns_empty(caplog, tmp_path):
+    """load_credentials() with no credentials file → {} (graceful, no crash)."""
+    creds = gep.load_credentials(project_dir=str(tmp_path))
+    assert creds == {}
+
+    logger.critical("[IMP:9][test] load_credentials missing-file OK — returned {}")
+
+
+# 🧪 TRAP[TEST] · Regression · credentials file present → load_credentials parses it
+# · Scenario: .platform-db.env in project dir → parsed dict with all 3 keys
+# · Last fail: N/A (new test)
+# · Remove if: load_credentials() logic changes
+@ldd_trajectory
+def test_load_credentials_parses_platform_db_env(caplog, tmp_path):
+    """load_credentials() parses .platform-db.env from project dir."""
+    (tmp_path / ".platform-db.env").write_text(
+        "PLATFORM_POSTGRES_DB=myapp_db\nPLATFORM_POSTGRES_USER=myapp_user\nPLATFORM_POSTGRES_PASSWORD=secret-123\n"
+    )
+    creds = gep.load_credentials(project_dir=str(tmp_path))
+    assert creds["PLATFORM_POSTGRES_DB"] == "myapp_db"
+    assert creds["PLATFORM_POSTGRES_USER"] == "myapp_user"
+    assert creds["PLATFORM_POSTGRES_PASSWORD"] == "secret-123"
+
+    logger.critical("[IMP:9][test] load_credentials parse OK — 3 keys from .platform-db.env")
+
+
+# endregion
+
+
+# ═══════════════════════════════════════════════════════════════════
 # region Tests: CLI argument parsing
 # ═══════════════════════════════════════════════════════════════════
 
@@ -127,9 +219,10 @@ def test_cli_args(caplog, monkeypatch, tmp_path):
     # Track what generate() receives from main()
     captured = {}
 
-    def mock_generate(data, domain, project_name=""):
+    def mock_generate(data, domain, project_name="", credentials=None):
         captured["domain"] = domain
         captured["project_name"] = project_name
+        captured["credentials"] = credentials
         return [
             "# GENERATED by ai-platform — DO NOT EDIT",
             f"PLATFORM_DOMAIN={domain}",
@@ -157,12 +250,49 @@ def test_cli_args(caplog, monkeypatch, tmp_path):
 
     assert captured.get("domain") == "mydomain.com", f"Expected domain=mydomain.com, got {captured.get('domain')}"
     assert captured.get("project_name") == "myapp", f"Expected project_name=myapp, got {captured.get('project_name')}"
+    assert captured.get("credentials") is None, "без --project-dir/--credentials-file credentials=None"
 
     logger.critical(
         "[IMP:9][test] CLI args parsed correctly: domain=%s, name=%s",
         captured.get("domain"),
         captured.get("project_name"),
     )
+
+
+# 🧪 TRAP[TEST] · Regression · CLI --project-dir resolves yaml/name/output and injects credentials
+# · Scenario: project dir with ai-platform.yaml + .platform-db.env → output written with real password
+# · Last fail: N/A (new test)
+# · Remove if: --project-dir CLI resolution logic changes
+@ldd_trajectory
+def test_cli_project_dir_writes_env_with_credentials(caplog, monkeypatch, tmp_path):
+    """CLI --project-dir: auto-resolve yaml/name/domain/output + credentials injection."""
+    yaml_path = tmp_path / "platform-env.yaml"
+    with open(str(yaml_path), "w") as f:
+        yaml.dump(_POSTGRES_DSN_DATA, f)
+    proj_dir = tmp_path / "proj"
+    proj_dir.mkdir()
+    (proj_dir / "ai-platform.yaml").write_text("name: myapp\ntarget_node: test-node\n")
+    (proj_dir / ".platform-db.env").write_text(
+        "PLATFORM_POSTGRES_DB=myapp_db\nPLATFORM_POSTGRES_USER=myapp_user\nPLATFORM_POSTGRES_PASSWORD=cli-secret\n"
+    )
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["gen_env_platform.py", "--project-dir", str(proj_dir)],
+    )
+
+    with contextlib.suppress(SystemExit):
+        rc = gep.main()
+
+    env_file = proj_dir / ".env.platform"
+    assert rc == 0
+    assert env_file.is_file()
+    content = env_file.read_text()
+    assert "PLATFORM_POSTGRES_DSN=postgresql://myapp_user:cli-secret@pgbouncer:6432/myapp_db" in content
+    assert "PLATFORM_DOMAIN=ai-platform.local" in content
+
+    logger.critical("[IMP:9][test] CLI --project-dir OK — .env.platform written with injected password")
 
 
 # endregion

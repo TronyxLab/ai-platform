@@ -162,7 +162,7 @@ def test_vps_fresh() -> None:
         logger.info("[IMP:7][fixture][test_vps_fresh] NODE not set — skip VPS state reset (local e2e tests)")
         return
     logger.info("[IMP:9][fixture][test_vps_fresh] Resetting state.json before E2E suite (cold start)")
-    node = _require_node_env()
+    _require_node_env()  # NODE guaranteed by the guard above (R4 для VPS-тестов)
     node_state = NodeState(NodeSSHClient(host=_resolve_test_vps_host(), user=os.environ.get("SSH_USER", "root")))
     result = node_state.reset_state(timeout=60)
     assert result.exit_code == 0, f"Fresh state reset failed: {result.stderr}"

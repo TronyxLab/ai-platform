@@ -1,6 +1,6 @@
 # @purpose  Base compose definition for postgres Docker module — container_name:postgres/pgbouncer, profiles, x-logging, command loads mounted configs
-# GREP_SUMMARY: postgres docker-compose shared-db-net profiles restart-unless-stopped stop-grace-period pgbouncer command-loads-config
-# STRUCTURE: ▶ postgres:16 [profiles:postgres] → ⚡ command -c config_file -c hba_file → shared-db-net → pgbouncer:6432 [profiles:postgres] → pg_isready healthcheck → ┐
+# GREP_SUMMARY: postgres docker-compose shared-db-net profiles restart-unless-stopped stop-grace-period pgbouncer command-loads-config wildcard DATABASE_URLS auth-delegation
+# STRUCTURE: ▶ postgres:16 [profiles:postgres] → ⚡ command -c config_file -c hba_file → shared-db-net → pgbouncer:6432 [profiles:postgres] wildcard DATABASE_URLS → pg_isready healthcheck → ┐
 # region MODULE_CONTRACT
 ## @purpose  Base compose definition for postgres Docker module
 ## @scope    Merged with root docker-compose.yml via include:
@@ -14,11 +14,18 @@
 ##   - Data volume mounted for persistence
 ##   - command: postgres -c config_file=/etc/postgresql/postgresql.conf -c hba_file=/etc/postgresql/pg_hba.conf
 ##     — bind-mounted configs are applied via -c flags, NOT via default paths
+##   - pgbouncer: DATABASE_URLS = URL без имени БД → wildcard '*' маршрутизация (DevPlan 133 D5):
+##     роли проектов auth-делегируются в postgres (auth_query/pg_shadow); новые БД подхватываются
+##     без рестарта пулера
 ## @rationale Profiles enable selective startup via `make up MODULES=postgres`.
 ##            command -c flags are REQUIRED: without them, postgres ignores bind-mounted
 ##            config files and uses its own defaults (B1 fix, T5.2).
 ##            DB_NET_NAME parametrization была удалена (Q4: YAGNI — ни одного сценария
 ##            переименования сети). Фиксированное имя shared-db-net уменьшает поверхность дрейфа.
+##            Wildcard pgbouncer (D5): регенерация DATABASE_URLS при каждом деплое давала
+##            рестарт пулера и гонки; дикая карта — нативная возможность edoburu/pgbouncer
+##            (entrypoint.sh: `${DB_NAME:-*} = host=... auth_user=postgres`).
+## @changes  2026-08-03 · DevPlan 133 D5 — DATABASE_URLS: 3 URL → 1 wildcard URL (роли проектов)
 # endregion MODULE_CONTRACT
 
 x-logging: &default-logging
@@ -84,7 +91,13 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      DATABASE_URLS: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?PG_PASSWORD_REQUIRED}@postgres:5432/platform,postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?PG_PASSWORD_REQUIRED}@postgres:5432/litellm,postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?PG_PASSWORD_REQUIRED}@postgres:5432/langfuse"
+      # DevPlan 133 D5: DATABASE_URLS = одна URL БЕЗ имени БД → entrypoint генерирует
+      # wildcard '* = host=postgres port=5432 auth_user=postgres' (нативная возможность
+      # edoburu/pgbouncer: `${DB_NAME:-*} = ...` в entrypoint.sh). Роли проектов резолвятся
+      # auth_query'ем из postgres (pg_shadow, auth_user=postgres — суперпользователь) —
+      # БЕЗ регенерации pgbouncer.ini при каждой новой БД (ранее: жёсткий список
+      # platform/litellm/langfuse → «no such database» для новых БД, DevPlan 133 эмпирика).
+      DATABASE_URLS: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?PG_PASSWORD_REQUIRED}@postgres:5432/"
       DB_USER: "${POSTGRES_USER:-postgres}"
       DB_PASSWORD: "${POSTGRES_PASSWORD:?PG_PASSWORD_REQUIRED}"
       LISTEN_PORT: "6432"
@@ -93,6 +106,7 @@ services:
       DEFAULT_POOL_SIZE: "10"
       RESERVE_POOL_SIZE: "5"
       SERVER_IDLE_TIMEOUT: "600"
+      # scram-sha-256 + auth_query по умолчанию (pg_shadow) — wildcard auth-делегация (D5)
       AUTH_TYPE: scram-sha-256
     deploy:
       resources:

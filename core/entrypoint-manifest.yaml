@@ -228,9 +228,11 @@ scaffold:
 - make_target: project-sync-env
   mechanism: shell-script
   delegates_to: core/entrypoints/scaffold.sh → core/internal/scaffold/gen_env_platform.py
-  signature: make project-sync-env [NAME=<name>]
-  operation_ru: Синхронизация .env.platform
-  description: Sync .env.platform from platform-env.yaml
+    → core/internal/scaffold/gen_project_platform_md.py
+  signature: make project-sync-env [NAME=<name>] [DOMAIN=<domain>] [PROJECT_DIR=<dir>]
+  operation_ru: Синхронизация .env.platform и AI-PLATFORM.md
+  description: Sync .env.platform from platform-env.yaml + regenerate AI-PLATFORM.md
+    GENERATED section (DevPlan 133; PROJECT_DIR mode enables credentials password-injection)
 - make_target: remove-project
   mechanism: shell-script
   delegates_to: core/entrypoints/scaffold.sh → core/internal/scaffold/remove-project.sh

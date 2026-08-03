@@ -1,5 +1,5 @@
-# GREP_SUMMARY: test-pgbouncer-static static-audit compose-section healthcheck-port pool-mode databases-match no-proxy required-dbs host-port-dbname postgres pgbouncer litellm langfuse hermes-agent
-# STRUCTURE: ▶ fixtures(postgres_fixtures obs_compose_paths hermes_agent_compose_path) → test_pgbouncer_section_in_compose(◇ YAML services) → test_pgbouncer_healthcheck_port_6432(◇ healthcheck) → test_pgbouncer_pool_mode_in_env(◇ POOL_MODE) → test_pgbouncer_databases_match_clients(◇ DATABASE_URLS↔DATABASE_URL in litellm+langfuse) → test_no_proxy_includes(◇ NO_PROXY in hermes-agent) → test_required_databases_present(◇ ⊕ platform+litellm+langfuse) → test_each_database_has_host_port_dbname(◇ params) → ⎋
+# GREP_SUMMARY: test-pgbouncer-static static-audit compose-section healthcheck-port pool-mode databases-match no-proxy required-dbs wildcard postgres pgbouncer litellm langfuse hermes-agent
+# STRUCTURE: ▶ fixtures(postgres_fixtures obs_compose_paths hermes_agent_compose_path) → test_pgbouncer_section_in_compose(◇ YAML services) → test_pgbouncer_healthcheck_port_6432(◇ healthcheck) → test_pgbouncer_pool_mode_in_env(◇ POOL_MODE) → test_pgbouncer_databases_match_clients(◇ wildcard DATABASE_URLS покрывает клиентов, D5) → test_no_proxy_includes(◇ NO_PROXY in hermes-agent) → test_required_databases_present(◇ wildcard-URL, 0 захардкоженных БД) → test_each_database_has_host_port_dbname(◇ params) → ⎋
 # region MODULE_CONTRACT
 ## @purpose  Static audit of pgbouncer configuration: compose service definition,
 ##           healthcheck port, pool mode (env-based), database mapping consistency with
@@ -12,9 +12,11 @@
 ##   - pgbouncer service is defined in postgres/docker-compose.base.yml
 ##   - Healthcheck uses pg_isready on port 6432
 ##   - POOL_MODE from compose environment = transaction (edoburu/pgbouncer image)
-##   - DATABASE_URLS in compose pgbouncer env match DATABASE_URL references in litellm/langfuse compose
+##   - DATABASE_URLS — ОДНА URL без имени БД → wildcard '*' (DevPlan 133 D5): auth-делегация
+##     в postgres (auth_query/pg_shadow); маршрутизация НЕ зависит от pgbouncer.ini-списка.
+##     Жёсткий список platform/litellm/langfuse удалён (баг «no such database» закрыт)
 ##   - NO_PROXY in hermes-agent compose includes pgbouncer (explicit fallback)
-##   - platform, litellm, langfuse databases must be present in DATABASE_URLS
+##   - platform/litellm/langfuse БД покрываются wildcard'ом; имена НЕ дублируются в DATABASE_URLS
 ##   - Each DATABASE_URLS entry must resolve host=postgres, port=5432, dbname=key
 ##   - At least one IMP:9 log per test per §TESTING LDD requirement
 ## @rationale — pgbouncer is critical infrastructure for litellm/langfuse DB connectivity;
@@ -30,6 +32,8 @@
 ##            UPDATED: 2026-07-14 | observability→litellm+langfuse+hermes-agent fixtures (QAAudit post-split fix)
 ##            UPDATED: 2026-07-15 | Migrated test_required_databases_present + test_each_database_has_host_port_dbname
 ##              from deleted test_bootstrap_pgbouncer.py (T5.2 consolidation)
+##            UPDATED: 2026-08-03 | DevPlan 133 D5 — wildcard DATABASE_URLS: T4/T6 переведены на
+##              wildcard-семантику (0 захардкоженных БД), баг «no such database» закрыт
 def _module_contract():
     pass
 
@@ -377,12 +381,22 @@ def test_pgbouncer_pool_mode_in_env(postgres_fixtures, caplog) -> None:
         )
 
 
-# ── Test 4: Databases Match Clients ─────────────────────────────────────────
+# ── Test 4: Wildcard DATABASE_URLS покрывает клиентов (DevPlan 133 D5) ─────
 
 
 @pytest.mark.static_audit
 @ldd_trajectory
 def test_pgbouncer_databases_match_clients(postgres_fixtures, obs_compose_paths, caplog) -> None:
+    """Wildcard DATABASE_URLS (без имён БД) покрывает всех клиентов — auth-делегация (D5).
+
+    ## @purpose — DevPlan 133 D5: pgbouncer больше НЕ хранит список БД. DATABASE_URLS =
+    ##            одна URL без имени БД → entrypoint генерирует '*' (wildcard); роли/БД
+    ##            резолвятся из postgres (auth_query/pg_shadow). Клиентские DATABASE_URL
+    ##            (litellm/langfuse) по-прежнему декларируют свои БД — их существование
+    ##            обеспечивает postgres init; wildcard маршрутизирует по имени БД.
+    ## @io — ⇥ postgres_fixtures, obs_compose_paths, caplog → ⎋ None (asserts)
+    ## @complexity — O(N) — YAML parse + URL parse
+    """
     with caplog.at_level(logging.DEBUG):
         logger.info("[IMP:7][test_pgbouncer][databases_match_env] START")
 
@@ -393,10 +407,14 @@ def test_pgbouncer_databases_match_clients(postgres_fixtures, obs_compose_paths,
         pgbouncer_svc = services.get("pgbouncer") or services.get("pgbouncer") or {}
         env_vars = pgbouncer_svc.get("environment", {})
         database_urls = env_vars.get("DATABASE_URLS", "")
+
+        # Wildcard-режим (D5): URL оканчивается на '/' (имя БД отсутствует → '*')
+        is_wildcard = database_urls.rstrip().endswith("/")
         pgb_databases = _parse_db_names_from_database_urls(database_urls)
         logger.info(
-            "[IMP:7][test_pgbouncer][databases_match_env] pgbouncer DATABASE_URLS databases: %s",
+            "[IMP:7][test_pgbouncer][databases_match_env] pgbouncer DATABASE_URLS databases: %s (wildcard=%s)",
             pgb_databases,
+            is_wildcard,
         )
 
         obs_databases = _extract_databases_from_observability(obs_compose_paths)
@@ -405,19 +423,20 @@ def test_pgbouncer_databases_match_clients(postgres_fixtures, obs_compose_paths,
             obs_databases,
         )
 
-        missing = obs_databases - pgb_databases
-
+        # Жёсткий список БД удалён — никаких имён в DATABASE_URLS (кроме пустого wildcard-сегмента)
+        hardcoded = pgb_databases - {""}
         logger.critical(
-            "[IMP:9][test_pgbouncer][databases_match_env] ASSERT: pgb=%s obs=%s missing=%s",
-            pgb_databases,
-            obs_databases,
-            missing,
+            "[IMP:9][test_pgbouncer][databases_match_env] ASSERT: wildcard=%s hardcoded=%s clients=%s",
+            is_wildcard,
+            hardcoded,
+            sorted(obs_databases),
         )
-        assert not missing, (
-            f"Databases {missing} are referenced in litellm/langfuse DATABASE_URL "
-            f"but not defined in pgbouncer DATABASE_URLS. "
-            f"pgbouncer has: {pgb_databases}; litellm+langfuse need: {obs_databases}"
+        assert is_wildcard, (
+            f"pgbouncer DATABASE_URLS must be the wildcard URL (без имени БД, DevPlan 133 D5): '{database_urls}'"
         )
+        assert not hardcoded, f"Hardcoded DB list in DATABASE_URLS (D5 violated): {hardcoded}"
+        # Клиенты по-прежнему декларируют свои БД (litellm/langfuse DATABASE_URL)
+        assert obs_databases >= {"litellm", "langfuse"}, f"client DB references lost: {obs_databases}"
 
 
 # ── Test 5: Hermes-agent NO_PROXY fallback ⊇ SoT ──────────────────────
@@ -502,15 +521,19 @@ def test_pgbouncer_no_proxy_includes(hermes_agent_compose_path, caplog) -> None:
         )
 
 
-# ── Test 6: Required Databases Present ────────────────────────────────
+# ── Test 6: Wildcard-режим (required databases covered by '*', D5) ────────
 
 
 @pytest.mark.static_audit
 @ldd_trajectory
 def test_required_databases_present(postgres_fixtures, caplog) -> None:
-    """Verify that platform, litellm, and langfuse databases are all present in DATABASE_URLS.
+    """Wildcard DATABASE_URLS покрывает platform/litellm/langfuse — 0 захардкоженных БД (D5).
 
-    Migrated from test_bootstrap_pgbouncer.py (T5.2 consolidation).
+    ## @purpose — DevPlan 133 D5: список платформенных БД НЕ дублируется в pgbouncer;
+    ##            wildcard '*' + auth-делегация маршрутизируют platform/litellm/langfuse
+    ##            (и любые новые проектные БД) без рестарта пулера.
+    ## @io — ⇥ postgres_fixtures, caplog → ⎋ None (asserts)
+    ## @complexity — O(1) — single YAML parse
     """
     with caplog.at_level(logging.DEBUG):
         logger.info("[IMP:7][test_pgbouncer][required] START")
@@ -518,21 +541,22 @@ def test_required_databases_present(postgres_fixtures, caplog) -> None:
         compose_path = postgres_fixtures["COMPOSE_FILE"]
         assert os.path.isfile(compose_path), f"Compose file not found: {compose_path}"
         env = _get_pgbouncer_env_from_compose(compose_path)
+        database_urls = env.get("DATABASE_URLS", "")
         dbs_from_urls = _parse_database_urls(env)
 
-        required = {"platform", "litellm", "langfuse"}
-        missing = required - dbs_from_urls
+        # Wildcard-режим: URL без имени БД (заканчивается на '/') → entrypoint '*'
+        is_wildcard = database_urls.rstrip().endswith("/")
+        # 0 захардкоженных имён БД (пустой сегмент после '/' — это wildcard-индикатор)
+        hardcoded = dbs_from_urls - {""}
 
-        logger.info(
-            "[IMP:7][test_pgbouncer][required] Required: %s, Present: %s",
-            required,
-            dbs_from_urls,
-        )
+        logger.info("[IMP:7][test_pgbouncer][required] DATABASE_URLS=%s", database_urls)
         logger.critical(
-            "[IMP:9][test_pgbouncer][required] ASSERT: missing=%s",
-            missing,
+            "[IMP:9][test_pgbouncer][required] ASSERT: wildcard=%s hardcoded=%s",
+            is_wildcard,
+            hardcoded,
         )
-        assert not missing, f"Required databases missing from DATABASE_URLS: {missing}. Present: {dbs_from_urls}"
+        assert is_wildcard, f"Wildcard DATABASE_URLS required (DevPlan 133 D5): '{database_urls}'"
+        assert not hardcoded, f"Required DBs must NOT be hardcoded in DATABASE_URLS (D5): {hardcoded}"
 
 
 # ── Test 7: Each Database Has Host/Port/Dbname ────────────────────────

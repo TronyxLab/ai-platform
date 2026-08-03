@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: converge-projects, reconcile-projects, r3, project-directories, stub, ai-platform-yaml, env-platform, generate-env-platform
-# STRUCTURE: ▶ parse node.yaml#projects (canonical NodeYaml) → ○ for each: validate name → mkdir -p → chown ci-deploy → stub ai-platform.yaml (if-missing) → .env.platform (if-missing) → ⎋ drift entry {R3}
+# GREP_SUMMARY: converge-projects, reconcile-projects, r3, project-directories, stub, ai-platform-yaml, env-platform, generate-env-platform, AI-PLATFORM.md
+# STRUCTURE: ▶ parse node.yaml#projects (canonical NodeYaml) → ○ for each: validate name → mkdir -p → chown ci-deploy → stub ai-platform.yaml (if-missing) → .env.platform (if-missing) → AI-PLATFORM.md (if-missing) → ⎋ drift entry {R3}
 # region MODULE_CONTRACT
 ## @purpose  R3 reconcile_projects — per-project directory + stub ai-platform.yaml + .env.platform.
 ##           Извлечён из reconciler.py (B9 T2, U-31).
@@ -12,8 +12,10 @@
 ##   - is_stub-детекция — через shared/stub_detection.is_stub_ai_platform_yaml (единая реализация, T4)
 ##   - validate_project_name — канон shared/project_registry (B6 T3); invalid → fail + continue
 ##   - .env.platform через generate_env_platform() (прямой импорт, T9b) с fallback на empty file
+##   - AI-PLATFORM.md через gen_project_platform_md() (прямой импорт, DevPlan 133 R3) if-missing
 ## @rationale DevPlan 116 B9 D3: 8 доменов reconciler по модулям.
 ## @changes  2026-08-01 · Extracted from reconciler.py (B9 T2); _is_stub → shared/stub_detection (T4)
+## @changes  2026-08-03 · DevPlan 133 R3 — +reconcile_project_platform_md (AI-PLATFORM.md if-missing)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -168,6 +170,9 @@ def reconcile_projects(
         # ── .env.platform (if-missing) ──
         reconcile_env_platform(proj_name, str(proj_dir), unit, dry_run, report_only)
 
+        # ── AI-PLATFORM.md (if-missing, DevPlan 133 R3) ──
+        reconcile_project_platform_md(proj_name, str(proj_dir), str(node_yaml), unit, dry_run, report_only)
+
     # Final report
     if mutated > 0:
         report_add(unit, "mutated", f"{mutated} project item(s) created/fixed")
@@ -314,3 +319,70 @@ def reconcile_env_platform(
 
 
 # endregion FUNC_reconcile_env_platform
+
+
+# region FUNC_reconcile_project_platform_md
+## @purpose  Ensure AI-PLATFORM.md exists in project directory (if-missing, DevPlan 133 R3).
+##           Генерация только при ОТСУТСТВИИ файла (if-missing семантика, как .env.platform) —
+##           существующий AI-PLATFORM.md НЕ трогается (ручные правки статики сохраняются).
+## @param proj_name      Project name
+## @param proj_dir       Path to the project directory
+## @param node_yaml_path Path to node.yaml (для GENERATED-секции: enabled-модули ноды)
+## @param unit           R-unit name for logging (typically "R3")
+## @param dry_run        If True, only log planned mutations
+## @param report_only    If True, skip mutations entirely
+## @complexity O(M + S) — direct import of gen_project_platform_md (Python→Python)
+## @invariants
+##   - if-missing: существующий AI-PLATFORM.md → SKIP (никогда не перезаписывается)
+##   - direct import (как generate_env_platform, T9b) — без subprocess
+##   - Сбой генерации → WARN + empty-фолбэк не требуется (пропуск, non-fatal)
+def reconcile_project_platform_md(
+    proj_name: str,
+    proj_dir: str,
+    node_yaml_path: str,
+    unit: str,
+    dry_run: bool,
+    report_only: bool,
+) -> None:
+    """Create AI-PLATFORM.md via gen_project_platform_md (if-missing policy, DevPlan 133 R3)."""
+
+    platform_file = Path(proj_dir) / "AI-PLATFORM.md"
+    if platform_file.is_file():
+        logger.info("[IMP:7][converge][%s] SKIP: %s already exists (if-missing policy)", unit, platform_file)
+        return
+
+    if dry_run or report_only:
+        logger.info("[IMP:9][converge][%s] WOULD create: %s via gen_project_platform_md()", unit, platform_file)
+        report_add(unit, "mutated", f"AI-PLATFORM.md would be created for {proj_name}")
+        set_exit(1)
+        return
+
+    logger.info("[IMP:8][converge][%s] Creating AI-PLATFORM.md via gen_project_platform_md() for %s", unit, proj_name)
+
+    # platform-env.yaml path — тот же канон, что reconcile_env_platform (T9b)
+    platform_env_path = str(Path(infra.core_dir).parent / "platform-env.yaml")
+
+    try:
+        from core.internal.scaffold.gen_project_platform_md import write_project_platform_md
+
+        status = write_project_platform_md(
+            proj_dir,
+            node_name=proj_name,
+            node_yaml_path=node_yaml_path,
+            platform_env_path=platform_env_path,
+        )
+        run_subprocess(["chmod", "0640", str(platform_file)], timeout=FILE_OP_TIMEOUT)
+        run_subprocess(["chown", "ci-deploy:ci-deploy", str(platform_file)], timeout=FILE_OP_TIMEOUT)
+        logger.info("[IMP:9][converge][%s] DONE: AI-PLATFORM.md %s for %s", unit, status, proj_name)
+        report_add(unit, "mutated", f"AI-PLATFORM.md created for {proj_name}")
+        set_exit(1)
+    except (ImportError, OSError, ValueError) as exc:
+        logger.warning(
+            "[IMP:9][converge][%s] WARN: AI-PLATFORM.md generation failed for %s (non-fatal): %s",
+            unit,
+            proj_name,
+            exc,
+        )
+
+
+# endregion FUNC_reconcile_project_platform_md

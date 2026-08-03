@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# GREP_SUMMARY: entrypoint scaffold project context vhost sync-env remove adopt list status lifecycle
+# GREP_SUMMARY: entrypoint scaffold project context vhost sync-env remove adopt list status lifecycle AI-PLATFORM.md
 # STRUCTURE: ▶ init → ◇ detect subcmd (add-project|context-init|add-vhost|sync-env|remove|adopt|list|status) → ⎋ delegate → ⊕ exit
 # region MODULE_CONTRACT
 ## @purpose  Entry-point for `make new-project`, `make new-context`, and project lifecycle
@@ -52,8 +52,24 @@ case "$CMD" in
         ;;
     project-sync-env|sync-env)
         shift
+        # DevPlan 133 D3: .env.platform + AI-PLATFORM.md (контракт проекта). Чистая
+        # оркестрация двух CLI (языковая политика — бизнес-логика в Python-модулях).
         log_imp 7 "-" "Delegating to gen_env_platform.py $*"
-        exec python3 "${PATHS_INTERNAL_DIR}/scaffold/gen_env_platform.py" "$@"
+        python3 "${PATHS_INTERNAL_DIR}/scaffold/gen_env_platform.py" "$@"
+        _env_rc=$?
+        if [ "$_env_rc" -ne 0 ]; then
+            exit "$_env_rc"
+        fi
+        # AI-PLATFORM.md — только при --project-dir (иначе нет проекта-контекста)
+        case " $* " in
+            *" --project-dir "*)
+                log_imp 7 "-" "Delegating to gen_project_platform_md.py $*"
+                exec python3 "${PATHS_INTERNAL_DIR}/scaffold/gen_project_platform_md.py" "$@"
+                ;;
+            *)
+                exit 0
+                ;;
+        esac
         ;;
     remove-project)
         shift

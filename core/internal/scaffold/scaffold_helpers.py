@@ -1,5 +1,5 @@
-# GREP_SUMMARY: scaffold_helpers gen_ai_platform_yaml gen_makefile gen_agents register_in_node_yaml shared
-# STRUCTURE: ▶ gen_ai_platform_yaml (⊕ monitoring per type) → ⚡ gen_project_makefile (sync-env + status) → ⚡ gen_project_agents (DD13 contract) → ⚡ register_in_node_yaml (NodeYaml CLI) → ⎋ exports
+# GREP_SUMMARY: scaffold_helpers gen_ai_platform_yaml gen_makefile gen_agents gen_project_platform_md register_in_node_yaml shared
+# STRUCTURE: ▶ gen_ai_platform_yaml (⊕ monitoring per type) → ⚡ gen_project_makefile (sync-env + status) → ⚡ gen_project_agents (DD13 contract) → ⚡ gen_project_platform_md (AI-PLATFORM.md, D2/D3) → ⚡ register_in_node_yaml (NodeYaml CLI) → ⎋ exports
 # region MODULE_CONTRACT
 ## @purpose  Shared scaffold helper functions extracted from project_adopter.py and add-project.sh.
 ##           Eliminates duplication between new-project (scaffolder) and adopt-project (adopter).
@@ -374,6 +374,69 @@ node: {node_val}
 
 
 # endregion FUNC_gen_project_agents
+
+
+# region FUNC_gen_project_platform_md
+## @purpose  Generate AI-PLATFORM.md (platform contract, DevPlan 133 D2/D3) — единая точка
+##           вызова генератора gen_project_platform_md.py из scaffold-слоя (аналог
+##           gen_project_agents/gen_project_makefile). Разрешает node.yaml
+##           (PROJECTS_ROOT/<org>/node-configs/<node>/node.yaml) и platform-env.yaml
+##           (repo root). Не перезаписывает существующий файл без маркеров (без force).
+## @param name         Project name
+## @param org          Organization name
+## @param node         Target node name
+## @param domain       Domain (fallback для ${DOMAIN} подстановки)
+## @param project_dir  Project directory (для резолва node.yaml и needs)
+## @param output_path  Where to write AI-PLATFORM.md
+## @param force        Overwrite existing file without GENERATED markers
+## @return   "generated" | "updated" | "exists" | "skipped"
+## @complexity O(M + S) — delegate to gen_project_platform_md
+## @invariants
+##   - Node.yaml resolution: PROJECTS_ROOT/<org>/node-configs/<node>/node.yaml
+##   - platform-env.yaml: repo root (тот же канон, что project_scaffolder.gen_env_platform)
+##   - Без PROJECTS_ROOT → node_yaml_path="" → генератор рендерит warning-секцию (graceful)
+def gen_project_platform_md(
+    name: str,
+    org: str = "",
+    node: str = "",
+    domain: str = "",
+    project_dir: str = "",
+    output_path: str | Path = "",
+    force: bool = False,
+) -> str:
+    """Generate AI-PLATFORM.md (platform contract) — "generated" | "updated" | "exists" | "skipped"."""
+    if not output_path:
+        logger.info("[IMP:8][helpers][platform_md] No output_path — skipping")
+        return "skipped"
+
+    from core.internal.scaffold.gen_project_platform_md import write_project_platform_md
+
+    target = Path(output_path)
+
+    # ── Resolve node.yaml: PROJECTS_ROOT/<org>/node-configs/<node>/node.yaml ──
+    node_yaml_path = ""
+    projects_root = os.environ.get("PROJECTS_ROOT", "")
+    if projects_root and org and node:
+        candidate = Path(projects_root) / org / "node-configs" / node / "node.yaml"
+        if candidate.is_file():
+            node_yaml_path = str(candidate)
+            logger.info("[IMP:8][helpers][platform_md] node.yaml resolved: %s", node_yaml_path)
+        else:
+            logger.info("[IMP:7][helpers][platform_md] node.yaml not found at %s — graceful section", candidate)
+
+    status = write_project_platform_md(
+        str(project_dir) if project_dir else str(target.parent),
+        node_name=node,
+        node_yaml_path=node_yaml_path,
+        platform_env_path=str(_REPO_ROOT / "platform-env.yaml"),
+        force=force,
+        domain=domain,
+    )
+    logger.info("[IMP:9][helpers][platform_md] AI-PLATFORM.md %s: %s", status, target)
+    return status
+
+
+# endregion FUNC_gen_project_platform_md
 
 
 # region FUNC_register_in_node_yaml

@@ -56,7 +56,7 @@
 | `make check-requirements` | Проверка актуальности requirements.txt | make check-requirements | core/internal/scripts/sync_requirements.py --check |
 | `make new-project` | Создание проекта из шаблона | make new-project NAME=\<n\> TEMPLATE=\<t\> | core/entrypoints/scaffold.sh → core/internal/scaffold/add-project.sh → core/internal/scaffold/add-vhost.sh |
 | `make new-context` | Создание контекста деплоя | make new-context NODE=\<n\> | core/entrypoints/scaffold.sh → core/internal/scaffold/context-init.sh |
-| `make project-sync-env` | Синхронизация .env.platform | make project-sync-env [NAME=\<name\>] | core/entrypoints/scaffold.sh → core/internal/scaffold/gen_env_platform.py |
+| `make project-sync-env` | Синхронизация .env.platform и AI-PLATFORM.md | make project-sync-env [NAME=\<name\>] [DOMAIN=\<domain\>] [PROJECT_DIR=\<dir\>] | core/entrypoints/scaffold.sh → core/internal/scaffold/gen_env_platform.py → core/internal/scaffold/gen_project_platform_md.py |
 | `make remove-project` | Удаление проекта из lifecycle | make remove-project NAME=\<name\> | core/entrypoints/scaffold.sh → core/internal/scaffold/remove-project.sh |
 | `make adopt-project` | Адаптация существующего проекта | make adopt-project DIR=\<dir\> | core/entrypoints/scaffold.sh → core/internal/scaffold/adopt-project.sh → core/internal/scaffold/gen_env_platform.py |
 | `make project-list` | Список проектов | make project-list [NODE=\<node\>] | core/entrypoints/scaffold.sh → core/internal/scaffold/project-list.sh |

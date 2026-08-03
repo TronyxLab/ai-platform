@@ -28,10 +28,12 @@ logger = logging.getLogger(__name__)
 PLATFORM_ROOT: pathlib.Path = pathlib.Path(__file__).resolve().parent.parent.parent
 
 # Allowlist (лимиты LOC): state_machine/reconciler/project_adopter после SRP-декомпозиции (B9)
+# project_adopter 600 → 650 (DevPlan 133 W1, 2026-08-03): +gen_project_platform_md (AI-PLATFORM.md,
+# контракт проекта) — осознанное расширение оркестратора, лимит поднят Architect-планом.
 ALLOWLIST: dict[str, int] = {
     "core/internal/bootstrap/lifecycle/state_machine.py": 1200,
     "core/internal/bootstrap/converge/reconciler.py": 800,
-    "core/internal/scaffold/project_adopter.py": 600,
+    "core/internal/scaffold/project_adopter.py": 650,
 }
 
 

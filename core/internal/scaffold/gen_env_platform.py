@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: gen_env_platform, env-platform, generator, provides, profiles, pgbouncer, generate_env_platform
-# STRUCTURE: ▶ generate_env_platform(load→validate→generate) → ⊕ lines list ▶ CLI main(catch→sys.exit)
+# GREP_SUMMARY: gen_env_platform, env-platform, generator, provides, profiles, pgbouncer, generate_env_platform, credentials, platform-db.env, password-injection
+# STRUCTURE: ▶ generate_env_platform(load→validate→generate) → ⊕ lines list ▶ password-injection (credentials → DSN ***) ▶ CLI main(catch→sys.exit)
 # region MODULE_CONTRACT
 ## @purpose  Generate .env.platform from platform-env.yaml. Library function + CLI wrapper.
 ##           Extracted from gen-env-platform.sh as Tier 1 Strangler — Python business logic,
@@ -14,19 +14,25 @@
 ##   - Idempotent: same YAML → identical output (modulo timestamp header)
 ##   - ≥8 PLATFORM_* variables (gate test validates)
 ##   - Library functions NEVER call sys.exit() — raise exceptions for caller to handle
+##   - Password-injection (DevPlan 133 W2.3/D4): при credentials-контексте (dict из
+##     .platform-db.env) реальный пароль подставляется в DSN (замена '***'); без
+##     credentials поведение НЕ меняется (обратная совместимость)
 ## @rationale Single source of truth for project environment — generated from
 ##            platform-env.yaml provides: section. Library design enables direct import
 ##            from reconciler.py and other Python modules (T9b) without subprocess overhead.
+## @links    DevPlan 133 W2.3: password-injection + CLI --project-dir/--credentials-file
 ## @changes  Plan 082 — extracted from gen-env-platform.sh inline python3 heredoc
 ## @changes  2026-07-30 · T9d — added --output argument, gen-env-platform.sh deleted
 ## @changes  2026-07-30 · T9a — library refactor: load_yaml/validate_provides raise exceptions;
 ##           added generate_env_platform() convenience wrapper; __all__ export
+## @changes  2026-08-03 · DevPlan 133 W2 — +credentials (password-injection), --project-dir/--credentials-file
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -35,11 +41,19 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
+# ── sys.path bootstrap: standalone CLI invocation (python3 script.py) ──
+# core.internal.shared.* резолвится без PYTHONPATH (паттерн on_project_deploy.py):
+# core/internal/scaffold/ → parents[3] = repo root.
+_PROJECT_ROOT = str(Path(__file__).resolve().parents[3])
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
 __all__ = [
     "GenEnvPlatformError",
     "GenEnvPlatformValidationError",
     "generate",
     "generate_env_platform",
+    "load_credentials",
     "load_yaml",
     "main",
     "validate_provides",
@@ -134,21 +148,101 @@ def validate_provides(data: dict, profiles: list[str]) -> dict:
 
 
 # ═══════════════════════════════════════════════════════════════════
+# region FUNC_apply_credentials_to_dsn
+## @purpose  Password-injection (DevPlan 133 W2.3/D4): подстановка реальных credentials
+##           (из .platform-db.env) в DSN-шаблон. Заменяет ${NAME}_user/${NAME}_db на
+##           фактические роль/БД (если заданы) и '***' на реальный пароль.
+##           Без credentials → шаблон возвращается без изменений (обратная совместимость).
+## @param dsn_tmpl     DSN template из platform-env.yaml (напр. postgresql://${NAME}_user:***@pgbouncer:6432/${NAME}_db)
+## @param project_name Project name (${NAME} подстановка — если credentials не покрывают)
+## @param credentials  dict из .platform-db.env (PLATFORM_POSTGRES_DB/USER/PASSWORD) | None
+## @return  str — DSN с подставленными credentials
+## @complexity O(1)
+## @invariants
+##   - token_urlsafe(24) пароль не требует URL-экранирования (charset [A-Za-z0-9_-])
+##   - Порядок: ${NAME}_user/${NAME}_db ДО ${NAME} (частичные совпадения не ломаются)
+##   - '***' заменяется ТОЛЬКО при наличии пароля в credentials
+def _apply_credentials_to_dsn(dsn_tmpl: str, project_name: str, credentials: dict[str, str] | None) -> str:
+    """Substitute real DB credentials into a DSN template (password-injection, DevPlan 133)."""
+    result = dsn_tmpl
+    if credentials:
+        user = credentials.get("PLATFORM_POSTGRES_USER", "") or ""
+        db = credentials.get("PLATFORM_POSTGRES_DB", "") or ""
+        pw = credentials.get("PLATFORM_POSTGRES_PASSWORD", "") or ""
+        if user:
+            result = result.replace("${NAME}_user", user)
+        if db:
+            result = result.replace("${NAME}_db", db)
+        if pw:
+            result = result.replace("***", pw)
+    if project_name:
+        result = result.replace("${NAME}", project_name)
+    return result
+
+
+# endregion FUNC_apply_credentials_to_dsn
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region FUNC_load_credentials
+## @purpose  Load DB credentials from .platform-db.env (project_dir) или явного файла
+##           (--credentials-file). Канонический парсер — shared/secrets_env_parser.
+##           Файл отсутствует → {} (без изменений поведения генератора).
+## @param project_dir        Project directory (ищет <dir>/.platform-db.env)
+## @param credentials_file   Explicit credentials file (приоритетнее project_dir)
+## @return  dict[str, str] — {} если файла нет
+## @complexity O(N) — N = строки файла
+## @invariants
+##   - Никогда не raise (отсутствие credentials-файла — нормальный режим)
+##   - Значения маскируются в логах парсером (TRAP[BUG] 2026-08-03, секрет-лики)
+def load_credentials(project_dir: str | None = None, credentials_file: str | None = None) -> dict[str, str]:
+    """Load DB credentials from .platform-db.env ({} if file absent)."""
+    from core.internal.shared.secrets_env_parser import parse
+
+    path = ""
+    if credentials_file:
+        path = credentials_file
+    elif project_dir:
+        candidate = Path(project_dir) / ".platform-db.env"
+        if candidate.is_file():
+            path = str(candidate)
+    if not path or not os.path.isfile(path):
+        logger.info("[IMP:7][load_credentials] No credentials file at %s — DSN keeps '***'", path or "<none>")
+        return {}
+    try:
+        creds = parse(path)
+        logger.info(
+            "[IMP:9][load_credentials] Credentials loaded from %s (%d key(s))",
+            path,
+            len(creds),
+        )
+        return creds
+    except Exception as exc:  # noqa: EXC — graceful: битый credentials → без инъекции (best-effort)
+        logger.warning("[IMP:7][load_credentials] Credentials parse skipped: %s", exc)
+        return {}
+
+
+# endregion FUNC_load_credentials
+
+
+# ═══════════════════════════════════════════════════════════════════
 # region FUNC_generate
 ## @purpose  Generate .env.platform lines from parsed platform-env.yaml data dict.
 ##           Called by generate_env_platform() after load+validate.
 ## @param data          Parsed platform-env.yaml dict (must contain profiles/provides/proxy keys)
 ## @param domain        Platform domain (e.g. "ai-platform.local")
 ## @param project_name  Optional project name for ${NAME} substitution in DSN/URL templates
+## @param credentials   Optional DB credentials dict (from .platform-db.env) — password-injection
 ## @return  List of .env.platform lines (newline-terminated)
 ## @raises GenEnvPlatformValidationError  If provides validation fails
-def generate(data: dict, domain: str, project_name: str = "") -> list[str]:
+def generate(data: dict, domain: str, project_name: str = "", credentials: dict[str, str] | None = None) -> list[str]:
     """Generate .env.platform lines from platform-env.yaml data.
 
     Args:
         data: Parsed platform-env.yaml dict.
         domain: Platform domain.
         project_name: Optional project name for DSN {NAME} substitution.
+        credentials: Optional DB credentials (password-injection, DevPlan 133 W2).
 
     Returns:
         List of .env.platform lines.
@@ -183,9 +277,9 @@ def generate(data: dict, domain: str, project_name: str = "") -> list[str]:
         if port:
             lines.append(f"PLATFORM_{svc_upper}_PORT={port}")
 
-        # Substitute {NAME} in DSN template
+        # Substitute {NAME} in DSN template (credentials — password-injection, DevPlan 133 W2)
         if dsn_tmpl:
-            dsn_val = dsn_tmpl.replace("${NAME}", project_name) if project_name else dsn_tmpl
+            dsn_val = _apply_credentials_to_dsn(dsn_tmpl, project_name, credentials)
             lines.append(f"PLATFORM_{svc_upper}_DSN={dsn_val}")
         if url_tmpl:
             url_val = url_tmpl.replace("${NAME}", project_name) if project_name else url_tmpl
@@ -226,12 +320,18 @@ def generate(data: dict, domain: str, project_name: str = "") -> list[str]:
 ## @param yaml_path     Path to platform-env.yaml on disk
 ## @param domain        Platform domain (e.g. "ai-platform.local")
 ## @param project_name  Optional project name for ${NAME} substitution
+## @param credentials   Optional DB credentials dict — password-injection (DevPlan 133 W2)
 ## @return  List of .env.platform lines (newline-terminated)
 ## @raises FileNotFoundError               If yaml_path does not exist
 ## @raises yaml.YAMLError                   If YAML content is malformed
 ## @raises GenEnvPlatformValidationError    If provides validation fails
 ## @complexity O(1) — delegates to load_yaml → generate
-def generate_env_platform(yaml_path: str, domain: str, project_name: str = "") -> list[str]:
+def generate_env_platform(
+    yaml_path: str,
+    domain: str,
+    project_name: str = "",
+    credentials: dict[str, str] | None = None,
+) -> list[str]:
     """Generate .env.platform lines from platform-env.yaml — convenience wrapper.
 
     Combines load_yaml + generate into a single call. All errors propagate
@@ -241,6 +341,7 @@ def generate_env_platform(yaml_path: str, domain: str, project_name: str = "") -
         yaml_path: Path to platform-env.yaml on disk.
         domain: Platform domain (e.g. \"ai-platform.local\").
         project_name: Optional project name for DSN {NAME} substitution.
+        credentials: Optional DB credentials (password-injection, DevPlan 133 W2).
 
     Returns:
         List of .env.platform lines (newline-terminated).
@@ -251,7 +352,7 @@ def generate_env_platform(yaml_path: str, domain: str, project_name: str = "") -
         GenEnvPlatformValidationError: If provides validation fails.
     """
     data = load_yaml(yaml_path)
-    lines = generate(data, domain=domain, project_name=project_name)
+    lines = generate(data, domain=domain, project_name=project_name, credentials=credentials)
     logger.info("[IMP:9][gen_env_platform][generate_env_platform] Generated %d lines from %s", len(lines), yaml_path)
     return lines
 
@@ -278,18 +379,55 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="[%(levelname)s][gen_env_platform] %(message)s", stream=sys.stderr)
 
     parser = argparse.ArgumentParser(description="Generate .env.platform from platform-env.yaml")
-    parser.add_argument("--yaml", required=True, type=str, help="Path to platform-env.yaml")
+    parser.add_argument(
+        "--yaml", type=str, default="", help="Path to platform-env.yaml (default: repo root via --project-dir)"
+    )
     parser.add_argument("--name", type=str, default="", help="Project name for DSN substitution")
-    parser.add_argument("--domain", type=str, default="ai-platform.local", help="Platform domain")
-    parser.add_argument("--output", type=str, default=None, help="Output path (default: stdout)")
+    parser.add_argument("--domain", type=str, default="", help="Platform domain")
+    parser.add_argument("--output", type=str, default=None, help="Output path (default: stdout / project dir)")
+    parser.add_argument(
+        "--project-dir",
+        type=str,
+        default=None,
+        help="Project directory: auto-resolve yaml/name/domain/output + credentials",
+    )
+    parser.add_argument(
+        "--credentials-file", type=str, default=None, help="Explicit DB credentials file (.platform-db.env format)"
+    )
     args = parser.parse_args()
 
     try:
-        lines = generate_env_platform(args.yaml, domain=args.domain, project_name=args.name)
-        if args.output:
-            output_path = Path(args.output)
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            output_path.write_text("\n".join(lines) + "\n")
+        # ── --project-dir mode (DevPlan 133 W2.3): auto-resolve yaml/name/domain/output + credentials ──
+        credentials: dict[str, str] | None = None
+        output_path = args.output
+        yaml_path = args.yaml
+        project_name = args.name
+        domain = args.domain
+        if args.project_dir:
+            from core.internal.shared.project_yaml import get_domain, get_name, load_project_yaml
+
+            proj_path = Path(args.project_dir)
+            ai_data = load_project_yaml(proj_path)
+            if not yaml_path:
+                yaml_path = str(Path(__file__).resolve().parents[3] / "platform-env.yaml")
+            if not project_name:
+                project_name = get_name(ai_data) or proj_path.name
+            if not domain:
+                domain = get_domain(ai_data) or "ai-platform.local"
+            if output_path is None:
+                output_path = str(proj_path / ".env.platform")
+            credentials = load_credentials(project_dir=args.project_dir, credentials_file=args.credentials_file)
+
+        if not yaml_path:
+            parser.error("--yaml is required (or use --project-dir)")
+        if not domain:
+            domain = "ai-platform.local"
+
+        lines = generate_env_platform(yaml_path, domain=domain, project_name=project_name, credentials=credentials)
+        if output_path:
+            output_file = Path(output_path)
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+            output_file.write_text("\n".join(lines) + "\n")
         else:
             for line in lines:
                 print(line)
@@ -298,7 +436,7 @@ def main() -> int:
         print(f"FAIL-FAST: {e}", file=sys.stderr)
         return 1
     except yaml.YAMLError as e:
-        print(f"FAIL-FAST: YAML parse error in {args.yaml}: {e}", file=sys.stderr)
+        print(f"FAIL-FAST: YAML parse error in {yaml_path}: {e}", file=sys.stderr)
         return 1
     except GenEnvPlatformError as e:
         print(f"FAIL-FAST: {e}", file=sys.stderr)

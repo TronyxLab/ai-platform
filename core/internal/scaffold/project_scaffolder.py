@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: project_scaffolder new-project scaffold template copy render git-init checklist FQDN vhost register dry-run
-# STRUCTURE: ▶ parse_args → auto_domain → validate_inputs → show_plan → confirm → copy_template → ⊕ gen_ai_platform_yaml → render_project_template → gen_env_platform → gen_makefile + gen_agents → git_init → create_github_repo → checklist → run_add_vhost → register_in_node_yaml → summary
+# GREP_SUMMARY: project_scaffolder new-project scaffold template copy render git-init checklist FQDN vhost register AI-PLATFORM.md dry-run
+# STRUCTURE: ▶ parse_args → auto_domain → validate_inputs → show_plan → confirm → copy_template → ⊕ gen_ai_platform_yaml → render_project_template → gen_env_platform → gen_makefile + gen_agents + gen_platform_md → git_init → create_github_repo → checklist → run_add_vhost → register_in_node_yaml → summary
 # region MODULE_CONTRACT
 ## @purpose  Python Strangler-Fig migration of add-project.sh (782 LOC shell, 16 functions).
 ##           Creates a new project from a template: copies template, generates ai-platform.yaml,
@@ -633,8 +633,12 @@ def main(argv: list[str] | None = None) -> int:
     # Step 4: Generate .env.platform
     gen_env_platform(project_dir, args.name, domain, args.dry_run)
 
-    # Step 5: Generate Makefile + AGENTS.md
-    from core.internal.scaffold.scaffold_helpers import gen_project_agents, gen_project_makefile
+    # Step 5: Generate Makefile + AGENTS.md + AI-PLATFORM.md
+    from core.internal.scaffold.scaffold_helpers import (
+        gen_project_agents,
+        gen_project_makefile,
+        gen_project_platform_md,
+    )
 
     gen_project_makefile(
         name=args.name,
@@ -649,6 +653,16 @@ def main(argv: list[str] | None = None) -> int:
         node=node,
         domain=domain,
         output_path=os.path.join(project_dir, "AGENTS.md"),
+        force=False,
+    )
+    # DevPlan 133 D3: AI-PLATFORM.md — контракт проекта с платформой (после gen_env_platform)
+    gen_project_platform_md(
+        name=args.name,
+        org=org,
+        node=node,
+        domain=domain,
+        project_dir=project_dir,
+        output_path=os.path.join(project_dir, "AI-PLATFORM.md"),
         force=False,
     )
 

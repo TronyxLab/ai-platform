@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: project_adopter, adopt-project, strangler-fig, ai-platform-yaml, compose-validation, node-yaml-registration, vhost, makefile, agents-md
-# STRUCTURE: ▶ adopt() 8 шагов → ○ gen_yaml → ○ simplify_deploy → ○ delete_platform_deploy → ○ gen_env (subprocess) → ○ makefile+agents (scaffold_helpers) → ○ validate_compose_networks (compose_validator) → ○ register_in_node_yaml (scaffold_helpers) → ○ configure_vhost (vhost_configurator) → ⎋ print_diff_report
+# GREP_SUMMARY: project_adopter, adopt-project, strangler-fig, ai-platform-yaml, compose-validation, node-yaml-registration, vhost, makefile, agents-md, AI-PLATFORM.md
+# STRUCTURE: ▶ adopt() 8 шагов → ○ gen_yaml → ○ simplify_deploy → ○ delete_platform_deploy → ○ gen_env (subprocess) → ○ makefile+agents+platform_md (scaffold_helpers) → ○ validate_compose_networks (compose_validator) → ○ register_in_node_yaml (scaffold_helpers) → ○ configure_vhost (vhost_configurator) → ⎋ print_diff_report
 # region MODULE_CONTRACT
 ## @purpose  Strangler-Fig migration of adopt-project.sh (906 LOC shell) into Python business logic.
 ##            Adopts an existing project into ai-platform lifecycle: generates ai-platform.yaml,
@@ -350,6 +350,24 @@ jobs:
 
     # endregion FUNC_gen_project_agents
 
+    # region FUNC_gen_project_platform_md
+    ## @purpose  Generate AI-PLATFORM.md (DevPlan 133 D3); preserves existing unless --force · ⇥ None → ⎋ str "generated"|"updated"|"exists"|"skipped" · @complexity O(M+S)
+    def gen_project_platform_md(self) -> str:
+        """Generate project AI-PLATFORM.md (delegates to scaffold_helpers)."""
+        from core.internal.scaffold.scaffold_helpers import gen_project_platform_md as _gen
+
+        return _gen(
+            name=self.name,
+            org=self.org,
+            node=self.node,
+            domain=self.domain or "",
+            project_dir=str(self.project_dir),
+            output_path=str(self.project_dir / "AI-PLATFORM.md"),
+            force=self.force,
+        )
+
+    # endregion FUNC_gen_project_platform_md
+
     # region FUNC_validate_compose_networks
     ## @purpose  Validate compose proxy-net (M4 gate) — делегирует compose_validator (B9 T5, U-32). · ⇥ compose_path: Path → ⎋ ValidationResult · @complexity O(S × N) · Validation only; без domain → valid=True (skip)
     def validate_compose_networks(self, compose_path: Path) -> ValidationResult:
@@ -460,11 +478,14 @@ jobs:
         else:
             result.changes.append("- .env.platform generation skipped (platform-env.yaml not found)")
 
-        # ── Step 5: Generate Makefile and AGENTS.md ──
-        logger.info("[IMP:7][%s][adopt] Step 5/8: Generate project Makefile and AGENTS.md", self._log_prefix)
+        # ── Step 5: Generate Makefile and AGENTS.md + AI-PLATFORM.md ──
+        logger.info("[IMP:7][%s][adopt] Step 5/8: Generate Makefile/AGENTS.md/AI-PLATFORM.md", self._log_prefix)
         mk = self.gen_project_makefile()
         ag = self.gen_project_agents()
-        result.changes.append(f"✔ Makefile/AGENTS.md ensured (Makefile={mk}, AGENTS.md={ag})")
+        pm = self.gen_project_platform_md()
+        result.changes.append(
+            f"✔ Makefile/AGENTS.md/AI-PLATFORM.md ensured (Makefile={mk}, AGENTS.md={ag}, AI-PLATFORM.md={pm})"
+        )
 
         # ── Step 6: Validate compose networks (proxy-net) ──
         logger.info("[IMP:7][%s][adopt] Step 6/8: Validate compose proxy-net (M4 gate)", self._log_prefix)
