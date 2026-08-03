@@ -36,7 +36,6 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from core.internal.config import platform_config
-from core.internal.shared.s3_client import get_s3_client as _shared_get_s3_client
 
 logger = logging.getLogger(__name__)
 
@@ -209,6 +208,12 @@ def probe_s3_connectivity(
             detail="S3 credentials not configured — cert restore will use acme.sh only",
         )
     try:
+        # ⚠️ TRAP[BUG] · 2026-08-03 · P1 · lazy-импорт s3_client (boto3) — RC-сессия 121
+        # · Symptom: preflight PanicException pyo3_runtime на свежей ноде — module-level импорт
+        #   s3_client тянул boto3→pyopenssl(debian)→cryptography(pip) несовместимость.
+        # · Fix: импорт ВНУТРИ probe (префлайт — лёгкая диагностика, не должен тянуть boto3);
+        #   ImportError → WARN (boto3 появится в φ1 python_deps — preflight идёт ДО него).
+        from core.internal.shared.s3_client import get_s3_client as _shared_get_s3_client
         from botocore.exceptions import ClientError  # type: ignore[import-untyped]
 
         ep = endpoint or os.environ.get("S3_ENDPOINT_URL", "https://s3.timeweb.cloud")
@@ -242,6 +247,15 @@ def probe_s3_connectivity(
             latency_ms=latency,
             detail="S3 probe error — cert restore degraded",
             error=str(e)[:200],
+        )
+    except BaseException as e:  # noqa: BLE001 — probe не должен ронять bootstrap (RC 121: pyo3 PanicException от битой pyopenssl)
+        latency = int((time.monotonic() - start) * 1000)
+        logger.warning("[IMP:8][preflight][s3] S3 probe crashed (%s: %s) — WARN, bootstrap continues", type(e).__name__, str(e)[:100])
+        return CheckResult(
+            status="warn",
+            latency_ms=latency,
+            detail="S3 probe crashed — cert restore degraded",
+            error=f"{type(e).__name__}: {str(e)[:100]}",
         )
 
 
