@@ -44,7 +44,9 @@ _TEST_ROLE = "e2e_dbproj_user"
 _WILDCARD_LINE = "* = host=postgres port=5432 auth_user=postgres"
 
 
-def _docker_exec(container: str, *args: str, env_extra: dict[str, str] | None = None, timeout: int = 30) -> subprocess.CompletedProcess:
+def _docker_exec(
+    container: str, *args: str, env_extra: dict[str, str] | None = None, timeout: int = 30
+) -> subprocess.CompletedProcess:
     """Run a command inside a container (docker exec) with optional extra env."""
     cmd = ["docker", "exec"]
     for k, v in (env_extra or {}).items():
@@ -174,9 +176,7 @@ def test_shared_db_full_cycle_via_pgbouncer(shared_db_stack, tmp_path, caplog) -
     assert creds_file.is_file(), ".platform-db.env не создан"
     assert (creds_file.stat().st_mode & 0o777) == 0o600
     creds = dict(
-        line.split("=", 1)
-        for line in creds_file.read_text().splitlines()
-        if "=" in line and not line.startswith("#")
+        line.split("=", 1) for line in creds_file.read_text().splitlines() if "=" in line and not line.startswith("#")
     )
     role_password = creds.get("PLATFORM_POSTGRES_PASSWORD", "")
     assert creds.get("PLATFORM_POSTGRES_USER") == _TEST_ROLE
@@ -210,9 +210,7 @@ def test_shared_db_full_cycle_via_pgbouncer(shared_db_stack, tmp_path, caplog) -
         f"psql через pgbouncer с ролью {_TEST_ROLE} failed: {conn.stdout}{conn.stderr}"
     )
 
-    logger.critical(
-        "[IMP:9][e2e][shared_db] FULL CYCLE OK — БД+роль+GRANT+credentials → SELECT 1 через pgbouncer:6432"
-    )
+    logger.critical("[IMP:9][e2e][shared_db] FULL CYCLE OK — БД+роль+GRANT+credentials → SELECT 1 через pgbouncer:6432")
 
     # ── cleanup (в конце теста — не оставляем мусор в postgres) ──
     _drop_test_artifacts()
@@ -265,7 +263,10 @@ def test_negative_nonexistent_role_auth_failure_not_no_such_database(shared_db_s
         k in output.lower() for k in ("password authentication failed", "auth failed", "no such user", "no pg_hba.conf")
     ), f"ожидался auth failure, получено: {output}"
 
-    logger.critical("[IMP:9][e2e][shared_db] R5-negative OK — missing role → auth failure (не «no such database»): %s", output.strip()[:120])
+    logger.critical(
+        "[IMP:9][e2e][shared_db] R5-negative OK — missing role → auth failure (не «no such database»): %s",
+        output.strip()[:120],
+    )
 
 
 # endregion TEST_negative_r5

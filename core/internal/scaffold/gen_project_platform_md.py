@@ -172,7 +172,9 @@ def render_generated(
             logger.warning("[IMP:7][gen_platform_md][generated] node.yaml parse skipped: %s", exc)
             modules = []
     else:
-        logger.warning("[IMP:7][gen_platform_md][generated] node.yaml not found: %s — module list unavailable", node_yaml_path)
+        logger.warning(
+            "[IMP:7][gen_platform_md][generated] node.yaml not found: %s — module list unavailable", node_yaml_path
+        )
 
     lines.append(f"**Node:** {node_name or '<unknown>'}  ")
     lines.append(f"**Context (org):** {context or '<unknown>'}  ")
@@ -203,14 +205,19 @@ def render_generated(
                 for net in svc.get("networks", []) or []:
                     if net:
                         networks.add(str(net))
-            logger.info("[IMP:9][gen_platform_md][generated] platform-env.yaml loaded: %d provides, %d networks", len(services), len(networks))
+            logger.info(
+                "[IMP:9][gen_platform_md][generated] platform-env.yaml loaded: %d provides, %d networks",
+                len(services),
+                len(networks),
+            )
         except (OSError, yaml.YAMLError) as exc:
             logger.warning("[IMP:7][gen_platform_md][generated] platform-env.yaml parse skipped: %s", exc)
             services = []
             networks = set()
     else:
         logger.warning(
-            "[IMP:7][gen_platform_md][generated] platform-env.yaml not found: %s — services unavailable", platform_env_path
+            "[IMP:7][gen_platform_md][generated] platform-env.yaml not found: %s — services unavailable",
+            platform_env_path,
         )
 
     lines.append("")
