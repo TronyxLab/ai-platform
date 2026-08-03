@@ -954,8 +954,8 @@ def test_t08_disk_pressure_92(requires_node: str, node_ssh: NodeSSHClient, caplo
             vals = [x.get("value", ["", ""])[1] for x in (data.get("data") or {}).get("result") or []]
             if vals and all(float(v) < 0.2 for v in vals):
                 ratio_critical = True
-        except (json.JSONDecodeError, ValueError):
-            pass
+        except (json.JSONDecodeError, ValueError) as exc:
+            logger.info("[IMP:7][T8][poll] prometheus ratio parse failed (retry): %s", exc)
         rules = node_ssh.ssh_read(
             f"set -a; source {_SECRETS_ENV}; set +a; "
             'curl -s -u "$GF_SECURITY_ADMIN_USER:$GF_SECURITY_ADMIN_PASSWORD" '
@@ -968,8 +968,8 @@ def test_t08_disk_pressure_92(requires_node: str, node_ssh: NodeSSHClient, caplo
                 for rule in group.get("rules") or []:
                     if re.search(r"Disk|space", json.dumps(rule), re.I):
                         rule_state = f"{rule.get('name')}={rule.get('state')}"
-        except json.JSONDecodeError:
-            pass
+        except json.JSONDecodeError as exc:
+            logger.info("[IMP:7][T8][poll] grafana rules parse failed (retry): %s", exc)
         if ratio_critical:
             break
         time.sleep(5)
@@ -994,8 +994,8 @@ def test_t08_disk_pressure_92(requires_node: str, node_ssh: NodeSSHClient, caplo
             if vals and all(v > 0.5 for v in vals):
                 resolved = True
                 break
-        except (json.JSONDecodeError, ValueError):
-            pass
+        except (json.JSONDecodeError, ValueError) as exc:
+            logger.info("[IMP:7][T8][poll] prometheus ratio parse failed (retry): %s", exc)
         time.sleep(10)
     sites_after, status_after = wait_sites_up(node_ssh, timeout_s=60)
     recovered_containers, miss2, _ = wait_all_containers(node_ssh, timeout_s=120)
