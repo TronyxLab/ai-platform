@@ -5,22 +5,18 @@
 ## @purpose  Entry-point for `make bootstrap-node`: resolve node.yaml → detect SSH host → SCP
 ##           core+node-configs → SSH-exec orchestrator (or local). Thin-wrapper per language policy.
 ## @scope    Called ONLY from Makefile. Owns usage+main. Delegates: scp/ssh → scp-deliver.sh,
-##           build-ssh-cmd.sh; AGE key + node detection → node_detect.py (DevPlan 104);
-##           node.yaml fields → node_yaml --get-many batch (DevPlan 116 B3 T5, U-52).
+##           build-ssh-cmd.sh; AGE key + node detection → node_detect.py (DevPlan 104); node.yaml → --get-many.
 ## @invariants
 ##   - 2 functions max: usage, main
 ##   - NODE=<name> optional in --resolve mode (auto-detection from /opt/node-configs/)
 ##   - AGE_SECRET_KEY chain (node_detect.py): env → SOPS_AGE_KEY → AGE_SECRET_KEY_FILE →
 ##     default key file ~/.config/age/keys.txt (age CLI default, symlink-конвенция); missing = WARN (not fatal)
-##   - ci_deploy_key: node.yaml единственный SoT (D2, B3 T6) — env-override удалён
-##   - --dry-run prints SCP+SSH commands; --resume always passed to node-lifecycle --mode init
-## 🧐 TRAP[DECISION] · 2026-07-21 · — · Encrypted secrets: <node-configs-dir>/secrets/<NODE>.enc.yaml
-## · Rejected: symlink/fallback search · Rev: если CI auto-deploy — пересмотреть доставку secrets
-## 🧐 TRAP[DECISION] · 2026-07-21 · — · passthrough arg pattern · Rejected: full parse_args
-## · Reason: minimal W1 scope · Rev: Wave 4 — redesign passthrough into parse_args spec
+##   - ci_deploy_key: node.yaml единственный SoT (D2, B3 T6); --dry-run печатает SCP+SSH; --resume всегда
+## 🧐 TRAP[DECISION] · 2026-07-21 · — · secrets: <node-configs-dir>/secrets/<NODE>.enc.yaml (без symlink-поиска); Rev: CI auto-deploy
+## 🧐 TRAP[DECISION] · 2026-07-21 · — · passthrough arg pattern (не полный parse_args); Rev: Wave 4 — parse_args spec
 ## @rationale Thin-wrapper per DevPlan 020 T4+T15 — auto-SSH+SCP eliminates manual rsync/SSH steps.
 ## @changes 2026-07-17 T15 layer re-homing; 2026-07-21 W4 --auto-reconcile; 2026-07-31 DevPlan 104;
-##           2026-08-01 B3 T5/T6 — 6×--get → ОДИН --get-many, env-override PLATFORM_CI_DEPLOY_KEY удалён (D2).
+##           2026-08-01 B3 T5/T6 — --get-many, env-override удалён (D2); 2026-08-03 RC 121 — age-key-file локально
 # endregion MODULE_CONTRACT
 set -euo pipefail
 
@@ -49,13 +45,8 @@ while [[ $# -gt 0 ]]; do
         --resolve) RESOLVE_MODE=true; shift ;;
         --dry-run) DRY_RUN=true; shift ;;
         --auto-reconcile) PASSTHROUGH_ARGS+=("--auto-reconcile"); shift ;;
-        # ⚠️ TRAP[BUG] · 2026-08-03 · P1 · --age-secret-key-file уходил в PASSTHROUGH_ARGS
-        # · Symptom: remote node-lifecycle.sh: "file not found: /Users/.../age-key-personal.txt"
-        # · Root: make-таргет передаёт AGE_SECRET_KEY_FILE как аргумент; bootstrap.sh не обрабатывал
-        #   его → аргумент попадал в remote-команду, где локальный путь не существует.
-        # · Fix: локальное чтение через node_detect-цепочку (как node-update.sh) — ключ уходит
-        #   в remote как export AGE_SECRET_KEY (build_ssh_cmd), путь НЕ передаётся.
-        # · Prevention: remote-команды не должны получать локальные пути (test_gate bootstrap).
+        # ⚠️ TRAP[BUG] · 2026-08-03 · P1 · --age-secret-key-file уходил в remote passthrough
+        # (локальный путь на VPS). Фикс: локальное чтение через node_detect-цепочку (как node-update.sh).
         --age-secret-key-file) AGE_SECRET_KEY_FILE="$2"; export AGE_SECRET_KEY_FILE; shift 2 ;;
         *) PASSTHROUGH_ARGS+=("$1"); shift ;;
     esac
@@ -105,9 +96,7 @@ main() {
     [[ -n "$OWNER_KEY" ]] || { echo "[IMP:10][bootstrap][entrypoint] FATAL: owner_key not found" >&2; exit 1; }
     echo "[IMP:9][bootstrap][entrypoint] Resolved: node=${NODE_NAME}"
 
-    # ⚠️ TRAP[BUG] · 2026-07-17 · P1 · RESOLVED 2026-08-01 (B3 T5/T6) — ci_deploy_key извлекается
-    # · batch-вызовом node_yaml --get-many; env-override PLATFORM_CI_DEPLOY_KEY удалён (D2); node.yaml = SoT.
-    # · Prevention: schema-based contract test. Source: 007-dance-site-launch/02-Debt.md D1
+    # ⚠️ TRAP[BUG] 2026-07-17 P1 RESOLVED 2026-08-01 (B3 T5/T6): ci_deploy_key — batch --get-many, env-override удалён (D2)
     if [[ -n "$CI_DEPLOY_KEY" ]]; then
         echo "[IMP:9][bootstrap][entrypoint] ci_deploy_key resolved"
     else
@@ -143,8 +132,7 @@ main() {
     echo "[IMP:9][bootstrap][entrypoint] SSH host: ${SSH_HOST} — REMOTE bootstrap"
     NODE_CONFIGS_DIR="$(dirname "$(dirname "${NODE_YAML}")")"
     if $DRY_RUN; then
-        echo "[IMP:8][bootstrap][dry-run] DRY-RUN: Would rsync core/ + platform-env.yaml + Makefile → ${SSH_HOST}"
-        echo "[IMP:8][bootstrap][dry-run] DRY-RUN: Would rsync node-configs/ → /opt/node-configs/"
+        echo "[IMP:8][bootstrap][dry-run] DRY-RUN: Would rsync core/ + platform-env.yaml + Makefile + node-configs/ → ${SSH_HOST}"
         [[ -d "${NODE_CONFIGS_DIR}/${NODE_NAME}/secrets" ]] && echo "[IMP:8][bootstrap][dry-run] DRY-RUN: Would rsync secrets/"
     else
         prepare_ssh_opts "${SSH_HOST}" "init"
@@ -154,14 +142,8 @@ main() {
 
     REMOTE_CMD="$(build_ssh_cmd "${NODE_NAME}" "${OWNER_KEY}" "${CI_DEPLOY_KEY}" "${DETECTED_AGE_KEY}" "${PASSTHROUGH_ARGS[@]}")"
     local masked_remote_cmd="${REMOTE_CMD}"
-    if [[ -n "${DETECTED_AGE_KEY}" ]]; then
-        local m; m="$(echo "${DETECTED_AGE_KEY}" | cut -c1-8)"
-        masked_remote_cmd="${REMOTE_CMD//${DETECTED_AGE_KEY}/<AGE_KEY:${m}...>}"
-    fi
-    $DRY_RUN && {
-        echo "[IMP:8][bootstrap][dry-run] DRY-RUN: ssh ${SSH_OPTS_COMMON[*]} root@${SSH_HOST} ${masked_remote_cmd}" >&2
-        echo "[IMP:9][bootstrap][dry-run] DRY-RUN complete" >&2; exit 0
-    }
+    [[ -n "${DETECTED_AGE_KEY}" ]] && { local m; m="$(echo "${DETECTED_AGE_KEY}" | cut -c1-8)"; masked_remote_cmd="${REMOTE_CMD//${DETECTED_AGE_KEY}/<AGE_KEY:${m}...>}"; }
+    $DRY_RUN && { echo "[IMP:8][bootstrap][dry-run] DRY-RUN: ssh ${SSH_OPTS_COMMON[*]} root@${SSH_HOST} ${masked_remote_cmd}" >&2; echo "[IMP:9][bootstrap][dry-run] DRY-RUN complete" >&2; exit 0; }
     echo "[IMP:9][bootstrap][entrypoint] SSH node-lifecycle.sh --mode init on root@${SSH_HOST}"
     # Волна 117 D7: exec ssh → SSH_OPTS_COMMON (lib/ssh.sh, Python SoT ssh_opts.py); exec + DRY_RUN семантика сохранены
     exec ssh "${SSH_OPTS_COMMON[@]}" "root@${SSH_HOST}" "${REMOTE_CMD}"
