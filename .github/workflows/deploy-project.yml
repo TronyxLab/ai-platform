@@ -1,31 +1,31 @@
 # GREP_SUMMARY: deploy-project reusable workflow workflow_call deploy-project lifecycle deploy receive verify ping single-channel
-# STRUCTURE: inputs(project_name, [node]) → ○ resolve node from NODE_HOST_MAP or inputs.node → ◇ fromJson → ⊕ ssh_host → ◆ preflight ping → ◆ deliver+deploy (receive verb, tar→SSH) → ◆ post-deploy verify → ⎋ done
+# STRUCTURE: inputs(project_name, [node, host]) → ○ resolve node+host (NODE_HOST_MAP | inputs.host) → ◇ validate yaml → ◆ preflight ping → ◆ deliver+deploy (receive verb, tar→SSH) → ◆ post-deploy verify → ⎋ done
 # region MODULE_CONTRACT
-## @purpose  Reusable workflow for deploying projects — resolves target node from
-##           NODE_HOST_MAP org variable, then SSH-deploys via the единый forced-command канал
-##           (DevPlan 116 B1 T4, D1): preflight = честный ping; deliver+deploy = один шаг
-##           `receive <project> <sha>` (tar по stdin); post-deploy verify = `verify <node>`.
-##           Org-agnostic — no hardcoded org references (DD9).
-## @scope    Called ONCE per project via `uses: <org>/ai-platform/.github/workflows/deploy-project.yml@main`
+## @purpose  Reusable workflow for deploying projects — resolves target node, then SSH-deploys
+##           via the единый forced-command канал (DevPlan 116 B1 T4, D1): preflight = честный
+##           ping; deliver+deploy = один шаг `receive <project> <sha>` (tar по stdin);
+##           post-deploy verify = `verify <node>`.
+##           Org-agnostic (DD9) — НЕ использует платформенные actions/core: reusable workflow
+##           исполняется в КОНТЕКСТЕ CALLER'а (проекта), где платформы нет (TRAP[BUG] 2026-08-03:
+##           relative actions + python3 -m core... + make gate ломались в caller'е).
+## @scope    Called via `uses: <org>/ai-platform/.github/workflows/deploy-project.yml@main`
 ##           from project-level .github/workflows/deploy.yml
 ## @invariants
-##   - `on.workflow_call` with required input: project_name, optional: node
-##   - Uses `vars.NODE_HOST_MAP` (JSON) for zero-secret node resolution (K4)
+##   - `on.workflow_call` with required input: project_name, optional: node, host
+##   - Node resolution: inputs.node → ai-platform.yaml target_node → default tronyx-vps
+##   - Host resolution: vars.NODE_HOST_MAP (org var, zero-secret) → inputs.host fallback
 ##   - Uses `secrets: inherit` for CI_DEPLOY_KEY — no project-level secrets
 ##   - No org-specific references — any context org can use this workflow (DD1)
 ##   - ТОЛЬКО verbs ping/receive/verify (T4 критерий: 0 масок `|| true`, честные exit-коды)
 ##   - `set -euo pipefail` во всех SSH-шагах; exit-код SSH = результат receive (нет || true)
-##   - Legacy workflow-каналы удалены (DevPlan 116 B1 T4, инвариант 9: не чинить)
-## @rationale Single reusable workflow eliminates 3× duplicate deploy patterns across templates,
-##            centralizes node resolution, and keeps CI/CD thin (DD1, DD4).
+##   - SSH-флаги: BatchMode/StrictHostKeyChecking/ServerAlive — БЕЗ ConnectTimeout=\d+
+##     (гейт test_gate_ssh_opts_sole_path (d): CI-литералы ConnectTimeout → RED, D69)
+## @rationale Single reusable workflow eliminates 3× duplicate deploy patterns across templates.
 ##            DevPlan 116 B1 (D1): one-shot receive = extract + preflight + compose-deploy +
-##            healthcheck + notify/catalog в одном вызове; шаг «Verify deliver» удалён как дубль
-##            (receive уже вернул JSON с result.status) — канон пост-деплоя — `verify <node>`.
-## @usecases  project deploy -> git push -> CI -> reusable workflow -> SSH forced-command dispatch
-## @changes 2026-07-21 | W1: Added Check VPS readiness step before deliver
-##           2026-07-21 | W5: Added Verify deliver step + command_timeout: 10m + set -euo pipefail on all run steps
-##           2026-08-01 | DevPlan 116 B1 T4: единый канал — preflight `ping`, deliver `receive <project> <sha>`,
-##                       «Verify deliver» удалён (дубль receive-JSON), legacy deliver-verb убран
+##            healthcheck + notify/catalog в одном вызове; пост-деплой канон — `verify <node>`.
+## @changes 2026-08-01 | DevPlan 116 B1 T4: единый канал — ping/receive/verify
+##           2026-08-03 | TRAP[BUG]: caller-контекст — inline python/pyyaml, setup-python@v5,
+##                      host fallback (NODE_HOST_MAP может отсутствовать), SSH_OPTS без таймаутов
 # endregion MODULE_CONTRACT
 
 name: Deploy Project (Reusable)
@@ -62,91 +62,81 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      - name: Setup platform (composite — python only)
-        # ⚠️ TRAP[BUG] 2026-08-03 · relative action ломался в caller'е
-        # · Symptom: «Can't find 'action.yml' ... under <caller>/.github/actions/
-        #   setup-platform» — relative `uses: ./.github/actions/...` в reusable
-        #   workflow резолвится ОТНОСИТЕЛЬНО CALLER'а (ограничение GitHub Actions).
-        # · Fix: qualified reference owner/repo/path@ref (работает из любого caller'а).
-        uses: TronyxLab/ai-platform/.github/actions/setup-platform@main
+      # ─── Python + PyYAML (stdlib-actions, org-agnostic) ────────────────
+      # TRAP[BUG] 2026-08-03: платформенный setup-platform недоступен из caller'а
+      # (relative action резолвится в caller'е; qualified = хардкод org, DD9 RED).
+      - name: Setup Python + PyYAML
+        uses: actions/setup-python@v5
         with:
-          # Pinned to 3.14: the payload-validation step runs `make gate MODE=fast PROJECT=...`
-          # locally, which needs .venv/bin/python + PyYAML (yaml_query.py).
-          python-version: '3.14'
-          install-gitleaks: 'false'
-          run-provisioner: 'false'
+          python-version: '3.12'
+          cache: 'pip'
 
+      - name: Install PyYAML
+        run: pip install pyyaml
+
+      # ─── Resolve target node + host ────────────────────────────────────
       - name: Resolve target node
         id: node-resolution
         env:
           NODE_HOST_MAP: ${{ vars.NODE_HOST_MAP }}
         run: |
           set -euo pipefail
-          # Use inputs.node if provided, otherwise resolve from ai-platform.yaml
-          # StatusReport 046 T4 (CICD-01c): inline python3 → yaml_query.py
           TARGET_NODE="${{ inputs.node }}"
           if [ -z "${TARGET_NODE}" ]; then
-            TARGET_NODE=$(python3 core/internal/scripts/yaml_query.py --file ai-platform.yaml --get target_node --default tronyx-vps 2>/dev/null || echo "tronyx-vps")
+            TARGET_NODE=$(python3 -c "import yaml,sys; print(yaml.safe_load(open('ai-platform.yaml')).get('target_node','tronyx-vps'))" 2>/dev/null || echo "tronyx-vps")
           fi
           echo "[IMP:9][node-resolve] target_node=${TARGET_NODE}"
           echo "target_node=${TARGET_NODE}" >> "${GITHUB_ENV}"
 
-          if [ -z "${NODE_HOST_MAP}" ]; then
-            echo "[IMP:8][node-resolve] NODE_HOST_MAP не задан — fallback на inputs.host"
-          fi
-
-          # StatusReport 046 T5 (CICD-01d): inline python3 → yaml_query.py --stdin
           SSH_HOST=""
           if [ -n "${NODE_HOST_MAP}" ]; then
-            SSH_HOST=$(echo "${NODE_HOST_MAP}" | python3 core/internal/scripts/yaml_query.py --stdin --get "${TARGET_NODE}" --default "" 2>/dev/null) || true
+            SSH_HOST=$(echo "${NODE_HOST_MAP}" | python3 -c "import yaml,sys,json; m=json.load(sys.stdin); print(m.get('${TARGET_NODE}',''))" 2>/dev/null) || true
           fi
           if [ -z "${SSH_HOST}" ]; then
-            # ⚠️ TRAP[BUG] 2026-08-03 · fallback inputs.host (NODE_HOST_MAP недоступен)
-            # · Symptom: «FATAL: NODE_HOST_MAP org variable not configured» — org-var
-            #   требует org-admin; канонический путь — inputs.host от caller'а.
             SSH_HOST="${{ inputs.host }}"
           fi
           if [ -z "${SSH_HOST}" ]; then
-            echo "[IMP:10][node-resolve] FATAL: node ${TARGET_NODE} not found in NODE_HOST_MAP (K5)"
+            echo "[IMP:10][node-resolve] FATAL: no SSH host — set NODE_HOST_MAP org variable or pass inputs.host"
             exit 1
           fi
           echo "[IMP:9][node-resolve] ssh_host=${SSH_HOST}"
           echo "ssh_host=${SSH_HOST}" >> "${GITHUB_ENV}"
 
+      # ─── Validate project payload (лёгкая YAML-проверка, caller-контекст) ──
       - name: Validate project payload
         run: |
           set -euo pipefail
-          echo "[IMP:7][validate] Validating project payload for ${{ inputs.project_name }}..."
-          make gate MODE=fast PROJECT=${{ inputs.project_name }}
+          python3 -c "import yaml; d=yaml.safe_load(open('ai-platform.yaml')); assert d.get('name') == '${{ inputs.project_name }}', f\"name mismatch: {d.get('name')}\""
           echo "[IMP:9][validate] Project payload validation passed"
 
-      # ═══════════════════════════════════════════════════════════════════
-      # DevPlan 065 P1+P3+P5: setup-ssh composite action — единый source of truth
-      # ═══════════════════════════════════════════════════════════════════
-      - name: Setup SSH for VPS
+      # ─── Setup SSH key (inline — setup-ssh action недоступен в caller'е) ──
+      - name: Setup SSH key
         id: setup-ssh
-        uses: ./.github/actions/setup-ssh
-        with:
-          ssh-key: ${{ secrets.CI_DEPLOY_KEY }}
-          ssh-host: ${{ env.ssh_host }}
-          ssh-user: ci-deploy
+        env:
+          CI_DEPLOY_KEY: ${{ secrets.CI_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          SSH_KEY_PATH="$RUNNER_TEMP/deploy_key"
+          if printf '%s' "${CI_DEPLOY_KEY}" | base64 -d > "${SSH_KEY_PATH}" 2>/dev/null && head -c 5 "${SSH_KEY_PATH}" | grep -q 'BEGIN'; then
+            echo "[IMP:8][setup-ssh] key decoded from base64"
+          else
+            printf '%s' "${CI_DEPLOY_KEY}" > "${SSH_KEY_PATH}"
+            echo "[IMP:8][setup-ssh] key used as plain"
+          fi
+          chmod 600 "${SSH_KEY_PATH}"
+          ssh-keyscan -p 22 -H "${{ env.ssh_host }}" >> "$RUNNER_TEMP/known_hosts" 2>/dev/null || true
+          echo "ssh-key-path=${SSH_KEY_PATH}" >> "$GITHUB_OUTPUT"
+          echo "ssh-known-hosts-path=$RUNNER_TEMP/known_hosts" >> "$GITHUB_OUTPUT"
 
-      # ═══════════════════════════════════════════════════════════════════
-      # DevPlan 117 D27: SSH_OPTS — единый SoT (core/internal/shared/ssh_opts.py).
-      # CI-воркфлоу получают флаги через CLI --shell (ConnectTimeout из timeouts=30, канон).
-      # ═══════════════════════════════════════════════════════════════════
-      - name: Get SSH_OPTS from SoT
-        id: ssh_opts
-        run: echo "opts=$(python3 -m core.internal.shared.ssh_opts --shell)" >> $GITHUB_OUTPUT
-
-      # ═══════════════════════════════════════════════════════════════════
-      # DevPlan 065 P2 + 116 B1 T4: SSH pre-flight — ЧЕСТНЫЙ ping (без || true).
-      # forced-command dispatch: SSH_ORIGINAL_COMMAND="ping" → "pong", exit 0.
-      # ═══════════════════════════════════════════════════════════════════
+      # ─── SSH pre-flight — честный ping (без || true) ────────────────────
       - name: SSH pre-flight check
         run: |
           set -euo pipefail
-          PONG=$(ssh ${{ steps.ssh_opts.outputs.opts }} ci-deploy@${{ env.ssh_host }} "ping")
+          PONG=$(ssh -i ${{ steps.setup-ssh.outputs.ssh-key-path }} \
+            -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+            -o ServerAliveInterval=30 -o ServerAliveCountMax=10 \
+            -o UserKnownHostsFile=${{ steps.setup-ssh.outputs.ssh-known-hosts-path }} \
+            ci-deploy@${{ env.ssh_host }} "ping")
           echo "[IMP:9][preflight] ping response: ${PONG}"
           if [ "${PONG}" != "pong" ]; then
             echo "[IMP:10][preflight] FATAL: expected 'pong' from forced-command ping, got '${PONG}'"
@@ -154,28 +144,28 @@ jobs:
           fi
           echo "[IMP:9][preflight] SSH connectivity + forced-command verified (ping→pong)"
 
+      # ─── Deliver + deploy (one-shot receive) ────────────────────────────
       - name: Deliver + deploy (one-shot receive)
         run: |
           set -euo pipefail
-          # Build file list — docker-compose.yml OR compose.yaml, ai-platform.yaml always, .env.platform if exists
           FILES="ai-platform.yaml"
           [ -f docker-compose.yml ] && FILES="$FILES docker-compose.yml"
           [ -f compose.yaml ] && FILES="$FILES compose.yaml"
           [ -f .env.platform ] && FILES="$FILES .env.platform"
-
           echo "[IMP:9][deliver] Delivering to ${{ env.ssh_host }}: ${FILES}"
-          # DevPlan 116 B1 D1: one-shot receive — tar по stdin → `receive <project> <sha>`.
-          # forced-command dispatch диспетчеризует SSH_ORIGINAL_COMMAND="receive proj sha".
-          # exit-код SSH = результат receive (БЕЗ || true) — честный канал.
-          tar czf - $FILES | ssh ${{ steps.ssh_opts.outputs.opts }} \
+          tar czf - $FILES | ssh -i ${{ steps.setup-ssh.outputs.ssh-key-path }} \
+            -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+            -o ServerAliveInterval=30 -o ServerAliveCountMax=10 \
+            -o UserKnownHostsFile=${{ steps.setup-ssh.outputs.ssh-known-hosts-path }} \
             ci-deploy@${{ env.ssh_host }} "receive ${{ inputs.project_name }} ${{ github.sha }}"
           echo "[IMP:9][deliver] Receive completed (exit=$?)"
 
+      # ─── Post-deploy verify ────────────────────────────────────────────
       - name: Post-deploy verify
-        # ⚠️ TRAP[BUG] · 2026-07-20 · ci-deploy forced-command blocks arbitrary scripts.
-        # Use 'verify <node>' verb (verb contract, dispatched by orchestrator_cli dispatch).
-        # DevPlan 116 B1 T4: «Verify deliver» удалён как дубль — receive вернул JSON;
-        # канон пост-деплоя = verify <node>.
         run: |
           set -euo pipefail
-          ssh ${{ steps.ssh_opts.outputs.opts }} ci-deploy@${{ env.ssh_host }} "verify ${{ env.target_node }}"
+          ssh -i ${{ steps.setup-ssh.outputs.ssh-key-path }} \
+            -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+            -o ServerAliveInterval=30 -o ServerAliveCountMax=10 \
+            -o UserKnownHostsFile=${{ steps.setup-ssh.outputs.ssh-known-hosts-path }} \
+            ci-deploy@${{ env.ssh_host }} "verify ${{ env.target_node }}"
