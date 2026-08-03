@@ -401,6 +401,25 @@ def _install_requirements(core_dir: str) -> bool:
     if not _run(pip_typing, label="pip typing_extensions"):
         return False
 
+    # Step 1b: jsonschema with --ignore-installed — RC-сессия 2026-08-03 (e2e φ1 fail на bare VPS)
+    # · Symptom: pip -r requirements.txt: "Cannot uninstall jsonschema 4.10.3 (installed by debian,
+    #   no RECORD)" — φ1 ставит apt python3-jsonschema (4.10.3, без RECORD), requirements требует
+    #   >=4.17 → pip не может заменить debian-пакет.
+    # · Fix: тот же паттерн, что typing_extensions (--ignore-installed) — ставит свежую версию
+    #   поверх, не трогая debian-пакет.
+    logger.info("[IMP:9][_install_requirements] Installing jsonschema (--ignore-installed)")
+    pip_jsonschema = [
+        python_bin,
+        "-m",
+        "pip",
+        "install",
+        "jsonschema",
+        "--ignore-installed",
+        "--break-system-packages",
+    ]
+    if not _run(pip_jsonschema, label="pip jsonschema"):
+        return False
+
     # Step 2: full requirements.txt
     logger.info("[IMP:9][_install_requirements] Installing -r requirements.txt")
     pip_reqs = [
