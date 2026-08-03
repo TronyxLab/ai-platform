@@ -684,13 +684,24 @@ def test_t05_tor_telegram_channel_down(requires_node: str, node_ssh: NodeSSHClie
 @pytest.mark.chaos
 @pytest.mark.requires_node
 def test_t06_postgres_sigkill_under_load(requires_node: str, node_ssh: NodeSSHClient, caplog) -> None:
-    """T6: docker kill -s KILL postgres посреди INSERT-нагрузки → WAL recovery →
-    0 потерянных committed-строк; контейнер сам восстанавливается."""
+    """T6: SIGKILL postgres-процесса (kill -9 1 ВНУТРИ контейнера) посреди INSERT-нагрузки →
+    restart policy → WAL recovery → 0 потерянных committed-строк; контейнер сам восстанавливается.
+
+    Находка W3 (2026-08-03): `docker kill -s KILL` НЕ триггерит restart policy —
+    daemon-инициированная остановка (как docker stop); инъекция = kill -9 PID 1
+    изнутри (падение main-процесса → политика unless-stopped срабатывает).
+    """
     caplog.set_level(logging.DEBUG)
     incident_start = host_epoch_seconds(node_ssh)
     logger.info("[IMP:9][T6][prep] create chaos_drill + load loop")
 
-    # препарация: БД chaos_drill + таблица + счётчик
+    # cleanup предыдущих прогонов (bracket-regex — не матчит собственную cmdline)
+    node_ssh.ssh_exec(
+        "pkill -f '[c]haos-t6-load' 2>/dev/null; pkill -f '[c]haos-t6-loader' 2>/dev/null; true", timeout=30
+    )
+    node_ssh.ssh_exec("rm -f /tmp/chaos-t6-load.log /tmp/chaos-t6-loader.log", timeout=30)
+    # препарация: БД chaos_drill (drop если есть) + таблица + счётчик
+    _psql(node_ssh, "platform", "DROP DATABASE IF EXISTS chaos_drill")
     _psql(node_ssh, "platform", "CREATE DATABASE chaos_drill")
     _psql(
         node_ssh,
@@ -715,7 +726,7 @@ def test_t06_postgres_sigkill_under_load(requires_node: str, node_ssh: NodeSSHCl
     load = node_ssh.ssh_exec(f"nohup bash -c '{load_cmd}' >/tmp/chaos-t6-loader.log 2>&1 &", timeout=30)
     assert load.exit_code == 0
 
-    # ждём ≥100 committed строк, затем KILL посреди нагрузки
+    # ждём ≥100 committed строк, затем SIGKILL main-процесса посреди нагрузки
     committed = 0
     for _ in range(60):
         cnt = _psql(node_ssh, "chaos_drill", "SELECT COALESCE(MAX(n),0) FROM counter", timeout=30)
@@ -730,22 +741,56 @@ def test_t06_postgres_sigkill_under_load(requires_node: str, node_ssh: NodeSSHCl
     assert committed >= 100, f"T6 FAIL: load did not reach 100 commits (got {committed})"
 
     t0 = time.monotonic()
-    kill = node_ssh.ssh_exec("docker kill -s KILL postgres", timeout=60)
-    assert kill.exit_code == 0, f"docker kill failed: {kill.stderr}"
+    # Инъекция: host-pid main-процесса из docker inspect .State.Pid + kill -9 С ХОСТА.
+    # Находки W3 (2026-08-03): (a) `docker kill -s KILL` НЕ триггерит restart policy
+    # (daemon-инициированная остановка); (b) `docker exec ... kill -9 1` НЕ убивает
+    # контейнер (namespace-init защищён — SIGKILL не доставляется, проверено на redis).
+    # kill -9 host-pid = падение main-процесса → container exit 137 → unless-stopped fires.
+    pg_pid = node_ssh.ssh_read("docker inspect --format '{{.State.Pid}}' postgres", timeout=30).stdout.strip()
+    assert pg_pid.isdigit(), f"T6 FAIL: cannot resolve postgres host pid: {pg_pid}"
+    kill = node_ssh.ssh_exec(f"kill -9 {pg_pid}", timeout=60)
+    assert kill.exit_code == 0, f"kill -9 {pg_pid} failed: {kill.stderr}"
 
-    ok, missing, _ = wait_all_containers(node_ssh, timeout_s=180, containers=["postgres", "pgbouncer"])
+    ok, missing, _ = wait_all_containers(node_ssh, timeout_s=240, containers=["postgres", "pgbouncer"])
     ttr = int(time.monotonic() - t0)
 
     # верификация: counter.n (committed) == count(t) — 0 потерянных строк
+    # ждём завершения нагрузки (loader process исчез + counter стабилен 2 чтения подряд) —
+    # верификация при работающем loader даёт гонку чтения (наблюдалось 3150/3900)
+    stable_counter = -1
+    for _ in range(120):
+        cnt = _psql(node_ssh, "chaos_drill", "SELECT COALESCE(MAX(n),0) FROM counter", timeout=30)
+        try:
+            cur = int(cnt)
+        except ValueError:
+            cur = -1
+        loader_alive = node_ssh.ssh_read("ps aux | grep -c '[c]haos-t6' || true", timeout=20)
+        if cur == 10000 and int(loader_alive.stdout.strip() or "0") == 0:
+            stable_counter = cur
+            break
+        if cur == stable_counter:  # два одинаковых чтения подряд = нагрузка остановилась
+            break
+        stable_counter = cur
+        time.sleep(3)
     final_counter = _psql(node_ssh, "chaos_drill", "SELECT COALESCE(MAX(n),0) FROM counter", timeout=60)
     final_count = _psql(node_ssh, "chaos_drill", "SELECT count(*) FROM t", timeout=60)
+    loader_lines = node_ssh.ssh_read("wc -l < /tmp/chaos-t6-load.log 2>/dev/null || echo 0", timeout=20)
     try:
         fc = int(final_counter)
         rows = int(final_count)
+        committed_batches = int(loader_lines.stdout.strip() or "0")
     except ValueError:
-        fc, rows = -1, -1
-    data_integrity = rows == fc and fc > 0
-    logger.info("[IMP:9][T6][verify] committed=%s rows=%s integrity=%s", fc, rows, data_integrity)
+        fc, rows, committed_batches = -1, -1, -1
+    # Инвариант (находка W3): батчи, прерванные SIGKILL (uncommitted), корректно теряются —
+    # rows == успешные батчи × 50 (успешный батч = строка в loader-логе; INSERT+UPDATE атомарны).
+    data_integrity = rows == committed_batches * 50 and committed_batches > 0
+    logger.info(
+        "[IMP:9][T6][verify] committed=%s rows=%s batches=%s integrity=%s",
+        fc,
+        rows,
+        committed_batches,
+        data_integrity,
+    )
 
     manifest = LogAuditManifest("T6")
     manifest.add("docker", "database system was interrupted", container="postgres", label="docker:postgres-interrupted")
