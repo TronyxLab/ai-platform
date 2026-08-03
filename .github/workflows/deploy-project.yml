@@ -41,6 +41,10 @@ name: Deploy Project (Reusable)
         required: false
         type: string
         description: "Target node name (e.g. tronyx-vps) — overrides auto-resolution from ai-platform.yaml"
+      host:
+        required: false
+        type: string
+        description: "Target node SSH host (IP/FQDN) — fallback when NODE_HOST_MAP org variable отсутствует"
       org:
         required: false
         default: ''
@@ -59,7 +63,12 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Setup platform (composite — python only)
-        uses: ./.github/actions/setup-platform
+        # ⚠️ TRAP[BUG] 2026-08-03 · relative action ломался в caller'е
+        # · Symptom: «Can't find 'action.yml' ... under <caller>/.github/actions/
+        #   setup-platform» — relative `uses: ./.github/actions/...` в reusable
+        #   workflow резолвится ОТНОСИТЕЛЬНО CALLER'а (ограничение GitHub Actions).
+        # · Fix: qualified reference owner/repo/path@ref (работает из любого caller'а).
+        uses: TronyxLab/ai-platform/.github/actions/setup-platform@main
         with:
           # Pinned to 3.14: the payload-validation step runs `make gate MODE=fast PROJECT=...`
           # locally, which needs .venv/bin/python + PyYAML (yaml_query.py).
@@ -83,12 +92,20 @@ jobs:
           echo "target_node=${TARGET_NODE}" >> "${GITHUB_ENV}"
 
           if [ -z "${NODE_HOST_MAP}" ]; then
-            echo "[IMP:10][node-resolve] FATAL: NODE_HOST_MAP org variable not configured (K5)"
-            exit 1
+            echo "[IMP:8][node-resolve] NODE_HOST_MAP не задан — fallback на inputs.host"
           fi
 
           # StatusReport 046 T5 (CICD-01d): inline python3 → yaml_query.py --stdin
-          SSH_HOST=$(echo "${NODE_HOST_MAP}" | python3 core/internal/scripts/yaml_query.py --stdin --get "${TARGET_NODE}" --default "" 2>/dev/null) || true
+          SSH_HOST=""
+          if [ -n "${NODE_HOST_MAP}" ]; then
+            SSH_HOST=$(echo "${NODE_HOST_MAP}" | python3 core/internal/scripts/yaml_query.py --stdin --get "${TARGET_NODE}" --default "" 2>/dev/null) || true
+          fi
+          if [ -z "${SSH_HOST}" ]; then
+            # ⚠️ TRAP[BUG] 2026-08-03 · fallback inputs.host (NODE_HOST_MAP недоступен)
+            # · Symptom: «FATAL: NODE_HOST_MAP org variable not configured» — org-var
+            #   требует org-admin; канонический путь — inputs.host от caller'а.
+            SSH_HOST="${{ inputs.host }}"
+          fi
           if [ -z "${SSH_HOST}" ]; then
             echo "[IMP:10][node-resolve] FATAL: node ${TARGET_NODE} not found in NODE_HOST_MAP (K5)"
             exit 1
