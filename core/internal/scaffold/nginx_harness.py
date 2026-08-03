@@ -28,6 +28,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from core.internal.shared.deploy_paths import letsencrypt_live  # C7/C6: единый резолвер LE-live (118 C7)
+
 # DevPlan 118 C11: таймаут docker run nginx -t — канон shared/timeouts.COMPOSE_UP_TIMEOUT
 # (литерал 120 удалён; scope гейта timeout_literals расширен на scaffold/).
 from core.internal.shared.ssl_certs import DEFAULT_OPENSSL_TIMEOUT  # B5: канон openssl-таймаута
@@ -182,21 +184,17 @@ add_header X-Frame-Options "DENY" always;
                 continue
             dev_vhost = vhosts_dir / vhost_file.name
             content = vhost_file.read_text(encoding="utf-8")
-            # 📝 TRAP[DEBT] · 2026-08-02 · LO · /etc/letsencrypt/live хардкод (DevPlan 119 C6)
-            # · Observed: regex-литерал /etc/letsencrypt/live/[^/]*/ для dev-cert swap
-            # · Suspected: единый резолвер letsencrypt_live() (shared/deploy_paths, 118 C7)
-            #   покрыл cert_orchestrator, но harness-замена prod→dev путей осталась на литералах
-            # · Impact: при смене корня letsencrypt — dev-валидация молча не найдёт prod-пути
-            # · When: 119 wave 2 audit (AUDIT-4 T7) — см. .ai/debt/letsencrypt-path-hardcode.md
-            # · Rev: при касании nginx_harness.py / плановой path-unification
+            # C6 (DevPlan 119, закрыт RC 121): /etc/letsencrypt/live хардкод → letsencrypt_live()
+            # (shared/deploy_paths, 118 C7). Prod-дефолт не меняется (env LETSENCRYPT_LIVE не задан).
+            le_live = re.escape(str(letsencrypt_live()))
             # Replace production SSL paths with dev-certs for validation
             swapped = re.sub(
-                r"/etc/letsencrypt/live/[^/]*/fullchain\.pem",
+                le_live + r"/[^/]*/fullchain\.pem",
                 "/etc/nginx/dev-certs/fullchain.pem",
                 content,
             )
             swapped = re.sub(
-                r"/etc/letsencrypt/live/[^/]*/privkey\.pem",
+                le_live + r"/[^/]*/privkey\.pem",
                 "/etc/nginx/dev-certs/privkey.pem",
                 swapped,
             )

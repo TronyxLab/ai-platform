@@ -34,3 +34,11 @@ TRAP[DEBT] добавлен на оба файла. Миграция на `letse
 | Status | Rev |
 |--------|-----|
 | OPEN | При касании vhost_renderer.py / nginx_harness.py |
+
+## FIXED (RC-сессия 2026-08-03, долг 119 C6)
+
+Оба файла мигрированы на letsencrypt_live() (shared/deploy_paths):
+- `vhost_renderer.py::generate_vhost_body` — ssl_certificate/ssl_certificate_key через le_live
+- `nginx_harness.py` — regex swap через re.escape(str(letsencrypt_live()))
+Прод-дефолт не меняется (LETSENCRYPT_LIVE не задан); 48 unit-тестов PASS.
+Status: FIXED | Rev: 2026-08-03

@@ -47,6 +47,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from core.internal.shared import project_yaml as shared_project_yaml
+from core.internal.shared.deploy_paths import letsencrypt_live  # C7/C6: единый резолвер LE-live (118 C7)
 from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError, PlatformFatalError
 from core.internal.shared.node_yaml import NodeYaml, ProjectEntry
 
@@ -307,6 +308,10 @@ def generate_vhost_body(fqdn: str, project_name: str, cert_domain: str) -> str:
     """
     nginx_safe_name = project_name.replace("-", "_")
 
+    # C6 (DevPlan 119, закрыт RC 121): /etc/letsencrypt/live хардкод → letsencrypt_live()
+    # (shared/deploy_paths, 118 C7). Prod-дефолт не меняется (env LETSENCRYPT_LIVE не задан).
+    le_live = str(letsencrypt_live())
+
     # NOTE: In this f-string, $host, $request_uri, $proxy_add_x_forwarded_for, etc.
     # are nginx runtime variables — they are literal $ in the output (not Python-
     # substituted). Only {fqdn}, {project_name}, {cert_domain}, {nginx_safe_name}
@@ -335,15 +340,9 @@ server {{
 
     http2 on;
 
-    # 📝 TRAP[DEBT] · 2026-08-02 · LO · /etc/letsencrypt/live хардкод (DevPlan 119 C6)
-    # · Observed: литерал пути в ssl_certificate/ssl_certificate_key template
-    # · Suspected: единый резолвер letsencrypt_live() (shared/deploy_paths, 118 C7)
-    #   покрыл cert_orchestrator, но scaffold-генераторы vhost-конфигов остались на литералах
-    # · Impact: при смене корня letsencrypt (тест/контейнеризация) — тихий рассинхрон
-    # · When: 119 wave 2 audit (AUDIT-4 T7) — см. .ai/debt/letsencrypt-path-hardcode.md
-    # · Rev: при касании vhost_renderer.py / плановой path-unification
-    ssl_certificate /etc/letsencrypt/live/{cert_domain}/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/{cert_domain}/privkey.pem;
+    # 📝 TRAP[DEBT] закрыт RC 121 (C6): путь резолвится через shared letsencrypt_live()
+    ssl_certificate {le_live}/{cert_domain}/fullchain.pem;
+    ssl_certificate_key {le_live}/{cert_domain}/privkey.pem;
 
     # Docker DNS resolver with caching (30s TTL) — enables lazy DNS resolution
     # @rationale nginx resolves upstream hostnames at config load time by default.
