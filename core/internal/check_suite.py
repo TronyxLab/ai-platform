@@ -1100,6 +1100,20 @@ def run_gate(
         print(f"[IMP:7][gate] Step {i}/{len(steps)}: {spec.id}...", file=sys.stderr)
         # DevPlan 124 T2c: docker-чеки (spec.docker: true) — под процессным локом (F4)
         r = _run_cmd(cmd_str, spec.timeout, env, root, docker_lock=spec.docker)
+        # DevPlan 124 (решение пользователя 2026-08-03): pre-commit-шаг — retry-once при
+        # «files were modified by this hook». Механизм флейка: pre-commit сверяет git-статус
+        # до/после КАЖДОГО хука; параллельная сессия (`git add -A` + commit в том же worktree,
+        # прецедент 2026-08-03 — RC-сессия коммитила во время gate-прогонов) меняет индекс во
+        # время исполнения хука → ложный «files were modified» (2/3 gate-фейлов; standalone —
+        # 0 фейлов). Retry-once отличает транзиент (повтор проходит) от реальной модификации
+        # хуком (повтор тоже падает — gate честно RED).
+        if spec.id == "pre-commit" and not r.passed and "files were modified by this hook" in (r.stdout or ""):
+            print(
+                "[IMP:8][gate] pre-commit: 'files were modified' — транзиентная гонка с параллельной "
+                "git-операцией, retry-once (DevPlan 124)",
+                file=sys.stderr,
+            )
+            r = _run_cmd(cmd_str, spec.timeout, env, root, docker_lock=spec.docker)
         if spec.allow_no_tests and r.exit_code == 5:
             r.passed_no_tests = True
             print(f"[IMP:8][gate] {spec.id}: 0 тестов (rc=5) → PASS (allow_no_tests)", file=sys.stderr)
@@ -1115,8 +1129,7 @@ def run_gate(
                 # ·   не видны (conftest automatic_skip_gate логирует 16 скипов в stderr;
                 # ·   прежний выбор (r.stderr or r.stdout) показывал только хвост скипов).
                 # · Fix: приоритет stdout (pytest short summary с FAILED), stderr — fallback.
-                # TEMP-DIAG-2026-08-03: полный вывод для диагностики флейка pre-commit-шага
-                print(((r.stdout or r.stderr) or ""), file=sys.stderr)
+                print(((r.stdout or r.stderr) or "")[-3000:], file=sys.stderr)
         outcomes.append(r)
         if gate_failed and gate_mode == "fast":
             break  # fail-fast: первый блокирующий провал стопит fast-режим
