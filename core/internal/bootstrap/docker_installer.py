@@ -26,7 +26,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from core.internal.shared.timeouts import DOCKER_CMD_TIMEOUT
+from core.internal.shared.timeouts import DOCKER_APT_TIMEOUT, DOCKER_CMD_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -197,8 +197,8 @@ def run() -> bool:
     installed = {pkg for pkg in APT_DEPS if pkg in dpkg_all}
     missing_deps = select_missing_packages(APT_DEPS, installed)
     if missing_deps:
-        _sh("apt-get", "update", "-qq", dry=dry)
-        _sh("apt-get", "install", "-y", "-qq", *missing_deps, dry=dry)
+        _sh("apt-get", "update", "-qq", dry=dry, timeout=DOCKER_APT_TIMEOUT)
+        _sh("apt-get", "install", "-y", "-qq", *missing_deps, dry=dry, timeout=DOCKER_APT_TIMEOUT)
         logger.info("[IMP:8][install-docker][apt-deps] Installed: %s", " ".join(missing_deps))
     else:
         logger.info("[IMP:8][install-docker][apt-deps] All prerequisite packages already present")
@@ -219,13 +219,13 @@ def run() -> bool:
         codename = _read_os_release(dry=dry)
         repo_line = " ".join(build_repo_command(arch, codename, keyring, list_file))
         _sh("bash", "-c", f"echo '{repo_line}' > {list_file}", dry=dry)
-        _sh("apt-get", "update", "-qq", dry=dry)
+        _sh("apt-get", "update", "-qq", dry=dry, timeout=DOCKER_APT_TIMEOUT)
         logger.info("[IMP:8][install-docker][docker-repo] Docker apt repo configured for %s/%s", codename, arch)
     else:
         logger.info("[IMP:8][install-docker][docker-repo] Docker apt repo already configured")
 
     # ── install docker packages ──
-    _sh("apt-get", "install", "-y", "-qq", *DOCKER_PACKAGES, dry=dry)
+    _sh("apt-get", "install", "-y", "-qq", *DOCKER_PACKAGES, dry=dry, timeout=DOCKER_APT_TIMEOUT)
     logger.info(
         "[IMP:8][install-docker][docker-install] Docker installed: %s", _sh("docker", "--version", dry=dry).strip()
     )
@@ -261,14 +261,19 @@ def run() -> bool:
 ## @purpose  Выполнить команду; DOCKER_INSTALLER_DRY_RUN=1 → логировать и вернуть "".
 ## @io       ⇥ *args: str, dry: bool → ⎋ str (stdout)
 ## @complexity O(1)
-def _sh(*args: str, dry: bool = False) -> str:
-    """Run a subprocess command (dry-run → log and return '')."""
+def _sh(*args: str, dry: bool = False, timeout: int = DOCKER_CMD_TIMEOUT) -> str:
+    """Run a subprocess command (dry-run → log and return '').
+
+    ## @purpose — Команды docker-домена: DOCKER_CMD_TIMEOUT (10s). apt-get update/install
+    ##            docker-пакетов передают DOCKER_APT_TIMEOUT (300s) — RC 121 e2e fix:
+    ##            скачивание docker-ce на fresh VPS занимает >10s.
+    """
     cmd = list(args)
     if dry:
         logger.info("[IMP:7][install-docker][dry] %s", " ".join(cmd))
         return ""
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=DOCKER_CMD_TIMEOUT)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired) as exc:
         logger.warning("[IMP:7][install-docker][sh] command failed: %s (%s)", " ".join(cmd), exc)
         return ""

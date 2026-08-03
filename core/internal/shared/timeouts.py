@@ -59,6 +59,10 @@ HEALTHCHECK_POLL_MAX_RETRIES = 20
 # Внутренние подвызовы docker ps/inspect/tag в shared-функциях (healthcheck_poll, docker_compose_*)
 DOCKER_CMD_TIMEOUT = 10
 
+# apt-get install/update docker-пакетов (docker_installer, RC 121 e2e fix):
+#   скачивание docker-ce на fresh VPS занимает >10s — DOCKER_CMD_TIMEOUT молча убивал install
+DOCKER_APT_TIMEOUT = 300
+
 # visudo -c -f <file> — валидация sudoers (sudoers_generator, отдельный от docker домен;
 #   visudo на слабых VPS может занимать >DOCKER_CMD_TIMEOUT)
 SUDOERS_CMD_TIMEOUT = 15
