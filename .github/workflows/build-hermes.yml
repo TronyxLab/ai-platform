@@ -83,7 +83,7 @@ jobs:
       # Tags (DevPlan 116 B3 T7, D1): :latest (floating base marker) + :sha-<full SHA> (immutable).
       # Context orgs pull :latest anonymously (package is public — see MANUAL step in MODULE_CONTRACT).
       - name: Build and push L1 — hermes-agent-base
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: core/modules/hermes-agent/build
           file: core/modules/hermes-agent/build/Dockerfile
