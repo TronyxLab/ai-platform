@@ -112,15 +112,13 @@ jobs:
       # ─── Setup SSH key (inline — setup-ssh action недоступен в caller'е) ──
       - name: Setup SSH key
         id: setup-ssh
-        env:
-          CI_DEPLOY_KEY: ${{ secrets.CI_DEPLOY_KEY }}
         run: |
           set -euo pipefail
           SSH_KEY_PATH="$RUNNER_TEMP/deploy_key"
-          if printf '%s' "${CI_DEPLOY_KEY}" | base64 -d > "${SSH_KEY_PATH}" 2>/dev/null && head -c 5 "${SSH_KEY_PATH}" | grep -q 'BEGIN'; then
+          if printf '%s' "${{ secrets.CI_DEPLOY_KEY }}" | base64 -d > "${SSH_KEY_PATH}" 2>/dev/null && head -c 5 "${SSH_KEY_PATH}" | grep -q 'BEGIN'; then
             echo "[IMP:8][setup-ssh] key decoded from base64"
           else
-            printf '%s' "${CI_DEPLOY_KEY}" > "${SSH_KEY_PATH}"
+            printf '%s' "${{ secrets.CI_DEPLOY_KEY }}" > "${SSH_KEY_PATH}"
             echo "[IMP:8][setup-ssh] key used as plain"
           fi
           chmod 600 "${SSH_KEY_PATH}"
