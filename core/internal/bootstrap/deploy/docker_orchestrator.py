@@ -265,7 +265,9 @@ def _build_compose_args(
         logger.info("[IMP:8][_build_compose_args][root-compose] Adding root compose ONLY: %s", root_compose)
     else:
         args.extend(["-f", str(compose_file)])
-        logger.info("[IMP:8][_build_compose_args][module-compose] Root compose absent — module file only: %s", compose_file)
+        logger.info(
+            "[IMP:8][_build_compose_args][module-compose] Root compose absent — module file only: %s", compose_file
+        )
 
     # Secrets env file
     env_file = secrets_env_file or "/run/platform/secrets.env"
