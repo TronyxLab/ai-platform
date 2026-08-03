@@ -921,8 +921,8 @@ def test_t08_disk_pressure_92(requires_node: str, node_ssh: NodeSSHClient, caplo
     spool_fill = node_ssh.ssh_exec(
         "docker exec backup-cron sh -c 'dd if=/dev/zero of=/var/lib/platform/backup-spool/chaos-fill "
         "bs=1M count=128 status=none; while true; do "
-        "U=\$(df / | awk \"NR==2 {print \\\$5}\" | tr -d \"%\"); "
-        "if [ \"\$U\" -ge 99 ]; then break; fi; "
+        'U=\$(df / | awk "NR==2 {print \\\$5}" | tr -d "%"); '
+        'if [ "\$U" -ge 99 ]; then break; fi; '
         "dd if=/dev/zero of=/var/lib/platform/backup-spool/chaos-fill bs=1M count=128 "
         "conv=notrunc oflag=append status=none 2>/dev/null; done; echo SPOOL_FILLED used=\$U'",
         timeout=600,
@@ -946,7 +946,7 @@ def test_t08_disk_pressure_92(requires_node: str, node_ssh: NodeSSHClient, caplo
     for _ in range(30):
         ratio = node_ssh.ssh_read(
             'curl -s -m 10 "http://127.0.0.1:9090/api/v1/query" --data-urlencode '
-            '"query=node_filesystem_avail_bytes{mountpoint=\'/\'} / node_filesystem_size_bytes{mountpoint=\'/\'}"',
+            "\"query=node_filesystem_avail_bytes{mountpoint='/'} / node_filesystem_size_bytes{mountpoint='/'}\"",
             timeout=30,
         )
         try:
@@ -985,7 +985,7 @@ def test_t08_disk_pressure_92(requires_node: str, node_ssh: NodeSSHClient, caplo
     for _ in range(30):
         ratio = node_ssh.ssh_read(
             'curl -s -m 10 "http://127.0.0.1:9090/api/v1/query" --data-urlencode '
-            '"query=node_filesystem_avail_bytes{mountpoint=\'/\'} / node_filesystem_size_bytes{mountpoint=\'/\'}"',
+            "\"query=node_filesystem_avail_bytes{mountpoint='/'} / node_filesystem_size_bytes{mountpoint='/'}\"",
             timeout=30,
         )
         try:
