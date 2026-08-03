@@ -114,7 +114,12 @@ jobs:
         run: |
           set -euo pipefail
           SSH_KEY_PATH="$RUNNER_TEMP/deploy_key"
-          if printf '%s' "${{ secrets.CI_DEPLOY_KEY }}" | base64 -d > "${SSH_KEY_PATH}" 2>/dev/null && head -c 5 "${SSH_KEY_PATH}" | grep -q 'BEGIN'; then
+          # ⚠️ TRAP[BUG] 2026-08-03 · head -c 5|grep BEGIN ловил "-----" (не BEGIN)
+          # · Symptom: «Load key ... error in libcrypto» — правильный base64-ключ
+          #   перезаписывался base64-строкой: первые 5 символов декода = "-----",
+          #   grep 'BEGIN' ложно-отрицателен → else-ветка перезаписывала файл.
+          # · Fix: grep 'PRIVATE KEY' по всему файлу (stable marker).
+          if printf '%s' "${{ secrets.CI_DEPLOY_KEY }}" | base64 -d > "${SSH_KEY_PATH}" 2>/dev/null && grep -q 'PRIVATE KEY' "${SSH_KEY_PATH}"; then
             echo "[IMP:8][setup-ssh] key decoded from base64"
           else
             printf '%s' "${{ secrets.CI_DEPLOY_KEY }}" > "${SSH_KEY_PATH}"
