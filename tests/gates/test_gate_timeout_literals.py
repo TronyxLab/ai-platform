@@ -104,7 +104,9 @@ _DOMAIN_DIR_PREFIXES = ("deploy/", "bootstrap/deploy/", "bootstrap/converge/", "
 # ROOT-relative rel не матчил ни один файл, та же латентная ошибка, что и в _is_domain_file).
 # 2026-08-03 (RC 121, долг 119 C2): watchdog-файлы (agent_watchdog/docker_ops/circuit_breaker)
 # УДАЛЕНЫ вместе с подсистемой — 3 записи убраны.
-_MODULE_DOMAIN_FILES: set[str] = set()  # watchdog удалён (RC 121); будущие модульные docker/ssh-файлы регистрируются здесь
+_MODULE_DOMAIN_FILES: set[str] = (
+    set()
+)  # watchdog удалён (RC 121); будущие модульные docker/ssh-файлы регистрируются здесь
 
 # Workflow-скан (DevPlan 117 D68): timeout=\d+ в run-шагах workflows → RED.
 # Allowlist — только не-subprocess timeout (actions/cache, docker actions).
