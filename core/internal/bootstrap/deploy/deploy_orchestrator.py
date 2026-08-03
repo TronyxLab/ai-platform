@@ -302,11 +302,16 @@ def _parse_modules(node_yaml: str, modules_dir: str, modules_filter: str) -> Mod
 
     all_names: list[str] = []
     enabled_names: list[str] = []
-    for name, enabled, _overlay in raw:
+    raw_overlays: dict[str, str] = {}
+    for name, enabled, overlay in raw:
         if name not in all_names:
             all_names.append(name)
         if enabled == "true" and name not in enabled_names:
             enabled_names.append(name)
+        # config_overlay из node.yaml (fallback для NGINX_OVERLAY_DIR — RC 121: прод-nginx не
+        # монтировал node-configs оверлеи, когда контекст-оверлей отсутствует)
+        if overlay:
+            raw_overlays[name] = overlay
 
     # ── modules_filter: comma/space-separated intersect with enabled set ──
     # 🧐 TRAP[DECISION] · 2026-07-31 · — · --modules filter now APPLIED in orchestrator
@@ -319,7 +324,7 @@ def _parse_modules(node_yaml: str, modules_dir: str, modules_filter: str) -> Mod
     if filter_set:
         enabled_names = [n for n in enabled_names if n in filter_set]
 
-    overlays = _resolve_overlay_dirs(node_yaml, enabled_names)
+    overlays = _resolve_overlay_dirs(node_yaml, enabled_names, raw_overlays)
     logger.info("[IMP:9][_parse_modules][result] enabled=%d all=%d", len(enabled_names), len(all_names))
     return ModuleLists(all_names=all_names, enabled_names=enabled_names, overlays=overlays)
 
@@ -335,8 +340,14 @@ def _parse_modules(node_yaml: str, modules_dir: str, modules_filter: str) -> Mod
 ##   - No context in node.yaml → all overlays empty (legacy grep "^context:" semantics)
 ##   - Overlay only set when the directory actually exists on disk
 ##   - NodeYaml.get_context() returns "" (no raise) when context absent
-def _resolve_overlay_dirs(node_yaml: str, enabled_names: list[str]) -> dict[str, str]:
-    """Resolve context overlay dirs from node.yaml context + filesystem existence."""
+def _resolve_overlay_dirs(node_yaml: str, enabled_names: list[str], config_overlays: dict[str, str] | None = None) -> dict[str, str]:
+    """Resolve context overlay dirs from node.yaml context + filesystem existence.
+
+    ⚠️ TRAP[BUG] · 2026-08-03 · P1 · config_overlay fallback (RC 121 прод)
+    · Symptom: прод-nginx монтировал default ./overlays (core/modules/nginx/overlays) — NGINX_OVERLAY_DIR
+    ·   не устанавливался: контекст пуст (нет contexts[]), config_overlay из node.yaml игнорировался.
+    · Fix: если контекст-оверлей не найден — используется config_overlay из node.yaml (абсолютный путь).
+    """
     ctx = ""
     try:
         ctx = NodeYaml(node_yaml).get_context()
@@ -350,6 +361,9 @@ def _resolve_overlay_dirs(node_yaml: str, enabled_names: list[str]) -> dict[str,
             candidate = f"/opt/{ctx}/platform/modules/{name}"
             if os.path.isdir(candidate):
                 overlay = candidate
+        if not overlay and config_overlays and config_overlays.get(name):
+            overlay = config_overlays[name]
+            logger.info("[IMP:8][_resolve_overlay_dirs][config_overlay] Using node.yaml config_overlay for %s: %s", name, overlay)
         overlays[name] = overlay
     return overlays
 
