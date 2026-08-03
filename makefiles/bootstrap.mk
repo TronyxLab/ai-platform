@@ -5,7 +5,7 @@
 ## @scope    Included from root Makefile; delegates to core/entrypoints/
 ## @invariants
 ##   - bootstrap-node must be idempotent (AGENTS.md Invariant 6)
-##   - converge preserves exit-code semantics (0=clean, 1=warnings, 2=errors)
+##   - converge: warnings (rc=1) не роняют make (exit 0), errors (rc=2) → exit 2 (make не может вернуть 1)
 ##   - deploy-context is idempotent (skips healthy projects)
 ## @rationale Makefile include-split W4-E4: bootstrap targets isolated from CI/scaffold.
 ##            DevPlan 047: added deploy-context target for standalone context project deploy.
@@ -72,7 +72,13 @@ converge:
 	@echo "[IMP:7][make][converge] Running node reconciliation..."
 	@PLATFORM_ROOT="$(_platform_root)" bash $(_platform_root)/core/entrypoints/converge.sh --node $(NODE) \
 		$(if $(DRY_RUN),--dry-run,) \
-		$(if $(filter 1,$(RECONCILE)),--reconcile)
+		$(if $(filter 1,$(RECONCILE)),--reconcile) \
+		|| _conv_rc=$$?; \
+	if [ "$${_conv_rc:-0}" -eq 1 ]; then \
+		echo "[IMP:8][make][converge] Warnings (rc=1) — non-fatal drift, exit 0" >&2; \
+		exit 0; \
+	fi; \
+	exit "$${_conv_rc:-0}"
 	@echo "[IMP:9][make][converge] Node reconciliation complete"
 
 ## render-vhosts: Regenerate Nginx vhost configs from node.yaml

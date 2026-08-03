@@ -204,7 +204,12 @@ class RemoteExecutor:
     ##      output: exit code 0/1/2/124
     ## @complexity  O(1) — resolve + ssh exec
     ## @invariants  НЕ вызывает sync_core_to_vps (в отличие от execute_update) — converge не доставляет core
-    ##              VPS self-SSH detect отсутствует (как в shell execute_remote_converge)
+    ## ⚠️ TRAP[BUG] · 2026-08-03 · P1 · VPS self-SSH detect добавлен (RC 121 e2e)
+    ## · Symptom: make converge на dev → ДВОЙНОЙ прогон reconcile (ssh на себя: локальный external →
+    ##   ssh → remote external → self-ssh → remote external → local fallback) — R2 мутировал дважды.
+    ## · Root: execute_converge не имел VPS-self-detect (в отличие от execute_update) — на VPS
+    ##   remote external converge.sh снова ssh'ил на себя.
+    ## · Fix: тот же VPS_NODE_LIFECYCLE check → return 2 (local fallback на VPS).
     def execute_converge(self, node_name: str, remote_cmd: str, passthrough_args: str = "") -> int:
         """Execute remote converge (resolve → prepare opts → ssh exec, no sync-core)."""
         try:
@@ -218,6 +223,10 @@ class RemoteExecutor:
             logger.info("[IMP:8][execute_converge][input] passthrough args: %s", passthrough_args)
         if not host:
             logger.info("[IMP:9][execute_converge][resolve] No SSH host — local fallback")
+            return 2
+        # ⚠️ TRAP[BUG] 2026-08-03 (RC 121): self-SSH loop — мы уже на VPS → local exec
+        if os.path.isfile(VPS_NODE_LIFECYCLE):
+            logger.info("[IMP:9][execute_converge][vps-detect] Local VPS detected — skipping SSH proxy")
             return 2
         logger.info("[IMP:9][execute_converge][resolve] SSH host: %s — REMOTE converge", host)
         _prepare_ssh_opts(host, "update")

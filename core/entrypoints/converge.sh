@@ -94,6 +94,10 @@ main() {
         echo "[IMP:8][converge][entrypoint] Delegating to ${internal}" >&2
         exec bash "${internal}" "${args[@]}"
     fi
+    # ⚠️ TRAP[BUG] · 2026-08-03 · P1 · неявный rc=1 от [[ ]] вместо проброса remote_rc (RC 121 e2e)
+    # · Symptom: remote converge с warnings (rc=1) — entrypoint возвращал rc=1 (make → 2), а при
+    #   remote_rc=0 — возвращал 1 (ложный fail). Теперь: явный проброс 0/1/2.
+    exit $remote_rc
 }
 # endregion FUNC_main
 
