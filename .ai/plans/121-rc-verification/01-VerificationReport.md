@@ -29,7 +29,7 @@
 ## SHA-якорь
 
 - **HEAD (верифицируемый):** `cd7392c` (122) + 18 RC-коммитов → `570cfb3` на момент написания
-- **origin/main после push:** `570cfb3` (86 коммитов: c484c17..570cfb3)
+- **origin/main после push:** `5f177ee` (96 коммитов: c484c17..5f177ee)
 - **e2e-нода (test-e2e):** state сброшен, bootstrap + 10/10 e2e PASSED на `828fd19`
 - **Прод-нода (tronyx-vps):** bootstrap на `1f40c5a` + финальный прогон (см. Фаза 4)
 
@@ -58,7 +58,7 @@
 | Проверка | Результат |
 |----------|-----------|
 | make check (после фиксов) | **GREEN 13/13** (3 полных прогона: 2 RED → фиксы → GREEN) |
-| make gate MODE=fast | **ALL PASS 10/10** (после fix-цикла: ruff-format, manifests коммит, LOC 150) |
+| make gate MODE=fast | **ALL PASS 10/10** (финальный прогон после всех RC-фиксов: ruff-format ×2, LOC 150, contexts[] миграция, артефакт-тест tmp) |
 | 122-audit-fixes T1-T7 | Верифицированы gate'ом (коммит cd7392c уже содержал реализацию; 4 новых parity-гейта зелёные) |
 | 119 G/H | Верифицированы; H (node_yaml пакет) — e2e-покрытием |
 
@@ -211,12 +211,12 @@ make node-update NODE=tronyx-vps AGE_SECRET_KEY_FILE=~/.ssh/age-key-personal.txt
 
 **STABLE** (с оговорками)
 
-- Локальный стек: **работает полностью** (21/21 + 3 проекта, HTTPS 200, HTTP 301, логи в nginx/Loki/status-page)
+- Локальный стек: **работает полностью** (21/21 + 3 проекта, HTTPS 200, HTTP 301, логи в nginx/Loki/status-page; NGINX_OVERLAY_DIR → .local/overlays/nginx)
 - E2E: **10/10 PASSED** (bootstrap/update/converge/deploy/healthcheck/backup/restore/rebootstrap/failure-сценарии)
-- Прод: bootstrap complete, 18/21 healthy на момент завершения прогона, tor установлен; **сертификаты ACME — в финальном прогоне** (P-14/P-17/сертификаты требуют завершающей проверки)
-- CI платформы: **не зелёный** (P-13 L1-push 403, P-14 manifests-гейт в CI) — блокирует core-deploy/проекты
+- Прод: bootstrap complete + node-update; nginx healthy с правильным overlay (/opt/node-configs/tronyx-vps/overlays/nginx); **сертификаты ACME выпущены** (tronyx.ru, sexydancerostov.ru, botanika.tronyx.ru); vhost'ы загружены (502 = upstream'ы проектов не развёрнуты — ждут CI-доставку, P-15); tor установлен; litellm/langfuse health:starting — требуют дождаться (P-17)
+- CI платформы: **не зелёный** (P-13 L1-push 403, P-14 manifests-гейт в CI) — блокирует core-deploy/проекты; последний push 5f177ee — новый ран platform-gate-fast in_progress
 - Тест-хелс: 3200+ static_audit PASS, 444+ gates PASS, 10/10 e2e
 
-**Test Health Score: 0.96** (оценка: 2 невоспроизводимых CI-гейта из 60+; локальный прогон зелёный)
+**Test Health Score: 0.96** (финальный gate 10/10; CI-гейты P-13/P-14 вне контроля локального прогона) (оценка: 2 невоспроизводимых CI-гейта из 60+; локальный прогон зелёный)
 
 **Вердикт:** платформа функционально готова (локально и на ноде); канонический CI/CD-канал требует закрытия P-13/P-14 (операторские/окруженческие, не код); доставка проектов (P-15) — следующая сессия.
