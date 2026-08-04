@@ -63,8 +63,19 @@ install_acme() {
     # Proxy vars not needed here: unset_platform_proxy() in bootstrap.sh ran before any
     # module install step, so HTTP_PROXY/HTTPS_PROXY are already clean on the host level.
     if ! git clone --depth 1 https://github.com/acmesh-official/acme.sh.git "$acme_home" 2>&1; then
-        log_step "acme" "FAIL" "Failed to clone acme.sh repository"
-        return 1
+        # Idempotent fallback: dir exists non-empty (leftover *_ecc cert stores from
+        # previous install/partial clone) — clone to temp and merge WITHOUT overwriting,
+        # preserving existing cert data. Pre-existing bug: bare clone fails on re-run.
+        local acme_tmp="${acme_home}.clone-tmp"
+        rm -rf "$acme_tmp"
+        if git clone --depth 1 https://github.com/acmesh-official/acme.sh.git "$acme_tmp" 2>&1; then
+            cp -rn "$acme_tmp/." "$acme_home/" 2>/dev/null || true
+            rm -rf "$acme_tmp"
+            log_step "acme" "WARN" "Existing ${acme_home} merged with fresh clone (idempotent re-run)"
+        else
+            log_step "acme" "FAIL" "Failed to clone acme.sh repository"
+            return 1
+        fi
     fi
 
     # Clone dnsapi extensions for Russian registrars (webnames, reg.ru, etc.)
