@@ -44,6 +44,9 @@ import os
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
+
+import yaml  # type: ignore[import-untyped]
 
 from core.internal.shared import audit_logger
 from core.internal.shared.exceptions import ConfigValidationError
@@ -57,6 +60,39 @@ logger = logging.getLogger(__name__)
 # GitHub SSH auth greeting markers — identical to the legacy shell grep
 # `grep -q "successfully authenticated\|Hi.*"` over the merged 2>&1 output.
 _SSH_AUTH_MARKERS = ("successfully authenticated", "Hi ")
+
+
+# region FUNC_resolve_org
+## @purpose  Resolve GitHub org name for a context — overlay context.yaml#org is the SoT
+##           (correct case: TronyxLab), context name is the fallback (historical behavior).
+## @io       ⇥ context: str → ⎋ str — GitHub org name
+## @rationale GitHub SSH paths are CASE-SENSITIVE: push to tronyx-lab/ai-platform fails
+##            ("Repository not found"), TronyxLab/ai-platform works. context.yaml#org
+##            (create-context канон) несёт точное имя org.
+def _resolve_org(context: str) -> str:
+    """Resolve GitHub org for a context: overlay context.yaml org field, else context name."""
+    candidates: list[Path] = []
+    for base in (os.environ.get("PROJECTS_ROOT", ""), str(Path.home() / "projects")):
+        if not base:
+            continue
+        candidates.append(Path(base) / context / "platform" / "context.yaml")
+        candidates.append(Path(base) / context / "context.yaml")
+    for ctx_yaml in candidates:
+        if not ctx_yaml.is_file():
+            continue
+        try:
+            data = yaml.safe_load(ctx_yaml.read_text(encoding="utf-8"))
+            org = (data or {}).get("org")
+            if org:
+                logger.info("[IMP:8][resolve_org] org=%s from %s", org, ctx_yaml)
+                return str(org)
+        except Exception as e:  # noqa: EXC — best-effort, fallback to context name
+            logger.warning("[IMP:7][resolve_org] Failed to parse %s: %s — using context name", ctx_yaml, e)
+    logger.info("[IMP:7][resolve_org] No context.yaml org found — using context name: %s", context)
+    return context
+
+
+# endregion FUNC_resolve_org
 
 
 # region FUNC_check_ssh_available
@@ -274,17 +310,20 @@ def promote_context(context: str, token: str | None) -> int:
         tag, "START", f"starting context promote to {context}/ai-platform", log_file=log_file
     )
 
+    # GitHub SSH case-sensitive: org из overlay context.yaml (TronyxLab), не имя контекста.
+    org = _resolve_org(context)
+
     if check_ssh_available():
-        logger.info("[IMP:9][promote_context] Promoting platform to context org: %s", context)
+        logger.info("[IMP:9][promote_context] Promoting platform to context org: %s", org)
         try:
-            mirror_head = promote_via_ssh(context)
+            mirror_head = promote_via_ssh(org)
         except (subprocess.CalledProcessError, OSError) as exc:
-            logger.error("[IMP:10][promote_context] FAILED: SSH push to %s/ai-platform failed: %s", context, exc)
+            logger.error("[IMP:10][promote_context] FAILED: SSH push to %s/ai-platform failed: %s", org, exc)
             logger.error(
                 "[IMP:10][promote_context] Check that target org %s/ai-platform exists and operator has push access",
-                context,
+                org,
             )
-            logger.error("[IMP:10][promote_context] FATAL: create %s/ai-platform first", context)
+            logger.error("[IMP:10][promote_context] FATAL: create %s/ai-platform first", org)
             audit_logger.write_audit_entry(tag, "FAIL", f"SSH push failed ({exc})", log_file=log_file)
             return 1
     else:
@@ -300,10 +339,10 @@ def promote_context(context: str, token: str | None) -> int:
             )
             return 1
         try:
-            mirror_head = promote_via_https(context, token)
+            mirror_head = promote_via_https(org, token)
         except (subprocess.CalledProcessError, OSError) as exc:
-            logger.error("[IMP:10][promote_context] FAILED: HTTPS push to %s/ai-platform failed: %s", context, exc)
-            logger.error("[IMP:10][promote_context] FATAL: create %s/ai-platform first", context)
+            logger.error("[IMP:10][promote_context] FAILED: HTTPS push to %s/ai-platform failed: %s", org, exc)
+            logger.error("[IMP:10][promote_context] FATAL: create %s/ai-platform first", org)
             audit_logger.write_audit_entry(tag, "FAIL", f"HTTPS push failed ({exc})", log_file=log_file)
             return 1
 
@@ -319,8 +358,8 @@ def promote_context(context: str, token: str | None) -> int:
         audit_logger.write_audit_entry(tag, "FAIL", f"git rev-parse HEAD failed ({exc})", log_file=log_file)
         return 1
 
-    if verify_mirror(context, mirror_head, source_head):
-        logger.info("[IMP:9][promote_context] SUCCESS: platform promoted to %s/ai-platform", context)
+    if verify_mirror(org, mirror_head, source_head):
+        logger.info("[IMP:9][promote_context] SUCCESS: platform promoted to %s/ai-platform", org)
         audit_logger.write_audit_entry(tag, "DONE", "completed successfully (rc=0)", log_file=log_file)
         return 0
 
