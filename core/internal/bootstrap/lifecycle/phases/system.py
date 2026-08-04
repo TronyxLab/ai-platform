@@ -344,7 +344,8 @@ def phase_platform_setup(core_dir: str, node_name: str, node_yaml: str) -> bool:
     # platform_setup»), но φ3 provision НЕ выполнял (латентный баг с wave4 a461573):
     # свежий bootstrap падал на external networks (observability-net/backup-net) в φ8.
     # Канон: provision-environment.sh --scope networks/volumes (идемпотентен, non-fatal).
-    prov_script = os.path.join(bootstrap_dir, "provision-environment.sh")
+    # Скрипт живёт в core/internal/provision-environment.sh (PATHS_INTERNAL_DIR).
+    prov_script = os.path.join(core_dir, "internal", "provision-environment.sh")
     if os.path.isfile(prov_script):
         try:
             for scope in ("networks", "volumes"):

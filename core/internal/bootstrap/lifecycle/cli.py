@@ -34,6 +34,7 @@ from core.internal.bootstrap.lifecycle.state_machine import (
     PhaseDependencyError,
     PhasePreconditionError,
     StateMachine,
+    StepState,
     phase_is_done,
 )
 
@@ -488,7 +489,10 @@ def _mark_phase_success(sm: StateMachine, phase: str, current_index: int) -> Non
     elif entry is not None:
         entry.status = "done"
     else:
-        sm.state.steps[phase] = {"name": phase, "status": "done", "done": True}
+        # StepState, НЕ raw dict: BootstrapState.to_dict() вызывает v.to_dict()
+        # на каждом элементе steps — raw-dict крэшит save (латентный баг,
+        # воспроизводится при отсутствующей фазе на resume).
+        sm.state.steps[phase] = StepState(name=phase, status="done", done=True)
     sm.state.current_step = current_index
     sm.save()
     logger.info("[IMP:9][state_mark] Phase %s marked done (current_step=%d)", phase, current_index)
@@ -519,12 +523,10 @@ def _mark_phase_with_warnings(sm: StateMachine, phase: str) -> None:
         entry.status = "done_with_warnings"
         entry.warnings.append(warn_msg)
     else:
-        sm.state.steps[phase] = {
-            "name": phase,
-            "status": "done_with_warnings",
-            "done": False,
-            "warnings": [warn_msg],
-        }
+        # StepState, НЕ raw dict (см. _mark_phase_success — to_dict() контракт).
+        sm.state.steps[phase] = StepState(
+            name=phase, status="done_with_warnings", done=False, warnings=[warn_msg]
+        )
     sm.state.warnings.append(warn_msg)
     sm.save()
     logger.warning("[IMP:7][state_mark] Phase %s marked done_with_warnings (re-run required)", phase)
