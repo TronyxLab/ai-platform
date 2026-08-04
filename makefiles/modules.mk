@@ -15,9 +15,14 @@
 ## up-safe: Start platform stack with preflight secret validation
 ##   Delegates to core/entrypoints/compose-wrapper.sh which runs compose_preflight.py
 ##   before docker compose up — blocks if required secrets are missing (DevPlan 049)
+##   MODULES empty → COMPOSE_PROFILES passthrough (compose reads .env), like `make up`
 up-safe:
 	@echo "[IMP:7][make][up-safe] Running preflight and starting stack..."
-	@COMPOSE_PROFILES="$(MODULES)" core/entrypoints/compose-wrapper.sh up -d
+	@if [ -n "$(MODULES)" ]; then \
+		COMPOSE_PROFILES="$(MODULES)" core/entrypoints/compose-wrapper.sh up -d; \
+	else \
+		core/entrypoints/compose-wrapper.sh up -d; \
+	fi
 
 ## compose-safe-up: Deprecated alias for up-safe (backward compatibility)
 compose-safe-up: up-safe

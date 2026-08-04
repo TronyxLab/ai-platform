@@ -19,6 +19,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PREFLIGHT_PY="${SCRIPT_DIR}/../internal/bootstrap/deploy/compose_preflight.py"
 
+# Canonical PYTHONPATH export (pattern: context-promote.sh) — compose_preflight.py
+# imports core.internal.* (deploy_paths/secrets_env_parser), standalone run needs
+# repo root on sys.path. Pre-existing bug: missing since 119da0f (core.* imports).
+export PYTHONPATH="${SCRIPT_DIR}/../..:${PYTHONPATH:-}"
+
 # Export debug flag if set
 if [ -n "${COMPOSE_PREFLIGHT_DEBUG:-}" ]; then
     export COMPOSE_PREFLIGHT_DEBUG
