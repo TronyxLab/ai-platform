@@ -358,10 +358,10 @@ def phase_platform_setup(core_dir: str, node_name: str, node_yaml: str) -> bool:
             logger.info("[IMP:9][phase:platform_setup] Environment provisioned (networks+volumes)")
         except Exception as e:  # noqa: EXC — non-fatal: provision is best-effort
             logger.warning("[IMP:7][phase:platform_setup] Environment provision failed (non-fatal): %s", e)
-            non_fatal_issues = True
     else:
+        # Отсутствие скрипта (тест-окружения/tmp CORE_DIR) — WARN, НЕ non_fatal:
+        # provision best-effort, фаза не должна уходить в done_with_warnings из-за него.
         logger.warning("[IMP:7][phase:platform_setup] provision-environment.sh not found — skipping")
-        non_fatal_issues = True
 
     # ── 2. Setup-node (sudoers generation) ──
     setup_script = os.path.join(core_dir, "internal", "bootstrap", "setup-node.sh")
