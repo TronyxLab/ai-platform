@@ -1,6 +1,6 @@
 # @purpose  Docker Compose test override for backup-cron — Docker-managed volumes, test container name, faster healthcheck
-# GREP_SUMMARY: docker-compose test-override backup-cron managed-volume test-container cross-platform
-# STRUCTURE: ▶ base.yml + test.yml → merge → ⚡ backup-cron-test override → Docker-managed volumes → ┘
+# GREP_SUMMARY: docker-compose test-override backup-cron managed-volume wal-archive-test test-container cross-platform
+# STRUCTURE: ▶ base.yml + test.yml → merge → ⚡ backup-cron-test override → Docker-managed volumes (incl wal-archive-test) → ┘
 # region MODULE_CONTRACT
 ## @purpose  Test override for backup-cron: Docker-managed volumes (cross-platform), test container name,
 ##           faster healthcheck intervals for CI
@@ -37,6 +37,12 @@ services:
     volumes:
       - backup-spool-test:/var/lib/platform/backup-spool
       - backup-logs-test:/var/log/platform/backup
+      # DevPlan 132 W2 (канон volume-rename U-62): НЕ переопределяем wal-archive in-place —
+      # объявляем НОВЫЙ volume wal-archive-test и перепривязываем сервис
+      - wal-archive-test:/var/lib/platform/wal-archive
+    # ── Test env override: WAL-архив в test-volume (DevPlan 132 W2) ──
+    environment:
+      WAL_ARCHIVE_DIR: "/var/lib/platform/wal-archive"
     # ── Faster healthcheck for CI ──
     healthcheck:
       test: ["CMD-SHELL", "pgrep cron > /dev/null 2>&1"]
@@ -50,6 +56,8 @@ volumes:
   backup-spool-test:
     driver: local
   backup-logs-test:
+    driver: local
+  wal-archive-test:
     driver: local
 
 networks:

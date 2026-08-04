@@ -1,6 +1,6 @@
 # @purpose  Base compose definition for logging module — Loki + Promtail
-# GREP_SUMMARY: logging docker-compose loki promtail observability-net profiles x-logging
-# STRUCTURE: ▶ loki:3.7.3 [profiles:logging] → observability-net → ┬─ ▶ promtail:3.6.11 [profiles:logging] → loki(dep) → ┐
+# GREP_SUMMARY: logging docker-compose loki promtail observability-net profiles x-logging journald-mounts
+# STRUCTURE: ▶ loki:3.7.3 [profiles:logging] → observability-net → ┬─ ▶ promtail:3.6.11 [profiles:logging] → loki(dep) + journald mounts → ┐
 # region MODULE_CONTRACT
 ## @purpose  Base compose definition for logging Docker module
 ## @scope    Merged with root docker-compose.yml via include:
@@ -8,6 +8,9 @@
 ##   - profiles: [logging] — pluggability: only included when COMPOSE_PROFILES contains logging
 ##   - Loki: scratch image (no shell/wget/curl), liveness via /usr/bin/loki -version
 ##   - Promtail: depends on loki (same module), Docker socket only (nginx logs via stdout → docker_sd match stage)
+##   - Promtail journal-скрейп (DevPlan 132 W3, 126 D-1): host-литералы /var/log/journal +
+##     /etc/machine-id (системные mount'ы — precedent /var/run/docker.sock; compose-include
+##     контракт разрешает host-литералы как системные)
 ##   - Networks declared as external: true — pre-created by deploy-modules.sh
 ##   - All TRAP comments from root compose preserved
 ## @rationale Profiles enable selective startup via `make up MODULES=logging`
@@ -108,6 +111,11 @@ services:
     volumes:
       - ./config/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      # DevPlan 132 W3 (126 D-1): journal-скрейп хоста — /var/log/journal (journald logs,
+      # Storage=persistent) + /etc/machine-id (journald requires machine-id для корректного
+      # чтения journal). Host-литералы допустимы как системные (precedent: docker.sock).
+      - /var/log/journal:/var/log/journal:ro
+      - /etc/machine-id:/etc/machine-id:ro
       # /var/log/nginx mount REMOVED (2026-07-25) — nginx logs captured via docker_sd stdout, not file scrape
 
     networks:

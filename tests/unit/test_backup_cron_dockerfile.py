@@ -47,6 +47,21 @@ _BACKUP_POSTGRES_PY = _SCRIPTS_DIR / "backup_postgres.py"
 
 @pytest.mark.static_audit
 @ldd_trajectory
+# 🧪 TRAP[TEST] · 2026-08-04 · REGRESSION · Dockerfile копирует wal_sync.py (132 W2)
+# · Scenario: AC W2 — если wal_sync.py не COPY'ится, hourly cron (10 * * * *)
+#   падает на «No such file or directory» /usr/local/bin/wal_sync.py
+# · Last fail: N/A (new test — DevPlan 132 W2)
+# · Remove if: wal_sync доставка переезжает в другой механизм
+def test_dockerfile_copies_wal_sync(caplog) -> None:
+    """AC-W2: Dockerfile содержит COPY scripts/wal_sync.py /usr/local/bin/wal_sync.py."""
+    content = _DOCKERFILE.read_text(encoding="utf-8")
+
+    assert "COPY scripts/wal_sync.py" in content, "AC-W2 FAIL: Dockerfile не копирует wal_sync.py"
+    logger.critical("[IMP:9][dockerfile][copy] COPY scripts/wal_sync.py присутствует (AC-W2 PASS)")
+
+
+@pytest.mark.static_audit
+@ldd_trajectory
 # 🧪 TRAP[TEST] · 2026-08-02 · NEGATIVE (R5) · Dockerfile копирует зависимости retention (C1)
 # · Scenario: AC-C1.1 — если date_parser.py/s3_client.py не COPY'ятся, cron retention
 #   падает на ImportError (регрессия оригинального бага)

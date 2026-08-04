@@ -421,6 +421,16 @@ def test_init_flow_all_phases(caplog, state_file, mock_subprocess, env_vars, mon
         "core.internal.bootstrap.lifecycle.helpers.system.install_cron_metrics",
         lambda core_dir: True,
     )
+    # DevPlan 132: install_cron_watchdog (φ3 2.6) + ensure_journald_persistent (φ1 5.1)
+    # пишут в /etc/cron.d и /etc/systemd — реальный FS не writable → mock True
+    monkeypatch.setattr(
+        "core.internal.bootstrap.lifecycle.helpers.system.install_cron_watchdog",
+        lambda core_dir: True,
+    )
+    monkeypatch.setattr(
+        "core.internal.bootstrap.lifecycle.helpers.system.ensure_journald_persistent",
+        lambda: True,
+    )
     # φ5 (node_configuration) проверяет /opt/node-configs/<node> через os.path.isdir — патуем
     orig_isdir = os.path.isdir
     monkeypatch.setattr(
@@ -822,6 +832,16 @@ def test_tor_conditional_runs(caplog, state_file, mock_subprocess, env_vars, mon
     monkeypatch.setattr(
         "core.internal.bootstrap.lifecycle.helpers.system.install_cron_metrics",
         lambda core_dir: True,
+    )
+    # DevPlan 132: install_cron_watchdog (φ3 2.6) + ensure_journald_persistent (φ1 5.1)
+    # пишут в /etc/cron.d и /etc/systemd — реальный FS не writable → mock True
+    monkeypatch.setattr(
+        "core.internal.bootstrap.lifecycle.helpers.system.install_cron_watchdog",
+        lambda core_dir: True,
+    )
+    monkeypatch.setattr(
+        "core.internal.bootstrap.lifecycle.helpers.system.ensure_journald_persistent",
+        lambda: True,
     )
     orig_isdir = os.path.isdir
     monkeypatch.setattr(

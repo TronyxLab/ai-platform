@@ -1,19 +1,23 @@
-# GREP_SUMMARY: promtail config docker_sd_config structured_metadata nginx_match
-# STRUCTURE: ▶ 1-scrape-config ┌ docker_sd:container-logs → json→match(nginx:status/host)→labels→structured_metadata ┐ → loki:3100 → ┘
+# GREP_SUMMARY: promtail config docker_sd_config journald journal-scrape structured_metadata nginx_match host-label
+# STRUCTURE: ▶ 2-scrape-configs ┌ docker_sd:container-logs → json→match(nginx:status/host)→labels→structured_metadata ┐ ┌ journal:journald→host-label→drop-debug ┐ → loki:3100 → ┘
 # region MODULE_CONTRACT
-## @purpose  Promtail configuration: Docker container log scraping (single docker_sd scrape)
+## @purpose  Promtail configuration: Docker container log scraping (docker_sd) + host journald
+##           scraping (journal) — закрывает 126 D-1 (journald → Loki)
 ## @scope    Mounted as /etc/promtail/promtail-config.yml in promtail container
 ## @invariants
 ##   - Docker socket scrape: docker_sd_config — auto-discovers all local containers
+##   - Journal scrape (DevPlan 132 W3, 126 D-1): journal {path: /var/log/journal, max_age: 24h};
+##     host-лейбл из __journal__hostname; drop debug level (перф, max_age 24h)
 ##   - Nginx logs captured via Docker stdout (official image symlinks access.log → /dev/stdout)
 ##   - Nginx-specific JSON fields (status, request_method, host) extracted via match stage
 ##   - pipeline_stages: json → match(nginx,litellm,langfuse) → labels → structured_metadata
 ##   - session_id/user_id → structured_metadata (NOT labels — high cardinality, D7)
 ##   - Container labels preserved: container, compose_service, compose_project
-##   - Single promtail instance — one docker_sd scrape config (simpler, no file scrape)
 ##   - All logs sent to loki:3100 on observability-net
 ## @rationale D7: structured_metadata avoids TSDB index explosion from high-cardinality
 ##           fields while still enabling LogQL filtering without full JSON scan.
+##           D-1 (126): journald (docker daemon, OOM, systemd) не попадал в Loki — добавлен
+##           journal-скрейп; Storage=persistent обеспечивает кросс-бут данные (132 W3 D6).
 # endregion MODULE_CONTRACT
 
 server:
@@ -125,6 +129,27 @@ scrape_configs:
       - source_labels: ["__meta_docker_container_label_com_docker_compose_project"]
         regex: "(.+)"
         target_label: "compose_project"
+
+  # ── Host journald (docker daemon, OOM, systemd) — 126 D-1 / DevPlan 132 W3 ─────
+  # · Скрейпит /var/log/journal (host mount, read-only); требует Storage=persistent
+  #   в journald.conf (132 W3 D6 — иначе кросс-бут реконструкция невозможна)
+  # · max_age 24h: ограничивает стартовое чтение при рестарте promtail (перф)
+  # · host-лейбл из __journal__hostname (журнал хоста, не контейнеров)
+  # · drop debug level — снижение объёма (docker-скрейп не трогаем)
+  - job_name: journal
+    journal:
+      path: /var/log/journal
+      max_age: 24h
+    relabel_configs:
+      - source_labels: ["__journal__hostname"]
+        target_label: "host"
+    pipeline_stages:
+      - match:
+          selector: '{job="journal"}'
+          stages:
+            - drop:
+                source: level
+                expression: "(?i)debug"
 
   # ── Nginx access logs — REMOVED (2026-07-25) ──────────────────────────
   # · Was: static_config file scrape of /var/log/nginx/access.log from host

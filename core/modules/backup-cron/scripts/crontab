@@ -1,11 +1,14 @@
-# GREP_SUMMARY: backup-cron crontab schedule 03:00 03:30 04:00 full-backup app-data cleanup
+# GREP_SUMMARY: backup-cron crontab schedule 03:00 03:30 04:00 05:00 hourly-wal-sync full-backup app-data cleanup retention wal-sync
 # region MODULE_CONTRACT
-## @purpose  Cron schedule for platform backup jobs (03 §4)
+## @purpose  Cron schedule for platform backup jobs (03 §4) + WAL sync (DevPlan 132 W2)
 ## @scope    Installed to /etc/cron.d/platform-backup in the container
 ## @invariants
 ##   - 03:00 UTC — full postgres pg_dumpall backup
 ##   - 03:30 UTC — application data backup (file volumes)
 ##   - 04:00 UTC — spool cleanup (remove files older than 7 days, 03 §3 retention)
+##   - 05:00 UTC — S3 retention rotation (7/28/90, phase 06 §3)
+##   - 10 * * * * — hourly WAL sync: wal_archive → S3 (HEAD→PUT) + safe-delete (132 W2);
+##     до 03:00 дампа не пересекается; после успеха upload в S3 локальный retention чистит старьё
 ##   - All scripts log to /var/log/platform/backup/
 ##   - Collision risk (03 §8): parallel start allowed in v1; no queue implementation
 ## @rationale Schedule mirrors 03 §4 spec; cleanup at 04:00 after both backups complete
@@ -32,6 +35,11 @@ PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 
 # [IMP:8][crontab] 05:00 UTC — S3 retention rotation (7/28/90, phase 06 §3)
 0   5   *   *   *   root /usr/local/bin/retention.py >> /var/log/platform/backup/retention.log 2>&1
+
+# [IMP:8][crontab] 10 * * * * UTC — hourly WAL sync → S3 (HEAD→PUT, safe-delete, 132 W2)
+# · WAL_ARCHIVE_DIR монтируется как wal-archive volume (/var/lib/platform/wal-archive)
+# · Run до 03:00 дампа — не пересекается; после upload локальный retention чистит старьё
+10  *   *   *   *   root python3 /usr/local/bin/wal_sync.py >> /var/log/platform/backup/wal-sync.log 2>&1
 
 # ⚠️ TRAP[BUG] · 2026-07-18 · P1 · Cron paths used /opt/core/ instead of /opt/platform/core/
 # · Symptom: cron jobs silently failed — /opt/core/ does not exist on VPS; only /opt/platform/ exists

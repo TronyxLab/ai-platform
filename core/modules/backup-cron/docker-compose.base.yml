@@ -1,5 +1,5 @@
-# GREP_SUMMARY: backup-cron docker-compose backup-net spool-volume restart-always stop-grace-period no-resource-limits
-# STRUCTURE: ▶ docker-compose.base → ┌ backup-cron ┐ → backup-net + shared-db-net → liveness + readiness → ┘
+# GREP_SUMMARY: backup-cron docker-compose backup-net spool-volume wal-archive-volume restart-always stop-grace-period no-resource-limits wal-sync
+# STRUCTURE: ▶ docker-compose.base → ┌ backup-cron ┐ → backup-net + shared-db-net → wal-archive volume + WAL_* env → liveness + readiness → ┘
 # @purpose  Base compose definition for backup-cron Docker module
 # region MODULE_CONTRACT
 ## @purpose  Base compose definition for backup-cron Docker module
@@ -9,6 +9,8 @@
 ##   - restart: always — cron daemon must survive container crash
 ##   - stop_grace_period: 120s — finish current backup or abort+cleanup (06 §13)
 ##   - Spool volume: /var/lib/platform/backup-spool/ (03 §4)
+##   - WAL archive volume: /var/lib/platform/wal-archive/ (DevPlan 132 W2 — wal_sync hourly;
+##     том объявлен в root compose (SoT, U-49) — модуль только маунтит)
 ##   - Resource limits: memory 128M (limits protect host from OOM; backup partial-state risk accepted)
 ##   - backup-net declared as external: true — pre-created by deploy-modules.sh (TASK-02-03)
 ##   - Also connected to shared-db-net for pg_dump access (external: true)
@@ -80,11 +82,20 @@ services:
       S3_PREFIX: "${S3_PREFIX:-platform/backups}"
       PLATFORM_CONTEXT: "${PLATFORM_CONTEXT:-personal}"
       NODE_NAME: "${NODE_NAME:-unknown}"
+      # ── WAL sync (DevPlan 132 W2): каталог WAL-архива + retention-пороги + rate-limit ──
+      # Не env_requires (без секретов) — дефолты в wal_sync.py
+      WAL_ARCHIVE_DIR: "/var/lib/platform/wal-archive"
+      WAL_LOCAL_RETENTION_DAYS: "${WAL_LOCAL_RETENTION_DAYS:-7}"
+      WAL_S3_RETENTION_DAYS: "${WAL_S3_RETENTION_DAYS:-14}"
+      WAL_MAX_UPLOAD_PER_RUN: "${WAL_MAX_UPLOAD_PER_RUN:-200}"
 
     volumes:
       # [IMP:8][backup-cron-compose] Spool volume: local staging before S3 upload (03 §4)
       - backup-spool:/var/lib/platform/backup-spool
       - backup-logs:/var/log/platform/backup
+      # [IMP:8][backup-cron-compose] WAL archive volume (DevPlan 132 W2): pg_wal сегменты для
+      # hourly wal_sync → S3; том объявлен в root compose (SoT, U-49) — модуль только маунтит
+      - wal-archive:/var/lib/platform/wal-archive
 
     networks:
       backup-net:

@@ -25,6 +25,8 @@
 ## @invariants
 ##   - RED: любой docker compose subprocess-вызов вне shared/docker_compose.py
 ##   - RED: любой docker ps/inspect/exec subprocess-вызов (не compose) вне shared/docker_ops.py
+##     (единственное исключение — core/internal/healthcheck/watchdog.py, DevPlan 132 W1:
+##     host-cron stdlib-only, см. TRAP[DECISION] у _OPS_ALLOWED_FILES)
 ##   - allowlist: entrypoints/shell вне скоупа (сканируется только core/internal/*.py)
 ##   - Строковые литералы в docstring/log-сообщениях НЕ триггерят (только AST-вызовы)
 ##   - Звёздные элементы (["docker", "compose", *args, ...]) ловятся по строковым константам
@@ -59,6 +61,18 @@ _ALLOWED_FILE = pathlib.Path("core/internal/shared/docker_compose.py")
 
 # DevPlan 128 W1 (P2-5/D6): docker ps/inspect/exec (не compose) — ТОЛЬКО в shared/docker_ops.py
 _OPS_ALLOWED_FILE = pathlib.Path("core/internal/shared/docker_ops.py")
+# 🧐 TRAP[DECISION] · 2026-08-04 · MED · watchdog.py — sole-path исключение (DevPlan 132 W1)
+# · Rejected: миграция watchdog на shared/docker_ops (риск: watchdog.py — host-cron stdlib-only,
+# ·   cron БЕЗ PYTHONPATH → импорт core.internal.shared.docker_ops падает на ModuleNotFoundError)
+# · Reason: DevPlan 132 W1 явно требует direct `docker ps/inspect/restart` subprocess в
+# ·   watchdog.py (stdlib-only контракт). Исключение узкое: ТОЛЬКО healthcheck/watchdog.py,
+# ·   остальные docker ps/inspect/exec вызовы — по-прежнему sole-path docker_ops.py.
+# · Rev: если watchdog переедет под PYTHONPATH-окружение (cron wrapper с export) —
+# ·   мигрировать на docker_ops и удалить исключение.
+_OPS_ALLOWED_FILES: tuple[pathlib.Path, ...] = (
+    _OPS_ALLOWED_FILE,
+    pathlib.Path("core/internal/healthcheck/watchdog.py"),
+)
 _OPS_TOKENS: tuple[str, ...] = ("ps", "inspect", "exec")
 
 _SUBPROCESS_FUNCS = {"run", "check_call", "check_output", "Popen", "call"}
@@ -212,7 +226,7 @@ def _find_ops_offenders() -> list[tuple[str, int, str]]:
                 continue  # compose-домен — docker_compose.py (свой скан)
             if not any(t in values for t in _OPS_TOKENS):
                 continue
-            if rel == _OPS_ALLOWED_FILE.as_posix():
+            if rel in {f.as_posix() for f in _OPS_ALLOWED_FILES}:
                 continue
             cmd_preview = " ".join(values[:6])
             offenders.append((rel, node.lineno, cmd_preview))

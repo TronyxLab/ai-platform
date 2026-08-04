@@ -163,6 +163,20 @@ def phase_system_bootstrap(core_dir: str, node_name: str, node_yaml: str) -> boo
         logger.warning("[IMP:7][phase:system_bootstrap] firewall.sh not found at %s — skipping", firewall_script)
         non_fatal_issues = True
 
+    # ── 5.1 Journald Storage=persistent (DevPlan 132 W3, D6) ──
+    # journald-скрейп в Loki (126 D-1) требует persistent-storage: volatile-journal
+    # не переживает reboot. Non-fatal (best-effort — как firewall/tor).
+    try:
+        journald_ok = helpers_system.ensure_journald_persistent()
+        if journald_ok:
+            logger.info("[IMP:9][phase:system_bootstrap] Journald persistent storage configured")
+        else:
+            logger.warning("[IMP:7][phase:system_bootstrap] Journald persistent setup failed (non-fatal)")
+            non_fatal_issues = True
+    except Exception as e:  # noqa: EXC — non-fatal: journald config is best-effort
+        logger.warning("[IMP:7][phase:system_bootstrap] Journald persistent setup raised (non-fatal): %s", e)
+        non_fatal_issues = True
+
     # ── 5.5 Apply unattended-upgrades security policy (DevPlan 134 L1) ──
     # security_updates.py ensure — идемпотентно (content-match no-op). Non-fatal (best-effort,
     # как firewall/tor): security-политика не должна ронять bootstrap. SECURITY_AUTO_REBOOT=false
@@ -350,6 +364,20 @@ def phase_platform_setup(core_dir: str, node_name: str, node_yaml: str) -> bool:
             non_fatal_issues = True
     except Exception as e:  # noqa: EXC — non-fatal: metrics cron is best-effort
         logger.warning("[IMP:7][phase:platform_setup] Metrics cron install raised (non-fatal): %s", e)
+        non_fatal_issues = True
+
+    # ── 2.6 Watchdog cron (DevPlan 132 W1) ──
+    # install_cron_watchdog() → /etc/cron.d/platform-watchdog (flock -n + timeout 50s,
+    # watchdog.py — host-cron авто-рестарта unhealthy-контейнеров). Non-fatal (тот же паттерн).
+    try:
+        watchdog_cron_ok = helpers_system.install_cron_watchdog(core_dir)
+        if watchdog_cron_ok:
+            logger.info("[IMP:9][phase:platform_setup] Watchdog cron installed (cron.d/platform-watchdog)")
+        else:
+            logger.warning("[IMP:7][phase:platform_setup] Watchdog cron install failed (non-fatal)")
+            non_fatal_issues = True
+    except Exception as e:  # noqa: EXC — non-fatal: watchdog cron is best-effort
+        logger.warning("[IMP:7][phase:platform_setup] Watchdog cron install raised (non-fatal): %s", e)
         non_fatal_issues = True
 
     # ── 3. Validate sudoers (non-fatal if permission denied) ──
