@@ -32,6 +32,8 @@
 ##            LDD-логи (log_imp) — байт-совместимость с потребителями (регрессия
 ##            tests/test_lib_node_resolver.py зелёная).
 ## @changes  2026-08-04 | DevPlan 127 W2 — Created (миграция node-resolver.sh, S8/P2-1)
+##           2026-08-04 | QA-fix — main() error-path: print→logger.error с [IMP:10]
+##                      (контракт-инвариант 26 теперь выполнен; stderr + exit 1 сохранены)
 ## @see      core/lib/node-resolver.sh (shell-фасад), core/internal/shared/node_yaml/resolve.py,
 ##           core/internal/shared/node_yaml_cli.py (T6-нормализация — локальная копия _format_cli_value)
 # endregion MODULE_CONTRACT
@@ -154,9 +156,21 @@ def main(argv: list[str] | None = None) -> int:
     ## @invariants
     ##   - resolve: stdout ровно одна строка (путь); not-found → stderr + exit 1
     ##   - host: stdout host|"" ; exit 0; file missing/parse → stderr + exit 1
+    ##   - Ошибки: logger.error с [IMP:10][node-resolver][<action>] префиксом (QA-fix
+    ##     2026-08-04: print → logger.error) — текст исключения внутри IMP:10-строки
     ##   - sys.exit НЕ вызывается — main() возвращает int (канон core/AGENTS.md)
     """
-    logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stderr)
+    # LDD-канал: привязка module-logger к ТЕКУЩЕМУ sys.stderr (per-invocation rebind).
+    # Root basicConfig в pytest — no-op (caplog-handler уже на root), поэтому error-логи
+    # без rebind не дошли бы до stderr (unit-тесты ассертят stderr-содержимое). Propagation
+    # к root сохранён — caplog-телеметрия IMP:8-10 продолжает работать. В реальном CLI
+    # basicConfig не нужен: module-handler покрывает INFO+ (IMP:8-10) без дублирования.
+    for _h in logger.handlers[:]:
+        logger.removeHandler(_h)
+    _cli_handler = logging.StreamHandler(sys.stderr)
+    _cli_handler.setFormatter(logging.Formatter("%(message)s"))
+    logger.addHandler(_cli_handler)
+    logger.setLevel(logging.INFO)
     parser = argparse.ArgumentParser(description="NodeYaml resolver CLI (DevPlan 127 W2)")
     sub = parser.add_subparsers(dest="action", required=True)
 
@@ -177,7 +191,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             path = resolve_node_yaml(node_name=args.node, platform_root=args.platform_root)
         except ConfigNotFoundError as exc:
-            print(str(exc), file=sys.stderr)
+            logger.error("[IMP:10][node-resolver][resolve] %s", exc)
             return 1
         print(path)
         return 0
@@ -186,10 +200,10 @@ def main(argv: list[str] | None = None) -> int:
         try:
             host = extract_node_host(args.file)
         except ConfigNotFoundError as exc:
-            print(str(exc), file=sys.stderr)
+            logger.error("[IMP:10][node-resolver][host] %s", exc)
             return 1
         except ConfigParseError as exc:
-            print(str(exc), file=sys.stderr)
+            logger.error("[IMP:10][node-resolver][host] %s", exc)
             return 1
         print(host)
         return 0
