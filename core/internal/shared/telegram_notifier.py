@@ -11,21 +11,26 @@
 ##           only (stdlib) — zero external dependencies. No requests library.
 ## @invariants
 ##   1. bot_token and chat_id sourced from parameters first, then os.environ fallback
-##   2. If both are None/empty AND not in env → log WARNING at IMP:7, return False
+##   2. If both are None/empty AND not in env → log IMP:9 DELIVERY FAILED marker, return False
 ##   3. POST to https://api.telegram.org/bot{token}/sendMessage
 ##   4. Content-Type: application/x-www-form-urlencoded (data in POST body, not query string)
 ##   5. If proxy_url set → configure ProxyHandler for both http and https
 ##   6. Timeout: 30s default (urllib.request.urlopen timeout parameter)
-##   7. All exceptions caught → log at IMP:7, return False (never raises)
+##   7. All exceptions caught → IMP:9 DELIVERY FAILED marker (reason + proxy state), return False
 ##   8. Non-fatal by design — caller must never depend on notification delivery
+##   9. notify(): ok = send_telegram(...); НЕ пишет «Notification sent» при неудаче (фикс 132 W4)
 ## @rationale DevPlan 081B7: Six independent Telegram notification implementations exist
 ##            across the codebase with different mechanisms (curl, urllib, requests).
 ##            A single shared module eliminates duplication, ensures consistent error
 ##            handling, and removes the `requests` external dependency. Stdlib-only
 ##            (urllib) keeps the module deployable without pip install on bare-metal nodes.
+##            DevPlan 132 W4 (126 D-2): failure-маркеры IMP:9 (DELIVERY FAILED + reason +
+##            proxy state) — реконструируемость провалов по логам; фикс лживого
+##            «Notification sent» (писался безусловно при send_telegram → False).
 ## @changes  2026-07-30 | DevPlan 081B7 — Created unified telegram_notifier module
 ##           2026-08-02 | DevPlan 118 E10 — +resolve_chat_id/format_notify_message/notify()
 ##                      (severity-mapping merged from notify-hook.sh); CLI +notify subcommand
+##           2026-08-04 | DevPlan 132 W4 — failure-маркеры IMP:9 (D-2), notify-fix
 # endregion MODULE_CONTRACT
 
 import json
@@ -70,19 +75,23 @@ def send_telegram(
     ##       → ⎋ bool — True if HTTP 200 received, False on any failure
     ## @complexity — O(1) + 1 HTTP POST request with 30s timeout
     ## @invariants
-    ##   - Never raises: all exceptions caught, logged at IMP:7, return False
+    ##   - Never raises: all exceptions caught, logged with IMP:9 DELIVERY FAILED marker, return False
     ##   - Token/chat_id resolution: param > env > fail
     ##   - POST body is application/x-www-form-urlencoded (not query string in URL)
     ##   - ProxyHandler configured for both http and https schemes when proxy_url set
     ##   - 30s timeout prevents hanging on unreachable Telegram API
+    ##   - Каждый failure-путь логирует [IMP:9] DELIVERY FAILED: <reason> (proxy=<set|none>) — 126 D-2
     """
     # ── Resolve credentials: parameter > environment variable ──
     token = bot_token or os.environ.get("TELEGRAM_BOT_TOKEN")
     chat = chat_id or os.environ.get("TELEGRAM_CHAT_ID")
+    proxy_state = "set" if proxy_url else "none"
 
     if not token or not chat:
         logger.warning(
-            "[IMP:7][telegram_notifier][send_telegram] TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set — notification suppressed"
+            "[IMP:9][telegram_notifier][send_telegram] DELIVERY FAILED: TELEGRAM_BOT_TOKEN or "
+            "TELEGRAM_CHAT_ID not set (proxy=%s)",
+            proxy_state,
         )
         return False
 
@@ -134,14 +143,16 @@ def send_telegram(
                 )
                 return True
             logger.warning(
-                "[IMP:7][telegram_notifier][send_telegram] Telegram API returned HTTP %d",
+                "[IMP:9][telegram_notifier][send_telegram] DELIVERY FAILED: Telegram API returned HTTP %d (proxy=%s)",
                 resp.status,
+                proxy_state,
             )
             return False
     except (OSError, urllib.error.URLError) as e:
         logger.warning(
-            "[IMP:7][telegram_notifier][send_telegram] Telegram API request failed: %s",
+            "[IMP:9][telegram_notifier][send_telegram] DELIVERY FAILED: %s (proxy=%s)",
             e,
+            proxy_state,
         )
         return False
 
@@ -283,6 +294,9 @@ def notify(
     ## @invariants
     ##   - Отсутствие secrets-файла / токена / chat → IMP:7 log, return True (неблокирующий)
     ##   - send_telegram с parse_mode="HTML" — HTML-разметка в сообщениях деплоя
+    ##   - ok = send_telegram(...); при not ok → IMP:9 DELIVERY FAILED (severity, context) — 126 D-2;
+    ##     «Notification sent» пишется ТОЛЬКО при ok (фикс лживого лога, DevPlan 132 W4)
+    ##   - always return True (неблокирующий дизайн сохранён)
     """
     env = dict(os.environ)
     if os.path.isfile(secrets_file):
@@ -310,10 +324,26 @@ def notify(
 
     full_message = format_notify_message(emoji, message, context)
     proxy = env.get("TELEGRAM_PROXY_URL") or env.get("PROXY_URL")
-    send_telegram(full_message, bot_token=token, chat_id=chat_id, proxy_url=proxy, parse_mode="HTML")
-    logger.info(
-        "[IMP:9][telegram_notifier][notify] Notification sent (severity=%s, context=%s)", severity or "none", context
-    )
+    ok = send_telegram(full_message, bot_token=token, chat_id=chat_id, proxy_url=proxy, parse_mode="HTML")
+    if not ok:
+        # ⚠️ TRAP[BUG] · 2026-08-04 · P1 · Лживый лог «Notification sent» при неудаче (126 D-2)
+        # · Symptom: notify() писал «[IMP:9] Notification sent» БЕЗУСЛОВНО (telegram_notifier.py:314-316),
+        # ·   даже когда send_telegram вернул False — оператор видел успех при реальном провале.
+        # · Root: результат send_telegram не захватывался; лог писался всегда.
+        # · Fix: ok = send_telegram(...); при not ok — IMP:9 DELIVERY FAILED (severity/context);
+        # ·   «Notification sent» — только при ok. Контракт «always exit 0 / always True» сохранён.
+        # · Prevention: маркер DELIVERY FAILED делает провалы реконструируемыми по логам (D-2).
+        logger.warning(
+            "[IMP:9][telegram_notifier][notify] DELIVERY FAILED (severity=%s, context=%s)",
+            severity or "none",
+            context,
+        )
+    else:
+        logger.info(
+            "[IMP:9][telegram_notifier][notify] Notification sent (severity=%s, context=%s)",
+            severity or "none",
+            context,
+        )
     return True
 
 

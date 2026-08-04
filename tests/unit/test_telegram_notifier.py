@@ -5,12 +5,13 @@
 ## @purpose  Unit tests for core/internal/shared/telegram_notifier.py
 ##           Verifies send_telegram() with mocked urllib.request.urlopen.
 ## @scope    Tests: successful send, missing credentials, env var fallback,
-##           proxy configuration, HTTP error, network error.
+##           proxy configuration, HTTP error, network error, failure-маркеры (132 W4, 126 D-2).
 ## @invariants
 ##   - All tests use unittest.mock (no real HTTP calls)
 ##   - No Docker dependency (pure Python unit tests)
 ##   - LDD: at least one IMP:9 log in successful send
-##   - IMP:7 warning logged on missing credentials or failures
+##   - Все failure-пути: IMP:9 DELIVERY FAILED маркер (126 D-2, DevPlan 132 W4)
+##   - R5: негативные тесты с оригинальной формой (urlerror/http_non200/notify-fail)
 ##   - No hardcoded paths anywhere
 # endregion MODULE_CONTRACT
 
@@ -115,8 +116,8 @@ def test_send_telegram_missing_bot_token(caplog: pytest.LogCaptureFixture) -> No
     """send_telegram returns False when bot_token is missing and not in env."""
     caplog.set_level(logging.WARNING)
 
-    # 🧪 TRAP[TEST] · Regression · Scenario: missing bot_token returns False
-    # · Last fail: N/A (new test)
+    # 🧪 TRAP[TEST] · Regression · Scenario: missing bot_token returns False + DELIVERY FAILED marker
+    # · Last fail: N/A (new test — DevPlan 132 W4: missing creds → IMP:9 marker, 126 D-2)
     # · Remove if: send_telegram changes credential resolution
 
     # Ensure env var is not set
@@ -129,12 +130,16 @@ def test_send_telegram_missing_bot_token(caplog: pytest.LogCaptureFixture) -> No
 
     assert result is False, "Must return False when bot_token is missing"
 
-    found_imp7 = False
+    found_marker = False
     for record in caplog.records:
-        if "[IMP:7]" in record.message and "TELEGRAM_BOT_TOKEN" in record.message:
-            found_imp7 = True
-            print(f"Captured warning: {record.message}")
-    assert found_imp7, "IMP:7 warning must be logged for missing bot_token"
+        if (
+            "[IMP:9]" in record.message
+            and "DELIVERY FAILED" in record.message
+            and "TELEGRAM_BOT_TOKEN" in record.message
+        ):
+            found_marker = True
+            print(f"Captured marker: {record.message}")
+    assert found_marker, "IMP:9 DELIVERY FAILED marker must be logged for missing bot_token"
 
 
 # endregion
@@ -147,8 +152,8 @@ def test_send_telegram_missing_chat_id(caplog: pytest.LogCaptureFixture) -> None
     """send_telegram returns False when chat_id is missing and not in env."""
     caplog.set_level(logging.WARNING)
 
-    # 🧪 TRAP[TEST] · Regression · Scenario: missing chat_id returns False
-    # · Last fail: N/A (new test)
+    # 🧪 TRAP[TEST] · Regression · Scenario: missing chat_id returns False + DELIVERY FAILED marker
+    # · Last fail: N/A (new test — DevPlan 132 W4: missing creds → IMP:9 marker, 126 D-2)
     # · Remove if: send_telegram changes credential resolution
 
     with patch.dict(os.environ, {}, clear=True):
@@ -160,12 +165,12 @@ def test_send_telegram_missing_chat_id(caplog: pytest.LogCaptureFixture) -> None
 
     assert result is False, "Must return False when chat_id is missing"
 
-    found_imp7 = False
+    found_marker = False
     for record in caplog.records:
-        if "[IMP:7]" in record.message and "TELEGRAM_CHAT_ID" in record.message:
-            found_imp7 = True
-            print(f"Captured warning: {record.message}")
-    assert found_imp7, "IMP:7 warning must be logged for missing chat_id"
+        if "[IMP:9]" in record.message and "DELIVERY FAILED" in record.message and "TELEGRAM_CHAT_ID" in record.message:
+            found_marker = True
+            print(f"Captured marker: {record.message}")
+    assert found_marker, "IMP:9 DELIVERY FAILED marker must be logged for missing chat_id"
 
 
 # endregion
@@ -307,8 +312,8 @@ def test_send_telegram_http_error(caplog: pytest.LogCaptureFixture) -> None:
     """send_telegram returns False when Telegram API returns non-200 HTTP status."""
     caplog.set_level(logging.WARNING)
 
-    # 🧪 TRAP[TEST] · Regression · Scenario: HTTP error handled gracefully
-    # · Last fail: N/A (new test)
+    # 🧪 TRAP[TEST] · Regression · Scenario: HTTP error handled gracefully + DELIVERY FAILED marker
+    # · Last fail: N/A (new test — DevPlan 132 W4: non-200 → IMP:9 marker, 126 D-2)
     # · Remove if: send_telegram changes error handling
 
     bot_token = "123:http-error"
@@ -336,12 +341,12 @@ def test_send_telegram_http_error(caplog: pytest.LogCaptureFixture) -> None:
 
     assert result is False, "Must return False on HTTP error"
 
-    found_imp7 = False
+    found_marker = False
     for record in caplog.records:
-        if "[IMP:7]" in record.message and "failed" in record.message.lower():
-            found_imp7 = True
-            print(f"Captured: {record.message}")
-    assert found_imp7, "IMP:7 warning must be logged for HTTP error"
+        if "[IMP:9]" in record.message and "DELIVERY FAILED" in record.message and "401" in record.message:
+            found_marker = True
+            print(f"Captured marker: {record.message}")
+    assert found_marker, "IMP:9 DELIVERY FAILED marker must be logged for non-200 HTTP"
 
 
 # endregion
@@ -354,8 +359,8 @@ def test_send_telegram_network_error(caplog: pytest.LogCaptureFixture) -> None:
     """send_telegram returns False on network-level errors (connection refused, DNS failure)."""
     caplog.set_level(logging.WARNING)
 
-    # 🧪 TRAP[TEST] · Regression · Scenario: network error returns False
-    # · Last fail: N/A (new test)
+    # 🧪 TRAP[TEST] · Regression · Scenario: network error returns False + DELIVERY FAILED marker
+    # · Last fail: N/A (new test — DevPlan 132 W4: URLError/OSError → IMP:9 marker, 126 D-2)
     # · Remove if: send_telegram changes error handling
 
     bot_token = "123:net-error"
@@ -374,12 +379,16 @@ def test_send_telegram_network_error(caplog: pytest.LogCaptureFixture) -> None:
 
     assert result is False, "Must return False on network error"
 
-    found_imp7 = False
+    found_marker = False
     for record in caplog.records:
-        if "[IMP:7]" in record.message and "failed" in record.message.lower():
-            found_imp7 = True
-            print(f"Captured: {record.message}")
-    assert found_imp7, "IMP:7 warning must be logged for network error"
+        if (
+            "[IMP:9]" in record.message
+            and "DELIVERY FAILED" in record.message
+            and "Connection refused" in record.message
+        ):
+            found_marker = True
+            print(f"Captured marker: {record.message}")
+    assert found_marker, "IMP:9 DELIVERY FAILED marker must be logged for network error"
 
 
 # endregion
@@ -506,6 +515,113 @@ def test_notify_missing_chat_skips_send(tmp_path, caplog: pytest.LogCaptureFixtu
     assert ok is True
     mock_send.assert_not_called(), "send_telegram must not be called when chat unresolvable"
     assert any("No TELEGRAM_CHAT_ID resolved" in r.message for r in caplog.records)
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · send_telegram URLError → IMP:9 DELIVERY FAILED (126 D-2)
+# · Scenario: оригинальная форма D-2 — send_telegram логировал провал только на IMP:7 без
+# ·   маркера; реконструкция по логам была невозможна. Точный вход: urllib.error.URLError
+# ·   (DNS/сеть). Маркер обязан содержать DELIVERY FAILED + причину + proxy-состояние.
+# · Last fail: до 132 W4 — «[IMP:7] Telegram API request failed: <err>» (без маркера)
+# · Remove if: send_telegram перестанет помечать провалы доставки
+def test_send_telegram_delivery_failed_marker_urlerror(caplog: pytest.LogCaptureFixture) -> None:
+    """R5: URLError (оригинальный вход D-2) → IMP:9 DELIVERY FAILED с причиной и proxy=none."""
+    caplog.set_level(logging.WARNING)
+    with patch.object(
+        urllib.request.OpenerDirector,
+        "open",
+        side_effect=urllib.error.URLError("name resolution failed"),
+    ):
+        result = send_telegram("test", bot_token="123:tok", chat_id="-1")
+
+    assert result is False
+    found = [
+        r.message
+        for r in caplog.records
+        if "[IMP:9]" in r.message
+        and "DELIVERY FAILED" in r.message
+        and "name resolution failed" in r.message
+        and "(proxy=none)" in r.message
+    ]
+    assert found, f"R5 FAIL: URLError не дал IMP:9 DELIVERY FAILED marker. Logs: {[r.message for r in caplog.records]}"
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · send_telegram non-200 → IMP:9 DELIVERY FAILED (126 D-2)
+# · Scenario: оригинальная форма — non-200 HTTP логировался как «[IMP:7] HTTP %d» без маркера.
+# ·   Точный вход: HTTPError 429 (rate limit) — маркер обязан быть IMP:9 DELIVERY FAILED.
+# · Last fail: до 132 W4 — «[IMP:7] Telegram API returned HTTP 429» (без маркера)
+# · Remove if: send_telegram перестанет помечать non-200 доставки
+def test_send_telegram_delivery_failed_marker_http_non200(caplog: pytest.LogCaptureFixture) -> None:
+    """R5: HTTPError 429 (оригинальный вход D-2) → IMP:9 DELIVERY FAILED с кодом."""
+    caplog.set_level(logging.WARNING)
+    http_error = urllib.error.HTTPError(
+        url="https://api.telegram.org/bot123:tok/sendMessage",
+        code=429,
+        msg="Too Many Requests",
+        hdrs=HTTPMessage(),
+        fp=BytesIO(b"{}"),
+    )
+    with patch.object(urllib.request.OpenerDirector, "open", side_effect=http_error):
+        result = send_telegram("test", bot_token="123:tok", chat_id="-1")
+
+    assert result is False
+    found = [
+        r.message
+        for r in caplog.records
+        if "[IMP:9]" in r.message and "DELIVERY FAILED" in r.message and "429" in r.message
+    ]
+    assert found, (
+        f"R5 FAIL: HTTPError 429 не дал IMP:9 DELIVERY FAILED marker. Logs: {[r.message for r in caplog.records]}"
+    )
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · notify: send_telegram → False → IMP:9 DELIVERY FAILED (126 D-2)
+# · Scenario: оригинальная форма D-2 — notify() писал «Notification sent» безусловно при
+# ·   send_telegram → False (лживый лог). Точный вход: send_telegram вернул False.
+# · Last fail: до 132 W4 — «[IMP:9] Notification sent» даже при провале (telegram_notifier.py:314-316)
+# · Remove if: notify перестанет маркировать провалы доставки
+def test_notify_delivery_failed_marker(tmp_path, caplog: pytest.LogCaptureFixture) -> None:
+    """R5: notify при send_telegram=False логирует IMP:9 DELIVERY FAILED (severity/context) и НЕ «Notification sent»."""
+    caplog.set_level(logging.INFO)
+    secrets = tmp_path / "secrets.env"
+    secrets.write_text("TELEGRAM_BOT_TOKEN=123:token\nTELEGRAM_CHAT_ID=-100base\n")
+
+    with (
+        patch.dict(os.environ, {}, clear=True),
+        patch("core.internal.shared.telegram_notifier.send_telegram", return_value=False),
+    ):
+        ok = notify("⚠️", "boom", severity="critical", context="watchdog", secrets_file=str(secrets))
+
+    assert ok is True, "notify всегда True (неблокирующий контракт сохранён)"
+    messages = [r.message for r in caplog.records]
+    assert any(
+        "[IMP:9]" in m and "DELIVERY FAILED" in m and "severity=critical" in m and "context=watchdog" in m
+        for m in messages
+    ), f"R5 FAIL: notify не залогировал IMP:9 DELIVERY FAILED. Logs: {messages}"
+    assert not any("Notification sent" in m for m in messages), (
+        "R5 FAIL: лживый «Notification sent» при send_telegram=False (исходный вход D-2)"
+    )
+
+
+# 🧪 TRAP[TEST] · Regression · Scenario: notify success без failure-маркера
+# · Last fail: N/A (new test — DevPlan 132 W4)
+# · Remove if: notify success-path логика меняется
+def test_notify_success_no_failure_marker(tmp_path, caplog: pytest.LogCaptureFixture) -> None:
+    """notify при send_telegram=True: «Notification sent», НЕТ DELIVERY FAILED, IMP:9 присутствует."""
+    caplog.set_level(logging.INFO)
+    secrets = tmp_path / "secrets.env"
+    secrets.write_text("TELEGRAM_BOT_TOKEN=123:token\nTELEGRAM_CHAT_ID=-100base\n")
+
+    with (
+        patch.dict(os.environ, {}, clear=True),
+        patch("core.internal.shared.telegram_notifier.send_telegram", return_value=True),
+    ):
+        ok = notify("✅", "all good", severity="info", context="deploy", secrets_file=str(secrets))
+
+    assert ok is True
+    messages = [r.message for r in caplog.records]
+    assert any("Notification sent" in m and "severity=info" in m for m in messages), "success log expected"
+    assert not any("DELIVERY FAILED" in m for m in messages), "no failure marker on success"
+    assert any("[IMP:9]" in m for m in messages), "IMP:9 on successful scenario (LDD)"
 
 
 # endregion E10_NOTIFY

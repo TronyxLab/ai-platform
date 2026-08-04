@@ -1,21 +1,33 @@
-# GREP_SUMMARY: grafana alert rules grafana12 service-down high-memory disk-space llm-api-errors telegram webhook
-# STRUCTURE: ▶ 4-rules ┌ ServiceDown → CRITICAL ┐ ┌ HighMemory → WARNING ┐ ┌ DiskSpace → CRITICAL ┐ ┌ LLMAPIErrors → WARNING ┐ → Grafana-provisioning → ┘
+# GREP_SUMMARY: grafana alert rules grafana12 service-down high-memory disk-space llm-api-errors backup-freshness backup-upload-failure wal-sync-failure telegram webhook loki
+# STRUCTURE: ▶ 7-rules ┌ ServiceDown → CRITICAL ┐ ┌ HighMemory → WARNING ┐ ┌ DiskSpace → CRITICAL ┐ ┌ LLMAPIErrors → WARNING ┐ ┌ BackupFreshness → CRITICAL (loki) ┐ ┌ BackupUploadFailure → WARNING (loki) ┐ ┌ WalSyncFailure → WARNING (loki) ┐ → Grafana-provisioning → ┘
 # region MODULE_CONTRACT
-## @purpose  4 Grafana 12 alert rules: ServiceDown, HighMemory, DiskSpace, LLMAPIErrors
-## @scope    Provisioned via GF_PROVISIONING_ALERTING_PATH; uses Prometheus datasource (uid: prometheus)
+## @purpose  7 Grafana 12 alert rules: ServiceDown, HighMemory, DiskSpace, LLMAPIErrors
+##           (Prometheus, uid: prometheus) + BackupFreshness, BackupUploadFailure, WalSyncFailure
+##           (Loki, uid: loki — DevPlan 132 W5, приоритет E)
+## @scope    Provisioned via GF_PROVISIONING_ALERTING_PATH; Prometheus datasource (uid: prometheus)
+##           + Loki datasource (uid: loki, provisioned в datasources.yml)
 ## @invariants
-##   - All rules use datasource UID "prometheus" (must match datasources.yml provisioning)
-##   - Each rule uses classic_conditions expression for threshold evaluation
-##   - Contact point: telegram-webhook (provisioned in contact-points.yml)
-##   - Rules are idempotent — safe to re-provision on every deploy
-## @rationale Grafana 12 requires data section with datasourceUid, refId, and model.expr;
-##           classic_conditions pattern ensures cross-Grafana-version compatibility.
+##   - Prometheus-правила используют datasource UID "prometheus"; Loki-правила — "loki"
+##     (должно совпадать с provisioning datasources.yml)
+##   - Каждое правило использует reduce+threshold expression для оценки
+##   - Contact point: telegram-webhook (provisioned в contact-points.yml) — наследование
+##     default notification policy (как существующие правила)
+##   - Правила идемпотентны — безопасно пере-провиженить на каждом деплое
+## @rationale Grafana 12 требует data section с datasourceUid, refId, и model.expr;
+##           classic_conditions pattern обеспечивает кросс-версионную совместимость.
+##           D5 (132): Loki-правила по бэкапам — 0 новой инфраструктуры (backup-cron логи уже
+##           в Loki через promtail docker_sd, compose_service="backup-cron").
+##           BackupFreshness: окно 26h > интервал дампа 24h + for: 30m (защита от ложных
+##           срабатываний при рестарте стека); failure-правила — for: 5m (анти-флаппинг).
 ##
 ## RULES:
-##   1. ServiceDown:    up == 0          for 1m → CRITICAL
-##   2. HighMemory:     mem_usage > 90%  for 5m → WARNING
-##   3. DiskSpace:      avail < 20%      for 0s → CRITICAL
-##   4. LLMAPIErrors:   error_rate>0.1/s for 0s → WARNING
+##   1. ServiceDown:          up == 0                    for 1m  → CRITICAL
+##   2. HighMemory:           mem_usage > 90%            for 5m  → WARNING
+##   3. DiskSpace:            avail < 20%                for 0s  → CRITICAL
+##   4. LLMAPIErrors:         error_rate>0.1/s           for 0s  → WARNING
+##   5. BackupFreshness:      count(BACKUP COMPLETE 26h)<1 for 30m → CRITICAL (loki)
+##   6. BackupUploadFailure:  count(off-site NOT confirmed 24h)>0 for 5m → WARNING (loki)
+##   7. WalSyncFailure:       count(WAL_SYNC FAIL 24h)>0     for 5m → WARNING (loki)
 # endregion MODULE_CONTRACT
 
 apiVersion: 1
@@ -218,5 +230,159 @@ groups:
         annotations:
           summary: "LLM API error rate exceeds 0.1/s over the last 5 minutes"
           description: "The LiteLLM failure rate is {{ $value | humanize }} per second over the last 5 minutes. Check upstream LLM provider status."
+        labels:
+          severity: "warning"
+
+      # ── 5. BackupFreshness (DevPlan 132 W5, Loki) ──────────────────────────
+      # count_over_time(BACKUP COMPLETE в 26h окне) < 1 → CRITICAL.
+      # Окно 26h > интервал дампа 24h (запас на рестарт стека); for: 30m — анти-флаппинг.
+      # noDataState: Alerting — нет логов вообще = бэкап не работает.
+      - uid: "backup_freshness"
+        title: "Backup Freshness"
+        condition: "C"
+        data:
+          - refId: "A"
+            datasourceUid: "loki"
+            model:
+              expr: 'count_over_time({compose_service="backup-cron"} |~ "BACKUP COMPLETE" [26h]) < 1'
+              refId: "A"
+            queryType: "range"
+            relativeTimeRange:
+              from: 93600
+              to: 0
+          - refId: "B"
+            datasourceUid: "__expr__"
+            model:
+              expression: "A"
+              refId: "B"
+              reducer: "last"
+              type: "reduce"
+            queryType: ""
+            relativeTimeRange:
+              from: 0
+              to: 0
+          - refId: "C"
+            datasourceUid: "__expr__"
+            model:
+              conditions:
+                - evaluator:
+                    params: [1]
+                    type: "lt"
+                  type: "query"
+              expression: "B"
+              refId: "C"
+              type: "threshold"
+            queryType: ""
+            relativeTimeRange:
+              from: 0
+              to: 0
+        noDataState: "Alerting"
+        execErrState: "Error"
+        for: "30m"
+        annotations:
+          summary: "No BACKUP COMPLETE in the last 26h"
+          description: "No successful backup ({{ $labels.compose_service }}) in the last 26h — RPO=24h window breached."
+        labels:
+          severity: "critical"
+
+      # ── 6. BackupUploadFailure (DevPlan 132 W5, Loki) ──────────────────────
+      # count_over_time("off-site backup NOT confirmed" в 24h) > 0 → WARNING.
+      # Лог-строка пишется backup_postgres.py при провале off-site upload.
+      - uid: "backup_upload_failure"
+        title: "Backup Upload Failure"
+        condition: "C"
+        data:
+          - refId: "A"
+            datasourceUid: "loki"
+            model:
+              expr: 'count_over_time({compose_service="backup-cron"} |~ "off-site backup NOT confirmed" [24h]) > 0'
+              refId: "A"
+            queryType: "range"
+            relativeTimeRange:
+              from: 86400
+              to: 0
+          - refId: "B"
+            datasourceUid: "__expr__"
+            model:
+              expression: "A"
+              refId: "B"
+              reducer: "last"
+              type: "reduce"
+            queryType: ""
+            relativeTimeRange:
+              from: 0
+              to: 0
+          - refId: "C"
+            datasourceUid: "__expr__"
+            model:
+              conditions:
+                - evaluator:
+                    params: [0]
+                    type: "gt"
+                  type: "query"
+              expression: "B"
+              refId: "C"
+              type: "threshold"
+            queryType: ""
+            relativeTimeRange:
+              from: 0
+              to: 0
+        noDataState: "OK"
+        execErrState: "Error"
+        for: "5m"
+        annotations:
+          summary: "Off-site backup upload NOT confirmed in the last 24h"
+          description: "backup-cron ({{ $labels.compose_service }}) failed to confirm an off-site S3 upload in the last 24h."
+        labels:
+          severity: "warning"
+
+      # ── 7. WalSyncFailure (DevPlan 132 W5, Loki) ───────────────────────────
+      # count_over_time("WAL_SYNC FAIL" в 24h) > 0 → WARNING.
+      # Строка пишется wal_sync.py при S3-ошибке (exit 1, IMP:10) — RPO-гарантия WAL.
+      - uid: "wal_sync_failure"
+        title: "WAL Sync Failure"
+        condition: "C"
+        data:
+          - refId: "A"
+            datasourceUid: "loki"
+            model:
+              expr: 'count_over_time({compose_service="backup-cron"} |~ "WAL_SYNC FAIL" [24h]) > 0'
+              refId: "A"
+            queryType: "range"
+            relativeTimeRange:
+              from: 86400
+              to: 0
+          - refId: "B"
+            datasourceUid: "__expr__"
+            model:
+              expression: "A"
+              refId: "B"
+              reducer: "last"
+              type: "reduce"
+            queryType: ""
+            relativeTimeRange:
+              from: 0
+              to: 0
+          - refId: "C"
+            datasourceUid: "__expr__"
+            model:
+              conditions:
+                - evaluator:
+                    params: [0]
+                    type: "gt"
+                  type: "query"
+              expression: "B"
+              refId: "C"
+              type: "threshold"
+            queryType: ""
+            relativeTimeRange:
+              from: 0
+              to: 0
+        noDataState: "OK"
+        execErrState: "Error"
+        for: "5m"
+        annotations:
+          summary: "WAL_SYNC FAIL detected in the last 24h"
+          description: "wal_sync ({{ $labels.compose_service }}) reported S3 failure in the last 24h — WAL RPO guarantee at risk."
         labels:
           severity: "warning"
