@@ -273,25 +273,33 @@ def _dispatch(argv: list[str]) -> int:
         print(json.dumps(result.to_dict()))
         return 0 if result.is_success() else 1
 
-    # ── verify \<node\>: thin orchestration of shell facade (language policy allows) ──
+    # ── verify \<node\> [\<project\>]: thin orchestration of shell facade (language policy allows) ──
     if verb == "verify":
-        node = args or ""
+        parts = (args or "").split()
+        node = parts[0] if parts else ""
+        project = parts[1] if len(parts) > 1 else ""
         if not node:
             print(json.dumps({"status": "ERROR", "error": "verify requires <node>"}))
             return 1
         platform_root = str(platform_remote_base())
+        verify_cmd: list[str] = [
+            sys.executable,
+            "-m",
+            "core.internal.verify.domain_verifier",
+            "verify",
+            "--node",
+            node,
+            "--platform-root",
+            platform_root,
+        ]
+        # CI-канал шлёт `verify <node> <project>` (деплой-проектный workflow) —
+        # per-project верификация; ранее args целиком уходил в --node (баг: node
+        # = "tronyx-vps tronyx-site"). Контракт parser'а (args="<node>") расширен.
+        if project:
+            verify_cmd += ["--project", project]
         try:
             proc = subprocess.run(
-                [
-                    sys.executable,
-                    "-m",
-                    "core.internal.verify.domain_verifier",
-                    "verify",
-                    "--node",
-                    node,
-                    "--platform-root",
-                    platform_root,
-                ],
+                verify_cmd,
                 capture_output=True,
                 text=True,
                 timeout=600,
