@@ -324,11 +324,11 @@ def phase_platform_setup(core_dir: str, node_name: str, node_yaml: str) -> bool:
     # ── 1. Docker Hub auth (DevPlan 047: step index 5) ──
     bootstrap_dir = os.path.join(core_dir, "internal", "bootstrap")
     auth_script = os.path.join(bootstrap_dir, "docker_registry_auth.py")
-    username = os.environ.get("DOCKER_HUB_USERNAME", "")
-    token = os.environ.get("DOCKER_HUB_TOKEN", "")
-    if not username or not token:
-        logger.warning("[IMP:7][phase:platform_setup] Docker Hub credentials not set — rate-limit may apply")
-    elif os.path.isfile(auth_script):
+    if os.path.isfile(auth_script):
+        # Script self-handles missing creds: mirror.gcr.io конфигурируется в любом
+        # случае (без auth), docker login — только при наличии кредов. Раньше при
+        # пустых DOCKER_HUB_* скрипт пропускался целиком → mirror не настраивался
+        # → anonymous rate-limit (429) на первом бутстрапе (φ3 идёт до φ4 secrets).
         try:
             helpers_subprocess.run_subprocess(["python3", auth_script], non_fatal=True, fatal_rc=(127,), timeout=120)
             logger.info("[IMP:9][phase:platform_setup] Docker Hub auth configured")
