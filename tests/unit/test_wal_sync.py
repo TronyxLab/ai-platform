@@ -236,9 +236,7 @@ def _old_file(tmp_path: Path, name: str, days_old: float = 10.0) -> Path:
     old_ts = time.time() - days_old * 86400.0
     with contextlib.suppress(OSError):
         os.utime(p, (old_ts, old_ts))
-    assert p.stat().st_mtime < time.time() - (days_old - 1) * 86400.0, (
-        "mtime-based retention test needs mtime control"
-    )
+    assert p.stat().st_mtime < time.time() - (days_old - 1) * 86400.0, "mtime-based retention test needs mtime control"
     return p
 
 
