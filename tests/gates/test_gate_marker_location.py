@@ -144,7 +144,7 @@ def test_gate_marker_outside_detected_negative(caplog) -> None:
     ## @complexity — O(F) — один временный файл
     """
     caplog.set_level(logging.INFO)
-    # 2026-08-04 (DevPlan 129 W2): TRAP[DEBT] 2026-08-03 снят — xdist-гонка устранена exclusions
+    # 2026-08-04 (DevPlan 129 W2): xdist-гонка устранена exclusions
     # · сканеров-жертв (DevPlan 119 C / 124): _gate_probe_marker_tmp в _EXCLUDED_DIRS
     # · test_gate_grep_summary.py и _PROBE_DIR_PARTS test_gate_test_infra_consistency.py.
     # · Probe остаётся в РЕАЛЬНОМ tests/ (не tmp_path) НАМЕРЕННО: _find_gate_markers_outside_gates()

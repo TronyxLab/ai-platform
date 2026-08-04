@@ -87,7 +87,7 @@ def is_production_host() -> bool:
     return any(p in hostname for p in PRODUCTION_HOST_PATTERNS)
 
 
-# 2026-08-04 (DevPlan 129 W3, P3-5/D18): TRAP[DEBT] 2026-07-15 доведён до конца.
+# 2026-08-04 (DevPlan 129 W3, P3-5/D18): фикс доведён до конца.
 # · B10 T5 (2026-08-01) сделал create-verify-цикл + контракт «тестовые сети не удаляются».
 # · Полный фикс (W3): LABEL-ФИЛЬТР — NetworkLeaseManager удаляет ТОЛЬКО сети, созданные
 # ·   ИМ САМИМ (метка ai-platform.test-managed=true). Сети без метки (созданы вне теста:

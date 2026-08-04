@@ -25,7 +25,6 @@ __PROVISION_PLATFORM_ROOT="$(cd "${__PROVISION_SCRIPT_DIR}/../.." && pwd)"
 # · Fix: DevPlan 089 removed the legacy shell audit logger (aa6bd61) but this source line
 #   was missed → set -euo pipefail aborted the whole script (17 gate tests red).
 #   Replaced with canonical thin facade core/lib/audit.sh (Python shared/audit_logger).
-# · Reverted-debt: previously registered as C-5 in .ai/debt/096-Residual-Debt.md.
 source "${__PROVISION_SCRIPT_DIR}/../lib/audit.sh"
 
 __PROVISION_DEFAULT_PLATFORM_ENV="${__PROVISION_PLATFORM_ROOT}/platform-env.yaml"

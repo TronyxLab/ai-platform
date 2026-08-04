@@ -20,12 +20,6 @@
 # · Ported from remote-cmd.sh:294. Fix: rsync core/ + node.yaml before remote exec.
 # · Prevention: always call sync_core_to_vps() before remote exec in node-update.
 # 🧐 TRAP[DECISION] · 2026-07-26 · — · printf %q builders stay in shell (D3). Rejected: shlex.quote() ≠ printf '%q'.
-# 📝 TRAP[DEBT] · 2026-07-26 · LO · node-resolver.sh has inline python3 -c (Tier 1 Strangler trigger).
-#   АКТУАЛИЗИРОВАНО 2026-08-01 (DevPlan 116 B11 T5, U-58): прежние строки 306-316 НЕ существуют
-#   (файл = 273 строки). Inline python3 -c МИГРИРОВАН — реальные места: node-resolver.sh:214
-#   («Replaces inline python3 -c import json») и :254 («Replaces inline python3 -c import yaml») —
-#   это уже фасадные вызовы python3 -m core.internal.shared.node_yaml (DevPlan 038c).
-#   Запись P2-1 (реестр долга) отслеживает остаточную декомпозицию node-resolver.sh (271 LOC).
 # endregion MODULE_CONTRACT
 
 import argparse

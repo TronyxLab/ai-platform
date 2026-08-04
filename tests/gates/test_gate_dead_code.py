@@ -647,7 +647,7 @@ def test_all_internal_scripts_reachable(
 
     ## @scope  Shebang-files only. Does NOT scan comments for stale references.
     ## 2026-08-04 (DevPlan 129 W5, D14): TODO «Future: implement test_gate_stale_comments» СНЯТ
-    ## как SUPERSEDED — после cleanup 131 (удаление TRAP[DEBT]/реестров) механизм stale-комментариев
+    ## как SUPERSEDED — после cleanup 131 (удаление реестров долга) механизм stale-комментариев
     ## не нужен: реестры-источники удаляются вместе с историей, скан комментариев потерял бы смысл.
 
     ## @invariants

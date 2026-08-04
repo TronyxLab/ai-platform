@@ -76,13 +76,13 @@ def git_repo(tmp_path: Path) -> Path:
 def mock_git_calls(monkeypatch: pytest.MonkeyPatch) -> None:
     """Мок git-субпроцессов fingerprint/кэш — детерминизм под xdist (DevPlan 129 W3).
 
-    ## @purpose — TRAP[DEBT] 2026-08-03 (test_check_suite.py:340) снят: транзиентная
-    ##            недоступность git-субпроцесса (_tree_files/_cache_path спавнят git под
-    ##            xdist-нагрузкой 12 воркеров; OSError при спавне под memory pressure) давала
-    ##            fingerprint=None → кэш не записывался → ложный FAIL replay-тестов (~25-30%).
-    ##            Логика replay-кэша НЕ про git (git — инфраструктура fingerprint) — мок
-    ##            git-вызовов на детерминированные версии: fingerprint считается из реального
-    ##            tmp-дерева (те же exclude-правила), кэш пишется в .git/check-cache.json.
+    ## @purpose — Транзиентная недоступность git-субпроцесса (test_check_suite.py:340) снята:
+    ##            _tree_files/_cache_path спавнят git под xdist-нагрузкой 12 воркеров; OSError
+    ##            при спавне под memory pressure давала fingerprint=None → кэш не записывался →
+    ##            ложный FAIL replay-тестов (~25-30%). Логика replay-кэша НЕ про git (git —
+    ##            инфраструктура fingerprint) — мок git-вызовов на детерминированные версии:
+    ##            fingerprint считается из реального tmp-дерева (те же exclude-правила), кэш
+    ##            пишется в .git/check-cache.json.
     ## @io — monkeypatch → ⎋ None
     ## @complexity O(1) — два monkeypatch.setattr
     ## @invariants
@@ -368,7 +368,7 @@ def test_fingerprint_changes_on_manifest_edit(git_repo: Path) -> None:
 # 🧪 TRAP[TEST] · Wave 3 · replay: зелёный прогон реплеится при том же fingerprint
 # · Scenario: 2× run_diagnostic(no_fix=True) на неизменённом дереве → 2-й содержит «replay», exit 0
 # · Last fail: 2026-08-03 — транзиентная недоступность git в tmp-репо под нагрузкой
-# ·   (TRAP[DEBT] снят DevPlan 129 W3: mock_git_calls — мок git-субпроцессов, см. fixture)
+# ·   (снят DevPlan 129 W3: mock_git_calls — мок git-субпроцессов, см. fixture)
 # · Remove if: кэш-механизм изменён
 def test_diagnostic_replays_green_run(git_repo: Path, capsys, mock_git_calls) -> None:
     """Повторный прогон на неизменённом дереве реплеит зелёный отчёт (AC-3)."""

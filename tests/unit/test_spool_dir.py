@@ -15,7 +15,7 @@
 ##   which is acceptable for now (see DD2 in DevPlan 006).
 ## @changes
 ##   2026-07-15 · Created (GAP-003 remediation)
-##   2026-08-04 · DevPlan 129 W1 T3 — TRAP[DEBT] 2026-07-15 снят: все 3 модуля имеют
+##   2026-08-04 · DevPlan 129 W1 T3 — spool-декларации закрыты: все 3 модуля имеют
 ##     spool-декларации. litellm/infra-metrics — spool_dir (абсолютные пути /var/lib/platform/*);
 ##     langfuse — spool_dir: none (stateless, DevPlan 116 B3 T8, U-67, D3). Контракт теста —
 ##     spool_dir OR spool_volume (OR, не AND): spool_volume — docker volume name, не файловый

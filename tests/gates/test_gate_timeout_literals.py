@@ -62,7 +62,7 @@ from tests.helpers.gate_helpers import repo_root
 # Rule) и сканируют их через параметр root=tmp_path; позитивные тесты сканируют рабочее дерево.
 # Сканеры также исключают файлы с префиксом _gate_probe_ (тестовые артефакты, НЕ продукт).
 # Отвергнуто: xdist_group("serial") — требует --dist loadgroup, при -n auto (load) игнорируется.
-# 2026-08-04 (DevPlan 129 W2): TRAP[DEBT] 2026-08-03 СНЯТ — probe-файлы уже в tmp_path
+# 2026-08-04 (DevPlan 129 W2): probe-файлы уже в tmp_path
 # (перенесены DevPlan 119 H, см. _find_offenders/_find_opt_path_literals с root=tmp_path).
 logger = logging.getLogger(__name__)
 
@@ -156,7 +156,7 @@ def _find_offenders(root: "object | None" = None) -> list[tuple[str, int, int]]:
     ▶ ┌core/internal domain files┐ → ○ AST walk → ◇ subprocess.* + timeout=литерал ∈ set + cmd domain
       → ⊕ offenders → ⎋ list. Пути — ОТНОСИТЕЛЬНО корня (по умолчанию core/internal/, фикс C1).
     Параметр root (DevPlan 119 H): R5-тесты сканируют probe во tmp_path — Zero Hardcode Rule,
-    устраняет xdist-race (probe-файлы больше не пишутся в рабочее дерево, TRAP[DEBT] 2026-08-03).
+    устраняет xdist-race (probe-файлы больше не пишутся в рабочее дерево).
     """
     base = _CORE_INTERNAL if root is None else root
     offenders: list[tuple[str, int, int]] = []
@@ -212,7 +212,7 @@ def _find_module_offenders(root: "object | None" = None) -> list[tuple[str, int,
     ##            subprocess.*) — правило «любой вызов» покрывает этот паттерн: файлы из
     ##            _MODULE_DOMAIN_FILES целиком docker/ssh-домен (agent_watchdog, docker_ops).
     ## Параметр root (DevPlan 119 H): R5-тесты сканируют probe во tmp_path — Zero Hardcode Rule,
-    ## устраняет xdist-race (TRAP[DEBT] 2026-08-03).
+    ## устраняет xdist-race.
     """
     base = _CORE_MODULES if root is None else root
     offenders: list[tuple[str, int, int]] = []
@@ -325,7 +325,7 @@ def test_r5_negative_module_rule_detects_run_docker_literal(caplog, tmp_path) ->
     import textwrap
 
     # DevPlan 119 H: probe во tmp_path (Zero Hardcode Rule) — рабочее дерево не загрязняется,
-    # xdist-race с позитивным сканером _find_module_offenders устранён (TRAP[DEBT] 2026-08-03).
+    # xdist-race с позитивным сканером _find_module_offenders устранён.
     # probe_rel добавляется в _MODULE_DOMAIN_FILES с watchdog-префиксом — сканер (root=tmp_path)
     # вычисляет rel = basename; добавляем БЕЗ префикса, чтобы релятивный путь совпал.
     probe = tmp_path / "_gate_probe_tmp.py"
@@ -457,7 +457,7 @@ def test_timeout_in_reconciler_projects(caplog) -> None:
 # 🧪 TRAP[TEST] · 2026-08-02 · NEGATIVE (R5) · литерал в новом domain-файле детектится (DevPlan 119 A2)
 # · Scenario: probe-файл tmp_path/ с subprocess docker + timeout=10 литерал → _find_offenders ловит
 # ·   (DevPlan 119 H: probe перенесён из рабочего дерева core/internal/ в tmp_path — Zero Hardcode
-# ·   Rule + устранение xdist-race, TRAP[DEBT] 2026-08-03)
+# ·   Rule + устранение xdist-race)
 # · Last fail: N/A (новый negative-тест — исходный вход AUDIT-4 T1 = timeout=10 в docker_registry_auth:278)
 # · Remove if: timeout-literals гейт отменяется
 def test_timeout_literal_detected_negative(caplog, tmp_path) -> None:
@@ -472,7 +472,7 @@ def test_timeout_literal_detected_negative(caplog, tmp_path) -> None:
     import textwrap
 
     # DevPlan 119 H: probe во tmp_path (Zero Hardcode Rule) — рабочее дерево не загрязняется,
-    # xdist-race между R5-создателем и позитивным сканером устранён (TRAP[DEBT] 2026-08-03).
+    # xdist-race между R5-создателем и позитивным сканером устранён.
     probe = tmp_path / "_gate_probe_timeout_a2.py"
     probe_rel = "_gate_probe_timeout_a2.py"
     probe.write_text(
@@ -515,7 +515,7 @@ def _find_opt_path_literals(root: "object | None" = None) -> list[tuple[str, int
     ## @purpose  AC-B2.1/AC-B3.1 (DevPlan 119): 0 дублирующих литералов путей вне SoT deploy_paths.
     ##            Комментарии с литералом тоже RED (дрейф-источник — переписывать, не цитировать).
     ## Параметр root (DevPlan 119 H): R5-тесты сканируют probe во tmp_path — Zero Hardcode Rule,
-    ## устраняет xdist-race (probe-файлы больше не пишутся в рабочее дерево, TRAP[DEBT] 2026-08-03).
+    ## устраняет xdist-race (probe-файлы больше не пишутся в рабочее дерево).
     """
     base = _CORE_INTERNAL if root is None else root
     offenders: list[tuple[str, int, str]] = []
@@ -556,7 +556,7 @@ def test_no_opt_path_literals_in_core_internal(caplog) -> None:
 @ldd_trajectory
 # 🧪 TRAP[TEST] · 2026-08-02 · NEGATIVE (R5) · литерал /opt/projects в новом файле детектится (B2)
 # · Scenario: probe-файл (tmp_path) с os.environ.get("PROJECTS_BASE", "/opt/projects") → сканер ловит
-# ·   (DevPlan 119 H: probe в tmp_path — Zero Hardcode Rule, устранение xdist-race, TRAP[DEBT] 2026-08-03)
+# ·   (DevPlan 119 H: probe в tmp_path — Zero Hardcode Rule, устранение xdist-race)
 # · Last fail: deploy_engine.py:234 projects_base="/opt/projects" (исходный вход AUDIT-4 T2)
 # · Remove if: opt-path гейт отменяется
 def test_opt_projects_literal_detected_negative(caplog, tmp_path) -> None:
@@ -589,7 +589,7 @@ def test_opt_projects_literal_detected_negative(caplog, tmp_path) -> None:
 # 🧪 TRAP[TEST] · 2026-08-02 · NEGATIVE (R5) · литералы /opt/platform + /opt/node-configs детектятся (B3)
 # · Scenario: probe-файл (tmp_path) с os.environ.get("PLATFORM_ROOT", "/opt/platform") и
 # ·   "/opt/node-configs" → ловится (DevPlan 119 H: probe в tmp_path — Zero Hardcode Rule,
-# ·   устранение xdist-race, TRAP[DEBT] 2026-08-03)
+# ·   устранение xdist-race)
 # · Last fail: orchestrator.py:890 platform_root="/opt/platform", secrets.py:91 "/opt/node-configs" (AUDIT-4 T3)
 # · Remove if: opt-path гейт отменяется
 def test_opt_platform_nodeconfigs_literal_detected_negative(caplog, tmp_path) -> None:

@@ -340,7 +340,7 @@ server {{
 
     http2 on;
 
-    # 📝 TRAP[DEBT] закрыт RC 121 (C6): путь резолвится через shared letsencrypt_live()
+    # Путь сертификатов резолвится через shared letsencrypt_live() (RC 121 C6)
     ssl_certificate {le_live}/{cert_domain}/fullchain.pem;
     ssl_certificate_key {le_live}/{cert_domain}/privkey.pem;
 

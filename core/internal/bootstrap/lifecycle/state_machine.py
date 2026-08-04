@@ -214,8 +214,8 @@ _phase_dependency_graph: dict[str, set[str]] = {
 }
 
 # Grouped-phase sub-step resume (execute_grouped_phase) УДАЛЕНО (волна 117 D5):
-# · TRAP[DEBT] снят с фиксацией решения — sub-step resume вне скоупа волны (без нового
-# · функционала). Фазы выполняются целиком; идемпотентность обеспечивается phase-статусами
+# · Решение зафиксировано — sub-step resume вне скоупа волны (без нового функционала).
+# · Фазы выполняются целиком; идемпотентность обеспечивается phase-статусами
 # · (done / done_with_warnings / pending / failed) — WARN-фазы перевыполняются при следующем init.
 
 # ── Phase statuses (волна 117 D5: WARN-семантика) ──────────────────────────

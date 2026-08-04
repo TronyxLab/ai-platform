@@ -42,11 +42,6 @@
 ##             wait_for_readiness/run_healthcheck/_invoke_healthcheck* → healthcheck_runner.py;
 ##             _handle_hermes_agent → hermes_workflow.py (оркестратор: роутинг + CLI)
 ##
-## ✅ TRAP[DEBT] · 2026-07-22 · D3 (5 test-side failures) — ЗАКРЫТ волнами 128 W1/W2:
-## · W1: примитивы docker ps/stop/rm вынесены в shared/docker_ops (bytes→str нормализация
-## ·   внутри слоя, TRAP[BUG] type-safety 2026-07-22 снят); W2: тесты верифицированы
-## ·   (0 failures в test_docker_orchestrator.py, моки к контракту shared-слоя).
-## · Note: orphan-реконсиляция делегирована в orphan_reconciler (DevPlan 117 D18)
 ## @modulemap
 ##   _check_image_exists [W:1] — docker manifest inspect via subprocess → bool
 ##   _resolve_compose_file [W:1] — find compose.yaml → docker-compose.yaml → docker-compose.base.yml in module dir
@@ -95,7 +90,7 @@ from core.internal.bootstrap.deploy import (
 )
 
 # DevPlan 128 W1 (P2-5/D6): docker ps/stop/rm примитивы — shared/docker_ops
-# (единственный слой, гейт docker_sole_path; TRAP[DEBT] D3 закрыт волной W1/W2).
+# (единственный слой, гейт docker_sole_path).
 from core.internal.shared import docker_ops
 from core.internal.shared.audit_logger import write_audit_entry as _shared_write_audit_entry
 

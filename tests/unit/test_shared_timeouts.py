@@ -142,7 +142,7 @@ def test_channels_defaults(caplog: pytest.LogCaptureFixture, monkeypatch: pytest
     # 🧪 TRAP[TEST] · Regression · Scenario: DEFAULT_DEPLOY_TIMEOUT/RETRY_COUNT/RETRY_BACKOFF
     # · Last fail: N/A (T1.3 — константы канала перенесены в timeouts)
     # · Remove if: канальные дефолты меняются
-    # 2026-08-04 (DevPlan 129 W3, D-11): TRAP[DEBT] 2026-08-03 СНЯТ — env-детерминизм уже
+    # 2026-08-04 (DevPlan 129 W3, D-11): env-детерминизм уже
     # реализован ниже: monkeypatch.delenv/setenv("PLATFORM_DEPLOY_TIMEOUT") + importlib.reload
     # (автооткат monkeypatch, значение теста не зависит от dev-машины оператора).
     from core.internal.deploy import channels

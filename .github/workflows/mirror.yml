@@ -212,7 +212,7 @@ jobs:
           fi
           echo "[IMP:9][MIRROR][VERIFY] Mirror sync verified: ${SOURCE_HEAD:0:7}"
 
-      # 💼 TRAP[DEBT] · 2026-07-07 · LOW · Manual force-sync (D24, закрыт 130 W4 — keep by design)
+      # 💼 Manual force-sync (D24, keep by design, 130 W4)
       # · Ручной force-sync канал СОХРАНЯЕТСЯ как documented recovery-procedure (keep by design):
       # · автоматизированный push выше (STEP_PushToMirror) — единственный штатный канал;
       # · force-sync — ручной recovery при non-fast-forward (mirror diverged).

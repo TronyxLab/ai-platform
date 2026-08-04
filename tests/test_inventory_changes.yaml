@@ -959,7 +959,7 @@ removed:
 
   # ── Волна 117 (D5): execute_grouped_phase удалён → grouped-phase тесты удалены ──
   - nodeid: "tests/integration/test_bootstrap_dry_run.py::test_skip_already_done_phases"
-    reason: "Волна 117 D5: execute_grouped_phase (sub-step resume) удалён как мёртвый код — TRAP[DEBT] снят, sub-step resume вне скоупа волны. Тест консервировал удалённую функцию. WARN-семантика (done_with_warnings ≠ done) покрыта tests/unit/test_state_machine.py::test_phase_with_warnings_not_done."
+    reason: "Волна 117 D5: execute_grouped_phase (sub-step resume) удалён как мёртвый код — решение зафиксировано, sub-step resume вне скоупа волны. Тест консервировал удалённую функцию. WARN-семантика (done_with_warnings ≠ done) покрыта tests/unit/test_state_machine.py::test_phase_with_warnings_not_done."
     issue: "117-post-refactor-drift D5"
     approved_by: "@tronyx"
   - nodeid: "tests/integration/test_bootstrap_dry_run.py::test_grouped_phase_skip_unchanged_sub_steps"

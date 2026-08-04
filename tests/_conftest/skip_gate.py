@@ -33,7 +33,7 @@ import pytest
 ## @rationale — Prevents agents from masking real bugs with pytest.skip (TASK-9).
 ##              The hook+fixture combo ensures every skip is visible in output;
 ##              agents reviewing LDD logs can verify the skip is justified.
-# 2026-08-04 (DevPlan 129 W1 T6): TRAP[DEBT] 2026-07-08 СНЯТ — uniform-обработка подтверждена.
+# 2026-08-04 (DevPlan 129 W1 T6): uniform-обработка подтверждена.
 # · Все tests/test_e2e_*.py используют _handle_e2e_error (grep-аудит: 0 e2e без хендлера).
 # · Smoke-тесты (test_smoke_*, test_component_hermes) используют каноническую альтернативу —
 # · retry с экспоненциальным backoff (паттерн 1s/2s/4s, TRAP[BUG] 2026-07-23) — оба паттерна

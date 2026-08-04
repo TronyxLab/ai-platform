@@ -64,7 +64,7 @@ _EXTERNAL_NETWORKS = ["test-observability-net", "test-proxy-net"]
 ## @purpose — Module-scoped compose lifecycle fixture for monitoring smoke tests.
 ##            Pre-cleans wave-monitoring project, starts wave-monitoring-smoke,
 ##            yields, tears down on completion.
-# 2026-08-04 (DevPlan 129 W3): TRAP[DEBT] 2026-08-01 СНЯТ — volume prometheus-config-gen
+# 2026-08-04 (DevPlan 129 W3): volume prometheus-config-gen
 # объявлен в docker-compose.test.yml (test-overlay, см. volumes: секцию) — test-стек
 # base+test больше не ссылается на необъявленный volume («undefined volume» устранён).
 
@@ -305,7 +305,7 @@ def monitoring_compose():
     # test-observability-net/test-proxy-net are SHARED external test networks (tests/_conftest/
     # networks.py TEST_NETWORKS). B10 T5 contract: shared external networks are created once,
     # reused across sessions, and MUST NOT be removed in teardown (parallel-session race —
-    # TRAP[DEBT] 2026-07-15 networks.py). The old `created_by_us` rm-loop was removed 2026-08-01
+    # networks.py). The old `created_by_us` rm-loop was removed 2026-08-01
     # (was: this fixture deleted networks it created while other sessions still needed them).
 
     _logger.info("[IMP:9][monitoring_compose][teardown] Fixture teardown complete")

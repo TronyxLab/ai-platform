@@ -152,7 +152,7 @@ _RE_DOTTED_NAME = re.compile(r"^[a-z_][\w]*(\.[a-z_][\w]*)+$")
 # Rev: сжатие allowlist — отдельный backlog (модули вне контейнерного рантайма).
 # 2026-08-02 (DevPlan 118 C1): docker_ops.py +1 запись (shared.timeouts — C1 требует импорт
 #   канона таймаутов); docker_compose запись сдвинута 24→27 (импорт-блок вырос на 3 строки).
-# 2026-08-02 (DevPlan 119 C2/C1): watchdog TRAP[DEBT]-блоки (+7 строк) → номера строк +7;
+# 2026-08-02 (DevPlan 119 C2/C1): watchdog-блоки (+7 строк) → номера строк +7;
 #   backup_config.py запись УДАЛЕНА — core.internal.config импорт удалён (C1, контейнер без core/internal).
 # 2026-08-03 (RC 121, долг 119 C2): 8 watchdog allowlist-записей УДАЛЕНЫ вместе с подсистемой
 #   (agent_watchdog/circuit_breaker/docker_ops — код, тесты, env_requires, timeouts).
@@ -1740,7 +1740,7 @@ class TestB11DottedImportDetection:
     def test_dotted_py_import_in_modules_is_violation(self, tmp_path: Path) -> None:
         """R5 negative: dotted py-import из modules → violation (RED)."""
         # region FUNC_test_dotted_py_import_in_modules_is_violation
-        # 2026-08-04 (DevPlan 129 W2): TRAP[DEBT] 2026-08-03 снят — xdist-гонка устранена exclusions
+        # 2026-08-04 (DevPlan 129 W2): xdist-гонка устранена exclusions
         # · сканеров-жертв (DevPlan 119 C / 124): _b11_negative_py_tmp в _EXCLUDED_DIRS
         # · test_gate_grep_summary.py и _EXCLUDE_DIRS test_gate_no_unregistered_entrypoint.py.
         # · Probe остаётся в РЕАЛЬНОМ core/modules/ НАМЕРЕННО: resolve_import/scan_py_file
@@ -1776,7 +1776,7 @@ class TestB11DottedImportDetection:
     def test_python3_m_in_modules_is_violation(self, tmp_path: Path) -> None:
         """R5 negative: python3 -m core.internal.* из modules/sh → violation (RED)."""
         # region FUNC_test_python3_m_in_modules_is_violation
-        # 2026-08-04 (DevPlan 129 W2): TRAP[DEBT] 2026-08-03 снят — xdist-гонка устранена exclusions
+        # 2026-08-04 (DevPlan 129 W2): xdist-гонка устранена exclusions
         # · сканеров-жертв (DevPlan 119 C / 124): _b11_negative_sh_tmp в _EXCLUDED_DIRS
         # · test_gate_grep_summary.py и _EXCLUDE_DIRS test_gate_no_unregistered_entrypoint.py.
         # · Probe остаётся в РЕАЛЬНОМ core/modules/ НАМЕРЕННО (см. TRAP[DECISION] в py-варианте).

@@ -8,10 +8,10 @@ Thin wrapper around boto3 S3 client for list/delete operations.
           paginated list and batch delete.
 @scope    Used by RetentionPolicy for S3 operations.
 @invariants
-  - ✅ TRAP[DEBT] 2026-07-12 D10 — ЗАКРЫТ волной 128 W5: таймауты живут в boto3 Config
-    (botocore.config.Config connect_timeout/read_timeout) на уровне конструирования клиента
-    (retention.py: BotoConfig) — это единственное место, где boto3 Config применим
-    (Config — per-client, не per-call). Сюда параметр timeout НЕ пробрасывается (мёртвый).
+  - Таймауты живут в boto3 Config (botocore.config.Config connect_timeout/read_timeout)
+    на уровне конструирования клиента (retention.py: BotoConfig) — это единственное место,
+    где boto3 Config применим (Config — per-client, не per-call). Сюда параметр timeout
+    НЕ пробрасывается (мёртвый).
   - delete_objects batches in chunks of 1000 (S3 API limit)
 """
 # endregion MODULE_CONTRACT

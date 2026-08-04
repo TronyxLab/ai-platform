@@ -4,15 +4,16 @@
 
 # region MODULE_CONTRACT
 ## @purpose  Пошаговая процедура ротации POSTGRES_PASSWORD на provisioned-ноде.
-##           P3-4/D11 (реестр 001, DevPlan 130 W3): пароль postgres ротировался вручную →
+##           P3-4/D11 (DevPlan 130 W3): пароль postgres ротировался вручную →
 ##           риск рассинхрона потребителей (litellm, langfuse, infra-metrics, backup-cron,
-##           pgbouncer auth_query). Закрывает TRAP[DEBT] 2026-07-17 в docker-compose.base.yml.
+##           pgbouncer auth_query). Runbook фиксирует риск ротации POSTGRES_PASSWORD
+##           (ранее — открытый долг в docker-compose.base.yml, закрыт решением 130 W3).
 ## @scope    Provisioned-нода с модулем postgres (docker compose, shared-db-net).
 ##           НЕ для dev-локали (там ci_default «test-pg-pwd» из .env).
 ## @invariants
 ##   - POSTGRES_PASSWORD потребляется при initdb и хранится в data dir (pg_authid) —
-##     смена env-переменной НЕ ротирует пароль в работающей БД (TRAP[DEBT] 2026-07-17).
-##     Ротация = ALTER USER (DB-сторона) + обновление секретов (config-сторона).
+##     смена env-переменной НЕ ротирует пароль в работающей БД (риск, зафиксированный
+##     в docker-compose.base.yml). Ротация = ALTER USER (DB-сторона) + обновление секретов (config-сторона).
 ##   - Charset-ограничение: ^[A-Za-z0-9._-]+$ (secret-definitions.yaml + secrets_validator) —
 ##     спецсимволы ломают pgbouncer/scram (crash-loop, DevPlan 116 B3 T5).
 ##   - Порядок критичен: сначала ALTER USER (живой БД), затем секреты, затем потребители.
@@ -35,7 +36,7 @@
 
 | Потребитель | Механизм | Эффект ротации |
 |-------------|----------|----------------|
-| `postgres` (initdb) | `POSTGRES_PASSWORD` env в compose | Только initdb-время; смена env после init НЕ ротирует (TRAP[DEBT]) |
+| `postgres` (initdb) | `POSTGRES_PASSWORD` env в compose | Только initdb-время; смена env после init НЕ ротирует (см. §инварианты) |
 | `pgbouncer` | `DATABASE_URLS` (wildcard) + `DB_PASSWORD` | auth_query→pg_shadow обновляется сам; пулер требует restart (кэш auth-соединения) |
 | `litellm` | `DATABASE_URL` → pgbouncer:6432/litellm | Пересоздание контейнера с новым env |
 | `langfuse` | `DATABASE_URL` → pgbouncer:6432/langfuse | Пересоздание контейнера с новым env |

@@ -259,7 +259,7 @@ def test_resolve_from_opt(tmp_path: Path) -> None:
     # · Rejected: tmp_path (Zero Hardcode Rule) — путь 3 ЖЁСТКО зашит в модуле под тестом
     # ·   (resolve_node_yaml → NodeYaml.resolve, core/internal/shared/node_yaml/resolve.py:94 —
     # ·   candidates.append("/opt/node-configs/...")), инъекции параметра нет.
-    # · Reason: DevPlan 129 W1 T5 — TRAP[DEBT] 2026-07-08 снят: cleanup УЖЕ реализован
+    # · Reason: DevPlan 129 W1 T5 — cleanup УЖЕ реализован
     # ·   (try/finally + shutil.rmtree только тест-поддиректории, строки ниже); при отсутствии
     # ·   прав на /opt тест корректно скипается (PermissionError → pytest.skip). Полный перевод
     # ·   на tmp_path потребовал бы изменения продакшен-кода resolve.py (вне скоупа W1).

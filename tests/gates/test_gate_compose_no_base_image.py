@@ -232,7 +232,7 @@ def test_platform_dev_has_l1_image(caplog) -> None:
 
 
 # region test_root_compose_uses_context_image_var
-# 2026-08-04 (DevPlan 129 W5, D13): TRAP[DEBT] 2026-07-14 СНЯТ — include-архитектура = канон
+# 2026-08-04 (DevPlan 129 W5, D13): include-архитектура = канон
 # (root docker-compose.yml include:-based, образ hermes-agent определён в base.yml с
 # CONTEXT_IMAGE var); тест адаптирован test_root_compose_uses_context_image_var ниже.
 # Rev-условие снято: возврат к inline-сервисам в root compose запрещён инвариантом include-канона.

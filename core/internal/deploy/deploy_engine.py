@@ -77,10 +77,6 @@
 ##   🧐 TRAP[DECISION] · 2026-07-26 · — · deploy_engine + payload_deliverer — TWO separate modules
 ##   · Rejected: единый deploy_orchestrator.py (God Class >800 LOC)
 ##   · Reason: разные домены (Docker orchestration vs file delivery), DDD boundary, переиспользование
-##
-##   ✅ TRAP[DEBT] 2026-07-26 D6 (docker ops library) — ЗАКРЫТ волной 128 W1: единый слой
-##   core/internal/shared/docker_ops.py (ps/inspect/exec/stop/rm/tag/image/network/volume/info),
-##   гейт docker_sole_path (allowlist пуст); deploy_engine делегирует image inspect/tag.
 ## @changes 2026-07-26 · DevPlan 036E — Created (Wave 5e Strangler-Fig migration from the legacy deploy shell)
 # endregion MODULE_CONTRACT
 
@@ -97,7 +93,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 # DevPlan 128 W1 (P2-5/D6): docker image inspect/tag примитивы — shared/docker_ops
-# (единственный слой, гейт docker_sole_path; TRAP[DEBT] 2026-07-26 снят волной W1).
+# (единственный слой, гейт docker_sole_path).
 from core.internal.shared import docker_ops
 
 # B2: канонический дефолт PROJECTS_BASE — shared/deploy_paths (литерал /opt/projects удалён)

@@ -53,7 +53,7 @@ def _reload_platform_config(monkeypatch: pytest.MonkeyPatch, platform_root: Path
     ## 2026-08-04 (DevPlan 129 W4): del sys.modules ЗАМЕНЁН на reload_safe.reload_module —
     ##   канон reload-безопасности (удаление модуля из sys.modules пересоздаёт объект при
     ##   следующем import; старые __globals__-ссылки других модулей остаются на старый объект →
-    ##   reload-гонка monkeypatch, test-env-leak-and-flakes.md Rev 2026-08-09).
+    ##   reload-гонка monkeypatch, DevPlan 129 W4).
     ## @io — ⇥ monkeypatch, platform_root → ⎋ Generator[module]
     """
     from _conftest.reload_safe import reload_module

@@ -8,7 +8,7 @@
 ##           ссылки (__globals__ других модулей, захваченные классы в _deliver/_receive) остаются на
 ##           СТАРЫЙ объект → monkeypatch патчит новый, вызов идёт по старому → реальный SSH/Docker
 ##           поллинг вместо заглушки (флейк test_deploy_mk_chain.py:128, зависание 1276.8s
-##           test_orchestrator_receive_version.py — test-env-leak-and-flakes.md Rev 2026-08-09).
+##           test_orchestrator_receive_version.py — DevPlan 129 W4).
 ## @scope    Все тест-хелперы, которым нужен reload модуля с новым env (test_status_page,
 ##           test_platform_export_metrics, unit/*, интеграционные). НЕ содержит тестов (пакет _conftest).
 ## @invariants
@@ -20,7 +20,7 @@
 ## @rationale DevPlan 129 W4 (AC-5): reload-гонка monkeypatch/sys.modules исследована и устранена —
 ##            канон «НЕ удалять модули из sys.modules; importlib.reload + патч ПОСЛЕ» задокументирован
 ##            в едином хелпере. Тест-хелперы не дублируют паттерн (DRY); следующий агент видит канон.
-## @changes 2026-08-04 · Created (DevPlan 129 W4, test-env-leak-and-flakes.md Rev 2026-08-09)
+## @changes 2026-08-04 · Created (DevPlan 129 W4, reload-race устранён)
 # endregion MODULE_CONTRACT
 
 import importlib

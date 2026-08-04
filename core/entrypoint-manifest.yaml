@@ -1118,42 +1118,6 @@ gates:
 - id: test_ssl_provision_sh_deleted
   test_file: test_gate_dead_code.py
   description: 'Auto-discovered gate: test_ssl_provision_sh_deleted'
-- id: test_check_file_lines_ignores_debt
-  test_file: test_gate_debt_registry.py
-  description: 'Auto-discovered gate: test_check_file_lines_ignores_debt'
-- id: test_debt_registry_all_entries_have_status_rev
-  test_file: test_gate_debt_registry.py
-  description: 'Auto-discovered gate: test_debt_registry_all_entries_have_status_rev'
-- id: test_debt_registry_all_sections
-  test_file: test_gate_debt_registry.py
-  description: 'Auto-discovered gate: test_debt_registry_all_sections'
-- id: test_debt_registry_arch_decisions_rev_dates
-  test_file: test_gate_debt_registry.py
-  description: 'Auto-discovered gate: test_debt_registry_arch_decisions_rev_dates'
-- id: test_debt_registry_exists
-  test_file: test_gate_debt_registry.py
-  description: 'Auto-discovered gate: test_debt_registry_exists'
-- id: test_debt_registry_no_stale_rev_dates
-  test_file: test_gate_debt_registry.py
-  description: 'Auto-discovered gate: test_debt_registry_no_stale_rev_dates'
-- id: test_debt_registry_no_trivial_entries
-  test_file: test_gate_debt_registry.py
-  description: 'Auto-discovered gate: test_debt_registry_no_trivial_entries'
-- id: test_debt_registry_node_resolver_in_p2
-  test_file: test_gate_debt_registry.py
-  description: 'Auto-discovered gate: test_debt_registry_node_resolver_in_p2'
-- id: test_debt_registry_shell_residual_entries
-  test_file: test_gate_debt_registry.py
-  description: 'Auto-discovered gate: test_debt_registry_shell_residual_entries'
-- id: test_gitignore_covers_debt
-  test_file: test_gate_debt_registry.py
-  description: 'Auto-discovered gate: test_gitignore_covers_debt'
-- id: test_negative_missing_rev_detected
-  test_file: test_gate_debt_registry.py
-  description: 'Auto-discovered gate: test_negative_missing_rev_detected'
-- id: test_negative_stale_date_detected
-  test_file: test_gate_debt_registry.py
-  description: 'Auto-discovered gate: test_negative_stale_date_detected'
 - id: test_canonical_verbs_no_legacy
   test_file: test_gate_deploy_channel.py
   description: 'Auto-discovered gate: test_canonical_verbs_no_legacy'

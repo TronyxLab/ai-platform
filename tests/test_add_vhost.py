@@ -26,7 +26,7 @@ from conftest import assert_ldd_stderr, source_and_run
 
 # ─── Constants ───────────────────────────────────────────────────────
 SCRIPT_PATH = Path(__file__).resolve().parent.parent / "core" / "internal" / "scaffold" / "add-vhost.sh"
-# B10 T9: stale TRAP[DEBT] 2026-07-31 «Все 7 тестов падают» удалён — проверено 2026-08-01:
+# B10 T9: stale-предупреждение «Все 7 тестов падают» удалено — проверено 2026-08-01:
 # 7 passed (python3 -m pytest tests/test_add_vhost.py). Предупреждение о провале вводило в заблуждение.
 PLATFORM_ROOT = Path(__file__).resolve().parent.parent  # /Users/.../ai-platform
 

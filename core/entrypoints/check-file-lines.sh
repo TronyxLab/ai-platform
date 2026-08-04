@@ -51,7 +51,7 @@ echo "[IMP:7][check-file-lines] Scanning files exceeding ${MAX_LINES} lines..."
 
 WARNING_COUNT=0
 
-# 2026-08-04 (DevPlan 129 W2): TRAP[DEBT] 2026-08-03 снят — xdist-race устранён двойной защитой:
+# 2026-08-04 (DevPlan 129 W2): xdist-race устранён двойной защитой:
 # 1) [ -f "$file" ] перед wc в ТОМ ЖЕ цикле (файл мог исчезнуть между find-итерациями);
 # 2) || true в command substitution (pipefail + set -e иначе роняли скрипт ДО fallback-ветки —
 #    bash сообщает redirection-ошибку на своём stderr, 2>/dev/null не перехватывает).

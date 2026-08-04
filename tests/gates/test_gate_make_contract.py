@@ -180,10 +180,6 @@ def test_no_empty_phony_targets(caplog, tmp_path) -> None:
 # · Scenario: make -n <target> для всех .PHONY-таргетов всех 13 docker-модулей → exit 0
 # · Last fail: U-25 (restore dry-run был тихим no-op)
 # · Remove if: make-контракт модулей меняется кардинально
-# 📝 TRAP[DEBT] · 2026-08-01 · MED · FIXED 2026-08-02 (DevPlan 119 C): flaky unlink под xdist —
-# ·   .combined.mk.tmp писался в фиксированный путь модуля и unlink() падал с FileNotFoundError
-# ·   при параллельном прогоне. Фикс (как и предписывал TRAP): tmp_path-фикстура вместо
-# ·   core/modules/<mod>/.combined.mk.tmp — 3 функции мигрированы (no_empty_phony, dry_run, restart).
 @pytest.mark.gate
 def test_make_n_dry_run_all_targets(caplog, tmp_path) -> None:
     """make -n для всех .PHONY-таргетов всех docker-модулей — exit 0 (без реального docker)."""

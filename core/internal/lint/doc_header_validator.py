@@ -51,12 +51,6 @@ logger = logging.getLogger("doc_header_validator")
 # ·   между DevPlan и Brief.
 # · Rev: при росте namelint-логики >150 LOC — вынести в отдельный модуль с обновлением манифеста.
 
-# ✅ TRAP[DEBT] · 2026-07-31 · D2 (check-file-lines/check-shellcheck-directives) — ЗАКРЫТ волной 128 W3:
-# · Имена из Brief-описаний не существуют в коде: check-file-lines — отдельный entrypoint
-# ·   check-file-lines.sh (НЕ функция этого модуля); shellcheck-directives — нет нигде.
-# · Манифест (entrypoint-manifest.yaml) этих имён не содержит — «манифест = код» соблюдён;
-# · Brief-описания приведены в соответствие (DevPlan 128 W3).
-
 _REGION_OPEN_RE = re.compile(r"^[ \t]*# region", re.MULTILINE)
 _REGION_CLOSE_RE = re.compile(r"^[ \t]*# endregion", re.MULTILINE)
 _VALID_EXTS = {"py", "sh", "md", "yaml", "yml"}
@@ -478,11 +472,10 @@ def validate_make_target_names(repo_root: Path) -> list[str]:
     name_linter = data.get("name_linter") or {}
     system_exceptions = set(name_linter.get("system_exceptions") or [])
     system_prefixes = tuple(name_linter.get("system_prefixes") or [])
-    # ✅ TRAP[DEBT] · 2026-07-31 · D1 (namespace_collision_names) — ЗАКРЫТ волной 128 W3:
-    # · Проверка коллизий имён реализована в tests/gates/test_gate_manifest_integrity.py
-    # · (NAMESPACE_COLLISION_NAMES ← manifest name_linter; test_module_targets_use_canonical_names —
-    # ·   модульные Makefile не используют голые deploy/build). Здесь НЕ дублируется (DRY).
-    # · Манифест отражает код (гейт читает name_linter.namespace_collision_names) — «манифест = код».
+    # Проверка коллизий имён реализована в tests/gates/test_gate_manifest_integrity.py
+    # (NAMESPACE_COLLISION_NAMES ← manifest name_linter; test_module_targets_use_canonical_names —
+    #   модульные Makefile не используют голые deploy/build). Здесь НЕ дублируется (DRY).
+    # Манифест отражает код (гейт читает name_linter.namespace_collision_names) — «манифест = код».
     targets: set[str] = set()
     targets |= _parse_phony(makefile)
     mk_dir = repo_root / "makefiles"

@@ -78,7 +78,6 @@ def test_<detector>_negative_<bug_id>(self) -> None:
 |------|--------|-------------|------|
 | R1 no-pass-tests | U-69 | ✅ inline fixtures (assert True / bare-pass / no-assert) | test_gate_r1_no_pass_tests.py |
 | audit-format R2 | U-10/D1 | ✅ `test_negative_direct_write_detected` (tmp .py с `open(audit.log, "a")`) | test_gate_audit_format.py |
-| debt-freshness | U-82/D4 | ✅ `test_negative_missing_rev_detected` + `test_negative_stale_date_detected` | test_gate_debt_registry.py |
 | cross-layer imports | U-09 | ✅ 2 negative (dotted py import RED + python3 -m RED) | tests/test_cross_layer_imports.py |
 | inventory rename | U-79 | ✅ `test_negative_undocumented_removal_detected` (удаление без changelog → RED) + `test_negative_rename_exempt` (rename-пара → PASS) | test_gate_test_inventory.py |
 | image tag form | U-60 | ✅ `test_bare_latest_rejected_negative` (inline `:latest` в base.yml → RED) | test_gate_image_tag_form.py |

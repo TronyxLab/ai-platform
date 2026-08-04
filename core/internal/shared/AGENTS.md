@@ -104,4 +104,3 @@
 | root AGENTS.md | Архитектурные инварианты, языковая политика, New shared modules (086) |
 | core/AGENTS.md | Канонические операции core, cross-layer import rules |
 | tests/unit/test_shared_*.py | Unit-тесты shared-модулей |
-| .ai/debt/096-Residual-Debt.md §C1 | Источник долга (shared/AGENTS.md отсутствовал) |

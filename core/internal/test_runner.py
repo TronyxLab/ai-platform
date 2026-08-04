@@ -172,7 +172,7 @@ def _xdist_args(marker: str | None = None) -> list[str]:
 ##           ["--timeout=300"] при доступности pytest-timeout; [] иначе (best-effort).
 ##           Таймаут 300s/тест — выше max легитимного (зависание 1276.8s = 4× выше);
 ##           висящий тест падает быстро вместо 20-минутного блокирования прогона
-##           (test-env-leak-and-flakes.md Rev 2026-08-09, 1276.8s HealthcheckPoller).
+##           (DevPlan 129 W4, 1276.8s HealthcheckPoller).
 ##           Только статические суиты (static_audit/static) — docker-тесты (smoke/component)
 ##           имеют легитимные длительные healthcheck-поллинги, таймаут к ним НЕ применяется.
 ## @io       ⇥ marker: str | None → ⎋ list[str] ([] или ["--timeout=300"])

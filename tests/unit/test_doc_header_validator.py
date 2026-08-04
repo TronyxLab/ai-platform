@@ -280,7 +280,7 @@ def test_namelint_manifest_code_sync(caplog) -> None:
     tests/gates/test_gate_manifest_integrity.py читает его (NAMESPACE_COLLISION_NAMES ← manifest);
     (2) stale-имена check_file_lines/check_shellcheck_directives отсутствуют в коде
     doc_header_validator (D2 — Brief-описания приведены к коду).
-    Last fail: 128 W3 — TRAP[DEBT] D1/D2 (манифест заявлял больше, чем проверялось).
+    Last fail: 128 W3 — D1/D2 (манифест заявлял больше, чем проверялось).
     Remove if: name_linter секция мигрирует на другой механизм."""
     caplog.set_level(logging.INFO)
     manifest = _REPO_ROOT / "core" / "entrypoint-manifest.yaml"
@@ -304,8 +304,6 @@ def test_namelint_manifest_code_sync(caplog) -> None:
     assert "check_shellcheck_directives" not in validator_src, (
         "check_shellcheck_directives не существует в doc_header_validator (D2)"
     )
-    # D1/D2 сняты: не осталось ОТКРЫТЫХ (📝) TRAP[DEBT]-записей в этом модуле
-    assert "📝 TRAP[DEBT]" not in validator_src, "в doc_header_validator не должно остаться открытых TRAP[DEBT]"
 
     logger.critical(
         "[IMP:9][test] manifest_code_sync: namespace_collision_names=%s (gate-consumed), D2-имена отсутствуют — OK",

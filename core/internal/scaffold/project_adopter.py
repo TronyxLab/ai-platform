@@ -30,11 +30,6 @@
 # ⚠️ TRAP[BUG] · 2026-07-17 · P1 · Silent default "personal" org + missing casing normalization — config drift
 # · Fix: fail-fast exit 1 + lowercase ghcr + exact-case uses: + сверка с node.yaml · Prevention: org явный
 
-# ✅ TRAP[DEBT] · 2026-07-26 · D8 (gen_env_platform CLI-first → subprocess overhead) — ЗАКРЫТ волной 128 W5:
-# · gen_env_platform.py имеет main() -> int + импортируемый generate_env_platform();
-# · project_adopter вызывает функцию напрямую (субпроцесс ~100ms overhead убран).
-# · D9 (node.yaml path resolution) — ЗАКРЫТ 118 E11: shared/project_yaml.py (detect_project_config).
-
 from __future__ import annotations
 
 import argparse

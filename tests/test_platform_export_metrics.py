@@ -912,7 +912,7 @@ class TestCoordinator:
         ##            объект при следующем import — старые __globals__-ссылки (например,
         ##            HealthcheckPoller в receive-цепочке других тестов) оставались на старый
         ##            объект → monkeypatch-заглушки не применялись → реальный Docker-поллинг
-        ##            (зависание 1276.8s, test-env-leak-and-flakes.md Rev 2026-08-09).
+        ##            (зависание 1276.8s, DevPlan 129 W4).
         ## @io — ⎋ None (side-effect: модуль перезагружен)
         ## @complexity O(1)
         """

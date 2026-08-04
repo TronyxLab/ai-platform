@@ -8,7 +8,7 @@
 ##           compares with container_name from all core/modules/*/docker-compose.base.yml.
 ## @invariants
 ##   - Every *_HOST value in .env.example must match a container_name in at least one base.yml
-##   - TRAP[DEBT] комментарии в .env.example исключаются из проверки (grep -v)
+##   - Комментарии-аннотации в .env.example исключаются из проверки (grep -v)
 ##   - Тест не требует Docker daemon — чисто статический анализ YAML + .env
 ## @rationale
 ##   Q: Why gate test instead of CI check?
@@ -47,13 +47,13 @@ HOST_TO_CONTAINER = {
 
 
 def _parse_env_hosts(env_path):
-    """Extract *_HOST=value pairs from .env.example, excluding TRAP comments
+    """Extract *_HOST=value pairs from .env.example, excluding annotation comments
     and known non-container host variables."""
     hosts = {}
     with open(env_path) as f:
         for line in f:
             line = line.strip()
-            # Skip TRAP annotation lines and regular comments
+            # Skip annotation lines and regular comments
             if line.startswith("#") or not line:
                 continue
             if "=" in line:

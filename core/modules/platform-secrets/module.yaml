@@ -10,7 +10,7 @@
 ##   - Secrets written to tmpfs (in-memory, never touches disk decrypted)
 ##   - Fails closed: if age key missing, service fails and docker doesn't start
 ##   # ⚠️ TRAP[BUG] · 2026-07-18 · P1 · RequiredBy=docker.service added — fails-closed invariant enforced
-##   # · Symptom: TRAP[DEBT] #2 from drift audit — unit had only Before=docker.service +
+##   # · Symptom: drift-аудит выявил отсутствие RequiredBy — unit had only Before=docker.service +
 ##   #   WantedBy=multi-user.target; docker started even if platform-secrets failed, violating
 ##   #   the declared fails-closed contract
 ##   # · Root: RequiredBy dropped during unit authoring; [Install] section lacked RequiredBy
@@ -20,7 +20,7 @@
 ## @rationale  Centralised secret management avoids per-container .env files on disk.
 ##             SOPS/age chosen for simplicity over Vault (no cluster needed).
 ## @changes
-##   2026-07-18 · Replaced TRAP[DEBT] #2 with TRAP[BUG] — RequiredBy=docker.service added (D3b)
+##   2026-07-18 · Replaced with TRAP[BUG] — RequiredBy=docker.service added (D3b)
 ##              · Added systemd.required_by field to module.yaml
 # endregion MODULE_CONTRACT
 

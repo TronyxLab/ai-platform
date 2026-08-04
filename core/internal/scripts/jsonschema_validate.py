@@ -39,10 +39,9 @@ from pathlib import Path
 
 import jsonschema
 
-# ✅ TRAP[DEBT] · 2026-08-01 · HI · jsonschema под python3.14 — ЗАКРЫТ (FIXED, RC-сессия 2026-08-03):
-# · python_deps.py Step 1b (DevPlan 123/RC 121) добавил jsonschema в requirements.txt — голый
-# · python3 (3.14) теперь имеет jsonschema; requirements-комментарий в sync_requirements.py
-# · отражает. Этот CLI и policy_schema.py исполняются под python3 = 3.14 без ModuleNotFoundError.
+# python_deps.py Step 1b (DevPlan 123/RC 121) добавил jsonschema в requirements.txt — голый
+# python3 (3.14) теперь имеет jsonschema; requirements-комментарий в sync_requirements.py
+# отражает. Этот CLI и policy_schema.py исполняются под python3 = 3.14 без ModuleNotFoundError.
 import yaml
 
 from core.internal.shared.schema_validator import validate_yaml_against_schema
