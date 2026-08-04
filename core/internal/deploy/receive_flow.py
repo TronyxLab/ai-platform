@@ -148,7 +148,20 @@ class ReceiveFlow:
         os.makedirs(target_dir, exist_ok=True)
         for item in Path(staging).iterdir():
             if item.is_file():
-                shutil.copy2(str(item), os.path.join(target_dir, item.name))
+                dest = os.path.join(target_dir, item.name)
+                # Bootstrap-стуб (context_deployer φ8, GENERATED-STUB) может быть
+                # root-owned — receive обязан перезаписать payload: удаляем существующий
+                # файл (каталог ci-deploy-writable → os.remove работает). Pre-existing:
+                # Permission denied при overwrite root-файла (fresh bootstrap → CI receive).
+                if os.path.lexists(dest):
+                    try:
+                        os.remove(dest)
+                    except OSError:
+                        logger.warning(
+                            "[IMP:7][ReceiveFlow][deploy] Cannot remove existing %s — copy will surface the error",
+                            dest,
+                        )
+                shutil.copy2(str(item), dest)
 
         # 🧐 TRAP[DECISION] · 2026-07-31 · HI · receive() local delivery channel
         # · Rejected: SCPChannel() with empty metadata (bug — deliver() always FAILED:
