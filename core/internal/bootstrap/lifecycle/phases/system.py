@@ -339,6 +339,29 @@ def phase_platform_setup(core_dir: str, node_name: str, node_yaml: str) -> bool:
         logger.warning("[IMP:7][phase:platform_setup] docker_registry_auth.py not found at %s — skipping", auth_script)
         non_fatal_issues = True
 
+    # ── 1.5 Environment provision (networks + volumes) ──
+    # φ8 (deploy-modules) вызывается с --skip-provision (комментарий «provision done in
+    # platform_setup»), но φ3 provision НЕ выполнял (латентный баг с wave4 a461573):
+    # свежий bootstrap падал на external networks (observability-net/backup-net) в φ8.
+    # Канон: provision-environment.sh --scope networks/volumes (идемпотентен, non-fatal).
+    prov_script = os.path.join(bootstrap_dir, "provision-environment.sh")
+    if os.path.isfile(prov_script):
+        try:
+            for scope in ("networks", "volumes"):
+                helpers_subprocess.run_subprocess(
+                    ["bash", prov_script, "--scope", scope],
+                    non_fatal=True,
+                    fatal_rc=(127,),
+                    timeout=180,
+                )
+            logger.info("[IMP:9][phase:platform_setup] Environment provisioned (networks+volumes)")
+        except Exception as e:  # noqa: EXC — non-fatal: provision is best-effort
+            logger.warning("[IMP:7][phase:platform_setup] Environment provision failed (non-fatal): %s", e)
+            non_fatal_issues = True
+    else:
+        logger.warning("[IMP:7][phase:platform_setup] provision-environment.sh not found — skipping")
+        non_fatal_issues = True
+
     # ── 2. Setup-node (sudoers generation) ──
     setup_script = os.path.join(core_dir, "internal", "bootstrap", "setup-node.sh")
     if os.path.isfile(setup_script):
