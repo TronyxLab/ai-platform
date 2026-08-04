@@ -41,9 +41,12 @@ from pathlib import Path
 from typing import Any
 
 # ── Path setup for shared module import ──
-_CORE_DIR = Path(__file__).resolve().parent.parent.parent  # core/
-if str(_CORE_DIR) not in sys.path:
-    sys.path.insert(0, str(_CORE_DIR))
+# File is at core/internal/bootstrap/docker_registry_auth.py → repo root = 4 levels up
+# (namespace package core/, no __init__.py). Pre-existing bug: 3 levels inserted core/
+# itself → `from core.internal...` failed under direct-script invocation.
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
 # DevPlan 119 E5: атомарная запись — единый канон shared/atomic_writer (tempfile+fsync+replace).
 from core.internal.shared import docker_ops  # W1: docker info примитив (гейт docker_sole_path)
