@@ -194,6 +194,22 @@ def ghcr_login(token: str | None = None, user: str = "ci-deploy") -> bool:
             env=docker_env,
         )
         if result.returncode == 0:
+            # Bootstrap выполняется от root с HOME=<user-home>: файлы config.json
+            # создаются root-овыми → receive (ci-deploy) получает «permission denied».
+            # chown конфига пользователю (только при root-процессе и не-root пользователе).
+            if os.geteuid() == 0 and user != "root":
+                try:
+                    pwd_entry = pwd.getpwnam(user)
+                    docker_dir = os.path.join(user_home, ".docker")
+                    config_path = os.path.join(docker_dir, "config.json")
+                    for path in (docker_dir, config_path):
+                        if os.path.exists(path):
+                            os.chown(path, pwd_entry.pw_uid, pwd_entry.pw_gid)
+                    if os.path.isfile(config_path):
+                        os.chmod(config_path, 0o600)
+                    logger.info("[IMP:9][ghcr_login] docker config chowned to %s", user)
+                except (KeyError, OSError) as e:
+                    logger.warning("[IMP:7][ghcr_login] Cannot chown docker config to %s: %s", user, e)
             logger.info("[IMP:9][ghcr_login] Auth success for ghcr.io as %s", user)
             return True
         logger.warning(
