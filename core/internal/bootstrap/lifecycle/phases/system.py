@@ -336,8 +336,9 @@ def phase_platform_setup(core_dir: str, node_name: str, node_yaml: str) -> bool:
             logger.warning("[IMP:7][phase:platform_setup] Docker Hub auth failed (non-fatal): %s", e)
             non_fatal_issues = True
     else:
+        # Отсутствие скрипта (test-окружения/tmp CORE_DIR) — WARN, не non_fatal:
+        # инвариант «Docker Hub auth is non-fatal» (rate-limit warning if creds missing).
         logger.warning("[IMP:7][phase:platform_setup] docker_registry_auth.py not found at %s — skipping", auth_script)
-        non_fatal_issues = True
 
     # ── 1.5 Environment provision (networks + volumes) ──
     # φ8 (deploy-modules) вызывается с --skip-provision (комментарий «provision done in
