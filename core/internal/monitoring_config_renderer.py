@@ -31,6 +31,14 @@ from pathlib import Path
 
 import yaml
 
+# Canonical sys.path bootstrap (pattern: config_renderer.py) — repo root needed
+# for `core.internal.*` imports in monitoring/* submodules under direct-script
+# invocation (`python3 core/internal/monitoring_config_renderer.py`, make target).
+# File is at core/internal/monitoring_config_renderer.py → root = 3 levels up.
+_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
 # ⚠️ TRAP[DECISION] · 2026-07-31 · — · Native template import — dual-path (DevPlan 094 §7.1)
 # · Rejected: subprocess to the deleted shell wrapper (2 extra processes, arg-marshalling, sed fallback drift)
 # · Reason: direct import — 0 subprocess in Python domain; strict {{UPPER_SNAKE}} grammar enforced
