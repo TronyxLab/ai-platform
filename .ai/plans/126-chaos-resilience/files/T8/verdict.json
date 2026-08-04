@@ -1,0 +1,127 @@
+{
+  "test": "T8",
+  "verdict": "FAIL",
+  "ttr_s": 15,
+  "incident_start_epoch": 1785798034,
+  "checked_at": "2026-08-04T00:03:09Z",
+  "reconstruction_note": "RECONSTRUCTED 2026-08-04 (W5) — verdict.json отсутствовал (тест не дошёл до record_verdict: crash на pre-record assert, наиболее вероятно `assert backup_enspc`). Вердикт и маркеры восстановлены из экспортированных артефактов T8/ (journal.log, backup-cron.log, nginx.log, promtail.log, loki.json, alerts.json). incident_start_epoch выведен из границы экспорта journalctl (from_iso = incident_start - 120 = 22:58:34Z → incident_start = 23:00:34Z). ttr_s = оценка (post-fill → ratio_critical confirm: sites+backup probes + первый ratio-поллинг).",
+  "markers": [
+    {
+      "label": "journald:enspc-evidence",
+      "source": "journald",
+      "regex": "No space left on device|ENOSPC",
+      "expected": "required",
+      "found": false,
+      "loki_duplicate": null,
+      "detail": "count=0 (reconstructed: 0 совпадений в T8/journal.log, реальное окно 22:58:34-23:03:09Z; journald: только sshd/systemd/CRON/UFW — никаких ENOSPC)"
+    },
+    {
+      "label": "docker:backup-enspc",
+      "source": "docker",
+      "regex": "No space left on device|ENOSPC",
+      "expected": "required",
+      "found": false,
+      "loki_duplicate": null,
+      "detail": "count=0 (reconstructed: T8/backup-cron.log пуст (0 байт) — backup-cron не пишет в stdout; docker exec-вывод backup-postgres.sh не логируется → след ENOSPC не персистирован)"
+    },
+    {
+      "label": "alerts:diskspace-fired",
+      "source": "alerts",
+      "regex": "Disk|space",
+      "expected": "optional",
+      "found": false,
+      "loki_duplicate": null,
+      "detail": "rule_states=[] (reconstructed: T8/alerts.json = []; DiskSpaceLow rule expr без mountpoint-фильтра → reducer last берёт произвольную серию → inactive при 90% — см. D-6)"
+    },
+    {
+      "label": "state:postgres",
+      "source": "state",
+      "regex": "postgres",
+      "expected": "required",
+      "found": true,
+      "loki_duplicate": null,
+      "detail": "status=running/healthy (reconstructed: сайты 200 через pgbouncer→postgres; journal без ошибок postgres в окне)"
+    },
+    {
+      "label": "state:nginx",
+      "source": "state",
+      "regex": "nginx",
+      "expected": "required",
+      "found": true,
+      "loki_duplicate": null,
+      "detail": "status=running/healthy (reconstructed: nginx 200 в реальном окне, 0 5xx; логи 22:58:44-23:03:07Z)"
+    },
+    {
+      "label": "state:redis",
+      "source": "state",
+      "regex": "redis",
+      "expected": "required",
+      "found": true,
+      "loki_duplicate": null,
+      "detail": "status=running/healthy (reconstructed: сайты 200; journal без событий redis в окне)"
+    },
+    {
+      "label": "state:loki",
+      "source": "state",
+      "regex": "loki",
+      "expected": "required",
+      "found": false,
+      "loki_duplicate": null,
+      "detail": "status=running/unhealthy (reconstructed: promtail 500s 'Ingester is shutting down' 22:40-23:01Z — Loki ingester недоступен всё окно — см. D-8)"
+    },
+    {
+      "label": "state:prometheus",
+      "source": "state",
+      "regex": "prometheus",
+      "expected": "required",
+      "found": true,
+      "loki_duplicate": null,
+      "detail": "status=running/healthy (reconstructed: Prometheus API отвечал — тест прошёл ratio-поллинг и export; ratio_critical data-path подтверждён)"
+    },
+    {
+      "label": "state:clickhouse",
+      "source": "state",
+      "regex": "clickhouse",
+      "expected": "required",
+      "found": true,
+      "loki_duplicate": null,
+      "detail": "status=running/healthy (reconstructed: journal без событий clickhouse в окне)"
+    },
+    {
+      "label": "sites:https://www.tronyx.ru/",
+      "source": "http",
+      "regex": "https://www.tronyx.ru/",
+      "expected": "required",
+      "found": true,
+      "loki_duplicate": null,
+      "detail": "https://www.tronyx.ru/ → 200 (reconstructed: nginx 200 в 23:03:05Z окне)"
+    },
+    {
+      "label": "sites:https://sexydancerostov.ru/",
+      "source": "http",
+      "regex": "https://sexydancerostov.ru/",
+      "expected": "required",
+      "found": true,
+      "loki_duplicate": null,
+      "detail": "https://sexydancerostov.ru/ → 200 (reconstructed: nginx 200 в 23:03:03Z окне)"
+    },
+    {
+      "label": "sites:https://botanika.tronyx.ru/",
+      "source": "http",
+      "regex": "https://botanika.tronyx.ru/",
+      "expected": "required",
+      "found": true,
+      "loki_duplicate": null,
+      "detail": "https://botanika.tronyx.ru/ → 200 (reconstructed: nginx 200 в 23:03:05Z окне)"
+    },
+    {
+      "label": "sites:https://platform.tronyx.ru/",
+      "source": "http",
+      "regex": "https://platform.tronyx.ru/",
+      "expected": "required",
+      "found": true,
+      "loki_duplicate": null,
+      "detail": "https://platform.tronyx.ru/ → 401 (reconstructed: nginx 401 в 23:03:07Z окне — ожидаемо, basic-auth)"
+    }
+  ]
+}

@@ -26,5 +26,9 @@
   "T7": {
     "verdict": "PARTIAL",
     "ttr_s": 1
+  },
+  "T8": {
+    "verdict": "FAIL",
+    "ttr_s": 15
   }
 }
