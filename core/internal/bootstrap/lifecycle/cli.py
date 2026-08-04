@@ -524,9 +524,7 @@ def _mark_phase_with_warnings(sm: StateMachine, phase: str) -> None:
         entry.warnings.append(warn_msg)
     else:
         # StepState, НЕ raw dict (см. _mark_phase_success — to_dict() контракт).
-        sm.state.steps[phase] = StepState(
-            name=phase, status="done_with_warnings", done=False, warnings=[warn_msg]
-        )
+        sm.state.steps[phase] = StepState(name=phase, status="done_with_warnings", done=False, warnings=[warn_msg])
     sm.state.warnings.append(warn_msg)
     sm.save()
     logger.warning("[IMP:7][state_mark] Phase %s marked done_with_warnings (re-run required)", phase)
