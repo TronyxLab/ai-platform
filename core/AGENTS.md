@@ -81,6 +81,7 @@
 | `make provision-llm` | Provision LiteLLM virtual keys | make provision-llm | core/entrypoints/provision-llm.sh → core/internal/llm/key_provisioner.py |
 | `make discover-modules` | Авто-обнаружение модулей | make discover-modules | core/internal/bootstrap/discover_modules.py |
 | `make dev-certs` | Генерация dev SSL-сертификатов | make dev-certs [CERT_BACKEND=...] | core/modules/nginx/dev_cert_generator.py |
+| `make dev-metrics` | Генерация dev status-metrics.json + htpasswd | make dev-metrics | core/internal/healthcheck/platform_export_metrics.py + core/internal/bootstrap/lifecycle/secrets_manager.py (htpasswd CLI) |
 | `make _get_all_profiles` | Вывод COMPOSE_PROFILES | make _get_all_profiles | echo |
 | `make render-monitoring` | Рендер конфигурации мониторинга после деплоя проекта | make render-monitoring PROJECT_DIR=\<dir\> PROJECT=\<name\> [NODE=\<node\>] | python3 core/internal/monitoring_config_renderer.py |
 | `make fix-executable-bit` | Исправление executable bit на .sh файлах | make fix-executable-bit [DRY_RUN=1] | git add --chmod=+x + git update-index --chmod=+x |

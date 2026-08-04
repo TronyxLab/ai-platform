@@ -676,6 +676,16 @@ dev:
   operation_ru: Генерация dev SSL-сертификатов
   description: Idempotent generation of self-signed dev SSL certificates for nginx
     (hybrid mkcert→openssl)
+- make_target: dev-metrics
+  mechanism: python-script
+  delegates_to: core/internal/healthcheck/platform_export_metrics.py + core/internal/bootstrap/lifecycle/secrets_manager.py
+    (htpasswd CLI)
+  signature: make dev-metrics
+  operation_ru: Генерация dev status-metrics.json + htpasswd
+  description: Dev-локали без нодового cron metrics — генерирует status-metrics.json
+    (тот же экспортёр, что cron на ноде) + .htpasswd-platform (secrets_manager htpasswd)
+    из .env-путей (STATUS_METRICS_JSON/HTPASSWD_FILE). Идемпотентен (D-12, DevPlan
+    130 W1).
 - make_target: _get_all_profiles
   mechanism: makefile-echo
   delegates_to: echo
@@ -869,6 +879,7 @@ allowed_verbs:
 - deploy-context
 - deploy-project
 - dev-certs
+- dev-metrics
 - discover-modules
 - down
 - down-volumes

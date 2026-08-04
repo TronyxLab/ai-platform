@@ -57,10 +57,13 @@ services:
       # 📝 TRAP[DEBT] · 2026-07-17 · MED · POSTGRES_PASSWORD rotation risk
       # · Observed: POSTGRES_PASSWORD is consumed at initdb time and stored in data dir.
       # ·   Changing the env var does NOT rotate the password in the running DB.
-      # · Suspected: password is written to data dir during first init; env change on
+      # · Root: password is written to pg_authid during first init; env change on
       # ·   container restart does not update it — similar to ClickHouse P1 pattern.
-      # · Impact: password rotation requires manual ALTER USER or data dir cleanup.
-      # · When: T1 implementation — deferred, out of scope (analogous to ClickHouse per-file mount fix)
+      # · Mitigation (130 W3, 2026-08-04): процедура ротации — ROTATION.md в этом модуле
+      # ·   (ALTER USER + sops + пересоздание потребителей + верификация). Решение:
+      # ·   runbook вместо автоматизации в secrets_manager (>30 LOC, не unit-тестируемо
+      # ·   без живого postgres — native pytest).
+      # · Rev: ротация ≥1 раз в квартал (≤2026-11-04) ИЛИ автоматизация через secrets_manager.
       POSTGRES_DB: "${POSTGRES_DB:-platform}"
 
     volumes:

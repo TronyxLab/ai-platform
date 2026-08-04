@@ -139,6 +139,7 @@
 | ✅ | `deploy-context` | Деплой проектов контекста на ноде |
 | ✅ | `deploy-project` | Прямой деплой минуя CI (DeployOrchestrator deliver) |
 | ✅ | `dev-certs` | Генерация dev SSL-сертификатов |
+| ✅ | `dev-metrics` | Генерация dev status-metrics.json + htpasswd |
 | ✅ | `discover-modules` | Авто-обнаружение модулей |
 | ✅ | `down` | Остановка compose-стека |
 | ✅ | `down-volumes` | Остановка compose-стека и удаление volumes |
