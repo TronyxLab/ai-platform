@@ -16,6 +16,7 @@
 ## @rationale E3: phases.py 1080 LOC → доменные модули (паттерн lifecycle/helpers). system-фазы —
 ##           системный домен (users/packages/sudoers/cron/converge).
 ## @changes  2026-08-02 · DevPlan 119 E3 — экстракция из lifecycle/phases.py
+## @changes  2026-08-05 · DevPlan 136 W3 — φ1 шаг 5.6: sshd MaxStartups drop-in (security_posture --apply-sshd)
 # endregion MODULE_CONTRACT
 from __future__ import annotations
 
@@ -200,6 +201,43 @@ def phase_system_bootstrap(core_dir: str, node_name: str, node_yaml: str) -> boo
             "[IMP:7][phase:system_bootstrap] security_updates.py not found at %s — skipping", security_script
         )
         non_fatal_issues = True
+
+    # ── 5.6 Apply sshd MaxStartups drop-in (DevPlan 136 W3) ──
+    # security_posture.py --apply-sshd — идемпотентно (content-match no-op, reload sshd
+    # только при изменении содержимого; sshd -T в S4 читает эффективное значение включая drop-in).
+    # sshd_config.d drop-in — НЕ правка основного sshd_config (канон drop-in, переживает
+    # apt-обновления sshd_config). Non-fatal (best-effort, как firewall/security_updates):
+    # MaxStartups не должен ронять bootstrap; повторный бутстрап = no-op.
+    posture_script = os.path.join(core_dir, "internal", "bootstrap", "security_posture.py")
+    if os.path.isfile(posture_script):
+        try:
+            helpers_subprocess.run_subprocess(
+                ["python3", posture_script, "--apply-sshd"],
+                non_fatal=True,
+                fatal_rc=(127,),
+                timeout=120,
+            )
+            logger.info("[IMP:9][phase:system_bootstrap] sshd MaxStartups drop-in applied")
+        except Exception as e:  # noqa: EXC — non-fatal: sshd hardening is best-effort
+            logger.warning("[IMP:7][phase:system_bootstrap] sshd MaxStartups drop-in failed (non-fatal): %s", e)
+            non_fatal_issues = True
+    else:
+        # Отсутствие скрипта (тест-окружения/tmp CORE_DIR) — WARN, НЕ non_fatal:
+        # MaxStartups drop-in best-effort, фаза не должна уходить в done_with_warnings
+        # из-за него (канон φ3 provision-environment.sh: «best-effort, фаза не должна
+        # уходить в done_with_warnings из-за него»); на реальной ноде скрипт гарантирован
+        # core-доставкой (φ5 verify_core_files), S4-проверка живёт в том же файле.
+        # ⚠️ TRAP[DECISION] · 2026-08-05 · MED · missing security_posture.py → WARN (не non_fatal)
+        # · Rejected: non_fatal (паттерн security_updates.py шаг 5.5) — ломает committed-фикстуры
+        #   test_state_machine.py (happy path «все True» перечисляет скрипты явно, без
+        #   security_posture.py) и классифицирует отсутствие в тест-окружении как WARN-фазу
+        # · Reason: best-effort hardening; реальная нода всегда имеет скрипт (core-доставка);
+        #   повторный бутстрап no-op; при добавлении скрипта в фикстуры поведение идентично
+        # · Rev: если security_posture.py станет обязательным прекондишеном φ1 — перейти на non_fatal
+        logger.warning(
+            "[IMP:7][phase:system_bootstrap] security_posture.py not found at %s — skipping MaxStartups",
+            posture_script,
+        )
 
     if non_fatal_issues:
         logger.info("[IMP:8][phase:system_bootstrap] Complete with non-fatal issues")

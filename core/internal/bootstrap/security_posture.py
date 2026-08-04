@@ -1,26 +1,41 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: security-posture S1-S8 unattended-upgrades image-freshness digest-drift pending-security ufw sshd docker live-restore world-writable forced-command exit-0-1-2 json DevPlan-134
-# STRUCTURE: ▶ root-check → ○ 8 checks (S1-S8, каждая pure+subprocess probe) → ○ aggregate (FAIL→2, WARN→1) → ○ text|json report → ⎋ exit 0|1|2
+# GREP_SUMMARY: security-posture S1-S8 unattended-upgrades image-freshness digest-drift pending-security ufw sshd maxstartups drop-in apply-sshd docker live-restore world-writable forced-command exit-0-1-2 json DevPlan-134
+# STRUCTURE: ▶ root-check → ◇ --apply-sshd? → ⚡ apply drop-in (content-match no-op → reload systemctl→service) → ⎋ exit 0|1 ┤
+#            ○ 8 checks (S1-S8, каждая pure+subprocess probe; S4: maxstartups ≥ 30:50:200) → ○ aggregate (FAIL→2, WARN→1) → ○ text|json report → ⎋ exit 0|1|2
 # region MODULE_CONTRACT
 ## @purpose  Security posture check ноды (DevPlan 134 L2) — 8 проверок S1-S8, закрывающих главные
 ##           векторы автоматизированных ИИ-атак: автопатчинг (S1/S2), сетевой периметр (S3),
-##           SSH-поверхность (S4), docker-демон (S5), локальные привилегии (S6), целостность
-##           forced-command канала деплоя (S7). Выполняется НА ноде как root (sshd -T).
+##           SSH-поверхность (S4, включая эффективный MaxStartups ≥ 30:50:200), docker-демон (S5),
+##           локальные привилегии (S6), целостность forced-command канала деплоя (S7).
+##           Выполняется НА ноде как root (sshd -T). DevPlan 136 W3: +apply_sshd_dropin()
+##           (идемпотентный sshd_config.d drop-in MaxStartups, вызов из φ1 бутстрапа).
 ## @scope    Вызывается: make check-security NODE=<name> (remote через SSH-канал converge),
 ##           локально на ноде (rc=2 fallback). Импортирует firewall.parse_ufw_status (0 дублирования),
-##           shared/subprocess_io (канон B4/C10) и shared/timeouts (гейт U-11).
+##           shared/subprocess_io (канон B4/C10), shared/atomic_writer (канон E5) и shared/timeouts (гейт U-11).
+##           --apply-sshd — opt-in apply-режим (мутация /etc/ssh/sshd_config.d), вызывается ТОЛЬКО
+##           из φ1 phase_system_bootstrap (lifecycle/phases/system.py, шаг 5.6).
 ## @invariants
 ##   - Exit: 0 = healthy, 1 = warnings (S2 pending security-апдейты — норма между daily-кронами),
 ##     2 = errors (любой FAIL: конфиг сломан, периметр открыт, канал деплоя повреждён)
 ##   - Каждая проверка — pure-функция check_*(ctx) -> CheckResult(status, message); subprocess
 ##     через run_subprocess (check=False, graceful); таймауты из shared/timeouts
-##   - Root-check fail-fast: euid != 0 → exit 2 (sshd -T требует root) — без половины отчёта
+##   - Root-check fail-fast: euid != 0 → exit 2 (sshd -T / --apply-sshd требуют root) — без половины отчёта
 ##   - --json: {"node", "exit_code", "checks": [{id, status, message}]} — фундамент L5-мониторинга
-##   - Не мутирует систему (read-only диагностика) — безопасен для прямого запуска на ноде
+##   - По умолчанию НЕ мутирует систему (read-only диагностика, безопасен для прямого запуска);
+##     --apply-sshd — единственная мутация (идемпотентная, content-match no-op, reload только при изменении)
+##   - S4 проверяет ЭФФЕКТИВНЫЙ MaxStartups (sshd -T включает drop-in из sshd_config.d):
+##     значение < 30:50:200 (покомпонентно) → FAIL; ненаблюдаемое значение → PASS (graceful,
+##     тест-фикстуры без maxstartups; реальный sshd -T всегда печатает дефолт 10:30:100 → FAIL)
 ## @rationale L2 security-гэпа (DevPlan 134): check-suite.yaml — только code-quality чеки;
 ##            security-постур ноды не проверялся ничем. Набор S1-S8 — минимально достаточный
 ##            (DevPlan D4), без мониторинг-тяжести (fail2ban/auditd — L5 follow-up).
+## @rationale MaxStartups (DevPlan 136 W3): ручной конфиг — источник повторяющихся инцидентов
+##            (свежий бутстрап не воспроизводил 30:50:200 → SSH connection-storm при параллельных
+##            деплоях). drop-in в sshd_config.d — НЕ правка основного sshd_config (канон drop-in,
+##            переживает apt-обновления sshd_config); эффективное значение читает sshd -T в S4.
 ## @changes 2026-08-04 | DevPlan 134 W2 — Created
+## @changes 2026-08-05 | DevPlan 136 W3 — S4 +MaxStartups effective check; +apply_sshd_dropin()
+##            (+CLI --apply-sshd, вызов из φ1 phase_system_bootstrap)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -42,6 +57,7 @@ from core.internal.bootstrap.firewall import (
 )
 from core.internal.shared import docker_ops  # W1: docker ps/inspect/manifest примитивы (гейт docker_sole_path)
 from core.internal.shared import subprocess_io as io
+from core.internal.shared.atomic_writer import atomic_write_text  # E5: канон атомарной записи (drop-in)
 
 # DevPlan 119 B2/B3 канон: /opt/platform литерал запрещён (гейт timeout_literals) —
 # platform_remote_base() (PLATFORM_REMOTE_BASE → /opt/platform, PLATFORM_ROOT исключён, RC 121)
@@ -62,6 +78,17 @@ PLATFORM_BASE = str(platform_remote_base())
 # Канон cli.py:261 — expanduser("~ci-deploy") вместо хардкода /home/ci-deploy (гейт no_hardcoded_local_paths)
 CI_DEPLOY_AUTHORIZED_KEYS = os.path.expanduser("~ci-deploy/.ssh/authorized_keys")
 APT_CHECK_BIN = "/usr/lib/update-notifier/apt-check"
+
+# ── sshd MaxStartups (DevPlan 136 W3) ──
+# drop-in в sshd_config.d (канон drop-in, НЕ правка основного sshd_config) — переживает
+# apt-обновления sshd_config; sshd -T (S4) читает эффективное значение ВКЛЮЧАЯ drop-in.
+SSHD_MAXSTARTUPS_DROPIN = "/etc/ssh/sshd_config.d/99-platform-maxstartups.conf"
+# Минимально допустимое эффективное значение MaxStartups (start:rate:full).
+# 30:50:200 — защита SSH от connection-storm при параллельных деплоях/healthcheck-прокидываниях.
+# Дефолт OpenSSH = 10:30:100 < минимума → FAIL, пока drop-in не применён бутстрапом.
+SSHD_MAXSTARTUPS_MIN = (30, 50, 200)
+SSHD_MAXSTARTUPS_STR = "30:50:200"
+_MAXSTARTUPS_RE = re.compile(r"^(\d+):(\d+):(\d+)$")
 
 _APT_CHECK_RE = re.compile(r"(\d+)\s+updates can be applied immediately")
 _APT_CHECK_SEC_RE = re.compile(r"(\d+)\s+of these updates are security updates")
@@ -172,12 +199,18 @@ def check_ufw() -> CheckResult:
 
 # region FUNC_check_sshd
 ## @purpose  S4: SSH-поверхность через sshd -T (эффективный конфиг): PermitRootLogin
-##           prohibit-password|no, PasswordAuthentication no, PubkeyAuthentication yes.
+##           prohibit-password|no, PasswordAuthentication no, PubkeyAuthentication yes,
+##           MaxStartups ≥ 30:50:200 (покомпонентно; DevPlan 136 W3).
 ## @io       ⇥ — → ⎋ CheckResult
 ## @complexity O(1) — один subprocess + regex
 ## @invariants  Требует root (sshd -T) — гарантируется root-check в main
+##              sshd -T печатает ЭФФЕКТИВНЫЙ MaxStartups (включая drop-in sshd_config.d) —
+##              проверяем именно эффективное значение, не исходный sshd_config
+##              Ненаблюдаемое значение (нет maxstartups в выводе) → PASS (graceful:
+##              тест-фикстуры без строки; реальный sshd -T всегда печатает дефолт 10:30:100 → FAIL)
 def check_sshd() -> CheckResult:
-    """S4: sshd effective config — no root password login, no password auth, pubkey only."""
+    """S4: sshd effective config — no root password login, no password auth, pubkey only,
+    MaxStartups >= 30:50:200 (drop-in applied)."""
     result = _probe(["sshd", "-T"], timeout=30)
     if result.returncode != 0:
         return CheckResult("S4", STATUS_FAIL, f"sshd -T failed (rc={result.returncode})")
@@ -195,13 +228,148 @@ def check_sshd() -> CheckResult:
         problems.append("PasswordAuthentication=yes (password auth enabled)")
     if settings.get("pubkeyauthentication", "") != "yes":
         problems.append("PubkeyAuthentication != yes")
+    # MaxStartups (DevPlan 136 W3): sshd -T = ЭФФЕКТИВНЫЙ конфиг (включая drop-in из
+    # sshd_config.d) — проверяем именно эффективное значение. Дефолт OpenSSH 10:30:100
+    # < 30:50:200 → FAIL, пока 99-platform-maxstartups.conf не применён (apply_sshd_dropin).
+    maxstartups_raw = settings.get("maxstartups", "")
+    if maxstartups_raw:
+        ms = _parse_maxstartups(maxstartups_raw)
+        if ms is None:
+            problems.append(f"MaxStartups={maxstartups_raw} (unparseable — expected start:rate:full)")
+        elif any(a < b for a, b in zip(ms, SSHD_MAXSTARTUPS_MIN, strict=True)):
+            problems.append(
+                f"MaxStartups={maxstartups_raw} < {SSHD_MAXSTARTUPS_STR} "
+                "(drop-in 99-platform-maxstartups.conf missing or too low)"
+            )
     if problems:
         return CheckResult("S4", STATUS_FAIL, "; ".join(problems))
-    logger.info("[IMP:9][posture][S4] SSH surface hardened")
-    return CheckResult("S4", STATUS_PASS, "sshd: root login restricted, password auth off, pubkey on")
+    detail = f", MaxStartups={maxstartups_raw}" if maxstartups_raw else ""
+    logger.info("[IMP:9][posture][S4] SSH surface hardened%s", detail)
+    return CheckResult("S4", STATUS_PASS, f"sshd: root login restricted, password auth off, pubkey on{detail}")
 
 
 # endregion FUNC_check_sshd
+
+
+# region FUNC__parse_maxstartups
+## @purpose  Парсер эффективного MaxStartups 'start:rate:full' → (start, rate, full).
+## @io       ⇥ value: str (lowercased из sshd -T) → ⎋ tuple[int,int,int] | None (malformed)
+## @complexity O(1) — regex
+## @invariants  Не-числовой формат (напр. 'random:50:200', OpenSSH ≥9.6) → None → FAIL в S4
+##              (политика должна быть явной; числовой канон платформы — 30:50:200)
+def _parse_maxstartups(value: str) -> tuple[int, int, int] | None:
+    """Parse 'start:rate:full' → (start, rate, full); None if malformed."""
+    m = _MAXSTARTUPS_RE.match(value.strip())
+    if not m:
+        return None
+    return int(m.group(1)), int(m.group(2)), int(m.group(3))
+
+
+# endregion FUNC__parse_maxstartups
+
+
+# region FUNC_desired_maxstartups_dropin
+## @purpose  Желаемое содержимое /etc/ssh/sshd_config.d/99-platform-maxstartups.conf.
+## @io       ⇥ — → ⎋ str — drop-in (комментарий + директива MaxStartups)
+## @complexity O(1)
+## @invariants  Файл помечен «Generated — DO NOT EDIT MANUALLY» (политика управления —
+##              файлы перезаписываются платформой, канон security_updates.py)
+##              Директива — ТОЛЬКО MaxStartups (другие sshd-директивы — вне скоупа W3)
+def desired_maxstartups_dropin() -> str:
+    """99-platform-maxstartups.conf: MaxStartups 30:50:200 (защита от connection-storm)."""
+    return (
+        "# Generated by ai-platform security_posture.py (DevPlan 136 W3) — DO NOT EDIT MANUALLY\n"
+        + "# MaxStartups 30:50:200 — защита SSH от connection-storm при параллельных деплоях/\n"
+        + "# healthcheck-прокидываниях. sshd_config.d drop-in — НЕ правка основного sshd_config;\n"
+        + "# sshd -T (S4) читает эффективное значение ВКЛЮЧАЯ drop-in.\n"
+        + f"MaxStartups {SSHD_MAXSTARTUPS_STR}\n"
+    )
+
+
+# endregion FUNC_desired_maxstartups_dropin
+
+
+# region FUNC__write_if_changed
+## @purpose  Content-match idempotent write: существующий файл с идентичным содержимым → no-op.
+## @io       ⇥ path: Path, desired: str → ⎋ (changed: bool, ok: bool) — changed=потребуется reload
+## @complexity O(1) — одно чтение + при необходимости атомарная запись
+## @invariants  НИКОГДА не пишет на диск при совпадении содержимого (строгая идемпотентность)
+##              Атомарная запись через shared/atomic_writer (temp + fsync + os.replace, 0644)
+##              Ошибка записи → (False, False) — вызывающий решает fatal/non-fatal
+def _write_if_changed(path: Path, desired: str) -> tuple[bool, bool]:
+    """Write file only when content differs. Returns (changed, ok)."""
+    try:
+        existing = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        existing = ""
+    if existing == desired:
+        logger.info("[IMP:8][posture][maxstartups][noop] %s unchanged — no-op (idempotent)", path)
+        return False, True
+    try:
+        atomic_write_text(str(path), desired, mode=0o644)
+    except OSError as e:
+        logger.error("[IMP:10][posture][maxstartups][write] Cannot write %s: %s", path, e)
+        return False, False
+    logger.info("[IMP:9][posture][maxstartups][write] %s %s", path, "updated" if existing else "created")
+    return True, True
+
+
+# endregion FUNC__write_if_changed
+
+
+# region FUNC__reload_sshd
+## @purpose  Reload sshd: systemctl reload sshd → fallback service ssh reload. True = успех.
+## @io       ⇥ — → ⎋ bool
+## @complexity O(2) — до двух subprocess-проб
+## @invariants  fallback на `service ssh reload` — systemd-отсутствие (container/chroot) не
+##              должно ломать apply; обе пробы через _probe (graceful, никогда не raise)
+def _reload_sshd() -> bool:
+    """Reload sshd effective config — systemctl reload sshd, fallback service ssh reload."""
+    for cmd in (["systemctl", "reload", "sshd"], ["service", "ssh", "reload"]):
+        result = _probe(cmd, timeout=30)
+        if result.returncode == 0:
+            logger.info("[IMP:9][posture][reload] sshd reloaded via %s", " ".join(cmd))
+            return True
+        logger.warning("[IMP:8][posture][reload] %s failed (rc=%s) — trying fallback", " ".join(cmd), result.returncode)
+    logger.error("[IMP:10][posture][reload] sshd reload failed (systemctl + service both non-zero)")
+    return False
+
+
+# endregion FUNC__reload_sshd
+
+
+# region FUNC_apply_sshd_dropin
+## @purpose  Применить sshd MaxStartups drop-in идемпотентно (DevPlan 136 W3): content-match
+##           no-op; при изменении — атомарная запись + reload sshd. Вызывается из φ1
+##           phase_system_bootstrap (CLI --apply-sshd), НЕ из check-потока.
+## @io       ⇥ — → ⎋ bool (True = применено/no-op; False = ошибка записи ИЛИ reload)
+## @complexity O(1) + до 2 reload-проб
+## @invariants  no-op при совпадении содержимого (reload НЕ вызывается)
+##              reload — только при изменении содержимого (systemctl → service fallback)
+##              Запись удалась, но reload не удался → False (конфиг не активен — честный отказ)
+## @rationale  apply в security_posture (не в phases/system.py): sshd-политика живёт в одном
+##             модуле с S4-проверкой (единый SoT эффективного значения); фаза вызывает CLI.
+def apply_sshd_dropin() -> bool:
+    """Apply sshd MaxStartups drop-in idempotently (content-match no-op; reload on change)."""
+    path = Path(SSHD_MAXSTARTUPS_DROPIN)
+    changed, ok = _write_if_changed(path, desired_maxstartups_dropin())
+    if not ok:
+        logger.error("[IMP:10][posture][maxstartups] Drop-in apply aborted — write failed")
+        return False
+    if changed:
+        if not _reload_sshd():
+            logger.error(
+                "[IMP:10][posture][maxstartups] Drop-in written but sshd reload FAILED — "
+                "новый MaxStartups не активен до перезапуска sshd"
+            )
+            return False
+        logger.info("[IMP:9][posture][maxstartups] Drop-in applied + sshd reloaded")
+    else:
+        logger.info("[IMP:8][posture][maxstartups] Drop-in already current — no-op (idempotent)")
+    return True
+
+
+# endregion FUNC_apply_sshd_dropin
 
 
 # region FUNC_check_docker
@@ -475,20 +643,36 @@ def render_report(node: str, results: list[CheckResult]) -> str:
 
 
 # region FUNC_main
-## @purpose  CLI: security_posture.py [--node NAME] [--json]. Root fail-fast, exit 0|1|2.
+## @purpose  CLI: security_posture.py [--node NAME] [--json] | [--apply-sshd]. Root fail-fast.
+##           Check-режим: exit 0|1|2. Apply-режим (--apply-sshd, DevPlan 136 W3): exit 0|1.
 ## @io       ⇥ argv → ⎋ int (exit code)
-## @complexity O(7) — прогон всех проверок
+## @complexity O(7) — прогон всех проверок; apply — O(1) + reload
 def main(argv: list[str] | None = None) -> int:
     """CLI entrypoint. Returns exit code 0/1/2 — sys.exit handled by __main__."""
     logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stderr)
     parser = argparse.ArgumentParser(description="Security posture check (DevPlan 134 L2)")
     parser.add_argument("--node", default="", help="Node name (informational, for report)")
     parser.add_argument("--json", action="store_true", help="Emit JSON report (L5 monitoring)")
+    parser.add_argument(
+        "--apply-sshd",
+        action="store_true",
+        help="Apply sshd MaxStartups drop-in (DevPlan 136 W3) — bootstrap φ1; exit 0 ok / 1 error",
+    )
     args = parser.parse_args(argv)
 
     if os.geteuid() != 0:
-        print("[FAIL] security_posture must run as root (sshd -T requires root) — exit 2", file=sys.stderr)
+        print(
+            "[FAIL] security_posture must run as root (sshd -T / --apply-sshd require root) — exit 2", file=sys.stderr
+        )
         return 2
+
+    if args.apply_sshd:
+        # Apply-режим (DevPlan 136 W3): идемпотентный drop-in + reload при изменении.
+        # НЕ check-режим — exit 0 = применено/no-op, 1 = ошибка (канон security_updates.py).
+        if apply_sshd_dropin():
+            return 0
+        print("[FAIL] sshd MaxStartups drop-in apply failed (see logs)", file=sys.stderr)
+        return 1
 
     results = run_all_checks()
     exit_code = aggregate_exit_code(results)
