@@ -86,9 +86,20 @@ runs:
         WF="${{ inputs.workflow-file }}"
         echo "[IMP:9][sha-resolve][verify] Verifying $WF for SHA: $SHA"
 
-        COUNT=$(gh api \
-          "/repos/${{ github.repository }}/actions/workflows/$WF/runs?head_sha=$SHA&status=success&per_page=1" \
-          --jq '.total_count')
+        # Retry-цикл: workflow_run триггерится при завершении гейта, но GitHub API
+        # может отдавать conclusion с задержкой 1-5 мин (eventual consistency) —
+        # без retry core-deploy падал «no successful run» сразу после зелёного гейта.
+        COUNT=0
+        for attempt in 1 2 3 4 5 6 7 8 9 10; do
+          COUNT=$(gh api \
+            "/repos/${{ github.repository }}/actions/workflows/$WF/runs?head_sha=$SHA&status=success&per_page=1" \
+            --jq '.total_count' 2>/dev/null || echo 0)
+          if [ "$COUNT" -gt 0 ]; then
+            break
+          fi
+          echo "[IMP:7][sha-resolve][verify] Attempt $attempt/10: no successful $WF run for $SHA yet — retrying in 30s"
+          sleep 30
+        done
 
         if [ "$COUNT" -eq 0 ]; then
           echo "[IMP:10][sha-resolve][verify] ERROR: $WF has no successful run for SHA $SHA"
