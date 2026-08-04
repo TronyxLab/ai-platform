@@ -137,6 +137,23 @@ def detect_age_key() -> str | None:
                 return key
             logger.warning("[IMP:8][node_detect] Default key file %s has no AGE-SECRET-KEY- line", candidate)
 
+    # ── Check 5: node canonical key file /etc/age/key.txt ──
+    # Нодовый канон: state_machine precondition φ4 принимает /etc/age/key.txt, bootstrap φ4
+    # персистит ключ туда (phases/secrets.py). CI node-update (core-deploy ssh) не несёт
+    # AGE_SECRET_KEY env — ключ обязан жить на ноде. Pre-existing: fresh bootstrap → decrypt fail.
+    node_key = Path("/etc/age/key.txt")
+    if node_key.is_file():
+        try:
+            with open(node_key) as f:
+                key = next((line.strip() for line in f if line.strip().startswith("AGE-SECRET-KEY-")), "")
+        except OSError as e:
+            logger.warning("[IMP:8][node_detect] Cannot read node key file %s: %s", node_key, e)
+        else:
+            if key:
+                _log_masked("AGE_SECRET_KEY", key, f"node file {node_key}")
+                return key
+            logger.warning("[IMP:8][node_detect] Node key file %s has no AGE-SECRET-KEY- line", node_key)
+
     logger.warning(
         "[IMP:8][node_detect] AGE_SECRET_KEY not found — Docker modules requiring secrets will fail to deploy"
     )
