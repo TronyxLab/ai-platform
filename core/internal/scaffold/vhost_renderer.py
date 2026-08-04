@@ -386,7 +386,9 @@ server {{
     }}
 
     location /health {{
-        proxy_pass $upstream_{nginx_safe_name}/health;
+        # proxy_pass с переменной + литеральным URI → nginx 500 (invalid URL prefix);
+        # без URI nginx передаёт оригинальный request URI — /health → upstream /health.
+        proxy_pass $upstream_{nginx_safe_name};
         access_log off;
     }}
 }}
