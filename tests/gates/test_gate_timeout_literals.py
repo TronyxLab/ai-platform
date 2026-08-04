@@ -57,20 +57,13 @@ import pytest
 from tests.conftest import ldd_trajectory
 from tests.helpers.gate_helpers import repo_root
 
-# ⚠️ xdist-race (DevPlan 119 H, TRAP[DEBT] 2026-08-03):
-# R5-negative-тесты пишут probe-файлы (_gate_probe_opt_path.py/_gate_probe_opt_path_b3.py/
-# _gate_probe_timeout_a2.py) в РАБОЧЕЕ дерево core/internal/, а позитивные тесты-сканеры
-# (_find_offenders/_find_opt_path_literals) в параллельных xdist-worker'ах ловят чужой probe →
-# флаки RED (make gate MODE=fast flaky, 2026-08-03, воспроизводится 3/3 с -n auto).
-# Решение: сканеры исключают файлы с префиксом _gate_probe_ (тестовые артефакты, НЕ продукт).
+# ⚠️ xdist-race (DevPlan 119 H): R5-negative-тесты пишут probe-файлы (_gate_probe_opt_path.py/
+# _gate_probe_opt_path_b3.py/_gate_probe_timeout_a2.py) ВО tmp_path (DevPlan 119 H — Zero Hardcode
+# Rule) и сканируют их через параметр root=tmp_path; позитивные тесты сканируют рабочее дерево.
+# Сканеры также исключают файлы с префиксом _gate_probe_ (тестовые артефакты, НЕ продукт).
 # Отвергнуто: xdist_group("serial") — требует --dist loadgroup, при -n auto (load) игнорируется.
-# 📝 TRAP[DEBT] · 2026-08-03 · MED · xdist race: probe-файлы R5-тестов в core/internal/ пересекаются
-# · со сканерами тех же тестов (test_no_opt_path_literals_in_core_internal ловит _gate_probe_opt_path)
-# · Observed: flaky 1 failed из 14 при -n auto (2026-08-03, волна H верификация)
-# · Suspected: R5-тесты пишут probe в рабочее дерево вместо tmp_path (Zero Hardcode Rule нарушение);
-# ·   корректный фикс — probe в tmp_path + параметризация сканера; исключение _gate_probe_ — минимальная защита
-# · Impact: без исключения probe-префикса gate flaky; при tmp_path-фиксе исключение можно снять
-# · When: during 119-H NodeYaml verification — deferred, out of scope (волна B/A2 тесты)
+# 2026-08-04 (DevPlan 129 W2): TRAP[DEBT] 2026-08-03 СНЯТ — probe-файлы уже в tmp_path
+# (перенесены DevPlan 119 H, см. _find_offenders/_find_opt_path_literals с root=tmp_path).
 logger = logging.getLogger(__name__)
 
 ROOT = repo_root()

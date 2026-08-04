@@ -33,13 +33,12 @@ import pytest
 ## @rationale — Prevents agents from masking real bugs with pytest.skip (TASK-9).
 ##              The hook+fixture combo ensures every skip is visible in output;
 ##              agents reviewing LDD logs can verify the skip is justified.
-# 📝 TRAP[DEBT] · 2026-07-08 · LO · _handle_e2e_error not uniformly used across E2E tests
-# · Observed: Some E2E tests catch requests.RequestException and call _handle_e2e_error,
-# ·   others catch but don't delegate. Pattern is inconsistent.
-# · Suspected: tests were written at different times without a shared error-handling template.
-# · Impact: inconsistent skip/fail behaviour across E2E suite.
-# · When: discovered during platform gate fix (path/venv/gate DevPlan).
-# · Mitigated: 2026-07-11 — added CHECKLIST item reminding to use _handle_e2e_error
+# 2026-08-04 (DevPlan 129 W1 T6): TRAP[DEBT] 2026-07-08 СНЯТ — uniform-обработка подтверждена.
+# · Все tests/test_e2e_*.py используют _handle_e2e_error (grep-аудит: 0 e2e без хендлера).
+# · Smoke-тесты (test_smoke_*, test_component_hermes) используют каноническую альтернативу —
+# · retry с экспоненциальным backoff (паттерн 1s/2s/4s, TRAP[BUG] 2026-07-23) — оба паттерна
+# · допускаются гейтом G3 (tests/gates/test_gate_http_retry_policy.py: retry ИЛИ _handle_e2e_error).
+# · CHECKLIST-запись (tests/_conftest/checklist.py:33) сохранена как напоминание для новых тестов.
 
 
 @pytest.hookimpl(tryfirst=True)

@@ -51,19 +51,21 @@ echo "[IMP:7][check-file-lines] Scanning files exceeding ${MAX_LINES} lines..."
 
 WARNING_COUNT=0
 
-# 📝 TRAP[DEBT] · 2026-08-03 · MED · xdist race: `wc -l < "$file"` падает, если файл исчез между
-# · find и wc — test_gate_timeout_literals.py (A2, волна 119) создаёт probe-файлы в core/internal/
-# · (_gate_probe_timeout_a2.py), а test_gate_debt_registry.py (check-file-lines) в параллельном
-# · xdist-worker'е сканирует ту же директорию → `wc: No such file or directory` → set -e → exit 1.
-# · Observed: make gate MODE=fast flaky (gates step, exit 1) только с -n auto; serial — 429 passed.
-# · Suspected: race между созданием/удалением A2-probe и find-итерацией; `set -euo pipefail`
-# ·   превращает wc-failure в exit 1 (несмотря на "non-blocking" контракт скрипта).
-# · Impact: flaky gate — редкий RED без реальной регрессии (волна H, 2026-08-03).
-# · When: during 119-H NodeYaml verification — deferred, out of scope (A2-тест, не H).
+# 2026-08-04 (DevPlan 129 W2): TRAP[DEBT] 2026-08-03 снят — xdist-race устранён двойной защитой:
+# 1) [ -f "$file" ] перед wc в ТОМ ЖЕ цикле (файл мог исчезнуть между find-итерациями);
+# 2) || true в command substitution (pipefail + set -e иначе роняли скрипт ДО fallback-ветки —
+#    bash сообщает redirection-ошибку на своём stderr, 2>/dev/null не перехватывает).
+# Обе ветки перекрывают окно «probe-файл теста создан/удалён конкурентным xdist-воркером».
 while IFS= read -r -d '' file; do
-    line_count=$(wc -l < "$file" 2>/dev/null | tr -d ' ')
+    # Файл может быть удалён конкуретным xdist-воркером между find и wc (probe-файлы тестов).
+    # Атомарная проверка перед wc — не читаем несуществующий файл, не роняем non-blocking контракт.
+    if [[ ! -f "$file" ]]; then
+        echo "[IMP:7][check-file-lines] SKIP (deleted between find and wc): ${file}" >&2
+        continue
+    fi
+    line_count=$(wc -l < "$file" 2>/dev/null | tr -d ' ' || true)
     if [[ -z "$line_count" || ! "$line_count" =~ ^[0-9]+$ ]]; then
-        # Файл исчез между find и wc (xdist race, TRAP[DEBT] выше) — пропускаем, не роняем gate
+        # Файл исчез между [ -f ] и wc (микро-окно race) — пропускаем, не роняем gate
         continue
     fi
     if [[ "$line_count" -gt "$MAX_LINES" ]]; then

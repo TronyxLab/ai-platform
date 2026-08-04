@@ -15,7 +15,6 @@
 # endregion MODULE_CONTRACT
 
 import logging
-import sys
 from collections.abc import Generator
 from contextlib import suppress
 from pathlib import Path
@@ -51,15 +50,20 @@ def _reload_platform_config(monkeypatch: pytest.MonkeyPatch, platform_root: Path
 
     ## @purpose — Изоляция: PLATFORM_ROOT указывает на tmp-директорию (не на репозиторий),
     ##            чтобы script-relative резолвинг не находил реальный platform-infra.yaml репо.
+    ## 2026-08-04 (DevPlan 129 W4): del sys.modules ЗАМЕНЁН на reload_safe.reload_module —
+    ##   канон reload-безопасности (удаление модуля из sys.modules пересоздаёт объект при
+    ##   следующем import; старые __globals__-ссылки других модулей остаются на старый объект →
+    ##   reload-гонка monkeypatch, test-env-leak-and-flakes.md Rev 2026-08-09).
     ## @io — ⇥ monkeypatch, platform_root → ⎋ Generator[module]
     """
-    if "core.internal.config.platform_config" in sys.modules:
-        del sys.modules["core.internal.config.platform_config"]
-    if "core.internal.config" in sys.modules:
-        del sys.modules["core.internal.config"]
+    from _conftest.reload_safe import reload_module
 
     monkeypatch.setenv("PLATFORM_ROOT", str(platform_root))
 
+    reload_module(
+        "core.internal.config.platform_config",
+        expected_file_substring="internal/config/platform_config.py",
+    )
     from core.internal.config import platform_config as pc
 
     pc._defaults = {}
@@ -68,8 +72,6 @@ def _reload_platform_config(monkeypatch: pytest.MonkeyPatch, platform_root: Path
     yield pc
 
     monkeypatch.delenv("PLATFORM_ROOT", raising=False)
-    sys.modules.pop("core.internal.config.platform_config", None)
-    sys.modules.pop("core.internal.config", None)
 
 
 @pytest.fixture

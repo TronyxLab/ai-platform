@@ -167,6 +167,36 @@ def _xdist_args(marker: str | None = None) -> list[str]:
 # endregion FUNC_XDIST_ARGS
 
 
+# region FUNC_TIMEOUT_ARGS
+## @purpose  pytest-timeout аргументы для СТАТИЧЕСКОГО прогона (DevPlan 129 W4):
+##           ["--timeout=300"] при доступности pytest-timeout; [] иначе (best-effort).
+##           Таймаут 300s/тест — выше max легитимного (зависание 1276.8s = 4× выше);
+##           висящий тест падает быстро вместо 20-минутного блокирования прогона
+##           (test-env-leak-and-flakes.md Rev 2026-08-09, 1276.8s HealthcheckPoller).
+##           Только статические суиты (static_audit/static) — docker-тесты (smoke/component)
+##           имеют легитимные длительные healthcheck-поллинги, таймаут к ним НЕ применяется.
+## @io       ⇥ marker: str | None → ⎋ list[str] ([] или ["--timeout=300"])
+## @complexity O(1) — import check
+def _timeout_args(marker: str | None = None) -> list[str]:
+    """Return pytest-timeout args for static suites; [] for docker suites or if plugin missing."""
+    if marker in _DOCKER_MARKERS:
+        return []
+    if marker in ("static", "static_audit", "contract", "all"):
+        # importlib.util.find_spec — строковая проверка доступности плагина БЕЗ статического
+        # import: pytest_timeout — dev-зависимость (только тесты), core-модуль test_runner.py
+        # НЕ должен импортировать её (гейт test_gate_imports: core → runtime deps only).
+        import importlib.util
+
+        if importlib.util.find_spec("pytest_timeout") is not None:
+            return ["--timeout=300"]
+        logger.info("[IMP:7][timeout_args] pytest-timeout недоступен — per-test timeout отключён")
+        return []
+    return []
+
+
+# endregion FUNC_TIMEOUT_ARGS
+
+
 # region FUNC_DOCKER_SUITE_LOCK
 ## @purpose  Процессный advisory flock на tests/.docker-suite.lock (DevPlan 124 T2c, A2+):
 ##           межсессионная сериализация docker-pytest-процессов. Два агента, одновременно
@@ -484,7 +514,14 @@ def _run_static_full(platform_root: Path, junit_path: Path, timeout: int) -> int
             print((r2.stderr or r2.stdout or "")[-4000:], file=sys.stderr)
             return r2.returncode
 
-        pytest_args = [*_xdist_args("static"), "-m", _STATIC_AUDIT_EXPR, "--junitxml", str(junit_path)]
+        pytest_args = [
+            *_xdist_args("static"),
+            *_timeout_args("static"),
+            "-m",
+            _STATIC_AUDIT_EXPR,
+            "--junitxml",
+            str(junit_path),
+        ]
         logger.info("[IMP:7][static_full][pytest] Running pytest static_audit: %s", " ".join(pytest_args))
         proc = subprocess.run(
             [sys.executable, "-m", "pytest", str(platform_root / "tests"), *pytest_args],
@@ -532,7 +569,7 @@ def _run_all_suites(platform_root: Path, junit_path: Path, timeout: int) -> int:
         args = MARKER_MAP[marker]
         assert args is not None, f"_ALL_SUITES_ORDER содержит special handler: {marker}"
         suite_junit = suite_dir / f"junit-{marker}.xml"
-        pytest_args = [*_xdist_args(marker), *args, "--junitxml", str(suite_junit)]
+        pytest_args = [*_xdist_args(marker), *_timeout_args(marker), *args, "--junitxml", str(suite_junit)]
         logger.info("[IMP:7][all_suites][run] Suite marker=%s", marker)
         proc: subprocess.CompletedProcess[str] | None = None
         try:
@@ -751,7 +788,13 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 pytest_args = _build_pytest_args(args.marker)
                 assert pytest_args is not None, f"marker={args.marker} не special handler, но вернул None"
-                pytest_args = [*_xdist_args(args.marker), *pytest_args, "--junitxml", str(junit_path)]
+                pytest_args = [
+                    *_xdist_args(args.marker),
+                    *_timeout_args(args.marker),
+                    *pytest_args,
+                    "--junitxml",
+                    str(junit_path),
+                ]
                 env = {**os.environ, "PYTEST_NO_ESCALATION": "1"}
                 try:
                     logger.info(

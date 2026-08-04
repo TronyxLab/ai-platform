@@ -37,7 +37,6 @@
 import contextlib
 import json
 import os
-import sys
 import time
 from pathlib import Path
 from unittest import mock
@@ -906,10 +905,23 @@ class TestCoordinator:
     """Tests for platform_export_metrics.py coordinator."""
 
     def _reimport_coordinator(self):
-        """Force reimport of platform_export_metrics to pick up new env vars."""
-        for key in list(sys.modules.keys()):
-            if "platform_export_metrics" in key:
-                del sys.modules[key]
+        """Force reload of platform_export_metrics to pick up new env vars.
+
+        ## @purpose — Канон reload-безопасности (DevPlan 129 W4): importlib.reload того же
+        ##            объекта модуля, БЕЗ del sys.modules. del sys.modules создавал НОВЫЙ
+        ##            объект при следующем import — старые __globals__-ссылки (например,
+        ##            HealthcheckPoller в receive-цепочке других тестов) оставались на старый
+        ##            объект → monkeypatch-заглушки не применялись → реальный Docker-поллинг
+        ##            (зависание 1276.8s, test-env-leak-and-flakes.md Rev 2026-08-09).
+        ## @io — ⎋ None (side-effect: модуль перезагружен)
+        ## @complexity O(1)
+        """
+        from _conftest.reload_safe import reload_module
+
+        reload_module(
+            "core.internal.healthcheck.platform_export_metrics",
+            expected_file_substring="healthcheck/platform_export_metrics.py",
+        )
 
     def test_coordinator_empty_state(
         self, mock_node_yaml_no_projects, tmp_path, caplog, mock_docker_subprocess, monkeypatch

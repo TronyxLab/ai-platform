@@ -142,13 +142,9 @@ def test_channels_defaults(caplog: pytest.LogCaptureFixture, monkeypatch: pytest
     # 🧪 TRAP[TEST] · Regression · Scenario: DEFAULT_DEPLOY_TIMEOUT/RETRY_COUNT/RETRY_BACKOFF
     # · Last fail: N/A (T1.3 — константы канала перенесены в timeouts)
     # · Remove if: канальные дефолты меняются
-    # 📝 TRAP[DEBT] · 2026-08-03 · LO · env-leak: тест читал PLATFORM_DEPLOY_TIMEOUT dev-машины (D-11)
-    # · Observed: assert int(os.environ.get("PLATFORM_DEPLOY_TIMEOUT", ...)) — если dev-машина
-    # ·   экспортирует переменную (старый .env в shell), тест падал бы без причины
-    # · Suspected: источник — gitignored .env, sourced в окружение оператора
-    # · Impact: флейк/ложный FAIL на машинах с остаточным env (паттерн AGE_SECRET_KEY-fix 8cd8c38)
-    # · When: DevPlan 125 T13 аудит os.environ в tests/unit; фикс — monkeypatch-детерминизм (канон)
-    # · Fix-канон: env-зависимость теста закрыта monkeypatch.setenv/delenv — детерминированные fixture
+    # 2026-08-04 (DevPlan 129 W3, D-11): TRAP[DEBT] 2026-08-03 СНЯТ — env-детерминизм уже
+    # реализован ниже: monkeypatch.delenv/setenv("PLATFORM_DEPLOY_TIMEOUT") + importlib.reload
+    # (автооткат monkeypatch, значение теста не зависит от dev-машины оператора).
     from core.internal.deploy import channels
 
     assert channels.DEFAULT_RETRY_COUNT == timeouts.RETRY_COUNT

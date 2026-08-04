@@ -1740,13 +1740,11 @@ class TestB11DottedImportDetection:
     def test_dotted_py_import_in_modules_is_violation(self, tmp_path: Path) -> None:
         """R5 negative: dotted py-import из modules → violation (RED)."""
         # region FUNC_test_dotted_py_import_in_modules_is_violation
-        # 📝 TRAP[DEBT] · 2026-08-03 · MED · Probe-файл в РЕАЛЬНОМ core/modules/ — xdist-гонка со сканерами
-        # · Observed: static_audit (-n auto) флейк: MISSING_GREP_SUMMARY: core/modules/_b11_negative_py_tmp/
-        # ·   test_negative.py (test_all_py_files_have_grep_summary) — probe живёт в дереве во время прогона
-        # · Suspected: probe-директории должны быть в exclusions-сетах сканеров-жертв (как _gate_probe_marker_tmp,
-        #   DevPlan 119 C) ЛИБО probe переносится в tmp_path с подменой CORE_DIR у сканера
-        # · Impact: ~15-30% флейк static_audit под xdist (ложный FAIL, агент гоняет тесты повторно)
-        # · When: DevPlan 124 верификация — 2 фейла из 10 static_audit-прогонов (junit подтвердил механизм)
+        # 2026-08-04 (DevPlan 129 W2): TRAP[DEBT] 2026-08-03 снят — xdist-гонка устранена exclusions
+        # · сканеров-жертв (DevPlan 119 C / 124): _b11_negative_py_tmp в _EXCLUDED_DIRS
+        # · test_gate_grep_summary.py и _EXCLUDE_DIRS test_gate_no_unregistered_entrypoint.py.
+        # · Probe остаётся в РЕАЛЬНОМ core/modules/ НАМЕРЕННО: resolve_import/scan_py_file
+        # · резолвят слой modules по реальному пути CORE_DIR — probe вне дерева не покрыл бы слой.
         fixture_dir = CORE_DIR / "modules" / "_b11_negative_py_tmp"
         fixture_dir.mkdir(parents=True, exist_ok=True)
         py_file = fixture_dir / "test_negative.py"
@@ -1778,15 +1776,10 @@ class TestB11DottedImportDetection:
     def test_python3_m_in_modules_is_violation(self, tmp_path: Path) -> None:
         """R5 negative: python3 -m core.internal.* из modules/sh → violation (RED)."""
         # region FUNC_test_python3_m_in_modules_is_violation
-        # 📝 TRAP[DEBT] · 2026-08-03 · MED · Probe-файл в РЕАЛЬНОМ core/modules/ — xdist-гонка со сканерами
-        # · Observed: static_audit (-n auto) флейк 2 классов: (1) MISSING_GREP_SUMMARY:
-        # ·   core/modules/_b11_negative_sh_tmp/test_negative.sh (test_all_sh_files_have_grep_summary);
-        # ·   (2) «Unregistered shebang script detected: core/modules/_b11_negative_sh_tmp/test_negative.sh»
-        # ·   (test_all_shebang_files_in_manifest) — probe имеет shebang и не зарегистрирован в манифесте
-        # · Suspected: exclusions-сеты сканеров-жертв не содержат _b11_negative_{py,sh}_tmp (как
-        #   _gate_probe_marker_tmp в grep-summary, DevPlan 119 C); probe живёт в дереве ~10-100ms
-        # · Impact: ~15-30% флейк static_audit под xdist (ложные FAIL — агент гоняет тесты повторно)
-        # · When: DevPlan 124 верификация — 2 фейла из 10 static_audit-прогонов (junit подтвердил механизм)
+        # 2026-08-04 (DevPlan 129 W2): TRAP[DEBT] 2026-08-03 снят — xdist-гонка устранена exclusions
+        # · сканеров-жертв (DevPlan 119 C / 124): _b11_negative_sh_tmp в _EXCLUDED_DIRS
+        # · test_gate_grep_summary.py и _EXCLUDE_DIRS test_gate_no_unregistered_entrypoint.py.
+        # · Probe остаётся в РЕАЛЬНОМ core/modules/ НАМЕРЕННО (см. TRAP[DECISION] в py-варианте).
         fixture_dir = CORE_DIR / "modules" / "_b11_negative_sh_tmp"
         fixture_dir.mkdir(parents=True, exist_ok=True)
         sh_file = fixture_dir / "test_negative.sh"

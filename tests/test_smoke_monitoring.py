@@ -64,18 +64,9 @@ _EXTERNAL_NETWORKS = ["test-observability-net", "test-proxy-net"]
 ## @purpose — Module-scoped compose lifecycle fixture for monitoring smoke tests.
 ##            Pre-cleans wave-monitoring project, starts wave-monitoring-smoke,
 ##            yields, tears down on completion.
-# 📝 TRAP[DEBT] · 2026-08-01 · MED · monitoring test stack: volume prometheus-config-gen не объявлен
-# · Observed: compose up падает «service "prometheus" refers to undefined volume prometheus-config-gen»
-# ·   (docker-compose.base.yml:67,104 ссылаются на volume; docker-compose.test.yml объявляет только
-#   networks, не volumes; root compose объявляет volume, но test-стек его не наследует — B3 volumes SoT).
-# · Suspected: B3 (volumes SoT, 80e9d54) консолидировал volumes в root compose; monitoring test-override
-#   не получил volumes-секцию → test-стек сломан с момента B3.
-# · Impact: 3 smoke-теста мониторинга (grafana/prometheus/targets) — ERROR в setup; НЕ входит в
-#   make gate / MARKER=static (requires_docker+smoke) — gate не блокирует, но smoke-покрытие потеряно.
-# · When: верификация B10 T10 (2026-08-01) — pre-existing, не связано с B10 (B10 изменил только
-#   teardown: убрал docker network rm для shared external-сетей).
-# · Fix: добавить `volumes: prometheus-config-gen: {driver: local}` в docker-compose.test.yml —
-#   вне скоупа B10.
+# 2026-08-04 (DevPlan 129 W3): TRAP[DEBT] 2026-08-01 СНЯТ — volume prometheus-config-gen
+# объявлен в docker-compose.test.yml (test-overlay, см. volumes: секцию) — test-стек
+# base+test больше не ссылается на необъявленный volume («undefined volume» устранён).
 
 
 @pytest.fixture(scope="module")

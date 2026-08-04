@@ -95,6 +95,17 @@ def _assert_ldd_imp9(caplog: pytest.LogCaptureFixture) -> None:
 
 
 # region HELPER__grep_core_excluding_pycache
+# Transient probe-артефакты параллельных xdist-тестов в core/ — НЕ продукт, исключаются
+# из скана (тот же класс защиты, что _EXCLUDED_DIRS в test_gate_grep_summary.py и
+# _EXCLUDE_DIRS в test_gate_no_unregistered_entrypoint.py; DevPlan 119 C / 124 / 129 W2):
+#   _gate_probe_marker_tmp       — test_gate_marker_location R5 probe
+#   _b11_negative_py_tmp/_sh_tmp — test_cross_layer_imports B11-negative probes
+#   _gate_probe_subprocess_io.py — test_gate_subprocess_io_sole R5 probe (core/ root)
+_PROBE_SEGMENTS: frozenset = frozenset({"_gate_probe_marker_tmp", "_b11_negative_py_tmp", "_b11_negative_sh_tmp"})
+_PROBE_FILENAMES: frozenset = frozenset({"_gate_probe_subprocess_io.py"})
+_EXTENSIONS: tuple[str, ...] = (".py", ".sh", ".yaml", ".yml", ".json", ".toml", ".cfg", ".md")
+
+
 def _grep_core_excluding_pycache(pattern: str, include_extensions: tuple[str, ...]) -> list[str]:
     """Recursive grep for `pattern` in core/ excluding __pycache__ directories.
 
@@ -102,12 +113,20 @@ def _grep_core_excluding_pycache(pattern: str, include_extensions: tuple[str, ..
     ##            compiled Python bytecode in __pycache__.
     ## @io — pattern(str) + include_extensions(tuple) → ⎋ list[str] of matching file paths
     ## @complexity — O(N * L) where N = files, L = avg lines per file
+    ## @invariants
+    ##   - __pycache__ directories excluded
+    ##   - Probe-артефакты параллельных xdist-тестов (см. _PROBE_SEGMENTS/_PROBE_FILENAMES)
+    ##     исключаются — транзиентные файлы чужих R5-тестов не должны влиять на гейт
     """
     matches: list[str] = []
     for fpath in CORE_DIR.rglob("*"):
         if fpath.suffix not in include_extensions:
             continue
         if "__pycache__" in fpath.parts:
+            continue
+        if any(part in _PROBE_SEGMENTS for part in fpath.parts):
+            continue
+        if fpath.name in _PROBE_FILENAMES:
             continue
         if not fpath.is_file():
             continue
@@ -150,7 +169,7 @@ def test_no_shell_to_python_step_references(caplog: pytest.LogCaptureFixture) ->
 
     matches = _grep_core_excluding_pycache(
         "SHELL_TO_PYTHON_STEP",
-        include_extensions=(".py", ".sh", ".yaml", ".yml", ".json", ".toml", ".cfg", ".md"),
+        include_extensions=_EXTENSIONS,
     )
 
     logger.info("[IMP:9][test_no_shell_to_python_step_references] Grep SHELL_TO_PYTHON_STEP in core/")

@@ -87,21 +87,14 @@ def is_production_host() -> bool:
     return any(p in hostname for p in PRODUCTION_HOST_PATTERNS)
 
 
-# 📝 TRAP[DEBT] · 2026-07-15 · MED · Parallel test teardown destroys shared external networks — RESOLVED-частично (B10 T5)
-# · Observed: docker events показали массовый destroy shared-db-net/proxy-net/etc во время
-# ·   параллельной сессии; повторный compose up упал с "network declared as external, but
-# ·   could not be found"
-# · Suspected: teardown одного тестового прогона удаляет external-сети, на которые полагаются
-# ·   другие сессии/прогоны
-# · Impact: флаки при параллельных волнах/сессиях — up падает между create сети и attach
-# ·   контейнера
-# · When: during wave-postgres T5.2 live-verification (2026-07-15)
-# · 2026-08-01 (B10 T5): RESOLVED-частично — (1) ensure_external_networks() получила verify-цикл
-# ·   (inspect → create → re-inspect, устойчивость к гонке create/remove); (2) контракт
-# ·   зафиксирован: общие тестовые сети — external: true в тестовых compose и НИКОГДА не
-# ·   удаляются в teardown (docker network rm в tests/_conftest отсутствует — проверено);
-# ·   (3) причина (parallel compose down одного прогона) задокументирована. Полный фикс
-# ·   (refcount-менеджер для external-сетей между сессиями) — за рамками B10.
+# 2026-08-04 (DevPlan 129 W3, P3-5/D18): TRAP[DEBT] 2026-07-15 доведён до конца.
+# · B10 T5 (2026-08-01) сделал create-verify-цикл + контракт «тестовые сети не удаляются».
+# · Полный фикс (W3): LABEL-ФИЛЬТР — NetworkLeaseManager удаляет ТОЛЬКО сети, созданные
+# ·   ИМ САМИМ (метка ai-platform.test-managed=true). Сети без метки (созданы вне теста:
+# ·   прод-стеком, другой сессией, ensure_external_networks) НЕ удаляются при release —
+# ·   teardown одной сессии больше не уничтожает shared external сети другой сессии/прода.
+# · master-семантика xdist уже есть (DevPlan 124 T1: sessionfinish cleanup — только master).
+_TEST_NETWORK_LABEL = "ai-platform.test-managed=true"
 
 
 def ensure_external_networks(names: list[str], docker_available: bool | None = None) -> None:
@@ -296,8 +289,10 @@ class NetworkLeaseManager:
         # · Fix: log create result; on real failure verify actual state via docker network inspect
         # ·   and emit [IMP:9] error if the network is truly missing (visibility-first).
         # · Rev: if create failures persist in CI — add explicit retry + acquire() result check.
+        # DevPlan 129 W3 (P3-5/D18): метка _TEST_NETWORK_LABEL — сеть, созданная менеджером,
+        #   помечается для label-фильтра в _remove_network (не удалять чужие сети при release).
         result = subprocess.run(
-            ["docker", "network", "create", name],
+            ["docker", "network", "create", "--label", _TEST_NETWORK_LABEL, name],
             capture_output=True,
             text=True,
             check=False,
@@ -339,8 +334,36 @@ class NetworkLeaseManager:
     ## @purpose  Remove Docker network via subprocess. Best-effort — ignores "in use" errors.
     ## @io       ⇥ name: str → ⎋ None
     ## @complexity — O(1)
+    ## @invariants
+    ##   - DevPlan 129 W3 (P3-5/D18): удаляет ТОЛЬКО сети, созданные ЭТИМ менеджером
+    ##     (метка _TEST_NETWORK_LABEL). Сеть без метки (создана вне теста — прод-стеком,
+    ##     другой сессией, ensure_external_networks) НЕ удаляется: release/refcount логика
+    ##     менеджера не должна уничтожать shared external сети других владельцев.
     def _remove_network(self, name: str) -> None:
-        """Remove Docker network. Best-effort — ignore errors."""
+        """Remove Docker network. Best-effort — ignore errors. Label-guard: только свои сети."""
+        # Label-guard (P3-5/D18): inspect метки перед удалением. Если сеть не помечена
+        # ai-platform.test-managed=true — она создана вне NetworkLeaseManager (прод/другая
+        # сессия) → НЕ удаляем (teardown одного прогона не уничтожает чужие сети).
+        inspect = subprocess.run(
+            ["docker", "network", "inspect", name, "--format", '{{index .Labels "ai-platform.test-managed"}}'],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=15,
+        )
+        if inspect.returncode != 0:
+            # Сеть не найдена (уже удалена кем-то) — no-op
+            _logger.debug("[IMP:7][NetworkLeaseManager] Network '%s' not found on remove — no-op", name)
+            return
+        if "true" not in (inspect.stdout or "").strip():
+            # Сеть существует, но НЕ создана этим менеджером — чужая, не удаляем.
+            _logger.info(
+                "[IMP:8][NetworkLeaseManager] Network '%s' not test-managed (no %s label) — "
+                "skip remove (shared external network of another owner, P3-5/D18)",
+                name,
+                _TEST_NETWORK_LABEL,
+            )
+            return
         subprocess.run(
             ["docker", "network", "rm", name],
             capture_output=True,

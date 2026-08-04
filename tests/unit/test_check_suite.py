@@ -72,6 +72,45 @@ def git_repo(tmp_path: Path) -> Path:
     return tmp_path
 
 
+@pytest.fixture
+def mock_git_calls(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Мок git-субпроцессов fingerprint/кэш — детерминизм под xdist (DevPlan 129 W3).
+
+    ## @purpose — TRAP[DEBT] 2026-08-03 (test_check_suite.py:340) снят: транзиентная
+    ##            недоступность git-субпроцесса (_tree_files/_cache_path спавнят git под
+    ##            xdist-нагрузкой 12 воркеров; OSError при спавне под memory pressure) давала
+    ##            fingerprint=None → кэш не записывался → ложный FAIL replay-тестов (~25-30%).
+    ##            Логика replay-кэша НЕ про git (git — инфраструктура fingerprint) — мок
+    ##            git-вызовов на детерминированные версии: fingerprint считается из реального
+    ##            tmp-дерева (те же exclude-правила), кэш пишется в .git/check-cache.json.
+    ## @io — monkeypatch → ⎋ None
+    ## @complexity O(1) — два monkeypatch.setattr
+    ## @invariants
+    ##   - _tree_files: обход tmp-дерева (без git ls-files), те же exclude-правила
+    ##   - _cache_path: фиксированный .git/check-cache.json (без git rev-parse)
+    ##   - Fingerprint-логика (хеширование, exclude-фильтры) остаётся РЕАЛЬНОЙ
+    """
+
+    def _tree_files_det(root: Path) -> list[str] | None:
+        files: list[str] = []
+        for p in sorted(root.rglob("*")):
+            if not p.is_file():
+                continue
+            rel = p.relative_to(root).as_posix()
+            if any(part in check_suite._FINGERPRINT_EXCLUDE_PARTS for part in rel.split("/")):
+                continue
+            if check_suite._FINGERPRINT_EXCLUDE_RE.search(rel):
+                continue
+            files.append(rel)
+        return files
+
+    def _cache_path_det(root: Path) -> Path | None:
+        return root / ".git" / "check-cache.json"
+
+    monkeypatch.setattr(check_suite, "_tree_files", _tree_files_det)
+    monkeypatch.setattr(check_suite, "_cache_path", _cache_path_det)
+
+
 _PASS_CMD = "python3 -c 'import sys; sys.exit(0)'"
 _FAIL_CMD = "python3 -c 'import sys; sys.exit(1)'"
 _NO_TESTS_CMD = "python3 -c 'import sys; sys.exit(5)'"
@@ -328,26 +367,15 @@ def test_fingerprint_changes_on_manifest_edit(git_repo: Path) -> None:
 
 # 🧪 TRAP[TEST] · Wave 3 · replay: зелёный прогон реплеится при том же fingerprint
 # · Scenario: 2× run_diagnostic(no_fix=True) на неизменённом дереве → 2-й содержит «replay», exit 0
-# · Last fail: 2026-08-03 — транзиентная недоступность git в tmp-репо под нагрузкой (см. retry-коммент)
+# · Last fail: 2026-08-03 — транзиентная недоступность git в tmp-репо под нагрузкой
+# ·   (TRAP[DEBT] снят DevPlan 129 W3: mock_git_calls — мок git-субпроцессов, см. fixture)
 # · Remove if: кэш-механизм изменён
-def test_diagnostic_replays_green_run(git_repo: Path, capsys) -> None:
+def test_diagnostic_replays_green_run(git_repo: Path, capsys, mock_git_calls) -> None:
     """Повторный прогон на неизменённом дереве реплеит зелёный отчёт (AC-3)."""
     _write_manifest(git_repo, [{"id": "ok", "tier": "static", "timeout": 30, "cmd": _PASS_CMD}])
 
     assert run_diagnostic(git_repo, no_fix=True, no_cache=False) == 0
     cache = git_repo / ".git" / "check-cache.json"
-    if not cache.is_file():
-        # 📝 TRAP[DEBT] · 2026-08-03 · LO · Транзиентная недоступность git под нагрузкой xdist
-        # · Observed: make check static_audit (12 воркеров) — cache не записан после зелёного прогона,
-        # ·   assert cache.is_file() падал 2/2 (junit: popen-gw8); standalone/5× xdist-file — 0 фейлов
-        # · Suspected: git-субпроцесс (_tree_files/_cache_path) транзиентно падает (OSError при спавне
-        # ·   под memory pressure 12 воркеров) → fingerprint None → graceful degradation (кэш не пишется,
-        # ·   прогон зелёный) — допущение теста «git в tmp-репо всегда доступен» нарушается
-        # · Impact: флейк static_audit ~25-30% в check-контексте (ложный FAIL, агент гоняет повторно)
-        # · When: DevPlan 124 верификация; retry-once ниже — компромисс (фальсифицируемость сохранена:
-        # ·   персистентная поломка кэша ИЛИ персистентная недоступность git → тест всё ещё падает)
-        logger.warning("[IMP:7][test] cache missing after green run — git transient failure, retry once")
-        assert run_diagnostic(git_repo, no_fix=True, no_cache=False) == 0
     assert cache.is_file(), "кэш должен быть записан после зелёного прогона"
 
     capsys.readouterr()  # очистить stdout 1-го прогона
@@ -361,7 +389,7 @@ def test_diagnostic_replays_green_run(git_repo: Path, capsys) -> None:
 # · Scenario: провал → кэш status=failed → повторный прогон ИСПОЛНЯЕТ чеки заново (без «replay»)
 # · Last fail: N/A
 # · Remove if: правило «failed never replayed» изменено
-def test_diagnostic_never_replays_failed_run(git_repo: Path, capsys) -> None:
+def test_diagnostic_never_replays_failed_run(git_repo: Path, capsys, mock_git_calls) -> None:
     """Упавший прогон никогда не реплеится как зелёный (AC-3)."""
     _write_manifest(git_repo, [{"id": "bad", "tier": "static", "timeout": 30, "cmd": _FAIL_CMD}])
 
@@ -378,7 +406,7 @@ def test_diagnostic_never_replays_failed_run(git_repo: Path, capsys) -> None:
 # · Scenario: env CHECK_CACHE=0 → кэш-файл не создаётся; прогон честный
 # · Last fail: N/A
 # · Remove if: CHECK_CACHE удалён
-def test_check_cache_zero_disables_cache(git_repo: Path, monkeypatch) -> None:
+def test_check_cache_zero_disables_cache(git_repo: Path, monkeypatch, mock_git_calls) -> None:
     """CHECK_CACHE=0 → полный прогон без чтения/записи кэша."""
     _write_manifest(git_repo, [{"id": "ok", "tier": "static", "timeout": 30, "cmd": _PASS_CMD}])
     monkeypatch.setenv("CHECK_CACHE", "0")
@@ -392,7 +420,7 @@ def test_check_cache_zero_disables_cache(git_repo: Path, monkeypatch) -> None:
 # · Scenario: no_cache=True → кэш не создаётся даже после прогона
 # · Last fail: N/A
 # · Remove if: --no-cache удалён
-def test_no_cache_flag_disables_write(git_repo: Path) -> None:
+def test_no_cache_flag_disables_write(git_repo: Path, mock_git_calls) -> None:
     """--no-cache: полный прогон, кэш не пишется."""
     _write_manifest(git_repo, [{"id": "ok", "tier": "static", "timeout": 30, "cmd": _PASS_CMD}])
     assert run_diagnostic(git_repo, no_fix=True, no_cache=True) == 0
@@ -681,6 +709,10 @@ def test_preflight_facade_maps_legacy_flags(monkeypatch, capsys) -> None:
 def test_apply_xdist_inserts_n_auto(tmp_path, monkeypatch) -> None:
     """Executor добавляет -n auto только прямым pytest-командам (make/test_runner — сами)."""
     monkeypatch.setattr(check_suite, "_has_xdist", lambda python_path: True)
+    # DevPlan 129 W3 (D-11 канон): детерминизм — внешний TEST_NO_XDIST=1 (серийный прогон
+    # оператора) не должен ломать тест: поведение «-n auto вставляется при xdist=True»
+    # проверяется при ПРИНУДИТЕЛЬНО снятой переменной.
+    monkeypatch.delenv("TEST_NO_XDIST", raising=False)
     spec = CheckSpec(id="gates", tier="pytest", timeout=10, xdist=True)
 
     out = _apply_xdist("pytest tests/gates/ -m 'gate and not requires_docker'", spec, tmp_path)

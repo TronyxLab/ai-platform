@@ -76,40 +76,6 @@ def _get_volume_device_path(volume_config: dict) -> str:
 
 # endregion HELPERS
 
-# region PHASE2_DETECT
-
-
-# 🧐 TRAP[DEBT] · 2026-07-15 · MED · Vacuous Check 3 (spool coverage via Phase 2 grep)
-def _has_phase2_dynamic_parsing(script_content: str) -> bool:
-    """Check if deploy-modules.sh has Phase 2 dynamic spool_dir parsing.
-
-    ## @purpose — Phase 2 reads spool_dir/spool_volume from each module.yaml
-    ##            via grep/awk at runtime, so paths don't need to be hardcoded.
-    ##            If present, any module with a spool_dir in module.yaml is
-    ##            automatically handled by the Phase 2 loop.
-    ## @io — ⇥ script_content → ⎋ bool
-    ## @complexity — O(1) — substring match
-    """
-    return "spool_dir:|" in script_content
-
-
-def _is_module_spool_handled_via_phase2(module_yaml: dict, script_content: str) -> bool:
-    """Check if a module's spool path is handled via Phase 2 dynamic parsing.
-
-    ## @purpose — A module with spool_dir in module.yaml is considered handled
-    ##            if the script contains Phase 2 grep pattern that reads
-    ##            module.yaml spool_dir fields at runtime.
-    ## @io — ⇥ module_yaml, script_content → ⎋ bool
-    ## @complexity — O(1)
-    """
-    spool_path = _find_spool_value(module_yaml)
-    if not spool_path:
-        return False
-    return _has_phase2_dynamic_parsing(script_content)
-
-
-# endregion PHASE2_DETECT
-
 # region KNOWN_HOST_DIRS
 # These directories are checked by spool_validator.py verify_spool_dirs()
 # — platform dirs, wal-archive, observability dirs, and fallback dirs

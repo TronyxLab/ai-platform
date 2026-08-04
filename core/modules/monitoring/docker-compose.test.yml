@@ -39,3 +39,13 @@ networks:
     external: true
   test-proxy-net:
     external: true
+
+# 2026-08-04 (DevPlan 129 W3): prometheus-config-gen объявлен в test-overlay —
+# test-стек (base.yml + test.yml, НЕ наследует root compose) ссылается на volume
+# (base.yml:67,104), но не объявлял его → compose up «refers to undefined volume».
+# Root compose объявляет volume для прод-стека; test.yml — только тестовый оверлей
+# (гейт test_gate_volumes_sot сканирует module docker-compose.base.yml top-level
+# volumes, не test.yml — SoT-контракт не нарушен).
+volumes:
+  prometheus-config-gen:
+    driver: local

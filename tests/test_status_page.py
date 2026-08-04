@@ -259,11 +259,11 @@ def _setup_app_env(node_yaml_path: str, metrics_json_path: str):
     ## · Fix: snapshot/restore после reload (app.py читает env только на уровне модуля)
     ## · Prevention: тест-хелперы, мутирующие os.environ, обязаны использовать
     ## ·   monkeypatch.setenv или snapshot/restore в finally
+    ## 2026-08-04 (DevPlan 129 W4): del sys.modules ЗАМЕНЁН на reload_safe.reload_module —
+    ##   канон reload-безопасности (НЕ удалять модули из sys.modules: удаление создаёт новый
+    ##   объект при следующем import, старые __globals__ других модулей держат старый →
+    ##   monkeypatch-заглушки в других тестах не применяются, реальный poller/SSH — 1276.8s).
     """
-    for key in list(sys.modules.keys()):
-        if "app" in key.lower() and "status" in str(sys.modules.get(key, "")):
-            del sys.modules[key]
-
     node_configs_dir = str(Path(node_yaml_path).parent.parent)
     node_name = Path(node_yaml_path).parent.name
 
@@ -277,11 +277,11 @@ def _setup_app_env(node_yaml_path: str, metrics_json_path: str):
     os.environ["PLATFORM_DOMAIN"] = "ai-platform.local"
 
     sys.path.insert(0, str(Path(__file__).parent.parent / "core" / "modules" / "status-page"))
-    import importlib
+    from _conftest.reload_safe import reload_module
 
-    import app as app_module
-
-    importlib.reload(app_module)
+    # Канон W4: importlib.reload того же объекта (БЕЗ del sys.modules) — env прочитан
+    # module-level строками, объект модуля остался тем же для внешних __globals__-ссылок.
+    app_module = reload_module("app", expected_file_substring="status-page")
 
     # Restore env — app.py уже захватил константы при reload (module-level reads).
     for key, value in saved.items():

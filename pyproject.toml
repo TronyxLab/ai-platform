@@ -41,6 +41,7 @@ dev = [
     "basedpyright>=1.12.0",
     "boto3-stubs>=1.28.0",
     "pytest>=7.4.0",
+    "pytest-timeout>=2.3.0",  # DevPlan 129 W4: per-test timeout static_audit (висящий тест падает быстро вместо 1276.8s)
     "python-dotenv>=1.0.0",  # только тесты (tests/_conftest/e2e.py, tests/test_env_contract.py) — dev extra (D4)
     "requests>=2.31.0",  # только тесты (tests/test_smoke_*) — dev extra (D4)
     "ruff==0.15.21",

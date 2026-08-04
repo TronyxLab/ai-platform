@@ -646,7 +646,9 @@ def test_all_internal_scripts_reachable(
     ##             at least one path from the Makefile to it.
 
     ## @scope  Shebang-files only. Does NOT scan comments for stale references.
-    ## ⚠️ TRAP[DEBT] · Future: implement test_gate_stale_comments to scan comments for stale script references
+    ## 2026-08-04 (DevPlan 129 W5, D14): TODO «Future: implement test_gate_stale_comments» СНЯТ
+    ## как SUPERSEDED — после cleanup 131 (удаление TRAP[DEBT]/реестров) механизм stale-комментариев
+    ## не нужен: реестры-источники удаляются вместе с историей, скан комментариев потерял бы смысл.
 
     ## @invariants
     ##   - core/lib/*.sh — libraries sourced by convention, exempt

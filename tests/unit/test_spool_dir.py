@@ -15,13 +15,12 @@
 ##   which is acceptable for now (see DD2 in DevPlan 006).
 ## @changes
 ##   2026-07-15 · Created (GAP-003 remediation)
-## ⚠️ TRAP[DEBT] · 2026-07-15 · MED · 3 modules without spool_volume: litellm, langfuse, infra-metrics
-## · Observed: D4-contract (core/modules/AGENTS.md) requires both spool_dir and spool_volume,
-##   but 3 modules have only spool_dir
-## · Suspected: spool_volume was not added during module creation — contract violation
-## · Impact: docker compose down -v will not remove named volumes for these modules,
-##   but host bind mount via spool_dir preserves data
-## · When: during R5 spool_dir audit — deferred, requires separate module.yaml contract fix
+##   2026-08-04 · DevPlan 129 W1 T3 — TRAP[DEBT] 2026-07-15 снят: все 3 модуля имеют
+##     spool-декларации. litellm/infra-metrics — spool_dir (абсолютные пути /var/lib/platform/*);
+##     langfuse — spool_dir: none (stateless, DevPlan 116 B3 T8, U-67, D3). Контракт теста —
+##     spool_dir OR spool_volume (OR, не AND): spool_volume — docker volume name, не файловый
+##     путь (spool_validator.py line 23: skipped for existence check). Список SoT — module.yaml
+##     каждого модуля (тест-инвариант: spool-декларации читаются из module.yaml, не хардкодятся).
 # endregion MODULE_CONTRACT
 """
 

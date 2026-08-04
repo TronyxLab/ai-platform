@@ -70,6 +70,12 @@ _EXCLUDED_DIRS: frozenset = frozenset(
 _EXCLUDED_FILES: frozenset = frozenset(
     {
         ".test_counter.json",
+        # Transient probe test_gate_subprocess_io_sole (xdist race, DevPlan 129 W2):
+        # core/_gate_probe_subprocess_io.py — R5 negative пишет probe БЕЗ GREP_SUMMARY
+        # в реальный core/ (сканер single-canon требует реального пути), параллельный
+        # test_all_py_files_have_grep_summary ловил его → ложный MISSING_GREP_SUMMARY
+        # (~15-30% под xdist). Прецедент: _gate_probe_marker_tmp (119 C), _b11_negative_* (124).
+        "_gate_probe_subprocess_io.py",
     }
 )
 # endregion EXCLUSIONS

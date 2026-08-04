@@ -255,12 +255,15 @@ def test_resolve_from_opt(tmp_path: Path) -> None:
         opt_node_yaml.write_text("node:\n  host: 10.0.0.1\n")
     except (PermissionError, OSError) as exc:
         pytest.skip(f"/opt/node-configs/ not writable ({exc}) — cannot test path 3")
-    # 📝 TRAP[DEBT] · 2026-07-08 · LO · No cleanup of /opt/node-configs/ test files on failure
-    # · Observed: test_resolve_from_opt creates dirs in /opt/node-configs/ but has no
-    # ·   try/finally cleanup. If test fails mid-way, stale directories persist.
-    # · Suspected: missing cleanup block.
-    # · Impact: stale test artifacts in /opt/node-configs/.
-    # · When: discovered during platform gate fix (path/venv/gate DevPlan).
+    # 🧐 TRAP[DECISION] · 2026-08-04 · — · Path 3 (/opt/node-configs/) тестируется через реальный каталог
+    # · Rejected: tmp_path (Zero Hardcode Rule) — путь 3 ЖЁСТКО зашит в модуле под тестом
+    # ·   (resolve_node_yaml → NodeYaml.resolve, core/internal/shared/node_yaml/resolve.py:94 —
+    # ·   candidates.append("/opt/node-configs/...")), инъекции параметра нет.
+    # · Reason: DevPlan 129 W1 T5 — TRAP[DEBT] 2026-07-08 снят: cleanup УЖЕ реализован
+    # ·   (try/finally + shutil.rmtree только тест-поддиректории, строки ниже); при отсутствии
+    # ·   прав на /opt тест корректно скипается (PermissionError → pytest.skip). Полный перевод
+    # ·   на tmp_path потребовал бы изменения продакшен-кода resolve.py (вне скоупа W1).
+    # · Rev: если resolve.py получит env-оверрайд для пути 3 — перевести тест на tmp_path.
 
     # Cleanup on teardown regardless of test outcome
     try:

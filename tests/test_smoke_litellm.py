@@ -70,11 +70,9 @@ def test_litellm_readiness(caplog, platform_services) -> None:
     # ⚠️ TRAP[BUG] · 2026-07-18 · R4 Fail-fast: live container check
     # · failed лист липкий (первый --wait timeout), restart: unless-stopped мог восстановить.
     # · Используем docker inspect для верификации реального состояния.
-    # ⚠️ TRAP[DEBT] · 2026-07-18 · MED · litellm first-start crash (httpx.ConnectError)
-    # · Observed: litellm может упасть на Application startup (httpx.ConnectError к модели),
-    # ·   после чего restart: unless-stopped поднимает контейнер. Это латентная проблема,
-    # ·   не связанная с F-7. Связана с Brief 017 (DNS-alias изоляция shared-сетей).
-    # · Suspected: pgbouncer alias-коллизия на shared-db-net при живом прод-стеке.
+    # 2026-08-04 (DevPlan 129 W1 T2): TRAP[DEBT] 2026-07-18 снят — first-start crash
+    # mitigated retry+backoff ниже (1s/2s/4s, TRAP[BUG] 2026-07-23 P0 с prevention-условием).
+    # Root-cause (Dep 017 DNS-alias pgbouncer) — вне скоупа (домен 126/прод).
     if not _module_container_running(platform_services, "litellm", "litellm-test", logger):
         pytest.fail("litellm-test did not start — smoke tests require running containers")
 

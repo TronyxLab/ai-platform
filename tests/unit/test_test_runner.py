@@ -470,13 +470,18 @@ def test_xdist_inserted_in_all_pytest_invocations(caplog):
 
     source = Path(tr_module.__file__).read_text(encoding="utf-8")
 
-    # marker-режим main(): pytest_args = [*_xdist_args(args.marker), *pytest_args, "--junitxml", ...]
-    assert "*_xdist_args(args.marker), *pytest_args" in source, "marker-режим main() не вставляет xdist"
-    # _run_static_full: [*_xdist_args("static"), "-m", _STATIC_AUDIT_EXPR, ...]
-    assert '*_xdist_args("static"), "-m"' in source, "_run_static_full не вставляет xdist перед -m"
-    # _run_all_suites: [*_xdist_args(marker), *args, "--junitxml", ...]
-    assert "*_xdist_args(marker), *args" in source, "_run_all_suites не вставляет xdist"
-    logger.critical("[IMP:9][test] xdist вставлен во все 3 pytest-инвокации (marker/static_full/all_suites)")
+    # marker-режим main(): pytest_args = [*_xdist_args(args.marker), *_timeout_args(args.marker), *pytest_args, ...]
+    # (многострочный формат — проверяем фрагменты независимо)
+    assert "*_xdist_args(args.marker)," in source, "marker-режим main() не вставляет xdist"
+    assert "*_timeout_args(args.marker)," in source, "marker-режим main() не вставляет timeout"
+    # _run_static_full: [*_xdist_args("static"), *_timeout_args("static"), "-m", _STATIC_AUDIT_EXPR, ...]
+    # (многострочный формат — проверяем фрагменты независимо)
+    assert '*_xdist_args("static"),' in source, "_run_static_full не вставляет xdist"
+    assert '*_timeout_args("static"),' in source, "_run_static_full не вставляет timeout"
+    assert '"-m",' in source and "_STATIC_AUDIT_EXPR" in source, "_run_static_full потерял -m expression"
+    # _run_all_suites: [*_xdist_args(marker), *_timeout_args(marker), *args, "--junitxml", ...]
+    assert "*_xdist_args(marker), *_timeout_args(marker), *args" in source, "_run_all_suites не вставляет xdist+timeout"
+    logger.critical("[IMP:9][test] xdist+timeout вставлены во все 3 pytest-инвокации (marker/static_full/all_suites)")
 
 
 # 🧪 TRAP[TEST] · DevPlan 124 T2c · процессный flock: _docker_suite_lock сериализует docker-процессы
