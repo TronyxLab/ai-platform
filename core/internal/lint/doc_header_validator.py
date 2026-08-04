@@ -12,7 +12,9 @@
 ##   - doc-headers: ext py|sh|md|yaml|yml (из последней точки, shell ${file##*.}); skip .venv/node_modules/__pycache__
 ##   - presence-проверки — первые 10 строк (порт head -10); keywords staged: БЕЗ strip HTML и БЕЗ skip flags
 ##   - namelint: системные исключения из секции name_linter манифеста (НЕ hardcoded case-паттерны)
-##   - namespace_collision_names НЕ реализуется → TRAP[DEBT]
+##   - namespace_collision_names (name_linter) реализован в tests/gates/test_gate_manifest_integrity.py
+##     (NAMESPACE_COLLISION_NAMES ← manifest; test_module_targets_use_canonical_names) — namelint здесь
+##     НЕ дублирует (DRY, DevPlan 128 W3); манифест = код
 ##   - Без аргументов doc-headers → pass (exit 0)
 ## @rationale awk-парсинг YAML — источник хрупкости (P3); yaml.safe_load устраняет класс ошибок.
 ##            namelint размещён здесь (не в третьем модуле) по Brief §План (строка 28) — Rev: >150 LOC → вынести.
@@ -49,12 +51,11 @@ logger = logging.getLogger("doc_header_validator")
 # ·   между DevPlan и Brief.
 # · Rev: при росте namelint-логики >150 LOC — вынести в отдельный модуль с обновлением манифеста.
 
-# 📝 TRAP[DEBT] · 2026-07-31 · LO · check_file_lines/check_shellcheck_directives в Brief не существуют в коде
-# · Observed: Brief упоминает функции, отсутствующие в исходниках (check_file_lines — в отдельном
-# ·   скрипте check-file-lines.sh; check_shellcheck_directives — нет нигде)
-# · Suspected: устаревшее описание более ранней версии скриптов
-# · Impact: следующий агент может искать несуществующие функции
-# · When: during DevPlan 106 drift-аудита — зафиксировано в §2, НЕ реализуется
+# ✅ TRAP[DEBT] · 2026-07-31 · D2 (check-file-lines/check-shellcheck-directives) — ЗАКРЫТ волной 128 W3:
+# · Имена из Brief-описаний не существуют в коде: check-file-lines — отдельный entrypoint
+# ·   check-file-lines.sh (НЕ функция этого модуля); shellcheck-directives — нет нигде.
+# · Манифест (entrypoint-manifest.yaml) этих имён не содержит — «манифест = код» соблюдён;
+# · Brief-описания приведены в соответствие (DevPlan 128 W3).
 
 _REGION_OPEN_RE = re.compile(r"^[ \t]*# region", re.MULTILINE)
 _REGION_CLOSE_RE = re.compile(r"^[ \t]*# endregion", re.MULTILINE)
@@ -445,7 +446,8 @@ def validate_make_target_names(repo_root: Path) -> list[str]:
     ## @io — ⇥ repo_root: Path → ⎋ list[str] — [FAIL] ошибки (manifest/Makefile отсутствуют → FAIL, lint.sh:90-100)
     ## @complexity — O(T) — T make-таргетов
     ## @invariants — порядок проверок: forbidden → allowed → lifecycle → system_prefixes → system_exceptions;
-    ##               namespace_collision_names НЕ проверяется (TRAP[DEBT])
+    ##               namespace_collision_names проверяется в tests/gates/test_gate_manifest_integrity.py
+    ##               (не дублируется здесь — DRY, DevPlan 128 W3; манифест = код)
     ## @rationale — системные исключения из секции name_linter манифеста — Source of Truth (G3),
     ##               поведенчески эквивалентны hardcoded case-паттернам shell (проверено, TRAP[DECISION]).
     """
@@ -476,11 +478,11 @@ def validate_make_target_names(repo_root: Path) -> list[str]:
     name_linter = data.get("name_linter") or {}
     system_exceptions = set(name_linter.get("system_exceptions") or [])
     system_prefixes = tuple(name_linter.get("system_prefixes") or [])
-    # 📝 TRAP[DEBT] · 2026-07-31 · LO · namespace_collision_names: [deploy] в манифесте не реализуется
-    # · Observed: секция name_linter манифеста содержит namespace_collision_names, shell-namelint его не проверяет
-    # · Suspected: запланированная, но не реализованная проверка коллизий имён
-    # · Impact: манифест заявляет больше, чем проверяется (минорный drift)
-    # · When: during DevPlan 106 namelint-порта — deferred, вне скоупа (AC6: поведение идентично)
+    # ✅ TRAP[DEBT] · 2026-07-31 · D1 (namespace_collision_names) — ЗАКРЫТ волной 128 W3:
+    # · Проверка коллизий имён реализована в tests/gates/test_gate_manifest_integrity.py
+    # · (NAMESPACE_COLLISION_NAMES ← manifest name_linter; test_module_targets_use_canonical_names —
+    # ·   модульные Makefile не используют голые deploy/build). Здесь НЕ дублируется (DRY).
+    # · Манифест отражает код (гейт читает name_linter.namespace_collision_names) — «манифест = код».
     targets: set[str] = set()
     targets |= _parse_phony(makefile)
     mk_dir = repo_root / "makefiles"

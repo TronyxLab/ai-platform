@@ -1,14 +1,17 @@
 # GREP_SUMMARY: s3_client thin-wrapper boto3 list-objects delete-objects pagination timeout
-# STRUCTURE: class S3Client → list_objects(prefix, max_keys, timeout) → delete_objects(keys)
+# STRUCTURE: class S3Client → list_objects(prefix, max_keys) → delete_objects(keys)
 # region MODULE_CONTRACT
 """
-Thin wrapper around boto3 S3 client for list/delete operations with timeout support.
+Thin wrapper around boto3 S3 client for list/delete operations.
 
 @purpose  Isolate S3 interaction logic from retention business logic. Provides
-          paginated list with timeout and batch delete.
+          paginated list and batch delete.
 @scope    Used by RetentionPolicy for S3 operations.
 @invariants
-  - list_objects accepts optional timeout parameter (M27 fix)
+  - ✅ TRAP[DEBT] 2026-07-12 D10 — ЗАКРЫТ волной 128 W5: таймауты живут в boto3 Config
+    (botocore.config.Config connect_timeout/read_timeout) на уровне конструирования клиента
+    (retention.py: BotoConfig) — это единственное место, где boto3 Config применим
+    (Config — per-client, не per-call). Сюда параметр timeout НЕ пробрасывается (мёртвый).
   - delete_objects batches in chunks of 1000 (S3 API limit)
 """
 # endregion MODULE_CONTRACT
@@ -21,7 +24,6 @@ logger = logging.getLogger(__name__)
 # region CONSTANTS
 
 _MAX_LIST_KEYS = 1000
-_DEFAULT_TIMEOUT_MS = 30000  # 30 seconds
 
 # endregion CONSTANTS
 
@@ -40,7 +42,8 @@ class S3Client:
         Initialize S3Client.
 
         Args:
-            boto3_client: boto3 S3 client instance.
+            boto3_client: boto3 S3 client instance (Конфиг таймаутов — на уровне
+                конструирования клиента, D10/128 W5).
             bucket: S3 bucket name.
         """
         self._client = boto3_client
@@ -55,28 +58,21 @@ class S3Client:
 
     # region list_objects
     ## @purpose  Paginated list of S3 objects under prefix with continuation token loop
-    ## @io       prefix: str + max_keys: int + timeout: int|None → list[dict]
+    ## @io       prefix: str + max_keys: int → list[dict]
     ## @complexity 2
     def list_objects(
         self,
         prefix: str,
         max_keys: int = _MAX_LIST_KEYS,
-        # 📝 TRAP[DEBT] · 2026-07-12 · LO · S3 timeout not wired to boto3 Config
-        # · Observed: timeout parameter accepted but not passed to boto3 client
-        # · Suspected: boto3 client needs Config(retries=..., read_timeout=...)
-        # · Impact: no per-request timeout — S3 calls may hang
-        # · When: during precommit fix
-        timeout: int | None = None,
     ) -> list[dict[str, Any]]:
         """
         ▶ ○ loop ∋ ContinuationToken: ◇ list_objects_v2 → ⊕ collect Contents → ◇ IsTruncated? → ○ next / ⎋ break
 
-        List all S3 objects under a prefix with pagination and optional timeout.
+        List all S3 objects under a prefix with pagination.
 
         Args:
             prefix: S3 prefix to list objects under.
             max_keys: Maximum keys per page (default 1000).
-            timeout: Per-request timeout in milliseconds (default 30000).
 
         Returns:
             List of S3 object dicts.

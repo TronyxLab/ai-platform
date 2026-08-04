@@ -31,6 +31,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+# DevPlan 128 W1 (P2-5/D6): docker ps/inspect/rm примитивы — shared/docker_ops
+# (единственный слой, гейт docker_sole_path).
+from core.internal.shared import docker_ops
 from core.internal.shared.compose_files import COMPOSE_FILENAMES as COMPOSE_FILE_CANDIDATES
 
 # DevPlan 118 A2: единый канон списков compose-файлов — shared/compose_files.py.
@@ -128,38 +131,11 @@ def _get_existing_containers() -> set:
     This allows the caller to continue gracefully if docker is unavailable.
     """
     logger.info("[IMP:7][_get_existing_containers] Querying docker ps -a for all containers")
-    try:
-        ps_r = subprocess.run(
-            ["docker", "ps", "-a", "--format", "{{.Names}}"],
-            capture_output=True,
-            text=True,
-            timeout=DOCKER_PS_TIMEOUT,
-        )
-        names = {line.strip() for line in ps_r.stdout.splitlines() if line.strip()}
-        logger.info("[IMP:7][_get_existing_containers] Found %d containers in docker ps -a", len(names))
-        return names
-    except FileNotFoundError:
-        logger.warning("[IMP:8][_get_existing_containers] docker binary not found — returning empty container set")
-        return set()
-    except subprocess.TimeoutExpired:
-        logger.warning(
-            "[IMP:8][_get_existing_containers] docker ps -a timed out after %ds — returning empty container set",
-            DOCKER_PS_TIMEOUT,
-        )
-        return set()
-    except subprocess.CalledProcessError as e:
-        logger.warning(
-            "[IMP:8][_get_existing_containers] docker ps -a failed (returncode=%d): %s — returning empty container set",
-            e.returncode,
-            e.stderr.strip() if e.stderr else "no stderr",
-        )
-        return set()
-    except OSError as e:
-        logger.warning(
-            "[IMP:8][_get_existing_containers] Unexpected docker ps error: %s — returning empty container set",
-            e,
-        )
-        return set()
+    # W1 (DevPlan 128): docker ps — shared/docker_ops (non-fatal, [] на сбое/таймауте)
+    names_list = docker_ops.ps_container_names(all=True, timeout=DOCKER_PS_TIMEOUT)
+    names = set(names_list)
+    logger.info("[IMP:7][_get_existing_containers] Found %d containers in docker ps -a", len(names))
+    return names
 
 
 # endregion FUNC__get_existing_containers
@@ -257,16 +233,10 @@ def _inspect_project_label(container_name: str) -> str:
     """
     logger.info("[IMP:7][_inspect_project_label] Inspecting project label for container %s", container_name)
     try:
-        ins_r = subprocess.run(
-            [
-                "docker",
-                "inspect",
-                "--format",
-                '{{index .Config.Labels "com.docker.compose.project"}}',
-                container_name,
-            ],
-            capture_output=True,
-            text=True,
+        # W1 (DevPlan 128): docker inspect — shared/docker_ops (non-fatal)
+        ins_r = docker_ops.docker_inspect(
+            container_name,
+            format='{{index .Config.Labels "com.docker.compose.project"}}',
             timeout=DOCKER_INSPECT_TIMEOUT,
         )
         proj = ins_r.stdout.strip()
@@ -435,28 +405,16 @@ def _self_heal_orphan_containers(orphans: list[dict[str, str]]) -> int:
         cname = orphan.get("container_name", "") or orphan.get("container", "")
         if not cname:
             continue
-        try:
-            result = subprocess.run(
-                ["docker", "rm", "-f", cname],
-                capture_output=True,
-                timeout=DOCKER_RM_TIMEOUT,
-                check=False,
+        # W1 (DevPlan 128): docker rm -f — shared/docker_ops (non-fatal)
+        if docker_ops.docker_rm(cname, force=True, timeout=DOCKER_RM_TIMEOUT):
+            logger.info(
+                "[IMP:9][self_heal][orphan] Removed orphan container: %s (module: %s)",
+                cname,
+                orphan.get("project", "unknown"),
             )
-            if result.returncode == 0:
-                logger.info(
-                    "[IMP:9][self_heal][orphan] Removed orphan container: %s (module: %s)",
-                    cname,
-                    orphan.get("project", "unknown"),
-                )
-                removed += 1
-            else:
-                logger.warning(
-                    "[IMP:8][self_heal][orphan] Failed to remove orphan %s: %s",
-                    cname,
-                    result.stderr.strip()[:200],
-                )
-        except (subprocess.TimeoutExpired, OSError) as exc:
-            logger.warning("[IMP:5][self_heal][orphan] Error removing %s: %s", cname, exc)
+            removed += 1
+        else:
+            logger.warning("[IMP:8][self_heal][orphan] Failed to remove orphan %s", cname)
     return removed
 
 

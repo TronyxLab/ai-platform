@@ -7,8 +7,6 @@
 ## @invariants
 ##   - Three independent chains: A (secrets→platform-env→env-example), B (entrypoint→AGENTS.md), C (litellm-config)
 ##   - check-manifests runs --check on all 6 generators without producing output
-##   - generate-manifests-atomic УДАЛЁН (волна 118 B4) — сломанная mv-семантика (затирал root
-##     AGENTS.md), TRAP[DEBT] 2026-08-01 признал dead; 0 вызовов в Makefile/manifest/глоссарии
 ##   - sync-env-defaults and check-env-defaults are standalone (also part of Chain A via dependencies)
 ##   - generate-requirements/check-requirements standalone (G1-G6 контракт НЕ меняется, DevPlan 123 T11)
 ## @rationale Extracted from root Makefile (DevPlan 090) to keep root <150 lines per AC-5b.

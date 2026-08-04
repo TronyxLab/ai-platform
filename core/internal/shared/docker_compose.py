@@ -38,6 +38,9 @@ import os
 import subprocess
 import time
 
+# DevPlan 128 W1: примитивы docker ps/inspect/exec — shared/docker_ops (единственный слой,
+# гейт docker_sole_path). Compose-домен остаётся здесь (свой compose-гейт).
+from core.internal.shared import docker_ops
 from core.internal.shared.timeouts import (
     BUILD_TIMEOUT,
     COMPOSE_UP_TIMEOUT,
@@ -517,10 +520,10 @@ def healthcheck_poll(
                 )
                 cids = [line.strip() for line in result.stdout.splitlines() if line.strip()]
             else:
-                result = subprocess.run(
-                    ["docker", "ps", "--filter", f"name={project_name}", "--format", "{{.ID}}"],
-                    capture_output=True,
-                    text=True,
+                # docker ps --filter name=... (D5, W1: примитив — shared/docker_ops)
+                result = docker_ops.docker_ps(
+                    filters=[f"name={project_name}"],
+                    format="{{.ID}}",
                     timeout=DOCKER_CMD_TIMEOUT,
                 )
                 cids = [line.strip() for line in result.stdout.splitlines() if line.strip()]
@@ -535,14 +538,8 @@ def healthcheck_poll(
             # Единый критерий «здоров» (D5): ВСЕ контейнеры running AND (healthy | "" | none)
             all_healthy = True
             for cid in cids:
-                insp = subprocess.run(
-                    ["docker", "inspect", "--format", "{{.State.Status}}|{{.State.Health.Status}}", cid],
-                    capture_output=True,
-                    text=True,
-                    timeout=DOCKER_CMD_TIMEOUT,
-                )
-                status_line = insp.stdout.strip()
-                state, _, health = status_line.partition("|")
+                # docker inspect State.Status|State.Health.Status (W1: примитив — shared/docker_ops)
+                state, health = docker_ops.inspect_state_health(cid, timeout=DOCKER_CMD_TIMEOUT)
                 if not (state == "running" and health in ("healthy", "", "none")):
                     # "unhealthy"/"starting"/exited — ждём (стартовые гонки), не fail сразу
                     logger.debug(
@@ -658,24 +655,8 @@ def check_image_exists(image_ref: str, timeout: int = IMAGE_CHECK_TIMEOUT) -> bo
     ##   - Non-fatal: returns False on errors/timeout
     """
     logger.info("[IMP:7][check_image_exists] Checking image: %s", image_ref)
-    try:
-        result = subprocess.run(
-            ["docker", "manifest", "inspect", image_ref],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-        if result.returncode == 0:
-            logger.info("[IMP:9][check_image_exists] Image exists: %s", image_ref)
-            return True
-        logger.warning("[IMP:5][check_image_exists] Image NOT found: %s", image_ref)
-        return False
-    except subprocess.TimeoutExpired:
-        logger.warning("[IMP:5][check_image_exists] docker manifest inspect timed out for %s", image_ref)
-        return False
-    except FileNotFoundError:
-        logger.error("[IMP:10][check_image_exists] docker command not found")
-        return False
+    # docker manifest inspect (W1: примитив — shared/docker_ops)
+    return docker_ops.docker_manifest_inspect(image_ref, timeout=timeout)
 
 
 # endregion FUNC_check_image_exists
@@ -694,13 +675,8 @@ def check_image_exists(image_ref: str, timeout: int = IMAGE_CHECK_TIMEOUT) -> bo
 def nginx_reload(container: str = "nginx", timeout: int = DOCKER_CMD_TIMEOUT) -> None:
     """Reload nginx container via docker exec (shared facade, DevPlan 118 D6)."""
     logger.info("[IMP:7][nginx_reload] Reloading nginx container: %s", container)
-    subprocess.run(
-        ["docker", "exec", container, "nginx", "-s", "reload"],
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        check=False,
-    )
+    # docker exec (W1: примитив — shared/docker_ops; non-fatal контракт сохраняется)
+    docker_ops.docker_exec(container, ["nginx", "-s", "reload"], timeout=timeout)
     logger.info("[IMP:9][nginx_reload] nginx reload executed: %s", container)
 
 

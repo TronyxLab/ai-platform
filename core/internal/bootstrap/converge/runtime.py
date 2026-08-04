@@ -25,10 +25,10 @@ from core.internal.bootstrap.converge.infra import (
     COOLDOWN_FILE,
     DOCKER_TIMEOUT,
     report_add,
-    run_subprocess,
     set_exit,
 )
 from core.internal.bootstrap.converge.volumes import parse_node_modules_yaml
+from core.internal.shared import docker_ops  # W1: docker ps/inspect/info примитивы (гейт docker_sole_path)
 from core.internal.shared.compose_files import resolve_compose_file
 from core.internal.shared.docker_compose import docker_compose_up as _shared_docker_compose_up
 from core.internal.shared.timeouts import COMPOSE_UP_TIMEOUT
@@ -45,15 +45,10 @@ def resolve_container_name(module_name: str) -> list[str]:
 
     Returns list of container names. Empty list if no matching containers.
     """
-    ps_r = run_subprocess(
-        [
-            "docker",
-            "ps",
-            "--filter",
-            f"name={module_name}",
-            "--format",
-            "{{.Names}}",
-        ],
+    # W1: docker ps — shared/docker_ops (non-fatal)
+    ps_r = docker_ops.docker_ps(
+        filters=[f"name={module_name}"],
+        format="{{.Names}}",
         timeout=DOCKER_TIMEOUT,
     )
     if ps_r.returncode != 0:
@@ -73,14 +68,10 @@ def resolve_container_name(module_name: str) -> list[str]:
 ## @return  State string (e.g. "running", "exited"). "unknown" on failure.
 def get_container_state(container_name: str) -> str:
     """Get container state via docker inspect --format '{{.State.Status}}'."""
-    inspect_r = run_subprocess(
-        [
-            "docker",
-            "inspect",
-            container_name,
-            "--format",
-            "{{.State.Status}}",
-        ],
+    # W1: docker inspect — shared/docker_ops (non-fatal)
+    inspect_r = docker_ops.docker_inspect(
+        container_name,
+        format="{{.State.Status}}",
         timeout=DOCKER_TIMEOUT,
     )
     if inspect_r.returncode != 0:
@@ -164,8 +155,8 @@ def reconcile_runtime_state(
     unit = "R9"
     logger.info("[IMP:8][converge][%s] START: reconcile_runtime_state — checking container states", unit)
 
-    # ── Check docker daemon ──
-    docker_info_r = run_subprocess(["docker", "info"], timeout=DOCKER_TIMEOUT)
+    # ── Check docker daemon (W1: docker info — shared/docker_ops) ──
+    docker_info_r = docker_ops.docker_info(timeout=DOCKER_TIMEOUT)
     if docker_info_r.returncode != 0:
         msg = "Docker daemon not available — skipping runtime reconciliation"
         logger.error("[IMP:10][converge][%s] FAIL: %s", unit, msg)

@@ -21,10 +21,10 @@
 
 import logging
 import re
-import subprocess
 
+from core.internal.shared import docker_ops
 from core.internal.shared.docker_compose import docker_compose_config as _shared_docker_compose_config
-from core.internal.shared.timeouts import DOCKER_CMD_TIMEOUT, DOCKER_STOP_TIMEOUT
+from core.internal.shared.timeouts import DOCKER_CMD_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -37,8 +37,8 @@ logger = logging.getLogger(__name__)
 ## @complexity 2 — docker compose config --services + docker ps + per-service stop/rm
 ## @invariants
 ##   - compose config --services через shared (sole path, DevPlan 116 B5 T4)
+##   - docker ps/stop/rm через shared/docker_ops (W1, non-fatal; bytes→str нормализация внутри)
 ##   - Сбой любого шага — WARN, не raise (best-effort: DEPLOY_BEST_EFFORT policy)
-##   - str/bytes нормализация stdout перед splitlines (TRAP[BUG] type safety)
 def cleanup_observability_containers(compose_file) -> None:
     """Clean up pre-existing observability service containers (best-effort)."""
     logger.info("[IMP:7][_cleanup_observability_containers][start] Cleaning observability containers")
@@ -51,36 +51,21 @@ def cleanup_observability_containers(compose_file) -> None:
     if svc_result.returncode != 0:
         logger.warning("[IMP:5][_cleanup_observability_containers][config_fail] compose config --services failed")
         return
-    # ⚠️ TRAP[BUG] · 2026-07-22 · P2 · str/bytes type safety (see _cleanup_legacy_container)
+    # ⚠️ TRAP[BUG] · 2026-07-22 · P2 · str/bytes type safety (см. _cleanup_legacy_container)
     svc_stdout = svc_result.stdout
     if isinstance(svc_stdout, bytes):
         svc_stdout = svc_stdout.decode("utf-8")
     services = [s.strip() for s in svc_stdout.splitlines() if s.strip()]
 
-    # ── Get all container names ──
-    try:
-        ps_result = subprocess.run(
-            ["docker", "ps", "-a", "--format", "{{.Names}}"],
-            capture_output=True,
-            text=True,
-            timeout=DOCKER_CMD_TIMEOUT,
-        )
-        # ⚠️ TRAP[BUG] · 2026-07-22 · P2 · str/bytes type safety (see _cleanup_legacy_container)
-        all_containers = ps_result.stdout
-        if isinstance(all_containers, bytes):
-            all_containers = all_containers.decode("utf-8")
-    except (subprocess.TimeoutExpired, OSError):
-        logger.warning("[IMP:5][_cleanup_observability_containers][ps_fail] docker ps failed")
-        return
+    # ── Get all container names (W1: shared/docker_ops — non-fatal, [] на сбое) ──
+    all_names = docker_ops.ps_container_names(all=True, timeout=DOCKER_CMD_TIMEOUT)
 
     for cname in services:
-        if re.search(re.escape(cname), all_containers, re.MULTILINE):
+        if any(re.search(re.escape(cname), name) for name in all_names):
             logger.info("[IMP:8][_cleanup_observability_containers][clean] Stopping/removing container: %s", cname)
-            try:
-                subprocess.run(["docker", "stop", cname], capture_output=True, timeout=DOCKER_STOP_TIMEOUT, check=False)
-                subprocess.run(["docker", "rm", cname], capture_output=True, timeout=DOCKER_STOP_TIMEOUT, check=False)
-            except (subprocess.TimeoutExpired, OSError):
-                logger.warning("[IMP:5][_cleanup_observability_containers][remove_fail] Failed to remove %s", cname)
+            # W1: docker stop/rm — shared/docker_ops (non-fatal; сбой → WARN внутри слоя)
+            docker_ops.docker_stop(cname)
+            docker_ops.docker_rm(cname)
 
 
 # endregion FUNC_cleanup_observability_containers

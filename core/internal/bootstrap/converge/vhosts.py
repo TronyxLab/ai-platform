@@ -27,10 +27,10 @@ from core.internal.bootstrap.converge.infra import (
     DOCKER_TIMEOUT,
     HOSTS_FILE,
     report_add,
-    run_subprocess,
     set_exit,
 )
 from core.internal.bootstrap.converge.projects import parse_projects_yaml
+from core.internal.shared import docker_ops  # W1: docker ps/exec примитивы (гейт docker_sole_path)
 
 logger = logging.getLogger(__name__)
 
@@ -308,11 +308,8 @@ def run_nginx_test(unit: str) -> None:
 
     If nginx container is not running, logs WARN and skips.
     """
-    # First check if nginx container is running
-    ps_r = run_subprocess(
-        ["docker", "ps", "--format", "{{.Names}}"],
-        timeout=DOCKER_TIMEOUT,
-    )
+    # First check if nginx container is running (W1: docker ps — shared/docker_ops)
+    ps_r = docker_ops.docker_ps(format="{{.Names}}", timeout=DOCKER_TIMEOUT)
     running = [n.strip() for n in ps_r.stdout.splitlines() if n.strip()]
 
     if "nginx" not in running:
@@ -324,10 +321,8 @@ def run_nginx_test(unit: str) -> None:
         return
 
     logger.info("[IMP:8][converge][%s] Running nginx -t...", unit)
-    nginx_t_r = run_subprocess(
-        ["docker", "exec", "nginx", "nginx", "-t"],
-        timeout=DOCKER_TIMEOUT,
-    )
+    # W1: docker exec — shared/docker_ops (non-fatal)
+    nginx_t_r = docker_ops.docker_exec("nginx", ["nginx", "-t"], timeout=DOCKER_TIMEOUT)
 
     if nginx_t_r.returncode == 0:
         logger.info("[IMP:9][converge][%s] OK: nginx -t passed", unit)

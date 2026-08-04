@@ -78,6 +78,10 @@ _MONTHLY_RETENTION_COUNT = 3  # Keep 3 most recent first-of-month (~90 days)
 # Boto3 config
 _BOTO_RETRIES = 3
 _MAX_LIST_KEYS = 1000
+# D10 (128 W5): таймауты boto3 Config — именованные константы модуля (модуль НЕ может
+# импортировать core/internal/shared/timeouts — cross-layer: modules → lib/templates only).
+_BOTO_CONNECT_TIMEOUT = 30  # seconds
+_BOTO_READ_TIMEOUT = 60  # seconds
 
 # endregion CONSTANTS
 
@@ -404,11 +408,11 @@ def main() -> None:
         logger.critical("[IMP:9][retention][main] Config error: %s", exc)
         sys.exit(2)
 
-    # Create S3 client
+    # Create S3 client (D10/128 W5: таймауты — именованные константы модуля)
     boto_config = BotoConfig(
         retries={"max_attempts": _BOTO_RETRIES, "mode": "standard"},
-        connect_timeout=30,
-        read_timeout=60,
+        connect_timeout=_BOTO_CONNECT_TIMEOUT,
+        read_timeout=_BOTO_READ_TIMEOUT,
     )
 
     s3_client = boto3.client(

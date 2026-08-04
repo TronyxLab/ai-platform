@@ -42,6 +42,7 @@ from core.internal.bootstrap.lifecycle.helpers import system as helpers_system
 from core.internal.shared import (
     subprocess_io as helpers_subprocess,  # B4: единый канон (копия lifecycle/helpers удалена)
 )
+from core.internal.shared.docker_compose import nginx_reload as shared_docker_compose_nginx_reload
 from core.internal.shared.timeouts import APT_TIMEOUT
 
 
@@ -281,11 +282,9 @@ def _registry_step_nginx_overlays(node_name: str) -> bool:
         overlay_dir,
     )
     try:
-        helpers_subprocess.run_subprocess(
-            ["docker", "exec", "nginx", "nginx", "-s", "reload"],
-            non_fatal=True,
-            fatal_rc=(127,),
-        )
+        # W1 (DevPlan 128): docker exec — shared docker_compose.nginx_reload → docker_ops.docker_exec
+        # (non-fatal фасад; best-effort семантика сохраняется)
+        shared_docker_compose_nginx_reload("nginx")
         logger.info("[IMP:9][phase:registry_update] Nginx reloaded with overlays")
         return False
     except Exception as e:  # noqa: EXC — non-fatal (best-effort: DEPLOY_BEST_EFFORT policy)

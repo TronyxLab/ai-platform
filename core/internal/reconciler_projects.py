@@ -32,6 +32,7 @@ from pathlib import Path
 
 from core.internal.deploy.channels import ForcedCommandChannel
 from core.internal.deploy.orchestrator import DeployOrchestrator
+from core.internal.shared import docker_ops  # W1: docker manifest inspect примитив (гейт docker_sole_path)
 from core.internal.shared.deploy_paths import projects_base
 from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError, ConfigValidationError
 from core.internal.shared.node_yaml import NodeYaml, ProjectEntry
@@ -190,16 +191,8 @@ def check_ghcr_image(org: str, project_name: str) -> bool:
     context = org if org else "tronyx-lab"
     image_ref = f"ghcr.io/{context}/{project_name}:latest"
 
-    try:
-        result = subprocess.run(
-            ["docker", "manifest", "inspect", image_ref],
-            capture_output=True,
-            text=True,
-            timeout=IMAGE_CHECK_TIMEOUT,
-        )
-        return result.returncode == 0
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-        return False
+    # W1 (DevPlan 128): docker manifest inspect — shared/docker_ops (non-fatal)
+    return docker_ops.docker_manifest_inspect(image_ref, timeout=IMAGE_CHECK_TIMEOUT)
 
 
 # endregion

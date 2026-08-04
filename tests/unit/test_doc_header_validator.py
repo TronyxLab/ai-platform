@@ -18,6 +18,8 @@
 import logging
 from pathlib import Path
 
+import yaml
+
 from core.internal.lint.doc_header_validator import (
     check_grep_summary_presence,
     check_md_sh_refs,
@@ -31,6 +33,8 @@ from core.internal.lint.doc_header_validator import (
 )
 
 logger = logging.getLogger("test_doc_header_validator")
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _assert_ldd(caplog) -> None:
@@ -267,3 +271,44 @@ def test_namelint_missing_manifest(tmp_path: Path, caplog) -> None:
     _assert_ldd(caplog)
     assert len(errors) == 1 and "Manifest not found" in errors[0], f"unexpected: {errors}"
     logger.critical("[IMP:9][test] namelint_missing_manifest: %s — OK", errors)
+
+
+def test_namelint_manifest_code_sync(caplog) -> None:
+    """# 🧪 TRAP[TEST] · 2026-08-04 · DevPlan 128 W3 — манифест name_linter = код (D1/D2).
+
+    Scenario: (1) namespace_collision_names остаётся в манифесте И потребляется кодом —
+    tests/gates/test_gate_manifest_integrity.py читает его (NAMESPACE_COLLISION_NAMES ← manifest);
+    (2) stale-имена check_file_lines/check_shellcheck_directives отсутствуют в коде
+    doc_header_validator (D2 — Brief-описания приведены к коду).
+    Last fail: 128 W3 — TRAP[DEBT] D1/D2 (манифест заявлял больше, чем проверялось).
+    Remove if: name_linter секция мигрирует на другой механизм."""
+    caplog.set_level(logging.INFO)
+    manifest = _REPO_ROOT / "core" / "entrypoint-manifest.yaml"
+    validator_src = (_REPO_ROOT / "core" / "internal" / "lint" / "doc_header_validator.py").read_text()
+
+    with open(manifest) as f:
+        data = yaml.safe_load(f)
+    name_linter = data.get("name_linter", {}) or {}
+
+    # (1) namespace_collision_names — в манифесте И реализован в gate (манифест = код)
+    collisions = name_linter.get("namespace_collision_names", [])
+    assert collisions, "namespace_collision_names должен оставаться в manifest name_linter (128 W3)"
+    gate_src = (_REPO_ROOT / "tests" / "gates" / "test_gate_manifest_integrity.py").read_text()
+    assert "namespace_collision_names" in gate_src, (
+        "namespace_collision_names должен потребляться кодом (test_gate_manifest_integrity)"
+    )
+    assert "NAMESPACE_COLLISION_NAMES" in gate_src
+
+    # (2) D2: stale-имена из Brief-описаний НЕ существуют в коде doc_header_validator
+    assert "check_file_lines" not in validator_src, "check_file_lines не существует в doc_header_validator (D2)"
+    assert "check_shellcheck_directives" not in validator_src, (
+        "check_shellcheck_directives не существует в doc_header_validator (D2)"
+    )
+    # D1/D2 сняты: не осталось ОТКРЫТЫХ (📝) TRAP[DEBT]-записей в этом модуле
+    assert "📝 TRAP[DEBT]" not in validator_src, "в doc_header_validator не должно остаться открытых TRAP[DEBT]"
+
+    logger.critical(
+        "[IMP:9][test] manifest_code_sync: namespace_collision_names=%s (gate-consumed), D2-имена отсутствуют — OK",
+        collisions,
+    )
+    _assert_ldd(caplog)

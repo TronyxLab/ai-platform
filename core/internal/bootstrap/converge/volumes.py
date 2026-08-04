@@ -21,7 +21,8 @@ import logging
 from pathlib import Path
 
 import core.internal.bootstrap.converge.infra as infra
-from core.internal.bootstrap.converge.infra import DOCKER_TIMEOUT, report_add, run_subprocess, set_exit
+from core.internal.bootstrap.converge.infra import DOCKER_TIMEOUT, report_add, set_exit
+from core.internal.shared import docker_ops  # W1: docker info/volume inspect примитивы (гейт docker_sole_path)
 from core.internal.shared.compose_files import resolve_compose_file
 from core.internal.shared.docker_compose import docker_compose_config as _shared_docker_compose_config
 
@@ -128,8 +129,8 @@ def reconcile_volumes(
     unit = "R7"
     logger.info("[IMP:8][converge][%s] START: reconcile_volumes — detect-only named volume check (O7)", unit)
 
-    # ── Check docker daemon ──
-    docker_info_r = run_subprocess(["docker", "info"], timeout=DOCKER_TIMEOUT)
+    # ── Check docker daemon (W1: docker info — shared/docker_ops) ──
+    docker_info_r = docker_ops.docker_info(timeout=DOCKER_TIMEOUT)
     if docker_info_r.returncode != 0:
         msg = "Docker daemon not available — skipping volume reconciliation"
         logger.error("[IMP:10][converge][%s] FAIL: %s", unit, msg)
@@ -198,11 +199,8 @@ def reconcile_volumes(
         logger.info("[IMP:7][converge][%s] Named volumes in %s: %s", unit, mod_name, named_volumes)
 
         for vol_name in named_volumes:
-            inspect_r = run_subprocess(
-                ["docker", "volume", "inspect", vol_name],
-                timeout=DOCKER_TIMEOUT,
-            )
-            if inspect_r.returncode != 0:
+            # W1: docker volume inspect — shared/docker_ops (detect-only, O7)
+            if not docker_ops.docker_volume_inspect(vol_name, timeout=DOCKER_TIMEOUT):
                 logger.warning(
                     "[IMP:9][converge][%s] VOLUME MISSING: %s (module: %s) — detect-only, NOT creating (O7)",
                     unit,

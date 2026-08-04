@@ -1182,6 +1182,9 @@ gates:
 - id: test_docker_compose_subprocess_sole_path
   test_file: test_gate_docker_sole_path.py
   description: 'Auto-discovered gate: test_docker_compose_subprocess_sole_path'
+- id: test_docker_ps_inspect_exec_sole_path
+  test_file: test_gate_docker_sole_path.py
+  description: 'Auto-discovered gate: test_docker_ps_inspect_exec_sole_path'
 - id: test_shell_and_make_no_direct_docker_compose
   test_file: test_gate_docker_sole_path.py
   description: 'Auto-discovered gate: test_shell_and_make_no_direct_docker_compose'

@@ -234,7 +234,8 @@ def test_healthcheck_poll_healthy(caplog: pytest.LogCaptureFixture) -> None:
     # · Last fail: N/A (T3.4 — критерий переработан на inspect State.Health)
     # · Remove if: healthcheck_poll criterion changes
 
-    with patch("core.internal.shared.docker_compose.subprocess.run") as mock_run:
+    # 128 W1: healthcheck_poll → docker_ops.docker_ps/docker_inspect (docker_ops.subprocess.run)
+    with patch("core.internal.shared.docker_ops.subprocess.run") as mock_run:
         # docker ps --filter name= → cid; docker inspect → running|healthy
         mock_run.side_effect = [
             subprocess.CompletedProcess([], returncode=0, stdout="abc123\n", stderr=""),
@@ -268,7 +269,8 @@ def test_healthcheck_poll_running_without_healthcheck(caplog: pytest.LogCaptureF
     # 🧪 TRAP[TEST] · Regression · Scenario: running без HEALTHCHECK — канон D5
     # · Last fail: N/A (T3.4 — единый критерий «здоров»)
     # · Remove if: healthcheck_poll criterion changes
-    with patch("core.internal.shared.docker_compose.subprocess.run") as mock_run:
+    # 128 W1: healthcheck_poll → docker_ops.docker_ps/docker_inspect (docker_ops.subprocess.run)
+    with patch("core.internal.shared.docker_ops.subprocess.run") as mock_run:
         mock_run.side_effect = [
             subprocess.CompletedProcess([], returncode=0, stdout="cid1\n", stderr=""),
             subprocess.CompletedProcess([], returncode=0, stdout="running|", stderr=""),  # Health.Status == ""
@@ -295,7 +297,8 @@ def test_healthcheck_poll_timeout(caplog: pytest.LogCaptureFixture) -> None:
     # · Remove if: healthcheck_poll criterion changes
 
     with (
-        patch("core.internal.shared.docker_compose.subprocess.run") as mock_run,
+        # 128 W1: healthcheck_poll → docker_ops.subprocess.run (ps+inspect)
+        patch("core.internal.shared.docker_ops.subprocess.run") as mock_run,
         patch("core.internal.shared.docker_compose.time.sleep", return_value=None),
         patch(
             "core.internal.shared.docker_compose.time.monotonic",
@@ -335,11 +338,19 @@ def test_healthcheck_poll_service_filter(caplog: pytest.LogCaptureFixture) -> No
     # 🧪 TRAP[TEST] · Regression · Scenario: service-фильтр (T3.4, T5.3)
     # · Last fail: N/A (new test)
     # · Remove if: healthcheck_poll signature changes
+    # 128 W1: compose ps -q (docker_compose) + inspect (docker_ops) — оба через ОДИН глобальный
+    # subprocess.run (патчи docker_compose.subprocess.run и docker_ops.subprocess.run — одно и то же
+    # атрибут-место); дискриминатор по команде.
     with patch("core.internal.shared.docker_compose.subprocess.run") as mock_run:
-        mock_run.side_effect = [
-            subprocess.CompletedProcess([], returncode=0, stdout="cid9\n", stderr=""),  # compose ps -q app
-            subprocess.CompletedProcess([], returncode=0, stdout="running|healthy", stderr=""),
-        ]
+
+        def _fake_run(cmd, **kwargs):
+            if cmd[:3] == ["docker", "compose", "ps"]:
+                return subprocess.CompletedProcess([], returncode=0, stdout="cid9\n", stderr="")
+            if "inspect" in cmd:
+                return subprocess.CompletedProcess([], returncode=0, stdout="running|healthy", stderr="")
+            return subprocess.CompletedProcess([], returncode=0, stdout="", stderr="")
+
+        mock_run.side_effect = _fake_run
 
         result = healthcheck_poll("app", timeout=5, interval=1, service="app")
 
@@ -431,7 +442,8 @@ def test_check_image_exists_found(caplog: pytest.LogCaptureFixture) -> None:
     # · Last fail: N/A (new test)
     # · Remove if: check_image_exists behavior changes
 
-    with patch("core.internal.shared.docker_compose.subprocess.run") as mock_run:
+    # 128 W1: check_image_exists → docker_ops.docker_manifest_inspect (docker_ops.subprocess.run)
+    with patch("core.internal.shared.docker_ops.subprocess.run") as mock_run:
         mock_run.return_value.returncode = 0
 
         result = check_image_exists("ghcr.io/test/image:latest")
@@ -462,7 +474,8 @@ def test_check_image_exists_not_found(caplog: pytest.LogCaptureFixture) -> None:
     # · Last fail: N/A (new test)
     # · Remove if: check_image_exists behavior changes
 
-    with patch("core.internal.shared.docker_compose.subprocess.run") as mock_run:
+    # 128 W1: check_image_exists → docker_ops.docker_manifest_inspect (docker_ops.subprocess.run)
+    with patch("core.internal.shared.docker_ops.subprocess.run") as mock_run:
         mock_run.return_value.returncode = 1
 
         result = check_image_exists("ghcr.io/test/image:latest")
@@ -498,7 +511,8 @@ def test_nginx_reload_success(caplog: pytest.LogCaptureFixture) -> None:
     """nginx_reload успешно выполняет docker exec nginx -s reload."""
     caplog.set_level(logging.INFO)
 
-    with patch("core.internal.shared.docker_compose.subprocess.run") as mock_run:
+    # 128 W1: nginx_reload → docker_ops.docker_exec (docker_ops.subprocess.run)
+    with patch("core.internal.shared.docker_ops.subprocess.run") as mock_run:
         mock_run.return_value.returncode = 0
 
         nginx_reload("nginx", timeout=30)
@@ -535,7 +549,8 @@ def test_nginx_reload_failure_mode(caplog: pytest.LogCaptureFixture) -> None:
     """nginx_reload: docker exec rc=1 (контейнер отсутствует) → no-raise (non-fatal)."""
     caplog.set_level(logging.INFO)
 
-    with patch("core.internal.shared.docker_compose.subprocess.run") as mock_run:
+    # 128 W1: nginx_reload → docker_ops.docker_exec (docker_ops.subprocess.run)
+    with patch("core.internal.shared.docker_ops.subprocess.run") as mock_run:
         mock_run.return_value.returncode = 1
         mock_run.return_value.stderr = "Error: No such container: nginx"
 
@@ -554,27 +569,27 @@ def test_nginx_reload_failure_mode(caplog: pytest.LogCaptureFixture) -> None:
 
 
 # region FUNC_test_nginx_reload_timeout
-## @purpose — nginx_reload: subprocess.TimeoutExpired → пробрасывается (R5 контракт:
-##            исключения TimeoutExpired/OSError/FileNotFoundError — caller ловит, шаг D6).
-## @io — ⇥ caplog → ⎋ None (asserts TimeoutExpired raised)
+## @purpose — nginx_reload: subprocess.TimeoutExpired глотается shared/docker_ops (non-fatal
+##            контракт 128 W1) — функция НЕ бросает (caller best-effort, phases/docker.py).
+## @io — ⇥ caplog → ⎋ None (asserts no-raise при timeout)
 ## @complexity — O(1)
 ## @invariants
-##   - subprocess.run → subprocess.TimeoutExpired → nginx_reload НЕ глотает (пробрасывает)
-##   - Caller (_step_nginx_reload) ловит и логирует WARN
-# 🧪 TRAP[TEST] · DevPlan 119 F4 (HOLE-1) · nginx_reload timeout
-# · Last fail: N/A — функция не была покрыта тестами
-# · Remove if: nginx_reload начинает глотать TimeoutExpired
+##   - docker_ops.docker_exec перехватывает TimeoutExpired → failed CompletedProcess → no-raise
+##   - Caller (_step_nginx_reload) семантика best-effort сохраняется (reload attempt завершён)
+## @rationale — 128 W1: nginx_reload делегирует docker_ops (единый non-fatal слой). Прежний
+##              контракт (raise TimeoutExpired) заменён non-fatal — тест адаптирован.
+# 🧪 TRAP[TEST] · DevPlan 119 F4 (HOLE-1) · nginx_reload timeout (адаптация 128 W1)
+# · Last fail: до W1 nginx_reload пробрасывал TimeoutExpired (docker_compose.subprocess.run)
+# · Remove if: docker_ops перестаёт быть non-fatal
 def test_nginx_reload_timeout(caplog: pytest.LogCaptureFixture) -> None:
-    """nginx_reload: TimeoutExpired → пробрасывается (caller решает severity)."""
+    """nginx_reload: TimeoutExpired глотается docker_ops — no-raise (non-fatal, 128 W1)."""
     caplog.set_level(logging.INFO)
 
-    with (
-        patch(
-            "core.internal.shared.docker_compose.subprocess.run",
-            side_effect=subprocess.TimeoutExpired(cmd=["docker", "exec", "nginx"], timeout=30),
-        ),
-        pytest.raises(subprocess.TimeoutExpired),
+    with patch(
+        "core.internal.shared.docker_ops.subprocess.run",
+        side_effect=subprocess.TimeoutExpired(cmd=["docker", "exec", "nginx"], timeout=30),
     ):
+        # Должно пройти без исключения (non-fatal контракт docker_ops)
         nginx_reload("nginx", timeout=30)
 
     print("--- LDD TRAJECTORY (IMP:7-10) ---")
@@ -582,6 +597,11 @@ def test_nginx_reload_timeout(caplog: pytest.LogCaptureFixture) -> None:
         if "[IMP:" in record.message:
             print(record.message)
     print("--- END LDD TRAJECTORY ---")
+
+    # R1: assert-механизм — docker_ops залогировал timeout warning (non-fatal swallowed)
+    assert any("[IMP:7]" in r.message and "timed out" in r.message for r in caplog.records), (
+        "expected docker_ops timeout warning log"
+    )
 
 
 # endregion FUNC_test_nginx_reload_timeout
@@ -600,7 +620,8 @@ def test_nginx_reload_container_missing_negative(caplog: pytest.LogCaptureFixtur
     """R5: отсутствующий контейнер → no-raise (non-fatal), docker exec вызван с верной командой."""
     caplog.set_level(logging.INFO)
 
-    with patch("core.internal.shared.docker_compose.subprocess.run") as mock_run:
+    # 128 W1: nginx_reload → docker_ops.docker_exec (docker_ops.subprocess.run)
+    with patch("core.internal.shared.docker_ops.subprocess.run") as mock_run:
         mock_run.return_value.returncode = 1  # "No such container"
         mock_run.return_value.stderr = "Error response from daemon: No such container: nginx"
 

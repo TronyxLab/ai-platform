@@ -23,10 +23,10 @@ from core.internal.bootstrap.converge.infra import (
     DOCKER_TIMEOUT,
     PROXY_NET,
     report_add,
-    run_subprocess,
     set_exit,
 )
 from core.internal.bootstrap.converge.projects import parse_projects_yaml
+from core.internal.shared import docker_ops  # W1: docker info/network/ps/inspect примитивы (гейт docker_sole_path)
 
 logger = logging.getLogger(__name__)
 
@@ -60,8 +60,8 @@ def reconcile_networks(
     unit = "R4"
     logger.info("[IMP:8][converge][%s] START: reconcile_networks — ensuring proxy-net exists", unit)
 
-    # ── Check docker daemon ──
-    docker_info_r = run_subprocess(["docker", "info"], timeout=DOCKER_TIMEOUT)
+    # ── Check docker daemon (W1: docker info — shared/docker_ops) ──
+    docker_info_r = docker_ops.docker_info(timeout=DOCKER_TIMEOUT)
     if docker_info_r.returncode != 0:
         msg = "Docker daemon not available — skipping network reconciliation"
         logger.error("[IMP:10][converge][%s] FAIL: %s", unit, msg)
@@ -69,12 +69,8 @@ def reconcile_networks(
         set_exit(2)
         return {"unit": unit, "status": "fail", "detail": msg}
 
-    # ── proxy-net: ensure exists ──
-    net_inspect_r = run_subprocess(
-        ["docker", "network", "inspect", PROXY_NET],
-        timeout=DOCKER_TIMEOUT,
-    )
-
+    # ── proxy-net: ensure exists (W1: docker network inspect/create — shared/docker_ops) ──
+    net_inspect_r = docker_ops.docker_network_inspect_raw(PROXY_NET, timeout=DOCKER_TIMEOUT)
     if net_inspect_r.returncode != 0:
         # Network does not exist — create it
         if dry_run or report_only:
@@ -83,20 +79,12 @@ def reconcile_networks(
             set_exit(1)
         else:
             logger.info("[IMP:8][converge][%s] Creating proxy-net (runtime fallback)", unit)
-            create_r = run_subprocess(
-                ["docker", "network", "create", "--driver", "bridge", PROXY_NET],
-                timeout=DOCKER_TIMEOUT,
-            )
-            if create_r.returncode == 0:
+            if docker_ops.docker_network_create(PROXY_NET, "bridge", timeout=DOCKER_TIMEOUT):
                 logger.info("[IMP:9][converge][%s] DONE: proxy-net created", unit)
                 report_add(unit, "mutated", "proxy-net created")
                 set_exit(1)
             else:
-                logger.error(
-                    "[IMP:10][converge][%s] FAIL: docker network create proxy-net failed: %s",
-                    unit,
-                    create_r.stderr.strip(),
-                )
+                logger.error("[IMP:10][converge][%s] FAIL: docker network create proxy-net failed", unit)
                 report_add(unit, "fail", "proxy-net creation failed")
                 set_exit(2)
                 return {"unit": unit, "status": "fail", "detail": "proxy-net creation failed"}
@@ -146,16 +134,10 @@ def check_proxy_connectivity(node_yaml_path: str, unit: str) -> None:
         if not pname:
             continue
 
-        # Find running containers for this project
-        ps_r = run_subprocess(
-            [
-                "docker",
-                "ps",
-                "--filter",
-                f"label=com.docker.compose.project={pname}",
-                "--format",
-                "{{.Names}}",
-            ],
+        # Find running containers for this project (W1: docker ps/inspect — shared/docker_ops)
+        ps_r = docker_ops.docker_ps(
+            filters=[f"label=com.docker.compose.project={pname}"],
+            format="{{.Names}}",
             timeout=DOCKER_TIMEOUT,
         )
         containers = [c.strip() for c in ps_r.stdout.splitlines() if c.strip()]
@@ -165,14 +147,9 @@ def check_proxy_connectivity(node_yaml_path: str, unit: str) -> None:
             continue
 
         for cname in containers:
-            inspect_r = run_subprocess(
-                [
-                    "docker",
-                    "inspect",
-                    cname,
-                    "--format",
-                    "{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}",
-                ],
+            inspect_r = docker_ops.docker_inspect(
+                cname,
+                format="{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}",
                 timeout=DOCKER_TIMEOUT,
             )
             networks = inspect_r.stdout.strip() if inspect_r.returncode == 0 else ""

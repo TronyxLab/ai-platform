@@ -114,7 +114,8 @@ def test_check_restart_loop_detects_loop(tmp_path: Path, caplog: pytest.LogCaptu
     """check_restart_loop: RestartCount=7 → restart loop True (IMP:9 FAIL log)."""
     caplog.set_level(logging.INFO)
     result = mock.MagicMock(returncode=0, stdout="false|7\n", stderr="")
-    monkeypatch.setattr("core.internal.healthcheck.modules_healthcheck.subprocess.run", lambda *a, **k: result)
+    # 128 W1: docker inspect — shared/docker_ops (docker_ops.subprocess.run — глобальный subprocess module)
+    monkeypatch.setattr("core.internal.shared.docker_ops.subprocess.run", lambda *a, **k: result)
 
     assert mh.check_restart_loop("postgres") is True
     assert any("[IMP:9]" in r.message and "restart loop" in r.message for r in caplog.records)
@@ -125,7 +126,8 @@ def test_check_restart_loop_healthy(tmp_path: Path, caplog: pytest.LogCaptureFix
     """check_restart_loop: Restarting=false, RestartCount=0 → no loop."""
     caplog.set_level(logging.INFO)
     result = mock.MagicMock(returncode=0, stdout="false|0\n", stderr="")
-    monkeypatch.setattr("core.internal.healthcheck.modules_healthcheck.subprocess.run", lambda *a, **k: result)
+    # 128 W1: docker inspect — shared/docker_ops (docker_ops.subprocess.run — глобальный subprocess module)
+    monkeypatch.setattr("core.internal.shared.docker_ops.subprocess.run", lambda *a, **k: result)
 
     assert mh.check_restart_loop("postgres") is False
 
@@ -135,7 +137,8 @@ def test_check_restart_loop_inspect_failure_ignored(monkeypatch, caplog: pytest.
     """check_restart_loop: docker inspect failure → False (не ложный FAIL)."""
     caplog.set_level(logging.INFO)
     result = mock.MagicMock(returncode=1, stdout="", stderr="err")
-    monkeypatch.setattr("core.internal.healthcheck.modules_healthcheck.subprocess.run", lambda *a, **k: result)
+    # 128 W1: docker inspect — shared/docker_ops (docker_ops.subprocess.run — глобальный subprocess module)
+    monkeypatch.setattr("core.internal.shared.docker_ops.subprocess.run", lambda *a, **k: result)
 
     assert mh.check_restart_loop("ghost-container") is False
 

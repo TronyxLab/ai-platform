@@ -1,20 +1,30 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: gate docker-sole-path subprocess docker-compose shared-only AST anti-drift sole-path shell-make-scan
-# STRUCTURE: ▶ AST-скан core/internal/*.py → ○ subprocess.* вызов с cmd: docker+compose → ◇ файл == shared/docker_compose.py? → PASS | ⟦RED: offenders⟧ → ⎋ shell/make-скан (docker compose вне фасадов → RED, D70)
+# GREP_SUMMARY: gate docker-sole-path subprocess docker-compose docker-ops ps inspect exec shared-only AST anti-drift sole-path shell-make-scan
+# STRUCTURE: ▶ AST-скан core/internal/*.py → ○ subprocess.* вызов с cmd: docker+compose → ◇ файл == shared/docker_compose.py? → PASS | ⟦RED: offenders⟧ →
+#            ▶ AST-скан core/internal/*.py → ○ subprocess.* вызов с cmd: docker+{ps|inspect|exec} (не compose) → ◇ файл == shared/docker_ops.py? → PASS | ⟦RED: offenders⟧ →
+#            ⎋ shell/make-скан (docker compose вне фасадов → RED, D70)
 # region MODULE_CONTRACT
-## @purpose  Sole-path gate (DevPlan 116 B5 T10, U-13 + DevPlan 117 D70): docker compose subprocess-вызовы
-##           разрешены ТОЛЬКО в core/internal/shared/docker_compose.py. 4 локальные копии
-##           (docker_orchestrator, DeployEngine, reconciler, healthcheck_poller) удалены волной B5.
+## @purpose  Sole-path gate (DevPlan 116 B5 T10, U-13 + DevPlan 117 D70 + DevPlan 128 W1, P2-5/D6):
+##           docker compose subprocess-вызовы разрешены ТОЛЬКО в core/internal/shared/docker_compose.py;
+##           docker ps/inspect/exec subprocess-вызовы (не compose) — ТОЛЬКО в
+##           core/internal/shared/docker_ops.py (allowlist пуст, 128 W1). 4 локальные копии
+##           (docker_orchestrator, DeployEngine, reconciler, healthcheck_poller) удалены волной B5;
+##           docker ps/inspect/exec копии (deploy_engine, docker_orchestrator, observability,
+##           orphan_reconciler, converge/*, modules_healthcheck, docker_collector, security_posture,
+##           provisioner, reconciler_projects, preflight, hermes_workflow, phases/docker,
+##           docker_registry_auth, state_store, deploy/orchestrator) — волной 128 W1.
 ##           DevPlan 117 D70: расширение на shell/make — прямые `docker compose` вызовы в
 ##           core/entrypoints/, core/lib/, core/internal/bootstrap/*.sh, *.mk → RED вне
 ##           разрешённых фасадов (compose-wrapper.sh, module.mk canonical wrapper).
 ## @scope    AST-скан всех core/internal/*.py: subprocess.run/check_call/check_output/Popen/call,
 ##           где cmd содержит "docker"+"compose" (список `["docker", "compose", ...]` или
-##           строка "docker compose"). Комментарии/докстринги исключаются (только AST-узлы вызовов).
+##           строка "docker compose"), либо "docker"+{ps|inspect|exec} БЕЗ "compose".
+##           Комментарии/докстринги исключаются (только AST-узлы вызовов).
 ##           Shell/make-скан (D70): core/entrypoints/*.sh, core/lib/*.sh, core/internal/bootstrap/*.sh,
 ##           core/modules/*/Makefile, core/templates/module*.mk — строки `docker compose` вне allowlist.
 ## @invariants
 ##   - RED: любой docker compose subprocess-вызов вне shared/docker_compose.py
+##   - RED: любой docker ps/inspect/exec subprocess-вызов (не compose) вне shared/docker_ops.py
 ##   - allowlist: entrypoints/shell вне скоупа (сканируется только core/internal/*.py)
 ##   - Строковые литералы в docstring/log-сообщениях НЕ триггерят (только AST-вызовы)
 ##   - Звёздные элементы (["docker", "compose", *args, ...]) ловятся по строковым константам
@@ -23,10 +33,13 @@
 ##     (canonical compose wrapper), комментарии/документация исключаются
 ## @rationale U-13: каждая волна добавляла 4-ю копию docker compose up/pull. Структурный
 ##            запрет возврата копий делает sole-path enforce-емым (парадигма self-verifying waves).
+##            128 W1 (P2-5/D6): docker ps/inspect/exec были в 3+ копиях (drift-акселератор);
+##            единый shared/docker_ops.py + этот скан с пустым allowlist'ом — enforcement.
 ##            D70: слепая зона — shell/make точки (module.mk COMPOSE_CMD, compose-wrapper)
 ##            не сканировались; теперь закрыта (задача 70, DevPlan 117).
 ## @changes 2026-08-01 | DevPlan 116 B5 T10 — Created
 ## @changes 2026-08-01 | DevPlan 117 D70 — shell/make-скан (test_shell_and_make_no_direct_docker_compose)
+## @changes 2026-08-04 | DevPlan 128 W1 — docker ps/inspect/exec скан (test_docker_ps_inspect_exec_sole_path)
 # endregion MODULE_CONTRACT
 
 import ast
@@ -43,6 +56,10 @@ logger = logging.getLogger(__name__)
 ROOT = repo_root()
 _CORE_INTERNAL = ROOT / "core" / "internal"
 _ALLOWED_FILE = pathlib.Path("core/internal/shared/docker_compose.py")
+
+# DevPlan 128 W1 (P2-5/D6): docker ps/inspect/exec (не compose) — ТОЛЬКО в shared/docker_ops.py
+_OPS_ALLOWED_FILE = pathlib.Path("core/internal/shared/docker_ops.py")
+_OPS_TOKENS: tuple[str, ...] = ("ps", "inspect", "exec")
 
 _SUBPROCESS_FUNCS = {"run", "check_call", "check_output", "Popen", "call"}
 
@@ -144,6 +161,84 @@ def test_docker_compose_subprocess_sole_path(caplog) -> None:
         )
 
     logger.info("[IMP:9][docker_sole_path] PASS: 0 docker compose subprocess calls outside shared/docker_compose.py")
+
+
+# ── (128 W1) docker ps/inspect/exec sole-path: ТОЛЬКО shared/docker_ops.py ──────
+
+
+def _find_ops_offenders() -> list[tuple[str, int, str]]:
+    """Scan core/internal/*.py for docker ps/inspect/exec subprocess calls outside docker_ops.py.
+
+    ▶ ┌_CORE_INTERNAL┐ → ○ for each .py → ○ walk AST → ◇ subprocess.* call + cmd docker+{ps|inspect|exec}
+    │   (НЕ compose — compose-домен в docker_compose.py, свой скан) → ⊕ offenders → ⎋ list
+    ## @purpose — 128 W1 enforcement: docker ps/inspect/exec прямые subprocess-вызовы разрешены
+    ##            ТОЛЬКО в core/internal/shared/docker_ops.py (allowlist пуст).
+    ## @io — ⎋ list[tuple[str, int, str]]: (rel_path, lineno, cmd_preview)
+    ## @invariants — команды с "compose" исключаются (compose-скан test_docker_compose_subprocess_sole_path)
+    """
+    offenders: list[tuple[str, int, str]] = []
+    for p in sorted(_CORE_INTERNAL.rglob("*.py")):
+        if "__pycache__" in p.parts:
+            continue
+        rel = p.relative_to(ROOT).as_posix()
+        try:
+            tree = ast.parse(p.read_text(errors="replace"))
+        except (OSError, SyntaxError):
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            fn = node.func
+            if not (isinstance(fn, ast.Attribute) and isinstance(fn.value, ast.Name) and fn.value.id == "subprocess"):
+                continue
+            if fn.attr not in _SUBPROCESS_FUNCS:
+                continue
+            cmd_node: ast.AST | None = None
+            if node.args:
+                cmd_node = node.args[0]
+            else:
+                for kw in node.keywords:
+                    if kw.arg in ("args", "cmd", "command"):
+                        cmd_node = kw.value
+                        break
+            if cmd_node is None:
+                continue
+            values = _cmd_values(cmd_node)
+            if not values:
+                continue
+            if "docker" not in values:
+                continue
+            if "compose" in values or any("docker compose" in v for v in values):
+                continue  # compose-домен — docker_compose.py (свой скан)
+            if not any(t in values for t in _OPS_TOKENS):
+                continue
+            if rel == _OPS_ALLOWED_FILE.as_posix():
+                continue
+            cmd_preview = " ".join(values[:6])
+            offenders.append((rel, node.lineno, cmd_preview))
+    return offenders
+
+
+@pytest.mark.gate
+@ldd_trajectory
+def test_docker_ps_inspect_exec_sole_path(caplog) -> None:
+    """docker ps/inspect/exec subprocess calls must live ONLY in shared/docker_ops.py (128 W1, D6)."""
+    offenders = _find_ops_offenders()
+    if offenders:
+        for rel, lineno, cmd in offenders:
+            logger.error(
+                "[IMP:10][docker_sole_path][ops] %s:%d docker %s subprocess: %s", rel, lineno, _OPS_TOKENS, cmd
+            )
+        pytest.fail(
+            f"docker ps/inspect/exec subprocess calls found outside shared/docker_ops.py ({len(offenders)}):\n"
+            + "\n".join(f"  - {rel}:{lineno} [{cmd}]" for rel, lineno, cmd in offenders)
+            + "\n\nSole path: core/internal/shared/docker_ops.py (DevPlan 128 W1, P2-5/D6). "
+            "Migrate to shared docker_ops.* functions."
+        )
+
+    logger.info(
+        "[IMP:9][docker_sole_path][ops] PASS: 0 docker ps/inspect/exec subprocess calls outside shared/docker_ops.py"
+    )
 
 
 # ── (D70) shell/make-скан: `docker compose` вне фасадов → RED ────────────────

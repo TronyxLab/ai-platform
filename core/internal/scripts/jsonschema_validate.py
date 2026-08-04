@@ -39,16 +39,10 @@ from pathlib import Path
 
 import jsonschema
 
-# 📝 TRAP[DEBT] · 2026-08-01 · HI · jsonschema недоступен под python3.14 после перехода на deadsnakes
-# · Observed: python_deps.py (2026-08-01) переключает голый `python3` на 3.14 (/usr/local/bin/python3
-# ·           → /usr/bin/python3.14), а requirements.txt НЕ содержит jsonschema — только apt
-# ·           python3-jsonschema для системного 3.12. Этот CLI (validate.sh python-validator) и
-# ·           core/internal/llm/policy_schema.py (φ11 config_renderer) исполняются под `python3` = 3.14
-# ·           на ноде → ModuleNotFoundError: jsonschema после бутстрапа.
-# · Suspected: requirements.txt нужно дополнить jsonschema (или перенести python3-jsonschema в 3.14);
-# ·           требует решения Architect (задача явно запретила менять зависимости).
-# · Impact: node-side `make validate` и LLM config render (φ11) сломаются на нодах после 3.14-бутстрапа.
-# · When: during python-3.14 bootstrap task (2026-08-01) — deferred, out of scope
+# ✅ TRAP[DEBT] · 2026-08-01 · HI · jsonschema под python3.14 — ЗАКРЫТ (FIXED, RC-сессия 2026-08-03):
+# · python_deps.py Step 1b (DevPlan 123/RC 121) добавил jsonschema в requirements.txt — голый
+# · python3 (3.14) теперь имеет jsonschema; requirements-комментарий в sync_requirements.py
+# · отражает. Этот CLI и policy_schema.py исполняются под python3 = 3.14 без ModuleNotFoundError.
 import yaml
 
 from core.internal.shared.schema_validator import validate_yaml_against_schema

@@ -8,15 +8,13 @@
 ##   - Default mode (no args): checks docker container health via check_docker_health (liveness)
 ##   - MODE=deep: check_docker_health + exec_check pg_isready (postgres) / pg_isready -p 6432 (pgbouncer)
 ##   - Returns 0 = all healthy; 1 = any unhealthy
+##   - ✅ TRAP[DEBT] 2026-07-15 D12-hc — ЗАКРЫТ волной 128 W5: имена контейнеров параметризованы
+##     (CONTAINER_SUFFIX / POSTGRES_CONTAINER / PGBOUNCER_CONTAINER) — пригодность для -test стека
+##     (CONTAINER_SUFFIX="-test" → postgres-test/pgbouncer-test, docker-compose.test.yml контракт)
 ## @rationale Unified contract per DevPlan 083: deep mode ALWAYS runs check_docker_health FIRST,
 ##            THEN adds service-specific diagnostics via exec_check. This ensures deep is a strict
 ##            superset of liveness, not a parallel alternative (DRIFT-H6 fix).
 ## @source ../../lib/healthcheck.sh — shared healthcheck primitives
-# 📝 TRAP[DEBT] · 2026-07-15 · LO · Container names hardcoded — script unusable against -test stack
-# · Observed: POSTGRES_CONTAINER/PGBOUNCER_CONTAINER захардкожены как postgres/pgbouncer
-# · Suspected: нет параметризации через env (CONTAINER_SUFFIX или аргумент)
-# · Impact: smoke-тесты не могут переиспользовать healthcheck.sh, дублируют его логику
-# · When: during wave-postgres T5.2 — smoke test forced to replicate deep checks
 # endregion MODULE_CONTRACT
 
 set -euo pipefail
@@ -27,8 +25,12 @@ echo "[IMP:7][postgres-hc][main] Starting postgres healthcheck" >&2
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../../lib/healthcheck.sh"
 
-POSTGRES_CONTAINER="postgres"
-PGBOUNCER_CONTAINER="pgbouncer"
+# ── Имена контейнеров параметризованы (128 W5 D12-hc): env override ИЛИ суффикс.
+#    -test стек: CONTAINER_SUFFIX="-test" → postgres-test/pgbouncer-test (docker-compose.test.yml).
+#    Production: без суффикса → postgres/pgbouncer (обратная совместимость).
+CONTAINER_SUFFIX="${CONTAINER_SUFFIX:-}"
+POSTGRES_CONTAINER="${POSTGRES_CONTAINER:-postgres}${CONTAINER_SUFFIX}"
+PGBOUNCER_CONTAINER="${PGBOUNCER_CONTAINER:-pgbouncer}${CONTAINER_SUFFIX}"
 MODE="${1:-}"
 
 if [ "$MODE" = "deep" ]; then

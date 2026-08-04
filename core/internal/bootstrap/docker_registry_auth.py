@@ -46,6 +46,7 @@ if str(_CORE_DIR) not in sys.path:
     sys.path.insert(0, str(_CORE_DIR))
 
 # DevPlan 119 E5: атомарная запись — единый канон shared/atomic_writer (tempfile+fsync+replace).
+from core.internal.shared import docker_ops  # W1: docker info примитив (гейт docker_sole_path)
 from core.internal.shared.atomic_writer import atomic_write_json as _atomic_write_json
 from core.internal.shared.docker_auth import docker_login as shared_docker_login
 from core.internal.shared.timeouts import (
@@ -272,17 +273,12 @@ def _restart_docker() -> bool:
                 result.stderr.strip()[:200],
             )
             return False
-        # Wait for Docker to be responsive
+        # Wait for Docker to be responsive (W1: docker info — shared/docker_ops, non-fatal)
         import time
 
         for _ in range(DOCKER_RESTART_POLL_RETRIES):  # 6 × 5s = 30s max wait
             time.sleep(DOCKER_RESTART_POLL_INTERVAL)
-            check = subprocess.run(
-                ["docker", "info"],
-                capture_output=True,
-                text=True,
-                timeout=DOCKER_CMD_TIMEOUT,
-            )
+            check = docker_ops.docker_info(timeout=DOCKER_CMD_TIMEOUT)
             if check.returncode == 0:
                 logger.info("[IMP:9][docker_auth] Docker restarted and responsive")
                 return True

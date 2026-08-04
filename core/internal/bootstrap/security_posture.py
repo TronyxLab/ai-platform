@@ -40,6 +40,7 @@ from core.internal.bootstrap.firewall import (
     FORBIDDEN_PORTS,
     parse_ufw_status,
 )
+from core.internal.shared import docker_ops  # W1: docker ps/inspect/manifest примитивы (гейт docker_sole_path)
 from core.internal.shared import subprocess_io as io
 
 # DevPlan 119 B2/B3 канон: /opt/platform литерал запрещён (гейт timeout_literals) —
@@ -349,7 +350,8 @@ def _collect_manifest_digests(data: object) -> set[str]:
 ##            (CVE-точность — CI-скан L3). Docker manifest inspect не тянет слои — дешёвый запрос.
 def check_image_freshness() -> CheckResult:
     """S8: image freshness — local digest vs registry digest (drift = update available)."""
-    ps = _probe(["docker", "ps", "--format", "{{.ID}}"], timeout=DOCKER_CMD_TIMEOUT)
+    # W1 (DevPlan 128): docker ps/inspect/manifest — shared/docker_ops (non-fatal)
+    ps = docker_ops.docker_ps(format="{{.ID}}", timeout=DOCKER_CMD_TIMEOUT)
     if ps.returncode != 0:
         return CheckResult("S8", STATUS_FAIL, f"docker ps failed (rc={ps.returncode}) — cannot assess images")
     cids = [ln.strip() for ln in str(getattr(ps, "stdout", "")).splitlines() if ln.strip()]
@@ -357,8 +359,9 @@ def check_image_freshness() -> CheckResult:
         logger.info("[IMP:9][posture][S8] No running containers — nothing to track")
         return CheckResult("S8", STATUS_PASS, "no running containers — nothing to track")
 
-    inspect = _probe(
-        ["docker", "inspect", "-f", "{{.Config.Image}}|{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}", *cids],
+    inspect = docker_ops.docker_inspect_many(
+        cids,
+        format="{{.Config.Image}}|{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
         timeout=DOCKER_CMD_TIMEOUT,
     )
     if inspect.returncode != 0:
@@ -376,7 +379,7 @@ def check_image_freshness() -> CheckResult:
         if not tag_ref:
             skipped += 1
             continue
-        registry = _probe(["docker", "manifest", "inspect", "--verbose", tag_ref], timeout=DOCKER_CMD_TIMEOUT)
+        registry = docker_ops.docker_manifest_inspect_raw(tag_ref, timeout=DOCKER_CMD_TIMEOUT, flags=["--verbose"])
         if registry.returncode == 124:
             stale.append(f"{ref} (registry query timed out)")
             continue

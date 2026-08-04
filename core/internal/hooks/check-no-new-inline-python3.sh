@@ -22,10 +22,11 @@
 set -euo pipefail
 
 WHITELIST_REGEX="^core/internal/scripts/.*\.py$|^core/internal/hooks/.*\.sh$"
-# ⚠️ TRAP[DEBT] · 2026-07-26 · yaml_read.sh removed — zero inline python3 after 038c
-# ⚠️ TRAP[DEBT] · 2026-07-26 · generate-catalog.sh heredoc — deferred extraction to Python module
-# ⚠️ TRAP[DEBT] · 2026-07-26 · adopt-project.sh complex JSON analysis (not covered by yaml_query)
-# ⚠️ TRAP[DEBT] · 2026-07-26 · add-vhost.sh duplicate domain check (stream processing, not yaml_query)
+# ✅ TRAP[DEBT] 2026-07-26 D7 — все 3 whitelist-записи ЗАКРЫТЫ (DevPlan 128 W4):
+# · generate-catalog.sh heredoc → core/internal/catalog/generate_catalog.py (фасад 17 LOC, 119 B1)
+# · adopt-project.sh JSON-анализ → core/internal/scaffold/project_adopter.py (detect_project_config, 118 E11)
+# · add-vhost.sh duplicate-domain check → core/internal/scaffold/vhost_renderer.py (Strangler 5b/5c)
+# · Whitelist по этим записям пуст; hook-логика не менялась.
 
 # Получаем staged files: shell under core/ + CI yaml under .github/ (StatusReport 046 T6)
 # DRIFT-046-2 prevention: hook script glob must match .pre-commit-config.yaml files filter

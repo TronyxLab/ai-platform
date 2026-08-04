@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: project_adopter, adopt-project, strangler-fig, ai-platform-yaml, compose-validation, node-yaml-registration, vhost, makefile, agents-md, AI-PLATFORM.md
-# STRUCTURE: ▶ adopt() 8 шагов → ○ gen_yaml → ○ simplify_deploy → ○ delete_platform_deploy → ○ gen_env (subprocess) → ○ makefile+agents+platform_md (scaffold_helpers) → ○ validate_compose_networks (compose_validator) → ○ register_in_node_yaml (scaffold_helpers) → ○ configure_vhost (vhost_configurator) → ⎋ print_diff_report
+# STRUCTURE: ▶ adopt() 8 шагов → ○ gen_yaml → ○ simplify_deploy → ○ delete_platform_deploy → ○ gen_env (direct import, D8) → ○ makefile+agents+platform_md (scaffold_helpers) → ○ validate_compose_networks (compose_validator) → ○ register_in_node_yaml (scaffold_helpers) → ○ configure_vhost (vhost_configurator) → ⎋ print_diff_report
 # region MODULE_CONTRACT
 ## @purpose  Strangler-Fig migration of adopt-project.sh (906 LOC shell) into Python business logic.
 ##            Adopts an existing project into ai-platform lifecycle: generates ai-platform.yaml,
@@ -19,7 +19,7 @@
 ##   5. deploy.yml simplified to reusable workflow (if exists); platform-deploy.yml deleted if exists
 ##   6. validate_compose_networks → compose_validator; register → scaffold_helpers
 ##   7. configure_vhost → vhost_configurator (vhost_renderer → add-vhost.sh fallback, D4)
-##   8. gen_env_platform always via subprocess.run (CLI-first design, D5)
+##   8. gen_env_platform — прямой импорт generate_env_platform() (D8, 128 W5: субпроцесс убран)
 ## @rationale Migration tool for existing projects. Strangler-Fig per Wave 5 language policy (AGENTS.md).
 ##            DevPlan 116 B9 D5: полный сплит ответственностей project_adopter (SRP, ≤600 LOC гейт T6.2).
 ## @changes  2026-07-26 · Wave 5c — Full Strangler-Fig from adopt-project.sh (906 LOC)
@@ -30,8 +30,10 @@
 # ⚠️ TRAP[BUG] · 2026-07-17 · P1 · Silent default "personal" org + missing casing normalization — config drift
 # · Fix: fail-fast exit 1 + lowercase ghcr + exact-case uses: + сверка с node.yaml · Prevention: org явный
 
-# 📝 TRAP[DEBT] · 2026-07-26 · LO · gen_env_platform.py — CLI-first (sys.exit) → subprocess.run (overhead ~100ms)
-# · When: Wave 5c — deferred
+# ✅ TRAP[DEBT] · 2026-07-26 · D8 (gen_env_platform CLI-first → subprocess overhead) — ЗАКРЫТ волной 128 W5:
+# · gen_env_platform.py имеет main() -> int + импортируемый generate_env_platform();
+# · project_adopter вызывает функцию напрямую (субпроцесс ~100ms overhead убран).
+# · D9 (node.yaml path resolution) — ЗАКРЫТ 118 E11: shared/project_yaml.py (detect_project_config).
 
 from __future__ import annotations
 
@@ -39,10 +41,11 @@ import argparse
 import logging
 import os
 import shutil
-import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+
+import yaml
 
 # B9 T5 (U-32): compose-валидация и vhost-логика — отдельные модули (SRP)
 from core.internal.scaffold import vhost_configurator
@@ -266,14 +269,12 @@ jobs:
     # endregion FUNC_delete_platform_deploy_yml
 
     # region FUNC_gen_env_platform
-    ## @purpose  Generate .env.platform via subprocess gen_env_platform.py (CLI-first, D5). · ⇥ None → ⎋ bool — True if generated, False if script not found or failed · @complexity O(1) · Всегда перегенерирует (не идемпотентен by design); gen_env_platform.py CLI-first
+    ## @purpose  Generate .env.platform via direct import of gen_env_platform.generate_env_platform
+    ##           (D8: убран subprocess.run ~100ms overhead; 128 W5). · ⇥ None → ⎋ bool — True if
+    ##           generated, False if script not found or failed · @complexity O(1) · Всегда
+    ##           перегенерирует (не идемпотентен by design)
     def gen_env_platform(self) -> bool:
-        """Generate .env.platform via subprocess gen_env_platform.py."""
-        gen_script = Path(__file__).resolve().parent / "gen_env_platform.py"
-        if not gen_script.exists():
-            logger.info("[IMP:8][%s][gen_env] gen_env_platform.py not found — skipping .env.platform", self._log_prefix)
-            return False
-
+        """Generate .env.platform via direct function call (D8, 128 W5 — no subprocess)."""
         env_file = self.project_dir / ".env.platform"
         platform_env_yaml = self.project_dir / "platform-env.yaml"
 
@@ -286,33 +287,21 @@ jobs:
         logger.info("[IMP:7][%s][gen_env] Generating .env.platform from platform-env.yaml", self._log_prefix)
 
         try:
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(gen_script),
-                    "--yaml",
-                    str(platform_env_yaml),
-                    "--name",
-                    self.name,
-                    "--domain",
-                    self.domain or "ai-platform.local",
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
+            from core.internal.scaffold.gen_env_platform import (
+                GenEnvPlatformError,
+                generate_env_platform,
             )
-            if result.returncode == 0:
-                env_file.write_text(result.stdout)
-                logger.info("[IMP:9][%s][gen_env] .env.platform generated: %s", self._log_prefix, env_file)
-                return True
-            logger.info(
-                "[IMP:8][%s][gen_env] gen_env_platform.py returned non-zero — stderr: %s",
-                self._log_prefix,
-                result.stderr.strip(),
+
+            lines = generate_env_platform(
+                str(platform_env_yaml),
+                domain=self.domain or "ai-platform.local",
+                project_name=self.name,
             )
-            return False
-        except FileNotFoundError:
-            logger.info("[IMP:8][%s][gen_env] gen_env_platform.py not found or not executable", self._log_prefix)
+            env_file.write_text("\n".join(lines) + "\n")
+            logger.info("[IMP:9][%s][gen_env] .env.platform generated: %s", self._log_prefix, env_file)
+            return True
+        except (OSError, yaml.YAMLError, GenEnvPlatformError) as exc:
+            logger.info("[IMP:8][%s][gen_env] gen_env_platform failed: %s", self._log_prefix, exc)
             return False
 
     # endregion FUNC_gen_env_platform

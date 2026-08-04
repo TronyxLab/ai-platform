@@ -43,6 +43,7 @@ from typing import Any
 from core.internal.deploy.channels import DeliveryChannel, Payload
 from core.internal.deploy.deploy_history import DeployHistory
 from core.internal.deploy.healthcheck_poller import HealthcheckPoller
+from core.internal.shared import docker_ops  # W1: docker tag примитив (гейт docker_sole_path)
 
 # DevPlan 116 B11 T2 (U-10, D1): единый audit-writer — shared/audit_logger.
 # deploy/audit_logger.py УДАЛЁН; DeployOrchestrator пишет через write_audit_entry
@@ -55,9 +56,6 @@ from core.internal.shared.audit_logger import write_audit_entry as _shared_write
 # прямые вызовы docker compose ps/down из DeployOrchestrator удалены (импорты ниже не нужны).
 from core.internal.shared.deploy_paths import platform_remote_base, projects_base
 from core.internal.shared.exceptions import PlatformError
-
-# DevPlan 116 B5 T1: таймауты — единый реестр shared/timeouts.py (U-11)
-from core.internal.shared.timeouts import DOCKER_CMD_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -1081,14 +1079,9 @@ class DeployOrchestrator:
             engine = DeployEngine(projects_base=self.projects_base)
             prev_image_id = snapshot.get("compose_state", {}).get("previous_image")
 
-            # Re-tag and restart
+            # Re-tag and restart (W1: docker tag — shared/docker_ops, non-fatal)
             if prev_image_id:
-                subprocess.run(
-                    ["docker", "tag", prev_image_id, f"{service}:previous-rollback"],
-                    capture_output=True,
-                    timeout=DOCKER_CMD_TIMEOUT,
-                    check=False,
-                )
+                docker_ops.docker_tag(prev_image_id, f"{service}:previous-rollback")
 
             result = engine.deploy(
                 project=Path(project_dir).name,

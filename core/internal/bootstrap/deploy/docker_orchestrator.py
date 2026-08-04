@@ -42,15 +42,10 @@
 ##             wait_for_readiness/run_healthcheck/_invoke_healthcheck* → healthcheck_runner.py;
 ##             _handle_hermes_agent → hermes_workflow.py (оркестратор: роутинг + CLI)
 ##
-## ⚠️ TRAP[DEBT] · 2026-07-22 · P2 · 5 test-side failures in test_docker_orchestrator.py (DevPlan 043-B5)
-## · Root: mock subprocess.run returns bytes, code expects str via text=True
-## · Impact: 5 unit-тестов падали (test_cleanup_legacy_container_found/not_found,
-##   test_deploy_docker_module_hermes_agent, testpre_pull_images_single,
-##   orphan-reconcile тест). Production-код корректен:
-##   docker stop/rm присутствуют в _cleanup_legacy_container; os._exit() в pre_pull_images
-##   корректен для forked child. P2 TypeGuard на bytes работает в production.
-## · Fix: адаптировать моки в test_docker_orchestrator.py (DevPlan 042 Phase 4)
-## · Non-blocking: production-код корректен, тесты требуют адаптации моков
+## ✅ TRAP[DEBT] · 2026-07-22 · D3 (5 test-side failures) — ЗАКРЫТ волнами 128 W1/W2:
+## · W1: примитивы docker ps/stop/rm вынесены в shared/docker_ops (bytes→str нормализация
+## ·   внутри слоя, TRAP[BUG] type-safety 2026-07-22 снят); W2: тесты верифицированы
+## ·   (0 failures в test_docker_orchestrator.py, моки к контракту shared-слоя).
 ## · Note: orphan-реконсиляция делегирована в orphan_reconciler (DevPlan 117 D18)
 ## @modulemap
 ##   _check_image_exists [W:1] — docker manifest inspect via subprocess → bool
@@ -77,7 +72,6 @@ import argparse
 import contextlib
 import logging
 import os
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -99,6 +93,10 @@ from core.internal.bootstrap.deploy import (
     orphan_reconciler,
     parallel_runner,
 )
+
+# DevPlan 128 W1 (P2-5/D6): docker ps/stop/rm примитивы — shared/docker_ops
+# (единственный слой, гейт docker_sole_path; TRAP[DEBT] D3 закрыт волной W1/W2).
+from core.internal.shared import docker_ops
 from core.internal.shared.audit_logger import write_audit_entry as _shared_write_audit_entry
 
 # DevPlan 081 Phase C (TASK-081C3): shared audit_logger for JSON-lines audit
@@ -123,7 +121,6 @@ from core.internal.shared.timeouts import (
     BUILD_TIMEOUT,
     COMPOSE_UP_TIMEOUT,
     DOCKER_CMD_TIMEOUT,
-    DOCKER_STOP_TIMEOUT,
 )
 
 logger = logging.getLogger(__name__)
@@ -647,36 +644,17 @@ PHASES: dict[str, object] = {
 ## @purpose  Stop and remove a legacy container by name (used for hermes-agent migration).
 ## @io       ⇥ container_name: str
 ##           ⎋ None (side-effect: docker stop + rm)
-## @complexity 1 — two subprocess calls with graceful error handling
+## @complexity 1 — два docker-вызова (ps/stop/rm) через shared/docker_ops (W1, non-fatal)
 def _cleanup_legacy_container(container_name: str) -> None:
     logger.info("[IMP:7][_cleanup_legacy_container][check] Checking for legacy container: %s", container_name)
-    try:
-        ps_result = subprocess.run(
-            ["docker", "ps", "-a", "--format", "{{.Names}}"],
-            capture_output=True,
-            text=True,
-            timeout=DOCKER_CMD_TIMEOUT,
-        )
-        # ⚠️ TRAP[BUG] · 2026-07-22 · P2 · str/bytes type safety in subprocess stdout
-        # · Symptom: container_name in stdout.splitlines() silently fails when mock returns bytes
-        # · Root: subprocess.run with text=True returns str, but mock tests pass bytes.
-        #   `str in bytes_list` is always False in Python 3.
-        # · Fix: decode bytes to str before comparison.
-        # · Prevention: always normalize stdout before string operations.
-        stdout = ps_result.stdout
-        if isinstance(stdout, bytes):
-            stdout = stdout.decode("utf-8")
-        if container_name in stdout.splitlines():
-            logger.info("[IMP:8][_cleanup_legacy_container][stop] Stopping legacy container: %s", container_name)
-            subprocess.run(
-                ["docker", "stop", container_name], capture_output=True, timeout=DOCKER_STOP_TIMEOUT, check=False
-            )
-            subprocess.run(
-                ["docker", "rm", container_name], capture_output=True, timeout=DOCKER_STOP_TIMEOUT, check=False
-            )
-            logger.info("[IMP:9][_cleanup_legacy_container][removed] Legacy container removed: %s", container_name)
-    except (subprocess.TimeoutExpired, OSError) as exc:
-        logger.warning("[IMP:5][_cleanup_legacy_container][error] Failed to clean up %s: %s", container_name, exc)
+    # W1 (DevPlan 128): примитивы docker ps/stop/rm — shared/docker_ops (non-fatal, bytes→str
+    # нормализация внутри; TRAP[BUG] type-safety 2026-07-22 снят shared-слоем).
+    names = docker_ops.ps_container_names(all=True, timeout=DOCKER_CMD_TIMEOUT)
+    if container_name in names:
+        logger.info("[IMP:8][_cleanup_legacy_container][stop] Stopping legacy container: %s", container_name)
+        docker_ops.docker_stop(container_name)
+        docker_ops.docker_rm(container_name)
+        logger.info("[IMP:9][_cleanup_legacy_container][removed] Legacy container removed: %s", container_name)
 
 
 # endregion FUNC__cleanup_legacy_container

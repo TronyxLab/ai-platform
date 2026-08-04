@@ -90,18 +90,19 @@ def mock_cache_dir(tmp_path: Path) -> str:
 
 @pytest.fixture
 def mock_docker_subprocess():
-    """Boundary fixture (T3 D1): ONE docker_collector.subprocess.run mock for the file.
+    """Boundary fixture (T3 D1): ONE docker_ops.subprocess.run mock for the file.
 
     ## @purpose — Replaces 9 inline docker_collector.subprocess.run patch blocks.
     ##            Default: empty docker (no containers). Tests configure
     ##            return_value / side_effect per scenario (ps → inspect → stats).
-    ## @io — ⎋ MagicMock (docker_collector.subprocess.run) — assert on parsed structure, not on calls
+    ## @io — ⎋ MagicMock (docker_ops.subprocess.run) — assert on parsed structure, not on calls
     ## @complexity — O(1)
     ## @invariants
-    ##   - Patches only core.internal.healthcheck.metrics.docker_collector.subprocess.run (module boundary)
+    ##   - 128 W1: docker_collector делегирует shared/docker_ops — патчим docker_ops.subprocess.run
+    ##     (глобальный subprocess module — покрывает все docker-подвызовы)
     ##   - Assertions on observable collector output (containers list / sizes dict / exit) — D1
     """
-    with mock.patch("core.internal.healthcheck.metrics.docker_collector.subprocess.run") as mock_run:
+    with mock.patch("core.internal.shared.docker_ops.subprocess.run") as mock_run:
         mock_run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
         yield mock_run
 

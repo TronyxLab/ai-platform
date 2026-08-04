@@ -20,13 +20,13 @@ import argparse
 import logging
 import os
 import shutil
-import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
 
+from core.internal.shared import docker_ops  # W1: docker network inspect/create примитивы (гейт docker_sole_path)
 from core.internal.shared.exceptions import PlatformError, PlatformFatalError
 
 # ── Logger setup ──────────────────────────────────────────────────────────────
@@ -174,27 +174,14 @@ def provision_networks(
             result.created += 1
             continue
 
-        # Check if network exists
-        inspect_rc = subprocess.run(
-            ["docker", "network", "inspect", net.name],
-            capture_output=True,
-            text=True,
-            check=False,
-        ).returncode
-
-        if inspect_rc == 0:
+        # Check if network exists (W1: docker network inspect — shared/docker_ops)
+        if docker_ops.docker_network_inspect(net.name):
             logger.info("[IMP:7][provision][networks] SKIP: network %s already exists", net.name)
             result.skipped += 1
         else:
             logger.info("[IMP:7][provision][networks] Creating network: %s (driver: %s)", net.name, net.driver)
-            create = subprocess.run(
-                ["docker", "network", "create", "--driver", net.driver, net.name],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if create.returncode != 0:
-                msg = f"Failed to create network {net.name}: {create.stderr.strip()}"
+            if not docker_ops.docker_network_create(net.name, net.driver):
+                msg = f"Failed to create network {net.name}"
                 logger.error("[IMP:10][provision][networks] %s", msg)
                 result.errors.append(msg)
             else:

@@ -24,12 +24,12 @@
 from __future__ import annotations
 
 import logging
-import subprocess
 import sys
 from pathlib import Path
 
 import yaml
 
+from core.internal.shared import docker_ops  # W1: docker inspect примитив (гейт docker_sole_path)
 from core.internal.shared.module_interface import invoke as invoke_module_interface
 from core.internal.shared.timeouts import DOCKER_CMD_TIMEOUT
 
@@ -125,17 +125,13 @@ def read_container_names(module_dir: Path) -> list[str]:
 ## @io       ⇥ container: str → ⎋ bool — True если restart loop
 ## @complexity O(1) — 1-2 docker inspect subprocess
 def check_restart_loop(container: str) -> bool:
-    """Inspect container State.Restarting/RestartCount → restart loop? (docker inspect subprocess)."""
-    try:
-        inspect = subprocess.run(
-            ["docker", "inspect", "--format", "{{.State.Restarting}}|{{.RestartCount}}", container],
-            capture_output=True,
-            text=True,
-            timeout=DOCKER_CMD_TIMEOUT,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        logger.warning("[IMP:7][modules-healthcheck][restart] docker inspect %s failed: %s", container, exc)
-        return False
+    """Inspect container State.Restarting/RestartCount → restart loop? (W1: shared/docker_ops)."""
+    # W1 (DevPlan 128): docker inspect — shared/docker_ops (non-fatal, never raises)
+    inspect = docker_ops.docker_inspect(
+        container,
+        format="{{.State.Restarting}}|{{.RestartCount}}",
+        timeout=DOCKER_CMD_TIMEOUT,
+    )
     if inspect.returncode != 0:
         logger.info(
             "[IMP:7][modules-healthcheck][restart] docker inspect %s exit=%d (container absent?)",

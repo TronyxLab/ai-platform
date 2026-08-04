@@ -30,6 +30,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from core.internal.shared import docker_ops  # W1: docker info примитив (гейт docker_sole_path)
+
 # B3: канонический platform base — shared/deploy_paths (литерал /opt/platform удалён)
 from core.internal.shared.deploy_paths import platform_remote_base
 
@@ -240,13 +242,8 @@ class BootstrapState:
             deploy_script = os.path.join(core_dir, "internal", "bootstrap", "deploy-modules.sh")
             if not os.path.isfile(deploy_script):
                 raise PhasePreconditionError(f"Phase {phase_value} requires deploy-modules.sh at {deploy_script}")
-            # Docker must be running
-            docker_check = subprocess.run(
-                ["docker", "info"],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
+            # Docker must be running (W1: docker info — shared/docker_ops, DOCKER_CMD_TIMEOUT=10 канон)
+            docker_check = docker_ops.docker_info()
             if docker_check.returncode != 0:
                 raise PhasePreconditionError(
                     f"Phase {phase_value} requires Docker daemon running: {docker_check.stderr.strip()[:200]}"

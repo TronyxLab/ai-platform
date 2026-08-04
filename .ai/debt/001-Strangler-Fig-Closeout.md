@@ -199,20 +199,20 @@
 
 ### §A.2 TRAP[DEBT] — все записи (из DevPlan 111 §1.5)
 
-| # | Файл:строка | Дата | Sev | Суть |
-|---|------------|------|-----|------|
-| D1 | `core/internal/lint/doc_header_validator.py:52` | 2026-07-31 | LO | check_file_lines/check_shellcheck_directives в Brief не существуют |
-| D2 | `core/internal/lint/doc_header_validator.py:479` | 2026-07-31 | LO | namespace_collision_names не реализуется |
-| D3 | `core/internal/bootstrap/deploy/docker_orchestrator.py:37` | 2026-07-22 | P2 | 5 test-side failures в test_docker_orchestrator.py |
-| D4 | `core/internal/bootstrap/lifecycle/state_machine.py:213` | 2026-07-31 | MED | resume_phase()/execute_grouped_phase() — мёртвый код |
-| D5 | `core/internal/bootstrap/overlay_deliverer.py:21` | 2026-07-26 | LO | node-resolver.sh:306-316 inline python3 -c |
-| D6 | `core/internal/deploy/deploy_engine.py:76` | 2026-07-26 | MED | Docker operations library — кандидат на shared модуль |
-| D7 | `core/internal/hooks/check-no-new-inline-python3.sh:25-28` | 2026-07-26 | — | 4 whitelist-записи (yaml_read.sh, generate-catalog.sh, adopt-project.sh, add-vhost.sh) |
-| D8 | `core/internal/scaffold/project_adopter.py:46` | 2026-07-26 | LO | gen_env_platform.py — CLI-first design prevents direct import |
-| D9 | `core/internal/scaffold/project_adopter.py:52` | 2026-07-26 | LO | node.yaml path resolution duplicated across 4+ scripts |
-| D10 | `core/modules/backup-cron/scripts/s3_client.py:64` | 2026-07-12 | LO | S3 timeout not wired to boto3 Config |
-| D11 | `core/modules/postgres/docker-compose.base.yml:50` | 2026-07-17 | MED | POSTGRES_PASSWORD rotation risk |
-| D12 | `core/modules/postgres/healthcheck.sh:15` | 2026-07-15 | LO | Container names hardcoded — непригоден для -test stack |
+| # | Файл:строка | Дата | Sev | Суть | Status (128 W1-W5) |
+|---|------------|------|-----|------|--------------------|
+| D1 | `core/internal/lint/doc_header_validator.py:52` | 2026-07-31 | LO | check_file_lines/check_shellcheck_directives в Brief не существуют | FIXED (128 W3 — имена не существуют, манифест = код; TRAP снят) |
+| D2 | `core/internal/lint/doc_header_validator.py:479` | 2026-07-31 | LO | namespace_collision_names не реализуется | FIXED (128 W3 — реализован в test_gate_manifest_integrity.py, читает manifest; DRY) |
+| D3 | `core/internal/bootstrap/deploy/docker_orchestrator.py:37` | 2026-07-22 | P2 | 5 test-side failures в test_docker_orchestrator.py | FIXED (128 W1/W2 — shared/docker_ops bytes→str, тесты 0 failures) |
+| D4 | `core/internal/bootstrap/lifecycle/state_machine.py:213` | 2026-07-31 | MED | resume_phase()/execute_grouped_phase() — мёртвый код | OPEN (волна 117 D5 — sub-step resume вне скоупа) |
+| D5 | `core/internal/bootstrap/overlay_deliverer.py:21` | 2026-07-26 | LO | node-resolver.sh:306-316 inline python3 -c | FIXED (127 W2 — shared/node_resolver.py) |
+| D6 | `core/internal/deploy/deploy_engine.py:76` | 2026-07-26 | MED | Docker operations library — кандидат на shared модуль | FIXED (128 W1 — shared/docker_ops.py, гейт docker_sole_path) |
+| D7 | `core/internal/hooks/check-no-new-inline-python3.sh:25-28` | 2026-07-26 | — | 4 whitelist-записи (yaml_read.sh, generate-catalog.sh, adopt-project.sh, add-vhost.sh) | FIXED (128 W4 — 3 записи закрыты Strangler-волнами; yaml_read.sh 038c; TRAP-комментарии сняты) |
+| D8 | `core/internal/scaffold/project_adopter.py:46` | 2026-07-26 | LO | gen_env_platform.py — CLI-first design prevents direct import | FIXED (128 W5 — прямой импорт generate_env_platform, subprocess убран) |
+| D9 | `core/internal/scaffold/project_adopter.py:52` | 2026-07-26 | LO | node.yaml path resolution duplicated across 4+ scripts | FIXED (118 E11 — shared/project_yaml.py; TRAP снят 128 W5) |
+| D10 | `core/modules/backup-cron/scripts/s3_client.py:64` | 2026-07-12 | LO | S3 timeout not wired to boto3 Config | FIXED (128 W5 — BotoConfig connect/read timeout на конструировании клиента retention.py; мёртвый param убран) |
+| D11 | `core/modules/postgres/docker-compose.base.yml:50` | 2026-07-17 | MED | POSTGRES_PASSWORD rotation risk | OPEN (вне скоупа 128) |
+| D12 | `core/modules/postgres/healthcheck.sh:15` | 2026-07-15 | LO | Container names hardcoded — непригоден для -test stack | FIXED (128 W5 — CONTAINER_SUFFIX/имя-переменные, -test стек) |
 | D13 | `tests/gates/test_gate_compose_no_base_image.py:235` | 2026-07-14 | — | root compose include-based, hermes-agent image в base.yml |
 | D14 | `tests/gates/test_gate_dead_code.py:650` | future | — | test_gate_stale_comments — будущая реализация |
 | D15 | `tests/unit/test_spool_dir.py:18` | 2026-07-15 | MED | 3 модуля без spool_volume: litellm, langfuse, infra-metrics |

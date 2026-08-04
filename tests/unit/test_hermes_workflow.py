@@ -24,6 +24,7 @@ import pytest
 
 from core.internal.bootstrap.deploy import docker_orchestrator as dorch
 from core.internal.bootstrap.deploy import hermes_workflow
+from core.internal.shared import docker_ops  # 128 W1: L1 image inspect/pull примитивы
 
 logger = logging.getLogger(__name__)
 
@@ -47,16 +48,17 @@ def test_phase_hermes_build(mock_check, mock_build, tmp_path, caplog: pytest.Log
     cfg_result.stdout = "ghcr.io/tronyx161/hermes:latest\n"
     with (
         patch.object(hermes_workflow, "_shared_docker_compose_config", return_value=cfg_result),
-        patch.object(hermes_workflow, "subprocess") as mock_sp,
+        # 128 W1: docker image inspect/pull — shared/docker_ops (L1 missing → pull fail → build)
+        patch.object(docker_ops, "docker_image_inspect_exists", return_value=False),
+        patch.object(docker_ops, "docker_pull", return_value=False),
+        patch.object(dorch, "_cleanup_legacy_container", return_value=None),
     ):
-        mock_sp.run.return_value = MagicMock(returncode=1)  # docker image inspect → L1 missing
-        with patch.object(dorch, "_cleanup_legacy_container", return_value=None):
-            result = dorch._phase_hermes(
-                module_name="hermes-agent",
-                module_dir=str(module_dir),
-                compose_file=compose_file,
-                compose_args=compose_args,
-            )
+        result = dorch._phase_hermes(
+            module_name="hermes-agent",
+            module_dir=str(module_dir),
+            compose_file=compose_file,
+            compose_args=compose_args,
+        )
 
     assert result is True
     mock_build.assert_called()

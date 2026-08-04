@@ -300,14 +300,42 @@ class TestS8:
 
     @pytest.fixture()
     def docker_probe(self, monkeypatch):
-        """Диспечер по полной команде docker: registry[key] -> FakeResult. Default rc=0 stdout=''."""
+        """Диспечер по полной команде docker: registry[key] -> FakeResult. Default rc=0 stdout=''.
+
+        128 W1: S8 использует shared/docker_ops (docker_ps/docker_inspect_many/
+        docker_manifest_inspect_raw) — патчим функции docker_ops вместо локального _probe.
+        """
         registry: dict[str, FakeResult] = {}
+        from core.internal.shared import docker_ops as _docker_ops
 
-        def _probe(cmd, timeout):
-            key = " ".join(cmd)
-            return registry.get(key, FakeResult())
+        def _fake_ps(**kwargs):
+            cmd = ["docker", "ps"]
+            if kwargs.get("all"):
+                cmd.append("-a")
+            if kwargs.get("quiet"):
+                cmd.append("-q")
+            fmt = kwargs.get("format")
+            if fmt:
+                cmd += ["--format", fmt]
+            return registry.get(" ".join(cmd), FakeResult())
 
-        monkeypatch.setattr(security_posture, "_probe", _probe)
+        def _fake_inspect_many(identifiers, format=None, timeout=60):
+            cmd = ["docker", "inspect"]
+            if format:
+                cmd += ["--format", format]
+            cmd += list(identifiers)
+            return registry.get(" ".join(cmd), FakeResult())
+
+        def _fake_manifest_raw(image_ref, timeout=60, flags=None):
+            cmd = ["docker", "manifest", "inspect"]
+            if flags:
+                cmd += list(flags)
+            cmd.append(image_ref)
+            return registry.get(" ".join(cmd), FakeResult())
+
+        monkeypatch.setattr(_docker_ops, "docker_ps", _fake_ps)
+        monkeypatch.setattr(_docker_ops, "docker_inspect_many", _fake_inspect_many)
+        monkeypatch.setattr(_docker_ops, "docker_manifest_inspect_raw", _fake_manifest_raw)
         return registry
 
     PS_OK = "abc123\ndef456\n"
@@ -334,7 +362,7 @@ class TestS8:
         """Digest-pinned образ актуален: registry digest совпадает с локальным (multi-arch set)."""
         docker_probe["docker ps --format {{.ID}}"] = self._ps("abc123")
         docker_probe[
-            "docker inspect -f {{.Config.Image}}|{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}} abc123"
+            "docker inspect --format {{.Config.Image}}|{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}} abc123"
         ] = self._inspect(
             "postgres:16@sha256:1111111111111111111111111111111111111111111111111111111111111111|sha256:1111111111111111111111111111111111111111111111111111111111111111"
         )
@@ -353,7 +381,7 @@ class TestS8:
         """Multi-arch manifest list: локальный digest входит в набор platform-digest'ов → PASS."""
         docker_probe["docker ps --format {{.ID}}"] = self._ps("abc123")
         docker_probe[
-            "docker inspect -f {{.Config.Image}}|{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}} abc123"
+            "docker inspect --format {{.Config.Image}}|{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}} abc123"
         ] = self._inspect(
             "ghcr.io/tronyxlab/hermes-agent-context:v2026.7.1|sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         )
@@ -382,7 +410,7 @@ class TestS8:
         """R5 negative (original form): апстрим опубликовал новый digest для pinned-тега → WARN."""
         docker_probe["docker ps --format {{.ID}}"] = self._ps("abc123")
         docker_probe[
-            "docker inspect -f {{.Config.Image}}|{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}} abc123"
+            "docker inspect --format {{.Config.Image}}|{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}} abc123"
         ] = self._inspect(
             "postgres:16@sha256:1111111111111111111111111111111111111111111111111111111111111111|sha256:1111111111111111111111111111111111111111111111111111111111111111"
         )
@@ -400,7 +428,7 @@ class TestS8:
         """Tag-based L2: локальный digest отличен от registry → WARN с рекомендацией пересборки."""
         docker_probe["docker ps --format {{.ID}}"] = self._ps("abc123")
         docker_probe[
-            "docker inspect -f {{.Config.Image}}|{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}} abc123"
+            "docker inspect --format {{.Config.Image}}|{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}} abc123"
         ] = self._inspect(
             "ghcr.io/tronyxlab/hermes-agent-context:v2026.7.1|sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         )
@@ -423,7 +451,7 @@ class TestS8:
         """Локально-собранный образ (manifest unknown) → skip, PASS."""
         docker_probe["docker ps --format {{.ID}}"] = self._ps("abc123")
         docker_probe[
-            "docker inspect -f {{.Config.Image}}|{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}} abc123"
+            "docker inspect --format {{.Config.Image}}|{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}} abc123"
         ] = self._inspect("status-page:latest|sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
         docker_probe["docker manifest inspect --verbose status-page:latest"] = self._manifest(
             "", rc=1, stderr="Error: no such manifest: status-page:latest"
@@ -435,7 +463,7 @@ class TestS8:
         """Registry недоступен (сеть/auth) → WARN graceful (как apt-check в S2)."""
         docker_probe["docker ps --format {{.ID}}"] = self._ps("abc123")
         docker_probe[
-            "docker inspect -f {{.Config.Image}}|{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}} abc123"
+            "docker inspect --format {{.Config.Image}}|{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}} abc123"
         ] = self._inspect(
             "postgres:16@sha256:1111111111111111111111111111111111111111111111111111111111111111|sha256:1111111111111111111111111111111111111111111111111111111111111111"
         )
@@ -456,7 +484,7 @@ class TestS8:
         """Локально-собранный (пустой RepoDigests) → skip, PASS."""
         docker_probe["docker ps --format {{.ID}}"] = self._ps("abc123")
         docker_probe[
-            "docker inspect -f {{.Config.Image}}|{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}} abc123"
+            "docker inspect --format {{.Config.Image}}|{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}} abc123"
         ] = self._inspect("status-page:latest|")
         result = security_posture.check_image_freshness()
         assert result.status == security_posture.STATUS_PASS
@@ -502,6 +530,10 @@ class TestAggregation:
     def test_full_run_logs_imp9(self, monkeypatch, patch_paths, fake_probe, caplog):
         """LDD: полный прогон healthy → минимум один [IMP:9] лог (Anti-Illusion Rule)."""
         monkeypatch.setattr(security_posture.os, "geteuid", lambda: 0)
+        # 128 W1: S8 использует shared/docker_ops — docker ps пусто → PASS (no containers)
+        from core.internal.shared import docker_ops as _docker_ops
+
+        monkeypatch.setattr(_docker_ops, "docker_ps", lambda **kw: FakeResult(0, ""))
         fake_probe["dpkg"] = FakeResult(0, "")
         fake_probe["/usr/lib/update-notifier/apt-check"] = FakeResult(
             0, "0 updates can be applied immediately.\n0 of these updates are security updates.\n"

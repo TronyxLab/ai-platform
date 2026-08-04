@@ -17,7 +17,8 @@
 
 import json
 import logging
-import subprocess
+
+from core.internal.shared import docker_ops  # W1: docker ps/inspect/stats/image примитивы (гейт docker_sole_path)
 
 logger = logging.getLogger(__name__)
 
@@ -44,93 +45,56 @@ def get_containers() -> list[dict]:
     _logger = logging.getLogger(__name__)
     _logger.info("[IMP:8][docker_collector][get_containers] Starting container collection")
 
-    # Step 1: docker ps -aq → all container IDs
-    try:
-        ps_result = subprocess.run(
-            ["docker", "ps", "-aq"],
-            capture_output=True,
-            text=True,
-            timeout=_SUBPROCESS_TIMEOUT,
-            check=False,
-        )
-        if ps_result.returncode != 0:
-            _logger.warning(
-                "[IMP:8][docker_collector][get_containers] docker ps -aq failed: %s", ps_result.stderr.strip()
-            )
-            return []
-        all_ids = [cid.strip() for cid in ps_result.stdout.strip().splitlines() if cid.strip()]
-        _logger.info("[IMP:8][docker_collector][get_containers] Found %d container(s) via docker ps -aq", len(all_ids))
-    except subprocess.TimeoutExpired:
-        _logger.warning(
-            "[IMP:8][docker_collector][get_containers] docker ps -aq timed out after %ds", _SUBPROCESS_TIMEOUT
-        )
+    # Step 1: docker ps -aq → all container IDs (W1: shared/docker_ops, non-fatal)
+    ps_result = docker_ops.docker_ps(all=True, quiet=True, timeout=_SUBPROCESS_TIMEOUT)
+    if ps_result.returncode != 0:
+        _logger.warning("[IMP:8][docker_collector][get_containers] docker ps -aq failed: %s", ps_result.stderr.strip())
         return []
-    except OSError as exc:
-        _logger.warning("[IMP:8][docker_collector][get_containers] docker CLI not available: %s", exc)
-        return []
+    all_ids = [cid.strip() for cid in ps_result.stdout.strip().splitlines() if cid.strip()]
+    _logger.info("[IMP:8][docker_collector][get_containers] Found %d container(s) via docker ps -aq", len(all_ids))
 
     if not all_ids:
         _logger.info("[IMP:8][docker_collector][get_containers] No containers found")
         return []
 
-    # Step 2: Batch docker inspect (ALL containers, ONE subprocess call)
-    try:
-        inspect_result = subprocess.run(
-            ["docker", "inspect", *all_ids],
-            capture_output=True,
-            text=True,
-            timeout=_SUBPROCESS_TIMEOUT,
-            check=False,
-        )
-        if inspect_result.returncode != 0:
-            _logger.warning(
-                "[IMP:8][docker_collector][get_containers] docker inspect batch failed: %s",
-                inspect_result.stderr.strip(),
-            )
-            return []
-        inspect_data = json.loads(inspect_result.stdout)
-        _logger.info(
-            "[IMP:9][docker_collector][get_containers] Batch docker inspect completed for %d container(s)", len(all_ids)
-        )
-    except subprocess.TimeoutExpired:
+    # Step 2: Batch docker inspect (ALL containers, ONE subprocess call; W1: shared/docker_ops)
+    inspect_result = docker_ops.docker_inspect_many(all_ids, timeout=_SUBPROCESS_TIMEOUT)
+    if inspect_result.returncode != 0:
         _logger.warning(
-            "[IMP:8][docker_collector][get_containers] docker inspect timed out after %ds", _SUBPROCESS_TIMEOUT
+            "[IMP:8][docker_collector][get_containers] docker inspect batch failed: %s",
+            inspect_result.stderr.strip(),
         )
         return []
-    except (json.JSONDecodeError, OSError) as exc:
+    try:
+        inspect_data = json.loads(inspect_result.stdout)
+    except json.JSONDecodeError as exc:
         _logger.warning("[IMP:8][docker_collector][get_containers] docker inspect parse error: %s", exc)
         return []
+    _logger.info(
+        "[IMP:9][docker_collector][get_containers] Batch docker inspect completed for %d container(s)", len(all_ids)
+    )
 
-    # Step 3: docker stats --no-stream (runtime CPU% + memory)
+    # Step 3: docker stats --no-stream (runtime CPU% + memory; W1: shared/docker_ops, non-fatal)
     stats_map: dict[str, dict] = {}
-    try:
-        stats_result = subprocess.run(
-            ["docker", "stats", "--no-stream", "--format", "{{json .}}"],
-            capture_output=True,
-            text=True,
-            timeout=_SUBPROCESS_TIMEOUT,
-            check=False,
-        )
-        if stats_result.returncode == 0 and stats_result.stdout.strip():
-            for line in stats_result.stdout.strip().splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    stat = json.loads(line)
-                    name = stat.get("Name", "")
-                    stats_map[name] = {
-                        "cpu_percent": _parse_percent(stat.get("CPUPerc", "0%")),
-                        "memory_usage_bytes": _parse_bytes(stat.get("MemUsage", "0B / 0B").split(" / ")[0]),
-                        "memory_limit_bytes": _parse_bytes(stat.get("MemLimit", "0B") or "0B"),
-                    }
-                except (json.JSONDecodeError, KeyError):
-                    continue
+    stats_result = docker_ops.docker_stats("{{json .}}", timeout=_SUBPROCESS_TIMEOUT)
+    if stats_result.returncode == 0 and stats_result.stdout.strip():
+        for line in stats_result.stdout.strip().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                stat = json.loads(line)
+                name = stat.get("Name", "")
+                stats_map[name] = {
+                    "cpu_percent": _parse_percent(stat.get("CPUPerc", "0%")),
+                    "memory_usage_bytes": _parse_bytes(stat.get("MemUsage", "0B / 0B").split(" / ")[0]),
+                    "memory_limit_bytes": _parse_bytes(stat.get("MemLimit", "0B") or "0B"),
+                }
+            except (json.JSONDecodeError, KeyError):
+                continue
         _logger.info(
             "[IMP:9][docker_collector][get_containers] docker stats completed for %d container(s)", len(stats_map)
         )
-    except (subprocess.TimeoutExpired, OSError) as exc:
-        _logger.warning("[IMP:8][docker_collector][get_containers] docker stats failed (graceful): %s", exc)
 
     # Step 4: Merge inspect_data + stats_map into container dicts
     containers: list[dict] = []
@@ -199,44 +163,32 @@ def get_image_sizes(image_ids: set[str]) -> dict[str, int]:
     ids_list = list(image_ids)
     _logger.info("[IMP:8][docker_collector][get_image_sizes] Inspecting %d image(s)", len(ids_list))
 
-    try:
-        result = subprocess.run(
-            ["docker", "image", "inspect", *ids_list, "--format", "{{json .}}"],
-            capture_output=True,
-            text=True,
-            timeout=_SUBPROCESS_TIMEOUT,
-            check=False,
+    # W1: docker image inspect batch — shared/docker_ops (non-fatal)
+    result = docker_ops.docker_image_inspect_many(ids_list, "{{json .}}", timeout=_SUBPROCESS_TIMEOUT)
+    if result.returncode != 0:
+        _logger.warning(
+            "[IMP:8][docker_collector][get_image_sizes] docker image inspect failed: %s",
+            result.stderr.strip()[:200],
         )
-        if result.returncode != 0:
-            _logger.warning(
-                "[IMP:8][docker_collector][get_image_sizes] docker image inspect failed: %s",
-                result.stderr.strip()[:200],
-            )
-            return {}
-
-        sizes: dict[str, int] = {}
-        for line in result.stdout.strip().splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                img = json.loads(line)
-                # Extract sha256 ID from Id field
-                img_id = img.get("Id", "")
-                img_size = img.get("Size", 0)
-                if img_id:
-                    sizes[img_id] = img_size
-            except json.JSONDecodeError:
-                continue
-
-        _logger.info("[IMP:9][docker_collector][get_image_sizes] Got sizes for %d image(s)", len(sizes))
-        return sizes
-    except subprocess.TimeoutExpired:
-        _logger.warning("[IMP:8][docker_collector][get_image_sizes] docker image inspect timed out")
         return {}
-    except OSError as exc:
-        _logger.warning("[IMP:8][docker_collector][get_image_sizes] docker CLI error: %s", exc)
-        return {}
+
+    sizes: dict[str, int] = {}
+    for line in result.stdout.strip().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            img = json.loads(line)
+            # Extract sha256 ID from Id field
+            img_id = img.get("Id", "")
+            img_size = img.get("Size", 0)
+            if img_id:
+                sizes[img_id] = img_size
+        except json.JSONDecodeError:
+            continue
+
+    _logger.info("[IMP:9][docker_collector][get_image_sizes] Got sizes for %d image(s)", len(sizes))
+    return sizes
 
 
 # endregion FUNC_get_image_sizes

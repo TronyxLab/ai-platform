@@ -78,12 +78,9 @@
 ##   · Rejected: единый deploy_orchestrator.py (God Class >800 LOC)
 ##   · Reason: разные домены (Docker orchestration vs file delivery), DDD boundary, переиспользование
 ##
-##   📝 TRAP[DEBT] · 2026-07-26 · MED · Docker operations library — кандидат на shared модуль
-##   · Observed: save_previous_image, pull_image_with_retry, prune_old_images дублируются в
-##     deploy_engine.py, context_deployer.py, docker_orchestrator.py
-##   · Suspected: дедупликация в core/internal/shared/docker_ops.py сократит ~200 LOC дублирования
-##   · Impact: при изменении Docker API — правка в 3+ местах вместо одного
-##   · When: during Wave 5e implementation — deferred to follow-up DevPlan
+##   ✅ TRAP[DEBT] 2026-07-26 D6 (docker ops library) — ЗАКРЫТ волной 128 W1: единый слой
+##   core/internal/shared/docker_ops.py (ps/inspect/exec/stop/rm/tag/image/network/volume/info),
+##   гейт docker_sole_path (allowlist пуст); deploy_engine делегирует image inspect/tag.
 ## @changes 2026-07-26 · DevPlan 036E — Created (Wave 5e Strangler-Fig migration from the legacy deploy shell)
 # endregion MODULE_CONTRACT
 
@@ -98,6 +95,10 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 from typing import Any
+
+# DevPlan 128 W1 (P2-5/D6): docker image inspect/tag примитивы — shared/docker_ops
+# (единственный слой, гейт docker_sole_path; TRAP[DEBT] 2026-07-26 снят волной W1).
+from core.internal.shared import docker_ops
 
 # B2: канонический дефолт PROJECTS_BASE — shared/deploy_paths (литерал /opt/projects удалён)
 from core.internal.shared.deploy_paths import DEFAULT_PROJECTS_BASE
@@ -127,9 +128,7 @@ from core.internal.shared.stub_detection import is_stub_ai_platform_yaml
 # DevPlan 118 C4: DOCKER_STOP_TIMEOUT — канон для `docker compose down --timeout` (литерал 30 удалён).
 from core.internal.shared.timeouts import (
     COMPOSE_UP_TIMEOUT,
-    DOCKER_CMD_TIMEOUT,
     DOCKER_STOP_TIMEOUT,
-    IMAGE_CHECK_TIMEOUT,
     PULL_TIMEOUT,
 )
 
@@ -571,22 +570,12 @@ class DeployEngine:
             logger.info("[IMP:9][save-prev] FIRST DEPLOY: no previous image for %s", service)
             return None
 
-        # Get tag (docker image inspect — локальная image-операция, IMAGE_CHECK_TIMEOUT)
-        tag_result = subprocess.run(
-            ["docker", "image", "inspect", image_id, "--format", "{{index .RepoTags 0}}"],
-            capture_output=True,
-            text=True,
-            timeout=IMAGE_CHECK_TIMEOUT,
-        )
-        tag = tag_result.stdout.strip()
+        # Get tag (docker image inspect — локальная image-операция; W1: shared/docker_ops)
+        tag = docker_ops.docker_image_inspect(image_id, "{{index .RepoTags 0}}")
 
         if not tag or tag == "<none>:<none>":
             tag = f"{service}:previous-rollback"
-            subprocess.run(
-                ["docker", "tag", image_id, tag],
-                capture_output=True,
-                timeout=DOCKER_CMD_TIMEOUT,
-            )
+            docker_ops.docker_tag(image_id, tag)
             logger.info("[IMP:8][save-prev] Created fallback tag for dangling image: %s", tag)
 
         logger.info("[IMP:9][save-prev] Previous image saved: ID=%s TAG=%s", image_id, tag)
@@ -663,13 +652,9 @@ class DeployEngine:
 
         logger.info("[IMP:10][rollback] ROLLING BACK %s to %s", service, previous_image.id)
 
-        # Re-tag previous image (docker tag — локальная image-операция, DOCKER_CMD_TIMEOUT)
+        # Re-tag previous image (docker tag — локальная image-операция; W1: shared/docker_ops)
         if previous_image.tag:
-            subprocess.run(
-                ["docker", "tag", previous_image.id, previous_image.tag],
-                capture_output=True,
-                timeout=DOCKER_CMD_TIMEOUT,
-            )
+            docker_ops.docker_tag(previous_image.id, previous_image.tag)
             logger.info("[IMP:9][rollback] Re-tagged %s → %s", previous_image.id, previous_image.tag)
 
         # docker compose up -d --force-recreate (T5.4: shared docker_compose_up — sole path)

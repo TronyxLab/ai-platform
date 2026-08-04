@@ -22,10 +22,10 @@
 
 import logging
 import os
-import subprocess
 from pathlib import Path
 
 from core.internal.config import platform_config
+from core.internal.shared import docker_ops  # W1: docker image inspect/pull примитивы (гейт docker_sole_path)
 from core.internal.shared.docker_compose import (
     check_image_exists as _shared_check_image_exists,
 )
@@ -106,49 +106,33 @@ def handle_hermes_agent(compose_args: list[str], module_dir: str, module_name: s
         logger.info("[IMP:9][handle_hermes_agent][all_found] All hermes-agent images found in registry")
         return True
 
-    # ── Ensure L1 base image exists locally ──
-    try:
-        inspect_result = subprocess.run(
-            ["docker", "image", "inspect", f"{L1_BASE_IMAGE}:latest"],
-            capture_output=True,
-            timeout=IMAGE_CHECK_TIMEOUT,
-        )
-        l1_exists = inspect_result.returncode == 0
-    except OSError:
-        l1_exists = False
+    # ── Ensure L1 base image exists locally (W1: docker image inspect — shared/docker_ops, non-fatal) ──
+    l1_exists = docker_ops.docker_image_inspect_exists(f"{L1_BASE_IMAGE}:latest", timeout=IMAGE_CHECK_TIMEOUT)
 
     if not l1_exists:
         logger.info(
             "[IMP:7][handle_hermes_agent][l1_missing] L1 base image not found locally — attempting pull from GHCR"
         )
-        try:
-            pull_result = subprocess.run(
-                ["docker", "pull", f"{GHCR_ORG}/{L1_BASE_IMAGE}:latest"],
-                capture_output=True,
-                timeout=PULL_TIMEOUT,
+        # W1: docker pull — shared/docker_ops (non-fatal; сбой → build from source)
+        if not docker_ops.docker_pull(f"{GHCR_ORG}/{L1_BASE_IMAGE}:latest", timeout=PULL_TIMEOUT):
+            logger.warning("[IMP:5][handle_hermes_agent][l1_pull_fail] L1 pull failed — building L1 from source")
+            # Build L1 from source (shared docker_compose_build — sole path)
+            base_compose = str(Path(module_dir) / "docker-compose.base.yml")
+            l1_ok = _shared_docker_compose_build(
+                os.path.dirname(base_compose),
+                timeout=BUILD_TIMEOUT,
+                compose_args=["-f", base_compose, "--profile", module_name],
+                flags=[
+                    "--build-arg",
+                    f"CONTEXT={os.environ.get('CONTEXT', platform_config.default_context())}",
+                ],
             )
-            if pull_result.returncode != 0:
-                logger.warning("[IMP:5][handle_hermes_agent][l1_pull_fail] L1 pull failed — building L1 from source")
-                # Build L1 from source (shared docker_compose_build — sole path)
-                base_compose = str(Path(module_dir) / "docker-compose.base.yml")
-                l1_ok = _shared_docker_compose_build(
-                    os.path.dirname(base_compose),
-                    timeout=BUILD_TIMEOUT,
-                    compose_args=["-f", base_compose, "--profile", module_name],
-                    flags=[
-                        "--build-arg",
-                        f"CONTEXT={os.environ.get('CONTEXT', platform_config.default_context())}",
-                    ],
-                )
-                if not l1_ok:
-                    logger.error("[IMP:10][handle_hermes_agent][l1_build_fail] L1 build failed")
-                    return False
-                logger.info("[IMP:9][handle_hermes_agent][l1_built] L1 built from source")
-            else:
-                logger.info("[IMP:9][handle_hermes_agent][l1_pulled] L1 pulled from GHCR")
-        except (subprocess.TimeoutExpired, OSError) as exc:
-            logger.error("[IMP:10][handle_hermes_agent][l1_error] L1 pull/build failed: %s", exc)
-            return False
+            if not l1_ok:
+                logger.error("[IMP:10][handle_hermes_agent][l1_build_fail] L1 build failed")
+                return False
+            logger.info("[IMP:9][handle_hermes_agent][l1_built] L1 built from source")
+        else:
+            logger.info("[IMP:9][handle_hermes_agent][l1_pulled] L1 pulled from GHCR")
 
     # ── Build L1→L2 locally ──
     logger.info("[IMP:7][handle_hermes_agent][build] Building hermes-agent L1→L2 locally (fallback)")

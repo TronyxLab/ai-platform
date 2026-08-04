@@ -36,6 +36,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from core.internal.config import platform_config
+from core.internal.shared import docker_ops  # W1: docker manifest inspect примитив (гейт docker_sole_path)
 
 logger = logging.getLogger(__name__)
 
@@ -328,12 +329,8 @@ def probe_docker_hub() -> CheckResult:
     """Probe Docker Hub reachability via manifest inspect. WARN on rate-limit."""
     start = time.monotonic()
     try:
-        result = subprocess.run(
-            ["docker", "manifest", "inspect", "hello-world:latest"],
-            capture_output=True,
-            text=True,
-            timeout=PROBE_TIMEOUT,
-        )
+        # W1 (DevPlan 128): docker manifest inspect — shared/docker_ops (raw variant — нужен stderr для 429)
+        result = docker_ops.docker_manifest_inspect_raw("hello-world:latest", timeout=PROBE_TIMEOUT)
         latency = int((time.monotonic() - start) * 1000)
         if result.returncode == 0:
             logger.info("[IMP:9][preflight][dockerhub] Docker Hub reachable (%dms)", latency)
