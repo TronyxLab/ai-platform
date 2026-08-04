@@ -12,6 +12,22 @@ make test        # Запустить тесты
 make gate        # Production gate (полная проверка перед деплоем)
 ```
 
+## Локальный dev-стек (runtime-файлы статус-страницы)
+
+После `make up` (или `make up-safe`) на dev-локали сгенерируй runtime-файлы статус-страницы:
+
+```bash
+make dev-metrics   # status-metrics.json + .htpasswd-platform (идемпотентно)
+```
+
+Dev-локали (macOS) не имеют нодового cron (`/etc/cron.d/platform-metrics`) — файлы,
+которые на ноде обновляются раз в минуту, здесь генерируются вручную. Таргет вызывает
+**тот же** экспортёр, что нодовый cron (`platform_export_metrics.py`), и htpasswd через
+`secrets_manager` CLI. Пути/креды берутся из `.env` (`STATUS_METRICS_JSON`,
+`HTPASSWD_FILE`, `PLATFORM_MASTER_EMAIL/PASSWORD` — см. `.env.example`).
+Повторный запуск безопасен: `status-metrics.json` пересоздаётся (свежесть — цель),
+`.htpasswd-platform` не перезаписывается при неизменных кредах (D-12, DevPlan 130 W1).
+
 ## Архитектурные инварианты
 
 1. **Makefile — единый фасад.** Все операции через `make <target>`.

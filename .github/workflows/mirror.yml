@@ -212,11 +212,28 @@ jobs:
           fi
           echo "[IMP:9][MIRROR][VERIFY] Mirror sync verified: ${SOURCE_HEAD:0:7}"
 
-      # 💼 TRAP[DEBT] · 2026-07-07 · LOW · Manual force-sync may be needed
-      # · If mirror.yml push fails due to non-fast-forward, manual force-sync:
-      # ·   git remote add mirror git@github.com:TronyxLab/ai-platform.git
-      # ·   GIT_SSH_COMMAND="ssh -i ~/.ssh/github_actions" git push -f mirror HEAD:main
-      # · Prevention: never force-push to Tronyx161/ai-platform main branch.
+      # 💼 TRAP[DEBT] · 2026-07-07 · LOW · Manual force-sync (D24, закрыт 130 W4 — keep by design)
+      # · Ручной force-sync канал СОХРАНЯЕТСЯ как documented recovery-procedure (keep by design):
+      # · автоматизированный push выше (STEP_PushToMirror) — единственный штатный канал;
+      # · force-sync — ручной recovery при non-fast-forward (mirror diverged).
+      # ·
+      # · ⚠️ ОПАСНО: force-push перезаписывает историю mirror-репозитория (TronyxLab/ai-platform).
+      # · НИКОГДА не force-push в Tronyx161/ai-platform main. Выполнять ТОЛЬКО при поломке
+      # · автоматического push и ТОЛЬКО если mirror отстаёт, а не содержит уникальных коммитов.
+      # ·
+      # · Процедура force-sync (ручной recovery, из корня репо):
+      # ·   1. Убедиться, что mirror НЕ имеет уникальных коммитов (отстаёт от source):
+      # ·        git fetch origin main
+      # ·        git ls-remote mirror refs/heads/main
+      # ·        # зеркальная HEAD должна быть предком origin/main (git merge-base --is-ancestor)
+      # ·   2. Выполнить:
+      # ·        git remote add mirror git@github.com:TronyxLab/ai-platform.git 2>/dev/null || true
+      # ·        GIT_SSH_COMMAND="ssh -i ~/.ssh/github_actions -o IdentitiesOnly=yes \
+      # ·          -o StrictHostKeyChecking=accept-new" git push -f mirror HEAD:main
+      # ·   3. Верифицировать: git ls-remote mirror refs/heads/main == git rev-parse HEAD
+      # ·   4. Закрыть тикет/инцидент с указанием причины divergence.
+      # · Rev (130 W4): пересмотр 2026-10-21 — если automated push стабилен ≥3 мес без
+      # ·   ручных вмешательств, допускается удаление ручного канала (keep→remove).
       # ·
       # · ⚠️ DO NOT EDIT code in TronyxLab/ai-platform — changes will be overwritten.
       # endregion STEP_PushToMirror
