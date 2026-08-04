@@ -133,6 +133,11 @@ def handle_hermes_agent(compose_args: list[str], module_dir: str, module_name: s
             logger.info("[IMP:9][handle_hermes_agent][l1_built] L1 built from source")
         else:
             logger.info("[IMP:9][handle_hermes_agent][l1_pulled] L1 pulled from GHCR")
+            # L2 Dockerfile: FROM hermes-agent-base:latest (bare tag) — pulled образ
+            # носит полное имя ghcr.io/...; без локального bare-тега L2 build падает
+            # (Docker Hub pull attempt). Tag — идемпотентный no-op при существующем.
+            if not docker_ops.docker_tag(f"{GHCR_ORG}/{L1_BASE_IMAGE}:latest", f"{L1_BASE_IMAGE}:latest"):
+                logger.warning("[IMP:7][handle_hermes_agent][l1_tag_fail] Cannot tag L1 as %s:latest", L1_BASE_IMAGE)
 
     # ── Build L1→L2 locally ──
     logger.info("[IMP:7][handle_hermes_agent][build] Building hermes-agent L1→L2 locally (fallback)")
