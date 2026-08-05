@@ -573,14 +573,15 @@ lifecycle:
 - make_target: check-security
   mechanism: ssh+script
   delegates_to: core/entrypoints/check-security.sh → remote_executor.py execute-check-security
-    → core/internal/bootstrap/security_posture.py (S1-S8, DevPlan 134 L2)
+    → core/internal/bootstrap/security_posture.py (S1-S9, DevPlan 134 L2 + 136 W10)
   signature: make check-security NODE=<name>
   operation_ru: Проверка security-постурa ноды
-  description: Security posture check (S1-S8) — unattended-upgrades активность, pending
-    security-апдейты, ufw, sshd -T, docker live-restore/iptables/API-порты, world-writable
-    файлы и права секретов, forced-command целостность ci-deploy ключа, image freshness
-    (digest drift локальный vs registry — устаревшие образы с доступными фиксами).
-    Exit — 0=healthy 1=warnings 2=errors
+  description: Security posture check (S1-S9) — unattended-upgrades активность, pending
+    security-апдейты, ufw, sshd -T (13 директив + MaxStartups), docker live-restore/iptables/
+    API-порты, world-writable файлы и права секретов (вкл. критичные пути), forced-command
+    целостность ci-deploy ключа (per-line + perms), image freshness (digest drift),
+    real-LISTEN docker-proxy (внутренние порты ≠ 0.0.0.0). Exit — 0=healthy 1=warnings
+    2=errors
 - make_target: healthcheck
   mechanism: shell-script
   delegates_to: core/entrypoints/healthcheck.sh → Module healthcheck.sh scripts +
@@ -1336,6 +1337,12 @@ gates:
 - id: test_postgres_deep_includes_pgbouncer
   test_file: test_gate_healthcheck_contract.py
   description: 'Auto-discovered gate: test_postgres_deep_includes_pgbouncer'
+- id: test_delegates_to_lib_healthcheck_d5_canon
+  test_file: test_gate_healthcheck_drift.py
+  description: 'Auto-discovered gate: test_delegates_to_lib_healthcheck_d5_canon'
+- id: test_env_parametrized_container_names
+  test_file: test_gate_healthcheck_drift.py
+  description: 'Auto-discovered gate: test_env_parametrized_container_names'
 - id: test_healthcheck_intervals_match_classification
   test_file: test_gate_healthcheck_intervals.py
   description: 'Auto-discovered gate: test_healthcheck_intervals_match_classification'
@@ -2128,6 +2135,18 @@ gates:
 - id: test_single_run_subprocess_canon_negative
   test_file: test_gate_subprocess_io_sole.py
   description: 'Auto-discovered gate: test_single_run_subprocess_canon_negative'
+- id: test_audit_path_synced_with_jsonl
+  test_file: test_gate_sudoers_hardening.py
+  description: 'Auto-discovered gate: test_audit_path_synced_with_jsonl'
+- id: test_legitimate_ops_entries_present
+  test_file: test_gate_sudoers_hardening.py
+  description: 'Auto-discovered gate: test_legitimate_ops_entries_present'
+- id: test_no_dangerous_privesc_patterns_in_setup_node
+  test_file: test_gate_sudoers_hardening.py
+  description: 'Auto-discovered gate: test_no_dangerous_privesc_patterns_in_setup_node'
+- id: test_sudoers_generator_make_only
+  test_file: test_gate_sudoers_hardening.py
+  description: 'Auto-discovered gate: test_sudoers_generator_make_only'
 - id: test_sys_exit_only_in_main_and_main_returns_int
   test_file: test_gate_sys_exit_contract.py
   description: 'Auto-discovered gate: test_sys_exit_only_in_main_and_main_returns_int'

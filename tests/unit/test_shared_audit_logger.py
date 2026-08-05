@@ -322,16 +322,16 @@ def test_write_entry_extended_schema(caplog: pytest.LogCaptureFixture, tmp_path:
 
 
 # region FUNC_test_write_entry_backward_compat
-## @purpose — Обратная совместимость: вызов без extra даёт ТОЛЬКО базовую схему (ts/tag/status/msg).
+## @purpose — Базовая схема без extra: ts/tag/status/msg + source (W10 T10.5).
 ## @io — ⇥ caplog, tmp_path → ⎋ None
 ## @complexity — O(1)
 def test_write_entry_backward_compat(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> None:
-    """Backward-compat: без extra — только ts/tag/status/msg (никаких лишних ключей)."""
+    """Backward-compat: без extra — базовая схема + source (W10 T10.5 атрибуция)."""
     caplog.set_level(logging.INFO)
 
     # 🧪 TRAP[TEST] · Regression · backward-compat без extra
-    # · Scenario: старый вызов write_audit_entry(tag, status, msg) — схема не меняется
-    # · Last fail: N/A
+    # · Scenario: старый вызов write_audit_entry(tag, status, msg) — базовая схема стабильна
+    # · Last fail: 2026-08-05 — W10 T10.5 добавил source-поле (атрибуция записи)
     # · Remove if: audit schema superseded
 
     log_file = tmp_path / "audit.jsonl"
@@ -340,10 +340,115 @@ def test_write_entry_backward_compat(caplog: pytest.LogCaptureFixture, tmp_path:
     entries = read_audit_log(log_file=str(log_file))
     assert len(entries) == 1
     entry = entries[0]
-    assert set(entry.keys()) == {"ts", "tag", "status", "msg"}, (
-        f"Backward-compat broken: unexpected keys {set(entry.keys()) - {'ts', 'tag', 'status', 'msg'}}"
+    assert set(entry.keys()) == {"ts", "tag", "status", "msg", "source"}, (
+        f"Schema drift: unexpected keys {set(entry.keys()) - {'ts', 'tag', 'status', 'msg', 'source'}}"
     )
-    logger.info("[IMP:9][test][backward-compat] ✅ базовый вызов без extra — ровно 4 ключа")
+    # W10 T10.5: source-поле = {uid, proc} — атрибуция каждой записи
+    assert isinstance(entry["source"], dict)
+    assert "uid" in entry["source"] and "proc" in entry["source"], f"source schema broken: {entry['source']}"
+    logger.info("[IMP:9][test][backward-compat] ✅ базовый вызов — 5 ключей (с source)")
+
+
+# endregion
+
+
+# region FUNC_test_write_entry_source_field
+## @purpose — W10 T10.5 (S-15): source-поле в КАЖДОЙ записи — {uid, proc}.
+## @io — ⇥ caplog, tmp_path → ⎋ None
+## @complexity — O(1)
+def test_write_entry_source_field(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> None:
+    """T10.5: source {uid, proc} присутствует и non-empty."""
+    caplog.set_level(logging.INFO)
+
+    # 🧪 TRAP[TEST] · REGRESSION (R5) · DevPlan 136 W10 T10.5 — запись без атрибуции
+    # · Scenario: убрать source — нельзя отличить запись CI-деплоя от ручной
+    # · Last fail: 2026-08-05 — W10: source добавлен в схему
+    # · Remove if: audit schema superseded
+
+    log_file = tmp_path / "audit.jsonl"
+    ok = write_audit_entry("test:src", "OK", "with source", log_file=str(log_file))
+    assert ok is True, "write_audit_entry должен возвращать True при успехе (T10.5)"
+
+    entry = read_audit_log(log_file=str(log_file))[0]
+    assert entry["source"]["uid"] is not None
+    assert entry["source"]["proc"], f"proc пуст: {entry['source']}"
+    logger.info("[IMP:9][test][source] ✅ source={%s}", entry["source"])
+
+
+# endregion
+
+
+# region FUNC_test_write_raises_on_oserror_when_raise_on_error
+## @purpose — W10 T10.5 (S-6): raise_on_error=True → OSError пробрасывается (CLI exit≠0).
+## @io — ⇥ caplog, tmp_path → ⎋ None
+## @complexity — O(1)
+def test_write_raises_on_oserror_when_raise_on_error(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> None:
+    """T10.5: raise_on_error=True → OSError propagates (fail, не silent-drop)."""
+    caplog.set_level(logging.INFO)
+
+    # 🧪 TRAP[TEST] · REGRESSION (R5) · DevPlan 136 W10 T10.5 — audit write failure
+    # · Scenario: журнал недоступен (dir как файл) — CLI должен УПАСТЬ, не потерять запись молча
+    # · Last fail: 2026-08-05 — W10: OSError логировался WARNING и молча дропал запись
+    # · Remove if: raise_on_error контракт изменён
+
+    blocker = tmp_path / "blocker"
+    blocker.write_text("dir placeholder")
+    log_file = blocker / "audit.jsonl"  # parent — файл, не директория → OSError при makedirs/write
+
+    with pytest.raises(OSError):
+        write_audit_entry("test:fail", "FAILED", "cannot write", log_file=str(log_file), raise_on_error=True)
+    logger.info("[IMP:9][test][raise_on_error] ✅ OSError проброшен при raise_on_error=True")
+
+
+# endregion
+
+
+# region FUNC_test_write_returns_false_on_oserror_default
+## @purpose — W10 T10.5: по умолчанию (raise_on_error=False) OSError → False (non-raising — W9 failure-пути).
+## @io — ⇥ caplog, tmp_path → ⎋ None
+## @complexity — O(1)
+def test_write_returns_false_on_oserror_default(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> None:
+    """T10.5: default (False) → OSError возвращает False, НЕ бросает (W9-совместимость)."""
+    caplog.set_level(logging.INFO)
+
+    # 🧪 TRAP[TEST] · REGRESSION · DevPlan 136 W10 T10.5 + W9 failure-пути
+    # · Scenario: audit в except/finally (W9) не должен маскировать оригинальное исключение
+    # · Last fail: 2026-08-05 — W10: контракт возврата изменён None → bool
+    # · Remove if: raise_on_error контракт изменён
+
+    blocker = tmp_path / "blocker"
+    blocker.write_text("dir placeholder")
+    log_file = blocker / "audit.jsonl"
+
+    ok = write_audit_entry("test:fail", "FAILED", "cannot write", log_file=str(log_file))
+    assert ok is False, "default: OSError → False (non-raising)"
+    logger.info("[IMP:9][test][default-false] ✅ OSError → False без проброса")
+
+
+# endregion
+
+
+# region FUNC_test_read_alerts_on_malformed_json
+## @purpose — W10 T10.5 (S-15): malformed JSON в read → ALERT-лог (ERROR, [IMP:9][audit][ALERT]).
+## @io — ⇥ caplog, tmp_path → ⎋ None
+## @complexity — O(1)
+def test_read_alerts_on_malformed_json(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> None:
+    """T10.5: read пропускает malformed-строку и ПОДНИМАЕТ ALERT (тампер/порча видимы)."""
+    caplog.set_level(logging.INFO)
+
+    # 🧪 TRAP[TEST] · REGRESSION (R5) · DevPlan 136 W10 T10.5 — тампер аудит-журнала
+    # · Scenario: злоумышленник/битый fs пишет мусорную строку — раньше молча пропускалась
+    # · Last fail: 2026-08-05 — W10: malformed логировался WARNING IMP:7 (невидим в L5)
+    # · Remove if: read контракт изменён
+
+    log_file = tmp_path / "audit.jsonl"
+    log_file.write_text('{"ts":"t1","tag":"ok","status":"OK","msg":"good"}\nTHIS-IS-NOT-JSON\n')
+    with caplog.at_level(logging.ERROR, logger="core.internal.shared.audit_logger"):
+        entries = read_audit_log(log_file=str(log_file))
+    assert len(entries) == 1, "valid entries должны возвращаться"
+    alerts = [r.message for r in caplog.records if "[audit][ALERT]" in r.message]
+    assert alerts, "ALERT-лог на malformed JSON обязателен (T10.5)"
+    logger.info("[IMP:9][test][malformed] ✅ ALERT поднят: %s", alerts[0][:80])
 
 
 # endregion

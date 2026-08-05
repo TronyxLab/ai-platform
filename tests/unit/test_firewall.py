@@ -26,8 +26,10 @@ from core.internal.bootstrap import firewall
 # region TEST_validate_ports
 def test_validate_ports_ok() -> None:
     # 🧪 TRAP[TEST] · 2026-08-02 · test_validate_ports_ok — DevPlan 118 E migration unit test
-    """validate_ports: valid integers 1-65535 pass through."""
-    assert firewall.validate_ports(["8080", "9090", "3000"]) == [8080, 9090, 3000]
+    """validate_ports: valid integers 1-65535 pass through (не модульные внутренние порты)."""
+    # W10 T10.6 (S-8): 9090/3000 теперь модульные внутренние порты (prometheus/grafana) — FORBIDDEN;
+    # валидные порты берём из свободного диапазона, не пересекающегося с реестром модулей.
+    assert firewall.validate_ports(["8080", "8081", "8443"]) == [8080, 8081, 8443]
     assert firewall.validate_ports([]) == []
     assert firewall.validate_ports(["65535", "1"]) == [65535, 1]
 
@@ -56,34 +58,115 @@ def test_validate_ports_forbidden_docker_api(bad_port: str) -> None:
         firewall.validate_ports([bad_port])
 
 
+@pytest.mark.parametrize("bad_port", ["6379", "9090", "3000", "3100", "9000", "4000"])
+def test_validate_ports_forbidden_module_port(bad_port: str) -> None:
+    # 🧪 TRAP[TEST] · REGRESSION (R5) · DevPlan 136 W10 T10.6 (S-8) — модульный внутренний порт
+    # · Scenario: admin открывает extra_ports=9090 (prometheus) — порт уже слушает 127.0.0.1,
+    # ·   allow Anywhere раскрывает внутренний сервис наружу
+    # · Last fail: 2026-08-05 — W10: FORBIDDEN был только {2375,2376}; 9090/3000/6379 проходили
+    # · Remove if: реестр модульных портов (platform-infra.yaml) пересмотрен
+    with pytest.raises(Exception, match="module-internal port"):
+        firewall.validate_ports([bad_port])
+
+
 # endregion
 
 
 # region TEST_build_rules
 def test_build_rules_baseline_and_deny() -> None:
     # 🧪 TRAP[TEST] · 2026-08-02 · test_build_rules_baseline_and_deny — DevPlan 118 E migration unit test
-    """build_rules: reset→defaults→baseline 22/80/443→deny 5432→enable (declarative full-set)."""
+    """build_rules: enable→default-deny→ssh-first→baseline 22/80/443→module-deny→deny 5432 (incremental)."""
+    # W10 T10.10 (S-14): контракт СМЕНЁН с declarative reset на инкрементальный apply —
+    # firewall активен с первой команды (enable первым), default-deny ДО allow-правил, ssh 22 первым.
     rules = firewall.build_rules([])
     cmds = [" ".join(r) for r in rules]
-    assert "ufw --force reset" in cmds
+    assert "ufw --force enable" in cmds
+    assert "ufw --force disable" not in cmds, "S-14: firewall НИКОГДА не выключается (disable запрещён)"
+    assert "ufw --force reset" not in cmds, "S-14: reset запрещён (инкрементальный apply)"
     assert "ufw default deny incoming" in cmds
     assert "ufw default allow outgoing" in cmds
+    # ssh 22 — первым allow-правилом (lockout-safe при переконфигурации)
+    assert cmds.index("ufw allow 22/tcp comment platform-baseline") < cmds.index(
+        "ufw allow 80/tcp comment platform-baseline"
+    ), "ssh 22 должен открываться раньше остальных baseline-портов"
     for port in (22, 80, 443):
         assert f"ufw allow {port}/tcp comment platform-baseline" in cmds
     assert "ufw deny 5432/tcp comment explicit-deny-postgresql" in cmds
-    assert "ufw --force enable" in cmds
+    # enable идёт ПЕРВОЙ командой (не последней как в старом контракте)
+    assert cmds.index("ufw --force enable") == 0, "enable должен быть первой командой (S-14)"
+
+
+def test_build_rules_no_disable_no_reset() -> None:
+    # 🧪 TRAP[TEST] · REGRESSION (R5) · DevPlan 136 W10 T10.10 (S-14) — disable/reset окно
+    # · Scenario: вернуть `ufw --force disable`/`ufw --force reset` — окно без файрвола при
+    # ·   перезапуске firewall (весь интервал между reset и enable нода голый)
+    # · Last fail: 2026-08-05 — W10: firewall.py имел declarative reset (disable→reset→enable)
+    # · Remove if: инкрементальный apply отменён через TRAP[DECISION]
+    rules = firewall.build_rules([])
+    cmds = [" ".join(r) for r in rules]
+    assert not any("disable" in c or "reset" in c for c in cmds), (
+        "S-14 FAIL: build_rules содержит disable/reset — firewall выключается"
+    )
 
 
 def test_build_rules_includes_extra_ports() -> None:
     # 🧪 TRAP[TEST] · 2026-08-02 · test_build_rules_includes_extra_ports — DevPlan 118 E migration unit test
-    """build_rules: extra ports appended with platform-extra comment."""
-    rules = firewall.build_rules([8080, 9090])
+    """build_rules: extra ports — ТОЛЬКО `allow from <ip> to any port <p>` (S-8, W10 T10.6)."""
+    # W10 T10.6: extra_ports требуют --source-ip; форма allow from <ip> — НИКОГДА 0.0.0.0/Anywhere.
+    rules = firewall.build_rules([8080, 8081], source_ip="1.2.3.4")
     cmds = [" ".join(r) for r in rules]
-    assert "ufw allow 8080/tcp comment platform-extra" in cmds
-    assert "ufw allow 9090/tcp comment platform-extra" in cmds
-    assert cmds.index("ufw allow 8080/tcp comment platform-extra") > cmds.index("ufw default allow outgoing"), (
-        "extra ports must come after defaults"
+    assert "ufw allow from 1.2.3.4 to any port 8080/tcp comment platform-extra" in cmds
+    assert "ufw allow from 1.2.3.4 to any port 8081/tcp comment platform-extra" in cmds
+    assert not any("allow 8080/tcp" in c and "from" not in c for c in cmds), "extra port должен быть IP-scoped (S-8)"
+    assert cmds.index("ufw allow from 1.2.3.4 to any port 8080/tcp comment platform-extra") > cmds.index(
+        "ufw default allow outgoing"
+    ), "extra ports must come after defaults"
+
+
+def test_build_rules_extra_ports_require_source_ip() -> None:
+    # 🧪 TRAP[TEST] · REGRESSION (R5) · DevPlan 136 W10 T10.6 (S-8) — extra_ports без источника
+    # · Scenario: extra_ports переданы без --source-ip → правило allow Anywhere (0.0.0.0) — открывает
+    # ·   порт всем интернетам
+    # · Last fail: 2026-08-05 — W10: build_rules([8080]) эмитил `allow 8080/tcp` без from
+    # · Remove if: IP-scoping отменён через TRAP[DECISION]
+    with pytest.raises(Exception, match="source-ip"):
+        firewall.build_rules([8080])
+
+
+def test_build_rules_includes_module_deny() -> None:
+    # 🧪 TRAP[TEST] · 2026-08-05 · DevPlan 136 W10 T10.6 — module-internal deny (defense-in-depth)
+    """build_rules: модульные внутренние порты получают явный deny (S-8)."""
+    rules = firewall.build_rules([], source_ip=None)
+    cmds = [" ".join(r) for r in rules]
+    for port in (6379, 9000, 9090, 3000, 3100):
+        assert f"ufw deny {port}/tcp comment platform-module-deny" in cmds, f"module port {port} deny missing"
+
+
+def test_collect_stale_platform_rules() -> None:
+    # 🧪 TRAP[TEST] · 2026-08-05 · DevPlan 136 W10 T10.10 (S-14) — stale-reconcile
+    """collect_stale_platform_rules: platform-* allow вне желаемого набора → delete-команда."""
+    status = (
+        "Status: active\n"
+        "22/tcp ALLOW IN Anywhere  # platform-baseline\n"
+        "8443/tcp ALLOW IN Anywhere  # platform-extra\n"
+        "8080/tcp ALLOW IN Anywhere  # platform-extra\n"
+        "5432/tcp DENY IN Anywhere  # explicit-deny-postgresql\n"
     )
+    # desired allow = baseline {22,80,443} + extra {8080}; 8443 вышел из набора → stale
+    deletes = firewall.collect_stale_platform_rules(status, desired_allow={22, 80, 443, 8080})
+    cmds = [" ".join(d) for d in deletes]
+    assert "ufw delete allow 8443/tcp" in cmds, "stale platform-extra 8443 должен удаляться"
+    assert "ufw delete allow 8080/tcp" not in cmds, "актуальный extra 8080 не удаляется"
+    assert "ufw delete allow 22/tcp" not in cmds, "baseline 22 не удаляется"
+    assert "ufw delete allow 5432/tcp" not in cmds, "deny-правила не трогаются"
+
+
+def test_collect_stale_platform_rules_ignores_foreign() -> None:
+    # 🧪 TRAP[TEST] · 2026-08-05 · DevPlan 136 W10 T10.10 — чужие правила не трогаются
+    """collect_stale_platform_rules: правило без комментария platform-* — вне скоупа reconcile."""
+    status = "Status: active\n8080/tcp ALLOW IN Anywhere  # user-project\n"
+    deletes = firewall.collect_stale_platform_rules(status, desired_allow={22, 80, 443})
+    assert deletes == [], "user-project правило не должно удаляться (не platform-*)"
 
 
 # endregion
@@ -187,6 +270,25 @@ def test_verify_firewall_missing_baseline(caplog: pytest.LogCaptureFixture) -> N
 5432/tcp DENY
 """
     assert firewall.verify_firewall(status) is False
+
+
+def test_verify_firewall_module_port_allow_fails(caplog: pytest.LogCaptureFixture) -> None:
+    # 🧪 TRAP[TEST] · REGRESSION (R5) · DevPlan 136 W10 T10.6 (S-8) — модульный порт ALLOW
+    # · Scenario: 9090 (prometheus) открыт в ufw ALLOW — внутренний сервис доступен снаружи
+    # · Last fail: 2026-08-05 — W10: verify проверял только 5432 и 2375/2376
+    # · Remove if: реестр модульных портов пересмотрен
+    caplog.set_level(logging.INFO)
+    status = """Status: active
+22/tcp ALLOW
+80/tcp ALLOW
+443/tcp ALLOW
+5432/tcp DENY
+9090/tcp ALLOW
+"""
+    assert firewall.verify_firewall(status) is False
+    assert any("[IMP:10]" in r.message and "9090" in r.message for r in caplog.records), (
+        "module-port-ALLOW must be reported as violation"
+    )
 
 
 # endregion

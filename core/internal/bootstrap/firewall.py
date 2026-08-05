@@ -3,18 +3,35 @@
 # STRUCTURE: ▶ parse extra_ports args → ○ validate_ports (1-65535, forbid 2375/2376) → ○ apply_rules (ufw reset→defaults→baseline→extra→deny 5432→enable) → ○ verify (ufw status) → ⎋ exit 0|1
 # region MODULE_CONTRACT
 ## @purpose  Declarative ufw baseline firewall: deny all incoming, allow outgoing, open exactly
-##           22/80/443 + extra_ports, explicitly deny 5432. Python-порт firewall.sh (DevPlan 118 E3).
+##           22/80/443 + extra_ports (только с `from <ip>` — НИКОГДА 0.0.0.0/Anywhere), explicitly
+##           deny module-internal ports (реестр platform-infra.yaml). Python-порт firewall.sh (DevPlan 118 E3).
+##           DevPlan 136 W10: (T10.6/S-8) extra_ports IP-scoped + FORBIDDEN/CHECK по реестру портов модулей;
+##           (T10.10/S-14) инкрементальный apply БЕЗ disable+reset — enable+default-deny ПЕРВЫМИ,
+##           stale platform-правила удаляются точечно (ufw delete) — окна «firewall выключен» нет.
 ## @scope    Called during bootstrap phase φ1 (phases.py) via thin facade core/internal/bootstrap/firewall.sh.
 ## @invariants
-##   - Full declarative reset on each run (not additive) ensures deterministic state
-##   - Ports 2375/2376 (Docker API) are NEVER added regardless of extra_ports (validation rejects)
-##   - Port 5432 (PostgreSQL) is explicitly DENIED regardless of extra_ports
-##   - extra_ports validated as integers 1-65535; non-numeric/out-of-range → fail-fast exit 1
-##   - exit 0 only if ufw status shows expected ports (baseline ALLOW, 5432 DENY, no 2375/2376)
-##   - subprocess ufw — тестируемость: validate_ports/build_rules/parse_ufw_status pure functions
+##   - НИКОГДА `ufw disable`/`ufw reset` — firewall не отключается (S-14, T10.10): enable+default-deny
+##     применяются ПЕРВЫМИ, затем allow-правила (ssh 22 первым — lockout-safe), затем deny модульных
+##     портов; stale allow-правила с комментарием platform-* удаляются точечно (идемпотентность без reset)
+##   - Порты 2375/2376 (Docker API) НИКОГДА не добавляются (FORBIDDEN — validate rejects)
+##   - Модульные внутренние порты (реестр platform-infra.yaml provides/env_defaults: postgres 5432,
+##     redis 6379, clickhouse 8123/9000, minio 9000/9001, litellm 4000, langfuse 3001, loki 3100,
+##     grafana 3000, prometheus 9090, hermes 9119/8642, nginx-exporter 9113, node-exporter 9100) —
+##     DENY на уровне ufw (defense-in-depth) И запрещены в extra_ports (FORBIDDEN) — S-8, T10.6
+##   - 8080 НЕ входит в deny-реестр: cadvisor/status-page слушают 127.0.0.1 (loopback = контроль),
+##     user-проекты часто публикуют 8080 (тест-проект test-project-web на test-VPS) — не ломать их
+##   - extra_ports валидируются как integers 1-65535; non-numeric/out-of-range/forbidden → fail-fast
+##   - extra_ports ТРЕБУЮТ `--source-ip <ip>` (allow from <ip>, НЕ Anywhere) — S-8, T10.6;
+##     extra_ports без source-ip → ConfigValidationError (fail-fast)
+##   - exit 0 только если ufw status показывает ожидаемые порты (baseline ALLOW, модульные DENY,
+##     нет 2375/2376, нет module-port ALLOW)
+##   - subprocess ufw — тестируемость: validate_ports/build_rules/parse_ufw_status/verify_firewall pure
 ## @rationale Additive ufw rules accumulate over re-runs; declarative replace guarantees idempotency.
-##            Strangler E3: ufw-оркестрация в Python (порты из node.yaml firewall-поддомен — TODO E3).
+##            disable+reset создавал окно без файрвола (S-14) — инкрементальный apply закрывает его.
+##            Strangler E3: ufw-оркестрация в Python (порты из node.yaml firewall-поддомен).
 ## @changes  2026-08-02 | DevPlan 118 E3 — Created (Python-порт firewall.sh, 167 LOC)
+## @changes  2026-08-05 | DevPlan 136 W10 — T10.6/T10.10: --source-ip, MODULE_PORTS_DENY,
+##                      инкрементальный apply (без disable/reset), stale-reconcile
 ## @see      core/internal/bootstrap/firewall.sh (тонкий фасад)
 # endregion MODULE_CONTRACT
 
@@ -36,22 +53,52 @@ BASELINE_PORTS: tuple[int, ...] = (22, 80, 443)
 FORBIDDEN_PORTS: tuple[int, ...] = (2375, 2376)
 # Explicit deny — managed PostgreSQL provider may host-forward
 DENY_PORT = 5432
+# Модульные внутренние порты — реестр platform-infra.yaml (provides + env_defaults):
+#   postgres 5432 (DENY_PORT), redis 6379, clickhouse 8123/9000, minio 9000/9001, litellm 4000,
+#   langfuse 3001, loki 3100, grafana 3000, prometheus 9090, hermes 9119/8642,
+#   nginx-exporter 9113, node-exporter 9100.
+# S-8/T10.6: DENY на уровне ufw (defense-in-depth поверх 127.0.0.1-bind в compose) И запрещены в
+# extra_ports (FORBIDDEN расширен). 8080 НЕ включён: cadvisor/status-page 127.0.0.1-bound,
+# user-проекты часто публикуют 8080 (тест-проект на test-VPS) — не блокировать.
+MODULE_PORTS_DENY: tuple[int, ...] = (
+    6379,
+    8123,
+    9000,
+    9001,
+    4000,
+    3001,
+    3100,
+    9090,
+    3000,
+    9119,
+    8642,
+    9113,
+    9100,
+)
+# Полный запрет extra_ports: Docker API + модульные порты + явный deny 5432
+FORBIDDEN_EXTRA_PORTS: tuple[int, ...] = (*FORBIDDEN_PORTS, DENY_PORT, *MODULE_PORTS_DENY)
 _PORT_RE = re.compile(r"^[0-9]+$")
 
 
 # region FUNC_validate_ports
-## @purpose  Валидация extra_ports: integer 1-65535, запрет 2375/2376 (fail-fast).
+## @purpose  Валидация extra_ports: integer 1-65535, запрет FORBIDDEN_EXTRA_PORTS (Docker API +
+##           модульные внутренние порты, fail-fast) — S-8/T10.6.
 ## @io       ⇥ ports: list[str] → ⎋ list[int] — валидные порты
 ## @complexity O(P) — P = число портов
-## @raises   ValueError на невалидный порт / Docker API port (контракт: exit 1 через main)
+## @raises   ConfigValidationError на невалидный/запрещённый порт (контракт: exit 1 через main)
 def validate_ports(ports: list[str]) -> list[int]:
-    """Validate extra_ports (1-65535, no 2375/2376). Raises ConfigValidationError on violation."""
+    """Validate extra_ports (1-65535, no Docker API, no module-internal ports)."""
     result: list[int] = []
     for port in ports:
         if not _PORT_RE.match(port) or not (1 <= int(port) <= 65535):
             raise ConfigValidationError(f"Invalid port '{port}' — must be integer 1-65535")
         if int(port) in FORBIDDEN_PORTS:
             raise ConfigValidationError(f"SECURITY: Port {port} is a Docker API port — forbidden in extra_ports")
+        if int(port) in FORBIDDEN_EXTRA_PORTS:
+            raise ConfigValidationError(
+                f"SECURITY: Port {port} is a module-internal port (platform-infra.yaml registry) — "
+                "forbidden in extra_ports (S-8, T10.6)"
+            )
         result.append(int(port))
     logger.info("[IMP:8][firewall][validate] extra_ports validated: %s", ports or "none")
     return result
@@ -61,25 +108,70 @@ def validate_ports(ports: list[str]) -> list[int]:
 
 
 # region FUNC_build_rules
-## @purpose  Построить упорядоченный список ufw-команд декларативной политики (reset→defaults→baseline→extra→deny→enable).
-## @io       ⇥ extra_ports: list[int] → ⎋ list[list[str]] — команды для subprocess
-## @complexity O(B + P) — B = baseline, P = extra
-def build_rules(extra_ports: list[int]) -> list[list[str]]:
-    """Build the ordered ufw command list (declarative full-set replacement)."""
+## @purpose  Построить упорядоченный список ufw-команд инкрементальной политики (S-14, T10.10):
+##           enable→defaults→ssh-first→baseline→extra(from ip)→deny модульных→stale-reconcile.
+##           НИКАКОГО disable/reset — firewall активен на всём протяжении (нет окна без файрвола).
+## @io       ⇥ extra_ports: list[int], source_ip: str|None → ⎋ list[list[str]] — команды для subprocess
+## @complexity O(B + P + M) — B = baseline, P = extra, M = module-deny
+## @raises   ConfigValidationError если extra_ports заданы без source_ip (S-8: никогда Anywhere)
+def build_rules(extra_ports: list[int], source_ip: str | None = None) -> list[list[str]]:
+    """Build the ordered ufw command list (incremental, firewall никогда не выключается)."""
+    if extra_ports and not source_ip:
+        raise ConfigValidationError(
+            "SECURITY: extra_ports require --source-ip <ip> (allow from <ip>, никогда 0.0.0.0/Anywhere) — S-8, T10.6"
+        )
     rules: list[list[str]] = [
-        ["ufw", "--force", "disable"],
-        ["ufw", "--force", "reset"],
+        # 1. Firewall активен с первой команды (S-14) — нет окна disable/reset
+        ["ufw", "--force", "enable"],
+        # 2. Default-deny ПЕРЕД allow-правилами — ничего не открыто по умолчанию
         ["ufw", "default", "deny", "incoming"],
         ["ufw", "default", "allow", "outgoing"],
+        # 3. SSH первым — lockout-safe при переконфигурации
+        ["ufw", "allow", "22/tcp", "comment", "platform-baseline"],
     ]
-    rules.extend(["ufw", "allow", f"{port}/tcp", "comment", "platform-baseline"] for port in BASELINE_PORTS)
-    rules.extend(["ufw", "allow", f"{port}/tcp", "comment", "platform-extra"] for port in extra_ports)
+    rules.extend(["ufw", "allow", f"{port}/tcp", "comment", "platform-baseline"] for port in (80, 443))
+    # extra_ports — ТОЛЬКО с явным источником (S-8): allow from <ip> to any port <p>/tcp
+    rules.extend(
+        ["ufw", "allow", "from", source_ip, "to", "any", "port", f"{port}/tcp", "comment", "platform-extra"]
+        for port in extra_ports
+    )
+    # Модульные внутренние порты — явный deny (defense-in-depth поверх 127.0.0.1-bind)
+    rules.extend(
+        ["ufw", "deny", f"{port}/tcp", "comment", "platform-module-deny"] for port in sorted(MODULE_PORTS_DENY)
+    )
     rules.append(["ufw", "deny", f"{DENY_PORT}/tcp", "comment", "explicit-deny-postgresql"])
-    rules.append(["ufw", "--force", "enable"])
     return rules
 
 
 # endregion FUNC_build_rules
+
+
+# region FUNC_collect_stale_platform_rules
+## @purpose  Детекция stale allow-правил платформы (комментарий platform-*): порты, которые больше
+##           НЕ в желаемом allow-наборе (baseline + extra) и не в deny-наборе → подлежат удалению.
+##           Идемпотентность БЕЗ `ufw reset` (S-14): удаляем точечно ТОЛЬКО свои правила.
+## @io       ⇥ status_text: str (текущий `ufw status verbose`), desired_allow: set[int] → ⎋ list[list[str]]
+## @complexity O(L) — L = строк статуса
+def collect_stale_platform_rules(status_text: str, desired_allow: set[int]) -> list[list[str]]:
+    """Delete-команды для platform-* allow-правил, чьи порты вышли из желаемого набора."""
+    deletes: list[list[str]] = []
+    denied = set(MODULE_PORTS_DENY) | {DENY_PORT}
+    for line in status_text.splitlines():
+        # Формат: `9000/tcp ALLOW IN Anywhere  # platform-extra` (комментарий в конце)
+        if "# platform-" not in line:
+            continue
+        m = re.match(r"^(\d+)/tcp\s+ALLOW", line.strip())
+        if not m:
+            continue
+        port = int(m.group(1))
+        if port in desired_allow or port in denied:
+            continue
+        deletes.append(["ufw", "delete", "allow", f"{port}/tcp"])
+        logger.info("[IMP:8][firewall][reconcile] Stale platform allow %d/tcp → delete", port)
+    return deletes
+
+
+# endregion FUNC_collect_stale_platform_rules
 
 
 # region FUNC_parse_ufw_status
@@ -101,11 +193,12 @@ def parse_ufw_status(status_text: str) -> tuple[bool, dict[int, str]]:
 
 
 # region FUNC_verify_firewall
-## @purpose  Verify ufw status: active, baseline ALLOW, forbidden NOT ALLOW, 5432 DENY.
+## @purpose  Verify ufw status: active, baseline ALLOW, forbidden NOT ALLOW, 5432 DENY,
+##           модульные порты NOT ALLOW (S-8/T10.6 CHECK по реестру модулей).
 ## @io       ⇥ status_text: str → ⎋ bool
-## @complexity O(1) — parse + 4 проверки
+## @complexity O(1) — parse + проверки
 def verify_firewall(status_text: str) -> bool:
-    """Verify ufw status against the declarative policy. True = compliant."""
+    """Verify ufw status against the policy. True = compliant."""
     active, port_actions = parse_ufw_status(status_text)
     if not active:
         logger.error("[IMP:10][firewall][verify] ufw is NOT active after apply")
@@ -121,7 +214,13 @@ def verify_firewall(status_text: str) -> bool:
     if port_actions.get(DENY_PORT) != "DENY":
         logger.error("[IMP:10][firewall][verify] SECURITY: Port %d is not DENIED in ufw", DENY_PORT)
         return False
-    logger.info("[IMP:9][firewall][verify] Firewall verified: active, 22/80/443 open, Docker ports closed, 5432 denied")
+    for port in MODULE_PORTS_DENY:
+        if port_actions.get(port) == "ALLOW":
+            logger.error("[IMP:10][firewall][verify] SECURITY: module-internal port %d is ALLOW in ufw (S-8)", port)
+            return False
+    logger.info(
+        "[IMP:9][firewall][verify] Firewall verified: active, 22/80/443 open, Docker ports closed, module ports denied"
+    )
     return True
 
 
@@ -129,27 +228,22 @@ def verify_firewall(status_text: str) -> bool:
 
 
 # region FUNC_apply_rules_subprocess
-## @purpose  Применить ufw-команды через subprocess (best-effort disable, fail-fast остальные).
+## @purpose  Применить ufw-команды через subprocess. Первая (enable) fail-fast; остальные fail-fast
+##           (инкрементальный apply — любая ошибка = политика не применена, честный отказ).
 ## @io       ⇥ rules: list[list[str]] → ⎋ bool
 ## @complexity O(R) — R = команд
 def _apply_rules_subprocess(rules: list[list[str]]) -> bool:
-    """Run ufw commands via subprocess. disable best-effort; reset/allow/deny/enable fail-fast."""
-    for idx, cmd in enumerate(rules):
+    """Run ufw commands via subprocess. All fail-fast (S-14 — no best-effort disable window)."""
+    for cmd in rules:
         try:
             result = subprocess.run(cmd, capture_output=True, text=True)
         except OSError as exc:
             logger.error("[IMP:10][firewall][apply] ufw not available: %s", exc)
             return False
-        if result.returncode != 0 and idx == 0:
-            logger.warning(
-                "[IMP:7][firewall][apply] ufw disable failed (non-fatal, reset re-establishes state): %s",
-                result.stderr.strip(),
-            )
-            continue
         if result.returncode != 0:
             logger.error("[IMP:10][firewall][apply] ufw command failed: %s %s", " ".join(cmd), result.stderr.strip())
             return False
-    logger.info("[IMP:9][firewall][apply] Declarative ufw policy applied")
+    logger.info("[IMP:9][firewall][apply] Incremental ufw policy applied (no disable/reset window)")
     return True
 
 
@@ -157,17 +251,26 @@ def _apply_rules_subprocess(rules: list[list[str]]) -> bool:
 
 
 # region FUNC_run
-## @purpose  Полный прогон: validate → build → apply → verify.
-## @io       ⇥ extra_ports: list[str] → ⎋ bool
+## @purpose  Полный прогон: validate → build (incremental) → stale-reconcile → apply → verify.
+## @io       ⇥ extra_ports: list[str], source_ip: str|None → ⎋ bool
 ## @complexity O(R + L)
-def run(extra_ports: list[str]) -> bool:
-    """Full firewall pipeline: validate ports, apply rules, verify status."""
+def run(extra_ports: list[str], source_ip: str | None = None) -> bool:
+    """Full firewall pipeline: validate ports, build incremental rules, reconcile stale, apply, verify."""
     try:
         ports = validate_ports(extra_ports)
+        rules = build_rules(ports, source_ip)
     except ConfigValidationError as exc:
         logger.error("[IMP:10][firewall][run] %s", exc)
         return False
-    rules = build_rules(ports)
+    # Stale-reconcile (S-14): удалить platform-* allow-правила, вышедшие из желаемого набора —
+    # идемпотентность без ufw reset. Читаем статус ДО apply (текущее состояние).
+    try:
+        status_before = subprocess.run(["ufw", "status", "verbose"], capture_output=True, text=True)
+        before_text = status_before.stdout if status_before.returncode == 0 else ""
+    except OSError:
+        before_text = ""
+    desired_allow = set(BASELINE_PORTS) | set(ports)
+    rules.extend(collect_stale_platform_rules(before_text, desired_allow))
     if not _apply_rules_subprocess(rules):
         return False
     try:
@@ -183,15 +286,20 @@ def run(extra_ports: list[str]) -> bool:
 
 # region FUNC_main
 def main() -> int:
-    """CLI entry: `python3 -m core.internal.bootstrap.firewall [extra_ports...]`.
+    """CLI entry: `python3 -m core.internal.bootstrap.firewall [--source-ip <ip>] [extra_ports...]`.
 
     ▶ ┌argv extra_ports (space-separated)┐ → ○ run() → ⎋ exit 0|1
     """
     logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stderr)
-    parser = argparse.ArgumentParser(description="Declarative ufw firewall (DevPlan 118 E3)")
-    parser.add_argument("extra_ports", nargs="*", help="Extra ports to allow (space-separated)")
+    parser = argparse.ArgumentParser(description="Incremental ufw firewall (DevPlan 118 E3 + 136 W10)")
+    parser.add_argument(
+        "--source-ip",
+        default=None,
+        help="Source IP for extra_ports allow rules (S-8: extra_ports никогда не 0.0.0.0/Anywhere)",
+    )
+    parser.add_argument("extra_ports", nargs="*", help="Extra ports to allow from --source-ip (space-separated)")
     args = parser.parse_args()
-    return 0 if run(args.extra_ports) else 1
+    return 0 if run(args.extra_ports, source_ip=args.source_ip) else 1
 
 
 # endregion FUNC_main

@@ -212,9 +212,10 @@ def test_healthcheck_sh_contract(caplog) -> None:
     # Must have default mode container checks for loki and promtail
     assert "loki" in content and "promtail" in content, "healthcheck.sh must check loki and promtail containers"
 
-    # Must have deep mode with check_http for Loki
-    assert 'check_http "http://127.0.0.1:3100/ready"' in content, (
-        "healthcheck.sh deep mode must check Loki /ready endpoint"
+    # Must have deep mode with check_http for Loki — порт env-параметризован (W10 T10.12):
+    # check_http "http://127.0.0.1:${LOKI_PORT}/ready" (канон infra-metrics; shifted-порт smoke 13100)
+    assert 'check_http "http://127.0.0.1:${LOKI_PORT}/ready"' in content, (
+        "healthcheck.sh deep mode must check Loki /ready endpoint (env-параметризованный порт, W10 T10.12)"
     )
 
     # Must have deep mode with check_docker_health — script loops over CONTAINERS

@@ -7,8 +7,11 @@
 ## @invariants
 ##   - Default mode: check_docker_health for all containers
 ##   - MODE=deep: HTTP endpoint check on loki (port 3100 /ready)
+##   - Имена контейнеров и порты env-параметризованы (паттерн infra-metrics, W10 T10.12):
+##     LOKI_CONTAINER_NAME/PROMTAIL_CONTAINER_NAME/LOKI_PORT
 ##   - Exits 0 only if all containers are healthy
 ## @rationale Standard module healthcheck contract per core/modules/AGENTS.md
+## @changes — 2026-08-05 | DevPlan 136 W10 T10.12 — env-параметризация имён/портов
 # endregion MODULE_CONTRACT
 
 set -euo pipefail
@@ -17,7 +20,11 @@ echo "[IMP:7][logging-hc][main] Starting logging healthcheck" >&2
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../../lib/healthcheck.sh"
 
-CONTAINERS=("loki" "promtail")
+CONTAINERS=(
+    "${LOKI_CONTAINER_NAME:-loki}"
+    "${PROMTAIL_CONTAINER_NAME:-promtail}"
+)
+LOKI_PORT="${LOKI_PORT:-3100}"
 MODE="${1:-}"
 
 if [ "$MODE" = "deep" ]; then
@@ -27,7 +34,7 @@ if [ "$MODE" = "deep" ]; then
     # ·   Promtail image is minimal — no wget/curl inside.
     # · Rev: if Promtail image adds wget/curl, restore HTTP check via docker exec.
 
-    log_imp 8 "healthcheck" "Deep mode: checking Docker health + HTTP endpoints"
+    log_imp 8 "healthcheck" "Deep mode: checking Docker health + HTTP endpoints (LOKI_PORT=${LOKI_PORT})"
 
     # Step 1: Check Docker health status for all containers
     for container in "${CONTAINERS[@]}"; do
@@ -35,7 +42,7 @@ if [ "$MODE" = "deep" ]; then
     done
 
     # Step 2: Service-specific diagnostics via check_http (Loki)
-    check_http "http://127.0.0.1:3100/ready" "200" || exit 1
+    check_http "http://127.0.0.1:${LOKI_PORT}/ready" "200" || exit 1
 
     log_imp 9 "healthcheck" "All logging deep checks passed"
     exit 0

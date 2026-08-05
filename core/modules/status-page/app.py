@@ -7,6 +7,9 @@
 ##           renders Jinja2 HTML with 3 tables, exposes /health for CI post-deploy gate.
 ##           Orchestrator only (DevPlan 117 G T55): collectors and renderer extracted to
 ##           sibling modules; app.py keeps Config, Jinja2 env, StatusPageHandler, main.
+##           W10 T10.11 (M-1): ThreadingHTTPServer — «медленный апстрим + /healthz» больше не
+##           блокирует fast-path readiness-пробы (load-тест: unit с mock-медленным хендлером).
+##           W10 T10.13 (M-7): /healthz возвращает 503 при staleness > порога (синхронизация с /health).
 ## @scope    Runs inside status-page Docker container on port 8080, internal-only (no external ports).
 ##           Accessed via nginx proxy_pass with Basic Auth (auth handled by nginx, not here).
 ## @invariants
@@ -38,6 +41,8 @@
 ##   2026-07-24 | 047 W1  | _enrich_projects/_enrich_containers use _format_bytes() instead of _bytes_to_gb*
 ##   2026-07-24 | 047 W2  | _render_html() — host context extended with memory_*, swap_*, os_* fields
 ##   2026-08-01 | 117 G T55 | collectors → collectors.py, renderer → renderer.py; app.py = orchestrator
+##   2026-08-05 | 136 W10 T10.11 | ThreadingHTTPServer (M-1: slow upstream не блокирует /healthz)
+##   2026-08-05 | 136 W10 T10.13 | /healthz staleness → 503 (синхронизация с /health, M-7)
 # ⚠️ TRAP[DECISION] · 2026-08-01 · — · status-page stays on raw yaml.safe_load — exception from NodeYaml facade invariant
 # · Rejected: migrating load_node_yaml() to core.internal.shared.node_yaml (risk: layer violation + image bloat)
 # · Reason: module image is python:3.12-alpine WITHOUT core/; modules→internal import is forbidden
@@ -327,16 +332,18 @@ class StatusPageHandler(http.server.BaseHTTPRequestHandler):
         duration_ms = int((_time.monotonic() - start) * 1000)
 
         if staleness:
-            # Stale data → WARN but still PASS (service is alive, data pipeline might be slow)
+            # W10 T10.13 (M-7): stale data → 503 FAIL — синхронизация с /health (stale pipeline
+            # означает, что status-page бесполезен: метрики не обновляются). Docker HEALTHCHECK
+            # увидит unhealthy → рестарт/алерт, а не ложный PASS.
             self._send_json(
                 {
-                    "status": "PASS",
-                    "warning": "stale_data",
+                    "status": "FAIL",
+                    "reason": "stale_data",
                     "staleness": staleness,
                     "schema_version": metrics.get("schema_version", 0),
                     "duration_ms": duration_ms,
                 },
-                status_code=200,
+                status_code=503,
             )
         else:
             self._send_json(
@@ -414,7 +421,10 @@ if __name__ == "__main__":
     print(f"[IMP:7][status-page][main] node.yaml: {NODE_YAML_PATH}", file=sys.stderr)
     print(f"[IMP:7][status-page][main] status-metrics.json: {STATUS_METRICS_JSON}", file=sys.stderr)
 
-    server = http.server.HTTPServer((LISTEN_HOST, LISTEN_PORT), StatusPageHandler)
+    server = http.server.ThreadingHTTPServer((LISTEN_HOST, LISTEN_PORT), StatusPageHandler)
+    # W10 T10.11 (M-1): ThreadingHTTPServer — медленный /health (полный агрегат) НЕ блокирует
+    # fast-path /healthz (readiness-проба Docker HEALTHCHECK). daemon_threads — быстрый выход.
+    server.daemon_threads = True
     try:
         server.serve_forever()
     except KeyboardInterrupt:

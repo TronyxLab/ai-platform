@@ -9,12 +9,14 @@
 ##   - MODE=deep with sub-mode: liveness ( /health ), readiness ( /ready ), deps (PG, Redis, LiteLLM)
 ##   - MODE=deep ALWAYS runs check_docker_health first, THEN service-specific checks
 ##   - Default: delegates to check_docker_health for liveness via docker inspect
-##   - Container name: hermes-agent
+##   - Container name env-параметризован (W10 T10.12): HERMES_CONTAINER_NAME; порт — HERMES_PORT
+##   - deps-режим: HTTP-проверка litellm через check_http (W10 T10.12 — HTTP в deps-режиме)
 ##   - exit 0 = healthy; exit 1 = unhealthy
 ## @rationale Unified contract per DevPlan 083 — deep mode is strict superset of liveness (DRIFT-H6 fix).
 ##   check_http replaces docker exec curl copy-paste for liveness/readiness checks (DRIFT-H4 fix).
 ##   deps mode → healthcheck_deps.py (DevPlan 119 D6, AUDIT-1 F8): required/optional агрегация в Python.
 ## @changes  2026-08-02 | DevPlan 119 D6 — deps-ветка (48-112) → exec python3 healthcheck_deps.py (test-first)
+## @changes  2026-08-05 | DevPlan 136 W10 T10.12 — env-параметризация имени/порта (HERMES_CONTAINER_NAME/HERMES_PORT)
 ## @source ../../lib/healthcheck.sh
 # endregion MODULE_CONTRACT
 
@@ -24,8 +26,9 @@ echo "[IMP:7][hermes-agent-hc][main] Starting hermes-agent healthcheck" >&2
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../../lib/healthcheck.sh"
 
-CONTAINER="hermes-agent"
-AGENT_URL="http://127.0.0.1:9119"
+CONTAINER="${HERMES_CONTAINER_NAME:-hermes-agent}"
+HERMES_PORT="${HERMES_PORT:-9119}"
+AGENT_URL="http://127.0.0.1:${HERMES_PORT}"
 # Port 9119 — internal dashboard port (agent listens here, not 8080)
 MODE="${1:-}"
 

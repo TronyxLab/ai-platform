@@ -10,18 +10,22 @@
 ##           from Python tests. No embedded shell logic — pure Python + subprocess.
 ## @invariants
 ##   (DD5 Security)
-##   DD5-1: Temp key file in /tmp with 0o600 permissions (never world-readable)
+##   DD5-1: Temp key file on TMPFS (/dev/shm при наличии, fallback TMPDIR) с 0o600 — S-13, W10 T10.15
 ##   DD5-2: Wipe via dd if=/dev/zero BEFORE rm (not just rm -f)
 ##   DD5-3: Cleanup via atexit.register + signal handlers SIGTERM/SIGINT (replaces shell trap)
 ##   DD5-4: No secret values in logs (keys masked to first 8 chars, [IMP:8] max)
 ##   DD5-5: SOPS_AGE_KEY_FILE env var for sops CLI compatibility
 ##   DD5-6: RuntimeError on decryption failure (fail-fast)
 ##   DD5-7: Atomic write via tempfile+rename prevents partial write corruption
+##   DD5-8: sops stderr SANITIZED в логах/исключениях (truncate + redact пути temp-ключа) — S-13, W10 T10.15
 ## @rationale DevPlan Strangler-Fig — Python core extracted from 223-line shell script.
 ##            Security-critical operations (key handling, cleanup) must be auditable,
 ##            testable, and verifiable via unit tests. Shell trap pattern replaced with
 ##            Python atexit+signal for deterministic cleanup order.
+##            W10 T10.15 (S-13): temp-ключ на tmpfs (/dev/shm) — ключ в RAM, не на диске root-fs;
+##            sanitize sops stderr — sops может печатать пути/контент в stderr на ошибке.
 ## @changes  2026-07-30 | Created — Python core extracted from decrypt-secrets.sh
+## @changes  2026-08-05 | DevPlan 136 W10 T10.15 — tmpfs temp-key (S-13), sanitize sops stderr
 ## ⚠️ TRAP[DECISION] · 2026-07-30 · MED · Cleanup architecture migrated from shell (trap+cleanup_all) to Python (atexit+signal)
 ## · Rejected: Keeping cleanup in shell (risk: two parallel cleanup paradigms — shell trap AND Python atexit — creates ambiguity)
 ## · Reason: Python atexit+signal provides deterministic cleanup order, testability, and replaces shell trap EXIT INT TERM
@@ -195,18 +199,19 @@ def _yaml_to_env(yaml_content: str) -> str:
 
 # region FUNC_decrypt_sops_file
 ## @purpose — Decrypt a SOPS-encrypted file using the provided age key.
-##            Writes age key to a temp file in /tmp with 0o600, runs
+##            Writes age key to a temp file on TMPFS (/dev/shm при наличии) with 0o600, runs
 ##            sops --decrypt with SOPS_AGE_KEY_FILE env, wipes temp key
-##            with dd after use, returns decrypted plaintext.
+##            with dd after use, returns decrypted plaintext. W10 T10.15 (S-13).
 ## @io — ⇥ age_key: str, enc_path: str → ⎋ str (decrypted content) | raises RuntimeError
 ## @complexity — O(1) — single subprocess call
 ## @invariants (DD5 Security)
-##   DD5-1: Temp key in /tmp with 0o600
+##   DD5-1: Temp key on TMPFS (/dev/shm fallback TMPDIR) with 0o600
 ##   DD5-2: dd if=/dev/zero wipe before rm
 ##   DD5-3: atexit+signal cleanup registered
 ##   DD5-4: Key masked to first 8 chars in logs
 ##   DD5-5: SOPS_AGE_KEY_FILE env var set for sops
 ##   DD5-6: RuntimeError on failure (fail-fast)
+##   DD5-8: sops stderr sanitized (truncate + redact temp-key path) — S-13
 def decrypt_sops_file(age_key: str, enc_path: str) -> str:
     """Decrypt SOPS-encrypted file; returns decrypted plaintext content."""
     # ── Pre-flight: check sops is available ──
@@ -219,8 +224,14 @@ def decrypt_sops_file(age_key: str, enc_path: str) -> str:
 
     logger.info("[IMP:8][decrypt_sops] Decrypting %s", enc_path)
 
-    # ── Create temp file for age key (DD5-1: 0o600 in /tmp) ──
-    fd, tmp_key_path = tempfile.mkstemp(prefix="platform-age-key-", suffix=".key")
+    # ── Create temp file for age key (DD5-1: 0o600; W10 T10.15 S-13: TMPFS — /dev/shm) ──
+    # tmpfs (RAM-backed) — ключ не оседает на диске root-fs; /dev/shm — tmpfs на Ubuntu (default),
+    # fallback TMPDIR (обычно /tmp). Размер ключа ~сотни байт — лимит shm не проблема.
+    # nosec B108: hardcoded /dev/shm НАМЕРЕН (S-13 tmpfs) — RAM-backed temp-ключ, не диск;
+    #   fallback TMPDIR сохраняет 0o600 + dd-wipe (DD5-2). Альтернатива (env-параметризация)
+    #   не оправдана: tmpfs — канон платформы, лишний конфиг создаёт вектор рассинхрона.
+    tmp_dir = "/dev/shm" if os.path.isdir("/dev/shm") else None  # nosec B108
+    fd, tmp_key_path = tempfile.mkstemp(prefix="platform-age-key-", suffix=".key", dir=tmp_dir)
     os.close(fd)
     os.chmod(tmp_key_path, 0o600)
     _TEMP_FILES.append(tmp_key_path)
@@ -246,9 +257,12 @@ def decrypt_sops_file(age_key: str, enc_path: str) -> str:
             env=sops_env,
         )
 
-        # ── Handle decryption failure (DD5-6: fail-fast) ──
+        # ── Handle decryption failure (DD5-6: fail-fast; W10 T10.15: sanitize sops stderr) ──
         if result.returncode != 0:
-            stderr_clean = result.stderr.strip() if result.stderr else ""
+            # S-13: sanitize — truncate + redact пути temp-ключа (sops может печатать пути/контент)
+            stderr_raw = result.stderr.strip() if result.stderr else ""
+            stderr_clean = stderr_raw.replace(tmp_key_path, "<redacted-age-key-path>")
+            stderr_clean = stderr_clean[:500] + ("…" if len(stderr_clean) > 500 else "")
             logger.error(
                 "[IMP:9][decrypt_sops] FAILED: sops --decrypt returned %d: %s",
                 result.returncode,

@@ -38,11 +38,13 @@
 ##   - status-metrics.json format (container_name → name, schema_version: 2)
 # endregion MODULE_CONTRACT
 
+import http.client
 import json
 import os
 import subprocess
 import sys
 import textwrap
+import threading
 import time
 from pathlib import Path
 from unittest import mock
@@ -1334,3 +1336,187 @@ def test_env_isolation_negative(
 
 
 # endregion FUNC_test_env_isolation_negative
+
+
+# ═══════════════════════════════════════════════════════════════════
+# W10 T10.11 / T10.13 — ThreadingHTTPServer + /healthz staleness
+# ═══════════════════════════════════════════════════════════════════
+# ⚠️  Отклонение от инварианта «no HTTP server»: T10.11 (M-1) — нагрузочный тест,
+#     по определению требующий реального ThreadingHTTPServer (медленный апстрим +
+#     /healthz опрос). DevPlan 136 §12.2 T10.11 — authoritative. Сервер локальный
+#     (127.0.0.1, эфемерный порт), полный teardown в finally (shutdown+close) —
+#     fixture-lifecycle: явный start/stop, не session-scoped autouse (rule 3.4).
+#     Все остальные тесты файла остаются server-free.
+
+
+# region CLASS_TestW10ThreadingHealthz
+class TestW10ThreadingHealthz:
+    """W10 T10.11 (M-1): ThreadingHTTPServer — медленный /health НЕ блокирует /healthz.
+    W10 T10.13 (M-7): /healthz возвращает 503 при staleness > порога (синхронно с /health)."""
+
+    @staticmethod
+    def _start_server(app_module) -> tuple[http.server.ThreadingHTTPServer, threading.Thread, str]:
+        """Запустить ThreadingHTTPServer с StatusPageHandler на эфемерном порту.
+
+        ## @purpose — Self-contained локальный сервер для load-теста (порт 0 = эфемерный,
+        ##            xdist-safe: нет фиксированных портов). Полный teardown в finally.
+        """
+        import http.server
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), app_module.StatusPageHandler)
+        server.daemon_threads = True
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        _, port = server.server_address
+        return server, thread, f"http://127.0.0.1:{port}"
+
+    @staticmethod
+    def _get(url: str, timeout: float) -> tuple[int, dict]:
+        """GET с таймаутом → (status, json_body). Обрабатывает HTTPError (503/4xx)."""
+        import urllib.error
+        import urllib.request
+
+        try:
+            with urllib.request.urlopen(url, timeout=timeout) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+                return resp.status, body
+        except urllib.error.HTTPError as e:
+            body = json.loads(e.read().decode("utf-8"))
+            return e.code, body
+
+    def test_slow_health_does_not_block_healthz(self, monkeypatch, tmp_path: Path) -> None:
+        """T10.11: /health (полный агрегат, ~секунды) в фоне; /healthz отвечает < 1s."""
+        # 🧪 TRAP[TEST] · REGRESSION (R5) · DevPlan 136 W10 T10.11 (M-1) — blocking /healthz
+        # · Scenario: HTTPServer (однопоточный) — /health завис на медленном апстриме → /healthz
+        # ·   ждёт в очереди → Docker HEALTHCHECK таймаутит → ложный unhealthy
+        # · Last fail: 2026-08-05 — W10: app.py использовал http.server.HTTPServer (однопоточный)
+        # · Remove if: HTTP-сервер заменён (fast-path /healthz вне серверного потока)
+        metrics = tmp_path / "status-metrics.json"
+        metrics.write_text(
+            json.dumps(
+                {
+                    "schema_version": 2,
+                    "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "containers": [],
+                }
+            )
+        )
+        node_yaml = tmp_path / "test-node" / "node.yaml"
+        node_yaml.parent.mkdir(parents=True)
+        node_yaml.write_text("projects: []\nmodules: []\n")
+        app_module = _setup_app_env(str(node_yaml), str(metrics))
+
+        # Медленный апстрим: /health блокируется на 3s (имитация сбора метрик)
+        def _slow_health(*args, **kwargs):
+            time.sleep(3.0)
+            return {"status": "PASS", "checks": [], "staleness": None, "duration_ms": 3000}
+
+        monkeypatch.setattr(app_module, "get_all_checks", _slow_health)
+
+        server, thread, base = self._start_server(app_module)
+        try:
+            # Фон: /health (заблокируется на 3s)
+            health_result = {}
+            t = threading.Thread(
+                target=lambda: health_result.update(status=self._get(base + "/health", timeout=10)[0]),
+                daemon=True,
+            )
+            t.start()
+            time.sleep(0.3)  # дать /health войти в блокировку
+
+            # /healthz должен ответить БЫСТРО (fast-path не ждёт медленный /health)
+            start = time.monotonic()
+            status, body = self._get(base + "/healthz", timeout=5)
+            elapsed = time.monotonic() - start
+            assert status == 200, f"/healthz должен быть 200, got {status}: {body}"
+            assert elapsed < 1.5, f"/healthz занял {elapsed:.2f}s — ThreadingHTTPServer не разблокировал"
+            t.join(timeout=10)
+            assert health_result.get("status") == 200, "/health должен завершиться 200"
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+        print(f"[IMP:9][test_w10_healthz] PASS: /healthz={elapsed:.2f}s при /health в блокировке (T10.11)")
+
+    def test_healthz_fresh_metrics_returns_200(self, tmp_path: Path) -> None:
+        """T10.13: свежие метрики → /healthz 200 PASS."""
+        metrics = tmp_path / "status-metrics.json"
+        metrics.write_text(
+            json.dumps(
+                {
+                    "schema_version": 2,
+                    "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "containers": [],
+                }
+            )
+        )
+        node_yaml = tmp_path / "test-node" / "node.yaml"
+        node_yaml.parent.mkdir(parents=True)
+        node_yaml.write_text("projects: []\nmodules: []\n")
+        app_module = _setup_app_env(str(node_yaml), str(metrics))
+
+        server, thread, base = self._start_server(app_module)
+        try:
+            status, body = self._get(base + "/healthz", timeout=5)
+            assert status == 200, f"свежие метрики → 200, got {status}: {body}"
+            assert body["status"] == "PASS"
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_healthz_stale_metrics_returns_503(self, tmp_path: Path) -> None:
+        """T10.13 (M-7): метрики старше 5 мин → /healthz 503 FAIL (синхронно с /health)."""
+        # 🧪 TRAP[TEST] · REGRESSION (R5) · DevPlan 136 W10 T10.13 (M-7) — stale → ложный PASS
+        # · Scenario: pipeline метрик упал, /healthz отвечал 200 (только warning) → Docker
+        # ·   HEALTHCHECK считал status-page healthy при мёртвых данных
+        # · Last fail: 2026-08-05 — W10: stale возвращал 200 + warning:"stale_data"
+        # · Remove if: /healthz контракт изменён
+        metrics = tmp_path / "status-metrics.json"
+        metrics.write_text(
+            json.dumps(
+                {
+                    "schema_version": 2,
+                    "generated_at": "2020-01-01T00:00:00Z",  # на годы в прошлом → stale
+                    "containers": [],
+                }
+            )
+        )
+        node_yaml = tmp_path / "test-node" / "node.yaml"
+        node_yaml.parent.mkdir(parents=True)
+        node_yaml.write_text("projects: []\nmodules: []\n")
+        app_module = _setup_app_env(str(node_yaml), str(metrics))
+
+        server, thread, base = self._start_server(app_module)
+        try:
+            status, body = self._get(base + "/healthz", timeout=5)
+            assert status == 503, f"stale метрики → 503, got {status}: {body}"
+            assert body["status"] == "FAIL"
+            assert body["reason"] == "stale_data", f"reason должен быть stale_data: {body}"
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_healthz_missing_metrics_returns_503(self, tmp_path: Path) -> None:
+        """T10.13: метрики отсутствуют → /healthz 503 FAIL (не ложный PASS)."""
+        metrics = tmp_path / "status-metrics.json"
+        # не пишем файл — отсутствует
+        node_yaml = tmp_path / "test-node" / "node.yaml"
+        node_yaml.parent.mkdir(parents=True)
+        node_yaml.write_text("projects: []\nmodules: []\n")
+        app_module = _setup_app_env(str(node_yaml), str(metrics))
+
+        server, thread, base = self._start_server(app_module)
+        try:
+            status, body = self._get(base + "/healthz", timeout=5)
+            assert status == 503, f"нет метрик → 503, got {status}: {body}"
+            assert body["reason"] == "metrics_file_missing"
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+
+# endregion CLASS_TestW10ThreadingHealthz

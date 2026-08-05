@@ -13,6 +13,8 @@
 
 import json
 import logging
+import os
+from types import SimpleNamespace
 
 import pytest
 
@@ -203,6 +205,94 @@ class TestS4:
         assert result.status == security_posture.STATUS_FAIL
         assert "PermitRootLogin" in result.message
 
+    def test_negative_weak_kexalgorithms(self, fake_probe):
+        """R5 negative (W10 T10.4/S-5): слабый KEX (diffie-hellman-group14-sha1) → FAIL."""
+        # 🧪 TRAP[TEST] · REGRESSION (R5) · DevPlan 136 W10 T10.4 (S-5)
+        # · Scenario: KexAlgorithms содержит diffie-hellman-group14-sha1 — downgrade-вектор
+        # · Last fail: 2026-08-05 — W10: расширение S4 до 9 директив
+        # · Remove if: S4 расширенные директивы отменены
+        fake_probe["sshd"] = FakeResult(
+            0,
+            self.SSHD_OK + "kexalgorithms curve25519-sha256,diffie-hellman-group14-sha1\n",
+        )
+        result = security_posture.check_sshd()
+        assert result.status == security_posture.STATUS_FAIL
+        assert "KexAlgorithms" in result.message
+
+    def test_negative_weak_ciphers(self, fake_probe):
+        """R5 negative (W10 T10.4/S-5): CBC-шифр (aes256-cbc) → FAIL."""
+        fake_probe["sshd"] = FakeResult(0, self.SSHD_OK + "ciphers chacha20-poly1305@openssh.com,aes256-cbc\n")
+        result = security_posture.check_sshd()
+        assert result.status == security_posture.STATUS_FAIL
+        assert "Ciphers" in result.message
+
+    def test_negative_weak_macs(self, fake_probe):
+        """R5 negative (W10 T10.4/S-5): hmac-md5 MAC → FAIL."""
+        fake_probe["sshd"] = FakeResult(0, self.SSHD_OK + "macs hmac-md5,hmac-sha2-256\n")
+        result = security_posture.check_sshd()
+        assert result.status == security_posture.STATUS_FAIL
+        assert "MACs" in result.message
+
+    def test_negative_client_alive_interval_low(self, fake_probe):
+        """R5 negative (W10 T10.4/S-5): ClientAliveInterval < 300 → FAIL (idle-каналы живут вечно)."""
+        fake_probe["sshd"] = FakeResult(0, self.SSHD_OK + "clientaliveinterval 60\n")
+        result = security_posture.check_sshd()
+        assert result.status == security_posture.STATUS_FAIL
+        assert "ClientAliveInterval" in result.message
+
+    def test_negative_x11_forwarding_enabled(self, fake_probe):
+        """R5 negative (W10 T10.4/S-5): X11Forwarding yes → FAIL."""
+        fake_probe["sshd"] = FakeResult(0, self.SSHD_OK + "x11forwarding yes\n")
+        result = security_posture.check_sshd()
+        assert result.status == security_posture.STATUS_FAIL
+        assert "X11Forwarding" in result.message
+
+    def test_negative_allow_tcp_forwarding(self, fake_probe):
+        """R5 negative (W10 T10.4/S-5): AllowTcpForwarding yes → FAIL (туннель через ssh)."""
+        fake_probe["sshd"] = FakeResult(0, self.SSHD_OK + "allowtcpforwarding yes\n")
+        result = security_posture.check_sshd()
+        assert result.status == security_posture.STATUS_FAIL
+        assert "AllowTcpForwarding" in result.message
+
+    def test_negative_permit_user_environment(self, fake_probe):
+        """R5 negative (W10 T10.4/S-5): PermitUserEnvironment yes → FAIL (env-инъекция)."""
+        fake_probe["sshd"] = FakeResult(0, self.SSHD_OK + "permituserenvironment yes\n")
+        result = security_posture.check_sshd()
+        assert result.status == security_posture.STATUS_FAIL
+        assert "PermitUserEnvironment" in result.message
+
+    def test_negative_login_grace_time_high(self, fake_probe):
+        """R5 negative (W10 T10.4/S-5): LoginGraceTime > 120 → FAIL (медленный brute-force окно)."""
+        fake_probe["sshd"] = FakeResult(0, self.SSHD_OK + "logingracetime 300\n")
+        result = security_posture.check_sshd()
+        assert result.status == security_posture.STATUS_FAIL
+        assert "LoginGraceTime" in result.message
+
+    def test_negative_allowusers_empty(self, fake_probe):
+        """R5 negative (W10 T10.4/S-5): AllowUsers пуст (явно задан пустым) → FAIL."""
+        fake_probe["sshd"] = FakeResult(0, self.SSHD_OK + "allowusers \n")
+        result = security_posture.check_sshd()
+        assert result.status == security_posture.STATUS_FAIL
+        assert "AllowUsers" in result.message
+
+    def test_hardened_with_all_directives_passes(self, fake_probe):
+        """Позитив W10 T10.4: все 9 расширенных директив в каноническом виде → PASS."""
+        fake_probe["sshd"] = FakeResult(
+            0,
+            self.SSHD_OK
+            + "allowusers deploy\n"
+            + "clientaliveinterval 300\n"
+            + "permituserenvironment no\n"
+            + "x11forwarding no\n"
+            + "allowtcpforwarding no\n"
+            + "kexalgorithms curve25519-sha256\n"
+            + "ciphers chacha20-poly1305@openssh.com\n"
+            + "macs hmac-sha2-256\n"
+            + "logingracetime 30\n",
+        )
+        result = security_posture.check_sshd()
+        assert result.status == security_posture.STATUS_PASS
+
 
 # endregion Tests: S4
 
@@ -264,6 +354,26 @@ class TestS6:
         assert result.status == security_posture.STATUS_FAIL
         assert "world-readable secrets" in result.message
 
+    def test_negative_critical_path_world_writable(self, patch_paths, fake_probe, monkeypatch):
+        """R5 negative (W10 T10.8/S-10): world-writable файл под /var/log/platform → FAIL."""
+        # 🧪 TRAP[TEST] · REGRESSION (R5) · DevPlan 136 W10 T10.8 (S-10)
+        # · Scenario: audit-журнал /var/log/platform/audit.jsonl world-writable — тампер аудита
+        # · Last fail: 2026-08-05 — W10: S6 проверял только /opt/platform
+        # · Remove if: критичные пути пересмотрены
+        patch_paths["platform_base"].mkdir()
+        (patch_paths["platform_base"] / "secrets").mkdir()
+        real_exists = os.path.exists
+
+        def _exists(path):
+            # Симулируем существование /var/log/platform (вне tmp_path) для критичного пути
+            return "/var/log/platform" in str(path) or real_exists(path)
+
+        monkeypatch.setattr(security_posture.os.path, "exists", _exists)
+        fake_probe["find"] = FakeResult(0, "/var/log/platform/audit.jsonl\n")
+        result = security_posture.check_file_perms()
+        assert result.status == security_posture.STATUS_FAIL
+        assert "world-writable under /var/log/platform" in result.message
+
 
 # endregion Tests: S6
 
@@ -272,23 +382,87 @@ class TestS6:
 class TestS7:
     FORCED_OK = 'command="cd /opt/platform && PYTHONPATH=/opt/platform python3 -m core.internal.deploy.orchestrator_cli dispatch",restrict ssh-ed25519 AAAA key'
 
-    def test_positive_dispatch_intact(self, patch_paths):
+    @staticmethod
+    def _patch_owner(monkeypatch):
+        """S7 (W10 T10.3): owner-ci-deploy проверяется через pwd.getpwuid — патчим uid→ci-deploy."""
+        real_uid = os.getuid() if hasattr(os, "getuid") else 1000
+
+        def _fake_getpwuid(uid):
+            return SimpleNamespace(pw_name="ci-deploy")
+
+        monkeypatch.setattr("pwd.getpwuid", _fake_getpwuid)
+        return real_uid
+
+    def test_positive_dispatch_intact(self, patch_paths, monkeypatch):
+        # 🧪 TRAP[TEST] · 2026-08-02 · test_positive_dispatch_intact — DevPlan 134 W2 + W10 T10.3
+        # · Scenario: каноническая строка command=...orchestrator_cli dispatch,restrict + perms 0600 + owner
+        # · Last fail: 2026-08-05 — W10 добавил perms/owner; tmp_path-файл 0644/твой-uid → FAIL без патча
+        # · Remove if: S7 контракт изменён
         patch_paths["keys_file"].write_text(self.FORCED_OK + "\n")
+        patch_paths["keys_file"].chmod(0o600)
+        self._patch_owner(monkeypatch)
         result = security_posture.check_forced_command()
         assert result.status == security_posture.STATUS_PASS
         assert "orchestrator_cli dispatch" in result.message
 
-    def test_negative_missing_forced_command(self, patch_paths):
+    def test_negative_missing_forced_command(self, patch_paths, monkeypatch):
         """R5 negative: ключ БЕЗ command= (открытый канал — потеря restrict) → FAIL."""
         patch_paths["keys_file"].write_text("ssh-ed25519 AAAA plain-key\n")
+        patch_paths["keys_file"].chmod(0o600)
+        self._patch_owner(monkeypatch)
         result = security_posture.check_forced_command()
         assert result.status == security_posture.STATUS_FAIL
-        assert "no forced-command" in result.message
+        assert "WITHOUT forced-command" in result.message
 
     def test_negative_missing_keys_file(self, patch_paths):
         result = security_posture.check_forced_command()
         assert result.status == security_posture.STATUS_FAIL
         assert "missing" in result.message
+
+    def test_negative_wrong_perms(self, patch_paths, monkeypatch):
+        """R5 negative (W10 T10.3/S-4): authorized_keys mode != 0600 → FAIL (world-readable key file)."""
+        # 🧪 TRAP[TEST] · REGRESSION (R5) · DevPlan 136 W10 T10.3 (S-4)
+        # · Scenario: chmod 0644 на authorized_keys — любой локальный юзер читает ключ деплоя
+        # · Last fail: 2026-08-05 — W10: perms-проверка добавлена в S7
+        # · Remove if: S7 perms-контракт отменён
+        patch_paths["keys_file"].write_text(self.FORCED_OK + "\n")
+        patch_paths["keys_file"].chmod(0o644)
+        self._patch_owner(monkeypatch)
+        result = security_posture.check_forced_command()
+        assert result.status == security_posture.STATUS_FAIL
+        assert "0600" in result.message
+
+    def test_negative_wrong_owner(self, patch_paths, monkeypatch):
+        """R5 negative (W10 T10.3/S-4): owner != ci-deploy → FAIL (подмена ключевого файла)."""
+        # 🧪 TRAP[TEST] · REGRESSION (R5) · DevPlan 136 W10 T10.3 (S-4)
+        # · Scenario: authorized_keys владеет root/другой юзер — файл мог быть подменён
+        # · Last fail: 2026-08-05 — W10: owner-проверка добавлена в S7
+        # · Remove if: S7 owner-контракт отменён
+        patch_paths["keys_file"].write_text(self.FORCED_OK + "\n")
+        patch_paths["keys_file"].chmod(0o600)
+        real_uid = os.getuid() if hasattr(os, "getuid") else 1000
+
+        def _fake_getpwuid(uid):
+            return SimpleNamespace(pw_name="root" if uid == real_uid else "ci-deploy")
+
+        monkeypatch.setattr("pwd.getpwuid", _fake_getpwuid)
+        result = security_posture.check_forced_command()
+        assert result.status == security_posture.STATUS_FAIL
+        assert "owner" in result.message
+
+    def test_negative_mixed_lines_bad_line_detected(self, patch_paths, monkeypatch):
+        """R5 negative (W10 T10.3): 1 хорошая + 1 плохая строка → FAIL с номером строки."""
+        # 🧪 TRAP[TEST] · REGRESSION (R5) · DevPlan 136 W10 T10.3 — per-line скан
+        # · Scenario: admin добавил второй ключ БЕЗ forced-command — канал деплоя открыт,
+        # ·   первая строка (канон) маскирует нарушение при старом «first-match»-скане
+        # · Last fail: 2026-08-05 — W10: S7 сканировал только первую строку (return при первом match)
+        # · Remove if: per-line скан заменён
+        patch_paths["keys_file"].write_text(self.FORCED_OK + "\nssh-ed25519 BBBB open-key\n")
+        patch_paths["keys_file"].chmod(0o600)
+        self._patch_owner(monkeypatch)
+        result = security_posture.check_forced_command()
+        assert result.status == security_posture.STATUS_FAIL
+        assert "line 2" in result.message
 
 
 # endregion Tests: S7
@@ -493,6 +667,74 @@ class TestS8:
 # endregion Tests: S8
 
 
+# region Tests: S9 — real LISTEN cross-check (W10 T10.2, S-7)
+class TestS9:
+    """docker-proxy не должен слушать 0.0.0.0 на внутренних портах модулей (реестр firewall)."""
+
+    def test_positive_no_docker_proxy(self, fake_probe):
+        """docker-proxy отсутствует (всё 127.0.0.1 или не docker) → PASS."""
+        fake_probe["ss"] = FakeResult(0, 'LISTEN 0 128 127.0.0.1:5432 0.0.0.0:* users:(("postgres"))\n')
+        result = security_posture.check_listening_ports()
+        assert result.status == security_posture.STATUS_PASS
+
+    def test_positive_user_project_public_port(self, fake_probe):
+        """user-проект публикует web-порт 8080 на 0.0.0.0 (test-project-web) → PASS (by-design)."""
+        # 🧪 TRAP[TEST] · REGRESSION (R5) · DevPlan 136 W10 T10.2 — ложноположительный FAIL
+        # · Scenario: S9 флагает ВСЕ docker-proxy 0.0.0.0 вне {80,443} — user-проект 8080
+        # ·   (test-project-web на test-VPS) ломает check-security; S9 обязан сверяться с
+        # ·   реестром ВНУТРЕННИХ портов модулей (cross-check с compose, T10.2)
+        # · Last fail: 2026-08-05 — W10: allowlist {80,443} → 8080 user-проекта = ложный FAIL
+        # · Remove if: S9 реестровая семантика отменена
+        fake_probe["ss"] = FakeResult(0, 'LISTEN 0 128 0.0.0.0:8080 0.0.0.0:* users:(("docker-proxy"))\n')
+        result = security_posture.check_listening_ports()
+        assert result.status == security_posture.STATUS_PASS
+
+    def test_positive_nginx_public_ports(self, fake_probe):
+        """nginx 80/443 (публичный вход платформы) → PASS (вне реестра внутренних портов)."""
+        fake_probe["ss"] = FakeResult(
+            0,
+            'LISTEN 0 128 0.0.0.0:80 0.0.0.0:* users:(("docker-proxy"))\n'
+            'LISTEN 0 128 0.0.0.0:443 0.0.0.0:* users:(("docker-proxy"))\n',
+        )
+        result = security_posture.check_listening_ports()
+        assert result.status == security_posture.STATUS_PASS
+
+    def test_negative_internal_port_exposed(self, fake_probe):
+        """R5 negative (W10 T10.2/S-7): docker-proxy на 0.0.0.0:5432 (postgres) → FAIL."""
+        # 🧪 TRAP[TEST] · REGRESSION (R5) · DevPlan 136 W10 T10.2 (S-7)
+        # · Scenario: compose publish без 127.0.0.1-bind (0.0.0.0:5432) — postgres доступен снаружи
+        # · Last fail: 2026-08-05 — W10: реальный LISTEN не проверялся (S3 — только ufw status)
+        # · Remove if: S9 отменён
+        fake_probe["ss"] = FakeResult(0, 'LISTEN 0 128 0.0.0.0:5432 0.0.0.0:* users:(("docker-proxy"))\n')
+        result = security_posture.check_listening_ports()
+        assert result.status == security_posture.STATUS_FAIL
+        assert "0.0.0.0:5432" in result.message
+
+    def test_negative_ipv6_wildcard_exposed(self, fake_probe):
+        """R5 negative (W10 T10.2/S-7): [::]:6379 (redis, IPv6-дубль 0.0.0.0) → FAIL."""
+        fake_probe["ss"] = FakeResult(0, 'LISTEN 0 128 [::]:6379 [::]:* users:(("docker-proxy"))\n')
+        result = security_posture.check_listening_ports()
+        assert result.status == security_posture.STATUS_FAIL
+        assert "0.0.0.0:6379" in result.message
+
+    def test_negative_minio_port_exposed(self, fake_probe):
+        """R5 negative (W10 T10.2/S-7): 0.0.0.0:9000 (minio, из реестра MODULE_PORTS_DENY) → FAIL."""
+        fake_probe["ss"] = FakeResult(0, 'LISTEN 0 128 0.0.0.0:9000 0.0.0.0:* users:(("docker-proxy"))\n')
+        result = security_posture.check_listening_ports()
+        assert result.status == security_posture.STATUS_FAIL
+        assert "0.0.0.0:9000" in result.message
+
+    def test_negative_ss_unavailable(self, fake_probe):
+        """ss -tlnp падает → FAIL (нельзя оценить LISTEN — честный отказ, не skip)."""
+        fake_probe["ss"] = FakeResult(1, "", stderr="ss: cannot open")
+        result = security_posture.check_listening_ports()
+        assert result.status == security_posture.STATUS_FAIL
+        assert "cannot assess listeners" in result.message
+
+
+# endregion Tests: S9
+
+
 # region Tests: aggregation + report + main
 class TestAggregation:
     def test_all_pass_exit_0(self):
@@ -524,7 +766,8 @@ class TestAggregation:
         assert payload["node"] == "n1"
         assert payload["exit_code"] == 2
         ids = [c["id"] for c in payload["checks"]]
-        assert ids == ["S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8"]
+        # W10 T10.2: +S9 (real LISTEN cross-check) — 9 проверок
+        assert ids == ["S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9"]
         assert any(c["status"] == "FAIL" for c in payload["checks"])
 
     def test_full_run_logs_imp9(self, monkeypatch, patch_paths, fake_probe, caplog):
@@ -540,11 +783,15 @@ class TestAggregation:
         )
         fake_probe["ufw"] = FakeResult(0, TestS3.UFW_OK)
         fake_probe["sshd"] = FakeResult(0, TestS4.SSHD_OK)
-        fake_probe["ss"] = FakeResult(0, "")
+        # S9 (W10 T10.2): ss -tlnp без docker-proxy на 0.0.0.0 (вне 80/443) → PASS
+        fake_probe["ss"] = FakeResult(0, 'LISTEN 0 128 0.0.0.0:80 0.0.0.0:* users:(("docker-proxy"))\n')
         patch_paths["platform_base"].mkdir()
         (patch_paths["platform_base"] / "secrets").mkdir()
         patch_paths["daemon_json"].write_text(json.dumps({"live-restore": True}))
         patch_paths["keys_file"].write_text(TestS7.FORCED_OK + "\n")
+        patch_paths["keys_file"].chmod(0o600)
+        # S7 owner: uid → ci-deploy (W10 T10.3)
+        monkeypatch.setattr("pwd.getpwuid", lambda uid: SimpleNamespace(pw_name="ci-deploy"))
         _write_uu_policy(patch_paths)
 
         with caplog.at_level(logging.INFO):

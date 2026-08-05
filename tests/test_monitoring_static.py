@@ -211,15 +211,16 @@ def test_healthcheck_sh_contract(caplog) -> None:
         "healthcheck.sh must source ../../lib/healthcheck.sh"
     )
 
-    # Must have deep mode with check_http
-    assert "MODE=deep" in content or 'check_http "http://127.0.0.1:9090' in content, (
+    # Must have deep mode with check_http — порты env-параметризованы (W10 T10.12):
+    # check_http "http://127.0.0.1:${PROMETHEUS_PORT}/-/healthy" (канон infra-metrics)
+    assert "MODE=deep" in content or 'check_http "http://127.0.0.1:' in content, (
         "healthcheck.sh must have deep mode with Prometheus HTTP check"
     )
-    assert 'check_http "http://127.0.0.1:9090/-/healthy"' in content, (
-        "healthcheck.sh deep mode must check Prometheus /-/healthy"
+    assert 'check_http "http://127.0.0.1:${PROMETHEUS_PORT}/-/healthy"' in content, (
+        "healthcheck.sh deep mode must check Prometheus /-/healthy (env-параметризованный порт, W10 T10.12)"
     )
-    assert 'check_http "http://127.0.0.1:3000/api/health"' in content, (
-        "healthcheck.sh deep mode must check Grafana /api/health"
+    assert 'check_http "http://127.0.0.1:${GRAFANA_PORT}/api/health"' in content, (
+        "healthcheck.sh deep mode must check Grafana /api/health (env-параметризованный порт, W10 T10.12)"
     )
 
     logger.info("[IMP:9][test_healthcheck_sh] ✅ healthcheck.sh contract OK: executable, deep mode")

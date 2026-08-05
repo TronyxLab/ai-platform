@@ -81,11 +81,14 @@ converge:
 	exit "$${_conv_rc:-0}"
 	@echo "[IMP:9][make][converge] Node reconciliation complete"
 
-## check-security: Security posture check ноды (S1-S7, DevPlan 134 L2)
+## check-security: Security posture check ноды (S1-S9, DevPlan 134 L2 + 136 W10)
 ##   Usage: make check-security NODE=<name> [DRY_RUN=1] [JSON=1]
 ##   JSON=1: JSON-отчёт security_posture.py (L5-мониторинг)
 ##   Delegates to core/entrypoints/check-security.sh → remote_executor.py execute-check-security
 ##     → core/internal/bootstrap/security_posture.py (на ноде, root)
+##   S1-S9 (136 W10): unattended-upgrades, pending-security, ufw, sshd (13 директив + MaxStartups),
+##     docker-daemon, file-perms (критичные пути), forced-command (per-line + perms),
+##     image-freshness, real-LISTEN docker-proxy (внутренние порты ≠ 0.0.0.0)
 ##   Exit codes: 0=healthy 1=warnings (pending security-апдейты) 2=errors — НЕ маскируются
 ##   (в отличие от converge: это check-таргет, оператор должен видеть warning).
 ##   ⚠️ TRAP[BUG] · 2026-07-31 · P1 · PLATFORM_ROOT не экспортировался → REMOTE converge падал

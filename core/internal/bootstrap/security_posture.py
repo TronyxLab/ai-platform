@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: security-posture S1-S8 unattended-upgrades image-freshness digest-drift pending-security ufw sshd maxstartups drop-in apply-sshd docker live-restore world-writable forced-command exit-0-1-2 json DevPlan-134
+# GREP_SUMMARY: security-posture S1-S9 unattended-upgrades image-freshness digest-drift pending-security ufw sshd maxstartups drop-in apply-sshd docker live-restore world-writable forced-command listening-ports docker-proxy 0-0-0-0 exit-0-1-2 json DevPlan-134
 # STRUCTURE: ▶ root-check → ◇ --apply-sshd? → ⚡ apply drop-in (content-match no-op → reload systemctl→service) → ⎋ exit 0|1 ┤
 #            ○ 8 checks (S1-S8, каждая pure+subprocess probe; S4: maxstartups ≥ 30:50:200) → ○ aggregate (FAIL→2, WARN→1) → ○ text|json report → ⎋ exit 0|1|2
 # region MODULE_CONTRACT
-## @purpose  Security posture check ноды (DevPlan 134 L2) — 8 проверок S1-S8, закрывающих главные
+## @purpose  Security posture check ноды (DevPlan 134 L2) — 9 проверок S1-S9, закрывающих главные
 ##           векторы автоматизированных ИИ-атак: автопатчинг (S1/S2), сетевой периметр (S3),
-##           SSH-поверхность (S4, включая эффективный MaxStartups ≥ 30:50:200), docker-демон (S5),
-##           локальные привилегии (S6), целостность forced-command канала деплоя (S7).
+##           SSH-поверхность (S4, включая эффективный MaxStartups ≥ 30:50:200 + 9 директив), docker-демон (S5),
+##           локальные привилегии (S6, включая критичные пути вне /opt/platform), целостность forced-command
+##           канала деплоя (S7, per-line + perms), реальные LISTEN-порты (S9, docker-proxy на 0.0.0.0).
 ##           Выполняется НА ноде как root (sshd -T). DevPlan 136 W3: +apply_sshd_dropin()
 ##           (идемпотентный sshd_config.d drop-in MaxStartups, вызов из φ1 бутстрапа).
 ## @scope    Вызывается: make check-security NODE=<name> (remote через SSH-канал converge),
@@ -23,11 +24,15 @@
 ##   - --json: {"node", "exit_code", "checks": [{id, status, message}]} — фундамент L5-мониторинга
 ##   - По умолчанию НЕ мутирует систему (read-only диагностика, безопасен для прямого запуска);
 ##     --apply-sshd — единственная мутация (идемпотентная, content-match no-op, reload только при изменении)
-##   - S4 проверяет ЭФФЕКТИВНЫЙ MaxStartups (sshd -T включает drop-in из sshd_config.d):
-##     значение < 30:50:200 (покомпонентно) → FAIL; ненаблюдаемое значение → PASS (graceful,
-##     тест-фикстуры без maxstartups; реальный sshd -T всегда печатает дефолт 10:30:100 → FAIL)
+##   - S4 проверяет ЭФФЕКТИВНЫЙ конфиг (sshd -T включает drop-in из sshd_config.d): 13 директив
+##     (root-login/password/pubkey/maxstartups + 9 расширенных W10 T10.4); каждая — только если
+##     директива ВЫВОДИТСЯ sshd -T (ненаблюдаемые → skip, graceful — тест-фикстуры без строки)
+##   - S7: FAIL при ЛЮБОЙ строке authorized_keys БЕЗ канонического forced-command prefix
+##     (command="...orchestrator_cli dispatch",restrict) + perms 0600 + owner ci-deploy (W10 T10.3)
+##   - S9: FAIL если docker-proxy слушает 0.0.0.0 на порту вне {80,443} (nginx public by-design) —
+##     реальный LISTEN-кросс-чек с compose (S-7/S-3/S-5, W10 T10.2)
 ## @rationale L2 security-гэпа (DevPlan 134): check-suite.yaml — только code-quality чеки;
-##            security-постур ноды не проверялся ничем. Набор S1-S8 — минимально достаточный
+##            security-постур ноды не проверялся ничем. Набор S1-S9 — минимально достаточный
 ##            (DevPlan D4), без мониторинг-тяжести (fail2ban/auditd — L5 follow-up).
 ## @rationale MaxStartups (DevPlan 136 W3): ручной конфиг — источник повторяющихся инцидентов
 ##            (свежий бутстрап не воспроизводил 30:50:200 → SSH connection-storm при параллельных
@@ -36,6 +41,8 @@
 ## @changes 2026-08-04 | DevPlan 134 W2 — Created
 ## @changes 2026-08-05 | DevPlan 136 W3 — S4 +MaxStartups effective check; +apply_sshd_dropin()
 ##            (+CLI --apply-sshd, вызов из φ1 phase_system_bootstrap)
+## @changes 2026-08-05 | DevPlan 136 W10 — S4 +9 sshd-директив (T10.4); S7 per-line+perms (T10.3);
+##            S6 критичные пути (T10.8); +S9 real-LISTEN docker-proxy 0.0.0.0 (T10.2)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -92,6 +99,50 @@ _MAXSTARTUPS_RE = re.compile(r"^(\d+):(\d+):(\d+)$")
 
 _APT_CHECK_RE = re.compile(r"(\d+)\s+updates can be applied immediately")
 _APT_CHECK_SEC_RE = re.compile(r"(\d+)\s+of these updates are security updates")
+
+# ── S9 (W10 T10.2): внутренние порты модулей — НИКОГДА 0.0.0.0 LISTEN (docker-proxy) ──
+# Реестр берётся из firewall.MODULE_PORTS_DENY + DENY_PORT (SoT platform-infra.yaml) — единый
+# источник с ufw-политикой. nginx 80/443 и user-проекты (произвольные web-порты, напр. 8080
+# test-project-web на test-VPS) публикуются ПО ДИЗАЙНУ — вне реестра, не флагаются.
+# Внутренние сервисы (postgres/minio/clickhouse/...) обязаны биндить 127.0.0.1 или не публиковаться
+# (compose base.yml: NO ports / 127.0.0.1 bindings — верификация W10 на test-VPS, ss -tlnp).
+
+# ── S4 (W10 T10.4): расширенные sshd-директивы (проверяемы через sshd -T) ──
+# Каждая директива: (ключ sshd -T, ожидание, fail-сообщение). Проверяется ТОЛЬКО если директива
+# присутствует в выводе sshd -T (ненаблюдаемые → skip, graceful — фикстуры без строки не падают).
+# AllowUsers: отсутствие строки в sshd -T = нода БЕЗ allowlist (Ubuntu печатает allowusers только
+# при явной настройке) → skip (graceful — не ложнопозитивный FAIL на дефолтных нодах);
+# allowusers задан ПУСТЫМ (директива присутствует без списка) → FAIL (явная политика нарушена).
+_SSHD_WEAK_KEX = ("diffie-hellman-group1-sha1", "diffie-hellman-group14-sha1", "diffie-hellman-group-exchange-sha1")
+_SSHD_WEAK_CIPHERS = ("arcfour", "3des-cbc", "aes128-cbc", "aes192-cbc", "aes256-cbc", "des-cbc", "blowfish-cbc")
+_SSHD_WEAK_MACS = ("hmac-md5", "hmac-md5-96", "hmac-sha1", "hmac-sha1-96", "umac-64", "umac-64@openssh.com")
+SSHD_CLIENT_ALIVE_INTERVAL_MIN = 300
+SSHD_LOGIN_GRACE_TIME_MAX = 120
+# (sshd -T key, expected-or-checker, label)
+# checker-формы: ("eq", value) — равенство; ("gte", n) — >=; ("lte", n) — <=;
+# ("not_contains_any", weak_list) — ни один слабый алгоритм; ("present_nonempty",) — не пуст
+_SSHD_EXTRA_DIRECTIVES: list[tuple[str, tuple, str]] = [
+    ("allowusers", ("present_nonempty",), "AllowUsers unset (no user allowlist — every user may ssh)"),
+    (
+        "clientaliveinterval",
+        ("gte", SSHD_CLIENT_ALIVE_INTERVAL_MIN),
+        f"ClientAliveInterval < {SSHD_CLIENT_ALIVE_INTERVAL_MIN}s (idle connections linger)",
+    ),
+    ("permituserenvironment", ("eq", "no"), "PermitUserEnvironment=yes (env injection into sshd session)"),
+    ("x11forwarding", ("eq", "no"), "X11Forwarding=yes (X11 channel exposure)"),
+    ("allowtcpforwarding", ("eq", "no"), "AllowTcpForwarding=yes (TCP tunnel via ssh)"),
+    ("kexalgorithms", ("not_contains_any", _SSHD_WEAK_KEX), "weak KexAlgorithms present (diffie-hellman-*-sha1)"),
+    ("ciphers", ("not_contains_any", _SSHD_WEAK_CIPHERS), "weak Ciphers present (arcfour/cbc/3des)"),
+    ("macs", ("not_contains_any", _SSHD_WEAK_MACS), "weak MACs present (md5/sha1/umac-64)"),
+    (
+        "logingracetime",
+        ("lte", SSHD_LOGIN_GRACE_TIME_MAX),
+        f"LoginGraceTime > {SSHD_LOGIN_GRACE_TIME_MAX}s (slow-brute window)",
+    ),
+]
+# UsePAM сознательно НЕ проверяется (9 директив ≥ 8 по T10.4): самостоятельной security-ценности
+# не имеет — связка «PasswordAuthentication=no + PubkeyAuthentication=yes» уже закрывает парольный
+# вход; ожидание UsePAM зависит от PAM-стека (ложно-позитивный риск, документировано W10 T10.4).
 
 
 # region DATACLS_CheckResult
@@ -200,17 +251,21 @@ def check_ufw() -> CheckResult:
 # region FUNC_check_sshd
 ## @purpose  S4: SSH-поверхность через sshd -T (эффективный конфиг): PermitRootLogin
 ##           prohibit-password|no, PasswordAuthentication no, PubkeyAuthentication yes,
-##           MaxStartups ≥ 30:50:200 (покомпонентно; DevPlan 136 W3).
+##           MaxStartups ≥ 30:50:200 (покомпонентно; DevPlan 136 W3) + 9 расширенных директив
+##           (AllowUsers, ClientAliveInterval, PermitUserEnvironment, X11Forwarding,
+##           AllowTcpForwarding, KexAlgorithms, Ciphers, MACs, LoginGraceTime — DevPlan 136 W10 T10.4).
 ## @io       ⇥ — → ⎋ CheckResult
 ## @complexity O(1) — один subprocess + regex
 ## @invariants  Требует root (sshd -T) — гарантируется root-check в main
-##              sshd -T печатает ЭФФЕКТИВНЫЙ MaxStartups (включая drop-in sshd_config.d) —
+##              sshd -T печатает ЭФФЕКТИВНЫЙ конфиг (включая drop-in sshd_config.d) —
 ##              проверяем именно эффективное значение, не исходный sshd_config
 ##              Ненаблюдаемое значение (нет maxstartups в выводе) → PASS (graceful:
 ##              тест-фикстуры без строки; реальный sshd -T всегда печатает дефолт 10:30:100 → FAIL)
+##              Расширенные директивы проверяются ТОЛЬКО при наличии в выводе sshd -T;
+##              allowusers задан пустым (директива есть без списка) → FAIL; отсутствует строка → skip
 def check_sshd() -> CheckResult:
-    """S4: sshd effective config — no root password login, no password auth, pubkey only,
-    MaxStartups >= 30:50:200 (drop-in applied)."""
+    """S4: sshd effective config — root login restricted, password auth off, pubkey on,
+    MaxStartups >= 30:50:200, +9 hardening-директив (W10 T10.4)."""
     result = _probe(["sshd", "-T"], timeout=30)
     if result.returncode != 0:
         return CheckResult("S4", STATUS_FAIL, f"sshd -T failed (rc={result.returncode})")
@@ -218,8 +273,11 @@ def check_sshd() -> CheckResult:
     settings: dict[str, str] = {}
     for line in text.splitlines():
         parts = line.split()
-        if len(parts) >= 2:
-            settings[parts[0].lower()] = parts[1].lower()
+        if not parts:
+            continue
+        # W10 T10.4: пусто-значные директивы (allowusers без списка) тоже фиксируются — value ""
+        # (исторический парсер требовал ≥2 частей → present_nonempty для AllowUsers был мёртвым кодом)
+        settings[parts[0].lower()] = parts[1].lower() if len(parts) >= 2 else ""
     problems: list[str] = []
     root_login = settings.get("permitrootlogin", "")
     if root_login not in ("no", "prohibit-password"):
@@ -241,6 +299,33 @@ def check_sshd() -> CheckResult:
                 f"MaxStartups={maxstartups_raw} < {SSHD_MAXSTARTUPS_STR} "
                 "(drop-in 99-platform-maxstartups.conf missing or too low)"
             )
+    # Расширенные директивы (W10 T10.4) — только присутствующие в sshd -T
+    for key, check, fail_msg in _SSHD_EXTRA_DIRECTIVES:
+        if key not in settings:
+            logger.info("[IMP:8][posture][S4] %s not in sshd -T output — skipped (graceful)", key)
+            continue
+        value = settings[key]
+        kind = check[0]
+        if kind == "eq" and value != check[1]:
+            problems.append(f"{fail_msg} (current: {value})")
+        elif kind == "gte":
+            try:
+                if int(value) < check[1]:
+                    problems.append(f"{fail_msg} (current: {value})")
+            except ValueError:
+                problems.append(f"{key}={value} (unparseable integer)")
+        elif kind == "lte":
+            try:
+                if int(value) > check[1]:
+                    problems.append(f"{fail_msg} (current: {value})")
+            except ValueError:
+                problems.append(f"{key}={value} (unparseable integer)")
+        elif kind == "present_nonempty" and not value:
+            problems.append(fail_msg)
+        elif kind == "not_contains_any":
+            weak = [w for w in check[1] if w in value]
+            if weak:
+                problems.append(f"{fail_msg} (found: {', '.join(weak[:4])})")
     if problems:
         return CheckResult("S4", STATUS_FAIL, "; ".join(problems))
     detail = f", MaxStartups={maxstartups_raw}" if maxstartups_raw else ""
@@ -410,12 +495,16 @@ def check_docker() -> CheckResult:
 
 # region FUNC_check_file_perms
 ## @purpose  S6: локальные привилегии — world-writable файлы в /opt/platform (вектор локального
-##           повышения привилегий) + world-readable файлы в /opt/platform/secrets (age-ключи/пароли).
+##           повышения привилегий) + world-readable файлы в /opt/platform/secrets (age-ключи/пароли)
+##           + world-writable НА КРИТИЧНЫХ ПУТЯХ вне платформы (W10 T10.8, S-10):
+##           ~ci-deploy/.ssh, /etc/sudoers.d, /var/log/platform, /etc/age (файлы и директории).
 ## @io       ⇥ — → ⎋ CheckResult
-## @complexity O(n) — два find по дереву платформы
+## @complexity O(n) — find-пробы по дереву платформы + критические пути
 ## @invariants  Отсутствие /opt/platform → WARN (нода не развёрнута — не security-ошибка)
+##              Критичные пути: world-writable (perm -0002) — файл И директория (вектор
+##              подмены authorized_keys / sudoers-инъекции / audit-тампера); отсутствие пути → skip
 def check_file_perms() -> CheckResult:
-    """S6: file permissions — no world-writable files, secrets not world-readable."""
+    """S6: file permissions — no world-writable files, secrets not world-readable, critical paths safe."""
     base = Path(PLATFORM_BASE)
     if not base.is_dir():
         return CheckResult("S6", STATUS_WARN, f"{PLATFORM_BASE} missing — platform not deployed")
@@ -434,24 +523,59 @@ def check_file_perms() -> CheckResult:
                 problems.append(
                     f"world-readable secrets: {', '.join(readable[:5])}" + ("..." if len(readable) > 5 else "")
                 )
+    # W10 T10.8 (S-10): критические пути вне /opt/platform — world-writable файл ИЛИ директория
+    # = локальная эскалация (подмена authorized_keys / sudoers.d / audit-журнала / AGE-ключа).
+    problems.extend(_check_critical_paths_world_writable())
     if problems:
         return CheckResult("S6", STATUS_FAIL, "; ".join(problems))
-    logger.info("[IMP:9][posture][S6] File permissions clean")
-    return CheckResult("S6", STATUS_PASS, "no world-writable files, secrets not world-readable")
+    logger.info("[IMP:9][posture][S6] File permissions clean (incl. critical paths)")
+    return CheckResult("S6", STATUS_PASS, "no world-writable files, secrets not world-readable, critical paths safe")
 
 
 # endregion FUNC_check_file_perms
 
 
+# region FUNC_check_critical_paths_world_writable
+## @purpose  Проба world-writable (perm -0002, файлы И директории) по критичным путям (W10 T10.8):
+##           ~ci-deploy/.ssh (подмена authorized_keys), /etc/sudoers.d (sudoers-инъекция),
+##           /var/log/platform (audit-тампер), /etc/age (AGE-ключ). Отсутствующий путь → skip.
+## @io       ⇥ — → ⎋ list[str] — найденные нарушения (пусто = чисто)
+## @complexity O(P) — P = критичных путей, каждая find-проба O(дерево пути)
+def _check_critical_paths_world_writable() -> list[str]:
+    """Find world-writable files/dirs under critical security paths (T10.8, S-10)."""
+    problems: list[str] = []
+    ci_deploy_ssh = os.path.expanduser("~ci-deploy/.ssh")
+    for path in (ci_deploy_ssh, "/etc/sudoers.d", "/var/log/platform", "/etc/age"):
+        if not os.path.exists(path):
+            logger.info("[IMP:8][posture][S6] critical path absent — skipped: %s", path)
+            continue
+        ww = _probe(["find", path, "-perm", "-0002"], timeout=30)
+        if ww.returncode == 0:
+            hits = [ln for ln in str(getattr(ww, "stdout", "")).splitlines() if ln.strip()]
+            if hits:
+                problems.append(
+                    f"world-writable under {path}: {', '.join(hits[:4])}" + ("..." if len(hits) > 4 else "")
+                )
+    return problems
+
+
+# endregion FUNC_check_critical_paths_world_writable
+
+
 # region FUNC_check_forced_command
-## @purpose  S7: целостность forced-command канала деплоя — ci-deploy authorized_keys содержит
-##           строку с command="...orchestrator_cli dispatch",restrict (единственный писатель ключа —
-##           lifecycle φ2; потеря command= = открытый SSH-канал без ограничений).
+## @purpose  S7: целостность forced-command канала деплоя — КАЖДАЯ строка ci-deploy authorized_keys
+##           содержит command="...orchestrator_cli dispatch",restrict (W10 T10.3/S-4): ЛЮБАЯ строка
+##           без канонического prefix = открытый SSH-канал (root-экспозиция деплоя).
+##           + проверка perms 0600 и owner ci-deploy (authorized_keys не должен быть world-readable
+##           или подменён другим владельцем).
 ## @io       ⇥ — → ⎋ CheckResult
-## @complexity O(1) — одно чтение файла
-## @invariants  Сверка с каноном phases/system.py φ2 (DevPlan 116 B1 + волна 117 D1)
+## @complexity O(1) — одно чтение файла + stat
+## @invariants  Сверка с каноном phases/system.py φ2 (DevPlan 116 B1 + волна 117 D1):
+##              command="cd {base} && PYTHONPATH={base} python3 -m core.internal.deploy.orchestrator_cli dispatch",restrict
+##              Пустые строки и комментарии (начинающиеся с #) — не ключи — пропускаются
+##              Файл отсутствует → FAIL; нечитаем → FAIL; perms != 0600 → FAIL; owner != ci-deploy → FAIL
 def check_forced_command() -> CheckResult:
-    """S7: ci-deploy forced-command dispatch intact (orchestrator_cli, restrict)."""
+    """S7: ci-deploy forced-command dispatch intact per-line + perms 0600/owner (T10.3)."""
     keys_file = Path(CI_DEPLOY_AUTHORIZED_KEYS)
     if not keys_file.is_file():
         return CheckResult("S7", STATUS_FAIL, f"{CI_DEPLOY_AUTHORIZED_KEYS} missing")
@@ -459,13 +583,35 @@ def check_forced_command() -> CheckResult:
         lines = keys_file.read_text().splitlines()
     except OSError as e:
         return CheckResult("S7", STATUS_FAIL, f"cannot read authorized_keys: {e}")
-    for line in lines:
+    # ── Perms/owner (W10 T10.3) ──
+    try:
+        st = keys_file.stat()
+        mode = st.st_mode & 0o777
+        if mode != 0o600:
+            return CheckResult("S7", STATUS_FAIL, f"authorized_keys mode {oct(mode)} != 0600 (world-readable key file)")
+        import pwd
+
+        owner = pwd.getpwuid(st.st_uid).pw_name
+        if owner != "ci-deploy":
+            return CheckResult("S7", STATUS_FAIL, f"authorized_keys owner '{owner}' != ci-deploy")
+    except (KeyError, OSError) as e:
+        return CheckResult("S7", STATUS_FAIL, f"cannot stat authorized_keys: {e}")
+    # ── Per-line forced-command (W10 T10.3): ЛЮБАЯ строка без канона = FAIL ──
+    violations: list[str] = []
+    for idx, line in enumerate(lines, 1):
         stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
         if stripped.startswith('command="') and "orchestrator_cli dispatch" in stripped and "restrict" in stripped:
-            logger.info("[IMP:9][posture][S7] Forced-command dispatch intact")
-            return CheckResult("S7", STATUS_PASS, "ci-deploy key restricted to orchestrator_cli dispatch")
+            continue
+        violations.append(f"line {idx}: {stripped[:60]}")
+    if violations:
+        return CheckResult(
+            "S7", STATUS_FAIL, f"{len(violations)} line(s) WITHOUT forced-command prefix: {'; '.join(violations[:3])}"
+        )
+    logger.info("[IMP:9][posture][S7] Forced-command dispatch intact (all lines, perms 0600, owner ci-deploy)")
     return CheckResult(
-        "S7", STATUS_FAIL, "no forced-command (command=...orchestrator_cli dispatch,restrict) in authorized_keys"
+        "S7", STATUS_PASS, "ci-deploy key restricted to orchestrator_cli dispatch (all lines, perms 0600)"
     )
 
 
@@ -590,12 +736,71 @@ def check_image_freshness() -> CheckResult:
 # endregion FUNC_check_image_freshness
 
 
+# region FUNC_check_listening_ports
+## @purpose  S9 (W10 T10.2, S-7): реальный LISTEN-кросс-чек — docker-proxy НЕ должен слушать 0.0.0.0
+##           на ВНУТРЕННИХ портах модулей (реестр MODULE_PORTS_DENY из firewall.py — SoT
+##           platform-infra.yaml). Внутренние сервисы (postgres/minio/clickhouse/redis/...) обязаны
+##           биндить 127.0.0.1 или не публиковаться (compose base.yml: NO ports / 127.0.0.1 bindings —
+##           верификация W10 на test-VPS, ss -tlnp). docker-proxy 0.0.0.0 на внутреннем порту =
+##           утечка сервиса наружу в обход loopback-контроля.
+##           user-проекты публикуют web-порты (напр. test-project-web 0.0.0.0:8080) ПО ДИЗАЙНУ —
+##           они НЕ флагаются (не входят в реестр внутренних портов; верификация test-VPS).
+## @io       ⇥ — → ⎋ CheckResult
+## @complexity O(1) — один `ss -tlnp` probe + regex
+## @invariants  Слушает только `ss -tlnp` (реальный LISTEN, не compose-декларация — кросс-чек S-7)
+##              [::] wildcard эквивалентен 0.0.0.0 (IPv6-дубль) — тоже FAIL для внутренних портов
+##              Строки без process docker-proxy пропускаются (sshd 22, systemd-resolve 53 — вне скоупа)
+##              Реестр внутренних портов — MODULE_PORTS_DENY + DENY_PORT (firewall.py, SoT) —
+##              единый источник с ufw-политикой (не дублировать литералы)
+def check_listening_ports() -> CheckResult:
+    """S9: no docker-proxy listening on 0.0.0.0 for module-internal ports (real LISTEN cross-check)."""
+    # Единый реестр внутренних портов модулей (SoT platform-infra.yaml) — кросс-чек с compose.
+    # Импорт из firewall.py: тот же пакет core/internal/bootstrap, никакого цикла (firewall не
+    # импортирует security_posture). Публичные порты nginx 80/443 в реестр НЕ входят (by-design),
+    # user-проекты публикуют произвольные порты — тоже вне реестра.
+    from core.internal.bootstrap.firewall import DENY_PORT as _FIREWALL_DENY_PORT
+    from core.internal.bootstrap.firewall import MODULE_PORTS_DENY as _MODULE_PORTS
+
+    internal_ports = set(_MODULE_PORTS) | {_FIREWALL_DENY_PORT}
+    ss = _probe(["ss", "-tlnp"], timeout=DOCKER_CMD_TIMEOUT)
+    if ss.returncode != 0:
+        return CheckResult("S9", STATUS_FAIL, f"ss -tlnp failed (rc={ss.returncode}) — cannot assess listeners")
+    ss_out = str(getattr(ss, "stdout", ""))
+    violations: list[str] = []
+    for line in ss_out.splitlines():
+        if "docker-proxy" not in line:
+            continue
+        m = re.search(r"(0\.0\.0\.0|\[::\]):(\d+)", line)
+        if not m:
+            continue
+        port = int(m.group(2))
+        if port not in internal_ports:
+            # user-проекты / прочие публичные порты — вне реестра внутренних сервисов
+            continue
+        violations.append(f"0.0.0.0:{port}")
+    if violations:
+        return CheckResult(
+            "S9",
+            STATUS_FAIL,
+            "docker-proxy listening on 0.0.0.0 for module-internal port(s): "
+            + ", ".join(sorted(set(violations)))
+            + f" (registry: {', '.join(str(p) for p in sorted(internal_ports))})",
+        )
+    logger.info("[IMP:9][posture][S9] No docker-proxy on 0.0.0.0 for module-internal ports")
+    return CheckResult(
+        "S9", STATUS_PASS, "no docker-proxy on 0.0.0.0 for module-internal ports (internal services loopback-bound)"
+    )
+
+
+# endregion FUNC_check_listening_ports
+
+
 # region FUNC_run_all_checks
-## @purpose  Прогон всех 8 проверок (S1-S8).
+## @purpose  Прогон всех 9 проверок (S1-S9).
 ## @io       ⇥ — → ⎋ list[CheckResult]
-## @complexity O(8) — константное число проверок
+## @complexity O(9) — константное число проверок
 def run_all_checks() -> list[CheckResult]:
-    """Run all S1-S8 posture checks."""
+    """Run all S1-S9 posture checks."""
     return [
         check_unattended_upgrades(),
         check_pending_security_updates(),
@@ -605,6 +810,7 @@ def run_all_checks() -> list[CheckResult]:
         check_file_perms(),
         check_forced_command(),
         check_image_freshness(),
+        check_listening_ports(),
     ]
 
 
@@ -646,7 +852,7 @@ def render_report(node: str, results: list[CheckResult]) -> str:
 ## @purpose  CLI: security_posture.py [--node NAME] [--json] | [--apply-sshd]. Root fail-fast.
 ##           Check-режим: exit 0|1|2. Apply-режим (--apply-sshd, DevPlan 136 W3): exit 0|1.
 ## @io       ⇥ argv → ⎋ int (exit code)
-## @complexity O(7) — прогон всех проверок; apply — O(1) + reload
+## @complexity O(9) — прогон всех проверок; apply — O(1) + reload
 def main(argv: list[str] | None = None) -> int:
     """CLI entrypoint. Returns exit code 0/1/2 — sys.exit handled by __main__."""
     logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stderr)

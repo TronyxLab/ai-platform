@@ -4,8 +4,12 @@
 # region MODULE_CONTRACT
 ## @purpose  Unified audit logger with JSON-lines format — ЕДИНСТВЕННЫЙ writer платформы (D1, DevPlan 116 B11 T2):
 ##           заменяет прямой file.write, deploy/audit_logger.py (удалён) и reporting.py free-text pipe.
-##           Усиленная схема: ts/tag/status/msg + optional extra-поля (operation/project/channel/result/
-##           duration_s/snapshot_id/... через **extra). Uses /var/log/platform/audit.jsonl (JSON-lines).
+##           Усиленная схема: ts/tag/status/msg + source (uid/process) + optional extra-поля
+##           (operation/project/channel/result/duration_s/snapshot_id/... через **extra).
+##           Uses /var/log/platform/audit.jsonl (JSON-lines).
+##           DevPlan 136 W10 T10.5 (S-6/S-15): fsync после append (аудит не теряется при краше);
+##           CLI write exit≠0 при OSError (fail, не silent-drop); ALERT при malformed JSON в read;
+##           source-поле (UID/process) в схеме — атрибуция каждой записи.
 ## @scope    Shared library consumed by context_deployer.py, DeployOrchestrator (adapter), reporting.py,
 ##           and any other module needing structured audit logging. Python-importable for direct calls;
 ##           CLI accessible via `python3 -m core.internal.shared.audit_logger`.
@@ -13,17 +17,23 @@
 ##   1. JSON-lines format: one JSON object per line (not JSON array)
 ##   2. Thread-safe via O_APPEND (atomic for lines < PIPE_BUF on POSIX)
 ##   3. Creates log directory if absent (os.makedirs with exist_ok=True)
-##   4. Non-fatal on write failure: catches OSError, logs WARNING, does NOT raise
+##   4. fsync после append — запись дюрабельна до возврата (W10 T10.5)
 ##   5. Default log file is /var/log/platform/audit.jsonl (единый файл — deploy-записи тоже сюда, D1)
 ##   6. Timestamp in ISO8601 UTC format via datetime.now(timezone.utc).strftime
 ##   7. Permissions on first write: chmod 640, chown :adm (если euid=0) — консолидировано из deploy/audit_logger.py (D1)
 ##   8. Extended schema: write_audit_entry(..., **extra) — extra-поля сериализуются в ту же JSON-строку;
-##      backward-compat: вызовы без extra работают как раньше (только ts/tag/status/msg)
+##      base-схема всегда содержит source {"uid": euid, "proc": basename(argv[0])} (W10 T10.5)
+##   9. write_audit_entry возвращает bool (True=записано); OSError → False + raise_on_error=True → проброс
+##      (CLI write: raise_on_error → exit 1 — fail при OSError, W10 T10.5). Library-вызовы в failure-путях
+##      (W9: _audit_failed/write_audit_log в except/finally) остаются non-raising — не маскируют оригинал.
+##   10. read_audit_log: malformed JSON → ALERT-лог (ERROR, IMP:9 marker) — тампер аудит-журнала виден
 ## @rationale DevPlan 081B5: unified JSON-lines audit trail. DevPlan 116 B11 T2 (U-10, D1):
 ##            полная консолидация — 3 writer'а (shared, deploy/audit_logger.py, reporting pipe) → один.
 ## @changes  2026-07-26 | DevPlan 081B5 — Created audit logger module
 ##           2026-08-01 | DevPlan 116 B11 T2 (U-10, D1) — extended schema (**extra),
 ##                      permissions chmod 640/chown :adm, единый файл audit.jsonl
+##           2026-08-05 | DevPlan 136 W10 T10.5 — fsync, raise_on_error (CLI exit≠0), ALERT malformed,
+##                      source-поле в схеме
 # endregion MODULE_CONTRACT
 
 import argparse
@@ -46,31 +56,36 @@ def write_audit_entry(
     status: str,
     message: str,
     log_file: str = DEFAULT_LOG_FILE,
+    raise_on_error: bool = False,
     **extra,
-) -> None:
-    """Append a JSON-lines audit entry to the log file.
+) -> bool:
+    """Append a JSON-lines audit entry to the log file. Returns True on success.
 
     ▶ ┌tag, status, msg, **extra┐ → ◇ mkdir -p log_dir → ◇ chmod 640/chown :adm (first write)
-      → ⊕ build JSON line (base + extra) → ⊕ O_APPEND write → ⎋
+      → ⊕ build JSON line (base + source + extra) → ⊕ O_APPEND write → ⊕ fsync → ⎋ bool
 
     ## @purpose — Append a single structured audit entry in JSON-lines format.
     ##            Thread-safe via O_APPEND on POSIX (atomic for lines < PIPE_BUF).
-    ##            Non-fatal: failures are logged at WARNING, never raised.
+    ##            fsync после append — дюрабельность (W10 T10.5).
+    ##            Возвращает bool; raise_on_error=True → OSError пробрасывается (CLI exit≠0).
     ## @io — ⇥ tag: str — logical tag (e.g. "deploy:deploy", "bootstrap:init")
     ##       ⇥ status: str — status code (e.g. "DEPLOYED", "FAILED", "DONE", "WARN")
     ##       ⇥ message: str — human-readable description
     ##       ⇥ log_file: str — path to JSON-lines log file (default /var/log/platform/audit.jsonl)
+    ##       ⇥ raise_on_error: bool — False (default): OSError → False; True: OSError пробрасывается
     ##       ⇥ **extra: dict — расширенная схема (D1): operation, project, channel, result,
     ##            duration_s, snapshot_id, projects, per_project_results, error_info, ...
-    ##       → ⎋ None
+    ##       → ⎋ bool — True = записано и fsync'нуто
     ## @complexity — O(1)
     ## @invariants
     ##   - Creates parent directory if absent (os.makedirs exist_ok=True)
     ##   - Uses O_APPEND mode for thread-safe writes
     ##   - Sets chmod 640 / chown :adm on first write (если euid==0; non-fatal)
-    ##   - Catches OSError, logs WARNING, does NOT raise
+    ##   - fsync после write (W10 T10.5): запись дюрабельна до возврата
+    ##   - OSError → False (raise_on_error=False) или проброс (raise_on_error=True)
     ##   - Timestamp in ISO8601 UTC
-    ##   - JSON serialization failure logged at ERROR, still does NOT raise
+    ##   - JSON serialization failure logged at ERROR, returns False
+    ##   - source-поле {"uid": euid, "proc": basename(argv[0])} — в КАЖДОЙ записи (W10 T10.5)
     ##   - extra-поля сериализуются в ту же JSON-строку (не отдельной записью)
     """
     log_dir = os.path.dirname(log_file)
@@ -81,19 +96,22 @@ def write_audit_entry(
             os.makedirs(log_dir, exist_ok=True)
             logger.info("[IMP:7][write_audit_entry] Created log directory: %s", log_dir)
         except OSError as e:
+            if raise_on_error:
+                raise
             logger.warning(
                 "[IMP:7][write_audit_entry] Cannot create log directory %s: %s — audit entry dropped",
                 log_dir,
                 e,
             )
-            return
+            return False
 
-    # ── Build JSON entry (base schema + extended extra fields, D1) ──
+    # ── Build JSON entry (base schema + source + extended extra fields, D1 + W10) ──
     entry = {
         "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "tag": tag,
         "status": status,
         "msg": message,
+        "source": {"uid": os.geteuid() if hasattr(os, "geteuid") else os.getuid(), "proc": _process_name()},
     }
     if extra:
         # Обратная совместимость: extra-поля НЕ перезаписывают базовую схему
@@ -112,24 +130,39 @@ def write_audit_entry(
             status,
             e,
         )
-        return
+        return False
 
-    # ── Append via O_APPEND (thread-safe on POSIX) ──
+    # ── Append via O_APPEND (thread-safe on POSIX) + fsync (W10 T10.5) ──
     try:
-        with open(log_file, "a", encoding="utf-8") as f:
-            f.write(line)
+        line_bytes = line.encode("utf-8")
+        with open(log_file, "ab") as f:
+            f.write(line_bytes)
+            f.flush()
+            os.fsync(f.fileno())
         logger.info("[IMP:9][write_audit_entry] Wrote audit entry: tag=%s status=%s", tag, status)
         # Permissions on first write (chmod 640 / chown :adm) — консолидировано из
         # deploy/audit_logger.py (D1, DevPlan 116 B11 T2). Non-fatal; set once per file.
         if log_file not in _PERMISSIONS_SET:
             _set_audit_permissions(log_file)
             _PERMISSIONS_SET.add(log_file)
+        return True
     except OSError as e:
+        if raise_on_error:
+            raise
         logger.warning(
             "[IMP:7][write_audit_entry] Cannot write to %s: %s — audit entry dropped",
             log_file,
             e,
         )
+        return False
+
+
+def _process_name() -> str:
+    """Short process name for the audit source field (W10 T10.5) — basename of argv[0]."""
+    try:
+        return os.path.basename(sys.argv[0]) if sys.argv and sys.argv[0] else "python"
+    except (AttributeError, IndexError):  # pragma: no cover — defensive
+        return "python"
 
 
 # Permissions applied per log file (once) — module-level guard for _set_audit_permissions
@@ -174,13 +207,15 @@ def read_audit_log(
 
     ## @purpose — Retrieve the most recent audit entries. Uses reverse-line reading
     ##            from the end of the file for efficiency.
+    ##            W10 T10.5 (S-15): malformed JSON — ALERT-лог (ERROR, [IMP:9][audit][ALERT]) —
+    ##            тампер/порча аудит-журнала становится видимым, а не молча пропускается.
     ## @io — ⇥ log_file: str — path to JSON-lines log file (default /var/log/platform/audit.jsonl)
     ##       ⇥ limit: int — max entries to return (default 100)
     ##       → ⎋ list[dict] — parsed JSON entries in chronological order (oldest first)
     ## @complexity — O(L) where L = lines scanned from end (approximately limit + malformed)
     ## @invariants
     ##   - Returns empty list if file doesn't exist or is empty
-    ##   - Skips malformed JSON lines (logs WARN, continues)
+    ##   - Skips malformed JSON lines (logs ALERT at ERROR, continues) — W10 T10.5
     ##   - Returns entries in chronological order (oldest first within the returned window)
     ##   - Scans from end of file for efficiency on large logs
     """
@@ -203,6 +238,7 @@ def read_audit_log(
 
     # ── Parse from end, collect reversed, then re-reverse for chronological order ──
     parsed = 0
+    malformed = 0
     for line in reversed(lines):
         line = line.strip()
         if not line:
@@ -210,7 +246,14 @@ def read_audit_log(
         try:
             record = json.loads(line)
         except json.JSONDecodeError:
-            logger.warning("[IMP:7][read_audit_log] Skipping malformed JSON line: %.80s", line[:80])
+            malformed += 1
+            logger.error(
+                "[IMP:9][audit][ALERT] Malformed JSON line in %s: %.80s — audit trail integrity issue "
+                "(tamper or corruption) — %d line(s) affected",
+                log_file,
+                line[:80],
+                malformed,
+            )
             continue
 
         entries.append(record)
@@ -220,6 +263,13 @@ def read_audit_log(
 
     # Reverse back to chronological order
     entries.reverse()
+
+    if malformed:
+        logger.error(
+            "[IMP:9][audit][ALERT] %s: %d malformed JSON line(s) skipped — audit integrity degraded (W10 T10.5)",
+            log_file,
+            malformed,
+        )
 
     logger.info(
         "[IMP:9][read_audit_log] Returned %d audit entries from %s (requested limit=%d)",
@@ -267,8 +317,8 @@ def main() -> int:
     """CLI entry point.
 
     ▶ ┌sys.argv┐ → ◇ parse → ◇ write/read dispatch → print → ⎋ exit 0/1
-
     ## @purpose — CLI wrapper for write_audit_entry and read_audit_log.
+    ##            W10 T10.5: write с raise_on_error=True — OSError → exit 1 (fail, не silent-drop).
     ## @io — ⇥ sys.argv → ⎋ exit code (0 = success, 1 = error)
     ## @complexity — O(L) for read, O(1) for write
     """
@@ -282,13 +332,18 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.command == "write":
-        write_audit_entry(
-            tag=args.tag,
-            status=args.status,
-            message=args.msg,
-            log_file=args.log_file,
-        )
-        return 0
+        try:
+            ok = write_audit_entry(
+                tag=args.tag,
+                status=args.status,
+                message=args.msg,
+                log_file=args.log_file,
+                raise_on_error=True,
+            )
+        except OSError as exc:
+            print(f"[FAIL] audit write failed: {exc}", file=sys.stderr)
+            return 1
+        return 0 if ok else 1
 
     if args.command == "read":
         entries = read_audit_log(
