@@ -108,13 +108,17 @@ test:
 ##   NOT included in `make test MARKER=all` or `make gate` — expensive, requires dedicated test-VPS
 ##   Per AGENTS.md invariant 9: test-VPS is recreatable — tests use cold-start only
 ##   Marker: requires_node (orthogonal to e2e = HTTP checks against *.tronyx.ru)
+##   Chaos excluded (DevPlan 136 W6 T6.1, B4): chaos fault-injection (126) targets a
+##   BOOTSTRAPPED node and breaks the bare-node cold-start suite. Run chaos separately:
+##   PYTEST_NO_ESCALATION=1 $(PYTHON) -m pytest tests/e2e/test_chaos_resilience.py -m chaos -v --tb=short -rs
+##   (pre-flight «голоты» check is skipped for chaos sessions — see tests/e2e/README.md)
 test-node:
 	@if [ -z "$(NODE)" ]; then \
 		echo "[IMP:9][make][test-node] ERROR: NODE not set — usage: make test-node NODE=<name>" >&2; \
 		exit 1; \
 	fi
-	@echo "[IMP:9][make][test-node] Running E2E pipeline tests NODE=$(NODE)..."
-	PYTEST_NO_ESCALATION=1 $(PYTHON) -m pytest tests/e2e/ -m "requires_node" -v --tb=short -rs \
+	@echo "[IMP:9][make][test-node] Running E2E pipeline tests NODE=$(NODE) (chaos excluded — B4)..."
+	PYTEST_NO_ESCALATION=1 $(PYTHON) -m pytest tests/e2e/ -m "requires_node and not chaos" -v --tb=short -rs \
 		--junitxml=tests/report-node.xml
 	@echo "[IMP:9][make][test-node] E2E pipeline tests complete NODE=$(NODE)"
 
