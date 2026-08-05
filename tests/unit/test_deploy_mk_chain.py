@@ -18,6 +18,8 @@
 
 import json
 import logging
+import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -28,6 +30,29 @@ logger = logging.getLogger(__name__)
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _DEPLOY_MK = _REPO_ROOT / "makefiles" / "deploy.mk"
+_MODULES_MK = _REPO_ROOT / "makefiles" / "modules.mk"
+_MANIFEST_MK = _REPO_ROOT / "makefiles" / "manifest.mk"
+_COMPOSE_WRAPPER = _REPO_ROOT / "core" / "entrypoints" / "compose-wrapper.sh"
+_MONITORING_RENDERER = _REPO_ROOT / "core" / "internal" / "monitoring_config_renderer.py"
+
+
+def _recipe_from_mk(mk_path: Path, target: str) -> str:
+    """Извлечь рецепт таргета из makefile-файла (от 'target:' до следующего неотступленного '## ').
+
+    ## @purpose — Статический парсинг make-рецепта для guard-assert'ов (паттерн _deploy_project_recipe).
+    ## @io — ⇥ mk_path: Path, target: str → ⎋ str (рецепт целиком)
+    ## @complexity — O(L) где L = строк файла
+    """
+    content = mk_path.read_text()
+    lines = content.splitlines()
+    start = next(i for i, line in enumerate(lines) if line.strip() == f"{target}:")
+    end = len(lines)
+    for i in range(start + 1, len(lines)):
+        stripped = lines[i].strip()
+        if stripped.startswith("## ") and not lines[i].startswith("\t"):
+            end = i
+            break
+    return "\n".join(lines[start:end])
 
 
 def _assert_imp9_logged(caplog: pytest.LogCaptureFixture) -> None:
@@ -194,3 +219,122 @@ def test_deliver_cli_requires_host(tmp_path, capsys) -> None:
 
 
 # endregion FUNC_test_deliver_cli_requires_host
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region Tests: D1/D2/D3 — up-safe / compose-wrapper / render-monitoring (DevPlan 136 W1 T1.10)
+# ═══════════════════════════════════════════════════════════════════
+
+
+# region FUNC_test_up_safe_empty_modules_passthrough_profiles
+## @purpose — D2 (7a7537e): up-safe с ПУСТЫМ MODULES → COMPOSE_PROFILES из .env пробрасывается
+##            (else-ветка БЕЗ COMPOSE_PROFILES= — compose читает .env). Раньше пустой MODULES
+##            переопределял COMPOSE_PROFILES пустым → «no service selected».
+# 🧪 TRAP[TEST] · 2026-08-05 · Regression · D2 — up-safe с пустым MODULES (7a7537e)
+# · Scenario: рецепт up-safe содержит if [ -n "$(MODULES)" ]; else-ветка вызывает compose-wrapper БЕЗ COMPOSE_PROFILES
+# · Last fail: 2026-08-04 — COMPOSE_PROFILES="$(MODULES)" безусловно → пусто → «no service selected»
+# · Remove if: up-safe меняет профильную логику
+def test_up_safe_empty_modules_passthrough_profiles() -> None:
+    """D2: up-safe с пустым MODULES → COMPOSE_PROFILES из .env (else-ветка без принудительного пустого)."""
+    recipe = _recipe_from_mk(_MODULES_MK, "up-safe")
+
+    assert 'if [ -n "$(MODULES)" ]' in recipe, "D2: guard по непустому MODULES обязан присутствовать"
+    assert recipe.count("COMPOSE_PROFILES=") == 1, (
+        "D2: COMPOSE_PROFILES= ровно один раз (внутри if-ветки), иначе пустой MODULES ломает профили"
+    )
+    # else-ветка: compose-wrapper.sh up -d БЕЗ COMPOSE_PROFILES (passthrough .env)
+    else_branch = recipe.split("else")[1].split("fi")[0]
+    assert "COMPOSE_PROFILES" not in else_branch, "D2: else-ветка (пустой MODULES) НЕ должна форсить COMPOSE_PROFILES"
+    assert "compose-wrapper.sh up -d" in else_branch, "D2: else-ветка обязана вызывать compose-wrapper"
+
+    # R5 negative: старый безусловный паттерн (строка @COMPOSE_PROFILES=...) отсутствует
+    assert "\n\t@COMPOSE_PROFILES=" not in recipe, "D2 negative: безусловный COMPOSE_PROFILES (старый паттерн) удалён"
+    logger.info("[IMP:9][test][d2] up-safe: пустой MODULES → passthrough .env профилей")
+
+
+# endregion FUNC_test_up_safe_empty_modules_passthrough_profiles
+
+
+# region FUNC_test_compose_wrapper_exports_pythonpath
+## @purpose — D1 (7a7537e): compose-wrapper.sh экспортирует PYTHONPATH с repo root — compose_preflight.py
+##            (core.internal.* импорты) обязан работать при standalone-запуске из любого cwd.
+# 🧪 TRAP[TEST] · 2026-08-05 · Regression · D1 — compose-wrapper PYTHONPATH export (7a7537e)
+# · Scenario: compose-wrapper.sh содержит export PYTHONPATH=REPO_ROOT (SCRIPT_DIR/../..)
+# · Last fail: 2026-08-04 — compose_preflight.py без PYTHONPATH → core.* импорт падал (make up-safe fail)
+# · Remove if: compose_preflight.py перестаёт импортировать core.internal (пакетизация)
+def test_compose_wrapper_exports_pythonpath() -> None:
+    """D1: compose-wrapper.sh export PYTHONPATH с корнем репо (standalone compose_preflight)."""
+    content = _COMPOSE_WRAPPER.read_text()
+
+    assert "export PYTHONPATH=" in content, "D1: export PYTHONPATH обязателен в compose-wrapper.sh"
+    assert "${SCRIPT_DIR}/../.." in content, "D1: PYTHONPATH обязан указывать на корень репо (2 уровня вверх)"
+    assert "compose_preflight.py" in content, "compose-wrapper обязан делегировать compose_preflight.py"
+    logger.info("[IMP:9][test][d1] compose-wrapper.sh экспортирует PYTHONPATH (repo root)")
+
+
+# endregion FUNC_test_compose_wrapper_exports_pythonpath
+
+
+# region FUNC_test_render_monitoring_self_bootstrap_source
+## @purpose — D3 (5fe5802): render-monitoring — make-рецепт БЕЗ PYTHONPATH (direct-script), модуль
+##            обязан сам загрузить repo root в sys.path ДО core.internal импортов.
+# 🧪 TRAP[TEST] · 2026-08-05 · Regression · D3 — render-monitoring self-bootstrap (5fe5802)
+# · Scenario: рецепт render-monitoring без PYTHONPATH + monitoring_config_renderer.py с
+# ·   _PROJECT_ROOT (3 уровня) + sys.path.insert ДО core.internal импортов
+# · Last fail: 2026-08-04 — render-monitoring ModuleNotFoundError (sys.path fallback неполный)
+# · Remove if: render-monitoring получает PYTHONPATH в рецепте (тогда инвертировать)
+def test_render_monitoring_self_bootstrap_source() -> None:
+    """D3: render-monitoring direct-script без PYTHONPATH — self-bootstrap в source модуля."""
+    recipe = _recipe_from_mk(_MANIFEST_MK, "render-monitoring")
+
+    assert "PYTHONPATH" not in recipe, "D3: рецепт не должен полагаться на внешний PYTHONPATH (self-bootstrap)"
+    assert "python3 core/internal/monitoring_config_renderer.py" in recipe, "direct-script invocация ожидалась"
+
+    src = _MONITORING_RENDERER.read_text()
+    assert "_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)" in src, (
+        "D3: self-bootstrap = корень репо (3 уровня parent)"
+    )
+    lines = src.splitlines()
+    bootstrap_line = next(i for i, line in enumerate(lines, 1) if "sys.path.insert" in line)
+    import_lines = [
+        i
+        for i, line in enumerate(lines, 1)
+        if line.lstrip().startswith(("from core.internal", "import core.internal")) and i > bootstrap_line
+    ]
+    assert import_lines and bootstrap_line < min(import_lines), (
+        "D3: sys.path.insert обязан идти ДО core.internal импортов (direct-script)"
+    )
+    logger.info("[IMP:9][test][d3] render-monitoring: self-bootstrap присутствует, рецепт без PYTHONPATH")
+
+
+# endregion FUNC_test_render_monitoring_self_bootstrap_source
+
+
+# region FUNC_test_render_monitoring_self_bootstrap_behavioral
+## @purpose — D3 behavioral: релоад модуля с ВЫЧЕРКНУТЫМ repo root из sys.path (имитация direct-script
+##            без PYTHONPATH) → self-bootstrap модуля восстанавливает корень.
+# 🧪 TRAP[TEST] · 2026-08-05 · Regression · D3 behavioral — self-bootstrap восстанавливает repo root
+# · Scenario: sys.path без repo root + PYTHONPATH удалён → importlib.reload(module) → repo root вернулся
+# · Last fail: 2026-08-04 — ModuleNotFoundError при direct-script invocации render-monitoring
+# · Remove if: monitoring_config_renderer.py перестаёт быть direct-script
+def test_render_monitoring_self_bootstrap_behavioral(monkeypatch: pytest.MonkeyPatch) -> None:
+    """D3 behavioral: релоад с вычеркнутым repo root — self-bootstrap восстанавливает sys.path."""
+    import importlib
+
+    import core.internal.monitoring_config_renderer as mcr
+
+    repo_root = str(Path(mcr.__file__).resolve().parent.parent.parent)
+    monkeypatch.delenv("PYTHONPATH", raising=False)
+    stripped = [p for p in sys.path if os.path.abspath(p) != repo_root]
+    monkeypatch.setattr(sys, "path", stripped)
+    assert repo_root not in sys.path, "precondition: repo root вычеркнут (direct-script без PYTHONPATH)"
+
+    importlib.reload(mcr)
+
+    assert repo_root in sys.path, "D3: self-bootstrap обязан восстановить repo root в sys.path"
+    logger.info("[IMP:9][test][d3-behavioral] self-bootstrap восстановил repo root после релоада")
+
+
+# endregion FUNC_test_render_monitoring_self_bootstrap_behavioral
+
+# endregion Tests: D1/D2/D3 — up-safe / compose-wrapper / render-monitoring (DevPlan 136 W1 T1.10)

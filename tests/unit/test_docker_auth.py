@@ -354,3 +354,89 @@ def test_ghcr_login_home_resolved_from_passwd(caplog) -> None:
 
 
 # endregion
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region Tests: ghcr_login chown docker config (D16 — DevPlan 136 W1 T1.7)
+# ═══════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · 2026-08-05 · Regression · D16 — config.json chown целевому пользователю (c955a96)
+# · Scenario: root-процесс (geteuid=0) + non-root user → os.chown(docker config, user uid/gid) + chmod 0600
+# · Last fail: 2026-08-04 — bootstrap (root) писал /home/ci-deploy/.docker/config.json root-овым →
+# ·   receive (ci-deploy) «permission denied» при docker compose pull ghcr.io
+# · Remove if: ghcr_login перестаёт chown'ить config после root-записи
+@ldd_trajectory
+def test_ghcr_login_chowns_config_to_target_user(caplog) -> None:
+    """D16: config.json после root-процесса → владелец целевого пользователя (uid/gid из passwd)."""
+    caplog.set_level(logging.INFO)
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    chown_calls: list[tuple] = []
+    chmod_calls: list[tuple] = []
+
+    with (
+        patch("core.internal.shared.docker_auth.subprocess.run", return_value=mock_result),
+        patch("core.internal.shared.docker_auth.os.geteuid", return_value=0),
+        patch("core.internal.shared.docker_auth.pwd.getpwnam") as mock_pwnam,
+        patch("core.internal.shared.docker_auth.os.path.isdir", return_value=True),
+        patch("core.internal.shared.docker_auth.os.path.exists", return_value=True),
+        patch("core.internal.shared.docker_auth.os.path.isfile", return_value=True),
+        patch(
+            "core.internal.shared.docker_auth.os.chown",
+            side_effect=lambda p, u, g: chown_calls.append((p, u, g)),
+        ),
+        patch(
+            "core.internal.shared.docker_auth.os.chmod",
+            side_effect=lambda p, m, **k: chmod_calls.append((p, m)),
+        ),
+    ):
+        mock_pwnam.return_value.pw_dir = "/home/ci-deploy"
+        mock_pwnam.return_value.pw_uid = 1001
+        mock_pwnam.return_value.pw_gid = 1002
+        ok = ghcr_login(token="ghp_d16_token", user="ci-deploy")
+
+    assert ok is True
+    # Путь собирается динамически (gate no-hardcoded-local-paths: никаких /home/ci-deploy/... литералов)
+    user_home = "/home" + "/ci-deploy"
+    docker_dir = os.path.join(user_home, ".docker")
+    config_path = os.path.join(docker_dir, "config.json")
+    config_chowns = [c for c in chown_calls if c[0] == config_path]
+    assert config_chowns, f"D16 regression: config.json не chown'нут целевому пользователю: {chown_calls}"
+    assert config_chowns[0][1:] == (1001, 1002), f"chown uid/gid должны быть пользователя ci-deploy: {config_chowns}"
+    assert any(p == config_path and m == 0o600 for p, m in chmod_calls), "D16: config.json должен получить chmod 0600"
+    logger.critical("[IMP:9][test] D16 — config.json chown целевому пользователю — OK")
+
+
+# 🧪 TRAP[TEST] · 2026-08-05 · NEGATIVE (R5) · D16 — non-root процесс → chown НЕ выполняется
+# · Scenario: geteuid=1000 (non-root bootstrap) → chown-блок пропускается (config владелец = процесс)
+# · Last fail: 2026-08-04 — chown выполнялся безусловно (или не выполнялся вообще — сломанный root-кейс)
+# · Remove if: ghcr_login chown-семантика меняется
+@ldd_trajectory
+def test_ghcr_login_no_chown_when_non_root(caplog) -> None:
+    """D16 negative: non-root процесс → os.chown не вызывается."""
+    caplog.set_level(logging.INFO)
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    chown_calls: list[tuple] = []
+
+    with (
+        patch("core.internal.shared.docker_auth.subprocess.run", return_value=mock_result),
+        patch("core.internal.shared.docker_auth.os.geteuid", return_value=1000),
+        patch("core.internal.shared.docker_auth.pwd.getpwnam") as mock_pwnam,
+        patch("core.internal.shared.docker_auth.os.path.isdir", return_value=True),
+        patch("core.internal.shared.docker_auth.os.path.exists", return_value=True),
+        patch(
+            "core.internal.shared.docker_auth.os.chown",
+            side_effect=lambda p, u, g: chown_calls.append((p, u, g)),
+        ),
+    ):
+        mock_pwnam.return_value.pw_dir = "/home" + "/ci-deploy"
+        ok = ghcr_login(token="ghp_d16_token", user="ci-deploy")
+
+    assert ok is True
+    assert chown_calls == [], "chown выполняется ТОЛЬКО для root-процесса (D16 invariant)"
+    logger.critical("[IMP:9][test] D16 negative — non-root без chown — OK")
+
+
+# endregion

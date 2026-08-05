@@ -19,6 +19,7 @@
 import io
 import json
 import logging
+import os
 import tarfile
 from pathlib import Path
 
@@ -133,3 +134,112 @@ def test_orchestrator_receive_flow_parity_negative(
     assert rc in (0, 1)
     assert rc == (0 if payload["status"] in ("DEPLOYED", "PARTIAL", "SKIPPED") else 1)
     logger.critical("[IMP:9][test] receive parity OK — status=%s rc=%d", payload["status"], rc)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# region Tests: root-owned bootstrap-стуб overwrite (D11 — DevPlan 136 W1 T1.11)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · 2026-08-05 · Regression · D11 — root-owned стуб docker-compose.yml (9f91a78)
+# · Scenario: target_dir/docker-compose.yml = root-owned readonly (GENERATED-STUB из context_deployer φ8) →
+# ·   flow.deploy → os.remove + shutil.copy2 перезаписывает payload (dir ci-deploy-writable)
+# · Last fail: 2026-08-04 — Permission denied при overwrite root-файла (fresh bootstrap → CI receive)
+# · Remove if: receive copy-логика меняется
+def test_receive_deploy_overwrites_root_owned_stub(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """D11: receive перезаписывает root-owned readonly стуб docker-compose.yml (os.remove + copy2)."""
+    caplog.set_level(logging.INFO)
+    from unittest.mock import MagicMock
+
+    target_dir = tmp_path / "projects" / "testproj"
+    target_dir.mkdir(parents=True)
+    stub = target_dir / "docker-compose.yml"
+    stub.write_text("# GENERATED-STUB (bootstrap)\nservices: {}\n", encoding="utf-8")
+    os.chmod(stub, 0o444)  # readonly — имитация root-owned файла (прямой overwrite дал бы Permission denied)
+
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    (staging / "docker-compose.yml").write_text("services:\n  web:\n    image: nginx:alpine\n", encoding="utf-8")
+    (staging / "ai-platform.yaml").write_text("name: testproj\n", encoding="utf-8")
+
+    class _FakeStatus:
+        value = "DEPLOYED"
+
+    class _FakeResult:
+        def __init__(self) -> None:
+            self.status = _FakeStatus()
+            self.version = "abc123"
+
+        def is_success(self) -> bool:
+            return True
+
+        def to_dict(self) -> dict:
+            return {"status": "DEPLOYED", "project": "testproj", "version": "abc123"}
+
+    fake_orch = MagicMock()
+    fake_orch.deploy.return_value = _FakeResult()
+    monkeypatch.setattr("core.internal.deploy.orchestrator.DeployOrchestrator", lambda *a, **k: fake_orch)
+
+    flow = ReceiveFlow(projects_base=str(tmp_path / "projects"))
+    result = flow.deploy(
+        "testproj", "testproj", "abc123", str(staging), str(target_dir), base=str(tmp_path / "projects")
+    )
+
+    assert result.is_success() is True
+    new_content = stub.read_text(encoding="utf-8")
+    assert "nginx:alpine" in new_content, f"D11: payload обязан перезаписать root-owned стуб:\n{new_content}"
+    assert "# GENERATED-STUB" not in new_content, "D11: стуб заменён payload'ом (не смержен)"
+    assert "[IMP:9][ReceiveFlow][deploy]" in caplog.text, "IMP:9 deploy-лог ожидался"
+
+    print("--- LDD TRAJECTORY (IMP:7-10) ---")
+    found_log = False
+    for record in caplog.records:
+        if "[IMP:" in record.message:
+            imp_level = int(record.message.split("[IMP:")[1].split("]")[0])
+            if imp_level >= 7:
+                print(record.message)
+            if imp_level >= 9:
+                found_log = True
+    print("--- END LDD TRAJECTORY ---")
+    assert found_log, "Critical LDD Error: No IMP:9 business logic log found"
+    logger.critical("[IMP:9][test] D11 PASS: root-owned стуб перезаписан через os.remove + copy2")
+
+
+# 🧪 TRAP[TEST] · 2026-08-05 · NEGATIVE (R5) · D11 — os.remove падает → WARN, copy продолжается
+# · Scenario: os.remove(dest) кидает OSError → «Cannot remove existing» WARN (ошибка всплывёт на copy2)
+# · Last fail: 2026-08-04 — без os.remove copy2 в root-файл давал Permission denied (receive FAIL)
+# · Remove if: receive copy-логика меняется
+def test_receive_deploy_remove_failure_logs_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """R5 negative (D11): os.remove падает → WARN-лог, copy не блокируется молча (никаких pass-tests)."""
+    caplog.set_level(logging.INFO)
+    from unittest.mock import MagicMock
+
+    target_dir = tmp_path / "projects" / "testproj"
+    target_dir.mkdir(parents=True)
+    (target_dir / "docker-compose.yml").write_text("old-stub\n", encoding="utf-8")
+
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    (staging / "docker-compose.yml").write_text("services:\n  web:\n    image: nginx:alpine\n", encoding="utf-8")
+
+    fake_orch = MagicMock()
+    fake_orch.deploy.return_value = MagicMock(is_success=lambda: True, status=type("S", (), {"value": "DEPLOYED"})())
+    monkeypatch.setattr("core.internal.deploy.orchestrator.DeployOrchestrator", lambda *a, **k: fake_orch)
+    monkeypatch.setattr("core.internal.deploy.receive_flow.os.remove", lambda path: (_ for _ in ()).throw(OSError(13)))
+
+    flow = ReceiveFlow(projects_base=str(tmp_path / "projects"))
+    flow.deploy("testproj", "testproj", "abc123", str(staging), str(target_dir), base=str(tmp_path / "projects"))
+
+    assert "Cannot remove existing" in caplog.text, "D11: WARN о неудачном os.remove ожидался"
+    logger.critical("[IMP:9][test] D11 negative PASS: os.remove-fail логируется WARN (не молча)")
+
+
+# endregion Tests: root-owned bootstrap-стуб overwrite (D11 — DevPlan 136 W1 T1.11)

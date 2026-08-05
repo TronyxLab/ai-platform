@@ -29,6 +29,8 @@ import pytest
 from core.internal.deploy import context_promoter
 from core.internal.shared.timeouts import SSH_CONNECT_TIMEOUT
 
+logger = logging.getLogger(__name__)
+
 SSH_TARGET = "git@github.com:myctx/ai-platform.git"
 HTTPS_URL = "https://github.com/myctx/ai-platform.git"
 MIRROR_SHA = "a" * 40  # ls-remote HEAD for mismatch scenarios
@@ -421,3 +423,93 @@ def test_audit_step_imp9(
 
 
 # endregion FUNC_test_audit_step_imp9
+
+
+# ── _resolve_org (D9 — DevPlan 136 W1 T1.6, GitHub SSH case-sensitivity) ─────
+
+
+# region FUNC_test_resolve_org_from_overlay_context_yaml
+def test_resolve_org_from_overlay_context_yaml(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """D9: org резолвится из overlay context.yaml#org (SoT), а не из имени контекста."""
+    caplog.set_level(logging.INFO)
+
+    ctx = "tronyx-lab"
+    overlay = tmp_path / ctx / "platform" / "context.yaml"
+    overlay.parent.mkdir(parents=True)
+    overlay.write_text("org: TronyxLab\n", encoding="utf-8")
+    monkeypatch.setenv("PROJECTS_ROOT", str(tmp_path))
+
+    # 🧪 TRAP[TEST] · 2026-08-05 · Regression · D9 — org из overlay context.yaml (f572787)
+    # · Scenario: PROJECTS_ROOT/<ctx>/platform/context.yaml с org → _resolve_org возвращает org
+    # · Last fail: 2026-08-04 — org = имя контекста (lowercase) → push «Repository not found»
+    # · Remove if: _resolve_org перестаёт читать context.yaml#org
+    assert context_promoter._resolve_org(ctx) == "TronyxLab"
+
+    logger.critical("[IMP:9][test] _resolve_org из overlay context.yaml — канонический org")
+    found_imp9 = _print_trajectory(caplog)
+    assert "[IMP:8][resolve_org] org=TronyxLab" in caplog.text
+    assert found_imp9, "Critical LDD Error: No IMP:9 log found in _resolve_org test"
+
+
+# endregion FUNC_test_resolve_org_from_overlay_context_yaml
+
+
+# region FUNC_test_resolve_org_mixed_case_context_name
+def test_resolve_org_mixed_case_context_name(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """R5 negative (D9): mixed-case вход — context 'tronyx-lab', org 'TronyxLab' (канонический кейс)."""
+    caplog.set_level(logging.INFO)
+
+    # Точный вход бага: имя контекста в lowercase (tronyx-lab), org в context.yaml — канонический кейс
+    ctx = "tronyx-lab"
+    overlay = tmp_path / ctx / "platform" / "context.yaml"
+    overlay.parent.mkdir(parents=True)
+    overlay.write_text("org: TronyxLab\n", encoding="utf-8")
+    monkeypatch.setenv("PROJECTS_ROOT", str(tmp_path))
+
+    # 🧪 TRAP[TEST] · 2026-08-05 · NEGATIVE (R5) · D9 — mixed-case tronyx-lab vs TronyxLab
+    # · Scenario: context.yaml org=TronyxLab при имени контекста tronyx-lab → вернётся TronyxLab
+    # · Last fail: 2026-08-04 — GitHub SSH case-sensitive: push tronyx-lab/ai-platform «Repository not found»
+    # · Remove if: _resolve_org больше не читает context.yaml (org из другого источника)
+    resolved = context_promoter._resolve_org(ctx)
+    assert resolved == "TronyxLab", f"Канонический org обязан прийти из context.yaml, got {resolved!r}"
+    assert resolved != ctx, "Имя контекста (lowercase) не может быть org'ом (D9 regression)"
+
+    logger.critical("[IMP:9][test] mixed-case org разрешён к каноническому TronyxLab (D9)")
+    found_imp9 = _print_trajectory(caplog)
+    assert found_imp9, "Critical LDD Error: No IMP:9 log found in mixed-case org test"
+
+
+# endregion FUNC_test_resolve_org_mixed_case_context_name
+
+
+# region FUNC_test_resolve_org_fallback_context_name
+def test_resolve_org_fallback_context_name(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """D9 fallback: нет context.yaml → org = имя контекста (историческое поведение)."""
+    caplog.set_level(logging.INFO)
+    monkeypatch.setenv("PROJECTS_ROOT", str(tmp_path))
+
+    # 🧪 TRAP[TEST] · 2026-08-05 · Regression · D9 — fallback на имя контекста
+    # · Scenario: context.yaml отсутствует → _resolve_org возвращает context name
+    # · Last fail: N/A (fallback — историческое поведение, сохранено фиксом)
+    # · Remove if: fallback на имя контекста удаляется
+    assert context_promoter._resolve_org("myctx") == "myctx"
+
+    logger.critical("[IMP:9][test] _resolve_org fallback на имя контекста (D9)")
+    found_imp9 = _print_trajectory(caplog)
+    assert "using context name" in caplog.text
+    assert found_imp9, "Critical LDD Error: No IMP:9 log found in fallback test"
+
+
+# endregion FUNC_test_resolve_org_fallback_context_name

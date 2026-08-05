@@ -1,17 +1,22 @@
-# GREP_SUMMARY: test nginx acme acme.sh tls http01-fallback ACME_CHALLENGE_MODE issue-cert contract LDD IMP
-# STRUCTURE: ISSUE_CERT_PATH → helpers → HTTP01_FALLBACK_TESTS(5 tests)
+# GREP_SUMMARY: test nginx acme acme.sh tls http01-fallback ACME_CHALLENGE_MODE issue-cert install-acme merge-fallback ecc D4 contract LDD IMP
+# STRUCTURE: ISSUE_CERT_PATH → helpers → HTTP01_FALLBACK_TESTS(5 tests) → INSTALL_ACME_MERGE_FALLBACK(D4)
 # region MODULE_CONTRACT
 ## @purpose  Contract tests for acme.sh TLS operations in issue-cert.sh (canonical cert script).
 ##           nginx/install.sh deleted per DevPlan 080 — all cert tests now source issue-cert.sh.
+##           DevPlan 136 W1 T1.1 (D4): install-acme.sh idempotent re-run — файловая фикстура
+##           merge-fallback, сохраняющего *_ecc cert stores (shell keep-файл, DevPlan 136 §1 п.7).
 ## @scope    subprocess calls to issue-cert.sh shell functions via _source_and_run_issue_cert_no_main.
+##           install-acme.sh D4-тест: bash + mock git + ACME_HOME=tmp_path.
 ##           No Docker, no acme.sh, no network access required. Tests guard clauses and error paths.
 ## @invariants
 ##   - All test_* functions use @ldd_trajectory decorator
 ##   - Each test logs IMP:9 business logic assertion
 ##   - Tests validate HTTP-01 fallback, ACME_CHALLENGE_MODE behavior
 ##   - WEBNAMES_API_KEY can be empty for HTTP-01 mode (bypasses DNS guard)
+##   - D4-тест: mock git в PATH, ACME_HOME=tmp_path — никаких реальных git/сетевых вызовов
 ## @changes  2026-07-23 | DevPlan 058 — Added HTTP-01 fallback tests (5 tests) + issue-cert.sh helpers
 ## @changes  2026-07-26 | DevPlan 080 — Removed install.sh-dependent tests (dead code deletion)
+## @changes  2026-08-05 | DevPlan 136 W1 T1.1 — Added install-acme.sh merge-fallback D4 test (mock git)
 ## @rationale  Contract tests call REAL bash functions, validating shell syntax, function
 ##   definitions, and business logic guards without requiring system-level dependencies.
 # endregion MODULE_CONTRACT
@@ -371,3 +376,108 @@ def test_http01_issues_individual_not_wildcard(caplog, tmp_path) -> None:
 
 
 # endregion HTTP01_FALLBACK_TESTS
+
+
+# region INSTALL_ACME_MERGE_FALLBACK (D4)
+## @purpose  File-fixture regression test for install-acme.sh idempotent re-run (DevPlan 136 W1 T1.1, D4).
+##           install-acme.sh — shell keep-файл (700 LOC) — НЕ юнит-тестируется (DevPlan 136 §1 правило 7);
+##           покрытие — интеграционная файловая фикстура: существующий /opt/acme.sh с cert-каталогами
+##           *_ecc → повторный запуск install-acme (mock git) → merge-fallback, *_ecc сохранены, exit 0.
+## @scope    subprocess bash install-acme.sh с mock git в PATH + ACME_HOME=tmp_path. Без сети/root.
+## @invariants
+##   - mock git: clone в непустой существующий каталог → FAIL (как реальный git), clone-tmp/dnsapi_ext → OK
+##   - *_ecc cert stores (leftover от прошлого install) сохраняются после merge (cp -rn)
+##   - WARN-лог «merged with fresh clone» в stderr; exit 0
+
+
+def _write_mock_git(mock_git_dir: pathlib.Path) -> pathlib.Path:
+    """Write a mock `git` binary for install-acme.sh merge-fallback test (D4).
+
+    ## @purpose — Emulates real git clone semantics for the D4 scenario: clone into an
+    ##            existing non-empty dir FAILS (git: destination path already exists),
+    ##            clone into ${ACME_HOME}.clone-tmp / dnsapi_ext SUCCEEDS. The mock
+    ##            inspects the destination (last argv) — no network access.
+    ## @io       ⇥ mock_git_dir: pathlib.Path → ⎋ pathlib.Path (executable mock git path)
+    ## @complexity — O(1) — single script write + chmod
+    """
+    mock_git = mock_git_dir / "git"
+    mock_git.write_text(
+        "#!/bin/bash\n"
+        "# Mock git for install-acme.sh merge-fallback test (D4, 017e1c1)\n"
+        'dest="${@: -1}"\n'
+        'case "$dest" in\n'
+        "  *clone-tmp*)\n"
+        '    mkdir -p "$dest"\n'
+        '    printf \'#!/bin/sh\\necho "mock acme.sh"\\n\' > "$dest/acme.sh"\n'
+        '    mkdir -p "$dest/dnsapi"\n'
+        "    exit 0\n"
+        "    ;;\n"
+        "  *dnsapi_ext*)\n"
+        '    mkdir -p "$dest"\n'
+        "    printf 'mock dnsapi ext\\n' > \"$dest/README.md\"\n"
+        "    exit 0\n"
+        "    ;;\n"
+        "  *)\n"
+        "    echo \"fatal: destination path '$dest' already exists and is not an empty directory.\" >&2\n"
+        "    exit 128\n"
+        "    ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    mock_git.chmod(0o755)
+    return mock_git
+
+
+# 🧪 TRAP[TEST] · Regression · D4 — install-acme.sh merge-fallback сохраняет *_ecc (017e1c1)
+# · Scenario: /opt/acme.sh существует с cert-каталогами *_ecc (leftover от прошлого install);
+# ·   git clone в него FAIL (непустой каталог) → merge-fallback в .clone-tmp → cp -rn
+# · Last fail: 2026-08-04 — bare git clone падал на re-run (bootstrap φ7 blocker), cert stores терялись
+# · Remove if: install-acme.sh перестаёт использовать merge-fallback (другая идемпотентная стратегия)
+@pytest.mark.contract
+@ldd_trajectory
+def test_install_acme_merge_fallback_preserves_ecc(caplog, tmp_path) -> None:
+    """install-acme.sh: повторный запуск с существующим /opt/acme.sh (mock git) → *_ecc сохранены, exit 0.
+
+    ## @purpose  R5 negative на точный вход D4: существующий непустой ACME_HOME с *_ecc cert stores.
+    ##            Фикс (017e1c1): clone в .clone-tmp + cp -rn merge БЕЗ перезаписи существующего.
+    ## @scenario  ACME_HOME=<tmp>/acme.sh (существует, *_ecc) + mock git (clone→fail, clone-tmp→ok)
+    ##            → bash install-acme.sh → merge-fallback WARN, *_ecc сохранены, acme.sh скопирован, rc 0
+    ## @regression  bare clone на re-run падает; *_ecc перезаписываются
+    """
+    acme_home = tmp_path / "acme.sh"
+    (acme_home / "tronyx.ru_ecc").mkdir(parents=True)
+    (acme_home / "example.com_ecc").mkdir(parents=True)
+    cert_cer = acme_home / "tronyx.ru_ecc" / "tronyx.ru.cer"
+    cert_cer.write_text("existing-cert-data\n", encoding="utf-8")
+
+    mock_git_dir = tmp_path / "mock-git"
+    mock_git_dir.mkdir()
+    _write_mock_git(mock_git_dir)
+
+    env = {
+        "ACME_HOME": str(acme_home),
+        "PATH": f"{mock_git_dir}:{os.environ.get('PATH', '')}",
+    }
+    result = subprocess.run(
+        ["bash", str(_ISSUE_CERT_PATH.parent / "install-acme.sh")], capture_output=True, text=True, env=env
+    )
+
+    print("--- INSTALL-ACME STDERR ---")
+    print(result.stderr)
+    print("--- END STDERR ---")
+
+    assert result.returncode == 0, f"install-acme merge-fallback should exit 0:\n{result.stderr}"
+    # *_ecc cert stores сохранены (cp -rn без перезаписи)
+    assert (acme_home / "tronyx.ru_ecc").is_dir(), "D4: *_ecc dir must survive merge-fallback"
+    assert cert_cer.read_text(encoding="utf-8") == "existing-cert-data\n", "D4: cert data must NOT be overwritten"
+    assert (acme_home / "example.com_ecc").is_dir(), "D4: second *_ecc dir must survive"
+    # merge-fallback WARN-лог
+    assert "merged with fresh clone" in result.stderr, f"D4: expected merge-fallback WARN in stderr:\n{result.stderr}"
+    # свежий clone смержен в ACME_HOME (install завершён)
+    assert (acme_home / "acme.sh").exists(), "D4: fresh clone must be merged into ACME_HOME"
+    assert "[IMP:9]" in result.stderr, "install-acme.sh должен логировать IMP:9 DONE"
+
+    logger.critical("[IMP:9][test_install_acme_merge_fallback] PASS: *_ecc preserved, merge-fallback exit 0")
+
+
+# endregion INSTALL_ACME_MERGE_FALLBACK (D4)

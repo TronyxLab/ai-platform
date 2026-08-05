@@ -686,4 +686,141 @@ def test_precondition_check_root_failure(
 # endregion FUNC_test_precondition_check_root_failure
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# region Tests: φ3 provision networks+volumes (D7, D14 — DevPlan 136 W1 T1.3)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+# region FUNC_test_platform_setup_provisions_networks_and_volumes
+## @purpose — D7 (be34360): φ3 обязан вызывать provision-environment.sh для ВСЕХ scope'ов
+##            (networks + volumes), не только proxy-net. Точный вход бага: свежий bootstrap —
+##            external networks (observability-net/backup-net) отсутствуют в φ8 →
+##            docker compose up падал (комментарий «provision done in platform_setup» был ложью с wave4).
+## @io — ⇥ caplog, bootstrap_env, mock_os_conditions, tmp_path → ⎋ None (assert вызовов provision)
+## @complexity — O(1) — одна фаза, subprocess мокается
+## @invariants
+##   - provision-environment.sh вызывается с --scope networks И --scope volumes
+##   - Никаких реальных сетей/volumes — subprocess.run полностью мокается
+# 🧪 TRAP[TEST] · 2026-08-05 · Regression · D7 — φ3 provision networks+volumes (be34360)
+# · Scenario: φ3 (platform_setup) на свежем machine → provision-environment.sh с обоими scope'ами
+# · Last fail: 2026-08-04 — φ3 НЕ провижинил сети/volumes → external networks missing в φ8
+# · Remove if: provision переносится из φ3 в другую фазу (тогда обновить assert на новую фазу)
+def test_platform_setup_provisions_networks_and_volumes(
+    caplog: pytest.LogCaptureFixture,
+    bootstrap_env: None,
+    mock_os_conditions: None,
+    tmp_path: Path,
+) -> None:
+    """D7: φ3 вызывает provision-environment.sh для сетей И volumes (не только proxy-net)."""
+    caplog.set_level(logging.DEBUG)
+    captured: list[list[str]] = []
+
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = ""
+        mock_run.return_value.stderr = ""
+
+        def _side(cmd, *args, **kwargs):
+            captured.append(list(cmd))
+            return mock_run.return_value
+
+        mock_run.side_effect = _side
+
+        sm = StateMachine(state_file_path=str(tmp_path / "state.json"))
+        sm.setup_state("init")
+        # φ3 (platform_setup) зависит от φ2 ← φ1 — отмечаем их done (dependency graph)
+        _mark_phase_done(sm, BootstrapPhase.SYSTEM_BOOTSTRAP)
+        _mark_phase_done(sm, BootstrapPhase.USER_ACCOUNTS)
+        sm.execute_phase(BootstrapPhase.PLATFORM_SETUP)
+
+    prov_calls = [c for c in captured if any("provision-environment.sh" in str(p) for p in c)]
+    assert prov_calls, f"D7 regression: φ3 обязан вызывать provision-environment.sh, calls={captured}"
+    flat = [" ".join(map(str, c)) for c in prov_calls]
+    assert any("--scope" in f and "networks" in f for f in flat), f"D7: --scope networks missing: {flat}"
+    assert any("--scope" in f and "volumes" in f for f in flat), f"D7: --scope volumes missing: {flat}"
+
+    found_imp9 = _print_ldd_trajectory(caplog, "test_platform_setup_provisions_networks_and_volumes")
+    assert found_imp9, "No IMP:9 business logic log found in φ3 provision dry-run"
+
+
+# endregion FUNC_test_platform_setup_provisions_networks_and_volumes
+
+
+# region FUNC_test_platform_setup_provision_wiring_source_negative
+## @purpose — R5 negative (D7): source-гейт — φ3 обязан СОДЕРЖАТЬ provision-цикл networks+volumes.
+##            Если provision-блок удалят (регрессия к состоянию до be34360), тест падает.
+## @io — ⇥ caplog → ⎋ None (inspect.getsource asserts)
+## @complexity — O(F) где F = размер phase_platform_setup
+# 🧪 TRAP[TEST] · 2026-08-05 · NEGATIVE (R5) · D7 — отсутствие фазы provision → FAIL
+# · Scenario: source phase_platform_setup обязан содержать цикл по ("networks", "volumes")
+# · Last fail: 2026-08-04 — provision-блок отсутствовал (комментарий «done in platform_setup» ложь)
+# · Remove if: provision переезжает в отдельный модуль/фазу (обновить оба D7-теста)
+def test_platform_setup_provision_wiring_source_negative(caplog: pytest.LogCaptureFixture) -> None:
+    """R5 negative (D7): φ3 source содержит provision wiring для ВСЕХ сетей и volumes."""
+    caplog.set_level(logging.INFO)
+    import inspect
+
+    from core.internal.bootstrap.lifecycle.phases import system as phases_system
+
+    src = inspect.getsource(phases_system.phase_platform_setup)
+    assert 'for scope in ("networks", "volumes")' in src, "D7 regression: provision-цикл networks+volumes удалён из φ3"
+    assert "provision-environment.sh" in src, "D7 regression: вызов provision-environment.sh удалён из φ3"
+    assert "--scope" in src, "D7 regression: --scope параметр удалён из provision-вызова"
+
+    logger.info("[IMP:9][test][d7] φ3 provision wiring (networks+volumes) присутствует в source")
+
+
+# endregion FUNC_test_platform_setup_provision_wiring_source_negative
+
+
+# region FUNC_test_platform_setup_provision_script_missing_nonfatal
+## @purpose — D14 (9a1915e): provision-environment.sh ОТСУТСТВУЕТ (test-окружения/tmp CORE_DIR) →
+##            WARN «not found — skipping» БЕЗ done_with_warnings (фаза возвращает True).
+##            Точный вход бага: отсутствующий скрипт давал done_with_warnings → фаза перевыполнялась.
+## @io — ⇥ monkeypatch, tmp_path, caplog → ⎋ None (assert True + WARN)
+## @complexity — O(1) + mocks
+# 🧪 TRAP[TEST] · 2026-08-05 · Regression · D14 — provision скрипт отсутствует → WARN non-fatal (9a1915e)
+# · Scenario: CORE_DIR без provision-environment.sh → φ3 WARN «not found — skipping», return True
+# · Last fail: 2026-08-04 — отсутствующий скрипт помечал фазу done_with_warnings (перевыполнение)
+# · Remove if: φ3 provision становится обязательным (FATAL) — тогда assert инвертируется
+def test_platform_setup_provision_script_missing_nonfatal(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """D14: отсутствие provision-environment.sh → WARN, фаза НЕ done_with_warnings (return True)."""
+    caplog.set_level(logging.INFO)
+
+    from core.internal.bootstrap.lifecycle.phases import system as phases_system
+
+    core_dir = tmp_path / "core"
+    bootstrap_dir = core_dir / "internal" / "bootstrap"
+    bootstrap_dir.mkdir(parents=True)
+    (bootstrap_dir / "docker_registry_auth.py").write_text("#!/usr/bin/env python3\nprint('ok')\n")
+    (bootstrap_dir / "setup-node.sh").write_text("#!/bin/bash\nexit 0\n")
+    # provision-environment.sh НЕ создаём — точный вход D14
+
+    captured: list[list[str]] = []
+    monkeypatch.setattr(
+        phases_system.helpers_subprocess, "run_subprocess", lambda cmd, **kw: captured.append(cmd) or None
+    )
+    monkeypatch.setattr(phases_system.helpers_system, "install_cron_metrics", lambda *a, **k: True)
+    monkeypatch.setattr(phases_system.helpers_system, "install_cron_watchdog", lambda *a, **k: True)
+    monkeypatch.setattr(phases_system.helpers_validation, "validate_sudoers", lambda *a, **k: None)
+
+    ok = phases_system.phase_platform_setup(str(core_dir), "test-node", "node.yaml")
+
+    assert ok is True, "D14: отсутствие provision-скрипта НЕ должно давать done_with_warnings (return False)"
+    assert "not found — skipping" in caplog.text, "D14: обязан быть WARN-лог о пропуске provision"
+    assert not any("provision-environment.sh" in " ".join(map(str, c)) for c in captured), (
+        "D14: provision не вызывается при отсутствии скрипта"
+    )
+    logger.info("[IMP:9][test][d14] φ3 пропустил provision без done_with_warnings — OK")
+
+
+# endregion FUNC_test_platform_setup_provision_script_missing_nonfatal
+
+# endregion Tests: φ3 provision networks+volumes (D7, D14 — DevPlan 136 W1 T1.3)
+
+
 # endregion Tests: Precondition Failure Edge Cases

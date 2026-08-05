@@ -675,3 +675,101 @@ def test_phase_user_accounts_forced_command_canonical_base(caplog, monkeypatch) 
 
 
 # endregion FUNC_test_phase_user_accounts_forced_command_canonical_base
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region Tests: φ3 platform_setup — Docker Hub auth (D5, D6 — DevPlan 136 W1 T1.2)
+# ═══════════════════════════════════════════════════════════════════
+
+
+# region FUNC_test_phase_platform_setup_runs_docker_auth_with_empty_creds
+## @purpose — D5 (8327c1d): φ3 с ПУСТЫМИ DOCKER_HUB_* кредами (ТОЧНЫЙ вход бага) →
+##            docker_registry_auth.py всё равно запускается (mirror конфигурируется без auth).
+##            Ранее при пустых кредах скрипт пропускался целиком → mirror не настроен →
+##            anonymous rate-limit (429) на первом бутстрапе (φ3 идёт до φ4 secrets).
+## @io — ⇥ caplog, monkeypatch, tmp_path → ⎋ None (assert вызова run_subprocess)
+## @complexity — O(1) + 1 mock
+# 🧪 TRAP[TEST] · 2026-08-05 · Regression · D5 — φ3 docker auth с ПУСТЫМИ кредами (8327c1d)
+# · Scenario: DOCKER_HUB_USERNAME/TOKEN удалены из env (пустые креды), docker_registry_auth.py
+# ·   существует в CORE_DIR → phase_platform_setup вызывает run_subprocess(["python3", auth_script])
+# · Last fail: 2026-08-04 — φ3 пропускал docker_registry_auth при пустых кредах → 429 на пуллах
+# · Remove if: φ3 меняет стратегию auth (скрипт больше не запускается при пустых кредах)
+@ldd_trajectory
+def test_phase_platform_setup_runs_docker_auth_with_empty_creds(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """D5: φ3 с пустыми кредами — docker_registry_auth.py всё равно запускается (mock subprocess)."""
+    caplog.set_level(logging.INFO)
+    monkeypatch.delenv("DOCKER_HUB_USERNAME", raising=False)
+    monkeypatch.delenv("DOCKER_HUB_TOKEN", raising=False)
+    monkeypatch.delenv("DOCKER_HUB_EMAIL", raising=False)
+
+    from core.internal.bootstrap.lifecycle.phases import system as phases_system
+
+    core_dir = tmp_path / "core"
+    bootstrap_dir = core_dir / "internal" / "bootstrap"
+    bootstrap_dir.mkdir(parents=True)
+    (bootstrap_dir / "docker_registry_auth.py").write_text("#!/usr/bin/env python3\nprint('ok')\n")
+    (core_dir / "internal" / "provision-environment.sh").write_text("#!/bin/bash\nexit 0\n")
+    (bootstrap_dir / "setup-node.sh").write_text("#!/bin/bash\nexit 0\n")
+
+    captured: list[list[str]] = []
+    monkeypatch.setattr(
+        phases_system.helpers_subprocess, "run_subprocess", lambda cmd, **kw: captured.append(cmd) or None
+    )
+    monkeypatch.setattr(phases_system.helpers_system, "install_cron_metrics", lambda *a, **k: True)
+    monkeypatch.setattr(phases_system.helpers_system, "install_cron_watchdog", lambda *a, **k: True)
+    monkeypatch.setattr(phases_system.helpers_validation, "validate_sudoers", lambda *a, **k: None)
+
+    ok = phases_system.phase_platform_setup(str(core_dir), "test-node", "node.yaml")
+
+    assert ok is True, "φ3 с пустыми кредами должен завершиться без non-fatal issues"
+    auth_calls = [c for c in captured if any("docker_registry_auth.py" in str(part) for part in c)]
+    assert auth_calls, f"D5 regression: docker_registry_auth.py должен запускаться с ПУСТЫМИ кредами: {captured}"
+    assert auth_calls[0][0] == "python3", f"D5: скрипт запускается через python3: {auth_calls[0]}"
+    logger.critical("[IMP:9][test] D5 PASS: docker_registry_auth запущен при пустых кредах")
+
+
+# endregion FUNC_test_phase_platform_setup_runs_docker_auth_with_empty_creds
+
+
+# region FUNC_test_docker_registry_auth_syspath_bootstrap_four_levels
+## @purpose — D6 (665aad0): docker_registry_auth.py — прямой запуск (direct-script, cwd≠root) обязан
+##            иметь sys.path bootstrap = корень РЕПО (4 уровня parent), а не core/ (3 уровня).
+##            Статический R5 negative на точный вход бага: `python3 docker_registry_auth.py` из чужого cwd.
+## @io — ⇥ caplog → ⎋ None (source-asserts)
+## @complexity — O(F) где F = размер скрипта
+# 🧪 TRAP[TEST] · 2026-08-05 · Regression · D6 — docker_registry_auth.py sys.path 4 уровня (665aad0)
+# · Scenario: direct-script invocация — bootstrap (sys.path.insert корень репо) ДО core.internal импортов
+# · Last fail: 2026-08-04 — 3 уровня вставляли core/ → `from core.internal...` ModuleNotFoundError
+# · Remove if: docker_registry_auth.py перестаёт быть direct-script (entrypoint/пакетизация)
+@ldd_trajectory
+def test_docker_registry_auth_syspath_bootstrap_four_levels(caplog: pytest.LogCaptureFixture) -> None:
+    """D6: docker_registry_auth.py self-bootstrap = корень репо (4 уровня), до core.internal импортов."""
+    caplog.set_level(logging.INFO)
+
+    auth_path = (
+        Path(__file__).resolve().parent.parent.parent / "core" / "internal" / "bootstrap" / "docker_registry_auth.py"
+    )
+    content = auth_path.read_text(encoding="utf-8")
+
+    assert "parent.parent.parent.parent" in content, "D6: bootstrap обязан быть 4 уровня (корень репо)"
+    assert "sys.path.insert" in content, "D6: sys.path.insert обязателен для direct-script invocации"
+    lines = content.splitlines()
+    bootstrap_line = next(i for i, line in enumerate(lines, 1) if "sys.path.insert" in line)
+    # Первый core.internal импорт ПОСЛЕ bootstrap (докстринг-упоминания не считаются)
+    import_lines = [
+        i
+        for i, line in enumerate(lines, 1)
+        if line.lstrip().startswith(("from core.internal", "import core.internal")) and i > bootstrap_line
+    ]
+    assert import_lines, "D6: core.internal импорты обязаны присутствовать после bootstrap"
+    assert bootstrap_line < min(import_lines), "D6: self-bootstrap обязан идти ДО core.internal импортов"
+    logger.critical("[IMP:9][test] D6 PASS: docker_registry_auth.py 4-level sys.path bootstrap")
+
+
+# endregion FUNC_test_docker_registry_auth_syspath_bootstrap_four_levels
+
+# endregion Tests: φ3 platform_setup — Docker Hub auth (D5, D6 — DevPlan 136 W1 T1.2)

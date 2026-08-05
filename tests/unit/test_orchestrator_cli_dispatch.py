@@ -285,3 +285,113 @@ def _dispatch_unknown_rc_matches(exit_code: int) -> bool:
 
 
 # endregion FUNC_test_dispatch_raises_config_validation_error_direct
+
+
+# ── verify verb — split node/project (D17 — DevPlan 136 W1 T1.8) ─────────────
+
+
+# region FUNC_test_dispatch_verify_splits_node_and_project
+## @purpose — D17 (8a4eb6d): dispatch args `verify NODE PROJECT` (ТОЧНЫЙ вход, сливавшийся) →
+##            split корректный: node=NODE, project=PROJECT (раньше args целиком уходил в --node:
+##            node = "tronyx-vps tronyx-site" → CI per-project verify ломался).
+## @io — ⇥ monkeypatch, capsys, caplog → ⎋ None (assert собранного verify_cmd)
+## @complexity — O(1) — subprocess.run мокается
+# 🧪 TRAP[TEST] · 2026-08-05 · Regression · D17 — verify split node/project (8a4eb6d)
+# · Scenario: SSH_ORIGINAL_COMMAND="verify tronyx-vps tronyx-site" → verify_cmd: --node tronyx-vps --project tronyx-site
+# · Last fail: 2026-08-04 — args целиком в --node (node="tronyx-vps tronyx-site") → CI verify FAIL
+# · Remove if: verify verb разбирает аргументы иначе
+def test_dispatch_verify_splits_node_and_project(monkeypatch, capsys, caplog: pytest.LogCaptureFixture) -> None:
+    """D17: verify NODE PROJECT → --node NODE и --project PROJECT (не склеенные args)."""
+    caplog.set_level(logging.INFO)
+    monkeypatch.delenv("SSH_ORIGINAL_COMMAND", raising=False)
+    _patch_orchestrator_projects_base(monkeypatch, "/tmp/d17-projects")
+
+    captured: dict = {}
+
+    def _fake_run(cmd, **kwargs):
+        captured["cmd"] = list(cmd)
+        return type("P", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr("core.internal.deploy.orchestrator_cli.subprocess.run", _fake_run)
+
+    rc = _dispatch(["verify", "tronyx-vps", "tronyx-site"])
+
+    cmd = captured.get("cmd")
+    assert cmd is not None, "D17: verify должен вызвать subprocess.run с verify_cmd"
+    assert "--node" in cmd, f"D17: verify_cmd обязан содержать --node: {cmd}"
+    assert cmd[cmd.index("--node") + 1] == "tronyx-vps", (
+        f"D17 regression: node обязан быть 'tronyx-vps', got {cmd[cmd.index('--node') + 1]!r}"
+    )
+    assert "--project" in cmd, f"D17: verify_cmd обязан содержать --project: {cmd}"
+    assert cmd[cmd.index("--project") + 1] == "tronyx-site", (
+        f"D17 regression: project обязан быть 'tronyx-site', got {cmd[cmd.index('--project') + 1]!r}"
+    )
+    assert "tronyx-vps tronyx-site" not in " ".join(cmd), "D17 negative: node не должен содержать склеенные args"
+    assert rc == 0
+
+    out = capsys.readouterr().out
+    _assert_imp9_logged(caplog)
+    logger.critical("[IMP:9][test] D17 — verify split node/project — OK (stdout=%r)", out)
+
+
+# endregion FUNC_test_dispatch_verify_splits_node_and_project
+
+
+# region FUNC_test_dispatch_verify_node_only
+## @purpose — D17: verify NODE без project → --node заполнен, --project ОТСУТСТВУЕТ.
+# 🧪 TRAP[TEST] · 2026-08-05 · Regression · D17 — verify только node
+# · Scenario: verify tronyx-vps → verify_cmd: --node tronyx-vps, без --project
+# · Last fail: N/A (сопровождающий кейс split-фикса)
+# · Remove if: verify verb разбирает аргументы иначе
+def test_dispatch_verify_node_only(monkeypatch, capsys, caplog: pytest.LogCaptureFixture) -> None:
+    """D17: verify NODE без project → --node только, --project отсутствует."""
+    caplog.set_level(logging.INFO)
+    monkeypatch.delenv("SSH_ORIGINAL_COMMAND", raising=False)
+    _patch_orchestrator_projects_base(monkeypatch, "/tmp/d17-projects")
+
+    captured: dict = {}
+
+    def _fake_run(cmd, **kwargs):
+        captured["cmd"] = list(cmd)
+        return type("P", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr("core.internal.deploy.orchestrator_cli.subprocess.run", _fake_run)
+
+    rc = _dispatch(["verify", "tronyx-vps"])
+
+    cmd = captured.get("cmd")
+    assert cmd is not None
+    assert cmd[cmd.index("--node") + 1] == "tronyx-vps"
+    assert "--project" not in cmd, "D17: без project в args --project не добавляется"
+    assert rc == 0
+    _assert_imp9_logged(caplog)
+    logger.critical("[IMP:9][test] D17 — verify node-only — OK")
+
+
+# endregion FUNC_test_dispatch_verify_node_only
+
+
+# region FUNC_test_dispatch_verify_missing_node_negative
+## @purpose — R5 negative (D17): verify без node → JSON ERROR + exit 1 (fail-fast, никакого пустого --node).
+# 🧪 TRAP[TEST] · 2026-08-05 · NEGATIVE (R5) · D17 — verify требует node
+# · Scenario: verify без аргументов → JSON {"status":"ERROR"} + rc 1
+# · Last fail: 2026-08-04 — пустой node уходил в verify_cmd (ложный прогон)
+# · Remove if: verify-контракт меняется
+def test_dispatch_verify_missing_node_negative(monkeypatch, capsys, caplog: pytest.LogCaptureFixture) -> None:
+    """D17 negative: verify без node → JSON ERROR + exit 1."""
+    caplog.set_level(logging.INFO)
+    monkeypatch.delenv("SSH_ORIGINAL_COMMAND", raising=False)
+    _patch_orchestrator_projects_base(monkeypatch, "/tmp/d17-projects")
+
+    rc = _dispatch(["verify"])
+
+    out = capsys.readouterr().out
+    payload = json.loads(out)
+    assert rc == 1
+    assert payload["status"] == "ERROR"
+    assert "verify requires <node>" in payload["error"]
+    _assert_imp9_logged(caplog)
+    logger.critical("[IMP:9][test] D17 negative — verify без node → ERROR exit 1 — OK")
+
+
+# endregion FUNC_test_dispatch_verify_missing_node_negative

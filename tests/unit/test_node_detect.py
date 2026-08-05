@@ -14,7 +14,10 @@
 ## @changes  2026-07-31 | DevPlan 104 — Created
 # endregion MODULE_CONTRACT
 
+import builtins
+import io
 import logging
+from pathlib import Path
 
 import pytest
 
@@ -187,6 +190,158 @@ class TestDetectAgeKey:
 
 
 # endregion CLASS_TestDetectAgeKey
+
+
+# region CLASS_TestDetectAgeKeyNodePersistence
+## @purpose  D15 (DevPlan 136 W1 T1.4, d2ded6a) — node canonical key file /etc/age/key.txt:
+##           detect-цепочка (Check 5) читает персистённый φ4 ключ. /etc/age/key.txt ОТСУТСТВУЕТ →
+##           цепочка завершается None (R5 negative на точный вход: CI node-update без env-ключа,
+##           ключ не персистён → decrypt fail); ПРИСУТСТВУЕТ → ключ возвращается (assert персист).
+## @scope    mock Path.is_file + builtins.open для /etc/age/key.txt (детерминизм на любой машине);
+##           HOME изолирован в tmp_path (default-file probe Check 4 не мешает).
+## @invariants — Check 5 = последнее звено цепочки; чтение через comment-scan (AGE-SECRET-KEY- строка)
+class TestDetectAgeKeyNodePersistence:
+    # region FUNC_test_detect_age_key_from_node_key_file
+    ## @purpose — D15: /etc/age/key.txt ПРИСУТСТВУЕТ (φ4 персист) → detect_age_key возвращает ключ.
+    ## @io — ⇥ caplog, monkeypatch, tmp_path → ⎋ None (asserts key + IMP:9)
+    ## @complexity — O(1)
+    @pytest.mark.unit
+    @ldd_trajectory
+
+    # 🧪 TRAP[TEST] · 2026-08-05 · REGRESSION · D15 — node key file /etc/age/key.txt (d2ded6a)
+    # · Scenario: /etc/age/key.txt существует (персист φ4) + env-цепочка пуста → ключ возвращается
+    # · Last fail: 2026-08-04 — CI node-update decrypt fail (ключ не жил на ноде)
+    # · Remove if: detect-цепочка Check 5 удаляется/меняется
+    def test_detect_age_key_from_node_key_file(
+        self,
+        caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: pytest.TempPathFactory,
+    ) -> None:
+        """detect_age_key возвращает персистённый ключ из /etc/age/key.txt (D15 assert персист)."""
+        caplog.set_level(logging.DEBUG)
+        monkeypatch.delenv("AGE_SECRET_KEY", raising=False)
+        monkeypatch.delenv("SOPS_AGE_KEY", raising=False)
+        monkeypatch.delenv("AGE_SECRET_KEY_FILE", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path))  # isolate default-file probe
+
+        real_is_file = Path.is_file
+        real_open = builtins.open
+
+        def fake_is_file(self):
+            if str(self) == "/etc/age/key.txt":
+                return True
+            return real_is_file(self)
+
+        def fake_open(path, *args, **kwargs):
+            if str(path) == "/etc/age/key.txt":
+                return io.StringIO("# created by bootstrap φ4\n# public key: age1...\n" + TEST_AGE_KEY + "\n")
+            return real_open(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "is_file", fake_is_file)
+        monkeypatch.setattr(builtins, "open", fake_open)
+
+        logger.info("[IMP:7][test_node_detect] Testing /etc/age/key.txt node file detection (D15)")
+        result = detect_age_key()
+        assert result == TEST_AGE_KEY, f"Expected key from /etc/age/key.txt, got {result}"
+        logger.info("[IMP:9][test_node_detect] detect_age_key вернул персистённый node-ключ (D15)")
+
+    # endregion FUNC_test_detect_age_key_from_node_key_file
+
+    # region FUNC_test_detect_age_key_node_file_absent_chain_completes
+    ## @purpose — R5 negative (D15): /etc/age/key.txt ОТСУТСТВУЕТ + env пуст → цепочка завершается
+    ##            None (без исключений, IMP:8 warning). Точный вход бага: CI node-update без
+    ##            AGE_SECRET_KEY env и без персистённого файла → раньше decrypt fail.
+    ## @io — ⇥ caplog, monkeypatch, tmp_path → ⎋ None (asserts None + warning)
+    ## @complexity — O(1)
+    @pytest.mark.unit
+    @ldd_trajectory
+
+    # 🧪 TRAP[TEST] · 2026-08-05 · NEGATIVE (R5) · D15 — /etc/age/key.txt отсутствует → цепочка доходит до None
+    # · Scenario: env пуст, HOME изолирован, /etc/age/key.txt mocked False → detect_age_key() is None
+    # · Last fail: 2026-08-04 — ключ не персистился на ноду → CI node-update decrypt FAIL
+    # · Remove if: Check 5 / persist-логика меняются
+    def test_detect_age_key_node_file_absent_chain_completes(
+        self,
+        caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: pytest.TempPathFactory,
+    ) -> None:
+        """R5 negative (D15): без node-файла цепочка завершается None (не ломается)."""
+        caplog.set_level(logging.DEBUG)
+        monkeypatch.delenv("AGE_SECRET_KEY", raising=False)
+        monkeypatch.delenv("SOPS_AGE_KEY", raising=False)
+        monkeypatch.delenv("AGE_SECRET_KEY_FILE", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path))
+
+        real_is_file = Path.is_file
+
+        def fake_is_file(self):
+            if str(self) == "/etc/age/key.txt":
+                return False  # ключ не персистён — точный вход D15
+            return real_is_file(self)
+
+        monkeypatch.setattr(Path, "is_file", fake_is_file)
+
+        logger.info("[IMP:7][test_node_detect] Testing node key file ABSENT (D15 negative)")
+        result = detect_age_key()
+        assert result is None, f"Expected None when /etc/age/key.txt absent, got {result}"
+        assert "AGE_SECRET_KEY not found" in caplog.text, "Должен быть IMP:8 warning о ненайденном ключе"
+        logger.info("[IMP:9][test_node_detect] detect-цепочка завершилась без node-файла (D15 negative)")
+
+    # endregion FUNC_test_detect_age_key_node_file_absent_chain_completes
+
+    # region FUNC_test_detect_age_key_node_file_without_prefix_line
+    ## @purpose — D15: /etc/age/key.txt существует, но без строки AGE-SECRET-KEY- (comment-файл) →
+    ##            warning «no AGE-SECRET-KEY- line» + None (comment-scan, не слепой readline).
+    ## @io — ⇥ caplog, monkeypatch, tmp_path → ⎋ None (asserts None + warning)
+    ## @complexity — O(1)
+    @pytest.mark.unit
+    @ldd_trajectory
+
+    # 🧪 TRAP[TEST] · 2026-08-05 · REGRESSION · D15 — node-файл без AGE-префикса (comment-scan)
+    # · Scenario: /etc/age/key.txt с комментариями без AGE-SECRET-KEY- → None + warning
+    # · Last fail: N/A (защита comment-scan контракта Check 5)
+    # · Remove if: Check 5 чтение меняется
+    def test_detect_age_key_node_file_without_prefix_line(
+        self,
+        caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: pytest.TempPathFactory,
+    ) -> None:
+        """detect_age_key: node-файл без AGE-SECRET-KEY- строки → None (comment-scan)."""
+        caplog.set_level(logging.DEBUG)
+        monkeypatch.delenv("AGE_SECRET_KEY", raising=False)
+        monkeypatch.delenv("SOPS_AGE_KEY", raising=False)
+        monkeypatch.delenv("AGE_SECRET_KEY_FILE", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path))
+
+        real_is_file = Path.is_file
+        real_open = builtins.open
+
+        def fake_is_file(self):
+            if str(self) == "/etc/age/key.txt":
+                return True
+            return real_is_file(self)
+
+        def fake_open(path, *args, **kwargs):
+            if str(path) == "/etc/age/key.txt":
+                return io.StringIO("# public key: age1...\n# no secret here\n")
+            return real_open(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "is_file", fake_is_file)
+        monkeypatch.setattr(builtins, "open", fake_open)
+
+        logger.info("[IMP:7][test_node_detect] Testing node key file without AGE prefix line")
+        result = detect_age_key()
+        assert result is None, f"Expected None for non-AGE content, got {result}"
+        assert "no AGE-SECRET-KEY- line" in caplog.text, "Должен быть warning о строке без AGE-префикса"
+        logger.info("[IMP:9][test_node_detect] comment-scan отклонил файл без AGE-строки (D15)")
+
+    # endregion FUNC_test_detect_age_key_node_file_without_prefix_line
+
+
+# endregion CLASS_TestDetectAgeKeyNodePersistence
 
 
 # region CLASS_TestAutoDetectNodeName

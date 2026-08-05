@@ -129,3 +129,28 @@ def test_template_validates_against_schema(template_path: str) -> None:
     except ValidationError as e:
         logger.error("[IMP:9] VALIDATION FAILED: %s - %s", template_path, e.message)
         raise
+
+
+# 🧪 TRAP[TEST] · 2026-08-05 · Regression · D19/D20 — vhost template output safety (DevPlan 136 W1 T1.9)
+# · Scenario: generate_vhost_body (nginx vhost «template») с /health →
+# ·   НЕТ `proxy_pass $var/URI` (D19: invalid URL prefix → 500), `set $upstream` В location /health (D20)
+# · Last fail: 2026-08-04 — /health proxy_pass $upstream_my_app$request_uri + set вне location → 500
+# · Remove if: vhost прокси-шаблон (generate_vhost_body) меняется
+def test_vhost_template_health_location_safe() -> None:
+    """D19/D20: rendered vhost body (nginx template) — /health без proxy_pass $var/URI, set в location."""
+    from core.internal.scaffold.vhost_renderer import generate_vhost_body
+
+    logger.info("[IMP:7][test_templates] Rendering vhost body with /health (D19/D20 guard)")
+
+    body = generate_vhost_body("app.example.com", "my-app", "example.com")
+    health_block = body[body.index("location /health {") :]
+
+    # D19: нет proxy_pass с переменной + URI/хвостом (nginx «invalid URL prefix»)
+    assert re.search(r"proxy_pass\s+\$upstream_[A-Za-z0-9_]+[^;]*[/$]", body) is None, (
+        "D19 regression: proxy_pass $var/URI в vhost template"
+    )
+    # D20: set $upstream определён В location /health (location-scope)
+    assert "set $upstream_my_app http://my-app:80;" in health_block, (
+        "D20 regression: set $upstream отсутствует в location /health"
+    )
+    logger.info("[IMP:9][test_templates] vhost /health template safe (D19/D20) — OK")
