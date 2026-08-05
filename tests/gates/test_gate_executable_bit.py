@@ -93,7 +93,7 @@ def test_executable_bit_outside_lib(caplog):
         msg += (
             "[GATE:FAIL][id:executable-bit][class:L1]\n"
             ">>> REPAIR_RECIPE_START >>>\n"
-            "make fix-gate && git add -u && make gate MODE=fast\n"
+            "make fix-gate && git add -u && make check\n"
             "<<< REPAIR_RECIPE_END <<<"
         )
         logging.error(msg)

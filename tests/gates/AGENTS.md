@@ -106,7 +106,7 @@ make check
 2. **Fingerprint-кэш** — повторный прогон на неизменённом дереве = replay <10s (CHECK_CACHE=0 отключает; кэш ТОЛЬКО у check, gate — без кэша)
 3. **Проверки из манифеста**: static-чеки параллельно (validate, check-dead-code, check-exception-patterns, doxygen-check, check-manifests, ruff check .) + pytest-чеки последовательно с xdist (gates, gates-docker, contract, static_audit, predeploy) — ~90s на 12 ядрах (static_audit xdist: 254s → ~60s)
 
-**Результат:** все ошибки собраны в ОДНОМ отчёте. Агент фиксит всё за один проход → `make gate MODE=fast` верифицирует один раз.
+**Результат:** все ошибки собраны в ОДНОМ отчёте. Агент фиксит всё за один проход; верификацию выполняет pre-push hook (`make gate MODE=fast`) один раз при push.
 
 **Узкий таргет:** `make check-diff` — pre-commit --files + ruff по изменённым .py + pytest изменённых test-файлов (без кэша, без изменений → exit 0).
 
@@ -116,12 +116,12 @@ make check
 |-----|-------------------------------------|--------------------|
 | 1 | `make gate` → fail на pre-commit | `make check` → собраны ВСЕ ошибки |
 | 2 | Фикс pre-commit → `make gate` → fail на static_audit | Агент читает ОДИН отчёт, фиксит ВСЁ |
-| 3 | Фикс static → `make gate` → fail на format | `make gate MODE=fast` → зелёный |
+| 3 | Фикс static → `make gate` → fail на format | `make check` повторно → зелёный (или <10s replay); арбитр — pre-push hook |
 | 4 | Фикс format → `make gate` → fail на другое |
 | ... | ... (4-5 итераций) |
 | N | `make gate` → зелёный |
 
-**Экономия:** ~60-80% времени агента на верификации (4-5 проходов → 1 check + 1 gate); повторный check на чистом дереве — <10s (fingerprint replay).
+**Экономия:** ~60-80% времени агента на верификации (4-5 проходов → 1 check; gate — только pre-push hook); повторный check на чистом дереве — <10s (fingerprint replay).
 
 ### Использование
 
@@ -153,11 +153,11 @@ make preflight
 
 ### Инварианты
 
-- **Check НЕ заменяет gate.** Gate остаётся канонической верификацией (арбитр). Check — диагностический акселератор. Оба executor'а читают ОДИН манифест `core/check-suite.yaml` — дрейф невозможен конструктивно (DevPlan 120 §3.2).
+- **Check НЕ заменяет gate.** Gate остаётся канонической верификацией (арбитр), но исполняется ТОЛЬКО pre-push hook'ом — в dev-цикле ручной прогон не выполняется. Check — диагностический акселератор (содержательный суперсет fast-шагов: зелёный check = зелёный gate fast на этом дереве). Оба executor'а читают ОДИН манифест `core/check-suite.yaml` — дрейф невозможен конструктивно (DevPlan 120 §3.2).
 - **Check НЕ коммитит изменения.** Только авто-фиксы в worktree (так же как `make fix-gate`).
 - **Fingerprint-кэш — только у check.** Gate/CI/pre-push — без кэша (канонический прогон всегда). Replay только при байт-идентичном дереве И зелёном последнем прогоне.
 - **Exit code 0** = все проверки прошли, gate должен быть зелёным.
-- **Exit code 1** = есть ошибки, нужно фиксить. После фикса: `make gate MODE=fast`.
+- **Exit code 1** = есть ошибки, нужно фиксить. После фикса: `make check` повторно (или `make check SKIP_FIX=1`).
 - **Parallel-чеки read-only** — не мутируют файлы, безопасны для concurrent execution; pytest-чеки строго последовательно (1 pytest с -n auto за раз).
 
 ### Рекомендуемый agent workflow
@@ -167,12 +167,12 @@ make preflight
 2. Прочитать отчёт — все FAIL-секции
 3. Исправить ВСЕ ошибки за один проход
 4. make check                        # повторный — <10s если дерево не менялось, ~90s если фиксили
-5. make gate MODE=fast               # ОДНА финальная верификация
+5. git push                          # pre-push hook: make gate MODE=fast — ОДНА финальная верификация (без кэша)
 ```
 
 Никаких `fix → gate → fix → gate → ...` циклов.
 
-**Примечание (V2, 2026-08-05):** pre-push hook гоняет `make gate MODE=fast` автоматически при пуше (без кэша) — ручной прогон шага 5 опционален, если hooks установлены (`make pre-commit-install`).
+**Примечание (V3, 2026-08-05):** `make gate MODE=fast` исполняется ТОЛЬКО pre-push hook'ом при пуше (без кэша, blocking). Ручной прогон — точный дубль (~350 s впустую), в dev-цикле НЕ выполняется. Исключение: `--no-verify` или отсутствие hooks (`make pre-commit-install` не выполнен) — тогда защита остаётся только на CI.
 
 ---
 

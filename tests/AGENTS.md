@@ -114,9 +114,9 @@ gates:
 - `make fix-gate` — ТОЛЬКО gate-blocking L1 ошибки (executable-bit + ruff + manifest drift). НЕ расширять без ревью.
 - `make fix-gate DRY_RUN=1` — вывод "would fix" без мутации.
 - Структурированный stdout: `[REPAIR:FIXED]`, `[REPAIR:NOOP]`, `[REPAIR:ERROR]`.
-- Pre-flight CI правило: `make fix-gate && git add -u && make gate MODE=fast` (см. `.kilo/rules/_project.md`).
+- Pre-flight CI правило: `make fix-gate && git add -u && make check` (см. `.kilo/rules/_project.md`).
 - `repair.mk` экспортирует `REPAIR_TARGETS` — machine-readable реестр для CI-валидации (`test_repair_contract_integrity`).
-- Диагностический цикл кодера (DevPlan 120): `make check` (SoT-манифест `core/check-suite.yaml`, экс-preflight) → фикс-цикл → `make gate MODE=fast`; узкий таргет — `make check-diff`. `preflight` — deprecated-алиас.
+- Диагностический цикл кодера (DevPlan 120): `make check` (SoT-манифест `core/check-suite.yaml`, экс-preflight) → фикс-цикл → финальная верификация `make check` до чистоты; `make gate MODE=fast` — ТОЛЬКО pre-push hook. Узкий таргет — `make check-diff`. `preflight` — deprecated-алиас.
 
 ---
 
