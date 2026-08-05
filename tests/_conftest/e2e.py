@@ -9,9 +9,15 @@
 ##   - PROMETHEUS_PROXY_URL defaults to "https://grafana.tronyx.ru/api/datasources/proxy/1" (E2E_PROMETHEUS_PROXY_URL)
 ##   - LOKI_PROXY_URL defaults to "https://grafana.tronyx.ru/api/datasources/proxy/2" (E2E_LOKI_PROXY_URL)
 ##   - grafana_credentials reads from core/modules/hermes-agent/.env via python-dotenv (graceful fallback)
+##   - T12.3 (T-5): _load_test_env / _e2e_disable_proxy — SCOPED маркером `e2e` (no-op для
+##     статических сессий — env pollution устранена)
+##   - T12.3 (T-6): NO_PROXY восстанавливается в teardown _e2e_disable_proxy
+##   - T12.8 (T-12): grafana_credentials БЕЗ пароля → pytest.fail (R4, не skip); datasource_uids
+##     при недоступности Grafana / non-200 → pytest.fail (не молчаливый {} / каскад пустых URL)
 ## @rationale — Centralising credentials in one module avoids repetition in every E2E test file.
 ##              Extracted from conftest.py to reduce coupling (from ~1671 to ~1420 lines).
-## @changes — 2026-07-09 · TASK-10 · Removed orphan fixtures: BASE_URL, langfuse_credentials, LANGFUSE_URL
+## @changes — 2026-08-05 | DevPlan 136 W12: T12.3 (e2e-marker scope + NO_PROXY restore), T12.8 (R4-fail)
+##            2026-07-09 · TASK-10 · Removed orphan fixtures: BASE_URL, langfuse_credentials, LANGFUSE_URL
 ##            2026-07-12 · Extracted from conftest.py to _e2e_fixtures.py (TASK-I1)
 ##            2026-07-12 · Moved to tests/conftest/e2e.py
 # endregion MODULE_CONTRACT
@@ -40,7 +46,7 @@ if _DOTENV_AVAILABLE:
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _load_test_env() -> None:
+def _load_test_env(request: pytest.FixtureRequest) -> None:
     """
     ## @purpose — Load .env from core/modules/hermes-agent/ into os.environ for ALL tests.
     ## @rationale — grafana_credentials fixture also loads .env, but only when explicitly
@@ -48,9 +54,17 @@ def _load_test_env() -> None:
     ##              Grafana credentials directly from os.environ without requesting
     ##              grafana_credentials, so they would skip without this autouse fixture.
     ##              Loads .env BEFORE _e2e_disable_proxy clears proxy vars.
+    ##              T12.3 (T-5): SCOPED by `e2e` marker — если в сессии нет e2e-тестов,
+    ##              фикстура no-op (не загрязняет os.environ статическим сьюитам).
     ## @io — ⎋ None (side-effect: os.environ populated from .env)
     ## @complexity — O(1)
     """
+    # T12.3 (T-5): env pollution — .env инжектится ТОЛЬКО для сессий с e2e-маркером.
+    if not _session_has_e2e_marker(request):
+        print(
+            "[IMP:7][conftest][_load_test_env] No e2e marker in session — env load skipped (T12.3 T-5)", file=sys.stderr
+        )
+        return
     dotenv_path = os.path.join(os.path.dirname(__file__), "..", "..", "core", "modules", "hermes-agent", ".env")
     if _DOTENV_AVAILABLE and os.path.isfile(dotenv_path):
         load_dotenv(dotenv_path)
@@ -68,24 +82,49 @@ def _load_test_env() -> None:
             print(f"[IMP:4][conftest][_load_test_env] .env not found at {dotenv_path} — skip", file=sys.stderr)
 
 
+# region FUNC_session_has_e2e_marker
+## @purpose  T12.3 (T-5): scoping env-фикстур маркером `e2e` — autouse session-фикстуры
+##            проверяют наличие e2e-маркера среди СОБРАННЫХ тестов и no-op при его отсутствии
+##            (статические/unit/gate сессии не получают .env-инъекцию и proxy-мутацию).
+## @io       ⇥ request: pytest.FixtureRequest → ⎋ bool
+## @complexity O(I) где I = собранные тесты
+def _session_has_e2e_marker(request: pytest.FixtureRequest) -> bool:
+    """True если хотя бы один собранный тест имеет маркер e2e."""
+    return any(item.get_closest_marker("e2e") for item in request.session.items)
+
+
+# endregion FUNC_session_has_e2e_marker
+
+
 @pytest.fixture(scope="session", autouse=True)
-def _e2e_disable_proxy() -> None:
+def _e2e_disable_proxy(request: pytest.FixtureRequest) -> None:
     """
     ## @purpose — Disable HTTP_PROXY/HTTPS_PROXY for E2E tests.
     ## @rationale — Root .env sets HTTP_PROXY=http://172.23.0.1:8118 (Privoxy on Docker host for Telegram).
     ##              requests library picks this up
     ##              and routes ALL traffic through a proxy that doesn't exist locally.
     ##              All E2E targets (tronyx.ru) are directly reachable, no proxy needed.
+    ##              T12.3 (T-5): scoped by `e2e` marker (no-op для статических сессий);
+    ##              T12.3 (T-6): NO_PROXY восстанавливается в teardown (не только proxy-переменные).
     ## @io — ⎋ None (mutates os.environ)
     ## @complexity — O(1)
     """
+    if not _session_has_e2e_marker(request):
+        print(
+            "[IMP:7][conftest][_e2e_disable_proxy] No e2e marker in session — proxy untouched (T12.3 T-5)",
+            file=sys.stderr,
+        )
+        yield
+        return
     saved = {}
     for var in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
         if var in os.environ:
             saved[var] = os.environ[var]
             del os.environ[var]
     # Ensure NO_PROXY covers tronyx.ru in case proxy vars come back
-    no_proxy = os.environ.get("NO_PROXY", "")
+    # T12.3 (T-6): исходный NO_PROXY сохраняется и восстанавливается в teardown
+    no_proxy_before = os.environ.get("NO_PROXY", "")
+    no_proxy = no_proxy_before
     if "tronyx.ru" not in no_proxy:
         os.environ["NO_PROXY"] = f"{no_proxy},tronyx.ru,*.tronyx.ru".strip(",")
     # [IMP:7][conftest][_e2e_disable_proxy] Proxy env vars cleared for E2E tests
@@ -95,6 +134,12 @@ def _e2e_disable_proxy() -> None:
     # Restore proxy vars after test session
     for var, val in saved.items():
         os.environ[var] = val
+    # T12.3 (T-6): restore NO_PROXY (если мы его мутировали)
+    if os.environ.get("NO_PROXY") != no_proxy_before:
+        if no_proxy_before:
+            os.environ["NO_PROXY"] = no_proxy_before
+        else:
+            os.environ.pop("NO_PROXY", None)
 
 
 # 🧐 TRAP[DECISION] · 2026-07-09 · — · Removed BASE_URL, langfuse_credentials, LANGFUSE_URL orphan fixtures
@@ -142,7 +187,13 @@ def grafana_credentials() -> tuple[str, str]:
     password = os.environ.get("GF_SECURITY_ADMIN_PASSWORD")
 
     if not password:
-        pytest.skip("Grafana password not set — set GF_SECURITY_ADMIN_PASSWORD")
+        # T12.8 (T-12): R4-fail вместо skip — отсутствие пароля = конфигурационная ошибка
+        # (environmental absence = FAIL, не skip; Test Honesty R4)
+        pytest.fail(
+            "Grafana password not set — set GF_SECURITY_ADMIN_PASSWORD (Rule R4: "
+            "environmental absence is a configuration error, not skip)",
+            pytrace=False,
+        )
 
     # [IMP:9][conftest][grafana_credentials] Credentials resolved
     print(f"[IMP:9][conftest][grafana_credentials] Grafana user = {username}", file=sys.stderr)
@@ -174,23 +225,29 @@ def datasource_uids(GRAFANA_URL: str, grafana_credentials: tuple[str, str]) -> d
     ## @io — ⎋ dict[str, str] e.g. {"prometheus": "uid1", "loki": "uid2"}
     ## @complexity — O(1) — single HTTP GET request
     ## @rationale — Hardcoded proxy UIDs (1, 2) are unreliable; dynamic discovery from Grafana ensures correctness.
+    ##              T12.8 (T-12): НЕ возвращает молча {} при недоступности — R4-fail:
+    ##              недоступный datasource = конфигурационная ошибка, не graceful degradation.
     """
     try:
         import requests
     except ImportError:
-        print("[IMP:9][conftest][datasource_uids] requests not installed — returning empty dict", file=sys.stderr)
-        return {}
+        pytest.fail(
+            "requests not installed — required for Grafana datasource discovery (Rule R4: "
+            "environmental absence = FAIL, not skip)",
+            pytrace=False,
+        )
 
     username, password = grafana_credentials
     url = f"{GRAFANA_URL}/api/datasources"
     try:
         resp = requests.get(url, auth=(username, password), timeout=10)
         if resp.status_code != 200:
-            print(
-                f"[IMP:9][conftest][datasource_uids] Grafana returned HTTP {resp.status_code} — returning empty dict",
-                file=sys.stderr,
+            # T12.8 (T-12): fail при недоступности (не пустой dict)
+            pytest.fail(
+                f"Grafana datasources API returned HTTP {resp.status_code} (Rule R4: "
+                f"unavailable datasource = configuration error, not silent empty dict)",
+                pytrace=False,
             )
-            return {}
         datasources = resp.json()
         result = {}
         for ds in datasources:
@@ -203,10 +260,13 @@ def datasource_uids(GRAFANA_URL: str, grafana_credentials: tuple[str, str]) -> d
         print(f"[IMP:9][conftest][datasource_uids] Discovered UIDs: {result}", file=sys.stderr)
         return result
     except (requests.exceptions.RequestException, ValueError) as exc:
-        print(
-            f"[IMP:9][conftest][datasource_uids] Failed to query Grafana: {exc} — returning empty dict", file=sys.stderr
+        # T12.8 (T-12): fail при недоступности Grafana (не молчаливый {} → каскад пустых URL)
+        pytest.fail(
+            f"Failed to query Grafana datasources at {url}: {exc} (Rule R4: "
+            f"unavailable datasource = configuration error, not skip)",
+            pytrace=False,
         )
-        return {}
+        return {}  # unreachable — для статического анализатора
 
 
 @pytest.fixture(scope="session")

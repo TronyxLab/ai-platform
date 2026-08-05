@@ -1946,6 +1946,15 @@ gates:
 - id: test_r1_no_pass_tests
   test_file: test_gate_r1_no_pass_tests.py
   description: 'Auto-discovered gate: test_r1_no_pass_tests'
+- id: test_retry_rate_accounting
+  test_file: test_gate_retry_rate.py
+  description: 'Auto-discovered gate: test_retry_rate_accounting'
+- id: test_retry_rate_threshold_constant
+  test_file: test_gate_retry_rate.py
+  description: 'Auto-discovered gate: test_retry_rate_threshold_constant'
+- id: test_retry_rate_within_threshold_computation
+  test_file: test_gate_retry_rate.py
+  description: 'Auto-discovered gate: test_retry_rate_within_threshold_computation'
 - id: deepseek_required_in_module_yaml
   test_file: test_gate_secrets_llm_cleanup.py
   description: 'Auto-discovered gate: deepseek_required_in_module_yaml'
@@ -2303,6 +2312,18 @@ gates:
 - id: test_root_volumes_match_module_references
   test_file: test_gate_volumes_sot.py
   description: 'Auto-discovered gate: test_root_volumes_match_module_references'
+- id: test_compute_module_waves_deterministic
+  test_file: test_gate_wave_sort_contract.py
+  description: 'Auto-discovered gate: test_compute_module_waves_deterministic'
+- id: test_sort_contract_documented
+  test_file: test_gate_wave_sort_contract.py
+  description: 'Auto-discovered gate: test_sort_contract_documented'
+- id: test_sort_deterministic_idempotent
+  test_file: test_gate_wave_sort_contract.py
+  description: 'Auto-discovered gate: test_sort_deterministic_idempotent'
+- id: test_sort_stable_equal_keys
+  test_file: test_gate_wave_sort_contract.py
+  description: 'Auto-discovered gate: test_sort_stable_equal_keys'
 - id: test_local_actions_after_checkout
   test_file: test_gate_workflow_checkout_order.py
   description: 'Auto-discovered gate: test_local_actions_after_checkout'

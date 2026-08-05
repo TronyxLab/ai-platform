@@ -24,6 +24,7 @@
 import os
 import pathlib
 import site
+import sys
 
 import pytest
 import yaml
@@ -50,6 +51,7 @@ from _conftest.ldd import (  # noqa: F401
     _handle_e2e_error,
     _print_ldd_trajectory,
 )
+from _conftest.session import _fixture_schema_integrity  # noqa: F401 — autouse per-test fail (T12.5 T-8)
 from _conftest.smoke import _module_container_running  # noqa: F401
 from _conftest.state_reset import _reset_fresh_state  # noqa: F401
 from _conftest.wave_pipeline import _ensure_wave_ready  # noqa: F401
@@ -173,14 +175,51 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 
     # Dynamic _test_infra_was_active: detect if any collected test has requires_docker marker.
     # Set to True/False so test_conftest_isolation.py can verify static tests don't trigger Docker.
+    # T12.10 (T-15): вычисление — в master на ПОЛНОЙ коллекции. pytest_collection_modifyitems
+    # исполняется ТОЛЬКО в master (xdist: воркеры получают готовые items) и видит ВСЕ собранные
+    # тесты (включая позже деселектед по -m). Defensive-гейт _is_xdist_worker() — модификацию
+    # флага в воркере исключает даже если hook вызовется в воркере.
     from _conftest.infra import _test_infra_was_active as _infra_flag
 
-    _requires_docker = any(item.get_closest_marker("requires_docker") for item in items)
-    _infra_flag.set(_requires_docker)
+    if _is_xdist_worker():
+        print(
+            f"[IMP:7][conftest][collection] Worker {os.environ.get('PYTEST_XDIST_WORKER')} — "
+            "infra-active flag not modified (master computes on full collection, T12.10 T-15)",
+            file=sys.stderr,
+        )
+    else:
+        _requires_docker = any(item.get_closest_marker("requires_docker") for item in items)
+        _infra_flag.set(_requires_docker)
 
+    # ── Sort contract (T12.6 T-9) ──────────────────────────────────────────────
+    # КОНТРАКТ (документирован, гейт tests/gates/test_gate_wave_sort_contract.py):
+    #   items.sort(key=(wave_number, nodeid))
+    #   - wave_number: @pytest.mark.wave(N) из module.yaml#depends_on (0 = нет зависимости)
+    #   - nodeid: детерминированный стабильный вторичный ключ
+    #   - Сортировка детерминирована: тот же набор items → тот же порядок, независимо от
+    #     порядка сбора (state-leak: порядок исполнения теста зависит ТОЛЬКО от (wave, nodeid),
+    #     не от состояния сессии/предыдущих прогонов)
+    #   - Python list.sort стабилен: равные ключи сохраняют порядок сбора
+    #   - Gate (T12.6): test_gate_wave_sort_contract проверяет, что (а) sort-ключ —
+    #     чистая функция item'а, (б) сортировка идемпотентна (повторный sort = тот же порядок),
+    #     (в) стабильность равных ключей
     items.sort(
         key=lambda item: (
             item.get_closest_marker("wave").args[0] if item.get_closest_marker("wave") else 0,
             item.nodeid,
         )
     )
+
+
+# region FUNC_is_xdist_worker
+## @purpose  Детекция xdist-воркера (PYTEST_XDIST_WORKER, DevPlan 124 T1): session/collection
+##           хуки исполняются в master; воркеры получают готовые items. Гейт используется для
+##           master-only мутаций (attempt-counter, docker-cleanup, _test_infra_was_active T12.10).
+## @io       → ⎋ bool (True = текущий процесс — xdist-воркер)
+## @complexity O(1)
+def _is_xdist_worker() -> bool:
+    """True when running inside a pytest-xdist worker (PYTEST_XDIST_WORKER set)."""
+    return bool(os.environ.get("PYTEST_XDIST_WORKER"))
+
+
+# endregion FUNC_is_xdist_worker

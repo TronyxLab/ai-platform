@@ -311,12 +311,15 @@ infra = _LazyTestInfraProxy()
 
 # Mutable flag for dynamic detection of requires_docker marker presence.
 # Used by test_conftest_isolation.py to verify static tests don't trigger Docker infra.
-# Set to True after pytest_collection_modifyitems if any collected test has requires_docker marker.
+# T12.10 (T-15): вычисляется в master на ПОЛНОЙ коллекции (pytest_collection_modifyitems,
+# conftest.py), НЕ в воркерах (xdist: воркеры получают готовые items и не исполняют
+# collection-хуки). Дефолт False (static-safe): воркеры/статический сьюит видят False —
+# только master, обнаруживший requires_docker, ставит True.
 class _InfraActiveFlag:
     """Mutable boolean container — allows post-import modification via pytest hooks."""
 
     def __init__(self) -> None:
-        self._active: bool = True
+        self._active: bool = False
 
     def __bool__(self) -> bool:
         return self._active

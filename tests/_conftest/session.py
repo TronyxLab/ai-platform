@@ -1,24 +1,33 @@
-# GREP_SUMMARY: session, conftest, pytest, session-hooks, escalation, anti-loop, attempt-counter, sessionstart, sessionfinish
-# STRUCTURE: pytest_sessionstart(read_counter→increment→write_counter) → run_tests → pytest_sessionfinish(◇exitstatus==0→reset|◇exitstatus!=0→check_escalation(attempts≤2→checklist|==3→external|==4→reflection|≥5→critical))
+# GREP_SUMMARY: session, conftest, pytest, session-hooks, escalation, anti-loop, attempt-counter, sessionstart, sessionfinish, full-session, schema-validation, master-only
+# STRUCTURE: pytest_sessionstart(master: validate fixtures→increment→record scope) → run_tests → pytest_sessionfinish(◇full-session 100% PASS→reset|◇fail→escalation) → _fixture_schema_integrity(per-test fail)
 # region MODULE_CONTRACT
 ## @purpose  Pytest session hooks (sessionstart/sessionfinish) + escalation dispatch for Anti-Loop protocol.
-##           Increments attempt counter on session start, resets on 100% PASS, escalates on failure.
+##           Increments attempt counter on session start, resets on 100% PASS of a FULL session, escalates on failure.
 ## @scope    Session-level hooks extracted from tests/conftest.py. Counter read/write delegated to
 ##           conftest.counter; escalation messages delegated to conftest.checklist.
 ## @invariants
-##   - .test_counter.json stored in tests/ directory (managed by conftest.counter)
-##   - Counter increments on every non-100% session (in sessionstart)
-##   - Counter resets to 0 only when exitstatus == 0 (all tests passed, in sessionfinish)
+##   - .test_counter.json stored in tests/ directory (managed by conftest.counter) — ЕДИНСТВЕННЫЙ
+##     counter-файл (T12.1 T-1: dual counter tests/gates/.test_counter.json удалён)
+##   - Counter increments on every non-100% session (in sessionstart, master only)
+##   - Counter resets to 0 ONLY when exitstatus == 0 AND session is FULL
+##     (_is_full_session: unfiltered run + >= FULL_SESSION_MIN_ITEMS items). Поднабор (-m filter,
+##     отдельный файл) при 100% PASS НЕ сбрасывает attempts (T12.1 T-2: reset only full session)
 ##   - Escalation levels: 1-2=checklist, 3=external help, 4=reflection, 5+=critical
 ##   - PYTEST_NO_ESCALATION env var suppresses escalation output (used by git hooks)
 ##   - retention module loaded via importlib from core/modules/backup-cron/scripts/
-##   - МУТИРУЮЩИЕ session-хуки (attempt-счётчик, docker-cleanup, network release) — ТОЛЬКО
-##     master-воркер (PYTEST_XDIST_WORKER гейт, DevPlan 124 T1): при -n auto хуки выполняются
-##     в каждом воркере, конкурентные docker rm -f / reset счётчика ломали параллельную сессию
+##   - МУТИРУЮЩИЕ session-хуки (attempt-счётчик, docker-cleanup, network release, schema-валидация) —
+##     ТОЛЬКО master-воркер (PYTEST_XDIST_WORKER гейт, DevPlan 124 T1): при -n auto хуки выполняются
+##     в каждом воркере, конкурентные docker rm -f / reset счётчика ломали параллельную сессию.
+##     Schema-валидация — master-only (T12.5 T-8): воркеры не дублируют валидацию
+##   - Schema-ошибки тест-фикстур — per-test FAIL через autouse _fixture_schema_integrity,
+##     НЕ pytest.exit (T12.5 T-8: pytest.exit убивал весь воркер/сессию без per-test traceback)
 ## @rationale  Extracted from tests/conftest.py to reduce file size and isolate session lifecycle logic.
 ##             Path adjusted from __file__ (conftest/) → (conftest/../..) so core/ resolves correctly.
 ## @changes
-##   LAST_CHANGE: 2026-08-03 | DevPlan 124 T1: master-guard для sessionstart/sessionfinish —
+##   LAST_CHANGE: 2026-08-05 | DevPlan 136 W12: T12.1 (reset только полная сессия — _is_full_session),
+##   T12.5 (schema-валидация master-only + per-test fail вместо pytest.exit), T12.7 (retry-rate
+##   check в sessionfinish), T12.9 (hermes-cleanup по label)
+##   2026-08-03 | DevPlan 124 T1: master-guard для sessionstart/sessionfinish —
 ##   _is_xdist_worker() (PYTEST_XDIST_WORKER); counter increment/reset и docker-cleanup —
 ##   только master; воркеры — no-op с логом worker id (гонки фактов 4-5 DevPlan 124)
 ##   2026-07-12 | Extracted from tests/conftest.py — ESCALATION_DISPATCH + PYTEST_SESSION_HOOKS regions
@@ -38,7 +47,23 @@ import pytest
 import yaml
 
 from _conftest.checklist import _print_checklist, _print_escalation, _print_external_help, _print_reflection
-from _conftest.counter import _increment_counter, _read_counter, _write_counter
+from _conftest.counter import (
+    _increment_counter,
+    _read_counter,
+    _record_scope,
+    _reset_counter,
+    _write_counter,  # noqa: F401 — backward-compat re-export (test_session_xdist_guards.py monkeypatch target)
+)
+
+# Порог «полной сессии» для сброса anti-loop счётчика (T12.1 T-2):
+#   - marker-выражение (-m) пусто (harness всегда фильтрует — check-suite/test_runner/ci.mk
+#     передают -m gate/static_audit/... → такие прогоны НИКОГДА не «полные»)
+#   - собранных тестов >= порога (отдельный файл/директория — поднабор, не полная сессия)
+_FULL_SESSION_MIN_ITEMS = 1000
+
+# Ошибки schema-валидации тест-фикстур (T12.5 T-8): заполняются в master на sessionstart,
+# потребляются per-test autouse фикстурой _fixture_schema_integrity (pytest.fail вместо pytest.exit)
+_FIXTURE_SCHEMA_ERRORS: list[str] = []
 
 # region FIXTURE_SCHEMA_VALIDATION
 
@@ -50,17 +75,20 @@ _FIXTURE_SCHEMA_MAP = {
 }
 
 
-def _validate_test_fixtures() -> None:
-    """Validate all test fixtures against their schemas at session start.
+def _validate_test_fixtures() -> list[str]:
+    """Validate all test fixtures against their schemas — returns list of error strings.
 
-    Fails fast with readable message BEFORE any test runs.
-    Called from pytest_sessionstart in this module.
-
-    Design decisions:
-    - Uses jsonschema.validate (not Draft7Validator) for version-agnostic validation
-    - Missing fixture file → skip (optional fixtures)
-    - Missing schema file → pytest.exit (configuration error)
-    - yaml.safe_load (not FullLoader) for security
+    ## @purpose  Собирает ошибки schema-валидации тест-фикстур (tests/test_data/node.yaml vs
+    ##            core/schemas/*.schema.json). T12.5 (T-8): НЕ вызывает pytest.exit — ошибки
+    ##            возвращаются и потребляются per-test autouse фикстурой (pytest.fail), что даёт
+    ##            per-test traceback вместо убийства всей сессии/воркера.
+    ## @io       → ⎋ list[str]: пусто = валидация прошла; иначе — сообщения об ошибках
+    ## @complexity O(F) где F = фикстуры в _FIXTURE_SCHEMA_MAP
+    ## @invariants
+    ##   - Missing fixture file → skip (optional fixtures), не ошибка
+    ##   - Missing schema file → ошибка (configuration error) — возвращается, не pytest.exit
+    ##   - yaml.safe_load (не FullLoader) для безопасности
+    ##   - Вызывается ТОЛЬКО master-воркером (гейт в pytest_sessionstart)
     """
     # Resolve paths relative to tests/_conftest/session.py
     # session.py → tests/_conftest/ → tests/ → project root
@@ -77,10 +105,11 @@ def _validate_test_fixtures() -> None:
             continue  # Optional fixture — skip silently
 
         if not schema_path.exists():
-            pytest.exit(
-                f"\n[IMP:10][sessionstart] Schema file not found: {schema_path}\n"
-                f"Check _FIXTURE_SCHEMA_MAP in tests/_conftest/session.py\n"
+            errors.append(
+                f"[IMP:10][sessionstart] Schema file not found: {schema_path}\n"
+                f"Check _FIXTURE_SCHEMA_MAP in tests/_conftest/session.py"
             )
+            continue
 
         with open(fixture_path) as f:
             data = yaml.safe_load(f)
@@ -92,12 +121,50 @@ def _validate_test_fixtures() -> None:
         except jsonschema.ValidationError as e:
             errors.append(f"  {fixture_path}: {e.message}")
 
-    if errors:
-        pytest.exit(
-            "\n[IMP:10][sessionstart] Test fixture schema validation FAILED:\n"
-            + "\n".join(errors)
-            + "\n\nUpdate test fixtures to match current schemas.\n"
+    return errors
+
+
+# region FUNC_fixture_schema_integrity
+## @purpose  Autouse per-test фикстура (T12.5 T-8): если в master на sessionstart накоплены
+##            ошибки schema-валидации тест-фикстур — каждый тест сессии падает с агрегированным
+##            сообщением (pytest.fail, НЕ pytest.skip/pytest.exit). Воркеры видят пустой список
+##            (валидация master-only) и проходят без накладных расходов.
+## @io       → ⎋ None | pytest.fail (агрегированные schema-ошибки)
+## @complexity O(1)
+@pytest.fixture(scope="function", autouse=True)
+def _fixture_schema_integrity() -> None:
+    """Fail every test when test-fixture schema validation found errors (master-validated)."""
+    if _FIXTURE_SCHEMA_ERRORS:
+        pytest.fail(
+            "[IMP:10][session] Test fixture schema validation FAILED:\n"
+            + "\n".join(_FIXTURE_SCHEMA_ERRORS)
+            + "\n\nUpdate test fixtures to match current schemas.",
+            pytrace=False,
         )
+
+
+# endregion FUNC_fixture_schema_integrity
+
+
+# region FUNC_is_full_session
+## @purpose  Детекция «полной сессии» для сброса anti-loop счётчика (T12.1 T-2).
+##            Полная сессия = прогон БЕЗ marker-фильтра (-m пусто) И собравший >=
+##            _FULL_SESSION_MIN_ITEMS тестов. Harness (check-suite / test_runner / ci.mk)
+##            всегда фильтрует по маркерам (gate, static_audit, contract, ...) → такие прогоны
+##            НИКОГДА не «полные» → attempts при их 100% PASS не сбрасываются (поднабор не
+##            стирает evidence фейла полного прогона).
+## @io       ⇥ session: pytest.Session → ⎋ bool
+## @complexity O(1)
+def _is_full_session(session: pytest.Session) -> bool:
+    """True только для прогона без -m фильтра и с >= _FULL_SESSION_MIN_ITEMS собранных тестов."""
+    marker_expr = session.config.getoption("-m", default=None)
+    if marker_expr:
+        return False
+    collected = len(getattr(session, "items", []))
+    return collected >= _FULL_SESSION_MIN_ITEMS
+
+
+# endregion FUNC_is_full_session
 
 
 # endregion FIXTURE_SCHEMA_VALIDATION
@@ -140,14 +207,17 @@ def _is_xdist_worker() -> bool:
 
 def pytest_sessionstart(session: pytest.Session) -> None:
     """
-    Session start hook: validate fixtures, increment attempt counter + conditional import.
+    Session start hook: validate fixtures (master only), increment attempt counter + conditional import.
 
-    Read .test_counter.json, increment attempts, write back.
+    Read .test_counter.json, increment attempts, write back + record session scope.
     Import retention.py ONLY when backup or test_retention marker is active —
     fail-fast: if retention.py is broken, it's discovered only when needed.
     """
     # ── FAIL-FAST: validate test fixtures BEFORE any test runs ──
-    _validate_test_fixtures()
+    # T12.5 (T-8): валидация — ТОЛЬКО master (PYTEST_XDIST_WORKER гейт ниже); при -n auto
+    # sessionstart выполняется в каждом воркере — дублирование валидации = лишние расходы и
+    # pytest.exit-риски. Ошибки копятся в _FIXTURE_SCHEMA_ERRORS → per-test fail (не pytest.exit).
+    _validate_fixtures_in_session(session)
 
     # Conditional import: only for backup/retention tests
     _marker_option = session.config.getoption("-m", "")
@@ -184,10 +254,55 @@ def pytest_sessionstart(session: pytest.Session) -> None:
         # DevPlan 120 §3.3: атомарный _increment_counter под flock — защита от ПАРАЛЛЕЛЬНЫХ
         # pytest-сессий (2 агента одновременно), не от xdist-воркеров (их гейт выше).
         attempts = _increment_counter()
+        # T12.1 (T-2): scope-тег сессии — чтобы sessionfinish отличал полную сессию от поднабора
+        _record_scope(_session_scope_signature(session))
         print(
             f"[IMP:9][conftest][sessionstart] Attempt #{attempts} — running tests...",
             file=sys.stderr,
         )
+
+
+# region FUNC_validate_fixtures_in_session
+## @purpose  Master-only обёртка schema-валидации тест-фикстур (T12.5 T-8): в master —
+##            _validate_test_fixtures() → ошибки в _FIXTURE_SCHEMA_ERRORS; в воркере — no-op.
+## @io       ⇥ session: pytest.Session → ⎋ None
+## @complexity O(F) в master, O(1) в воркерах
+def _validate_fixtures_in_session(session: pytest.Session) -> None:
+    """Заполняет _FIXTURE_SCHEMA_ERRORS в master; воркеры — no-op (валидация master-only)."""
+    del session  # unused — гейт по env, не по session
+    if _is_xdist_worker():
+        print(
+            f"[IMP:7][conftest][sessionstart] Worker {os.environ.get('PYTEST_XDIST_WORKER')} — "
+            "fixture schema validation skipped (master owns session)",
+            file=sys.stderr,
+        )
+        return
+    _FIXTURE_SCHEMA_ERRORS.clear()
+    _FIXTURE_SCHEMA_ERRORS.extend(_validate_test_fixtures() or [])
+    if _FIXTURE_SCHEMA_ERRORS:
+        print(
+            "[IMP:10][sessionstart] Test fixture schema validation FAILED:\n"
+            + "\n".join(_FIXTURE_SCHEMA_ERRORS)
+            + "\n\nUpdate test fixtures to match current schemas.",
+            file=sys.stderr,
+        )
+
+
+# endregion FUNC_validate_fixtures_in_session
+
+
+# region FUNC_session_scope_signature
+## @purpose  Сигнатура сессии для scope-тега counter (T12.1 T-2): marker-выражение + число
+##            собранных тестов. Позволяет диагностировать subset-pass без сброса attempts.
+## @io       ⇥ session: pytest.Session → ⎋ str
+## @complexity O(1)
+def _session_scope_signature(session: pytest.Session) -> str:
+    """'marker=<expr>|items=<count>' — идентификатор текущего прогона."""
+    marker_expr = session.config.getoption("-m", default=None) or ""
+    return f"marker={marker_expr}|items={len(getattr(session, 'items', []))}"
+
+
+# endregion FUNC_session_scope_signature
 
 
 def _final_compose_cleanup() -> None:
@@ -236,37 +351,37 @@ def _final_compose_cleanup() -> None:
         print(f"[IMP:8][conftest][sessionfinish] Final cleanup error: {exc}", file=sys.stderr)
 
 
+# Метка, которой ДОЛЖНЫ помечаться все test-контейнеры (включая hermes-init detached-контейнеры).
+# T12.9 (T-13): sweep по label (не по имени) — label-фильтр не заденет чужой контейнер.
+_HERMES_TEST_LABEL = "ai-platform.test=true"
+
+
 def _final_hermes_test_cleanup() -> None:
-    """Final cleanup: remove ALL hermes-test-* containers regardless of compose labels.
+    """Final cleanup: remove hermes-test containers — by LABEL (T12.9 T-13), not by name.
 
     ## @purpose — DevPlan 123 T5 (false-lead #10): hermes-init tests (test_hermes_init.py)
     ##            create containers named hermes-test-l1-*/hermes-test-l2-* WITHOUT the
     ##            com.docker.compose.project=ai-platform-test label, so the label-based
     ##            _final_compose_cleanup() sweep misses them. Exited containers then cause
-    ##            503 on the status-page /health endpoint. This second sweep matches by name
-    ##            prefix and force-removes every leftover, independent of labels.
+    ##            503 on the status-page /health endpoint. T12.9 (T-13): sweep по канонической
+    ##            тест-метке ai-platform.test=true (docker rm -f по label, не имени).
     ## @io — ⎋ None (side-effect: Docker containers removed)
-    ## @complexity — O(N) where N = containers matching the name filter
-    ## @rationale — Name-prefix filter is file-path-agnostic and label-independent; the
-    ##              hermes-test- prefix is unique to this test suite (see _run_container_detached
-    ##              in test_hermes_init.py), so no unrelated container is ever touched.
+    ## @complexity — O(N) where N = containers matching the label filter
+    ## @invariants
+    ##   - Первичный sweep: label=ai-platform.test=true (T12.9 T-13) — безопасен для чужих контейнеров
+    ##   - ⚠️ TRAP[DECISION] · 2026-08-05 · — · hermes-test- контейнеры пока БЕЗ метки
+    ##     ai-platform.test=true: создание в test_hermes_init.py::_run_container_detached (вне
+    ##     скоупа W12, файл не в списке изменений) — name-prefix fallback СОХРАНЁН до добавления
+    ##     метки в создателе. · Rejected: удалить name-fallback (риск: 503 false-lead вернётся
+    ##     на нодах с остатками hermes-test-*) · Reason: deferred — label-first + documented
+    ##     fallback; proper fix (метка в создателе) — Debt с Rev 2026-10-21 · Rev: когда
+    ##     test_hermes_init.py добавит label=ai-platform.test=true в docker run — удалить fallback
+    ##   - Name-prefix fallback: hermes-test- префикс уникален для этого сьюита — не заденет чужое
+    ## @rationale — Label-фильтр файл-агностичен и не зависит от имени; T12.9 требует rm -f по
+    ##              label (не имени). Fallback сохраняется до добавления метки в создателе (Debt).
     """
     try:
-        result = subprocess.run(
-            [
-                "docker",
-                "ps",
-                "-a",
-                "--filter",
-                "name=hermes-test-",
-                "--format",
-                "{{.ID}}",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-        container_ids = [cid.strip() for cid in result.stdout.strip().splitlines() if cid.strip()]
+        container_ids = _docker_ps_ids(["--filter", f"label={_HERMES_TEST_LABEL}"])
         if container_ids:
             subprocess.run(
                 ["docker", "rm", "-f", *container_ids],
@@ -275,13 +390,47 @@ def _final_hermes_test_cleanup() -> None:
                 timeout=30,
             )
             print(
-                f"[IMP:7][conftest][sessionfinish] Hermes-test cleanup: removed {len(container_ids)} container(s)",
+                f"[IMP:7][conftest][sessionfinish] Hermes-test cleanup (label {_HERMES_TEST_LABEL}): "
+                f"removed {len(container_ids)} container(s)",
+                file=sys.stderr,
+            )
+            return
+        # Fallback (TRAP[DECISION] выше): hermes-test-* пока создаются без метки
+        legacy_ids = _docker_ps_ids(["--filter", "name=hermes-test-"])
+        if legacy_ids:
+            subprocess.run(
+                ["docker", "rm", "-f", *legacy_ids],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            print(
+                f"[IMP:8][conftest][sessionfinish] Hermes-test cleanup (name fallback): "
+                f"removed {len(legacy_ids)} container(s)",
                 file=sys.stderr,
             )
         else:
             print("[IMP:8][conftest][sessionfinish] Hermes-test cleanup: no containers to remove", file=sys.stderr)
     except (subprocess.TimeoutExpired, OSError) as exc:
         print(f"[IMP:8][conftest][sessionfinish] Hermes-test cleanup error: {exc}", file=sys.stderr)
+
+
+def _docker_ps_ids(extra_filters: list[str]) -> list[str]:
+    """Return docker container IDs matching extra `docker ps -a` filters (best-effort).
+
+    ## @io       ⇥ extra_filters: list[str] (e.g. ["--filter", "label=..."]) → ⎋ list[str]
+    ## @complexity O(N) где N = контейнеры
+    """
+    try:
+        result = subprocess.run(
+            ["docker", "ps", "-a", *extra_filters, "--format", "{{.ID}}"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        return [cid.strip() for cid in result.stdout.strip().splitlines() if cid.strip()]
+    except (subprocess.TimeoutExpired, OSError):
+        return []
 
 
 def _force_release_test_networks() -> None:
@@ -305,9 +454,10 @@ def _force_release_test_networks() -> None:
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     """
-    Session finish hook: reset counter on 100% PASS, else increment escalation.
+    Session finish hook: reset counter on 100% PASS of a FULL session, else keep + escalate.
     Also runs final Docker compose cleanup (DevPlan 040 Wave 3), the hermes-test-*
-    container sweep (DevPlan 123 T5) and NetworkLeaseManager cleanup.
+    container sweep (DevPlan 123 T5, label-based T12.9), NetworkLeaseManager cleanup
+    and the smoke retry-rate check (T12.7 T-11).
 
     DevPlan 124 T1: docker-cleanup и counter read/reset выполняются ТОЛЬКО в master
     (PYTEST_XDIST_WORKER отсутствует). В xdist-воркерах pytest_sessionfinish выполняется
@@ -316,8 +466,10 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     фейл параллельной сессии (факт 4). Master видит aggregate-результат сессии —
     reset при полном PASS корректен только там.
 
-    - exitstatus == 0 → all passed → reset counter to 0
-    - exitstatus != 0 → failures → keep incremented counter, print escalation
+    DevPlan 136 W12 T12.1 (T-2): reset — ТОЛЬКО при 100% PASS ПОЛНОЙ сессии
+    (_is_full_session: без -m фильтра + >= 1000 тестов). Поднабор (gates/static_audit/
+    отдельный файл) при 100% PASS НЕ сбрасывает attempts — проходящий поднабор не должен
+    стирать evidence фейла полного прогона.
     """
     if _is_xdist_worker():
         print(
@@ -330,22 +482,32 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     # ── Final compose cleanup (DevPlan 040 Wave 3) ──────────────────────────
     _final_compose_cleanup()
 
-    # ── Hermes-test-* sweep (DevPlan 123 T5, false-lead #10) ─────────────────
+    # ── Hermes-test-* sweep (DevPlan 123 T5, false-lead #10; label-based T12.9) ─
     _final_hermes_test_cleanup()
 
     # ── NetworkLeaseManager cleanup (DevPlan 041 W3) ─────────────────────────
     _force_release_test_networks()
 
+    # ── Smoke retry-rate check (T12.7 T-11): RED-логирование при >15% retry-rate ─
+    _check_smoke_retry_rate()
+
     counter = _read_counter()
     attempts = counter.get("attempts", 1)
 
     if exitstatus == pytest.ExitCode.OK:
-        # Reset counter on full pass
-        _write_counter({"attempts": 0})
-        print(
-            "[IMP:9][conftest][sessionfinish] 100% PASS — counter reset to 0",
-            file=sys.stderr,
-        )
+        # T12.1 (T-2): reset ТОЛЬКО при 100% PASS полной сессии; поднабор — не сбрасывает
+        if _is_full_session(session):
+            _reset_counter(scope=_session_scope_signature(session))
+            print(
+                "[IMP:9][conftest][sessionfinish] 100% PASS (full session) — counter reset to 0",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"[IMP:8][conftest][sessionfinish] 100% PASS (subset, {len(getattr(session, 'items', []))} items) — "
+                f"counter NOT reset (T12.1 T-2: reset only on full-session pass)",
+                file=sys.stderr,
+            )
     else:
         print(
             f"[IMP:9][conftest][sessionfinish] FAILURES DETECTED — attempt #{attempts}",
@@ -355,6 +517,41 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
         if not os.environ.get("PYTEST_NO_ESCALATION"):
             _handle_escalation(attempts)
         # Counter already incremented in sessionstart — persist as-is
+
+
+# region FUNC_check_smoke_retry_rate
+## @purpose  T12.7 (T-11): чтение retry-stats из smoke.py (счётчики retries/attempts модульных
+##            compose-стартов) и RED-логирование при retry-rate > 15% — сигнал ресурсной
+##            контенции Docker (DevPlan 136 §12.4: «gate при >15% retry-rate»). Не роняет
+##            сессию (exitstatus уже определён) — диагностический RED-маркер в лог.
+## @io       → ⎋ None
+## @complexity O(1)
+def _check_smoke_retry_rate() -> None:
+    """Log RED when smoke-module compose retry-rate exceeds 15% (T12.7 T-11)."""
+    try:
+        from _conftest.smoke import retry_stats
+
+        attempts, retries = retry_stats()
+        if attempts <= 0:
+            return
+        rate = retries / attempts
+        if rate > 0.15:
+            print(
+                f"[IMP:9][conftest][sessionfinish] SMOKE RETRY-RATE {rate:.0%} "
+                f"({retries}/{attempts}) EXCEEDS 15% threshold — Docker resource contention "
+                "suspected (TRAP[DECISION] retry-until-green, DevPlan 136 W12 T12.7 T-11)",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"[IMP:8][conftest][sessionfinish] Smoke retry-rate {rate:.0%} ({retries}/{attempts}) — within 15% threshold",
+                file=sys.stderr,
+            )
+    except Exception as exc:  # best-effort — никогда не роняет sessionfinish
+        print(f"[IMP:7][conftest][sessionfinish] retry-rate check skipped: {exc}", file=sys.stderr)
+
+
+# endregion FUNC_check_smoke_retry_rate
 
 
 # endregion PYTEST_SESSION_HOOKS

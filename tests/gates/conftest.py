@@ -1,172 +1,62 @@
-# GREP_SUMMARY: conftest, gates, anti-loop, pytest, counter, escalation, xdist-worker, master-guard
-# STRUCTURE: ┌.test_counter.json read/write┐ → ◇ _is_xdist_worker (PYTEST_XDIST_WORKER) → ◇ pytest_sessionstart (master: increment) → ◇ pytest_sessionfinish (master: reset on 100% pass) → ⎋
+# GREP_SUMMARY: conftest, gates, anti-loop, pytest, counter, re-export, xdist-worker, master-guard, unified-counter
+# STRUCTURE: ┌тонкий ре-экспорт _conftest.counter┐ → ⎋ (session-хуки — root conftest _conftest/session.py)
 # region MODULE_CONTRACT
-## @purpose  Anti-Loop protocol for gate tests — tracks failed run attempts and escalates on repeated failures
-## @scope    pytest hooks for session lifecycle: pytest_sessionstart (increment counter),
-##           pytest_sessionfinish (reset counter on 100% PASS)
+## @purpose  Тонкий ре-экспорт Anti-Loop counter для gate-тестов (DevPlan 136 W12 T12.1, T-1/T-2).
+##           УНИФИКАЦИЯ: один counter-модуль (_conftest/counter.py), один путь файла
+##           (tests/.test_counter.json), один ключ ("attempts"). Собственный counter-модуль,
+##           собственный .test_counter.json (tests/gates/) и собственные session-хуки УДАЛЕНЫ —
+##           dual counter (T-1) расщеплял anti-loop состояние, а reset поднабором (T-2) стирал
+##           evidence фейла полного прогона.
+## @scope    Конфигурация pytest для tests/gates/; counter-функции re-экспортируются для обратной
+##           совместимости. Session-хуки НЕ регистрируются здесь — root tests/conftest.py
+##           (через _conftest/session.py) загружается для ЛЮБОГО прогона под tests/ (включая
+##           tests/gates/), его pytest_sessionstart/finish покрывают gates-сессии с master-гейтом.
 ## @invariants
-##   - Counter file: tests/gates/.test_counter.json
-##   - Counter resets to 0 only at 100% PASS (all tests pass)
-##   - On failure: counter increments; escalation messages printed at 1-2, 3, 4, 5+
-##   - Individual test files NEVER call counter management functions
+##   - НЕТ собственных pytest_sessionstart/pytest_sessionfinish — иначе двойная регистрация
+##     хуков с root conftest (двойной increment/reset за прогон)
+##   - НЕТ собственного counter-файла/ключа — единственный файл tests/.test_counter.json
+##   - Reset счётчика — только при 100% PASS ПОЛНОЙ сессии (_is_full_session в session.py),
+##     не при 100% PASS поднабора (gates-прогон — всегда поднабор: -m "gate ...")
 ##   - Master-guard (DevPlan 124 T4): gates-чеки исполняются с -n auto (check-suite gates
-##     xdist: true) — hooks session выполняются в каждом воркере; increment/reset — ТОЛЬКО
-##     master (PYTEST_XDIST_WORKER отсутствует), воркеры — no-op
-## @rationale Anti-Loop protocol (RULES.md §TESTING) prevents agents from repeating failed strategies infinitely
-## @changes 2026-07-30 · DevPlan 088 Wave 4 — create gates conftest with Anti-Loop
-## @changes 2026-08-03 · DevPlan 124 T4 — master-guard: _is_xdist_worker() гейт для
-##           increment/reset (воркеры не искажают failed_runs при -n auto)
+##     xdist: true) — increment/reset выполняет master root-conftest (PYTEST_XDIST_WORKER гейт)
+## @rationale DevPlan 136 W12 T12.1: унификация counter устраняет T-1 (dual counter) и T-2
+##            (reset поднабором); ре-экспорт сохраняет совместимость именований.
+## @changes 2026-07-30 | DevPlan 088 Wave 4 — создан с Anti-Loop (собственный counter)
+## @changes 2026-08-03 | DevPlan 124 T4 — master-guard (_is_xdist_worker)
+## @changes 2026-08-05 | DevPlan 136 W12 T12.1 — переписан как тонкий ре-экспорт _conftest.counter;
+##           dual counter и собственные session-хуки удалены
 # endregion MODULE_CONTRACT
 
 """
-Anti-Loop protocol for gate tests.
+Anti-Loop protocol for gate tests — thin re-export (DevPlan 136 W12 T12.1).
 
-Prevents agents from repeating failed strategies infinitely by tracking
-failed run counts in .test_counter.json.
+С 2026-08-05 counter для gates — ЕДИНЫЙ модуль tests/_conftest/counter.py (файл
+tests/.test_counter.json), session-хуки — root tests/conftest.py (_conftest/session.py),
+которые загружаются и для tests/gates/ прогонов. Здесь только re-экспорт counter-функций
+для обратной совместимости импортов.
 
-Escalation levels:
+Escalation levels (peчатаются root session.py при не-PYTEST_NO_ESCALATION прогонах):
   Attempt 1-2: Output CHECKLIST of common errors
   Attempt 3:   Suggest external help (MCP tavily or Context 7)
   Attempt 4:   Warning: looping risk — pause and reflect
   Attempt 5+:  CRITICAL ERROR: agent looping detected — STOP
 """
 
-import json
-import logging
-import os
-from pathlib import Path
+# ── Единый counter-модуль (T12.1: dual counter удалён) ──────────────────────
+from _conftest.counter import (  # noqa: F401
+    _increment_counter,
+    _read_counter,
+    _read_scope,
+    _record_scope,
+    _reset_counter,
+    _write_counter,
+)
 
-import pytest
-
-logger = logging.getLogger(__name__)
-
-COUNTER_FILE = Path(__file__).resolve().parent / ".test_counter.json"
-LOCK_FILE = COUNTER_FILE.parent / (COUNTER_FILE.name + ".lock")
-
-
-# region FUNC_is_xdist_worker
-## @purpose  Детекция xdist-воркера (PYTEST_XDIST_WORKER, DevPlan 124 T1/T4): gates-чеки
-##           исполняются с -n auto (check-suite gates xdist: true, _apply_xdist) — hooks
-##           session выполняются в каждом воркере; счётчик и escalation принадлежат master
-##           (он видит aggregate-результат сессии).
-## @io       → ⎋ bool
-## @complexity O(1)
-def _is_xdist_worker() -> bool:
-    """True inside a pytest-xdist worker (PYTEST_XDIST_WORKER set)."""
-    return bool(os.environ.get("PYTEST_XDIST_WORKER"))
-
-
-# endregion FUNC_is_xdist_worker
-
-# Checklist of common gate test errors
-CHECKLIST = [
-    "tmp_path not used — hardcoded paths in tests",
-    "XML fixture content malformed or missing required sections",
-    "REQUIRED_SECTIONS mismatch",
-    "caplog level not set — IMP:7-10 logs not captured",
-    "File not found — framework/ or granules/ dir missing",
-    "Version stamp format incorrect",
-    "merge_sections collision logic not handling duplicates",
-    "yaml.safe_load called outside NodeYaml facade",
-    "yq eval still present in core/ shell scripts",
-]
-
-
-# region CONTEXT_COUNTER_LOCK
-## @purpose  Файловая блокировка flock (fcntl) вокруг counter RMW — xdist-безопасность
-##           (DevPlan 120 §3.3): gates-чеки исполняются с -n auto, session-хуки — в каждом
-##           worker'е; раздельные read/write .test_counter.json = гонка (потерянные обновления).
-## @io       → with _CounterLock(): критическая секция
-## @complexity O(1)
-class _CounterLock:
-    """Advisory flock around gate-counter read-modify-write (xdist-safe)."""
-
-    def __enter__(self) -> "_CounterLock":
-        import fcntl
-
-        self._fh = open(LOCK_FILE, "a+")
-        fcntl.flock(self._fh.fileno(), fcntl.LOCK_EX)
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        import fcntl
-
-        try:
-            fcntl.flock(self._fh.fileno(), fcntl.LOCK_UN)
-        finally:
-            self._fh.close()
-
-
-# endregion CONTEXT_COUNTER_LOCK
-
-
-def _read_counter() -> int:
-    """Read current attempt counter from .test_counter.json (under flock)."""
-    with _CounterLock():
-        if COUNTER_FILE.exists():
-            try:
-                data = json.loads(COUNTER_FILE.read_text())
-                return data.get("failed_runs", 0)
-            except (json.JSONDecodeError, KeyError):
-                return 0
-        return 0
-
-
-def _write_counter(count: int) -> None:
-    """Write attempt counter to .test_counter.json (under flock)."""
-    with _CounterLock():
-        COUNTER_FILE.write_text(json.dumps({"failed_runs": count}, indent=2) + "\n")
-        logger.info("[IMP:7][anti-loop][counter] Set failed_runs=%d", count)
-
-
-def _print_escalation(attempt: int) -> None:
-    """Print escalation message based on attempt count."""
-    print(f"\n{'=' * 60}")
-    print(f"  ANTI-LOOP ESCALATION: Attempt #{attempt}")
-    print(f"{'=' * 60}")
-
-    if attempt <= 2:
-        print("\n  CHECKLIST — common errors to verify:")
-        for i, item in enumerate(CHECKLIST, 1):
-            print(f"    {i}. {item}")
-    elif attempt == 3:
-        print("\n  >> Attempt 3: Use MCP tavily or Context 7 to find a solution online.")
-    elif attempt == 4:
-        print("\n  >> WARNING: Looping risk! Pause and reflect.")
-        print("  >> Are you repeating a failed strategy? Consider alternatives (Superposition).")
-    else:
-        print("\n  >> CRITICAL ERROR: Agent looping detected. STOP.")
-        print("  >> Formulate a help request for an operator.")
-    print(f"{'=' * 60}\n")
-
-
-def pytest_sessionstart(session: pytest.Session) -> None:
-    """Increment failed run counter at session start (master only — DevPlan 124 T4)."""
-    if _is_xdist_worker():
-        logger.info(
-            "[IMP:7][anti-loop][start] Worker %s — counter increment skipped (master owns session)",
-            os.environ.get("PYTEST_XDIST_WORKER"),
-        )
-        return
-    count = _read_counter() + 1
-    _write_counter(count)
-    logger.info("[IMP:7][anti-loop][start] Session started, failed_runs=%d", count)
-
-    if count > 1:
-        _print_escalation(count)
-
-
-def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
-    """Reset counter to 0 on 100% PASS, keep on failure (master only — DevPlan 124 T4)."""
-    if _is_xdist_worker():
-        logger.info(
-            "[IMP:7][anti-loop][reset] Worker %s — counter reset skipped (master owns session)",
-            os.environ.get("PYTEST_XDIST_WORKER"),
-        )
-        return
-    if exitstatus == 0:
-        _write_counter(0)
-        logger.info("[IMP:7][anti-loop][reset] All tests passed — counter reset to 0")
-    else:
-        count = _read_counter()
-        logger.warning("[IMP:7][anti-loop][fail] Tests failed — counter stays at %d", count)
+# ⚠️ TRAP[DECISION] · 2026-08-05 · — · gates/conftest — тонкий ре-экспорт, без session-хуков
+# · Rejected: оставить собственные pytest_sessionstart/finish + tests/gates/.test_counter.json
+# · Reason: dual counter (T-1) — расщеплённое anti-loop состояние; собственный reset поднабором
+#   (T-2) — ложный сброс attempts при 100% PASS gates-поднабора, стирающий evidence фейла
+#   полного прогона. Root conftest session-хуки уже покрывают gates-прогоны (root conftest
+#   загружается для tests/gates/) — собственные хуки = двойной increment/reset.
+# · Rev: если gates-прогоны начнут исполняться ИЗОЛИРОВАННО (pytest --rootdir вне tests/) —
+#   пересмотреть регистрацию session-хуков в root conftest.

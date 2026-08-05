@@ -44,6 +44,19 @@ class _FakeSession:
 
     config = _FakeConfig()
 
+    def __init__(self) -> None:
+        self.items: list = []  # поднабор — 0 собранных тестов (reset запрещён, T12.1 T-2)
+
+
+class _FakeFullSession:
+    """Полная сессия (T12.1 T-2): без -m фильтра + >= _FULL_SESSION_MIN_ITEMS items
+    (имитация `pytest tests/` — единственный случай сброса counter)."""
+
+    config = _FakeConfig()
+
+    def __init__(self) -> None:
+        self.items: list = [object()] * 1000
+
 
 def _as_worker(monkeypatch: pytest.MonkeyPatch) -> None:
     """Смоделировать xdist-воркер: PYTEST_XDIST_WORKER установлен (стандартный env xdist)."""
@@ -79,6 +92,11 @@ def _guard_hooks(monkeypatch: pytest.MonkeyPatch) -> dict:
     def _fake_write(data: dict) -> None:
         calls.append(f"write:{data}")
 
+    def _fake_reset(scope: str | None = None) -> None:
+        # T12.1 (T-2): sessionfinish вызывает _reset_counter (не _write_counter) —
+        # тест сохраняет совместимость assertion'ов через write-псевдоним
+        calls.append("write:{'attempts': 0}" if scope is None else f"reset:{scope}")
+
     def _fake_compose_cleanup() -> None:
         calls.append("compose_cleanup")
 
@@ -91,6 +109,7 @@ def _guard_hooks(monkeypatch: pytest.MonkeyPatch) -> dict:
     monkeypatch.setattr(session_mod, "_increment_counter", _fake_increment)
     monkeypatch.setattr(session_mod, "_read_counter", _fake_read)
     monkeypatch.setattr(session_mod, "_write_counter", _fake_write)
+    monkeypatch.setattr(session_mod, "_reset_counter", _fake_reset)
     monkeypatch.setattr(session_mod, "_final_compose_cleanup", _fake_compose_cleanup)
     monkeypatch.setattr(session_mod, "_final_hermes_test_cleanup", _fake_hermes_cleanup)
     monkeypatch.setattr(session_mod, "_force_release_test_networks", _fake_network_release)
@@ -163,14 +182,16 @@ def test_sessionfinish_worker_skips_cleanup_and_counter(caplog, monkeypatch) -> 
     logger.critical("[IMP:9][test] worker sessionfinish: cleanup+reset skipped (calls=%d)", len(calls))
 
 
-# 🧪 TRAP[TEST] · DevPlan 124 T1 · sessionfinish: master чистит и сбрасывает при 100% PASS
-# · Scenario: без PYTEST_XDIST_WORKER, exitstatus==0 → все 3 cleanup + read + write({"attempts": 0})
-# ·   (master видит aggregate-результат xdist-сессии — reset корректен только там)
-# · Last fail: 2026-08-03 — каждый воркер сбрасывал счётчик при своём локальном PASS (факт 4)
-# · Remove if: порядок cleanup/reset в sessionfinish изменён
+# 🧪 TRAP[TEST] · DevPlan 124 T1 + 136 W12 T12.1 · sessionfinish: master чистит; reset — ТОЛЬКО полная сессия
+# · Scenario: без PYTEST_XDIST_WORKER, exitstatus==0, ПОДНАБОР (0 items — нет -m, но < 1000) →
+# ·   cleanup выполняется, счётчик НЕ сбрасывается (T12.1 T-2: reset только при 100% PASS полной
+# ·   сессии; проходящий поднабор не стирает evidence фейла полного прогона)
+# · Last fail: 2026-08-05 — тест кодировал СТАРЫЙ контракт (reset при любом exitstatus==0);
+# ·   T12.1 (T-2) изменил семантику (см. test_sessionfinish_master_full_session_resets)
+# · Remove if: семантика reset при поднаборе изменена
 @ldd_trajectory
 def test_sessionfinish_master_cleans_and_resets(caplog, monkeypatch) -> None:
-    """DevPlan 124 T1: master при exitstatus==0 чистит docker и сбрасывает счётчик в 0."""
+    """DevPlan 124 T1 + 136 T12.1: master при exitstatus==0 чистит docker; ПОДНАБОР — НЕ сбрасывает."""
     calls = _guard_hooks(monkeypatch)
     _as_master(monkeypatch)
     monkeypatch.setenv("PYTEST_NO_ESCALATION", "1")
@@ -181,8 +202,29 @@ def test_sessionfinish_master_cleans_and_resets(caplog, monkeypatch) -> None:
     assert "hermes_cleanup" in calls, "master должен выполнить hermes-test sweep"
     assert "network_release" in calls, "master должен выполнить network release"
     assert "read" in calls, "master должен прочитать счётчик"
-    assert "write:{'attempts': 0}" in calls, f"master должен сбросить счётчик в 0, calls={calls}"
-    logger.critical("[IMP:9][test] master sessionfinish: cleanup+reset executed (calls=%s)", calls)
+    assert not any(c.startswith("write:") for c in calls), (
+        f"T12.1 T-2: поднабор 100% PASS НЕ сбрасывает счётчик, calls={calls}"
+    )
+    logger.critical("[IMP:9][test] master sessionfinish subset: cleanup executed, counter NOT reset (calls=%s)", calls)
+
+
+# 🧪 TRAP[TEST] · DevPlan 136 W12 T12.1 (T-2) · sessionfinish: reset ТОЛЬКО при полной сессии
+# · Scenario: exitstatus==0 + ПОЛНАЯ сессия (>= 1000 items, без -m) → _write_counter({"attempts": 0})
+# · Last fail: 2026-08-05 — dual counter / reset-поднабором (T-1/T-2 audit finding)
+# · Remove if: полная сессия перестала быть единственным reset-триггером
+@ldd_trajectory
+def test_sessionfinish_master_full_session_resets(caplog, monkeypatch) -> None:
+    """DevPlan 136 W12 T12.1: master при exitstatus==0 + ПОЛНАЯ сессия сбрасывает счётчик в 0."""
+    calls = _guard_hooks(monkeypatch)
+    _as_master(monkeypatch)
+    monkeypatch.setenv("PYTEST_NO_ESCALATION", "1")
+
+    session_mod.pytest_sessionfinish(_FakeFullSession(), exitstatus=0)
+
+    assert "compose_cleanup" in calls, "master должен выполнить final compose cleanup"
+    assert "read" in calls, "master должен прочитать счётчик"
+    assert any(c.startswith("reset:") for c in calls), f"полная сессия 100% PASS — сброс счётчика, calls={calls}"
+    logger.critical("[IMP:9][test] master sessionfinish full-session: counter reset (calls=%s)", calls)
 
 
 # 🧪 TRAP[TEST] · DevPlan 124 T1 · sessionfinish: master при фейле НЕ сбрасывает счётчик

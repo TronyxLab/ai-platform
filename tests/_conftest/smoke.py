@@ -7,20 +7,31 @@
 ## @scope — Used by test_smoke_platform.py and test_platform_endpoints.py.
 ## @invariants
 ##   - platform_services is session-scoped (not module) — containers live for entire session
-##   - SMOKE_ENV contains MINIMAL test values, not production secrets
+##   - SMOKE_ENV — ЛЕНИВЫЙ (T12.4 T-7, PEP 562 __getattr__): platform-env.yaml грузится при
+##     первом обращении (не import-time); fallback на env_defaults_generated.py при отсутствии файла
+##   - platform_env — module-scoped (T12.3 T-6): инжектится только для модулей, запрашивающих её;
+##     platform_services (session) не зависит от неё — compose получает SMOKE_ENV через merge
 ##   - Docker guard built into platform_services — skip if Docker unavailable or production
 ##   - Conditional activation via requires_docker marker — static tests don't trigger compose
-##   - _collect_external_netwalks path resolved from tests/conftest/smoke.py (3 levels up → core/modules)
+##   - started/failed — снимок под _WAVE_STATE_LOCK перед yield (T12.2 T-3); финальный wave-event
+##     сигналится в finally основного потока (T12.2 T-4)
+##   - Retry-rate компоуз-стартов трекается (_RETRY_STATS) и проверяется в sessionfinish (T12.7 T-11)
+##   - Loki /ready — честный флаг (T12.7 T-10): loki_ready в результате + фикстура loki_ready
 ## @rationale — Cross-file module-scoped fixture imports cause non-deterministic teardown
 ##              ordering. Session scope extracted to dedicated module eliminates race condition.
-## @changes — LAST_CHANGE: 2026-07-12 | Extracted from conftest.py SMOKE_PLATFORM_FIXTURES region
+## @changes — LAST_CHANGE: 2026-08-05 | DevPlan 136 W12: T12.2 (wave lock+snapshot+finally),
+##            T12.3 (platform_env module-scope, platform_services без platform_env),
+##            T12.4 (lazy SMOKE_ENV + fallback), T12.7 (loki_ready, retry-stats), T12.9 (host-dirs cleanup)
+##            2026-07-12 | Extracted from conftest.py SMOKE_PLATFORM_FIXTURES region
 ## @modulemap — _collect_external_networks → parse compose YAMLs for external:true networks
 ##              _run_docker_smoke → centralised docker subprocess runner with SMOKE_ENV
 ##              _wait_for_loki_ready → HTTP poll for Loki /ready (scratch image has no curl/wget)
-##              platform_env → inject/restore SMOKE_ENV in os.environ
+##              platform_env → inject/restore SMOKE_ENV in os.environ (module-scoped)
 ##              platform_services → lifecycle fixture: start/stop compose stack
 # endregion MODULE_CONTRACT
 
+import contextlib
+import functools
 import json
 import logging
 import os
@@ -119,6 +130,103 @@ _STATIC_SMOKE_ENV: dict[str, str] = {
     "GRAFANA_TEST_PORT": "13030",
 }
 
+# region WAVE_STATE_LOCK
+# T12.2 (T-3, DevPlan 136 §12.4): started/failed списки мутируются фоновым потоком волн
+# (_start_remaining) ПОСЛЕ yield — тесты получали «живой» снимок в процессе мутации
+# (гонка: волна 1+ дописывает, пока волна 0 тесты читают). Lock + снимок перед yield.
+_WAVE_STATE_LOCK = threading.Lock()
+
+# 🧐 TRAP[DECISION] · 2026-08-05 · — · Docker-тесты — single-process по построению (T12.2 T-4)
+# · Rejected: маркер-фильтр docker-тестов в один xdist-воркер (-n 1 для docker-субсетов)
+# · Reason: канон тестовой архитектуры (tests/AGENTS.md §Параллельный запуск п.1-2): Docker —
+#   только канонические session-фикстуры (platform_services, модульные), один стек на машину;
+#   `-n auto` применяется к статическим сьюитам (check-suite gates/static_audit xdist: true),
+#   docker-сьюиты (smoke/component/integration) исполняются single-process (check-suite xdist:
+#   false для них; test_runner исключает docker-субсеты из -n auto — DevPlan 124). Маркер-фильтр
+#   в один воркер не нужен: docker-фикстуры НЕ создают стек в воркерах (session-фикстура —
+#   только master), а маркер-выражение уже отделяет docker-сьюиты от статических.
+# · Rev: если появится требование распараллелить docker-сьюиты по разным машинам/стекам —
+#   ввести маркер-группировку и параметр one-docker-worker.
+# endregion WAVE_STATE_LOCK
+
+# region RETRY_STATS
+# T12.7 (T-11): счётчики retry-until-green для compose-стартов модулей. Итоговая retry-rate
+# (retries/attempts) проверяется в sessionfinish (_check_smoke_retry_rate): >15% → RED.
+# Гейт на порог — tests/gates/test_gate_retry_rate.py (порог 0.15 — канон, 2 места).
+_RETRY_STATS: dict[str, int] = {"attempts": 0, "retries": 0}
+_RETRY_STATS_LOCK = threading.Lock()
+_RETRY_RATE_THRESHOLD = 0.15  # >15% retry-rate = ресурсная контенция Docker (T12.7 T-11)
+
+
+def retry_stats() -> tuple[int, int]:
+    """Вернуть (attempts, retries) smoke-compose стартов (T12.7 T-11, thread-safe).
+
+    ## @io       → ⎋ tuple[int, int] — (число попыток старта, число retry-попыток)
+    ## @complexity O(1)
+    """
+    with _RETRY_STATS_LOCK:
+        return int(_RETRY_STATS["attempts"]), int(_RETRY_STATS["retries"])
+
+
+def _bump_retry_stats(retried: bool) -> None:
+    """Учесть попытку старта модуля (attempts += 1; retries += 1 если это retry)."""
+    with _RETRY_STATS_LOCK:
+        _RETRY_STATS["attempts"] += 1
+        if retried:
+            _RETRY_STATS["retries"] += 1
+
+
+def _set_retry_stats(attempts: int, retries: int) -> None:
+    """TEST-SUPPORT: установить счётчики (используется gate-тестом для restore после дельты).
+
+    ## @purpose  T12.7 (T-11): gate-тест учёта не должен оставлять side-effect в глобальном
+    ##            счётчике (иначе sessionfinish даёт ложный RED retry-rate в gates-прогоне).
+    ## @io       ⇥ attempts, retries: int → ⎋ None
+    ## @complexity O(1)
+    """
+    with _RETRY_STATS_LOCK:
+        _RETRY_STATS["attempts"] = int(attempts)
+        _RETRY_STATS["retries"] = int(retries)
+
+
+# endregion RETRY_STATS
+
+# region LOKI_READY_STATE
+# T12.7 (T-10): реестр готовности Loki (observability-модуль). Заполняется
+# _start_single_module (ленивый HTTP-poll /ready), агрегируется _loki_ready_aggregate()
+# в результат platform_services и потребляется фикстурой loki_ready (skip loki-зависимых).
+_LOKI_READY_STATE: dict[str, object] = {"observed": False, "ready": False}
+_LOKI_READY_LOCK = threading.Lock()
+
+
+def _record_loki_ready(ready: bool) -> None:
+    """Зафиксировать результат Loki /ready poll (thread-safe)."""
+    with _LOKI_READY_LOCK:
+        _LOKI_READY_STATE["observed"] = True
+        _LOKI_READY_STATE["ready"] = ready
+
+
+def _loki_ready_aggregate() -> bool:
+    """Вернуть готовность Loki: False если не наблюдалась (модуль не стартовал)."""
+    with _LOKI_READY_LOCK:
+        return bool(_LOKI_READY_STATE["ready"])
+
+
+# endregion LOKI_READY_STATE
+
+
+@pytest.fixture(scope="session")
+def loki_ready() -> bool:
+    """True если Loki /ready poll прошёл (иначе False — loki-зависимые тесты skip).
+
+    ## @purpose  T12.7 (T-10): честный флаг готовности Loki вместо silent-proceed.
+    ##            Потребители (loki-зависимые тесты) запрашивают фикстуру и скипают при False
+    ##            (инфраструктурная недоступность — легитимный skip per tests/AGENTS.md rule 4).
+    ## @io       → ⎋ bool
+    ## @complexity O(1)
+    """
+    return _loki_ready_aggregate()
+
 
 def load_platform_env_defaults() -> dict[str, str]:
     """Load env_defaults from repo-root platform-env.yaml (runtime, D2).
@@ -127,11 +235,14 @@ def load_platform_env_defaults() -> dict[str, str]:
     ##            Устраняет дубли static-копий (DevPlan 116 T3, U-17): значения
     ##            (PLATFORM_DOMAIN, POSTGRES_USER, PROMETHEUS_TARGETS_DIR, ...)
     ##            читаются из generated platform-env.yaml, а не хардкодятся в smoke.py.
+    ##            T12.4 (T-7): вызывается ЛЕНИВО (не import-time) — статические сессии
+    ##            без Docker не платят за YAML-load и не падают при отсутствии файла.
     ## @io — ⎋ dict[str, str]: env_defaults секция platform-env.yaml
     ## @complexity — O(1) — single YAML load
     ## @invariants
     ##   - File resolved from repo root (tests/helpers/gate_helpers.py::repo_root)
-    ##   - Raises if platform-env.yaml missing (fail-fast — generated file must exist)
+    ##   - Missing platform-env.yaml → fallback на env_defaults_generated.py (T12.4 T-7),
+    ##     НЕ raise на import-time
     ##   - Returned dict contains ONLY env_defaults (не port_mappings/profiles)
     """
     import yaml as _yaml_load
@@ -140,10 +251,14 @@ def load_platform_env_defaults() -> dict[str, str]:
 
     env_path = _repo_root() / "platform-env.yaml"
     if not env_path.is_file():
-        raise FileNotFoundError(
-            f"[IMP:10][smoke] platform-env.yaml not found at {env_path} — "
-            "run `make generate-platform-env` (DevPlan 116 T3, D2)."
+        # T12.4 (T-7): fallback на generated CI-дефолты (tests/helpers/env_defaults_generated.py)
+        # вместо import-time FileNotFoundError — статические сессии не должны падать.
+        logging.getLogger(__name__).warning(
+            "[IMP:8][smoke][load_platform_env_defaults] platform-env.yaml not found at %s — "
+            "falling back to env_defaults_generated.py",
+            env_path,
         )
+        return _fallback_env_defaults()
     with open(env_path) as f:
         data = _yaml_load.safe_load(f)
     raw = (data or {}).get("env_defaults", {})
@@ -154,7 +269,56 @@ def load_platform_env_defaults() -> dict[str, str]:
     return defaults
 
 
-PLATFORM_ENV_DEFAULTS: dict[str, str] = load_platform_env_defaults()
+# region FUNC_fallback_env_defaults
+## @purpose  T12.4 (T-7): fallback-источник env-дефолтов при отсутствии platform-env.yaml —
+##            generated tests/helpers/env_defaults_generated.py (_-префиксные константы).
+## @io       → ⎋ dict[str, str]: {SECRET_NAME: CI-значение}
+## @complexity O(K) где K = констант в generated-модуле
+def _fallback_env_defaults() -> dict[str, str]:
+    """Build env_defaults from tests/helpers/env_defaults_generated.py constants (T12.4)."""
+    try:
+        from tests.helpers import env_defaults_generated as _gen  # type: ignore[import-untyped]
+
+        result: dict[str, str] = {}
+        for name in getattr(_gen, "__all__", []):
+            if name.startswith("_") and hasattr(_gen, name):
+                result[name.lstrip("_")] = str(getattr(_gen, name))
+        logging.getLogger(__name__).info(
+            "[IMP:8][smoke][fallback_env_defaults] Using %d generated CI defaults (fallback)",
+            len(result),
+        )
+        return result
+    except Exception as exc:  # generated-файл отсутствует/битый — пустой fallback
+        logging.getLogger(__name__).warning(
+            "[IMP:7][smoke][fallback_env_defaults] env_defaults_generated.py unavailable: %s", exc
+        )
+        return {}
+
+
+# endregion FUNC_fallback_env_defaults
+
+
+# region FUNC_get_smoke_env
+## @purpose  T12.4 (T-7): ЛЕНИВЫЙ мерж SMOKE_ENV — platform-env.yaml грузится при ПЕРВОМ
+##            обращении (не import-time). Статические сессии (без Docker) не платят за
+##            YAML-load и не падают при отсутствии файла (fallback на env_defaults_generated).
+##            Кэш на сессию процесса (functools.lru_cache — идемпотентен, 1 load на процесс).
+## @io       → ⎋ dict[str, str]: мерж env_defaults → static → generated (TRAP[DECISION] ниже)
+## @complexity O(1) после первого вызова
+def get_smoke_env() -> dict[str, str]:
+    """Lazily compute SMOKE_ENV (platform-env defaults → static → generated) with cache."""
+    return _compute_smoke_env()
+
+
+@functools.lru_cache(maxsize=1)
+def _compute_smoke_env() -> dict[str, str]:
+    """Compute SMOKE_ENV merge once per process (cached)."""
+    _platform_defaults = load_platform_env_defaults()
+    return {**_platform_defaults, **_STATIC_SMOKE_ENV, **SMOKE_ENV_GENERATED}
+
+
+# endregion FUNC_get_smoke_env
+
 
 # ⚠️ TRAP[DECISION] · 2026-07-31 · — · Merge order: env_defaults → static → generated
 # · Rejected: literal DevPlan 116 order {static, env_defaults, generated}
@@ -163,7 +327,20 @@ PLATFORM_ENV_DEFAULTS: dict[str, str] = load_platform_env_defaults()
 # ·   Static содержит ТОЛЬКО тест-специфику (дубли удалены) → статик должен побеждать env_defaults.
 # ·   SMOKE_ENV_GENERATED (секреты ci_default) — последний, как в generate_platform_env (secret > non-secret).
 # · Rev: если статик снова получит ключи, дублирующие env_defaults → вернуть порядок DevPlan.
-SMOKE_ENV: dict[str, str] = {**PLATFORM_ENV_DEFAULTS, **_STATIC_SMOKE_ENV, **SMOKE_ENV_GENERATED}
+
+# T12.4 (T-7): SMOKE_ENV — ленивый (PEP 562 module __getattr__): import-time НЕ грузит
+# platform-env.yaml; первый доступ к атрибуту вызывает get_smoke_env() (кэш на процесс).
+# Совместимость: `from _conftest.smoke import SMOKE_ENV` и `SMOKE_ENV` внутри модуля работают.
+
+
+def __getattr__(name: str) -> object:
+    """PEP 562: ленивые SMOKE_ENV / PLATFORM_ENV_DEFAULTS (T12.4 T-7)."""
+    if name == "SMOKE_ENV":
+        return get_smoke_env()
+    if name == "PLATFORM_ENV_DEFAULTS":
+        return load_platform_env_defaults()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 _SMOKE_VOLUME_BIND_DIRS: list[str] = [
     "/var/lib/platform/postgres-data",
@@ -219,7 +396,7 @@ def _run_docker_smoke(
     ## @io — ⇥ args, env_override, timeout → ⎋ CompletedProcess
     ## @complexity — O(1)
     """
-    cmd_env = {**os.environ, **SMOKE_ENV}
+    cmd_env = {**os.environ, **SMOKE_ENV}  # noqa: F821 — SMOKE_ENV ленивый (PEP 562 __getattr__, T12.4)
     if env_override:
         cmd_env.update(env_override)
     return subprocess.run(
@@ -466,6 +643,8 @@ def _start_single_module(
     _start_ok = False
 
     for _attempt in range(_MAX_RETRIES):
+        # T12.7 (T-11): честный учёт retry-rate (attempts/retries) для gate-проверки в sessionfinish
+        _bump_retry_stats(retried=_attempt > 0)
         if _attempt > 0:
             _logger.warning(
                 "[IMP:8][conftest][_start_single_module] Retry %d/%d for '%s' — transient failure cooldown",
@@ -595,18 +774,28 @@ def _start_single_module(
         return {"success": False, "module_name": module_name}
 
     # ---- Loki readiness HTTP-poll ------------------------------------
+    # T12.7 (T-10): Loki timeout больше НЕ «silent proceed» — loki_ready явно отражается в
+    # результате модуля и агрегируется в платформенном результате (потребитель — loki_ready
+    # фикстура / sessionfinish диагностика). Ложь = loki-зависимые тесты будут падать
+    # осмысленно, а не с каскадом недоступности.
+    _loki_ready = True
     if module_name == "observability":
         _loki_ready = _wait_for_loki_ready(
             url=f"http://localhost:{platform_ports['LOKI_PORT']}/ready",
             timeout=loki_timeout,
             logger=_logger,
         )
+        _record_loki_ready(_loki_ready)
         if not _loki_ready:
-            _logger.warning(
-                "[IMP:9][conftest][_start_single_module] Loki /ready timeout - proceeding",
+            _logger.error(
+                "[IMP:9][conftest][_start_single_module] Loki /ready timeout after %ds — "
+                "loki-dependent tests will fail (T12.7 T-10)",
+                loki_timeout,
             )
+        else:
+            _logger.info("[IMP:9][conftest][_start_single_module] Loki /ready OK — loki-dependent tests enabled")
 
-    return {"success": True, "module_name": module_name}
+    return {"success": True, "module_name": module_name, "loki_ready": _loki_ready}
 
 
 # region R4_HELPER
@@ -690,26 +879,34 @@ def _module_container_running(
 # endregion R4_HELPER
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def platform_env() -> dict[str, str]:
-    """Inject SMOKE_ENV into os.environ; restore on teardown.
+    """Inject SMOKE_ENV into os.environ; restore on teardown (module-scoped, T12.3 T-6).
 
     ## @purpose — Set environment variables required by docker-compose files.
-    ##            Saves original values and restores them after the session.
+    ##            Saves original values and restores them after the module.
+    ##            T12.3 (T-6): scope=module (не session) — SMOKE_ENV инжектится только для
+    ##            модулей, которые её реально запрашивают; session-scope загрязнял os.environ
+    ##            для ВСЕХ тестов сессии (env pollution, T-5/T-6).
     ## @io — ⇥ (os.environ snapshot) → ⌋ dict[str, str] (SMOKE_ENV copy)
     ## @complexity — O(K) where K = len(SMOKE_ENV)
+    ## @invariants
+    ##   - module scope: фикстура создаётся один раз на тестовый модуль, teardown восстанавливает env
+    ##   - platform_services (session) НЕ зависит от неё (T12.3): compose-субпроцессы получают
+    ##     SMOKE_ENV через merge в _run_docker_smoke — инъекция os.environ не нужна для старта
     """
     _logger = logging.getLogger(__name__)
     _logger.info("[IMP:7][conftest][platform_env] Setting SMOKE_ENV environment variables")
+    smoke_env = get_smoke_env()
     saved: dict[str, str | None] = {}
-    for key in SMOKE_ENV:
+    for key in smoke_env:
         saved[key] = os.environ.get(key)
-        os.environ[key] = SMOKE_ENV[key]
+        os.environ[key] = smoke_env[key]
 
-    yield SMOKE_ENV
+    yield smoke_env
 
     _logger.info("[IMP:9][conftest][platform_env] Restoring original environment")
-    for key in SMOKE_ENV:
+    for key in smoke_env:
         env_value = saved[key]
         if env_value is None:
             os.environ.pop(key, None)
@@ -734,7 +931,6 @@ def platform_ports(platform_port_mappings_dict: dict[str, int]) -> dict[str, int
 @pytest.fixture(scope="session")
 def platform_services(
     request: pytest.FixtureRequest,
-    platform_env: dict[str, str],
     all_compose_files: dict[str, str],
     module_graph: dict[str, list[str]],
     platform_ports: dict[str, int],
@@ -747,9 +943,18 @@ def platform_services(
     ##            Session-scoped — containers live for the entire test session.
     ##            Built-in Docker guard: skips if Docker unavailable or production host.
     ##            Conditional activation: only if at least one test has requires_docker marker.
-    ## @io — ⇥ request, platform_env, all_compose_files, module_graph
-    ##       → ⎋ dict[str, list[str]]: {"started": [module_names], "failed": [module_names]}
+    ##            T12.3 (T-6): НЕ зависит от platform_env (session→module scope mismatch) —
+    ##            compose-субпроцессы получают SMOKE_ENV через merge в _run_docker_smoke.
+    ## @io — ⇥ request, all_compose_files, module_graph
+    ##       → ⎋ dict[str, list[str]]: {"started": [module_names], "failed": [module_names],
+    ##                                  "loki_ready": bool} — СНИМОК под lock (T12.2 T-3)
     ## @complexity — O(N + M) where N = compose files, M = networks
+    ## @invariants
+    ##   - started/failed — СНИМОК (list-копия) под _WAVE_STATE_LOCK перед yield (T12.2 T-3):
+    ##     фоновый поток волн дописывает списки ПОСЛЕ старта — «живые» списки = гонка чтения
+    ##   - Финальный wave-event сигналится в try/finally основного потока (T12.2 T-4): даже если
+    ##     фоновый поток умер, тесты platform_services-волны не висят 600s до timeout
+    ##   - Только master (session-фикстура): воркеры не создают свой стек
     """
     _logger = logging.getLogger(__name__)
 
@@ -764,12 +969,16 @@ def platform_services(
     needs_docker = any(item.get_closest_marker("requires_docker") for item in items)
     if not needs_docker:
         _logger.info("[IMP:8][conftest][platform_services] No test requires Docker — yielding no-op")
-        yield {"started": [], "failed": []}
+        yield {"started": [], "failed": [], "loki_ready": _loki_ready_aggregate()}
         return
 
     _logger.info("[IMP:7][conftest][platform_services] Starting platform services")
 
     # ── Ensure volume bind-mount directories ─────────────────────────────────
+    # T12.9 (T-14): созданные host-директории (не существовавшие до старта) трекаются
+    # в _created_host_dirs и удаляются в teardown (только пустые, best-effort) — тест не
+    # оставляет артефактов на host.
+    _created_host_dirs: list[str] = [_bind_dir for _bind_dir in _SMOKE_VOLUME_BIND_DIRS if not os.path.isdir(_bind_dir)]
     _ensure_volume_dirs(_SMOKE_VOLUME_BIND_DIRS)
 
     # ── Generate test data files for status-page bind-mount ─────────────────
@@ -789,7 +998,6 @@ def platform_services(
             modules: {}
     """)
     )
-
     _test_status_metrics.parent.mkdir(parents=True, exist_ok=True)
     _test_status_metrics.write_text(
         json.dumps(
@@ -971,7 +1179,9 @@ def platform_services(
         # Wave 1+ — background thread (overlaps container start with test execution)
         def _start_remaining(wave_list, started_list, failed_list):
             """Start remaining waves in background thread.
-            Each wave signals readiness after completion, unblocking tests."""
+            Each wave signals readiness after completion, unblocking tests.
+            T12.2 (T-3): started_list/failed_list мутируются под _WAVE_STATE_LOCK —
+            основной поток делает снимок перед yield (гонка чтения «живых» списков)."""
             for wave_idx in range(1, len(wave_list)):
                 wave_modules = wave_list[wave_idx]
                 _logger.info(
@@ -1007,19 +1217,23 @@ def platform_services(
                         try:
                             _wm_result = future.result()
                             if isinstance(_wm_result, dict) and _wm_result.get("success"):
-                                started_list.append(_wm_module_name)
+                                # T12.2 (T-3): append под lock — конкурентно с основным потоком (снимок)
+                                with _WAVE_STATE_LOCK:
+                                    started_list.append(_wm_module_name)
                             else:
-                                failed_list.append(_wm_module_name)
+                                with _WAVE_STATE_LOCK:
+                                    failed_list.append(_wm_module_name)
                         except Exception:
-                            failed_list.append(_wm_module_name)
+                            with _WAVE_STATE_LOCK:
+                                failed_list.append(_wm_module_name)
 
-                _logger.info(
-                    "[IMP:9][conftest][platform_services] Wave %d (background) complete: %d started, %d failed",
-                    wave_idx,
-                    len([m for m in wave_modules if m in started_list]),
-                    len([m for m in wave_modules if m in failed_list]),
-                )
-                signal_wave_ready(wave_idx)
+                    _logger.info(
+                        "[IMP:9][conftest][platform_services] Wave %d (background) complete: %d started, %d failed",
+                        wave_idx,
+                        len([m for m in wave_modules if m in started_list]),
+                        len([m for m in wave_modules if m in failed_list]),
+                    )
+                    signal_wave_ready(wave_idx)
 
             # ⚠️ TRAP[BUG] · 2026-07-23 · Signal "all waves done" for platform_services tests
             # · Symptom: tests using platform_services fixture (wave = max_wave + 1) ran before
@@ -1028,6 +1242,8 @@ def platform_services(
             # ·   container was "never started" (started=[] — container not in Wave 0).
             # · Fix: signal wave = len(wave_list) after ALL background waves complete.
             # ·   _init_wave_events creates len(waves)+1 events (0..len(waves) for max_wave+1).
+            # · T12.2 (T-4): дублируется в try/finally основного потока — если bg-поток умер,
+            # ·   финальный wave-event всё равно сигналится (тесты не висят 600s).
             signal_wave_ready(len(wave_list))
 
         bg_thread = threading.Thread(
@@ -1037,12 +1253,25 @@ def platform_services(
         )
         bg_thread.start()
 
-    _logger.info("[IMP:9][conftest][platform_services] Result: %d started, %d failed", len(started), len(failed))
-    yield {"started": started, "failed": failed}
+    # T12.2 (T-3): СНИМОК started/failed под lock перед yield — тесты получают
+    # консистентный снимок, не «живые» списки (фон дописывает их после старта).
+    with _WAVE_STATE_LOCK:
+        _result_snapshot = {"started": list(started), "failed": list(failed), "loki_ready": _loki_ready_aggregate()}
+    _logger.info(
+        "[IMP:9][conftest][platform_services] Result: %d started, %d failed",
+        len(_result_snapshot["started"]),
+        len(_result_snapshot["failed"]),
+    )
+    try:
+        yield _result_snapshot
+    finally:
+        # T12.2 (T-4): финальный wave-event сигналится в main thread finally — даже при
+        # падении фонового потока тесты platform_services-волны не ждут 600s до timeout.
+        signal_wave_ready(len(waves))
 
-    # ── Wait for background thread (if any) before teardown ─────────────────
-    if bg_thread is not None:
-        bg_thread.join(timeout=600)
+        # ── Wait for background thread (if any) before teardown ─────────────────
+        if bg_thread is not None:
+            bg_thread.join(timeout=600)
 
     # ── Teardown: compose stop (not down) — faster, preserves volumes ────────
     # DevPlan 040 Wave 3: compose down → compose stop saves ~50s.
@@ -1076,6 +1305,27 @@ def platform_services(
     _logger.info("[IMP:8][conftest][platform_services] Releasing %d network(s) via NetworkLeaseManager", len(_all_nets))
     for net_name in reversed(_all_nets):
         _nm.release(net_name)
+
+    # ── T12.9 (T-14): host-артефакты teardown (best-effort, только созданные нами) ──
+    # Удаляем тестовые файлы и пустые директории, созданные fixture'ой. rmdir падает
+    # если в директории осталось содержимое (контейнерные volume-данные) — это ожидаемо,
+    # такие директории НЕ удаляем (их создал не тест).
+    _test_artifacts = [
+        Path("/tmp/test-node-configs/test-node/node.yaml"),
+        Path("/tmp/run/platform/status-metrics.json"),
+    ]
+    for _artifact in _test_artifacts:
+        try:
+            _artifact.unlink(missing_ok=True)
+        except OSError as _exc:
+            _logger.info("[IMP:7][conftest][platform_services] T12.9: artifact cleanup skip: %s", _exc)
+    for _dir in reversed(_created_host_dirs):
+        with contextlib.suppress(OSError):
+            os.rmdir(_dir)  # только пустые — OSError если не пусто (данные не наши)
+    if _created_host_dirs:
+        _logger.info(
+            "[IMP:8][conftest][platform_services] T12.9: removed %d empty host dir(s)", len(_created_host_dirs)
+        )
 
     _logger.info("[IMP:9][conftest][platform_services] Cleanup complete")
 

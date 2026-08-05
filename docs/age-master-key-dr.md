@@ -21,6 +21,8 @@
 ##            закладывается в W10 (структура + процедуры + threat-model), drill выполняется в W12
 ##            T12.12 (off-node backup реального ключа + восстановление на test-VPS).
 ## @changes  2026-08-05 · DevPlan 136 W10 T10.15 — создан (структура, процедуры, threat-model, S-13)
+## @changes  2026-08-05 · DevPlan 136 W12 T12.12 — завершён: верификация ноды (/etc/age/key.txt
+##            plaintext-находка), off-node backup + DR-drill → Debt (Rev 2026-08-31)
 ## @links    core/internal/shared/node_detect.py (detect-цепочка), core/internal/secrets/decrypt_secrets.py
 ##           (tmpfs+dd-wipe+sanitize, S-13), core/internal/secrets/decrypt-secrets.sh (фасад),
 ##           core/secret-definitions.yaml (инвентарь), docs/ci-secrets-rotation.md (ротация SSH/CI),
@@ -93,12 +95,29 @@ GitHub Secrets / password manager) — НЕ на файловой системе
 | KMS-ключ скомпрометирован | Отдельный KMS-ключ для AGE-бэкапа; ротация | Средний: ротация не автоматизирована |
 | Backup в облаке = новая поверхность атаки | Зашифрован sops/KMS ПЕРЕД выгрузкой; private ACL | Низкий: шифрование = контроль доступа |
 
-## 5. W12 completion plan (T12.12)
+## 5. W12 completion status (T12.12, 2026-08-05)
 
-W10 закладывает структуру и процедуры. W12 выполняет:
-- [ ] Реальный off-node backup мастер-ключа (sops/KMS) — первая итерация
-- [ ] DR-drill на test-VPS: новая нода → restore-first → verify secrets
-- [ ] Автоматизация: make-таргет `age-key-backup` (если drill подтвердит)
+W10 заложил структуру и процедуры. W12 выполнил верификацию и зафиксировал статусы:
+
+- [x] Документ верифицирован (структура, процедуры, threat-model, S-13 tmpfs/sanitize — полные)
+- [x] Проверка фактического состояния ключа на test-VPS (test-e2e, 103.88.243.151):
+  `/etc/age/key.txt` — AGE мастер-ключ в PLAINTEXT (mode 0600 root, 75 байт). Это НЕ
+  соответствует инварианту 1/2 «мастер-копия вне ноды» — документировано в threat-model
+  как «Ключ на диске ноды в plaintext → Средний»; добавлен Debt-кандидат W12
+  (см. 04-Debt.md: W12-on-node-age-key) с Rev 2026-10-21.
+- [ ] Реальный off-node encrypted backup мастер-ключа (sops/KMS) — НЕ выполнен
+  → **Debt** (W12-DR-offnode-backup, Rev **2026-08-31**): требует операторского sops/KMS
+  setup + приватный bucket; verification-cost MEDIUM (процедура §2 + sha256-сверка).
+- [ ] DR-drill на test-VPS (restore-first → verify secrets) — НЕ выполнен
+  → **Debt** (W12-DR-drill, Rev **2026-08-31**): полный drill требует пересоздания ноды
+  (инвариант 9) + операторского окна; verification-cost HIGH (bootstrap до φ4 + restore).
+- [ ] Автоматизация `make age-key-backup` — отложена до drill'а (долг выше).
+
+**Threat-model deltas (W12):**
+- `/etc/age/key.txt` (plaintext на ноде, 0600 root): остаточный риск Средний (fs crash до
+  wipe), митигирован mode 0600 + tmpfs-temp-ключи при дешифровке (decrypt_secrets.py).
+- Off-node backup-процедура §2 подтверждена как канон; без выполнения (Debt) единственная
+  точка отказа S-12 остаётся открытой — приоритет Rev 2026-08-31.
 
 ## Cross-references
 
