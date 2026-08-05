@@ -40,6 +40,20 @@ import sys
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+# ⚠️ TRAP[BUG] · 2026-08-05 · HI · Standalone-инвокация context_deployer.py без PYTHONPATH → ModuleNotFoundError
+# · Symptom: `env -i python3 context_deployer.py --help` из чистого env падал на `from core.internal...`
+# ·   (deploy-context.sh вызывает python3 без экспорта PYTHONPATH — core.* импорты держались
+# ·   только на случайном глобальном PYTHONPATH ноды; латентный класс A, DevPlan 136 W2 T2.10).
+# · Root: sys.path-hack удалён (DevPlan 116 B6 T2 — deprecated-алиас node_yaml), но каноничный
+# ·   self-bootstrap корня репо добавлен не был.
+# · Fix: self-bootstrap корня репо (канон config_renderer.py:44-45) ДО core.* импортов.
+# ·   Файл: core/internal/bootstrap/deploy/context_deployer.py → корень = 5 уровней parent.
+# · Prevention: core.*-модули не полагаются на внешний PYTHONPATH — self-bootstrap в источнике.
+# · DevPlan 136 W2 T2.10: тест env -i python3 context_deployer.py --help → exit 0.
+_PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent.parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
 # DevPlan 118 A5: нормальный импорт cert_orchestrator — importlib-обход удалён (тихий полом
 # системы импорта при рефакторинге cert-кода исключён). Модуль-уровневый импорт даёт обычный
 # ImportError при отсутствии cert_orchestrator.py (loud failure), а не silent-деградацию.

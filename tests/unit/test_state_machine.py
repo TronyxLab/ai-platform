@@ -1342,3 +1342,121 @@ def test_cli_run_phase(caplog):
 
 
 # endregion
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region Tests: D8 — raw-dict записи + resume без setup_state (DevPlan 136 W2 T2.7)
+# ═══════════════════════════════════════════════════════════════════
+# D8: lifecycle cli _mark_phase_* вставлял raw-dict в steps → to_dict() save crash при
+# отсутствующей фазе на resume (67d9f10, fa16f34 — StepState фикс в _mark_phase_*).
+# W2 T2.7: расширение resume-кейсов — (1) missing phase на resume выполняется,
+# (2) raw-dict root-level phase keys (load_state миграция) конвертируются в StepState,
+# save() не крэшит, (3) StepState.from_dict backward-compat done-ключ.
+
+
+# 🧪 TRAP[TEST] · 2026-08-05 · Regression · D8/T2.7 — resume с missing phase (без setup_state)
+# · Scenario: state.json с φ1/φ2 done (StepState), остальные фазы ОТСУТСТВУЮТ → run_init_mode
+#   без setup_state: done-фазы skip, missing выполняются (не падает, не KeyError)
+# · Last fail: 2026-08-05 — resume мог крэшиться на missing phase (raw-dict/отсутствие записи)
+# · Remove if: run_init_mode перестаёт поддерживать resume без setup_state
+@ldd_trajectory
+def test_resume_missing_phase_executes(caplog, state_file, monkeypatch):
+    """D8/T2.7: resume без setup_state — done skip, missing фазы выполняются."""
+    initial_data = {
+        "mode": "init",
+        "node": "test-node",
+        "current_step": 2,
+        "steps": {
+            "system_bootstrap": {"name": "system_bootstrap", "status": "done"},
+            "user_accounts": {"name": "user_accounts", "status": "done"},
+        },
+        "errors": [],
+        "warnings": [],
+    }
+    state_file.write_text(json.dumps(initial_data))
+
+    # Fake execute_phase: помечает фазу как выполненную (без реальных phase-функций)
+    executed: list[str] = []
+
+    def _fake_execute_phase(self, phase_value: str):
+        executed.append(phase_value)
+        return True
+
+    monkeypatch.setattr(sm.StateMachine, "execute_phase", _fake_execute_phase)
+    monkeypatch.setattr("core.internal.bootstrap.lifecycle.cli._forced_command_smoke", lambda: True)
+    monkeypatch.setattr("core.internal.bootstrap.lifecycle.cli.write_audit_log", lambda sm: None)
+    monkeypatch.setattr("core.internal.bootstrap.lifecycle.cli.send_telegram", lambda sm: None)
+
+    # НЕ вызываем setup_state — resume-сценарий: загруженное состояние используется как есть
+    m = sm.StateMachine(state_file_path=str(state_file))
+    assert m.state.current_step == 2, "resume: current_step загружен из state.json"
+
+    exit_code = cli.run_init_mode(m)
+    assert exit_code == 0
+
+    # Done-фазы НЕ перевыполнялись (resume-семантика)
+    assert "system_bootstrap" not in executed, "done-фаза system_bootstrap не должна перевыполняться"
+    assert "user_accounts" not in executed, "done-фаза user_accounts не должна перевыполняться"
+    # Missing-фазы выполнились и помечены done (StepState — не raw-dict)
+    assert "platform_setup" in executed, "missing фаза platform_setup обязана выполниться на resume"
+    missing = sm.BootstrapPhase.INIT_PHASE_ORDER[2]  # platform_setup
+    assert m.state.steps[missing].status == "done", f"{missing} должна быть done после resume"
+    assert isinstance(m.state.steps[missing], sm.StepState), "steps обязан содержать StepState, не raw-dict"
+    logger.critical("[IMP:9][test] resume missing phase executed, done skipped — OK")
+
+
+# 🧪 TRAP[TEST] · 2026-08-05 · Regression (R5 negative) · D8/T2.7 — raw-dict root-level phase key → save() не крэшит
+# · Scenario: state.json с legacy root-level phase key {"done": true} (migrate_state_to_phases эпоха)
+#   → load_state конвертирует в StepState → save() НЕ крэшит (to_dict() контракт)
+# · Last fail: 2026-08-05 — load_state вставлял raw-dict → BootstrapState.to_dict() → AttributeError на save()
+# · Remove if: root-level phase key миграция удалена из load_state
+@ldd_trajectory
+def test_resume_raw_dict_phase_key_save_no_crash(caplog, state_file):
+    """D8/T2.7: raw-dict root-level phase key → StepState; save() не крэшит (R5 negative)."""
+    initial_data = {
+        "mode": "init",
+        "node": "test-node",
+        "current_step": 1,
+        # legacy: phase key на ROOT-уровне (migrate_state_to_phases формат), raw-dict без 'status'
+        "system_bootstrap": {"done": True},
+        "steps": {},
+        "errors": [],
+        "warnings": [],
+    }
+    state_file.write_text(json.dumps(initial_data))
+
+    m = sm.StateMachine(state_file_path=str(state_file))
+    assert sm.phase_is_done(m.state.steps["system_bootstrap"]) is True, (
+        "raw-dict {'done': true} без status должен трактоваться как done"
+    )
+    assert isinstance(m.state.steps["system_bootstrap"], sm.StepState), (
+        "load_state обязан конвертировать raw-dict root-level phase key в StepState (D8)"
+    )
+
+    # save() на состоянии с мигрированным raw-dict НЕ крэшит (тот самый D8-крэш: to_dict на raw-dict)
+    m.state.current_step = 2
+    m.save()  # AttributeError здесь = регрессия D8
+    reloaded = json.loads(state_file.read_text())
+    assert reloaded["steps"]["system_bootstrap"]["status"] == "done", (
+        "StepState.from_dict должен вывести status='done' из done-ключа"
+    )
+    logger.critical("[IMP:9][test] raw-dict root-level phase key → StepState, save() без крэша — OK")
+
+
+# 🧪 TRAP[TEST] · 2026-08-05 · Regression · D8/T2.7 — StepState.from_dict backward-compat done-ключ
+# · Scenario: raw-dict {'done': true} без 'status' → status 'done'; {'done': false} → 'pending'
+# · Last fail: 2026-08-05 — from_dict игнорировал done-ключ → {'done': true} давал status 'pending'
+# · Remove if: legacy done-ключ поддержка удалена
+@ldd_trajectory
+def test_stepstate_from_dict_done_key_backward_compat(caplog):
+    """D8/T2.7: StepState.from_dict выводит status из done-ключа (legacy raw-dict)."""
+    assert sm.StepState.from_dict({"done": True}).status == "done", "from_dict({'done': true}) → status 'done' (legacy)"
+    assert sm.StepState.from_dict({"done": False}).status == "pending", "from_dict({'done': false}) → status 'pending'"
+    assert sm.StepState.from_dict({"status": "failed", "done": True}).status == "failed", (
+        "явный status приоритетнее done-ключа"
+    )
+    assert sm.StepState.from_dict({"status": "done"}).status == "done", "статус без done-ключа сохраняется"
+    logger.critical("[IMP:9][test] StepState.from_dict done-ключ backward-compat — OK")
+
+
+# endregion

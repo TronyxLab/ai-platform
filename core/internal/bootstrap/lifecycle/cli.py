@@ -492,7 +492,15 @@ def _mark_phase_success(sm: StateMachine, phase: str, current_index: int) -> Non
         # StepState, НЕ raw dict: BootstrapState.to_dict() вызывает v.to_dict()
         # на каждом элементе steps — raw-dict крэшит save (латентный баг,
         # воспроизводится при отсутствующей фазе на resume).
-        sm.state.steps[phase] = StepState(name=phase, status="done", done=True)
+        # ⚠️ TRAP[BUG] · 2026-08-05 · HI · StepState(name, status, done=True) → TypeError
+        # · Symptom: resume БЕЗ setup_state (state.json с missing phase) → run_init_mode →
+        #   _mark_phase_success → TypeError: StepState.__init__() got an unexpected keyword 'done'
+        # · Root: StepState — dataclass БЕЗ поля done (поля: name/status/hash/started_at/error/
+        #   reason/warnings); D8-фикс (67d9f10) передавал done=True/done=False в конструктор —
+        #   ветка entry=None выполнялась только при missing phase на resume (DevPlan 136 W2 T2.7).
+        # · Fix: убрать done= kwarg (status — единственный SoT; phase_is_done читает status).
+        # · Prevention: StepState конструктор — только валидные поля dataclass.
+        sm.state.steps[phase] = StepState(name=phase, status="done")
     sm.state.current_step = current_index
     sm.save()
     logger.info("[IMP:9][state_mark] Phase %s marked done (current_step=%d)", phase, current_index)
@@ -524,7 +532,8 @@ def _mark_phase_with_warnings(sm: StateMachine, phase: str) -> None:
         entry.warnings.append(warn_msg)
     else:
         # StepState, НЕ raw dict (см. _mark_phase_success — to_dict() контракт).
-        sm.state.steps[phase] = StepState(name=phase, status="done_with_warnings", done=False, warnings=[warn_msg])
+        # W2 T2.7 (DevPlan 136): done= kwarg убран — StepState dataclass без поля done.
+        sm.state.steps[phase] = StepState(name=phase, status="done_with_warnings", warnings=[warn_msg])
     sm.state.warnings.append(warn_msg)
     sm.save()
     logger.warning("[IMP:7][state_mark] Phase %s marked done_with_warnings (re-run required)", phase)

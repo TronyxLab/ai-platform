@@ -38,6 +38,19 @@ import tempfile
 from copy import deepcopy
 from typing import Any
 
+# ⚠️ TRAP[BUG] · 2026-08-05 · HI · Standalone-инвокация key_provisioner.py без PYTHONPATH → ModuleNotFoundError
+# · Symptom: `env -i python3 key_provisioner.py --help` падал на `from core.internal.llm.admin_client...`
+# ·   (provision-llm.sh экспортирует PYTHONPATH — но прямой вызов модуля без него ломался;
+# ·   латентный класс A, DevPlan 136 W2 T2.10).
+# · Root: _PROJECT_ROOT определялся ПОСЛЕ core.* импортов и без sys.path.insert — self-bootstrap отсутствовал.
+# · Fix: self-bootstrap корня репо (канон config_renderer.py:44-45) ДО core.* импортов.
+# ·   Файл: core/internal/llm/key_provisioner.py → корень = 4 уровня parent.
+# · Prevention: core.*-модули не полагаются на внешний PYTHONPATH — self-bootstrap в источнике.
+# · DevPlan 136 W2 T2.10: тест env -i python3 key_provisioner.py --help → exit 0.
+_PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
 from core.internal.llm.admin_client import LiteLLMAdminClient
 from core.internal.llm.policy_schema import LLMPolicy
 from core.internal.shared.exceptions import PlatformError
@@ -50,8 +63,7 @@ _DEFAULT_BASE_URL: str = "http://litellm:4000"
 _DEFAULT_POLICY_REL_PATH = pathlib.Path("core") / "internal" / "llm" / "policy.yaml"
 
 # ── Project root resolution ──────────────────────────────────────────────────
-
-_PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent.parent
+# _PROJECT_ROOT определён выше (self-bootstrap, W2 T2.10) — см. шапку модуля.
 
 
 # region CONSUMER_DISCOVERY

@@ -1,4 +1,11 @@
 # Матрица покрытия дефектов D1-D23 — DevPlan 136 W1 (регресс-тесты свежего бутстрапа)
+# GREP_SUMMARY: coverage-matrix, D1-D23, regression-tests, fresh-bootstrap, W1, defect-coverage, R5
+# STRUCTURE: ▶ D1-D23 inventory → ◇ type (regress-test|ops|env) → ◇ test/commit mapping → ⎋ coverage verdict
+# 🧐 TRAP[DECISION] · 2026-08-05 · — · W2 добавил doc-заголовки (GREP_SUMMARY/STRUCTURE) в шапку W1-файла
+# · Rejected: оставить файл без doc-заголовков (строгое правило 5 «не трогать чужие волны» — gate остался бы красным)
+# · Reason: pre-commit doc-headers hook (gate fast) требовал GREP_SUMMARY/STRUCTURE в первых 10 строках;
+# ·   правка чисто doc-стандартная (0 изменений семантики матрицы), необходимая для зелёного gate W2 (AC W2)
+# · Rev: если doc-headers hook ослабит требование для .md — правку можно откатить
 
 $START_MATRIX
 

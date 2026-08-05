@@ -37,6 +37,19 @@ from pathlib import Path
 
 import yaml  # type: ignore[import-untyped]
 
+# ⚠️ TRAP[BUG] · 2026-08-05 · HI · Standalone-инвокация compose_preflight.py без PYTHONPATH → ModuleNotFoundError
+# · Symptom: `env -i python3 compose_preflight.py --help` из чистого env падал на `from core.internal...`
+# ·   (compose-wrapper.sh экспортирует PYTHONPATH — но прямой вызов модуля из cron/CI без него ломался;
+# ·   латентный класс A, DevPlan 136 W2 T2.10).
+# · Root: sys.path-инъекция корня репо отсутствовала в модуле (полагался на shell-экспорт).
+# · Fix: self-bootstrap корня репо (канон config_renderer.py:44-45) ДО core.* импортов.
+# ·   Файл: core/internal/bootstrap/deploy/compose_preflight.py → корень = 5 уровней parent.
+# · Prevention: core.*-модули не полагаются на внешний PYTHONPATH — self-bootstrap в источнике.
+# · DevPlan 136 W2 T2.10: тест env -i python3 compose_preflight.py --help → exit 0.
+_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent.parent.parent)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
 # B3: канонический platform root — shared/deploy_paths (литерал /opt/platform удалён)
 from core.internal.shared.deploy_paths import platform_remote_base
 from core.internal.shared.secrets_env_parser import parse as parse_secrets_env

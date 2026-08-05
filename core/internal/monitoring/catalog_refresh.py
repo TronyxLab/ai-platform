@@ -27,6 +27,12 @@ except ImportError:  # pragma: no cover — direct-script invocation path
     _INTERNAL_DIR = str(Path(__file__).resolve().parent.parent)
     if _INTERNAL_DIR not in sys.path:
         sys.path.insert(0, _INTERNAL_DIR)
+    # W2 T2.6 (DevPlan 136, латентный класс A): канон config_renderer.py — корень репо
+    # (fallback добавляет И core/internal/ для top-level monitoring-импортов, И корень
+    # для core.internal.* — единый документированный канон self-bootstrap).
+    _PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent.parent)
+    if _PROJECT_ROOT not in sys.path:
+        sys.path.insert(0, _PROJECT_ROOT)
     from monitoring_config_renderer import RenderResult
 
     from monitoring.constants import CATALOG_SCRIPT

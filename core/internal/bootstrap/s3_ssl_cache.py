@@ -36,10 +36,25 @@ import os
 import sys
 import tarfile
 import tempfile
+from pathlib import Path
 
 import boto3
 from boto3.exceptions import S3UploadFailedError
 from botocore.exceptions import ClientError
+
+# ⚠️ TRAP[BUG] · 2026-08-05 · HI · cron-контекст acme.sh: python3 s3_ssl_cache.py upload $domain → ModuleNotFoundError
+# · Symptom: issue-cert.sh --reloadcmd/--renew-hook (строки 237/302/361) вызывают
+# ·   `python3 <SCRIPT_DIR>/s3_ssl_cache.py upload <domain>` из cron-окружения acme.sh — без PYTHONPATH
+# ·   (daily renewal, env -i-like) → `from core.internal...` падал → S3-бэкап сертификатов молча терялся.
+# · Root: sys.path-инъекция корня репо отсутствовала; core.* импорты (config/platform_config,
+# ·   shared/atomic_writer, shared/deploy_paths, shared/s3_client, shared/ssl_certs) требовали PYTHONPATH.
+# · Fix: self-bootstrap корня репо (канон config_renderer.py:44-45) ДО core.* импортов.
+# ·   Файл: core/internal/bootstrap/s3_ssl_cache.py → корень = 4 уровня parent.
+# · Prevention: любой модуль, вызываемый из cron/hook-контекста (чистый env), обязан иметь self-bootstrap.
+# · DevPlan 136 W2 T2.2: тест env -i python3 s3_ssl_cache.py → осмысленный exit (0/1 usage), НЕ ModuleNotFoundError.
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
 from core.internal.config import platform_config
 

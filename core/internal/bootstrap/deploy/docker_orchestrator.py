@@ -77,6 +77,20 @@ _THIS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_THIS_DIR))
 from build_cache import check_build_needed, compute_source_hash, save_build_hash
 
+# ⚠️ TRAP[BUG] · 2026-08-05 · HI · Standalone-инвокация docker_orchestrator.py без PYTHONPATH → ModuleNotFoundError
+# · Symptom: `env -i python3 docker_orchestrator.py --help` из cwd≠root падал на `from core.internal...`
+# ·   (свежий бутстрап/ручной запуск без экспортированного PYTHONPATH — латентный класс A, DevPlan 136 W2 T2.1)
+# · Root: sys.path-инъекция была только для build_cache (та же deploy/ директория), core.* импорты
+# ·   требовали PYTHONPATH корня репо (deploy-modules.sh:43 экспортирует — но standalone-запуск нет).
+# · Fix: self-bootstrap корня репо (канон config_renderer.py:44-45) ДО core.* импортов.
+# ·   Файл: core/internal/bootstrap/deploy/docker_orchestrator.py → корень = 5 уровней parent.
+# · Prevention: standalone-инвокация любого core.*-модуля обязана иметь self-bootstrap корня.
+# · DevPlan 136 W2 T2.1: тест env -i python3 docker_orchestrator.py → exit 0 (или осмысленная ошибка,
+# ·   но НЕ ModuleNotFoundError по core.*).
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
 # DevPlan 117 D18: единый канон orphan-реконсиляции — orphan_reconciler (batch-подход,
 # один docker ps -a). Локальный per-module orphan-cleanup удалён (дубль логики).
 # DevPlan 118 D1: healthcheck-инвокации и hermes-workflow вынесены в отдельные модули.

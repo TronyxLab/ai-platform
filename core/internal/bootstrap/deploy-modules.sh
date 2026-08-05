@@ -25,13 +25,37 @@ done
 [[ "$(id -u)" -eq 0 ]] || { echo "[IMP:10][deploy-modules] ERROR: must run as root" >&2; exit 1; }
 NODE_YAML="${NODE_YAML:-}"; [[ -n "$NODE_YAML" && -f "$NODE_YAML" ]] || { echo "[IMP:10][deploy-modules] ERROR: NODE_YAML not set" >&2; exit 1; }
 
-# ── Network provision (bash — system-level, must stay) ──
+# ── Network/volume provision (bash — system-level, must stay) ──
+# ⚠️ TRAP[BUG] · 2026-08-05 · HI · `|| true` маскировал провал provision → молчаливый деплой без сетей/volumes
+# · Symptom: provision-environment.sh (--scope networks/volumes) падал, но фасад продолжал
+# ·   deploy → контейнеры на несозданных сетях/volumes → тихие 502/ошибки монтирования
+# ·   (латентный класс C/F, DevPlan 136 W2 T2.4).
+# · Root: строки 31-32 `bash provision-environment.sh --scope networks || true` — exit-код глотался.
+# · Fix: провал provision → ВИДИМЫЙ FAIL [IMP:10] + exit 1 (Fail-Fast, никакой маскировки).
+# ·   Fallback (T2.3): provision-environment.sh отсутствует → прямой вызов provisioner.py,
+# ·   который создаёт ВСЕ сети/volumes из platform-env.yaml (было: только proxy-net).
+# · Prevention: provision — обязательный пре-шаг деплоя; его провал не может быть non-fatal.
+# · DevPlan 136 W2 T2.3/T2.4: тест mock provision exit 1 → фасад логирует FAIL и НЕ продолжает молча.
 if [[ "${SKIP_PROVISION}" != "true" ]]; then
     if [[ -f "${PATHS_INTERNAL_DIR}/provision-environment.sh" ]]; then
-        bash "${PATHS_INTERNAL_DIR}/provision-environment.sh" --scope networks || true
-        bash "${PATHS_INTERNAL_DIR}/provision-environment.sh" --scope volumes || true
+        if ! bash "${PATHS_INTERNAL_DIR}/provision-environment.sh" --scope networks; then
+            echo "[IMP:10][deploy-modules][provision] FATAL: network provision failed (scope=networks)" >&2
+            exit 1
+        fi
+        if ! bash "${PATHS_INTERNAL_DIR}/provision-environment.sh" --scope volumes; then
+            echo "[IMP:10][deploy-modules][provision] FATAL: volume provision failed (scope=volumes)" >&2
+            exit 1
+        fi
     else
-        docker network inspect proxy-net &>/dev/null || docker network create proxy-net --driver bridge
+        # Fallback (T2.3): все сети/volumes из platform-env.yaml через provisioner.py (не только proxy-net)
+        if ! python3 "${PATHS_INTERNAL_DIR}/provisioner.py" --scope networks --platform-env "${PATHS_INTERNAL_DIR}/../../platform-env.yaml"; then
+            echo "[IMP:10][deploy-modules][provision] FATAL: fallback network provision failed (provisioner.py)" >&2
+            exit 1
+        fi
+        if ! python3 "${PATHS_INTERNAL_DIR}/provisioner.py" --scope volumes --platform-env "${PATHS_INTERNAL_DIR}/../../platform-env.yaml"; then
+            echo "[IMP:10][deploy-modules][provision] FATAL: fallback volume provision failed (provisioner.py)" >&2
+            exit 1
+        fi
     fi
 fi
 

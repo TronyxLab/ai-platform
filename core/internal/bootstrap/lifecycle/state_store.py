@@ -81,10 +81,22 @@ class StepState:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> StepState:
-        """Deserialize from dict."""
+        """Deserialize from dict.
+
+        ## @purpose — Обратная совместимость с raw-dict записями (D8-класс, DevPlan 136 W2 T2.7):
+        ##   legacy state.json мог хранить {'done': true} БЕЗ 'status' → статус выводится из done-ключа.
+        ##   Это гарантирует, что raw-dict конвертируется в StepState с консистентным status,
+        ##   а BootstrapState.to_dict() (v.to_dict() на каждом шаге) не крэшится на save().
+        ## @invariants
+        ##   - status приоритетен; при отсутствии — 'done' если done-ключ true, иначе 'pending'
+        ##   - name может отсутствовать в legacy raw-dict (заполняется ключом на load_state)
+        """
+        status = data.get("status")
+        if status is None:
+            status = "done" if data.get("done") else "pending"
         return cls(
             name=data.get("name", ""),
-            status=data.get("status", "pending"),
+            status=status,
             hash=data.get("hash"),
             started_at=data.get("started_at"),
             error=data.get("error"),
@@ -345,7 +357,16 @@ def load_state(path: Path) -> BootstrapState:
 
         for pv in BootstrapPhase.ALL_PHASES:
             if pv in data and pv not in state.steps:
-                state.steps[pv] = data[pv]
+                raw = data[pv]
+                # ⚠️ TRAP[BUG] · 2026-08-05 · HI · root-level phase keys вставлялись как raw-dict →
+                #   save() крэшил (BootstrapState.to_dict() вызывает v.to_dict() на каждом элементе steps)
+                # · Symptom: state.json с legacy root-level phase keys (migrate_state_to_phases эпоха) +
+                #   resume с missing phase → _mark_phase_success → sm.save() → AttributeError: 'dict' object
+                #   has no attribute 'to_dict' (латентный класс E, D8, DevPlan 136 W2 T2.7).
+                # · Root: load_state копировал data[pv] как есть (raw dict), а не StepState.
+                # · Fix: конвертация raw-dict → StepState.from_dict (StepState.from_dict учитывает done-ключ).
+                # · Prevention: steps обязан содержать ТОЛЬКО StepState (контракт to_dict()).
+                state.steps[pv] = raw if isinstance(raw, StepState) else StepState.from_dict(raw)
         logger.info(
             "[IMP:8][StateMachine][init] State loaded: mode=%s node=%s current_step=%d",
             state.mode,
