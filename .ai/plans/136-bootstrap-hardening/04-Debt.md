@@ -3,8 +3,8 @@
 $START_DEBT
 
 $ARTIFACT_CONTRACT
-PURPOSE:               Реестр долгов волны W7 (DevPlan 136 §5.7): «ничьи зоны» без Debt-записей — T9-T11 (повторный прогон chaos-программы на пересозданной ноде + реальные ACME), hermes root-500, живые долги D-3..D-8 из программы 126, ограничения харнесса B6/B7, находки W2-агентов (overlay-дрейф, firewall reset→apply).
-DESCRIPTION:           Актуальные статусы на 2026-08-05. Каждая запись: категория, описание, verification-cost, Rev-дата в окне 2026-08-19..2026-11-01, статус OPEN (или CLOSED с указанием закрывающей волны). D-3..D-8 переносятся из .ai/plans/126-chaos-resilience/04-Debt.md (актуальные статусы: D-1/D-2 CLOSED-by-132, D-3..D-8 OPEN — сверено с VerificationReport 126 W5). Формат записей — канон 126 (Status + Rev-условие).
+PURPOSE:               Реестр долгов волны W7 (DevPlan 136 §5.7) + финализация W12 T12.13: «ничьи зоны» без Debt-записей — T9-T11 (повторный прогон chaos-программы на пересозданной ноде + реальные ACME), hermes root-500, живые долги D-3..D-8 из программы 126, ограничения харнесса B6/B7, находки W2-агентов (overlay-дрейф, firewall reset→apply), кандидаты meta-волн W9-W12 (W9-orphan, W11-C-x residual, W10-S-13/nginx/noqa, W12 T-находки).
+DESCRIPTION:           Актуальные статусы на 2026-08-05 (W7) + 2026-08-05 (W12 T12.13 — кандидаты W9-W12 добавлены, W7-записи не дублированы). Каждая запись: категория, описание, verification-cost, Rev-дата в окне 2026-08-19..2026-11-01, статус OPEN (или CLOSED с указанием закрывающей волны). D-3..D-8 переносятся из .ai/plans/126-chaos-resilience/04-Debt.md (актуальные статусы: D-1/D-2 CLOSED-by-132, D-3..D-8 OPEN — сверено с VerificationReport 126 W5). Формат записей — канон 126 (Status + Rev-условие).
 RATIONALE:             Протокол artifacts.md: Debt-реестр фиксирует АКТУАЛЬНЫЕ статусы. Brief 136 R7: «T9-T11 и hermes-500 не имеют Debt-записей» — «ничьи зоны» теряются без Debt-протокола; W7 закрывает пробел с Rev-датами, чтобы долги не были бессрочными.
 ACCEPTANCE_CRITERIA:   (1) Каждая запись имеет категорию (T9-T11/hermes/D-x/B-x), описание, verification-cost и Rev-дату в диапазоне 2026-08-19..2026-11-01; (2) D-3..D-8 — актуальные статусы из 126 (проверено по 04-Debt.md 126 + VerificationReport 126 W5); (3) B6/B7 задокументированы; (4) находки W2 (overlay-дрейф, firewall reset→apply) зафиксированы; (5) нет выдуманных долгов — каждый подтверждён артефактами.
 IMPLEMENTS:            DevPlan 136 §5.7 T7.2; Brief 136 AC(7) / R7; VerificationReport 126 W5 (T9-T11 не выполнялись).
@@ -33,10 +33,31 @@ $END_ARTIFACT_CONTRACT
 
 ---
 
-## Сводка статусов
+## Кандидаты meta-волн W9-W12 (добавлены W12 T12.13, 2026-08-05)
 
-- **CLOSED:** D-1 (132 W3), D-2 (132 W4) — из 126, подтверждены VerificationReport 126 W5; W2-overlay-drift (136 W7 T7.5).
-- **OPEN:** T9-T11 (отдельное окно пересозданной ноды), hermes-root-500 (upstream/L2-патч), D-3..D-8 (мониторинг/alerting/Loki), B6 (CI-канал вне харнесса), B7 (реальные ACME вне харнесса), W2-firewall-reset (W10-скоуп).
-- Все Rev-даты в окне **2026-08-19..2026-11-01**; после Rev-даты запись пересматривается (закрывается фиксом или переоформляется с новой Rev).
+| ID | Категория | Суть | Status | Verification-cost | Rev-дата / Rev-условие |
+|----|-----------|------|--------|-------------------|------------------------|
+| W9-T9.15-orphan | W9 (B-12) | resume-aware orphan cleanup при deploy-modules timeout НЕ верифицирован: `make bootstrap-node` при прерванном deploy-modules (600s) оставляет orphan-контейнеры модулей; cleanup на resume — заявлен, не проверен эмпирически | **OPEN** | MEDIUM — прерванный deploy-modules прогон (kill в середине φ11) + проверка orphan-cleanup на resume | **Rev: первый timeout-инцидент deploy-modules** (при реальном 600s-timeout на ноде — верифицировать; если cleanup не сработал — фикс) |
+| W9-T9.19-legacy | W9 (B-11) | `.hc_done_in_deploy` маркер на диске БЕЗ суффикса контекста: создаётся в φ11 (docker.py:354) как узел-глобальный; legacy-форма на существующих нодах не мигрирована (новая per-context форма — только для новых бутстрапов) | **OPEN** | LOW — ls ноды + сравнение имён маркеров | **Rev: ближайший node-update** (при node-update — переписать legacy-маркер в per-context форму) |
+| W11-C-14 | W11 (C-14) | Linux-only CI: workflow-матрицы без macOS-leg для non-Docker gate; macOS dev-машина — единственная non-Linux поверхность (Docker Desktop smoke) | **OPEN** | LOW — macOS-leg матрица для static-гейтов ИЛИ TRAP-документация | **Rev: 2026-10-21** (вместе с пересмотром TRAP языковой политики) |
+| W11-C-1-residual | W11 (C-1) | Прямые push в main обходят full-gate: branch-protection гейтит PR, но push-main (fast-forward) не прогоняет full-gate (fast-gate — деплой-триггер). Residual после W11: full-gate остаётся PR-only | **OPEN** | MEDIUM — включить full-gate в push-main path (CI анализ branch protection) | **Rev: 2026-10-21** (пересмотр при изменении branch protection) |
+| W11-C-8-residual | W11 (C-8) | VPS_SSH_KEY в CI: верифицирован forced-command ci-deploy канал, но root-shell доступ ключа в workflow env остаётся (MIGRATE/промоут-сценарии) | **OPEN** | MEDIUM — аудит всех использований VPS_SSH_KEY + сужение до ci-deploy forced-command | **Rev: 2026-10-21** |
+| W11-digest-ec | W11 (C-6/C-10) | L1 digest eventual-consistency: ghcr.io digest обновляется асинхронно после push; context-воркфлоу, пулящий по digest сразу после push, может получить STALE (задержка видимости) | **OPEN** | LOW — мониторинг задержки digest-видимости; bounded-retry при «not found» | **Rev: при появлении боли от задержки** (реальный CI-fail на digest-miss) |
+| W10-S-13-drill | W10 (S-12/S-13) | DR-drill AGE мастер-ключа НЕ выполнен (T12.12): off-node encrypted backup + restore-first на пересозданной ноде — требует операторского окна + sops/KMS | **OPEN** | HIGH — полный drill (bootstrap до φ4 + restore + verify secrets) на test-VPS | **Rev: 2026-08-31** |
+| W10-nginx-sudoers | W10 (S-1/S-2/S-3 residual) | nginx `systemctl restart nginx` sudoers-записи на Docker-нодах — legacy (nginx работает в контейнере, systemd-юнит отсутствует); запись остаётся для совместимости с non-Docker нодами | **OPEN** | LOW — ревизия sudoers-шаблона по типам нод (docker vs systemd) | **Rev: 2026-10-21** |
+| W10-noqa-EXC | W10 | pre-existing `# noqa: E722`/broad-except в core/** вне скоупа W10-фиксов — накопленные исключения в allowlist'ах (не добавлены в этом реестре ранее) | **OPEN** | LOW — при правке файла (убрать noqa попутно) | **Rev: при правке соответствующего файла** |
+| W12-T13-label | W12 (T-13) | hermes-test- контейнеры создаются БЕЗ метки `ai-platform.test=true` (test_hermes_init.py::_run_container_detached, вне скоупа W12) — sessionfinish sweep работает label-first + name-fallback; proper fix — метка в создателе | **OPEN** | LOW — добавить label в docker run (test_hermes_init.py) + убрать name-fallback | **Rev: 2026-10-21** (ближайшая правка test_hermes_init.py) |
+| W12-on-node-age-key | W12 (S-12 finding) | `/etc/age/key.txt` на ноде — AGE мастер-ключ в plaintext (0600 root, подтверждено на test-e2e 2026-08-05). Документировано в threat-model (docs/age-master-key-dr.md) как «Средний»; противоречит инварианту «мастер-копия вне ноды» — нужен перенос на tmpfs-только/KMS | **OPEN** | MEDIUM — аудит мест хранения ключа на ноде + перенос (tmpfs decrypt-only) | **Rev: 2026-10-21** |
+| W12-flaky | W12 (T12.11) | Flaky-detection 5× под нагрузкой: **0 flaky / 0 consistent** из 80 тестов × 5 прогонов (test_bootstrap_phases + test_security_posture, 2026-08-05) — negative-результат, долг не требуется | **CLOSED** (negative finding) | N/A — повторный прогон при изменении target-тестов | Rev: повторять при изменении статического сьюита |
+| W12-multiboot | W12 (T12.11) | Multi-bootstrap 3× идемпотентность — **ВЫПОЛНЕН 2026-08-05 на test-e2e**: run1 exit=0 17s, run2 exit=0 15s, run3 exit=0 16s (skip_markers=9 каждый; total 48s); INIT-фазы state.json не регрессировали — инвариант 6 подтверждён эмпирически | **CLOSED** (2026-08-05) | N/A — повторный прогон при изменении bootstrap-логики | Rev: повторять при изменении bootstrap-логики (harness tests/integration/test_multi_bootstrap_idempotency.py) |
+
+---
+
+## Сводка статусов (обновлено W12 T12.13)
+
+- **CLOSED:** D-1 (132 W3), D-2 (132 W4) — из 126, подтверждены VerificationReport 126 W5; W2-overlay-drift (136 W7 T7.5); W12-flaky (negative finding — flaky не обнаружен).
+- **OPEN:** T9-T11 (отдельное окно пересозданной ноды), hermes-root-500 (upstream/L2-патч), D-3..D-8 (мониторинг/alerting/Loki), B6 (CI-канал вне харнесса), B7 (реальные ACME вне харнесса), W2-firewall-reset (W10-скоуп) + кандидаты W9-W12 (таблица выше).
+- W7-записи (T9-T11, hermes, D-3..D-8, B6/B7) на месте — не дублированы.
+- Все Rev-даты в окне **2026-08-19..2026-11-01**; после Rev-даты запись пересматривается (закрывается фиксом или переоформляется с новой Rev). Исключения с ранним Rev: W10-S-13-drill / W12-multiboot (2026-08-31 — окно ноды).
 
 $END_DEBT
