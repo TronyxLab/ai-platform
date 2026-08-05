@@ -199,15 +199,29 @@ jobs:
           fi
 
           # ──────────────────────────────────────────────────────────
-          # [IMP:8][MIRROR][VERIFY] Post-push verification via SSH
+          # [IMP:9][MIRROR][VERIFY] Post-push verification with retry (10×10s)
+          # · Eventual-consistency race (DevPlan 136 W7 T7.4): git ls-remote may
+          # · return the OLD mirror HEAD for a few seconds after push completes
+          # · (GitHub server-side ref propagation). Retry канон — sha-resolve
+          # · (10 attempts, sleep между) — .github/actions/sha-resolve/action.yml.
           # ──────────────────────────────────────────────────────────
-          MIRROR_HEAD=$(git ls-remote mirror refs/heads/main | awk '{print $1}')
           SOURCE_HEAD=$(git rev-parse HEAD)
           echo "[IMP:8][MIRROR][VERIFY] Source HEAD: ${SOURCE_HEAD}"
-          echo "[IMP:8][MIRROR][VERIFY] Mirror HEAD: ${MIRROR_HEAD}"
+
+          MIRROR_HEAD=""
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            # || true: transient ls-remote failure не должен прерывать retry-цикл (set -euo pipefail)
+            MIRROR_HEAD=$(git ls-remote mirror refs/heads/main 2>/dev/null | awk '{print $1}' || true)
+            echo "[IMP:8][MIRROR][VERIFY] Attempt ${attempt}/10: mirror HEAD: ${MIRROR_HEAD}"
+            if [[ "${MIRROR_HEAD}" == "${SOURCE_HEAD}" ]]; then
+              break
+            fi
+            echo "[IMP:7][MIRROR][VERIFY] Attempt ${attempt}/10: mirror not yet in sync — retrying in 10s"
+            sleep 10
+          done
 
           if [[ "${MIRROR_HEAD}" != "${SOURCE_HEAD}" ]]; then
-            echo "[IMP:10][MIRROR][VERIFY] FAIL: mirror HEAD (${MIRROR_HEAD:0:7}) != source HEAD (${SOURCE_HEAD:0:7})"
+            echo "[IMP:10][MIRROR][VERIFY] FAIL: mirror HEAD (${MIRROR_HEAD:0:7}) != source HEAD (${SOURCE_HEAD:0:7}) after 10 attempts"
             exit 1
           fi
           echo "[IMP:9][MIRROR][VERIFY] Mirror sync verified: ${SOURCE_HEAD:0:7}"
