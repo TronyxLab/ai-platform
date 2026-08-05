@@ -239,8 +239,8 @@ non-blocking), `[PRACTICES:LEGACY]` (lock отсутствует — grace L1 wa
 `PRACTICES_LEGACY_GRACE=1`), `[PRACTICES:BLOCK]`, `[PRACTICES:DRIFT-VERSION]`.
 
 **Язык-ветвление** по `type` проекта (Q3): python → ruff/pytest, typescript/react →
-build/tsc/eslint, sh → shellcheck, общий слой → gitleaks/hygiene/compose; fullstack — обе
-ветки. Проверки исполняются платформенным Python (`core/internal/practices/`), НЕ копируются
+build/tsc/eslint, sh → shellcheck, общий слой → gitleaks/hygiene/compose. Проверки
+исполняются платформенным Python (`core/internal/practices/`), НЕ копируются
 в проект (языковая политика, аудит 137).
 
 ---
@@ -356,4 +356,3 @@ build/tsc/eslint, sh → shellcheck, общий слой → gitleaks/hygiene/co
 | [`tests/gates/AGENTS.md`](tests/gates/AGENTS.md) | Gate test conventions, invariant testing | Вспомогательный |
 | [`templates/template-backend/AGENTS.md`](templates/template-backend/AGENTS.md) | Payload шаблона new-project | Вне скоупа инварианта |
 | [`templates/template-frontend/AGENTS.md`](templates/template-frontend/AGENTS.md) | Payload шаблона new-project | Вне скоупа инварианта |
-| [`templates/template-fullstack/AGENTS.md`](templates/template-fullstack/AGENTS.md) | Payload шаблона new-project | Вне скоупа инварианта |

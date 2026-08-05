@@ -1,7 +1,7 @@
-# GREP_SUMMARY: gate templates-practices template-backend frontend fullstack practices-files GENERATED-header quality-section
-# STRUCTURE: ▶ ┌3 шаблона┐ → ◇ (a) .pre-commit-config.yaml + practices.lock во всех → ◇ (b) pyproject в backend/fullstack (не frontend) → ◇ (c) GENERATED-шапка во всех практиках-файлах → ◇ (d) ai-platform.yaml quality.level=auto → ⎋ pass|fail
+# GREP_SUMMARY: gate templates-practices template-backend frontend practices-files GENERATED-header quality-section
+# STRUCTURE: ▶ ┌2 шаблона┐ → ◇ (a) .pre-commit-config.yaml + practices.lock во всех → ◇ (b) pyproject в backend (не frontend) → ◇ (c) GENERATED-шапка во всех практиках-файлах → ◇ (d) ai-platform.yaml quality.level=auto → ⎋ pass|fail
 # region MODULE_CONTRACT
-## @purpose  Гейт наличия практик-файлов в шаблонах (DevPlan 137 W5): все 3 шаблона содержат
+## @purpose  Гейт наличия практик-файлов в шаблонах (DevPlan 137 W5): все 2 шаблона содержат
 ##           GENERATED-заглушки практик (.pre-commit-config.yaml, practices.lock; pyproject.toml
 ##           — только python-семейство) с GENERATED-шапкой, и ai-platform.yaml несёт
 ##           quality-секцию (level=auto — решение 2026-08-05). Защищает от дрейфа копий
@@ -9,11 +9,12 @@
 ## @scope    Read-only гейт (make gate MODE=fast).
 ## @invariants
 ##   - Каждый шаблон: .pre-commit-config.yaml + practices.lock с GENERATED-шапкой
-##   - pyproject.toml — только backend/fullstack (frontend без pyproject)
+##   - pyproject.toml — только backend (frontend без pyproject)
 ##   - ai-platform.yaml#quality.level == auto (default, эскалатор жив)
 ##   - pre-commit-заглушка — ТОЛЬКО upstream (0 путей core/ — аудит 137)
 ## @rationale  Шаблоны — payload new-project; отсутствие практик = новый проект без защиты.
 ## @changes  2026-08-05 · DevPlan 137 W1 — создан
+##           2026-08-05 · fullstack-шаблон удалён из платформы
 # endregion MODULE_CONTRACT
 
 import logging
@@ -29,7 +30,6 @@ ROOT = repo_root()
 _TEMPLATES = {
     "backend": ROOT / "templates" / "template-backend",
     "frontend": ROOT / "templates" / "template-frontend",
-    "fullstack": ROOT / "templates" / "template-fullstack",
 }
 
 
@@ -40,7 +40,6 @@ def test_gate_templates_contain_practices_files() -> None:
         assert (tdir / ".pre-commit-config.yaml").is_file(), f"template-{name}: нет .pre-commit-config.yaml"
         assert (tdir / "practices.lock").is_file(), f"template-{name}: нет practices.lock"
     assert (_TEMPLATES["backend"] / "pyproject.toml").is_file()
-    assert (_TEMPLATES["fullstack"] / "pyproject.toml").is_file()
     assert not (_TEMPLATES["frontend"] / "pyproject.toml").exists(), "frontend не должен иметь pyproject"
 
 

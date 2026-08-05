@@ -513,7 +513,7 @@ def _check_env_file(services: dict[str, Any]) -> list[_RawFinding]:
 ##           идентификация сервиса: platform.type/platform.domain/platform.project/
 ##           platform.module/platform.healthcheck).
 ##           ⚠️ TRAP[DECISION] — план-таблица §5 W4 указывала строго platform.project +
-##           platform.module, но реальные шаблоны (template-{backend,frontend,fullstack}) и
+##           platform.module, но реальные шаблоны (template-{backend,frontend}) и
 ##           scaffold используют platform.type + platform.domain (проверено 2026-08-05) —
 ##           строгий набор ложноблокировал бы собственные scaffold-проекты платформы (риск
 ##           §7 HI). Имплементация: наличие ≥1 platform.* label (семантическая группа),

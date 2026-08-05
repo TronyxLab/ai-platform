@@ -167,12 +167,12 @@ def test_generate_minimal_yaml_with_domain(caplog: pytest.LogCaptureFixture, tmp
 
 
 # 🧪 TRAP[TEST] · Regression · Auto-detect project type from directory contents
-# · Scenario: frontend dir exists → type=frontend; fullstack dirs → type=fullstack
+# · Scenario: frontend dir exists → type=frontend
 # · Last fail: N/A (new test)
 # · Remove if: type detection logic changes
 @ldd_trajectory
 def test_generate_minimal_yaml_type_detection(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> None:
-    """Auto-detect project type: frontend, fullstack, backend."""
+    """Auto-detect project type: frontend, backend."""
     caplog.set_level(logging.INFO)
 
     # Test: frontend via src/index.html
@@ -185,15 +185,6 @@ def test_generate_minimal_yaml_type_detection(caplog: pytest.LogCaptureFixture, 
     with open(adopter.yaml_file) as f:
         data = yaml.safe_load(f)
     assert data["type"] == "frontend", f"Expected frontend, got {data['type']}"
-
-    # Test: fullstack via frontend/ + backend/
-    adopter2 = _make_adopter(tmp_path / "fullstack-project", name="fullstack-project")
-    (adopter2.project_dir / "frontend").mkdir(parents=True, exist_ok=True)
-    (adopter2.project_dir / "backend").mkdir(parents=True, exist_ok=True)
-    adopter2.generate_minimal_ai_platform_yaml()
-    with open(adopter2.yaml_file) as f:
-        data2 = yaml.safe_load(f)
-    assert data2["type"] == "fullstack", f"Expected fullstack, got {data2['type']}"
 
     # Test: backend (default) — no frontend markers
     adopter3 = _make_adopter(tmp_path / "backend-project", name="backend-project")

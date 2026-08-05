@@ -223,23 +223,6 @@ templates:
       PLATFORM_DOMAIN:
         required: false
 
-  - template: ../../templates/template-fullstack/
-    output: null
-    type: directory
-    recursive: true
-    consumer: core/internal/scaffold/add-project.sh
-    vars:
-      PROJECT_NAME:
-        required: true
-      ORG_NAME:
-        required: true
-      DOMAIN:
-        required: false
-      NODE_NAME:
-        required: true
-      PLATFORM_DOMAIN:
-        required: false
-
   - template: ../../templates/template-context/
     output: null
     type: directory

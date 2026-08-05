@@ -46,11 +46,10 @@ KLASS_L1 = "L1"
 KLASS_L2 = "L2"
 KLASS_L3 = "L3"
 
-# ── Маппинг type (ai-platform.yaml) → языки канона (DevPlan 137 §3.2; Q3: fullstack = 2 языка) ──
+# ── Маппинг type (ai-platform.yaml) → языки канона (DevPlan 137 §3.2) ──
 LANGUAGE_FOR_TYPE: dict[str, tuple[str, ...]] = {
     "backend": ("python",),
     "frontend": ("typescript", "react"),
-    "fullstack": ("python", "typescript", "react"),
     "python": ("python",),
     "typescript": ("typescript", "react"),
     "react": ("typescript", "react"),

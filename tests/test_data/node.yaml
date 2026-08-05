@@ -23,4 +23,4 @@ projects:
   - name: test-site
     domain: test-site.example.com
     repo: https://github.com/example/test-site.git
-    type: fullstack
+    type: backend

@@ -42,7 +42,7 @@ class ProjectEntry:
     ## @purpose  Structured representation of a project entry for mutation operations.
     ## @fields   name — project name
     ##           repo — GitHub repository path (org/repo)
-    ##           type — project type (frontend, backend, fullstack, agent, bot, landing)
+    ##           type — project type (frontend, backend, agent, bot, landing)
     ##           domain — FQDN for HTTP-routable projects
     ##           database — database name for postgres projects
     ##           context — context name this project belongs to

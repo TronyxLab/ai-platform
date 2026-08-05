@@ -51,7 +51,7 @@ _PINS = load_manifest().pins
 # · Regression: timestamp/порядок в контенте → дрейф GENERATED-файлов (гейт 137)
 # · Last fail: N/A
 # · Remove if: рендер намеренно становится недетерминированным
-@pytest.mark.parametrize("language", ["backend", "frontend", "fullstack", "sh"])
+@pytest.mark.parametrize("language", ["backend", "frontend", "sh"])
 def test_render_deterministic(language: str) -> None:
     """Двойной рендер project files — байт-идентичен (детерминизм генераторов)."""
     first = render_project_files("demo", language, "baseline", _PINS)

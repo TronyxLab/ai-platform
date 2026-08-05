@@ -572,11 +572,11 @@ def main(argv: list[str] | None = None) -> int:
     """
     parser = argparse.ArgumentParser(description="Create a new project from a template.")
     parser.add_argument("--name", required=True, help="Project name (alphanumeric, hyphens, underscores)")
-    parser.add_argument("--template", required=True, help="Template: frontend | backend | fullstack")
+    parser.add_argument("--template", required=True, help="Template: frontend | backend")
     parser.add_argument("--org", default="", help=f"Organization name (default: {_DEFAULT_ORG})")
     parser.add_argument("--node", default="", help=f"Target node name (default: {_DEFAULT_NODE})")
     parser.add_argument("--domain", default="", help="Domain for nginx vhost (auto: NAME.PLATFORM_DOMAIN)")
-    parser.add_argument("--database", default="", help="Database name for backend/fullstack projects")
+    parser.add_argument("--database", default="", help="Database name for backend projects")
     parser.add_argument("--dry-run", action="store_true", default=False, help="Show plan without creating files")
     parser.add_argument("--mode", default="", help="dev mode: enables staging")
     parser.add_argument("--register", action="store_true", default=False, help="Register project in node.yaml")
@@ -589,9 +589,9 @@ def main(argv: list[str] | None = None) -> int:
     node = args.node or _DEFAULT_NODE
 
     # Validate
-    if args.template not in ("frontend", "backend", "fullstack"):
+    if args.template not in ("frontend", "backend"):
         logger.info("[IMP:10][scaffold][main] Invalid template: %s", args.template)
-        print(f"ERROR: Invalid template type: '{args.template}'. Must be: frontend | backend | fullstack")
+        print(f"ERROR: Invalid template type: '{args.template}'. Must be: frontend | backend")
         return 1
 
     # ⚠️ TRAP[BUG] · 2026-08-01 · P2 · Old strip-check accepted leading '-'/'_' project names

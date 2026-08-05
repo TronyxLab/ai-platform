@@ -87,7 +87,7 @@ def test_maturity_thresholds_from_canon() -> None:
 
 
 # 🧪 TRAP[TEST] · 2026-08-05 · unit · checks_for фильтрует по языку/уровню/каналу
-# · Regression: fullstack = 2 языка (Q3), "all"-проверки применяются к любому языку
+# · Regression: "all"-проверки применяются к любому языку
 # · Last fail: N/A
 # · Remove if: checks_for API меняется
 def test_checks_for_filters() -> None:

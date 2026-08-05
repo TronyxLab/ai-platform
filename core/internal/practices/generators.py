@@ -60,7 +60,7 @@ RUFF_FULL_SELECT: tuple[str, ...] = ("E", "F", "I", "B", "UP", "S", "ANN", "D", 
 RUFF_FULL_IGNORE: tuple[str, ...] = ("S101", "D100", "S310")
 
 # ── Языки python-семейства (pyproject рендерится только для них) ──
-_PYTHON_TYPES: frozenset[str] = frozenset({"python", "backend", "fullstack"})
+_PYTHON_TYPES: frozenset[str] = frozenset({"python", "backend"})
 
 # ── Относительные пути GENERATED-файлов (AC W1: 5 файлов; practices.lock рендерится
 #    отдельно — render_lock требует maturity/decision, поэтому не входит в render_project_files) ──
@@ -75,7 +75,7 @@ GENERATED_FILE_PATHS: tuple[str, ...] = (
 
 # region FUNC_render_pyproject
 ## @purpose  Рендер pyproject.toml (ruff + pytest конфиг). ТОЛЬКО для python-языков
-##           (python|backend|fullstack); иначе возвращает "" (файл не генерируется).
+##           (python|backend); иначе возвращает "" (файл не генерируется).
 ##           BASELINE: ruff format (стиль), ruff check отключён (select = [] — агент не
 ##           гоняется по правкам, §3.4). FULL: полный набор правил + strict-pytest.
 ## @io       ⇥ project_name: str, language: str, level: str → ⎋ str ("" если language не python)

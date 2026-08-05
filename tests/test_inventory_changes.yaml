@@ -2066,3 +2066,20 @@ removed:
     reason: "139 W3: deploy_modules сплит по подобластям (T6) — тест переехал: пакеты→test_deploy_modules_packages.py, env→test_deploy_modules_env.py; покрытие сохранено."
     issue: "139-test-system-stewardship W3"
     approved_by: "@tronyx"
+
+  # ── fullstack-тип удалён из платформы: payload-шаблон template-fullstack/ + тип fullstack ──
+  # Шаблон templates/template-fullstack/ удалён, тип fullstack убран из схем (ai-platform.schema.json,
+  # node.schema.json), мониторинга (defaults.yaml), практик (LANGUAGE_FOR_TYPE/_PYTHON_TYPES),
+  # scaffold (project_scaffolder/scaffold_helpers/project_adopter), CI (deploy-project.yml) и тестовых данных.
+  - nodeid: "tests/test_scaffold_helpers.py::test_gen_yaml_fullstack_full"
+    reason: "fullstack-тип удалён из платформы — тест проверял fullstack-специфичный мониторинг (ai_retention 30d, alerting/dashboard, llm remote) и needs.llm ветку gen_ai_platform_yaml, которые удалены вместе с типом."
+    issue: "fullstack-template-removal"
+    approved_by: "@tronyx"
+  - nodeid: "tests/test_templates.py::test_template_validates_against_schema[template-fullstack]"
+    reason: "fullstack-тип удалён из платформы — параметризационный случай glob-валидации шаблонов для удалённого templates/template-fullstack/ (папка и её ai-platform.yaml удалены)."
+    issue: "fullstack-template-removal"
+    approved_by: "@tronyx"
+  - nodeid: "tests/unit/test_practices_generators.py::test_render_deterministic[fullstack]"
+    reason: "fullstack-тип удалён из платформы — параметр 'fullstack' убран из parametrize test_render_deterministic (fullstack больше не валидный type)."
+    issue: "fullstack-template-removal"
+    approved_by: "@tronyx"

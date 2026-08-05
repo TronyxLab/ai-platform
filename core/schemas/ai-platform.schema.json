@@ -22,10 +22,9 @@
       "type": "string",
       "enum": [
         "frontend",
-        "backend",
-        "fullstack"
+        "backend"
       ],
-      "description": "Project category (frontend|backend|fullstack) — agent is a platform component, not a project type (AD-1)"
+      "description": "Project category (frontend|backend) — agent is a platform component, not a project type (AD-1)"
     },
     "target_node": {
       "type": "string",
@@ -249,7 +248,7 @@
           "minimum": 1024,
           "maximum": 65535,
           "default": 3000,
-          "description": "Prometheus metrics port (default 3000; backend/fullstack = 8080)"
+          "description": "Prometheus metrics port (default 3000; backend = 8080)"
         },
         "host_port": {
           "type": "integer",

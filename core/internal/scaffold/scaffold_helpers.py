@@ -86,7 +86,7 @@ def load_compose_profiles_from_platform_env() -> str:
 # region FUNC_gen_ai_platform_yaml
 ## @purpose  Generate ai-platform.yaml for a project (shared between new-project + adopt).
 ## @param name         Project name
-## @param ptype        Project type: frontend, backend, fullstack
+## @param ptype        Project type: frontend, backend
 ## @param org          Organization name
 ## @param node         Target node name
 ## @param domain       Domain name (optional)
@@ -98,7 +98,7 @@ def load_compose_profiles_from_platform_env() -> str:
 ## @complexity O(1)
 ## @invariants
 ##   - Overwrites existing file (caller decides idempotency)
-##   - Full monitoring config depends on project type (frontend/backend/fullstack)
+##   - Full monitoring config depends on project type (frontend/backend)
 ##   - Minimal mode: only name, type, target_node, needs, basic monitoring
 def gen_ai_platform_yaml(
     name: str,
@@ -159,8 +159,6 @@ def gen_ai_platform_yaml(
         # str "False" → lower "false" → skip (семантика сохраняется), "False"/"false" → skip.
         if database and str(database).lower() != "false":
             data["needs"]["database"] = database
-        if ptype == "fullstack":
-            data["needs"]["llm"] = "remote"
 
         # Monitoring per type
         mon_config: dict[str, Any]
@@ -171,15 +169,6 @@ def gen_ai_platform_yaml(
                 "logs_retention": "3d",
                 "alerting": False,
                 "dashboard": False,
-            }
-        elif ptype == "fullstack":
-            mon_config = {
-                "metrics": True,
-                "metrics_port": 8080,
-                "logs_retention": "30d",
-                "ai_retention": "30d",
-                "alerting": True,
-                "dashboard": True,
             }
         else:  # backend
             mon_config = {
@@ -303,7 +292,7 @@ help:
 ##           Does NOT overwrite existing unless force=True.
 ## @param name         Project name
 ## @param org          Organization name
-## @param template     Template type (frontend/backend/fullstack)
+## @param template     Template type (frontend/backend)
 ## @param node         Target node name
 ## @param domain       Domain name (optional)
 ## @param output_path  Where to write AGENTS.md
@@ -448,7 +437,7 @@ def gen_project_platform_md(
 ## @param name         Project name
 ## @param org          Organization name
 ## @param node         Node name
-## @param ptype        Project type (frontend/backend/fullstack/adopted)
+## @param ptype        Project type (frontend/backend/adopted)
 ## @param domain       Domain name (optional)
 ## @param database     Database name (optional)
 ## @param yaml_path    Explicit path to node.yaml

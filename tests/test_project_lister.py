@@ -86,7 +86,7 @@ def multi_node_yamls(tmp_path: pathlib.Path) -> pathlib.Path:
         tmp_path,
         "dev-server",
         [
-            {"name": "app-c", "domain": "c.tronyx.ru", "type": "fullstack", "repo": "org/app-c"},
+            {"name": "app-c", "domain": "c.tronyx.ru", "type": "backend", "repo": "org/app-c"},
             {"name": "app-d", "type": "backend", "repo": "org/app-d"},
         ],
     )

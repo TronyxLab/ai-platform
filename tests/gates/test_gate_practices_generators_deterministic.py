@@ -29,7 +29,7 @@ from core.internal.practices.maturity import Maturity
 
 logger = logging.getLogger(__name__)
 
-_LANGUAGES = ["backend", "frontend", "fullstack", "python", "typescript", "sh"]
+_LANGUAGES = ["backend", "frontend", "python", "typescript", "sh"]
 
 
 @pytest.mark.gate

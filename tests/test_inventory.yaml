@@ -6,7 +6,7 @@
 ##            for test_gate_test_inventory.py. Any test removal without documented changelog FAILS the gate.
 ## @rationale — Prevents silent test deletion in PRs. If a test is removed from the suite
 ##              without an entry in test_inventory_changes.yaml, the inventory gate catches it.
-## @changes — 2026-08-05 | regenerated (3933 tests)
+## @changes — 2026-08-06 | regenerated (3930 tests)
 ## @changes — 2026-07-15 | Added 5 gate tests (DevPlan 007: P20 + compose-include-sync)
 ## @changes — 2026-07-10 | Initial baseline per TestsMetaDevPlan2.md TASK-10
 # endregion MODULE_CONTRACT
@@ -1382,7 +1382,6 @@ test_nodeids:
 - 'tests/test_scaffold_helpers.py::test_gen_yaml_backend_full'
 - 'tests/test_scaffold_helpers.py::test_gen_yaml_dev_mode'
 - 'tests/test_scaffold_helpers.py::test_gen_yaml_frontend_full'
-- 'tests/test_scaffold_helpers.py::test_gen_yaml_fullstack_full'
 - 'tests/test_scaffold_helpers.py::test_gen_yaml_minimal_mode'
 - 'tests/test_scaffold_helpers.py::test_register_dry_run'
 - 'tests/test_scaffold_helpers.py::test_register_missing_yaml_file'
@@ -1494,7 +1493,6 @@ test_nodeids:
 - 'tests/test_template_engine.py::test_unresolved_placeholder_blocking'
 - 'tests/test_templates.py::test_template_validates_against_schema[template-backend]'
 - 'tests/test_templates.py::test_template_validates_against_schema[template-frontend]'
-- 'tests/test_templates.py::test_template_validates_against_schema[template-fullstack]'
 - 'tests/test_templates.py::test_vhost_template_health_location_safe'
 - 'tests/test_tls_wildcard.py::test_acme_sh_available'
 - 'tests/test_tls_wildcard.py::test_hermes_vhost_conditionally_deployed'
@@ -2928,7 +2926,6 @@ test_nodeids:
 - 'tests/unit/test_practices_generators.py::test_generator_hash_deterministic'
 - 'tests/unit/test_practices_generators.py::test_render_deterministic[backend]'
 - 'tests/unit/test_practices_generators.py::test_render_deterministic[frontend]'
-- 'tests/unit/test_practices_generators.py::test_render_deterministic[fullstack]'
 - 'tests/unit/test_practices_generators.py::test_render_deterministic[sh]'
 - 'tests/unit/test_practices_generators.py::test_render_lock_contains_maturity_snapshot'
 - 'tests/unit/test_practices_generators.py::test_render_precommit_upstream_only'

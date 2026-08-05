@@ -132,12 +132,12 @@ class CheckReport:
 ## @io       ⇥ project_dir: Path → ⎋ tuple[str, ...] языков канона
 ## @complexity O(1)
 ## @invariants
-##   - type frontend → (typescript, react); fullstack → (python, typescript, react)
+##   - type frontend → (typescript, react)
 ##   - Неизвестный type → ("all",)-эквивалент: пустой кортеж языков → только all-проверки
 def resolve_language(project_dir: Path) -> tuple[str, ...]:
-    """Resolve canon languages from ai-platform.yaml type (fullstack → python+ts).
+    """Resolve canon languages from ai-platform.yaml type (backend → python, frontend → ts).
 
-    ## @purpose  type из ai-platform.yaml (backend|frontend|fullstack|python|typescript|react|sh)
+    ## @purpose  type из ai-platform.yaml (backend|frontend|python|typescript|react|sh)
     ##           → кортеж языков канона (§3.2). Неизвестный/отсутствующий type → пустой кортеж
     ##           (только all-проверки — безопасный fallback, не угадываем язык).
     ## @io       ⇥ project_dir: Path → ⎋ tuple[str, ...]
@@ -168,7 +168,7 @@ def select_checks(manifest: PracticesManifest, languages: tuple[str, ...], state
     ## @purpose  L1-проверки — ВСЕГДА (безопасность платформы, §3.1 п.4); baseline-проверки —
     ##           всегда; full-проверки — только в proposed/active-full (эскалатор). Язык:
     ##           проверка применяется, если languages содержит "all" ИЛИ пересекается с языками
-    ##           проекта (fullstack → python+ts/react обе ветки, DevPlan 137 Q3).
+    ##           проекта (frontend → python+ts/react обе ветки, DevPlan 137 Q3).
     ## @io       ⇥ manifest, languages, state_name → ⎋ list[PracticeCheck] в порядке канона
     ## @complexity O(C)
     """

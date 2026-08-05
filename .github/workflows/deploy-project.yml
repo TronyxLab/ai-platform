@@ -130,9 +130,9 @@ jobs:
           echo "PROJECT_TYPE=${PROJECT_TYPE}" >> "${GITHUB_ENV}"
           echo "QUALITY_LEVEL=${QUALITY_LEVEL}" >> "${GITHUB_ENV}"
 
-      # ─── Node.js (только frontend/fullstack) — stdlib-экшен, org-agnostic ─────────
-      - name: Setup Node.js (frontend/fullstack)
-        if: ${{ env.PROJECT_TYPE == 'frontend' || env.PROJECT_TYPE == 'fullstack' || env.PROJECT_TYPE == 'typescript' || env.PROJECT_TYPE == 'react' }}
+      # ─── Node.js (только frontend) — stdlib-экшен, org-agnostic ─────────
+      - name: Setup Node.js (frontend)
+        if: ${{ env.PROJECT_TYPE == 'frontend' || env.PROJECT_TYPE == 'typescript' || env.PROJECT_TYPE == 'react' }}
         uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -156,7 +156,6 @@ jobs:
           case "${PROJECT_TYPE}" in
             python|backend) HAS_PYTHON=1 ;;
             typescript|react|frontend) HAS_NODE=1 ;;
-            fullstack) HAS_PYTHON=1; HAS_NODE=1 ;;  # Q3: обе ветки исполняются
             sh) ;;
             *) echo "[IMP:9][quality] unknown type '${PROJECT_TYPE}' — no language checks (deploy proceeds)" ;;
           esac

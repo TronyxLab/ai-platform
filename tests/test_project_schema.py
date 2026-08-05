@@ -10,7 +10,7 @@
 ##   - FQDN conflict: two projects with same domain — schema does not block,
 ##     but test checks _simulate_fqdn_registry that models validate.sh behaviour
 ##   - Version: 'latest' as platform_services value is NOT auto-injected (04 §5)
-##   - type: only frontend | backend | fullstack | agent
+##   - type: only frontend | backend | agent
 ##   - target_node: required field
 ##   - At least one IMP:9 log per §TESTING
 ## @rationale Q: Why test schema in Python instead of shell? A: python-jsonschema gives
@@ -33,7 +33,7 @@ Tests for ai-platform.yaml schema validation (TASK-03-07).
   - FQDN-конфликт: два проекта с одинаковым domain — schema не блокирует (runtime validate.sh блокирует),
     но тест проверяет логику _simulate_fqdn_registry которая моделирует поведение validate.sh
   - Версия: 'latest' как значение platform_services НЕ подставляется автоматически (04 §5)
-  - type: только frontend | backend | fullstack | agent
+  - type: только frontend | backend | agent
   - target_node: обязательное поле
   - At least one IMP:9 log per §TESTING
 """
@@ -327,7 +327,7 @@ def test_expose_true_requires_domain_string(project_schema, caplog) -> None:
 @pytest.mark.parametrize(
     "project_type",
     [
-        "microservice",  # Not in enum {frontend, backend, fullstack, agent}
+        "microservice",  # Not in enum {frontend, backend, agent}
         "cli-tool",
         "",
     ],

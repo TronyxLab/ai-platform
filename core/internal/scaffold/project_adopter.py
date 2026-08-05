@@ -108,7 +108,7 @@ class ProjectAdopter:
         self._log_prefix = "adopt"
 
     # region FUNC_generate_minimal_ai_platform_yaml
-    ## @purpose  Generate minimal ai-platform.yaml (auto-type-detect frontend/fullstack/backend; exists → "exists"). · ⇥ None → ⎋ str "generated"|"exists" · @complexity O(1) · Не перезаписывает существующий yaml; делегирует scaffold_helpers.gen_ai_platform_yaml
+    ## @purpose  Generate minimal ai-platform.yaml (auto-type-detect frontend/backend; exists → "exists"). · ⇥ None → ⎋ str "generated"|"exists" · @complexity O(1) · Не перезаписывает существующий yaml; делегирует scaffold_helpers.gen_ai_platform_yaml
     def generate_minimal_ai_platform_yaml(self) -> str:
         """Generate minimal ai-platform.yaml if not present."""
         if self.yaml_file.exists():
@@ -121,8 +121,6 @@ class ProjectAdopter:
         type_guess = "backend"
         if (self.project_dir / "src" / "index.html").exists() or (self.project_dir / "frontend").is_dir():
             type_guess = "frontend"
-        if (self.project_dir / "frontend").is_dir() and (self.project_dir / "backend").is_dir():
-            type_guess = "fullstack"
 
         logger.info("[IMP:7][%s][gen_yaml] Guessed project type: %s", self._log_prefix, type_guess)
 

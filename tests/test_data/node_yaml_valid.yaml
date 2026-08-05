@@ -13,7 +13,7 @@ projects:
   - name: app1
     domain: app1.example.com
     repo: git@github.com:org/app1.git
-    type: fullstack
+    type: backend
   - name: app2
     domain: app2.example.com
     repo: git@github.com:org/app2.git

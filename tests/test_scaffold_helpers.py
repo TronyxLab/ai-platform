@@ -90,29 +90,6 @@ def test_gen_yaml_frontend_full(tmp_path: pathlib.Path, caplog) -> None:
 
 
 @ldd_trajectory
-def test_gen_yaml_fullstack_full(tmp_path: pathlib.Path, caplog) -> None:
-    yaml_path = tmp_path / "ai-platform.yaml"
-    logger.info("[IMP:9][test][helpers] test_gen_yaml_fullstack_full")
-    result = gen_ai_platform_yaml(
-        name="test-fullstack",
-        ptype="fullstack",
-        org="test-org",
-        domain="fullstack.tronyx.ru",
-        output_path=yaml_path,
-        minimal=False,
-    )
-    assert result == "generated"
-    parsed = yaml.safe_load(yaml_path.read_text())
-    mon = parsed["monitoring"]
-    assert mon["metrics"] is True
-    assert mon["ai_retention"] == "30d"
-    assert mon["alerting"] is True
-    assert mon["dashboard"] is True
-    assert "llm" in parsed["needs"]
-    assert parsed["needs"]["llm"] == "remote"
-
-
-@ldd_trajectory
 def test_gen_yaml_minimal_mode(tmp_path: pathlib.Path, caplog) -> None:
     yaml_path = tmp_path / "ai-platform.yaml"
     logger.info("[IMP:9][test][helpers] test_gen_yaml_minimal_mode")

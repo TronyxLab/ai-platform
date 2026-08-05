@@ -1,4 +1,4 @@
-# GREP_SUMMARY: monitoring defaults global type-defaults frontend backend fullstack metrics logs_retention ai_retention alerting dashboard type-defaults
+# GREP_SUMMARY: monitoring defaults global type-defaults frontend backend metrics logs_retention ai_retention alerting dashboard type-defaults
 # STRUCTURE: ▶ L1:defaults.yaml → L2:org-overrides → L3:project-config → deep-merge → effective config → ⎋
 # region MODULE_CONTRACT
 ## @purpose  Platform monitoring defaults by project type (L1 layer in three-layer config merge)
@@ -52,11 +52,3 @@ type-defaults:
     # ai_retention: not set (backends may use LLM via needs.llm)
     alerting: false
     dashboard: false
-
-  fullstack:
-    metrics: true
-    metrics_port: 8080
-    logs_retention: 30d
-    ai_retention: 30d
-    alerting: true
-    dashboard: true

@@ -220,18 +220,17 @@
             "minLength": 1,
             "description": "GitHub repository path (org/repo)"
           },
-          "type": {
-            "type": "string",
-            "enum": [
-              "frontend",
-              "backend",
-              "fullstack",
-              "agent",
-              "bot",
-              "landing"
-            ],
-            "description": "Project type — determines deployment strategy"
-          },
+            "type": {
+              "type": "string",
+              "enum": [
+                "frontend",
+                "backend",
+                "agent",
+                "bot",
+                "landing"
+              ],
+              "description": "Project type — determines deployment strategy"
+            },
           "domain": {
             "type": "string",
             "description": "FQDN for HTTP-routable projects (required for frontend/landing types)"

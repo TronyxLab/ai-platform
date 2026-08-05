@@ -199,7 +199,7 @@ def load_l1_defaults(defaults_path: Path, project_type: str) -> dict:
     ##            type-defaults.<project_type> section.
     ## @io
     ##   ⇥ defaults_path: Path — path to defaults.yaml
-    ##   ⇥ project_type: str — project type ("backend", "frontend", "fullstack")
+    ##   ⇥ project_type: str — project type ("backend", "frontend")
     ##   ⎋ dict — merged L1 config (empty if defaults file missing)
     ## @complexity O(N) where N = keys in defaults.yaml
     ## @invariants
