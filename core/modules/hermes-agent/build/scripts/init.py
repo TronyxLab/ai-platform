@@ -163,7 +163,7 @@ class HermesInit:
         ## @invariants
         ##   - guard-файл существует → overlay пропускается (идемпотентность)
         ##   - overlay: rsync -a --ignore-existing (базовые профили приоритетны при re-init)
-        ##   - chown -R uid:gid на data — non-fatal при провале (как shell || true)
+        ##   - chown -R uid:gid на data — ТОЛЬКО при root (L1); non-root (L2) — skip + лог (DevPlan 140 W6)
         ##   - volume permissions: тест записи + chown если root — non-fatal (TRAP[BUG] 2026-07-06)
         """
         profiles_src = self.context_dir / "templates" / "profiles"
@@ -184,11 +184,23 @@ class HermesInit:
 
         # ── Volume permissions (non-fatal; TRAP[BUG] 2026-07-06 P0) ──
         self._validate_volume_permissions()
-        try:
-            subprocess.run(["chown", "-R", f"{self.uid}:{self.gid}", str(self.data.parent)], check=False)
-        except OSError as exc:
-            logger.warning("[IMP:7][INIT][OWNERSHIP] chown failed (non-fatal): %s", exc)
-        logger.info("[IMP:8][INIT][OWNERSHIP] %s ownership set to %d:%d", self.data.parent, self.uid, self.gid)
+        if os.geteuid() == 0:
+            # chown-if-root (DevPlan 140 W6): L1-root случай — страховка для volume,
+            # смонтированного root-владельцем; non-fatal (как shell || true)
+            try:
+                subprocess.run(["chown", "-R", f"{self.uid}:{self.gid}", str(self.data.parent)], check=False)
+                logger.info("[IMP:8][INIT][OWNERSHIP] %s ownership set to %d:%d", self.data.parent, self.uid, self.gid)
+            except OSError as exc:
+                logger.warning("[IMP:7][INIT][OWNERSHIP] chown failed (non-fatal): %s", exc)
+        else:
+            # L2 non-root: chown невозможен (Operation not permitted) — volume обязан быть
+            # pre-owned UID:GID; проверка записи в _validate_volume_permissions уже выполнена
+            logger.info(
+                "[IMP:7][INIT][OWNERSHIP] Non-root (euid=%d) — chown skipped; volume must be pre-owned by %d:%d",
+                os.geteuid(),
+                self.uid,
+                self.gid,
+            )
 
     # endregion FUNC_init_state
 
@@ -222,8 +234,12 @@ class HermesInit:
                 except (OSError, subprocess.CalledProcessError):
                     logger.warning("[IMP:7][VOLUME][FIX] chown failed — continuing anyway (non-fatal)")
             else:
+                # DevPlan 140 W6 (L2 non-root): проверка записи ОБЯЗАТЕЛЬНА — volume должен быть
+                # смонтирован владельцем UID 10000; chown-фикс возможен только при root (L1).
                 logger.warning(
-                    "[IMP:7][VOLUME][FIX] Not running as root — cannot fix ownership, continuing anyway (non-fatal)"
+                    "[IMP:7][VOLUME][FIX] Not running as root — cannot fix ownership, continuing anyway "
+                    "(non-fatal); volume must be pre-owned by UID %d (write check is mandatory)",
+                    self.uid,
                 )
 
     # endregion FUNC__validate_volume_permissions

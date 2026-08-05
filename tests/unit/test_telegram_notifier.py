@@ -624,4 +624,74 @@ def test_notify_success_no_failure_marker(tmp_path, caplog: pytest.LogCaptureFix
     assert any("[IMP:9]" in m for m in messages), "IMP:9 on successful scenario (LDD)"
 
 
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · notify: кавычки в secrets.env (ночная сессия 141)
+# · Scenario: оригинальная форма — secrets.env от decrypt_secrets.py пишет значения в '...';
+# ·   inline-парсер notify() с v.strip() оставлял кавычки → InvalidURL nonnumeric port "8118'"
+# ·   (TELEGRAM_PROXY_URL) и 401-токен. Точный вход: single-quoted значения в secrets-файле.
+# · Last fail: 2026-08-06 до фикса — ValueError: invalid literal for int() with base 10: "8118'"
+# · Remove if: secrets.env перестанет писать значения в кавычках ИЛИ notify сменит источник env
+def test_notify_quoted_secrets_env_original_form(tmp_path, caplog: pytest.LogCaptureFixture) -> None:
+    """R5: notify() с кавычками в secrets.env передаёт ОЧИЩЕННЫЕ token/chat/proxy в send_telegram."""
+    caplog.set_level(logging.INFO)
+    secrets = tmp_path / "secrets.env"
+    # Точный формат write_secrets_env (decrypt_secrets.py): KEY='value' (single-quoted)
+    secrets.write_text(
+        "TELEGRAM_BOT_TOKEN='123:token'\nTELEGRAM_CHAT_ID='-100base'\nTELEGRAM_PROXY_URL='http://127.0.0.1:8118'\n"
+    )
+    captured: dict = {}
+
+    def _fake_send(message, bot_token=None, chat_id=None, proxy_url=None, parse_mode=None):
+        captured.update(token=bot_token, chat_id=chat_id, proxy=proxy_url, message=message, parse_mode=parse_mode)
+        return True
+
+    with (
+        patch.dict(os.environ, {}, clear=True),
+        patch("core.internal.shared.telegram_notifier.send_telegram", side_effect=_fake_send),
+    ):
+        ok = notify("✅", "quoted env", severity="info", context="deploy", secrets_file=str(secrets))
+
+    assert ok is True
+    assert captured["token"] == "123:token", f"R5 FAIL: token с кавычками: {captured['token']!r}"
+    assert captured["chat_id"] == "-100base", f"R5 FAIL: chat_id с кавычками: {captured['chat_id']!r}"
+    assert captured["proxy"] == "http://127.0.0.1:8118", f"R5 FAIL: proxy с кавычками: {captured['proxy']!r}"
+    messages = [r.message for r in caplog.records]
+    assert any("[IMP:9]" in m and "Notification sent" in m for m in messages), (
+        "R5 FAIL: успешная доставка не залогирована IMP:9 (LDD)"
+    )
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · CLI send: kwarg token vs bot_token (ночная сессия 141)
+# · Scenario: оригинальная форма — `send`/`get-me` вызывали send_telegram(token=...) →
+# ·   TypeError: unexpected keyword argument 'token' (сигнатура bot_token). Точный вход: argv send.
+# · Last fail: 2026-08-06 до фикса — TypeError в main() send/get-me ветках
+# · Remove if: сигнатура send_telegram/get_me перестанет принимать bot_token
+def test_main_send_cli_uses_bot_token_kwarg(tmp_path) -> None:
+    """R5: CLI send вызывает send_telegram с bot_token= (НЕ token=)."""
+    from core.internal.shared.telegram_notifier import main
+
+    captured: dict = {}
+
+    def _fake_send(message, bot_token=None, chat_id=None, proxy_url=None, parse_mode=None):
+        captured.update(bot_token=bot_token, chat_id=chat_id, proxy=proxy_url)
+        return True
+
+    with (
+        patch.dict(
+            os.environ,
+            {"TELEGRAM_BOT_TOKEN": "123:token", "TELEGRAM_CHAT_ID": "-100base"},
+            clear=True,
+        ),
+        patch(
+            "sys.argv",
+            ["telegram_notifier", "send", "hello"],
+        ),
+        patch("core.internal.shared.telegram_notifier.send_telegram", side_effect=_fake_send),
+    ):
+        rc = main()
+
+    assert rc == 0
+    assert captured["bot_token"] == "123:token", f"R5 FAIL: send_telegram не получил bot_token: {captured!r}"
+    assert captured["chat_id"] == "-100base"
+
+
 # endregion E10_NOTIFY

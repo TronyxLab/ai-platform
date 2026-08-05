@@ -74,9 +74,17 @@ services:
     #   - Readiness: мониторинг метрики loki_ready через Prometheus +
     #     алерт-правило (alert-rules.yml: LokiNotReady) — внешний HTTP-проб
     #     на http://loki:3100/ready, выполняемый Prometheus, не изнутри контейнера.
+    #   - Deep-диагностика модуля: healthcheck.sh MODE=deep → check_http /ready
+    #     (core/modules/logging/healthcheck.sh) — внешний проб с хоста.
     # · Альтернатива: перейти на shell-based образ (grafana/loki:3.7.3-alpine),
     #   если такой существует — требует отдельного исследования совместимости
     #   (конфиги, сигналы, entrypoint). Не реализовано.
+    # · 2026-08-06 (D-8, DevPlan 140 W3): инспекция образа подтверждена —
+    #   docker export grafana/loki:3.7.3 → файловая система содержит ЕДИНСТВЕННЫЙ
+    #   бинарник usr/bin/loki, shell/wget/curl/busybox/pgrep отсутствуют (0 утилит).
+    #   HTTP-ready проверка изнутри scratch-контейнера невозможна в принципе —
+    #   ready-критерий остаётся внешним (deep check_http + Prometheus loki_ready),
+    #   liveness-критерий НЕ меняется.
     # · Rev: при появлении Loki alpine-образа — заменить liveness на wget /ready,
     #   убрать внешний readiness-мониторинг loki_ready (станет избыточным).
     healthcheck:

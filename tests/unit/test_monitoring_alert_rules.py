@@ -1,25 +1,30 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: test-monitoring-alert-rules alerting-enabled template-render created skipped failed provisioning loki backup-rules uid-unique
-# STRUCTURE: ┌4 test functions (generate_alert_rules)┐ → ◇ alerting disabled (1) → ◇ template missing (1) → ◇ created (1) → ◇ render failure (1) → ┤ provisioning alert-rules.yml (uid unique, loki datasource, 3 backup rules)
+# GREP_SUMMARY: test-monitoring-alert-rules alerting-enabled template-render created skipped failed provisioning loki backup-rules uid-unique service-down-short mountpoint-filter
+# STRUCTURE: ┌4 test functions (generate_alert_rules)┐ → ◇ alerting disabled (1) → ◇ template missing (1) → ◇ created (1) → ◇ render failure (1) → ┤ provisioning alert-rules.yml (uid unique, loki datasource, 3 backup rules, service_down_short, disk_space mountpoint-filter)
 # region MODULE_CONTRACT
 ## @purpose  Unit tests for core/internal/monitoring/alert_rules.py — generate_alert_rules()
 #            (DevPlan 117 G T54 extraction) + статическая валидация provisioning-файла
-#            core/modules/monitoring/config/alerting/alert-rules.yml (DevPlan 132 W5).
+#            core/modules/monitoring/config/alerting/alert-rules.yml (DevPlan 132 W5, 140 W2).
 ## @scope    No Docker — tmp_path template/output fixtures; yaml-парс provisioning-файла (read-only).
 ## @invariants
 ##   - All tests use tmp_path (zero hardcoded paths)
 ##   - Branch coverage target: ≥80% (AC-G3)
 ##   - 132 W5: uid уникальны, datasourceUid="loki" для backup-правил, expr непустой,
 ##     новые правила присутствуют (backup_freshness/backup_upload_failure/wal_sync_failure)
+##   - 140 W2 D-4: правило service_down_short присутствует (uid/for=15s/severity=warning/expr up == 0)
+##   - 140 W2 D-6: expr disk_space содержит {mountpoint="/"} (root-файловая система, не tmpfs/overlay)
 ## @rationale  DevPlan 117 G T54 §TEST_SPEC — alert_rules direct tests after extraction.
 ##            DevPlan 132 W5 §TEST_SPEC — валидация структуры новых Loki-правил.
+##            DevPlan 140 W2 §4.2/§5 — fire-семантика: sub-minute правило + mountpoint-фильтр (negative R5).
 ## @changes  2026-08-01 · DevPlan 117 G T54 — created
 ## @changes  2026-08-04 · DevPlan 132 W5 — +provisioning-файл валидация (3 Loki-правила)
+## @changes  2026-08-06 · DevPlan 140 W2 — +service_down_short (D-4), +disk_space mountpoint-фильтр (D-6), +R5 negative
 # endregion MODULE_CONTRACT
 
 import logging
 from pathlib import Path
 
+import pytest
 import yaml
 from monitoring.alert_rules import generate_alert_rules
 from monitoring_config_renderer import ProjectMonitoringConfig
@@ -123,14 +128,14 @@ def _provisioning_rules() -> list[dict]:
 
 
 # 🧪 TRAP[TEST] · Regression · Scenario: uid уникальны в provisioning-файле (132 W5)
-# · Expect: 7 правил, 0 дублей uid
+# · Expect: 8 правил, 0 дублей uid
 # · Last fail: N/A (new test for DevPlan 132 W5)
 # · Remove if: provisioning-структура alert-rules.yml меняется
 def test_provisioning_alert_rules_uid_unique(caplog) -> None:
     """Все uid правил уникальны (Grafana 12 provisioning contract)."""
     caplog.set_level(logging.INFO)
     rules = _provisioning_rules()
-    assert len(rules) >= 7, f"ожидается ≥7 правил (4 prometheus + 3 loki), got {len(rules)}"
+    assert len(rules) >= 8, f"ожидается ≥8 правил (5 prometheus + 3 loki), got {len(rules)}"
     uids = [r["uid"] for r in rules]
     assert len(uids) == len(set(uids)), f"дубли uid: {[u for u in uids if uids.count(u) > 1]}"
     logger.info("[IMP:9][test_monitoring_alert_rules] %d rules, uid unique PASS", len(uids))
@@ -184,3 +189,75 @@ def test_provisioning_alert_rules_prometheus_rules_intact(caplog) -> None:
         assert uid in rules, f"существующее правило {uid} удалено"
         assert rules[uid]["data"][0]["datasourceUid"] == "prometheus", f"{uid}: datasource != prometheus"
     logger.info("[IMP:9][test_monitoring_alert_rules] 4 prometheus rules intact PASS")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# DevPlan 140 W2: D-4 sub-minute правило + D-6 mountpoint-фильтр
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _alert_expr(rule: dict) -> str:
+    """Первая data-запись правила — Prometheus-запрос; вернуть model.expr."""
+    return rule["data"][0]["model"].get("expr", "")
+
+
+def _assert_disk_space_mountpoint_filter(expr: str) -> None:
+    """D-6 детектор: expr правила disk_space обязан фильтровать root-файловую систему.
+
+    Без фильтра reducer берёт tmpfs/overlay (node_filesystem_* без селектора) —
+    ложные срабатывания на 20% fill (Debt 126 D-6).
+    """
+    assert '{mountpoint="/"}' in expr, f"D-6 FAIL: expr без mountpoint-фильтра: {expr}"
+    assert expr.count('{mountpoint="/"}') == 2, (
+        f"D-6 FAIL: mountpoint-фильтр должен быть на обоих операндах, expr: {expr}"
+    )
+
+
+# 🧪 TRAP[TEST] · Regression · Scenario: sub-minute правило service_down_short (140 W2 D-4)
+# · Expect: uid/for="15s"/severity=warning/expr up == 0, summary "down (short)"
+# · Last fail: N/A (new test for DevPlan 140 W2)
+# · Remove if: sub-minute правило удаляется из alert-rules.yml
+def test_provisioning_alert_rules_service_down_short(caplog) -> None:
+    """D-4: sub-minute правило покрывает падение <1m (например postgres) — warning-канал."""
+    caplog.set_level(logging.INFO)
+    rules = {r["uid"]: r for r in _provisioning_rules()}
+    assert "service_down_short" in rules, "правило service_down_short отсутствует в alert-rules.yml"
+    rule = rules["service_down_short"]
+    assert rule["for"] == "15s", f"service_down_short for != 15s: {rule['for']}"
+    assert rule["labels"]["severity"] == "warning", (
+        f"service_down_short severity != warning: {rule['labels']['severity']}"
+    )
+    expr = _alert_expr(rule)
+    assert "up == 0" in expr, f"service_down_short expr не содержит 'up == 0': {expr}"
+    assert "down (short)" in rule["annotations"]["summary"], (
+        f"summary != 'Service {{{{ $labels.job }}}} down (short)': {rule['annotations']['summary']}"
+    )
+    # Анти-флаппинг critical (правило #1) не тронут
+    assert rules["service_down"]["for"] == "1m", "service_down for должен остаться 1m (анти-флаппинг)"
+    assert rules["service_down"]["labels"]["severity"] == "critical", "service_down severity должен быть critical"
+    logger.info("[IMP:9][test_monitoring_alert_rules] service_down_short (15s/warning) PASS")
+
+
+# 🧪 TRAP[TEST] · Regression · Scenario: disk_space expr с mountpoint-фильтром (140 W2 D-6)
+# · Expect: оба операнда содержат {mountpoint="/"} — root ФС, не tmpfs/overlay
+# · Last fail: N/A (new test for DevPlan 140 W2)
+# · Remove if: disk_space правило удаляется/меняет семантику
+def test_provisioning_alert_rules_disk_space_mountpoint_filter(caplog) -> None:
+    """D-6: DiskSpaceLow expr фильтрует mountpoint=\"/\" (детектор, не tmpfs/overlay)."""
+    caplog.set_level(logging.INFO)
+    rules = {r["uid"]: r for r in _provisioning_rules()}
+    assert "disk_space" in rules, "правило disk_space отсутствует в alert-rules.yml"
+    _assert_disk_space_mountpoint_filter(_alert_expr(rules["disk_space"]))
+    logger.info("[IMP:9][test_monitoring_alert_rules] disk_space mountpoint=/ filter PASS")
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · disk_space mountpoint-фильтр — Debt 126 D-6
+# · Last fail: исходный вход — expr "node_filesystem_avail_bytes / node_filesystem_size_bytes < 0.2"
+# ·   (без селектора; reducer брал tmpfs/overlay → ложные DiskSpaceLow на 20% fill)
+# · Remove if: детектор _assert_disk_space_mountpoint_filter меняет контракт (mountpoint="/")
+def test_disk_space_mountpoint_filter_negative_removed() -> None:
+    """R5 negative (D-6): expr без mountpoint-фильтра — исходный вход, поймавший баг —
+    детектор ОБЯЗАН упасть (assert красный). Если он не падает — регрессия фильтра."""
+    legacy_expr = "node_filesystem_avail_bytes / node_filesystem_size_bytes < 0.2"
+    with pytest.raises(AssertionError):
+        _assert_disk_space_mountpoint_filter(legacy_expr)

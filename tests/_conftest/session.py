@@ -24,6 +24,9 @@
 ## @rationale  Extracted from tests/conftest.py to reduce file size and isolate session lifecycle logic.
 ##             Path adjusted from __file__ (conftest/) → (conftest/../..) so core/ resolves correctly.
 ## @changes
+##   2026-08-06 | DevPlan 140 W5 (W12-T13): name-prefix fallback в _final_hermes_test_cleanup
+##   УДАЛЁН — sweep label-only (ai-platform.test=true); TRAP[DECISION] 2026-08-05 обновлён
+##   (Rev executed: создатель test_hermes_init.py теперь помечает контейнеры той же константой)
 ##   LAST_CHANGE: 2026-08-05 | DevPlan 136 W12: T12.1 (reset только полная сессия — _is_full_session),
 ##   T12.5 (schema-валидация master-only + per-test fail вместо pytest.exit), T12.7 (retry-rate
 ##   check в sessionfinish), T12.9 (hermes-cleanup по label)
@@ -357,7 +360,7 @@ _HERMES_TEST_LABEL = "ai-platform.test=true"
 
 
 def _final_hermes_test_cleanup() -> None:
-    """Final cleanup: remove hermes-test containers — by LABEL (T12.9 T-13), not by name.
+    """Final cleanup: remove hermes-test containers — by LABEL (T12.9 T-13), label-only.
 
     ## @purpose — DevPlan 123 T5 (false-lead #10): hermes-init tests (test_hermes_init.py)
     ##            create containers named hermes-test-l1-*/hermes-test-l2-* WITHOUT the
@@ -368,17 +371,22 @@ def _final_hermes_test_cleanup() -> None:
     ## @io — ⎋ None (side-effect: Docker containers removed)
     ## @complexity — O(N) where N = containers matching the label filter
     ## @invariants
-    ##   - Первичный sweep: label=ai-platform.test=true (T12.9 T-13) — безопасен для чужих контейнеров
-    ##   - ⚠️ TRAP[DECISION] · 2026-08-05 · — · hermes-test- контейнеры пока БЕЗ метки
+    ##   - Sweep: label=ai-platform.test=true (T12.9 T-13) — ЕДИНСТВЕННЫЙ путь (label-only, DevPlan 140 W5)
+    ##   - 🧐 TRAP[DECISION] · 2026-08-05 · — · hermes-test- контейнеры пока БЕЗ метки
     ##     ai-platform.test=true: создание в test_hermes_init.py::_run_container_detached (вне
     ##     скоупа W12, файл не в списке изменений) — name-prefix fallback СОХРАНЁН до добавления
     ##     метки в создателе. · Rejected: удалить name-fallback (риск: 503 false-lead вернётся
     ##     на нодах с остатками hermes-test-*) · Reason: deferred — label-first + documented
     ##     fallback; proper fix (метка в создателе) — Debt с Rev 2026-10-21 · Rev: когда
     ##     test_hermes_init.py добавит label=ai-platform.test=true в docker run — удалить fallback
-    ##   - Name-prefix fallback: hermes-test- префикс уникален для этого сьюита — не заденет чужое
+    ##     ✅ REV EXECUTED 2026-08-06 (DevPlan 140 W5): test_hermes_init.py::_run_container_detached
+    ##     создаёт detached-контейнеры с label ai-platform.test=true (константа _HERMES_TEST_LABEL
+    ##     импортируется создателем из этого модуля); name-prefix fallback УДАЛЁН — sweep label-only;
+    ##     label-first — единственный путь.
     ## @rationale — Label-фильтр файл-агностичен и не зависит от имени; T12.9 требует rm -f по
-    ##              label (не имени). Fallback сохраняется до добавления метки в создателе (Debt).
+    ##              label (не имени). Создатель контейнеров использует ту же константу — метка и
+    ##              sweep не могут разойтись. Имя hermes-test-* больше не является идентификатором
+    ##              для очистки (name-fallback удалён): без label контейнер sweep'ом не подхватывается.
     """
     try:
         container_ids = _docker_ps_ids(["--filter", f"label={_HERMES_TEST_LABEL}"])
@@ -392,21 +400,6 @@ def _final_hermes_test_cleanup() -> None:
             print(
                 f"[IMP:7][conftest][sessionfinish] Hermes-test cleanup (label {_HERMES_TEST_LABEL}): "
                 f"removed {len(container_ids)} container(s)",
-                file=sys.stderr,
-            )
-            return
-        # Fallback (TRAP[DECISION] выше): hermes-test-* пока создаются без метки
-        legacy_ids = _docker_ps_ids(["--filter", "name=hermes-test-"])
-        if legacy_ids:
-            subprocess.run(
-                ["docker", "rm", "-f", *legacy_ids],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            print(
-                f"[IMP:8][conftest][sessionfinish] Hermes-test cleanup (name fallback): "
-                f"removed {len(legacy_ids)} container(s)",
                 file=sys.stderr,
             )
         else:

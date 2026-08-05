@@ -237,9 +237,14 @@ jobs:
             exit 1
           fi
           echo "[IMP:8][deploy][node-detect] Auto-detected NODE=${NODE}"
+          # W4 (DevPlan 140): AGE_SECRET_KEY env в remote-команду node-update — канон для
+          # φ9 secrets_update decrypt (ключ НЕ живёт на диске ноды: persist удалён из φ4;
+          # decrypt — tmpfs decrypt-only, S-13). Секрет настраивается оператором в GitHub
+          # Secrets org (AGE_SECRET_KEY). Если секрет НЕ настроен → Actions подставит пустую
+          # строку → detect_age_key деградирует мягко на restore-first fallback /etc/age/key.txt.
           ssh ${{ steps.ssh_opts.outputs.opts }} \
             ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }} \
-            "cd /opt/platform && DEPLOY_PARALLEL=true GITHUB_SHA=$SHA make node-update NODE=$NODE"
+            "cd /opt/platform && AGE_SECRET_KEY=\"${{ secrets.AGE_SECRET_KEY }}\" DEPLOY_PARALLEL=true GITHUB_SHA=$SHA make node-update NODE=$NODE"
 
       # ─── Step 6: Audit trail ──────────────────────────────────────────
       - name: Log deployment audit trail

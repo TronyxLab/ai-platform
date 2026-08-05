@@ -545,6 +545,10 @@ def _check_critical_paths_world_writable() -> list[str]:
     """Find world-writable files/dirs under critical security paths (T10.8, S-10)."""
     problems: list[str] = []
     ci_deploy_ssh = os.path.expanduser("~ci-deploy/.ssh")
+    # /etc/age — non-canonical (DevPlan 140 W4): файл допустим ТОЛЬКО при restore-first
+    # (ручной перенос ключа оператором при восстановлении ноды); канон — env → tmpfs
+    # decrypt-only (S-13). Проверка world-writable остаётся: fallback-файл, существуя,
+    # обязан быть защищён (0600) — пермишн-контроль не ослабляется.
     for path in (ci_deploy_ssh, "/etc/sudoers.d", "/var/log/platform", "/etc/age"):
         if not os.path.exists(path):
             logger.info("[IMP:8][posture][S6] critical path absent — skipped: %s", path)

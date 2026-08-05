@@ -10,6 +10,9 @@
 ##   - structured_metadata enabled for high-cardinality fields (session_id, user_id)
 ##   - Single ingester instance (single-node mode)
 ##   - HTTP server on port 3100 (default)
+##   - Out-of-order toleration (D-8, DevPlan 140 W3): ingester.max_chunk_age: 72h →
+##     out-of-order window 36h (Loki 3.x: window = max_chunk_age/2, `out_of_order_time_window`
+##     removed from schema — config error at startup). Clock skew ±24h → 0 rejected.
 ## @rationale D9: Without compactor block, retention settings are silently ignored
 ##           on filesystem storage. Disk grows unbounded despite configured retention.
 # endregion MODULE_CONTRACT
@@ -37,7 +40,27 @@ ingester:
     # · Rev: if switching to multi-ingester mode, restore default 15s
     min_ready_duration: 0s
   chunk_idle_period: 30m
-  max_chunk_age: 1h
+  # 🧐 TRAP[DECISION] · 2026-08-06 · MED · D-8 (DevPlan 140 W3): out-of-order окно = max_chunk_age/2
+  # · Loki 3.7.3: параметр `out_of_order_time_window` УДАЛЁН из схемы (deprecated в 3.0,
+  # ·   удалён в 3.3+). Его настройка = отказ старта: «yaml: unmarshal errors: field
+  # ·   out_of_order_time_window not found in type validation.plain» (проверено локально,
+  # ·   docker run grafana/loki:3.7.3, 2026-08-06).
+  # ·   В 3.x out-of-order (unordered) записи ВКЛЮЧЕНЫ по умолчанию (limits_config.unordered_writes,
+  # ·   deprecated, default true), а единственный ограничитель глубины приёма — ingester.max_chunk_age:
+  # ·   cutoff = highest_stream_ts - max_chunk_age/2 (pkg/ingester/stream.go:441-443);
+  # ·   docs: «the allowed out-of-order window is half of the configured max_chunk_age».
+  # · Было: 1h → окно 30m → chaos T4 (skew ±24h, tests/e2e/test_chaos_resilience.py) =
+  # ·   1943 rejected «entry too far behind» (воспроизведено локально: push записи 24h назад
+  # ·   при max_chunk_age 1h → HTTP 400 «oldest acceptable timestamp is: highestTs - 30m»).
+  # · Стало: 72h → окно 36h ≥ 24h требуемого toleration + margin (promtail retry-backlog ~30m).
+  # · Цена: открытые chunk'и активных стримов живут до 72h; память ограничена
+  # ·   chunk_target_size 1MB (флаш по размеру), idle-стримы флашатся по chunk_idle_period 30m.
+  # · Rejected: reject_old_samples:false — это ДРУГОЙ чек (validation.GreaterThanMaxSampleAge,
+  # ·   «timestamp too old», абсолютный пол-флор от now), он НЕ управляет «too far behind» —
+  # ·   проблему не решает (проверено по исходникам pkg/validation/validate.go).
+  # · Rev: если в новых версиях Loki появится выделенный параметр окна out-of-order —
+  # ·   вернуть max_chunk_age к 1h и использовать его.
+  max_chunk_age: 72h
   chunk_target_size: 1048576  # 1MB
   wal:
     enabled: true
@@ -98,6 +121,12 @@ limits_config:
   # Dynamic rules are generated post-deploy (receive verb → monitoring_config_renderer.py)
   # and written to runtime-config.yml (NOT to this file — see TASK-5.4).
   # Default rule: 7d for all streams without explicit per-project config.
+  # ⚠️ D-8 (DevPlan 140 W3): reject_old_samples — НЕ out-of-order механизм. Это абсолютный
+  #   пол-флор «older than now - reject_old_samples_max_age» (validation.GreaterThanMaxSampleAge,
+  #   ошибка «timestamp too old»), защита от абсурдно старых записей (WAL-replay/restore).
+  #   Окно приёма out-of-order записей задаётся ingester.max_chunk_age (см. ingester-секцию):
+  #   в Loki 3.x окно = max_chunk_age/2, `out_of_order_time_window` удалён из схемы.
+  #   168h = 7d оставляем без изменений (не мешает ±24h skew: 168h >> 36h окна).
   reject_old_samples: true
   reject_old_samples_max_age: 168h
   max_query_series: 500

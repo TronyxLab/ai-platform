@@ -37,11 +37,15 @@ step_10_decrypt_secrets() {
     local enc_file="${NODE_CONFIGS_DIR:-/opt/node-configs}/secrets/${NODE_NAME}.enc.yaml"
     [[ -f "$enc_file" ]] || { step_skip "decrypt-secrets" "No encrypted secrets file at ${enc_file}"; return 0; }
     [[ -z "${AGE_SECRET_KEY:-}" ]] && [[ -n "${SOPS_AGE_KEY:-}" ]] && export AGE_SECRET_KEY="$SOPS_AGE_KEY"
-    # ⚠️ TRAP[BUG] 2026-08-03 · CI node-update падал «AGE_SECRET_KEY not set»
-    # · Symptom: core-deploy → node-update → secrets_update FAIL — CI не передаёт
-    #   AGE_SECRET_KEY env (bootstrap передавал); /etc/age/key.txt (стандартная
-    #   age-локация) не читалась.
-    # · Fix: fallback на /etc/age/key.txt (операторский ключ ноды, chmod 600).
+    # ⚠️ TRAP[DECISION] · 2026-08-06 · — · /etc/age/key.txt — restore-first fallback (DevPlan 140 W4)
+    # · Rejected: удалить fallback полностью (ключ НЕ должен жить на диске ноды)
+    # · Reason: fallback остаётся для РУЧНОГО восстановления ноды (restore-first: оператор
+    # ·   переносит ключ на новую ноду, φ4 расшифровывает). Канон (W4): AGE_SECRET_KEY env (CI
+    # ·   node-update) / AGE_SECRET_KEY_FILE (bootstrap оператора) → tmpfs decrypt-only (/dev/shm
+    # ·   + dd-wipe, S-13, decrypt_secrets.py). φ4 (phases/secrets.py) ключ НЕ персистит —
+    # ·   /etc/age/key.txt создаётся ТОЛЬКО вручную оператором (restore-first), не φ4.
+    # · Rev: если появится автоматизированный restore-канал (env-доставка ключа на новую ноду
+    # ·   без ручного переноса) — fallback можно удалить.
     if [[ -z "${AGE_SECRET_KEY:-}" ]] && [[ -f /etc/age/key.txt ]]; then
         AGE_SECRET_KEY="$(cat /etc/age/key.txt)"
         export AGE_SECRET_KEY

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: node-detect, detect-age-key, auto-detect-node-name, AGE_SECRET_KEY, SOPS_AGE_KEY, AGE_SECRET_KEY_FILE, default-key-files, node-configs, NodeDetectionError, shared, cli
-# STRUCTURE: ▶ detect_age_key → ◇ AGE_SECRET_KEY env? → ◇ SOPS_AGE_KEY env? → ◇ AGE_SECRET_KEY_FILE? → ◇ default key file (~/.config/age/keys.txt)? → ⊕ masked log → ⎋ str|None ── ▶ auto_detect_node_name → ∋ scan node-configs/*/ (skip scripts|secrets) → ◇ count==1? → ⎋ name | ✗ NodeDetectionError ── ▶ CLI → ◇ --detect-age-key | --detect-node-name → ⎋ exit 0|3|1 (3 = key absent)
+# STRUCTURE: ▶ detect_age_key → ◇ AGE_SECRET_KEY env? → ◇ SOPS_AGE_KEY env? → ◇ AGE_SECRET_KEY_FILE? → ◇ default key file (~/.config/age/keys.txt)? → ◇ /etc/age/key.txt (restore-first fallback)? → ⊕ masked log → ⎋ str|None ── ▶ auto_detect_node_name → ∋ scan node-configs/*/ (skip scripts|secrets) → ◇ count==1? → ⎋ name | ✗ NodeDetectionError ── ▶ CLI → ◇ --detect-age-key | --detect-node-name → ⎋ exit 0|3|1 (3 = key absent)
 # region MODULE_CONTRACT
 ## @purpose  Canonical single-source-of-truth for AGE secret key detection and node name
 ##           auto-detection. Consolidates duplicate shell implementations from
@@ -14,10 +14,15 @@
 ##           scripts/ and secrets/ are ALWAYS excluded (single detector canon).
 ## @invariants
 ##   1. detect_age_key chain: AGE_SECRET_KEY → SOPS_AGE_KEY → AGE_SECRET_KEY_FILE →
-##      default key file ~/.config/age/keys.txt (first non-empty wins). Default — стандартная
-##      age CLI локация; на dev-машине оператора это symlink на ~/.ssh/age-key-personal.txt.
+##      default key file ~/.config/age/keys.txt → /etc/age/key.txt (Check 5, ПОСЛЕДНИЙ —
+##      restore-first fallback, W4 DevPlan 140). Первый непустой источник побеждает. Default —
+##      стандартная age CLI локация; на dev-машине оператора это symlink на ~/.ssh/age-key-personal.txt.
 ##      Используется ТОЛЬКО когда env-цепочка пуста (CI/production не затронуты: ключ
 ##      всегда передаётся через env/файл)
+##   1a. /etc/age/key.txt (Check 5) — НЕ канон для φ4: φ4 (phases/secrets.py) НЕ персистит
+##      ключ на диск (W4 DevPlan 140, W12-on-node-age-key); канон — env → tmpfs decrypt-only
+##      (S-13). Check 5 читает файл только если env-цепочка пуста И default key file не найден —
+##      ручной перенос ключа оператором (restore-first при восстановлении ноды).
 ##   2. detect_age_key returns None (never empty string) when no key found
 ##   3. detect_age_key logs masked (first 8 chars) key source at IMP:8 — no plaintext key in logs
 ##   4. auto_detect_node_name skips "scripts" and "secrets" subdirectories
@@ -38,6 +43,9 @@
 ##            make test-node без ручного export (test-VPS пересоздана, 103.88.243.151)
 ## @changes  2026-08-03 | Один default-путь: ~/.config/age/keys.txt (age CLI default) — на dev-машине
 ##            symlink на ~/.ssh/age-key-personal.txt (решение пользователя: единая стандартная локация)
+## @changes  2026-08-06 | DevPlan 140 W4 — Check 5 (/etc/age/key.txt) → restore-first fallback
+##            (не канон): persist удалён из phases/secrets.py; путь через модульную константу
+##            _ETC_AGE_KEY_FILE (тестируемость, monkeypatch на tmp_path в unit-тестах)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -55,6 +63,10 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_NODE_CONFIGS_DIR = str(node_configs_remote())
 SKIP_DIRS = frozenset({"scripts", "secrets"})
+# W4 (DevPlan 140): /etc/age/key.txt — restore-first fallback (ручной перенос ключа
+# оператором при восстановлении ноды), НЕ канон для φ4. Модульная константа — путь
+# тестируемый (тесты monkeypatch-ят её на tmp_path вместо чтения реального /etc/age).
+_ETC_AGE_KEY_FILE = "/etc/age/key.txt"
 
 
 # region CLASS_NodeDetectionError
@@ -85,7 +97,7 @@ class NodeDetectionError(Exception):
 def detect_age_key() -> str | None:
     """Detect AGE secret key from env chain.
 
-    ▶ ◇ AGE_SECRET_KEY env? → ◇ SOPS_AGE_KEY env? → ◇ AGE_SECRET_KEY_FILE? → ◇ ~/.config/age/keys.txt? → ⎋ str | None
+    ▶ ◇ AGE_SECRET_KEY env? → ◇ SOPS_AGE_KEY env? → ◇ AGE_SECRET_KEY_FILE? → ◇ ~/.config/age/keys.txt? → ◇ /etc/age/key.txt (restore-first fallback)? → ⎋ str | None
     """
     # ── Check 1: AGE_SECRET_KEY env ──
     # Returns key in canonical AGE-SECRET-KEY-xxxxxxxx… format (with prefix)
@@ -137,11 +149,12 @@ def detect_age_key() -> str | None:
                 return key
             logger.warning("[IMP:8][node_detect] Default key file %s has no AGE-SECRET-KEY- line", candidate)
 
-    # ── Check 5: node canonical key file /etc/age/key.txt ──
-    # Нодовый канон: state_machine precondition φ4 принимает /etc/age/key.txt, bootstrap φ4
-    # персистит ключ туда (phases/secrets.py). CI node-update (core-deploy ssh) не несёт
-    # AGE_SECRET_KEY env — ключ обязан жить на ноде. Pre-existing: fresh bootstrap → decrypt fail.
-    node_key = Path("/etc/age/key.txt")
+    # ── Check 5: /etc/age/key.txt — restore-first fallback (W4, DevPlan 140) ──
+    # НЕ канон для φ4: φ4 (phases/secrets.py) НЕ персистит ключ на диск — канон env →
+    # tmpfs decrypt-only (S-13, decrypt_secrets.py). /etc/age/key.txt читается ТОЛЬКО если
+    # вся env-цепочка пуста и default key file не найден — ручной перенос ключа оператором
+    # при восстановлении ноды (restore-first). Ключ приходит env (CI: AGE_SECRET_KEY).
+    node_key = Path(_ETC_AGE_KEY_FILE)
     if node_key.is_file():
         try:
             with open(node_key) as f:
@@ -150,7 +163,7 @@ def detect_age_key() -> str | None:
             logger.warning("[IMP:8][node_detect] Cannot read node key file %s: %s", node_key, e)
         else:
             if key:
-                _log_masked("AGE_SECRET_KEY", key, f"node file {node_key}")
+                _log_masked("AGE_SECRET_KEY", key, f"node file {node_key} (restore-first fallback)")
                 return key
             logger.warning("[IMP:8][node_detect] Node key file %s has no AGE-SECRET-KEY- line", node_key)
 

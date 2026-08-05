@@ -1,17 +1,17 @@
-# GREP_SUMMARY: grafana alert rules grafana12 service-down high-memory disk-space llm-api-errors backup-freshness backup-upload-failure wal-sync-failure telegram webhook loki
-# STRUCTURE: ▶ 7-rules ┌ ServiceDown → CRITICAL ┐ ┌ HighMemory → WARNING ┐ ┌ DiskSpace → CRITICAL ┐ ┌ LLMAPIErrors → WARNING ┐ ┌ BackupFreshness → CRITICAL (loki) ┐ ┌ BackupUploadFailure → WARNING (loki) ┐ ┌ WalSyncFailure → WARNING (loki) ┐ → Grafana-provisioning → ┘
+# GREP_SUMMARY: grafana alert rules grafana12 service-down service-down-short high-memory disk-space llm-api-errors backup-freshness backup-upload-failure wal-sync-failure telegram webhook loki
+# STRUCTURE: ▶ 8-rules ┌ ServiceDown → CRITICAL ┐ ┌ ServiceDownShort → WARNING ┐ ┌ HighMemory → WARNING ┐ ┌ DiskSpace → CRITICAL (mountpoint=/) ┐ ┌ LLMAPIErrors → WARNING ┐ ┌ BackupFreshness → CRITICAL (loki) ┐ ┌ BackupUploadFailure → WARNING (loki) ┐ ┌ WalSyncFailure → WARNING (loki) ┐ → Grafana-provisioning → ┘
 # region MODULE_CONTRACT
-## @purpose  7 Grafana 12 alert rules: ServiceDown, HighMemory, DiskSpace, LLMAPIErrors
-##           (Prometheus, uid: prometheus) + BackupFreshness, BackupUploadFailure, WalSyncFailure
-##           (Loki, uid: loki — DevPlan 132 W5, приоритет E)
+## @purpose  8 Grafana 12 alert rules: ServiceDown, ServiceDownShort, HighMemory, DiskSpace,
+##           LLMAPIErrors (Prometheus, uid: prometheus) + BackupFreshness, BackupUploadFailure,
+##           WalSyncFailure (Loki, uid: loki — DevPlan 132 W5, приоритет E)
 ## @scope    Provisioned via GF_PROVISIONING_ALERTING_PATH; Prometheus datasource (uid: prometheus)
 ##           + Loki datasource (uid: loki, provisioned в datasources.yml)
 ## @invariants
 ##   - Prometheus-правила используют datasource UID "prometheus"; Loki-правила — "loki"
 ##     (должно совпадать с provisioning datasources.yml)
 ##   - Каждое правило использует reduce+threshold expression для оценки
-##   - Contact point: telegram-webhook (provisioned в contact-points.yml) — наследование
-##     default notification policy (как существующие правила)
+##   - Contact point: Telegram Critical / Telegram Warning (provisioned в contact-points.yml,
+##     DevPlan 140 W2 D-3) — severity-routing через default notification policy
 ##   - Правила идемпотентны — безопасно пере-провиженить на каждом деплое
 ## @rationale Grafana 12 требует data section с datasourceUid, refId, и model.expr;
 ##           classic_conditions pattern обеспечивает кросс-версионную совместимость.
@@ -21,13 +21,14 @@
 ##           срабатываний при рестарте стека); failure-правила — for: 5m (анти-флаппинг).
 ##
 ## RULES:
-##   1. ServiceDown:          up == 0                    for 1m  → CRITICAL
-##   2. HighMemory:           mem_usage > 90%            for 5m  → WARNING
-##   3. DiskSpace:            avail < 20%                for 0s  → CRITICAL
-##   4. LLMAPIErrors:         error_rate>0.1/s           for 0s  → WARNING
-##   5. BackupFreshness:      count(BACKUP COMPLETE 26h)<1 for 30m → CRITICAL (loki)
-##   6. BackupUploadFailure:  count(off-site NOT confirmed 24h)>0 for 5m → WARNING (loki)
-##   7. WalSyncFailure:       count(WAL_SYNC FAIL 24h)>0     for 5m → WARNING (loki)
+##   1. ServiceDown:          up == 0                    for 1m   → CRITICAL
+##   2. ServiceDownShort:     up == 0                    for 15s  → WARNING
+##   3. HighMemory:           mem_usage > 90%            for 5m   → WARNING
+##   4. DiskSpace:            avail < 20% (mountpoint=/) for 0s   → CRITICAL
+##   5. LLMAPIErrors:         error_rate>0.1/s           for 0s   → WARNING
+##   6. BackupFreshness:      count(BACKUP COMPLETE 26h)<1 for 30m → CRITICAL (loki)
+##   7. BackupUploadFailure:  count(off-site NOT confirmed 24h)>0 for 5m → WARNING (loki)
+##   8. WalSyncFailure:       count(WAL_SYNC FAIL 24h)>0     for 5m → WARNING (loki)
 # endregion MODULE_CONTRACT
 
 apiVersion: 1
@@ -86,7 +87,58 @@ groups:
         labels:
           severity: "critical"
 
-      # ── 2. HighMemory ───────────────────────────────────────────────────────
+      # ── 2. ServiceDownShort (DevPlan 140 W2, D-4) ─────────────────────────
+      # Sub-minute покрытие падения (например postgres <1m): тот же expr up == 0,
+      # for: 15s, severity warning — анти-флаппинг critical сохранён правилом #1 (for: 1m).
+      - uid: "service_down_short"
+        title: "Service Down (Short)"
+        condition: "C"
+        data:
+          - refId: "A"
+            datasourceUid: "prometheus"
+            model:
+              expr: "up == 0"
+              refId: "A"
+            queryType: ""
+            relativeTimeRange:
+              from: 120
+              to: 0
+          - refId: "B"
+            datasourceUid: "__expr__"
+            model:
+              expression: "A"
+              refId: "B"
+              reducer: "last"
+              type: "reduce"
+            queryType: ""
+            relativeTimeRange:
+              from: 0
+              to: 0
+          - refId: "C"
+            datasourceUid: "__expr__"
+            model:
+              conditions:
+                - evaluator:
+                    params: [0]
+                    type: "gt"
+                  type: "query"
+              expression: "B"
+              refId: "C"
+              type: "threshold"
+            queryType: ""
+            relativeTimeRange:
+              from: 0
+              to: 0
+        noDataState: "NoData"
+        execErrState: "Error"
+        for: "15s"
+        annotations:
+          summary: "Service {{ $labels.job }} down (short)"
+          description: "Prometheus target {{ $labels.instance }} (job={{ $labels.job }}) has been unreachable for over 15 seconds."
+        labels:
+          severity: "warning"
+
+      # ── 3. HighMemory ───────────────────────────────────────────────────────
       - uid: "high_memory"
         title: "High Memory Usage"
         condition: "C"
@@ -135,7 +187,7 @@ groups:
         labels:
           severity: "warning"
 
-      # ── 3. DiskSpace ────────────────────────────────────────────────────────
+      # ── 4. DiskSpace ────────────────────────────────────────────────────────
       - uid: "disk_space"
         title: "Disk Space Low"
         condition: "C"
@@ -143,7 +195,7 @@ groups:
           - refId: "A"
             datasourceUid: "prometheus"
             model:
-              expr: "node_filesystem_avail_bytes / node_filesystem_size_bytes < 0.2"
+              expr: "node_filesystem_avail_bytes{mountpoint=\"/\"} / node_filesystem_size_bytes{mountpoint=\"/\"} < 0.2"
               refId: "A"
             queryType: ""
             relativeTimeRange:
@@ -184,7 +236,7 @@ groups:
         labels:
           severity: "critical"
 
-      # ── 4. LLMAPIErrors ─────────────────────────────────────────────────────
+      # ── 5. LLMAPIErrors ─────────────────────────────────────────────────────
       - uid: "llm_api_errors"
         title: "LLM API Error Rate High"
         condition: "C"
@@ -233,7 +285,7 @@ groups:
         labels:
           severity: "warning"
 
-      # ── 5. BackupFreshness (DevPlan 132 W5, Loki) ──────────────────────────
+      # ── 6. BackupFreshness (DevPlan 132 W5, Loki) ──────────────────────────
       # count_over_time(BACKUP COMPLETE в 26h окне) < 1 → CRITICAL.
       # Окно 26h > интервал дампа 24h (запас на рестарт стека); for: 30m — анти-флаппинг.
       # noDataState: Alerting — нет логов вообще = бэкап не работает.
@@ -285,7 +337,7 @@ groups:
         labels:
           severity: "critical"
 
-      # ── 6. BackupUploadFailure (DevPlan 132 W5, Loki) ──────────────────────
+      # ── 7. BackupUploadFailure (DevPlan 132 W5, Loki) ──────────────────────
       # count_over_time("off-site backup NOT confirmed" в 24h) > 0 → WARNING.
       # Лог-строка пишется backup_postgres.py при провале off-site upload.
       - uid: "backup_upload_failure"
@@ -336,7 +388,7 @@ groups:
         labels:
           severity: "warning"
 
-      # ── 7. WalSyncFailure (DevPlan 132 W5, Loki) ───────────────────────────
+      # ── 8. WalSyncFailure (DevPlan 132 W5, Loki) ───────────────────────────
       # count_over_time("WAL_SYNC FAIL" в 24h) > 0 → WARNING.
       # Строка пишется wal_sync.py при S3-ошибке (exit 1, IMP:10) — RPO-гарантия WAL.
       - uid: "wal_sync_failure"

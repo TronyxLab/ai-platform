@@ -12,13 +12,15 @@
 ##   3. secrets.env re-sourced into os.environ after decryption.
 ## @rationale E3: phases.py 1080 LOC → доменные модули. secrets-фазы — decrypt/ensure-домен.
 ## @changes  2026-08-02 · DevPlan 119 E3 — экстракция из lifecycle/phases.py
+## @changes  2026-08-06 · DevPlan 140 W4 — persist /etc/age/key.txt УДАЛЁН (W12-on-node-age-key):
+##            ключ не пишется на диск ноды; канон env → tmpfs decrypt-only (S-13);
+##            /etc/age/key.txt — только restore-first fallback (ручной)
 # endregion MODULE_CONTRACT
 from __future__ import annotations
 
 import logging
 import os
 import subprocess
-from pathlib import Path
 
 # DevPlan 118 C6: единый путь litellm-config.yml — shared/llm_paths (литерал удалён).
 # B3: канонический node-configs base — shared/deploy_paths (литерал /opt/node-configs удалён)
@@ -63,23 +65,11 @@ def phase_secrets_provision(core_dir: str, node_name: str, node_yaml: str) -> bo
         logger.error("[IMP:10][phase:secrets_provision] Secrets decryption FAILED — aborting: %s", e)
         raise PlatformFatalError(f"Secrets decryption failed: {e}") from e
 
-    # ── 1.5 Persist AGE key to /etc/age/key.txt (node canonical location) ──
-    # CI node-update (core-deploy ssh) не несёт AGE_SECRET_KEY env — ключ обязан жить
-    # на ноде (state_machine precondition φ4 и node_detect.detect_age_key читают его).
-    # Pre-existing gap: fresh bootstrap → CI node-update decrypt fail (AGE_SECRET_KEY not set).
-    age_key = os.environ.get("AGE_SECRET_KEY") or os.environ.get("SOPS_AGE_KEY")
-    if age_key:
-        try:
-            age_dir = Path("/etc/age")
-            age_dir.mkdir(mode=0o700, exist_ok=True)
-            key_file = age_dir / "key.txt"
-            tmp_path = key_file.with_suffix(".tmp")
-            tmp_path.write_text(age_key.strip() + "\n", encoding="utf-8")
-            os.chmod(tmp_path, 0o600)
-            os.replace(tmp_path, key_file)
-            logger.info("[IMP:9][phase:secrets_provision] AGE key persisted to %s", key_file)
-        except OSError as e:
-            logger.warning("[IMP:7][phase:secrets_provision] Cannot persist AGE key to /etc/age/key.txt: %s", e)
+    # ── 1.5 AGE key НЕ персистится на диск (DevPlan 140 W4, W12-on-node-age-key) ──
+    # Канон: ключ приходит env (CI node-update: AGE_SECRET_KEY; bootstrap оператора:
+    # AGE_SECRET_KEY_FILE) → tmpfs decrypt-only (/dev/shm temp-key + dd-wipe, S-13,
+    # decrypt_secrets.py). /etc/age/key.txt допустим ТОЛЬКО как restore-first fallback
+    # (ручной перенос ключа оператором при восстановлении ноды) — φ4 его НЕ создаёт.
 
     # ── 2. Ensure secrets.env exists + source into environ + generate autogen ──
     try:

@@ -353,6 +353,9 @@ def test_precondition_check_secrets_no_age_key(
     """φ4 precondition should fail when no age key env var or file exists."""
     monkeypatch.delenv("AGE_SECRET_KEY", raising=False)
     monkeypatch.delenv("SOPS_AGE_KEY", raising=False)
+    # W4 (DevPlan 140): AGE_SECRET_KEY_FILE — третье звено env-цепочки (канон); изолируем,
+    # чтобы dev-env оператора (AGE_SECRET_KEY_FILE установлен) не ломал negative-кейс.
+    monkeypatch.delenv("AGE_SECRET_KEY_FILE", raising=False)
 
     # Mock os.path.isfile to return False for /etc/age/key.txt
     original_isfile = os.path.isfile
@@ -372,6 +375,39 @@ def test_precondition_check_secrets_no_age_key(
 
 
 # endregion FUNC_test_precondition_check_secrets_no_age_key
+
+
+# 🧪 TRAP[TEST] · 2026-08-06 · REGRESSION · W4 — φ4 precondition: AGE_SECRET_KEY_FILE env достаточно
+# · Scenario: env-цепочка (канон, W4 DevPlan 140): AGE_SECRET_KEY_FILE установлен (файл-на-диске
+# ·   НЕ требуется — чтение/отсутствие файла — ответственность node_detect.detect_age_key) →
+# ·   precondition φ4 проходит без файла-на-диске
+# · Last fail: N/A (new test — W4: env-цепочка первична, /etc/age/key.txt — restore-first fallback)
+# · Remove if: φ4 precondition env-цепочка меняется
+# region FUNC_test_precondition_check_secrets_age_key_file_env
+@ldd_trajectory
+@r1_delegates
+def test_precondition_check_secrets_age_key_file_env(
+    caplog,
+    state: sm.BootstrapState,
+    monkeypatch,
+) -> None:
+    """W4: φ4 precondition проходит при AGE_SECRET_KEY_FILE env (файл-на-диске не нужен).
+
+    🧪 TRAP[TEST] · F1 (DevPlan 118) · @r1_delegates: fail-механизм делегирован
+    state.precondition_check (raises PhasePreconditionError на нарушение — R5-negative
+    test_precondition_check_secrets_no_age_key рядом).
+    """
+    monkeypatch.delenv("AGE_SECRET_KEY", raising=False)
+    monkeypatch.delenv("SOPS_AGE_KEY", raising=False)
+    # Файл НЕ создаём — env-канал достаточен (чтение — node_detect; отсутствие → warning, не блок).
+    monkeypatch.setenv("AGE_SECRET_KEY_FILE", "/tmp/nonexistent-age-key-file.txt")
+
+    state.precondition_check(BootstrapPhase.SECRETS_PROVISION)
+
+    logger.critical("[IMP:9][test] φ4 precondition passed with AGE_SECRET_KEY_FILE env only (W4) — OK")
+
+
+# endregion FUNC_test_precondition_check_secrets_age_key_file_env
 
 # endregion
 

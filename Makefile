@@ -73,7 +73,9 @@ ifeq ($(MAKELEVEL),0)
 $(shell mkdir -p $(MAKE_LOG_DIR))
 $(shell umask 077; : > $(MAKE_LOG_FILE))
 $(shell rm -f $(MAKE_LOG_DIR)/latest.log && ln -s $(notdir $(MAKE_LOG_FILE)) $(MAKE_LOG_DIR)/latest.log)
-$(info ==> make log: $(MAKE_LOG_FILE)  [latest: logs/make/latest.log])
+# Banner → stderr: stdout make-вывода остаётся machine-readable (parity-гейт
+# test_gate_profiles_parity сравнивает stdout `make _get_all_profiles` с SoT).
+$(shell printf '==> make log: %s  [latest: logs/make/latest.log]\n' '$(MAKE_LOG_FILE)' >&2)
 endif
 SHELL := $(_platform_root)/scripts/make-log-shell.sh
 endif

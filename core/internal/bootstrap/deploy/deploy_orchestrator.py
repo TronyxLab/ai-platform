@@ -754,13 +754,16 @@ def _invoke_module_interface(module_name: str, interface: str, *args: str) -> bo
 
 
 # region FUNC__postflight
-## @purpose  PHASE 4: post-deploy housekeeping — sudoers batch generation, orphan container detection,
-##           litellm-config.yml render. Independent of deploy outcome.
+## @purpose  PHASE 4: post-deploy housekeeping — sudoers batch generation, orphan container
+##           reconciliation (detect + self-heal remove, S2-A DevPlan 140 W5), litellm-config.yml
+##           render. Independent of deploy outcome.
 ## @io       ⇥ all_names, enabled_names, modules_dir, core_dir, templates_dir → ⎋ None
 ## @complexity 2 — 3 guarded calls (each non-fatal, legacy `|| true` parity)
 ## @invariants
 ##   - sudoers batch uses ALL module names (legacy --module-names "$ALL_NAMES" parity)
-##   - orphan detection uses ENABLED module names (legacy --module-entries "$ENABLED_NAMES" parity)
+##   - orphan reconciliation uses ENABLED module names (legacy --module-entries "$ENABLED_NAMES" parity)
+##   - remove_orphans вызывается внутри того же try (self-heal); remove_orphans сам безопасен —
+##     логирует «No orphans to remove» при пустом списке (orphan_reconciler.py remove_orphans)
 ##   - platform_root for sudoers derived as core_dir parent (core/.. == project root on VPS)
 def _postflight(
     all_names: list[str],
@@ -782,10 +785,12 @@ def _postflight(
     except Exception as exc:  # noqa: EXC — sudoers non-fatal (best-effort: DEPLOY_BEST_EFFORT policy)
         logger.warning("[IMP:5][_postflight][sudoers] error (non-fatal): %s", exc)
 
-    # ── orphan container detection (batch, detect-only — self-heal not enabled) ──
+    # ── orphan container reconciliation (batch: detect → self-heal remove, S2-A DevPlan 140 W5) ──
     try:
         orphans = orphan_reconciler.batch_orphan_reconciliation(enabled_names, modules_dir)
         logger.info("[IMP:8][_postflight][orphans] %d orphan(s) detected", len(orphans))
+        removed = orphan_reconciler.remove_orphans(orphans)
+        logger.info("[IMP:9][_postflight][orphans] removed %d orphan(s)", removed)
     except Exception as exc:  # noqa: EXC — orphan detection non-fatal (best-effort: DEPLOY_BEST_EFFORT policy)
         logger.warning("[IMP:5][_postflight][orphans] error (non-fatal): %s", exc)
 

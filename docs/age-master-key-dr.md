@@ -23,6 +23,9 @@
 ## @changes  2026-08-05 · DevPlan 136 W10 T10.15 — создан (структура, процедуры, threat-model, S-13)
 ## @changes  2026-08-05 · DevPlan 136 W12 T12.12 — завершён: верификация ноды (/etc/age/key.txt
 ##            plaintext-находка), off-node backup + DR-drill → Debt (Rev 2026-08-31)
+## @changes  2026-08-06 · DevPlan 140 W4 — канон «ключ — env → tmpfs decrypt-only (S-13)»;
+##            /etc/age/key.txt — restore-first fallback (non-canonical); persist удалён из φ4;
+##            таблица источников + Check 5 node_detect обновлены; W12-on-node-age-key закрыт
 ## @links    core/internal/shared/node_detect.py (detect-цепочка), core/internal/secrets/decrypt_secrets.py
 ##           (tmpfs+dd-wipe+sanitize, S-13), core/internal/secrets/decrypt-secrets.sh (фасад),
 ##           core/secret-definitions.yaml (инвентарь), docs/ci-secrets-rotation.md (ротация SSH/CI),
@@ -44,14 +47,18 @@
 
 | Приоритет | Источник | Контекст |
 |-----------|----------|----------|
-| 1 | `AGE_SECRET_KEY` (env) | CI, bootstrap (ключ передаётся как env-контент, не файл) |
+| 1 | `AGE_SECRET_KEY` (env) | CI (node-update, GitHub Secrets), bootstrap (ключ передаётся как env-контент, не файл) — канон |
 | 2 | `SOPS_AGE_KEY` (env) | sops-совместимость |
-| 3 | `AGE_SECRET_KEY_FILE` (env) | путь к файлу-ключу |
+| 3 | `AGE_SECRET_KEY_FILE` (env) | путь к файлу-ключу (bootstrap оператора) |
 | 4 | `~/.config/age/keys.txt` (default key file) | dev-машина оператора; на dev-машине — symlink на `~/.ssh/age-key-personal.txt` (age CLI default-локация) |
+| 5 | `/etc/age/key.txt` (Check 5) | **restore-first fallback (W4, DevPlan 140) — non-canonical**: ручной перенос ключа оператором при восстановлении ноды; читается только если env-цепочка пуста и default key file не найден. φ4 ключ НЕ персистит |
 
-**На ноде:** bootstrap (φ4 secrets-provision, `decrypt-secrets.sh` → `decrypt_secrets.py`) получает
-ключ через env-цепочку; мастер-копия живёт в защищённом месте вне репозитория (секреты оператора /
-GitHub Secrets / password manager) — НЕ на файловой системе ноды в plaintext.
+**На ноде:** bootstrap (φ4 secrets-provision) НЕ записывает ключ на диск — φ4 (persist-блок
+`phases/secrets.py`) удалён (W4, DevPlan 140); ключ приходит env (`AGE_SECRET_KEY`/`AGE_SECRET_KEY_FILE`)
+и используется ТОЛЬКО для расшифровки через tmpfs decrypt-only (`decrypt_secrets.py`: temp-key
+на `/dev/shm` 0600 + dd-wipe, S-13). Мастер-копия живёт в защищённом месте вне репозитория
+(секреты оператора / GitHub Secrets / password manager) — НЕ на файловой системе ноды в plaintext.
+`/etc/age/key.txt` на ноде допустим исключительно как restore-first fallback (ручной перенос).
 
 ## 2. Off-node encrypted backup (sops/KMS)
 
@@ -102,9 +109,11 @@ W10 заложил структуру и процедуры. W12 выполни�
 - [x] Документ верифицирован (структура, процедуры, threat-model, S-13 tmpfs/sanitize — полные)
 - [x] Проверка фактического состояния ключа на test-VPS (test-e2e, 103.88.243.151):
   `/etc/age/key.txt` — AGE мастер-ключ в PLAINTEXT (mode 0600 root, 75 байт). Это НЕ
-  соответствует инварианту 1/2 «мастер-копия вне ноды» — документировано в threat-model
-  как «Ключ на диске ноды в plaintext → Средний»; добавлен Debt-кандидат W12
-  (см. 04-Debt.md: W12-on-node-age-key) с Rev 2026-10-21.
+  соответствует инварианту 1/2 «мастер-копия вне ноды» — зафиксировано как Debt
+  (W12-on-node-age-key) и **закрыто W4 (DevPlan 140)**: persist удалён из φ4
+  (`phases/secrets.py`), канон — env → tmpfs decrypt-only (S-13), CI node-update несёт
+  `AGE_SECRET_KEY` env (GitHub Secrets org); `/etc/age/key.txt` остаётся только
+  restore-first fallback (ручной перенос оператором).
 - [ ] Реальный off-node encrypted backup мастер-ключа (sops/KMS) — НЕ выполнен
   → **Debt** (W12-DR-offnode-backup, Rev **2026-08-31**): требует операторского sops/KMS
   setup + приватный bucket; verification-cost MEDIUM (процедура §2 + sha256-сверка).
@@ -116,6 +125,9 @@ W10 заложил структуру и процедуры. W12 выполни�
 **Threat-model deltas (W12):**
 - `/etc/age/key.txt` (plaintext на ноде, 0600 root): остаточный риск Средний (fs crash до
   wipe), митигирован mode 0600 + tmpfs-temp-ключи при дешифровке (decrypt_secrets.py).
+  **W4 (DevPlan 140):** persist удалён — φ4 НЕ создаёт key.txt; файл допустим только как
+  restore-first fallback (ручной). Риск «ключ at-rest на свежезабутстрапленной ноде» закрыт;
+  на нодах с ручным restore-переносом — прежняя митигация (0600 + tmpfs).
 - Off-node backup-процедура §2 подтверждена как канон; без выполнения (Debt) единственная
   точка отказа S-12 остаётся открытой — приоритет Rev 2026-08-31.
 

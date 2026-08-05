@@ -41,6 +41,8 @@ import urllib.parse
 import urllib.request
 from collections.abc import Mapping
 
+from core.internal.shared import secrets_env_parser
+
 logger = logging.getLogger(__name__)
 
 TELEGRAM_API_BASE = "https://api.telegram.org/bot{token}/sendMessage"
@@ -301,13 +303,14 @@ def notify(
     env = dict(os.environ)
     if os.path.isfile(secrets_file):
         try:
-            with open(secrets_file, encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line or line.startswith("#") or "=" not in line:
-                        continue
-                    k, _, v = line.partition("=")
-                    env[k.strip()] = v.strip()
+            # ⚠️ TRAP[BUG] · 2026-08-06 · P1 · Ночная сессия 141 — кавычки в secrets.env ломали доставку
+            # · Symptom: notify() падал с ValueError: invalid literal for int() with base 10: "8118'"
+            # ·   (TELEGRAM_PROXY_URL='http://127.0.0.1:8118' — одинарные кавычки из write_secrets_env
+            # ·   оставались в значении) / Telegram 401 при кавычках в токене.
+            # · Root: inline-парсер с v.strip() без снятия кавычек — 8-й дубль канона secrets_env_parser.
+            # · Fix: канонический secrets_env_parser.parse() (снимает '...' и "...").
+            # · Prevention: secrets.env читается ТОЛЬКО через secrets_env_parser (SoT, инвариант 11).
+            env.update(secrets_env_parser.parse(secrets_file))
         except OSError as exc:
             logger.warning("[IMP:7][telegram_notifier][notify] Cannot read secrets %s: %s", secrets_file, exc)
 
@@ -403,9 +406,9 @@ def main() -> int:
         if not chat_id:
             logger.error("[IMP:10][telegram][cli] TELEGRAM_CHAT_ID not set")
             return 1
-        ok = send_telegram(args.text, chat_id=chat_id, token=token, proxy_url=proxy, parse_mode="HTML")
+        ok = send_telegram(args.text, chat_id=chat_id, bot_token=token, proxy_url=proxy, parse_mode="HTML")
         return 0 if ok else 1
-    ok = get_me(token=token, proxy_url=proxy)
+    ok = get_me(bot_token=token, proxy_url=proxy)
     return 0 if ok else 1
 
 

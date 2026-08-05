@@ -26,6 +26,9 @@
 ## @changes — CREATED: 2026-07-09 | TASK-0.5: Unit tests for L1/L2 init scripts
 ## @changes — 2026-08-03 | DevPlan 123 T5: container creation/verify wrapped in try/finally —
 ##            _cleanup_container() guarantees removal on ANY outcome (false-lead #10, 503 on /health)
+## @changes — 2026-08-06 | DevPlan 140 W5 (W12-T13): detached контейнеры создаются с меткой
+##            ai-platform.test=true (_run_container_detached) — label-first sweep session.py;
+##            name-fallback в session.py удалён (label-only).
 # endregion MODULE_CONTRACT
 
 import itertools
@@ -34,8 +37,11 @@ import pathlib
 import subprocess
 import time
 
+# Единый канон тест-метки (T12.9 T-13, DevPlan 140 W5): sweep в session.py использует
+# ТУ ЖЕ константу — создатель и очиститель не могут разойтись (label-first единственный путь).
 import pytest
 from _conftest.honesty import require_docker_or_fail
+from _conftest.session import _HERMES_TEST_LABEL
 from conftest import ldd_trajectory
 
 logger = logging.getLogger(__name__)
@@ -213,8 +219,13 @@ def _run_container_detached(
     ## @rationale — mem_limit=1g matches production limit (module.yaml deploy.resources.limits.memory).
     ##              Prevents OOM kill on resource-constrained environments (macOS Docker Desktop default ~2GB)
     ##              while providing enough memory for s6-overlay init + QEMU emulation overhead.
+    ## @rationale — W12-T13 (DevPlan 140 W5): detached hermes-test-* контейнеры помечаются
+    ##              ai-platform.test=true (_HERMES_TEST_LABEL из _conftest/session.py) — это метка,
+    ##              по которой sessionfinish-sweep _final_hermes_test_cleanup() их удаляет (label-only,
+    ##              name-prefix fallback удалён). Без метки выживший контейнер дал бы 503 на /health
+    ##              (false-lead #10, DevPlan 123 T5).
     """
-    cmd = ["docker", "run", "-d", "--memory", mem_limit]
+    cmd = ["docker", "run", "-d", "--memory", mem_limit, "--label", _HERMES_TEST_LABEL]
     if name:
         cmd.extend(["--name", name])
     if env_vars:

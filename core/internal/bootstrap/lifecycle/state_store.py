@@ -25,6 +25,8 @@
 ##            os.replace'ить чужие данные; коррапт молча сбрасывался в свежий state.
 ## @changes  2026-08-01 · Extracted from state_machine (B9 T2)
 ## @changes  2026-08-05 · DevPlan 136 W9 T9.2 — flock + unique tmp save; StateCorruptError load
+## @changes  2026-08-06 · DevPlan 140 W4 — precondition φ4: env-цепочка первична
+##            (AGE_SECRET_KEY/SOPS_AGE_KEY/AGE_SECRET_KEY_FILE), /etc/age/key.txt — restore-first fallback
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -54,6 +56,11 @@ if TYPE_CHECKING:
     pass
 
 logger = logging.getLogger(__name__)
+
+# W4 (DevPlan 140): /etc/age/key.txt — restore-first fallback (ручной перенос ключа
+# оператором), НЕ канон для φ4. Канон — env-цепочка (AGE_SECRET_KEY/SOPS_AGE_KEY/
+# AGE_SECRET_KEY_FILE) → tmpfs decrypt-only (S-13). Константа — для тестируемости.
+_ETC_AGE_KEY_FILE = "/etc/age/key.txt"
 
 
 # region FUNC_StepState
@@ -221,15 +228,21 @@ class BootstrapState:
                     raise PhasePreconditionError(f"Phase {phase_value} requires '{cmd}' which is not available")
 
         elif phase_value == "secrets_provision":
-            # Age key must be available for decryption
-            age_key = os.environ.get("AGE_SECRET_KEY", "") or os.environ.get("SOPS_AGE_KEY", "")
-            if not age_key:
-                age_key_file = "/etc/age/key.txt"
-                if not os.path.isfile(age_key_file):
-                    raise PhasePreconditionError(
-                        f"Phase {phase_value} requires AGE_SECRET_KEY env var or "
-                        f"{age_key_file} file for secret decryption"
-                    )
+            # W4 (DevPlan 140): env-цепочка первична (канон) — AGE_SECRET_KEY / SOPS_AGE_KEY /
+            # AGE_SECRET_KEY_FILE env (файл-на-диске не требуется: чтение — ответственность
+            # node_detect.detect_age_key, отсутствие файла → warning, не блок). /etc/age/key.txt —
+            # ТОЛЬКО restore-first fallback (ручной перенос ключа оператором при восстановлении
+            # ноды); φ4 (phases/secrets.py) ключ НЕ персистит на диск (канон env → tmpfs decrypt-only).
+            age_key = (
+                os.environ.get("AGE_SECRET_KEY", "")
+                or os.environ.get("SOPS_AGE_KEY", "")
+                or os.environ.get("AGE_SECRET_KEY_FILE", "")
+            )
+            if not age_key and not os.path.isfile(_ETC_AGE_KEY_FILE):
+                raise PhasePreconditionError(
+                    f"Phase {phase_value} requires AGE_SECRET_KEY / SOPS_AGE_KEY / AGE_SECRET_KEY_FILE env "
+                    f"(canonical) or {_ETC_AGE_KEY_FILE} restore-first fallback (manual) for secret decryption"
+                )
 
         elif phase_value == "registry_auth":
             # GHCR token is optional but warn if missing

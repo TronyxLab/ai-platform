@@ -11,6 +11,9 @@
 ##   - Copies context skills to /opt/hermes/context/skills/
 ##   - Init script at /etc/cont-init.d/04-context-init (runs after L1 02-platform-init, 03-register-profiles)
 ##   - HEALTHCHECK identical to L1 (curl http://127.0.0.1:9119/)
+##   - Non-root runtime: USER 10000:10000 (HERMES_UID/HERMES_GID, DevPlan 140 W6);
+##     L1 stays root (public distribution base, upstream); chown-if-root страховка в
+##     init.py остаётся для L1-root случая
 ##   - NO EXPOSE — agent accessed through proxy-net (nginx reverse proxy) only
 ##   - NO resource limits set (AR3)
 ## @rationale   L1 (hermes-agent-base) is the platform base with all generic configs, profiles, skills.
@@ -76,8 +79,17 @@ COPY core/modules/hermes-agent/context/scripts/init-context.sh /etc/cont-init.d/
 # ── Ensure init script is executable ──────────────────────────────────────
 RUN chmod +x /etc/cont-init.d/04-context-init
 
+# ── Non-root runtime (DevPlan 140 W6: hermes-root-500) ──
+# USER 10000:10000 — соответствует HERMES_UID/HERMES_GID в build/scripts/init.py
+# (chown-if-root страховка в init.py остаётся для L1-root случая; L2 работает non-root)
+# ⚠️ RISK (DevPlan 140 W6 §7): s6-overlay /init (PID 1, ENTRYPOINT унаследован от upstream L1)
+# спроектирован для root-PID1; non-root запуск верифицируется на test-VPS ДО промоута
+# (docker inspect Config.User + dashboard 9119 + API 8642); откат = revert этого блока.
+USER 10000:10000
+
 # ── HEALTHCHECK (same as L1) ──────────────────────────────────────────────
 # [IMP:8][L2-DOCKERFILE] Liveness via dashboard HTTP endpoint (port 9119)
+# Port 9119 non-privileged — curl as UID 10000 is permitted (no root needed)
 # Same interval/timeout/retries as L1 — consistent healthcheck across all layers
 HEALTHCHECK --interval=15s --timeout=10s --retries=3 --start-period=20s \
     CMD curl -f http://127.0.0.1:9119/ || exit 1

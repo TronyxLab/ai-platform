@@ -486,6 +486,7 @@ def test_postflight_calls_all_steps(tmp_path, caplog) -> None:
     with (
         mock.patch.object(orch.sudoers_generator, "batch_generate_sudoers", return_value=True) as mock_sudoers,
         mock.patch.object(orch.orphan_reconciler, "batch_orphan_reconciliation", return_value=[]) as mock_orphans,
+        mock.patch.object(orch.orphan_reconciler, "remove_orphans", return_value=0) as mock_remove,
         mock.patch.object(orch, "_render_litellm_config") as mock_litellm,
     ):
         orch._postflight(
@@ -500,17 +501,72 @@ def test_postflight_calls_all_steps(tmp_path, caplog) -> None:
         ["a", "b"], Path(str(tmp_path / "modules")), Path(str(tmp_path / "templates")), str(tmp_path)
     )
     mock_orphans.assert_called_once_with(["a"], str(tmp_path / "modules"))
+    # DevPlan 140 W5 (S2-A): self-heal — remove_orphans вызывается с результатом детекта
+    # даже при пустом списке (remove_orphans сам логирует «No orphans to remove» и возвращает 0)
+    mock_remove.assert_called_once_with([])
     mock_litellm.assert_called_once_with(str(tmp_path / "core"))
-    logger.info("[IMP:9][test_postflight_calls_all_steps] all 3 postflight steps wired correctly")
+    logger.info("[IMP:9][test_postflight_calls_all_steps] all 4 postflight steps wired correctly")
 
     _assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · Regression: postflight must run regardless of deploy outcome (legacy parity)
-# · Scenario: _postflight(all_names, enabled_names, dirs) → sudoers(all), orphans(enabled), litellm(core_dir)
+# · Scenario: _postflight(all_names, enabled_names, dirs) → sudoers(all), orphans(enabled)+remove, litellm(core_dir)
 # · Last fail: N/A
 # · Remove if: postflight composition changes
 # endregion FUNC_test_postflight_calls_all_steps
+
+
+# region FUNC_test_postflight_selfheal_removes_orphans
+## @purpose  DevPlan 140 W5 (W9-T9.15, S2-A): _postflight вызывает remove_orphans(orphans) —
+##           self-heal orphan-контейнеров при orphan>0 (detect-only gap закрыт).
+## @io       tmp_path, caplog → None (assert remove called with detected orphans)
+## @complexity 1 — mocked sub-step wiring assert
+
+
+def test_postflight_selfheal_removes_orphans(tmp_path, caplog) -> None:
+    """_postflight self-heal: remove_orphans invoked with the detected orphans (orphan>0)."""
+    caplog.set_level(logging.DEBUG)
+    logger.info("[IMP:7][test_postflight_selfheal_removes_orphans] START — orphan>0 self-heal")
+
+    detected_orphans = [
+        {"container_name": "orphan-pg", "project": "old-project"},
+        {"container_name": "orphan-redis", "project": ""},
+    ]
+    with (
+        mock.patch.object(orch.sudoers_generator, "batch_generate_sudoers", return_value=True) as mock_sudoers,
+        mock.patch.object(
+            orch.orphan_reconciler, "batch_orphan_reconciliation", return_value=detected_orphans
+        ) as mock_orphans,
+        mock.patch.object(orch.orphan_reconciler, "remove_orphans", return_value=2) as mock_remove,
+        mock.patch.object(orch, "_render_litellm_config") as mock_litellm,
+    ):
+        orch._postflight(
+            ["a", "b"],
+            ["a"],
+            str(tmp_path / "modules"),
+            str(tmp_path / "core"),
+            str(tmp_path / "templates"),
+        )
+
+    mock_orphans.assert_called_once_with(["a"], str(tmp_path / "modules"))
+    mock_remove.assert_called_once_with(detected_orphans)
+    mock_sudoers.assert_called_once()
+    mock_litellm.assert_called_once()
+    logger.info(
+        "[IMP:9][test_postflight_selfheal_removes_orphans] remove_orphans invoked with %d orphan(s)",
+        len(detected_orphans),
+    )
+
+    _assert_ldd_imp9(caplog)
+
+
+# 🧪 TRAP[TEST] · DevPlan 140 W5 (W9-T9.15) · self-heal: remove вызывается при orphan>0
+# · Scenario: batch_orphan_reconciliation вернул 2 orphan → remove_orphans(orphans) вызывается с ними
+# ·   (было: detect-only — orphan оставался до ручного вмешательства)
+# · Last fail: N/A — detect-only gap (DevPlan 140 §3 S2, зафиксирован аудитом 2026-08-05)
+# · Remove if: self-heal перенесён из _postflight или remove_orphans заменён
+# endregion FUNC_test_postflight_selfheal_removes_orphans
 
 
 # ══════════════════════════════════════════════════════════════════════════════

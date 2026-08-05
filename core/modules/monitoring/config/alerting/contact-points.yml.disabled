@@ -1,69 +1,23 @@
-# GREP_SUMMARY: grafana contact point telegram built-in alerting severity critical warning routing
-# @purpose  Grafana contact points for Telegram alerts routed by severity
-# @scope    Provisioned alongside alert-rules.yml in GF_PROVISIONING_ALERTING_PATH
-# @invariants
-#   - Two contact points: telegram-critical (immediate) and telegram-warning (grouped)
-#   - Uses Grafana built-in Telegram type (no external webhook service needed)
-#   - TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID_* from secrets.env (Grafana env substitution)
-#   - No authentication required (Grafana direct Telegram Bot API call)
-#   - Notification policies route by severity label
-# @rationale Grafana 11.6.16 has built-in Telegram Bot API support; avoids the complexity
-#           of maintaining a separate notify-hook-web service and uses the same bot token
-#           as the existing notify-hook.sh CLI script.
+# GREP_SUMMARY: grafana contact-points disabled no-receivers no-policies safe-default
+# STRUCTURE: ▶ empty-contact-points + empty-policies → no-notifications → safe-default ┘
+# region MODULE_CONTRACT
+## @purpose  Safe default contact-points — no receivers, no notification policies. Grafana starts cleanly without Telegram env vars.
+## @scope    ОТКЛЮЧЁННЫЙ вариант (не монтируется): активный канал — contact-points.yml (Telegram, DevPlan 140 W2 D-3)
+## @invariants
+##   - No contactPoints defined — safe when TELEGRAM_BOT_TOKEN is empty
+##   - No notification policies — no routing to non-existent receivers
+##   - alert-rules.yml still works (rules fire, but no notifications)
+## @rationale Grafana 11.6.16 crashes at provisioning when contactPoints reference empty Telegram env vars
+##           ("could not find Bot Token in settings"). Safe-default деактивирован 2026-08-06
+##           (DevPlan 140 W2 D-3); хранится как откатный вариант. Чтобы вернуть safe-default:
+##           поменять местами contact-points.yml и contact-points.yml.disabled, затем
+##           docker compose restart grafana.
+# endregion MODULE_CONTRACT
 
 apiVersion: 1
 
-contactPoints:
-  - orgId: 1
-    name: "Telegram Critical"
-    receivers:
-      - uid: "telegram-critical"
-        type: "telegram"
-        settings:
-          bottoken: "${TELEGRAM_BOT_TOKEN}"
-          chatid: "${TELEGRAM_CHAT_ID_CRITICAL}"
-          message: '{{ template "telegram.default.message" . }}'
-          disable_notifications: false
-          uploadImage: false
-        disableResolveMessage: false
+# ⚠️ No contact points — Grafana starts cleanly without Telegram env vars.
+contactPoints: []
 
-  - orgId: 1
-    name: "Telegram Warning"
-    receivers:
-      - uid: "telegram-warning"
-        type: "telegram"
-        settings:
-          bottoken: "${TELEGRAM_BOT_TOKEN}"
-          chatid: "${TELEGRAM_CHAT_ID_WARNING}"
-          message: '{{ template "telegram.default.message" . }}'
-          disable_notifications: true
-          uploadImage: false
-        disableResolveMessage: false
-
-# 🧐 TRAP[DECISION] · 2026-07-02 · — · Grafana 11.6.16 receiver names use contactPoint name (not uid)
-# · Grafana provisioning: `receiver` field must match contactPoint `name`
-# · (e.g. "Telegram Critical"), not the receiver `uid` (e.g. "telegram-critical").
-# · Using uid caused "receiver 'telegram-critical' does not exist" at startup.
-# · Rejected: downgrade Grafana · Reason: 11.6.16 is current stable
-policies:
-  - orgId: 1
-    receiver: "Telegram Warning"
-    group_by: ["alertname", "severity"]
-    group_wait: "5m"
-    group_interval: "5m"
-    repeat_interval: "1h"
-    routes:
-      - receiver: "Telegram Critical"
-        matchers:
-          - severity="critical"
-        group_wait: "1s"
-        group_interval: "1s"
-        repeat_interval: "5m"
-        sendReminder: false
-      - receiver: "Telegram Warning"
-        matchers:
-          - severity="warning"
-        group_wait: "5m"
-        group_interval: "5m"
-        repeat_interval: "1h"
-        sendReminder: true
+# ⚠️ No notification policies — rules in alert-rules.yml fire but no notifications are sent.
+policies: []

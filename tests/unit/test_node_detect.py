@@ -1,5 +1,5 @@
 # GREP_SUMMARY: unit-test, node-detect, detect-age-key, auto-detect-node-name, AGE_SECRET_KEY, SOPS_AGE_KEY, AGE_SECRET_KEY_FILE, node-configs, NodeDetectionError, CLI, devplan-104
-# STRUCTURE: ▶ TestDetectAgeKey×4 (env→SOPS→file→none) → ▶ TestAutoDetectNodeName×4 (single→multi→none→skip) → ▶ TestCLI×3 (age-key→node-name→not-found) → ⎋ 11 pass
+# STRUCTURE: ▶ TestDetectAgeKey×5 (env→SOPS→file→none→default-file) → ▶ TestDetectAgeKeyNodePersistence×4 (restore-first fallback: present→absent→no-prefix→tmp-path W4) → ▶ TestAutoDetectNodeName×5 (single→multi→none→skip→app) → ▶ TestCLI×3 (age-key→node-name→not-found) → ⎋ 17 pass
 
 # region MODULE_CONTRACT
 ## @purpose  Unit tests for core/internal/shared/node_detect.py — detect_age_key(),
@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pytest
 
+import core.internal.shared.node_detect as node_detect_mod  # W4: _ETC_AGE_KEY_FILE monkeypatch
 from core.internal.shared.node_detect import (
     NodeDetectionError,
     auto_detect_node_name,
@@ -143,6 +144,10 @@ class TestDetectAgeKey:
         monkeypatch.delenv("SOPS_AGE_KEY", raising=False)
         monkeypatch.delenv("AGE_SECRET_KEY_FILE", raising=False)
         monkeypatch.setenv("HOME", str(tmp_path))  # isolate default-file probe from real home
+        # W4 (DevPlan 140): Check 5 — restore-first fallback /etc/age/key.txt читается через
+        # модульную константу _ETC_AGE_KEY_FILE → monkeypatch на несуществующий tmp-путь
+        # (детерминизм: реальный /etc/age/key.txt на тестовой машине не должен влиять).
+        monkeypatch.setattr(node_detect_mod, "_ETC_AGE_KEY_FILE", str(tmp_path / "no-etc-age-key.txt"))
 
         logger.info("[IMP:7][test_node_detect] Testing missing key — all sources absent")
         result = detect_age_key()
@@ -193,23 +198,28 @@ class TestDetectAgeKey:
 
 
 # region CLASS_TestDetectAgeKeyNodePersistence
-## @purpose  D15 (DevPlan 136 W1 T1.4, d2ded6a) — node canonical key file /etc/age/key.txt:
-##           detect-цепочка (Check 5) читает персистённый φ4 ключ. /etc/age/key.txt ОТСУТСТВУЕТ →
-##           цепочка завершается None (R5 negative на точный вход: CI node-update без env-ключа,
-##           ключ не персистён → decrypt fail); ПРИСУТСТВУЕТ → ключ возвращается (assert персист).
-## @scope    mock Path.is_file + builtins.open для /etc/age/key.txt (детерминизм на любой машине);
+## @purpose  D15 (DevPlan 136 W1 T1.4, d2ded6a) + W4 (DevPlan 140) — node key file
+##           /etc/age/key.txt: Check 5 = ПОСЛЕДНИЙ fallback (restore-first, ручной перенос
+##           оператором; НЕ канон для φ4 — persist удалён из phases/secrets.py, канон env →
+##           tmpfs decrypt-only, S-13). /etc/age/key.txt ОТСУТСТВУЕТ → цепочка завершается None
+##           (R5 negative на точный вход: CI node-update без env-ключа → decrypt fail);
+##           ПРИСУТСТВУЕТ → ключ возвращается (restore-first fallback).
+## @scope    mock Path.is_file + builtins.open для "/etc/age/key.txt" (детерминизм на любой машине);
+##           W4-тест monkeypatch-ит модульную константу node_detect._ETC_AGE_KEY_FILE на tmp_path;
 ##           HOME изолирован в tmp_path (default-file probe Check 4 не мешает).
 ## @invariants — Check 5 = последнее звено цепочки; чтение через comment-scan (AGE-SECRET-KEY- строка)
 class TestDetectAgeKeyNodePersistence:
     # region FUNC_test_detect_age_key_from_node_key_file
-    ## @purpose — D15: /etc/age/key.txt ПРИСУТСТВУЕТ (φ4 персист) → detect_age_key возвращает ключ.
+    ## @purpose — D15: /etc/age/key.txt ПРИСУТСТВУЕТ (restore-first fallback, W4) →
+    ##            detect_age_key возвращает ключ.
     ## @io — ⇥ caplog, monkeypatch, tmp_path → ⎋ None (asserts key + IMP:9)
     ## @complexity — O(1)
     @pytest.mark.unit
     @ldd_trajectory
 
     # 🧪 TRAP[TEST] · 2026-08-05 · REGRESSION · D15 — node key file /etc/age/key.txt (d2ded6a)
-    # · Scenario: /etc/age/key.txt существует (персист φ4) + env-цепочка пуста → ключ возвращается
+    # · Scenario: /etc/age/key.txt существует (restore-first fallback, W4) + env-цепочка пуста →
+    # ·   ключ возвращается
     # · Last fail: 2026-08-04 — CI node-update decrypt fail (ключ не жил на ноде)
     # · Remove if: detect-цепочка Check 5 удаляется/меняется
     def test_detect_age_key_from_node_key_file(
@@ -218,7 +228,7 @@ class TestDetectAgeKeyNodePersistence:
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: pytest.TempPathFactory,
     ) -> None:
-        """detect_age_key возвращает персистённый ключ из /etc/age/key.txt (D15 assert персист)."""
+        """detect_age_key возвращает ключ из /etc/age/key.txt (restore-first fallback, D15/W4)."""
         caplog.set_level(logging.DEBUG)
         monkeypatch.delenv("AGE_SECRET_KEY", raising=False)
         monkeypatch.delenv("SOPS_AGE_KEY", raising=False)
@@ -244,14 +254,14 @@ class TestDetectAgeKeyNodePersistence:
         logger.info("[IMP:7][test_node_detect] Testing /etc/age/key.txt node file detection (D15)")
         result = detect_age_key()
         assert result == TEST_AGE_KEY, f"Expected key from /etc/age/key.txt, got {result}"
-        logger.info("[IMP:9][test_node_detect] detect_age_key вернул персистённый node-ключ (D15)")
+        logger.info("[IMP:9][test_node_detect] detect_age_key вернул restore-first ключ из /etc/age/key.txt (D15/W4)")
 
     # endregion FUNC_test_detect_age_key_from_node_key_file
 
     # region FUNC_test_detect_age_key_node_file_absent_chain_completes
     ## @purpose — R5 negative (D15): /etc/age/key.txt ОТСУТСТВУЕТ + env пуст → цепочка завершается
     ##            None (без исключений, IMP:8 warning). Точный вход бага: CI node-update без
-    ##            AGE_SECRET_KEY env и без персистённого файла → раньше decrypt fail.
+    ##            AGE_SECRET_KEY env и без restore-first файла → раньше decrypt fail.
     ## @io — ⇥ caplog, monkeypatch, tmp_path → ⎋ None (asserts None + warning)
     ## @complexity — O(1)
     @pytest.mark.unit
@@ -259,8 +269,8 @@ class TestDetectAgeKeyNodePersistence:
 
     # 🧪 TRAP[TEST] · 2026-08-05 · NEGATIVE (R5) · D15 — /etc/age/key.txt отсутствует → цепочка доходит до None
     # · Scenario: env пуст, HOME изолирован, /etc/age/key.txt mocked False → detect_age_key() is None
-    # · Last fail: 2026-08-04 — ключ не персистился на ноду → CI node-update decrypt FAIL
-    # · Remove if: Check 5 / persist-логика меняются
+    # · Last fail: 2026-08-04 — ключ не переносился на ноду restore-first → CI node-update decrypt FAIL
+    # · Remove if: Check 5 / restore-first логика меняются
     def test_detect_age_key_node_file_absent_chain_completes(
         self,
         caplog: pytest.LogCaptureFixture,
@@ -339,6 +349,47 @@ class TestDetectAgeKeyNodePersistence:
         logger.info("[IMP:9][test_node_detect] comment-scan отклонил файл без AGE-строки (D15)")
 
     # endregion FUNC_test_detect_age_key_node_file_without_prefix_line
+
+    # region FUNC_test_detect_age_key_from_etc_age_tmp_path
+    ## @purpose — W4 (DevPlan 140): /etc/age/key.txt подхватывается, когда env-цепочка пуста и
+    ##            default-файла нет — через monkeypatch модульной константы
+    ##            node_detect._ETC_AGE_KEY_FILE на tmp_path (путь тестируем; реальный /etc/age
+    ##            на тестовой машине не читается).
+    ## @io — ⇥ caplog, monkeypatch, tmp_path → ⎋ None (asserts key)
+    ## @complexity — O(1)
+    @pytest.mark.unit
+    @ldd_trajectory
+
+    # 🧪 TRAP[TEST] · 2026-08-06 · REGRESSION · W4 — restore-first fallback через константу пути
+    # · Scenario: env пуст, HOME изолирован, _ETC_AGE_KEY_FILE → tmp_path/etc/age/key.txt (есть ключ)
+    # ·   → detect_age_key возвращает ключ (Check 5 — последнее звено цепочки)
+    # · Last fail: N/A (new test — DevPlan 140 W4)
+    # · Remove if: Check 5 / _ETC_AGE_KEY_FILE убираются
+    def test_detect_age_key_from_etc_age_tmp_path(
+        self,
+        caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: pytest.TempPathFactory,
+    ) -> None:
+        """W4: /etc/age/key.txt (restore-first) подхватывается через константу пути на tmp_path."""
+        caplog.set_level(logging.DEBUG)
+        monkeypatch.delenv("AGE_SECRET_KEY", raising=False)
+        monkeypatch.delenv("SOPS_AGE_KEY", raising=False)
+        monkeypatch.delenv("AGE_SECRET_KEY_FILE", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path))  # isolate default-file probe (Check 4)
+
+        etc_age = tmp_path / "etc" / "age"
+        etc_age.mkdir(parents=True)
+        key_file = etc_age / "key.txt"
+        key_file.write_text("# restore-first (W4)\n" + TEST_AGE_KEY + "\n")
+        monkeypatch.setattr(node_detect_mod, "_ETC_AGE_KEY_FILE", str(key_file))
+
+        logger.info("[IMP:7][test_node_detect] Testing /etc/age/key.txt via _ETC_AGE_KEY_FILE (W4)")
+        result = detect_age_key()
+        assert result == TEST_AGE_KEY, f"Expected key from _ETC_AGE_KEY_FILE, got {result}"
+        logger.info("[IMP:9][test_node_detect] restore-first fallback через константу пути вернул ключ (W4)")
+
+    # endregion FUNC_test_detect_age_key_from_etc_age_tmp_path
 
 
 # endregion CLASS_TestDetectAgeKeyNodePersistence
@@ -575,6 +626,8 @@ class TestCLI:
         monkeypatch.delenv("SOPS_AGE_KEY", raising=False)
         monkeypatch.delenv("AGE_SECRET_KEY_FILE", raising=False)
         monkeypatch.setenv("HOME", str(tmp_path))  # isolate default-file probe from real home
+        # W4 (DevPlan 140): Check 5 restore-first fallback изолирован (см. test_not_found).
+        monkeypatch.setattr(node_detect_mod, "_ETC_AGE_KEY_FILE", str(tmp_path / "no-etc-age-key.txt"))
 
         logger.info("[IMP:7][test_node_detect] Testing CLI --detect-age-key not-found path")
         rc = main(["--detect-age-key"])
