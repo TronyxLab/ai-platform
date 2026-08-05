@@ -192,6 +192,7 @@ class TestMakefileIncludeSplit:
             "scaffold.mk",
             "modules.mk",
             "ci.mk",
+            "dev.mk",
             "helpers.mk",
             "repair.mk",
             "manifest.mk",
