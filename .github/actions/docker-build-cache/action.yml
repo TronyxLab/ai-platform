@@ -12,6 +12,7 @@
 ##   - cache-backend=registry → type=registry,mode=max,ref=ghcr.io/<repo_owner>/ai-platform-build-cache:<scope>
 ##   - cache-backend=gha → type=gha,mode=max,scope=<scope>
 ##   - provenance: false, sbom: false — no attestations for local builds
+##   - НЕТ hashFiles(context) в cache scope/ref — buildkit content-addressed (см. TRAP[DECISION] в runs)
 ## @rationale  DevPlan 017 T12: consolidate 3× duplicate docker build configs.
 ##             DevPlan 006 D3: registry cache (ghcr.io) for reliable cache across builds.
 ##             GHA cache suffers from "failed to reserve cache" with large images (>500MB)
@@ -45,6 +46,17 @@ inputs:
 runs:
   using: 'composite'
   steps:
+    # 🧐 TRAP[DECISION] · 2026-08-05 · — · НЕТ hashFiles(context) в cache scope (C-5/C-13, DevPlan 136 W11 T11.3)
+    # · Rejected: hashFiles('core/modules/hermes-agent/build/**', 'pyproject.toml') +
+    # ·   runner.os + python-version в scope/ref cache-ключа.
+    # · Reason: buildkit gha/registry cache (mode=max) — CONTENT-ADDRESSED по digest'ам слоёв
+    # ·   (Dockerfile + context-файлы); изменение контекста автоматически инвалидирует затронутые
+    # ·   слои. Статический scope — ТОЛЬКО namespace. Добавление hashFiles() в scope создал бы
+    # ·   НОВЫЙ namespace на каждую правку контекста → полный холодный кэш (анти-паттерн,
+    # ·   не «stale cache» fix). Гипотеза C-5 верифицирована чтением: кэш НЕ stale by design.
+    # ·   Реальный риск mutable :latest L1 (C-6/C-10) закрыт digest-pinning в build-platform.yml.
+    # · Rev: если buildkit перестанет учитывать context-файлы в digest'ах слоёв (изменение
+    # ·   поведения) — пересмотреть добавление hashFiles в scope.
     - name: Set cache parameters (${{ inputs.cache-backend }})
       id: cache_params
       shell: bash

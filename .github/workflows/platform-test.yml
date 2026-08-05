@@ -63,6 +63,15 @@ jobs:
   platform-test:
     name: Platform Test (unified gate)
     runs-on: ubuntu-latest
+    # 🧐 TRAP[DECISION] · 2026-08-05 · — · Linux-only CI (C-14, DevPlan 136 W11 T11.12)
+    # · Rejected: macOS-leg матрица для non-Docker gate (runs-on: macos-* ~10× cost; все
+    # ·   workflow'ы ubuntu; macOS-специфичные пути платформы — dev-hosts /etc/hosts,
+    # ·   GNU timeout vs gtimeout, ssh/rsync-семантика — остаются непокрытыми и после матрицы).
+    # · Reason: LOW severity. macOS-пути тестируются локальной dev-машиной (make dev-hosts,
+    # ·   lib/ssh.sh gtimeout-doc в AGENTS.md); Linux-only CI не должен создавать иллюзию
+    # ·   кросс-платформенного покрытия. Debt-кандидат — в отчёте W11.
+    # · Rev: 2026-10-21 — пересмотр, если macOS-специфичные баги (dev-hosts/ssh/rsync)
+    # ·   проявятся ≥2 раз в течение квартала → добавить macOS-ножку для static-gate.
     timeout-minutes: 40
 
     env:
@@ -92,8 +101,18 @@ jobs:
           install-gitleaks: 'true'
           run-provisioner: 'false'
 
+      # C-4 (DevPlan 136 W11 T11.6): слепой `|| true` УБРАН — fetch-провал не маскируется.
+      # Явная семантика: fetch успешен → baseline актуален; fetch упал → rev-parse fallback
+      # (stale ref) с ::warning::; ref отсутствует → ::warning:: (inventory-diff тесты пропустятся).
       - name: Fetch origin/main for inventory baseline
-        run: git fetch origin main:refs/remotes/origin/main --depth=1 || true
+        run: |
+          if git fetch origin main:refs/remotes/origin/main --depth=1 2>&1; then
+            echo "[IMP:8][baseline] origin/main fetched for inventory baseline"
+          elif git rev-parse --verify refs/remotes/origin/main >/dev/null 2>&1; then
+            echo "::warning::[IMP:8][baseline] origin/main fetch FAILED — using stale existing baseline ref"
+          else
+            echo "::warning::[IMP:7][baseline] origin/main unavailable — inventory diff tests may skip"
+          fi
 
       # DevPlan 123 T2 (P-14): ключ включает pyproject.toml hash (ruff-версия) —
       # прежний ключ только по .pre-commit-config.yaml давал cache-hit со старым venv.
@@ -133,14 +152,22 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
+      # C-11 (DevPlan 136 W11 T11.10): секрет передаётся ТОЛЬКО через docker/login-action
+      # (action inputs, НЕ env:-ключи). env:-ключи обязаны регистрироваться в platform-env.yaml
+      # env_defaults (test_gate_ci_env_vars.py — T7 SoT); DOCKER_HUB_TOKEN — CI-секрет, не platform
+      # env-переменная. inline-интерполяция в run: запрещена (C-11: попадает в логи/шелл-историю).
+      # if: secrets.X != '' — тот же guard, что и прежний [ -n "${{ secrets.DOCKER_HUB_TOKEN }}" ]
+      # (fork PR без секретов → anonymous, R4-честно).
       - name: Authenticate Docker Hub (rate limit mitigation)
-        run: |
-          if [ -n "${{ secrets.DOCKER_HUB_TOKEN }}" ]; then
-            echo "${{ secrets.DOCKER_HUB_TOKEN }}" | docker login -u "${{ secrets.DOCKER_HUB_USERNAME }}" --password-stdin
-            echo "[IMP:8][docker] Docker Hub authenticated — rate limit 200/6h"
-          else
-            echo "[IMP:7][docker] DOCKER_HUB_TOKEN not set — using anonymous pulls (100/6h)"
-          fi
+        if: ${{ secrets.DOCKER_HUB_TOKEN != '' }}
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
+
+      - name: Note Docker Hub auth status (anonymous)
+        if: ${{ secrets.DOCKER_HUB_TOKEN == '' }}
+        run: echo "[IMP:7][docker] DOCKER_HUB_TOKEN not set — using anonymous pulls (100/6h)"
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v4
@@ -158,21 +185,50 @@ jobs:
         id: module_list
         uses: ./.github/actions/discover-modules
 
+      # C-11 (DevPlan 136 W11 T11.10): pre-pull — агрегация исходов вместо молчаливой маскировки
+      # (`|| echo WARNING` + continue-on-error). Каждый провал → ::warning:: annotation;
+      # полный провал всех pre-pull'ов → ::error::. Шаг остаётся non-blocking (pre-pull —
+      # оптимизация, не гейт; ci-docker gate перетянет образы по требованию) — НО провалы
+      # теперь видимы в job summary, а не теряются.
       - name: Pre-pull Docker images (parallel)
         continue-on-error: true
         run: |
           echo "::group::Pre-pulling Docker images (parallel)"
+          PULL_TMP=$(mktemp -d)
           for compose_file in $(python3 core/internal/scripts/module_discovery.py --format lines); do
             module=$(basename "$(dirname "$compose_file")")
-            (echo "[pull:$module] Starting..." && docker compose -f "$compose_file" pull --ignore-buildable 2>&1 | sed "s/^/[pull:$module] /" || echo "[pull:$module] WARNING: some images failed") &
+            (
+              echo "[pull:$module] Starting..."
+              docker compose -f "$compose_file" pull --ignore-buildable 2>&1 | sed "s/^/[pull:$module] /"
+              echo $? > "$PULL_TMP/$module.rc"
+            ) &
           done
-          wait
-          echo "[pull] All parallel pulls completed"
-          echo "[pull] Pulling postgres:16-alpine for monitoring test override..."
-          docker pull postgres:16-alpine 2>&1 || echo "[warn] postgres:16-alpine pull failed — continuing"
-          echo "[IMP:8][pre-pull] Pulling nousresearch/hermes-agent:v2026.7.7.2 for build cache..."
-          docker pull nousresearch/hermes-agent:v2026.7.7.2 2>&1 | tail -5 || echo "[warn] hermes-agent base image pre-pull failed — continuing (may affect build time)"
-          echo "[IMP:9][pre-pull] Base image pulled — build step will reuse"
+          ( docker pull postgres:16-alpine 2>&1 | sed 's/^/[pull:postgres] /'; echo $? > "$PULL_TMP/postgres.rc" ) &
+          ( docker pull nousresearch/hermes-agent:v2026.7.7.2 2>&1 | tail -5 | sed 's/^/[pull:hermes-base] /'; echo $? > "$PULL_TMP/hermes-base.rc" ) &
+          wait || true
+          FAILED=0
+          TOTAL=0
+          for rc_file in "$PULL_TMP"/*.rc; do
+            module=$(basename "$rc_file" .rc)
+            rc=$(cat "$rc_file")
+            TOTAL=$((TOTAL+1))
+            if [ "$rc" != "0" ]; then
+              FAILED=$((FAILED+1))
+              echo "::warning::[pull:$module] pre-pull FAILED (rc=$rc) — image will be pulled on demand or built"
+            else
+              echo "[pull:$module] pre-pull OK"
+            fi
+          done
+          if [ "$FAILED" -gt 0 ]; then
+            if [ "$FAILED" -eq "$TOTAL" ]; then
+              echo "::error::[pull] ALL $TOTAL pre-pulls FAILED — registry outage or auth problem (see warnings)"
+            else
+              echo "::warning::[pull] $FAILED/$TOTAL pre-pull(s) failed — see warnings above"
+            fi
+          else
+            echo "[IMP:9][pre-pull] All images pre-pulled successfully — build/cache step will reuse"
+          fi
+          rm -rf "$PULL_TMP"
           echo "::endgroup::"
 
       # ⚠️ TRAP[DECISION] · 2026-08-03 · — · cache-backend=gha (DevPlan 123 T1, P-13)
@@ -271,9 +327,11 @@ jobs:
           fi
         shell: bash
 
+      # C-2 (DevPlan 136 W11 T11.2): continue-on-error УБРАН — провал integration-степа
+      # теперь честно роняет job (CI «зелёный, система врёт»). error-path не требует
+      # API-ключей (fork PR-safe); rc=5 (нет тестов) → exit 0 обрабатывается явно.
       - name: Integration test — error-path mode (no API keys needed)
         id: integration_error_path
-        continue-on-error: true
         run: |
           INTEGRATION_MODE=error-path make test MARKER=integration && rc=0 || rc=$?
           if [ $rc -eq 5 ]; then
@@ -282,9 +340,10 @@ jobs:
           fi
           exit $rc
 
+      # C-2 (DevPlan 136 W11 T11.2): continue-on-error УБРАН (см. integration_error_path).
+      # live-mode сам выходит 0 при отсутствии API-ключей (fork PR path) — строгий режим безопасен.
       - name: Integration test — live mode (requires API keys)
         id: integration_live
-        continue-on-error: true
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY }}

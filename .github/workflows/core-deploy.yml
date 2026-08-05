@@ -39,6 +39,19 @@ on:
 
 env:
   VPS_USER: root
+  # 🧐 TRAP[DECISION] · 2026-08-05 · HI · core-deploy: root-shell канал (C-8, DevPlan 136 W11 T11.8)
+  # · Rejected: ci-deploy forced-command канал (orchestrator_cli dispatch verbs: ping/exit/status/
+  # ·   verify/remove/receive, verbs.py) — rsync --server и `make node-update`/`make provision`
+  # ·   требуют полноценный shell; dispatch не имеет verbs для core-доставки (receive = только
+  # ·   payload-деплой проектов). Верифицировано: фактический SSH-канал — setup-ssh action
+  # ·   (.github/actions/setup-ssh) + ssh_opts SoT (core.internal.shared.ssh_opts --shell),
+  # ·   user = env.VPS_USER = root.
+  # · Reason: VPS_SSH_KEY (base64, setup-ssh, cleanup после рана) даёт ROOT SHELL на VPS. Это
+  # ·   ОТДЕЛЬНЫЙ канал от ci-deploy forced-command (другой ключ, другой пользователь). Risk-
+  # ·   acceptance: ключ ограничен known_hosts (ssh-keyscan), удаляется в cleanup (always),
+  # ·   audit-trail деплоя логирует SHA. Связано с W10 sudoers-сужением (S-1/S-2/S-3).
+  # · Rev: 2026-10-21 — если core-доставка получит dispatch-verb (node-update/provision) или
+  # ·   ограниченного non-root пользователя с точечным sudoers (rsync-флаги) — перевести с root.
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.workflow_run.head_sha || github.sha }}
@@ -53,7 +66,11 @@ jobs:
     # Push filter: only deploy when triggered by push event (not PR)
     if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # C-9 (DevPlan 136 W11 T11.9): 15 → 30 мин — rsync (core+makefiles+node-configs) +
+    # provision + node-update (DEPLOY_PARALLEL=true, deploy-modules timeout 600s, W9 T9.15)
+    # превышали 15 мин на холодном пуше/первом деплое. Вариант B (split rsync/node-update
+    # jobs) отклонён: увеличивает латентность цепочки без выигрыша (rsync ~2-4 мин).
+    timeout-minutes: 30
 
     steps:
       # ⚠️ TRAP[BUG] · 2026-07-23 · P0 · sha-resolve before checkout broke core-deploy

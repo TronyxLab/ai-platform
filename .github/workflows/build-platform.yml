@@ -56,8 +56,8 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push') }}
     runs-on: ubuntu-latest
     permissions:
-      contents: read
-      packages: write
+      contents: write  # C-6/C-10 (DevPlan 136 W11 T11.4): source-org step коммитит .github/l1-distribution-digest
+      packages: write  #   (GITHUB_TOKEN-коммиты НЕ триггерят workflow-раны — GitHub documented, loop'а нет)
       actions: read
 
     steps:
@@ -94,21 +94,37 @@ jobs:
         with:
           scope: networks,volumes
 
-      # ─── Step 4: Acquire L1 hermes-agent-base (context-dependent, B3 T7/D1) ──
-      # tronyx161 (source org): builds L1 from sources below (existing docker-build-cache path).
-      # Context orgs: pull the PUBLIC distribution base ghcr.io/tronyx161/hermes-agent-base:latest
-      # anonymously, tag it locally as hermes-agent-base:latest; on pull failure → build from sources.
-      - name: Pull L1 distribution base (context org)
+      # ─── Step 4: Acquire L1 hermes-agent-base (context-dependent, B3 T7/D1 + C-6/C-10 digest-pinning) ──
+      # tronyx161 (source org): builds L1 from sources (docker-build-cache path below).
+      # Context orgs: pull the PUBLIC distribution base by PINNED DIGEST from
+      #   .github/l1-distribution-digest (обновляется source-org шагом ниже; репо доставляется
+      #   через mirror.yml), tag locally as hermes-agent-base:latest.
+      # Digest-pull failure / missing digest file → явный ::error:: маркер + fallback build
+      #   (C-10: :latest eventual-consistency — releases use digest-pin, DevPlan 136 W11 T11.4).
+      - name: Pull L1 distribution base (context org, digest-pinned)
         id: pull-l1
         if: github.repository_owner != 'tronyx161'
         run: |
-          if docker pull ghcr.io/tronyx161/hermes-agent-base:latest; then
-            docker tag ghcr.io/tronyx161/hermes-agent-base:latest hermes-agent-base:latest
-            echo "pulled=true" >> "$GITHUB_OUTPUT"
-            echo "[IMP:9][CI][L1] Pulled public L1 distribution base (ghcr.io/tronyx161)"
-          else
+          DIGEST_FILE=".github/l1-distribution-digest"
+          if [ ! -f "$DIGEST_FILE" ]; then
+            echo "::error::[IMP:10][CI][L1] $DIGEST_FILE missing — context repo not synced; falling back to build from sources"
             echo "pulled=false" >> "$GITHUB_OUTPUT"
-            echo "[IMP:8][CI][L1] L1 pull FAILED — falling back to build from sources"
+            exit 0
+          fi
+          DIGEST=$(tr -d '[:space:]' < "$DIGEST_FILE")
+          if [ -z "$DIGEST" ]; then
+            echo "::error::[IMP:10][CI][L1] $DIGEST_FILE empty — malformed; falling back to build from sources"
+            echo "pulled=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          REF="ghcr.io/tronyx161/hermes-agent-base@$DIGEST"
+          if docker pull "$REF"; then
+            docker tag "$REF" hermes-agent-base:latest
+            echo "pulled=true" >> "$GITHUB_OUTPUT"
+            echo "[IMP:9][CI][L1] Pulled public L1 distribution base by pinned digest ($DIGEST)"
+          else
+            echo "::error::[IMP:10][CI][L1] L1 digest pull FAILED for $REF — stale digest? Falling back to build from sources"
+            echo "pulled=false" >> "$GITHUB_OUTPUT"
           fi
 
       # ─── Step 5: Build L1 from sources (source org / pull-fallback) ────
@@ -198,3 +214,36 @@ jobs:
       - name: Push L1 to ghcr.io (source org — backup + distribution base)
         if: success() && github.repository_owner == 'tronyx161'
         run: make hermes-push-l1
+
+      # ─── Step 8: Sync L1 distribution digest (SOURCE ORG ONLY — C-6/C-10, DevPlan 136 W11 T11.4) ───
+      # После push'а L1 фиксирует digest в .github/l1-distribution-digest — context-орги пулят
+      # ПО PINNED DIGEST (не mutable :latest). Коммит через GITHUB_TOKEN:
+      #   · GITHUB_TOKEN-коммиты НЕ триггерят workflow-раны (GitHub documented) → loop'а нет
+      #   · содержимое файла — digest; изменение = только новый L1-релиз
+      #   · eventual consistency: TronyxLab получит новый digest при следующем реальном push
+      #     (mirror.yml слушает workflow_run platform-gate-fast, который для токен-коммита не стреляет)
+      - name: Sync L1 distribution digest (source org)
+        if: success() && github.repository_owner == 'tronyx161'
+        run: |
+          set -euo pipefail
+          DIGEST_FILE=".github/l1-distribution-digest"
+          REF="ghcr.io/tronyx161/hermes-agent-base:latest"
+          REPO_DIGEST=$(docker inspect "$REF" --format '{{index .RepoDigests 0}}' 2>/dev/null || true)
+          DIGEST="${REPO_DIGEST##*@}"
+          if [ -z "$DIGEST" ]; then
+            echo "::error::[IMP:10][CI][L1] Cannot resolve pushed L1 digest — RepoDigests empty for $REF (push failed?)"
+            exit 1
+          fi
+          CURRENT=""
+          [ -f "$DIGEST_FILE" ] && CURRENT=$(tr -d '[:space:]' < "$DIGEST_FILE")
+          if [ "$CURRENT" = "$DIGEST" ]; then
+            echo "[IMP:9][CI][L1] L1 digest unchanged ($DIGEST) — manifest up to date"
+            exit 0
+          fi
+          printf '%s' "$DIGEST" > "$DIGEST_FILE"
+          git config user.email "ci@ai-platform.local"
+          git config user.name "ai-platform-ci"
+          git add "$DIGEST_FILE"
+          git -c commit.gpgsign=false commit -m "ci(136): W11 — update L1 distribution digest $DIGEST"
+          git push origin HEAD:main
+          echo "[IMP:9][CI][L1] L1 digest updated + committed: $DIGEST"

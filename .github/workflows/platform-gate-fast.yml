@@ -15,6 +15,19 @@
 ## @rationale U-57: downstream ждали 20-минутный full-gate + integration — хрупкая цепочка.
 ##            Отдельный лёгкий gate-workflow (fast-gate) — единственный триггер downstream.
 ## @changes 2026-08-01 | DevPlan 116 B11 T4 (D2, U-57) — Created
+# 🧐 TRAP[DECISION] · 2026-08-05 · HI · deploys on fast-gate by design — full-gate PR-only (C-1, DevPlan 136 W11 T11.1)
+# · Rejected: workflow_run-trigger на platform-test (full gate) — downstream ждал бы 20+ мин
+# ·   full-gate + integration + docker-степы (хрупкая цепочка, U-57); это и есть D2 (116 B11 T4).
+# · Reason: верифицировано 2026-08-05 — branch protection API → `protected: false` (private repo,
+# ·   GitHub Free; rulesets API тоже 403). Прямые push в main ВОЗМОЖНЫ (история: single-parent
+# ·   коммиты W1-W7). Для прямого push единственный гейт перед деплоем = fast-gate (этот workflow).
+# ·   full-gate (platform-test) на main-коммите — PR-time + async push-main (не precondition деплоя).
+# ·   Mitigation: gate-тест tests/gates/test_gate_ci_trigger_strength.py (canary) enforce-ит, что
+# ·   downstream триггерится ТОЛЬКО workflow_run от гейта, гейт содержит `make gate MODE=fast`
+# ·   (никогда слабее fast), push-filter + conclusion==success. Сужение до full-gate = отдельная задача.
+# · Rev: 2026-10-21 — пересмотр: (а) если появятся ложные деплои багов, прошедших fast и упавших
+# ·   на full → переключить downstream на platform-test (workflow_run), (б) если GitHub Free
+# ·   получит branch protection для private — включить require PR + required checks.
 # endregion MODULE_CONTRACT
 
 name: platform-gate-fast

@@ -69,31 +69,6 @@
 ## · Public key documented at .github/mirror-deploy-key.pub for recovery.
 ##
 # endregion MODULE_CONTRACT
-# ═══════════════════════════════════════════════════════════════════
-# MODULE_CONTRACT: Mirror workflow — SHA-aware auto-sync from Tronyx161/ai-platform to TronyxLab/ai-platform
-# ═══════════════════════════════════════════════════════════════════
-# ## @purpose:   SHA-aware mirror sync: triggers on platform-test completion.
-#                Verifies gate passed before mirroring. Prevents mirroring untested code.
-# ## @scope:     Source → Destination push only; no force push, no history rewrite
-# ## @invariants:
-#                - Triggers on workflow_run: platform-test completed successfully
-#                - Also supports workflow_dispatch for manual mirror
-#                - Blocking SHA verification for workflow_dispatch (API check)
-#                - Never triggers on push from mirror (recursion guard)
-#                - MIRROR_SSH_KEY (SSH) replaces GIT_MIRROR_TOKEN (HTTPS) for push
-#                - Mirror stays up-to-date without force push
-# ## @rationale:  SHA-aware aggregator (D4) ensures only tested code is mirrored.
-#                Mirror in TronyxLab is read-only, used by TronyxLab CI.
-# 🧐 TRAP[DECISION] · 2026-07-11 · — · platform-test not verified via API
-# · Rejected: dual workflow verification (main-full-gate + platform-test)
-# · Reason: platform-test runs on every PR/push — its completion is a weak signal
-# ·   (PR may not be merged). main-full-gate is the final gate. Checking both
-# ·   is redundant. Accepted in 002-fix-gate-coverage.
-# ## @changes:    2026-07-15 · Switched trigger to platform-test per Plan 2
-# ## @changes:    2026-07-10 · SHA-aware verification per TestsMetaDevPlan2.md TASK-7
-# ## @changes:    2026-07-07 · Initial implementation (TASK-3)
-# ## @links:      AGENTS.md §Architecture
-# ═══════════════════════════════════════════════════════════════════
 
 # 🧐 TRAP[DECISION] · 2026-07-07 · — · Recursion guard via repository_owner check
 # · Rejected: `[skip ci]` in commit message of mirrored commits
@@ -191,11 +166,24 @@ jobs:
           # ──────────────────────────────────────────────────────────
           git remote add mirror git@github.com:TronyxLab/ai-platform.git
 
+          # C-3 (DevPlan 136 W11 T11.5): non-fast-forward recovery.
+          # Push может упасть если mirror diverged (уникальные коммиты) или локальный HEAD
+          # отстал от origin/main (очередь workflow_run, cancel-in-progress: false).
+          # Recovery: синхронизировать HEAD с актуальным origin/main и пушить его.
+          # Verification-цикл ниже использует git rev-parse HEAD → учитывает recovery-ветку.
           if git -c commit.gpgsign=false push mirror HEAD:main 2>&1; then
             echo "[IMP:9][MIRROR][PUSH] Push to TronyxLab/ai-platform successful"
           else
-            echo "[IMP:10][MIRROR][PUSH] FAILED: push to TronyxLab/ai-platform failed"
-            exit 1
+            echo "[IMP:10][MIRROR][PUSH] Push FAILED (likely non-fast-forward) — re-syncing to origin/main and retrying"
+            git fetch origin main
+            git checkout --detach origin/main
+            if git -c commit.gpgsign=false push mirror HEAD:main 2>&1; then
+              echo "[IMP:9][MIRROR][PUSH] Push to TronyxLab/ai-platform successful after origin/main re-sync"
+            else
+              echo "[IMP:10][MIRROR][PUSH] FAILED: push to TronyxLab/ai-platform failed after re-sync — mirror содержит уникальные коммиты?"
+              echo "::error::Manual recovery: см. force-sync процедуру в комментарии ниже (D24, keep by design)"
+              exit 1
+            fi
           fi
 
           # ──────────────────────────────────────────────────────────
