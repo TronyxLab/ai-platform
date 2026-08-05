@@ -63,15 +63,29 @@ def create_user(username: str, groups: list[str] | None = None) -> None:
 
 # region FUNC_add_ssh_key
 ## @purpose  Add an SSH public key to user's authorized_keys (with forced-command support).
-## @io       ⇥ username: str, key: str, forced_command_prefix: str | None = None → ⎋ None
-## @complexity O(1)
+##           T9.18 (B-5, DevPlan 136 W9): существующая запись с тем же ключом НЕ пропускается
+##           вслепую — сверяется command= префикс; дрейф (другой/отсутствующий forced-command)
+##           реконсилируется перезаписью строки (иначе ci-deploy канал молча оставался бы на
+##           старом префиксе после обновления платформы).
+## @io       ⇥ username: str, key: str, forced_command_prefix: str | None = None,
+##              home_dir: str | None = None (override для тестов; None → /home/`username`) → ⎋ None
+## @complexity O(N) где N = строки authorized_keys
+## @invariants
+##   - Ключ отсутствует → append (существующее поведение)
+##   - Ключ есть + forced_command_prefix задан: строка == ожидаемая → no-op;
+##     префикс дрейфует (другой/пустой) → строка перезаписывается (reconcile)
+##   - Ключ есть + forced_command_prefix НЕ задан (owner-ключи): key in content → skip (legacy)
+##   - Запись всегда завершается chmod 0600 + chown (единый контракт)
+## @changes 2026-08-05 | DevPlan 136 W9 T9.18 (B-5) — reconcile command= префикса
+##           + home_dir override (unit-тест без реального /home)
 def add_ssh_key(
     username: str,
     key: str,
     forced_command_prefix: str | None = None,
+    home_dir: str | None = None,
 ) -> None:
-    """Add an SSH public key to user's authorized_keys."""
-    home = f"/home/{username}"
+    """Add an SSH public key to user's authorized_keys (with forced-command reconcile, T9.18)."""
+    home = home_dir or f"/home/{username}"
     ssh_dir = os.path.join(home, ".ssh")
     auth_keys = os.path.join(ssh_dir, "authorized_keys")
 
@@ -79,16 +93,43 @@ def add_ssh_key(
     # Ensure ownership (B4: non_fatal=True + fatal_rc=(127,) — exit=127 всегда fatal, TRAP[BUG])
     run_subprocess(["chown", f"{username}:{username}", ssh_dir], non_fatal=True, fatal_rc=(127,))
 
-    # Check if key already present
+    expected_entry = f"{forced_command_prefix} {key}" if forced_command_prefix else key
+
+    # ── Reconcile (T9.18): ключ присутствует — проверить/исправить command= префикс ──
     if os.path.isfile(auth_keys):
         try:
             with open(auth_keys) as f:
-                content = f.read()
-            if key in content:
-                logger.info("[IMP:7][ssh_key] Key already present for %s — skipping", username)
-                return
+                lines = f.read().splitlines()
         except OSError:
-            pass
+            lines = []
+        for i, line in enumerate(lines):
+            if not line.strip() or key not in line:
+                continue
+            if line.strip() == expected_entry:
+                logger.info("[IMP:7][ssh_key] Key already present with matching prefix for %s — skipping", username)
+                return
+            if forced_command_prefix is not None:
+                # ⚠️ TRAP[BUG] · 2026-08-05 · P1 · stale forced-command prefix не чинился
+                # · Symptom: обновление платформы меняет command= префикс (orchestrator_cli dispatch,
+                #   DevPlan 116 B1) — но authorized_keys уже содержит ключ с СТАРЫМ префиксом →
+                #   add_ssh_key («key in content») пропускал → канал оставался на старом диспетчере.
+                # · Root: duplicate-check по ключу без сравнения префикса (B-5, T9.18).
+                # · Fix: при несовпадении строки перезаписать ЕЁ (reconcile), не дублировать.
+                # · Prevention: сравнение полной записи (prefix + key), не только ключа.
+                logger.warning(
+                    "[IMP:8][ssh_key] Key for %s has STALE forced-command prefix — reconciling (T9.18)",
+                    username,
+                )
+                lines[i] = expected_entry
+                with open(auth_keys, "w") as f:
+                    f.write("\n".join(lines) + "\n")
+                os.chmod(auth_keys, 0o600)
+                run_subprocess(["chown", f"{username}:{username}", auth_keys], non_fatal=True, fatal_rc=(127,))
+                logger.info("[IMP:9][ssh_key] SSH key prefix reconciled for %s", username)
+                return
+            # owner-ключ (без prefix): legacy-поведение — ключ есть → skip
+            logger.info("[IMP:7][ssh_key] Key already present for %s — skipping", username)
+            return
 
     entry = f"{forced_command_prefix} {key}\n" if forced_command_prefix else f"{key}\n"
     with open(auth_keys, "a") as f:

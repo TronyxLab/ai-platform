@@ -162,7 +162,19 @@ def main() -> int:
         os.environ.setdefault("CONTEXT", args.context)
 
     # Create state machine
-    sm = StateMachine(state_file_path=args.state_file)
+    # T9.2 (DevPlan 136 W9): коррапт state.json → PlatformFatalError. Recovery: --force
+    # удаляет файл и стартует заново (явный операторский reset, не тихий сброс).
+    try:
+        sm = StateMachine(state_file_path=args.state_file)
+    except PlatformFatalError as e:
+        if args.force:
+            logger.warning("[IMP:8][main] Corrupt state + --force: removing %s and starting fresh", args.state_file)
+            Path(args.state_file).unlink(missing_ok=True)
+            sm = StateMachine(state_file_path=args.state_file)
+        else:
+            logger.critical("[IMP:10][main] %s", e)
+            print(f"[FATAL] {e}", file=sys.stderr)
+            return e.exit_code
 
     # Detect CORE_DIR from PLATFORM_ROOT or default
     platform_root = str(platform_remote_base())
@@ -329,11 +341,23 @@ def run_init_mode(sm: StateMachine) -> int:
                 if phase_state.get("status") == "done" or (
                     phase_state.get("done", False) and phase_state.get("status") in (None, "done")
                 ):
+                    # T9.3 (L-4/B-1): content-hash инвалидация — done-фаза перевыполняется,
+                    # если входы (modules/services node.yaml / код платформы) изменились.
+                    if sm.phase_needs_rerun(phase):
+                        logger.info(
+                            "[IMP:8][run_init] Phase %s done but inputs changed (hash) — re-running (T9.3)", phase
+                        )
+                        phase_state["status"] = "pending"
+                    else:
+                        logger.info("[IMP:7][run_init] Phase %s already done — skipping", phase)
+                        continue
+            elif phase_state.status == "done":
+                if sm.phase_needs_rerun(phase):
+                    logger.info("[IMP:8][run_init] Phase %s done but inputs changed (hash) — re-running (T9.3)", phase)
+                    phase_state.status = "pending"
+                else:
                     logger.info("[IMP:7][run_init] Phase %s already done — skipping", phase)
                     continue
-            elif phase_state.status == "done":
-                logger.info("[IMP:7][run_init] Phase %s already done — skipping", phase)
-                continue
 
         try:
             result = sm.execute_phase(phase)
@@ -357,6 +381,8 @@ def run_init_mode(sm: StateMachine) -> int:
                 entry["status"] = "failed"
             elif entry is not None:
                 entry.status = "failed"
+            # T9.6 (L-5/L-11): audit FAILED в failure-пути (не только при успешном завершении)
+            _audit_failed(sm, phase, e)
             sm.save()
             return e.exit_code if hasattr(e, "exit_code") else 1
         except PhasePreconditionError as e:
@@ -366,6 +392,7 @@ def run_init_mode(sm: StateMachine) -> int:
                 entry["status"] = "failed"
             elif entry is not None:
                 entry.status = "failed"
+            _audit_failed(sm, phase, e)
             sm.save()
             return 1
         except PlatformFatalError as e:
@@ -375,6 +402,7 @@ def run_init_mode(sm: StateMachine) -> int:
                 entry["status"] = "failed"
             elif entry is not None:
                 entry.status = "failed"
+            _audit_failed(sm, phase, e)
             sm.save()
             return e.exit_code
 
@@ -413,11 +441,24 @@ def run_update_mode(sm: StateMachine) -> int:
                 if phase_state.get("status") == "done" or (
                     phase_state.get("done", False) and phase_state.get("status") in (None, "done")
                 ):
+                    # T9.3 (B-1): update-фазы инвалидируются hash'ом входов
+                    if sm.phase_needs_rerun(phase):
+                        logger.info(
+                            "[IMP:8][run_update] Phase %s done but inputs changed (hash) — re-running (T9.3)", phase
+                        )
+                        phase_state["status"] = "pending"
+                    else:
+                        logger.info("[IMP:7][run_update] Phase %s already done — skipping", phase)
+                        continue
+            elif phase_state.status == "done":
+                if sm.phase_needs_rerun(phase):
+                    logger.info(
+                        "[IMP:8][run_update] Phase %s done but inputs changed (hash) — re-running (T9.3)", phase
+                    )
+                    phase_state.status = "pending"
+                else:
                     logger.info("[IMP:7][run_update] Phase %s already done — skipping", phase)
                     continue
-            elif phase_state.status == "done":
-                logger.info("[IMP:7][run_update] Phase %s already done — skipping", phase)
-                continue
 
         try:
             result = sm.execute_phase(phase)
@@ -439,6 +480,7 @@ def run_update_mode(sm: StateMachine) -> int:
                 entry["status"] = "failed"
             elif entry is not None:
                 entry.status = "failed"
+            _audit_failed(sm, phase, e)
             sm.save()
             return e.exit_code if hasattr(e, "exit_code") else 1
         except PhasePreconditionError as e:
@@ -448,6 +490,7 @@ def run_update_mode(sm: StateMachine) -> int:
                 entry["status"] = "failed"
             elif entry is not None:
                 entry.status = "failed"
+            _audit_failed(sm, phase, e)
             sm.save()
             return 1
         except PlatformFatalError as e:
@@ -457,6 +500,7 @@ def run_update_mode(sm: StateMachine) -> int:
                 entry["status"] = "failed"
             elif entry is not None:
                 entry.status = "failed"
+            _audit_failed(sm, phase, e)
             sm.save()
             return e.exit_code
 
@@ -469,6 +513,31 @@ def run_update_mode(sm: StateMachine) -> int:
 
 
 # endregion FUNC_run_update_mode
+
+
+# region FUNC__audit_failed
+## @purpose  Write FAILED audit entry for a phase that raised in run_init/run_update
+##           (T9.6, L-5/L-11). Ранее audit писался ТОЛЬКО в успешном хвосте run_*_mode —
+##           фейл фазы (PhaseDependencyError/PhasePreconditionError/PlatformFatalError)
+##           покидал run без audit-следа. Здесь ошибка добавляется в sm.state.errors
+##           (попадает в ERROR-записи write_audit_log) и пишется summary с result=FAILED.
+## @io       ⇥ sm: StateMachine, phase: str, exc: Exception → ⎋ None (non-fatal — никогда не raise)
+## @complexity O(1) + audit write
+## @invariants
+##   - write_audit_log(sm, result="FAILED") — status FAILED в summary-записи
+##   - Ошибка дублируется в sm.state.errors (ERROR-записи) — audit содержит контекст фейла
+##   - Non-fatal: сбой audit-записи (OSError внутри write_audit_log) → WARN, exit-код не меняется
+def _audit_failed(sm: StateMachine, phase: str, exc: Exception) -> None:
+    """Record a FAILED audit entry for a phase exception (T9.6 — audit in failure paths)."""
+    try:
+        sm.state.errors.append(f"Phase {phase} failed: {exc}")
+        write_audit_log(sm, result="FAILED")
+        logger.info("[IMP:9][audit] FAILED audit entry written for phase %s", phase)
+    except Exception as e:  # noqa: EXC — best-effort: audit никогда не маскирует основной фейл
+        logger.warning("[IMP:7][audit] Failed to write FAILED audit entry (non-fatal): %s", e)
+
+
+# endregion FUNC__audit_failed
 
 
 # region FUNC__mark_phase_success
@@ -486,8 +555,11 @@ def _mark_phase_success(sm: StateMachine, phase: str, current_index: int) -> Non
     if isinstance(entry, dict):
         entry["done"] = True
         entry["status"] = "done"
+        # T9.3 (L-4/B-1): content-hash входов сохраняется для hash-инвалидации при следующем run
+        entry["hash"] = sm._phase_input_hash(phase)
     elif entry is not None:
         entry.status = "done"
+        entry.hash = sm._phase_input_hash(phase)
     else:
         # StepState, НЕ raw dict: BootstrapState.to_dict() вызывает v.to_dict()
         # на каждом элементе steps — raw-dict крэшит save (латентный баг,
@@ -566,11 +638,13 @@ def _maybe_run_preflight(sm: StateMachine) -> int:
         logger.warning("[IMP:7][preflight] preflight.py not found at %s — skipping", preflight_script)
         return 0
 
-    # ── D6: все фазы done (без WARN-статусов) → preflight не нужен ──
+    # ── D6 (волна 117): все фазы done (без WARN-статусов) → тяжёлый preflight не нужен ──
+    # T9.17 (B-9, DevPlan 136 W9): НО no-op bootstrap не должен быть слепым — вместо тяжёлого
+    # preflight выполняется ЛЁГКИЙ liveness-probe (docker info, диск, порт). Критический сбой
+    # (docker daemon мёртв) → abort (нода с мёртвым docker = сломанная, no-op маскировал бы).
     all_done = all(phase_is_done(sm.state.steps.get(pv)) for pv in BootstrapPhase.phase_list("init"))
     if all_done:
-        logger.info("[IMP:9][preflight] All init phases done — preflight skipped (D6)")
-        return 0
+        return _run_liveness_probe(sm)
 
     # ── Есть pending/WARN-фазы → выполнить (сохранённый путь node-lifecycle.sh:60-64) ──
     logger.info("[IMP:8][preflight] Running pre-flight checks (pending/WARN phases present)")
@@ -617,6 +691,66 @@ def _maybe_run_preflight(sm: StateMachine) -> int:
 
 
 # endregion FUNC__maybe_run_preflight
+
+
+# region FUNC__run_liveness_probe
+## @purpose  Lightweight liveness probe for no-op bootstrap (T9.17, B-9): все фазы done →
+##           тяжёлый preflight заменяется быстрыми проверками «нода жива»: docker info
+##           (критично) и заполненность диска на platform base (WARN).
+##           Тяжёлые проверки preflight (сети, certs, registry) НЕ выполняются — фазы done,
+##           их состояние верифицируется при следующем реальном деплое/healthcheck.
+## @io       ⇥ sm: StateMachine → ⎋ int (0 = ok/warn, 1 = критический сбой)
+## @complexity O(1) — 1 subprocess (docker info) + 1 statvfs
+## @invariants
+##   - docker info FAIL → IMP:10 + return 1 (abort — нода с мёртвым docker не «ок»)
+##   - Диск на platform base заполнен более чем на 90% → WARN (non-fatal, return 0)
+##   - Non-fatal лог: probe не дублирует тяжёлый preflight (D6-семантика сохранена)
+def _run_liveness_probe(sm: StateMachine) -> int:
+    """Run a lightweight liveness probe when all phases are done (T9.17)."""
+    logger.info(
+        "[IMP:9][liveness] All init phases done — running lightweight liveness probe (T9.17, not full preflight)"
+    )
+    failures = 0
+
+    # ── 1. Docker daemon (критично) ──
+    try:
+        from core.internal.shared import docker_ops
+
+        docker_check = docker_ops.docker_info()
+        if docker_check.returncode == 0:
+            logger.info("[IMP:9][liveness] docker daemon OK")
+        else:
+            logger.error(
+                "[IMP:10][liveness] docker daemon NOT available: %s",
+                (docker_check.stderr or docker_check.stdout).strip()[:200],
+            )
+            failures += 1
+    except Exception as e:  # noqa: EXC — best-effort: probe должен переживать любые сбои проверки
+        logger.error("[IMP:10][liveness] docker info probe error: %s", e)
+        failures += 1
+
+    # ── 2. Диск на platform base (не-fatal WARN) ──
+    try:
+        import shutil
+
+        base = str(platform_remote_base())
+        usage = shutil.disk_usage(base)
+        pct = usage.used / usage.total * 100
+        if pct > 90:
+            logger.warning("[IMP:7][liveness] Disk on %s at %.1f%% — above 90%% (non-fatal)", base, pct)
+        else:
+            logger.info("[IMP:8][liveness] Disk on %s: %.1f%% used (%.1f GiB free)", base, pct, usage.free / 2**30)
+    except OSError as e:
+        logger.warning("[IMP:7][liveness] Disk probe failed (non-fatal): %s", e)
+
+    if failures:
+        logger.error("[IMP:10][liveness] No-op bootstrap ABORTED: %d critical probe(s) failed", failures)
+        return 1
+    logger.info("[IMP:9][liveness] Liveness probe OK — no-op bootstrap continues")
+    return 0
+
+
+# endregion FUNC__run_liveness_probe
 
 
 if __name__ == "__main__":

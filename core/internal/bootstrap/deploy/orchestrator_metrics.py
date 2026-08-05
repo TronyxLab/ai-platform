@@ -36,10 +36,13 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 # ── Constants (paths mirror deploy-modules.sh facade / docker_orchestrator.py) ──
-_HC_DONE_MARKER = "/var/lib/platform/.bootstrap/.hc_done_in_deploy"
+_HC_DONE_MARKER = os.path.join(
+    os.environ.get("PLATFORM_STATE_DIR", "/var/lib/platform/.bootstrap"), ".hc_done_in_deploy"
+)
 _STATUS_METRICS_PATH = "/run/platform/status-metrics.json"
 _STATUS_METRICS_TEMPLATE: dict[str, Any] = {
     "schema_version": 2,
@@ -115,13 +118,21 @@ def status_metrics_json() -> str:
 # region FUNC_hc_marker_path
 ## @purpose  Path of the healthcheck-done marker (pure constant) — signals state_machine.py to
 ##           skip the standalone healthcheck (already ran inside deploy_docker_group).
-## @io       ⇥ None → ⎋ str
+##           T9.19 (B-11, DevPlan 136 W9): маркер per-context (не node-global) — несколько
+##           контекстов на одной ноде не затирают чужие маркеры (деплой context A не должен
+##           подавлять standalone healthcheck context B). Путь = .hc_done_in_deploy.`context`
+##           при заданном CONTEXT; legacy-путь (без суффикса) — для нод без CONTEXT (1:1).
+## @io       ⇥ context: str | None = None (CONTEXT env var; None → legacy-путь) → ⎋ str
 ## @complexity O(1)
 ## @invariants
-##   - Единый источник пути (дедупликация с phases.py hc_done_marker)
-##   - Значение: /var/lib/platform/.bootstrap/.hc_done_in_deploy
-def hc_marker_path() -> str:
-    """Return the healthcheck-done marker path (single source of truth)."""
+##   - Единый источник пути (дедупликация с phases/docker.py hc_done_marker — читатель
+##     и писатель обязаны резолвить ОДИНАКОВО, иначе маркер не сработает)
+##   - CONTEXT задан → /var/lib/platform/.bootstrap/.hc_done_in_deploy.`context`
+##   - CONTEXT пуст → /var/lib/platform/.bootstrap/.hc_done_in_deploy (legacy, 1 нода = 1 контекст)
+def hc_marker_path(context: str | None = None) -> str:
+    """Return the healthcheck-done marker path (per-context since T9.19)."""
+    if context:
+        return f"{_HC_DONE_MARKER}.{context}"
     return _HC_DONE_MARKER
 
 

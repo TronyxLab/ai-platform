@@ -22,7 +22,6 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
-from pathlib import Path
 
 # DevPlan 118 C6: единый путь litellm-config.yml — shared/llm_paths (литерал удалён).
 # B3: канонический node-configs base — shared/deploy_paths (литерал /opt/node-configs удалён)
@@ -43,7 +42,7 @@ from core.internal.shared import (
     subprocess_io as helpers_subprocess,  # B4: единый канон (копия lifecycle/helpers удалена)
 )
 from core.internal.shared.docker_compose import nginx_reload as shared_docker_compose_nginx_reload
-from core.internal.shared.timeouts import APT_TIMEOUT
+from core.internal.shared.timeouts import APT_TIMEOUT, DEPLOY_TIMEOUT
 
 
 # region FUNC_phase_registry_auth
@@ -126,7 +125,9 @@ def phase_deploy_services(core_dir: str, node_name: str, node_yaml: str) -> bool
         try:
             helpers_subprocess.run_subprocess(
                 ["bash", deploy_script, "--skip-provision"],
-                timeout=300,
+                # T9.15 (B-12): deploy 14+ модулей может занять >300с (pull + build + healthcheck
+                # per module) — канон DEPLOY_TIMEOUT (600) вместо legacy 300.
+                timeout=DEPLOY_TIMEOUT,
                 check=True,
             )
             logger.info("[IMP:9][phase:deploy_services] Modules deployed successfully")
@@ -260,31 +261,98 @@ def _registry_step_provision_env(core_dir: str) -> bool:
 
 
 # region FUNC__registry_step_nginx_overlays
-## @purpose  E3 sub-step 3 (nginx overlays): reload nginx если есть *.conf в overlay-директории.
+## @purpose  E3 sub-step 3 (nginx overlays): reload nginx ТОЛЬКО при изменении содержимого
+##           overlay-директории (T9.14, B-10). Хэш ВСЕГО содержимого dir (относительные пути +
+##           содержимое файлов — deletions меняют набор путей) сравнивается с маркером
+##           PLATFORM_STATE_DIR/.nginx-overlay-{node}.hash → reload при mismatch.
 ## @io       ⇥ node_name: str → ⎋ bool (True = non-fatal issue occurred)
-## @complexity O(N) where N = overlay .conf files
+## @complexity O(N) где N = overlay файлы (хэш) + 1 reload
 ## @invariants
-##   - Overlay-директории нет / .conf нет → skip (не issue)
+##   - Overlay-директории нет → skip (не issue)
+##   - Хэш учитывает ВСЕ содержимое dir ВКЛЮЧАЯ пустоту: удаление ВСЕХ .conf инвалидирует
+##     хэш → reload применяет удаление vhost'ов (раньше early-return «no .conf» маскировал)
+##   - Первый запуск с пустым overlay → базовый маркер, reload НЕ выполняется
+##   - Содержимое не изменилось → НЕТ reload (no-op; раньше reload был на каждый φ11)
 ##   - Сбой reload → WARN + True (best-effort)
 def _registry_step_nginx_overlays(node_name: str) -> bool:
-    """Deliver nginx overlays + reload sub-step."""
+    """Deliver nginx overlays + reload sub-step (content-hash gated, T9.14)."""
     overlay_dir = str(deploy_paths.node_configs_remote() / node_name / "overlays" / "nginx")
     if not os.path.isdir(overlay_dir):
         logger.info("[IMP:7][phase:registry_update] No overlay directory at %s — skipping", overlay_dir)
         return False
-    conf_files = list(Path(overlay_dir).glob("*.conf"))
-    if not conf_files:
-        logger.info("[IMP:7][phase:registry_update] No .conf files in %s — skipping nginx reload", overlay_dir)
+
+    # ── T9.14: content-hash ВСЕГО содержимого dir (пути + содержимое) — deletions инвалидируют ──
+    import hashlib
+
+    hasher = hashlib.sha256()
+    try:
+        for rel in sorted(os.listdir(overlay_dir)):
+            full = os.path.join(overlay_dir, rel)
+            hasher.update(rel.encode("utf-8"))
+            if os.path.isfile(full):
+                with open(full, "rb") as f:
+                    hasher.update(f.read())
+            hasher.update(b"\0")
+    except OSError as e:
+        logger.warning("[IMP:7][phase:registry_update] Cannot hash overlay dir %s (non-fatal): %s", overlay_dir, e)
+        return True
+    dir_hash = hasher.hexdigest()
+
+    marker = os.path.join(
+        os.environ.get("PLATFORM_STATE_DIR", "/var/lib/platform/.bootstrap"), f".nginx-overlay-{node_name}.hash"
+    )
+    marker_exists = os.path.isfile(marker)
+    previous = ""
+    if marker_exists:
+        try:
+            with open(marker) as f:
+                previous = f.read().strip()
+        except OSError as e:
+            logger.warning("[IMP:7][phase:registry_update] Cannot read overlay hash marker (non-fatal): %s", e)
+
+    # ⚠️ TRAP[BUG] · 2026-08-05 · P1 · удаление ВСЕХ .conf не применялось (B-10, T9.14)
+    # · Symptom: .conf удалён из overlay → early-return «No .conf files» срабатывал ДО hash-проверки
+    # ·   → nginx продолжал обслуживать удалённый vhost; reload не выполнялся.
+    # · Root: пустая директория считалась «нет overlay» (skip) — deletions невидимы.
+    # · Fix: hash по ВСЕМУ содержимому dir (включая пустоту); reload при mismatch ИЗМЕНЁННОГО
+    # ·   состояния (marker_exists); первый запуск с пустым overlay — только базовый маркер.
+    # · Prevention: hash-гейт не должен иметь early-return до сравнения с маркером.
+    if previous == dir_hash:
+        logger.info(
+            "[IMP:8][phase:registry_update] Nginx overlay %s unchanged (hash %s) — reload skipped (T9.14)",
+            node_name,
+            dir_hash[:12],
+        )
         return False
+
+    # Первый запуск с ПУСТЫМ overlay: нечего применять — фиксируем базовый маркер, без reload
+    if not marker_exists and not os.listdir(overlay_dir):
+        try:
+            os.makedirs(os.path.dirname(marker), exist_ok=True)
+            with open(marker, "w") as f:
+                f.write(dir_hash)
+        except OSError as e:
+            logger.warning("[IMP:7][phase:registry_update] Cannot write overlay hash marker (non-fatal): %s", e)
+        logger.info("[IMP:8][phase:registry_update] Empty overlay baseline recorded for %s — no reload", node_name)
+        return False
+
     logger.info(
-        "[IMP:8][phase:registry_update] Found %d overlay(s) in %s — reloading nginx",
-        len(conf_files),
-        overlay_dir,
+        "[IMP:8][phase:registry_update] Overlay %s changed (hash %s → %s) — reloading nginx",
+        node_name,
+        (previous or "-")[:12],
+        dir_hash[:12],
     )
     try:
         # W1 (DevPlan 128): docker exec — shared docker_compose.nginx_reload → docker_ops.docker_exec
         # (non-fatal фасад; best-effort семантика сохраняется)
         shared_docker_compose_nginx_reload("nginx")
+        # ── Обновить маркер ТОЛЬКО после успешного reload ──
+        try:
+            os.makedirs(os.path.dirname(marker), exist_ok=True)
+            with open(marker, "w") as f:
+                f.write(dir_hash)
+        except OSError as e:
+            logger.warning("[IMP:7][phase:registry_update] Cannot write overlay hash marker (non-fatal): %s", e)
         logger.info("[IMP:9][phase:registry_update] Nginx reloaded with overlays")
         return False
     except Exception as e:  # noqa: EXC — non-fatal (best-effort: DEPLOY_BEST_EFFORT policy)
@@ -346,16 +414,22 @@ def _registry_step_llm_provision(core_dir: str) -> bool:
 ## @io       ⇥ node_yaml: str → ⎋ bool (True = non-fatal issue occurred)
 ## @complexity O(M * R) where M = modules, R = retries
 ## @invariants
-##   - .hc_done_in_deploy маркер → skip + unlink (не issue)
+##   - `.hc_done_in_deploy` + суффикс контекста (per-context, T9.19) → skip + unlink (не issue)
 ##   - node.yaml отсутствует → WARN + True
 ##   - Сбой healthchecks → WARN + True (best-effort)
 def _registry_step_healthcheck(node_yaml: str) -> bool:
     """Standalone healthcheck sub-step (skip if already done in deploy)."""
-    hc_done_marker = "/var/lib/platform/.bootstrap/.hc_done_in_deploy"
+    # T9.19 (B-11): маркер per-context (не node-global) — единый источник пути с писателем
+    # (deploy_orchestrator._set_hc_marker → orchestrator_metrics.hc_marker_path). CONTEXT env
+    # задаётся при деплое контекста; деплой context A не подавляет healthcheck context B.
+    from core.internal.bootstrap.deploy.orchestrator_metrics import hc_marker_path as _hc_marker_path
+
+    hc_done_marker = _hc_marker_path(os.environ.get("CONTEXT"))
     if os.path.isfile(hc_done_marker):
         logger.info(
             "[IMP:9][phase:registry_update] Healthcheck already done during deploy "
-            "(DEPLOY_PARALLEL) — skipping standalone healthcheck"
+            "(DEPLOY_PARALLEL, marker %s) — skipping standalone healthcheck",
+            hc_done_marker,
         )
         import contextlib
 
@@ -408,7 +482,8 @@ def phase_deploy_update(core_dir: str, node_name: str, node_yaml: str) -> bool:
         try:
             helpers_subprocess.run_subprocess(
                 ["bash", deploy_script, "--skip-provision"],
-                timeout=300,
+                # T9.15 (B-12): канон DEPLOY_TIMEOUT (600) вместо legacy 300 (см. φ8)
+                timeout=DEPLOY_TIMEOUT,
                 check=True,
             )
             logger.info("[IMP:9][phase:deploy_update] Modules deployed successfully")

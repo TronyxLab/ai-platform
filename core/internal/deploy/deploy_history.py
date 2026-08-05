@@ -14,15 +14,21 @@ DeployHistory — snapshot-based deploy history storage for rollback support.
 ##           at /opt/projects/<name>/.deploy-snapshots/<snapshot_id>.json.
 ## @invariants
 ##   1. Storage path: /opt/projects/<name>/.deploy-snapshots/<snapshot_id>.json
-##   2. Snapshot format: { project, version, timestamp, compose_state, health_status, payload_hash }
-##   3. Retention: keep last 10 snapshots (prune on create)
-##   4. File lock: /var/lock/platform-deploy-{project}.lock via fcntl.flock
+##   2. Snapshot format: { project, version, timestamp, compose_state, health_status, payload_hash,
+##      payload_dir } — payload_dir (T9.8): пред-деплойные payload-файлы для rollback
+##   3. Retention: keep last 10 snapshots (prune on create, под deploy lock — T9.10)
+##   4. File lock: platform_lock_path (shared/file_lock, T9.1): PLATFORM_LOCK_DIR env → иначе
+##      /var/lock/platform-deploy-{project}.lock; reentrant (deploy() уже держит тот же замок)
 ##   5. Snapshot ID: ISO8601 timestamp (second precision)
-##   6. Thread-safe via fcntl.flock on lock file
+##   6. Thread/process-safe via fcntl.flock on lock file; write — атомарный (atomic_writer, T9.10)
 ## @rationale DevPlan 089 DD5: In-memory history lost on VPS restart. File-based snapshots
 ##            survive crashes, enable audit trail, and support version-specific rollback.
 ##            Retention of 10 balances history vs disk (avg snapshot ~5 KB JSON).
+##            DevPlan 136 W9 T9.10 (L-12): create_snapshot писал напрямую (частичная запись при
+##            crash) и prune не был под lock (гонка двух create_snapshot → оба prune друг друга);
+##            payload-бэкап (T9.8) персистится для восстановления payload-файлов при rollback.
 ## @changes 2026-07-30 | DevPlan 089 T6.5 — Created
+## @changes 2026-08-05 | DevPlan 136 W9 T9.8/T9.10 — payload_dir; атомарная запись; flock-прин
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -31,13 +37,23 @@ import json
 import logging
 import os
 import re
+import shutil
 import time
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
+# DevPlan 136 W9 T9.10 (L-12): единый атомарный writer (unique tmp + fsync + replace).
+from core.internal.shared.atomic_writer import atomic_write_json as _atomic_write_json
+
 # B2: канонический дефолт PROJECTS_BASE — shared/deploy_paths (литерал /opt/projects удалён)
 from core.internal.shared.deploy_paths import DEFAULT_PROJECTS_BASE
+
+# DevPlan 136 W9 T9.1/T9.10: канонический flock + путь deploy-замка (shared — deploy-слой
+# НЕ импортирует bootstrap/). Reentrant: deploy() держит lock → create_snapshot → prune
+# берёт тот же замок без дедлока (depth-счётчик в FileLock).
+from core.internal.shared.file_lock import FileLock as _FileLock
+from core.internal.shared.file_lock import platform_lock_path as _platform_lock_path
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +62,8 @@ LOCK_DIR = "/var/lock"
 MAX_SNAPSHOTS = 10
 # DeployHistory-owned snapshot file pattern: <ISO8601-ts>-<8-hex>.json (create_snapshot format)
 _SNAPSHOT_ID_RE = re.compile(r"^\d{8}T\d{6}-[0-9a-f]{8}\.json$")
+# Payload backup dir for a snapshot: payload/<snapshot_id>/ (T9.8/T9.10)
+_PAYLOAD_BACKUP_DIR = "payload"
 
 
 # region CLASS_DeployHistory
@@ -89,7 +107,9 @@ class DeployHistory:
         Returns:
             Path to lock file.
         """
-        return os.path.join(LOCK_DIR, f"platform-deploy-{project}.lock")
+        # T9.1/T9.10: канонический путь — shared/file_lock.platform_lock_path
+        # (PLATFORM_LOCK_DIR env override / /var/lock/platform-deploy-{project}.lock)
+        return _platform_lock_path(project)
 
     def _snapshot_path(self, project: str, snapshot_id: str) -> str:
         """Get the full path for a snapshot file.
@@ -110,6 +130,7 @@ class DeployHistory:
         compose_state: dict | None = None,
         health_status: str = "",
         payload_hash: str = "",
+        payload_backup_dir: str | None = None,
     ) -> str:
         """Create a deploy snapshot.
 
@@ -119,6 +140,8 @@ class DeployHistory:
             compose_state: Docker compose state (containers, images).
             health_status: Health after deploy.
             payload_hash: SHA256 hash of deployed payload.
+            payload_backup_dir: Optional dir with the PREVIOUS payload files (captured before
+                overwrite — T9.8). Copies persisted into payload/<snapshot_id>/ for rollback.
 
         Returns:
             Snapshot ID (ISO8601 timestamp).
@@ -139,27 +162,57 @@ class DeployHistory:
         snap_dir = self._snapshot_dir(project)
         os.makedirs(snap_dir, exist_ok=True)
 
-        # Write snapshot
-        filepath = self._snapshot_path(project, snapshot_id)
+        # T9.10 (L-12): prune + write под reentrant deploy lock (тот же, что T9.1 —
+        # deploy() уже держит его; вне deploy (manual snapshot) — acquire здесь).
+        lock = _FileLock(self._lock_path(project), timeout=30.0)
+        lock.acquire()
         try:
-            with open(filepath, "w") as f:
-                json.dump(snapshot, f, indent=2, default=str)
-            logger.info(
-                "[IMP:9][DeployHistory][create] Created snapshot %s for %s (version=%s)",
-                snapshot_id,
-                project,
-                version,
-            )
-        except OSError as e:
-            logger.error(
-                "[IMP:10][DeployHistory][create] Failed to write snapshot for %s: %s",
-                project,
-                e,
-            )
-            raise
+            # ── T9.8: персист payload-бэкапа (предыдущие payload-файлы) ──
+            payload_dir: str | None = None
+            if payload_backup_dir and os.path.isdir(payload_backup_dir):
+                payload_dir = os.path.join(snap_dir, _PAYLOAD_BACKUP_DIR, snapshot_id)
+                os.makedirs(payload_dir, exist_ok=True)
+                for item in os.listdir(payload_backup_dir):
+                    src = os.path.join(payload_backup_dir, item)
+                    if os.path.isfile(src):
+                        try:
+                            shutil.copy2(src, os.path.join(payload_dir, item))
+                        except OSError as e:
+                            logger.warning(
+                                "[IMP:7][DeployHistory][create] Cannot persist payload backup %s (non-fatal): %s",
+                                src,
+                                e,
+                            )
+                if payload_dir:
+                    snapshot["payload_dir"] = payload_dir
+                    logger.info(
+                        "[IMP:9][DeployHistory][create] Payload backup persisted for %s → %s",
+                        project,
+                        payload_dir,
+                    )
 
-        # Prune old snapshots
-        self._prune_snapshots(project)
+            # Write snapshot — T9.10: atomic (unique tmp + fsync + os.replace), не прямой f.write
+            filepath = self._snapshot_path(project, snapshot_id)
+            try:
+                _atomic_write_json(filepath, snapshot, mode=0o644)
+                logger.info(
+                    "[IMP:9][DeployHistory][create] Created snapshot %s for %s (version=%s)",
+                    snapshot_id,
+                    project,
+                    version,
+                )
+            except OSError as e:
+                logger.error(
+                    "[IMP:10][DeployHistory][create] Failed to write snapshot for %s: %s",
+                    project,
+                    e,
+                )
+                raise
+
+            # Prune old snapshots (под тем же lock — T9.10)
+            self._prune_snapshots(project)
+        finally:
+            lock.release()
 
         return snapshot_id
 
@@ -299,6 +352,10 @@ class DeployHistory:
             while len(files) > MAX_SNAPSHOTS:
                 oldest = files.pop(0)
                 os.remove(os.path.join(snap_dir, oldest))
+                # T9.8/T9.10: payload-бэкап pruned snapshot удаляется вместе с ним
+                payload_dir = os.path.join(snap_dir, _PAYLOAD_BACKUP_DIR, oldest[:-5])  # .json → id
+                if os.path.isdir(payload_dir):
+                    shutil.rmtree(payload_dir, ignore_errors=True)
                 logger.info(
                     "[IMP:8][DeployHistory][prune] Pruned old snapshot: %s (retention=%d)",
                     oldest,

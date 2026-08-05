@@ -141,8 +141,13 @@ def run_healthchecks(node_yaml: str) -> None:
 ## @complexity O(1)
 ## @changes 2026-08-01 | DevPlan 116 B11 T2 (U-10, D1): free-text pipe → shared write_audit_entry;
 ##           единый файл audit.jsonl; warnings/errors — отдельные WARN/ERROR записи
-def write_audit_log(sm: StateMachine) -> None:
-    """Write bootstrap/update audit summary to the unified audit log (JSON-lines, D1)."""
+## @changes 2026-08-05 | DevPlan 136 W9 T9.6 (L-5/L-11): +result param — FAILED-записи из
+##           failure-путей run_init/run_update (audit больше не только в успешном хвосте)
+def write_audit_log(sm: StateMachine, result: str | None = None) -> None:
+    """Write bootstrap/update audit summary to the unified audit log (JSON-lines, D1).
+
+    result="FAILED" → summary status FAILED (failure paths, T9.6); default — DONE/ERROR по errors.
+    """
     from core.internal.shared.audit_logger import write_audit_entry
 
     try:
@@ -150,10 +155,11 @@ def write_audit_log(sm: StateMachine) -> None:
         node = sm.state.node or "unknown"
         warnings_count = len(sm.state.warnings)
         errors_count = len(sm.state.errors)
-        summary = f"bootstrap:{mode} DONE | node={node} | warnings={warnings_count} | errors={errors_count}"
+        summary_status = result if result is not None else ("DONE" if errors_count == 0 else "ERROR")
+        summary = f"bootstrap:{mode} {summary_status} | node={node} | warnings={warnings_count} | errors={errors_count}"
         write_audit_entry(
             tag=f"bootstrap:{mode}",
-            status="DONE" if errors_count == 0 else "ERROR",
+            status=summary_status,
             message=summary,
             node=node,
             warnings_count=warnings_count,
@@ -164,8 +170,9 @@ def write_audit_log(sm: StateMachine) -> None:
         for e in sm.state.errors:
             write_audit_entry(tag=f"bootstrap:{mode}", status="ERROR", message=str(e), node=node)
         logger.info(
-            "[IMP:9][audit] Audit entries written (bootstrap:%s, %d warnings, %d errors)",
+            "[IMP:9][audit] Audit entries written (bootstrap:%s %s, %d warnings, %d errors)",
             mode,
+            summary_status,
             warnings_count,
             errors_count,
         )

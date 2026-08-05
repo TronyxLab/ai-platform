@@ -97,15 +97,20 @@ def install_apt_packages(packages: list[str]) -> None:
 ## @purpose  Install sops (v3.9.4) from GitHub if not present. Non-fatal.
 ## @io       ⇥ None → ⎋ None (side-effect: downloads and installs sops binary)
 ## @complexity O(1)
+## @invariants
+##   - Идемпотентность: sops в PATH (shutil.which) → no-op (БЕЗ re-download)
+##   - Установка non-fatal (best-effort — GitHub может быть недоступен)
+## @changes 2026-08-05 | DevPlan 136 W9 T9.12 (B-4): `/bin/bash -c "command -v sops"` →
+##           shutil.which — `command` это bash-builtin, прямой subprocess.run(["command", ...])
+##           ВСЕГДА FileNotFoundError → sops перекачивался на КАЖДОМ φ1 (B-4: повторный φ1
+##           без re-download нарушался); паттерн TRAP[BUG] state_store._check_command_exists
 def ensure_sops() -> None:
     """Install sops (v3.9.4) from GitHub if not present."""
-    try:
-        result = subprocess.run(["command", "-v", "sops"], capture_output=True, text=True, timeout=10)
-        if result.returncode == 0:
-            logger.info("[IMP:7][sops] Already installed")
-            return
-    except FileNotFoundError:
-        pass
+    import shutil
+
+    if shutil.which("sops"):
+        logger.info("[IMP:7][sops] Already installed (%s)", shutil.which("sops"))
+        return
 
     logger.info("[IMP:8][sops] Installing sops v3.9.4 from GitHub")
     try:
@@ -337,6 +342,37 @@ def _set_storage_persistent(content: str) -> str:
 # endregion FUNC__set_storage_persistent
 
 
+# region FUNC__journald_persistent_active
+## @purpose  Чистая функция: True если в содержимом journald.conf есть АКТИВНАЯ (не
+##           закомментированная) строка `Storage=persistent`. Используется как идемпотентность-гейт.
+## @io       ⇥ content: str → ⎋ bool
+## @complexity O(N) — N строк конфига
+## @invariants
+##   - Комментированная строка (`#Storage=persistent` / `# Storage=persistent`) НЕ считается активной
+##   - Активная `Storage=` с иным значением (например, `Storage=auto`) → False (нужна перезапись)
+##   - Значение сравнивается по active-line: строка начинается (после пробелов) с `Storage=persistent`
+##   ⚠️ TRAP[BUG] · 2026-08-05 · P1 · substring-проверка «Storage=persistent» ловила комментарии
+##   · Symptom: journald.conf с закомментированной строкой `#Storage=persistent` → ensure_journald_persistent
+##   ·   считал конфиг уже настроенным (no-op) → journald оставался volatile (D-1 не закрывался).
+##   · Root: `"Storage=persistent" in content` — substring match не различает активную строку
+##   ·   и комментарий (B-8, DevPlan 136 W9 T9.13).
+##   · Fix: active-line проверка (не substring): строка без ведущих пробелов начинается с
+##   ·   `Storage=persistent` И не начинается с '#'. (backticks — doxygen не резолвит `Storage`)
+##   · Prevention: идемпотентность-гейты конфигов — active-line match, не substring (см. выше).
+def _journald_persistent_active(content: str) -> bool:
+    """Return True if an ACTIVE (non-commented) Storage=persistent line exists."""
+    for line in content.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("Storage=") and stripped == "Storage=persistent":
+            return True
+    return False
+
+
+# endregion FUNC__journald_persistent_active
+
+
 # region FUNC_ensure_journald_persistent
 ## @purpose  Установить Storage=persistent в /etc/systemd/journald.conf (идемпотентно, temp+mv)
 ##           + restart systemd-journald (non-fatal). Закрывает D-1 из 126 (journald → Loki).
@@ -358,8 +394,8 @@ def ensure_journald_persistent() -> bool:
         logger.warning("[IMP:7][journald] Cannot read %s (non-fatal): %s", JOURNALD_CONF, e)
         return False
 
-    if "Storage=persistent" in content:
-        logger.info("[IMP:7][journald] Storage=persistent already set — no-op (idempotent)")
+    if _journald_persistent_active(content):
+        logger.info("[IMP:7][journald] Storage=persistent already set (active line) — no-op (idempotent)")
         return True
 
     try:

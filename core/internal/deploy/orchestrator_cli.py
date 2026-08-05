@@ -66,6 +66,9 @@ from core.internal.deploy.ssh_command_parser import parse_ssh_command
 from core.internal.shared.deploy_paths import platform_remote_base, projects_base
 from core.internal.shared.exceptions import ConfigValidationError, PlatformError
 
+# T9.7 (L-10): валидация project_name в dispatch ДО маршрутизации (канон shared/project_registry)
+from core.internal.shared.project_registry import validate_project_name as _validate_project_name
+
 logger = logging.getLogger(__name__)
 
 # Путь к shell-фасаду verify (языковая политика: тонкая оркестрация shell-фасада допустима)
@@ -249,6 +252,16 @@ def _dispatch(argv: list[str]) -> int:
     orchestrator = DeployOrchestrator()
 
     logger.info("[IMP:9][dispatch][route] verb=%s args=%r", verb, args)
+
+    # ── T9.7 (L-10): validate_project_name ДО маршрутизации для verbs, принимающих проект.
+    # Инъекция `;`/`../` в project_name (SSH_ORIGINAL_COMMAND) отсекается здесь — проект
+    # не должен влиять на path-резолв/команды. Канон — shared/project_registry (U-56).
+    if verb in ("status", "remove", "receive"):
+        project_token = (args or "").split()[0] if (args or "").split() else ""
+        if project_token and not _validate_project_name(project_token):
+            logger.error("[IMP:10][dispatch][invalid_project] Invalid/reserved project name: %r (T9.7)", project_token)
+            print(json.dumps({"status": "ERROR", "error": f"Invalid or reserved project name: {project_token}"}))
+            return 1
 
     # ── ping: vps_readiness CMD_PING (живой потребитель) ──
     if verb == "ping":

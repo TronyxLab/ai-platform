@@ -126,7 +126,8 @@ logger = logging.getLogger(__name__)
 # ── Constants (paths mirror deploy-modules.sh facade / docker_orchestrator.py) ──
 # E6: единственные источники констант — orchestrator_metrics.py (чистые функции).
 # Локальные копии _HC_DONE_MARKER/_STATUS_METRICS_TEMPLATE УДАЛЕНЫ (дубли).
-_HC_DONE_MARKER = _metrics_hc_marker_path()
+# Маркер резолвится В CALL-TIME через _metrics_hc_marker_path(os.environ.get("CONTEXT")) —
+# import-time константа убрана (T9.19: per-context путь зависит от env на момент деплоя).
 _STATUS_METRICS_PATH = "/run/platform/status-metrics.json"
 # C5 (DevPlan 118): сборка bash -c делегирована в shared/module_interface.invoke — локальные
 # константы путей (paths.sh/module-interface.sh) УДАЛЕНЫ (единый источник в shared).
@@ -881,10 +882,11 @@ def _compute_exit_code(crit: int, warn: int, deployed: int) -> int:
 
 
 # region FUNC__set_hc_marker
-## @purpose  Touch /var/lib/platform/.bootstrap/.hc_done_in_deploy — signals state_machine.py to skip
+## @purpose  Touch the healthcheck-done marker — signals state_machine.py to skip
 ##           the standalone healthcheck (healthcheck already ran inside deploy_docker_group).
 ##           HC_DONE_MARKER always set (DEPLOY_BEST_EFFORT policy — healthcheck был выполнен
-##           внутри деплоя даже при частичных сбоях). Путь маркера — orchestrator_metrics (E6).
+##           внутри деплоя даже при частичных сбоях). Путь маркера — orchestrator_metrics (E6);
+##           T9.19 (B-11): per-context (CONTEXT env) — см. hc_marker_path(context).
 ## @io       ⇥ None → ⎋ None (side-effect: marker file)
 ## @complexity 1 — mkdir + touch with graceful failure
 def _set_hc_marker() -> None:
@@ -893,14 +895,13 @@ def _set_hc_marker() -> None:
     Поведение определяется политикой DEPLOY_BEST_EFFORT (shared/contracts.py, U-39):
     маркер ставится всегда — healthcheck уже выполнен внутри deploy_docker_group.
     """
+    marker_path = _metrics_hc_marker_path(os.environ.get("CONTEXT"))
     try:
-        os.makedirs(os.path.dirname(_HC_DONE_MARKER), exist_ok=True)
-        Path(_HC_DONE_MARKER).touch(exist_ok=True)
-        logger.info(
-            "[IMP:9][_set_hc_marker][done] Created %s — standalone healthcheck will be skipped", _HC_DONE_MARKER
-        )
+        os.makedirs(os.path.dirname(marker_path), exist_ok=True)
+        Path(marker_path).touch(exist_ok=True)
+        logger.info("[IMP:9][_set_hc_marker][done] Created %s — standalone healthcheck will be skipped", marker_path)
     except OSError as exc:
-        logger.warning("[IMP:7][_set_hc_marker][warn] Cannot create marker %s: %s", _HC_DONE_MARKER, exc)
+        logger.warning("[IMP:7][_set_hc_marker][warn] Cannot create marker %s: %s", marker_path, exc)
 
 
 # endregion FUNC__set_hc_marker

@@ -11,16 +11,23 @@
 ##           DeployOrchestrator/LocalChannel — избегают circular import (orchestrator → receive_flow).
 ## @invariants
 ##   - Пустой stdin → JSON-ошибка + exit 1 (fail-fast, БЕЗ || true-масок)
+##   - Payload > MAX_PAYLOAD_BYTES (env PLATFORM_MAX_PAYLOAD_BYTES, default 1GiB) → reject
+##     ДО распаковки (T9.9: потоковое чтение, лимит по ходу, не после)
 ##   - ai-platform.yaml отсутствует → JSON-ошибка + exit 1 (fail-fast)
 ##   - project_name из аргументов (валидируется validate_project_name + verb-reserve U-56);
 ##     фолбэк на ai-platform.yaml `name` — ТОЛЬКО для локальных/ручных вызовов без аргументов
 ##   - version ТОЛЬКО из аргументов (D5 sha-pinning); service = project_name
 ##   - Деплой через LocalChannel (payload уже извлечён — TRAP[DECISION] 2026-07-31)
+##   - Атомарная замена payload (T9.8): staging-copy → per-file os.replace — сбой не оставляет
+##     частично перезаписанных файлов; существующие payload-файлы бэкапятся в payload_backup_dir
+##     (metadata) → rollback восстанавливает payload, не только compose (L-6)
 ##   - Пост-деплой цепочка best-effort (сбой → WARN, деплой НЕ фейлится)
 ## @rationale DevPlan 119 E2 (AUDIT-2 M2): receive() CC=15 в монолите orchestrator.py (1157 LOC).
 ##           Вынос в ReceiveFlow (unpack/validate/deploy) снижает CC до ≤8 на метод и даёт
 ##           изолированное тестирование (R5: test_orchestrator_receive_flow_parity).
+##           DevPlan 136 W9 T9.8 (L-6)/T9.9 (L-7): атомарность staging + размерный лимит.
 ## @changes  2026-08-02 · DevPlan 119 E2 — экстракция из DeployOrchestrator.receive()
+## @changes  2026-08-05 · DevPlan 136 W9 T9.8/T9.9 — atomic staging + payload backup; MAX_PAYLOAD_BYTES
 ## @modulemap
 ##   ReceiveFlow.unpack [W:2] — tar.gz → staging (filter="data", tarfile)
 ##   ReceiveFlow.validate [W:3] — ai-platform.yaml parse + project name resolve/validate
@@ -48,6 +55,43 @@ from typing import Any
 from core.internal.shared.exceptions import ConfigValidationError
 
 logger = logging.getLogger(__name__)
+
+# ── T9.9 (L-7, DevPlan 136 W9): лимит размера payload из stdin. Env-конфигурируемый,
+# default 1 GiB. Потоковое чтение (chunked) — reject при превышении ДО распаковки.
+MAX_PAYLOAD_BYTES = int(os.environ.get("PLATFORM_MAX_PAYLOAD_BYTES", str(1024**3)))
+_READ_CHUNK_BYTES = 1024 * 1024  # 1 MiB per chunk
+
+
+def _read_stdin_limited() -> bytes | None:
+    """Stream sys.stdin.buffer up to MAX_PAYLOAD_BYTES. Returns None if the limit is exceeded.
+
+    ▶ ┌stdin┐ → ○ read chunk (1 MiB) → ◇ total > MAX? → ⎋ None (reject) → ⊕ accumulate → ⎋ bytes
+
+    ## @purpose — T9.9: потоковое чтение без загрузки всего stdin в память заранее; лимит
+    ##            применяется по ходу чтения (не после) — гигантский payload не читается целиком.
+    ## @io — ⇥ None → ⎋ bytes | None (None = превышен MAX_PAYLOAD_BYTES)
+    ## @complexity O(N) где N = прочитанные байты (≤ MAX_PAYLOAD_BYTES + chunk)
+    ## @invariants
+    ##   - Читает chunk-ами, а не одним .read() — память ограничена chunk'ом на шаг
+    ##   - total > MAX_PAYLOAD_BYTES → None (reject; вызывающий печатает JSON-ошибку, exit 1)
+    ##   - Чистый EOF ДО лимита → объединённые байты
+    """
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = sys.stdin.buffer.read(_READ_CHUNK_BYTES)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > MAX_PAYLOAD_BYTES:
+            logger.error(
+                "[IMP:10][ReceiveFlow][read] Payload exceeds MAX_PAYLOAD_BYTES=%d (got >%d bytes) — rejecting (T9.9)",
+                MAX_PAYLOAD_BYTES,
+                total,
+            )
+            return None
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 # region CLASS_ReceiveFlow
@@ -141,47 +185,79 @@ class ReceiveFlow:
     def deploy(
         self, project: str, service: str, version: str, staging: str, target_dir: str, base: str | None = None
     ) -> Any:
-        """Copy payload + deploy via LocalChannel. Returns OrchestratorDeployResult."""
+        """Copy payload + deploy via LocalChannel. Returns OrchestratorDeployResult.
+
+        T9.8 (L-6): атомарная замена payload (staging-copy → per-file os.replace) + бэкап
+        существующих payload-файлов (payload_backup_dir в metadata) — rollback восстанавливает
+        их, а не только compose (см. DeployOrchestrator._rollback_deploy).
+        """
         from core.internal.deploy.channels import LocalChannel
         from core.internal.deploy.orchestrator import DeployOrchestrator
 
         os.makedirs(target_dir, exist_ok=True)
-        for item in Path(staging).iterdir():
-            if item.is_file():
-                dest = os.path.join(target_dir, item.name)
-                # Bootstrap-стуб (context_deployer φ8, GENERATED-STUB) может быть
-                # root-owned — receive обязан перезаписать payload: удаляем существующий
-                # файл (каталог ci-deploy-writable → os.remove работает). Pre-existing:
-                # Permission denied при overwrite root-файла (fresh bootstrap → CI receive).
-                if os.path.lexists(dest):
-                    try:
-                        os.remove(dest)
-                    except OSError:
-                        logger.warning(
-                            "[IMP:7][ReceiveFlow][deploy] Cannot remove existing %s — copy will surface the error",
-                            dest,
-                        )
-                shutil.copy2(str(item), dest)
+        staging_files = [p for p in Path(staging).iterdir() if p.is_file()]
 
-        # 🧐 TRAP[DECISION] · 2026-07-31 · HI · receive() local delivery channel
-        # · Rejected: SCPChannel() with empty metadata (bug — deliver() always FAILED:
-        #   "SCPChannel requires 'host' in payload.metadata"; the payload is already
-        #   extracted to target_dir, so a transport hop is meaningless)
-        # · Reason: LocalChannel is a no-op delivery preserving the full pipeline
-        # · Rev: if receive() ever needs to ship payload to a THIRD host, switch channels.
-        local_channel = LocalChannel()
-        orchestrator = DeployOrchestrator(projects_base=base or self.projects_base or "")
-        result = orchestrator.deploy(
-            project_name=project,
-            channel=local_channel,
-            version=version,
-            service=service,
-            project_dir=target_dir,
-        )
-        # D5: version (sha) попадает в OrchestratorDeployResult JSON
-        result.version = version
-        logger.info("[IMP:9][ReceiveFlow][deploy] Deploy result: %s", result.status.value)
-        return result
+        # ── T9.8: бэкап существующих payload-файлов ДО overwrite (для rollback) ──
+        backup_dir = tempfile.mkdtemp(prefix="payload-backup-", dir=target_dir)
+        for item in staging_files:
+            dest = os.path.join(target_dir, item.name)
+            if os.path.isfile(dest):
+                try:
+                    shutil.copy2(dest, os.path.join(backup_dir, item.name))
+                except OSError as e:
+                    logger.warning("[IMP:7][ReceiveFlow][deploy] Cannot backup existing %s (non-fatal): %s", dest, e)
+
+        try:
+            # ── T9.8: атомарная замена — staging-copy → per-file os.replace (rename) ──
+            # Раньше файлы копировались из staging напрямую в target: сбой на середине
+            # оставлял частично перезаписанные файлы. os.replace атомарен на POSIX
+            # (читатель видит старый ИЛИ новый файл, не обрезанный).
+            staging_copy = tempfile.mkdtemp(prefix="payload-stage-", dir=target_dir)
+            try:
+                for item in staging_files:
+                    shutil.copy2(str(item), os.path.join(staging_copy, item.name))
+                for item in Path(staging_copy).iterdir():
+                    if not item.is_file():
+                        continue
+                    dest = os.path.join(target_dir, item.name)
+                    # Bootstrap-стуб (context_deployer φ8, GENERATED-STUB) может быть root-owned —
+                    # os.replace (rename) работает по правам ДИРЕКТОРИИ (ci-deploy-writable):
+                    # удаляем существующий файл как legacy-путь (D11) + WARN при неудаче.
+                    if os.path.lexists(dest):
+                        try:
+                            os.remove(dest)
+                        except OSError:
+                            logger.warning(
+                                "[IMP:7][ReceiveFlow][deploy] Cannot remove existing %s — os.replace will surface the error",
+                                dest,
+                            )
+                    os.replace(str(item), dest)
+            finally:
+                shutil.rmtree(staging_copy, ignore_errors=True)
+
+            # 🧐 TRAP[DECISION] · 2026-07-31 · HI · receive() local delivery channel
+            # · Rejected: SCPChannel() with empty metadata (bug — deliver() always FAILED:
+            #   "SCPChannel requires 'host' in payload.metadata"; the payload is already
+            #   extracted to target_dir, so a transport hop is meaningless)
+            # · Reason: LocalChannel is a no-op delivery preserving the full pipeline
+            # · Rev: if receive() ever needs to ship payload to a THIRD host, switch channels.
+            local_channel = LocalChannel()
+            orchestrator = DeployOrchestrator(projects_base=base or self.projects_base or "")
+            result = orchestrator.deploy(
+                project_name=project,
+                channel=local_channel,
+                version=version,
+                service=service,
+                project_dir=target_dir,
+                # T9.8: бэкап предыдущих payload-файлов — rollback восстановит их из snapshot
+                metadata={"payload_backup_dir": backup_dir},
+            )
+            # D5: version (sha) попадает в OrchestratorDeployResult JSON
+            result.version = version
+            logger.info("[IMP:9][ReceiveFlow][deploy] Deploy result: %s", result.status.value)
+            return result
+        finally:
+            shutil.rmtree(backup_dir, ignore_errors=True)
 
     # endregion FUNC_deploy
 
@@ -198,8 +274,19 @@ class ReceiveFlow:
         """Run the full receive flow. Returns exit code {0,1}."""
         logger.info("[IMP:9][ReceiveFlow][run] Receiving deploy payload via stdin (version=%s)", version)
 
-        # Read tar from stdin — пустой stdin → fail-fast (БЕЗ || true-масок)
-        tar_bytes = sys.stdin.buffer.read()
+        # Read tar from stdin — T9.9: потоковое чтение с лимитом MAX_PAYLOAD_BYTES
+        # (пустой stdin → fail-fast; превышение лимита → reject ДО распаковки).
+        tar_bytes = _read_stdin_limited()
+        if tar_bytes is None:
+            print(
+                json.dumps(
+                    {
+                        "status": "FAILED",
+                        "error": f"Payload exceeds MAX_PAYLOAD_BYTES ({MAX_PAYLOAD_BYTES} bytes) — rejected (T9.9)",
+                    }
+                )
+            )
+            return 1
 
         staging = tempfile.mkdtemp(prefix="deploy-receive-")
         try:

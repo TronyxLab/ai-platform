@@ -29,6 +29,7 @@ from __future__ import annotations
 import abc
 import logging
 import os
+import shlex
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -233,8 +234,10 @@ class SCPChannel(DeliveryChannel):
         remote = f"{user}@{host}" if user else host
         target = f"{remote}:{remote_dir}/{payload.project_name}/"
 
-        # Ensure remote dir exists
-        ssh_cmd = ["ssh", *self.ssh_opts, remote, f"mkdir -p {remote_dir}/{payload.project_name}"]
+        # Ensure remote dir exists — T9.7 (L-8): project_name в SSH-команде через shlex.quote
+        # (инъекция `;`/`&&` в имени проекта не должна выполнить произвольную команду на хосте)
+        mkdir_remote_cmd = f"mkdir -p {shlex.quote(remote_dir)}/{shlex.quote(payload.project_name)}"
+        ssh_cmd = ["ssh", *self.ssh_opts, remote, mkdir_remote_cmd]
         logger.info(
             "[IMP:8][SCPChannel][deliver] Creating remote dir %s/%s on %s",
             remote_dir,
@@ -273,8 +276,10 @@ class SCPChannel(DeliveryChannel):
             duration = time.monotonic() - start
 
             if rsync_result.returncode == 0:
-                # Run remote-cmd.sh unpack if available
-                unpack_script = f"{remote_dir}/{payload.project_name}/remote-cmd.sh unpack {payload.project_name}"
+                # Run remote-cmd.sh unpack if available — T9.7: shlex.quote(project_name)
+                unpack_script = (
+                    f"{remote_dir}/{payload.project_name}/remote-cmd.sh unpack {shlex.quote(payload.project_name)}"
+                )
                 subprocess.run(
                     ["ssh", *self.ssh_opts, remote, unpack_script],
                     capture_output=True,
@@ -417,8 +422,10 @@ class ForcedCommandChannel(DeliveryChannel):
         remote_user = f"{user}@{host}" if user else host
         # DevPlan 116 B1 T2 (D1): verb-форма — SSH_ORIGINAL_COMMAND для forced-command диспетчера.
         # Версия из payload.version (D5): CI шлёт receive <project> <sha>.
+        # T9.7 (L-8): project_name/version в SSH-команде через shlex.quote — инъекция `;`/`../`
+        # в project_name не должна выполнить команду на VPS (защита ДО validate на стороне receive).
         version = payload.version or "latest"
-        remote_cmd = f"receive {payload.project_name} {version}"
+        remote_cmd = f"receive {shlex.quote(payload.project_name)} {shlex.quote(version)}"
 
         # Build SSH command with piped tar
         ssh_cmd = [

@@ -33,6 +33,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -56,6 +57,15 @@ from core.internal.shared.audit_logger import write_audit_entry as _shared_write
 # прямые вызовы docker compose ps/down из DeployOrchestrator удалены (импорты ниже не нужны).
 from core.internal.shared.deploy_paths import platform_remote_base, projects_base
 from core.internal.shared.exceptions import PlatformError
+
+# DevPlan 136 W9 T9.1 (L-1/L-9/L-12): flock deploy lock per project. shared/ — deploy-слой
+# НЕ импортирует bootstrap/ (инвариант core/AGENTS.md); lifecycle/lock.py — bootstrap-фасад.
+from core.internal.shared.file_lock import FileLock as _FileLock
+from core.internal.shared.file_lock import FileLockError as _FileLockError
+from core.internal.shared.file_lock import platform_lock_path as _platform_lock_path
+
+# DevPlan 136 W9 T9.7 (L-10): validate_project_name в _prepare_deploy (до deliver).
+from core.internal.shared.project_registry import validate_project_name as _validate_project_name
 
 logger = logging.getLogger(__name__)
 
@@ -329,20 +339,76 @@ class DeployOrchestrator:
             dry_run,
         )
 
-        # ── Step 1: _prepare (validate + dry-run + payload assembly) ──
-        payload, failure = self._prepare_deploy(
-            project_name, channel, version, service, project_dir, metadata, dry_run, start
-        )
-        if failure is not None:
-            return failure
+        # ── Step 0: concurrent guard (T9.1, L-1/L-9/L-12) — flock per project, non-blocking ──
+        # Retry double-deploy / параллельный deploy того же проекта → явный FAILED «locked by PID X»,
+        # а не параллельное исполнение compose-операций. Stale-блокировки невозможны (kernel-managed flock).
+        lock = _FileLock(_platform_lock_path(project_name), timeout=0.0)
+        try:
+            lock.acquire()
+        except _FileLockError as e:
+            logger.error("[IMP:10][DeployOrchestrator][deploy] Concurrent deploy blocked for %s: %s", project_name, e)
+            self.audit_logger.log(
+                operation="deploy",
+                project=project_name,
+                channel=channel.__class__.__name__,
+                result="FAILED",
+                duration_s=time.monotonic() - start,
+                error=str(e),
+            )
+            return self._result(
+                DeployStatus.FAILED,
+                project_name,
+                channel.__class__.__name__,
+                error_info=f"Concurrent deploy blocked: {e}",
+                duration_s=time.monotonic() - start,
+            )
 
-        # ── Step 2: _apply (deliver + compose up) ──
-        apply_result = self._apply_deploy(project_name, channel, version, service, project_dir, payload, start)
-        if apply_result is not None:
-            return apply_result
+        try:
+            # ── Step 1: _prepare (validate + dry-run + payload assembly) ──
+            payload, failure = self._prepare_deploy(
+                project_name, channel, version, service, project_dir, metadata, dry_run, start
+            )
+            if failure is not None:
+                return failure
 
-        # ── Step 3: _verify (healthcheck + snapshot + audit) ──
-        return self._verify_deploy(project_name, channel, version, project_dir, start)
+            # ── Step 2: _apply (deliver + compose up) ──
+            apply_result = self._apply_deploy(project_name, channel, version, service, project_dir, payload, start)
+            if apply_result is not None:
+                return apply_result
+
+            # ── Step 3: _verify (healthcheck + snapshot + audit) ──
+            # T9.6 (L-11): исключение в verify (snapshot OSError и т.п.) — audit FAILED + результат,
+            # не молчаливый проброс без audit-следа.
+            try:
+                return self._verify_deploy(
+                    project_name,
+                    channel,
+                    version,
+                    project_dir,
+                    start,
+                    payload_backup_dir=metadata.get("payload_backup_dir"),
+                )
+            except (OSError, subprocess.SubprocessError) as e:
+                logger.error(
+                    "[IMP:10][DeployOrchestrator][deploy] Verify failed for %s: %s (auditing FAILED)", project_name, e
+                )
+                self.audit_logger.log(
+                    operation="deploy",
+                    project=project_name,
+                    channel=channel.__class__.__name__,
+                    result="FAILED",
+                    duration_s=time.monotonic() - start,
+                    error=str(e),
+                )
+                return self._result(
+                    DeployStatus.FAILED,
+                    project_name,
+                    channel.__class__.__name__,
+                    error_info=f"Deploy verify failed: {e}",
+                    duration_s=time.monotonic() - start,
+                )
+        finally:
+            lock.release()
 
     # endregion FUNC_deploy
 
@@ -375,6 +441,18 @@ class DeployOrchestrator:
                 project_name,
                 "",
                 error_info="Project name is required",
+                duration_s=time.monotonic() - start,
+            )
+
+        # ── T9.7 (L-10): validate_project_name ДО deliver — инъекция `;`/`../` в project_name
+        # отсекается ДО маршрутизации/доставки (канон — shared/project_registry, verb-reserve U-56) ──
+        if not _validate_project_name(project_name):
+            logger.error("[IMP:10][DeployOrchestrator][prepare] Invalid/reserved project name: %r (T9.7)", project_name)
+            return None, self._result(
+                DeployStatus.FAILED,
+                project_name,
+                channel.__class__.__name__,
+                error_info=f"Invalid or reserved project name: {project_name}",
                 duration_s=time.monotonic() - start,
             )
 
@@ -463,7 +541,12 @@ class DeployOrchestrator:
                     "[IMP:9][DeployOrchestrator][deploy] Compose failed — attempting rollback for %s",
                     project_name,
                 )
-                return self._rollback_deploy(project_name, channel, service, project_dir, snapshot, start)
+                # T9.8 (L-6): payload-бэкап (предыдущие payload-файлы, снят ДО overwrite в
+                # receive_flow) передаётся в rollback — восстанавливаются НЕ только compose/image.
+                payload_backup_dir = payload.metadata.get("payload_backup_dir")
+                return self._rollback_deploy(
+                    project_name, channel, service, project_dir, snapshot, start, payload_backup_dir=payload_backup_dir
+                )
 
             self.audit_logger.log(
                 operation="deploy",
@@ -490,6 +573,7 @@ class DeployOrchestrator:
     ## @invariants
     ##   - Healthcheck status "healthy" → DEPLOYED, иначе PARTIAL
     ##   - Snapshot создаётся после healthcheck (содержит post-deploy health)
+    ##   - payload_backup_dir (T9.8) персистится в snapshot (rollback восстанавливает payload)
     def _verify_deploy(
         self,
         project_name: str,
@@ -497,6 +581,7 @@ class DeployOrchestrator:
         version: str,
         project_dir: str,
         start: float,
+        payload_backup_dir: str | None = None,
     ) -> OrchestratorDeployResult:
         """Healthcheck + snapshot + audit (E2 step VERIFY)."""
         health = self.healthcheck_poller.poll_until_healthy(project_name, project_dir)
@@ -508,6 +593,7 @@ class DeployOrchestrator:
             project=project_name,
             version=version,
             health_status=healthcheck_status,
+            payload_backup_dir=payload_backup_dir,
         )
 
         result_status = DeployStatus.DEPLOYED if healthcheck_status == "healthy" else DeployStatus.PARTIAL
@@ -540,10 +626,12 @@ class DeployOrchestrator:
     # endregion FUNC__verify_deploy
 
     # region FUNC__rollback_deploy
-    ## @purpose  E2 deploy step 4 (ROLLBACK): restore compose from snapshot after failed apply.
-    ## @io       ⇥ (project, channel, service, project_dir, snapshot, start) → ⎋ OrchestratorDeployResult
-    ## @complexity — O(1) — rollback compose + audit
+    ## @purpose  E2 deploy step 4 (ROLLBACK): restore payload files (T9.8) + compose from
+    ##           snapshot after failed apply.
+    ## @io       ⇥ (project, channel, service, project_dir, snapshot, start, payload_backup_dir) → ⎋ OrchestratorDeployResult
+    ## @complexity — O(F + 1) — F payload-файлов + rollback compose + audit
     ## @invariants
+    ##   - payload_backup_dir (предыдущие payload-файлы, снят до overwrite) → restore ДО compose
     ##   - Rollback успешен → ROLLED_BACK, иначе FAILED
     def _rollback_deploy(
         self,
@@ -553,8 +641,18 @@ class DeployOrchestrator:
         project_dir: str,
         snapshot: dict[str, Any],
         start: float,
+        payload_backup_dir: str | None = None,
     ) -> OrchestratorDeployResult:
-        """Rollback compose after failed deploy (E2 step ROLLBACK)."""
+        """Rollback payload + compose after failed deploy (E2 step ROLLBACK)."""
+        # T9.8 (L-6): rollback восстанавливает payload-файлы из бэкапа (не только compose).
+        # Бэкап снят ДО overwrite в receive_flow — содержит предыдущие (рабочие) файлы.
+        if payload_backup_dir:
+            restored = self._restore_payload_files(payload_backup_dir, project_dir)
+            if restored:
+                logger.info(
+                    "[IMP:9][DeployOrchestrator][rollback] Payload files restored from backup %s (T9.8)",
+                    payload_backup_dir,
+                )
         rollback_ok = self._rollback_compose(project_dir, service, snapshot)
         rollback_status = "ROLLED_BACK" if rollback_ok else "FAILED"
         self.audit_logger.log(
@@ -680,6 +778,17 @@ class DeployOrchestrator:
 
         project_dir = os.path.join(self.projects_base, project_name)
         service = project_name
+
+        # T9.8 (L-6): payload-файлы из snapshot (payload_dir — пред-деплойный бэкап) восстанавливаются
+        # ДО compose-rollback: сломанный payload (compose/ai-platform.yaml) заменяется рабочим.
+        snapshot_payload_dir = snapshot.get("payload_dir")
+        if snapshot_payload_dir and os.path.isdir(snapshot_payload_dir):
+            restored = self._restore_payload_files(snapshot_payload_dir, project_dir)
+            if restored:
+                logger.info(
+                    "[IMP:9][DeployOrchestrator][rollback] Payload files restored from snapshot %s (T9.8)",
+                    snapshot.get("snapshot_id"),
+                )
 
         rollback_ok = self._rollback_compose(project_dir, service, snapshot)
 
@@ -1062,6 +1171,52 @@ class DeployOrchestrator:
             logger.error("[IMP:10][DeployOrchestrator][deploy_compose] Failed: %s", e)
             return False
 
+    # region FUNC__restore_payload_files
+    ## @purpose  Restore payload files from a backup dir into the project dir (T9.8, L-6).
+    ##           Используется при rollback: (а) deploy-failure — из metadata payload_backup_dir
+    ##           (бэкап снят ДО overwrite в receive_flow), (б) manual rollback — из snapshot payload_dir.
+    ## @io       ⇥ backup_dir: str (директория с сохранёнными payload-файлами), target_dir: str → ⎋ bool
+    ## @complexity O(F) где F = файлов в backup
+    ## @invariants
+    ##   - Копирует ВСЕ файлы backup (compose/ai-platform.yaml/.env.platform) поверх target
+    ##   - Файл не читается (OSError) → WARN, restore считается неуспешным (False)
+    ##   - Не-fatal для общего rollback-флоу: сбой restore НЕ блокирует compose-rollback
+    def _restore_payload_files(self, backup_dir: str, target_dir: str) -> bool:
+        """Copy payload files from a backup dir into the project dir (T9.8)."""
+        try:
+            os.makedirs(target_dir, exist_ok=True)
+            restored = 0
+            for item in os.listdir(backup_dir):
+                src = os.path.join(backup_dir, item)
+                if not os.path.isfile(src):
+                    continue
+                dest = os.path.join(target_dir, item)
+                if os.path.lexists(dest):
+                    try:
+                        os.remove(dest)
+                    except OSError as e:
+                        logger.warning(
+                            "[IMP:7][DeployOrchestrator][restore_payload] Cannot remove %s (non-fatal): %s", dest, e
+                        )
+                shutil.copy2(src, dest)
+                restored += 1
+            logger.info(
+                "[IMP:9][DeployOrchestrator][restore_payload] Restored %d payload file(s) → %s", restored, target_dir
+            )
+            return True
+        except OSError as e:
+            logger.error("[IMP:10][DeployOrchestrator][restore_payload] Payload restore failed: %s", e)
+            return False
+
+    # endregion FUNC__restore_payload_files
+
+    # region FUNC__rollback_compose
+    ## @purpose  Rollback compose to a previous snapshot state.
+    ## @io       ⇥ project_dir: str, service: str, snapshot: dict[str, Any] → ⎋ bool
+    ## @complexity — O(1) — single docker compose deploy of previous image
+    ## @invariants
+    ##   - previous_image из compose_state re-tag → docker compose deploy
+    ##   - PlatformError/OSError/SubprocessError → False (audit пишет FAILED в _rollback_deploy)
     def _rollback_compose(self, project_dir: str, service: str, snapshot: dict[str, Any]) -> bool:
         """Rollback compose to a previous snapshot state.
 
@@ -1097,6 +1252,8 @@ class DeployOrchestrator:
         except (OSError, subprocess.SubprocessError) as e:
             logger.error("[IMP:10][DeployOrchestrator][rollback_compose] Failed: %s", e)
             return False
+
+    # endregion FUNC__rollback_compose
 
     def _result(
         self,

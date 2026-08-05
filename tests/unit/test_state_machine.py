@@ -145,18 +145,20 @@ def test_load_existing_state(caplog, state_file):
     logger.critical("[IMP:9][test] StateMachine loaded existing state (name-based keys) — OK")
 
 
-# 🧪 TRAP[TEST] · Regression · StateMachine handles corrupt state file gracefully
-# · Scenario: State file has invalid JSON → __init__ creates fresh state and logs WARN
-# · Last fail: N/A (new test)
-# · Remove if: corrupt state handling changes
+# 🧪 TRAP[TEST] · REGRESSION (R5 negative) · T9.2 — коррапт state.json → ЯВНАЯ ошибка (не fresh state)
+# · Scenario: State file has invalid JSON → StateMachine.__init__ raises PlatformFatalError
+# · Last fail: 2026-08-05 — load_state молча возвращал свежий state (L-2/B-2: потеря checkpoint'ов
+#   тихо, node-update начинал всё заново; DevPlan 136 W9 T9.2)
+# · Remove if: corrupt state handling changes (T9.2 контракт — explicit error, NOT fresh)
 @ldd_trajectory
 def test_load_corrupt_state(caplog, state_file):
-    """StateMachine should create fresh state on corrupt JSON."""
+    """T9.2: StateMachine raises PlatformFatalError on corrupt JSON (NOT fresh state)."""
+    from core.internal.shared.exceptions import PlatformFatalError
+
     state_file.write_text("{invalid json...}")
-    m = sm.StateMachine(state_file_path=str(state_file))
-    assert m.state.mode == "init"
-    assert m.state.current_step == 0
-    logger.critical("[IMP:9][test] StateMachine handled corrupt state — OK")
+    with pytest.raises(PlatformFatalError, match="corrupt"):
+        sm.StateMachine(state_file_path=str(state_file))
+    logger.critical("[IMP:9][test] Corrupt state raises explicit PlatformFatalError — OK (T9.2)")
 
 
 # 🧪 TRAP[TEST] · REGRESSION (R5 negative) · setup_state node-switch сбрасывает фазы
@@ -1220,10 +1222,14 @@ def test_phase_is_done_contract(caplog):
 # 🧪 TRAP[TEST] · 2026-08-01 · Regression: D6 — preflight пропускается при всех done-фазах
 # · Scenario: _maybe_run_preflight при всех фазах done → [IMP:9] skip, preflight.py НЕ вызывается
 # · Last fail: preflight выполнялся при каждом init даже при done-состоянии (node-lifecycle.sh:60-64)
+# 🧪 TRAP[TEST] · 2026-08-01 · Regression: D6 — все фазы done → лёгкий liveness-probe (T9.17)
+# · Scenario: _maybe_run_preflight при всех done → тяжёлый preflight НЕ вызывается (D6),
+#   вместо него — лёгкий liveness probe (docker info, T9.17); тяжёлый preflight не запускается
+# · Last fail: N/A (T9.17 — no-op bootstrap был слепым: preflight просто пропускался)
 # · Remove if: preflight решение перенесено обратно в shell
 @ldd_trajectory
 def test_preflight_skipped_when_all_phases_done(caplog, state_file, monkeypatch):
-    """_maybe_run_preflight: все фазы done → skip (D6)."""
+    """_maybe_run_preflight: все фазы done → лёгкий liveness probe (T9.17), НЕ тяжёлый preflight."""
     monkeypatch.delenv("SKIP_PREFLIGHT", raising=False)
     core_dir = Path(state_file).parent
     bootstrap_dir = core_dir / "internal" / "bootstrap"
@@ -1244,14 +1250,17 @@ def test_preflight_skipped_when_all_phases_done(caplog, state_file, monkeypatch)
         "core.internal.bootstrap.lifecycle.cli.subprocess.run",
         lambda *a, **kw: preflight_calls.append(1) or _FakeCompleted(0),
     )
+    # T9.17: docker probe (docker_ops.docker_info) мокается как OK — liveness probe проходит
+    monkeypatch.setattr(
+        "core.internal.shared.docker_ops.docker_info",
+        lambda: _FakeCompleted(0),
+    )
 
     rc = cli._maybe_run_preflight(m)
     assert rc == 0
-    assert len(preflight_calls) == 0, f"preflight не должен вызываться при всех done, calls={preflight_calls}"
-    assert any("preflight skipped" in r.message for r in caplog.records), (
-        "Должен быть [IMP:9] лог 'preflight skipped (D6)'"
-    )
-    logger.critical("[IMP:9][test] preflight skipped при all-done — OK")
+    assert len(preflight_calls) == 0, f"тяжёлый preflight не должен вызываться при всех done, calls={preflight_calls}"
+    assert any("liveness probe" in r.message for r in caplog.records), "Должен быть [IMP:9] лог liveness probe (T9.17)"
+    logger.critical("[IMP:9][test] liveness probe при all-done, тяжёлый preflight не вызван — OK")
 
 
 # 🧪 TRAP[TEST] · 2026-08-01 · Regression: D6 — preflight выполняется при pending-фазах

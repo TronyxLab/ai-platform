@@ -67,6 +67,7 @@ from typing import ClassVar
 
 from core.internal.bootstrap.lifecycle.state_store import (
     BootstrapState,
+    StateCorruptError,
     StepState,
     load_state,
     save_state,
@@ -75,6 +76,7 @@ from core.internal.shared.content_hash import compute_content_hash as _shared_co
 
 # B3: канонический platform base — shared/deploy_paths (литерал /opt/platform удалён)
 from core.internal.shared.deploy_paths import platform_remote_base
+from core.internal.shared.exceptions import PlatformFatalError
 
 logger = logging.getLogger(__name__)
 
@@ -228,6 +230,19 @@ PHASE_STATUS_FAILED = "failed"
 PHASE_STATUS_SKIPPED = "skipped"
 PHASE_STATUS_RUNNING = "running"
 
+# Фазы, инвалидируемые content-hash'ом входов (T9.3, L-4/B-1): потребляют modules/services
+# из node.yaml. Прочие фазы (φ1-φ7, φ9-φ10) от node.yaml modules не зависят — их done не
+# сбрасывается hash'ом (легаси-совместимость + отсутствие лишних перевыполнений).
+_HASH_INVALIDATED_PHASES = frozenset(
+    {
+        BootstrapPhase.DEPLOY_SERVICES,  # φ8 deploy-modules (modules/services)
+        BootstrapPhase.CONVERGE_SERVICES,  # φ8.5 converge
+        BootstrapPhase.REGISTRY_UPDATE,  # φ11 provision/overlays/healthcheck
+        BootstrapPhase.DEPLOY_UPDATE,  # φ12 deploy-modules
+        BootstrapPhase.CONVERGE_UPDATE,  # φ13 converge
+    }
+)
+
 
 def phase_is_done(phase_state) -> bool:
     """Return True if a phase state entry is completed successfully (status == 'done').
@@ -312,11 +327,22 @@ class StateMachine:
     ## @purpose — Initialize state machine: load existing state or create new.
     ## @io — ⇥ state_file_path: Path to JSON state file → ⎋ None
     ## @complexity — O(N) where N = number of steps in existing state
+    ## @invariants
+    ##   - Коррапт state.json → PlatformFatalError (T9.2: явная ошибка; recovery — rm / --force)
     def __init__(self, state_file_path: str = DEFAULT_STATE_FILE) -> None:
         self.state_file = Path(state_file_path)
         self.core_dir: str | None = None
-        # Persistence делегируется state_store.load_state (fresh state на missing/corrupt)
-        self.state = load_state(self.state_file)
+        # Persistence делегируется state_store.load_state (fresh state ТОЛЬКО на missing).
+        # T9.2 (DevPlan 136 W9): коррапт → StateCorruptError → PlatformFatalError с инструкцией.
+        try:
+            self.state = load_state(self.state_file)
+        except StateCorruptError as e:
+            # ⚠️ TRAP[BUG] · 2026-08-05 · HI · коррапт state.json тихо сбрасывался (L-2/B-2)
+            # · Symptom: повреждённый state.json → молчаливый fresh state → фазы перевыполнялись
+            #   или checkpoint'ы терялись без следа (DevPlan 136 W9 T9.2).
+            # · Fix: StateCorruptError → PlatformFatalError; --force (cli.main) удаляет файл.
+            logger.critical("[IMP:10][StateMachine][init] %s", e)
+            raise PlatformFatalError(str(e)) from e
 
     # endregion FUNC___init__
 
@@ -345,6 +371,87 @@ class StateMachine:
         return digest
 
     # endregion FUNC__step_hash
+
+    # region FUNC__phase_input_hash
+    ## @purpose — Compute content hash of phase-relevant INPUTS (DevPlan 136 W9 T9.3, L-4/B-1):
+    ##            modules + services из node.yaml (релевантные поля, НЕ весь файл — риск §9 meta)
+    ##            + lifecycle code (state_machine.py) + phase-агрегатор (phases/__init__.py),
+    ##            чтобы смена кода платформы тоже инвалидировала done-фазу.
+    ##            Hash сохраняется в StepState.hash при успехе фазы (см. cli._mark_phase_success).
+    ## @io — ⇥ phase_value: str → ⎋ str (SHA256 hexdigest)
+    ## @complexity O(N) где N = размер релевантных полей node.yaml
+    ## @invariants
+    ##   - ТОЛЬКО релевантные поля (modules, services) — правка нерелевантного поля (например,
+    ##     ssh_authorized_keys) НЕ инвалидирует deploy-фазы (risk §9: «hash только по релевантным полям»)
+    ##   - node.yaml отсутствует/битый → детерминированный «no-node-yaml» сегмент (не падает)
+    ##   - Включает state_machine.py + phases/__init__.py: обновление платформы перевыполняет
+    ##     deploy-фазы (B-1: update-фазы инвалидируются hash'ом)
+    def _phase_input_hash(self, phase_value: str) -> str:
+        """Hash of phase-relevant inputs (node.yaml modules/services + lifecycle code)."""
+        import hashlib
+
+        hasher = hashlib.sha256()
+        hasher.update(phase_value.encode("utf-8"))
+        node_yaml = os.environ.get("NODE_YAML", "")
+        if node_yaml and os.path.isfile(node_yaml):
+            try:
+                with open(node_yaml, encoding="utf-8") as f:
+                    data = json.load(f)
+                relevant = {"modules": data.get("modules", {}), "services": data.get("services", {})}
+                hasher.update(json.dumps(relevant, sort_keys=True, default=str).encode("utf-8"))
+            except (OSError, json.JSONDecodeError) as e:
+                # Best-effort: битый node.yaml — детерминированный fallback (не фатально на hash-стадии)
+                logger.warning("[IMP:7][_phase_input_hash] Cannot parse %s: %s", node_yaml, e)
+                hasher.update(b"node-yaml-unparseable")
+        else:
+            hasher.update(b"no-node-yaml")
+        # Код-инвалидация: состояние lifecycle-оркестратора (изменение платформы → re-run)
+        code_path = os.path.abspath(__file__)
+        try:
+            with open(code_path, "rb") as f:
+                hasher.update(f.read())
+        except OSError:
+            hasher.update(b"code-missing")
+        digest = hasher.hexdigest()
+        logger.debug("[IMP:6][_phase_input_hash] Phase %s input hash: %s", phase_value, digest[:12])
+        return digest
+
+    # endregion FUNC__phase_input_hash
+
+    # region FUNC_phase_needs_rerun
+    ## @purpose — True если фаза отмечена done, но её входы изменились (hash mismatch) —
+    ##            content-hash инвалидация (T9.3, L-4/B-1). Участвуют deploy/converge-фазы;
+    ##            прочие фазы (φ1-φ7, φ9-φ10) не зависят от modules/services → False (backward-compat:
+    ##            legacy done-фазы без hash'а НЕ перевыполняются).
+    ## @io — ⇥ phase_value: str → ⎋ bool
+    ## @complexity O(N) где N = hash входов
+    ## @invariants
+    ##   - Только HASH_INVALIDATED_PHASES: deploy_services, deploy_update, registry_update,
+    ##     converge_services, converge_update — фазы, потребляющие modules/services из node.yaml
+    ##   - StepState без сохранённого hash (legacy) → False (done сохраняется — обратная совместимость)
+    ##   - mismatch → True (cli перевыполнит фазу, сбросив статус в pending)
+    def phase_needs_rerun(self, phase_value: str) -> bool:
+        """Return True if a done phase must re-run because its inputs changed (T9.3)."""
+        if phase_value not in _HASH_INVALIDATED_PHASES:
+            return False
+        entry = self.state.steps.get(phase_value)
+        if entry is None or not phase_is_done(entry):
+            return False
+        stored_hash = getattr(entry, "hash", None) if not isinstance(entry, dict) else entry.get("hash")
+        if not stored_hash:
+            return False  # legacy: hash не сохранялся → done сохраняется
+        current = self._phase_input_hash(phase_value)
+        changed = current != stored_hash
+        if changed:
+            logger.info(
+                "[IMP:9][phase_needs_rerun] Phase %s inputs changed (hash %s → %s) — re-run required (T9.3)",
+                phase_value,
+                stored_hash[:12],
+                current[:12],
+            )
+        return changed
+
+    # endregion FUNC_phase_needs_rerun
 
     # region FUNC_validate_bootstrap_env
     ## @purpose — Validate that required env vars are set for bootstrap.
@@ -452,12 +559,23 @@ class StateMachine:
         if phase_func is None:
             raise PhaseDependencyError(f"Unknown phase: {phase_value}")
 
-        # Execute
+        # Execute (T9.11, B-3): _should_retry вокруг phase_func — транзиентные сбои
+        # (TimeoutExpired/OSError/FileNotFoundError) ретраятся RETRY_COUNT=2 с экспоненциальным
+        # backoff. ВАЖНО: ретраится ТОЛЬКО raise-путь (фаза НЕ вернула bool) — фаза, вернувшая
+        # False (non-fatal issues), НЕ ретраится (это WARN-семантика done_with_warnings, волна 117 D5).
         core_dir = self.core_dir or os.environ.get("CORE_DIR", str(platform_remote_base() / "core"))
         node_name = os.environ.get("NODE_NAME", "")
         node_yaml = os.environ.get("NODE_YAML", "")
 
-        result = phase_func(core_dir, node_name, node_yaml)
+        attempt = 1
+        while True:
+            try:
+                result = phase_func(core_dir, node_name, node_yaml)
+                break
+            except RETRYABLE_EXCEPTIONS as exc:
+                if not _should_retry(exc, attempt):
+                    raise
+                attempt += 1
         logger.info(
             "[IMP:9][execute_phase] Phase %s completed: %s",
             phase_value,

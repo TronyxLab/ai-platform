@@ -11,12 +11,20 @@
 ## @invariants
 ##   - BootstrapState.from_dict поддерживает backward-compat numeric-key миграцию (DevPlan 071 Rev 2)
 ##   - precondition_check — BLOCKING intra-phase валидация; ошибки человекочитаемы
-##   - save_state — атомарная запись (tmp + replace)
+##   - save_state — атомарная запись (unique tmp через shared atomic_writer + fsync + replace)
+##     ПОД flock на state.json.lock (сериализация конкурентных writers, DevPlan 136 W9 T9.2)
+##   - load_state — коррапт state.json → StateCorruptError (ЯВНАЯ ошибка, НЕ свежий state —
+##     DevPlan 136 W9 T9.2; свежий state маскировал бы потерю checkpoint'ов)
 ##   - НЕТ статического импорта state_machine (направление зависимостей: state_machine → state_store);
 ##     PhasePreconditionError импортируется лениво внутри precondition_check (единственная точка raise)
 ## @rationale DevPlan 116 B9 D2: persistence (~270 LOC) вынесена в state_store.py —
 ##            state_machine.py остаётся чистой оркестрацией (~950 LOC, запас под гейт ≤1200).
+##            DevPlan 136 W9 T9.2 (L-2/B-2): save_state писал в ФИКСИРОВАННЫЙ tmp
+##            (path.with_suffix('.json.tmp')) — два конкурентных writers (retry double-deploy,
+##            bootstrap + node-update параллельно) могли перезаписать tmp друг друга и
+##            os.replace'ить чужие данные; коррапт молча сбрасывался в свежий state.
 ## @changes  2026-08-01 · Extracted from state_machine (B9 T2)
+## @changes  2026-08-05 · DevPlan 136 W9 T9.2 — flock + unique tmp save; StateCorruptError load
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -32,8 +40,15 @@ from typing import TYPE_CHECKING, Any
 
 from core.internal.shared import docker_ops  # W1: docker info примитив (гейт docker_sole_path)
 
+# DevPlan 136 W9 T9.2: единый атомарный writer (unique tmp + fsync + os.replace) —
+# фиксированный tmp (with_suffix('.json.tmp')) был гонкой для конкурентных writers.
+from core.internal.shared.atomic_writer import atomic_write_json as _atomic_write_json
+
 # B3: канонический platform base — shared/deploy_paths (литерал /opt/platform удалён)
 from core.internal.shared.deploy_paths import platform_remote_base
+
+# DevPlan 136 W9 T9.2: flock на state.json.lock (reentrant, blocking с таймаутом).
+from core.internal.shared.file_lock import FileLock as _FileLock
 
 if TYPE_CHECKING:
     pass
@@ -330,15 +345,35 @@ class BootstrapState:
 # endregion FUNC_BootstrapState
 
 
+# region CLASS_StateCorruptError
+class StateCorruptError(Exception):
+    """Raised by load_state when state.json is corrupt (invalid JSON / wrong structure).
+
+    ## @purpose — DevPlan 136 W9 T9.2 (L-2/B-2): коррапт state.json НЕ маскируется свежим
+    ##            state'ом (потеря checkpoint'ов: фазы, помеченные done, молча сбрасываются →
+    ##            повторный полный bootstrap; или наоборот — pending-фазы становятся fresh).
+    ##            Явная ошибка → оператор восстанавливает файл или запускает с --force.
+    ## @io — ⇥ message → ⎋ StateCorruptError instance
+    ## @complexity O(1)
+    """
+
+
+# endregion CLASS_StateCorruptError
+
+
 # region FUNC_load_state
-## @purpose  Load BootstrapState from state.json path. Fresh state on missing/corrupt file.
-## @io       ⇥ path: Path → ⎋ BootstrapState
+## @purpose  Load BootstrapState from state.json path. Raises StateCorruptError on corrupt.
+## @io       ⇥ path: Path → ⎋ BootstrapState ⚡ StateCorruptError
 ## @complexity O(N) where N = number of steps in existing state
 ## @invariants
-##   - Коррапт state.json (JSONDecodeError/KeyError/ValueError) → WARN + fresh state (не fatal)
+##   - Отсутствующий файл → свежий state (не коррапт — нормальный первый запуск)
+##   - Коррапт state.json (JSONDecodeError/KeyError/ValueError) → StateCorruptError (ЯВНАЯ ошибка)
 ##   - Phase-key migration: root-level phase keys копируются в steps (migrate_state_to_phases legacy)
 def load_state(path: Path) -> BootstrapState:
-    """Load bootstrap state from JSON file (fresh state on missing/corrupt)."""
+    """Load bootstrap state from JSON file.
+
+    Raises StateCorruptError on corrupt state (T9.2 — explicit, NOT fresh state).
+    """
     if not path.exists():
         logger.info("[IMP:7][StateMachine][init] No state file at %s — creating fresh", path)
         return BootstrapState()
@@ -375,32 +410,53 @@ def load_state(path: Path) -> BootstrapState:
         )
         return state
     except (json.JSONDecodeError, KeyError, ValueError) as e:
-        logger.warning("[IMP:7][StateMachine][init] Corrupt state file %s: %s — creating fresh", path, e)
-        return BootstrapState()
+        # ⚠️ TRAP[BUG] · 2026-08-05 · HI · коррапт state.json молча сбрасывался в свежий state
+        # · Symptom: node-update на ноде с повреждённым state.json тихо начинал всё заново
+        #   (L-2/B-2, DevPlan 136 W9 T9.2) — checkpoint'ы терялись без следа.
+        # · Root: except-ветка возвращала BootstrapState() (fresh) — «не свежий state» требование.
+        # · Fix: StateCorruptError с путём и recovery-инструкцией; StateMachine.__init__ оборачивает
+        #   в PlatformFatalError; --force (cli.main) удаляет файл и стартует заново.
+        # · Prevention: коррапт = фатальная ошибка, не тихий сброс; единственный reset — --force.
+        logger.error(
+            "[IMP:10][StateMachine][init] Corrupt state file %s: %s — remove it or run with --force "
+            "(T9.2: explicit error, NOT fresh state)",
+            path,
+            e,
+        )
+        raise StateCorruptError(f"State file {path} is corrupt: {e}. Remove the file or re-run with --force.") from e
 
 
 # endregion FUNC_load_state
 
 
 # region FUNC_save_state
-## @purpose  Persist state to JSON file atomically (tmp + rename). Creates parent dirs.
-## @io       ⇥ state: BootstrapState, path: Path → ⎋ None
+## @purpose  Persist state to JSON file atomically (unique tmp + flock) — T9.2.
+##           Creates parent dirs. Writers сериализуются через FileLock на state.json.lock.
+## @io       ⇥ state: BootstrapState, path: Path → ⎋ None ⚡ OSError (re-raise), FileLockError
 ## @complexity O(N) where N = number of steps
 ## @invariants
-##   - Атомарная запись: write tmp → replace — коррапт state.json невозможен при crash
+##   - Атомарная запись: unique tmp (shared atomic_writer: mkstemp + fsync) → replace —
+##     коррапт state.json невозможен при crash; конкурентные writers не делят один tmp
+##   - flock на {path}.lock (reentrant, blocking, timeout 30s): два процесса, пишущих
+##     state.json одновременно, сериализуются (last-writer-wins, без tearing)
 ##   - OSError → RE-RAISE (fatal) — потеря state недопустима
+##   - FileLockError (контеншн > timeout) → RE-RAISE — тихий сброс чужого writers опасен
 def save_state(state: BootstrapState, path: Path) -> None:
-    """Write state to JSON file atomically (write to tmp then rename)."""
+    """Write state to JSON file atomically (unique tmp + replace) under flock (T9.2)."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(".json.tmp")
+    lock_path = path.with_suffix(path.suffix + ".lock")  # state.json → state.json.lock
+    lock = _FileLock(lock_path, timeout=30.0)
+    lock.acquire()
     try:
-        with open(tmp_path, "w") as f:
-            json.dump(state.to_dict(), f, indent=2, ensure_ascii=False)
-        tmp_path.replace(path)
+        # Shared atomic_writer (E5-канон): NamedTemporaryFile в той же директории →
+        # flush + fsync → os.replace. Фиксированный tmp (legacy .json.tmp) удалён — гонка writers.
+        _atomic_write_json(path, state.to_dict(), mode=0o644)
         logger.debug("[IMP:6][StateMachine][save] State saved to %s", path)
     except OSError as e:
         logger.error("[IMP:10][StateMachine][save] Failed to save state: %s", e)
         raise
+    finally:
+        lock.release()
 
 
 # endregion FUNC_save_state
