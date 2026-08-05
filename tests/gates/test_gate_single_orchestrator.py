@@ -43,6 +43,7 @@ ALLOWED_DOCKER_COMPOSE_MODULES: list[str] = [
     "internal/bootstrap/deploy/docker_orchestrator.py",  # Not yet migrated
     "internal/bootstrap/deploy/compose_preflight.py",  # Compose preflight
     "internal/shared/docker_compose.py",  # Shared docker compose wrapper
+    "internal/practices/check_project.py",  # K1 project-check: docker compose config --quiet (read-only validation, DevPlan 137)
 ]
 
 # Layer 2: Shell/Python files that are ALLOWED to use scp/rsync directly

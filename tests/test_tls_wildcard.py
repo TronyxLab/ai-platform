@@ -843,7 +843,7 @@ def test_acme_sh_available() -> None:
 
 
 # region FUNC_test_no_simulator_code
-# ⚠️ TRAP[FIX] · 2026-07-10 · Epic 2 T2.1 · Replaced chr()-encoded self-read with glob-based scan
+# ⚠️ TRAP[BUG] · 2026-07-10 · Epic 2 T2.1 · Replaced chr()-encoded self-read with glob-based scan
 # · Old: chr(99)+chr(108)+... pattern masked self-reference; read_text(__file__) only checked own file
 # · New: glob("tests/**/*.py") scans ENTIRE test suite for any Simulator class definition
 _SIMULATOR_CLASS_PATTERN = re.compile(r"class\s+\w*Simulator")

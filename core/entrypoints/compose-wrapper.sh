@@ -3,7 +3,7 @@
 # STRUCTURE: ▶ parse COMPOSE_PREFLIGHT_DEBUG → ◇ python3 compose_preflight.py "$@" → ◇ exit 1 if blocked → exec docker compose "$@"
 # region MODULE_CONTRACT
 ## @purpose  Docker compose wrapper that runs preflight secret validation before `up`.
-##           Called from `make compose-safe-up MODULES=<list>` or directly.
+##           Called from `make up-safe MODULES=<list>` or directly.
 ## @scope    Pre-flight check: validates required secrets exist for target modules before `docker compose up`.
 ## @invariants
 ##   - Delegates to `python3 compose_preflight.py` for all validation logic

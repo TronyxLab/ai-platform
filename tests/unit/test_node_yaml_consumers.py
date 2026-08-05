@@ -16,6 +16,8 @@
 
 import importlib
 import logging
+import sys
+from pathlib import Path
 
 from core.internal.shared.node_yaml import NodeYaml
 from tests._conftest.ldd import ldd_trajectory
@@ -67,10 +69,10 @@ CONSUMERS = [
 @ldd_trajectory
 def test_all_consumers_unchanged(caplog):
     """H3: все потребители NodeYaml импортируют агрегатор корректно (verify-then-delete)."""
-    import sys
-
-    # status-page — модуль с дефисом в имени, подключается module-specific path (tests/AGENTS.md)
-    sys.path.insert(0, "core/modules/status-page")
+    # status-page — модуль с дефисом в имени, подключается module-specific path (tests/AGENTS.md).
+    # xdist-инвариант 4 (DevPlan 139 W2): относительный sys.path → абсолютный Path(__file__)-based
+    # (относительный путь зависел от CWD воркера — флак при -n auto).
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "core" / "modules" / "status-page"))
 
     failures: list[str] = []
     imported_ok = 0

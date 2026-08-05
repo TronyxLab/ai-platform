@@ -78,11 +78,11 @@ def test_mutate_config_already_correct_noop() -> None:
 
 
 # 🧪 TRAP[TEST] · 2026-08-02 · Regression · mutate_config: 127.0.0.1 listen-address апгрейдится (D3)
-# · Scenario: listen-address 127.0.0.1:8118 → апгрейд до 0.0.0.0:8118 (TRAP[BUGFIX] 2026-06-24)
+# · Scenario: listen-address 127.0.0.1:8118 → апгрейд до 0.0.0.0:8118 (TRAP[BUG] 2026-06-24)
 # · Last fail: 2026-06-24 HI — Docker контейнеры не могли достучаться до Privoxy на 127.0.0.1:8118
 # · Remove if: listen-address upgrade удалён
 def test_mutate_config_upgrade_listen_address() -> None:
-    """listen-address 127.0.0.1:8118 → 0.0.0.0:8118 (Docker-доступ, TRAP[BUGFIX] 2026-06-24)."""
+    """listen-address 127.0.0.1:8118 → 0.0.0.0:8118 (Docker-доступ, TRAP[BUG] 2026-06-24)."""
     content = "listen-address 127.0.0.1:8118\nsome other line\n"
     new_content, changed = privoxy_config.mutate_config(content, "0.0.0.0:8118", "127.0.0.1:9050")
     assert changed is True

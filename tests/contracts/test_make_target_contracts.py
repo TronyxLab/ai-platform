@@ -42,6 +42,7 @@ _SYSTEM_EXCEPTIONS = {
     "venv",  # name_linter.system_exceptions
     "pre-commit-install",  # name_linter.system_prefixes: pre-commit-
     "pre-commit-run",  # name_linter.system_prefixes: pre-commit-
+    "_get_all_profiles",  # name_linter.system_exceptions (DevPlan 138 S3 — технический помощник parity-гейта)
 }
 
 
@@ -192,6 +193,53 @@ def _parse_delegates_to_files(manifest_path: pathlib.Path) -> list[str]:
     return unique_files
 
 
+def _load_manifest_entry(manifest_path: pathlib.Path, target: str) -> dict:
+    """Load a single make_target entry dict from entrypoint-manifest.yaml.
+
+    ## @purpose — K2 (139 W1): fetch one manifest entry by make_target name for
+    ##            registration-contract assertions (signature/delegates_to/mechanism).
+    ## @io — ⇥ manifest_path, target → ⎋ dict (entry) | {} (not found)
+    ## @complexity — O(E) where E = number of manifest entries
+    """
+    with open(manifest_path) as f:
+        data = yaml.safe_load(f)
+    if not isinstance(data, dict):
+        return {}
+    for entries in data.values():
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if isinstance(entry, dict) and entry.get("make_target") == target:
+                logger.info(
+                    "[IMP:8][_load_manifest_entry] Found manifest entry for '%s'",
+                    target,
+                )
+                return entry
+    logger.warning("[IMP:7][_load_manifest_entry] Manifest entry '%s' NOT found", target)
+    return {}
+
+
+def _makefile_doc_block(makefile_path: pathlib.Path, target: str) -> str:
+    """Extract the doc-comment block above a make target recipe.
+
+    ## @purpose — K2 (139 W1): read the `## ` doc lines immediately preceding the
+    ##            target recipe — the Makefile-level registration point for variables.
+    ## @io — ⇥ makefile_path, target → ⎋ str (doc block) | "" (not found)
+    ## @complexity — O(L) where L = makefile lines
+    """
+    text = makefile_path.read_text()
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if line.strip() == f"{target}:":
+            doc: list[str] = []
+            j = i - 1
+            while j >= 0 and lines[j].startswith("##"):
+                doc.append(lines[j])
+                j -= 1
+            return "\n".join(reversed(doc))
+    return ""
+
+
 # endregion HELPERS
 
 
@@ -332,6 +380,70 @@ def test_manifest_delegate_scripts_exist(caplog) -> None:
     logger.critical(
         "[IMP:9][test_manifest_delegate_scripts_exist] PASS: All %d delegates_to scripts exist on disk",
         len(delegate_files),
+    )
+
+
+# endregion
+
+
+# region TEST: deploy NODE/LAUNCH/preflight registration contract (139 W1 K2)
+
+
+@pytest.mark.contract
+@ldd_trajectory
+def test_deploy_registration_contract(caplog) -> None:
+    """K2 (139 W1): NODE/LAUNCH/preflight-семантика зарегистрирована в entrypoint-manifest.
+
+    ## @purpose — Контракт РЕГИСТРАЦИИ (не симуляция bash): make_target deploy в
+    ##            entrypoint-manifest.yaml обязан регистрировать make-переменные
+    ##            PROJECT/NODE/LAUNCH в signature и preflight/launch-семантику в
+    ##            delegates_to; Makefile deploy-таргет регистрирует те же переменные
+    ##            в doc-блоке (parity Makefile ↔ manifest). Заменяет удалённый
+    ##            tests/test_sequencing.py (P0-синтетика, DevPlan 139 W1 K2).
+    ## @scenario — Load manifest deploy entry → assert signature vars + delegates_to verbs
+    ##            → assert makefiles/deploy.mk doc registers NODE/LAUNCH
+    ## @regression — Деploy sequencing-контракт дрейфует (манифест теряет NODE/LAUNCH)
+    ## @last_fail — N/A (новый контракт; замена bash-симуляций test_sequencing.py)
+    ## @remove_if — deploy-таргет намеренно перестаёт поддерживать NODE/LAUNCH
+    """
+    deploy_entry = _load_manifest_entry(_MANIFEST_PATH, "deploy")
+
+    # ── 1. Запись зарегистрирована (make_target + mechanism) ──
+    assert deploy_entry, "manifest entry 'deploy' missing — NODE/LAUNCH/preflight не зарегистрированы"
+    assert deploy_entry.get("mechanism") == "git-push", (
+        f"deploy mechanism must be git-push, got {deploy_entry.get('mechanism')!r}"
+    )
+    logger.info("[IMP:9][deploy_contract] deploy entry registered (mechanism=git-push)")
+
+    # ── 2. signature регистрирует переменные PROJECT (required) + NODE + LAUNCH ──
+    signature = str(deploy_entry.get("signature", ""))
+    assert "PROJECT=" in signature, f"deploy signature must register PROJECT=, got: {signature!r}"
+    assert "NODE=" in signature, f"deploy signature must register NODE= (preflight trigger), got: {signature!r}"
+    assert "LAUNCH=" in signature, f"deploy signature must register LAUNCH= (deliver mode), got: {signature!r}"
+    logger.info("[IMP:9][deploy_contract] signature registers PROJECT/NODE/LAUNCH: %s", signature)
+
+    # ── 3. delegates_to регистрирует receive verb + orchestrator_cli (LAUNCH deliver path) ──
+    delegates_to = str(deploy_entry.get("delegates_to", ""))
+    assert "receive" in delegates_to, f"delegates_to must register 'receive' verb, got: {delegates_to!r}"
+    assert "orchestrator_cli" in delegates_to, (
+        f"delegates_to must register orchestrator_cli dispatch, got: {delegates_to!r}"
+    )
+    logger.info("[IMP:9][deploy_contract] delegates_to registers receive → orchestrator_cli dispatch")
+
+    # ── 4. Makefile parity: deploy doc-блок регистрирует те же NODE/LAUNCH переменные ──
+    deploy_mk = _PROJECT_ROOT / "makefiles" / "deploy.mk"
+    doc_block = _makefile_doc_block(deploy_mk, "deploy")
+    assert doc_block, "makefiles/deploy.mk: deploy doc-блок не найден (registration point)"
+    assert "NODE=" in doc_block, f"deploy.mk doc must register NODE=, got: {doc_block!r}"
+    assert "LAUNCH=" in doc_block, f"deploy.mk doc must register LAUNCH=, got: {doc_block!r}"
+    assert "pre-flight" in doc_block or "preflight" in doc_block, (
+        f"deploy.mk doc must register pre-flight semantics, got: {doc_block!r}"
+    )
+    logger.info("[IMP:9][deploy_contract] makefiles/deploy.mk doc registers NODE/LAUNCH/pre-flight (parity)")
+
+    logger.critical(
+        "[IMP:9][test_deploy_registration_contract] PASS: NODE/LAUNCH/preflight зарегистрированы "
+        "(manifest signature + delegates_to + Makefile parity)"
     )
 
 

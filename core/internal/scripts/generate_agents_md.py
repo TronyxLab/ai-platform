@@ -57,6 +57,7 @@ TABLE_SECTIONS: tuple[str, ...] = (
     "test",
     "test/gate",
     "scaffold",
+    "practices",
     "secrets",
     "lifecycle",
     "provision",

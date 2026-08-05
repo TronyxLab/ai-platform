@@ -319,6 +319,40 @@ def gen_env_platform(project_dir: str, name: str, domain: str = "", dry_run: boo
 # endregion FUNC_gen_env_platform
 
 
+# region FUNC_gen_project_practices
+def gen_project_practices(project_dir: str, dry_run: bool = False) -> bool:
+    """Generate baseline practices (DevPlan 137 W1 step 11): GENERATED files + practices.lock.
+
+    ## @purpose  При new-project ВСЕГДА генерируются 5 GENERATED-файлов практик
+    ##           (pyproject.toml, .pre-commit-config.yaml, tests/conftest.py,
+    ##           tests/test_health.py, practices.lock) через sync_practices (K1-канон).
+    ##           level=auto (из ai-platform.yaml quality.level) → свежий проект получает
+    ##           state=baseline (эскалатор жив, решение пользователя 2026-08-05).
+    ## @io        ⇥ project_dir, dry_run → ⎋ bool
+    ## @complexity O(N * C) — рендер + атомарные записи
+    ## @invariants
+    ##   - Вызывается ПОСЛЕ gen_platform_md и ДО git_init (практики попадают в init-коммит)
+    ##   - ВСЕГДА (не только для определённых типов) — baseline практики для всех шаблонов
+    """
+    if dry_run:
+        logger.info("[IMP:7][scaffold][practices] [DRY-RUN] Would generate baseline practices in: %s", project_dir)
+        return True
+
+    from core.internal.practices.sync_practices import sync_practices
+
+    report = sync_practices(Path(project_dir), force=True)
+    logger.info(
+        "[IMP:9][scaffold][practices] Baseline practices generated (state=%s, level=%s, lock=%s)",
+        report.state,
+        report.level,
+        report.lock_status,
+    )
+    return True
+
+
+# endregion FUNC_gen_project_practices
+
+
 # region FUNC_git_init_project
 def git_init_project(project_dir: str, name: str, template: str, dry_run: bool = False) -> bool:
     """Initialize git repository and create initial commit.
@@ -665,6 +699,10 @@ def main(argv: list[str] | None = None) -> int:
         output_path=os.path.join(project_dir, "AI-PLATFORM.md"),
         force=False,
     )
+
+    # DevPlan 137 W1 шаг 11: baseline-практики (ВСЕГДА, level=auto → state=baseline).
+    # До git_init (шаг 6) — GENERATED-файлы и practices.lock попадают в init-коммит.
+    gen_project_practices(project_dir, args.dry_run)
 
     # Step 6: Git init
     git_init_project(project_dir, args.name, args.template, args.dry_run)

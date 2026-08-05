@@ -24,3 +24,6 @@ monitoring:
   metrics: true
   metrics_port: 8080
   logs_retention: 7d
+
+quality:
+  level: auto    # baseline | full | auto (default auto, DevPlan 137 — решение 2026-08-05)

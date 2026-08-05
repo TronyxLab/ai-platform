@@ -193,6 +193,9 @@ def gen_ai_platform_yaml(
         data["monitoring"] = mon_config
         if mode == "dev":
             data["staging"] = True
+        # DevPlan 137 W1: quality-секция практик (уровень эскалатора). default auto —
+        # решение пользователя 2026-08-05: мок ведёт себя как baseline, эскалатор жив.
+        data["quality"] = {"level": "auto"}  # baseline | full | auto (default auto)
 
     # Write YAML
     try:

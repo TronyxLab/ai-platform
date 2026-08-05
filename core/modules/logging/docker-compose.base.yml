@@ -128,7 +128,6 @@ services:
       loki:
         condition: service_healthy
 
-    # 🧐 TRAP[TASK-3] · 2026-07-02 · Optimized: start_period 30→15s (container startup optimization)
     healthcheck:
       test: ["CMD", "pgrep", "promtail"]
       interval: 30s

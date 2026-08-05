@@ -69,8 +69,21 @@ _SSH_AUTH_MARKERS = ("successfully authenticated", "Hi ")
 ## @rationale GitHub SSH paths are CASE-SENSITIVE: push to tronyx-lab/ai-platform fails
 ##            ("Repository not found"), TronyxLab/ai-platform works. context.yaml#org
 ##            (create-context канон) несёт точное имя org.
-def _resolve_org(context: str) -> str:
-    """Resolve GitHub org for a context: overlay context.yaml org field, else context name."""
+## @changes 2026-08-05 | DevPlan 139 W2 — _resolve_org → resolve_org (публичный контракт D9:
+##            неотъемлемый бизнес-контракт резолва org, тестируется публичным путём; private
+##            доступ из тестов запрещён — top-10 private-доступов закрыты)
+def resolve_org(context: str) -> str:
+    """Resolve GitHub org for a context: overlay context.yaml org field, else context name.
+
+    ▶ ┌context┐ → ◇ PROJECTS_ROOT/<ctx>/platform/context.yaml#org? → ⎋ org │ ◇ ~/projects/<ctx>/... → ⎋ org │ ⎋ context-name
+
+    ## @purpose — Публичный контракт (DevPlan 139 W2): org из overlay context.yaml (SoT,
+    ##            точный регистр), fallback — имя контекста (историческое поведение).
+    ## @io — ⇥ context: str → ⎋ str (GitHub org name)
+    ## @complexity — O(C) — C = кандидаты context.yaml (PROJECTS_ROOT + ~/projects, ×2 пути)
+    ## @invariants — org из context.yaml#org (если задан) ВСЕГДА приоритетнее имени контекста;
+    ##              парсинг best-effort (ошибка YAML → fallback, не raise)
+    """
     candidates: list[Path] = []
     for base in (os.environ.get("PROJECTS_ROOT", ""), str(Path.home() / "projects")):
         if not base:
@@ -86,7 +99,7 @@ def _resolve_org(context: str) -> str:
             if org:
                 logger.info("[IMP:8][resolve_org] org=%s from %s", org, ctx_yaml)
                 return str(org)
-        except Exception as e:  # noqa: EXC — best-effort, fallback to context name
+        except Exception as e:  # noqa: EXC — best-effort org resolution (resolve_org: YAML-ошибка → fallback, не raise)
             logger.warning("[IMP:7][resolve_org] Failed to parse %s: %s — using context name", ctx_yaml, e)
     logger.info("[IMP:7][resolve_org] No context.yaml org found — using context name: %s", context)
     return context
@@ -311,7 +324,7 @@ def promote_context(context: str, token: str | None) -> int:
     )
 
     # GitHub SSH case-sensitive: org из overlay context.yaml (TronyxLab), не имя контекста.
-    org = _resolve_org(context)
+    org = resolve_org(context)
 
     if check_ssh_available():
         logger.info("[IMP:9][promote_context] Promoting platform to context org: %s", org)

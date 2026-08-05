@@ -1,13 +1,13 @@
 # GREP_SUMMARY: manifest.mk, include-split, manifest-generation, DAG, check
-# STRUCTURE: ┌Chain A (G1→G2→G5)┐ → ◇ Chain B (G3→G4) → ◇ Chain C (G6) → ⊕ check → ⎋ sync-env-defaults
+# STRUCTURE: ┌Chain A (G1→G2→G5)┐ → ◇ Chain B (G3→G4) → ◇ Chain C (G6) → ⊕ check → ⎋ check-env-defaults
 # region MODULE_CONTRACT
 ## @purpose  Manifest generation targets — DAG of 3 independent chains
-## @scope    All generate-*, check-manifests, sync-env-defaults, check-env-defaults,
+## @scope    All generate-*, check-manifests, check-env-defaults,
 ##           generate-requirements, check-requirements targets
 ## @invariants
 ##   - Three independent chains: A (secrets→platform-env→env-example), B (entrypoint→AGENTS.md), C (litellm-config)
 ##   - check-manifests runs --check on all 6 generators without producing output
-##   - sync-env-defaults and check-env-defaults are standalone (also part of Chain A via dependencies)
+##   - check-env-defaults is standalone (Chain A generate-env-example via dependencies)
 ##   - generate-requirements/check-requirements standalone (G1-G6 контракт НЕ меняется, DevPlan 123 T11)
 ## @rationale Extracted from root Makefile (DevPlan 090) to keep root <150 lines per AC-5b.
 ##            Separate file makes DAG structure navigable and reduces merge conflict surface.
@@ -24,7 +24,7 @@
 #   Chain C: G6 (litellm-config)
 # generate-manifests покрывает ВСЕ 6 генераторов (DevPlan 116 T5, U-44) — fix-gate
 # (repair.mk → generate-manifests) чинит check-manifests полностью (G1-G6).
-.PHONY: generate-manifests check-manifests sync-env-defaults check-env-defaults
+.PHONY: generate-manifests check-manifests check-env-defaults
 .PHONY: generate-requirements check-requirements
 .PHONY: generate-secrets-manifest generate-platform-env generate-env-example
 .PHONY: generate-entrypoint-manifest generate-agents-md generate-litellm-config render-monitoring
@@ -175,14 +175,6 @@ check-manifests:
 	fi; \
 	echo "[IMP:9][check-manifests] All generated manifests are up to date."
 
-sync-env-defaults:
-	@echo "[IMP:7][sync-env-defaults] Generating .env.example from SoT..."
-	@python3 core/internal/scripts/sync_env_defaults.py \
-		--platform-env platform-env.yaml \
-		--secret-defs core/secret-definitions.yaml \
-		--output .env.example
-	@echo "[IMP:9][sync-env-defaults] .env.example regenerated from SoT."
-
 check-env-defaults:
 	@echo "[IMP:7][check-env-defaults] Checking .env.example is up to date..."
 	@python3 core/internal/scripts/sync_env_defaults.py \
@@ -192,7 +184,7 @@ check-env-defaults:
 		--check || \
 		(echo "[GATE:FAIL][id:check-env-defaults][class:L1]" && \
 		 echo ">>> REPAIR_RECIPE_START >>>" && \
-		 echo "make sync-env-defaults && git add .env.example && make check-env-defaults" && \
+		 echo "make generate-env-example && git add .env.example && make check-env-defaults" && \
 		 echo "<<< REPAIR_RECIPE_END <<<" && exit 1)
 	@echo "[IMP:9][check-env-defaults] .env.example is up to date."
 

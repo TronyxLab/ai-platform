@@ -4,7 +4,8 @@
 # region MODULE_CONTRACT
 ## @purpose  Generate the project file AI-PLATFORM.md — hybrid: static canonical reference
 ##           + per-node GENERATED section (enabled modules, provides services with DSN/URL,
-##           networks, needs-status). Pattern: gen_env_platform.py (module + CLI).
+##           networks, needs-status) + Practices GENERATED section (уровень/зрелость/
+##           [PRACTICES:PROPOSE], DevPlan 137 W1 §2.1C). Pattern: gen_env_platform.py.
 ## @scope    Library generate()/write_project_platform_md() + CLI main(). Consumers:
 ##           scaffold_helpers.gen_project_platform_md (new-project/adopt-project),
 ##           Makefile project-sync-env (CLI), converge R3 (if-missing, direct import).
@@ -51,9 +52,12 @@ from core.internal.shared.project_yaml import get_name, get_needs
 __all__ = [
     "GENERATED_END",
     "GENERATED_START",
+    "PRACTICES_END",
+    "PRACTICES_START",
     "generate",
     "main",
     "render_generated",
+    "render_practices_section",
     "render_static",
     "write_project_platform_md",
 ]
@@ -61,6 +65,10 @@ __all__ = [
 # ── GENERATED-section markers (canonical generated-секции паттерн, инвариант 11) ──
 GENERATED_START = "<!-- GENERATED:START:platform_md -->"
 GENERATED_END = "<!-- GENERATED:END:platform_md -->"
+
+# ── Practices-секция (DevPlan 137 W1 §2.1C): уровень/зрелость/[PRACTICES:PROPOSE] ──
+PRACTICES_START = "<!-- GENERATED:START:practices_md -->"
+PRACTICES_END = "<!-- GENERATED:END:practices_md -->"
 
 # ── Repo root (для default-резолва platform-env.yaml в CLI) ──
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -108,6 +116,9 @@ def render_static(project_name: str, org: str = "") -> str:
 
 {GENERATED_START}
 {GENERATED_END}
+
+## Practices  {PRACTICES_START}
+{PRACTICES_END}
 
 ## Приоритет инструкций
 
@@ -268,6 +279,98 @@ def _read_project_needs(project_dir: Path) -> dict:
 
 
 # ═══════════════════════════════════════════════════════════════════
+# region FUNC_render_practices_section
+## @purpose  Render Practices-секцию AI-PLATFORM.md (DevPlan 137 §2.1C): уровень практик,
+##           состояние эскалатора (baseline|proposed|active-full) + maturity-reason,
+##           generator-инфо (версия канона + hash lock) и [PRACTICES:PROPOSE] варнинг-блок
+##           для proposed (агент видит предложение до начала работы).
+## @param project_dir  Project directory (ai-platform.yaml quality.level + practices.lock)
+## @return  Section content WITHOUT markers (caller wraps with PRACTICES_START/END)
+## @complexity O(F) где F = файлы проекта (maturity walk)
+## @invariants
+##   - Level display: proposed → "full (auto-proposed)"; active-full → "full (active)";
+##     baseline → level_setting как есть (auto/baseline/full)
+##   - State display: proposed добавляет "(age=41d, files=87)" reason
+##   - Варнинг-блок — только при decision.warning (proposed); автопромоута НЕТ
+##   - Graceful: нет ai-platform.yaml/lock → "not configured / not synced" (не crash)
+def render_practices_section(project_dir) -> str:
+    """Render Practices section content (level, state, generator, PROPOSE warning)."""
+    from core.internal.practices.escalator import evaluate
+    from core.internal.practices.generators import read_lock
+    from core.internal.practices.manifest import load_manifest
+    from core.internal.practices.maturity import compute_maturity
+
+    proj = Path(project_dir)
+    data = _load_raw_project_yaml(proj)
+    quality = data.get("quality") or {}
+    level_setting = str(quality.get("level", "auto") or "auto")
+
+    maturity = compute_maturity(proj)
+    lock = read_lock(proj)
+    try:
+        decision = evaluate(maturity, level_setting, lock)
+    except ValueError:
+        decision = None
+
+    manifest = load_manifest()
+    version = manifest.version
+
+    if decision is None:
+        level_display = f"{level_setting} (invalid)"
+        state_display = "unknown"
+    elif decision.state_name == "proposed":
+        level_display = "full (auto-proposed)"
+        state_display = f"proposed ({decision.reason})"
+    elif decision.state_name == "active-full":
+        level_display = "full (active)"
+        state_display = "active-full"
+    else:
+        level_display = level_setting
+        state_display = "baseline"
+
+    hash_part = lock.generator_hash if lock is not None else "not synced"
+    lines: list[str] = [
+        f"- **Level:** {level_display}  ",
+        f"- **State:** {state_display}  ",
+        f"- **Generator:** practices v{version}, hash {hash_part}  ",
+    ]
+    if decision is not None and decision.warning:
+        lines.extend(
+            [
+                "",
+                f"> {decision.warning.splitlines()[0]}",
+                "> >>> RECOMMEND: `make project-set-practices full` (или `make project-sync-practices` для обновления канона)",
+                "> Деплой НЕ блокируется (proposed = non-blocking). active-full включается ТОЛЬКО по согласию",
+                "> (`make project-set-practices full`) — автопромоута нет (решение пользователя 2026-08-05).",
+            ]
+        )
+    lines.append("")
+    logger.info(
+        "[IMP:9][gen_platform_md][practices] Section rendered (state=%s level=%s)", state_display, level_display
+    )
+    return "\n".join(lines)
+
+
+# endregion FUNC_render_practices_section
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region FUNC_load_raw_project_yaml
+## @purpose  Прочитать ai-platform.yaml проекта (raw dict) для quality.level.
+## @param project_dir  Project directory
+## @return  dict ({} если отсутствует/не dict)
+## @complexity O(1)
+def _load_raw_project_yaml(project_dir: Path) -> dict:
+    """Load project ai-platform.yaml dict ({} if missing/unparseable)."""
+    from core.internal.shared.project_yaml import load_project_yaml
+
+    return load_project_yaml(project_dir)
+
+
+# endregion FUNC_load_raw_project_yaml
+
+
+# ═══════════════════════════════════════════════════════════════════
 # region FUNC_generate
 ## @purpose  Generate the FULL AI-PLATFORM.md content (static + GENERATED section).
 ## @param project_dir        Project directory (for ai-platform.yaml needs + display)
@@ -307,11 +410,17 @@ def generate(
     org = _resolve_org(node_yaml_path, proj_path)
     static = render_static(name, org)
     section = render_generated(name, node_yaml_path, platform_env_path, domain=domain, project_dir=proj_path)
+    practices_section = render_practices_section(proj_path)
 
-    # Wrap section with markers (canonical single pair)
+    # Wrap sections with markers (canonical single pairs)
     full = static.replace(
         f"{GENERATED_START}\n{GENERATED_END}",
         f"{GENERATED_START}\n{section}\n{GENERATED_END}",
+        1,
+    )
+    full = full.replace(
+        f"{PRACTICES_START}\n{PRACTICES_END}",
+        f"{PRACTICES_START}\n{practices_section}\n{PRACTICES_END}",
         1,
     )
     logger.info("[IMP:9][gen_platform_md][generate] AI-PLATFORM.md rendered (%d chars)", len(full))
@@ -361,11 +470,13 @@ def write_project_platform_md(
     if target.is_file():
         existing = target.read_text(encoding="utf-8")
         if GENERATED_START in existing and GENERATED_END in existing:
-            # Replace section only (preserve hand-edited static part) — identical marker pair
-            head = existing.split(GENERATED_START, 1)[0]
-            tail = existing.split(GENERATED_END, 1)[1]
-            section_part = full.split(GENERATED_START, 1)[1].split(GENERATED_END, 1)[0]
-            new_content = head + GENERATED_START + section_part + GENERATED_END + tail
+            # Replace section only (preserve hand-edited static part) — identical marker pairs
+            new_content = _replace_section(existing, full, GENERATED_START, GENERATED_END)
+            if PRACTICES_START in existing and PRACTICES_END in existing:
+                new_content = _replace_section(new_content, full, PRACTICES_START, PRACTICES_END)
+            else:
+                # Practices-маркеров ещё нет (файл создан до 137) → добавить секцию из статики
+                new_content = _append_practices_section(new_content, full)
             atomic_write_text(target, new_content, mode=0o644)
             logger.info("[IMP:9][gen_platform_md][write] Section updated: %s (static part preserved)", target)
             return "updated"
@@ -380,6 +491,42 @@ def write_project_platform_md(
 
 
 # endregion FUNC_write_project_platform_md
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region FUNC_replace_section
+## @purpose  Replace content between start/end markers in `existing` with the block from `full`
+##           (preserving static part before/after). Идентичная семантика прежней
+##           replace-section для platform_md — расширена на обе пары маркеров (137).
+## @io       ⇥ existing, full, start, end → ⎋ str
+## @complexity O(N)
+def _replace_section(existing: str, full: str, start: str, end: str) -> str:
+    """Swap marker-delimited block in existing with block from full (static preserved)."""
+    head = existing.split(start, 1)[0]
+    tail = existing.split(end, 1)[1]
+    section_part = full.split(start, 1)[1].split(end, 1)[0]
+    return head + start + section_part + end + tail
+
+
+# endregion FUNC_replace_section
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region FUNC_append_practices_section
+## @purpose  Добавить Practices-секцию (маркеры + контент из full) в конец существующего файла,
+##           если маркеров ещё нет (файл создан до DevPlan 137). Идемпотентно.
+## @io       ⇥ existing, full → ⎋ str
+## @complexity O(N)
+def _append_practices_section(existing: str, full: str) -> str:
+    """Append Practices GENERATED section to existing file (markers absent case)."""
+    if "## Practices" not in full or PRACTICES_END not in full:
+        return existing
+    block = full.split("## Practices", 1)[1]
+    block = "## Practices" + block.split(PRACTICES_END, 1)[0] + PRACTICES_END
+    return existing.rstrip("\n") + "\n\n" + block + "\n"
+
+
+# endregion FUNC_append_practices_section
 
 
 # ═══════════════════════════════════════════════════════════════════

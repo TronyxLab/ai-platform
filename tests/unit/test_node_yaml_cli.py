@@ -142,14 +142,14 @@ class TestCliGetMany:
         with pytest.raises(ConfigValidationError):
             node_yaml_cli._cli_get_many(mock_node, "alias-only-no-colon")
 
-    def test_traverse_dotted_list_aware(self) -> None:
-        """Numeric list indices traversed; bad path → ConfigValidationError."""
-        data = {"contexts": [{"name": "myorg"}]}
-        assert node_yaml_cli._traverse_dotted_list_aware(data, "contexts.0.name") == "myorg"
-        with pytest.raises(ConfigValidationError):
-            node_yaml_cli._traverse_dotted_list_aware(data, "contexts.5.name")
-        with pytest.raises(ConfigValidationError):
-            node_yaml_cli._traverse_dotted_list_aware(data, "contexts.x.name")
+    # 🧐 TRAP[DECISION] · 2026-08-05 · — · _traverse_dotted_list_aware: private-тест удалён (DevPlan 139 W2)
+    # · Rejected: поднять traversal-helper в публичный API (расширение поверхности без потребителя)
+    # · Reason: деталь реализации — dotted-обход с list-index. Наблюдаемый публичный контракт
+    # ·   (missing key / non-dict / list-index деградация → пустое значение, exit 0) покрыт
+    # ·   через публичный путь --get-many в test_node_yaml_cli_get_many.py
+    # ·   (test_get_many_context_priority / test_get_many_non_dict_traversal_empty).
+    # ·   Внутреннее raise ConfigValidationError — контракт хелпера, caller деградирует.
+    # · Rev: при появлении прямого потребителя traversal-семантики — поднять в публичную функцию
 
 
 # ══════════════════════════════════════════════════════════════════════

@@ -1,0 +1,159 @@
+# core/internal/practices/practices_manifest.yaml
+# GREP_SUMMARY: practices_manifest, canon, version, levels, checks, maturity, pins, allowed_external_networks, SoT, 137
+# STRUCTURE: ┌version: 1┐ → ◇ maturity (age/files пороги) → ◇ allowed_external_networks → ◇ pins (версии хуков) → ◇ checks[] (id → level → languages → channel → class → auto_fix → timeout_sec)
+# region MODULE_CONTRACT
+## @purpose  SoT-канон практик проектов (DevPlan 137 §2.1, аналог core/check-suite.yaml для
+##           проектов): версия, пороги зрелости, allowlist внешних сетей (L1-контракт),
+##           pins версий upstream-хуков (анти-дрейф), состав BASELINE/FULL проверок по языкам.
+## @scope    Единственный источник правды для practices-домена. Потребители: manifest.py
+##           (валидация через shared/schema_validator), generators.py (pins для pre-commit),
+##           check_project.py (исполнение), sync/set_practices.py, гейт test_gate_practices_manifest.
+## @invariants
+##   - version: 1 — bump при несовместимом изменении схемы (инвалидирует practices.lock)
+##   - id — kebab-case, уникальный (гейт test_gate_practices_manifest)
+##   - level ∈ {baseline, full}; class ∈ {L1, L2, L3}; channel ⊆ {local, ci, verify}
+##   - L1-класс исполняется ПРИ ЛЮБОМ уровне (безопасность платформы, §3.1 п.4)
+##   - Пороги: age_days_propose=30, code_files_propose=50 (решение пользователя 2026-08-05)
+##   - Автопромоута НЕТ: константа K (счётчик автопромоута) НЕ существует
+##   - pins == версиям корневого .pre-commit-config.yaml платформы (анти-дрейф, гейт сверяет)
+## @rationale Один канон вместо копий в 3 шаблонах: GENERATED-файлы рендерятся из него,
+##            project-sync-practices — единый repair, гейт детерминизма — байт-сверка двойного рендера.
+## @changes  2026-08-05 · DevPlan 137 W1 — создан (канон §2.1, pins latest 2026-08-05)
+# endregion MODULE_CONTRACT
+
+version: 1
+
+maturity:
+  age_days_propose: 30        # порог возраста (решение пользователя 2026-08-05)
+  code_files_propose: 50      # порог файлов кода (не библиотек)
+  # автопромоута НЕТ (решение пользователя 2026-08-05: «варнинга хватит»)
+
+allowed_external_networks:    # allowlist L1 external-networks (реальные сети платформы)
+  - proxy-net
+  - shared-db-net
+  - observability-net
+  - backup-net
+  - hermes-agent-net
+  - shared-cache-net
+
+pins:                         # версии хуков проекта = версиям платформы (анти-дрейф)
+  gitleaks: v8.30.1           # паритет .github/actions/setup-gitleaks (latest 2026-08-05)
+  ruff_pre_commit: v0.16.1    # паритет корневому .pre-commit-config.yaml rev (ruff 0.16.1, 2026-08-05)
+  shellcheck_py: v0.11.0.1    # latest (2026-08-05)
+  pre_commit_hooks: v6.0.0    # latest (2026-08-05)
+  conventional_pre_commit: v4.4.0  # latest (2026-08-05)
+
+checks:
+  - id: gitleaks
+    level: baseline
+    languages: [all]
+    channel: [local, ci, verify]
+    class: L1                  # L1 = блок всегда, L2 = блок в full, L3 = warning
+    auto_fix: false
+    timeout_sec: 5
+  - id: hygiene                # trailing/EOF/merge-conflict/yaml/json/toml/private-key
+    level: baseline
+    languages: [all]
+    channel: [local, ci]
+    class: L3
+    auto_fix: true             # pre-commit автофикс — агент не тратит время
+    timeout_sec: 5
+  - id: commit-msg             # Conventional Commits
+    level: baseline
+    languages: [all]
+    channel: [local, ci]
+    class: L3
+    auto_fix: false
+    timeout_sec: 1
+  - id: compose-config         # docker compose config --quiet
+    level: baseline
+    languages: [all]
+    channel: [local, ci, verify]
+    class: L2
+    auto_fix: false
+    timeout_sec: 5
+  - id: docker-build-check     # docker build --check (BuildKit статический)
+    level: baseline
+    languages: [all]
+    channel: [ci]
+    class: L2
+    auto_fix: false
+    timeout_sec: 20
+  - id: ruff-format            # ruff format --check (автофикс через project-fix)
+    level: baseline
+    languages: [python]
+    channel: [local, ci]
+    class: L3
+    auto_fix: true
+    timeout_sec: 5
+  - id: shellcheck             # только sh-файлы проекта
+    level: baseline
+    languages: [sh]
+    channel: [local, ci]
+    class: L3
+    auto_fix: false
+    timeout_sec: 10
+  - id: pytest-baseline        # pytest -q -x --timeout=60 (если тесты есть)
+    level: baseline
+    languages: [python]
+    channel: [local, ci]
+    class: L3
+    auto_fix: false
+    timeout_sec: 30
+  - id: build                  # npm run build / tsc --noEmit
+    level: baseline
+    languages: [typescript, react]
+    channel: [local, ci]
+    class: L2
+    auto_fix: false
+    timeout_sec: 30
+  # ─── FULL (максимальный уровень) ───
+  - id: ruff-check             # полный набор правил
+    level: full
+    languages: [python]
+    channel: [local, ci]
+    class: L3
+    auto_fix: true             # ruff --fix — но правила жёсткие: full-only
+    timeout_sec: 10
+  - id: pyright
+    level: full
+    languages: [python]
+    channel: [local, ci]
+    class: L3
+    auto_fix: false
+    timeout_sec: 20
+  - id: eslint
+    level: full
+    languages: [typescript, react]
+    channel: [local, ci]
+    class: L3
+    auto_fix: false
+    timeout_sec: 15
+  - id: pytest-full            # strict-маркеры, LDD IMP:9, Honesty R1/R4
+    level: full
+    languages: [python]
+    channel: [local, ci]
+    class: L3
+    auto_fix: false
+    timeout_sec: 120
+  - id: grep-summary           # GREP_SUMMARY в первых 10 строках кода
+    level: full
+    languages: [python, typescript, react, sh]
+    channel: [local, ci]
+    class: L3
+    auto_fix: false
+    timeout_sec: 5
+  - id: drift-gate             # GENERATED-файлы практик не тронуты руками
+    level: full                # (proposed: non-blocking)
+    languages: [all]
+    channel: [local, ci, verify]   # verify: только version-warn (на VPS нет файлов проекта)
+    class: L2
+    auto_fix: true             # repair: make project-sync-practices
+    timeout_sec: 5
+  - id: verify-contracts       # L1: секреты/порты/env-контракт/healthcheck/labels
+    level: full                # (L1-класс исполняется и в baseline — см. §4.5)
+    languages: [all]
+    channel: [verify]
+    class: L1
+    auto_fix: false
+    timeout_sec: 10

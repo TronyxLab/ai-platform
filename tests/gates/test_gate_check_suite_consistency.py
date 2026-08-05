@@ -1,5 +1,5 @@
 # GREP_SUMMARY: gate check-suite-consistency anti-drift SoT-manifest golden-parity registration no-hardcoded-checks hole-coverage
-# STRUCTURE: ▶ parse makefiles (ci.mk gate/repair.mk check*) → ◇ 0 hardcoded pytest/check-списков → ◇ validate_manifest (schema v1) → ◇ hole-coverage (check-manifests/ruff/gates-docker) → ◇ golden-паритет шагов gate (fast/full) → ◇ регистрация (allowed_verbs/check/check-diff/preflight-deprecated) → ⎋ PASS|FAIL
+# STRUCTURE: ▶ parse makefiles (ci.mk gate/repair.mk check*) → ◇ 0 hardcoded pytest/check-списков → ◇ validate_manifest (schema v1) → ◇ hole-coverage (check-manifests/ruff/gates-docker) → ◇ golden-паритет шагов gate (fast/full) → ◇ регистрация (allowed_verbs/check/check-diff/preflight-удалён) → ⎋ PASS|FAIL
 # region MODULE_CONTRACT
 ## @purpose  Anti-drift consistency gate for the check-suite SoT manifest (DevPlan 120 §3.7,
 ##           по образцу parity-гейтов 116 T9). Пять проверок:
@@ -11,7 +11,7 @@
 ##           4. Паритет gate-шагов: `check_suite list --gate-mode fast|full` == golden-списки
 ##              (сняты с прежнего ci.mk ДО порта — Wave 1 фиксирует, этот тест сверяет)
 ##           5. Регистрация: make-таргеты чеков в allowed_verbs entrypoint-manifest.yaml;
-##              check/check-diff зарегистрированы; preflight — deprecated
+##              check/check-diff зарегистрированы; preflight — удалён (DevPlan 138 W1)
 ## @scope    Read-only скан: makefiles/ci.mk, makefiles/repair.mk, core/check-suite.yaml,
 ##           core/entrypoint-manifest.yaml. Никаких subprocess-запусков проверок.
 ## @invariants
@@ -114,11 +114,11 @@ def _extract_target_body(content: str, target: str) -> str:
 
 
 # region HELPER_extract_target_def
-## @purpose  Извлечь строку определения таргета (например «preflight: check» — make-зависимость).
+## @purpose  Извлечь строку определения таргета (например «check:» с make-зависимостями).
 ## @io       ⇥ content: str, target: str → str (строка определения, пусто если не найден)
 ## @complexity O(L)
 def _extract_target_def(content: str, target: str) -> str:
-    """Extract the make target definition line (may carry dependencies, e.g. `preflight: check`)."""
+    """Extract the make target definition line (may carry dependencies, e.g. `up: discover-modules`)."""
     for line in content.splitlines():
         if re.fullmatch(rf"\s*{re.escape(target)}:.*", line):
             return line.strip()
@@ -137,19 +137,20 @@ def _extract_target_def(content: str, target: str) -> str:
 @pytest.mark.gate
 @ldd_trajectory
 def test_no_hardcoded_checks_in_makefiles(caplog) -> None:
-    """AC-1: gate/check/check-diff/preflight таргеты вызывают ТОЛЬКО check_suite.
+    """AC-1: gate/check/check-diff таргеты вызывают ТОЛЬКО check_suite.
 
     # ▶ извлечь тела таргетов → ◇ pytest/-m-выражения в телах? → RED · └→ PASS
 
     ## @purpose — DevPlan 120 §3.7 п.1 (AC-1): pytest-маркерные выражения и списки чеков
     ##            НЕ захардкожены в makefiles/ci.mk (gate) и makefiles/repair.mk
-    ##            (check/check-diff/preflight) — разрешены только вызовы check_suite run.
+    ##            (check/check-diff) — разрешены только вызовы check_suite run.
+    ##            preflight-портал удалён (DevPlan 138 W1 — таргет удалён, literal-бан).
     ## @io — caplog → ⎋ None (pytest.fail со списком нарушений)
     ## @complexity O(L) где L = строки make-файлов
     """
     # 🧪 TRAP[TEST] · DevPlan 120 §3.7 п.1 · AC-1 анти-дрейф: возврат хардкода в makefiles
     # · Regression: добавление pytest -m "..." или списка чеков прямо в gate/check-таргеты
-    # · Scenario: скан тел таргетов {gate, check, check-diff, preflight}
+    # · Scenario: скан тел таргетов {gate, check, check-diff}
     # · Last fail: N/A (новый гейт — прежний ci.mk:138-239 содержал 8+ hardcoded-выражений)
     # · Remove if: makefiles перестанут быть точкой входа проверок (полный Python-диспетчер)
     caplog.set_level(logging.INFO)
@@ -158,8 +159,7 @@ def test_no_hardcoded_checks_in_makefiles(caplog) -> None:
     repair_content = _REPAIR_MK_PATH.read_text(encoding="utf-8")
 
     # Таргеты-порталы: тело должно содержать check_suite и НЕ содержать pytest/-m "…"
-    # preflight — alias через make-зависимость (preflight: check) — портал check_suite
-    # не обязан присутствовать в теле (DevPlan 120 AC-5: deprecated-алиас).
+    # preflight-портал удалён в DevPlan 138 W1 (таргет удалён, literal-бан в phantom-refs).
     portals: dict[str, tuple[str, str]] = {
         "gate (ci.mk)": (
             _extract_target_def(ci_content, "gate"),
@@ -173,18 +173,11 @@ def test_no_hardcoded_checks_in_makefiles(caplog) -> None:
             _extract_target_def(repair_content, "check-diff"),
             _extract_target_body(repair_content, "check-diff"),
         ),
-        "preflight (repair.mk)": (
-            _extract_target_def(repair_content, "preflight"),
-            _extract_target_body(repair_content, "preflight"),
-        ),
     }
 
     violations: list[str] = []
-    for name, (def_line, body) in portals.items():
+    for name, (_def_line, body) in portals.items():
         has_portal = "check_suite" in body
-        # deprecated-алиас: make-зависимость preflight: check делегирует на check-портал
-        if re.fullmatch(r"preflight:\s*check", def_line):
-            has_portal = True
         if not has_portal:
             violations.append(f"{name}: тело таргета не содержит вызов check_suite")
         # pytest-инвокация или маркерное выражение в теле = хардкод проверки
@@ -366,20 +359,20 @@ def test_gate_step_parity_golden(caplog) -> None:
 @pytest.mark.gate
 @ldd_trajectory
 def test_registration_in_entrypoint_manifest(caplog) -> None:
-    """П.5: make-таргеты чеков в allowed_verbs; check/check-diff зарегистрированы; preflight deprecated.
+    """П.5: make-таргеты чеков в allowed_verbs; check/check-diff зарегистрированы; preflight удалён.
 
-    # ▶ repair: preflight.deprecated + check/check-diff записи → ◇ allowed_verbs покрытие
+    # ▶ repair: preflight ОТСУТСТВУЕТ + check/check-diff записи → ◇ allowed_verbs покрытие
     #   (cmd «make X» → X ∈ allowed_verbs ∪ system_exceptions) → RED · └→ PASS
 
     ## @purpose — DevPlan 120 §3.7 п.5: каждый check, чья команда вызывает make-таргет,
     ##            регистрируется в allowed_verbs entrypoint-manifest.yaml (триада
     ##            Makefile/AGENTS.md/манифест); check/check-diff — канонические глаголы;
-    ##            preflight — deprecated: true (compose-safe-up прецедент).
+    ##            preflight — таргет УДАЛЁН (DevPlan 138 W1), запись и глагол отсутствуют.
     ## @io — caplog → ⎋ None (pytest.fail со списком нарушений регистрации)
     ## @complexity O(C * V) где C = чеков, V = allowed_verbs
     """
     # 🧪 TRAP[TEST] · DevPlan 120 §3.7 п.5 · регистрационный дрейф
-    # · Regression: новый make-таргет в манифесте без allowed_verbs; preflight без deprecated
+    # · Regression: новый make-таргет в манифесте без allowed_verbs; возврат preflight
     # · Scenario: скан cmd «make X» чеков против allowed_verbs + system_exceptions
     # · Last fail: N/A (новый гейт)
     # · Remove if: entrypoint-manifest.yaml перестанет быть реестром глаголов
@@ -412,10 +405,13 @@ def test_registration_in_entrypoint_manifest(caplog) -> None:
     if "check-diff" not in allowed_verbs:
         violations.append("глагол 'check-diff' не зарегистрирован в allowed_verbs")
 
+    # DevPlan 138 W1: preflight-таргет удалён — запись в repair-секции и глагол запрещены
     repair_section = entrypoint.get("repair", []) or []
     preflight_entries = [e for e in repair_section if isinstance(e, dict) and e.get("make_target") == "preflight"]
-    if not preflight_entries or not preflight_entries[0].get("deprecated"):
-        violations.append("preflight: запись в manifest не помечена deprecated: true")
+    if preflight_entries:
+        violations.append("preflight: запись в repair-секции manifest существует — таргет удалён (DevPlan 138 W1)")
+    if "preflight" in allowed_verbs:
+        violations.append("preflight: глагол в allowed_verbs — таргет удалён (DevPlan 138 W1)")
 
     logger.info(
         "[IMP:8][consistency][registration] allowed_verbs=%d, violations=%d", len(allowed_verbs), len(violations)
@@ -430,7 +426,8 @@ def test_registration_in_entrypoint_manifest(caplog) -> None:
         )
 
     logger.critical(
-        "[IMP:9][consistency][registration] PASS: make-таргеты чеков зарегистрированы; check/check-diff в allowed_verbs; preflight deprecated"
+        "[IMP:9][consistency][registration] PASS: make-таргеты чеков зарегистрированы; "
+        "check/check-diff в allowed_verbs; preflight удалён (DevPlan 138 W1)"
     )
 
 

@@ -204,6 +204,45 @@ Gate-тест ДОЛЖЕН быть зарегистрирован в **трёх
 
 ---
 
+## Удаление тестов (inventory-процедура, DevPlan 139 §4.1)
+
+**Инвариант:** каждое удаление теста из дерева ОБЯЗАНО пройти inventory-процедуру —
+иначе `tests/gates/test_gate_test_inventory.py` падает (Anti-Tamper T18: любое
+недокументированное удаление = RED). Порядок жёсткий: changelog СНАЧАЛА, удаление ПОТОМ,
+регенерация в конце.
+
+```
+┌─ агент удаляет тест ─┐
+│ 1. rg удаляемые nodeid по дереву (нет живых ссылок: tests/, core/, docs/, .github/) │
+│ 2. запись в tests/test_inventory_changes.yaml (nodeid/reason/issue/approved_by)     │
+│ 3. удаление файла/директории                                                        │
+│ 4. make test-inventory-sync → регенерация tests/test_inventory.yaml                 │
+│ 5. pytest tests/gates/test_gate_test_inventory.py -q → PASS (сверка baseline)       │
+│ 6. git diff — changelog + baseline + удаления в одном коммите                        │
+└─ commit ─┘
+```
+
+**Формат changelog-записи** (`tests/test_inventory_changes.yaml`, секция `removed:`):
+
+```yaml
+removed:
+  - nodeid: "tests/test_old_module.py::test_removed"
+    reason: "Краткое обоснование удаления (дубль/синтетика/консолидация)"
+    issue: "NNN-slug TASK-X | issue-номер"
+    approved_by: "@reviewer"
+```
+
+**Правила:**
+1. `nodeid` — точная строка из `pytest --collect-only -q` (совпадает с baseline test_inventory.yaml).
+2. Rename-пара (файл/тест переименован, не удалён) — exception гейта: `test_negative_rename_exempt`; в changelog — обе стороны пары.
+3. Добавление тестов — всегда OK, changelog НЕ требуется (гейт ловит только удаления).
+4. Anti-Tamper T18: `tests/tools/sync_inventory.py` и `tests/gates/test_gate_test_inventory.py`
+   НЕ редактировать и НЕ импортировать друг из друга (намеренные копии XML-парсера).
+5. Полная регенерация baseline — `make test-inventory-sync` (только он пишет test_inventory.yaml).
+6. Косметика/рефакторинг БЕЗ изменения набора nodeid → регенерация не обязательна (baseline не дрейфует).
+
+---
+
 ## Cross-References
 
 | Файл | Назначение |

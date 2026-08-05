@@ -15,7 +15,8 @@
 ##   - PRIMARY extraction: СТАТИЧЕСКИЙ парсинг .PHONY-строк из Makefile + makefiles/*.mk —
 ##     детерминированный между машинами (P-14: make -np вывод отличался gmake 4.4.1 vs make 4.4 CI).
 ##     make -np остаётся только fallback при пустом статическом результате.
-##   - system_exceptions filtered out: help, venv, pre-commit-*, test-*, gate-*
+##   - system_exceptions filtered out: help, venv, pre-commit-*, test-*, gate-*,
+##     _get_all_profiles (технический помощник parity-гейта, DevPlan 138 S3)
 ##   - All other sections preserved verbatim from existing manifest
 ##   - Empty lists are written as [] in YAML (never null)
 ## @rationale DevPlan 051 Wave 2: automated sync eliminates drift between Makefile targets and
@@ -34,6 +35,9 @@
 ##                        in main(). allowed_verbs and gates NEVER read from manifest (DevPlan 090 T6).
 ##           2026-08-03 | DevPlan 123 T2 (P-14): статический .PHONY-парсинг → PRIMARY;
 ##                        make -np → fallback; diff в --check — полный (не 20 строк)
+##           2026-08-05 | DevPlan 138 S3 (W2): SYSTEM_EXCEPTIONS += _get_all_profiles
+##                        (технический помощник parity-гейта test_gate_profiles_parity,
+##                        не каноническая операция; таргет жив в helpers.mk .PHONY)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -59,6 +63,14 @@ SYSTEM_EXCEPTIONS: set[str] = {
     "venv",
     "pre-commit-install",
     "pre-commit-run",
+    # DevPlan 138 S3 (W2): _get_all_profiles — технический помощник parity-гейта
+    # test_gate_profiles_parity (проверка (c): `make _get_all_profiles` stdout == SoT),
+    # НЕ каноническая операция платформы. Таргет ОСТАЁТСЯ в makefiles/helpers.mk .PHONY
+    # и работает — гейт test_all_makefile_targets_in_allowed_verbs пропускает системные
+    # исключения (by-design, DevPlan 119 G2). Прецедент: help/venv/pre-commit-*.
+    # Rev: если _get_all_profiles обретёт второго потребителя-человека — вернуть
+    # в allowed_verbs (удалить отсюда + из name_linter.system_exceptions).
+    "_get_all_profiles",
 }
 
 # Canonical targets that bypass SYSTEM_PREFIXES filter
@@ -517,12 +529,14 @@ def _generate_output(merged: dict) -> str:
         "## @rationale Machine-readable registry enables CI gates to validate the Makefile/AGENTS.md/filesystem triad\n"
         "# endregion MODULE_CONTRACT\n"
         "#\n"
-        "# ⚠️ СИСТЕМНЫЕ ИСКЛЮЧЕНИЯ .PHONY (DevPlan 119 G2, by-design отклонение от @invariants):\n"
-        "#   help, venv, pre-commit-install, pre-commit-run НЕ входят в allowed_verbs/глоссарий —\n"
-        "#   это системные утилиты Makefile (справка, venv bootstrap, pre-commit hook setup), а НЕ\n"
-        "#   канонические операции платформы. Они не исполняются на VPS/CI-нодах, не имеют\n"
-        "#   delegates_to-цепочек и не требуют регистрации в core/AGENTS.md. См. секцию\n"
-        "#   name_linter.system_exceptions ниже и core/AGENTS.md «Системные исключения .PHONY».\n"
+        "# ⚠️ СИСТЕМНЫЕ ИСКЛЮЧЕНИЯ .PHONY (DevPlan 119 G2 + DevPlan 138 S3, by-design отклонение от @invariants):\n"
+        "#   help, venv, pre-commit-install, pre-commit-run — системные утилиты Makefile (справка,\n"
+        "#   venv bootstrap, pre-commit hook setup); _get_all_profiles — технический помощник\n"
+        "#   parity-гейта test_gate_profiles_parity (DevPlan 138 S3). Все они НЕ входят в\n"
+        "#   allowed_verbs/глоссарий: не канонические операции платформы, не исполняются на\n"
+        "#   VPS/CI-нодах как контрактные операции и не требуют delegates_to-цепочек в\n"
+        "#   core/AGENTS.md. См. секцию name_linter.system_exceptions ниже и core/AGENTS.md\n"
+        "#   «Системные исключения .PHONY».\n"
         "#   Полный перечень системных исключений — name_linter.system_exceptions.\n"
         "\n"
     )

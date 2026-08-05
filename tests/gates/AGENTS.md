@@ -146,9 +146,6 @@ make check CHECK_CACHE=0
 
 # Узкая диагностика по изменённым файлам
 make check-diff
-
-# Deprecated-алиас (обратная совместимость; мигрируйте на check)
-make preflight
 ```
 
 ### Инварианты

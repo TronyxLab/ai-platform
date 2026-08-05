@@ -21,6 +21,9 @@
 ##            eliminates the entire class of risk. Strangler-Fig Tier 1 extraction.
 ## @changes
 ##   LAST_CHANGE: 2026-07-25 | Created (DevPlan 074)
+##   2026-08-05 | DevPlan 138 W3: экстракция run_monitoring_reconfig(project_dir, project_name,
+##               node_name, platform_root) из main() + _render_step (non-blocking шаги);
+##               main() делегирует — CLI fallback жив; вызов из DeployOrchestrator post_deploy_chain
 # endregion MODULE_CONTRACT
 
 import argparse
@@ -566,6 +569,85 @@ def reload_monitoring_services() -> list[RenderResult]:
 # region CLI_ENTRY
 
 
+# region FUNC__render_step
+def _render_step(step_name: str, fn, *args) -> None:
+    """Execute one monitoring render step non-blocking (DevPlan 138 §4.3).
+
+    ## @purpose  Best-effort контракт post-deploy chain: ошибка шага → log WARN (IMP:8),
+    ##            continue — деплой НЕ фейлится. Паритет до-B8 module-hook семантики.
+    ## @io       ⇥ step_name: str — имя шага (alert_rules/prometheus/grafana/loki/reload/langfuse/catalog)
+    ##           ⇥ fn: callable — render-функция (facade, возвращает RenderResult|list[RenderResult])
+    ##           ⇥ *args — аргументы render-функции → ⎋ None
+    ## @complexity O(1)
+    ## @invariants
+    ##   - Исключения НЕ пробрасываются (non-blocking, R5 — сбой рендера не роняет деплой)
+    ##   - Успешный шаг логируется на IMP:8 со статусом RenderResult (или "done" для list)
+    ##   - Сбой логируется на IMP:8 WARN с текстом исключения
+    """
+    try:
+        result = fn(*args)
+        status = getattr(result, "status", "done")
+        logger.info("[IMP:8][hook] %s render: %s", step_name, status)
+    except Exception as e:  # noqa: EXC — best-effort контракт post-deploy chain (DevPlan 138 §4.3)
+        logger.warning("[IMP:8][hook] %s render WARN (non-fatal): %s", step_name, e)
+
+
+# endregion FUNC__render_step
+
+
+# region FUNC_run_monitoring_reconfig
+def run_monitoring_reconfig(
+    project_dir: Path,
+    project_name: str,
+    node_name: str,
+    platform_root: Path,
+) -> int:
+    """Post-deploy monitoring reconfiguration (паритет до-B8 module-hook).
+
+    ## @purpose  Execute full monitoring reconfig for one project after deploy.
+    ##            Паритет удалённого module-hook (волна 118 B8): рендер на каждый receive,
+    ##            non-blocking. Экстрагирован из main() (DevPlan 138 W3 §4.3) для вызова
+    ##            из DeployOrchestrator._run_post_deploy_chain (lazy-import, WARN non-fatal).
+    ## @io       ⇥ project_dir: Path — директория проекта (содержит ai-platform.yaml)
+    ##           ⇥ project_name: str — имя проекта
+    ##           ⇥ node_name: str — имя ноды ("" если неизвестно — O3 DevPlan 138 §10.1)
+    ##           ⇥ platform_root: Path — корень платформы (node-configs/, defaults.yaml)
+    ##           ⎋ int — 0 всегда (best-effort); исключения НЕ пробрасываются
+    ## @complexity O(N) где N = render-операции
+    ## @invariants
+    ##   - build_merged_config None → return 0 (skip, log IMP:8, рендер не выполняется)
+    ##   - Все render-шаги non-blocking (ошибка → log WARN, continue)
+    ##   - Порядок: alert_rules → prometheus → grafana → loki → reload → langfuse → catalog
+    ##   - Возвращает 0 всегда; исключения НЕ пробрасываются в orchestrator (R5)
+    ##   - Логирует [IMP:9][hook] START/DONE (AC W3: receive-деплой с monitoring-секцией)
+    ## @rationale Native Python, 0 subprocess. Паритет до-B8: module-hook monitoring удалён
+    ##            волной 118 (B8), вызов так и не был подключён — рендер висел ручным.
+    """
+    logger.info("[IMP:9][hook] === monitoring on-project-deploy START: %s ===", project_name)
+
+    # Load + merge configs (L1←L2←L3); None → skip (backward compat, без рендера)
+    config = build_merged_config(project_dir, project_name, node_name, platform_root)
+    if config is None:
+        logger.info("[IMP:8][hook] No monitoring config — skipping hook for %s", project_name)
+        return 0
+
+    # Execute all render steps non-blocking. Порядок паритет исходного main():
+    # alert_rules → prometheus → grafana → loki → reload → langfuse → catalog (DevPlan 138 §4.3).
+    _render_step("alert_rules", generate_alert_rules, config)
+    _render_step("prometheus", generate_prometheus_target, config)
+    _render_step("grafana", generate_grafana_dashboard, config)
+    _render_step("loki", update_loki_retention, config)
+    _render_step("reload", reload_monitoring_services)
+    _render_step("langfuse", create_langfuse_project, config)
+    _render_step("catalog", refresh_catalog, platform_root)
+
+    logger.info("[IMP:9][hook] === monitoring on-project-deploy DONE: %s ===", project_name)
+    return 0
+
+
+# endregion FUNC_run_monitoring_reconfig
+
+
 def _build_arg_parser() -> argparse.ArgumentParser:
     """Build CLI argument parser.
 
@@ -597,9 +679,9 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 def main() -> int:
     """CLI entry point: orchestrate full monitoring reconfiguration pipeline.
 
-    ## @purpose  Parse args → resolve platform_root → build merged config →
-    ##            execute all monitoring component renderers → exit.
-    ##            Matches execution order of original main() (lines 392-413).
+    ## @purpose  Parse args → resolve platform_root → logging →
+    ##            return run_monitoring_reconfig(...) (DevPlan 138 W3 §4.3).
+    ##            Полная обратная совместимость CLI (make render-monitoring fallback жив).
     ## @io
     ##   CLI: --project-dir <dir> --project <name> [--node <name>]
     ##   ⎋ int — exit code (0 = success, 1 = config parse error)
@@ -609,6 +691,7 @@ def main() -> int:
     ##   - No monitoring section → exit 0 (backward compat)
     ##   - All render steps are non-blocking (errors logged, continue)
     ##   - Execution order: alert_rules → prometheus → grafana → loki → reload → langfuse → catalog
+    ##   - Логика в run_monitoring_reconfig (single source для CLI и DeployOrchestrator)
     """
     parser = _build_arg_parser()
     args = parser.parse_args()
@@ -627,25 +710,7 @@ def main() -> int:
         stream=sys.stderr,
     )
 
-    logger.info("[IMP:9][hook] === monitoring on-project-deploy START: %s ===", project_name)
-
-    # Load + merge configs
-    config = build_merged_config(project_dir, project_name, node_name, platform_root)
-    if config is None:
-        logger.info("[IMP:8][hook] No monitoring config — skipping hook for %s", project_name)
-        return 0
-
-    # Execute all render steps (order matches original main)
-    generate_alert_rules(config)
-    generate_prometheus_target(config)
-    generate_grafana_dashboard(config)
-    update_loki_retention(config)
-    reload_monitoring_services()
-    create_langfuse_project(config)
-    refresh_catalog(platform_root)
-
-    logger.info("[IMP:9][hook] === monitoring on-project-deploy DONE: %s ===", project_name)
-    return 0
+    return run_monitoring_reconfig(project_dir, project_name, node_name, platform_root)
 
 
 if __name__ == "__main__":

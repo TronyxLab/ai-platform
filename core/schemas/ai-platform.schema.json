@@ -5,7 +5,11 @@
   "title": "AI-Platform Declaration",
   "description": "Schema for ai-platform.yaml — единый манифест проекта AI Platform (деплой + мониторинг). ЕДИНСТВЕННЫЙ формат манифеста — AD-2.",
   "type": "object",
-  "required": ["name", "type", "target_node"],
+  "required": [
+    "name",
+    "type",
+    "target_node"
+  ],
   "additionalProperties": false,
   "properties": {
     "name": {
@@ -16,7 +20,11 @@
     },
     "type": {
       "type": "string",
-      "enum": ["frontend", "backend", "fullstack"],
+      "enum": [
+        "frontend",
+        "backend",
+        "fullstack"
+      ],
       "description": "Project category (frontend|backend|fullstack) — agent is a platform component, not a project type (AD-1)"
     },
     "target_node": {
@@ -83,14 +91,27 @@
               "pattern": "^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\\.)+[a-zA-Z]{2,}$",
               "description": "FQDN — must be a valid domain name (e.g. 'example.com')"
             },
-            {"type": "boolean", "enum": [false]}
+            {
+              "type": "boolean",
+              "enum": [
+                false
+              ]
+            }
           ],
           "description": "FQDN — first claimant owns it; conflict blocks deploy (06 §5.4 E1)"
         },
         "database": {
           "oneOf": [
-            {"type": "string", "minLength": 1},
-            {"type": "boolean", "enum": [false]}
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "boolean",
+              "enum": [
+                false
+              ]
+            }
           ],
           "description": "Database name or false"
         },
@@ -121,7 +142,11 @@
         },
         "profile": {
           "type": "string",
-          "enum": ["default", "premium", "unlimited"],
+          "enum": [
+            "default",
+            "premium",
+            "unlimited"
+          ],
           "description": "Access profile from LLM policy — defines models, budget, rate limits"
         },
         "overrides": {
@@ -131,7 +156,9 @@
           "properties": {
             "models": {
               "type": "array",
-              "items": {"type": "string"},
+              "items": {
+                "type": "string"
+              },
               "description": "Override model alias list"
             },
             "budget": {
@@ -175,7 +202,9 @@
     },
     "modules": {
       "type": "array",
-      "items": {"type": "string"},
+      "items": {
+        "type": "string"
+      },
       "description": "Module names required by this project"
     },
     "env": {
@@ -184,7 +213,9 @@
     },
     "secrets_ref": {
       "type": "array",
-      "items": {"type": "string"},
+      "items": {
+        "type": "string"
+      },
       "description": "Keys from decrypted secrets to inject as env vars"
     },
     "monitoring": {
@@ -228,28 +259,58 @@
         }
       },
       "additionalProperties": false
+    },
+    "quality": {
+      "type": "object",
+      "required": [
+        "level"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "level": {
+          "type": "string",
+          "enum": [
+            "baseline",
+            "full",
+            "auto"
+          ],
+          "description": "Уровень практик (DevPlan 137): baseline|full|auto (default auto, решение 2026-08-05)"
+        }
+      }
     }
   },
   "if": {
     "properties": {
       "needs": {
         "properties": {
-          "expose": { "const": true }
+          "expose": {
+            "const": true
+          }
         },
-        "required": ["expose"]
+        "required": [
+          "expose"
+        ]
       }
     },
-    "required": ["needs"]
+    "required": [
+      "needs"
+    ]
   },
   "then": {
     "properties": {
       "needs": {
         "properties": {
           "domain": {
-            "not": { "enum": [false] }
+            "not": {
+              "enum": [
+                false
+              ]
+            }
           }
         },
-        "required": ["domain"]
+        "required": [
+          "domain"
+        ]
       }
     }
   }

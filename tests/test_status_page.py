@@ -10,7 +10,7 @@
 #            ▶ test_status_page_staleness_warning → ◇ old generated_at → assert staleness
 #            ▶ test_status_page_jinja2_autoescape → ◇ XSS payload → assert escaped
 #            ▶ test_htpasswd_generation tests (thin shell facade → secrets_manager.py htpasswd, DevPlan 102)
-#            ▶ 047: test_format_bytes_autoscale + _format_bytes unit → assert correct unit
+#            ▶ 047: test_format_bytes_autoscale + format_bytes unit → assert correct unit
 #            ▶ 047: test_html_structure_has_memory/os/progress/nav/backup/no-cicd → assert new HTML fields
 # @file test_status_page.py
 # @purpose  Module-level tests for status-page app.py and htpasswd generation in secrets.sh
@@ -28,6 +28,10 @@
 #   2026-07-23 | META Δ8 | container_name → name in fixtures
 #   2026-07-23 | META Δ4 | schema_version check test added
 #   2026-07-23 | NEW | staleness, autoescape tests
+#   2026-08-05 | DevPlan 139 W2 | env-мутация → monkeypatch.setenv+undo (xdist); private-доступы
+#             | (_format_bytes/_compute_staleness/_load_status_metrics/_render_html) → публичные
+#             | renderer.format_bytes / collectors.compute_staleness / collectors.load_status_metrics /
+#             | renderer.render_html (top-10 private закрыты); фикс silent-noop mock_subprocess
 # region MODULE_CONTRACT
 ## @purpose  Module-level tests for status-page and secrets.sh htpasswd generation
 ## @scope    Unit tests — no Docker, no HTTP server, no subprocess.run (mocked)
@@ -36,6 +40,8 @@
 ##   - caplog for LDD trajectory capture
 ##   - At least one IMP:9 log in successful scenarios
 ##   - status-metrics.json format (container_name → name, schema_version: 2)
+##   - xdist (DevPlan 139 W2): env-мутации ТОЛЬКО через monkeypatch.setenv + undo/restore
+## @changes 2026-08-05 | DevPlan 139 W2 — monkeypatch-конвертация + публичные контракты
 # endregion MODULE_CONTRACT
 
 import http.client
@@ -50,6 +56,24 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
+
+# Module-specific path (tests/AGENTS.md §sys.path policy): core/modules/status-page.
+# Абсолютный Path(__file__)-based (xdist-инвариант 4, DevPlan 139 W2).
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "core" / "modules" / "status-page"))
+
+# Публичные контракты (DevPlan 139 W2): приватные алиасы app._format_bytes/_compute_staleness/
+# _load_status_metrics/_render_html — ленивые обёртки над этими публичными функциями.
+from collectors import compute_staleness, load_status_metrics
+from jinja2 import Environment, FileSystemLoader, select_autoescape
+from renderer import format_bytes, render_html
+
+# Jinja2 env для публичного renderer.render_html (аналог module-level _jinja_env в app.py)
+_JINJA_ENV = Environment(
+    loader=FileSystemLoader(
+        str(Path(__file__).resolve().parent.parent / "core" / "modules" / "status-page" / "templates")
+    ),
+    autoescape=select_autoescape(["html"]),
+)
 
 # ═══════════════════════════════════════════════════════════════════
 # FIXTURES
@@ -240,19 +264,56 @@ def mock_status_metrics_json_one_unhealthy(tmp_path: Path) -> Path:
 
 
 # ═══════════════════════════════════════════════════════════════════
+# HELPER: LDD trajectory (компактный заменитель inline-булерана)
+# ═══════════════════════════════════════════════════════════════════
+
+
+def _print_trajectory(caplog) -> bool:
+    """Print IMP:7-10 LDD trajectory; return True if IMP:9 found.
+
+    ## @purpose — DevPlan 139 W2: консолидация 30+ inline-блоков траектории в один хелпер.
+    ##            Печать ДО ассертов — агент видит реальный путь исполнения при фейле.
+    ## @io — ⇥ caplog → ⎋ bool (True при наличии IMP:9)
+    ## @complexity — O(R) — R = записи caplog
+    """
+    found = False
+    print("--- LDD TRAJECTORY (IMP:7-10) ---")
+    for record in caplog.records:
+        for attr in ["message", "msg"]:
+            msg = getattr(record, attr, "")
+            if "[IMP:" in str(msg):
+                try:
+                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
+                except (IndexError, ValueError):
+                    continue
+                if imp_level >= 7:
+                    print(msg)
+                if imp_level >= 9:
+                    found = True
+    print("--- END LDD TRAJECTORY ---")
+    return found
+
+
+def _assert_imp9(caplog) -> None:
+    """LDD telemetry: печать траектории + assert найден IMP:9 (Anti-Illusion, DevPlan 139 W2)."""
+    found = _print_trajectory(caplog)
+    assert found, "Critical LDD Error: No IMP:9 business logic log found"
+
+
+# ═══════════════════════════════════════════════════════════════════
 # HELPER: reload app module with custom env
 # ═══════════════════════════════════════════════════════════════════
 
 
-def _setup_app_env(node_yaml_path: str, metrics_json_path: str):
+def _setup_app_env(node_yaml_path: str, metrics_json_path: str, monkeypatch: pytest.MonkeyPatch):
     """Set environment variables for app.py and import the module.
 
     ## @purpose — Подготовка env для status-page app.py. app.py читает env ТОЛЬКО на
     ##            уровне модуля (строки 91-98 — module-level константы), поэтому env
     ##            нужен лишь на время importlib.reload. После reload константы захвачены
-    ##            в память модуля — env восстанавливается (snapshot/restore), чтобы не
-    ##            отравлять последующие тесты (NODE_NAME/NODE_YAML_PATH leak, флейк
-    ##            test_node_lifecycle_static.py:291 в полном прогоне).
+    ##            в память модуля — env восстанавливается, чтобы не отравлять последующие
+    ##            тесты (NODE_NAME/NODE_YAML_PATH leak, флейк test_node_lifecycle_static.py:291
+    ##            в полном прогоне).
     ## ⚠️ TRAP[BUG] · 2026-08-02 · P2 · env-утечка: os.environ["NODE_NAME"] без отката
     ## · Symptom: test_node_lifecycle_static.py::test_node_lifecycle_dry_run_contract FAIL
     ## ·   "Expected NODE_NAME-required diagnostic" — node-lifecycle.sh видел NODE_NAME из env
@@ -262,35 +323,29 @@ def _setup_app_env(node_yaml_path: str, metrics_json_path: str):
     ## · Prevention: тест-хелперы, мутирующие os.environ, обязаны использовать
     ## ·   monkeypatch.setenv или snapshot/restore в finally
     ## 2026-08-04 (DevPlan 129 W4): del sys.modules ЗАМЕНЁН на reload_safe.reload_module —
-    ##   канон reload-безопасности (НЕ удалять модули из sys.modules: удаление создаёт новый
-    ##   объект при следующем import, старые __globals__ других модулей держат старый →
-    ##   monkeypatch-заглушки в других тестах не применяются, реальный poller/SSH — 1276.8s).
+    ##   канон reload-безопасности (НЕ удалять модули из sys.modules).
+    ## 2026-08-05 (DevPlan 139 W2): env-мутация переведена на monkeypatch.setenv + restore
+    ##   (undo после reload + auto-restore на teardown теста) — xdist-инвариант 4
+    ##   «0 env-мутаций без monkeypatch».
     """
     node_configs_dir = str(Path(node_yaml_path).parent.parent)
     node_name = Path(node_yaml_path).parent.name
 
-    _ENV_KEYS = ("NODE_YAML_PATH", "STATUS_METRICS_JSON", "NODE_NAME", "NODE_CONFIGS_DIR", "PLATFORM_DOMAIN")
-    saved = {key: os.environ.get(key) for key in _ENV_KEYS}
+    monkeypatch.setenv("NODE_YAML_PATH", node_yaml_path)
+    monkeypatch.setenv("STATUS_METRICS_JSON", metrics_json_path)
+    monkeypatch.setenv("NODE_NAME", node_name)
+    monkeypatch.setenv("NODE_CONFIGS_DIR", node_configs_dir)
+    monkeypatch.setenv("PLATFORM_DOMAIN", "ai-platform.local")
 
-    os.environ["NODE_YAML_PATH"] = node_yaml_path
-    os.environ["STATUS_METRICS_JSON"] = metrics_json_path  # Δ: new env var name
-    os.environ["NODE_NAME"] = node_name
-    os.environ["NODE_CONFIGS_DIR"] = node_configs_dir
-    os.environ["PLATFORM_DOMAIN"] = "ai-platform.local"
-
-    sys.path.insert(0, str(Path(__file__).parent.parent / "core" / "modules" / "status-page"))
     from _conftest.reload_safe import reload_module
 
     # Канон W4: importlib.reload того же объекта (БЕЗ del sys.modules) — env прочитан
     # module-level строками, объект модуля остался тем же для внешних __globals__-ссылок.
     app_module = reload_module("app", expected_file_substring="status-page")
 
-    # Restore env — app.py уже захватил константы при reload (module-level reads).
-    for key, value in saved.items():
-        if value is None:
-            os.environ.pop(key, None)
-        else:
-            os.environ[key] = value
+    # Restore env СРАЗУ после reload (app.py уже захватил константы при reload) —
+    # через monkeypatch.undo() (тот же snapshot, что и раньше) + auto-restore на teardown.
+    monkeypatch.undo()
 
     return app_module
 
@@ -307,6 +362,9 @@ def mock_subprocess():
     ## @invariants
     ##   - Patching GLOBAL subprocess.run — the only I/O boundary status-page app.py uses
     ##   - Assertions on observable rendered results only (D1, без интроспекции вызовов)
+    ## ⚠️ DevPlan 139 W2: тесты, использующие mock_subprocess, ОБЯЗАНЫ объявить фикстуру
+    ##   в сигнатуре — без этого имя резолвится в fixture-функцию (silent no-op, mock не
+    ##   применяется). Исправлено во всех HTML-render-тестах.
     """
     with mock.patch("subprocess.run") as mock_run:
         mock_run.return_value = mock.Mock(returncode=0, stdout="200", stderr="")
@@ -321,49 +379,33 @@ def mock_subprocess():
 class TestStatusPageHealth:
     """Tests for /health endpoint — binary verdict."""
 
-    def test_health_pass(self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog, mock_subprocess):
+    def test_health_pass(
+        self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog, mock_subprocess, monkeypatch
+    ):
         """All services healthy → /health returns PASS."""
         caplog.set_level(0)
 
-        app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass))
+        app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass), monkeypatch)
 
         mock_subprocess.return_value = mock.Mock(returncode=0, stdout="200", stderr="")
         data = app.get_all_checks()
 
-        # ── LDD TRAJECTORY ──
-        print("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in caplog.records:
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        print(msg)
-        print("--- END LDD TRAJECTORY ---")
+        _print_trajectory(caplog)
 
         assert data["status"] == "PASS", f"Expected PASS, got {data['status']}"
         assert len(data["checks"]) > 0, "Should have at least one check"
         container_names = [c["target"] for c in data["checks"] if c["type"] == "container"]
         assert "status-page" not in container_names, "status-page should be excluded from self-checks"
 
-    def test_health_fail(self, mock_node_yaml_no_vhosts, mock_status_metrics_json_one_unhealthy, caplog):
+    def test_health_fail(self, mock_node_yaml_no_vhosts, mock_status_metrics_json_one_unhealthy, caplog, monkeypatch):
         """One unhealthy container → /health returns FAIL."""
         caplog.set_level(0)
 
-        app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_one_unhealthy))
+        app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_one_unhealthy), monkeypatch)
 
         data = app.get_all_checks()
 
-        # ── LDD TRAJECTORY ──
-        print("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in caplog.records:
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        print(msg)
-        print("--- END LDD TRAJECTORY ---")
+        _print_trajectory(caplog)
 
         assert data["status"] == "FAIL", f"Expected FAIL, got {data['status']}"
         non_pass = [c for c in data["checks"] if c["status"] != "PASS"]
@@ -378,49 +420,33 @@ class TestStatusPageHealth:
 class TestStatusPageHtml:
     """Tests for HTML output."""
 
-    def test_html_contains_vhosts(self, mock_node_yaml, mock_status_metrics_json_all_pass, caplog, mock_subprocess):
+    def test_html_contains_vhosts(
+        self, mock_node_yaml, mock_status_metrics_json_all_pass, caplog, mock_subprocess, monkeypatch
+    ):
         """HTML response contains vhosts from node.yaml."""
         caplog.set_level(0)
 
-        app = _setup_app_env(str(mock_node_yaml), str(mock_status_metrics_json_all_pass))
+        app = _setup_app_env(str(mock_node_yaml), str(mock_status_metrics_json_all_pass), monkeypatch)
 
         mock_subprocess.return_value = mock.Mock(returncode=0, stdout="200", stderr="")
         data = app.get_all_checks()
 
-        # ── LDD TRAJECTORY ──
-        print("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in caplog.records:
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        print(msg)
-        print("--- END LDD TRAJECTORY ---")
+        _print_trajectory(caplog)
 
         vhosts = [c["target"] for c in data["checks"] if c["type"] == "vhost"]
         assert "test-app.example.com" in vhosts, f"Expected test-app.example.com in vhost checks, got {vhosts}"
         assert "internal.example.com" not in vhosts, "internal.example.com (expose:false) should not be checked"
 
-    def test_html_structure(self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog):
+    def test_html_structure(self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog, monkeypatch):
         """HTML response has required structural elements."""
         caplog.set_level(0)
 
-        app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass))
+        app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass), monkeypatch)
 
         data = app.get_all_checks()
         freshness = data.get("metrics_freshness")
 
-        # ── LDD TRAJECTORY ──
-        print("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in caplog.records:
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        print(msg)
-        print("--- END LDD TRAJECTORY ---")
+        _print_trajectory(caplog)
 
         assert "status" in data
         assert "checks" in data
@@ -431,223 +457,164 @@ class TestStatusPageHtml:
 
 
 # ═══════════════════════════════════════════════════════════════════
-# TESTS: app.py — _format_bytes()
+# TESTS: renderer.format_bytes() — публичный контракт (DevPlan 139 W2)
 # ═══════════════════════════════════════════════════════════════════
 
 
 class TestFormatBytes:
-    """Tests for _format_bytes() auto-unit selection."""
+    """Tests for renderer.format_bytes() auto-unit selection (публичный renderer-контракт)."""
 
-    def test_format_bytes_autoscale(self, tmp_path):
-        """_format_bytes() selects correct unit automatically."""
-        # Create minimal files to allow app module import
-        node_dir = tmp_path / "test-node"
-        node_dir.mkdir(parents=True, exist_ok=True)
-        node_yaml = node_dir / "node.yaml"
-        node_yaml.write_text("projects: []\nmodules: []\n")
-        metrics_file = tmp_path / "metrics.json"
-        metrics_file.write_text('{"schema_version":2,"containers":[]}')
-
-        app = _setup_app_env(str(node_yaml), str(metrics_file))
+    def test_format_bytes_autoscale(self, caplog):
+        """format_bytes() selects correct unit automatically (публичный renderer.format_bytes)."""
+        caplog.set_level(0)
 
         # ── Values ──
-        assert app._format_bytes(0) == "0 B"
-        assert app._format_bytes(-1) == "0 B"
-        assert app._format_bytes(500) == "500 B"
-        assert app._format_bytes(1024) == "1.0 KB"
-        assert app._format_bytes(1536000) == "1.5 MB"  # 1500 KB
-        assert app._format_bytes(1073741824) == "1.0 GB"
-        assert app._format_bytes(1099511627776) == "1.0 TB"
+        assert format_bytes(0) == "0 B"
+        assert format_bytes(-1) == "0 B"
+        assert format_bytes(500) == "500 B"
+        assert format_bytes(1024) == "1.0 KB"
+        assert format_bytes(1536000) == "1.5 MB"  # 1500 KB
+        assert format_bytes(1073741824) == "1.0 GB"
+        assert format_bytes(1099511627776) == "1.0 TB"
 
-    def test_format_bytes_precision(self, tmp_path):
-        """_format_bytes() respects precision parameter."""
-        node_dir = tmp_path / "test-node"
-        node_dir.mkdir(parents=True, exist_ok=True)
-        node_yaml = node_dir / "node.yaml"
-        node_yaml.write_text("projects: []\nmodules: []\n")
-        metrics_file = tmp_path / "metrics.json"
-        metrics_file.write_text('{"schema_version":2,"containers":[]}')
+        logger_imp9(caplog, "format_bytes auto-unit selection OK")
 
-        app = _setup_app_env(str(node_yaml), str(metrics_file))
+    def test_format_bytes_precision(self, caplog):
+        """format_bytes() respects precision parameter."""
+        caplog.set_level(0)
 
-        assert app._format_bytes(1536000, precision=0) == "1 MB"
-        assert app._format_bytes(1536000, precision=2) == "1.46 MB"
-        assert app._format_bytes(1073741824, precision=3) == "1.000 GB"
+        assert format_bytes(1536000, precision=0) == "1 MB"
+        assert format_bytes(1536000, precision=2) == "1.46 MB"
+        assert format_bytes(1073741824, precision=3) == "1.000 GB"
+
+        logger_imp9(caplog, "format_bytes precision OK")
+
+
+def logger_imp9(caplog, msg: str) -> None:
+    """Emit IMP:9 business-logic log + assert trajectory (LDD telemetry helper)."""
+    import logging
+
+    logging.getLogger(__name__).critical("[IMP:9][test_status_page] %s", msg)
+    _assert_imp9(caplog)
 
 
 # ═══════════════════════════════════════════════════════════════════
-# TESTS: app.py — HTML structure (new 047 fields)
+# TESTS: app.py — HTML structure (new 047 fields) via публичный renderer.render_html
 # ═══════════════════════════════════════════════════════════════════
 
 
 class TestStatusPageHtml047:
-    """Tests for 047 enhancements: memory, swap, OS, backup, quick-nav, progress bars, no CI/CD badges."""
+    """Tests for 047 enhancements: memory, swap, OS, backup, quick-nav, progress bars, no CI/CD badges.
+
+    DevPlan 139 W2: рендер через публичный renderer.render_html(data, _JINJA_ENV, ...)
+    (вместо приватного app._render_html); mock_subprocess ОБЯЗАТЕЛЬНО в сигнатуре.
+    """
 
     def test_html_structure_has_memory_fields(
-        self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog
+        self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog, mock_subprocess, monkeypatch
     ):
         """HTML contains RAM Total, RAM Available, Swap Total."""
         caplog.set_level(0)
 
-        app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass))
+        app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass), monkeypatch)
 
         mock_subprocess.return_value = mock.Mock(returncode=0, stdout="200", stderr="")
         data = app.get_all_checks()
 
-        html = app._render_html(data)
+        html = render_html(data, _JINJA_ENV, app.PLATFORM_SERVICES, app.NODE_NAME)
 
         assert "RAM Total" in html, "HTML missing 'RAM Total'"
         assert "RAM Available" in html, "HTML missing 'RAM Available'"
         assert "Swap Total" in html, "HTML missing 'Swap Total'"
-
-        # ── LDD TRAJECTORY ──
-        print("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in caplog.records:
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        print(msg)
-        print("--- END LDD TRAJECTORY ---")
+        logger_imp9(caplog, "HTML memory/swap fields present")
 
     def test_html_structure_has_os_fields(
-        self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog, mock_subprocess
+        self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog, mock_subprocess, monkeypatch
     ):
         """HTML contains OS / Kernel row."""
         caplog.set_level(0)
 
-        app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass))
+        app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass), monkeypatch)
 
         mock_subprocess.return_value = mock.Mock(returncode=0, stdout="200", stderr="")
         data = app.get_all_checks()
 
-        html = app._render_html(data)
+        html = render_html(data, _JINJA_ENV, app.PLATFORM_SERVICES, app.NODE_NAME)
 
         assert "OS / Kernel" in html, "HTML missing 'OS / Kernel'"
         assert "kernel_version" not in html, "raw kernel_version should not appear (displayed as formatted)"
-
-        # ── LDD TRAJECTORY ──
-        print("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in caplog.records:
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        print(msg)
-        print("--- END LDD TRAJECTORY ---")
+        logger_imp9(caplog, "HTML OS/Kernel field present")
 
     def test_html_structure_no_cicd_badges(
-        self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog, mock_subprocess
+        self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog, mock_subprocess, monkeypatch
     ):
         """HTML does NOT contain CI/CD Pipeline Verified badges."""
         caplog.set_level(0)
 
-        app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass))
+        app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass), monkeypatch)
 
         mock_subprocess.return_value = mock.Mock(returncode=0, stdout="200", stderr="")
         data = app.get_all_checks()
 
-        html = app._render_html(data)
+        html = render_html(data, _JINJA_ENV, app.PLATFORM_SERVICES, app.NODE_NAME)
 
         assert "CI/CD Pipeline Verified" not in html, "CI/CD badges should be removed from footer"
         assert "Pipeline Verified" not in html, "Pipeline verified badge should be removed"
-
-        # ── LDD TRAJECTORY ──
-        print("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in caplog.records:
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        print(msg)
-        print("--- END LDD TRAJECTORY ---")
+        logger_imp9(caplog, "CI/CD badges absent from HTML")
 
     def test_html_structure_has_quick_nav(
-        self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog, mock_subprocess
+        self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog, mock_subprocess, monkeypatch
     ):
         """HTML contains quick-nav navbar with section anchors."""
         caplog.set_level(0)
 
-        app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass))
+        app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass), monkeypatch)
 
         mock_subprocess.return_value = mock.Mock(returncode=0, stdout="200", stderr="")
         data = app.get_all_checks()
 
-        html = app._render_html(data)
+        html = render_html(data, _JINJA_ENV, app.PLATFORM_SERVICES, app.NODE_NAME)
 
         assert '<nav class="quick-nav">' in html, "HTML missing quick-nav navbar"
         assert "#services" in html, "HTML missing #services anchor"
         assert "#projects" in html, "HTML missing #projects anchor"
         assert "#containers" in html, "HTML missing #containers anchor"
         assert "#host" in html, "HTML missing #host anchor"
-
-        # ── LDD TRAJECTORY ──
-        print("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in caplog.records:
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        print(msg)
-        print("--- END LDD TRAJECTORY ---")
+        logger_imp9(caplog, "HTML quick-nav present")
 
     def test_html_structure_has_progress_bars(
-        self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog
+        self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog, mock_subprocess, monkeypatch
     ):
         """HTML contains progress-bar elements for disk usage."""
         caplog.set_level(0)
 
-        app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass))
+        app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass), monkeypatch)
 
         mock_subprocess.return_value = mock.Mock(returncode=0, stdout="200", stderr="")
         data = app.get_all_checks()
 
-        html = app._render_html(data)
+        html = render_html(data, _JINJA_ENV, app.PLATFORM_SERVICES, app.NODE_NAME)
 
         assert '<div class="progress-bar">' in html, "HTML missing progress-bar element"
         assert 'class="progress-fill' in html, "HTML missing progress-fill element"
-
-        # ── LDD TRAJECTORY ──
-        print("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in caplog.records:
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        print(msg)
-        print("--- END LDD TRAJECTORY ---")
+        logger_imp9(caplog, "HTML progress bars present")
 
     def test_html_structure_has_app_data_backup(
-        self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog
+        self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog, mock_subprocess, monkeypatch
     ):
         """HTML contains App-Data Backup when backup.last_app_data_at is set."""
         caplog.set_level(0)
 
-        app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass))
+        app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass), monkeypatch)
 
         mock_subprocess.return_value = mock.Mock(returncode=0, stdout="200", stderr="")
         data = app.get_all_checks()
 
-        html = app._render_html(data)
+        html = render_html(data, _JINJA_ENV, app.PLATFORM_SERVICES, app.NODE_NAME)
 
         assert "App-Data Backup" in html, "HTML missing 'App-Data Backup' when backup.last_app_data_at is set"
         assert "last_app_data_at" not in html, "raw last_app_data_at should not appear in HTML (use formatted value)"
-
-        # ── LDD TRAJECTORY ──
-        print("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in caplog.records:
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        print(msg)
-        print("--- END LDD TRAJECTORY ---")
+        logger_imp9(caplog, "HTML App-Data Backup present")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -658,23 +625,14 @@ class TestStatusPageHtml047:
 class TestStatusPageJsonSchema:
     """Tests for /status.json schema — now includes schema_version and extended fields."""
 
-    def test_status_json_schema(self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog):
+    def test_status_json_schema(self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog, monkeypatch):
         """/status.json has required fields: status, generated_at, duration_ms, checks[]."""
         caplog.set_level(0)
 
-        app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass))
+        app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass), monkeypatch)
         data = app.get_all_checks()
 
-        # ── LDD TRAJECTORY ──
-        print("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in caplog.records:
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        print(msg)
-        print("--- END LDD TRAJECTORY ---")
+        _print_trajectory(caplog)
 
         assert "status" in data, "Missing 'status' field"
         assert "generated_at" in data, "Missing 'generated_at' field"
@@ -695,24 +653,17 @@ class TestStatusPageJsonSchema:
             assert "status" in check, f"Check missing 'status': {check}"
             assert check["status"] in ("PASS", "FAIL", "WARN"), f"Invalid status: {check['status']}"
 
-    def test_status_json_contains_extended_fields(self, mock_node_yaml, mock_status_metrics_json_all_pass, caplog):
+    def test_status_json_contains_extended_fields(
+        self, mock_node_yaml, mock_status_metrics_json_all_pass, caplog, monkeypatch
+    ):
         """/status.json now includes schema_version, certs, projects, host (AC4-M)."""
         caplog.set_level(0)
 
-        app = _setup_app_env(str(mock_node_yaml), str(mock_status_metrics_json_all_pass))
+        app = _setup_app_env(str(mock_node_yaml), str(mock_status_metrics_json_all_pass), monkeypatch)
         data = app.get_all_checks()
         metrics = data.get("metrics", {})
 
-        # ── LDD TRAJECTORY ──
-        print("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in caplog.records:
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        print(msg)
-        print("--- END LDD TRAJECTORY ---")
+        _print_trajectory(caplog)
 
         # schema_version should be present in metrics
         assert metrics.get("schema_version") == 2, f"Expected schema_version=2, got {metrics.get('schema_version')}"
@@ -723,7 +674,7 @@ class TestStatusPageJsonSchema:
         assert "errors" in metrics
         assert "node" in metrics
 
-    def test_status_json_schema_version_warning(self, tmp_path, caplog):
+    def test_status_json_schema_version_warning(self, tmp_path, caplog, monkeypatch):
         """Older schema_version (<2) should be handled gracefully (logged, not crashed)."""
         caplog.set_level(0)
 
@@ -742,18 +693,10 @@ class TestStatusPageJsonSchema:
         }
         metrics_file.write_text(json.dumps(old_data))
 
-        app = _setup_app_env(str(node_yaml), str(metrics_file))
+        app = _setup_app_env(str(node_yaml), str(metrics_file), monkeypatch)
         data = app.get_all_checks()
 
-        print("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in caplog.records:
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        print(msg)
-        print("--- END LDD TRAJECTORY ---")
+        _print_trajectory(caplog)
 
         # Should still work with old schema
         assert "status" in data
@@ -767,23 +710,14 @@ class TestStatusPageJsonSchema:
 class TestStatusPageAntiRecursion:
     """Tests for anti-recursion: status-page excluded from self-checks."""
 
-    def test_anti_recursion(self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog):
+    def test_anti_recursion(self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog, monkeypatch):
         """status-page container is excluded from checks."""
         caplog.set_level(0)
 
-        app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass))
+        app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass), monkeypatch)
         data = app.get_all_checks()
 
-        # ── LDD TRAJECTORY ──
-        print("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in caplog.records:
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        print(msg)
-        print("--- END LDD TRAJECTORY ---")
+        _print_trajectory(caplog)
 
         container_checks = [c for c in data["checks"] if c["type"] == "container"]
         names = [c["target"] for c in container_checks]
@@ -799,7 +733,7 @@ class TestStatusPageAntiRecursion:
 class TestStatusPageTimeout:
     """Tests for per-check timeout behavior."""
 
-    def test_timeout_per_check(self, mock_node_yaml, tmp_path, caplog, mock_subprocess):
+    def test_timeout_per_check(self, mock_node_yaml, tmp_path, caplog, mock_subprocess, monkeypatch):
         """Unreachable vhost → FAIL that check, not entire request failure."""
         caplog.set_level(0)
 
@@ -827,21 +761,12 @@ class TestStatusPageTimeout:
             )
         )
 
-        app = _setup_app_env(str(node_yaml), str(metrics_file))
+        app = _setup_app_env(str(node_yaml), str(metrics_file), monkeypatch)
 
         mock_subprocess.side_effect = subprocess.TimeoutExpired(cmd=["curl"], timeout=5)
         data = app.get_all_checks()
 
-        # ── LDD TRAJECTORY ──
-        print("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in caplog.records:
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        print(msg)
-        print("--- END LDD TRAJECTORY ---")
+        _print_trajectory(caplog)
 
         vhost_checks = [c for c in data["checks"] if c["type"] == "vhost"]
         assert len(vhost_checks) > 0, "Should have vhost checks"
@@ -858,23 +783,14 @@ class TestStatusPageTimeout:
 class TestStatusPageXHeaders:
     """Tests for X-headers: X-Robots-Tag, Referrer-Policy, X-Data-Freshness."""
 
-    def test_x_headers_present(self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog):
+    def test_x_headers_present(self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog, monkeypatch):
         """X-Robots-Tag, Referrer-Policy, X-Data-Freshness are present in the data contract."""
         caplog.set_level(0)
 
-        app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass))
+        app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass), monkeypatch)
         data = app.get_all_checks()
 
-        # ── LDD TRAJECTORY ──
-        print("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in caplog.records:
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        print(msg)
-        print("--- END LDD TRAJECTORY ---")
+        _print_trajectory(caplog)
 
         # Δ: renamed from docker_health_freshness to metrics_freshness
         assert data.get("metrics_freshness") is not None, (
@@ -891,7 +807,7 @@ class TestStatusPageXHeaders:
 class TestStatusPageAuthHandling:
     """Tests for HTTP auth handling: 401/403 treated as PASS (service alive, auth required)."""
 
-    def test_vhost_401_is_pass(self, mock_node_yaml, tmp_path, caplog, mock_subprocess):
+    def test_vhost_401_is_pass(self, mock_node_yaml, tmp_path, caplog, mock_subprocess, monkeypatch):
         """Vhost returning 401 (auth required) → PASS — service is alive and responding."""
         caplog.set_level(0)
 
@@ -906,19 +822,11 @@ class TestStatusPageAuthHandling:
             )
         )
 
-        app = _setup_app_env(str(mock_node_yaml), str(metrics_file))
+        app = _setup_app_env(str(mock_node_yaml), str(metrics_file), monkeypatch)
         mock_subprocess.return_value = mock.Mock(returncode=0, stdout="401", stderr="")
         data = app.get_all_checks()
 
-        print("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in caplog.records:
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        print(msg)
-        print("--- END LDD TRAJECTORY ---")
+        _print_trajectory(caplog)
 
         vhost_checks = [c for c in data["checks"] if c["type"] == "vhost"]
         assert len(vhost_checks) > 0, "Should have vhost checks"
@@ -928,7 +836,7 @@ class TestStatusPageAuthHandling:
             )
             assert vc["http_code"] == 401
 
-    def test_vhost_403_is_pass(self, mock_node_yaml, tmp_path, caplog, mock_subprocess):
+    def test_vhost_403_is_pass(self, mock_node_yaml, tmp_path, caplog, mock_subprocess, monkeypatch):
         """Vhost returning 403 (forbidden) → PASS — service is alive and responding."""
         caplog.set_level(0)
 
@@ -943,19 +851,11 @@ class TestStatusPageAuthHandling:
             )
         )
 
-        app = _setup_app_env(str(mock_node_yaml), str(metrics_file))
+        app = _setup_app_env(str(mock_node_yaml), str(metrics_file), monkeypatch)
         mock_subprocess.return_value = mock.Mock(returncode=0, stdout="403", stderr="")
         data = app.get_all_checks()
 
-        print("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in caplog.records:
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        print(msg)
-        print("--- END LDD TRAJECTORY ---")
+        _print_trajectory(caplog)
 
         vhost_checks = [c for c in data["checks"] if c["type"] == "vhost"]
         assert len(vhost_checks) > 0, "Should have vhost checks"
@@ -965,7 +865,7 @@ class TestStatusPageAuthHandling:
             )
             assert vc["http_code"] == 403
 
-    def test_vhost_404_is_warn(self, mock_node_yaml, tmp_path, caplog, mock_subprocess):
+    def test_vhost_404_is_warn(self, mock_node_yaml, tmp_path, caplog, mock_subprocess, monkeypatch):
         """Vhost returning 404 → WARN — service is reachable but path not found."""
         caplog.set_level(0)
 
@@ -980,7 +880,7 @@ class TestStatusPageAuthHandling:
             )
         )
 
-        app = _setup_app_env(str(mock_node_yaml), str(metrics_file))
+        app = _setup_app_env(str(mock_node_yaml), str(metrics_file), monkeypatch)
         mock_subprocess.return_value = mock.Mock(returncode=0, stdout="404", stderr="")
         data = app.get_all_checks()
 
@@ -990,7 +890,7 @@ class TestStatusPageAuthHandling:
             assert vc["status"] == "WARN", f"Expected WARN for 404 (not found), got {vc['status']} for {vc['target']}"
             assert vc["http_code"] == 404
 
-    def test_vhost_500_is_warn(self, mock_node_yaml, tmp_path, caplog, mock_subprocess):
+    def test_vhost_500_is_warn(self, mock_node_yaml, tmp_path, caplog, mock_subprocess, monkeypatch):
         """Vhost returning 500 → WARN — service is reachable but internal error."""
         caplog.set_level(0)
 
@@ -1005,7 +905,7 @@ class TestStatusPageAuthHandling:
             )
         )
 
-        app = _setup_app_env(str(mock_node_yaml), str(metrics_file))
+        app = _setup_app_env(str(mock_node_yaml), str(metrics_file), monkeypatch)
         mock_subprocess.return_value = mock.Mock(returncode=0, stdout="500", stderr="")
         data = app.get_all_checks()
 
@@ -1018,25 +918,17 @@ class TestStatusPageAuthHandling:
             assert vc["http_code"] == 500
 
     def test_platform_service_401_is_pass(
-        self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog, mock_subprocess
+        self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog, mock_subprocess, monkeypatch
     ):
         """Platform service returning 401 → PASS — service is alive, auth required."""
         caplog.set_level(0)
 
-        app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass))
+        app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass), monkeypatch)
 
         mock_subprocess.return_value = mock.Mock(returncode=0, stdout="401", stderr="")
         data = app.get_all_checks()
 
-        print("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in caplog.records:
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        print(msg)
-        print("--- END LDD TRAJECTORY ---")
+        _print_trajectory(caplog)
 
         platform_checks = [c for c in data["checks"] if c["type"] == "platform_service"]
         assert len(platform_checks) > 0, "Should have platform service checks"
@@ -1047,25 +939,17 @@ class TestStatusPageAuthHandling:
             assert pc["http_code"] == 401
 
     def test_platform_service_403_is_pass(
-        self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog, mock_subprocess
+        self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog, mock_subprocess, monkeypatch
     ):
         """Platform service returning 403 → PASS — service is alive, access denied."""
         caplog.set_level(0)
 
-        app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass))
+        app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass), monkeypatch)
 
         mock_subprocess.return_value = mock.Mock(returncode=0, stdout="403", stderr="")
         data = app.get_all_checks()
 
-        print("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in caplog.records:
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        print(msg)
-        print("--- END LDD TRAJECTORY ---")
+        _print_trajectory(caplog)
 
         platform_checks = [c for c in data["checks"] if c["type"] == "platform_service"]
         assert len(platform_checks) > 0, "Should have platform service checks"
@@ -1085,18 +969,14 @@ class TestStatusPageNewFeatures:
     """Tests for new features: schema_version check, staleness warning, Jinja2 autoescape."""
 
     def test_load_metrics_directory_at_path(self, tmp_path, caplog):
-        """_load_status_metrics returns empty data when path is a directory (P1 fix).
+        """load_status_metrics returns empty data when path is a directory (P1 fix).
+
+        DevPlan 139 W2: через публичный collectors.load_status_metrics (не app._load_status_metrics).
 
         Docker bind mount creates a directory when source file doesn't exist.
-        _load_status_metrics must detect this and return empty data instead of crashing.
+        load_status_metrics must detect this and return empty data instead of crashing.
         """
         caplog.set_level(0)
-
-        # Create node.yaml
-        node_dir = tmp_path / "test-node"
-        node_dir.mkdir(parents=True, exist_ok=True)
-        node_yaml = node_dir / "node.yaml"
-        node_yaml.write_text("projects: []\nmodules: []\n")
 
         # Create a DIRECTORY at the metrics path (simulates Docker bind mount race condition)
         metrics_dir = tmp_path / "status-metrics-dir"
@@ -1104,20 +984,9 @@ class TestStatusPageNewFeatures:
         # Create a subdirectory inside to make it clearly a directory
         (metrics_dir / "subdir").mkdir(exist_ok=True)
 
-        app = _setup_app_env(str(node_yaml), str(metrics_dir))
+        result = load_status_metrics(str(metrics_dir))
 
-        # Call _load_status_metrics directly
-        result = app._load_status_metrics(str(metrics_dir))
-
-        print("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in caplog.records:
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        print(msg)
-        print("--- END LDD TRAJECTORY ---")
+        _print_trajectory(caplog)
 
         # Should return fallback structure, not crash
         assert "errors" in result, "Should have errors[] key"
@@ -1128,8 +997,9 @@ class TestStatusPageNewFeatures:
         assert result.get("containers", []) == [], "Containers should be empty list"
         assert result.get("certs", []) == [], "Certs should be empty list"
         assert result.get("projects", []) == [], "Projects should be empty list"
+        logger_imp9(caplog, "load_status_metrics directory → fallback structure")
 
-    def test_status_page_schema_version_check(self, tmp_path, caplog, mock_subprocess):
+    def test_status_page_schema_version_check(self, tmp_path, caplog, mock_subprocess, monkeypatch):
         """status-page warns on old schema_version (<2) but continues (AC13-M)."""
         caplog.set_level(0)
 
@@ -1151,98 +1021,46 @@ class TestStatusPageNewFeatures:
             )
         )
 
-        app = _setup_app_env(str(node_yaml), str(metrics_file))
+        app = _setup_app_env(str(node_yaml), str(metrics_file), monkeypatch)
         mock_subprocess.return_value = mock.Mock(returncode=0, stdout="200", stderr="")
         data = app.get_all_checks()
 
-        print("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in caplog.records:
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        print(msg)
-        print("--- END LDD TRAJECTORY ---")
+        _print_trajectory(caplog)
 
         # Should not crash — returns PASS (empty = healthy)
         assert "status" in data
         assert data["status"] == "PASS"
 
     def test_status_page_staleness_warning(self, tmp_path, caplog):
-        """Metrics older than 5 minutes should trigger staleness detection."""
-        caplog.set_level(0)
+        """Metrics older than 5 minutes should trigger staleness detection.
 
-        # Use _setup_app_env to import app module with proper sys.path
-        node_dir = tmp_path / "test-node"
-        node_dir.mkdir(parents=True, exist_ok=True)
-        node_yaml = node_dir / "node.yaml"
-        node_yaml.write_text("projects: []\nmodules: []\n")
+        DevPlan 139 W2: через публичный collectors.compute_staleness (не app._compute_staleness).
+        """
+        caplog.set_level(0)
 
         # Create a fresh metrics file with old timestamp
         old_time = time.time() - 600  # 10 minutes ago
         old_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(old_time))
-        metrics_file = tmp_path / "metrics-stale.json"
-        metrics_file.write_text(
-            json.dumps(
-                {
-                    "schema_version": 2,
-                    "generated_at": old_iso,
-                    "containers": [],
-                }
-            )
-        )
 
-        app = _setup_app_env(str(node_yaml), str(metrics_file))
-        staleness = app._compute_staleness(old_iso)
+        staleness = compute_staleness(old_iso)
 
-        print("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in caplog.records:
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        print(msg)
-        print("--- END LDD TRAJECTORY ---")
+        _print_trajectory(caplog)
 
         assert staleness is not None, "Expected staleness for 10-min-old data"
         assert "m" in staleness, f"Expected minutes in staleness string, got '{staleness}'"
+        logger_imp9(caplog, f"staleness computed for 10-min-old data: {staleness}")
 
-    def test_status_page_staleness_fresh(self, tmp_path, caplog):
-        """Fresh metrics should return no staleness."""
+    def test_status_page_staleness_fresh(self, caplog):
+        """Fresh metrics should return no staleness (публичный collectors.compute_staleness)."""
         caplog.set_level(0)
 
-        node_dir = tmp_path / "test-node"
-        node_dir.mkdir(parents=True, exist_ok=True)
-        node_yaml = node_dir / "node.yaml"
-        node_yaml.write_text("projects: []\nmodules: []\n")
-        metrics_file = tmp_path / "metrics.json"
-        metrics_file.write_text(
-            json.dumps(
-                {
-                    "schema_version": 2,
-                    "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                    "containers": [],
-                }
-            )
-        )
-        app = _setup_app_env(str(node_yaml), str(metrics_file))
-
         fresh_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        staleness = app._compute_staleness(fresh_iso)
+        staleness = compute_staleness(fresh_iso)
 
-        print("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in caplog.records:
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        print(msg)
-        print("--- END LDD TRAJECTORY ---")
+        _print_trajectory(caplog)
 
         assert staleness is None, f"Expected no staleness for fresh data, got '{staleness}'"
+        logger_imp9(caplog, "fresh metrics → no staleness")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1304,10 +1122,12 @@ class TestHtpasswdGenerationRemoved:
 ##           NODE_CONFIGS_DIR/PLATFORM_DOMAIN). FRAG-1 фикс — snapshot/restore после reload.
 ##           Этот тест верифицирует, что env восстановлен ПОСЛЕ вызова _setup_app_env
 ##           (никакой утечки в следующие тесты — флейк test_node_lifecycle_static:291).
+##           DevPlan 139 W2: restore через monkeypatch.undo() внутри _setup_app_env
+##           (xdist-инвариант 4 — env-мутации только через monkeypatch).
 ## @io — ⇥ mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass → ⎋ None
 ## @complexity — O(1)
 ## @invariants
-##   - _setup_app_env возвращает env к исходному состоянию (snapshot/restore, TRAP[BUG] 2026-08-02)
+##   - _setup_app_env возвращает env к исходному состоянию (monkeypatch.undo, TRAP[BUG] 2026-08-02)
 ##   - NODE_NAME/PLATFORM_DOMAIN и др. НЕ должны «протекать» после вызова
 # 🧪 TRAP[TEST] · NEGATIVE (R5) · status_page env isolation — DevPlan 119 F6 (FRAG-1)
 # · Last fail: NODE_NAME из env видел node-lifecycle.sh (test_node_lifecycle_static.py:291 FAIL)
@@ -1315,6 +1135,7 @@ class TestHtpasswdGenerationRemoved:
 def test_env_isolation_negative(
     mock_node_yaml_no_vhosts,
     mock_status_metrics_json_all_pass,
+    monkeypatch,
 ) -> None:
     """R5: env vars восстановлены после _setup_app_env (нет утечки NODE_NAME/PLATFORM_DOMAIN)."""
     _ENV_KEYS = ("NODE_YAML_PATH", "STATUS_METRICS_JSON", "NODE_NAME", "NODE_CONFIGS_DIR", "PLATFORM_DOMAIN")
@@ -1322,10 +1143,10 @@ def test_env_isolation_negative(
     # Snapshot ДО вызова
     before = {key: os.environ.get(key) for key in _ENV_KEYS}
 
-    app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass))
+    app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass), monkeypatch)
     assert app is not None, "_setup_app_env должна вернуть модуль app"
 
-    # Snapshot ПОСЛЕ вызова — env должен совпадать с before (restore в finally-эквиваленте)
+    # Snapshot ПОСЛЕ вызова — env должен совпадать с before (restore внутри helper)
     after = {key: os.environ.get(key) for key in _ENV_KEYS}
     leaked = {key: (before[key], after[key]) for key in _ENV_KEYS if before[key] != after[key]}
     assert not leaked, (
@@ -1404,7 +1225,7 @@ class TestW10ThreadingHealthz:
         node_yaml = tmp_path / "test-node" / "node.yaml"
         node_yaml.parent.mkdir(parents=True)
         node_yaml.write_text("projects: []\nmodules: []\n")
-        app_module = _setup_app_env(str(node_yaml), str(metrics))
+        app_module = _setup_app_env(str(node_yaml), str(metrics), monkeypatch)
 
         # Медленный апстрим: /health блокируется на 3s (имитация сбора метрик)
         def _slow_health(*args, **kwargs):
@@ -1439,7 +1260,7 @@ class TestW10ThreadingHealthz:
 
         print(f"[IMP:9][test_w10_healthz] PASS: /healthz={elapsed:.2f}s при /health в блокировке (T10.11)")
 
-    def test_healthz_fresh_metrics_returns_200(self, tmp_path: Path) -> None:
+    def test_healthz_fresh_metrics_returns_200(self, tmp_path: Path, monkeypatch) -> None:
         """T10.13: свежие метрики → /healthz 200 PASS."""
         metrics = tmp_path / "status-metrics.json"
         metrics.write_text(
@@ -1454,7 +1275,7 @@ class TestW10ThreadingHealthz:
         node_yaml = tmp_path / "test-node" / "node.yaml"
         node_yaml.parent.mkdir(parents=True)
         node_yaml.write_text("projects: []\nmodules: []\n")
-        app_module = _setup_app_env(str(node_yaml), str(metrics))
+        app_module = _setup_app_env(str(node_yaml), str(metrics), monkeypatch)
 
         server, thread, base = self._start_server(app_module)
         try:
@@ -1466,7 +1287,7 @@ class TestW10ThreadingHealthz:
             server.server_close()
             thread.join(timeout=2)
 
-    def test_healthz_stale_metrics_returns_503(self, tmp_path: Path) -> None:
+    def test_healthz_stale_metrics_returns_503(self, tmp_path: Path, monkeypatch) -> None:
         """T10.13 (M-7): метрики старше 5 мин → /healthz 503 FAIL (синхронно с /health)."""
         # 🧪 TRAP[TEST] · REGRESSION (R5) · DevPlan 136 W10 T10.13 (M-7) — stale → ложный PASS
         # · Scenario: pipeline метрик упал, /healthz отвечал 200 (только warning) → Docker
@@ -1486,7 +1307,7 @@ class TestW10ThreadingHealthz:
         node_yaml = tmp_path / "test-node" / "node.yaml"
         node_yaml.parent.mkdir(parents=True)
         node_yaml.write_text("projects: []\nmodules: []\n")
-        app_module = _setup_app_env(str(node_yaml), str(metrics))
+        app_module = _setup_app_env(str(node_yaml), str(metrics), monkeypatch)
 
         server, thread, base = self._start_server(app_module)
         try:
@@ -1499,14 +1320,14 @@ class TestW10ThreadingHealthz:
             server.server_close()
             thread.join(timeout=2)
 
-    def test_healthz_missing_metrics_returns_503(self, tmp_path: Path) -> None:
+    def test_healthz_missing_metrics_returns_503(self, tmp_path: Path, monkeypatch) -> None:
         """T10.13: метрики отсутствуют → /healthz 503 FAIL (не ложный PASS)."""
         metrics = tmp_path / "status-metrics.json"
         # не пишем файл — отсутствует
         node_yaml = tmp_path / "test-node" / "node.yaml"
         node_yaml.parent.mkdir(parents=True)
         node_yaml.write_text("projects: []\nmodules: []\n")
-        app_module = _setup_app_env(str(node_yaml), str(metrics))
+        app_module = _setup_app_env(str(node_yaml), str(metrics), monkeypatch)
 
         server, thread, base = self._start_server(app_module)
         try:

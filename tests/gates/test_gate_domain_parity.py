@@ -92,7 +92,7 @@ def test_platform_domain_single_sot(caplog) -> None:
                 break
     if env_line != pd_sot:
         logger.error("[IMP:10][domain_parity][a] .env.example PLATFORM_DOMAIN=%r", env_line)
-        pytest.fail(f".env.example PLATFORM_DOMAIN={env_line!r} != SoT {pd_sot!r} — run `make sync-env-defaults`")
+        pytest.fail(f".env.example PLATFORM_DOMAIN={env_line!r} != SoT {pd_sot!r} — run `make generate-env-example`")
 
     logger.info("[IMP:9][domain_parity][a] PASS: single SoT definition + generated parity (%s)", pd_sot)
 

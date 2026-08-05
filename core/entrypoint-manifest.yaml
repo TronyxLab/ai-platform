@@ -12,12 +12,14 @@
 ## @rationale Machine-readable registry enables CI gates to validate the Makefile/AGENTS.md/filesystem triad
 # endregion MODULE_CONTRACT
 #
-# ⚠️ СИСТЕМНЫЕ ИСКЛЮЧЕНИЯ .PHONY (DevPlan 119 G2, by-design отклонение от @invariants):
-#   help, venv, pre-commit-install, pre-commit-run НЕ входят в allowed_verbs/глоссарий —
-#   это системные утилиты Makefile (справка, venv bootstrap, pre-commit hook setup), а НЕ
-#   канонические операции платформы. Они не исполняются на VPS/CI-нодах, не имеют
-#   delegates_to-цепочек и не требуют регистрации в core/AGENTS.md. См. секцию
-#   name_linter.system_exceptions ниже и core/AGENTS.md «Системные исключения .PHONY».
+# ⚠️ СИСТЕМНЫЕ ИСКЛЮЧЕНИЯ .PHONY (DevPlan 119 G2 + DevPlan 138 S3, by-design отклонение от @invariants):
+#   help, venv, pre-commit-install, pre-commit-run — системные утилиты Makefile (справка,
+#   venv bootstrap, pre-commit hook setup); _get_all_profiles — технический помощник
+#   parity-гейта test_gate_profiles_parity (DevPlan 138 S3). Все они НЕ входят в
+#   allowed_verbs/глоссарий: не канонические операции платформы, не исполняются на
+#   VPS/CI-нодах как контрактные операции и не требуют delegates_to-цепочек в
+#   core/AGENTS.md. См. секцию name_linter.system_exceptions ниже и core/AGENTS.md
+#   «Системные исключения .PHONY».
 #   Полный перечень системных исключений — name_linter.system_exceptions.
 
 bootstrap:
@@ -54,10 +56,11 @@ deploy:
     → core/internal/notify/notify-hook.sh + core/internal/catalog/generate-catalog.sh
     (post-deploy, D4) → legacy-local-entrypoint → core/entrypoints/deploy.sh (DevPlan
     116 B1 T7)
-  signature: make deploy PROJECT=<dir>
+  signature: make deploy PROJECT=<dir> [NODE=<node>] [LAUNCH=1]
   operation_ru: Деплой проекта
   description: Deploy a project via git push → CI → SSH forced-command dispatch (receive
-    verb) on VPS
+    verb) on VPS; NODE triggers VPS pre-flight readiness check (W1); LAUNCH=1 delivers
+    directly via orchestrator_cli (W6, DevPlan 116 B1 T5)
 - make_target: deploy-project
   mechanism: ssh+tar
   delegates_to: core/internal/deploy/orchestrator_cli.py deliver (ForcedCommandChannel
@@ -278,6 +281,41 @@ scaffold:
   operation_ru: Генерация vhost конфигов
   description: Regenerate Nginx vhost configs from node.yaml#projects with domain
     (GENERATED, S1)
+practices:
+- make_target: project-check
+  mechanism: python-module
+  delegates_to: python3 -m core.internal.practices.check_project --project-dir <p>
+    [--level <l>] [--fix]
+  signature: make project-check PROJECT=<dir> [LEVEL=<level>]
+  operation_ru: Проверка практик проекта (K1)
+  description: 'Локальный канал K1 практик (DevPlan 137): исполнение проверок канона
+    по каталогу проекта (exit 0/1/4). L1-проверки всегда; L2/L3 — warning в baseline/proposed,
+    блок в active-full. [PRACTICES:...] вывод.'
+- make_target: project-fix
+  mechanism: python-module
+  delegates_to: python3 -m core.internal.practices.check_project --project-dir <p>
+    --fix
+  signature: make project-fix PROJECT=<dir>
+  operation_ru: Автофикс практик проекта (alias project-check --fix)
+  description: 'Alias project-check --fix: применяет auto_fix-проверки канона (hygiene,
+    ruff format/check, drift-gate repair через project-sync-practices).'
+- make_target: project-sync-practices
+  mechanism: python-module
+  delegates_to: python3 -m core.internal.practices.sync_practices --project-dir <p>
+  signature: make project-sync-practices PROJECT=<dir>
+  operation_ru: Перегенерация GENERATED-файлов практик до канона
+  description: 'Repair дрейфа практик (DevPlan 137): рендер pyproject/.pre-commit/
+    conftest/test_health + practices.lock (state + maturity-снапшот) до канона. Ручной
+    файл без GENERATED-шапки — skip (force не задан).'
+- make_target: project-set-practices
+  mechanism: python-module
+  delegates_to: python3 -m core.internal.practices.set_practices --project-dir <p>
+    --level <l>
+  signature: make project-set-practices PROJECT=<dir> LEVEL=<level>
+  operation_ru: Установка уровня практик (baseline|full|auto)
+  description: Устанавливает ai-platform.yaml#quality.level + перегенерирует GENERATED-файлы
+    и practices.lock (force). level=full → active-full ТОЛЬКО по явному согласию (автопромоута
+    нет, решение 2026-08-05); level=baseline → откат-форс. Аудит-запись перехода.
 secrets:
 - make_target: secrets-unlock
   mechanism: shell-script
@@ -347,20 +385,13 @@ test/gate:
   signature: make generate-litellm-config
   operation_ru: Генерация litellm-config.yml
   description: Generate LiteLLM config from policy.yaml via config_renderer.py.
-- make_target: sync-env-defaults
-  mechanism: python-script
-  delegates_to: core/internal/scripts/sync_env_defaults.py → .env.example
-  signature: make sync-env-defaults
-  operation_ru: Генерация .env.example из SoT
-  description: Generate .env.example from platform-env.yaml + secret-definitions.yaml.
-    Single SoT → auto-generated .env.example — never edit manually.
 - make_target: check-env-defaults
   mechanism: python-script
   delegates_to: core/internal/scripts/sync_env_defaults.py --check
   signature: make check-env-defaults
   operation_ru: Проверка актуальности .env.example
   description: 'Drift gate — fail if .env.example diverges from SoT. Repair: make
-    sync-env-defaults.'
+    generate-env-example.'
 - make_target: generate-requirements
   mechanism: python-script
   delegates_to: core/internal/scripts/sync_requirements.py → core/requirements.txt
@@ -431,16 +462,6 @@ repair:
     repair_safe: true
     repair_idempotent: true
     repair_class: L1
-- make_target: preflight
-  mechanism: python-script
-  deprecated: true
-  delegates_to: python3 -m core.internal.check_suite run --mode diagnostic (через
-    deprecated-фасад core/internal/preflight.py — DevPlan 120)
-  signature: preflight (deprecated — используйте check)
-  operation_ru: Deprecated-алиас — диагностика через make check
-  description: 'Deprecated alias for check (compose-safe-up прецедент, DevPlan 120
-    AC-5). Прежние флаги WORKERS/JSON/SKIP_FIX/VERBOSE работают через фасад. Нейминг-миграция:
-    0 упоминаний глагола preflight в .kilo/* и AGENTS.md — гейт phantom-refs.'
 - make_target: check
   mechanism: python-script
   delegates_to: python3 -m core.internal.check_suite run --mode diagnostic (SoT core/check-suite.yaml)
@@ -557,12 +578,6 @@ lifecycle:
   operation_ru: Безопасный compose up
   description: Safe docker compose up with preflight secret validation — blocks if
     required secrets missing (DevPlan 049)
-- make_target: compose-safe-up
-  mechanism: alias
-  delegates_to: up-safe (deprecated alias)
-  signature: make compose-safe-up (deprecated — use up-safe)
-  operation_ru: Deprecated alias for up-safe
-  description: Deprecated alias for up-safe. Migrate to `make up-safe`.
 - make_target: converge
   mechanism: ssh+script
   delegates_to: core/entrypoints/converge.sh → core/internal/bootstrap/converge.sh
@@ -708,13 +723,6 @@ dev:
     из SAN dev-сертификатов в маркер-блоке BEGIN/END ai-platform dev-hosts. Default
     --dry-run (exit 1 при diff), APPLY=1 → --apply (sudo, атомарно tmp+mv). Чужие
     строки /etc/hosts не трогаются.
-- make_target: _get_all_profiles
-  mechanism: makefile-echo
-  delegates_to: echo
-  signature: make _get_all_profiles
-  operation_ru: Вывод COMPOSE_PROFILES
-  description: Private helper — echo COMPOSE_PROFILES string (all 13 Docker modules
-    with profiles). Used by CI and production scripts.
 - make_target: render-monitoring
   mechanism: python-script
   delegates_to: python3 core/internal/monitoring_config_renderer.py
@@ -783,6 +791,7 @@ name_linter:
   - venv
   - pre-commit-install
   - pre-commit-run
+  - _get_all_profiles
   system_prefixes:
   - test-
   - gate-
@@ -879,7 +888,6 @@ shared_modules:
   - docker_registry_auth.py
   - state_machine.py
 allowed_verbs:
-- _get_all_profiles
 - adopt-project
 - backup
 - bootstrap-node
@@ -894,7 +902,6 @@ allowed_verbs:
 - check-profiles-parity
 - check-requirements
 - check-security
-- compose-safe-up
 - context-promote
 - converge
 - deploy
@@ -929,10 +936,13 @@ allowed_verbs:
 - new-context
 - new-project
 - node-update
-- preflight
+- project-check
+- project-fix
 - project-list
+- project-set-practices
 - project-status
 - project-sync-env
+- project-sync-practices
 - provision
 - provision-llm
 - remove-project
@@ -943,7 +953,6 @@ allowed_verbs:
 - scripts-audit
 - secrets-unlock
 - status
-- sync-env-defaults
 - templates-check
 - templates-render
 - test
@@ -1793,18 +1802,18 @@ gates:
 - id: test_no_opt_core_references
   test_file: test_gate_path_consistency.py
   description: 'Auto-discovered gate: test_no_opt_core_references'
-- id: test_no_make_preflight_in_kilo_and_agents
+- id: test_make_literal_ban_scan_detects_dummy
   test_file: test_gate_phantom_refs.py
-  description: 'Auto-discovered gate: test_no_make_preflight_in_kilo_and_agents'
+  description: 'Auto-discovered gate: test_make_literal_ban_scan_detects_dummy'
+- id: test_no_make_literal_bans_in_scan_roots
+  test_file: test_gate_phantom_refs.py
+  description: 'Auto-discovered gate: test_no_make_literal_bans_in_scan_roots'
 - id: test_no_phantom_names_in_code_and_ci
   test_file: test_gate_phantom_refs.py
   description: 'Auto-discovered gate: test_no_phantom_names_in_code_and_ci'
 - id: test_phantom_scan_detects_dummy_file
   test_file: test_gate_phantom_refs.py
   description: 'Auto-discovered gate: test_phantom_scan_detects_dummy_file'
-- id: test_preflight_ban_scan_detects_dummy
-  test_file: test_gate_phantom_refs.py
-  description: 'Auto-discovered gate: test_preflight_ban_scan_detects_dummy'
 - id: test_env_defaults_do_not_contain_dot_env_keys
   test_file: test_gate_platform_env_schema.py
   description: 'Auto-discovered gate: test_env_defaults_do_not_contain_dot_env_keys'
@@ -1868,6 +1877,30 @@ gates:
 - id: test_provision_coverage_preserved
   test_file: test_gate_platform_env_schema.py
   description: 'Auto-discovered gate: test_provision_coverage_preserved'
+- id: practices_generator_hash_deterministic
+  test_file: test_gate_practices_generators_deterministic.py
+  description: 'Auto-discovered gate: practices_generator_hash_deterministic'
+- id: practices_generators_deterministic_double_render
+  test_file: test_gate_practices_generators_deterministic.py
+  description: 'Auto-discovered gate: practices_generators_deterministic_double_render'
+- id: practices_lock_deterministic_render
+  test_file: test_gate_practices_generators_deterministic.py
+  description: 'Auto-discovered gate: practices_lock_deterministic_render'
+- id: practices_manifest_ids_unique_and_kebab
+  test_file: test_gate_practices_manifest.py
+  description: 'Auto-discovered gate: practices_manifest_ids_unique_and_kebab'
+- id: practices_manifest_levels_classes_channels
+  test_file: test_gate_practices_manifest.py
+  description: 'Auto-discovered gate: practices_manifest_levels_classes_channels'
+- id: practices_manifest_maturity_thresholds
+  test_file: test_gate_practices_manifest.py
+  description: 'Auto-discovered gate: practices_manifest_maturity_thresholds'
+- id: practices_manifest_pins_parity_with_root_precommit
+  test_file: test_gate_practices_manifest.py
+  description: 'Auto-discovered gate: practices_manifest_pins_parity_with_root_precommit'
+- id: practices_manifest_version_one
+  test_file: test_gate_practices_manifest.py
+  description: 'Auto-discovered gate: practices_manifest_version_one'
 - id: test_generated_files_match_sot
   test_file: test_gate_profiles_parity.py
   description: 'Auto-discovered gate: test_generated_files_match_sot'
@@ -2183,6 +2216,18 @@ gates:
 - id: test_all_templates_use_strict_grammar
   test_file: test_gate_template_syntax.py
   description: 'Auto-discovered gate: test_all_templates_use_strict_grammar'
+- id: templates_ai_platform_yaml_quality
+  test_file: test_gate_templates_practices.py
+  description: 'Auto-discovered gate: templates_ai_platform_yaml_quality'
+- id: templates_contain_practices_files
+  test_file: test_gate_templates_practices.py
+  description: 'Auto-discovered gate: templates_contain_practices_files'
+- id: templates_practices_have_generated_header
+  test_file: test_gate_templates_practices.py
+  description: 'Auto-discovered gate: templates_practices_have_generated_header'
+- id: templates_precommit_upstream_only
+  test_file: test_gate_templates_practices.py
+  description: 'Auto-discovered gate: templates_precommit_upstream_only'
 - id: test_compose_projects_are_unique
   test_file: test_gate_test_infra_consistency.py
   description: 'Auto-discovered gate: test_compose_projects_are_unique'
@@ -2294,6 +2339,27 @@ gates:
 - id: test_no_cyclic_dependencies
   test_file: test_gate_topology.py
   description: 'Auto-discovered gate: test_no_cyclic_dependencies'
+- id: verify_contracts_all_contracts_implemented
+  test_file: test_gate_verify_contracts.py
+  description: 'Auto-discovered gate: verify_contracts_all_contracts_implemented'
+- id: verify_contracts_baseline_green_positive
+  test_file: test_gate_verify_contracts.py
+  description: 'Auto-discovered gate: verify_contracts_baseline_green_positive'
+- id: verify_contracts_external_networks_allowlist_from_canon
+  test_file: test_gate_verify_contracts.py
+  description: 'Auto-discovered gate: verify_contracts_external_networks_allowlist_from_canon'
+- id: verify_contracts_l1_always_blocks
+  test_file: test_gate_verify_contracts.py
+  description: 'Auto-discovered gate: verify_contracts_l1_always_blocks'
+- id: verify_contracts_legacy_grace_negative
+  test_file: test_gate_verify_contracts.py
+  description: 'Auto-discovered gate: verify_contracts_legacy_grace_negative'
+- id: verify_contracts_negative_tests_present
+  test_file: test_gate_verify_contracts.py
+  description: 'Auto-discovered gate: verify_contracts_negative_tests_present'
+- id: verify_contracts_registered_in_canon
+  test_file: test_gate_verify_contracts.py
+  description: 'Auto-discovered gate: verify_contracts_registered_in_canon'
 - id: vhost_nginx_t
   test_file: test_gate_vhost_nginx_t.py
   description: 'Auto-discovered gate: vhost_nginx_t'
@@ -2369,6 +2435,21 @@ gates:
 - id: test_workflow_module_lists_match_filesystem
   test_file: test_gate_workflow_consistency.py
   description: 'Auto-discovered gate: test_workflow_module_lists_match_filesystem'
+- id: test_gitleaks_pin_parity
+  test_file: test_gate_workflow_org_agnostic.py
+  description: 'Auto-discovered gate: test_gitleaks_pin_parity'
+- id: test_negative_dotted_py_import_detected
+  test_file: test_gate_workflow_org_agnostic.py
+  description: 'Auto-discovered gate: test_negative_dotted_py_import_detected'
+- id: test_negative_python3_m_detected
+  test_file: test_gate_workflow_org_agnostic.py
+  description: 'Auto-discovered gate: test_negative_python3_m_detected'
+- id: test_negative_qualified_and_relative_action_detected
+  test_file: test_gate_workflow_org_agnostic.py
+  description: 'Auto-discovered gate: test_negative_qualified_and_relative_action_detected'
+- id: test_workflow_single_job_org_agnostic
+  test_file: test_gate_workflow_org_agnostic.py
+  description: 'Auto-discovered gate: test_workflow_single_job_org_agnostic'
 - id: test_entrypoint_manifest_deterministic
   test_file: test_gate_yaml_deterministic_output.py
   description: 'Auto-discovered gate: test_entrypoint_manifest_deterministic'

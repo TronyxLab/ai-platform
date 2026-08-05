@@ -196,6 +196,7 @@ class TestMakefileIncludeSplit:
             "helpers.mk",
             "repair.mk",
             "manifest.mk",
+            "project-practices.mk",
         }
         missing = expected - mk_names
         assert not missing, f"Missing .mk files: {missing}"

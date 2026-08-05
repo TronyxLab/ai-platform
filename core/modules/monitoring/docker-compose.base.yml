@@ -208,7 +208,6 @@ services:
       - observability-net
       - proxy-net
 
-    # 🧐 TRAP[TASK-3] · 2026-07-02 · Optimized: start_period 30→15s (container startup optimization)
     healthcheck:
       # ⚠️ TASK-9 · 2026-07-03 · Alpine: curl → wget (busybox wget in alpine image, curl absent)
       test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:3000/api/health"]

@@ -32,7 +32,8 @@ MODULES_DIR = repo_root() / "core" / "modules"
 EXPECTED_TEST_RESTART = "no"
 EXPECTED_BASE_RESTART = {"always", "unless-stopped"}
 
-# ⚠️ TRAP[CARVE-OUT] · 2026-07-24 · clickhouse test-compose uses unless-stopped
+# 🧐 TRAP[DECISION] · 2026-07-24 · — · clickhouse test-compose uses unless-stopped
+# · Rejected: единое правило restart (always) для clickhouse test-compose
 # · Root: macOS Docker Desktop resource pressure crashes ClickHouse after healthy start.
 # ·   Without restart, langfuse fails DNS resolution (clickhouse alias disappears on stop).
 # ·   restart: unless-stopped = pragmatic workaround for platform-limited Docker Desktop.

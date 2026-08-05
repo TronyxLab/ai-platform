@@ -112,6 +112,31 @@ def _make_recorder(results: list[tuple[int, str]] | None = None):
 # endregion FUNC__make_recorder
 
 
+# region FUNC__assert_log_event
+def _assert_log_event(
+    caplog: pytest.LogCaptureFixture,
+    *,
+    levelno: int,
+    imp: int,
+    keyword: str,
+) -> None:
+    """Структурная проверка лог-события: severity + IMP-код + факт события (DevPlan 139 W2).
+
+    ## @purpose  Замена assert'ов на ТОЧНЫЕ строки логов: проверяем УРОВЕНЬ (levelno),
+    ##            IMP-код и короткий факт события — НЕ полный форматированный текст.
+    ##            Exact-string ассерты краснеют от безобидных правок формулировок
+    ##            и молчат при семантических поломках; структурные — устойчивы.
+    ## @io — ⇥ caplog; levelno (logging.*), imp (int), keyword (событие) → ⎋ None (assert)
+    ## @complexity — O(R) — R = записи caplog
+    """
+    assert any(r.levelno == levelno and f"[IMP:{imp}]" in r.message and keyword in r.message for r in caplog.records), (
+        f"Лог-событие не найдено: levelno={levelno} [IMP:{imp}] keyword={keyword!r}\n---\n{caplog.text}"
+    )
+
+
+# endregion FUNC__assert_log_event
+
+
 # ── exit-контракт: root / аргументы ────────────────────────────────────────────
 
 
@@ -128,7 +153,7 @@ def test_main_requires_root(caplog: pytest.LogCaptureFixture, monkeypatch: pytes
     rc = install_tor_proxy.main([])
 
     assert rc == EXIT_GENERIC, f"Expected 1 (root required), got {rc}"
-    assert any("ERROR: must run as root" in r.message for r in caplog.records), caplog.text
+    _assert_log_event(caplog, levelno=logging.ERROR, imp=10, keyword="must run as root")
     _assert_imp9(caplog)
 
 
@@ -148,7 +173,7 @@ def test_main_unknown_argument(caplog: pytest.LogCaptureFixture, monkeypatch: py
     rc = install_tor_proxy.main(["--bogus"])
 
     assert rc == EXIT_GENERIC
-    assert any("Unknown argument: --bogus" in r.message for r in caplog.records), caplog.text
+    _assert_log_event(caplog, levelno=logging.ERROR, imp=10, keyword="Unknown argument")
     _assert_imp9(caplog)
 
 
@@ -200,7 +225,7 @@ def test_main_flow_success_and_order(caplog: pytest.LogCaptureFixture, monkeypat
         "install_cron_healthcheck",
         "verify_tor_circuit",
     ], f"Order mismatch: {order}"
-    assert any("Tor + Privoxy installation complete" in r.message for r in caplog.records), caplog.text
+    _assert_log_event(caplog, levelno=logging.INFO, imp=9, keyword="installation complete")
     _assert_imp9(caplog)
 
 
@@ -228,8 +253,8 @@ def test_main_flow_circuit_failure(caplog: pytest.LogCaptureFixture, monkeypatch
     rc = install_tor_proxy.main([])
 
     assert rc == EXIT_GENERIC
-    assert any("CRITICAL: Tor circuit failed to establish" in r.message for r in caplog.records), caplog.text
-    assert any("Telegram notifications will be unavailable" in r.message for r in caplog.records), caplog.text
+    _assert_log_event(caplog, levelno=logging.ERROR, imp=10, keyword="circuit failed to establish")
+    _assert_log_event(caplog, levelno=logging.ERROR, imp=10, keyword="Telegram notifications will be unavailable")
     _assert_imp9(caplog)
 
 
@@ -255,7 +280,7 @@ def test_main_step_failure_exit1(caplog: pytest.LogCaptureFixture, monkeypatch: 
     rc = install_tor_proxy.main([])
 
     assert rc == EXIT_GENERIC
-    assert any("systemctl restart tor failed" in r.message for r in caplog.records), caplog.text
+    _assert_log_event(caplog, levelno=logging.ERROR, imp=10, keyword="systemctl restart tor failed")
     _assert_imp9(caplog)
 
 
@@ -323,7 +348,7 @@ def test_write_torrc_template_used(tmp_path: Path, caplog: pytest.LogCaptureFixt
     install_tor_proxy.write_torrc(tor_config, None, template)
 
     assert tor_config.read_text() == "SOCKSPort 127.0.0.1:9050\nDataDirectory /var/lib/tor\n"
-    assert any("No bridges file" in r.message for r in caplog.records), caplog.text
+    _assert_log_event(caplog, levelno=logging.INFO, imp=8, keyword="No bridges file")
     _assert_imp9(caplog)
 
 
@@ -344,7 +369,7 @@ def test_write_torrc_fallback_inline(tmp_path: Path, caplog: pytest.LogCaptureFi
     install_tor_proxy.write_torrc(tor_config, None, missing_template)
 
     assert tor_config.read_text() == _FALLBACK_TORRC
-    assert any("Template not found" in r.message for r in caplog.records), caplog.text
+    _assert_log_event(caplog, levelno=logging.INFO, imp=8, keyword="Template not found")
     _assert_imp9(caplog)
 
 
@@ -375,7 +400,7 @@ def test_write_torrc_bridges_appended(
     assert "UseBridges 1" in content, content
     assert "ClientTransportPlugin obfs4 exec /usr/bin/obfs4proxy" in content, content
     assert "Bridge obfs4 1.2.3.4:443 ABC cert=XYZ iat-mode=0" in content, content
-    assert any("Bridges appended" in r.message for r in caplog.records), caplog.text
+    _assert_log_event(caplog, levelno=logging.INFO, imp=8, keyword="Bridges appended")
     _assert_imp9(caplog)
 
 
@@ -400,7 +425,7 @@ def test_write_torrc_unknown_transport_failfast(
 
     with pytest.raises(tor_transport.TorTransportError):
         install_tor_proxy.write_torrc(tor_config, str(bridges), template)
-    assert any("Unknown transport" in r.message for r in caplog.records), caplog.text
+    _assert_log_event(caplog, levelno=logging.INFO, imp=8, keyword="Unknown transport")
     _assert_imp9(caplog)
 
 
@@ -487,7 +512,7 @@ def test_enable_services_command_sequence(caplog: pytest.LogCaptureFixture, monk
         ["systemctl", "restart", "tor"],
         ["systemctl", "restart", "privoxy"],
     ], cmds
-    assert any("Tor restarted — waiting" in r.message for r in caplog.records), caplog.text
+    _assert_log_event(caplog, levelno=logging.INFO, imp=9, keyword="restarted")
     _assert_imp9(caplog)
 
 
@@ -551,7 +576,7 @@ def test_verify_services_active_tor_inactive(caplog: pytest.LogCaptureFixture, m
     monkeypatch.setattr(install_tor_proxy, "run_command", fake)
 
     assert install_tor_proxy.verify_services_active() is False
-    assert any("Tor: NOT active" in r.message for r in caplog.records), caplog.text
+    _assert_log_event(caplog, levelno=logging.INFO, imp=8, keyword="Tor: NOT active")
     _assert_imp9(caplog)
 
 
@@ -575,7 +600,7 @@ def test_verify_tor_circuit_success(caplog: pytest.LogCaptureFixture, monkeypatc
 
     assert install_tor_proxy.verify_tor_circuit() is True
     assert len(calls) == 1, f"Успех должен быть на 1-й попытке: {calls}"
-    assert any("Tor circuit established after 1x5s" in r.message for r in caplog.records), caplog.text
+    _assert_log_event(caplog, levelno=logging.INFO, imp=8, keyword="circuit established")
     _assert_imp9(caplog)
 
 
@@ -600,7 +625,7 @@ def test_verify_tor_circuit_retries_then_fails(
     assert install_tor_proxy.verify_tor_circuit() is False
     assert len(calls) == install_tor_proxy.VERIFY_MAX_ATTEMPTS, f"Ожидалось 12 попыток: {len(calls)}"
     assert fake_time.sleep_calls == install_tor_proxy.VERIFY_MAX_ATTEMPTS - 1, "sleep между попытками"
-    assert any("Tor failed to establish circuit within 60s" in r.message for r in caplog.records), caplog.text
+    _assert_log_event(caplog, levelno=logging.INFO, imp=8, keyword="failed to establish circuit")
     _assert_imp9(caplog)
 
 
@@ -620,7 +645,7 @@ def test_verify_tor_circuit_skipped(caplog: pytest.LogCaptureFixture, monkeypatc
 
     assert install_tor_proxy.verify_tor_circuit(skip=True) is True
     assert calls == [], f"skip=True не должен вызывать curl: {calls}"
-    assert any("Tor verification skipped" in r.message for r in caplog.records), caplog.text
+    _assert_log_event(caplog, levelno=logging.INFO, imp=8, keyword="verification skipped")
     _assert_imp9(caplog)
 
 
@@ -650,7 +675,7 @@ def test_install_cron_healthcheck_writes(tmp_path: Path, caplog: pytest.LogCaptu
     expected = f"{install_tor_proxy.CRON_SCHEDULE} {hc}\n"
     assert cron_file.read_text() == expected, cron_file.read_text()
     assert cron_file.stat().st_mode & 0o777 == 0o644, oct(cron_file.stat().st_mode)
-    assert any("Healthcheck cron installed" in r.message for r in caplog.records), caplog.text
+    _assert_log_event(caplog, levelno=logging.INFO, imp=8, keyword="Healthcheck cron installed")
     _assert_imp9(caplog)
 
 
@@ -677,7 +702,7 @@ def test_install_cron_healthcheck_idempotent(tmp_path: Path, caplog: pytest.LogC
     install_tor_proxy.install_cron_healthcheck(core_dir, cron)
 
     assert cron.read_text() == "CUSTOM-UNTOUCHED\n", "Существующий cron НЕ должен перезаписываться"
-    assert any("Cron healthcheck already installed" in r.message for r in caplog.records), caplog.text
+    _assert_log_event(caplog, levelno=logging.INFO, imp=9, keyword="already installed")
     _assert_imp9(caplog)
 
 
@@ -698,7 +723,7 @@ def test_install_cron_healthcheck_missing_script(tmp_path: Path, caplog: pytest.
     install_tor_proxy.install_cron_healthcheck(core_dir, cron_file)
 
     assert not cron_file.exists(), "Без hc-скрипта cron не должен создаваться"
-    assert any("Healthcheck script not found" in r.message for r in caplog.records), caplog.text
+    _assert_log_event(caplog, levelno=logging.INFO, imp=8, keyword="Healthcheck script not found")
     _assert_imp9(caplog)
 
 
@@ -750,7 +775,7 @@ def test_configure_firewall_docker_rule_exists(
     install_tor_proxy.configure_firewall_docker()
 
     assert len(calls) == 1 and calls[0][1] == "-C", calls
-    assert any("rule already exists" in r.message for r in caplog.records), caplog.text
+    _assert_log_event(caplog, levelno=logging.INFO, imp=8, keyword="rule already exists")
     _assert_imp9(caplog)
 
 

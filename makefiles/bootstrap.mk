@@ -91,8 +91,6 @@ converge:
 ##     image-freshness, real-LISTEN docker-proxy (внутренние порты ≠ 0.0.0.0)
 ##   Exit codes: 0=healthy 1=warnings (pending security-апдейты) 2=errors — НЕ маскируются
 ##   (в отличие от converge: это check-таргет, оператор должен видеть warning).
-##   ⚠️ TRAP[BUG] · 2026-07-31 · P1 · PLATFORM_ROOT не экспортировался → REMOTE converge падал
-##   · Prevention (тот же канон): любой remote-таргет экспортирует PLATFORM_ROOT.
 check-security:
 	@echo "[IMP:7][make][check-security] Running security posture check..."
 	@if [[ -z "$(NODE)" ]]; then \

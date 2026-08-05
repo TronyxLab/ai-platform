@@ -13,10 +13,11 @@
 ##   - Старые флаги работают без изменений (обратная совместимость CLI)
 ##   - Exit code = exit code check_suite (0 зелёный, 1 провалы, 2 конфигурация)
 ##   - `python3 -m core.internal.preflight` больше НЕ содержит hardcoded-списков проверок
-## @rationale DevPlan 120: preflight НЕ удаляется (ломал бы существующие ссылки/хуки) —
-##            остаётся deprecated-алиасом; нейминг-миграция (AC-5) переводит документацию
-##            на `make check`/`make check-diff`, phantom-refs гейт банит `make preflight`
-##            в .kilo/* и AGENTS.md.
+## @rationale DevPlan 120: preflight-таргет удалён (DevPlan 138 W1) — модуль-фасад
+##            сохранён для обратной совместимости CLI (python3 -m core.internal.preflight,
+##            прецедент §6.3); нейминг-миграция (AC-5) переводит документацию на
+##            `make check`/`make check-diff`; phantom-refs гейт банит make-литералы
+##            удалённых таргетов (DevPlan 138).
 ## @changes 2026-08-02 | DevPlan 120 Wave 1 — переписан как тонкий фасад (был: 572 LOC
 ##           параллельного executor'а с 3 hardcoded-фазами)
 # endregion MODULE_CONTRACT

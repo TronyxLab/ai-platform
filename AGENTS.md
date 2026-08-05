@@ -117,7 +117,6 @@
 | Статус | Глагол | Операция |
 |--------|--------|----------|
 <!-- GENERATED:START:glossary -->
-| ✅ | `_get_all_profiles` | Вывод COMPOSE_PROFILES |
 | ✅ | `adopt-project` | Адаптация существующего проекта |
 | ✅ | `backup` | Резервное копирование |
 | ✅ | `bootstrap-node` | Идемпотентный bootstrap ноды |
@@ -132,7 +131,6 @@
 | ✅ | `check-profiles-parity` | Parity-гейт COMPOSE_PROFILES (единый SoT platform-infra.yaml) |
 | ✅ | `check-requirements` | Проверка актуальности requirements.txt |
 | ✅ | `check-security` | Проверка security-постурa ноды |
-| ✅ | `compose-safe-up` | Deprecated alias for up-safe |
 | ✅ | `context-promote` | Промоут платформы в контекст |
 | ✅ | `converge` | Реконсиляция ноды |
 | ✅ | `deploy` | Деплой проекта |
@@ -167,10 +165,13 @@
 | ✅ | `new-context` | Создание контекста деплоя |
 | ✅ | `new-project` | Создание проекта из шаблона |
 | ✅ | `node-update` | Обновление provisioned ноды |
-| ✅ | `preflight` | Deprecated-алиас — диагностика через make check |
+| ✅ | `project-check` | Проверка практик проекта (K1) |
+| ✅ | `project-fix` | Автофикс практик проекта (alias project-check --fix) |
 | ✅ | `project-list` | Список проектов |
+| ✅ | `project-set-practices` | Установка уровня практик (baseline|full|auto) |
 | ✅ | `project-status` | Статус проекта |
 | ✅ | `project-sync-env` | Синхронизация .env.platform и AI-PLATFORM.md |
+| ✅ | `project-sync-practices` | Перегенерация GENERATED-файлов практик до канона |
 | ✅ | `provision` | Provision окружения |
 | ✅ | `provision-llm` | Provision LiteLLM virtual keys |
 | ✅ | `remove-project` | Удаление проекта из lifecycle |
@@ -181,7 +182,6 @@
 | ✅ | `scripts-audit` | Аудит регистрации скриптов |
 | ✅ | `secrets-unlock` | Расшифровка секретов |
 | ✅ | `status` | Статус compose-стека |
-| ✅ | `sync-env-defaults` | Генерация .env.example из SoT |
 | ✅ | `templates-check` | Проверка покрытия и разрешимости шаблонов |
 | ✅ | `templates-render` | Рендер шаблонов |
 | ✅ | `test` | Запуск тестов |
@@ -201,6 +201,47 @@
 **Правило создания проекта:** `make new-project` — единственный способ создания проекта. Ручное создание проектной директории не регистрирует проект в lifecycle и требует `make project-sync-env` для синхронизации .env.platform.
 
 **Двухуровневая семантика:** root-глагол = оркестрация стека, module-глагол = операция одного модуля. Глаголы `up`, `down`, `restart`, `backup`, `restore` имеют разную реализацию на уровне root Makefile (весь стек) и в module.mk (один модуль).
+
+---
+
+## Наследование практик (DevPlan 137)
+
+**Принцип: проект наследует ПОВЕДЕНИЕ (проверки исполняются платформенными каналами), а не код.**
+В репозитории проекта — только тонкие GENERATED-файлы (рендерятся из канона
+`core/internal/practices/practices_manifest.yaml`, DO NOT EDIT, repair: `make project-sync-practices`):
+
+| GENERATED-файл проекта | Содержимое |
+|------------------------|------------|
+| `pyproject.toml` | ruff-конфиг (baseline: format; full: полные правила) + pytest options |
+| `.pre-commit-config.yaml` | ТОЛЬКО upstream-хуки (pre-commit-hooks, gitleaks, conventional-pre-commit, ruff-pre-commit, shellcheck-py) + pre-push K5-хук `project-push-check` |
+| `tests/conftest.py`, `tests/test_health.py` | .env.platform + health-фикстура (TCP-probe, skip при недоступном сервисе) |
+| `practices.lock` | снапшот канона: version/level/state/maturity/generator_hash — коммитится в git проекта, доставляется на VPS payload'ом receive |
+| `ai-platform.yaml#quality.level` | уровень: `baseline` \| `full` \| `auto` (default `auto`) |
+
+**Каналы исполнения (K1–K5):**
+
+| Канал | Механика |
+|-------|----------|
+| **K1** | `make project-check/fix/sync-practices/set-practices` — PLATFORM_DIR-делегирование в `core.internal.practices.*` |
+| **K2** | inline quality-шаги `.github/workflows/deploy-project.yml` (lint/test по language/level из ai-platform.yaml, maturity-warn; org-agnostic, 0 inline python3) |
+| **K3** | verify verb → `core/internal/deploy/verify_contracts.py` на VPS: L1 всегда (блок), L2/L3 по state из practices.lock |
+| **K4** | эскалатор зрелости: `maturity.py` + `escalator.py` — state-машина baseline → proposed → active-full (БЕЗ автопромоута, решение 2026-08-05) |
+| **K5** | pre-push хук проекта `project-push-check` → `make project-check` (delegation K1) |
+
+**Классы L1/L2/L3** (политика блокировки на деплое, K3): L1 — безопасность платформы
+(секреты/порты/healthcheck/external-сети/env-контракт/labels, блок при ЛЮБОМ уровне);
+L2 — контракт качества (compose config/build/drift-lock; warning в baseline/proposed,
+блок в active-full); L3 — код-стандарты (ruff check/pyright/eslint/LDD/grep-summary;
+warning, блок в active-full).
+
+**Варнинги** единым форматом для агента: `[PRACTICES:PROPOSE]` (предложение full,
+non-blocking), `[PRACTICES:LEGACY]` (lock отсутствует — grace L1 warning-only при
+`PRACTICES_LEGACY_GRACE=1`), `[PRACTICES:BLOCK]`, `[PRACTICES:DRIFT-VERSION]`.
+
+**Язык-ветвление** по `type` проекта (Q3): python → ruff/pytest, typescript/react →
+build/tsc/eslint, sh → shellcheck, общий слой → gitleaks/hygiene/compose; fullstack — обе
+ветки. Проверки исполняются платформенным Python (`core/internal/practices/`), НЕ копируются
+в проект (языковая политика, аудит 137).
 
 ---
 
@@ -266,7 +307,6 @@
 | `core/lib/ssh.sh` | 188 | Тонкий фасад над `python3 -m core.internal.shared.ssh_opts --shell` (116 B5 D1) | при втором shell-потребителе флагов |
 | `core/lib/audit.sh` | 83 | Тонкий фасад над `shared.audit_logger` (единственный writer, 116 B11 T2) | при изменении схемы аудита |
 | `core/lib/module-interface.sh` | 26 | Тонкий фасад над `python3 -m core.internal.shared.module_interface invoke` (119 D4) | при новом канале dispatch |
-| `core/lib/yaml_read.sh` | 100 | Исторический YAML-reader; вытеснен `yaml_query.py` CLI — сохранён для обратной совместимости (0 активных source-потребителей после 119 D4) | при 0 ссылок в течение 90 дней → удалить |
 | `core/lib/vps-readiness.sh` | 23 | Тонкий фасад над `python3 -m core.internal.shared.vps_readiness` (105) | — |
 
 **Мигрированы (DevPlan 127, W1/W2 — больше НЕ исключения):**

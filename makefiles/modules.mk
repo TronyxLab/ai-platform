@@ -10,7 +10,7 @@
 ## @rationale Makefile include-split W4-E4: module targets isolated from bootstrap/CI
 # endregion MODULE_CONTRACT
 
-.PHONY: up-safe compose-safe-up up down down-volumes restart status healthcheck backup restore discover-modules validate-modules
+.PHONY: up-safe up down down-volumes restart status healthcheck backup restore discover-modules validate-modules
 
 ## up-safe: Start platform stack with preflight secret validation
 ##   Delegates to core/entrypoints/compose-wrapper.sh which runs compose_preflight.py
@@ -23,9 +23,6 @@ up-safe:
 	else \
 		core/entrypoints/compose-wrapper.sh up -d; \
 	fi
-
-## compose-safe-up: Deprecated alias for up-safe (backward compatibility)
-compose-safe-up: up-safe
 
 ## up: Start platform stack (docker compose up -d) — supports MODULES filter
 up: discover-modules dev-certs

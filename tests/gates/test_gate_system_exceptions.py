@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: gate-test system-exceptions phony manifest name-linter documented by-design
-# STRUCTURE: ▶ read manifest name_linter.system_exceptions → ◇ compare expected {help,venv,pre-commit-install,pre-commit-run} → ⊕ scan AGENTS.md+generator for documentation → ∑ violations → ⎋ verdict
+# STRUCTURE: ▶ read manifest name_linter.system_exceptions → ◇ compare expected {help,venv,pre-commit-install,pre-commit-run,_get_all_profiles} → ⊕ scan AGENTS.md+generator for documentation → ∑ violations → ⎋ verdict
 # region MODULE_CONTRACT
 ## @purpose  Gate test (DevPlan 119 G2): системные исключения .PHONY (help/venv/
-##           pre-commit-install/pre-commit-run) задокументированы как by-design
-##           отклонение от @invariants в entrypoint-manifest.yaml и core/AGENTS.md.
+##           pre-commit-install/pre-commit-run/_get_all_profiles) задокументированы как
+##           by-design отклонение от @invariants в entrypoint-manifest.yaml и core/AGENTS.md.
 ## @scope    entrypoint-manifest.yaml (name_linter.system_exceptions + header-комментарий),
 ##           core/AGENTS.md (секция «Системные исключения .PHONY»),
 ##           generate_entrypoint_manifest.py (SYSTEM_EXCEPTIONS + header).
 ## @invariants
-##   - Манифест СОДЕРЖИТ ровно {help, venv, pre-commit-install, pre-commit-run}
+##   - Манифест СОДЕРЖИТ ровно {help, venv, pre-commit-install, pre-commit-run, _get_all_profiles}
 ##   - Манифест СОДЕРЖИТ header-комментарий о by-design исключениях (G2)
 ##   - core/AGENTS.md СОДЕРЖИТ секцию «Системные исключения .PHONY»
 ##   - Генератор СОДЕРЖИТ SYSTEM_EXCEPTIONS с теми же именами (не дрейфует)
@@ -17,6 +17,7 @@
 ##            документирование prevents дрейфа между генератором, манифестом и AGENTS.md
 ##            (AUDIT-6 F3: исключения существовали, но не были задокументированы).
 ## @changes 2026-08-02 | CREATED: DevPlan 119 G2 (AUDIT-6 F3)
+##           2026-08-05 | DevPlan 138 S3: + _get_all_profiles (технический помощник parity-гейта)
 # endregion MODULE_CONTRACT
 
 import logging
@@ -34,7 +35,7 @@ GENERATOR: pathlib.Path = (
     pathlib.Path(PLATFORM_ROOT) / "core" / "internal" / "scripts" / "generate_entrypoint_manifest.py"
 )
 
-# Канонический перечень системных исключений (DevPlan 119 G2)
+# Канонический перечень системных исключений (DevPlan 119 G2; + _get_all_profiles — DevPlan 138 S3)
 # NB: frozenset(tuple), не frozenset({...}) — set-литерал внутри Call ловится гейтом
 # test_no_hardcoded_target_sets_in_gates (test_gate_exception_audit.py, G1.2).
 EXPECTED_SYSTEM_EXCEPTIONS: frozenset[str] = frozenset(
@@ -43,6 +44,7 @@ EXPECTED_SYSTEM_EXCEPTIONS: frozenset[str] = frozenset(
         "venv",
         "pre-commit-install",
         "pre-commit-run",
+        "_get_all_profiles",
     )
 )
 

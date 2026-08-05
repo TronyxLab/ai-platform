@@ -21,7 +21,7 @@
 <!-- GENERATED:START:canon_table -->
 | `make bootstrap-node` | Идемпотентный bootstrap ноды | make bootstrap-node NODE=\<name\> | core/entrypoints/bootstrap.sh → core/internal/bootstrap/preflight.py → core/internal/bootstrap/node-lifecycle.sh --mode init → core/internal/bootstrap/lifecycle/cli.py → core/internal/bootstrap/lifecycle/state_machine.py (B9 state machine — 14 фаз — 9 INIT — φ1 system_bootstrap → core/internal/bootstrap/install-docker.sh → core/internal/bootstrap/install-tor-proxy.sh → core/internal/bootstrap/firewall.sh · φ2 user_accounts · φ3 platform_setup → core/internal/bootstrap/docker_registry_auth.py → core/internal/bootstrap/setup-node.sh · φ4 secrets_provision · φ5 node_configuration · φ6 registry_auth · φ7 certificates → core/internal/bootstrap/install-acme.sh · φ8 deploy_services → core/internal/bootstrap/deploy-modules.sh → core/internal/bootstrap/cert_orchestrator.py → core/internal/bootstrap/deploy/context_deployer.py · φ8.5 converge_services — 5 UPDATE — φ9 secrets_update · φ10 node_config_update · φ11 registry_update · φ12 deploy_update · φ13 converge_update) |
 | `make deploy-context` | Деплой проектов контекста на ноде | make deploy-context NODE=\<n\> [CONTEXT=\<ctx\>] | core/entrypoints/deploy-context.sh → core/internal/bootstrap/deploy/context_deployer.py |
-| `make deploy` | Деплой проекта | make deploy PROJECT=\<dir\> | git push → CI → .github/workflows/deploy-project.yml (receive verb) → orchestrator_cli dispatch receive → core/internal/deploy/orchestrator.py DeployOrchestrator.receive() → core/internal/notify/notify-hook.sh + core/internal/catalog/generate-catalog.sh (post-deploy, D4) → legacy-local-entrypoint → core/entrypoints/deploy.sh (DevPlan 116 B1 T7) |
+| `make deploy` | Деплой проекта | make deploy PROJECT=\<dir\> [NODE=\<node\>] [LAUNCH=1] | git push → CI → .github/workflows/deploy-project.yml (receive verb) → orchestrator_cli dispatch receive → core/internal/deploy/orchestrator.py DeployOrchestrator.receive() → core/internal/notify/notify-hook.sh + core/internal/catalog/generate-catalog.sh (post-deploy, D4) → legacy-local-entrypoint → core/entrypoints/deploy.sh (DevPlan 116 B1 T7) |
 | `make deploy-project` | Прямой деплой минуя CI (DeployOrchestrator deliver) | make deploy-project PROJECT=\<dir\> NODE=\<node\> | core/internal/deploy/orchestrator_cli.py deliver (ForcedCommandChannel receive \<project\> \<version\>) → orchestrator_cli dispatch receive → DeployOrchestrator.receive() |
 | `make context-promote` | Промоут платформы в контекст | make context-promote CONTEXT=\<context\> | core/entrypoints/context-promote.sh → core/internal/deploy/context_promoter.py |
 | `make hermes-build-platform` | Сборка L1 образа | make hermes-build-platform | core/entrypoints/build.sh → core/internal/build/hermes-images.sh build-platform |
@@ -51,7 +51,6 @@
 | `make generate-entrypoint-manifest` | Генерация entrypoint-manifest.yaml | make generate-entrypoint-manifest | python3 core/internal/scripts/generate_entrypoint_manifest.py |
 | `make generate-agents-md` | Генерация core/AGENTS.md | make generate-agents-md | python3 core/internal/scripts/generate_agents_md.py → core/AGENTS.md |
 | `make generate-litellm-config` | Генерация litellm-config.yml | make generate-litellm-config | python3 core/internal/llm/config_renderer.py → litellm-config.yml |
-| `make sync-env-defaults` | Генерация .env.example из SoT | make sync-env-defaults | core/internal/scripts/sync_env_defaults.py → .env.example |
 | `make check-env-defaults` | Проверка актуальности .env.example | make check-env-defaults | core/internal/scripts/sync_env_defaults.py --check |
 | `make generate-requirements` | Генерация requirements.txt из pyproject.toml | make generate-requirements | core/internal/scripts/sync_requirements.py → core/requirements.txt |
 | `make check-requirements` | Проверка актуальности requirements.txt | make check-requirements | core/internal/scripts/sync_requirements.py --check |
@@ -63,9 +62,12 @@
 | `make project-list` | Список проектов | make project-list [NODE=\<node\>] | core/entrypoints/scaffold.sh → core/internal/scaffold/project-list.sh |
 | `make project-status` | Статус проекта | make project-status NAME=\<name\> | core/entrypoints/scaffold.sh → core/internal/scaffold/project-list.sh --status |
 | `make render-vhosts` | Генерация vhost конфигов | make render-vhosts NODE=\<name\> | core/internal/scaffold/add-vhost.sh --render-all --node \<n\> |
+| `make project-check` | Проверка практик проекта (K1) | make project-check PROJECT=\<dir\> [LEVEL=\<level\>] | python3 -m core.internal.practices.check_project --project-dir \<p\> [--level \<l\>] [--fix] |
+| `make project-fix` | Автофикс практик проекта (alias project-check --fix) | make project-fix PROJECT=\<dir\> | python3 -m core.internal.practices.check_project --project-dir \<p\> --fix |
+| `make project-sync-practices` | Перегенерация GENERATED-файлов практик до канона | make project-sync-practices PROJECT=\<dir\> | python3 -m core.internal.practices.sync_practices --project-dir \<p\> |
+| `make project-set-practices` | Установка уровня практик (baseline|full|auto) | make project-set-practices PROJECT=\<dir\> LEVEL=\<level\> | python3 -m core.internal.practices.set_practices --project-dir \<p\> --level \<l\> |
 | `make secrets-unlock` | Расшифровка секретов | make secrets-unlock [NODE=...] | core/entrypoints/secrets.sh → core/internal/secrets/decrypt-secrets.sh |
 | `make up-safe` | Безопасный compose up | make up-safe [MODULES=...] | core/entrypoints/compose-wrapper.sh → core/internal/bootstrap/deploy/compose_preflight.py → docker compose up |
-| `make compose-safe-up` | Deprecated alias for up-safe | make compose-safe-up (deprecated — use up-safe) | up-safe (deprecated alias) |
 | `make converge` | Реконсиляция ноды | make converge NODE=\<name\> | core/entrypoints/converge.sh → core/internal/bootstrap/converge.sh |
 | `make check-security` | Проверка security-постурa ноды | make check-security NODE=\<name\> | core/entrypoints/check-security.sh → remote_executor.py execute-check-security → core/internal/bootstrap/security_posture.py (S1-S9, DevPlan 134 L2 + 136 W10) |
 | `make healthcheck` | Проверка здоровья | make healthcheck [NODE=...] | core/entrypoints/healthcheck.sh → Module healthcheck.sh scripts + core/internal/healthcheck/tor-proxy-healthcheck.sh |
@@ -84,12 +86,10 @@
 | `make dev-certs` | Генерация dev SSL-сертификатов | make dev-certs [CERT_BACKEND=...] | core/modules/nginx/dev_cert_generator.py |
 | `make dev-metrics` | Генерация dev status-metrics.json + htpasswd | make dev-metrics | core/internal/healthcheck/platform_export_metrics.py + core/internal/bootstrap/lifecycle/secrets_manager.py (htpasswd CLI) |
 | `make dev-hosts` | Управление /etc/hosts dev-блоком | make dev-hosts [APPLY=1] | core/internal/dev_hosts.py |
-| `make _get_all_profiles` | Вывод COMPOSE_PROFILES | make _get_all_profiles | echo |
 | `make render-monitoring` | Рендер конфигурации мониторинга после деплоя проекта | make render-monitoring PROJECT_DIR=\<dir\> PROJECT=\<name\> [NODE=\<node\>] | python3 core/internal/monitoring_config_renderer.py |
 | `make fix-executable-bit` | Исправление executable bit на .sh файлах | make fix-executable-bit [DRY_RUN=1] | git add --chmod=+x + git update-index --chmod=+x |
 | `make fix-ruff` | Форматирование Python файлов через ruff | make fix-ruff [SCOPE=diff|staged|all] [DRY_RUN=1] | ruff check --fix + ruff format |
 | `make fix-gate` | Композитное исправление gate-ошибок | make fix-gate [DRY_RUN=1] | fix-executable-bit + fix-ruff + generate-manifests |
-| `make preflight` | Deprecated-алиас — диагностика через make check | preflight (deprecated — используйте check) | python3 -m core.internal.check_suite run --mode diagnostic (через deprecated-фасад core/internal/preflight.py — DevPlan 120) |
 | `make check` | Диагностика — все проверки из core/check-suite.yaml (экс-preflight) | make check [WORKERS=6] [JSON=1] [SKIP_FIX=1] [VERBOSE=1] [CHECK_CACHE=0] | python3 -m core.internal.check_suite run --mode diagnostic (SoT core/check-suite.yaml) |
 | `make check-diff` | Узкая диагностика по изменённым файлам | make check-diff | python3 -m core.internal.check_suite run --mode diff |
 | `make check-profiles-parity` | Parity-гейт COMPOSE_PROFILES (единый SoT platform-infra.yaml) | make check-profiles-parity | pytest tests/gates/test_gate_profiles_parity.py (COMPOSE_PROFILES SoT parity, DevPlan 116 T9) |
@@ -167,9 +167,9 @@
 
 Полный список разрешённых глаголов см. в таблице «Канонические операции» выше и в [`entrypoint-manifest.yaml`](entrypoint-manifest.yaml) (`allowed_verbs`).
 
-### Системные исключения .PHONY (by-design, DevPlan 119 G2)
+### Системные исключения .PHONY (by-design, DevPlan 119 G2 + DevPlan 138 S3)
 
-Следующие `.PHONY`-таргеты **намеренно НЕ входят** в глоссарий глаголов и в `allowed_verbs` — это системные утилиты Makefile, а не канонические операции платформы:
+Следующие `.PHONY`-таргеты **намеренно НЕ входят** в глоссарий глаголов и в `allowed_verbs` — это системные утилиты Makefile или технические помощники gate-тестов, а не канонические операции платформы:
 
 | Таргет | Назначение | Почему вне глоссария |
 |--------|-----------|----------------------|
@@ -177,8 +177,9 @@
 | `venv` | Создание локального Python venv для разработки | Dev-инфраструктура, не исполняется на нодах |
 | `pre-commit-install` | Установка pre-commit hooks | Setup-утилита окружения разработчика |
 | `pre-commit-run` | Запуск pre-commit hooks | Локальный инструмент, дублируется CI gate'ами |
+| `_get_all_profiles` | Вывод COMPOSE_PROFILES (SoT platform-infra.yaml) | Технический помощник parity-гейта test_gate_profiles_parity (проверка (c)), не операция (DevPlan 138 S3) |
 
-**Инвариант:** эти таргеты не имеют `delegates_to`-цепочек, не регистрируются в `core/AGENTS.md` и исключаются генератором манифеста (`SYSTEM_EXCEPTIONS` в `generate_entrypoint_manifest.py`) из `allowed_verbs`. Полный перечень — секция `name_linter.system_exceptions` в `entrypoint-manifest.yaml`. Это by-design отклонение от инварианта «каждый .PHONY → глоссарий».
+**Инвариант:** эти таргеты не имеют `delegates_to`-цепочек, не регистрируются в `core/AGENTS.md` и исключаются генератором манифеста (`SYSTEM_EXCEPTIONS` в `generate_entrypoint_manifest.py`) из `allowed_verbs`. Полный перечень — секция `name_linter.system_exceptions` в `entrypoint-manifest.yaml`. Это by-design отклонение от инварианта «каждый .PHONY → глоссарий». `_get_all_profiles` остаётся рабочим таргетом (makefiles/helpers.mk .PHONY) — Rev-условие возврата в `allowed_verbs`: второй потребитель-человек (DevPlan 138 S3).
 
 ---
 

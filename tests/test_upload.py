@@ -1,16 +1,23 @@
-# GREP_SUMMARY: test upload s3-boto3 mock retry ClientError permanent-error FileNotFound upload_with_retries
-# STRUCTURE: fixtures(fake_s3) → test_create_s3_client_config → test_upload_file_success → test_upload_file_not_found → test_upload_file_boto_error → test_is_permanent_error_403 → test_is_permanent_error_500 → test_retry_exhausted → test_retry_succeeds_on_retry → test_upload_verify → test_main_success
+# GREP_SUMMARY: test upload s3-boto3 fake DI effect spool retry ClientError permanent-error FileNotFound upload_with_retries exit-code
+# STRUCTURE: fixtures(fake_s3) → test_create_s3_client_config → test_upload_file_success → test_upload_file_not_found → test_upload_file_boto_error → test_perm_error_403_failfast → test_transient_500_retries → test_retry_exhausted → test_retry_succeeds → test_upload_verify → test_main_success → test_main_verify_fail_exit1
 # region MODULE_CONTRACT
-## @purpose  Unit tests for upload.py — S3 upload with retry logic, FakeS3Client instead of mocks.
-## @scope    Uses FakeS3Client for boto3; no real S3 connections; no unittest.mock for boto3.
+## @purpose  Unit tests for upload.py — S3 upload with retry logic. DevPlan 139 W2:
+##           проверяем ЭФФЕКТ (файл в spool, exit code, retry-поведение, ответ публичного API),
+##           а НЕ внутренности мока (fake._uploads/_call_count удалены из утверждений).
+## @scope    FakeS3Client — DI-контракт (сигнатура boto3 upload_file/head_object), НЕ объект
+##           утверждений; никаких реальных S3-соединений; no unittest.mock для boto3-логики.
 ## @invariants
-##   - All test_* functions marked @pytest.mark.static_audit
-##   - tmp_path for local file operations
-##   - No subprocess.run for business logic
-##   - Each test logs IMP:9 assertion + prints LDD trajectory
-## @rationale — upload.py (406 lines, 3 retries × 30min) is critical for backup reliability;
-##   fake-based testing covers error branching without 90-min wait or real S3.
-## @changes — REFACTORED: 2026-07-08 | MagicMock→FakeS3Client (Wave 2.1)
+##   - ВСЕ тесты: @ldd_trajectory + IMP:9-лог (LDD telemetry, DevPlan 139 инвариант 3)
+##   - tmp_path для локальных файлов (Zero Hardcode)
+##   - Эффекты: spool-файл НЕ удаляется при неуспехе (TRAP[BUSINESS] spool-never-delete),
+##     удаляется только при успешном main() (remove_spool_file); retry-поведение — через
+##     caplog-события (WARNING+[IMP:8]+Retry), НЕ счётчики мока
+##   - Exit-коды: main() → 0 (успех + spool rm), 1 (verify fail, файл в spool), 2 (config)
+## @rationale upload.py (817 LOC, 3 retries × 30min) критичен для надёжности бэкапов; fake-based
+##   тестирование покрывает ветвления без 90-минутного ожидания или реального S3. Мок как
+##   DI-контракт (сигнатура) + утверждения на наблюдаемый эффект (не внутреннее состояние).
+## @changes 2026-07-08 | MagicMock→FakeS3Client (Wave 2.1)
+## @changes 2026-08-05 | DevPlan 139 W2 — REWRITE: внутренности моков → эффекты (spool/exit/retry/API)
 def _module_contract():
     pass
 
@@ -19,9 +26,17 @@ def _module_contract():
 
 import logging
 import os
+import sys
+from pathlib import Path
 
 import pytest
 from conftest import ldd_trajectory
+
+# Module-specific path (tests/AGENTS.md §sys.path policy): core/modules/backup-cron/scripts.
+# Абсолютный Path(__file__)-based (xdist-инвариант 4, DevPlan 139 W2) — относительные
+# пути зависели бы от CWD воркера. Оригинальный файл НЕ имел этого пути — `import upload`
+# падал ModuleNotFoundError (исправлено в рамках W2 REWRITE).
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "core" / "modules" / "backup-cron" / "scripts"))
 
 logger = logging.getLogger(__name__)
 
@@ -30,42 +45,60 @@ logger = logging.getLogger(__name__)
 
 
 class FakeS3Client:
-    """Fake S3 client with same interface as boto3 S3 client, no network calls."""
+    """Fake S3 client — DI-контракт (сигнатура boto3 upload_file/head_object), без сети.
 
-    def __init__(self, objects: dict[str, bytes] | None = None, fail_on: str | None = None, fail_count: int = 1):
+    DevPlan 139 W2: внутренние списки загрузок (fake._uploads) и счётчики НЕ являются
+    объектом утверждений. Fake сохраняет только поведенческий контракт:
+    - upload_file(Filename, Bucket, Key, **kwargs) — при fail_on/fail_count эмулирует
+      ClientError (fail_status), иначе КОПИРУЕТ локальный файл в бакет (эффект: объект
+      виден через head_object — как boto3)
+    - head_object(Bucket, Key) — отдаёт ContentLength/Metadata для загруженных объектов
+    """
+
+    def __init__(
+        self,
+        objects: dict[str, bytes] | None = None,
+        fail_on: str | None = None,
+        fail_count: int = 1,
+        fail_status: int = 500,
+        metadata: dict[str, dict] | None = None,
+    ):
         self.objects = objects or {}
-        self.fail_on = fail_on  # key name that triggers error
-        self.fail_count = fail_count  # how many times to fail before succeeding
-        self._call_count: dict[str, int] = {}
-        self._uploads: list[dict] = []
+        self.fail_on = fail_on  # key substring, триггерящий ошибку
+        self.fail_count = fail_count  # сколько раз фейлить до успеха
+        self.fail_status = fail_status  # HTTP-статус эмулируемого ClientError
+        self.metadata = metadata or {}  # object key → Metadata (boto3 ExtraArgs.Metadata контракт)
+        self._attempts = 0  # внутренний механизм fail-симуляции (НЕ для утверждений)
 
     def upload_file(self, Filename: str, Bucket: str, Key: str, **kwargs) -> None:
-        self._call_count.setdefault("upload_file", 0)
-        self._call_count["upload_file"] += 1
-        if self.fail_on and self.fail_on in Key and self._call_count["upload_file"] <= self.fail_count:
-            from botocore.exceptions import ClientError
+        from botocore.exceptions import ClientError
 
+        self._attempts += 1
+        if self.fail_on and self.fail_on in Key and self._attempts <= self.fail_count:
             raise ClientError(
                 {
-                    "Error": {"Code": "500", "Message": "Simulated error"},
-                    "ResponseMetadata": {"HTTPStatusCode": 500},
+                    "Error": {"Code": str(self.fail_status), "Message": "Simulated error"},
+                    "ResponseMetadata": {"HTTPStatusCode": self.fail_status},
                 },
                 "upload_file",
             )
-        self._uploads.append({"file": Filename, "bucket": Bucket, "key": Key})
+        # Эффект (как boto3): локальный файл скопирован в бакет + ExtraArgs.Metadata сохранён
+        data = Path(Filename).read_bytes()
+        self.objects[Key] = data
+        extra = kwargs.get("ExtraArgs") or {}
+        md = extra.get("Metadata") or {}
+        if md:
+            self.metadata[Key] = md
 
     def head_object(self, Bucket: str, Key: str) -> dict:
-        if Key not in self.objects:
-            from botocore.exceptions import ClientError
+        from botocore.exceptions import ClientError
 
+        if Key not in self.objects:
             raise ClientError(
                 {"Error": {"Code": "404", "Message": "Not Found"}, "ResponseMetadata": {"HTTPStatusCode": 404}},
                 "head_object",
             )
-        return {
-            "ContentLength": len(self.objects[Key]),
-            "Metadata": {"sha256": "simulated-sha256-for-testing"},
-        }
+        return {"ContentLength": len(self.objects[Key]), "Metadata": self.metadata.get(Key, {})}
 
 
 # endregion FAKE_S3_CLIENT
@@ -89,7 +122,28 @@ def _make_config(**overrides) -> dict:
     return config
 
 
-_DEFAULT_BOTO_RETRIES = 3
+def _write_file(tmp_path, name: str = "test_backup.sql.gz", data: str = "test data") -> str:
+    """Создать локальный spool-файл в tmp_path (эффект: файл в spool)."""
+    path = os.path.join(str(tmp_path), name)
+    with open(path, "w") as f:
+        f.write(data)
+    return path
+
+
+def _assert_retry_warning(caplog, *, present: bool) -> None:
+    """Структурная проверка retry-поведения: WARNING + [IMP:8] + 'Retry' (DevPlan 139 W2).
+
+    ## @purpose — retry-поведение проверяется по caplog-событиям (severity+IMP+факт),
+    ##            НЕ по внутренним счётчикам мока. present=True → ретрай был;
+    ##            present=False → fail-fast (перманентная ошибка не ретраится).
+    """
+    found = any(
+        r.levelno == logging.WARNING and "[IMP:8]" in r.message and "Retry" in r.message for r in caplog.records
+    )
+    assert found is present, (
+        f"retry-warning {'не найден (ожидался)' if present else 'найден (не ожидался)'}\n---\n{caplog.text}"
+    )
+
 
 # endregion HELPERS
 
@@ -101,7 +155,7 @@ _DEFAULT_BOTO_RETRIES = 3
 @ldd_trajectory
 def test_create_s3_client_config(caplog) -> None:
     """create_s3_client constructs boto3 client with correct config.
-    Uses unittest.mock.patch only for boto3 import — legitimate use.
+    Uses unittest.mock.patch only for boto3 import — legitimate use (фабрика = публичный API).
     """
     from unittest.mock import patch as mock_patch
 
@@ -109,7 +163,7 @@ def test_create_s3_client_config(caplog) -> None:
         from upload import create_s3_client
 
         config = _make_config()
-        client = create_s3_client(config)
+        create_s3_client(config)
 
         mock_boto3.client.assert_called_once()
         call_kwargs = mock_boto3.client.call_args[1]
@@ -123,32 +177,36 @@ def test_create_s3_client_config(caplog) -> None:
         assert call_kwargs["aws_access_key_id"] == config["aws_access_key_id"]
         assert call_kwargs["aws_secret_access_key"] == config["aws_secret_access_key"]
         assert call_kwargs["region_name"] == config["region"]
-        assert client is not None
 
 
 @pytest.mark.static_audit
 @ldd_trajectory
 def test_upload_file_success(tmp_path, caplog) -> None:
+    """Эффект: upload_file возвращает (True, None), файл ОСТАЁТСЯ в spool, объект виден в S3."""
     with caplog.at_level(logging.DEBUG):
         fake = FakeS3Client()
 
         from upload import upload_file
 
-        local_path = os.path.join(str(tmp_path), "test_backup.sql.gz")
-        with open(local_path, "w") as f:
-            f.write("test data")
+        local_path = _write_file(tmp_path)
+        key = "platform/backups/test.sql.gz"
 
-        result = upload_file(fake, "test-bucket", local_path, "platform/backups/test.sql.gz")
+        result = upload_file(fake, "test-bucket", local_path, key)
 
         logger.critical("[IMP:9][test_upload][upload_success] ASSERT: result=%s exc=%s", result[0], result[1])
         assert result[0] is True
         assert result[1] is None
-        assert fake._uploads == [{"file": local_path, "bucket": "test-bucket", "key": "platform/backups/test.sql.gz"}]
+        # Эффект 1: spool-файл НЕ удаляется upload_file'ом (TRAP[BUSINESS] spool-never-delete)
+        assert os.path.isfile(local_path), "upload_file НЕ должен удалять spool-файл"
+        # Эффект 2: объект загружен в S3 (head_object видит размер)
+        meta = fake.head_object("test-bucket", key)
+        assert meta["ContentLength"] == len(b"test data"), "S3-объект должен отражать размер файла"
 
 
 @pytest.mark.static_audit
 @ldd_trajectory
 def test_upload_file_not_found(tmp_path, caplog) -> None:
+    """Эффект: отсутствующий локальный файл → FileNotFoundError (fail-fast, публичный контракт)."""
     with caplog.at_level(logging.DEBUG):
         from upload import upload_file
 
@@ -164,16 +222,16 @@ def test_upload_file_not_found(tmp_path, caplog) -> None:
 @pytest.mark.static_audit
 @ldd_trajectory
 def test_upload_file_boto_error(tmp_path, caplog) -> None:
+    """Эффект: сбой S3 → (False, exc), файл остаётся в spool, объект НЕ загружен."""
     with caplog.at_level(logging.DEBUG):
         fake = FakeS3Client(fail_on="some/key", fail_count=999)
 
         from upload import upload_file
 
-        local_path = os.path.join(str(tmp_path), "test.sql.gz")
-        with open(local_path, "w") as f:
-            f.write("data")
+        local_path = _write_file(tmp_path, "test.sql.gz", "data")
+        key = "some/key"
 
-        result = upload_file(fake, "test-bucket", local_path, "some/key")
+        result = upload_file(fake, "test-bucket", local_path, key)
 
         logger.critical(
             "[IMP:9][test_upload][boto_error] ASSERT: result=%s exc=%s",
@@ -182,52 +240,75 @@ def test_upload_file_boto_error(tmp_path, caplog) -> None:
         )
         assert result[0] is False
         assert result[1] is not None
+        # Эффект: spool-файл сохранён (нет потери данных при сбое загрузки)
+        assert os.path.isfile(local_path), "spool-файл должен сохраняться при сбое upload"
+        # Эффект: объект НЕ появился в S3
+        assert key not in fake.objects, "сбой upload не должен создавать S3-объект"
 
 
 @pytest.mark.static_audit
 @ldd_trajectory
-def test_is_permanent_error_403(caplog) -> None:
+def test_is_permanent_error_403(tmp_path, caplog) -> None:
+    """Эффект: перманентная ошибка (403) → False на ПЕРВОЙ попытке, БЕЗ ретрая (fail-fast)."""
     with caplog.at_level(logging.DEBUG):
-        from botocore.exceptions import ClientError
-        from upload import _is_permanent_error
+        import upload as upload_module
 
-        error_response = {"Error": {"Code": "403", "Message": "Forbidden"}, "ResponseMetadata": {"HTTPStatusCode": 403}}
-        exc = ClientError(error_response, "upload_file")
-        result = _is_permanent_error(exc)
+        fake = FakeS3Client(fail_on="some/key", fail_count=999, fail_status=403)
+        local_path = _write_file(tmp_path, "test.sql.gz", "data")
 
-        logger.critical("[IMP:9][test_upload][perm_403] ASSERT: permanent=%s (expected True)", result)
-        assert result is True
+        result = upload_module.upload_with_retries(
+            fake,
+            "test-bucket",
+            local_path,
+            "some/key",
+            max_retries=3,
+            interval_sec=0,
+        )
 
-
-@pytest.mark.static_audit
-@ldd_trajectory
-def test_is_permanent_error_500(caplog) -> None:
-    with caplog.at_level(logging.DEBUG):
-        from botocore.exceptions import ClientError
-        from upload import _is_permanent_error
-
-        error_response = {
-            "Error": {"Code": "500", "Message": "Internal Error"},
-            "ResponseMetadata": {"HTTPStatusCode": 500},
-        }
-        exc = ClientError(error_response, "upload_file")
-        result = _is_permanent_error(exc)
-
-        logger.critical("[IMP:9][test_upload][perm_500] ASSERT: permanent=%s (expected False)", result)
+        logger.critical("[IMP:9][test_upload][perm_403] ASSERT: result=%s (expected False)", result)
         assert result is False
+        # Fail-fast: перманентная ошибка НЕ ретраится (нет retry-warning'ов)
+        _assert_retry_warning(caplog, present=False)
+        # Эффект: spool-файл сохранён
+        assert os.path.isfile(local_path)
+
+
+@pytest.mark.static_audit
+@ldd_trajectory
+def test_is_permanent_error_500(tmp_path, caplog) -> None:
+    """Эффект: транзиентная ошибка (500) → ретраи (retry-warning'и есть) → False после max_retries."""
+    with caplog.at_level(logging.DEBUG):
+        import upload as upload_module
+
+        fake = FakeS3Client(fail_on="some/key", fail_count=999, fail_status=500)
+        local_path = _write_file(tmp_path, "test.sql.gz", "data")
+
+        result = upload_module.upload_with_retries(
+            fake,
+            "test-bucket",
+            local_path,
+            "some/key",
+            max_retries=3,
+            interval_sec=0,
+        )
+
+        logger.critical("[IMP:9][test_upload][transient_500] ASSERT: result=%s (expected False)", result)
+        assert result is False
+        # Ретрай-поведение: транзиентная ошибка ретраится (WARNING+[IMP:8]+Retry присутствует)
+        _assert_retry_warning(caplog, present=True)
+        # Эффект: spool-файл сохранён после исчерпания ретраев
+        assert os.path.isfile(local_path)
 
 
 @pytest.mark.static_audit
 @ldd_trajectory
 def test_retry_exhausted(tmp_path, caplog) -> None:
+    """Эффект: все ретраи исчерпаны → False, spool-файл НЕ удалён (нет потери данных)."""
     with caplog.at_level(logging.DEBUG):
         import upload as upload_module
 
         fake = FakeS3Client(fail_on="some/key", fail_count=999)
-
-        local_path = os.path.join(str(tmp_path), "test.sql.gz")
-        with open(local_path, "w") as f:
-            f.write("data")
+        local_path = _write_file(tmp_path, "test.sql.gz", "data")
 
         result = upload_module.upload_with_retries(
             fake,
@@ -238,50 +319,54 @@ def test_retry_exhausted(tmp_path, caplog) -> None:
             interval_sec=0,
         )
 
-        logger.critical(
-            "[IMP:9][test_upload][retry_exhausted] ASSERT: result=%s (expected False) call_count=%d",
-            result,
-            fake._call_count.get("upload_file", 0),
-        )
+        logger.critical("[IMP:9][test_upload][retry_exhausted] ASSERT: result=%s (expected False)", result)
         assert result is False
-        assert fake._call_count.get("upload_file", 0) >= 3, "Expected at least 3 upload attempts"
+        # Ретрай-поведение: попытки были (WARNING+[IMP:8]+Retry)
+        _assert_retry_warning(caplog, present=True)
+        # Эффект: файл остаётся в spool — «file remains in spool» (бизнес-инвариант)
+        assert os.path.isfile(local_path), "файл должен остаться в spool после исчерпания ретраев"
 
 
 @pytest.mark.static_audit
 @ldd_trajectory
 def test_retry_succeeds_on_retry(tmp_path, caplog) -> None:
+    """Эффект: 1-я попытка фейл, ретрай успешен → True, объект загружен, spool-файл сохранён."""
     with caplog.at_level(logging.DEBUG):
         import upload as upload_module
 
         fake = FakeS3Client(fail_on="some/key", fail_count=1)
-
-        local_path = os.path.join(str(tmp_path), "test.sql.gz")
-        with open(local_path, "w") as f:
-            f.write("data")
+        local_path = _write_file(tmp_path, "test.sql.gz", "data")
+        key = "some/key"
 
         result = upload_module.upload_with_retries(
             fake,
             "test-bucket",
             local_path,
-            "some/key",
+            key,
             max_retries=3,
             interval_sec=0,
         )
 
-        logger.critical(
-            "[IMP:9][test_upload][retry_succeeds] ASSERT: result=%s call_count=%d",
-            result,
-            fake._call_count.get("upload_file", 0),
-        )
+        logger.critical("[IMP:9][test_upload][retry_succeeds] ASSERT: result=%s (expected True)", result)
         assert result is True
-        assert fake._call_count.get("upload_file", 0) == 2, "Expected 2 attempts (fail then succeed)"
+        # Ретрай-поведение: перед успехом была неудачная попытка (retry-warning)
+        _assert_retry_warning(caplog, present=True)
+        # Эффект: объект загружен в S3 с корректным размером
+        meta = fake.head_object("test-bucket", key)
+        assert meta["ContentLength"] == len(b"data"), "ретрай должен завершиться загрузкой объекта"
+        # Эффект: upload_with_retries НЕ удаляет spool-файл (удаление — ответственность main)
+        assert os.path.isfile(local_path)
 
 
 @pytest.mark.static_audit
 @ldd_trajectory
 def test_get_s3_metadata_success(caplog) -> None:
+    """Публичный API get_s3_metadata: размер + sha256 из head_object."""
     with caplog.at_level(logging.DEBUG):
-        fake = FakeS3Client(objects={"some/key": b"x" * 12345})
+        fake = FakeS3Client(
+            objects={"some/key": b"x" * 12345},
+            metadata={"some/key": {"sha256": "simulated-sha256-for-testing"}},
+        )
 
         from upload import get_s3_metadata
 
@@ -299,55 +384,34 @@ def test_get_s3_metadata_success(caplog) -> None:
 @pytest.mark.static_audit
 @ldd_trajectory
 def test_main_upload_success(tmp_path, caplog) -> None:
+    """Эффект: upload+verify цепочка через публичный API — загрузка затем верификация размера."""
     with caplog.at_level(logging.DEBUG):
-        from unittest.mock import patch as mock_patch
-
         import upload as upload_module
 
         config = _make_config()
         full_key = f"{config['prefix']}/backups/test.sql.gz".replace("//", "/")
-        bucket = config["bucket"]
-        local_file = os.path.join(str(tmp_path), "fake.sql.gz")
-        with open(local_file, "w") as f:
-            f.write("x" * 1000)
+        local_file = _write_file(tmp_path, "fake.sql.gz", "x" * 1000)
+        fake = FakeS3Client()
+        local_sha256 = upload_module.compute_sha256(local_file)
 
-        fake = FakeS3Client(objects={full_key: b"x" * 1000})
+        success = upload_module.upload_with_retries(fake, config["bucket"], local_file, full_key, sha256=local_sha256)
+        assert success is True
 
-        with (
-            mock_patch("upload.get_backup_config", return_value=config),
-            mock_patch("upload.create_s3_client", return_value=fake),
-            mock_patch("upload.os.path.isfile", return_value=True),
-            mock_patch("upload.os.path.getsize", return_value=1000),
-        ):
-            client = upload_module.create_s3_client(config)
-            assert client is fake
-
-            success = upload_module.upload_with_retries(
-                client,
-                bucket,
-                local_file,
-                full_key,
-            )
-            assert success is True
-
-            s3_meta = upload_module.get_s3_metadata(client, bucket, full_key)
-            assert s3_meta["size"] == 1000
-            assert s3_meta["sha256"] is not None
+        s3_meta = upload_module.get_s3_metadata(fake, config["bucket"], full_key)
+        assert s3_meta["size"] == 1000, "размер S3-объекта должен совпадать с локальным файлом"
+        assert s3_meta["sha256"] == local_sha256, "sha256-метаданные должны roundtrip через S3 (verify-контракт)"
 
         logger.critical("[IMP:9][test_upload][main_success] ASSERT: upload+verify pipeline OK")
-
-
-# region TESTS_NEW_036
 
 
 @pytest.mark.static_audit
 @ldd_trajectory
 def test_get_s3_metadata_client_error(caplog) -> None:
-    """get_s3_metadata returns {size: None, sha256: None} with CRITICAL log on ClientError."""
+    """get_s3_metadata возвращает {size: None, sha256: None} с CRITICAL log на ClientError."""
     with caplog.at_level(logging.DEBUG):
         from upload import get_s3_metadata
 
-        # FakeS3Client raises ClientError(404) for missing keys
+        # FakeS3Client raises ClientError(404) для отсутствующих ключей
         fake = FakeS3Client(objects={})  # empty objects — head_object raises ClientError
         meta = get_s3_metadata(fake, "test-bucket", "nonexistent/key")
 
@@ -359,13 +423,11 @@ def test_get_s3_metadata_client_error(caplog) -> None:
         assert meta["size"] is None
         assert meta["sha256"] is None
 
-        # Verify CRITICAL log was emitted
-        found_critical = False
-        for record in caplog.records:
-            if record.levelname == "CRITICAL" and "Cannot verify S3 object" in record.message:
-                found_critical = True
-                break
-        assert found_critical, "Expected CRITICAL log 'Cannot verify S3 object'"
+        # Структурная проверка: CRITICAL + [IMP:9] + факт события "Cannot verify S3 object"
+        assert any(
+            r.levelno == logging.CRITICAL and "[IMP:9]" in r.message and "Cannot verify S3 object" in r.message
+            for r in caplog.records
+        ), f"нет CRITICAL-лога verify: {caplog.text}"
 
 
 @pytest.mark.static_audit
@@ -387,62 +449,92 @@ def test_get_s3_metadata_unexpected_error(caplog) -> None:
         logger.critical("[IMP:9][test_upload][meta_unexpected] ASSERT: ConnectionError propagated")
 
 
+# region TESTS_MAIN_PUBLIC_PATH (exit-code + spool-эффекты через main())
+
+
+class _UploadOkVerifyFailClient:
+    """DI-контракт: upload успешен, но verify (head_object) фейлит — S3-неконсистентность.
+
+    Эмулирует реальный сценарий: загрузка прошла, но метаданные объекта недоступны
+    (get_s3_metadata → {size: None} → verification failure → exit 1).
+    """
+
+    def upload_file(self, Filename: str, Bucket: str, Key: str, **kwargs) -> None:
+        return None  # успех — объект «загружен», но head_object ниже фейлит
+
+    def head_object(self, Bucket: str, Key: str) -> dict:
+        from botocore.exceptions import ClientError
+
+        raise ClientError(
+            {"Error": {"Code": "404", "Message": "Not Found"}, "ResponseMetadata": {"HTTPStatusCode": 404}},
+            "head_object",
+        )
+
+
+def _run_main(monkeypatch: pytest.MonkeyPatch, tmp_path, client, s3_key: str) -> str:
+    """Прогнать upload.main() через публичный путь (argv + env + DI-фабрики), вернуть local_file.
+
+    ## @purpose — exit-code-тесты идут через main(): argv/sys.argv, env S3_*, get_backup_config,
+    ##            create_s3_client monkeypatch-заменены; никаких приватных _upload/_verify вызовов.
+    ## @io — ⇥ monkeypatch, tmp_path, client, s3_key → ⎋ local_file (str)
+    """
+    import upload as upload_module
+
+    config = _make_config()
+    local_file = _write_file(tmp_path, "fake.sql.gz", "x" * 1000)
+
+    monkeypatch.setattr(upload_module.sys, "argv", ["upload.py", local_file, s3_key])
+    monkeypatch.setenv("S3_BUCKET", config["bucket"])
+    monkeypatch.setenv("S3_ACCESS_KEY", config["aws_access_key_id"])
+    monkeypatch.setenv("S3_SECRET_KEY", config["aws_secret_access_key"])
+    monkeypatch.setattr(upload_module, "get_backup_config", lambda: config)
+    monkeypatch.setattr(upload_module, "create_s3_client", lambda _cfg: client)
+
+    return local_file
+
+
 @pytest.mark.static_audit
 @ldd_trajectory
-def test_main_verification_fails_on_none_metadata(tmp_path, caplog) -> None:
-    """_upload_and_verify exits with code 1 when s3_size is None."""
+def test_main_success_removes_spool_file(tmp_path, caplog, monkeypatch) -> None:
+    """Эффект: main() успех → exit 0 + spool-файл УДАЛЁН (remove_spool_file после успеха)."""
     with caplog.at_level(logging.DEBUG):
-        from unittest.mock import patch as mock_patch
-
         import upload as upload_module
 
+        key = "test.sql.gz"
         config = _make_config()
-        full_key = f"{config['prefix']}/test_verify_fail.sql.gz".replace("//", "/")
-        local_file = os.path.join(str(tmp_path), "test_verify_fail.sql.gz")
-        with open(local_file, "w") as f:
-            f.write("x" * 500)
+        full_key = f"{config['prefix']}/{key}".replace("//", "/")
+        fake = FakeS3Client()
+        local_file = _run_main(monkeypatch, tmp_path, fake, key)
 
-        # Fake client with empty objects — upload succeeds but head_object returns None metadata
-        fake = FakeS3Client(objects={})
+        with pytest.raises(SystemExit) as exc_info:
+            upload_module.main()
 
-        with (
-            mock_patch("upload.get_backup_config", return_value=config),
-            mock_patch("upload.create_s3_client", return_value=fake),
-        ):
-            client = upload_module.create_s3_client(config)
-            assert client is fake
-
-            # Upload should succeed (no fail_on set)
-            success = upload_module.upload_with_retries(
-                client,
-                config["bucket"],
-                local_file,
-                full_key,
-                max_retries=1,
-                interval_sec=0,
-            )
-            assert success is True
-
-            # Now verify — should exit 1 because s3_size is None (key not in objects dict)
-            local_sha256 = upload_module.compute_sha256(local_file)
-            with pytest.raises(SystemExit) as exc_info:
-                upload_module._upload_and_verify(
-                    client,
-                    config["bucket"],
-                    local_file,
-                    full_key,
-                    local_sha256,
-                    max_retries=1,
-                    interval_sec=0,
-                )
-
-            logger.critical(
-                "[IMP:9][test_upload][verify_fail] ASSERT: exit code=%s (expected 1)",
-                exc_info.value.code,
-            )
-            assert exc_info.value.code == 1
+        logger.critical("[IMP:9][test_upload][main_success] ASSERT: exit=%s", exc_info.value.code)
+        assert exc_info.value.code == 0, "успешный upload+verify должен завершиться exit 0"
+        # Эффект: spool-файл удалён после подтверждённого успеха (legacy upload-s3.sh контракт)
+        assert not os.path.exists(local_file), "после успешного main() spool-файл должен быть удалён"
+        # Эффект: объект загружен и верифицирован в S3
+        assert fake.head_object(config["bucket"], full_key)["ContentLength"] == 1000
 
 
-# endregion TESTS_NEW_036
+@pytest.mark.static_audit
+@ldd_trajectory
+def test_main_verification_fails_on_none_metadata(tmp_path, caplog, monkeypatch) -> None:
+    """Эффект: verify-фейл (head_object недоступен) → exit 1 + spool-файл СОХРАНЁН."""
+    with caplog.at_level(logging.DEBUG):
+        import upload as upload_module
+
+        local_file = _run_main(monkeypatch, tmp_path, _UploadOkVerifyFailClient(), "test_verify_fail.sql.gz")
+
+        with pytest.raises(SystemExit) as exc_info:
+            upload_module.main()
+
+        logger.critical("[IMP:9][test_upload][verify_fail] ASSERT: exit=%s (expected 1)", exc_info.value.code)
+        assert exc_info.value.code == 1, "verify-fail должен завершиться exit 1"
+        # Эффект: файл остаётся в spool (нет потери данных при verification failure)
+        assert os.path.exists(local_file), "файл должен остаться в spool при verify-fail"
+
+
+# endregion TESTS_MAIN_PUBLIC_PATH
 
 # endregion TESTS

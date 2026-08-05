@@ -109,7 +109,7 @@ _COMPOSE_EXTRA_TIMEOUT = 30  # extra timeout added to PLATFORM_COMPOSE_TIMEOUT
 _STATIC_SMOKE_ENV: dict[str, str] = {
     "COMPOSE_PROJECT_NAME": "ai-platform-test",
     "PLATFORM_DIR": "/tmp/ai-platform-test",
-    "S3_ENDPOINT_URL": "",  # ⚠️ TRAP[FIX] · 2026-07-24 · Empty — skip S3 in test; production endpoint unreachable in CI
+    "S3_ENDPOINT_URL": "",  # 🧐 TRAP[DECISION] · 2026-07-24 · — · Empty — skip S3 in test · Rejected: реальный S3 endpoint в CI · Reason: production endpoint unreachable in CI (deferred workaround) · Rev: CI-доступ к S3
     "NGINX_CERT_DIR": "/etc/nginx/dev-certs",
     "NODE_NAME": "test-node",
     # ⚠️ TRAP[BUG] · 2026-07-27 · HI · CONTEXT_IMAGE must be set for smoke tests
@@ -323,7 +323,7 @@ def _compute_smoke_env() -> dict[str, str]:
 # ⚠️ TRAP[DECISION] · 2026-07-31 · — · Merge order: env_defaults → static → generated
 # · Rejected: literal DevPlan 116 order {static, env_defaults, generated}
 # · Reason: env_defaults AFTER static would clobber намеренные тест-оверрайды
-# ·   (S3_ENDPOINT_URL:"" TRAP[FIX], CONTEXT_IMAGE:latest TRAP[BUG], NGINX_CERT_DIR test-путь).
+# ·   (S3_ENDPOINT_URL:"" TRAP[DECISION], CONTEXT_IMAGE:latest TRAP[BUG], NGINX_CERT_DIR test-путь).
 # ·   Static содержит ТОЛЬКО тест-специфику (дубли удалены) → статик должен побеждать env_defaults.
 # ·   SMOKE_ENV_GENERATED (секреты ci_default) — последний, как в generate_platform_env (secret > non-secret).
 # · Rev: если статик снова получит ключи, дублирующие env_defaults → вернуть порядок DevPlan.
@@ -915,11 +915,12 @@ def platform_env() -> dict[str, str]:
     _logger.info("[IMP:7][conftest][platform_env] Environment restored")
 
 
-# ⚠️ TRAP[DRIFT] · 2026-07-22 · P2 · platform_ports fixture removed in DevPlan 041 rename
+# 🧐 TRAP[DECISION] · 2026-07-22 · — · platform_ports fixture removed in DevPlan 041 rename
+# · Rejected: немедленное удаление alias-фикстуры (ломал platform_services consumers)
 # · Root: platform_port_mappings_dict replaced platform_ports, but platform_services fixture
 #   still expects platform_ports parameter → fixture not found errors in test_smoke_postgres,
 #   test_component_pgbouncer, test_component_clickhouse
-# · Fix: backward-compatible alias delegating to platform_port_mappings_dict
+# · Fix: backward-compatible alias delegating to platform_port_mappings_dict (deferred workaround)
 # · Rev: next DevPlan — update platform_services and _start_single_module to use
 #   platform_port_mappings_dict directly, then remove this alias
 @pytest.fixture(scope="session")

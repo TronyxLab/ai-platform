@@ -64,7 +64,7 @@ def test_env_example_fresh(caplog):
     )
     if result.returncode == 2:
         logger.error("[IMP:10][gate] .env.example diverges from SoT:\n%s", result.stderr[:2000])
-        pytest.fail(".env.example is stale — run: make sync-env-defaults")
+        pytest.fail(".env.example is stale — run: make generate-env-example")
     elif result.returncode != 0:
         logger.error("[IMP:10][gate] sync_env_defaults.py failed: %s", result.stderr[:1000])
         pytest.fail(f"sync_env_defaults.py exited {result.returncode}")

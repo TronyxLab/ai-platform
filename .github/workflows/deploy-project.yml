@@ -26,6 +26,12 @@
 ## @changes 2026-08-01 | DevPlan 116 B1 T4: единый канал — ping/receive/verify
 ##           2026-08-03 | TRAP[BUG]: caller-контекст — inline python/pyyaml, setup-python@v5,
 ##                      host fallback (NODE_HOST_MAP может отсутствовать), SSH_OPTS без таймаутов
+##           2026-08-05 | DevPlan 137 W2 (K2): inline quality-шаги (после validate, до deliver) —
+##                      Quality lint/test по language/level из ai-platform.yaml (runtime),
+##                      Gitleaks scan (L1, pin v8.30.1), Maturity warn (DRIFT-STALE/PROPOSE),
+##                      Blocking (full), Deliver FILES += practices.lock. Только stdlib actions
+##                      (setup-python@v5, setup-node@v4) + CLI; 0 inline python3 в новых шагах
+##                      (TRAP §10.2 caller-context; гейт test_gate_workflow_org_agnostic).
 # endregion MODULE_CONTRACT
 
 name: Deploy Project (Reusable)
@@ -108,6 +114,165 @@ jobs:
           python3 -c "import yaml; d=yaml.safe_load(open('ai-platform.yaml')); assert d.get('name') == '${{ inputs.project_name }}', f\"name mismatch: {d.get('name')}\""
           echo "[IMP:9][validate] Project payload validation passed"
 
+      # ─── Quality config (DevPlan 137 W2, K2): язык/уровень из ai-platform.yaml В РАНТАЙМЕ ──
+      # Решение аудита 137: inline quality-шаги вместо reusable workflow — level/language/type
+      # читаются из ai-platform.yaml в рантайме, шаблоны deploy.yml проектов НЕ меняются.
+      # Bash-only (0 inline python3 — гейт no-new-inline-python3); grep/sed — YAML-экстракция
+      # (конфиги проекта — единственный источник правил в caller-контексте).
+      - name: Read quality config
+        id: quality-config
+        run: |
+          set -uo pipefail
+          PROJECT_TYPE=$(grep -E '^type:' ai-platform.yaml | head -1 | awk '{print $2}' | tr -d '[:space:]')
+          QUALITY_LEVEL=$(sed -n '/^quality:/,/^[a-z]/p' ai-platform.yaml | grep -E '^[[:space:]]+level:' | head -1 | awk '{print $2}' | tr -d '[:space:]')
+          QUALITY_LEVEL=${QUALITY_LEVEL:-auto}
+          echo "[IMP:9][quality-config] type=${PROJECT_TYPE:-none} level=${QUALITY_LEVEL}"
+          echo "PROJECT_TYPE=${PROJECT_TYPE}" >> "${GITHUB_ENV}"
+          echo "QUALITY_LEVEL=${QUALITY_LEVEL}" >> "${GITHUB_ENV}"
+
+      # ─── Node.js (только frontend/fullstack) — stdlib-экшен, org-agnostic ─────────
+      - name: Setup Node.js (frontend/fullstack)
+        if: ${{ env.PROJECT_TYPE == 'frontend' || env.PROJECT_TYPE == 'fullstack' || env.PROJECT_TYPE == 'typescript' || env.PROJECT_TYPE == 'react' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # ─── Quality lint/test (DevPlan 137 §5 W2) ────────────────────────────────────
+      # Только stdlib actions + CLI (setup-python@v5/setup-node@v4, pip/npm/ruff/shellcheck);
+      # 0 inline python3, 0 платформенных actions (TRAP §10.2 caller-context;
+      # гейт test_gate_workflow_org_agnostic). pytest-timeout ОБЯЗАТЕЛЕН (иначе
+      # --timeout=60 → unrecognized arguments). pytest exit 5 (нет тестов) = PASS
+      # (канон allow_no_tests). build — только при package.json с build-скриптом (§7).
+      - name: Quality lint/test
+        run: |
+          set -uo pipefail
+          QUALITY_FAIL=0
+          PROJECT_TYPE="${PROJECT_TYPE:-}"
+          QUALITY_LEVEL="${QUALITY_LEVEL:-auto}"
+          echo "[IMP:9][quality] type=${PROJECT_TYPE} level=${QUALITY_LEVEL}"
+
+          HAS_PYTHON=0
+          HAS_NODE=0
+          case "${PROJECT_TYPE}" in
+            python|backend) HAS_PYTHON=1 ;;
+            typescript|react|frontend) HAS_NODE=1 ;;
+            fullstack) HAS_PYTHON=1; HAS_NODE=1 ;;  # Q3: обе ветки исполняются
+            sh) ;;
+            *) echo "[IMP:9][quality] unknown type '${PROJECT_TYPE}' — no language checks (deploy proceeds)" ;;
+          esac
+
+          if [ "${HAS_PYTHON}" = "1" ]; then
+            pip install -q pytest pytest-timeout ruff pyyaml
+            if ! ruff format --check .; then
+              QUALITY_FAIL=1; echo "::error::[PRACTICES:QUALITY] ruff format --check FAILED"
+            fi
+            if [ "${QUALITY_LEVEL}" = "full" ] && ! ruff check .; then
+              QUALITY_FAIL=1; echo "::error::[PRACTICES:QUALITY] ruff check FAILED (full)"
+            fi
+            pytest -q -x --timeout=60; PYTEST_RC=$?
+            if [ "${PYTEST_RC}" -ne 0 ] && [ "${PYTEST_RC}" -ne 5 ]; then
+              QUALITY_FAIL=1; echo "::error::[PRACTICES:QUALITY] pytest FAILED (rc=${PYTEST_RC})"
+            fi
+            echo "[IMP:9][quality] python checks done (pytest rc=${PYTEST_RC}, 5=no-tests PASS)"
+          fi
+
+          if [ "${HAS_NODE}" = "1" ]; then
+            if [ -f package.json ]; then
+              npm ci
+              if grep -q '"build"' package.json; then
+                if ! npm run build; then
+                  QUALITY_FAIL=1; echo "::error::[PRACTICES:QUALITY] npm run build FAILED"
+                fi
+              else
+                echo "[IMP:9][quality] no build script in package.json — build skipped"
+              fi
+              if [ "${QUALITY_LEVEL}" = "full" ] && grep -q '"lint"' package.json; then
+                if ! npm run lint; then
+                  QUALITY_FAIL=1; echo "::error::[PRACTICES:QUALITY] npm run lint FAILED (full)"
+                fi
+              fi
+            else
+              echo "[IMP:9][quality] no package.json — TS checks skipped (mock)"
+            fi
+          fi
+
+          if [ "${PROJECT_TYPE}" = "sh" ]; then
+            pip install -q shellcheck-py
+            if ! find . -name '*.sh' -not -path './node_modules/*' -print0 | xargs -0 -r shellcheck -S error; then
+              QUALITY_FAIL=1; echo "::error::[PRACTICES:QUALITY] shellcheck FAILED"
+            fi
+          fi
+
+          echo "quality_fail=${QUALITY_FAIL}" >> "${GITHUB_ENV}"
+          echo "[IMP:9][quality] QUALITY_FAIL=${QUALITY_FAIL}"
+
+      # ─── Gitleaks scan (L1 — блокирует ВСЕГДА, канон §4.5) ────────────────────────
+      # Паритет pins канона (practices_manifest.yaml#pins.gitleaks = v8.30.1 = setup-gitleaks
+      # default, DevPlan 137 §2.1). Org-agnostic: бинарник с github.com/gitleaks — не
+      # платформенный action (TRAP §10.2; паритет-проверка в test_gate_workflow_org_agnostic).
+      - name: Gitleaks scan (L1)
+        run: |
+          set -uo pipefail
+          VERSION="8.30.1"   # pin канона practices_manifest.yaml#pins.gitleaks (паритет setup-gitleaks)
+          curl -sL -o /tmp/gitleaks.tar.gz "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz"
+          tar -xzf /tmp/gitleaks.tar.gz -C /usr/local/bin gitleaks
+          chmod +x /usr/local/bin/gitleaks
+          if ! gitleaks git --no-banner -v; then
+            echo "::error::[PRACTICES:GITLEAKS] L1: secret leak detected — deploy blocked (receive NOT called)"
+            exit 1
+          fi
+          echo "[IMP:9][gitleaks] L1 scan passed (v${VERSION})"
+
+      # ─── Maturity warn (K4/K5, DevPlan 137 §5 W2) — bash, БЕЗ python3 ─────────────
+      # Возраст из первого коммита (git log --reverse), файлы кода через find. Пороги
+      # 30/50 — из канона practices_manifest.yaml#maturity (решение 2026-08-05); хардкод
+      # в bash-шаге = документированная копия SoT (bash не читает YAML в caller-контексте
+      # без python3). lock.state из practices.lock (доставляется payload'ом receive).
+      - name: Maturity warn
+        run: |
+          set -uo pipefail
+          AGE_DAYS=0
+          FIRST_COMMIT=$(git log --reverse --format=%aI 2>/dev/null | head -1 || true)
+          if [ -n "${FIRST_COMMIT}" ]; then
+            AGE_EPOCH=$(date -d "${FIRST_COMMIT}" +%s 2>/dev/null || echo 0)
+            NOW_EPOCH=$(date +%s)
+            AGE_DAYS=$(( (NOW_EPOCH - AGE_EPOCH) / 86400 ))
+          fi
+          FILES_COUNT=$(find src backend frontend app tests scripts -type f \
+            \( -name '*.py' -o -name '*.ts' -o -name '*.tsx' -o -name '*.js' -o -name '*.jsx' -o -name '*.sh' \) \
+            2>/dev/null | grep -vE '/(node_modules|\.venv|dist|build|coverage|\.next)/' | wc -l | tr -d '[:space:]')
+          LOCK_STATE=""
+          [ -f practices.lock ] && LOCK_STATE=$(grep -E '^state:' practices.lock | head -1 | awk '{print $2}' | tr -d '[:space:]')
+          echo "[IMP:9][maturity] age=${AGE_DAYS}d files=${FILES_COUNT} lock.state=${LOCK_STATE:-missing}"
+          if [ "${AGE_DAYS}" -gt 30 ] || [ "${FILES_COUNT}" -gt 50 ]; then
+            if [ "${LOCK_STATE}" != "proposed" ]; then
+              echo "::warning::[PRACTICES:DRIFT-STALE] maturity exceeded (age=${AGE_DAYS}d, files=${FILES_COUNT}) but practices.lock state is '${LOCK_STATE:-missing}' — run 'make project-sync-practices' locally and commit"
+            else
+              echo "[PRACTICES:PROPOSE][level:full][reason:age=${AGE_DAYS}d,files=${FILES_COUNT}]"
+              {
+                echo "### [PRACTICES:PROPOSE] — Practices escalator recommendation"
+                echo "- **State:** proposed (age=${AGE_DAYS}d, files=${FILES_COUNT})"
+                echo "- **RECOMMEND:** \`make project-set-practices full\` (или \`make project-sync-practices\` для обновления канона)"
+                echo "- Деплой НЕ блокируется (proposed = non-blocking). active-full — ТОЛЬКО по согласию (DevPlan 137, решение 2026-08-05)."
+              } >> "${GITHUB_STEP_SUMMARY}"
+            fi
+          fi
+
+      # ─── Blocking (full) — DevPlan 137 §5 W2 AC ───────────────────────────────────
+      # quality.level=full + качество RED → exit 1 (receive НЕ вызывается). baseline/proposed
+      # → деплой идёт с warning (AC W2). Gitleaks L1 блокирует сам (шаг выше).
+      - name: Blocking (full)
+        run: |
+          set -uo pipefail
+          if [ "${QUALITY_LEVEL}" = "full" ] && [ "${quality_fail:-0}" = "1" ]; then
+            echo "::error::[PRACTICES:BLOCK] quality.level=full и качество RED — деплой заблокирован (receive не вызван)"
+            exit 1
+          fi
+          if [ "${quality_fail:-0}" = "1" ]; then
+            echo "::warning::[PRACTICES:QUALITY] качество RED при level=${QUALITY_LEVEL} — деплой идёт с warning (AC W2)"
+          fi
+          echo "[IMP:9][blocking] level=${QUALITY_LEVEL} quality_fail=${quality_fail:-0} — deploy allowed"
+
       # ─── Setup SSH key (inline — setup-ssh action недоступен в caller'е) ──
       - name: Setup SSH key
         id: setup-ssh
@@ -150,6 +315,9 @@ jobs:
           [ -f docker-compose.yml ] && FILES="$FILES docker-compose.yml"
           [ -f compose.yaml ] && FILES="$FILES compose.yaml"
           [ -f .env.platform ] && FILES="$FILES .env.platform"
+          # DevPlan 137 §2.1B/§5 W2: practices.lock — носитель state эскалатора для K3 (verify
+          # на VPS применяет state без вычисления maturity; отсутствие → legacy-grace).
+          [ -f practices.lock ] && FILES="$FILES practices.lock"
           echo "[IMP:9][deliver] Delivering to ${{ env.ssh_host }}: ${FILES}"
           tar czf - $FILES | ssh -i ${{ steps.setup-ssh.outputs.ssh-key-path }} -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o UserKnownHostsFile=${{ steps.setup-ssh.outputs.ssh-known-hosts-path }} ci-deploy@${{ env.ssh_host }} "receive ${{ inputs.project_name }} ${{ github.sha }}"
           echo "[IMP:9][deliver] Receive completed (exit=$?)"

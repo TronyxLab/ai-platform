@@ -126,7 +126,7 @@ def test_generated_files_match_sot(caplog) -> None:
                 break
     if env_line != sot:
         logger.error("[IMP:10][profiles_parity][b] .env.example != SoT")
-        pytest.fail(f".env.example COMPOSE_PROFILES={env_line!r} != SoT {sot!r} — run `make sync-env-defaults`")
+        pytest.fail(f".env.example COMPOSE_PROFILES={env_line!r} != SoT {sot!r} — run `make generate-env-example`")
 
     logger.info("[IMP:9][profiles_parity][b] PASS: platform-env.yaml + .env.example == SoT")
 

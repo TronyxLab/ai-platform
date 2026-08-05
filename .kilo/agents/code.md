@@ -120,7 +120,7 @@ permission:
       Use `write` to create `tests/test_module.py` files. Native imports only (no subprocess.run). Use `tmp_path` fixture. Include caplog-based IMP:7-10 telemetry output. Each test function must include `# 🧪 TRAP[TEST]` with Regression/Scenario/Last fail/Remove if fields (see QA §MARKUP for format). Create `tests/conftest.py` with Anti-Loop protocol if not already present.
 
      **Step 5: VERIFY_TESTS (batched)** — Verification is BATCHED, never per-file:
-       a. Discover the project's batched verification command: `make preflight` / `make test-summary` (Makefile projects), `npm run lint && npm test` (React/Node), or the command documented in project files. If none exists — fall back to running tests via `bash` with output to temp file.
+       a. Discover the project's batched verification command: `make check` / `make test-summary` (Makefile projects), `npm run lint && npm test` (React/Node), or the command documented in project files. If none exists — fall back to running tests via `bash` with output to temp file.
        b. Run the batched command ONCE — it collects ALL failures in a single pass. Do not run the suite separately per file.
        c. Fix ALL failures from that single pass in one batch, then re-run the batched command once. Repeat only if new failures appear. Do NOT re-run the full gate between individual fixes.
        d. Run fast static checks (linter, formatter, type checker — project-specific) BEFORE the full gate, not after.
@@ -221,6 +221,46 @@ permission:
     2. For each entity in Draft Code Graph → create corresponding module/function with distilled contracts
     3. For each acceptance criterion → create corresponding test with @purpose referencing the criterion
     4. For each data flow step → create corresponding LDD log checkpoint at IMP:8-9
+**TRAP Taxonomy — Canonical Types (DevPlan 139 W5, S8)**
+
+Единый канонический словарь типов TRAP-маркеров. Новый код создаёт ТОЛЬКО эти типы;
+любой другой маркер (BUGFIX/BUG-FIX/FIX/UPSTREAM/DRIFT/CARVE-OUT/DESIGN/LOCAL/ARCHIVED) —
+legacy (консолидация ниже). Кластеры KEEP (TEST, BUG, DECISION, BUSINESS, PERF,
+INCIDENT, INDEX, CROSS-LAYER, DOCKER-BIND-MOUNT) при правках файлов не консолидируются.
+
+- TEST — регрессионный guard тест-функции (обязателен на каждом тесте; §QA MARKUP, TRAP[TEST])
+- BUG — нетривиальный баг-фикс с root-причиной (Symptom/Root/Fix/Prevention; §Bug Trap ниже)
+- DECISION — отвергнутая альтернатива / отложенный workaround (Rejected/Reason/Rev; §Decision Trap ниже)
+- BUSINESS — бизнес-инвариант/требование, зафиксированное в коде
+- PERF — подтверждённый bottleneck с митигацией (Root/Mit; §Performance Trap ниже)
+- INCIDENT — инцидент production с root-анализом
+- INDEX — проблема нумерации/индексов (Renumber-риск)
+- CROSS-LAYER — нарушение границы слоёв (import direction)
+- DOCKER-BIND-MOUNT — Docker bind-mount/volume-специфика
+- DEBT — отдельный процессный тип: латентная проблема вне скоупа (rule 11; §Debt Trap ниже)
+
+**Консолидация legacy-типов (DevPlan 139 W5, S8):**
+
+- BUGFIX / BUG-FIX / FIX → BUG (маркер исправления бага)
+- UPSTREAM / DRIFT / CARVE-OUT / DESIGN / LOCAL → DECISION (задокументированное отклонение / отложенный workaround, по смыслу)
+- ARCHIVED (0 применений за 2 мес) → RESOLVED-практика (удалён из словаря, заменён маркером RESOLVED)
+
+**RESOLVED-практика (DevPlan 139 W5):** закрытый TRAP (Rev-условие наступило / root-причина
+устранена / подтверждено верификацией) помечается `TRAP[BUG] · RESOLVED · <дата> · <ссылка на волну>`
+в строке маркера. RESOLVED НЕ удаляет запись — история сохраняется для контекста
+(формат проверяется тестом: tests/unit/test_bootstrap_batch.py:142-151). Примеры применения:
+- `core/entrypoints/bootstrap.sh:99` — `TRAP[BUG] 2026-07-17 P1 RESOLVED 2026-08-01 (B3 T5/T6)` (DevPlan 116)
+- `core/internal/bootstrap/lifecycle/state_machine.py:648` — TRAP[BUG] снят (волна 117 D5)
+- `core/entrypoints/bootstrap.sh:15/16` — Rev закрыты: «подтверждено 2026-08-05 (DevPlan 118 B6)» (139 W1)
+
+**Исторические legacy-маркеры (осознанно сохранены; НЕ консолидировать вне задачи):**
+- BUGFIX ×4 — core/internal/bootstrap/privoxy_config.py, core/bootstrap/tor/privoxy-config.template (core/ вне скоупа правок)
+- BUG-FIX ×2 — core/internal/lint/doc_header_validator.py (core/)
+- FIX ×3 — core/modules/clickhouse/docker-compose.test.yml (core/)
+- UPSTREAM ×1 — core/modules/hermes-agent/build/Dockerfile (core/)
+- DESIGN ×4 — core/internal/hooks/check-no-new-inline-python3.sh, core/internal/test_runner.py, core/internal/scripts/yaml_query.py (core/)
+- LOCAL ×7 — tests/test_e2e_{grafana_api,prometheus,langfuse,loki,health}.py, tests/_conftest/e2e.py (env-заметки e2e без семантического эквивалента BUG/DECISION — при правке файла консолидировать или удалить)
+
 **Bug Trap — TRAP[BUG]**
 
     When fixing a non-trivial bug, add a TRAP[BUG] comment at the fix location. Format:
@@ -259,8 +299,9 @@ permission:
     observations, confidence <50% (ask the user first).
 
     **Lifecycle:** creation → QA verification → future investigation → TRAP[BUG] (confirmed + fixed)
-    / update Observed+Suspected (confirmed, fix unknown) / TRAP[ARCHIVED] (false positive or
-    prevented architecturally).
+    / update Observed+Suspected (confirmed, fix unknown) / RESOLVED-маркер (false positive,
+    prevented architecturally или закрыт верификацией — см. §TRAP Taxonomy, RESOLVED-практика,
+    DevPlan 139 W5; TRAP[ARCHIVED] удалён из словаря).
 **Decision Trap — TRAP[DECISION]**
 
     When a non-obvious design decision is made and a plausible alternative was rejected, add a TRAP[DECISION] comment at the decision point. Format (one-line):

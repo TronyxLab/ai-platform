@@ -37,7 +37,7 @@ def _yaml_override_constructor(loader: yaml.SafeLoader, node: yaml.Node) -> list
     Handles BOTH forms used across test overlays:
     - sequence: `networks: !override [test-proxy-net, ...]`
     - mapping:  clickhouse test.yml `networks: !override {test-observability-net: {aliases: [...]}}`
-      (mapping form preserves the 'clickhouse' alias for langfuse DNS — TRAP[FIX] 2026-07-22).
+      (mapping form preserves the 'clickhouse' alias for langfuse DNS — TRAP[BUG] 2026-07-22).
     """
     if isinstance(node, yaml.MappingNode):
         return loader.construct_mapping(node)

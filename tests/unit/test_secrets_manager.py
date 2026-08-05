@@ -39,6 +39,9 @@ import secrets_manager as sm
 # Re-export for fixture cleanups
 MODULE = sm
 
+# Публичный htpasswd-контракт (DevPlan 139 W2): sm._ensure_htpasswd — приватный ленивый фасад
+# к htpasswd.ensure_htpasswd; тесты идут через ПУБЛИЧНЫЙ путь (top-10 private-доступов закрыты).
+from core.internal.bootstrap.lifecycle.htpasswd import ensure_htpasswd
 
 # ═══════════════════════════════════════════════════════════════════
 # region Fixtures
@@ -477,35 +480,36 @@ def test_ensure_secrets_preserves_nongenerated(caplog, secrets_env, mock_subproc
 
 
 # 🧪 TRAP[TEST] · Regression · htpasswd salt-extraction idempotency (TRAP[BUG] 2026-07-31)
-# · Scenario: two calls to _ensure_htpasswd with identical credentials → identical md5sum
-# ·   (2nd call extracts $apr1$ salt from existing file, recomputes entry with fixed salt)
+# · Scenario: two calls to ensure_htpasswd (public контракт) with identical credentials →
+# ·   identical md5sum (2nd call extracts $apr1$ salt from existing file, recomputes entry with fixed salt)
 # · Last fail: N/A (new test — validates DevPlan 102 TASK-1 fix)
-# · Remove if: salt-extraction logic in _write_htpasswd_file changes fundamentally
+# · Remove if: salt-extraction logic in write_htpasswd_file changes fundamentally
 @ldd_trajectory
 def test_ensure_htpasswd_idempotent(caplog, tmp_path, monkeypatch):
-    """Two calls to _ensure_htpasswd with same creds → identical md5sum (salt extraction).
+    """Two calls to ensure_htpasswd with same creds → identical md5sum (salt extraction).
 
     ## @purpose  Verify DevPlan 102 TASK-1 fix: random salt broke idempotency —
     ##           each call regenerated a different $apr1$ hash and rewrote the file.
     ##           Now the existing file's salt is extracted and reused, so the second
     ##           call produces the identical entry (md5-stable file).
+    ##           DevPlan 139 W2: через публичный htpasswd.ensure_htpasswd (не sm._ensure_htpasswd).
     """
     secrets_env_file = tmp_path / "secrets.env"
     secrets_env_file.write_text("PLATFORM_MASTER_EMAIL=admin@test.local\nPLATFORM_MASTER_PASSWORD=test-password-123\n")
     htpasswd_file = tmp_path / ".htpasswd-platform"
 
-    # Ensure env not pre-seeded — _ensure_htpasswd sources from secrets.env
+    # Ensure env not pre-seeded — ensure_htpasswd sources from secrets.env
     monkeypatch.delenv("PLATFORM_MASTER_EMAIL", raising=False)
     monkeypatch.delenv("PLATFORM_MASTER_PASSWORD", raising=False)
 
-    assert sm._ensure_htpasswd(str(secrets_env_file), str(htpasswd_file)) is True
+    assert ensure_htpasswd(str(secrets_env_file), str(htpasswd_file)) is True
     first_md5 = hashlib.md5(htpasswd_file.read_bytes()).hexdigest()
 
     # Clear env so the second call re-sources credentials from secrets.env
     monkeypatch.delenv("PLATFORM_MASTER_EMAIL", raising=False)
     monkeypatch.delenv("PLATFORM_MASTER_PASSWORD", raising=False)
 
-    assert sm._ensure_htpasswd(str(secrets_env_file), str(htpasswd_file)) is True
+    assert ensure_htpasswd(str(secrets_env_file), str(htpasswd_file)) is True
     second_md5 = hashlib.md5(htpasswd_file.read_bytes()).hexdigest()
 
     assert first_md5 == second_md5, (

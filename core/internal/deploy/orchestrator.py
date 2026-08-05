@@ -26,6 +26,8 @@ DeployOrchestrator — единый typed фасад для всех deploy-оп
 ## @rationale DevPlan 089 — устраняет дублирование бизнес-логики в 6+ путях деплоя.
 ##            Багфикс в одном пути применяется ко всем через единый DeployOrchestrator.
 ## @changes 2026-07-30 | DevPlan 089 T6 — Created
+##           2026-08-05 | DevPlan 138 W3 — monitoring reconfig (run_monitoring_reconfig) в
+##           _run_post_deploy_chain после generate-catalog, до deploy-hooks (паритет до-B8)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -976,16 +978,21 @@ class DeployOrchestrator:
 
     # region FUNC__run_post_deploy_chain
     ## @purpose  Best-effort post-deploy chain (DevPlan 116 B1 T2/D4, U-24): notify-hook (Telegram)
-    ##           + generate-catalog (regen catalog.json) + module deploy-hooks (B8 wire).
+    ##           + generate-catalog (regen catalog.json) + monitoring reconfig (DevPlan 138 W3)
+    ##           + module deploy-hooks (B8 wire).
     ##           Все неблокирующие: сбой → WARN, деплой НЕ фейлится (дизайн notify-hook always exit 0).
     ## @io       ⇥ project: str, version: str, status: str, project_dir: str, node_name: str → ⎋ None
     ## @complexity — O(1) — subprocess-вызовы с timeout
+    ##
     ## @invariants
     ##   - Вызывается ТОЛЬКО после успешного деплоя (DEPLOYED/PARTIAL)
     ##   - notify-hook timeout 30s, generate-catalog timeout 60s, module deploy-hook COMPOSE_UP_TIMEOUT
     ##   - Сбой цепочки → logger.warning (IMP:8), не raise
     ##   - B8 (волна 118): module deploy-hooks (module.yaml hooks.on_project_deploy) вызываются
     ##     через shared/module_interface.invoke — восстановленный триггер (ранее удалён в 117 sweep)
+    ##   - DevPlan 138 W3: monitoring reconfig (run_monitoring_reconfig, lazy-import) — ПОСЛЕ
+    ##     generate-catalog, ДО deploy-hooks; паритет до-B8 module-hook; WARN non-fatal (R5)
+    ##
     def _run_post_deploy_chain(
         self,
         project: str,
@@ -994,7 +1001,7 @@ class DeployOrchestrator:
         project_dir: str | None = None,
         node_name: str = "",
     ) -> None:
-        """Run notify-hook + generate-catalog + module deploy-hooks (best-effort, D4)."""
+        """Run notify-hook + generate-catalog + monitoring reconfig + module deploy-hooks (best-effort, D4)."""
         platform_root = str(platform_remote_base())
         notify_hook = os.path.join(platform_root, "core", "internal", "notify", "notify-hook.sh")
         generate_catalog = os.path.join(platform_root, "core", "internal", "catalog", "generate-catalog.sh")
@@ -1037,6 +1044,26 @@ class DeployOrchestrator:
             logger.info("[IMP:9][DeployOrchestrator][post_deploy_chain] generate-catalog regenerated for %s", project)
         except (OSError, subprocess.TimeoutExpired, subprocess.SubprocessError) as e:
             logger.warning("[IMP:8][DeployOrchestrator][post_deploy_chain] generate-catalog WARN (non-fatal): %s", e)
+
+        # ── Monitoring reconfig (DevPlan 138): паритет до-B8 module-hook ──
+        # B8 (волна 118) удалил monitoring deploy-hook с пометкой «Python-эквиваленты»,
+        # но вызов так и не был подключён — рендер висел ручным (make render-monitoring).
+        # Non-blocking (R5): исключение → WARN, деплой НЕ фейлится (best-effort контракт).
+        if project_dir and project:
+            try:
+                from core.internal.monitoring_config_renderer import run_monitoring_reconfig
+
+                run_monitoring_reconfig(
+                    Path(project_dir),
+                    project,
+                    node_name or "",
+                    Path(platform_root),
+                )
+            except Exception as e:  # noqa: EXC — best-effort контракт post-deploy chain
+                logger.warning(
+                    "[IMP:8][DeployOrchestrator][post_deploy_chain] monitoring reconfig WARN (non-fatal): %s",
+                    e,
+                )
 
         # ── Module deploy-hooks (B8, волна 118): deploy-hook для зарегистрированных модулей ──
         # Регистрация: module.yaml hooks.on_project_deploy (+ entrypoint-manifest module_hooks).

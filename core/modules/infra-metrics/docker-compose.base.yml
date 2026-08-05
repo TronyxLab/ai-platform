@@ -70,7 +70,6 @@ services:
     networks:
       - observability-net
 
-    # 🧐 TRAP[TASK-3] · 2026-07-02 · Optimized: start_period 30→15s (container startup optimization)
     # ⚠️ TRAP[BUG] · 2026-07-27 · HI · wget missing in scratch-based v0.55.1 → HEALTHCHECK always fails
     # · Root: v0.52.0 (Alpine, has wget) → v0.55.1 (scratch, no wget). TRAP comment said
     # ·   "no breaking changes expected" — incorrect: base image change = breaking for HEALTHCHECK.

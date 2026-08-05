@@ -322,10 +322,43 @@ def _dispatch(argv: list[str]) -> int:
                 print(proc.stdout, end="")
             if proc.stderr:
                 print(proc.stderr, end="", file=sys.stderr)
-            return proc.returncode
+            # HTTPS-проверка НЕ прошла → контракты проекта не исполняем (нет смысла блокировать
+            # поверх сетевого сбоя; verify-domains — канон DevPlan 125 T1, НЕ трогаем)
+            if proc.returncode != 0:
+                return proc.returncode
         except (OSError, subprocess.TimeoutExpired) as e:
             print(json.dumps({"status": "ERROR", "error": f"verify failed: {e}"}))
             return 1
+
+        # ── W4 (K3, DevPlan 137 §5 W4): контракты проекта ПОСЛЕ успешной HTTPS-проверки ──
+        # verify без project (make verify NODE=...) — только домены (per-project контракты
+        # требуют project_dir из projects_base). L1-блок → [PRACTICES:BLOCK] + exit 1;
+        # warnings → [PRACTICES:PROPOSE]/[PRACTICES:LEGACY] + exit 0 (политика §4.5).
+        if project:
+            from core.internal.deploy.verify_contracts import verify_project_contracts
+
+            report = verify_project_contracts(projects_base() / project)
+            n_block = sum(1 for f in report.findings if f.severity == "block")
+            logger.info(
+                "[IMP:9][verify][contracts] project=%s state=%s findings=%d blocking=%d",
+                project,
+                report.state,
+                len(report.findings),
+                n_block,
+            )
+            if report.has_blocking_violation():
+                logger.info(
+                    "[IMP:9][verify][contracts] BLOCKED project=%s (%d blocking violations)",
+                    project,
+                    n_block,
+                )
+                print(report.format_for_ssh())
+                return 1
+            if report.has_warnings():
+                print(report.format_for_ssh())
+            else:
+                logger.info("[IMP:9][verify][contracts] OK project=%s — 0 findings", project)
+        return 0
 
     # ── receive [project] [sha]: tar из stdin, версия из аргументов (D5) ──
     if verb == "receive":

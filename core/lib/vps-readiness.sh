@@ -11,7 +11,7 @@
 ##   - --quick / --json флаги пробрасываются в Python CLI как есть
 ## @rationale Strangler-Fig: business logic migrated to Python, bash остаётся тонким фасадом.
 ##            НЕ source'ит logging.sh/paths.sh (D5) — IMP-логи теперь в Python, paths не нужен.
-##            Только ssh.sh — для _default_ssh_runner() внутри Python (ssh_read + SSH_OPTS_COMMON).
+##            Только ssh.sh — для default_ssh_runner() внутри Python (ssh_read + SSH_OPTS_COMMON).
 ## @changes 2026-07-31 | 181 LOC → ~20 LOC фасад (DevPlan 105)
 # endregion MODULE_CONTRACT
 

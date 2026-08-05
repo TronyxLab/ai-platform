@@ -444,10 +444,10 @@ def test_resolve_org_from_overlay_context_yaml(
     monkeypatch.setenv("PROJECTS_ROOT", str(tmp_path))
 
     # 🧪 TRAP[TEST] · 2026-08-05 · Regression · D9 — org из overlay context.yaml (f572787)
-    # · Scenario: PROJECTS_ROOT/<ctx>/platform/context.yaml с org → _resolve_org возвращает org
+    # · Scenario: PROJECTS_ROOT/<ctx>/platform/context.yaml с org → resolve_org возвращает org
     # · Last fail: 2026-08-04 — org = имя контекста (lowercase) → push «Repository not found»
-    # · Remove if: _resolve_org перестаёт читать context.yaml#org
-    assert context_promoter._resolve_org(ctx) == "TronyxLab"
+    # · Remove if: resolve_org перестаёт читать context.yaml#org
+    assert context_promoter.resolve_org(ctx) == "TronyxLab"
 
     logger.critical("[IMP:9][test] _resolve_org из overlay context.yaml — канонический org")
     found_imp9 = _print_trajectory(caplog)
@@ -477,8 +477,8 @@ def test_resolve_org_mixed_case_context_name(
     # 🧪 TRAP[TEST] · 2026-08-05 · NEGATIVE (R5) · D9 — mixed-case tronyx-lab vs TronyxLab
     # · Scenario: context.yaml org=TronyxLab при имени контекста tronyx-lab → вернётся TronyxLab
     # · Last fail: 2026-08-04 — GitHub SSH case-sensitive: push tronyx-lab/ai-platform «Repository not found»
-    # · Remove if: _resolve_org больше не читает context.yaml (org из другого источника)
-    resolved = context_promoter._resolve_org(ctx)
+    # · Remove if: resolve_org больше не читает context.yaml (org из другого источника)
+    resolved = context_promoter.resolve_org(ctx)
     assert resolved == "TronyxLab", f"Канонический org обязан прийти из context.yaml, got {resolved!r}"
     assert resolved != ctx, "Имя контекста (lowercase) не может быть org'ом (D9 regression)"
 
@@ -501,10 +501,10 @@ def test_resolve_org_fallback_context_name(
     monkeypatch.setenv("PROJECTS_ROOT", str(tmp_path))
 
     # 🧪 TRAP[TEST] · 2026-08-05 · Regression · D9 — fallback на имя контекста
-    # · Scenario: context.yaml отсутствует → _resolve_org возвращает context name
+    # · Scenario: context.yaml отсутствует → resolve_org возвращает context name
     # · Last fail: N/A (fallback — историческое поведение, сохранено фиксом)
     # · Remove if: fallback на имя контекста удаляется
-    assert context_promoter._resolve_org("myctx") == "myctx"
+    assert context_promoter.resolve_org("myctx") == "myctx"
 
     logger.critical("[IMP:9][test] _resolve_org fallback на имя контекста (D9)")
     found_imp9 = _print_trajectory(caplog)

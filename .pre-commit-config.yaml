@@ -1,5 +1,5 @@
 # GREP_SUMMARY: pre-commit gitleaks ruff yamllint check-jsonschema shellcheck check-yaml trailing-whitespace end-of-file-fixer check-merge-conflict detect-private-key check-added-large-files mixed-line-ending check-toml check-json basedpyright bandit check-manifest-parity check-doc-headers name-linter commit-msg pre-push-gate fix-executable-bit
-# STRUCTURE: repos → gitleaks(v8.30.1) → ruff(v0.15) → yamllint(v1.38) → local(check-doc-headers + name-linter) → shellcheck(v0.11) → check-jsonschema(0.37) → pre-commit-hooks(v6.0 + check-merge-conflict + detect-private-key + check-added-large-files + mixed-line-ending + check-toml + check-json) → local(basedpyright + bandit + commit-msg + pre-push-gate + check-manifest-parity)
+# STRUCTURE: repos → gitleaks(v8.30.1) → ruff(v0.16) → yamllint(v1.38) → local(check-doc-headers + name-linter) → shellcheck(v0.11) → check-jsonschema(0.37) → pre-commit-hooks(v6.0 + check-merge-conflict + detect-private-key + check-added-large-files + mixed-line-ending + check-toml + check-json) → local(basedpyright + bandit + commit-msg + pre-push-gate + check-manifest-parity)
 # region MODULE_CONTRACT
 ## @purpose  Unified pre-commit hooks via pre-commit framework (per DevPlan 001):
 ##           - gitleaks (secret scanning) + ruff (verify only: check + format --check; auto-fix: ruff check --fix . && ruff format .)
@@ -50,7 +50,7 @@ repos:
         args: ["--config", ".gitleaks.toml"]
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.21
+    rev: v0.16.1
     hooks:
       - id: ruff-check
         name: ruff-check (lint, verify only)

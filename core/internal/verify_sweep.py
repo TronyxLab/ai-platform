@@ -87,6 +87,12 @@ from core.internal.shared.node_yaml import NodeYaml
 from core.internal.shared.node_yaml.projects import ProjectEntry
 from core.internal.shared.timeouts import SSH_CONNECT_TIMEOUT
 
+# Единый SSH-раннер (DevPlan 139 W3 T4): verbatim-копия удалена, канон — vps_readiness.
+# Сигнатура (host, user, cmd, timeout, ssh_lib_path=None) -> tuple[int, str] идентична;
+# timeout-семантика (Python-level = bash timeout + 5s) сохранена без изменений.
+# Гейт ssh_opts_sole_path остаётся зелёным (ssh.sh фасад не тронут).
+from core.internal.shared.vps_readiness import default_ssh_runner
+
 logger = logging.getLogger(__name__)
 
 # ── Constants (единственный источник литералов домена e2e-verify) ──────────
@@ -109,7 +115,6 @@ REMOTE_NGINX_CONF_DIR: str = "/etc/nginx/conf.d/overlay"
 """## @invariant Remote-директория nginx vhost conf.d (include /etc/nginx/conf.d/overlay/*.conf, nginx_harness.py:123)."""
 
 _NODE_HOST_MAP_ENV = "NODE_HOST_MAP"
-_SSH_LIB_PATH = str(Path(__file__).resolve().parent.parent / "lib" / "ssh.sh")
 
 # Коды HTTP по дизайну (I2). FAIL-коды (502/504/5xx) легального by-design статуса не имеют.
 _BY_DESIGN_OK_CODES: frozenset[int] = frozenset({200, 301, 302, 401, 403, 404, 444})
@@ -639,7 +644,7 @@ def _collect_remote(
     ## @purpose — Источник remote (DevPlan 136 T5.1: «remote — через SSH чтение nginx conf.d»):
     ##            фактические задеплоенные server_names на ноде (истинное состояние).
     ##            R4: ssh-недоступен → EndpointCollectionError(exit_code=1) — FAIL, не skip.
-    ## @io — ⇥ node: str; host: str; ssh_runner DI (None → _default_ssh_runner);
+    ## @io — ⇥ node: str; host: str; ssh_runner DI (None → default_ssh_runner);
     ##         remote_conf_dir: str; ssh_user: str → ⎋ list[Endpoint]
     ## @complexity — O(1) SSH round-trip + O(L) парсинг
     ## @raises — EndpointCollectionError(exit_code=1): ssh rc != 0 / timeout / bash missing
@@ -650,7 +655,7 @@ def _collect_remote(
     ##   - Таймаут SSH: SSH_CONNECT_TIMEOUT (shared/timeouts канон)
     """
     if ssh_runner is None:
-        ssh_runner = _default_ssh_runner
+        ssh_runner = default_ssh_runner
 
     cmd = f"cat {remote_conf_dir}/*.conf 2>/dev/null"
     logger.info("[IMP:7][_collect_remote] SSH %s@%s: %s", ssh_user, host, cmd)
@@ -1035,54 +1040,17 @@ def _default_subprocess_runner(cmd: list[str], timeout: int) -> subprocess.Compl
 # endregion FUNC__default_subprocess_runner
 
 
-# region FUNC__default_ssh_runner
-def _default_ssh_runner(
-    host: str,
-    user: str,
-    cmd: str,
-    timeout: int,
-    ssh_lib_path: str | None = None,
-) -> tuple[int, str]:
-    """Дефолтный SSH-раннер через lib/ssh.sh::ssh_read (subprocess-bash паттерн).
-
-    ▶ ┌host,user,cmd,timeout┐ → ⚡ bash -c 'source lib/ssh.sh && ssh_read h u cmd t' → ⎋ (rc, stdout)
-
-    ## @purpose — Remote-collect через lib/ssh.sh::ssh_read — единый SoT SSH (TRAP[DECISION]
-    ##            2026-07-21 в lib/ssh.sh; прецедент vps_readiness._default_ssh_runner).
-    ##            Python-level timeout = bash timeout + 5 (macOS без GNU timeout, R2-прецедент).
-    ## @io — ⇥ host: str; user: str; cmd: str; timeout: int; ssh_lib_path: str | None
-    ##       → ⎋ tuple[int, str] (rc, stdout)
-    ## @complexity — O(1) — single subprocess call
-    ## @invariants
-    ##   - Команда строго: `source "<lib>" && ssh_read "<host>" "<user>" "<cmd>" <timeout>`
-    ##   - TimeoutExpired / FileNotFoundError → (1, message) — fail-verbose, без исключений
-    ##   - stderr намеренно отбрасывается (как в vps_readiness)
-    """
-    lib_path = ssh_lib_path or _SSH_LIB_PATH
-    logger.info("[IMP:7][_default_ssh_runner] ssh_read %s@%s (timeout=%ss, lib=%s)", user, host, timeout, lib_path)
-    try:
-        result = subprocess.run(
-            ["bash", "-c", f'source "{lib_path}" && ssh_read "{host}" "{user}" "{cmd}" {timeout}'],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=timeout + 5,
-        )
-        logger.info(
-            "[IMP:8][_default_ssh_runner] ssh_read rc=%s stdout=%.120s",
-            result.returncode,
-            result.stdout.strip() or "<empty>",
-        )
-        return result.returncode, result.stdout
-    except subprocess.TimeoutExpired:
-        logger.info("[IMP:10][_default_ssh_runner] Python-level TimeoutExpired after %ss", timeout + 5)
-        return 1, "SSH timeout (Python-level TimeoutExpired)"
-    except FileNotFoundError as exc:
-        logger.info("[IMP:10][_default_ssh_runner] bash not found: %s", exc)
-        return 1, f"bash not found: {exc}"
-
-
-# endregion FUNC__default_ssh_runner
+# region FUNC_ssh_runner
+# ⚠️ TRAP[DECISION] · 2026-08-05 · — · SSH-раннер дедуплицирован (DevPlan 139 W3 T4)
+# · Rejected: держать verbatim-копию default_ssh_runner в verify_sweep (дрейф: 2 копии,
+# ·   timeout-семантика может разойтись; AC W3b: rg def default_ssh_runner → 1 def)
+# · Reason: канон — core.internal.shared.vps_readiness.default_ssh_runner (DevPlan 105);
+# ·   сигнатура (host, user, cmd, timeout, ssh_lib_path=None) идентична, Python-level
+# ·   timeout = bash timeout + 5s сохранён (сверено до импорта). DI-точка ssh_runner
+# ·   в _collect_remote не менялась — name разрешается в импортированный канон.
+# · Rev: если потребуется иная timeout-семантика для e2e-verify — параметризовать канон,
+# ·   не копировать.
+# endregion FUNC_ssh_runner
 
 
 # endregion RUNNERS

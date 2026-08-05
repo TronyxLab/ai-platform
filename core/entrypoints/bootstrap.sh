@@ -12,8 +12,8 @@
 ##   - AGE_SECRET_KEY chain (node_detect.py): env → SOPS_AGE_KEY → AGE_SECRET_KEY_FILE →
 ##     default key file ~/.config/age/keys.txt (age CLI default, symlink-конвенция); missing = WARN (not fatal)
 ##   - ci_deploy_key: node.yaml единственный SoT (D2, B3 T6); --dry-run печатает SCP+SSH; --resume всегда
-## 🧐 TRAP[DECISION] · 2026-07-21 · — · secrets: <node-configs-dir>/secrets/<NODE>.enc.yaml (без symlink-поиска); Rev: CI auto-deploy
-## 🧐 TRAP[DECISION] · 2026-07-21 · — · passthrough arg pattern (не полный parse_args); Rev: Wave 4 — parse_args spec
+## 🧐 TRAP[DECISION] · 2026-07-21 · — · secrets: <node-configs-dir>/secrets/<NODE>.enc.yaml (без symlink-поиска); подтверждено 2026-08-05 (Rev CI auto-deploy наступил и закрыт, DevPlan 118 B6)
+## 🧐 TRAP[DECISION] · 2026-07-21 · — · passthrough arg pattern (не полный parse_args); подтверждено 2026-08-05 (Rev Wave 4 — parse_args spec наступил и закрыт, DevPlan 118 B6)
 ## @rationale Thin-wrapper per DevPlan 020 T4+T15 — auto-SSH+SCP eliminates manual rsync/SSH steps.
 ## @changes 2026-07-17 T15 layer re-homing; 2026-07-21 W4 --auto-reconcile; 2026-07-31 DevPlan 104;
 ##           2026-08-01 B3 T5/T6 — --get-many, env-override удалён (D2); 2026-08-03 RC 121 — age-key-file локально

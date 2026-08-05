@@ -1,7 +1,0 @@
-# @purpose Test fixture for NodeYaml unit tests — structurally invalid (projects is not a list)
-# GREP_SUMMARY: test-data node-yaml-facade invalid
-node:
-  host: 1.2.3.4
-domain:
-  platform: example.com
-projects: "not_a_list"   # ← validation error

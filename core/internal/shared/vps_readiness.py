@@ -7,7 +7,7 @@
 ##           /opt/projects/ exists+writable, Docker daemon) with fail-fast semantics and
 ##           per-failure remediation hints. CLI: python3 -m core.internal.shared.vps_readiness NODE [--json|--quick].
 ## @scope    Called from core/lib/vps-readiness.sh shell facade (sourced by makefiles/deploy.mk:37-38).
-##           Provides: check_vps_ready(), _default_ssh_runner(), _resolve_node_host(),
+##           Provides: check_vps_ready(), default_ssh_runner(), _resolve_node_host(),
 ##           _build_ready_diagnostics(), _build_json_diagnostics(), CLI __main__.
 ## @invariants
 ##   - 4 checks ordered by failure probability: SSH → forced-command ping → /opt/projects → Docker
@@ -42,7 +42,7 @@
 # · Rev: if 4th consumer of ssh_read appears → extract shared Python SSH runner.
 
 # ⚡ TRAP[DECISION] · 2026-07-31 · — · macOS без GNU timeout (DevPlan 105 R2)
-# · Rejected: bash-level GNU `timeout` wrapper inside _default_ssh_runner (missing on macOS dev)
+# · Rejected: bash-level GNU `timeout` wrapper inside default_ssh_runner (missing on macOS dev)
 # · Reason: Python-level subprocess.run(timeout=timeout+5) catches hangs portably. On macOS the
 # ·         subprocess may surface TimeoutExpired instead of bash exit=124 — diagnosis less precise,
 # ·         but pre-flight runs (4 checks × 30s) have bounded cost. Production (Linux) unaffected.
@@ -89,7 +89,7 @@ CMD_PING = "ping"
 CMD_EXIT = "exit"
 
 
-# region FUNC__default_ssh_runner
+# region FUNC_ssh_runner
 ## @purpose  Default SSH runner — executes remote command via lib/ssh.sh::ssh_read through
 ##           subprocess-bash. Preserves the ssh.sh single-source-of-truth contract
 ##           (SSH_OPTS_COMMON, timeout wrapper, exit=124 detection).
@@ -103,7 +103,7 @@ CMD_EXIT = "exit"
 ## @invariants
 ##   - Python-level timeout = bash timeout + 5s (ловит зависание на macOS без GNU timeout, R2)
 ##   - subprocess.TimeoutExpired / FileNotFoundError → (1, message) — fail-verbose, без исключений
-def _default_ssh_runner(
+def default_ssh_runner(
     host: str,
     user: str,
     cmd: str,
@@ -140,7 +140,7 @@ def _default_ssh_runner(
         return 1, f"bash not found: {exc}"
 
 
-# endregion FUNC__default_ssh_runner
+# endregion FUNC_ssh_runner
 
 
 # region FUNC__resolve_node_host
@@ -238,7 +238,7 @@ def _build_json_diagnostics(
 ## @param node_name     Node name to check
 ## @param output_mode   "text" (default) | "json" — влияет только на логи; CLI рендерит вывод
 ## @param quick_mode    True → skip Docker check (AC4)
-## @param ssh_runner    DI: (host, user, cmd, timeout) -> (exit_code, stdout); None → _default_ssh_runner()
+## @param ssh_runner    DI: (host, user, cmd, timeout) -> (exit_code, stdout); None → default_ssh_runner()
 ## @param node_host_map DI: dict node→host; None → os.environ["NODE_HOST_MAP"] (AC8)
 ## @io        ⎋ (bool, dict): (True, ready-diagnostics) | (False, not_ready-diagnostics)
 ## @complexity O(1) — 3-4 последовательных SSH-вызова × timeout 30s (fail-fast)
@@ -270,7 +270,7 @@ def check_vps_ready(
     )
 
     if ssh_runner is None:
-        ssh_runner = _default_ssh_runner
+        ssh_runner = default_ssh_runner
 
     # ── Step 0: Resolve NODE_HOST_MAP ────────────────────────────────
     ssh_host, resolve_error, resolve_remediation = _resolve_node_host(node_name, node_host_map)

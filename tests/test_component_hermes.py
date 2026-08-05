@@ -317,7 +317,7 @@ def hermes_up(platform_services: dict[str, list[str]], postgres_up, modules_dir)
     #          ensures clean state before compose up.
     logger.info("[IMP:7][hermes_up] Pre-flight: cleaning up leftover containers ...")
     hermes_test_override = os.path.join(os.path.dirname(compose_file), "docker-compose.test.yml")
-    # ⚠️ TRAP[FIX] · 2026-07-24 · Include test.yml in down for consistency with up
+    # ⚠️ TRAP[BUG] · 2026-07-24 · Include test.yml in down for consistency with up
     _down_cleanup_args = ["docker", "compose", "-f", compose_file]
     if os.path.exists(hermes_test_override):
         _down_cleanup_args.extend(["-f", hermes_test_override])
@@ -528,7 +528,7 @@ def test_hermes_compose_up(hermes_up, caplog) -> None:
     ## @complexity — O(1) — single subprocess call
     ## @acceptance — hermes-agent-test container must appear in docker ps output as 'Up'
 
-    ⚠️ TRAP[FIX] · 2026-07-24 · Use `docker ps` instead of `docker compose ps`
+    ⚠️ TRAP[BUG] · 2026-07-24 · Use `docker ps` instead of `docker compose ps`
     · docker compose ps returns empty when platform_services background wave
     ·   recreates hermes-agent-test under ai-platform-test project, taking
     ·   ownership away from ai-platform-test-hermes. docker ps checks the

@@ -20,11 +20,11 @@
 ## @rationale Prevents silent failures when `docker compose up` is invoked manually without bootstrap.
 ##            One-time bootstrap runs `docker_orchestrator.py` which validates secrets already,
 ##            but iterative `docker compose up` during development bypasses that validation.
-##            The wrapper is opt-in (compose-safe-up make target), not a global override.
+##            The wrapper is opt-in (up-safe make target), not a global override.
 ## @changes 2026-07-22 | Initial — TASK-4 of Plan 049 secrets-centralization
 ##          2026-07-30 | Refactored load_env_map() to delegate to shared secrets_env_parser.parse() — DRY consolidation
 ## @usecases
-##   - `make compose-safe-up MODULES=postgres,litellm` → preflight check → docker compose up
+##   - `make up-safe MODULES=postgres,litellm` → preflight check → docker compose up
 ##   - Developer running `docker compose up --profile my-module` directly (bypass): no guard
 # endregion MODULE_CONTRACT
 

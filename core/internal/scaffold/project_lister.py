@@ -36,6 +36,11 @@ from typing import Any
 # DevPlan 118 C11: SSH-таймаут — единый канон shared/timeouts.SSH_READ_TIMEOUT (литерал 10 удалён).
 from core.internal.shared.timeouts import SSH_READ_TIMEOUT
 
+# DevPlan 139 W3 T4: SSH-раннер дедуплицирован — канон shared/vps_readiness
+# (verbatim-копия _ssh_read удалена; сигнатура (host, user, cmd, timeout, ssh_lib_path)
+# идентична, timeout-семантика = bash timeout + 5s сохранена).
+from core.internal.shared.vps_readiness import default_ssh_runner
+
 logger = logging.getLogger(__name__)
 
 # ── Path defaults ────────────────────────────────────────────────────────
@@ -51,6 +56,28 @@ _DEFAULT_SSH_HOST = os.environ.get("DEFAULT_SSH_HOST", "")
 #   Calling via subprocess preserves the facade contract and timeout handling.
 #   In tests, the ssh runner is injected as a callable (DI over Mocks).
 # · Rev: if subprocess overhead becomes problematic → extract Python SSH runner from lib/ssh.sh
+
+
+# region FUNC__shared_ssh_read
+## @purpose  Default SSH-раннер через канон shared/vps_readiness.default_ssh_runner
+##           (DevPlan 139 W3 T4 — дедупликация локальной verbatim-копии _ssh_read).
+##           Адаптирует (rc, stdout) → stdout|None: rc==0 → stdout, иначе None.
+## @param h        SSH host
+## @param u        SSH user
+## @param cmd      Remote command (verb `status <project>`)
+## @param timeout  Bash-level ssh_read timeout (default SSH_READ_TIMEOUT, C11 канон)
+## @io        ⎋ str | None — stdout при rc==0, None при ошибке/таймауте
+## @complexity O(1) — single subprocess call в каноне
+## @invariants
+##   - Timeout-семантика канона: Python-level = bash timeout + 5s (macOS без GNU timeout)
+##   - None на любом сбое (таймаут/FileNotFound/rc!=0) — прежнее поведение сохранено
+def _shared_ssh_read(h: str, u: str, cmd: str, timeout: int = SSH_READ_TIMEOUT) -> str | None:
+    """SSH-раннер через канон shared/vps_readiness — адаптер (rc, stdout) → stdout|None."""
+    rc, stdout = default_ssh_runner(h, u, cmd, timeout)
+    return stdout if rc == 0 else None
+
+
+# endregion FUNC__shared_ssh_read
 
 
 # region FUNC_find_node_yaml_files
@@ -297,30 +324,10 @@ def get_status_via_ssh(
 
     import getpass
 
-    # Default ssh runner: subprocess-based ssh_read from lib/ssh.sh
+    # Default ssh runner: канон shared/vps_readiness (DevPlan 139 W3 T4) —
+    # адаптер (rc, stdout) → stdout|None (прежняя семантика локальной _ssh_read).
     if ssh_runner is None:
-
-        def _ssh_read(h: str, u: str, cmd: str, timeout: int = SSH_READ_TIMEOUT) -> str | None:
-            """Default SSH runner via lib/ssh.sh facade (C11: SSH_READ_TIMEOUT канон)."""
-            try:
-                result = subprocess.run(
-                    [
-                        "bash",
-                        "-c",
-                        f'source core/lib/ssh.sh && ssh_read "{h}" "{u}" "{cmd}" {timeout}',
-                    ],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                    timeout=timeout + 5,
-                )
-                if result.returncode == 0:
-                    return result.stdout
-                return None
-            except (subprocess.TimeoutExpired, FileNotFoundError):
-                return None
-
-        ssh_runner = _ssh_read
+        ssh_runner = _shared_ssh_read
 
     # Try ci-deploy user first, then current user
     current_user = os.environ.get("USER") or getpass.getuser()

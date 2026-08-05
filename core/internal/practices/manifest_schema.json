@@ -1,0 +1,85 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://ai-platform.local/schemas/practices_manifest.json",
+  "title": "practices_manifest.yaml schema (DevPlan 137)",
+  "description": "Draft7 schema для канона практик проектов — валидируется через shared/schema_validator.validate_yaml_against_schema (единственная Draft7Validator-точка, DevPlan 116 B6 T5).",
+  "type": "object",
+  "required": ["version", "maturity", "allowed_external_networks", "pins", "checks"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Версия канона — bump при несовместимом изменении схемы (инвалидирует practices.lock)"
+    },
+    "maturity": {
+      "type": "object",
+      "required": ["age_days_propose", "code_files_propose"],
+      "additionalProperties": false,
+      "properties": {
+        "age_days_propose": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Порог возраста проекта (дней) для предложения FULL (решение 2026-08-05: 30)"
+        },
+        "code_files_propose": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Порог файлов кода для предложения FULL (решение 2026-08-05: 50)"
+        }
+      }
+    },
+    "allowed_external_networks": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "description": "Allowlist L1 external-networks (реальные сети платформы) — единственная SoT"
+    },
+    "pins": {
+      "type": "object",
+      "additionalProperties": { "type": "string", "minLength": 1 },
+      "description": "Версии upstream-хуков = версиям платформы (анти-дрейф, гейт сверяет с корневым .pre-commit-config.yaml)"
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "level", "languages", "channel", "class", "auto_fix", "timeout_sec"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*$",
+            "description": "kebab-case уникальный id проверки (гейт test_gate_practices_manifest)"
+          },
+          "level": {
+            "enum": ["baseline", "full"],
+            "description": "Уровень, на котором проверка исполняется локально/в CI"
+          },
+          "languages": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 },
+            "description": "Языки применения (\"all\" = все проекты)"
+          },
+          "channel": {
+            "type": "array",
+            "items": { "enum": ["local", "ci", "verify"] },
+            "description": "Каналы исполнения: K1 локально, K2 CI проекта, K3 verify на VPS"
+          },
+          "class": {
+            "enum": ["L1", "L2", "L3"],
+            "description": "Класс блокировки: L1 блок всегда, L2 блок в active-full, L3 warning (см. §4.5)"
+          },
+          "auto_fix": {
+            "type": "boolean",
+            "description": "Автофикс через make project-fix (hygiene, ruff format, ruff --fix)"
+          },
+          "timeout_sec": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Таймаут исполнения проверки"
+          }
+        }
+      }
+    }
+  }
+}

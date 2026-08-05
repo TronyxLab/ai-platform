@@ -28,17 +28,37 @@
 ##            _cleanup_container() guarantees removal on ANY outcome (false-lead #10, 503 on /health)
 # endregion MODULE_CONTRACT
 
+import itertools
 import logging
 import pathlib
 import subprocess
 import time
-import uuid
 
 import pytest
 from _conftest.honesty import require_docker_or_fail
 from conftest import ldd_trajectory
 
 logger = logging.getLogger(__name__)
+
+# xdist-инвариант 4 (DevPlan 139 W2): uuid.uuid4() → детерминированный генератор имён.
+# Docker-тесты — single-process по построению (tests/AGENTS.md §Параллельный запуск),
+# поэтому фиксированный seed + счётчик детерминирован и коллизий не создаёт (никаких
+# нестабильных имён при повторных прогонах / ретраях — flaky-фикс).
+_FIXED_CONTAINER_SEED = "a1b2c3d4"
+_container_seq = itertools.count(1)
+
+
+def _container_name(prefix: str) -> str:
+    """Детерминированное имя контейнера: <prefix>-<seed>-<NNNN> (xdist-safe, DevPlan 139 W2).
+
+    ## @purpose — Замена uuid.uuid4().hex[:8] для имён docker-контейнеров: фиксированный
+    ##            seed + монотонный счётчик. Docker-тесты выполняются single-process,
+    ##            счётчик детерминирован — имена стабильны между прогонами.
+    ## @io — ⇥ prefix: str → ⎋ str (container name)
+    ## @complexity O(1)
+    """
+    return f"{prefix}-{_FIXED_CONTAINER_SEED}-{next(_container_seq):04d}"
+
 
 # ── Paths ───────────────────────────────────────────────────────────────────
 _PROJECT_ROOT: pathlib.Path = pathlib.Path(__file__).resolve().parent.parent
@@ -304,7 +324,7 @@ def test_l1_without_context_ok(caplog: pytest.LogCaptureFixture, tmp_path: pathl
     # endregion
 
     # region BLOCK_Run
-    container_name = f"hermes-test-l1-{uuid.uuid4().hex[:8]}"
+    container_name = _container_name("hermes-test-l1")
     try:
         logger.info(
             "[IMP:7][test_l1_without_context_ok] Starting L1 container '%s' with CONTEXT='' ...", container_name
@@ -408,7 +428,7 @@ def test_l2_without_context_exit1(caplog: pytest.LogCaptureFixture, tmp_path: pa
     # so we verify the guard FATAL message appears in stdout instead.
     # Container is named (--rm still auto-removes on exit) so finally can force-remove
     # a leaked container if `docker run` times out mid-startup (would 503 status-page /health).
-    container_name = f"hermes-test-l2-guard-{uuid.uuid4().hex[:8]}"
+    container_name = _container_name("hermes-test-l2-guard")
     try:
         logger.info("[IMP:7][test_l2_without_context_exit1] Running L2 container with empty CONTEXT...")
         run_result = subprocess.run(
@@ -484,7 +504,7 @@ def test_l2_with_context_ok(caplog: pytest.LogCaptureFixture, tmp_path: pathlib.
     # endregion
 
     # region BLOCK_Run
-    container_name = f"hermes-test-l2-{uuid.uuid4().hex[:8]}"
+    container_name = _container_name("hermes-test-l2")
     try:
         logger.info(
             "[IMP:7][test_l2_with_context_ok] Starting L2 container '%s' with CONTEXT=ci-test ...", container_name

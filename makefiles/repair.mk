@@ -1,5 +1,5 @@
-# GREP_SUMMARY: repair.mk, fix-executable-bit, fix-ruff, fix-gate, repair-contract, repairable, gates, REPAIR_TARGETS, M-ADE, check, check-diff, preflight-deprecated
-# STRUCTURE: ┌REPAIR_TARGETS export┐ → ◇ fix-executable-bit (xargs -0) → ◇ fix-ruff (SCOPE=diff) → ◇ fix-gate (composite) → ◇ check (SoT-executor) → ◇ check-diff (diff-скоуп) → ◇ preflight (deprecated alias) → ⊕ .PHONY
+# GREP_SUMMARY: repair.mk, fix-executable-bit, fix-ruff, fix-gate, repair-contract, repairable, gates, REPAIR_TARGETS, M-ADE, check, check-diff
+# STRUCTURE: ┌REPAIR_TARGETS export┐ → ◇ fix-executable-bit (xargs -0) → ◇ fix-ruff (SCOPE=diff) → ◇ fix-gate (composite) → ◇ check (SoT-executor) → ◇ check-diff (diff-скоуп) → ⊕ .PHONY
 # region MODULE_CONTRACT
 ## @purpose  Repair targets for deterministic, idempotent L1 gate errors + диагностический
 ##           check/check-diff (DevPlan 120, экс-preflight).
@@ -9,7 +9,6 @@
 ##   - Каждый repair target — детерминированный и идемпотентный
 ##   - check/check-diff НЕ содержат hardcoded-списков проверок — делегируют check_suite
 ##     (единственный источник — core/check-suite.yaml, AC-1 DevPlan 120)
-##   - preflight — deprecated-алиас на check (обратная совместимость, compose-safe-up прецедент)
 ##   - Никаких сетевых вызовов
 ##   - Не меняет git history (только index/worktree)
 ##   - fix-gate — ТОЛЬКО gate-blocking L1 ошибки, не расширять без ревью
@@ -24,9 +23,9 @@
 # endregion MODULE_CONTRACT
 
 # ═══ REPAIR_TARGETS — machine-readable реестр для CI-валидации ═══
-REPAIR_TARGETS := fix-executable-bit fix-ruff fix-gate preflight check check-diff
+REPAIR_TARGETS := fix-executable-bit fix-ruff fix-gate check check-diff
 
-.PHONY: fix-executable-bit fix-ruff fix-gate preflight check check-diff
+.PHONY: fix-executable-bit fix-ruff fix-gate check check-diff
 
 # ── fix-executable-bit: chmod +x for .sh outside core/lib/ ──
 ## @purpose  Двухпроходный fix: (1) staged/new .sh через git add --chmod=+x,
@@ -176,13 +175,6 @@ check:
 ##   Usage: make check-diff
 check-diff:
 	$(PYTHON) -m core.internal.check_suite run --mode diff
-
-# ── preflight: DEPRECATED alias for check (compose-safe-up прецедент, DevPlan 120 AC-5) ──
-## @purpose  Deprecated-алиас: прежние флаги (WORKERS/JSON/SKIP_FIX/VERBOSE) маппятся на check.
-##           Мигрируйте на `make check` (0 упоминаний «make preflight» в .kilo/* и AGENTS.md —
-##           гейт phantom-refs). Таргет остаётся рабочим для обратной совместимости.
-preflight: check
-	@echo "[REPAIR:NOOP][preflight] deprecated — используйте: make check"
 
 # ⚠️ TRAP[DECISION] · 2026-07-23 · — · fix-ruff: newline-separated not null-terminated
 # · Rejected: null-separated storage in bash variables ($()) loses all but first file
