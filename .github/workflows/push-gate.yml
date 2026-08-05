@@ -1,23 +1,28 @@
-# GREP_SUMMARY: push-gate quick-gate any-branch pre-commit static-audit predeploy gitleaks-composite provisioner
-# STRUCTURE: on:push(branches-ignore:main) → quick-gate(pre-commit+static+predeploy) → teardown(docker-network-cleanup)
+# GREP_SUMMARY: push-gate quick-gate any-branch pre-commit gitleaks-composite provisioner no-fast-gate-duplication
+# STRUCTURE: on:push(branches-ignore:main) → quick-gate(pre-commit only) → teardown(docker-network-cleanup)
 # region MODULE_CONTRACT
-## @purpose — Lightweight CI gate on push to any branch (except main): pre-commit hooks + static audit + predeploy checks
-## @scope — Runs on every git push to non-main branches; cancelled on new pushes to same branch
+## @purpose — Lightweight CI gate on push to any branch (except main): pre-commit hooks only (gitleaks + code quality).
+##            НЕ запускает `make gate MODE=fast` — полный fast-gate гарантирован локальным pre-push hook
+##            (pre-push-gate.sh, blocking; V2 superposition 2026-08-05) — CI-дубль устранён.
+## @scope — Runs on every git push to non-main branches; cancelled on new pushes to same branch.
+##            PR-валидация (полный gate + Docker/integration) = platform-test.yml;
+##            main-branch gate + R4-honesty (REQUIRE_HONESTY_MODE=fail) = platform-gate-fast.yml.
 ## @invariants
-##   - No Docker compose stacks are started — only Docker networks for predeploy tests
+##   - No Docker compose stacks are started — only Docker networks for provisioner
 ##   - Pre-commit run includes: gitleaks, check-yaml, trailing-whitespace, end-of-file-fixer
-##   - Python syntax + JSON validation run before pytest (fail-fast)
-##   - Parallel static_audit + unit tests (~93 tests across 17 files)
-##   - Predeploy tests validate networks, compose config, and schema against JSON Schema
-##   - Timeout: 5 minutes (pre-commit ~10s, py/JSON check ~5s, static ~30s, predeploy ~60s)
+##   - NO `make gate MODE=fast` step — дубль локального pre-push (V2, DevPlan-superposition 2026-08-05)
+##   - Timeout: 5 minutes (pre-commit ~30-60s; запас на холодный pre-commit venv cache)
 ##   - Docker networks created via provision-environment.sh (Plan 1 foundation)
 ##   - Gitleaks uses composite action setup-gitleaks (single source of truth)
-##   - Cleanup runs unconditionally — removes Docker networks created by predeploy tests
-## @rationale — Fast feedback (<3 min) for every push. Catches gitleaks leaks, malformed YAML/JSON/Python,
-##   config schema violations, and network inconsistencies before PR is opened.
-##   Main-branch gate uses platform-test.yml with full gate-full suite.
+##   - Cleanup runs unconditionally — removes Docker networks created by provisioner
+## @rationale — Fast feedback for every push. Catches gitleaks leaks, malformed YAML/JSON/Python,
+##   config schema violations before PR is opened — БЕЗ дублирования локального pre-push fast-gate
+##   (экономия ~3 min CI-минут на каждый push; локальный pre-push — обязательный шлагбаум).
+##   Main-branch gate uses platform-gate-fast.yml; PR full gate uses platform-test.yml.
 ## @changes — 2026-07-15 | Inline docker network create → provision-environment.sh --scope networks
 ## @changes — 2026-07-15 | Inline gitleaks install → composite action setup-gitleaks
+## @changes — 2026-08-05 | V2 (superposition): removed `make gate MODE=fast` step — точный дубль локального
+##   pre-push hook (pre-push-gate.sh, blocking). Остаётся только make pre-commit-run (лёгкая страховка среды).
 # endregion MODULE_CONTRACT
 
 name: push-gate
@@ -32,7 +37,7 @@ concurrency:
 
 jobs:
   quick-gate:
-    name: Quick Gate (static + predeploy)
+    name: Quick Gate (pre-commit hooks)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -67,9 +72,10 @@ jobs:
 
       - name: Run pre-commit hooks (gitleaks + code quality)
         run: make pre-commit-run
-
-      - name: Run fast gate (syntax/JSON check + gates + contract + static + predeploy)
-        run: make gate MODE=fast
+        # V2 (2026-08-05): fast-gate шаг УДАЛЁН — `make gate MODE=fast` дублирует локальный
+        # pre-push hook (pre-push-gate.sh, blocking). Локальный pre-push — обязательный шлагбаум:
+        # пуш без зелёного fast gate физически не проходит. Полный fast-gate в CI остаётся
+        # только в platform-gate-fast.yml (main, REQUIRE_HONESTY_MODE=fail) и platform-test.yml (PR, Docker).
 
       - name: Cleanup Docker networks
         if: always()
