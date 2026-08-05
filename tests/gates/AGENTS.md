@@ -172,6 +172,8 @@ make preflight
 
 Никаких `fix → gate → fix → gate → ...` циклов.
 
+**Примечание (V2, 2026-08-05):** pre-push hook гоняет `make gate MODE=fast` автоматически при пуше (без кэша) — ручной прогон шага 5 опционален, если hooks установлены (`make pre-commit-install`).
+
 ---
 
 ## Cross-references
