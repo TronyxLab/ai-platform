@@ -53,3 +53,27 @@ include makefiles/project-practices.mk
 
 # === Default target ===
 .DEFAULT_GOAL := help
+
+# === Make output logging — every invocation's output persisted to logs/make/ ===
+# SHELL wrapper (scripts/make-log-shell.sh) tees each recipe line into $MAKE_LOG_FILE.
+# Per-run file: logs/make/<ts>-<goal>.log; logs/make/latest.log → symlink to last run.
+# Recursive/nested make (pre-commit hooks etc.) inherits MAKE_LOG_FILE via env and
+# appends to the SAME file; only the top-level make (MAKELEVEL=0) creates files/symlink.
+# Disable with: make <target> MAKE_LOG_DISABLE=1
+ifneq ($(MAKE_LOG_DISABLE),1)
+MAKE_LOG_DIR := logs/make
+MAKE_LOG_GOAL := $(subst /,_,$(firstword $(MAKECMDGOALS)))
+ifeq ($(MAKE_LOG_GOAL),)
+MAKE_LOG_GOAL := default
+endif
+MAKE_LOG_TS := $(shell date +%Y%m%d-%H%M%S)
+MAKE_LOG_FILE ?= $(MAKE_LOG_DIR)/$(MAKE_LOG_TS)-$(MAKE_LOG_GOAL).log
+export MAKE_LOG_FILE
+ifeq ($(MAKELEVEL),0)
+$(shell mkdir -p $(MAKE_LOG_DIR))
+$(shell umask 077; : > $(MAKE_LOG_FILE))
+$(shell rm -f $(MAKE_LOG_DIR)/latest.log && ln -s $(notdir $(MAKE_LOG_FILE)) $(MAKE_LOG_DIR)/latest.log)
+$(info ==> make log: $(MAKE_LOG_FILE)  [latest: logs/make/latest.log])
+endif
+SHELL := $(_platform_root)/scripts/make-log-shell.sh
+endif

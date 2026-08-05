@@ -93,3 +93,6 @@ tests/gates/.test_counter.json
 
 # Runtime deploy artifacts — never committed (DevPlan 116 B11 T5, U-51)
 .deploy-snapshots/
+
+# Make output logs (root Makefile logging shell — scripts/make-log-shell.sh)
+logs/
