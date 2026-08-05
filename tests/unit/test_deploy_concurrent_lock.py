@@ -157,12 +157,22 @@ def test_deploy_history_snapshot_atomic_prune_payload(
     assert not tmp_leftovers, f"атомарная запись не должна оставлять tmp: {tmp_leftovers}"
 
     # Payload-персист (T9.8): payload/<snapshot_id>/ содержит файл бэкапа
-    latest_id = snap_ids[-1]
-    payload_dir = snap_dir / "payload" / latest_id
+    # ⚠️ TRAP[BUG] · 2026-08-05 · MED · Flaky assertion: payload бьётся по snap_ids[-1]
+    # · Symptom: test_deploy_history_snapshot_atomic_prune_payload падал ~1 из 6 прогонов
+    # ·   («payload-бэкап обязан персиститься»), проходил в check, падал в gate (static_audit)
+    # · Root: все 12 snapshot-ов создаются в одну секунду (<ts>-<uuid8>); prune (retention=10)
+    # ·   удаляет 2 ЛЕКСИКОГРАФИЧЕСКИ НАИМЕНЬШИХ id (и их payload-диры, _prune_snapshots).
+    # ·   snap_ids[-1] (последний созданный) имеет СЛУЧАЙНЫЙ uuid8 → с вероятностью ~2/12 он
+    # ·   попадает в pruned → его payload-дир удалён → assertion ложно падает.
+    # · Fix: assertion бьётся по all_ids_sorted[-1] (лексикографический максимум) — он
+    # ·   ГАРАНТИРОВАННО переживает prune (уже проверено выше: all_ids_sorted[-1] в remaining).
+    # · Prevention: assertion на выживший снапшот, не на «последний созданный» (случайный ключ).
+    surviving_id = all_ids_sorted[-1]
+    payload_dir = snap_dir / "payload" / surviving_id
     assert (payload_dir / "docker-compose.yml").is_file(), "payload-бэкап обязан персиститься в snapshot"
 
-    # Содержимое последнего снапшота: payload_dir записан + compose_state
-    data = history.read_snapshot("testproj", latest_id)
+    # Содержимое снапшота: payload_dir записан + compose_state
+    data = history.read_snapshot("testproj", surviving_id)
     assert data is not None
     assert data["payload_dir"] == str(payload_dir), "snapshot JSON обязан содержать payload_dir"
     logger.critical("[IMP:9][test] snapshot atomic + prune(10) + payload_dir persisted — OK (T9.10)")
