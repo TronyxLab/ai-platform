@@ -86,6 +86,11 @@ checks:
     cmd: .venv/bin/ruff check .
     tier: static
     timeout: 60
+  - id: e2e-verify
+    cmd: make e2e-verify NODE=<node>
+    tier: static
+    timeout: 600
+    diagnostic: false
   - id: gates
     tier: pytest
     timeout: 180

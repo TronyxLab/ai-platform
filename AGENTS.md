@@ -139,11 +139,13 @@
 | ✅ | `deploy-context` | Деплой проектов контекста на ноде |
 | ✅ | `deploy-project` | Прямой деплой минуя CI (DeployOrchestrator deliver) |
 | ✅ | `dev-certs` | Генерация dev SSL-сертификатов |
+| ✅ | `dev-hosts` | Управление /etc/hosts dev-блоком |
 | ✅ | `dev-metrics` | Генерация dev status-metrics.json + htpasswd |
 | ✅ | `discover-modules` | Авто-обнаружение модулей |
 | ✅ | `down` | Остановка compose-стека |
 | ✅ | `down-volumes` | Остановка compose-стека и удаление volumes |
 | ✅ | `doxygen-check` | Doxygen zero-warnings проверка |
+| ✅ | `e2e-verify` | HTTP+TLS sweep-верификация всех endpoints ноды |
 | ✅ | `fix-executable-bit` | Исправление executable bit на .sh файлах |
 | ✅ | `fix-gate` | Композитное исправление gate-ошибок |
 | ✅ | `fix-ruff` | Форматирование Python файлов через ruff |

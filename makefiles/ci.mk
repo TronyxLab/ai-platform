@@ -16,7 +16,7 @@
 ## @changes 2026-08-02 | DevPlan 120 Wave 2: gate → check_suite run --gate-mode (портал манифеста)
 # endregion MODULE_CONTRACT
 
-.PHONY: test test-summary test-node gate validate lint check-file-lines pre-commit-install pre-commit-run scripts-audit secrets-unlock check-dead-code check-exception-patterns doxygen-check
+.PHONY: test test-summary test-node e2e-verify gate validate lint check-file-lines pre-commit-install pre-commit-run scripts-audit secrets-unlock check-dead-code check-exception-patterns doxygen-check
 
 ## test: Run tests with MARKER filter. Usage: make test [MARKER=static|smoke|component|integration|predeploy|contract|e2e|all]
 ##   MARKER=all (default) — full suite in canonical order: validate → lint → gates → contract → static → predeploy → smoke → component → integration
@@ -117,6 +117,25 @@ test-node:
 	PYTEST_NO_ESCALATION=1 $(PYTHON) -m pytest tests/e2e/ -m "requires_node" -v --tb=short -rs \
 		--junitxml=tests/report-node.xml
 	@echo "[IMP:9][make][test-node] E2E pipeline tests complete NODE=$(NODE)"
+
+## e2e-verify: HTTP+TLS sweep verification of all endpoints on a node (requires NODE, SSH for remote collect)
+##   Usage: make e2e-verify NODE=<name> [MODE=local|remote] [JSON=1]
+##   NOT included in `make test MARKER=all` or `make gate` — requires a live node
+##   R4 semantics: no node / SSH unavailable → FAIL (exit 1), never skip
+##   DevPlan 136 W5: acceptance script — table + exit 0 when all endpoints green (W6.7)
+##   MODE=remote (default) — collect endpoints via SSH reading nginx conf.d;
+##   MODE=local — collect from local node-configs (node.yaml projects + overlays/nginx)
+e2e-verify:
+	@if [ -z "$(NODE)" ]; then \
+		echo "[IMP:9][make][e2e-verify] ERROR: NODE not set — usage: make e2e-verify NODE=<name>" >&2; \
+		exit 1; \
+	fi
+	@echo "[IMP:9][make][e2e-verify] Running endpoint sweep verification NODE=$(NODE) MODE=$(or $(MODE),remote)..."
+	$(PYTHON) -m core.internal.verify_sweep sweep \
+		--node "$(NODE)" \
+		--mode $(or $(MODE),remote) \
+		$(if $(JSON),--json)
+	@echo "[IMP:9][make][e2e-verify] Endpoint sweep verification complete NODE=$(NODE)"
 
 ## test-summary: Run tests via compact agent-oriented wrapper. Usage: make test-summary [MARKER=static_audit|smoke|component|integration|predeploy|contract|e2e|all|static] [TIMEOUT=1800] [TEST_FILE=<path>]
 ##   Delegates to core/internal/test_runner.py — outputs compact summary (<100 lines, PASS/FAIL counts).

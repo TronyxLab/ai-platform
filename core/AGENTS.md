@@ -41,6 +41,7 @@
 | `make test-summary` | Запуск тестов (агент-ориентированная обёртка) | make test-summary [MARKER=static_audit|smoke|component|integration|predeploy|contract|e2e|static|all] [TIMEOUT=1800] | core/internal/test_runner.py --marker \<MARKER\> |
 | `make test-inventory-sync` | Синхронизация test inventory | make test-inventory-sync | tests/tools/sync_inventory.py |
 | `make test-node` | E2E pipeline тесты на test-VPS | make test-node NODE=\<name\> | pytest tests/e2e/ -m requires_node |
+| `make e2e-verify` | HTTP+TLS sweep-верификация всех endpoints ноды | make e2e-verify NODE=\<name\> [MODE=local|remote] [JSON=1] | python3 -m core.internal.verify_sweep sweep |
 | `make gate` | Production gate | make gate [MODE=fast|full|ci-docker] | make gate [MODE=fast|full|ci-docker] |
 | `make check-manifests` | Проверка актуальности сгенерированных манифестов | make check-manifests | --check for all 6 generators (G1-G6) — byte-level comparison |
 | `make generate-manifests` | Генерация всех манифестов | make generate-manifests | make generate-manifests |
@@ -82,6 +83,7 @@
 | `make discover-modules` | Авто-обнаружение модулей | make discover-modules | core/internal/bootstrap/discover_modules.py |
 | `make dev-certs` | Генерация dev SSL-сертификатов | make dev-certs [CERT_BACKEND=...] | core/modules/nginx/dev_cert_generator.py |
 | `make dev-metrics` | Генерация dev status-metrics.json + htpasswd | make dev-metrics | core/internal/healthcheck/platform_export_metrics.py + core/internal/bootstrap/lifecycle/secrets_manager.py (htpasswd CLI) |
+| `make dev-hosts` | Управление /etc/hosts dev-блоком | make dev-hosts [APPLY=1] | core/internal/dev_hosts.py |
 | `make _get_all_profiles` | Вывод COMPOSE_PROFILES | make _get_all_profiles | echo |
 | `make render-monitoring` | Рендер конфигурации мониторинга после деплоя проекта | make render-monitoring PROJECT_DIR=\<dir\> PROJECT=\<name\> [NODE=\<node\>] | python3 core/internal/monitoring_config_renderer.py |
 | `make fix-executable-bit` | Исправление executable bit на .sh файлах | make fix-executable-bit [DRY_RUN=1] | git add --chmod=+x + git update-index --chmod=+x |

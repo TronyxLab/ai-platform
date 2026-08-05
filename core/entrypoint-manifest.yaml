@@ -211,6 +211,17 @@ test:
   description: Run E2E bootstrap pipeline tests against a recreatable test-VPS (requires_node
     marker, NODE env, SSH, Docker). NOT in make test MARKER=all or make gate. DevPlan
     095.
+- make_target: e2e-verify
+  mechanism: python-module
+  delegates_to: python3 -m core.internal.verify_sweep sweep
+  signature: make e2e-verify NODE=<name> [MODE=local|remote] [JSON=1]
+  operation_ru: HTTP+TLS sweep-верификация всех endpoints ноды
+  description: 'Endpoint sweep verification (DevPlan 136 W5) — collect endpoints (local
+    node.yaml projects + overlays/nginx server_names | remote ssh nginx conf.d), sweep
+    each with check_http (expected_codes by-design: 200/301/302/401/403/404/444 pass,
+    502/504/5xx fail) and check_tls (openssl s_client — chain, wildcard SAN, expiry
+    WARN<14d/FAIL). Exit 0 = «всё зелёное» scriptable acceptance. NOT in make test
+    MARKER=all or make gate — requires a live node (R4: no node/SSH → FAIL, not skip).'
 scaffold:
 - make_target: new-project
   mechanism: shell-script
@@ -686,6 +697,16 @@ dev:
     (тот же экспортёр, что cron на ноде) + .htpasswd-platform (secrets_manager htpasswd)
     из .env-путей (STATUS_METRICS_JSON/HTPASSWD_FILE). Идемпотентен (D-12, DevPlan
     130 W1).
+- make_target: dev-hosts
+  mechanism: python-script
+  delegates_to: core/internal/dev_hosts.py
+  signature: make dev-hosts [APPLY=1]
+  operation_ru: Управление /etc/hosts dev-блоком
+  description: Идемпотентное управление /etc/hosts для локальной dev-схемы (DevPlan
+    136 W4) — server_names vhost_renderer (dev-mode <project>.<suffix>) + base-домены
+    из SAN dev-сертификатов в маркер-блоке BEGIN/END ai-platform dev-hosts. Default
+    --dry-run (exit 1 при diff), APPLY=1 → --apply (sudo, атомарно tmp+mv). Чужие
+    строки /etc/hosts не трогаются.
 - make_target: _get_all_profiles
   mechanism: makefile-echo
   delegates_to: echo
@@ -879,11 +900,13 @@ allowed_verbs:
 - deploy-context
 - deploy-project
 - dev-certs
+- dev-hosts
 - dev-metrics
 - discover-modules
 - down
 - down-volumes
 - doxygen-check
+- e2e-verify
 - fix-executable-bit
 - fix-gate
 - fix-ruff
