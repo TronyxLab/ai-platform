@@ -245,10 +245,10 @@
         },
         "metrics_port": {
           "type": "integer",
-          "minimum": 1024,
+          "minimum": 1,
           "maximum": 65535,
           "default": 3000,
-          "description": "Prometheus metrics port (default 3000; backend = 8080)"
+          "description": "Prometheus metrics port (DevPlan 141: backend=8000 FastAPI, frontend=80 nginx)"
         },
         "host_port": {
           "type": "integer",

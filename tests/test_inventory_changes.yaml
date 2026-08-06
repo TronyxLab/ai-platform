@@ -2083,3 +2083,25 @@ removed:
     reason: "fullstack-тип удалён из платформы — параметр 'fullstack' убран из parametrize test_render_deterministic (fullstack больше не валидный type)."
     issue: "fullstack-template-removal"
     approved_by: "@tronyx"
+
+  # ── DevPlan 141 (template-evolution, 03-MetaDevPlan §2.1 RED-BLOCKER #1) ──
+  # Статический гейт практик шаблонов переработан в runtime-модель: шаблоны больше НЕ хранят
+  # GENERATED-копии практик (удалены W1), sync_practices — единственный источник.
+  # 4 статических теста заменены 1 runtime-тестом (test_gate_templates_practices_sync_generates_expected_files)
+  # + R5 negative. Имена gate-id в entrypoint-manifest сохранены (стабильные), семантика обновлена.
+  - nodeid: "tests/gates/test_gate_templates_practices.py::test_gate_templates_contain_practices_files"
+    reason: "DevPlan 141: переработан под runtime-модель (sync_practices на tmp_path вместо статической проверки файлов в шаблонах)."
+    issue: "141-template-evolution Q1"
+    approved_by: "@tronyx"
+  - nodeid: "tests/gates/test_gate_templates_practices.py::test_gate_templates_practices_have_generated_header"
+    reason: "DevPlan 141: переработан под runtime-модель — GENERATED-шапка теперь проверяется на отрендеренном sync_practices output."
+    issue: "141-template-evolution Q1"
+    approved_by: "@tronyx"
+  - nodeid: "tests/gates/test_gate_templates_practices.py::test_gate_templates_precommit_upstream_only"
+    reason: "DevPlan 141: переработан под runtime-модель — upstream-only проверка .pre-commit-config.yaml на отрендеренном sync_practices output."
+    issue: "141-template-evolution Q1"
+    approved_by: "@tronyx"
+  - nodeid: "tests/gates/test_gate_templates_practices.py::test_gate_templates_ai_platform_yaml_quality"
+    reason: "DevPlan 141: удалён полностью — шаблоны больше не содержат ai-platform.yaml (генерируется gen_ai_platform_yaml, покрыт своими тестами)."
+    issue: "141-template-evolution Q1"
+    approved_by: "@tronyx"

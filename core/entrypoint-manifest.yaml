@@ -1277,6 +1277,9 @@ gates:
 - id: test_hermes_agent_env_example_well_formed
   test_file: test_gate_env_example_sync.py
   description: 'Auto-discovered gate: test_hermes_agent_env_example_well_formed'
+- id: test_env_example_subset_of_provides
+  test_file: test_gate_env_example_template.py
+  description: 'Auto-discovered gate: test_env_example_subset_of_provides'
 - id: test_env_example_hostnames_match_containers
   test_file: test_gate_env_hostname_drift.py
   description: 'Auto-discovered gate: test_env_example_hostnames_match_containers'
@@ -2216,18 +2219,12 @@ gates:
 - id: test_all_templates_use_strict_grammar
   test_file: test_gate_template_syntax.py
   description: 'Auto-discovered gate: test_all_templates_use_strict_grammar'
-- id: templates_ai_platform_yaml_quality
+- id: templates_practices_sync_generates_expected_files
   test_file: test_gate_templates_practices.py
-  description: 'Auto-discovered gate: templates_ai_platform_yaml_quality'
-- id: templates_contain_practices_files
+  description: 'Auto-discovered gate: templates_practices_sync_generates_expected_files'
+- id: test_negative_language_for_type_drop_detected
   test_file: test_gate_templates_practices.py
-  description: 'Auto-discovered gate: templates_contain_practices_files'
-- id: templates_practices_have_generated_header
-  test_file: test_gate_templates_practices.py
-  description: 'Auto-discovered gate: templates_practices_have_generated_header'
-- id: templates_precommit_upstream_only
-  test_file: test_gate_templates_practices.py
-  description: 'Auto-discovered gate: templates_precommit_upstream_only'
+  description: 'Auto-discovered gate: test_negative_language_for_type_drop_detected'
 - id: test_compose_projects_are_unique
   test_file: test_gate_test_infra_consistency.py
   description: 'Auto-discovered gate: test_compose_projects_are_unique'

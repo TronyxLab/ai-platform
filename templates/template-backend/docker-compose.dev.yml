@@ -1,0 +1,44 @@
+# GREP_SUMMARY: docker-compose.dev external-networks shared-db-net shared-cache-net uvicorn-reload
+# STRUCTURE: service(app) → env_file(.env.platform) → networks(shared-db-net + shared-cache-net:external) → volumes(./src)
+# region MODULE_CONTRACT
+## @purpose  Dev-compose для локальной разработки против платформенного стека (DevPlan 141 B6/Q3):
+##           НЕ поднимает локальные postgres/redis — подключается к external networks платформы
+##           (shared-db-net, shared-cache-net). Требует запущенного `make up` в ai-platform.
+## @scope    Локальная разработка backend-проекта (не для production/CI)
+## @invariants
+##   - shared-db-net/shared-cache-net — external (создаются платформенным compose)
+##   - env_file: .env.platform — единственный источник платформенных переменных
+##   - Без стека платформы compose упадёт с «network not found» — ожидаемое поведение
+## @rationale Платформа предоставляет postgres/redis в prod — dev дублирует сети, не сервисы
+##            (версионный дрейф dev/prod исключён, DSN из .env.platform работает как есть)
+# endregion MODULE_CONTRACT
+
+# docker-compose.dev.yml — локальная разработка против платформенного стека
+# Usage:
+#   1. В ai-platform: make up (поднимает pgbouncer/postgres, redis — shared-db-net, shared-cache-net)
+#   2. Здесь: docker compose -f docker-compose.dev.yml up -d
+# Подключается к external networks платформы (shared-db-net, shared-cache-net).
+# В .env.platform: PLATFORM_POSTGRES_HOST=pgbouncer, PLATFORM_REDIS_HOST=redis.
+# Без запущенного стека платформы (`make up`) compose упадёт с «network not found» — ожидаемо.
+
+services:
+  # Development app — запускает uvicorn с reload, подключается к платформенным сервисам
+  app:
+    build: .
+    image: {{PROJECT_NAME}}:dev
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    env_file: .env.platform
+    volumes:
+      - ./src:/app
+    ports:
+      - "8000:8000"
+    networks:
+      - shared-db-net
+      - shared-cache-net
+    depends_on: []  # платформенные сервисы уже запущены
+
+networks:
+  shared-db-net:
+    external: true
+  shared-cache-net:
+    external: true

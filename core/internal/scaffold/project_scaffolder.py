@@ -40,6 +40,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from core.internal.shared.exceptions import ConfigValidationError
+
 # template_engine native import (DevPlan 094 Wave 2.C — 0 subprocess).
 # Invocation: `python3 -m core.internal.scaffold.project_scaffolder` — project root
 # is on sys.path via -m, so core.internal.template_engine resolves without PYTHONPATH.
@@ -643,6 +645,16 @@ def main(argv: list[str] | None = None) -> int:
     if not copy_template(str(template_path), project_dir, dry_run=args.dry_run):
         return 1
 
+    # Step 1b: Validate template.yaml (DevPlan 141 A7) — informational, graceful
+    from core.internal.scaffold.scaffold_helpers import read_template_yaml
+
+    try:
+        read_template_yaml(template_path)
+    except ConfigValidationError as exc:
+        logger.info("[IMP:10][scaffold][template_yaml] template.yaml validation failed: %s", exc)
+        print(f"ERROR: template.yaml validation failed: {exc}")
+        return 1
+
     # Step 2: Generate ai-platform.yaml
     from core.internal.scaffold.scaffold_helpers import gen_ai_platform_yaml
 
@@ -678,7 +690,7 @@ def main(argv: list[str] | None = None) -> int:
         name=args.name,
         domain=domain,
         output_path=os.path.join(project_dir, "Makefile"),
-        force=False,
+        force=True,
     )
     gen_project_agents(
         name=args.name,
@@ -687,7 +699,7 @@ def main(argv: list[str] | None = None) -> int:
         node=node,
         domain=domain,
         output_path=os.path.join(project_dir, "AGENTS.md"),
-        force=False,
+        force=True,
     )
     # DevPlan 133 D3: AI-PLATFORM.md — контракт проекта с платформой (после gen_env_platform)
     gen_project_platform_md(

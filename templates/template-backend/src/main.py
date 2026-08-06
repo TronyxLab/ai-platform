@@ -1,14 +1,16 @@
-# GREP_SUMMARY: main.py health ready fastapi bot-stub uvicorn
-# STRUCTURE: FastAPI app → /health(200) + /ready(200) → uvicorn server(0.0.0.0:8000)
+# GREP_SUMMARY: main.py health ready metrics fastapi prometheus config uvicorn
+# STRUCTURE: FastAPI app → /health(200) + /ready(200) + /metrics(prometheus) → uvicorn server(0.0.0.0:8000)
 # region MODULE_CONTRACT
-## @purpose  Backend service entrypoint: health/ready endpoints + bot stub (04-templates §3)
-## @scope    Python FastAPI application
+## @purpose  Backend service entrypoint: health/ready/metrics endpoints (DevPlan 141 B1/B2)
+## @scope    Python FastAPI application (template-backend)
 ## @invariants
 ##   - /health returns 200 (Docker healthcheck target)
 ##   - /ready returns 200 (pre-stop readiness probe)
-##   - /metrics returns 200 (Prometheus metrics endpoint)
-##   - Server listens on 0.0.0.0:8000
-## @rationale Health and readiness endpoints are mandatory for zero-downtime deploys (06 §7)
+##   - /metrics returns Prometheus-формат (prometheus-client обязателен, контракт monitoring)
+##   - Server listens on 0.0.0.0:8000 (metrics_port=8000 в ai-platform.yaml)
+## @rationale Health and readiness endpoints are mandatory for zero-downtime deploys (06 §7);
+##            /metrics — честный Prometheus-формат (не JSON-заглушка) — платформенный
+##            мониторинг-контракт (monitoring.metrics=true, TRAP[RISK-5] DevPlan 141)
 # endregion MODULE_CONTRACT
 
 import logging
@@ -17,11 +19,18 @@ import sys
 
 try:
     import uvicorn
-    from fastapi import FastAPI
+    from fastapi import FastAPI, Response
+    from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
     FASTAPI_AVAILABLE = True
 except ImportError:
     FASTAPI_AVAILABLE = False
+
+# Конфигурация через pydantic-settings (src/config.py) — PLATFORM_* из .env.platform
+try:
+    from config import settings
+except ImportError:
+    settings = None
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("{{PROJECT_NAME}}")
@@ -48,9 +57,12 @@ def main():
         return {"status": "READY"}
 
     @app.get("/metrics")
-    async def metrics() -> dict[str, str]:
-        """Prometheus metrics endpoint — required when metrics: true in ai-platform.yaml."""
-        return {"status": "OK", "metrics": "exposed"}
+    async def metrics() -> Response:
+        """Prometheus metrics endpoint (metrics: true в ai-platform.yaml).
+
+        Кастомные метрики — см. snippets/metrics_prometheus.py.
+        """
+        return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
     @app.get("/")
     async def root() -> dict[str, str]:

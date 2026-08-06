@@ -365,15 +365,10 @@ def render_project_files(
     files[".pre-commit-config.yaml"] = render_precommit(level, language, pins)
     files["tests/conftest.py"] = render_conftest(project_name)
     files["tests/test_health.py"] = render_test_health()
-    # 📝 TRAP[DEBT] · 2026-08-05 · LO · frontend .eslintrc/tsconfig.json — template-stubs без рендера
-    # · Observed: templates/template-frontend/{.eslintrc, tsconfig.json} — GENERATED-заглушки (W2-5),
-    # ·   но generators НЕ рендерят их → они вне practices.lock#files → дрейф-гейт (drift-gate,
-    # ·   full-уровень) не покрывает их ручную правку (в отличие от pyproject/precommit/conftest).
-    # · Suspected: W1-скоуп §6.1 перечислил файлы, но render-функции (render_eslintrc/render_tsconfig)
-    # ·   не были запроектированы в §2.1A — пробел спецификации, а не намеренный дизайн.
-    # · Impact: ручная правка стуба не детектится project-check/CI (drift спит до деплоя);
-    # ·   hash lock не включает эти файлы → project-sync-practices их не пересоздаст.
-    # · When: DevPlan 137 W2 (K2) — создание стубов по §6.1
+    # tsconfig.json/.eslintrc — static payload в template-frontend/, НЕ GENERATED (DevPlan 141).
+    # Не требуют рендера из practices_manifest — проектно-специфичные конфиги
+    # (eslint.config.js flat config, eslint 9+). Ручная правка не детектится drift-гейтом —
+    # это осознанный выбор: конфиги принадлежат проекту, не канону практик.
     logger.info(
         "[IMP:9][practices_gen][files] rendered %d GENERATED files (language=%s level=%s)",
         len(files),
