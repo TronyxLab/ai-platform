@@ -30,8 +30,14 @@ LABEL maintainer="core" \
 # RUN layers merged + BuildKit --mount=type=cache for apt/pip — saves ~50MB image size, faster rebuilds
 # ⚠️ TRAP[BUG] awscli 2.9.19 requires urllib3<1.27 — upgraded urllib3 may break aws CLI
 #   workaround: boto3 uses urllib3 directly, awscli fallback to manual S3 commands
+# ⚠️ TRAP[BUG] · 2026-08-06 · HI · B18b (141 r2): apt fail на ноде (Dockerfile:33)
+# · Symptom: docker compose build backup-cron падал на apt postgresql-client-16 (только на VPS;
+# ·   локальный build успешен). Кандидат-корень: BuildKit cache-mount /var/lib/apt/lists хранит
+# ·   битые/частичные списки от прерванного build → "Unable to locate package postgresql-client-16".
+# · Fix: (1) cache-mount /var/lib/apt/lists УДАЛЁН — каждый build делает свежий apt-get update;
+# ·   (2) ретрай-проход install: при фейле — rm -rf списков + apt-get update + повторный install.
+# · Rev: если фейл повторится на ноде после фикса — смотреть сетевую доступность apt.postgresql.org.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     --mount=type=cache,target=/root/.cache/pip,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates gnupg lsb-release \
@@ -39,13 +45,22 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
   && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /etc/apt/keyrings/postgresql.gpg \
   && sh -c 'echo "deb [signed-by=/etc/apt/keyrings/postgresql.gpg] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list' \
   && apt-get update \
-  && apt-get install -y --no-install-recommends \
-    cron \
-    postgresql-client-16 \
-    procps \
-    python3 \
-    python3-pip \
-    awscli \
+  && (apt-get install -y --no-install-recommends \
+        cron \
+        postgresql-client-16 \
+        procps \
+        python3 \
+        python3-pip \
+        awscli \
+      || (rm -rf /var/lib/apt/lists/* \
+          && apt-get update \
+          && apt-get install -y --no-install-recommends \
+            cron \
+            postgresql-client-16 \
+            procps \
+            python3 \
+            python3-pip \
+            awscli)) \
   && mkdir -p /var/lib/platform/backup-spool/postgres \
               /var/lib/platform/backup-spool/app-data \
               /var/log/platform/backup \

@@ -435,3 +435,105 @@ def test_module_without_compose_file(modules_dir: Path, caplog) -> None:
 
 
 # endregion FUNC_test_module_without_compose_file
+
+
+# region FUNC_test_root_compose_platform_project_not_orphan
+## @purpose  B18 regression (141 r2): контейнеры root-compose проекта (config "name": "platform")
+##           НЕ считаются орфанами — expected project = deploy project, не module_name
+## @io       tmp_path modules + mock docker → batch_orphan_reconciliation → assert empty list
+## @complexity 3 — root-compose scenario: config name=platform, containers labeled platform
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · batch_orphan_reconciliation — B18 (141 r2)
+# · Last fail: node-update: контейнеры модулей (project=platform, root compose) удалялись
+# ·   как orphans (expected=module_name) → все 13 модулей исчезали после деплоя.
+# · Remove if: orphan-детекция вернётся к сравнению с module_name.
+@ldd_trajectory
+def test_root_compose_platform_project_not_orphan(modules_dir: Path, caplog) -> None:
+    """Containers of the root compose project (config name="platform") are NOT orphans.
+
+    Setup:
+    - modules/postgres/ compose config returns name="platform" (root compose deployed)
+    - docker ps -a returns "postgres-ct"
+    - docker inspect returns project="platform" (root compose project label)
+    - Expected: NO orphans — containers belong to the deploy project
+    """
+    mock_run = _make_mock_run(
+        ps_containers={"postgres-ct"},
+        compose_responses={
+            str(modules_dir / "postgres" / "compose.yaml"): {
+                "name": "platform",
+                "services": {
+                    "postgres": {
+                        "container_name": "postgres-ct",
+                        "name": "postgres",
+                    }
+                },
+            },
+        },
+        inspect_responses={
+            "postgres-ct": "platform",  # Root compose project label — must NOT be orphan
+        },
+    )
+
+    with patch("orphan_reconciler.subprocess.run", side_effect=mock_run):
+        orphans = batch_orphan_reconciliation(["postgres"], str(modules_dir))
+
+    logger.info("[IMP:9][unit][orphan] Root-compose platform containers → orphans=%s", orphans)
+    assert orphans == [], f"B18 regression: root-compose containers must not be orphans, got {orphans}"
+    logger.info("[IMP:9][unit][orphan] Root-compose project containers preserved ✓")
+
+
+# endregion FUNC_test_root_compose_platform_project_not_orphan
+
+
+# region FUNC_test_foreign_project_container_is_orphan
+## @purpose  B18a-совместимость: контейнер-тёзка от ЧУЖОГО проекта (не deploy project)
+##           удаляется как орфан — pre-up cleanup исключает name-conflict при повторном деплое
+## @io       tmp_path modules + mock docker → batch_orphan_reconciliation → assert 1 orphan
+## @complexity 3 — foreign project label vs deploy project name
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · batch_orphan_reconciliation — B18a (141 r2)
+# · Last fail: "Container redis-exporter Creating" — конфликт имени с контейнером от
+# ·   чужого проекта (миксовый деплой модульный/root) при повторном deploy infra-metrics.
+# · Remove if: name-conflict cleanup переедет из orphan_reconciler в другой механизм.
+@ldd_trajectory
+def test_foreign_project_container_is_orphan(modules_dir: Path, caplog) -> None:
+    """Container with the same name from a FOREIGN project is detected as orphan.
+
+    Setup:
+    - modules/infra-metrics/ compose config returns name="platform" (root compose deployed)
+    - docker ps -a returns "redis-exporter" (existing container from legacy module project)
+    - docker inspect returns project="infra-metrics" (legacy module project — foreign now)
+    - Expected: "redis-exporter" is an orphan → removed before up (no name conflict)
+    """
+    im_dir = modules_dir / "infra-metrics"
+    im_dir.mkdir(parents=True)
+    (im_dir / "docker-compose.base.yml").write_text("services:\n  redis-exporter:\n    image: redis_exporter:1\n")
+
+    mock_run = _make_mock_run(
+        ps_containers={"redis-exporter"},
+        compose_responses={
+            str(im_dir / "docker-compose.base.yml"): {
+                "name": "platform",
+                "services": {
+                    "redis-exporter": {
+                        "container_name": "redis-exporter",
+                        "name": "redis-exporter",
+                    }
+                },
+            },
+        },
+        inspect_responses={
+            "redis-exporter": "infra-metrics",  # Legacy module project — foreign vs "platform"
+        },
+    )
+
+    with patch("orphan_reconciler.subprocess.run", side_effect=mock_run):
+        orphans = batch_orphan_reconciliation(["infra-metrics"], str(modules_dir))
+
+    logger.info("[IMP:9][unit][orphan] Foreign project container → orphans=%s", orphans)
+    assert len(orphans) == 1, f"Expected 1 orphan (foreign project), got {len(orphans)}: {orphans}"
+    assert orphans[0]["container_name"] == "redis-exporter"
+    assert orphans[0]["project"] == "infra-metrics"
+    logger.info("[IMP:9][unit][orphan] Foreign project container detected as orphan ✓")
+
+
+# endregion FUNC_test_foreign_project_container_is_orphan

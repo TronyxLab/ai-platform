@@ -577,24 +577,34 @@ def _phase_rebuild(
 
 
 # region FUNC__phase_up
-## @purpose  E1 up phase: docker compose up -d --remove-orphans [--force-recreate] + audit.
+## @purpose  E1 up phase: docker compose up -d [--force-recreate] + audit.
 ## @io       ⇥ module_name, module_dir, compose_args, has_local_build → ⎋ bool
 ## @complexity 1 — single shared docker_compose_up call + audit
 ## @invariants
 ##   - --force-recreate added for build:-modules (bypass same-tag no-op)
 ##   - Audit DEPLOYED/FAILED через shared audit_logger (D6)
 ##   - Различение TIMEOUT/ERROR/FAILED схлопывается в FAILED (детали в shared-логах)
+##   - --remove-orphans НЕ передаётся (TRAP[BUG] 141 B18): при неполном активном наборе
+##     профилей (COMPOSE_PROFILES env / --profile модуля) каскадно удаляет контейнеры
+##     проекта вне config. Orphan-политика — только orphan_reconciler (точечный docker rm -f).
 def _phase_up(
     module_name: str,
     module_dir: str,
     compose_args: list[str],
     has_local_build: bool,
 ) -> bool:
-    """E1 phase: docker compose up -d --remove-orphans [--force-recreate] + audit."""
+    """E1 phase: docker compose up -d [--force-recreate] + audit."""
     # · --force-recreate added for build:-modules to bypass Docker Compose's
     #   local-image-same-tag no-op (build creates new image under same tag,
     #   compose doesn't detect the change → container not recreated).
-    flags = ["--remove-orphans"] + (["--force-recreate"] if has_local_build else [])
+    # ⚠️ TRAP[BUG] · 2026-08-06 · HI · --remove-orphans удалён из модульного up (141 B18)
+    # · Symptom: контейнеры модулей (project=platform, root compose) исчезали после
+    # ·   node-update: up --profile <module> --remove-orphans при неполном COMPOSE_PROFILES
+    # ·   считал контейнеры остальных модулей orphans и удалял их каскадно.
+    # · Fix: orphan-управление только через orphan_reconciler (deploy_docker_module pre-up
+    # ·   + deploy_orchestrator _postflight batch) — точечный docker rm -f с явным expected project.
+    # · Rev: если у root compose появится name: — пересмотреть (project name в config "name").
+    flags = ["--force-recreate"] if has_local_build else []
     logger.info(
         "[IMP:8][_phase_up][up] Running compose up for %s (flags=%s)",
         module_name,

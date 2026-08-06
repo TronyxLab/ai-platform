@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 
 import core.internal.bootstrap.converge.infra as infra
@@ -170,10 +171,18 @@ def reconcile_volumes(
         logger.info("[IMP:7][converge][%s] Checking module: %s (compose: %s)", unit, mod_name, compose_file)
 
         # Run docker compose config to get resolved JSON (shared — sole path, DevPlan 116 B5 T6)
+        # ⚠️ TRAP[BUG] · 2026-08-06 · HI · R7: config без secrets env-file слеп (141 B18)
+        # · Symptom: "required variable POSTGRES_PASSWORD is missing" (26 вхождений/прогон) —
+        # ·   ${VAR:?} в base.yml падал → R7 detect-only мимо (0 сервисов), orphan-детекция слепа.
+        # · Fix: --env-file /run/platform/secrets.env если существует (канон _build_compose_args).
+        _compose_args = ["-f", str(compose_file), "--profile", mod_name]
+        _secrets_env = os.path.join("/run/platform", "secrets.env")
+        if os.path.isfile(_secrets_env):
+            _compose_args = ["--env-file", _secrets_env, *_compose_args]
         config_r = _shared_docker_compose_config(
             str(compose_file.parent),
             timeout=DOCKER_TIMEOUT,
-            compose_args=["-f", str(compose_file), "--profile", mod_name],
+            compose_args=_compose_args,
             flags=["--format", "json"],
         )
         if config_r.returncode != 0:

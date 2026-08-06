@@ -142,21 +142,26 @@ def _get_existing_containers() -> set:
 
 
 # region FUNC__get_compose_services
-## @purpose  Parse container names from docker compose config --format json output
-## @io       ⇥ compose_path: str, module_name: str → ⎋ list[str] (container names from this compose file)
+## @purpose  Parse container names + project name from docker compose config --format json output.
+##           Возвращает (container_names, project_name): project_name = config "name" — ФАКТИЧЕСКИЙ
+##           compose project деплоя (basename dirname первого -f файла: root → "platform", модуль → имя модуля).
+## @io       ⇥ compose_path: str, module_name: str → ⎋ tuple[list[str], str] (container names, project name)
 ## @complexity 2 — subprocess call + JSON parse + iteration over services
 ## @invariants
-##   - On subprocess error: log WARN, return empty list
-##   - JSON parse error: log WARN, return empty list
+##   - On subprocess error: log WARN, return ([], "")
+##   - JSON parse error: log WARN, return ([], "")
 ##   - Service container_name resolves to explicit container_name or service name
 ##   - Services without container_name AND without name field are skipped
 ##   - --profile <module_name\> is passed to get the correct config resolution
-def _get_compose_services(compose_path: str, module_name: str) -> list[str]:
-    """Run docker compose config --format json and extract container names.
+##   - --env-file /run/platform/secrets.env добавляется если существует (R7-fix 141 B18:
+##     без env-file ${VAR:?} в base.yml падает — config слеп, orphan-детекция = 0 сервисов)
+##   - project_name используется для orphan-сравнения (expected project), НЕ module_name
+def _get_compose_services(compose_path: str, module_name: str) -> tuple[list[str], str]:
+    """Run docker compose config --format json and extract container names + project name.
 
     Uses --profile <module_name\\> so compose resolves the correct service set
-    for the given module. Returns a list of container names (explicit or
-    service-name fallback).
+    for the given module. Returns (container names, project name) — project name
+    is the ACTUAL compose project of the deploy (config JSON "name" field).
     """
     logger.info("[IMP:7][_get_compose_services] Resolving services for %s from %s", module_name, compose_path)
     # Shared docker_compose_config — sole path (DevPlan 116 B5 T3, гейт docker_sole_path).
@@ -167,6 +172,13 @@ def _get_compose_services(compose_path: str, module_name: str) -> list[str]:
     _compose_args = ["-f", compose_path, "--profile", module_name]
     if os.path.isfile(_root_compose):
         _compose_args = ["-f", _root_compose, "--profile", module_name]
+    # ⚠️ TRAP[BUG] · 2026-08-06 · HI · R7: config без secrets env-file слеп (141 B18)
+    # · Symptom: docker compose config падал "required variable POSTGRES_PASSWORD is missing"
+    # ·   (26 вхождений/прогон) → orphan-детекция 0 сервисов; R7 volumes — detect-only мимо.
+    # · Fix: --env-file /run/platform/secrets.env если существует (канон _build_compose_args).
+    _secrets_env = os.path.join("/run/platform", "secrets.env")
+    if os.path.isfile(_secrets_env):
+        _compose_args = ["--env-file", _secrets_env, *_compose_args]
     cfg_r = _shared_docker_compose_config(
         os.path.dirname(compose_path),
         compose_args=_compose_args,
@@ -179,7 +191,7 @@ def _get_compose_services(compose_path: str, module_name: str) -> list[str]:
             cfg_r.returncode,
             cfg_r.stderr.strip() if cfg_r.stderr else "no stderr",
         )
-        return []
+        return [], ""
 
     cfg_stdout = cfg_r.stdout
     if isinstance(cfg_stdout, bytes):
@@ -192,8 +204,11 @@ def _get_compose_services(compose_path: str, module_name: str) -> list[str]:
             module_name,
             e,
         )
-        return []
+        return [], ""
 
+    # Проект деплоя: docker compose config "name" (basename dirname первого -f файла).
+    # root compose → "platform" (на ноде); модульный -f → имя модуля.
+    project_name = str(cfg.get("name", "") or "")
     services = cfg.get("services", {})
     container_names: list[str] = []
 
@@ -204,11 +219,12 @@ def _get_compose_services(compose_path: str, module_name: str) -> list[str]:
             logger.info("[IMP:7][_get_compose_services] %s → container_name: %s", svc_name, cname)
 
     logger.info(
-        "[IMP:7][_get_compose_services] Resolved %d container names from %s",
+        "[IMP:7][_get_compose_services] Resolved %d container names (project=%s) from %s",
         len(container_names),
+        project_name,
         compose_path,
     )
-    return container_names
+    return container_names, project_name
 
 
 # endregion FUNC__get_compose_services
@@ -274,21 +290,27 @@ def _inspect_project_label(container_name: str) -> str:
 ##   - Returns empty list on any fatal error (docker unavailable, no compose files, etc.)
 ##   - Each orphan dict has "container_name" and "project" keys
 ##   - Project is empty string if label not found
-##   - Container is orphan if project label != module_name
+##   - Container is orphan if project label != deploy project (compose config "name"),
+##     fallback expected = module_name (config без "name")
 ##   - Container not in docker ps -a output is silently skipped (not an orphan)
 ##   - All subprocess errors are caught and logged at WARN level — never raised
 ## @rationale  One-pass algorithm avoids per-module docker ps -a (O(N) → O(1) docker calls).
 ##             The single docker ps -a call provides a consistent snapshot of container state,
 ##             avoiding TOCTOU race conditions that per-module calls would create.
+## ⚠️ TRAP[BUG] · 2026-08-06 · HI · expected project != module_name (141 B18)
+## · Symptom: контейнеры модулей (project=platform от root compose, RC-121) удалялись как
+## ·   orphans (expected=module_name) → ВСЕ контейнеры платформы исчезали после деплоя.
+## · Fix: expected = compose config "name" (фактический project деплоя) — root "platform",
+## ·   модульный деплой = имя модуля; fallback на module_name при отсутствии "name".
 def batch_orphan_reconciliation(module_entries: list[str], modules_dir: str) -> list[dict[str, str]]:
     """Detect orphan containers across all modules.
 
     Algorithm:
     1. Find compose files for each module entry
     2. Run docker ps -a once for all modules
-    3. For each module's compose services: resolve container names
+    3. For each module's compose services: resolve container names + deploy project (config name)
     4. For each resolved container that exists: check project label
-    5. If project label != module_name → it's a foreign/orphan container
+    5. If project label != deploy project → it's a foreign/orphan container
 
     Returns a list of orphan dicts: [{"container_name": "...", "project": "..."}]
     The shell facade reads this output and stops+removes each orphan.
@@ -321,18 +343,25 @@ def batch_orphan_reconciliation(module_entries: list[str], modules_dir: str) -> 
         len(compose_files),
     )
 
-    # Steps 3-5: For each compose file, resolve services and check project labels
-    orphans: list[dict[str, str]] = []
+    # Steps 3-5: For each compose file, resolve services and check project labels.
+    # Дедуп по container_name: при полном COMPOSE_PROFILES config каждого модуля видит
+    # сервисы ВСЕХ модулей — один контейнер может встретиться N раз (N = число модулей).
+    orphans: dict[str, dict[str, str]] = {}
 
     for mod_name, cf_path in compose_files:
         logger.info("[IMP:7][batch_orphan_reconciliation] Checking module: %s (compose: %s)", mod_name, cf_path)
 
-        container_names = _get_compose_services(cf_path, mod_name)
+        container_names, project_name = _get_compose_services(cf_path, mod_name)
         logger.info(
-            "[IMP:7][batch_orphan_reconciliation] Module %s has %d container names from compose config",
+            "[IMP:7][batch_orphan_reconciliation] Module %s has %d container names (deploy project=%s) from compose config",
             mod_name,
             len(container_names),
+            project_name,
         )
+
+        # Expected project: фактический project деплоя (root compose → "platform", модульный → имя модуля).
+        # Fallback на module_name при config без "name" (legacy-безопасность).
+        expected_project = project_name or mod_name
 
         for cname in container_names:
             if cname not in existing:
@@ -342,28 +371,29 @@ def batch_orphan_reconciliation(module_entries: list[str], modules_dir: str) -> 
             # Check the project label
             proj = _inspect_project_label(cname)
 
-            # Container is orphan if: no project label OR project label != module_name
-            if not proj or proj != mod_name:
+            # Container is orphan if: no project label OR project label != deploy project
+            if not proj or proj != expected_project:
                 logger.info(
                     "[IMP:9][batch_orphan_reconciliation] ORPHAN DETECTED: container=%s, expected_project=%s, actual_project='%s'",
                     cname,
-                    mod_name,
+                    expected_project,
                     proj,
                 )
-                orphans.append({"container_name": cname, "project": proj})
+                orphans[cname] = {"container_name": cname, "project": proj}
             else:
                 logger.info(
-                    "[IMP:7][batch_orphan_reconciliation] Container %s OK — project label matches module %s",
+                    "[IMP:7][batch_orphan_reconciliation] Container %s OK — project label matches deploy project %s",
                     cname,
-                    mod_name,
+                    expected_project,
                 )
 
+    orphan_list = list(orphans.values())
     logger.info(
         "[IMP:9][batch_orphan_reconciliation] Batch orphan reconciliation complete — %d orphans found across %d modules",
-        len(orphans),
+        len(orphan_list),
         len(compose_files),
     )
-    return orphans
+    return orphan_list
 
 
 # endregion FUNC_batch_orphan_reconciliation

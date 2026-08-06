@@ -286,7 +286,11 @@ def test_deploy_docker_module_basic(mock_subprocess, module_dir):
     assert "compose" in up_args
     assert "up" in up_args
     assert "-d" in up_args
-    assert "--remove-orphans" in up_args
+    # 🧪 TRAP[TEST] · NEGATIVE (R5) · _phase_up — B18 (141 r2)
+    # · Last fail: node-update 2-го цикла: up --profile <mod> --remove-orphans при неполном
+    # ·   COMPOSE_PROFILES каскадно удалял контейнеры остальных модулей (project=platform).
+    # · Remove if: orphan-политика вернётся в up (запрещено — только orphan_reconciler).
+    assert "--remove-orphans" not in up_args
 
 
 # 🧪 TRAP[TEST] · Edge-case · No compose file returns False · Last fail: N/A · Remove if: error handling changes
