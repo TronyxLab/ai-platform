@@ -452,29 +452,45 @@ def _ensure_bootstrap_compose(project_dir: str, project: ProjectInfo) -> bool:
     if not os.path.isdir(project_dir):
         os.makedirs(project_dir, exist_ok=True)
 
-    port = getattr(project, "port", None) or "3000"
     domain = getattr(project, "domain", None) or project.name
 
-    compose_content = f'''# GENERATED-STUB: Bootstrap reverse proxy. Replaced by CI receive (dispatch-канал).
+    # ⚠️ TRAP[BUG] · 2026-08-06 · P1 · Ночная сессия 141 — stub compose несовместим с DeployOrchestrator
+    # · Symptom: холодный бутстрап — пул проекта падал «no such service» (3 попытки) →
+    # ·   first-deploy FATAL (exit 10) → deploy_services FAILED. Ручной pull работал.
+    # · Root: сервис stuba был ‹project.name›-proxy, а DeployOrchestrator пулит с
+    # ·   service=project_name (orchestrator.py:334); вдобавок stub: host-порт {port}
+    # ·   (конфликт), healthcheck curl (в nginx:alpine нет curl), нет proxy-net.
+    # · Fix: stub повторяет конвенцию реальных compose (сервис = project.name,
+    # ·   сети name-net + proxy-net external, wget healthcheck, без host-портов).
+    # · Rev: если конвенция реальных compose изменится — синхронизировать stub.
+    compose_content = f"""# GENERATED-STUB: Bootstrap reverse proxy. Replaced by CI receive (dispatch-канал).
 version: '3.8'
 services:
-  {project.name}-proxy:
+  {project.name}:
     image: nginx:alpine
+    container_name: {project.name}
     labels:
       - "ai-platform.bootstrap=true"
       - "ai-platform.project={project.name}"
-    ports:
-      - "{port}:{port}"
-    volumes:
-      - /etc/letsencrypt/live/{domain}/fullchain.pem:/etc/nginx/certs/fullchain.pem:ro
-      - /etc/letsencrypt/live/{domain}/privkey.pem:/etc/nginx/certs/privkey.pem:ro
+      - "platform.type=frontend"
+      - "platform.domain={domain}"
+    networks:
+      - {project.name}-net
+      - proxy-net
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:{port}"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
       interval: 30s
       timeout: 10s
       retries: 3
     restart: unless-stopped
-'''
+networks:
+  {project.name}-net:
+    name: {project.name}-net
+    driver: bridge
+  proxy-net:
+    name: proxy-net
+    external: true
+"""
     try:
         with open(compose_file, "w") as f:
             f.write(compose_content)

@@ -287,10 +287,12 @@ def test_idempotent_skip_healthy(caplog, node_yaml_file, monkeypatch):
 # ═══════════════════════════════════════════════════════════════════
 
 
-# 🧪 TRAP[TEST] · Regression · _ensure_bootstrap_compose creates minimal docker-compose.yml
-# · Scenario: project_dir with no docker-compose.yml → creates nginx:alpine compose with ai-platform.bootstrap label
-# · Last fail: N/A (new test)
-# · Remove if: bootstrap compose generation logic changes
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · _ensure_bootstrap_compose конвенция проектов (ночная сессия 141, B9)
+# · Scenario: оригинальная форма — сервис stuba `{name}-proxy` не совпадал с service=project_name
+# ·   DeployOrchestrator (orchestrator.py:334) → «no such service» → first-deploy FATAL;
+# ·   healthcheck curl (нет в nginx:alpine), host-порт {port} (конфликт), нет proxy-net.
+# · Last fail: 2026-08-06 холодный бутстрап — tronyx-site/botanika/roadmap пул «no such service»
+# · Remove if: конвенция реальных compose проектов (сервис=имя, proxy-net) изменится
 @ldd_trajectory
 def test_bootstrap_compose_generation(caplog, tmp_path):
     """_ensure_bootstrap_compose should create docker-compose.yml with nginx:alpine, correct labels, and healthcheck."""
@@ -316,6 +318,16 @@ def test_bootstrap_compose_generation(caplog, tmp_path):
     assert "healthcheck:" in content, "Should have healthcheck section"
     assert "restart: unless-stopped" in content, "Should have restart policy"
     assert "GENERATED-STUB" in content, "Should indicate it's a generated stub"
+    # B9: сервис = project.name (совпадает с service=project_name деплоя и upstream nginx)
+    assert "  test-webapp:" in content, "B9-R5 FAIL: сервис stuba обязан называться как проект"
+    assert "-proxy" not in content, "B9-R5 FAIL: -proxy суффикс ломает docker compose pull <project>"
+    # B9: proxy-net external + своя сеть (nginx-overlay резолвит tronyx-site:80)
+    assert "proxy-net" in content and "external: true" in content, (
+        "B9-R5 FAIL: stub обязан подключаться к proxy-net (внешняя сеть nginx)"
+    )
+    # B9: healthcheck wget (в nginx:alpine нет curl)
+    assert "wget" in content, "B9-R5 FAIL: healthcheck должен использовать wget (nginx:alpine без curl)"
+    assert "ports:" not in content, "B9-R5 FAIL: host-порты в stub конфликтуют между проектами"
     logger.critical(
         "[IMP:9][test] Bootstrap compose generated for %s — image=nginx:alpine, label=ai-platform.bootstrap=true, healthcheck present",
         project.name,

@@ -52,6 +52,7 @@ import logging
 import os
 import re
 import shlex
+import signal
 import subprocess
 import sys
 import time
@@ -122,6 +123,7 @@ class CheckSpec:
     gate_modes: list[str] = field(default_factory=list)
     diagnostic: bool = True
     xdist: bool = True
+    sequential: bool = False
     allow_no_tests: bool = False
     non_blocking: bool = False
     junit: str | None = None
@@ -331,6 +333,7 @@ def parse_checks(manifest: dict) -> list[CheckSpec]:
                 gate_modes=list(c.get("gate_modes", [])),
                 diagnostic=c.get("diagnostic", True),
                 xdist=c.get("xdist", tier == "pytest"),
+                sequential=c.get("sequential", False),
                 allow_no_tests=c.get("allow_no_tests", False),
                 non_blocking=c.get("non_blocking", False),
                 junit=c.get("junit"),
@@ -515,6 +518,12 @@ def _run_cmd(
     start = time.monotonic()
     try:
         with _docker_suite_lock(root) if docker_lock else contextlib.nullcontext():
+            # ⚠️ TRAP[BUG] · 2026-08-06 · P1 · Ночная сессия 141 — таймаут-килл оставлял орфанов
+            # · Symptom: static_audit >300s → subprocess.run(timeout) убивал ТОЛЬКО pytest-родителя;
+            # ·   xdist-воркеры/дети осиротевали и ПРОДОЛЖАЛИ мутировать tests/ (junitxml, __pycache__)
+            # ·   → последующий doxygen-check парсил дерево во время мутаций → 46 «unexpanded alias»
+            # ·   (flex-баг 1.17.0) → gate/check флакали; орфан жил часами.
+            # · Fix: start_new_session + killpg при TimeoutExpired (весь process-group).
             result = subprocess.run(
                 tokens,
                 capture_output=True,
@@ -522,6 +531,7 @@ def _run_cmd(
                 timeout=timeout,
                 cwd=str(root),
                 env=env,
+                start_new_session=True,
             )
         duration = (time.monotonic() - start) * 1000
         logger.info(
@@ -537,9 +547,20 @@ def _run_cmd(
             stderr=result.stderr,
             duration_ms=duration,
         )
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as exc:
         duration = (time.monotonic() - start) * 1000
-        logger.warning("[IMP:7][run_cmd][timeout] %s TIMEOUT after %ds", cmd_str[:80], timeout)
+        # killpg: убить ВЕСЬ process-group (pytest-родитель + xdist-воркеры) — иначе орфаны
+        # продолжают мутировать дерево и ломают doxygen-check (TRAP выше)
+        try:
+            os.killpg(os.getpgid(exc.pid), signal.SIGKILL)
+            logger.warning(
+                "[IMP:7][run_cmd][timeout] %s TIMEOUT after %ds — killed process group %d",
+                cmd_str[:80],
+                timeout,
+                exc.pid,
+            )
+        except (ProcessLookupError, PermissionError):
+            pass  # процесс уже мёртв
         return CheckOutcome(
             name=tokens[0] if tokens else "?", exit_code=124, stderr=f"Timeout after {timeout}s", duration_ms=duration
         )
@@ -927,12 +948,22 @@ def run_diagnostic(
     pytest_checks = [s for s in diagnostic_checks if s.tier == "pytest"]
 
     # ── static: параллельно в потоках; pytest: строго последовательно (решение b) ──
+    # ⚠️ TRAP[BUG] · 2026-08-06 · P1 · Ночная сессия 141 — doxygen-check флакал в параллели
+    # · Symptom: make check/gate периодически падали «46 doxygen warning(s)» (unexpanded alias),
+    # ·   standalone doxygen = 0 warning'ов. Поймано в check: doxygen в ThreadPoolExecutor
+    # ·   параллельно с static_audit (pytest, 300s) — pytest мутирует tests/ (__pycache__,
+    # ·   report-файлы) пока doxygen парсит → lexer doxygen 1.17.0 (flex push-back overflow,
+    # ·   TRAP Doxyfile:53) → «Found unexpanded alias» в последующих docstring'ах.
+    # · Fix: sequential:true чеки (doxygen-check) исполняются ПОСЛЕ параллельной static-фазы,
+    # ·   до pytest-фазы. Плюс unique log в ci.mk (коллизия /tmp/doxygen-check.log при двух gate).
+    # · Rev: если doxygen обновится (flex-fix) — sequential можно снять.
+    static_parallel = [s for s in static_checks if not s.sequential and s.resolve_command(None)]
+    static_sequential = [s for s in static_checks if s.sequential and s.resolve_command(None)]
     static_results: list[CheckOutcome] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {
             executor.submit(_run_cmd, s.resolve_command(None) or "", s.timeout, env, root): s.id
-            for s in static_checks
-            if s.resolve_command(None)
+            for s in static_parallel
         }
         for future in concurrent.futures.as_completed(futures):
             cid = futures[future]
@@ -940,6 +971,9 @@ def run_diagnostic(
                 static_results.append(future.result())
             except Exception as exc:  # noqa: EXC — best-effort thread-pool wrapper, must not crash
                 static_results.append(CheckOutcome(name=cid, exit_code=1, stderr=f"Internal error: {exc}"))
+    for spec in static_sequential:
+        print(f"[IMP:7][check] {spec.id} (sequential, после параллельной static-фазы)...", file=sys.stderr)
+        static_results.append(_run_cmd(spec.resolve_command(None) or "", spec.timeout, env, root))
     outcomes.extend(static_results)
 
     for spec in pytest_checks:

@@ -210,10 +210,11 @@ doxygen-check:
 		echo "[IMP:7][make][doxygen-check] doxygen not installed — SKIP (zero-warnings invariant not enforceable on this host)"; \
 	else \
 		echo "[IMP:7][make][doxygen-check] Running doxygen Doxyfile (zero-warnings invariant)..."; \
-		doxygen Doxyfile > /tmp/doxygen-check.log 2>&1; \
+		LOG=/tmp/doxygen-check.$$$$.log; \
+		doxygen Doxyfile > $$LOG 2>&1; \
 		EXIT=$$?; \
-		COUNT=$$(grep -c "warning:" /tmp/doxygen-check.log 2>/dev/null || true); \
-		rm -f /tmp/doxygen-check.log; \
+		COUNT=$$(grep -c "warning:" $$LOG 2>/dev/null || true); \
+		rm -f $$LOG; \
 		if [ $$EXIT -ne 0 ]; then \
 			echo "[IMP:9][make][doxygen-check] FAIL: doxygen exited $$EXIT"; \
 			exit 1; \
