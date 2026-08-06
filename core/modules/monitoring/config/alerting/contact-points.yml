@@ -29,7 +29,9 @@ contactPoints:
         type: "telegram"
         settings:
           bottoken: "${TELEGRAM_BOT_TOKEN}"
-          chatid: "${TELEGRAM_CHAT_ID_CRITICAL}"
+          chatid: |-
+             -
+             ${TELEGRAM_CHAT_ID_CRITICAL}
           message: '{{ template "telegram.default.message" . }}'
           disable_notifications: false
           uploadImage: false
@@ -42,7 +44,9 @@ contactPoints:
         type: "telegram"
         settings:
           bottoken: "${TELEGRAM_BOT_TOKEN}"
-          chatid: "${TELEGRAM_CHAT_ID_WARNING}"
+          chatid: |-
+             -
+             ${TELEGRAM_CHAT_ID_WARNING}
           message: '{{ template "telegram.default.message" . }}'
           disable_notifications: true
           uploadImage: false

@@ -211,6 +211,7 @@ doxygen-check:
 	else \
 		echo "[IMP:7][make][doxygen-check] Running doxygen Doxyfile (zero-warnings invariant)..."; \
 		LOG=/tmp/doxygen-check.$$$$.log; \
+		rm -rf .doxygen; mkdir -p .doxygen/.docs/html .doxygen/.docs/xml; \
 		doxygen Doxyfile > $$LOG 2>&1; \
 		EXIT=$$?; \
 		COUNT=$$(grep -c "warning:" $$LOG 2>/dev/null || true); \

@@ -458,7 +458,7 @@ def _ensure_bootstrap_compose(project_dir: str, project: ProjectInfo) -> bool:
     # · Symptom: холодный бутстрап — пул проекта падал «no such service» (3 попытки) →
     # ·   first-deploy FATAL (exit 10) → deploy_services FAILED. Ручной pull работал.
     # · Root: сервис stuba был ‹project.name›-proxy, а DeployOrchestrator пулит с
-    # ·   service=project_name (orchestrator.py:334); вдобавок stub: host-порт {port}
+    # ·   service=project_name (orchestrator.py:334); вдобавок stub: host-порт (порт проекта)
     # ·   (конфликт), healthcheck curl (в nginx:alpine нет curl), нет proxy-net.
     # · Fix: stub повторяет конвенцию реальных compose (сервис = project.name,
     # ·   сети name-net + proxy-net external, wget healthcheck, без host-портов).
@@ -478,7 +478,7 @@ services:
       - {project.name}-net
       - proxy-net
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
+      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1/']
       interval: 30s
       timeout: 10s
       retries: 3
