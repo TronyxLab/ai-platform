@@ -596,6 +596,8 @@ def _section_telegram(env_defaults: dict[str, str], secret_defs: dict[str, dict[
     lines.append("TELEGRAM_CHAT_ID_CRITICAL=" + _get_env_val(env_defaults, "TELEGRAM_CHAT_ID_CRITICAL", ""))
     lines.append("# Чат для warning-алертов (можно совпадать с CRITICAL)")
     lines.append("TELEGRAM_CHAT_ID_WARNING=" + _get_env_val(env_defaults, "TELEGRAM_CHAT_ID_WARNING", ""))
+    # CI-флаг присутствия Docker Hub секретов (job env, platform-test.yml; 141 B-фикс secrets-in-if)
+    lines.append("DOCKER_HUB_AUTH=" + _get_env_val(env_defaults, "DOCKER_HUB_AUTH", "false"))
     return lines
 
 
