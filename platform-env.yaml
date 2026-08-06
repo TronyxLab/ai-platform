@@ -63,7 +63,8 @@ volumes:
 proxy:
   consumers:
   - hermes-agent
-  no_proxy_internal: localhost,127.0.0.1,.local,postgres,pgbouncer,redis,clickhouse,litellm,langfuse,minio,grafana,prometheus
+  - monitoring
+  no_proxy_internal: localhost,127.0.0.1,.local,postgres,pgbouncer,redis,clickhouse,litellm,langfuse,minio,grafana,prometheus,loki,nginx,node-exporter,cadvisor,hermes-agent,status-page,backup-cron,nginx-prometheus-exporter,redis-exporter,postgres-exporter
 provides:
   postgres:
     host: pgbouncer
@@ -197,7 +198,7 @@ env_defaults:
   WEBNAMES_API_KEY: '*test-webnames-api-key'
   HTTP_PROXY: ''
   HTTPS_PROXY: ''
-  NO_PROXY: localhost,127.0.0.1,.local,postgres,pgbouncer,redis,clickhouse,litellm,langfuse,minio,grafana,prometheus
+  NO_PROXY: localhost,127.0.0.1,.local,postgres,pgbouncer,redis,clickhouse,litellm,langfuse,minio,grafana,prometheus,loki,nginx,node-exporter,cadvisor,hermes-agent,status-page,backup-cron,nginx-prometheus-exporter,redis-exporter,postgres-exporter
   GF_SECURITY_ADMIN_USER: admin@ai-platform.local
   GF_SECURITY_ADMIN_PASSWORD: testpass
   GRAFANA_PORT: '3000'

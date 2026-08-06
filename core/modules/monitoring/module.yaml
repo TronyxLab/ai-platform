@@ -43,3 +43,8 @@ resources:
 env_requires:
   - GF_SECURITY_ADMIN_PASSWORD
   - LITELLM_MASTER_KEY
+
+env_shared:
+  NO_PROXY: "${NO_PROXY}"
+  HTTP_PROXY: "${HTTP_PROXY}"
+  HTTPS_PROXY: "${HTTPS_PROXY}"
