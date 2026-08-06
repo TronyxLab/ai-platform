@@ -346,14 +346,23 @@ class DeployEngine:
             )
 
             # ── Pull image with retry (T5.1: shared retry_pull — backoff [5,10,20], env IMAGE_TAG) ──
+            # ⚠️ TRAP[BUG] · 2026-08-06 · P1 · Ночная сессия 141 — first-deploy пул = FATAL при 15s ретраев
+            # · Symptom: холодный бутстрап — пул tronyx-site (nginx:alpine) упал 3× подряд за ~20s
+            # ·   (транзиент: mirror/DNS на окне параллельных пулов 21 модуля) → «First deploy failed —
+            # ·   no rollback possible» (exit 10) → deploy_services FAILED → весь bootstrap падает.
+            # ·   Ручной пул через минуту — успех (образ в кеше). Ошибка транзиентная, окно ретраев мало.
+            # · Fix: first-deploy пул — 5 попыток, backoff [5,10,20,40,60] (~2 мин окно транзиентов);
+            # ·   повторный пул после частичного кеша = cache_hit (доказательство в 04-TimingsReport).
+            # · Rev: если транзиентные фейлы пулов станут >2 мин — поднять max_attempts/backoff.
             if not _shared_retry_pull(
                 project_dir,
-                max_attempts=3,
+                max_attempts=5,
+                backoff_seconds=[5, 10, 20, 40, 60],
                 timeout=PULL_TIMEOUT,
                 service=service,
                 env_override={"IMAGE_TAG": ref},
             ):
-                self._handle_first_deploy(project, service, ref, "Pull failed after 3 attempts")
+                self._handle_first_deploy(project, service, ref, "Pull failed after 5 attempts")
                 # unreachable — _handle_first_deploy raises PlatformFatalError
 
             # ── Atomic up ──

@@ -77,6 +77,15 @@ jobs:
     env:
       INTEGRATION_MODE: live
       HERMES_DASHBOARD_PASSWORD: ${{ secrets.HERMES_DASHBOARD_PASSWORD }}
+      # ⚠️ TRAP[BUG] · 2026-08-06 · P1 · Ночная сессия 141 — secrets НЕ доступен в step-level if:
+      # · Symptom: workflow падал на старте (0s, «workflow file issue», 0 jobs) — GitHub-парсер
+      # ·   отвергает контекст secrets в jobs.<id>.steps.if (actionlint: context "secrets" is not
+      # ·   allowed here) — строки 162/169 (C-11, DevPlan 136 W11 T11.10). platform-test мёртв
+      # ·   на push/PR с 136 W11.
+      # · Fix: хойст присутствия секрета в job-level env (secrets доступен в env) →
+      # ·   step-условия через env.DOCKER_HUB_AUTH == 'true'/'false'.
+      # · Rev: если GitHub разрешит secrets в steps.if — можно вернуть прямые условия.
+      DOCKER_HUB_AUTH: ${{ secrets.DOCKER_HUB_TOKEN != '' && secrets.DOCKER_HUB_USERNAME != '' }}
       # Test Honesty R4 (DevPlan 117 Brief F + DevPlan 119 A3): CI-раннеры ИМЕЮТ Docker →
       # REQUIRE_HONESTY_MODE=fail (отсутствие сервиса = FAIL, не skip — R4 compliant).
       # Локальная dev-машина остаётся marker: переменная не задана → default "marker"
@@ -156,17 +165,16 @@ jobs:
       # (action inputs, НЕ env:-ключи). env:-ключи обязаны регистрироваться в platform-env.yaml
       # env_defaults (test_gate_ci_env_vars.py — T7 SoT); DOCKER_HUB_TOKEN — CI-секрет, не platform
       # env-переменная. inline-интерполяция в run: запрещена (C-11: попадает в логи/шелл-историю).
-      # if: secrets.X != '' — тот же guard, что и прежний [ -n "${{ secrets.DOCKER_HUB_TOKEN }}" ]
-      # (fork PR без секретов → anonymous, R4-честно).
+      # ⚠️ TRAP[BUG] 141: secrets в steps.if ломал парсер workflow (0s fail) — условия через env.DOCKER_HUB_AUTH
       - name: Authenticate Docker Hub (rate limit mitigation)
-        if: ${{ secrets.DOCKER_HUB_TOKEN != '' }}
+        if: env.DOCKER_HUB_AUTH == 'true'
         uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKER_HUB_USERNAME }}
           password: ${{ secrets.DOCKER_HUB_TOKEN }}
 
       - name: Note Docker Hub auth status (anonymous)
-        if: ${{ secrets.DOCKER_HUB_TOKEN == '' }}
+        if: env.DOCKER_HUB_AUTH != 'true'
         run: echo "[IMP:7][docker] DOCKER_HUB_TOKEN not set — using anonymous pulls (100/6h)"
 
       - name: Login to GitHub Container Registry
