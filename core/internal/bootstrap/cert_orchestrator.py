@@ -583,6 +583,13 @@ def _log_post_issue_coverage(domain: str) -> str:
             return "direct"
 
     # 2. Wildcard: *.parent покрывает поддомен (только для subdomains — parent != domain)
+    # ⚠️ TRAP[BUG] · 2026-08-06 · P1 · Ночная сессия 141 — B12: прямой серт родителя ≠ wildcard
+    # · Symptom: botanika/roadmap.tronyx.ru «covered by wildcard *.tronyx.ru» при ОТСУТСТВИИ
+    # ·   сертификатов (nginx emerg: cannot load certificate) — direct-серт tronyx.ru (CN=tronyx.ru)
+    # ·   проходил проверку cert_subject_matches_domain(subject, parent) как «wildcard».
+    # · Root: проверка не требовала WILDCARD-формы CN (*.parent) — direct-серт родителя матчился.
+    # · Fix: wildcard-ветка проверяет subject против '*.parent' (только настоящий wildcard).
+    # · Rev: если wildcard-серты перестанут использоваться — ветку можно удалить.
     labels = domain.split(".")
     for i in range(1, len(labels) - 1):
         parent = ".".join(labels[i:])
@@ -590,7 +597,7 @@ def _log_post_issue_coverage(domain: str) -> str:
         if not os.path.isfile(wildcard_path):
             continue
         subject = cert_get_subject(wildcard_path)
-        if subject and cert_subject_matches_domain(subject, parent):
+        if subject and cert_subject_matches_domain(subject, f"*.{parent}"):
             logger.info(
                 "[IMP:9][cert_orchestrator] %s — covered by wildcard %s (issue-cert SKIP поддомена), НЕ alarm (FL15)",
                 domain,

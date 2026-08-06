@@ -99,6 +99,7 @@ deploy-project:
 		--project "$$PROJECT_NAME" \
 		--project-dir "$(PROJECT)" \
 		--host "$$DEPLOY_HOST" \
+		$(if $(KEY_FILE),--key-file '$(KEY_FILE)') \
 		$(if $(VERSION),--version '$(VERSION)')
 	@echo "[IMP:9][make][deploy-project] Direct deploy complete"
 
