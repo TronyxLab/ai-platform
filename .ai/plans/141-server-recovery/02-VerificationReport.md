@@ -111,4 +111,53 @@ node-update (5 UPDATE фаз) — отработал; deploy-project ×4 (receiv
 - e2e-verify: `evidence/verify-sweep.json` (GREEN)
 - коммиты: 12 (docs(140), feat(140), 10× fix(141)) — `git log --oneline 21d4ab25..HEAD`
 
+---
+
+## 6. ДОПОЛНЕНИЕ 2-го цикла (рестарт 11:26 MSK + хвосты до 20:30 MSK)
+
+### 6.1 Рестарт
+Сервер переустановлен ПОВТОРНО 11:26 MSK (uptime 9 мин, docker отсутствует) — весь 1-й цикл на сервере утрачен; код/отчёты/S3-кеш целы. Полный 2-й цикл на коде с фиксами B1-B17.
+
+| Сценарий | Вердикт | Доказательство |
+|----------|---------|----------------|
+| test-node E2E (холодный бутстрап) | ✅ 8/10 (28:42): 9 INIT фаз + сценарии PASSED; test_02/03 — B18 (container исчезновение, root-cause в 7366d2dd) | evidence/test-node-r2.log |
+| Bootstrap no-op (повторный) | ✅ 19s, инвариант 6 | bootstrap-noop-r2.log |
+| node-update (5 фаз) + converge | ✅ 5/5 + converge warn-non-fatal | server-ops-log-r2.md |
+| deploy-project ×4 | ✅ DEPLOYED healthy (3-13s каждый) | timings.tsv |
+| Сертификаты | ✅ 4/4 из S3-кеша (0 acme-выпусков) | certs-r2.md |
+| e2e-verify | ✅ HTTP 4/4, TLS 4/4 depth=4 | e2e-verify-r2.json |
+| Chaos-сьют (11 тестов) | ⚠️ 3 passed (T4/T5/T6), 8 failed — вскрыл B18-B26 (все задокументированы, фиксы B19-B24 запушены) | server-ops-log-r2.md |
+| Grafana/Loki/Langfuse | ✅ 8 правил, 2 ds, 3 CP; 16/16 стримов; langfuse v3.212 | grafana-api-r2.md, loki-r2.md |
+| **R1: alertmanager→Telegram 400** | ✅ **ЗАКРЫТ** (см. 6.2) | docker logs grafana (0 ошибок с 15:30Z) |
+| LLM-цепочка с ноды | ✅ deepseek-chat «pong! 🏓» (3443 токена) | llm-node-probe |
+| Prometheus | ✅ TSDB очищен после chaos T4 (clock-skew) → 7/8 UP (cadvisor — R) | curl up |
+| core-deploy CI-канал | ⏳ PENDING: GitHub Major Outage (16:30-20:30+) — Actions не стартуют; **ручной эквивалент выполнен**: rsync core+scripts → provision → node-update 5/5 с AGE_SECRET_KEY (φ9 decrypt) ✅; dispatch — после восстановления GitHub | gh status + ssh |
+
+### 6.2 R1 — полная диагностика и фикс (alertmanager «400 Bad Request»)
+
+Три независимых корня, каждый устранён (коммиты 98dd6d2a + серверные правки):
+
+| # | Корень | Симптом | Фикс |
+|---|--------|---------|------|
+| 1 | privoxy после reboot слушал только 127.0.0.1; grafana ходит на host.docker.internal (=172.17.0.1 docker0) | «context deadline exceeded» (transport) | listen-address 172.17.0.1/172.22.0.1/172.18.0.1 + ufw allow 172.16.0.0/12:8118 |
+| 2 | chatid block-scalar «-\n79xxx9» (grafana env-интерполяция на JSON-тексте: голое число → #69950 provisioning-fail) | 400 chat not found / provisioning fail | `chatid: "${VAR} "` — хвостовой пробел: JSON-строка + Telegram тримит (sendMessage 488 ✅) |
+| 3 | grafana telegram дефолт parse_mode=**MarkdownV2** — резервирует { } ( ) → summary «{{ $labels.job }}»/alertname «(Short)» | 400 «Character '(' is reserved» (воспроизведено: V2=400, HTML=OK, Markdown=OK) | `parse_mode: "Markdown"` |
+
+Доказательство: после рестарта 15:30:06Z — 0 ошибок notify (до — шторм 400 × 78/сек). Тестовые sendMessage 484-488 доставлены.
+
+### 6.3 Новые баги 2-го цикла (B18-B26 → 7366d2dd, b9fbc47f, bc3a448b, a4218f38)
+
+B18 orphan/remove-orphans · B18a redis-exporter name-conflict · B18b backup-cron apt · B19 .deploy-snapshots chown · B20 practices.lock whitelist + ci-deploy группы · B21 tmpfs-источники /run/platform · B22 converge R9 docker ps -a · B23 NGINX_OVERLAY_DIR fail-fast · B24 status-page deep · B25 dev-only · B26 state.json (механизм не выявлен, восстановлен). Плюс: REQ_FIX scripts/-доставка (core_deliverer 1d + CI rsync), node-detect «unknown/» мусорный каталог.
+
+### 6.4 Остатки для оператора (после 2-го цикла)
+
+| # | Что | Важность |
+|---|-----|----------|
+| R8 | **core-deploy CI-прогон**: GitHub Major Outage — dispatch после восстановления (ручной эквивалент прошёл) | MED |
+| R9 | cadvisor: target «cadvisor» DNS + fs-handler 1m49s (медленный overlayfs) — 7/8 метрик | LOW |
+| R10 | Build Platform Agent smoke `undefined volume hermes-data` (из 1-го цикла, не сервер) | MED |
+| R11 | Build Hermes Images write_package denied (нужен PAT) | MED |
+| R12 | B21/B26 (tmpfs-источники, state.json) — архитектурные, ждут решения | LOW |
+| R13 | platform-test ci-docker фаза (compose standalone-валидация) — давно красная | LOW |
+
 $END_VERIFICATION_REPORT

@@ -47,4 +47,26 @@ $START_TELEGRAM_SUMMARY
 3. **Чат warning == critical** — по решению оператора; при желании разделить — задать TELEGRAM_CHAT_ID_WARNING отдельно в enc.yaml (sops set, строка!).
 4. **Шум DatasourceError** — корень устранён (NO_PROXY), но правило можно retune (исключить внутренние 5xx).
 
+---
+
+## ДОПОЛНЕНИЕ 2-го цикла (18:00 MSK): R1 alertmanager-доставка ЗАКРЫТА
+
+**Корень (3 слоя, все устранены, коммит 98dd6d2a):**
+1. **Транспорт**: privoxy после reboot слушал только 127.0.0.1, grafana ходит на host.docker.internal=172.17.0.1 → добавлены listen 172.17.0.1/172.22.0.1/172.18.0.1 + ufw allow docker-сетей на 8118.
+2. **chatid**: block-scalar «-\n79xxx9» → Telegram 400; grafana env-интерполяция на JSON-тексте (голое число → #69950) → `chatid: "${VAR} "` (пробел: строка + Telegram тримит — message_id 488).
+3. **parse_mode**: grafana telegram дефолт = **MarkdownV2** (резервирует `{ } ( )`) → 400 «Character '(' is reserved» на summary «{{ $labels.job }}» и alertname «(Short)»; фикс `parse_mode: "Markdown"` (legacy).
+
+**Доказательство**: рестарт 15:30:06Z → **0 ошибок notify** (до фикса — шторм 400). Тестовые sendMessage 484-488 (HTML/Markdown/plain — все доставлены). Алерты (DatasourceNoData, ServiceDown, Backup Freshness) уходят в телефон оператора.
+
+**Карта точек отправки (актуально на конец сессии):**
+
+| Точка | Статус | Что менялось в сессии |
+|-------|--------|----------------------|
+| Grafana alertmanager → Telegram | ✅ РАБОТАЕТ | chatid-пробел, parse_mode Markdown, privoxy-listen, ufw |
+| notify-hook (CLI, tg.sh милстоуны) | ✅ РАБОТАЕТ | фиксы B1/B2 (1-й цикл); милстоуны 2-го цикла доставлены (rc=0) |
+| Lifecycle bootstrap send_telegram | ✅ | не менялся |
+| Test-контакт-пойнт API (Grafana 11.6.16) | ⚠️ 404 (feature-toggle) | закрыто живыми алертами |
+
+**Рекомендации оператору (2-й цикл):** в телефоне должны быть: милстоуны рестарта/R1/LLM (tg.sh) + реальные алерты (DatasourceNoData/ServiceDown/Backup Freshness) + тестовые 484-488. Parse_mode Markdown оставить (HTML-вариант тоже работал, но Markdown безопаснее для summary с шаблонными скобками).
+
 $END_TELEGRAM_SUMMARY
