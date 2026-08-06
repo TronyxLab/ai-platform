@@ -29,9 +29,23 @@ contactPoints:
         type: "telegram"
         settings:
           bottoken: "${TELEGRAM_BOT_TOKEN}"
-          chatid: |-
-             -
-             ${TELEGRAM_CHAT_ID_CRITICAL}
+          # ⚠️ TRAP[BUG] · 2026-08-06 · R1 (141-r2) · chatid: «3 провала» → финальный приём
+          # · Symptom: alertmanager «webhook response status 400 Bad Request» на каждом notify.
+          # · Root (механика grafana 11.6.16): env-интерполяция ${VAR} выполняется НА JSON-ТЕКСТЕ
+          # ·   настроек ПОСЛЕ YAML: {"chatid": "${VAR}"} → замена токена голым значением «79xxx9»
+          # ·   → JSON-число → «cannot unmarshal number into string» (provisioning FAIL) ИЛИ,
+          # ·   при block-scalar с дефисом («-\n79xxx9») — строка с мусором → Telegram 400 chat not found.
+          # · Fix: хвостовой пробел «${VAR} » — JSON-строка сохраняется, Telegram тримит пробел
+          # ·   (sendMessage с «79xxx9 » → message_id 488, проверено 141-r2).
+          chatid: "${TELEGRAM_CHAT_ID_CRITICAL} "
+          # ⚠️ TRAP[BUG] · 2026-08-06 · R1 (141-r2) · parse_mode: grafana telegram default = MarkdownV2
+          # · Symptom: alertmanager «webhook response status 400 Bad Request» при ВАЛИДНОМ chatid/токене
+          # · Root: дефолтный parse_mode=MarkdownV2 резервирует { } [ ] ( ) & → summary «{{ $labels.job }}»
+          # ·   и alertname «Service Down (Short)» → «can't parse entities: Character '(' is reserved»
+          # ·   (воспроизведено sendMessage: MarkdownV2=400, HTML=OK, Markdown=OK).
+          # · Fix: parse_mode: "Markdown" (legacy) — не резервирует { } ( ); message B15-эскейпы для HTML
+          # ·   безвредны в Markdown. HTML-вариант тоже работал в тесте, но Markdown безопаснее для summary.
+          parse_mode: "Markdown"
           # 141 B15: короткий plain-текст — default-шаблон (HTML) упирался в 4096 runes,
           #   усечение резало HTML-тег → Telegram 400 Bad Request
           message: '🚨 {{ range .Alerts }}{{ .Labels.alertname }} [{{ .Labels.severity }}] {{ if .Annotations.summary }}{{ .Annotations.summary | reReplaceAll "<" "&lt;" | reReplaceAll ">" "&gt;" | reReplaceAll "&" "&amp;" }}{{ end }}{{ end }}'
@@ -46,9 +60,8 @@ contactPoints:
         type: "telegram"
         settings:
           bottoken: "${TELEGRAM_BOT_TOKEN}"
-          chatid: |-
-             -
-             ${TELEGRAM_CHAT_ID_WARNING}
+          chatid: "${TELEGRAM_CHAT_ID_WARNING} "
+          parse_mode: "Markdown"
           message: '⚠️ {{ range .Alerts }}{{ .Labels.alertname }} [{{ .Labels.severity }}] {{ if .Annotations.summary }}{{ .Annotations.summary | reReplaceAll "<" "&lt;" | reReplaceAll ">" "&gt;" | reReplaceAll "&" "&amp;" }}{{ end }}{{ end }}'
           disable_notifications: true
           uploadImage: false
