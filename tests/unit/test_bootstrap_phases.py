@@ -809,3 +809,102 @@ def test_docker_registry_auth_syspath_bootstrap_four_levels(caplog: pytest.LogCa
 # endregion FUNC_test_docker_registry_auth_syspath_bootstrap_four_levels
 
 # endregion Tests: φ3 platform_setup — Docker Hub auth (D5, D6 — DevPlan 136 W1 T1.2)
+
+
+# region Tests: φ7 certificates — acme fail не блокирует деплой (ночная сессия 141, B4)
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · phase_certificates: acme-fail при живых сертификатах (141 B4)
+# · Scenario: оригинальная форма — _install_acme вернул False (git clone через tor-прокси падал,
+# ·   run timeout 120s) → non_fatal_issues=True → фаза вернула False → done_with_warnings →
+# ·   dependency-гейт заблокировал deploy_services → cold bootstrap FAILED (сертификаты при этом
+# ·   выданы: S3 restore + wildcard *.tronyx.ru, summary failed=0).
+# · Last fail: 2026-08-06 test_01_cold_start_bootstrap_9_phases (rc=2, «Phase deploy_services
+# ·   requires prerequisite phase(s): certificates»)
+# · Remove if: фаза certificates перестанет быть гейтом для deploy_services
+@ldd_trajectory
+def test_phase_certificates_acme_fail_ssl_ok_returns_true(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> None:
+    """B4-R5: acme.sh install fail + ssl_provision OK → фаза возвращает True (НЕ done_with_warnings)."""
+    from core.internal.bootstrap.lifecycle.phases import certs as certs_mod
+
+    caplog.set_level(logging.INFO)
+    node_yaml = tmp_path / "node.yaml"
+    node_yaml.write_text("domain: tronyx.ru\nprojects: []\n")
+
+    with (
+        patch.object(certs_mod, "_install_acme", return_value=False),
+        patch.object(certs_mod.helpers_domains, "ssl_provision_via_orchestrator", return_value=None) as ssl_mock,
+    ):
+        result = certs_mod.phase_certificates(str(tmp_path), "tronyx-vps", str(node_yaml))
+
+    assert result is True, "B4-R5 FAIL: acme-fail при успешном ssl-provision должен давать True"
+    ssl_mock.assert_called_once_with(str(tmp_path), str(node_yaml))
+    messages = [r.message for r in caplog.records]
+    assert any("non-fatal" in m and "acme.sh" in m for m in messages), (
+        "B4-R5 FAIL: acme-fail обязан логироваться WARN (non-fatal)"
+    )
+    assert any("[IMP:9]" in m and "φ7 complete" in m for m in messages), (
+        "B4-R5 FAIL: фаза должна завершиться IMP:9 (LDD)"
+    )
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · phase_certificates: ssl-provision реально упал → False (141 B4)
+# · Scenario: защита от обратной регрессии — если САМ deliverable (сертификаты) не выдался,
+# ·   фаза обязана вернуть False (done_with_warnings → блок деплоя КОРРЕКТЕН).
+# · Last fail: N/A (эталонное поведение, не регрессия)
+# · Remove if: изменится контракт «деплой без сертификатов запрещён»
+@ldd_trajectory
+def test_phase_certificates_ssl_fail_returns_false(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> None:
+    """B4: ssl-provision падает → фаза возвращает False (блок деплоя без сертификатов корректен)."""
+    from core.internal.bootstrap.lifecycle.phases import certs as certs_mod
+
+    caplog.set_level(logging.INFO)
+    node_yaml = tmp_path / "node.yaml"
+    node_yaml.write_text("domain: tronyx.ru\nprojects: []\n")
+
+    with (
+        patch.object(certs_mod, "_install_acme", return_value=True),
+        patch.object(certs_mod.helpers_domains, "ssl_provision_via_orchestrator", side_effect=RuntimeError("no certs")),
+    ):
+        result = certs_mod.phase_certificates(str(tmp_path), "tronyx-vps", str(node_yaml))
+
+    assert result is False, "B4: ssl-fail обязан давать False (done_with_warnings)"
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · _install_acme: proxy-чистая env (141 B4)
+# · Scenario: оригинальная форма — install-acme.sh наследовал HTTP_PROXY/HTTPS_PROXY из env
+# ·   cli.py (source_secrets_env) → git clone через privoxy→tor → падение/timeout. Скрипт
+# ·   документирует «Proxy vars are expected to be clean» — фикс: subprocess env без прокси.
+# · Last fail: 2026-08-06 — install-acme.sh exit=1 (clone через tor)
+# · Remove if: install-acme.sh перестанет требовать чистую env (или уберёт git clone)
+def test_install_acme_runs_with_clean_proxy_env(tmp_path: Path) -> None:
+    """B4: _install_acme передаёт subprocess env БЕЗ proxy-переменных."""
+    from core.internal.bootstrap.lifecycle.phases import certs as certs_mod
+
+    captured: dict = {}
+
+    def _fake_run(cmd, capture_output, text, timeout, env):
+        captured["env"] = env
+        captured["cmd"] = cmd
+        return type("R", (), {"returncode": 0, "stderr": ""})()
+
+    with (
+        patch.dict(
+            os.environ,
+            {"HTTP_PROXY": "http://127.0.0.1:8118", "HTTPS_PROXY": "http://127.0.0.1:8118"},
+            clear=False,
+        ),
+        patch.object(certs_mod.subprocess, "run", side_effect=_fake_run),
+    ):
+        script = tmp_path / "internal" / "bootstrap" / "install-acme.sh"
+        script.parent.mkdir(parents=True)
+        script.write_text("#!/usr/bin/env bash\n")
+        ok = certs_mod._install_acme(str(tmp_path))
+
+    assert ok is True
+    assert "HTTP_PROXY" not in captured["env"], "B4-R5 FAIL: HTTP_PROXY не вычищен из env subprocess"
+    assert "HTTPS_PROXY" not in captured["env"], "B4-R5 FAIL: HTTPS_PROXY не вычищен из env subprocess"
+    assert captured["cmd"] == ["bash", str(script)]
+
+
+# endregion Tests: φ7 certificates — acme fail не блокирует деплой (ночная сессия 141, B4)

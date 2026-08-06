@@ -71,6 +71,7 @@ main() {
             NODE_YAML="$(resolve_node_yaml "${NODE_NAME}")" || { echo "[IMP:10][node-lifecycle][update] Cannot resolve NODE_YAML for node=${NODE_NAME}" >&2; exit 1; }
             export NODE_YAML
         fi
+        detect_tor_enabled; export TOR_ENABLED  # 141 B5: update не экспортировал TOR_ENABLED → cleanup резал прокси
         _delegate --mode update --node-name "${NODE_NAME}" --node-yaml "${NODE_YAML}" \
             ${CONTEXT:+--context "$CONTEXT"} ${FORCE_MODE:+--force}
     fi

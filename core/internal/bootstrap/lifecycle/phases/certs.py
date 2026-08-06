@@ -47,12 +47,27 @@ def _install_acme(core_dir: str) -> bool:
         return False
 
     logger.info("[IMP:9][install_acme] Installing acme.sh")
+    # ⚠️ TRAP[BUG] · 2026-08-06 · P1 · Ночная сессия 141 — git clone acme.sh через tor-прокси
+    # · Symptom: install-acme.sh падал/висел на свежей ноде (init: TOR_ENABLED=true → HTTP_PROXY
+    # ·   из secrets.env в env cli.py → git clone через privoxy→tor → медленные/падающие цепи →
+    # ·   run timeout 120s → фаза certificates done_with_warnings → deploy_services ЗАБЛОКИРОВАН →
+    # ·   весь холодный бутстрап падает (сертификаты при этом выданы: S3 restore + wildcard).
+    # · Root: install-acme.sh документирует «Proxy vars are expected to be clean at this stage
+    # ·   (unset_platform_proxy already ran)» — но unset_platform_proxy живёт только в ЛОКАЛЬНОМ
+    # ·   bootstrap.sh; REMOTE-цепочка (build_ssh_cmd → cli.py → source_secrets_env) кладёт
+    # ·   HTTP_PROXY/HTTPS_PROXY в env процесса → subprocess наследует.
+    # · Fix: вычистить proxy-переменные из env subprocess для install-acme.sh (контракт скрипта).
+    # · Prevention: любой скрипт с документированным «proxy clean» контрактом вызывать с чистой env.
+    clean_env = dict(os.environ)
+    for proxy_var in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy"):
+        clean_env.pop(proxy_var, None)
     try:
         result = subprocess.run(
             ["bash", install_script],
             capture_output=True,
             text=True,
             timeout=120,
+            env=clean_env,
         )
         if result.returncode == 0:
             logger.info("[IMP:9][install_acme] acme.sh installed successfully")
@@ -96,17 +111,24 @@ def phase_certificates(core_dir: str, node_name: str, node_yaml: str) -> bool:
 
     non_fatal_issues = False
 
-    # ── 1. Install acme.sh ──
+    # ── 1. Install acme.sh (best-effort infra-инструмент, НЕ deliverable фазы) ──
+    # ⚠️ TRAP[BUG] · 2026-08-06 · P1 · Ночная сессия 141 — acme-fail валил фазу → блок деплоя
+    # · Symptom: acme.sh install fail (exit=1) → non_fatal_issues=True → фаза вернула False →
+    # ·   done_with_warnings → dependency-гейт заблокировал deploy_services → весь cold bootstrap
+    # ·   FAILED, хотя сертификаты ВСЕ выданы (S3 restore + wildcard *.tronyx.ru, summary: failed=0).
+    # · Root: deliverable фазы = сертификаты (post-check), а статус фазы решался по инструменту.
+    # · Fix: acme-инструмент — WARN-only; False возвращается ТОЛЬКО если провален ssl-provision
+    # ·   (сам deliverable). Деградация renewal-cron при отсутствии acme.sh уже логируется
+    # ·   оркестратором (IMP:7 «acme.sh not found — skipping cron install») и лечится node-update.
+    # · Rev: если renewal-канал без acme.sh станет критичным — поднять до блокирующего.
     try:
         acme_ok = _install_acme(core_dir)
         if acme_ok:
             logger.info("[IMP:9][phase:certificates] acme.sh installed/verified")
         else:
-            logger.warning("[IMP:7][phase:certificates] acme.sh installation returned non-success")
-            non_fatal_issues = True
+            logger.warning("[IMP:7][phase:certificates] acme.sh installation returned non-success (non-fatal)")
     except Exception as e:  # noqa: EXC — non-fatal: acme.sh is best-effort
         logger.warning("[IMP:7][phase:certificates] acme.sh installation failed (non-fatal): %s", e)
-        non_fatal_issues = True
 
     # ── 2. SSL provision via cert_orchestrator ──
     try:
