@@ -420,3 +420,25 @@ ci-poll	cycle-347	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --
 ci-poll	cycle-348	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:01:31Z	2026-08-06T07:01:33Z	2	0	na	0	watch for next push
 ci-poll	cycle-349	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:02:33Z	2026-08-06T07:02:35Z	2	0	na	0	watch for next push
 ci-poll	cycle-350	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:03:35Z	2026-08-06T07:03:38Z	3	0	na	0	watch for next push
+ci-poll	cycle-351	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:06:31Z	2026-08-06T07:06:33Z	2	0	na	0	watch 1fd117ac gate
+ci-poll	cycle-352	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:07:33Z	2026-08-06T07:07:35Z	2	0	na	0	watch 1fd117ac gate
+ci-poll	cycle-353	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:08:36Z	2026-08-06T07:08:38Z	2	0	na	0	watch 1fd117ac gate
+ci-poll	cycle-354	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:09:38Z	2026-08-06T07:09:40Z	2	0	na	0	watch 1fd117ac gate
+ci-poll	cycle-355	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:10:40Z	2026-08-06T07:10:43Z	3	0	na	0	watch 1fd117ac gate
+ci-poll	cycle-356	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:11:43Z	2026-08-06T07:11:45Z	2	0	na	0	watch 1fd117ac gate
+ci-poll	cycle-357	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:12:45Z	2026-08-06T07:12:47Z	2	0	na	0	watch 1fd117ac gate
+ci-poll	cycle-358	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:13:47Z	2026-08-06T07:13:49Z	2	0	na	0	watch 1fd117ac gate
+ci-poll	cycle-359	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:15:05Z	2026-08-06T07:15:07Z	2	0	na	0	gate f184b3ab running
+ci-poll	cycle-360	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:16:07Z	2026-08-06T07:16:09Z	2	0	na	0	gate f184b3ab running
+ci-poll	cycle-361	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:17:09Z	2026-08-06T07:17:11Z	2	0	na	0	gate f184b3ab running
+ci-poll	cycle-362	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:18:11Z	2026-08-06T07:18:14Z	3	0	na	0	gate f184b3ab running
+ci-poll	cycle-363	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:19:14Z	2026-08-06T07:19:16Z	2	0	na	0	gate f184b3ab running
+ci-poll	cycle-364	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:20:16Z	2026-08-06T07:20:19Z	3	0	na	0	gate f184b3ab running
+ci-poll	cycle-365	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:21:19Z	2026-08-06T07:21:21Z	2	0	na	0	gate f184b3ab running
+ci-poll	cycle-366	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:22:21Z	2026-08-06T07:22:24Z	3	0	na	0	gate f184b3ab running
+ci-poll	cycle-367	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:23:31Z	2026-08-06T07:23:33Z	2	0	na	0	gate f184b3ab running
+ci-poll	cycle-368	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:24:33Z	2026-08-06T07:24:35Z	2	0	na	0	gate f184b3ab running
+ci-poll	cycle-369	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:25:35Z	2026-08-06T07:25:38Z	3	0	na	0	gate f184b3ab running
+ci-poll	cycle-370	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:26:38Z	2026-08-06T07:26:40Z	2	0	na	0	gate f184b3ab running
+ci-poll	cycle-371	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:27:40Z	2026-08-06T07:27:42Z	2	0	na	0	gate f184b3ab running
+ci-poll	cycle-373	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:29:45Z	2026-08-06T07:29:47Z	2	0	na	0	gate f184b3ab running

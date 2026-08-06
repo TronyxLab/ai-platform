@@ -656,5 +656,96 @@
     "started": "2026-08-06T07:02:50Z",
     "status": "skipped",
     "workflow": "core-deploy"
+  },
+  "31079518458": {
+    "cause": "push:docs(141): \u043d\u043e\u0447\u043d\u0430\u044f \u0441\u0435\u0441\u0441\u0438\u044f \u2014 VerificationReport, TimingsReport, Telegra\u2026",
+    "duration_s": 122,
+    "started": "2026-08-06T07:04:21Z",
+    "status": "failure",
+    "workflow": "platform-gate-fast"
+  },
+  "31079518459": {
+    "cause": "push:docs(141): \u043d\u043e\u0447\u043d\u0430\u044f \u0441\u0435\u0441\u0441\u0438\u044f \u2014 VerificationReport, TimingsReport, Telegra\u2026",
+    "duration_s": 122,
+    "started": "2026-08-06T07:04:21Z",
+    "status": "failure",
+    "workflow": "platform-test"
+  },
+  "31079654822": {
+    "cause": "parent:workflow_run",
+    "duration_s": 2,
+    "started": "2026-08-06T07:06:25Z",
+    "status": "skipped",
+    "workflow": "Build Platform Agent"
+  },
+  "31079654832": {
+    "cause": "parent:workflow_run",
+    "duration_s": 2,
+    "started": "2026-08-06T07:06:25Z",
+    "status": "skipped",
+    "workflow": "core-deploy"
+  },
+  "31079654968": {
+    "cause": "parent:workflow_run",
+    "duration_s": 2,
+    "started": "2026-08-06T07:06:25Z",
+    "status": "skipped",
+    "workflow": "Mirror to TronyxLab"
+  },
+  "31079991416": {
+    "cause": "push:fix(141): proxy opt-in \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442 \u0434\u043b\u044f monitoring (env_shared, consumers\u2026",
+    "duration_s": 784,
+    "started": "2026-08-06T07:11:45Z",
+    "status": "failure",
+    "workflow": "platform-gate-fast"
+  },
+  "31079991442": {
+    "cause": "push:fix(141): proxy opt-in \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442 \u0434\u043b\u044f monitoring (env_shared, consumers\u2026",
+    "duration_s": 859,
+    "started": "2026-08-06T07:11:46Z",
+    "status": "failure",
+    "workflow": "platform-test"
+  },
+  "31080820864": {
+    "cause": "parent:workflow_run",
+    "duration_s": 1,
+    "started": "2026-08-06T07:24:51Z",
+    "status": "skipped",
+    "workflow": "Mirror to TronyxLab"
+  },
+  "31080821125": {
+    "cause": "parent:workflow_run",
+    "duration_s": 1,
+    "started": "2026-08-06T07:24:52Z",
+    "status": "skipped",
+    "workflow": "Build Platform Agent"
+  },
+  "31080821191": {
+    "cause": "parent:workflow_run",
+    "duration_s": 8,
+    "started": "2026-08-06T07:24:52Z",
+    "status": "skipped",
+    "workflow": "core-deploy"
+  },
+  "31081100992": {
+    "cause": "push:fix(141): hermes NO_PROXY fallback \u0441\u0438\u043d\u0445\u0440\u043e\u043d\u0438\u0437\u0438\u0440\u043e\u0432\u0430\u043d \u0441 SoT (no_proxy_in\u2026",
+    "duration_s": 3,
+    "started": "2026-08-06T07:29:15Z",
+    "status": "in_progress",
+    "workflow": "platform-test"
+  },
+  "31081101043": {
+    "cause": "push:fix(141): hermes NO_PROXY fallback \u0441\u0438\u043d\u0445\u0440\u043e\u043d\u0438\u0437\u0438\u0440\u043e\u0432\u0430\u043d \u0441 SoT (no_proxy_in\u2026",
+    "duration_s": 3,
+    "started": "2026-08-06T07:29:15Z",
+    "status": "in_progress",
+    "workflow": "platform-gate-fast"
+  },
+  "31081101178": {
+    "cause": "push:fix(141): hermes NO_PROXY fallback \u0441\u0438\u043d\u0445\u0440\u043e\u043d\u0438\u0437\u0438\u0440\u043e\u0432\u0430\u043d \u0441 SoT (no_proxy_in\u2026",
+    "duration_s": 28,
+    "started": "2026-08-06T07:29:15Z",
+    "status": "failure",
+    "workflow": "Build Hermes Images"
   }
 }
