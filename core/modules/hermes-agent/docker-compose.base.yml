@@ -156,7 +156,7 @@ services:
       # · Rev: if another module needs proxy — add to env_shared AND platform-env.yaml proxy.consumers
       HTTP_PROXY: "${HTTP_PROXY:-}"
       HTTPS_PROXY: "${HTTPS_PROXY:-}"
-      NO_PROXY: "${NO_PROXY:-localhost,127.0.0.1,.local,litellm,langfuse,postgres,pgbouncer,redis,clickhouse,minio,grafana,prometheus}"
+      NO_PROXY: "${NO_PROXY:-localhost,127.0.0.1,.local,postgres,pgbouncer,redis,clickhouse,litellm,langfuse,minio,grafana,prometheus,loki,nginx,node-exporter,cadvisor,hermes-agent,status-page,backup-cron,nginx-prometheus-exporter,redis-exporter,postgres-exporter}"
 
       # Agent identity
       NODE_NAME: "${NODE_NAME:-unknown}"

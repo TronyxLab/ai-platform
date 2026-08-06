@@ -228,7 +228,7 @@ def test_provisioning_alert_rules_service_down_short(caplog) -> None:
         f"service_down_short severity != warning: {rule['labels']['severity']}"
     )
     expr = _alert_expr(rule)
-    assert "up == 0" in expr, f"service_down_short expr не содержит 'up == 0': {expr}"
+    assert "up == bool 0" in expr, f"service_down_short expr не содержит 'up == bool 0' (B17): {expr}"
     assert "down (short)" in rule["annotations"]["summary"], (
         f"summary != 'Service {{{{ $labels.job }}}} down (short)': {rule['annotations']['summary']}"
     )
