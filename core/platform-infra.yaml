@@ -229,6 +229,10 @@ env_defaults:
   TELEGRAM_ALLOWED_USERS: ""
   TELEGRAM_CHAT_ID_CRITICAL: ""
   TELEGRAM_CHAT_ID_WARNING: ""
+  # ── CI (workflow env-регистрация, T7 SoT) ──
+  # DOCKER_HUB_AUTH: hoist secrets-присутствия для step-if (ночная сессия 141 —
+  #   secrets недоступен в steps.if; значение вычисляется в job env, см. platform-test.yml)
+  DOCKER_HUB_AUTH: "false"
   # ── Nginx ──
   NGINX_CONF_DIR: "./config"
   # Dev default; production overridden via node-configs/env to /etc/letsencrypt
