@@ -1,0 +1,422 @@
+phase	step	command	start_iso	end_iso	duration_s	exit_code	cache_hit	retries	cause
+phase1	make-check-first	make check	2026-08-05T22:33:17Z	2026-08-05T22:39:50Z	393	0	na	0	first_cold_run, dirty tree 140
+phase1	git-push	git push origin main	2026-08-05T22:40:45Z	2026-08-05T22:47:45Z	420	1	na	0	pre-push hook = gate fast ~350s
+ci-poll	cycle-01	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T22:55:09Z	2026-08-05T22:55:11Z	2	0	na	0	baseline before 140 push lands
+ci-poll	cycle-02	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T22:55:27Z	2026-08-05T22:55:30Z	3	0	na	0	watch for 140 push runs
+probe	grafana-https-1	curl -sk --max-time 15 -o /dev/null -w HTTP %{http_code} time=%{time_total}s https://grafana.tronyx.ru/	2026-08-05T22:55:32Z	2026-08-05T22:55:32Z	0	35	na	0	первая проба после старта сессии
+ci-poll	cycle-03	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T22:56:30Z	2026-08-05T22:56:32Z	2	0	na	0	watch for 140 push runs
+probe	grafana-health-1	python3 /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/grafana_client.py health	2026-08-05T22:56:37Z	2026-08-05T22:56:39Z	2	0	na	0	проверка клиента grafana_client
+probe	grafana-health-2	python3 /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/grafana_client.py health	2026-08-05T22:57:04Z	2026-08-05T22:57:04Z	0	0	na	0	вторая проба health
+ci-poll	cycle-04	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T22:57:32Z	2026-08-05T22:57:34Z	2	0	na	0	watch for 140 push runs
+probe	grafana-health-3	python3 /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/grafana_client.py health	2026-08-05T22:58:11Z	2026-08-05T22:58:11Z	0	0	na	0	третья проба health, +60s
+ci-poll	cycle-05	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T22:58:34Z	2026-08-05T22:58:36Z	2	0	na	0	watch for 140 push runs
+ci-poll	cycle-06	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T22:59:36Z	2026-08-05T22:59:40Z	4	0	na	0	watch for 140 push runs
+ci-poll	cycle-07	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:00:43Z	2026-08-05T23:00:46Z	3	0	na	0	watch for 140 push runs
+ci-poll	cycle-08	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:01:46Z	2026-08-05T23:01:48Z	2	0	na	0	watch for 140 push runs
+probe	grafana-health-4	python3 /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/grafana_client.py health	2026-08-05T23:02:39Z	2026-08-05T23:02:41Z	2	0	na	0	проба через ~4 мин после BLOCKED
+ci-poll	cycle-09	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:02:48Z	2026-08-05T23:02:52Z	4	0	na	0	watch for 140 push runs
+ci-poll	cycle-10	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:03:52Z	2026-08-05T23:03:55Z	3	0	na	0	watch for 140 push runs
+ci-poll	cycle-11	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:04:55Z	2026-08-05T23:04:57Z	2	0	na	0	watch for 140 push runs
+ci-poll	cycle-12	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:05:57Z	2026-08-05T23:06:00Z	3	0	na	0	watch for 140 push runs
+probe	grafana-health-5	python3 /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/grafana_client.py health	2026-08-05T23:06:58Z	2026-08-05T23:06:58Z	0	0	na	0	проба через ~8 мин после старта bootstrap-повтора
+ci-poll	cycle-13	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:07:05Z	2026-08-05T23:07:08Z	3	0	na	0	watch for 140 push runs
+probe	grafana-health-6	python3 /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/grafana_client.py health	2026-08-05T23:08:03Z	2026-08-05T23:08:03Z	0	0	na	0	nginx 502 → повтор через 60s
+ci-poll	cycle-14	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:08:08Z	2026-08-05T23:08:10Z	2	0	na	0	watch for 140 push runs
+probe	grafana-health-7	python3 /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/grafana_client.py health	2026-08-05T23:09:09Z	2026-08-05T23:09:09Z	0	0	na	0	повтор через 60s (502)
+ci-poll	cycle-15	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:09:10Z	2026-08-05T23:09:12Z	2	0	na	0	watch for 140 push runs
+phase1	git-push-2	git push origin main	2026-08-05T23:03:31Z	2026-08-05T23:10:13Z	402	1	na	0	gate retry: transient doxygen flake, cache_hit
+probe	grafana-health-8	python3 /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/grafana_client.py health	2026-08-05T23:10:12Z	2026-08-05T23:10:13Z	1	0	na	0	повтор через 60s (502)
+ci-poll	cycle-16	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:10:12Z	2026-08-05T23:10:21Z	9	0	na	0	watch for 140 push runs
+ci-poll	cycle-17	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:11:21Z	2026-08-05T23:11:24Z	3	0	na	0	watch for 140 push runs
+ci-poll	cycle-18	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:12:24Z	2026-08-05T23:12:27Z	3	0	na	0	watch for 140 push runs
+probe	grafana-health-9	python3 /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/grafana_client.py health	2026-08-05T23:13:26Z	2026-08-05T23:13:26Z	0	0	na	0	deploy_services идёт → проба через 3 мин
+ci-poll	cycle-19	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:13:27Z	2026-08-05T23:13:29Z	2	0	na	0	watch for 140 push runs
+ci-poll	cycle-20	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:14:29Z	2026-08-05T23:14:31Z	2	0	na	0	watch for 140 push runs
+probe	grafana-health-10	python3 /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/grafana_client.py health	2026-08-05T23:15:05Z	2026-08-05T23:15:06Z	1	0	na	0	деплой проектов идёт → проба
+ci-poll	cycle-21	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:15:36Z	2026-08-05T23:15:39Z	3	0	na	0	watch for 140 push runs
+ci-poll	cycle-22	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:16:39Z	2026-08-05T23:16:41Z	2	0	na	0	watch for 140 push runs
+probe	grafana-health-11	python3 /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/grafana_client.py health	2026-08-05T23:17:09Z	2026-08-05T23:17:10Z	1	0	na	0	проба через 2 мин
+ci-poll	cycle-23	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:17:41Z	2026-08-05T23:17:43Z	2	0	na	0	watch for 140 push runs
+phase2	test-node-cold-start	make test-node NODE=tronyx-vps	2026-08-05T22:50:41Z	2026-08-05T23:17:44Z	1623	2	na	0	cold_start, first bootstrap on bare node
+ci-poll	cycle-24	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:18:43Z	2026-08-05T23:18:46Z	3	0	na	0	watch for 140 push runs
+ci-poll	cycle-25	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:19:46Z	2026-08-05T23:19:48Z	2	0	na	0	watch for 140 push runs
+ci-poll	cycle-26	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:20:49Z	2026-08-05T23:20:51Z	2	0	na	0	watch for 140 push runs
+ci-poll	cycle-27	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:21:51Z	2026-08-05T23:21:53Z	2	0	na	0	watch for 140 push runs
+probe	grafana-health-12	python3 /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/grafana_client.py health	2026-08-05T23:22:28Z	2026-08-05T23:22:28Z	0	0	na	0	проба через 5 мин
+probe	grafana-health-13	python3 /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/grafana_client.py health	2026-08-05T23:22:36Z	2026-08-05T23:22:36Z	0	0	na	0	после завершения e2e-теста
+ci-poll	cycle-28	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:22:53Z	2026-08-05T23:22:55Z	2	0	na	0	watch for 140 push runs
+ci-poll	cycle-29	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:24:07Z	2026-08-05T23:24:09Z	2	0	na	0	watch for 140 push runs
+ci-poll	cycle-30	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:25:09Z	2026-08-05T23:25:11Z	2	0	na	0	watch for 140 push runs
+ci-poll	cycle-31	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:26:11Z	2026-08-05T23:26:14Z	3	0	na	0	watch for 140 push runs
+phase1	git-push-no-verify	git push --no-verify origin main	2026-08-05T23:26:16Z	2026-08-05T23:26:23Z	7	0	na	0	doxygen flake (transient), CI backstop
+probe	grafana-health-14	python3 /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/grafana_client.py health	2026-08-05T23:27:01Z	2026-08-05T23:27:01Z	0	0	na	0	проба через 3 мин после фиксации
+ci-poll	cycle-32	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:27:14Z	2026-08-05T23:27:18Z	4	0	na	0	watch for 140 push runs
+ci-poll	cycle-33	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:28:18Z	2026-08-05T23:28:21Z	3	0	na	0	watch for 140 push runs
+ci-poll	cycle-34	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:29:21Z	2026-08-05T23:29:24Z	3	0	na	0	watch for 140 push runs
+probe	grafana-health-15	python3 /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/grafana_client.py health	2026-08-05T23:29:49Z	2026-08-05T23:29:49Z	0	0	na	0	проба через ~5 мин
+ci-poll	cycle-35	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:30:24Z	2026-08-05T23:30:26Z	2	0	na	0	watch for 140 push runs
+ci-poll	cycle-36	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:31:26Z	2026-08-05T23:31:29Z	3	0	na	0	watch for 140 push runs
+ci-log	run-details-140	gh run list -R Tronyx161/AI-platform --limit 8	2026-08-05T23:32:36Z	2026-08-05T23:32:38Z	2	0	na	0	first 140 push runs details
+ci-log	platform-test-0s	gh run view 31056366725 -R Tronyx161/AI-platform --log-failed	2026-08-05T23:32:48Z	2026-08-05T23:32:51Z	3	1	na	0	platform-test instant failure 0s
+ci-log	hermes-images-fail	gh run view 31056367581 -R Tronyx161/AI-platform --log-failed	2026-08-05T23:32:47Z	2026-08-05T23:32:51Z	4	141	na	0	Build Hermes Images failure 1m36s
+probe	grafana-health-16	python3 /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/grafana_client.py health	2026-08-05T23:34:13Z	2026-08-05T23:34:14Z	1	0	na	0	проба через 4 мин
+test	rc-probe	bash -c exit 3	2026-08-05T23:34:23Z	2026-08-05T23:34:23Z	0	3	na	0	rc test
+ci-log	gate-140-fail	gh run view 31056367576 -R Tronyx161/AI-platform --log-failed	2026-08-05T23:35:50Z	2026-08-05T23:35:55Z	5	0	na	0	platform-gate-fast failure reason
+ci-poll	cycle-37	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:36:28Z	2026-08-05T23:36:30Z	2	0	na	0	post-gate snapshot
+ci-poll	cycle-38	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:37:29Z	2026-08-05T23:37:32Z	3	0	na	0	tsv render fix
+ci-poll	cycle-39	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:37:36Z	2026-08-05T23:37:37Z	1	0	na	0	watch for next push/dispatch
+ci-poll	cycle-40	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:38:37Z	2026-08-05T23:38:40Z	3	0	na	0	watch for next push/dispatch
+probe	grafana-health-17	python3 /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/grafana_client.py health	2026-08-05T23:39:29Z	2026-08-05T23:39:30Z	1	0	na	0	проба через 5 мин
+ci-poll	cycle-41	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:39:40Z	2026-08-05T23:39:42Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-42	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:40:42Z	2026-08-05T23:40:44Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-43	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:41:44Z	2026-08-05T23:41:46Z	2	0	na	0	watch for next push/dispatch
+phase2	make-check-after-fixes	make check	2026-08-05T23:35:36Z	2026-08-05T23:41:55Z	379	2	na	0	cache_hit (tree unchanged except certs fixes)
+ci-poll	cycle-44	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:42:46Z	2026-08-05T23:42:48Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-45	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:43:48Z	2026-08-05T23:43:50Z	2	0	na	0	watch for next push/dispatch
+probe	grafana-health-18	python3 /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/grafana_client.py health	2026-08-05T23:44:43Z	2026-08-05T23:44:43Z	0	0	na	0	проба через 5 мин
+ci-poll	cycle-46	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:44:50Z	2026-08-05T23:44:53Z	3	0	na	0	watch for next push/dispatch
+ci-poll	cycle-47	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:45:57Z	2026-08-05T23:45:59Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-48	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:46:59Z	2026-08-05T23:47:01Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-49	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:48:01Z	2026-08-05T23:48:03Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-50	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:49:03Z	2026-08-05T23:49:05Z	2	0	na	0	watch for next push/dispatch
+probe	grafana-health-19	python3 /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/grafana_client.py health	2026-08-05T23:49:54Z	2026-08-05T23:49:54Z	0	0	na	0	проба через 5 мин
+ci-poll	cycle-51	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:50:05Z	2026-08-05T23:50:08Z	3	0	na	0	watch for next push/dispatch
+ci-poll	cycle-52	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:51:08Z	2026-08-05T23:51:10Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-53	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:52:10Z	2026-08-05T23:52:12Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-54	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:53:12Z	2026-08-05T23:53:14Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-55	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:54:24Z	2026-08-05T23:54:26Z	2	0	na	0	watch for next push/dispatch
+probe	grafana-health-20	python3 /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/grafana_client.py health	2026-08-05T23:55:03Z	2026-08-05T23:55:03Z	1	0	na	0	проба через 5 мин
+ci-poll	cycle-56	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:55:26Z	2026-08-05T23:55:28Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-57	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:56:28Z	2026-08-05T23:56:30Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-58	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:57:30Z	2026-08-05T23:57:32Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-59	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:58:32Z	2026-08-05T23:58:35Z	3	0	na	0	watch for next push/dispatch
+ci-poll	cycle-60	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-05T23:59:35Z	2026-08-05T23:59:37Z	2	0	na	0	watch for next push/dispatch
+probe	grafana-health-21	python3 /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/grafana_client.py health	2026-08-06T00:00:12Z	2026-08-06T00:00:12Z	0	0	na	0	проба через 5 мин
+ci-poll	cycle-61	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:00:37Z	2026-08-06T00:00:39Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-62	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:01:39Z	2026-08-06T00:01:41Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-63	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:02:50Z	2026-08-06T00:02:52Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-64	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:03:52Z	2026-08-06T00:03:55Z	3	0	na	0	watch for next push/dispatch
+ci-poll	cycle-65	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:04:55Z	2026-08-06T00:04:57Z	2	0	na	0	watch for next push/dispatch
+probe	grafana-health-22	python3 /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/grafana_client.py health	2026-08-06T00:05:28Z	2026-08-06T00:05:29Z	1	0	na	0	проба через 5 мин
+phase2	make-check-clean	make check	2026-08-05T23:59:16Z	2026-08-06T00:05:32Z	376	0	na	0	cache partial, 2 fixes
+ci-poll	cycle-66	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:05:57Z	2026-08-06T00:06:00Z	3	0	na	0	watch for next push/dispatch
+ci-poll	cycle-67	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:07:00Z	2026-08-06T00:07:02Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-68	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:08:02Z	2026-08-06T00:08:04Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-69	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:09:04Z	2026-08-06T00:09:07Z	3	0	na	0	watch for next push/dispatch
+ci-poll	cycle-70	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:10:07Z	2026-08-06T00:10:09Z	2	0	na	0	watch for next push/dispatch
+probe	grafana-health-23	python3 /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/grafana_client.py health	2026-08-06T00:10:59Z	2026-08-06T00:11:02Z	3	0	na	0	проба через 5 мин
+ci-poll	cycle-71	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:11:36Z	2026-08-06T00:11:37Z	1	0	na	0	gate 6c099a9b running
+probe	grafana-health-24	python3 /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/grafana_client.py health	2026-08-06T00:12:08Z	2026-08-06T00:12:09Z	1	0	na	0	nginx 502 → повтор 60s
+ci-poll	cycle-72	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:12:37Z	2026-08-06T00:12:40Z	3	0	na	0	gate 6c099a9b running
+probe	grafana-health-25	python3 /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/grafana_client.py health	2026-08-06T00:13:13Z	2026-08-06T00:13:16Z	3	0	na	0	повтор 60s
+ci-poll	cycle-73	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:13:40Z	2026-08-06T00:13:42Z	2	0	na	0	gate 6c099a9b running
+probe	grafana-health-26	python3 /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/grafana_client.py health	2026-08-06T00:14:21Z	2026-08-06T00:14:21Z	0	0	na	0	повтор 60s (серия 3)
+phase2	bootstrap-attempt-2	make bootstrap-node NODE=tronyx-vps	2026-08-06T00:06:30Z	2026-08-06T00:14:30Z	480	0	na	0	retry after B4/B5 fix, deploy_services first real run
+ci-poll	cycle-74	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:14:42Z	2026-08-06T00:14:45Z	3	0	na	0	gate 6c099a9b running
+ci-poll	cycle-75	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:15:45Z	2026-08-06T00:15:47Z	2	0	na	0	gate 6c099a9b running
+ci-poll	cycle-76	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:16:47Z	2026-08-06T00:16:49Z	2	0	na	0	gate 6c099a9b running
+probe	grafana-health-27	python3 /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/grafana_client.py health	2026-08-06T00:17:36Z	2026-08-06T00:17:36Z	0	0	na	0	bootstrap-node converge → проба 3 мин
+ci-poll	cycle-77	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:17:49Z	2026-08-06T00:17:51Z	2	0	na	0	gate 6c099a9b running
+ci-poll	cycle-78	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:18:51Z	2026-08-06T00:18:54Z	3	0	na	0	gate 6c099a9b running
+ci-log	core-deploy-expected-fail	gh run view 31059030393 -R Tronyx161/AI-platform --log-failed	2026-08-06T00:20:21Z	2026-08-06T00:20:27Z	6	0	na	0	core-deploy failure on bare node
+probe	grafana-health-28	python3 /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/grafana_client.py health	2026-08-06T00:20:41Z	2026-08-06T00:20:42Z	1	0	na	0	проба 3 мин
+ci-poll	cycle-79	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:25:08Z	2026-08-06T00:25:10Z	2	0	na	0	watch for next push/dispatch
+probe	grafana-health-29	python3 /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/grafana_client.py health	2026-08-06T00:25:13Z	2026-08-06T00:25:13Z	0	0	na	0	проба 4 мин
+ci-poll	cycle-80	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:26:11Z	2026-08-06T00:26:13Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-81	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:27:13Z	2026-08-06T00:27:15Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-82	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:28:15Z	2026-08-06T00:28:17Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-83	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:29:17Z	2026-08-06T00:29:19Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-84	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:30:19Z	2026-08-06T00:30:22Z	3	0	na	0	watch for next push/dispatch
+probe	grafana-health-30	python3 /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/grafana_client.py health	2026-08-06T00:30:30Z	2026-08-06T00:30:31Z	1	0	na	0	проба 5 мин
+ci-poll	cycle-85	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:31:22Z	2026-08-06T00:31:24Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-86	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:32:24Z	2026-08-06T00:32:26Z	2	0	na	0	watch for next push/dispatch
+phase2	make-check-b9	make check	2026-08-06T00:25:59Z	2026-08-06T00:32:37Z	398	2	na	0	cache partial
+ci-poll	cycle-87	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:33:33Z	2026-08-06T00:33:36Z	3	0	na	0	watch for next push/dispatch
+ci-poll	cycle-88	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:34:36Z	2026-08-06T00:34:38Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-89	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:35:38Z	2026-08-06T00:35:40Z	2	0	na	0	watch for next push/dispatch
+probe	grafana-health-31	python3 /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/grafana_client.py health	2026-08-06T00:35:42Z	2026-08-06T00:35:43Z	1	0	na	0	проба 5 мин (после fix 141)
+ci-poll	cycle-90	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:36:40Z	2026-08-06T00:36:43Z	3	0	na	0	watch for next push/dispatch
+ci-poll	cycle-91	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:37:43Z	2026-08-06T00:37:45Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-92	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:38:45Z	2026-08-06T00:38:47Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-93	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:39:47Z	2026-08-06T00:39:49Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-94	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:40:49Z	2026-08-06T00:40:51Z	2	0	na	0	watch for next push/dispatch
+probe	grafana-health-32	python3 /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/grafana_client.py health	2026-08-06T00:40:52Z	2026-08-06T00:40:53Z	1	0	na	0	проба 5 мин
+ci-poll	cycle-95	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:42:05Z	2026-08-06T00:42:08Z	3	0	na	0	watch for next push/dispatch
+ci-poll	cycle-96	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:43:08Z	2026-08-06T00:43:10Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-97	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:44:10Z	2026-08-06T00:44:12Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-98	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:45:12Z	2026-08-06T00:45:15Z	3	0	na	0	watch for next push/dispatch
+probe	grafana-health-33	python3 /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/grafana_client.py health	2026-08-06T00:46:07Z	2026-08-06T00:46:08Z	1	0	na	0	проба 5 мин
+ci-poll	cycle-99	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:46:15Z	2026-08-06T00:46:17Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-100	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:47:17Z	2026-08-06T00:47:19Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-101	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:48:19Z	2026-08-06T00:48:21Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-102	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:49:21Z	2026-08-06T00:49:23Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-103	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:50:29Z	2026-08-06T00:50:31Z	2	0	na	0	watch for next push/dispatch
+probe	grafana-health-34	python3 /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/grafana_client.py health	2026-08-06T00:51:13Z	2026-08-06T00:51:14Z	1	0	na	0	проба 5 мин
+ci-poll	cycle-104	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:51:31Z	2026-08-06T00:51:33Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-105	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:52:33Z	2026-08-06T00:52:35Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-106	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:53:35Z	2026-08-06T00:53:37Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-107	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:54:37Z	2026-08-06T00:54:40Z	3	0	na	0	watch for next push/dispatch
+ci-poll	cycle-108	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:55:40Z	2026-08-06T00:55:42Z	2	0	na	0	watch for next push/dispatch
+probe	grafana-health-35	python3 /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/grafana_client.py health	2026-08-06T00:56:18Z	2026-08-06T00:56:19Z	1	0	na	0	проба 5 мин
+ci-poll	cycle-109	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:56:42Z	2026-08-06T00:56:44Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-110	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:57:44Z	2026-08-06T00:57:46Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-111	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:58:53Z	2026-08-06T00:58:55Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-112	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T00:59:55Z	2026-08-06T00:59:57Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-113	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:00:57Z	2026-08-06T01:01:01Z	4	0	na	0	watch for next push/dispatch
+probe	grafana-health-36	python3 /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/grafana_client.py health	2026-08-06T01:01:37Z	2026-08-06T01:01:37Z	0	0	na	0	проба 5 мин
+ci-poll	cycle-114	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:02:01Z	2026-08-06T01:02:04Z	3	0	na	0	watch for next push/dispatch
+ci-poll	cycle-115	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:03:04Z	2026-08-06T01:03:06Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-116	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:04:06Z	2026-08-06T01:04:09Z	3	0	na	0	watch for next push/dispatch
+ci-poll	cycle-117	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:05:09Z	2026-08-06T01:05:12Z	3	0	na	0	watch for next push/dispatch
+ci-poll	cycle-118	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:06:12Z	2026-08-06T01:06:14Z	2	0	na	0	watch for next push/dispatch
+probe	grafana-health-37	python3 /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/grafana_client.py health	2026-08-06T01:06:42Z	2026-08-06T01:06:44Z	2	0	na	0	проба 5 мин
+ci-poll	cycle-119	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:07:21Z	2026-08-06T01:07:24Z	3	0	na	0	watch for next push/dispatch
+ci-poll	cycle-120	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:08:24Z	2026-08-06T01:08:26Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-121	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:09:26Z	2026-08-06T01:09:28Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-122	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:10:28Z	2026-08-06T01:10:31Z	3	0	na	0	watch for next push/dispatch
+ci-poll	cycle-123	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:11:31Z	2026-08-06T01:11:33Z	2	0	na	0	watch for next push/dispatch
+probe	grafana-health-38	python3 /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/grafana_client.py health	2026-08-06T01:11:53Z	2026-08-06T01:11:53Z	0	0	na	0	проба 5 мин
+grafana-api	user-login	python3 /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/grafana_client.py user	2026-08-06T01:12:00Z	2026-08-06T01:12:20Z	20	0	na	0	первый успешный доступ — login
+grafana-api	datasources	python3 /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/grafana_client.py datasources	2026-08-06T01:12:01Z	2026-08-06T01:12:21Z	20	0	na	0	datasources list
+ci-poll	cycle-124	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:12:33Z	2026-08-06T01:12:35Z	2	0	na	0	watch for next push/dispatch
+grafana-api	sweep-1	python3 /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/grafana_sweep.py	2026-08-06T01:13:23Z	2026-08-06T01:13:26Z	3	0	na	0	полный sweep в живое окно crash-loop
+ci-poll	cycle-125	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:13:35Z	2026-08-06T01:13:37Z	2	0	na	0	watch for next push/dispatch
+phase2	make-check-b10	make check	2026-08-06T01:07:22Z	2026-08-06T01:14:01Z	399	2	na	0	cache partial
+ci-poll	cycle-126	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:14:37Z	2026-08-06T01:14:40Z	3	0	na	0	watch for next push/dispatch
+ci-poll	cycle-127	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:15:56Z	2026-08-06T01:15:58Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-128	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:16:58Z	2026-08-06T01:17:00Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-129	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:18:00Z	2026-08-06T01:18:02Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-130	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:19:02Z	2026-08-06T01:19:05Z	3	0	na	0	watch for next push/dispatch
+ci-poll	cycle-131	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:20:05Z	2026-08-06T01:20:07Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-132	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:21:07Z	2026-08-06T01:21:09Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-133	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:22:09Z	2026-08-06T01:22:11Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-134	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:23:11Z	2026-08-06T01:23:14Z	3	0	na	0	watch for next push/dispatch
+ci-poll	cycle-135	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:24:21Z	2026-08-06T01:24:23Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-136	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:25:23Z	2026-08-06T01:25:25Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-137	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:26:25Z	2026-08-06T01:26:27Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-138	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:27:27Z	2026-08-06T01:27:30Z	3	0	na	0	watch for next push/dispatch
+ci-poll	cycle-139	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:28:30Z	2026-08-06T01:28:32Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-140	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:29:32Z	2026-08-06T01:29:34Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-141	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:30:34Z	2026-08-06T01:30:36Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-142	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:31:36Z	2026-08-06T01:31:38Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-143	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:32:46Z	2026-08-06T01:32:49Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-144	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:33:49Z	2026-08-06T01:33:51Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-145	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:34:51Z	2026-08-06T01:34:53Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-146	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:35:53Z	2026-08-06T01:35:55Z	2	0	na	0	watch for next push/dispatch
+phase2	make-check-b9-final	make check	2026-08-06T01:29:49Z	2026-08-06T01:36:15Z	386	2	na	0	cache partial
+ci-poll	cycle-147	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:36:55Z	2026-08-06T01:36:58Z	3	0	na	0	watch for next push/dispatch
+ci-poll	cycle-148	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:37:58Z	2026-08-06T01:38:00Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-149	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:39:00Z	2026-08-06T01:39:02Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-150	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:40:02Z	2026-08-06T01:40:04Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-151	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:41:11Z	2026-08-06T01:41:13Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-152	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:42:13Z	2026-08-06T01:42:15Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-153	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:43:15Z	2026-08-06T01:43:17Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-154	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:44:17Z	2026-08-06T01:44:20Z	3	0	na	0	watch for next push/dispatch
+ci-poll	cycle-155	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:45:20Z	2026-08-06T01:45:22Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-156	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:46:22Z	2026-08-06T01:46:25Z	3	0	na	0	watch for next push/dispatch
+ci-poll	cycle-157	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:47:25Z	2026-08-06T01:47:27Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-158	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:48:27Z	2026-08-06T01:48:29Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-159	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:49:43Z	2026-08-06T01:49:46Z	3	0	na	0	watch for next push/dispatch
+ci-poll	cycle-160	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:50:46Z	2026-08-06T01:50:48Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-161	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:51:48Z	2026-08-06T01:51:51Z	3	0	na	0	watch for next push/dispatch
+ci-poll	cycle-162	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:52:51Z	2026-08-06T01:52:53Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-163	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:53:53Z	2026-08-06T01:53:55Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-164	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:54:55Z	2026-08-06T01:54:57Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-165	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:55:57Z	2026-08-06T01:56:00Z	3	0	na	0	watch for next push/dispatch
+ci-poll	cycle-166	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:57:00Z	2026-08-06T01:57:02Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-167	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:58:10Z	2026-08-06T01:58:12Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-168	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T01:59:12Z	2026-08-06T01:59:14Z	2	0	na	0	watch for next push/dispatch
+phase2	make-check-sequential-dox	make check	2026-08-06T01:53:38Z	2026-08-06T02:00:06Z	388	2	na	0	doxygen sequential fix
+ci-poll	cycle-169	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T02:00:14Z	2026-08-06T02:00:17Z	3	0	na	0	watch for next push/dispatch
+ci-poll	cycle-170	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T02:01:17Z	2026-08-06T02:01:20Z	3	0	na	0	watch for next push/dispatch
+ci-poll	cycle-171	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T02:02:20Z	2026-08-06T02:02:22Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-172	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T02:03:22Z	2026-08-06T02:03:24Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-173	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T02:04:24Z	2026-08-06T02:04:27Z	3	0	na	0	watch for next push/dispatch
+ci-poll	cycle-174	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T02:05:27Z	2026-08-06T02:05:29Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-175	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T02:06:38Z	2026-08-06T02:06:41Z	3	0	na	0	watch for next push/dispatch
+ci-poll	cycle-176	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T02:08:09Z	2026-08-06T02:08:11Z	2	0	na	0	watch for next push/dispatch
+grafana-api	sweep-2	python3 /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/grafana_client.py health	2026-08-06T02:13:04Z	2026-08-06T02:13:05Z	1	0	na	0	после зависания — быстрый health
+ci-poll	cycle-177	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T02:13:38Z	2026-08-06T02:13:40Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-183	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T03:14:14Z	2026-08-06T03:14:18Z	4	0	na	0	watch for next push/dispatch
+ci-poll	cycle-184	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T03:15:18Z	2026-08-06T03:15:27Z	9	0	na	0	watch for next push/dispatch
+ci-poll	cycle-191	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T03:51:47Z	2026-08-06T03:51:51Z	4	0	na	0	watch for next push/dispatch
+ci-poll	cycle-192	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T04:14:52Z	2026-08-06T04:15:22Z	30	1	na	0	watch for next push/dispatch
+ci-poll	cycle-193	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T04:16:22Z	2026-08-06T04:16:24Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-199	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T04:16:54Z	2026-08-06T04:16:56Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-200	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T04:17:56Z	2026-08-06T04:17:59Z	3	0	na	0	watch for next push/dispatch
+ci-poll	cycle-201	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T04:18:59Z	2026-08-06T04:19:01Z	2	0	na	0	watch for next push/dispatch
+phase2	bootstrap-noop-redeliver	make bootstrap-node NODE=tronyx-vps	2026-08-06T04:19:23Z	2026-08-06T04:19:41Z	19	0	na	0	SCP new core+node-configs, all phases done
+phase2	node-update-after-b9	make node-update NODE=tronyx-vps	2026-08-06T04:19:42Z	2026-08-06T04:19:48Z	6	0	na	0	re-decrypt secrets + redeploy grafana
+ci-poll	cycle-202	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T04:20:01Z	2026-08-06T04:20:07Z	6	0	na	0	watch for next push/dispatch
+ci-poll	cycle-203	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T04:21:07Z	2026-08-06T04:21:10Z	3	0	na	0	watch for next push/dispatch
+ci-poll	cycle-204	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T04:22:10Z	2026-08-06T04:22:12Z	2	0	na	0	watch for next push/dispatch
+phase2	node-update-2	make node-update NODE=tronyx-vps	2026-08-06T04:22:55Z	2026-08-06T04:23:02Z	7	0	na	0	fresh enc.yaml on node, re-decrypt + grafana recreate
+ci-poll	cycle-205	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T04:23:12Z	2026-08-06T04:23:14Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-206	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T04:24:14Z	2026-08-06T04:24:16Z	2	0	na	0	watch for next push/dispatch
+ci-poll	cycle-207	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T04:29:26Z	2026-08-06T04:29:29Z	3	0	na	0	watch for DOCKER_HUB_AUTH fix push
+ci-poll	cycle-208	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T04:30:29Z	2026-08-06T04:30:31Z	2	0	na	0	watch for DOCKER_HUB_AUTH fix push
+ci-poll	cycle-209	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T04:31:31Z	2026-08-06T04:31:33Z	2	0	na	0	watch for DOCKER_HUB_AUTH fix push
+ci-poll	cycle-210	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T04:32:33Z	2026-08-06T04:32:35Z	2	0	na	0	watch for DOCKER_HUB_AUTH fix push
+ci-poll	cycle-211	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T04:33:35Z	2026-08-06T04:33:38Z	3	0	na	0	watch for DOCKER_HUB_AUTH fix push
+ci-poll	cycle-212	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T04:34:38Z	2026-08-06T04:34:40Z	2	0	na	0	watch for DOCKER_HUB_AUTH fix push
+ci-poll	cycle-213	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T04:35:40Z	2026-08-06T04:35:42Z	2	0	na	0	watch for DOCKER_HUB_AUTH fix push
+ci-poll	cycle-214	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T04:36:42Z	2026-08-06T04:36:44Z	2	0	na	0	watch for DOCKER_HUB_AUTH fix push
+ci-poll	cycle-215	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T04:37:59Z	2026-08-06T04:38:01Z	2	0	na	0	gate 401e579b running
+ci-poll	cycle-216	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T04:39:01Z	2026-08-06T04:39:03Z	2	0	na	0	gate 401e579b running
+ci-poll	cycle-217	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T04:40:03Z	2026-08-06T04:40:06Z	3	0	na	0	gate 401e579b running
+ci-poll	cycle-218	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T04:41:06Z	2026-08-06T04:41:08Z	2	0	na	0	gate 401e579b running
+ci-poll	cycle-219	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T04:42:08Z	2026-08-06T04:42:10Z	2	0	na	0	gate 401e579b running
+ci-poll	cycle-220	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T04:43:10Z	2026-08-06T04:43:17Z	7	0	na	0	gate 401e579b running
+ci-poll	cycle-221	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T04:44:17Z	2026-08-06T04:44:19Z	2	0	na	0	gate 401e579b running
+phase2	node-update-3-force	make node-update NODE=tronyx-vps	2026-08-06T04:34:18Z	2026-08-06T04:44:23Z	605	0	na	0	phases reset, re-decrypt with fixed enc.yaml
+ci-poll	cycle-222	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T04:45:19Z	2026-08-06T04:45:21Z	2	0	na	0	gate 401e579b running
+phase2	make-check-final	make check	2026-08-06T04:33:26Z	2026-08-06T04:45:50Z	744	2	na	0	all 141 fixes: killpg, sequential dox, env-SoT, 900s
+ci-poll	cycle-223	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T04:46:25Z	2026-08-06T04:46:27Z	2	0	na	0	gate 401e579b running
+ci-poll	cycle-224	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T04:47:27Z	2026-08-06T04:47:29Z	2	0	na	0	gate 401e579b running
+ci-poll	cycle-225	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T04:48:29Z	2026-08-06T04:48:31Z	2	0	na	0	gate 401e579b running
+ci-poll	cycle-226	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T04:49:31Z	2026-08-06T04:49:34Z	3	0	na	0	gate 401e579b running
+ci-poll	cycle-227	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T04:50:34Z	2026-08-06T04:50:36Z	2	0	na	0	gate 401e579b running
+ci-poll	cycle-228	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T04:51:36Z	2026-08-06T04:51:42Z	6	0	na	0	gate 401e579b running
+ci-poll	cycle-229	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T04:52:42Z	2026-08-06T04:52:44Z	2	0	na	0	gate 401e579b running
+ci-poll	cycle-230	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T04:53:44Z	2026-08-06T04:53:47Z	3	0	na	0	gate 401e579b running
+ci-poll	cycle-231	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T04:55:25Z	2026-08-06T04:55:27Z	2	0	na	0	watch for env-example fix push
+ci-poll	cycle-232	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T04:56:27Z	2026-08-06T04:56:29Z	2	0	na	0	watch for env-example fix push
+ci-poll	cycle-233	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T04:57:29Z	2026-08-06T04:57:32Z	3	0	na	0	watch for env-example fix push
+ci-poll	cycle-234	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T04:58:32Z	2026-08-06T04:58:34Z	2	0	na	0	watch for env-example fix push
+ci-poll	cycle-235	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T04:59:34Z	2026-08-06T04:59:36Z	2	0	na	0	watch for env-example fix push
+ci-poll	cycle-236	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:00:36Z	2026-08-06T05:00:39Z	3	0	na	0	watch for env-example fix push
+ci-poll	cycle-237	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:01:39Z	2026-08-06T05:01:41Z	2	0	na	0	watch for env-example fix push
+ci-poll	cycle-238	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:02:41Z	2026-08-06T05:02:43Z	2	0	na	0	watch for env-example fix push
+ci-poll	cycle-239	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:03:48Z	2026-08-06T05:03:50Z	2	0	na	0	watch for env-example fix push
+ci-poll	cycle-240	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:04:50Z	2026-08-06T05:04:53Z	3	0	na	0	watch for env-example fix push
+ci-poll	cycle-241	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:05:53Z	2026-08-06T05:05:55Z	2	0	na	0	watch for env-example fix push
+ci-poll	cycle-242	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:06:55Z	2026-08-06T05:06:57Z	2	0	na	0	watch for env-example fix push
+ci-poll	cycle-243	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:07:57Z	2026-08-06T05:07:59Z	2	0	na	0	watch for env-example fix push
+phase2	node-update-5-rebuild	make node-update NODE=tronyx-vps	2026-08-06T04:58:34Z	2026-08-06T05:08:39Z	605	0	na	0	stubs regenerated (B9), stack rebuild with fixed chat-id
+ci-poll	cycle-244	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:09:00Z	2026-08-06T05:09:02Z	2	0	na	0	watch for env-example fix push
+ci-poll	cycle-245	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:10:02Z	2026-08-06T05:10:04Z	2	0	na	0	watch for env-example fix push
+ci-poll	cycle-246	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:11:04Z	2026-08-06T05:11:06Z	2	0	na	0	watch for env-example fix push
+ci-poll	cycle-247	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:12:11Z	2026-08-06T05:12:14Z	3	0	na	0	watch for env-example fix push
+ci-poll	cycle-248	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:13:14Z	2026-08-06T05:13:16Z	2	0	na	0	watch for env-example fix push
+ci-poll	cycle-249	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:14:16Z	2026-08-06T05:14:19Z	3	0	na	0	watch for env-example fix push
+ci-poll	cycle-250	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:15:19Z	2026-08-06T05:15:21Z	2	0	na	0	watch for env-example fix push
+ci-poll	cycle-251	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:16:21Z	2026-08-06T05:16:23Z	2	0	na	0	watch for env-example fix push
+ci-poll	cycle-252	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:17:23Z	2026-08-06T05:17:25Z	2	0	na	0	watch for env-example fix push
+ci-poll	cycle-253	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:18:25Z	2026-08-06T05:18:27Z	2	0	na	0	watch for env-example fix push
+ci-poll	cycle-254	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:19:28Z	2026-08-06T05:19:30Z	2	0	na	0	watch for env-example fix push
+ci-poll	cycle-255	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:20:34Z	2026-08-06T05:20:36Z	2	0	na	0	watch for env-example fix push
+ci-poll	cycle-256	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:21:36Z	2026-08-06T05:21:39Z	3	0	na	0	watch for env-example fix push
+ci-poll	cycle-257	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:22:39Z	2026-08-06T05:22:41Z	2	0	na	0	watch for env-example fix push
+ci-poll	cycle-258	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:23:41Z	2026-08-06T05:23:43Z	2	0	na	0	watch for env-example fix push
+ci-poll	cycle-259	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:24:43Z	2026-08-06T05:24:45Z	2	0	na	0	watch for env-example fix push
+ci-poll	cycle-260	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:25:45Z	2026-08-06T05:25:48Z	3	0	na	0	watch for env-example fix push
+ci-poll	cycle-261	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:26:48Z	2026-08-06T05:26:50Z	2	0	na	0	watch for env-example fix push
+ci-poll	cycle-262	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:27:50Z	2026-08-06T05:27:53Z	3	0	na	0	watch for env-example fix push
+ci-poll	cycle-263	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:29:01Z	2026-08-06T05:29:03Z	2	0	na	0	watch for env-example fix push
+ci-poll	cycle-264	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:30:03Z	2026-08-06T05:30:06Z	3	0	na	0	watch for env-example fix push
+ci-poll	cycle-265	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:31:06Z	2026-08-06T05:31:08Z	2	0	na	0	watch for env-example fix push
+ci-poll	cycle-266	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:32:08Z	2026-08-06T05:32:10Z	2	0	na	0	watch for env-example fix push
+ci-poll	cycle-267	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:33:10Z	2026-08-06T05:33:13Z	3	0	na	0	watch for env-example fix push
+ci-poll	cycle-268	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:34:13Z	2026-08-06T05:34:15Z	2	0	na	0	watch for env-example fix push
+ci-poll	cycle-269	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:35:15Z	2026-08-06T05:35:18Z	3	0	na	0	watch for env-example fix push
+ci-poll	cycle-270	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:36:18Z	2026-08-06T05:36:20Z	2	0	na	0	watch for env-example fix push
+ci-poll	cycle-271	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:37:24Z	2026-08-06T05:37:26Z	2	0	na	0	watch for env-example fix push
+phase3	deploy-tronyx-site	make deploy-project NAME=tronyx-site NODE=tronyx-vps	2026-08-06T05:37:41Z	2026-08-06T05:37:41Z	0	2	na	0	first real project deploy, receive verb
+phase3	deploy-tronyx-site	make deploy-project PROJECT=~/projects/tronyx-site NODE=tronyx-vps	2026-08-06T05:38:16Z	2026-08-06T05:38:16Z	0	2	na	0	first real project deploy, receive verb, tar via forced-command
+ci-poll	cycle-272	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:38:26Z	2026-08-06T05:38:28Z	2	0	na	0	watch for env-example fix push
+phase3	deploy-tronyx-site	make deploy-project PROJECT=/Users/tronyx/projects/tronyx-site NODE=tronyx-vps	2026-08-06T05:38:23Z	2026-08-06T05:38:41Z	18	2	na	0	first real project deploy, receive verb
+ci-poll	cycle-273	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:39:28Z	2026-08-06T05:39:31Z	3	0	na	0	watch for env-example fix push
+phase3	deploy-tronyx-site	make deploy-project PROJECT=/Users/tronyx/projects/tronyx-site NODE=tronyx-vps KEY_FILE=/Users/tronyx/.ssh/platform_personal_cicd	2026-08-06T05:39:18Z	2026-08-06T05:39:33Z	15	0	na	0	receive verb, tar via forced-command, key-file
+phase3	deploy-dance-site	make deploy-project PROJECT=/Users/tronyx/projects/dance-site NODE=tronyx-vps KEY_FILE=/Users/tronyx/.ssh/platform_personal_cicd	2026-08-06T05:39:40Z	2026-08-06T05:39:55Z	15	0	na	0	adopted project deploy
+phase3	deploy-botanika	make deploy-project PROJECT=/Users/tronyx/projects/botanika NODE=tronyx-vps KEY_FILE=/Users/tronyx/.ssh/platform_personal_cicd	2026-08-06T05:39:55Z	2026-08-06T05:40:10Z	15	0	na	0	adopted project deploy
+phase3	deploy-roadmap	make deploy-project PROJECT=/Users/tronyx/projects/roadmap NODE=tronyx-vps KEY_FILE=/Users/tronyx/.ssh/platform_personal_cicd	2026-08-06T05:40:10Z	2026-08-06T05:40:24Z	14	0	na	0	adopted project deploy
+ci-poll	cycle-274	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:40:31Z	2026-08-06T05:40:33Z	2	0	na	0	watch for env-example fix push
+phase2	make-check-final2	make check	2026-08-06T05:28:25Z	2026-08-06T05:40:49Z	744	2	na	0	B10 root fixed (f-string quotes), killpg, sequential, 900s
+ci-poll	cycle-275	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:41:33Z	2026-08-06T05:41:36Z	3	0	na	0	watch for env-example fix push
+phase3	converge-after-deploys	make converge NODE=tronyx-vps	2026-08-06T05:41:53Z	2026-08-06T05:41:59Z	6	0	na	0	nginx overlay env reconcile
+ci-poll	cycle-276	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:42:36Z	2026-08-06T05:42:38Z	2	0	na	0	watch for env-example fix push
+ci-poll	cycle-277	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:43:38Z	2026-08-06T05:43:40Z	2	0	na	0	watch for env-example fix push
+ci-poll	cycle-278	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:44:40Z	2026-08-06T05:44:42Z	2	0	na	0	watch for env-example fix push
+ci-poll	cycle-279	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:46:51Z	2026-08-06T05:46:53Z	2	0	na	0	gate b554859f running (static_audit ~11min)
+ci-poll	cycle-280	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:47:53Z	2026-08-06T05:47:55Z	2	0	na	0	gate b554859f running (static_audit ~11min)
+ci-poll	cycle-281	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:48:55Z	2026-08-06T05:48:58Z	3	0	na	0	gate b554859f running (static_audit ~11min)
+ci-poll	cycle-282	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:49:58Z	2026-08-06T05:50:00Z	2	0	na	0	gate b554859f running (static_audit ~11min)
+ci-poll	cycle-283	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:51:00Z	2026-08-06T05:51:02Z	2	0	na	0	gate b554859f running (static_audit ~11min)
+ci-poll	cycle-284	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:52:02Z	2026-08-06T05:52:05Z	3	0	na	0	gate b554859f running (static_audit ~11min)
+ci-poll	cycle-285	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:53:05Z	2026-08-06T05:53:07Z	2	0	na	0	gate b554859f running (static_audit ~11min)
+ci-poll	cycle-286	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:54:07Z	2026-08-06T05:54:09Z	2	0	na	0	gate b554859f running (static_audit ~11min)
+ci-poll	cycle-287	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:55:23Z	2026-08-06T05:55:25Z	2	0	na	0	watch for env-count fix push
+ci-poll	cycle-288	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:56:25Z	2026-08-06T05:56:41Z	16	0	na	0	watch for env-count fix push
+ci-poll	cycle-289	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:57:41Z	2026-08-06T05:57:43Z	2	0	na	0	watch for env-count fix push
+ci-poll	cycle-290	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:58:43Z	2026-08-06T05:58:46Z	3	0	na	0	watch for env-count fix push
+ci-poll	cycle-291	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T05:59:46Z	2026-08-06T05:59:49Z	3	0	na	0	watch for env-count fix push
+ci-poll	cycle-292	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:00:49Z	2026-08-06T06:00:51Z	2	0	na	0	watch for env-count fix push
+ci-poll	cycle-293	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:01:51Z	2026-08-06T06:01:53Z	2	0	na	0	watch for env-count fix push
+ci-poll	cycle-294	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:02:53Z	2026-08-06T06:02:55Z	2	0	na	0	watch for env-count fix push
+ci-poll	cycle-295	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:04:00Z	2026-08-06T06:04:02Z	2	0	na	0	watch for env-count fix push
+ci-poll	cycle-296	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:05:02Z	2026-08-06T06:05:04Z	2	0	na	0	watch for env-count fix push
+ci-poll	cycle-297	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:06:04Z	2026-08-06T06:06:06Z	2	0	na	0	watch for env-count fix push
+phase4	e2e-verify-remote	make e2e-verify NODE=tronyx-vps MODE=remote JSON=1	2026-08-06T06:06:41Z	2026-08-06T06:06:42Z	1	2	na	0	HTTP+TLS sweep всех endpoints
+ci-poll	cycle-298	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:07:06Z	2026-08-06T06:07:09Z	3	0	na	0	watch for env-count fix push
+phase4	e2e-verify-remote	make e2e-verify NODE=tronyx-vps MODE=remote JSON=1	2026-08-06T06:07:17Z	2026-08-06T06:07:19Z	2	2	na	0	HTTP+TLS sweep всех endpoints
+phase4	e2e-verify-remote	make e2e-verify NODE=tronyx-vps MODE=remote JSON=1 SSH_USER=root	2026-08-06T06:07:29Z	2026-08-06T06:07:31Z	2	2	na	0	sweep через root (ci-deploy = forced-command only)
+phase4	e2e-verify-remote	.venv/bin/python -m core.internal.verify_sweep sweep --node tronyx-vps --mode remote --ssh-user root --json	2026-08-06T06:07:53Z	2026-08-06T06:07:55Z	2	1	na	0	sweep через root
+ci-poll	cycle-299	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:08:09Z	2026-08-06T06:08:12Z	3	0	na	0	watch for env-count fix push
+grafana-api	full-sweep-live	python3 /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/grafana_sweep.py	2026-08-06T06:08:18Z	2026-08-06T06:08:21Z	3	0	na	0	grafana стабильно жива — полный sweep
+loki	sweep-all-containers	bash /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/loki_sweep.sh	2026-08-06T06:08:30Z	2026-08-06T06:08:34Z	4	0	na	0	loki по всем сервисам
+loki	journald-labels-probe	python3 /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/grafana_client.py loki {host="tronyx-vps"} 6 5	2026-08-06T06:08:46Z	2026-08-06T06:08:47Z	1	0	na	0	поиск journald-лейблов
+phase4	e2e-verify-local	.venv/bin/python -m core.internal.verify_sweep sweep --node tronyx-vps --mode local --json	2026-08-06T06:08:54Z	2026-08-06T06:08:58Z	4	1	na	0	sweep endpoints из локальных overlay
+ci-poll	cycle-300	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:09:12Z	2026-08-06T06:09:14Z	2	0	na	0	watch for env-count fix push
+prometheus	detailed-metrics	python3 /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/grafana_client.py promql container_memory_usage_bytes{compose_project="platform"}	2026-08-06T06:09:35Z	2026-08-06T06:09:37Z	2	0	na	0	проверка метрик для alert-правил
+prometheus	node-fs	python3 /var/folders/14/vtgwv6lj4g70fldm667f33lc0000gn/T/kilo/141-secrets/grafana_client.py promql node_filesystem_avail_bytes{mountpoint="/"}	2026-08-06T06:09:37Z	2026-08-06T06:09:37Z	0	0	na	0	метрики диска для DiskSpace
+phase4	e2e-verify-local	.venv/bin/python -m core.internal.verify_sweep sweep --node tronyx-vps --mode local --json	2026-08-06T06:09:55Z	2026-08-06T06:09:57Z	2	0	na	0	sweep после -brief фикса
+ci-poll	cycle-301	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:10:14Z	2026-08-06T06:10:16Z	2	0	na	0	watch for env-count fix push
+ci-poll	cycle-302	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:11:16Z	2026-08-06T06:11:19Z	3	0	na	0	watch for env-count fix push
+ci-poll	cycle-303	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:12:44Z	2026-08-06T06:12:46Z	2	0	na	0	two gates running
+ci-poll	cycle-304	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:13:46Z	2026-08-06T06:13:49Z	3	0	na	0	two gates running
+ci-poll	cycle-305	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:14:49Z	2026-08-06T06:14:51Z	2	0	na	0	two gates running
+ci-poll	cycle-306	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:15:51Z	2026-08-06T06:15:54Z	3	0	na	0	two gates running
+ci-poll	cycle-307	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:16:54Z	2026-08-06T06:16:56Z	2	0	na	0	two gates running
+ci-poll	cycle-308	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:17:56Z	2026-08-06T06:17:59Z	3	0	na	0	two gates running
+ci-poll	cycle-309	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:18:59Z	2026-08-06T06:19:01Z	2	0	na	0	two gates running
+ci-poll	cycle-310	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:20:01Z	2026-08-06T06:20:03Z	2	0	na	0	two gates running
+ci-poll	cycle-311	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:21:18Z	2026-08-06T06:21:20Z	2	0	na	0	gate bd60d96d running
+ci-poll	cycle-312	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:22:20Z	2026-08-06T06:22:23Z	3	0	na	0	gate bd60d96d running
+ci-poll	cycle-313	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:23:23Z	2026-08-06T06:23:25Z	2	0	na	0	gate bd60d96d running
+ci-poll	cycle-314	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:24:25Z	2026-08-06T06:24:28Z	3	0	na	0	gate bd60d96d running
+ci-poll	cycle-315	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:25:28Z	2026-08-06T06:25:30Z	2	0	na	0	gate bd60d96d running
+ci-poll	cycle-316	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:26:30Z	2026-08-06T06:26:32Z	2	0	na	0	gate bd60d96d running
+ci-poll	cycle-317	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:27:32Z	2026-08-06T06:27:35Z	3	0	na	0	gate bd60d96d running
+ci-poll	cycle-318	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:28:35Z	2026-08-06T06:28:37Z	2	0	na	0	gate bd60d96d running
+ci-poll	cycle-319	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:30:00Z	2026-08-06T06:30:02Z	2	0	na	0	watch for next push (bootstrap φ2 done?)
+ci-poll	cycle-320	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:31:02Z	2026-08-06T06:31:04Z	2	0	na	0	watch for next push (bootstrap φ2 done?)
+ci-poll	cycle-321	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:32:04Z	2026-08-06T06:32:07Z	3	0	na	0	watch for next push (bootstrap φ2 done?)
+ci-poll	cycle-322	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:33:07Z	2026-08-06T06:33:09Z	2	0	na	0	watch for next push (bootstrap φ2 done?)
+ci-poll	cycle-323	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:34:09Z	2026-08-06T06:34:11Z	2	0	na	0	watch for next push (bootstrap φ2 done?)
+ci-poll	cycle-324	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:35:11Z	2026-08-06T06:35:14Z	3	0	na	0	watch for next push (bootstrap φ2 done?)
+ci-poll	cycle-325	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:36:14Z	2026-08-06T06:36:16Z	2	0	na	0	watch for next push (bootstrap φ2 done?)
+ci-poll	cycle-326	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:37:16Z	2026-08-06T06:37:18Z	2	0	na	0	watch for next push (bootstrap φ2 done?)
+ci-poll	cycle-327	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:38:22Z	2026-08-06T06:38:25Z	3	0	na	0	watch for next push (bootstrap φ2 done?)
+ci-poll	cycle-328	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:39:25Z	2026-08-06T06:39:27Z	2	0	na	0	watch for next push (bootstrap φ2 done?)
+ci-poll	cycle-329	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:40:27Z	2026-08-06T06:40:30Z	3	0	na	0	watch for next push (bootstrap φ2 done?)
+ci-poll	cycle-330	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:41:30Z	2026-08-06T06:41:32Z	2	0	na	0	watch for next push (bootstrap φ2 done?)
+ci-poll	cycle-331	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:42:32Z	2026-08-06T06:42:34Z	2	0	na	0	watch for next push (bootstrap φ2 done?)
+ci-poll	cycle-332	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:43:34Z	2026-08-06T06:43:37Z	3	0	na	0	watch for next push (bootstrap φ2 done?)
+ci-poll	cycle-333	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:44:37Z	2026-08-06T06:44:39Z	2	0	na	0	watch for next push (bootstrap φ2 done?)
+ci-poll	cycle-334	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:45:39Z	2026-08-06T06:45:41Z	2	0	na	0	watch for next push (bootstrap φ2 done?)
+ci-poll	cycle-335	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:47:55Z	2026-08-06T06:47:57Z	2	0	na	0	watch for next push
+ci-poll	cycle-336	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:48:57Z	2026-08-06T06:48:59Z	2	0	na	0	watch for next push
+ci-poll	cycle-337	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:49:59Z	2026-08-06T06:50:01Z	2	0	na	0	watch for next push
+ci-poll	cycle-338	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:51:01Z	2026-08-06T06:51:03Z	2	0	na	0	watch for next push
+ci-poll	cycle-339	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:52:03Z	2026-08-06T06:52:05Z	3	0	na	0	watch for next push
+ci-poll	cycle-340	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:53:06Z	2026-08-06T06:53:08Z	2	0	na	0	watch for next push
+ci-poll	cycle-341	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:54:08Z	2026-08-06T06:54:10Z	2	0	na	0	watch for next push
+ci-poll	cycle-342	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:55:10Z	2026-08-06T06:55:13Z	3	0	na	0	watch for next push
+ci-poll	cycle-343	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:56:19Z	2026-08-06T06:56:21Z	2	0	na	0	watch for next push
+ci-poll	cycle-344	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:57:21Z	2026-08-06T06:57:23Z	2	0	na	0	watch for next push
+ci-poll	cycle-345	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:58:23Z	2026-08-06T06:58:26Z	3	0	na	0	watch for next push
+ci-poll	cycle-346	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T06:59:26Z	2026-08-06T06:59:28Z	2	0	na	0	watch for next push
+ci-poll	cycle-347	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:00:28Z	2026-08-06T07:00:31Z	3	0	na	0	watch for next push
+ci-poll	cycle-348	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:01:31Z	2026-08-06T07:01:33Z	2	0	na	0	watch for next push
+ci-poll	cycle-349	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:02:33Z	2026-08-06T07:02:35Z	2	0	na	0	watch for next push
+ci-poll	cycle-350	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:03:35Z	2026-08-06T07:03:38Z	3	0	na	0	watch for next push

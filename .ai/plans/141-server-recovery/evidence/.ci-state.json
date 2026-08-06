@@ -1,0 +1,660 @@
+{
+  "30824402903": {
+    "cause": "parent:workflow_run",
+    "duration_s": 13,
+    "started": "2026-08-03T14:47:41Z",
+    "status": "success",
+    "workflow": "Mirror to TronyxLab"
+  },
+  "30824404335": {
+    "cause": "parent:workflow_run",
+    "duration_s": 107,
+    "started": "2026-08-03T14:47:42Z",
+    "status": "failure",
+    "workflow": "Build Platform Agent"
+  },
+  "30824878062": {
+    "cause": "push:fix(121): secrets.sh step_10 \u2014 fallback /etc/age/key.txt (CI node-upd\u2026",
+    "duration_s": 143,
+    "started": "2026-08-03T14:53:47Z",
+    "status": "failure",
+    "workflow": "platform-test"
+  },
+  "30824878389": {
+    "cause": "push:fix(121): secrets.sh step_10 \u2014 fallback /etc/age/key.txt (CI node-upd\u2026",
+    "duration_s": 55,
+    "started": "2026-08-03T14:57:58Z",
+    "status": "failure",
+    "workflow": "platform-gate-fast"
+  },
+  "30824943557": {
+    "cause": "parent:workflow_run",
+    "duration_s": 1,
+    "started": "2026-08-03T14:54:37Z",
+    "status": "skipped",
+    "workflow": "Mirror to TronyxLab"
+  },
+  "30824943608": {
+    "cause": "parent:workflow_run",
+    "duration_s": 1,
+    "started": "2026-08-03T14:54:37Z",
+    "status": "skipped",
+    "workflow": "Build Platform Agent"
+  },
+  "30824943657": {
+    "cause": "parent:workflow_run",
+    "duration_s": 1,
+    "started": "2026-08-03T14:54:37Z",
+    "status": "skipped",
+    "workflow": "core-deploy"
+  },
+  "30825283854": {
+    "cause": "parent:workflow_run",
+    "duration_s": 1,
+    "started": "2026-08-03T14:58:55Z",
+    "status": "skipped",
+    "workflow": "core-deploy"
+  },
+  "30825283869": {
+    "cause": "parent:workflow_run",
+    "duration_s": 9,
+    "started": "2026-08-03T14:58:55Z",
+    "status": "skipped",
+    "workflow": "Build Platform Agent"
+  },
+  "30825283872": {
+    "cause": "parent:workflow_run",
+    "duration_s": 1,
+    "started": "2026-08-03T14:58:55Z",
+    "status": "skipped",
+    "workflow": "Mirror to TronyxLab"
+  },
+  "30825475751": {
+    "cause": "push:docs(121): \u0434\u043d\u0435\u0432\u043d\u0430\u044f RC-\u0441\u0435\u0441\u0441\u0438\u044f \u2014 VerificationReport (CI/CD \u0434\u043e\u043a\u0430\u0437\u0430\u043d, 3/3\u2026",
+    "duration_s": 366,
+    "started": "2026-08-03T15:01:12Z",
+    "status": "success",
+    "workflow": "platform-gate-fast"
+  },
+  "30825476969": {
+    "cause": "push:docs(121): \u0434\u043d\u0435\u0432\u043d\u0430\u044f RC-\u0441\u0435\u0441\u0441\u0438\u044f \u2014 VerificationReport (CI/CD \u0434\u043e\u043a\u0430\u0437\u0430\u043d, 3/3\u2026",
+    "duration_s": 846,
+    "started": "2026-08-03T15:01:13Z",
+    "status": "failure",
+    "workflow": "platform-test"
+  },
+  "30825986120": {
+    "cause": "parent:workflow_run",
+    "duration_s": 184,
+    "started": "2026-08-03T15:07:21Z",
+    "status": "success",
+    "workflow": "core-deploy"
+  },
+  "30825986281": {
+    "cause": "parent:workflow_run",
+    "duration_s": 13,
+    "started": "2026-08-03T15:07:21Z",
+    "status": "success",
+    "workflow": "Mirror to TronyxLab"
+  },
+  "30825986567": {
+    "cause": "parent:workflow_run",
+    "duration_s": 95,
+    "started": "2026-08-03T15:07:21Z",
+    "status": "failure",
+    "workflow": "Build Platform Agent"
+  },
+  "30826284694": {
+    "cause": "push:docs(121): \u0444\u0438\u043d\u0430\u043b \u2014 core-deploy SUCCESS (e1f03d1), P-21 \u0437\u0430\u043a\u0440\u044b\u0442 (\u0433\u043e\u043d\u043a\u0430 \u2026",
+    "duration_s": 375,
+    "started": "2026-08-03T15:11:04Z",
+    "status": "success",
+    "workflow": "platform-gate-fast"
+  },
+  "30826285242": {
+    "cause": "push:docs(121): \u0444\u0438\u043d\u0430\u043b \u2014 core-deploy SUCCESS (e1f03d1), P-21 \u0437\u0430\u043a\u0440\u044b\u0442 (\u0433\u043e\u043d\u043a\u0430 \u2026",
+    "duration_s": 1072,
+    "started": "2026-08-03T15:11:05Z",
+    "status": "failure",
+    "workflow": "platform-test"
+  },
+  "30826782365": {
+    "cause": "parent:workflow_run",
+    "duration_s": 38,
+    "started": "2026-08-03T15:17:22Z",
+    "status": "success",
+    "workflow": "core-deploy"
+  },
+  "30826782550": {
+    "cause": "parent:workflow_run",
+    "duration_s": 25,
+    "started": "2026-08-03T15:17:22Z",
+    "status": "success",
+    "workflow": "Mirror to TronyxLab"
+  },
+  "30826782806": {
+    "cause": "parent:workflow_run",
+    "duration_s": 92,
+    "started": "2026-08-03T15:17:23Z",
+    "status": "failure",
+    "workflow": "Build Platform Agent"
+  },
+  "30898873674": {
+    "cause": "push:fix(ci): sha-resolve verify retry loop \u2014 GitHub API conclusion lag (c\u2026",
+    "duration_s": 862,
+    "started": "2026-08-04T10:01:29Z",
+    "status": "failure",
+    "workflow": "platform-test"
+  },
+  "30898874264": {
+    "cause": "push:fix(ci): sha-resolve verify retry loop \u2014 GitHub API conclusion lag (c\u2026",
+    "duration_s": 428,
+    "started": "2026-08-04T10:01:29Z",
+    "status": "success",
+    "workflow": "platform-gate-fast"
+  },
+  "30899397577": {
+    "cause": "parent:workflow_run",
+    "duration_s": 113,
+    "started": "2026-08-04T10:08:39Z",
+    "status": "failure",
+    "workflow": "Build Platform Agent"
+  },
+  "30899397601": {
+    "cause": "parent:workflow_run",
+    "duration_s": 39,
+    "started": "2026-08-04T10:10:44Z",
+    "status": "failure",
+    "workflow": "core-deploy"
+  },
+  "30899397612": {
+    "cause": "parent:workflow_run",
+    "duration_s": 16,
+    "started": "2026-08-04T10:08:39Z",
+    "status": "success",
+    "workflow": "Mirror to TronyxLab"
+  },
+  "30899703193": {
+    "cause": "push:ci: trigger fresh core-deploy (VPS_SSH_KEY rotation)",
+    "duration_s": 393,
+    "started": "2026-08-04T10:12:59Z",
+    "status": "success",
+    "workflow": "platform-gate-fast"
+  },
+  "30899703732": {
+    "cause": "push:ci: trigger fresh core-deploy (VPS_SSH_KEY rotation)",
+    "duration_s": 973,
+    "started": "2026-08-04T10:12:59Z",
+    "status": "failure",
+    "workflow": "platform-test"
+  },
+  "30900162098": {
+    "cause": "parent:workflow_run",
+    "duration_s": 35,
+    "started": "2026-08-04T10:19:36Z",
+    "status": "failure",
+    "workflow": "core-deploy"
+  },
+  "30900163020": {
+    "cause": "parent:workflow_run",
+    "duration_s": 108,
+    "started": "2026-08-04T10:19:37Z",
+    "status": "failure",
+    "workflow": "Build Platform Agent"
+  },
+  "30900163393": {
+    "cause": "parent:workflow_run",
+    "duration_s": 20,
+    "started": "2026-08-04T10:19:37Z",
+    "status": "success",
+    "workflow": "Mirror to TronyxLab"
+  },
+  "30900645710": {
+    "cause": "push:fix(platform): AGE key node persistence (/etc/age/key.txt) \u2014 decrypt \u2026",
+    "duration_s": 397,
+    "started": "2026-08-04T10:26:27Z",
+    "status": "success",
+    "workflow": "platform-gate-fast"
+  },
+  "30900645786": {
+    "cause": "push:fix(platform): AGE key node persistence (/etc/age/key.txt) \u2014 decrypt \u2026",
+    "duration_s": 991,
+    "started": "2026-08-04T10:26:27Z",
+    "status": "failure",
+    "workflow": "platform-test"
+  },
+  "30901113341": {
+    "cause": "parent:workflow_run",
+    "duration_s": 664,
+    "started": "2026-08-04T10:33:06Z",
+    "status": "success",
+    "workflow": "core-deploy"
+  },
+  "30901113346": {
+    "cause": "parent:workflow_run",
+    "duration_s": 160,
+    "started": "2026-08-04T10:33:06Z",
+    "status": "failure",
+    "workflow": "Build Platform Agent"
+  },
+  "30901113459": {
+    "cause": "parent:workflow_run",
+    "duration_s": 27,
+    "started": "2026-08-04T10:33:06Z",
+    "status": "success",
+    "workflow": "Mirror to TronyxLab"
+  },
+  "30906823324": {
+    "cause": "push:fix(platform): vhost /health upstream set in-location (empty variable\u2026",
+    "duration_s": 820,
+    "started": "2026-08-04T11:55:06Z",
+    "status": "failure",
+    "workflow": "platform-test"
+  },
+  "30906823354": {
+    "cause": "push:fix(platform): vhost /health upstream set in-location (empty variable\u2026",
+    "duration_s": 383,
+    "started": "2026-08-04T11:55:06Z",
+    "status": "success",
+    "workflow": "platform-gate-fast"
+  },
+  "30907282332": {
+    "cause": "parent:workflow_run",
+    "duration_s": 116,
+    "started": "2026-08-04T12:01:31Z",
+    "status": "failure",
+    "workflow": "Build Platform Agent"
+  },
+  "30907282489": {
+    "cause": "parent:workflow_run",
+    "duration_s": 29,
+    "started": "2026-08-04T12:01:32Z",
+    "status": "success",
+    "workflow": "core-deploy"
+  },
+  "30907282654": {
+    "cause": "parent:workflow_run",
+    "duration_s": 15,
+    "started": "2026-08-04T12:01:32Z",
+    "status": "success",
+    "workflow": "Mirror to TronyxLab"
+  },
+  "31056366725": {
+    "cause": "push:feat(140): debt-close-wave \u2014 telegram channel fixes (quoted secrets.e\u2026",
+    "duration_s": 0,
+    "started": "2026-08-05T23:26:25Z",
+    "status": "failure",
+    "workflow": ".github/workflows/platform-test.yml"
+  },
+  "31056367576": {
+    "cause": "push:feat(140): debt-close-wave \u2014 telegram channel fixes (quoted secrets.e\u2026",
+    "duration_s": 468,
+    "started": "2026-08-05T23:26:26Z",
+    "status": "failure",
+    "workflow": "platform-gate-fast"
+  },
+  "31056367581": {
+    "cause": "push:feat(140): debt-close-wave \u2014 telegram channel fixes (quoted secrets.e\u2026",
+    "duration_s": 96,
+    "started": "2026-08-05T23:26:26Z",
+    "status": "failure",
+    "workflow": "Build Hermes Images"
+  },
+  "31056824178": {
+    "cause": "parent:workflow_run",
+    "duration_s": 2,
+    "started": "2026-08-05T23:34:16Z",
+    "status": "skipped",
+    "workflow": "Build Platform Agent"
+  },
+  "31056824227": {
+    "cause": "parent:workflow_run",
+    "duration_s": 2,
+    "started": "2026-08-05T23:34:16Z",
+    "status": "skipped",
+    "workflow": "core-deploy"
+  },
+  "31056824285": {
+    "cause": "parent:workflow_run",
+    "duration_s": 0,
+    "started": "2026-08-05T23:34:17Z",
+    "status": "skipped",
+    "workflow": "Mirror to TronyxLab"
+  },
+  "31058577757": {
+    "cause": "push:fix(141): cold bootstrap \u2014 certificates dep-gate (B4), TOR_ENABLED up\u2026",
+    "duration_s": 0,
+    "started": "2026-08-06T00:06:05Z",
+    "status": "failure",
+    "workflow": ".github/workflows/platform-test.yml"
+  },
+  "31058578546": {
+    "cause": "push:fix(141): cold bootstrap \u2014 certificates dep-gate (B4), TOR_ENABLED up\u2026",
+    "duration_s": 468,
+    "started": "2026-08-06T00:06:06Z",
+    "status": "success",
+    "workflow": "platform-gate-fast"
+  },
+  "31059030388": {
+    "cause": "parent:workflow_run",
+    "duration_s": 25,
+    "started": "2026-08-06T00:13:57Z",
+    "status": "success",
+    "workflow": "Mirror to TronyxLab"
+  },
+  "31059030393": {
+    "cause": "parent:workflow_run",
+    "duration_s": 12,
+    "started": "2026-08-06T00:13:57Z",
+    "status": "failure",
+    "workflow": "core-deploy"
+  },
+  "31059030399": {
+    "cause": "parent:workflow_run",
+    "duration_s": 127,
+    "started": "2026-08-06T00:13:57Z",
+    "status": "failure",
+    "workflow": "Build Platform Agent"
+  },
+  "31059042978": {
+    "cause": "push:fix(141): first-deploy pull retry 5\u00d7[5,10,20,40,60] (transient pull k\u2026",
+    "duration_s": 120,
+    "started": "2026-08-06T00:14:10Z",
+    "status": "failure",
+    "workflow": "platform-test"
+  },
+  "31059043002": {
+    "cause": "push:fix(141): first-deploy pull retry 5\u00d7[5,10,20,40,60] (transient pull k\u2026",
+    "duration_s": 100,
+    "started": "2026-08-06T00:14:10Z",
+    "status": "failure",
+    "workflow": "platform-gate-fast"
+  },
+  "31059137592": {
+    "cause": "parent:workflow_run",
+    "duration_s": 6,
+    "started": "2026-08-06T00:15:52Z",
+    "status": "skipped",
+    "workflow": "Mirror to TronyxLab"
+  },
+  "31059137593": {
+    "cause": "parent:workflow_run",
+    "duration_s": 1,
+    "started": "2026-08-06T00:15:52Z",
+    "status": "skipped",
+    "workflow": "core-deploy"
+  },
+  "31059137594": {
+    "cause": "parent:workflow_run",
+    "duration_s": 7,
+    "started": "2026-08-06T00:15:52Z",
+    "status": "skipped",
+    "workflow": "Build Platform Agent"
+  },
+  "31070915825": {
+    "cause": "push:fix(141): bootstrap stub compose B9, doxygen flake B10, check killpg \u2026",
+    "duration_s": 128,
+    "started": "2026-08-06T04:28:01Z",
+    "status": "failure",
+    "workflow": "platform-gate-fast"
+  },
+  "31070915844": {
+    "cause": "push:fix(141): bootstrap stub compose B9, doxygen flake B10, check killpg \u2026",
+    "duration_s": 148,
+    "started": "2026-08-06T04:19:09Z",
+    "status": "failure",
+    "workflow": "platform-test"
+  },
+  "31071011893": {
+    "cause": "parent:workflow_run",
+    "duration_s": 1,
+    "started": "2026-08-06T04:21:14Z",
+    "status": "skipped",
+    "workflow": "Build Platform Agent"
+  },
+  "31071011899": {
+    "cause": "parent:workflow_run",
+    "duration_s": 1,
+    "started": "2026-08-06T04:21:14Z",
+    "status": "skipped",
+    "workflow": "Mirror to TronyxLab"
+  },
+  "31071011908": {
+    "cause": "parent:workflow_run",
+    "duration_s": 10,
+    "started": "2026-08-06T04:21:14Z",
+    "status": "skipped",
+    "workflow": "core-deploy"
+  },
+  "31071427852": {
+    "cause": "parent:workflow_run",
+    "duration_s": 10,
+    "started": "2026-08-06T04:30:11Z",
+    "status": "skipped",
+    "workflow": "core-deploy"
+  },
+  "31071427856": {
+    "cause": "parent:workflow_run",
+    "duration_s": 1,
+    "started": "2026-08-06T04:30:11Z",
+    "status": "skipped",
+    "workflow": "Mirror to TronyxLab"
+  },
+  "31071427881": {
+    "cause": "parent:workflow_run",
+    "duration_s": 1,
+    "started": "2026-08-06T04:30:11Z",
+    "status": "skipped",
+    "workflow": "Build Platform Agent"
+  },
+  "31071581545": {
+    "cause": "push:fix(141): DOCKER_HUB_AUTH \u0432 SoT env_defaults (CI env-\u0433\u0435\u0439\u0442), static_au\u2026",
+    "duration_s": 874,
+    "started": "2026-08-06T04:33:21Z",
+    "status": "failure",
+    "workflow": "platform-test"
+  },
+  "31071581563": {
+    "cause": "push:fix(141): DOCKER_HUB_AUTH \u0432 SoT env_defaults (CI env-\u0433\u0435\u0439\u0442), static_au\u2026",
+    "duration_s": 779,
+    "started": "2026-08-06T04:33:21Z",
+    "status": "failure",
+    "workflow": "platform-gate-fast"
+  },
+  "31072180394": {
+    "cause": "parent:workflow_run",
+    "duration_s": 1,
+    "started": "2026-08-06T04:46:22Z",
+    "status": "skipped",
+    "workflow": "core-deploy"
+  },
+  "31072180425": {
+    "cause": "parent:workflow_run",
+    "duration_s": 1,
+    "started": "2026-08-06T04:46:22Z",
+    "status": "skipped",
+    "workflow": "Mirror to TronyxLab"
+  },
+  "31072180452": {
+    "cause": "parent:workflow_run",
+    "duration_s": 1,
+    "started": "2026-08-06T04:46:22Z",
+    "status": "skipped",
+    "workflow": "Build Platform Agent"
+  },
+  "31074685391": {
+    "cause": "push:fix(141): doxygen f-string quotes (B10 root), grafana #69950 chatid w\u2026",
+    "duration_s": 842,
+    "started": "2026-08-06T05:37:33Z",
+    "status": "failure",
+    "workflow": "platform-test"
+  },
+  "31074685497": {
+    "cause": "push:fix(141): doxygen f-string quotes (B10 root), grafana #69950 chatid w\u2026",
+    "duration_s": 774,
+    "started": "2026-08-06T05:37:33Z",
+    "status": "failure",
+    "workflow": "platform-gate-fast"
+  },
+  "31075333082": {
+    "cause": "parent:workflow_run",
+    "duration_s": 7,
+    "started": "2026-08-06T05:50:29Z",
+    "status": "skipped",
+    "workflow": "Build Platform Agent"
+  },
+  "31075333126": {
+    "cause": "parent:workflow_run",
+    "duration_s": 9,
+    "started": "2026-08-06T05:50:29Z",
+    "status": "skipped",
+    "workflow": "Mirror to TronyxLab"
+  },
+  "31075333140": {
+    "cause": "parent:workflow_run",
+    "duration_s": 1,
+    "started": "2026-08-06T05:50:29Z",
+    "status": "skipped",
+    "workflow": "core-deploy"
+  },
+  "31076165307": {
+    "cause": "push:fix(141): B12 FL15 false-wildcard (direct parent cert \u2260 wildcard), de\u2026",
+    "duration_s": 845,
+    "started": "2026-08-06T06:06:09Z",
+    "status": "failure",
+    "workflow": "platform-test"
+  },
+  "31076165322": {
+    "cause": "push:fix(141): B12 FL15 false-wildcard (direct parent cert \u2260 wildcard), de\u2026",
+    "duration_s": 808,
+    "started": "2026-08-06T06:06:09Z",
+    "status": "failure",
+    "workflow": "platform-gate-fast"
+  },
+  "31076438965": {
+    "cause": "push:fix(141): e2e-verify -brief \u0432 openssl s_client \u043b\u043e\u043c\u0430\u043b chain-\u043f\u0430\u0440\u0441\u0438\u043d\u0433 (c\u2026",
+    "duration_s": 134,
+    "started": "2026-08-06T06:11:02Z",
+    "status": "cancelled",
+    "workflow": "platform-test"
+  },
+  "31076439006": {
+    "cause": "push:fix(141): e2e-verify -brief \u0432 openssl s_client \u043b\u043e\u043c\u0430\u043b chain-\u043f\u0430\u0440\u0441\u0438\u043d\u0433 (c\u2026",
+    "duration_s": 801,
+    "started": "2026-08-06T06:11:03Z",
+    "status": "failure",
+    "workflow": "platform-gate-fast"
+  },
+  "31076557800": {
+    "cause": "push:fix(141): DOCKER_HUB_AUTH \u0432 .env.example \u0433\u0435\u043d\u0435\u0440\u0430\u0442\u043e\u0440\u0435 + env-contract co\u2026",
+    "duration_s": 819,
+    "started": "2026-08-06T06:13:15Z",
+    "status": "success",
+    "workflow": "platform-gate-fast"
+  },
+  "31076557838": {
+    "cause": "push:fix(141): DOCKER_HUB_AUTH \u0432 .env.example \u0433\u0435\u043d\u0435\u0440\u0430\u0442\u043e\u0440\u0435 + env-contract co\u2026",
+    "duration_s": 1465,
+    "started": "2026-08-06T06:13:15Z",
+    "status": "failure",
+    "workflow": "platform-test"
+  },
+  "31076909969": {
+    "cause": "parent:workflow_run",
+    "duration_s": 2,
+    "started": "2026-08-06T06:19:40Z",
+    "status": "skipped",
+    "workflow": "Build Platform Agent"
+  },
+  "31076910090": {
+    "cause": "parent:workflow_run",
+    "duration_s": 3,
+    "started": "2026-08-06T06:19:40Z",
+    "status": "skipped",
+    "workflow": "Mirror to TronyxLab"
+  },
+  "31076910098": {
+    "cause": "parent:workflow_run",
+    "duration_s": 2,
+    "started": "2026-08-06T06:19:40Z",
+    "status": "skipped",
+    "workflow": "core-deploy"
+  },
+  "31077176641": {
+    "cause": "parent:workflow_run",
+    "duration_s": 1,
+    "started": "2026-08-06T06:24:27Z",
+    "status": "skipped",
+    "workflow": "Build Platform Agent"
+  },
+  "31077176643": {
+    "cause": "parent:workflow_run",
+    "duration_s": 8,
+    "started": "2026-08-06T06:24:27Z",
+    "status": "skipped",
+    "workflow": "Mirror to TronyxLab"
+  },
+  "31077176669": {
+    "cause": "parent:workflow_run",
+    "duration_s": 2,
+    "started": "2026-08-06T06:24:27Z",
+    "status": "skipped",
+    "workflow": "core-deploy"
+  },
+  "31077314431": {
+    "cause": "parent:workflow_run",
+    "duration_s": 16,
+    "started": "2026-08-06T06:26:57Z",
+    "status": "failure",
+    "workflow": "core-deploy"
+  },
+  "31077314446": {
+    "cause": "parent:workflow_run",
+    "duration_s": 19,
+    "started": "2026-08-06T06:26:57Z",
+    "status": "success",
+    "workflow": "Mirror to TronyxLab"
+  },
+  "31077314447": {
+    "cause": "parent:workflow_run",
+    "duration_s": 97,
+    "started": "2026-08-06T06:26:57Z",
+    "status": "failure",
+    "workflow": "Build Platform Agent"
+  },
+  "31079288382": {
+    "cause": "push:fix(141): B16 renderer import (monitoring.constants dotted), B17 aler\u2026",
+    "duration_s": 127,
+    "started": "2026-08-06T07:00:41Z",
+    "status": "failure",
+    "workflow": "platform-gate-fast"
+  },
+  "31079288634": {
+    "cause": "push:fix(141): B16 renderer import (monitoring.constants dotted), B17 aler\u2026",
+    "duration_s": 122,
+    "started": "2026-08-06T07:00:41Z",
+    "status": "failure",
+    "workflow": "platform-test"
+  },
+  "31079423704": {
+    "cause": "parent:workflow_run",
+    "duration_s": 2,
+    "started": "2026-08-06T07:02:50Z",
+    "status": "skipped",
+    "workflow": "Build Platform Agent"
+  },
+  "31079423737": {
+    "cause": "parent:workflow_run",
+    "duration_s": 2,
+    "started": "2026-08-06T07:02:50Z",
+    "status": "skipped",
+    "workflow": "Mirror to TronyxLab"
+  },
+  "31079423819": {
+    "cause": "parent:workflow_run",
+    "duration_s": 8,
+    "started": "2026-08-06T07:02:50Z",
+    "status": "skipped",
+    "workflow": "core-deploy"
+  }
+}
