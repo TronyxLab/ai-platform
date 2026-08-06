@@ -32,7 +32,9 @@ contactPoints:
           chatid: |-
              -
              ${TELEGRAM_CHAT_ID_CRITICAL}
-          message: '{{ template "telegram.default.message" . }}'
+          # 141 B15: короткий plain-текст — default-шаблон (HTML) упирался в 4096 runes,
+          #   усечение резало HTML-тег → Telegram 400 Bad Request
+          message: '🚨 {{ range .Alerts }}{{ .Labels.alertname }} [{{ .Labels.severity }}] {{ if .Annotations.summary }}{{ .Annotations.summary | reReplaceAll "<" "&lt;" | reReplaceAll ">" "&gt;" | reReplaceAll "&" "&amp;" }}{{ end }}{{ end }}'
           disable_notifications: false
           uploadImage: false
         disableResolveMessage: false
@@ -47,7 +49,7 @@ contactPoints:
           chatid: |-
              -
              ${TELEGRAM_CHAT_ID_WARNING}
-          message: '{{ template "telegram.default.message" . }}'
+          message: '⚠️ {{ range .Alerts }}{{ .Labels.alertname }} [{{ .Labels.severity }}] {{ if .Annotations.summary }}{{ .Annotations.summary | reReplaceAll "<" "&lt;" | reReplaceAll ">" "&gt;" | reReplaceAll "&" "&amp;" }}{{ end }}{{ end }}'
           disable_notifications: true
           uploadImage: false
         disableResolveMessage: false

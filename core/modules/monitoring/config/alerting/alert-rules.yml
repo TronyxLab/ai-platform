@@ -46,7 +46,7 @@ groups:
           - refId: "A"
             datasourceUid: "prometheus"
             model:
-              expr: "up == 0"
+              expr: "up == bool 0"
               refId: "A"
             queryType: ""
             relativeTimeRange:
@@ -97,7 +97,7 @@ groups:
           - refId: "A"
             datasourceUid: "prometheus"
             model:
-              expr: "up == 0"
+              expr: "up == bool 0"
               refId: "A"
             queryType: ""
             relativeTimeRange:

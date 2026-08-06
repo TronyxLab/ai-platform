@@ -148,6 +148,9 @@ services:
     profiles: [monitoring]
     restart: unless-stopped
     stop_signal: SIGTERM
+    # 141 B14: host.docker.internal → host-gateway (Linux-нода; Docker Desktop резолвит сам)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     deploy:
       resources:
         limits:
@@ -186,6 +189,22 @@ services:
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
       TELEGRAM_CHAT_ID_CRITICAL: "${TELEGRAM_CHAT_ID_CRITICAL:-}"
       TELEGRAM_CHAT_ID_WARNING: "${TELEGRAM_CHAT_ID_WARNING:-}"
+
+      # ⚠️ TRAP[BUG] · 2026-08-06 · P1 · Ночная сессия 141 — telegram из контейнера без tor
+      # · Symptom: alertmanager «Notify for alerts failed: context deadline exceeded» —
+      # ·   api.telegram.org НЕДОСТУПЕН напрямую с ноды (000), контейнер не имел прокси.
+      # · Root: секреты несут TELEGRAM_PROXY_URL=127.0.0.1:8118 (host-уровень), но compose
+      # ·   его не пробрасывал; внутри контейнера 127.0.0.1 = сам контейнер.
+      # · Fix: docker-уровневый прокси host.docker.internal:8118 (host tor/privoxy) для grafana.
+      # · Rev: если api.telegram.org станет доступен напрямую — прокси можно убрать.
+      # ⚠️ TRAP[BUG] 141 B15: прокси ТОЛЬКО для telegram; datasource-запросы (prometheus/loki)
+      #   шли через privoxy → 503 Forwarding failure → DatasourceError-шторм.
+      #   NO_PROXY покрывает внутренние сервисы + домены платформы (прямые запросы).
+      TELEGRAM_PROXY_URL: "http://host.docker.internal:8118"
+      HTTP_PROXY: "http://host.docker.internal:8118"
+      HTTPS_PROXY: "http://host.docker.internal:8118"
+      NO_PROXY: "localhost,127.0.0.1,prometheus,loki,grafana,nginx,postgres,pgbouncer,redis,clickhouse,minio,litellm,langfuse,hermes-agent,status-page,backup-cron,observability-net,.tronyx.ru"
+      no_proxy: "localhost,127.0.0.1,prometheus,loki,grafana,nginx,postgres,pgbouncer,redis,clickhouse,minio,litellm,langfuse,hermes-agent,status-page,backup-cron,observability-net,.tronyx.ru"
 
     volumes:
       # 🧐 TRAP[DECISION] · 2026-07-21 · — · project-template.json НЕ монтируется сюда (template, а не dashboard)

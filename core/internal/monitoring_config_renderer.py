@@ -68,7 +68,16 @@ logger = logging.getLogger(__name__)
 # ── module-level constants ──────────────────────────────────────────────────
 # DevPlan 117 G T54: constants moved to core/internal/monitoring/constants.py
 # (single source shared by the 7 generator modules + this orchestrator).
-from monitoring.constants import (  # noqa: F401
+# ⚠️ TRAP[BUG] · 2026-08-06 · P1 · Ночная сессия 141 — B16: renderer не запускался
+# · Symptom: render-monitoring (DevPlan 138 авто-запуск после деплоя) падал
+# ·   ModuleNotFoundError: No module named 'monitoring' — file_sd-таргеты проектов
+# ·   НИКОГДА не генерировались → prometheus без проектных таргетов → ServiceDown-правила
+# ·   без данных (up == 0 пусто) → алерт-шторм DatasourceError (503 Privoxy через прокси).
+# · Root: try-ветка импорта template_engine (успех) НЕ добавляла core/internal в sys.path —
+# ·   `from monitoring.constants import ...` (не-dotted) требовал internal-каталог.
+# · Fix: канонический dotted-импорт core.internal.monitoring.constants (одна точка истины).
+# · Rev: если monitoring-пакет получит namespace — импорт обновится вместе с пакетом.
+from core.internal.monitoring.constants import (  # noqa: F401
     ALERT_RULES_DIR,
     CATALOG_SCRIPT,
     DEFAULT_ALERT_RULES_TEMPLATE,
