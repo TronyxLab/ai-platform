@@ -134,7 +134,7 @@ def ensure_remote_dirs(
     """
     base = base or resolve_remote_base()
     ncb = ncb or resolve_node_configs_base()
-    cmd = ["ssh", *SSH_OPTS, f"{user}@{host}", f"mkdir -p {base}/core {ncb}/{node} {ncb}/secrets"]
+    cmd = ["ssh", *SSH_OPTS, f"{user}@{host}", f"mkdir -p {base}/core {base}/scripts {ncb}/{node} {ncb}/secrets"]
     logger.info("[IMP:8][ensure_remote_dirs][exec] Ensuring remote directories exist on %s", host)
     if dry_run:
         logger.info("[IMP:8][ensure_remote_dirs][dry-run] DRY-RUN: %s", " ".join(cmd))
@@ -274,6 +274,56 @@ def deliver_makefile(
 # endregion FUNC_deliver_makefile
 
 
+# region FUNC_deliver_scripts
+## @purpose  Phase 1d/4: rsync scripts/ (root-level, core_dir/../scripts/) → {base}/scripts/.
+##           Skip если директория отсутствует. Без --delete (старые скрипты безвредны).
+## @io  input: host, core_dir, remote_user, base, dry_run; output: bool True (done или skip)
+## @complexity  O(F) where F = number of scripts
+## ⚠️ TRAP[BUG] · 2026-08-06 · HI · REQ_FIX (141 r2, ci-ops): scripts/ НЕ доставлялась ни одним каналом
+## · Symptom: /opt/platform/scripts/make-log-shell.sh отсутствовал на чистом сервере →
+## ·   Makefile:80 `SHELL := $(_platform_root)/scripts/make-log-shell.sh` → make на ноде падал
+## ·   Error 127 (provision). CI core-deploy rsync core/ + bootstrap core_deliverer не включали scripts/.
+## · Fix: отдельная rsync-фаза scripts/ → {base}/scripts/ (канал Core, push-based, NO git).
+## · Rev: если scripts/ перестанет содержать Makefile-хелперы — фазу можно убрать.
+def deliver_scripts(
+    host: str,
+    core_dir: str,
+    remote_user: str = "root",
+    base: str | None = None,
+    dry_run: bool = False,
+) -> bool:
+    """Rsync scripts/ (core_dir/../) → {base}/scripts/. Skip if dir absent.
+
+    @raises CoreDeliveryError  On rsync failure.
+    """
+    base = base or resolve_remote_base()
+    src_dir = os.path.normpath(os.path.join(core_dir, "..", "scripts"))
+    if not os.path.isdir(src_dir):
+        logger.info("[IMP:8][deliver_scripts][skip] Phase 1d/4: SKIP — scripts/ not found at %s", src_dir)
+        return True
+    cmd = [
+        "rsync",
+        "-avz",
+        "-e",
+        build_rsync_ssh_opts(),
+        f"{src_dir}/",
+        f"{remote_user}@{host}:{base}/scripts/",
+    ]
+    logger.info("[IMP:9][deliver_scripts][exec] Phase 1d/4: Rsyncing scripts/ → %s:%s/scripts/", host, base)
+    if dry_run:
+        logger.info("[IMP:8][deliver_scripts][dry-run] DRY-RUN: %s", " ".join(cmd))
+        return True
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=RSYNC_TIMEOUT)
+    if r.returncode != 0:
+        logger.info("[IMP:10][deliver_scripts][error] FATAL: rsync scripts/ failed for %s", host)
+        raise CoreDeliveryError(f"rsync scripts/ failed for {host} (exit={r.returncode}): {r.stderr.strip()}")
+    logger.info("[IMP:9][deliver_scripts][done] Phase 1d/4: scripts/ rsync complete")
+    return True
+
+
+# endregion FUNC_deliver_scripts
+
+
 # region FUNC_deliver_node_configs
 ## @purpose  Phase 2/4: rsync node-configs/{node}/ → {ncb}/{node}/ с 3 exclude-паттернами (AC7).
 ## @io  input: host, node, node_configs_dir, remote_user, ncb, dry_run; output: bool True on success
@@ -395,6 +445,7 @@ def deliver_all(
     deliver_core(host, core_dir, remote_user, base, dry_run)
     deliver_platform_env(host, core_dir, remote_user, base, dry_run)
     deliver_makefile(host, core_dir, remote_user, base, dry_run)
+    deliver_scripts(host, core_dir, remote_user, base, dry_run)
     deliver_root_compose(host, core_dir, remote_user, base, dry_run)
     deliver_node_configs(host, node, node_configs_dir, remote_user, ncb, dry_run)
     deliver_secrets(host, node, node_configs_dir, remote_user, ncb, dry_run)

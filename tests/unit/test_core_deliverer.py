@@ -35,6 +35,7 @@ from core.internal.bootstrap.core_deliverer import (
     deliver_makefile,
     deliver_node_configs,
     deliver_platform_env,
+    deliver_scripts,
     deliver_secrets,
     ensure_remote_dirs,
     resolve_remote_base,
@@ -142,7 +143,7 @@ def test_resolve_remote_base_chain(monkeypatch, caplog) -> None:
 
 # region FUNC_test_ensure_remote_dirs_command
 def test_ensure_remote_dirs_command(caplog) -> None:
-    """ensure_remote_dirs: ssh args = 3 dirs ({base}/core {ncb}/{node} {ncb}/secrets)."""
+    """ensure_remote_dirs: ssh args = 4 dirs ({base}/core {base}/scripts {ncb}/{node} {ncb}/secrets)."""
     caplog.set_level(logging.DEBUG)
     logger.info("[IMP:7][test_ensure_remote_dirs_command][start] BEGIN")
     with mock.patch.object(subprocess, "run", return_value=_ok_run()) as mock_run:
@@ -154,12 +155,12 @@ def test_ensure_remote_dirs_command(caplog) -> None:
         "ssh",
         *SSH_OPTS,
         "root@1.2.3.4",
-        "mkdir -p /opt/platform/core /opt/node-configs/test-node /opt/node-configs/secrets",
+        "mkdir -p /opt/platform/core /opt/platform/scripts /opt/node-configs/test-node /opt/node-configs/secrets",
     ], f"Unexpected mkdir cmd: {cmd}"
     assert mock_run.call_args.kwargs["timeout"] == 30, "mkdir timeout must be 30 (parity ssh_exec)"
     logger.info("[IMP:9][test_ensure_remote_dirs_command][done] mkdir cmd verified: %s", " ".join(cmd))
     # 🧪 TRAP[TEST] · Regression: mkdir -p target dirs drift
-    # · Scenario: {base}/core, {ncb}/{node}, {ncb}/secrets missing from ssh mkdir
+    # · Scenario: {base}/core, {base}/scripts (REQ_FIX 141 r2), {ncb}/{node}, {ncb}/secrets
     # · Last fail: N/A (new test)
     # · Remove if: remote dir hierarchy changes
     _assert_imp9(caplog)
@@ -308,6 +309,53 @@ def test_deliver_makefile_missing_skips(tmp_path, caplog) -> None:
 
 
 # endregion FUNC_test_deliver_makefile_missing_skips
+
+
+# region FUNC_test_deliver_scripts_missing_skips
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · deliver_scripts — REQ_FIX (141 r2, ci-ops)
+# · Last fail: /opt/platform/scripts/make-log-shell.sh не доставлялся ни одним каналом →
+# ·   Makefile:80 SHELL → make на ноде Error 127 (provision).
+# · Remove if: scripts/ перестанет доставляться Core-каналом (запрещено — Makefile зависимость)
+def test_deliver_scripts_missing_skips(tmp_path, caplog) -> None:
+    """deliver_scripts: scripts/ отсутствует → IMP:8 SKIP, без rsync."""
+    caplog.set_level(logging.DEBUG)
+    core_dir = str(tmp_path / "core")
+    os.makedirs(core_dir)  # no scripts/ at tmp_path level
+    with mock.patch.object(subprocess, "run", return_value=_ok_run()) as mock_run:
+        result = deliver_scripts("1.2.3.4", core_dir)
+    assert result is True
+    mock_run.assert_not_called(), "subprocess must NOT run when scripts/ missing"
+    assert "Phase 1d/4: SKIP — scripts/ not found" in caplog.text, "IMP:8 SKIP log missing"
+    logger.critical("[IMP:9][test][deliver_scripts] missing-skip verified (R5 REQ_FIX)")
+    _assert_imp9(caplog)
+
+
+# endregion FUNC_test_deliver_scripts_missing_skips
+
+
+# region FUNC_test_deliver_scripts_rsync_destination
+def test_deliver_scripts_rsync_destination(tmp_path, caplog) -> None:
+    """deliver_scripts: scripts/ присутствует → rsync в {base}/scripts/ (без --delete)."""
+    caplog.set_level(logging.DEBUG)
+    core_dir = str(tmp_path / "core")
+    os.makedirs(core_dir)
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir()
+    (scripts_dir / "make-log-shell.sh").write_text("#!/bin/bash\necho log")
+    with mock.patch.object(subprocess, "run", return_value=_ok_run()) as mock_run:
+        result = deliver_scripts("1.2.3.4", core_dir)
+    assert result is True
+    mock_run.assert_called_once()
+    cmd = mock_run.call_args.args[0]
+    assert cmd[0] == "rsync" and "-avz" in cmd
+    assert f"{scripts_dir}/" in cmd, f"src scripts/ missing: {cmd}"
+    assert "root@1.2.3.4:/opt/platform/scripts/" in cmd, f"dest /opt/platform/scripts/ missing: {cmd}"
+    assert "--delete" not in cmd, "scripts-синк без --delete (старые скрипты безвредны)"
+    logger.critical("[IMP:9][test][deliver_scripts] rsync destination verified")
+    _assert_imp9(caplog)
+
+
+# endregion FUNC_test_deliver_scripts_rsync_destination
 
 
 # ═══════════════════════════════════════════════════════════════════

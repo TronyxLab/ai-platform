@@ -25,8 +25,13 @@ MODE="${1:-}"
 if [ "$MODE" = "deep" ]; then
     # Step 1: Check Docker health status (same as liveness)
     check_docker_health "$CONTAINER" || exit 1
-    # Step 2: Service-specific diagnostics via check_http
-    check_http "http://127.0.0.1:8080/health" "200" || exit 1
+    # Step 2: Service-specific diagnostics — HTTP /health ВНУТРИ контейнера.
+    # ⚠️ TRAP[BUG] · 2026-08-06 · HI · B24 (141 r2): check_http на 127.0.0.1:8080 с хоста —
+    # ·   status-page НЕ публикует порты (доступ через nginx proxy_pass), 8080 на хосте занят
+    # ·   cadvisor/test-project → deep-check бился об чужой сервис.
+    # · Fix: exec_check с busybox wget ВНУТРИ контейнера (alpine, D5-канон: без raw curl).
+    # · Rev: если образ сменится на scratch — пересмотреть механизм.
+    exec_check "$CONTAINER" "wget -q -O /dev/null http://127.0.0.1:8080/health" || exit 1
     log_imp 9 "healthcheck" "status-page deep check PASSED"
     exit 0
 fi

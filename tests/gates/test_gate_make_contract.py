@@ -23,6 +23,7 @@
 # endregion MODULE_CONTRACT
 
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -379,6 +380,9 @@ def test_nginx_dev_compose_valid(caplog) -> None:
         capture_output=True,
         text=True,
         timeout=60,
+        # 🧪 TRAP[TEST] · 2026-08-06 · B23 (141 r2): NGINX_OVERLAY_DIR обязателен (${VAR:?} fail-fast) —
+        # · dev-машина задаёт его в .env; тест не читает .env → явный env (tmp-директория).
+        env={**os.environ, "NGINX_OVERLAY_DIR": str(nginx_dir / "overlays")},
     )
     print(f"[IMP:8][nginx_compose] docker compose config exit={result.returncode}")
     assert result.returncode == 0, f"docker compose base+dev config FAILED: {result.stderr[:500]}"

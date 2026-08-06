@@ -187,6 +187,17 @@ jobs:
           else
             echo "[IMP:8][deploy][rsync] platform-env.yaml/Makefile/makefiles отсутствуют на раннере — пропуск"
           fi
+          # ⚠️ TRAP[BUG] · 2026-08-06 · HI · REQ_FIX (141 r2): scripts/ не доставлялась CI-каналом
+          # · Symptom: /opt/platform/scripts/make-log-shell.sh отсутствовал → Makefile:80 SHELL →
+          # ·   make на ноде Error 127 (provision). Синк с guard'ом по образцу makefiles-шага.
+          if [ -d ./scripts ]; then
+            ssh ${{ steps.ssh_opts.outputs.opts }} \
+              ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }} "mkdir -p /opt/platform/scripts"
+            rsync -avz \
+              ./scripts/ ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/platform/scripts/
+          else
+            echo "[IMP:8][deploy][rsync] scripts/ отсутствует на раннере — пропуск"
+          fi
           # Rsync node-configs (per-node config + encrypted secrets)
           # · Excludes .git, __pycache__
           # · Destination: /opt/node-configs/ on VPS

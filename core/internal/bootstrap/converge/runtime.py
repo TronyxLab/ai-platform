@@ -37,19 +37,23 @@ logger = logging.getLogger(__name__)
 
 
 # region FUNC_resolve_container_name
-## @purpose  Get container name(s) for a module via docker ps --filter.
+## @purpose  Get container name(s) for a module via docker ps -a --filter.
+## ⚠️ TRAP[BUG] · 2026-08-06 · HI · B22 (141 r2): docker ps (без -a) не видел Exited/Created →
+## ·   R9 self-heal мёртв (BAD-состояния не детектировались, converge «FULLY CONVERGED» при мёртвых nginx).
+## · Fix: all=True — docker ps -a (Exited/dead/created видимы) → get_container_state → compose up -d.
 ## @param module_name  Module name (used as name filter)
-## @return  List of container names matching the module
+## @return  List of container names matching the module (включая не-running)
 def resolve_container_name(module_name: str) -> list[str]:
-    """Resolve container names for a module via docker ps --filter name.
+    """Resolve container names for a module via docker ps -a --filter name.
 
     Returns list of container names. Empty list if no matching containers.
     """
-    # W1: docker ps — shared/docker_ops (non-fatal)
+    # W1: docker ps -a — shared/docker_ops (non-fatal); all=True: Exited/Created/restarting видимы (B22)
     ps_r = docker_ops.docker_ps(
         filters=[f"name={module_name}"],
         format="{{.Names}}",
         timeout=DOCKER_TIMEOUT,
+        all=True,
     )
     if ps_r.returncode != 0:
         logger.warning("[IMP:8][resolve_container_name] docker ps failed for module %s", module_name)

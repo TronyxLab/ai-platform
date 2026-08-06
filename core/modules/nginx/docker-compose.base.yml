@@ -74,9 +74,14 @@ services:
       #    в docker-compose.dev.yml (DevPlan 116 D3) — dev-режим явный opt-in, не в prod-базе.
       - ${NGINX_CERT_DIR:-/etc/letsencrypt}:/etc/letsencrypt:ro
       # Overlay vhosts — node-configs/overlays/nginx/*.conf mounted ro into conf.d/overlay/
-      # Default: ./overlays (empty dir, .gitkeep ensures git tracks the directory)
-      # Production: NGINX_OVERLAY_DIR=/opt/node-configs/<node>/overlays/nginx
-      - ${NGINX_OVERLAY_DIR:-./overlays}:/etc/nginx/conf.d/overlay:ro
+      # Production: NGINX_OVERLAY_DIR=/opt/node-configs/<node>/overlays/nginx (docker_orchestrator env)
+      # Dev: .env задаёт NGINX_OVERLAY_DIR (локальный overlay)
+      # ⚠️ TRAP[BUG] · 2026-08-06 · HI · B23 (141 r2): fallback ./overlays тихо монтировал ПУСТОЙ каталог
+      # · Symptom: ручной `docker compose -f root --profile nginx up -d` без NGINX_OVERLAY_DIR →
+      # ·   все vhost-конфиги пропали из контейнера → 0 server-блоков с listen 443 → сайты 444.
+      # · Fix: ${VAR:?} fail-fast — тихая пустота заменена громкой ошибкой. Канонический деплой
+      # ·   (deploy_docker_module → os.environ NGINX_OVERLAY_DIR) и dev (.env) значения задают.
+      - ${NGINX_OVERLAY_DIR:?NGINX_OVERLAY_DIR required — deploy через deploy_docker_module (B23)}:/etc/nginx/conf.d/overlay:ro
       # htpasswd-platform — generated from PLATFORM_MASTER_CREDENTIALS by secrets.sh
       # Used by platform-default.conf.template (+ prometheus/loki vhosts) for Basic Auth
       # Host source параметризуется: HTPASSWD_FILE (dev-локаль); прод-дефолт /run/platform (tmpfs).
