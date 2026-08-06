@@ -792,7 +792,6 @@ def check_tls(
         "-servername",
         ep.fqdn,
         "-showcerts",
-        "-brief",
     ]
     logger.info("[IMP:7][check_tls] openssl s_client %s:%d SNI=%s", ep.host, SSL_PORT, ep.fqdn)
 
