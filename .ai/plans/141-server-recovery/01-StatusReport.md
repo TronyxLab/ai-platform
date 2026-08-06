@@ -74,3 +74,51 @@ $END_STATUS_REPORT
 - **Фаза 6**: 02-VerificationReport, 04-TimingsReport, 05-TelegramSummary, 03-browser-checklist — готовы. Финальный милстоун отправлен.
 
 **Итог: 17 багов (B1-B17), 12 коммитов, платформа штатно работает.**
+
+---
+
+## 🔄 РЕСТАРТ: сервер переустановлен ПОВТОРНО — 2-й полный цикл (11:26 MSK)
+
+**Событие:** 2026-08-06 11:26 MSK сервер tronyx-vps переустановлен/сброшен (uptime 9 мин, `docker: command not found`, `/opt/platform` и `ci-deploy` отсутствуют, все сайты 000). Вся серверная часть 1-го цикла утрачена; локальные артефакты (12 коммитов с фиксами B1-B17, отчёты, S3-кеш, enc.yaml) целы. Запущен полный повторный цикл «голый сервер → штатная работа» на исправленном коде.
+
+### Фаза 0-r2 — Префлайт рестарта (11:30–11:45 MSK) — ✅ ЗАВЕРШЕНА
+
+| Шаг | Результат | Доказательство |
+|-----|-----------|----------------|
+| SSH-доступ | ✅ `tronyx-vps` alias (tronyx-vps_new) работает; known_hosts обновлён (host-key сменился — ожидаемо) | SSH_OK |
+| CI-канал core-deploy | ✅ Ключ `ci-core-deploy` (~/.ssh/vps_ci_root.pub) добавлен в /root/.ssh/authorized_keys → `CI_CORE_DEPLOY_OK` (был единственной причиной вечных core-deploy failure 1-го цикла) | SSH verify |
+| AGE_SECRET_KEY в GitHub Secrets | ✅ Установлен (repo, 08:36:59Z) — был причиной пустого AGE в node-update CI (core-deploy.yml:241) | gh secret list |
+| S3-креды | ✅ Источник: secrets.env (имена S3_ENDPOINT/S3_ACCESS_KEY/S3_SECRET_KEY/S3_BUCKET — НЕ S3_ENDPOINT_URL); bucket `tronyx-vps-backups` жив | s3-cert-keys-r2.txt |
+| S3-кеш сертификатов | ✅ Все 4 домена + wildcard: fullchain/chain/privkey; account.tar.gz (tronyx.ru, sexydancerostov.ru) | s3-cert-keys-r2.txt |
+| Секреты | ✅ secrets.env + secrets.local.env (chmod 600, вне репо) — полный набор (52 ключа) | — |
+| GitHub | ✅ VPS_SSH_KEY/VPS_HOST на месте; AGE_SECRET_KEY добавлен; org-secrets отсутствуют (repo-level) | gh secret list |
+| Telegram-канал | ✅ tg.sh + secrets.local.env (без прокси, dev-машина); канал проверен 1-м циклом (5 сообщений) | telegram-sent.log |
+
+### Решения рестарта
+
+- **R2-S1:** 2-й цикл выполняется на чистом дереве (фиксы B1-B17 уже в main) — ожидается меньше ретраев, чем в 1-м цикле; каждый шаг — в timings.tsv с cause.
+- **R2-S2:** Отклонение от брифа 1-го цикла зафиксировано: вопросы оператору НЕ перезадавались — все ответы 1-го цикла (SSH-ключ, AGE, S3, webnames, telegram, эксклюзивность) остаются в силе; сервер переустановлен явно перед запуском сессии (11:26 MSK vs старт 11:30 MSK).
+- **R2-S3:** CI-канал core-deploy — теперь реально проверяемый сценарий (ключ + AGE_SECRET_KEY готовы): workflow_dispatch после успешного бутстрапа.
+
+---
+
+## Фаза «Хвосты» 2-го цикла (15:00–16:30 MSK) — закрытие R1 и операционных блокеров
+
+| Шаг | Результат | Доказательство |
+|-----|-----------|----------------|
+| R1: транспорт telegram | ✅ privoxy слушал только 127.0.0.1 после reboot; grafana ходит на host.docker.internal (=172.17.0.1 docker0) → добавлены listen 172.17.0.1/172.22.0.1/172.18.0.1 + ufw allow 172.16.0.0/12:8118 | ss + curl 302 |
+| R1: chatid | ✅ block-scalar «-\n79xxx9» → Telegram 400; grafana env-интерполяция на JSON-тексте: голое число → #69950 provisioning-fail → фикс `chatid: "${VAR} "` (хвостовой пробел — Telegram тримит, message_id 488) | sendMessage пробы |
+| R1: parse_mode | ✅ grafana telegram дефолт = **MarkdownV2** → «{ } ( )» из summary/alertname → 400 «Character '(' is reserved» (воспроизведено); фикс `parse_mode: "Markdown"` (legacy — принимает всё) | sendMessage: V2=400, HTML=OK, Markdown=OK |
+| **R1 итог** | ✅ **Алерты доставляются**: после рестарта 15:30:06Z 0 ошибок notify (до — шторм 400 каждую секунду). Коммит 98dd6d2a | docker logs grafana |
+| LLM-цепочка с ноды | ✅ litellm 127.0.0.1:4000 → deepseek-chat «pong! 🏓» (3443 токена, reasoning 3348) | evidence/llm-node-probe.json |
+| Prometheus TSDB | ✅ после chaos T4 (clock-skew +23h) сэмплы отклонялись → очистка wal/blocks (данные и так были пусты) → метрики 7/8 UP | curl up |
+| cadvisor | ⚠️ R-остаток (не регрессия, в 1-м цикле тоже 7/8): fs-handler 1m49s/контейнер + таргет «cadvisor» не резолвится (prometheus-targets пуст — след B20b) | docker logs |
+| core-deploy node-detect | ✅ каталог-мусор `/opt/node-configs/unknown/` (пустой node.yaml, артефакт бутстрапа 09:17Z) ломал авто-детект («Multiple directories») → удалён → detect = tronyx-vps | node_detect CLI |
+| core-deploy история 2-го цикла | 3× failure: (1) 12:53 SSH-ключ отсутствовал — EXPECTED; (2) 14:01 provision Error 127 — scripts/ не доставлялись (REQ_FIX, фикс a4218f38); (3) 15:20 node-detect (unknown/) — фикс выше. Дальше — ждём гейт 98dd6d2a → dispatch | gh run |
+
+### Решения хвостов
+
+- **H1:** операционные фиксы на ноде (privoxy listen, ufw, TSDB-очистка, unknown/) выполнены главным оператором напрямую (server-ops/ci-ops завершили цикл или заблокированы gh edge-limit) — зафиксировано в evidence; все конфиг-правки продублированы в репо (contact-points.yml 98dd6d2a).
+- **H2:** cadvisor — НЕ чинится в этой сессии (известный R, низкий приоритет): медленный fs-обход overlayfs на VPS + DNS-таргет; рекомендация — отдельный фикс (static target по IP или docker_sd).
+
+$END_STATUS_REPORT

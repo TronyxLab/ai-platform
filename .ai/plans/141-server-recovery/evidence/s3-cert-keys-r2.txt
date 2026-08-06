@@ -1,0 +1,27 @@
+BUCKET=tronyx-vps-backups TOTAL=26
+platform/backups/postgres/pgdumpall_20260803T191629Z.sql.gz
+platform/backups/postgres/pgdumpall_20260803T215509Z.sql.gz
+platform/backups/postgres/pgdumpall_20260803T222120Z.sql.gz
+platform/backups/postgres/pgdumpall_20260803T223251Z.sql.gz
+platform/backups/postgres/pgdumpall_20260803T224015Z.sql.gz
+platform/backups/postgres/pgdumpall_20260803T225747Z.sql.gz
+platform/backups/postgres/pgdumpall_20260803T230126Z.sql.gz
+platform/ssl-certs/botanika.tronyx.ru/account.tar.gz
+platform/ssl-certs/botanika.tronyx.ru/chain.pem
+platform/ssl-certs/botanika.tronyx.ru/fullchain.pem
+platform/ssl-certs/botanika.tronyx.ru/privkey.pem
+platform/ssl-certs/roadmap.tronyx.ru/account.tar.gz
+platform/ssl-certs/roadmap.tronyx.ru/chain.pem
+platform/ssl-certs/roadmap.tronyx.ru/fullchain.pem
+platform/ssl-certs/roadmap.tronyx.ru/privkey.pem
+platform/ssl-certs/sexydancerostov.ru/account.tar.gz
+platform/ssl-certs/sexydancerostov.ru/chain.pem
+platform/ssl-certs/sexydancerostov.ru/fullchain.pem
+platform/ssl-certs/sexydancerostov.ru/privkey.pem
+platform/ssl-certs/tronyx.ru/account.tar.gz
+platform/ssl-certs/tronyx.ru/chain.pem
+platform/ssl-certs/tronyx.ru/fullchain.pem
+platform/ssl-certs/tronyx.ru/privkey.pem
+platform/ssl-certs/www.tronyx.ru/chain.pem
+platform/ssl-certs/www.tronyx.ru/fullchain.pem
+platform/ssl-certs/www.tronyx.ru/privkey.pem

@@ -1,0 +1,66 @@
+{
+  "node": "tronyx-vps",
+  "mode": "local",
+  "endpoints": 4,
+  "http": [
+    {
+      "fqdn": "tronyx.ru",
+      "code": 200,
+      "verdict": "pass",
+      "error": null
+    },
+    {
+      "fqdn": "sexydancerostov.ru",
+      "code": 200,
+      "verdict": "pass",
+      "error": null
+    },
+    {
+      "fqdn": "botanika.tronyx.ru",
+      "code": 200,
+      "verdict": "pass",
+      "error": null
+    },
+    {
+      "fqdn": "roadmap.tronyx.ru",
+      "code": 200,
+      "verdict": "pass",
+      "error": null
+    }
+  ],
+  "tls": [
+    {
+      "fqdn": "tronyx.ru",
+      "chain_depth": 4,
+      "san_ok": true,
+      "days_left": 86,
+      "verdict": "ok",
+      "error": null
+    },
+    {
+      "fqdn": "sexydancerostov.ru",
+      "chain_depth": 4,
+      "san_ok": true,
+      "days_left": 74,
+      "verdict": "ok",
+      "error": null
+    },
+    {
+      "fqdn": "botanika.tronyx.ru",
+      "chain_depth": 4,
+      "san_ok": true,
+      "days_left": 86,
+      "verdict": "ok",
+      "error": null
+    },
+    {
+      "fqdn": "roadmap.tronyx.ru",
+      "chain_depth": 4,
+      "san_ok": true,
+      "days_left": 86,
+      "verdict": "ok",
+      "error": null
+    }
+  ],
+  "collect_errors": []
+}
