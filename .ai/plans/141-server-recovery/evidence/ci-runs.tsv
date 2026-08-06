@@ -103,6 +103,14 @@ run_id	workflow	status	started	duration_s	cause
 31080820864	Mirror to TronyxLab	skipped	2026-08-06T07:24:51Z	1	parent:workflow_run
 31080821125	Build Platform Agent	skipped	2026-08-06T07:24:52Z	1	parent:workflow_run
 31080821191	core-deploy	skipped	2026-08-06T07:24:52Z	8	parent:workflow_run
-31081100992	platform-test	in_progress	2026-08-06T07:29:15Z	3	push:fix(141): hermes NO_PROXY fallback синхронизирован с SoT (no_proxy_in…
-31081101043	platform-gate-fast	in_progress	2026-08-06T07:29:15Z	3	push:fix(141): hermes NO_PROXY fallback синхронизирован с SoT (no_proxy_in…
+31081100992	platform-test	failure	2026-08-06T07:29:15Z	1076	push:fix(141): hermes NO_PROXY fallback синхронизирован с SoT (no_proxy_in…
+31081101043	platform-gate-fast	success	2026-08-06T07:29:15Z	749	push:fix(141): hermes NO_PROXY fallback синхронизирован с SoT (no_proxy_in…
 31081101178	Build Hermes Images	failure	2026-08-06T07:29:15Z	28	push:fix(141): hermes NO_PROXY fallback синхронизирован с SoT (no_proxy_in…
+31081168332	platform-gate-fast	success	2026-08-06T07:30:16Z	815	push:docs(141): финальные evidence-обновления (timings, ci-runs, state)
+31081168467	platform-test	failure	2026-08-06T07:30:16Z	2132	push:docs(141): финальные evidence-обновления (timings, ci-runs, state)
+31081913367	core-deploy	failure	2026-08-06T07:41:46Z	22	parent:workflow_run
+31081913429	Build Platform Agent	failure	2026-08-06T07:41:46Z	113	parent:workflow_run
+31081913431	Mirror to TronyxLab	success	2026-08-06T07:41:46Z	18	parent:workflow_run
+31082046946	Mirror to TronyxLab	success	2026-08-06T07:43:53Z	17	parent:workflow_run
+31082047016	core-deploy	failure	2026-08-06T07:43:53Z	19	parent:workflow_run
+31082047036	Build Platform Agent	failure	2026-08-06T07:43:53Z	87	parent:workflow_run

@@ -125,3 +125,26 @@ Append-only. TS in MSK (UTC+3).
 - вердикт: INFO для дорожки — platform-test НЕ триггер деплой-цепочки (цепочка = workflow_run platform-gate-fast),
   деплой не блокирован. Для оператора: кандидат на отдельный баг-фикс вне ночной сессии (составной разбор
   модульных compose с root volumes либо standalone-валидация с -f root -f module).
+## 2026-08-06T07:50:00+03:00 (MSK) — 2 зелёных гейта подряд (87c4ec593, 8a3ee3754); core-deploy всё ещё EXPECTED-fail
+- run: 31081101043 platform-gate-fast (87c4ec593, success) → цепочка: core-deploy 31081913367 failure (SSH pre-flight,
+  ключ ещё не создан), Mirror success, Build Platform Agent failure (smoke hermes-data)
+- run: 31081168332 platform-gate-fast (8a3ee3754 docs+evidence, success) → цепочка: core-deploy 31082047016 failure,
+  Mirror success, Build Platform Agent failure
+- КОНТЕКСТ: оператор в финальной фазе сессии (docs-коммиты: VerificationReport, TimingsReport, TelegramSummary,
+  evidence-обновления включая ci-runs). static_audit фейлы f184b3ab (NO_PROXY SoT недобор, service_down_short 'up == 0'
+  литерал vs 'up == bool 0') — закрыты 87c4ec593.
+- ОЖИДАНИЕ: финальный core-deploy SUCCESS станет возможен после bootstrap φ2 (создание ci-deploy ключа) + следующий
+  зелёный гейт. Если сессия завершается без этого — core-deploy failure задокументирован как EXPECTED (бриф).
+## 2026-08-06T11:25:00+03:00 (MSK) — ЗАКРЫТИЕ ci-ops дорожки (сессия 141): итоговая сводка
+- 75 ранов сессии (после push 4801e377): gate 4✅/10❌, core-deploy 4❌(все EXPECTED — SSH publickey denied)/11⏭,
+  Mirror 4✅/11⏭, Build Platform Agent 4❌/11⏭, Build Hermes Images 2❌, platform-test 11❌+1⏹+2 parse-фейла.
+- Ключевые вердикты сессии (подробно выше):
+  1. core-deploy failure на голом сервере = ОЖИДАЕМОЕ по брифу (ci-deploy ключ создаёт только bootstrap φ2) — задокументировано, код не трогался.
+  2. platform-test 0s-фейл = secrets в steps.if (GitHub-парсер) — оператор закрыл ховстом в env (2665a866e); подтверждено документацией GitHub.
+  3. DOCKER_HUB_AUTH env-гейт (T7 SoT) → фикс env_defaults + count 94 + .env.example реген (401e579b, bd60d96d) — по рецепту ci-ops.
+  4. Build Hermes Images write_package denied (GITHUB_TOKEN vs public-пакет) — RED открыт (нужен PAT или пересмотр видимости).
+  5. Build Platform Agent smoke `undefined volume hermes-data` — RED открыт (compose-контракт).
+  6. platform-test ci-docker фаза давно красная (compose standalone-валидация vs root-volume SoT) — не блокирует цепочку.
+  7. R1 «флак» в записи 03:20 — КОРРЕКТИРОВАН в 05:40: имя теста скрывалось warnings-summary; реальные фейлы = ci_env_vars/static_audit.
+- Артефакты: evidence/ci-runs.tsv (115 ранов, полная история), evidence/ci-findings.md (17 записей), timings.tsv (циклы ci-poll 1-422, ci-log, ci-dispatch: request-файл НЕ появлялся).
+- Dispatch-запросов от оператора не поступало; telegram-милстоуны не слались (дорожка оператора).

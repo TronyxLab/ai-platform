@@ -20,7 +20,15 @@
 set -euo pipefail
 echo "[IMP:7][pre-push-gate][main] Starting pre-push gate" >&2
 _EP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${_EP_DIR}/../lib/paths.sh"
+# ⚠️ TRAP[BUG] · 2026-08-06 · HI · source lib/paths.sh экспортировал PLATFORM_ROOT=/opt/platform (141 r2)
+# · Symptom: pre-push hook → make gate MODE=fast падал: adopt-тесты (subprocess env=os.environ)
+# ·   наследовали PLATFORM_ROOT=/opt/platform → adopt-project.sh source /opt/platform/core/lib/logging.sh
+# ·   (нет файла на dev-машине) → FAIL. Воспроизводится 100% в hook-окружении, 0% standalone.
+# · Root: paths.sh:46 `export PLATFORM_ROOT="${PLATFORM_ROOT:-/opt/platform}"` — побочный эффект source;
+# ·   pre-push-gate.sh НЕ использует функции paths.sh (только _EP_DIR локально).
+# · Fix: убрать source lib/paths.sh — make gate запускается с чистым env вызывающего.
+# · Rev: если pre-push-gate понадобится lib-функция — source'ить точечно (lib/logging.sh), не paths.sh.
+# source "${_EP_DIR}/../lib/paths.sh"  # REMOVED — см. TRAP[BUG] выше
 
 if [[ "${1:-}" == "--help" ]]; then
     echo "Usage: $(basename "$0")"

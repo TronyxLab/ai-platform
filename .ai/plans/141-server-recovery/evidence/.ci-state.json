@@ -729,16 +729,16 @@
   },
   "31081100992": {
     "cause": "push:fix(141): hermes NO_PROXY fallback \u0441\u0438\u043d\u0445\u0440\u043e\u043d\u0438\u0437\u0438\u0440\u043e\u0432\u0430\u043d \u0441 SoT (no_proxy_in\u2026",
-    "duration_s": 3,
+    "duration_s": 1076,
     "started": "2026-08-06T07:29:15Z",
-    "status": "in_progress",
+    "status": "failure",
     "workflow": "platform-test"
   },
   "31081101043": {
     "cause": "push:fix(141): hermes NO_PROXY fallback \u0441\u0438\u043d\u0445\u0440\u043e\u043d\u0438\u0437\u0438\u0440\u043e\u0432\u0430\u043d \u0441 SoT (no_proxy_in\u2026",
-    "duration_s": 3,
+    "duration_s": 749,
     "started": "2026-08-06T07:29:15Z",
-    "status": "in_progress",
+    "status": "success",
     "workflow": "platform-gate-fast"
   },
   "31081101178": {
@@ -747,5 +747,61 @@
     "started": "2026-08-06T07:29:15Z",
     "status": "failure",
     "workflow": "Build Hermes Images"
+  },
+  "31081168332": {
+    "cause": "push:docs(141): \u0444\u0438\u043d\u0430\u043b\u044c\u043d\u044b\u0435 evidence-\u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u044f (timings, ci-runs, state)",
+    "duration_s": 815,
+    "started": "2026-08-06T07:30:16Z",
+    "status": "success",
+    "workflow": "platform-gate-fast"
+  },
+  "31081168467": {
+    "cause": "push:docs(141): \u0444\u0438\u043d\u0430\u043b\u044c\u043d\u044b\u0435 evidence-\u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u044f (timings, ci-runs, state)",
+    "duration_s": 2132,
+    "started": "2026-08-06T07:30:16Z",
+    "status": "failure",
+    "workflow": "platform-test"
+  },
+  "31081913367": {
+    "cause": "parent:workflow_run",
+    "duration_s": 22,
+    "started": "2026-08-06T07:41:46Z",
+    "status": "failure",
+    "workflow": "core-deploy"
+  },
+  "31081913429": {
+    "cause": "parent:workflow_run",
+    "duration_s": 113,
+    "started": "2026-08-06T07:41:46Z",
+    "status": "failure",
+    "workflow": "Build Platform Agent"
+  },
+  "31081913431": {
+    "cause": "parent:workflow_run",
+    "duration_s": 18,
+    "started": "2026-08-06T07:41:46Z",
+    "status": "success",
+    "workflow": "Mirror to TronyxLab"
+  },
+  "31082046946": {
+    "cause": "parent:workflow_run",
+    "duration_s": 17,
+    "started": "2026-08-06T07:43:53Z",
+    "status": "success",
+    "workflow": "Mirror to TronyxLab"
+  },
+  "31082047016": {
+    "cause": "parent:workflow_run",
+    "duration_s": 19,
+    "started": "2026-08-06T07:43:53Z",
+    "status": "failure",
+    "workflow": "core-deploy"
+  },
+  "31082047036": {
+    "cause": "parent:workflow_run",
+    "duration_s": 87,
+    "started": "2026-08-06T07:43:53Z",
+    "status": "failure",
+    "workflow": "Build Platform Agent"
   }
 }

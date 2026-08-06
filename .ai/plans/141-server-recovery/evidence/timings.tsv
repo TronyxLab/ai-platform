@@ -442,3 +442,52 @@ ci-poll	cycle-369	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --
 ci-poll	cycle-370	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:26:38Z	2026-08-06T07:26:40Z	2	0	na	0	gate f184b3ab running
 ci-poll	cycle-371	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:27:40Z	2026-08-06T07:27:42Z	2	0	na	0	gate f184b3ab running
 ci-poll	cycle-373	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:29:45Z	2026-08-06T07:29:47Z	2	0	na	0	gate f184b3ab running
+ci-poll	cycle-374	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:30:47Z	2026-08-06T07:30:49Z	2	0	na	0	gate f184b3ab running
+ci-poll	cycle-375	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:32:12Z	2026-08-06T07:32:14Z	2	0	na	0	gates 87c4ec593 + 8a3ee3754
+ci-poll	cycle-376	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:33:14Z	2026-08-06T07:33:16Z	2	0	na	0	gates 87c4ec593 + 8a3ee3754
+ci-poll	cycle-377	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:34:16Z	2026-08-06T07:34:19Z	3	0	na	0	gates 87c4ec593 + 8a3ee3754
+ci-poll	cycle-378	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:35:19Z	2026-08-06T07:35:21Z	2	0	na	0	gates 87c4ec593 + 8a3ee3754
+ci-poll	cycle-379	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:36:21Z	2026-08-06T07:36:24Z	3	0	na	0	gates 87c4ec593 + 8a3ee3754
+ci-poll	cycle-380	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:37:24Z	2026-08-06T07:37:26Z	2	0	na	0	gates 87c4ec593 + 8a3ee3754
+ci-poll	cycle-381	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:38:26Z	2026-08-06T07:38:29Z	3	0	na	0	gates 87c4ec593 + 8a3ee3754
+ci-poll	cycle-382	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:39:29Z	2026-08-06T07:39:31Z	2	0	na	0	gates 87c4ec593 + 8a3ee3754
+ci-poll	cycle-383	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:40:36Z	2026-08-06T07:40:38Z	2	0	na	0	gates 87c4ec593 + 8a3ee3754
+ci-poll	cycle-384	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:41:38Z	2026-08-06T07:41:41Z	3	0	na	0	gates 87c4ec593 + 8a3ee3754
+ci-poll	cycle-385	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:42:41Z	2026-08-06T07:42:43Z	2	0	na	0	gates 87c4ec593 + 8a3ee3754
+ci-poll	cycle-386	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:43:43Z	2026-08-06T07:43:45Z	2	0	na	0	gates 87c4ec593 + 8a3ee3754
+ci-poll	cycle-387	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:44:45Z	2026-08-06T07:44:48Z	3	0	na	0	gates 87c4ec593 + 8a3ee3754
+ci-poll	cycle-388	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:45:48Z	2026-08-06T07:45:50Z	2	0	na	0	gates 87c4ec593 + 8a3ee3754
+ci-poll	cycle-389	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:46:50Z	2026-08-06T07:46:52Z	2	0	na	0	gates 87c4ec593 + 8a3ee3754
+ci-poll	cycle-390	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:47:52Z	2026-08-06T07:47:55Z	3	0	na	0	gates 87c4ec593 + 8a3ee3754
+ci-poll	cycle-391	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:49:10Z	2026-08-06T07:49:13Z	3	0	na	0	watch for final push
+ci-poll	cycle-392	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:50:13Z	2026-08-06T07:50:15Z	2	0	na	0	watch for final push
+ci-poll	cycle-393	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:51:15Z	2026-08-06T07:51:18Z	3	0	na	0	watch for final push
+ci-poll	cycle-394	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:52:18Z	2026-08-06T07:52:20Z	2	0	na	0	watch for final push
+ci-poll	cycle-395	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:53:20Z	2026-08-06T07:53:22Z	2	0	na	0	watch for final push
+ci-poll	cycle-396	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:54:22Z	2026-08-06T07:54:25Z	3	0	na	0	watch for final push
+ci-poll	cycle-397	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:55:25Z	2026-08-06T07:55:27Z	2	0	na	0	watch for final push
+ci-poll	cycle-398	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:56:27Z	2026-08-06T07:56:29Z	2	0	na	0	watch for final push
+ci-poll	cycle-399	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:57:34Z	2026-08-06T07:57:36Z	2	0	na	0	watch for final push
+ci-poll	cycle-400	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:58:37Z	2026-08-06T07:58:39Z	2	0	na	0	watch for final push
+ci-poll	cycle-401	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T07:59:39Z	2026-08-06T07:59:41Z	2	0	na	0	watch for final push
+ci-poll	cycle-402	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T08:00:41Z	2026-08-06T08:00:43Z	2	0	na	0	watch for final push
+ci-poll	cycle-403	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T08:01:43Z	2026-08-06T08:01:46Z	3	0	na	0	watch for final push
+ci-poll	cycle-404	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T08:02:46Z	2026-08-06T08:02:48Z	2	0	na	0	watch for final push
+ci-poll	cycle-405	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T08:03:48Z	2026-08-06T08:03:50Z	2	0	na	0	watch for final push
+ci-poll	cycle-406	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T08:04:50Z	2026-08-06T08:04:52Z	2	0	na	0	watch for final push
+ci-poll	cycle-407	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T08:06:02Z	2026-08-06T08:06:05Z	3	0	na	0	watch for final core-deploy push
+ci-poll	cycle-408	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T08:07:05Z	2026-08-06T08:07:07Z	2	0	na	0	watch for final core-deploy push
+ci-poll	cycle-409	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T08:08:07Z	2026-08-06T08:08:10Z	3	0	na	0	watch for final core-deploy push
+ci-poll	cycle-410	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T08:09:10Z	2026-08-06T08:09:12Z	2	0	na	0	watch for final core-deploy push
+ci-poll	cycle-411	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T08:10:12Z	2026-08-06T08:10:14Z	2	0	na	0	watch for final core-deploy push
+ci-poll	cycle-412	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T08:11:14Z	2026-08-06T08:11:17Z	3	0	na	0	watch for final core-deploy push
+ci-poll	cycle-413	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T08:12:17Z	2026-08-06T08:12:19Z	2	0	na	0	watch for final core-deploy push
+ci-poll	cycle-414	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T08:13:19Z	2026-08-06T08:13:22Z	3	0	na	0	watch for final core-deploy push
+ci-poll	cycle-415	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T08:14:26Z	2026-08-06T08:14:29Z	3	0	na	0	watch for final core-deploy push
+ci-poll	cycle-416	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T08:15:29Z	2026-08-06T08:15:31Z	2	0	na	0	watch for final core-deploy push
+ci-poll	cycle-417	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T08:16:31Z	2026-08-06T08:16:33Z	2	0	na	0	watch for final core-deploy push
+ci-poll	cycle-418	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T08:17:33Z	2026-08-06T08:17:36Z	3	0	na	0	watch for final core-deploy push
+ci-poll	cycle-419	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T08:18:36Z	2026-08-06T08:18:38Z	2	0	na	0	watch for final core-deploy push
+ci-poll	cycle-420	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T08:19:38Z	2026-08-06T08:19:40Z	2	0	na	0	watch for final core-deploy push
+ci-poll	cycle-421	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T08:20:40Z	2026-08-06T08:20:43Z	3	0	na	0	watch for final core-deploy push
+ci-poll	cycle-422	python3 .ai/plans/141-server-recovery/evidence/ci_poller.py --limit 40	2026-08-06T08:21:43Z	2026-08-06T08:21:45Z	2	0	na	0	watch for final core-deploy push
