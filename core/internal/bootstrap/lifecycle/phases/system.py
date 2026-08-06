@@ -294,8 +294,11 @@ def phase_user_accounts(core_dir: str, node_name: str, node_yaml: str) -> bool:
 
     # ── 2. Create ci-deploy user + add deploy SSH key ──
     try:
-        helpers_users.create_user("ci-deploy", ["docker"])
-        logger.info("[IMP:9][phase:user_accounts] ci-deploy user created/verified")
+        # B20b (141 r2): ci-deploy в группу platform — пост-деплой чейн (receive) пишет
+        # /opt/platform артефакты root:platform (catalog.json 664, prometheus-targets 2775).
+        # create_user идемпотентен: существующий юзер получит группу через usermod -aG.
+        helpers_users.create_user("ci-deploy", ["docker", "platform"])
+        logger.info("[IMP:9][phase:user_accounts] ci-deploy user created/verified (groups: docker, platform)")
         if ci_deploy_key:
             # ⚠️ TRAP[BUG] 2026-08-03 · forced-command без cd/PYTHONPATH — канал мёртв
             # · Symptom: SSH forced-command receive падал «ModuleNotFoundError: No module

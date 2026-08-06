@@ -55,6 +55,9 @@ from core.internal.shared.deploy_paths import DEFAULT_PROJECTS_BASE
 from core.internal.shared.file_lock import FileLock as _FileLock
 from core.internal.shared.file_lock import platform_lock_path as _platform_lock_path
 
+# B4: единый канон subprocess (shared/subprocess_io) — chown снапшот-директории (B19)
+from core.internal.shared.subprocess_io import run_subprocess as _run_subprocess
+
 logger = logging.getLogger(__name__)
 
 SNAPSHOT_DIR = ".deploy-snapshots"
@@ -161,6 +164,18 @@ class DeployHistory:
         # Ensure snapshot dir exists
         snap_dir = self._snapshot_dir(project)
         os.makedirs(snap_dir, exist_ok=True)
+
+        # ⚠️ TRAP[BUG] · 2026-08-06 · HI · B19 (141 r2): снапшот-директория root:root блокировала receive
+        # · Symptom: бутстрап (φ8 context_deployer, root) создал .deploy-snapshots root:root →
+        # ·   receive-деплой под ci-deploy падал «[Errno 13] Permission denied .../payload» (auditing FAILED).
+        # · Fix: best-effort chown ci-deploy:ci-deploy — под root (бутстрап) чинит владельца;
+        # ·   под ci-deploy (receive) chown вернёт rc=1 → non_fatal WARN (владелец уже он).
+        # ·   OSError (экзотика: execl, тестовые mock) — WARN, НЕ проброс (verify не должен падать).
+        # · Rev: если снапшоты переедут под другого системного юзера — обновить имя.
+        try:
+            _run_subprocess(["chown", "ci-deploy:ci-deploy", snap_dir], non_fatal=True, fatal_rc=(127,))
+        except OSError as e:
+            logger.warning("[IMP:8][DeployHistory][chown] chown %s non-fatal skip: %s", snap_dir, e)
 
         # T9.10 (L-12): prune + write под reentrant deploy lock (тот же, что T9.1 —
         # deploy() уже держит его; вне deploy (manual snapshot) — acquire здесь).

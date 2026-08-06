@@ -20,6 +20,7 @@
 import io
 import json
 import logging
+import subprocess
 import tarfile
 from types import SimpleNamespace
 
@@ -214,7 +215,13 @@ def test_receive_chain_failure_warns_not_fails(monkeypatch, tmp_path, caplog: py
     monkeypatch.setattr(HealthcheckPoller, "poll_until_healthy", _healthy_poll)
 
     # Сбой subprocess внутри _run_post_deploy_chain (notify-hook/generate-catalog недоступны)
+    # 🧪 TRAP[TEST] · 2026-08-06 · B19 (141 r2): chown в DeployHistory.create_snapshot (verify-путь)
+    # · попадает под глобальный mock subprocess.run → OSError ронял деплой. chown пропускается
+    # · mock'ом (rc=0) — D4-сценарий (chain OSError) сохраняется без побочных эффектов verify.
     def _boom(*a, **k):
+        cmd = a[0] if a else k.get("args", [])
+        if isinstance(cmd, list) and cmd and cmd[0] == "chown":
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
         raise OSError("notify-hook not found (test)")
 
     monkeypatch.setattr("core.internal.deploy.orchestrator.subprocess.run", _boom)

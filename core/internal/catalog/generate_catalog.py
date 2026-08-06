@@ -119,6 +119,12 @@ def generate_catalog(projects_root: str, catalog_file: str) -> int:
         os.makedirs(catalog_dir, exist_ok=True)
         with open(catalog_file, "w") as f:
             json.dump(catalog, f, indent=2, ensure_ascii=False)
+        # ⚠️ TRAP[BUG] · 2026-08-06 · HI · B20b (141 r2): catalog.json 644 root:platform —
+        # ·   пост-деплой чейн (generate-catalog под ci-deploy, теперь в группе platform)
+        # ·   не мог перезаписать файл (group write отсутствовал) → каталог не регенерировался.
+        # · Fix: 0664 при создании — group write для ci-deploy (группа platform).
+        # · Rev: если артефакты /opt/platform сменят группу — синхронизировать с users.py.
+        os.chmod(catalog_file, 0o664)  # nosec B103 — group-write намеренный (B20b)
     except OSError as exc:
         log.log(9, "FATAL: cannot write %s: %s", catalog_file, exc, extra={"imp_level": 9})  # type: ignore[call-arg]
         # T3.6 (DevPlan 116 B4): business sys.exit → raise PlatformFatalError (IO — ручное вмешательство)

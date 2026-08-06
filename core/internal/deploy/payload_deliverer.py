@@ -63,10 +63,25 @@ MAX_PAYLOAD_SIZE = 1 * 1024 * 1024  # 1 MiB
 # DevPlan 118 A2: compose-подмножество whitelist'а — из единого канона shared/compose_files
 # (PROJECT_COMPOSE_FILENAMES: docker-compose.yml, compose.yaml). docker-compose.base.yml —
 # модульный паттерн, в проектные payload'ы не входит. Состав членства НЕ изменился.
-WHITELIST_FILES: frozenset[str] = frozenset(PROJECT_COMPOSE_FILENAMES) | {"ai-platform.yaml", ".env.platform"}
+# ⚠️ TRAP[BUG] · 2026-08-06 · HI · B20a (141 r2): practices.lock не доставлялся payload'ом
+# · Symptom: после deploy-project на ноде /opt/projects/<p>/practices.lock ОТСУТСТВОВАЛ →
+# ·   K3 verify state=legacy вечно. Противоречит AGENTS.md §Наследование практик (DevPlan 137):
+# ·   «practices.lock ... доставляется на VPS payload'ом receive».
+# · Fix: practices.lock добавлен в WHITELIST_FILES и _PAYLOAD_FILE_NAMES.
+# · Rev: при расширении практик новыми GENERATED-файлами — синхронизировать оба кортежа.
+WHITELIST_FILES: frozenset[str] = frozenset(PROJECT_COMPOSE_FILENAMES) | {
+    "ai-platform.yaml",
+    ".env.platform",
+    "practices.lock",
+}
 
 # Порядок файлов payload'а для assemble_payload: compose-подмножество канона + platform-файлы
-_PAYLOAD_FILE_NAMES: tuple[str, ...] = (*PROJECT_COMPOSE_FILENAMES, "ai-platform.yaml", ".env.platform")
+_PAYLOAD_FILE_NAMES: tuple[str, ...] = (
+    *PROJECT_COMPOSE_FILENAMES,
+    "ai-platform.yaml",
+    ".env.platform",
+    "practices.lock",
+)
 
 
 # ── Custom exceptions ───────────────────────────────────────────────────────

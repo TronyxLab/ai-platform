@@ -451,6 +451,20 @@ def _ensure_bootstrap_compose(project_dir: str, project: ProjectInfo) -> bool:
 
     if not os.path.isdir(project_dir):
         os.makedirs(project_dir, exist_ok=True)
+        # ⚠️ TRAP[BUG] · 2026-08-06 · HI · B19 (141 r2): проектный каталог бутстрапа root:root
+        # · Symptom: receive-деплой под ci-deploy не мог писать .deploy-snapshots/payload →
+        # ·   «Permission denied» (auditing FAILED). Канон владельца проектов — ci-deploy
+        # ·   (ensure_projects_base users.py); бутстрап (root) обязан выставлять его сразу.
+        # · Fix: chown ci-deploy:ci-deploy при создании каталога (non-fatal: dev-окружения без
+        # ·   ci-deploy-юзера не блокируются).
+        # · Rev: если владелец проектов сменится — синхронизировать здесь и в users.py.
+        subprocess.run(
+            ["chown", "ci-deploy:ci-deploy", project_dir],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
 
     domain = getattr(project, "domain", None) or project.name
 

@@ -37,6 +37,19 @@ def create_user(username: str, groups: list[str] | None = None) -> None:
     # Check if user exists
     result = subprocess.run(["id", username], capture_output=True, text=True, timeout=10)
     if result.returncode == 0:
+        # ⚠️ TRAP[BUG] · 2026-08-06 · HI · B20b (141 r2): существующий юзер не получал группы
+        # · Symptom: пост-деплой чейн (receive под ci-deploy) писал с Permission denied в
+        # ·   /opt/platform артефакты root:platform (catalog.json, prometheus-targets) — WARN'ы
+        # ·   скрыты → молчаливая деградация. ci-deploy не был в группе platform.
+        # · Fix: при существующем юзере — usermod -aG (идемпотентен) для недостающих групп.
+        # ·   Бутстрап повторно создаёт группы; существующие ноды чинятся при перевыполнении φ2.
+        if groups:
+            id_groups = subprocess.run(["id", "-Gn", username], capture_output=True, text=True, timeout=10)
+            current = set(id_groups.stdout.split()) if id_groups.returncode == 0 else set()
+            missing = [g for g in groups if g not in current]
+            if missing:
+                run_subprocess(["usermod", "-aG", ",".join(missing), username], check=True)
+                logger.info("[IMP:9][user] User '%s' added to groups: %s", username, ",".join(missing))
         logger.info("[IMP:7][user] User '%s' already exists — skipping creation", username)
         return
 

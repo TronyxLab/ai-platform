@@ -26,12 +26,26 @@ _project_root = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_project_root))
 
 from core.internal.deploy.payload_deliverer import (
+    _PAYLOAD_FILE_NAMES,
     MAX_PAYLOAD_SIZE,
+    WHITELIST_FILES,
     PayloadDeliverer,
     SizeLimitError,
 )
 
 logger = logging.getLogger(__name__)
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · payload whitelist — B20a (141 r2)
+# · Last fail: deploy-project не доставлял practices.lock на ноду (whitelist без него) →
+# ·   K3 verify state=legacy вечно. AGENTS.md §Наследование практик (DevPlan 137): lock
+# ·   доставляется payload'ом receive.
+# · Remove if: practices.lock перестанет доставляться payload'ом (запрещено — контракт 137).
+def test_practices_lock_in_payload_whitelist() -> None:
+    """B20a: practices.lock входит в whitelist и порядок файлов payload'а."""
+    assert "practices.lock" in WHITELIST_FILES, "whitelist без practices.lock — K3 legacy вечно"
+    assert "practices.lock" in _PAYLOAD_FILE_NAMES, "_PAYLOAD_FILE_NAMES без practices.lock"
+    logger.info("[IMP:9][unit][payload] practices.lock in whitelist + file names ✓")
 
 
 # ── Helpers ──

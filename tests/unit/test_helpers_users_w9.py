@@ -16,11 +16,12 @@
 # endregion MODULE_CONTRACT
 
 import logging
+import subprocess
 from pathlib import Path
 
 import pytest
 
-from core.internal.bootstrap.lifecycle.helpers.users import add_ssh_key
+from core.internal.bootstrap.lifecycle.helpers.users import add_ssh_key, create_user
 from tests._conftest.ldd import ldd_trajectory
 
 logger = logging.getLogger(__name__)
@@ -122,3 +123,42 @@ def test_add_ssh_key_adds_missing_prefix(
     assert len(lines) == 1
     assert lines[0] == f"{PREFIX} {KEY}", f"префикс обязан быть добавлен: {lines[0]!r}"
     logger.critical("[IMP:9][test] missing prefix added — OK (T9.18)")
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · create_user — B20b (141 r2)
+# · Last fail: существующий ci-deploy без группы platform → пост-деплой чейн (receive)
+# ·   писал с Permission denied в /opt/platform артефакты root:platform (catalog.json,
+# ·   prometheus-targets) — WARN'ы скрыты, молчаливая деградация.
+# · Remove if: create_user перестанет реконсилить группы существующих юзеров
+@ldd_trajectory
+def test_create_user_existing_adds_missing_groups(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B20b: существующий юзер получает недостающие группы (usermod -aG)."""
+    caplog.set_level(logging.INFO)
+    usermod_calls: list[list[str]] = []
+
+    def _fake_subprocess_run(cmd, *args, **kwargs):
+        cmd_str = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
+        if cmd_str.startswith("id ") and "-Gn" not in cmd_str:
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+        if "id" in cmd_str and "-Gn" in cmd_str:
+            # Существующие группы: ci-deploy, docker — БЕЗ platform (тот вход, что ломал B20b)
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="ci-deploy docker", stderr="")
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    def _fake_run_subprocess(cmd, *args, **kwargs):
+        if isinstance(cmd, list) and cmd and cmd[0] == "usermod":
+            usermod_calls.append(cmd)
+        return
+
+    monkeypatch.setattr("core.internal.bootstrap.lifecycle.helpers.users.subprocess.run", _fake_subprocess_run)
+    monkeypatch.setattr("core.internal.bootstrap.lifecycle.helpers.users.run_subprocess", _fake_run_subprocess)
+
+    create_user("ci-deploy", ["docker", "platform"])
+
+    logger.info("[IMP:9][unit][users] usermod_calls=%s", usermod_calls)
+    assert len(usermod_calls) == 1, f"ожидался 1 usermod -aG, получено {len(usermod_calls)}: {usermod_calls}"
+    assert usermod_calls[0][:3] == ["usermod", "-aG", "platform"], f"usermod args: {usermod_calls[0]}"
+    assert "added to groups" in caplog.text
+    logger.critical("[IMP:9][test] existing user groups reconciled — OK (B20b)")
