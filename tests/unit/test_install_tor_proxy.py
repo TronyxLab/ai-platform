@@ -488,6 +488,36 @@ def test_write_privoxy_config_idempotent(tmp_path: Path, caplog: pytest.LogCaptu
 # endregion FUNC_test_write_privoxy_config_idempotent
 
 
+# region FUNC_test_write_privoxy_config_dpkg_double_space_upgrade
+@pytest.mark.unit
+# 🧪 TRAP[TEST] · 2026-08-07 · 142 B33 (R5) · dpkg-конфиг «listen-address  127.0.0.1:8118» (ДВА пробела)
+# · Scenario: точный replace (один пробел) не матчил dpkg-формат → upgrade молча пропускался →
+# ·   φ11 W6 re-apply «No changes needed» при протухшем 127.0.0.1 (grafana telegram мёртв)
+# · Last fail: 2026-08-07 (node-update --force, privoxy-config idempotent no-op)
+# · Remove if: mutate_config перестанет апгрейдить listen-address через regex
+def test_write_privoxy_config_dpkg_double_space_upgrade(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """B33: dpkg-конфиг (двойной пробел) — listen-address upgrade до 0.0.0.0:8118."""
+    caplog.set_level(logging.INFO)
+    config = tmp_path / "config"
+    # Ubuntu dpkg-формат: два пробела после listen-address
+    config.write_text(
+        "listen-address  127.0.0.1:8118\nlisten-address  [::1]:8118\nforward-socks5t / 127.0.0.1:9050 .\n"
+    )
+
+    install_tor_proxy.write_privoxy_config(config)
+    first = config.read_text()
+    assert "listen-address 0.0.0.0:8118" in first, f"dpkg 127.0.0.1 (2 пробела) должен быть апгрейждён: {first}"
+    assert "listen-address  127.0.0.1:8118" not in first, "старый 127.0.0.1 не должен остаться"
+
+    # Идемпотентность: повторный вызов — no-op
+    install_tor_proxy.write_privoxy_config(config)
+    assert config.read_text() == first, "повторный запуск изменил конфиг (не идемпотентно)"
+    _assert_imp9(caplog)
+
+
+# endregion FUNC_test_write_privoxy_config_dpkg_double_space_upgrade
+
+
 # ── systemd ─────────────────────────────────────────────────────────────────────
 
 

@@ -191,6 +191,10 @@ def phase_registry_update(core_dir: str, node_name: str, node_yaml: str) -> bool
     # 142 W6 (A2): re-apply конфига privoxy в update-режиме (no-op при корректном конфиге) —
     # после reboot/переустановки пакета privoxy сбрасывался к 127.0.0.1 → telegram-канал мёртв.
     non_fatal_issues |= _registry_step_privoxy_config(core_dir)
+    # 142 B34: re-apply firewall baseline в update-режиме (W6 Фикс 2) — ufw-правило
+    # tor-privoxy 8118 (172.16.0.0/12) могло не примениться при bootstrap (B30: Bad port)
+    # или дрейфовать; firewall.sh инкрементален (никогда ufw disable/reset), non-fatal.
+    non_fatal_issues |= _registry_step_firewall(core_dir)
     non_fatal_issues |= _registry_step_llm_provision(core_dir)
     non_fatal_issues |= _registry_step_healthcheck(node_yaml)
 
@@ -400,6 +404,38 @@ def _registry_step_privoxy_config(core_dir: str) -> bool:
 
 
 # endregion FUNC__registry_step_privoxy_config
+
+
+# region FUNC__registry_step_firewall
+## @purpose  142 B34: re-apply firewall baseline в update-режиме (W6 Фикс 2 расширение).
+##           ufw-правило tor-privoxy (172.16.0.0/12 → 8118) могло не примениться при bootstrap
+##           (B30: «Bad port '8118'») или задрейфовать; firewall.sh инкрементален (S-14:
+##           никогда ufw disable/reset — только add/delete точечные). Best-effort, non-fatal.
+## @io       ⇥ core_dir → ⎋ bool (True = non-fatal issue)
+## @complexity O(F) — F = ufw-команды (малый константный набор)
+## @invariants — только при TOR_ENABLED=true (правило privoxy актуально только с tor)
+##              — отсутствующий firewall.sh → WARN (не issue)
+def _registry_step_firewall(core_dir: str) -> bool:
+    """Re-apply ufw baseline (incremental) в update-режиме — 142 B34 (W6 Фикс 2)."""
+    if os.environ.get("TOR_ENABLED", "false").lower() != "true":
+        logger.info("[IMP:7][phase:registry_update] TOR_ENABLED != true — skipping firewall re-apply")
+        return False
+    firewall_script = os.path.join(core_dir, "internal", "bootstrap", "firewall.sh")
+    if not os.path.isfile(firewall_script):
+        logger.warning("[IMP:7][phase:registry_update] firewall.sh not found at %s — skipping", firewall_script)
+        return False
+    try:
+        from core.internal.shared import subprocess_io as helpers_subprocess
+
+        helpers_subprocess.run_subprocess(["bash", firewall_script], non_fatal=True, fatal_rc=(127,), timeout=120)
+        logger.info("[IMP:9][phase:registry_update] Firewall baseline re-applied (incremental)")
+        return False
+    except Exception as e:  # noqa: EXC — non-fatal (best-effort, как privoxy/firewall в φ1)
+        logger.warning("[IMP:7][phase:registry_update] Firewall re-apply failed (non-fatal): %s", e)
+        return True
+
+
+# endregion FUNC__registry_step_firewall
 
 
 # region FUNC__registry_step_llm_provision

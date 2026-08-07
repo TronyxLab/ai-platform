@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -82,14 +83,22 @@ def mutate_config(content: str, listen_addr: str, forward_addr: str) -> tuple[st
     changed = False
 
     # 1. listen-address: append если отсутствует; иначе upgrade 127.0.0.1 → listen_addr
+    # ⚠️ TRAP[BUG] · 2026-08-07 · P1 · 142 B33: dpkg-конфиг Ubuntu пишет «listen-address  127.0.0.1:8118»
+    # ·   (ДВА пробела) — точный replace «listen-address 127.0.0.1:8118» (один пробел) не матчил →
+    # ·   upgrade молча не применялся; другие мутации давали changed=True → конфиг записывался
+    # ·   с прежним 127.0.0.1, второй вызов — no-op (φ11 W6 re-apply мёртв). Fix: regex \s+.
     if not any(line.startswith("listen-address") for line in lines):
         lines.append(f"listen-address {listen_addr}")
         changed = True
     else:
-        upgraded = [line.replace("listen-address 127.0.0.1:8118", f"listen-address {listen_addr}") for line in lines]
-        if upgraded != lines:
-            lines = upgraded
-            changed = True
+        upgraded: list[str] = []
+        for line in lines:
+            if re.match(r"^listen-address\s+127\.0\.0\.1:8118\s*$", line):
+                upgraded.append(f"listen-address {listen_addr}")
+                changed = True
+            else:
+                upgraded.append(line)
+        lines = upgraded
 
     # 2-3. permit-access: 127.0.0.1 + 172.16.0.0/12 (Docker bridge) перед forward-socks5t
     if not any(line.startswith("permit-access 127.0.0.1") for line in lines):

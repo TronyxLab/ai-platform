@@ -908,3 +908,43 @@ def test_install_acme_runs_with_clean_proxy_env(tmp_path: Path) -> None:
 
 
 # endregion Tests: φ7 certificates — acme fail не блокирует деплой (ночная сессия 141, B4)
+
+
+# region FUNC_test_registry_update_firewall_reapply
+## 🧪 TRAP[TEST] · 142 B34 (R5) · φ11 registry_update re-applies firewall.sh при TOR_ENABLED
+## · Regression: ufw-правило tor-privoxy 8118 применялось ТОЛЬКО в φ1 (init); после фикса B30
+## ·   (Bad port syntax) правило на живой ноде не появлялось без полного bootstrap; update-режим
+## ·   firewall не трогал → C6 (grafana→telegram через docker-мост) оставался мёртвым.
+## · Last fail: 2026-08-07 (node-update --force, ufw без 8118, grafana notify connection refused)
+## · Remove if: firewall re-apply уберётся из φ11
+@pytest.mark.unit
+def test_registry_update_firewall_reapply(tmp_path, caplog, monkeypatch) -> None:
+    """φ11: при TOR_ENABLED=true вызывает firewall.sh (incremental re-apply, non-fatal)."""
+    import core.internal.bootstrap.lifecycle.phases.docker as docker_phases
+
+    caplog.set_level(logging.INFO)
+    monkeypatch.setenv("TOR_ENABLED", "true")
+    core_dir = tmp_path / "core"
+    core_dir.mkdir()
+    (core_dir / "internal" / "bootstrap").mkdir(parents=True)
+    firewall_script = core_dir / "internal" / "bootstrap" / "firewall.sh"
+    firewall_script.write_text("#!/bin/bash\nexit 0\n")
+
+    calls: list[list[str]] = []
+
+    # Мокаем ТОЛЬКО run_subprocess (внутренний канон) — сам _registry_step_firewall реальный
+    import core.internal.shared.subprocess_io as subprocess_io
+
+    def _fake_rs(cmd, **kwargs):
+        calls.append(cmd)
+        return
+
+    monkeypatch.setattr(subprocess_io, "run_subprocess", _fake_rs)
+
+    result = docker_phases._registry_step_firewall(str(core_dir))
+    assert result is False, "firewall re-apply не должен считаться non-fatal issue"
+    assert any("firewall.sh" in " ".join(c) for c in calls), f"firewall.sh должен вызываться: {calls}"
+    logger.info("[IMP:9][test] B34 verified: φ11 re-applies firewall.sh (TOR_ENABLED=true)")
+
+
+# endregion FUNC_test_registry_update_firewall_reapply
