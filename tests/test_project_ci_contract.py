@@ -240,42 +240,69 @@ def test_platform_deploy_yml_deleted_from_templates(caplog) -> None:
 
 
 @ldd_trajectory
-def test_template_has_env_platform_makefile_agents(caplog) -> None:
-    """Each template must have .env.platform, Makefile, AGENTS.md; AGENTS.md ≤60 lines.
+def test_template_has_env_platform_makefile_agents(caplog, tmp_path: pathlib.Path) -> None:
+    """Генераторы scaffold производят Makefile/AGENTS.md/.env.platform контракт (DevPlan 141 runtime).
 
-    ── Scenario: Per template dir, check required files and AGENTS.md line count ──
+    ── Scenario: .env.platform/Makefile/AGENTS.md больше НЕ хранятся в шаблонах (W1: GENERATED-дубли
+    удалены) — они генерируются при scaffold (gen_env_platform/gen_project_makefile/gen_project_agents).
+    Гейт проверяет генераторы: Makefile несёт sync-env/status/project-* таргеты (K3), AGENTS.md ≤60
+    строк (DD13), .env.platform — ≥8 PLATFORM_* линий (инвариант gen_env_platform).
+    ──
     """
-    template_dirs = _get_template_dirs()
-    assert template_dirs, f"No template directories found under {_TEMPLATES_DIR}"
+    from core.internal.scaffold.gen_env_platform import generate_env_platform
+    from core.internal.scaffold.scaffold_helpers import gen_project_agents, gen_project_makefile
 
-    required_files = [".env.platform", "Makefile", "AGENTS.md"]
-    # Exclude template-context — it is a context template, not a project template
-    # and does not require .env.platform/Makefile/AGENTS.md
-    excluded_templates = {"template-context"}
+    project_types = ("backend", "frontend")
     issues: list[str] = []
 
-    for template_dir in template_dirs:
-        tpl_name = template_dir.name
-        if tpl_name in excluded_templates:
-            logger.info("[IMP:7][test][template_files] %s: excluded from project template check", tpl_name)
-            continue
+    for ptype in project_types:
+        project_dir = tmp_path / f"test-{ptype}"
+        project_dir.mkdir()
 
-        for req_file in required_files:
-            file_path = template_dir / req_file
-            if not file_path.exists():
-                issues.append(f"{tpl_name}: missing required file '{req_file}'")
-                logger.info("[IMP:8][test][template_files] %s: MISSING %s", tpl_name, req_file)
-            elif req_file == "AGENTS.md":
-                agents_lines = len(file_path.read_text().splitlines())
-                logger.info(
-                    "[IMP:7][test][template_files] %s: AGENTS.md = %d lines",
-                    tpl_name,
-                    agents_lines,
-                )
-                if agents_lines > 60:
-                    issues.append(f"{tpl_name}: AGENTS.md has {agents_lines} lines (max 60)")
-            else:
-                logger.info("[IMP:7][test][template_files] %s: %s present", tpl_name, req_file)
+        # Makefile — K3 контракт: фасад платформенных операций (генератор — SoT)
+        gen_project_makefile(f"test-{ptype}", "test.local", str(project_dir / "Makefile"), force=True)
+        makefile = (project_dir / "Makefile").read_text()
+        issues.extend(
+            f"{ptype}: Makefile без таргета '{target}' (K3 contract)"
+            for target in (
+                "sync-env",
+                "status",
+                "project-check",
+                "project-fix",
+                "project-sync-practices",
+                "project-set-practices",
+            )
+            if f"{target}:" not in makefile
+        )
+        logger.info("[IMP:8][test][template_files] %s: Makefile targets present (K3)", ptype)
+
+        # AGENTS.md — DD13 контракт: ≤60 строк
+        gen_project_agents(
+            f"test-{ptype}",
+            "tronyx161",
+            ptype,
+            "test-node",
+            "test.local",
+            str(project_dir / "AGENTS.md"),
+            force=True,
+        )
+        agents_lines = len((project_dir / "AGENTS.md").read_text().splitlines())
+        if agents_lines > 60:
+            issues.append(f"{ptype}: AGENTS.md has {agents_lines} lines (max 60)")
+        logger.info("[IMP:8][test][template_files] %s: AGENTS.md = %d lines (DD13)", ptype, agents_lines)
+
+        # .env.platform — инвариант gen_env_platform: ≥8 PLATFORM_* линий
+        env_lines = generate_env_platform(
+            str(_PROJECT_ROOT / "platform-env.yaml"),
+            domain="test.local",
+            project_name=f"test-{ptype}",
+        )
+        plat_count = sum(1 for line in env_lines if line.startswith("PLATFORM_"))
+        if plat_count < 8:
+            issues.append(f"{ptype}: .env.platform generator produced {plat_count} PLATFORM_* lines (expected ≥8)")
+        logger.info(
+            "[IMP:8][test][template_files] %s: .env.platform generator = %d PLATFORM_* lines", ptype, plat_count
+        )
 
     assert not issues, "Template contract violations:\n" + "\n".join(f"  - {i}" for i in issues)
-    logger.info("[IMP:9][test][template_files] All templates have required files, AGENTS.md ≤60 lines")
+    logger.info("[IMP:9][test][template_files] All templates produce Makefile/AGENTS.md/.env.platform contract")

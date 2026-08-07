@@ -1,18 +1,21 @@
-# GREP_SUMMARY: gate template metrics port endpoint consistency ai-platform.yaml src/main.py metrics_port
-# STRUCTURE: ┌glob templates/*/ai-platform.yaml┐ → ◇ metrics: true? → ◇ assert metrics_port present → ◇ assert /metrics endpoint → ◇ check port consistency
+# GREP_SUMMARY: gate template metrics port endpoint consistency gen_ai_platform_yaml runtime metrics_port
+# STRUCTURE: ▶ ┌gen_ai_platform_yaml (runtime SoT)┐ → ◇ metrics: true? → ◇ assert metrics_port present → ◇ assert /metrics endpoint → ◇ check port consistency
 # region MODULE_CONTRACT
-## @purpose — Gate test A2: validate that every project template with metrics: true has:
-##            1. A metrics_port field in ai-platform.yaml
+## @purpose — Gate test A2 (DevPlan 141 runtime-модель): для каждого типа шаблона с metrics: true:
+##            1. A metrics_port field in ai-platform.yaml (сгенерированного gen_ai_platform_yaml)
 ##            2. A /metrics endpoint in src/main.py (if src/main.py exists)
 ##            3. Consistent port between ai-platform.yaml and src/main.py (if port specified in main.py)
-## @scope — Scans templates/*/ai-platform.yaml for monitoring.metrics flag, validates metrics_port,
-##          and checks for /metrics endpoint in template source code.
+## @scope — Runtime-валидация: ai-platform.yaml больше НЕ хранится в шаблонах (DevPlan 141 W1),
+##          генерируется gen_ai_platform_yaml при scaffold — гейт проверяет генератор (SoT).
 ## @invariants
 ##   - templates with metrics: false are skipped entirely
 ##   - Missing src/main.py logs IMP:7 skip, not FAIL
 ##   - Port consistency is checked when main.py contains explicit port reference
-## @rationale — Post-refactoring audit C4: templates must have consistent metrics configuration
+## @rationale — Post-refactoring audit C4: templates must have consistent metrics configuration.
+##              DevPlan 141: статический источник (templates/*/ai-platform.yaml) заменён runtime-
+##              генерацией — шаблоны не несут манифест, генератор — единственный SoT.
 ## @changes — 2026-07-12 | Created per 004-automation-plan TASK-2
+## @changes — 2026-08-06 | DevPlan 141 W1 — runtime-источник через gen_ai_platform_yaml
 # endregion MODULE_CONTRACT
 
 import logging
@@ -29,43 +32,50 @@ _TEMPLATES_DIR: pathlib.Path = _PROJECT_ROOT / "templates"
 
 logger = logging.getLogger(__name__)
 
+# Типы шаблонов платформы (scaffold: --template backend|frontend). Источник конфига — генератор.
+_TEMPLATE_TYPES: tuple[str, ...] = ("backend", "frontend")
 
-def _find_template_yamls() -> list[tuple[str, pathlib.Path, dict]]:
-    """Find all templates/*/ai-platform.yaml with metrics: true.
 
-    ## @purpose — Glob templates/*/ai-platform.yaml, parse YAML, collect those with metrics: true.
-    ## @io — ⎋ list[tuple[name, yaml_path, parsed_dict]] for templates with metrics enabled
-    ## @complexity — O(N) where N = template directories
+@pytest.fixture()
+def template_metrics_configs(tmp_path: pathlib.Path) -> list[tuple[str, pathlib.Path, dict]]:
+    """Сгенерировать ai-platform.yaml для каждого типа шаблона через gen_ai_platform_yaml.
+
+    ## @purpose — Runtime SoT (DevPlan 141): шаблоны не хранят ai-platform.yaml;
+    ##            гейт валидирует output генератора для каждого типа шаблона.
+    ## @io — ⎋ list[tuple[name, yaml_path, parsed_dict]] для типов с metrics enabled
+    ## @complexity — O(N) где N = типы шаблонов
     """
+    from core.internal.scaffold.scaffold_helpers import gen_ai_platform_yaml
+
     results: list[tuple[str, pathlib.Path, dict]] = []
-    if not _TEMPLATES_DIR.is_dir():
-        logger.warning("[IMP:7][_find_template_yamls] Templates directory not found: %s", _TEMPLATES_DIR)
-        return results
-
-    for entry in sorted(_TEMPLATES_DIR.iterdir()):
-        yaml_path = entry / "ai-platform.yaml"
-        if not yaml_path.is_file():
-            continue
-
+    for ptype in _TEMPLATE_TYPES:
+        name = f"template-{ptype}"
+        yaml_path = tmp_path / name / "ai-platform.yaml"
+        yaml_path.parent.mkdir(parents=True, exist_ok=True)
+        gen_ai_platform_yaml(
+            name=f"test-{ptype}",
+            ptype=ptype,
+            org="tronyx161",
+            node="test-node",
+            domain="test.local",
+            database="",
+            mode="",
+            output_path=str(yaml_path),
+        )
         with open(yaml_path) as f:
-            raw = f.read()
-        # Replace {{...}} placeholders with valid YAML strings before parsing
-        # (Mustache-style placeholders crash yaml.safe_load as unhashable dict keys)
-        processed = re.sub(r"\{\{(\w+)\}\}", r"placeholder_\1", raw)
-        data = yaml.safe_load(processed)
+            data = yaml.safe_load(f)
 
-        # Check metrics flag
         monitoring = data.get("monitoring", {}) or {}
         if monitoring.get("metrics") is True:
-            results.append((entry.name, yaml_path, data))
+            results.append((name, yaml_path, data))
             logger.info(
                 "[IMP:8][_find_template_yamls] Template '%s' has metrics: true — queued for validation",
-                entry.name,
+                name,
             )
         else:
             logger.info(
                 "[IMP:8][_find_template_yamls] Template '%s' has metrics: false — skipped",
-                entry.name,
+                name,
             )
 
     logger.info("[IMP:8][_find_template_yamls] Found %d template(s) with metrics: true", len(results))
@@ -90,17 +100,17 @@ def _get_main_py_path(template_name: str) -> pathlib.Path | None:
 
 @pytest.mark.gate
 @ldd_trajectory
-def test_templates_metrics_port_present(caplog) -> None:
+def test_templates_metrics_port_present(caplog, template_metrics_configs) -> None:
     """Verify every template with metrics: true has metrics_port.
 
-    ## @purpose — For each templates/*/ai-platform.yaml where monitoring.metrics is true,
+    ## @purpose — For each generated template config where monitoring.metrics is true,
     ##            assert that monitoring.metrics_port is present and is a positive integer.
     ## @io — ⎋ None (assert side-effect)
     ## @complexity — O(N) where N = templates with metrics: true
     """
     logger.info("[IMP:8][test_templates_metrics_port_present] === Metrics port audit ===")
 
-    templates = _find_template_yamls()
+    templates = template_metrics_configs
     assert len(templates) > 0, "No templates with metrics: true found — at least one expected"
 
     violations: list[str] = []
@@ -136,7 +146,7 @@ def test_templates_metrics_port_present(caplog) -> None:
 
 @pytest.mark.gate
 @ldd_trajectory
-def test_templates_metrics_endpoint_in_main(caplog) -> None:
+def test_templates_metrics_endpoint_in_main(caplog, template_metrics_configs) -> None:
     """Verify templates with metrics: true have /metrics endpoint in src/main.py.
 
     ## @purpose — For each template with metrics: true, check that src/main.py (if exists)
@@ -147,7 +157,7 @@ def test_templates_metrics_endpoint_in_main(caplog) -> None:
     """
     logger.info("[IMP:8][test_templates_metrics_endpoint_in_main] === Metrics endpoint audit ===")
 
-    templates = _find_template_yamls()
+    templates = template_metrics_configs
     assert len(templates) > 0, "No templates with metrics: true found — at least one expected"
 
     violations: list[str] = []
@@ -209,7 +219,7 @@ def test_templates_metrics_endpoint_in_main(caplog) -> None:
 
 @pytest.mark.gate
 @ldd_trajectory
-def test_templates_metrics_port_consistency(caplog) -> None:
+def test_templates_metrics_port_consistency(caplog, template_metrics_configs) -> None:
     """Verify port in ai-platform.yaml matches port reference in src/main.py.
 
     ## @purpose — For each template with metrics: true, compare metrics_port from
@@ -221,7 +231,7 @@ def test_templates_metrics_port_consistency(caplog) -> None:
     """
     logger.info("[IMP:8][test_templates_metrics_port_consistency] === Port consistency audit ===")
 
-    templates = _find_template_yamls()
+    templates = template_metrics_configs
     assert len(templates) > 0, "No templates with metrics: true found — at least one expected"
 
     violations: list[str] = []

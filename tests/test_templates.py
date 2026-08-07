@@ -21,7 +21,6 @@ def _module_contract():
 
 import json
 import logging
-import pathlib
 import re
 
 import pytest
@@ -32,8 +31,10 @@ logger = logging.getLogger(__name__)
 
 from tests.helpers.gate_helpers import repo_root
 
-# --- [IMP:7] Поиск всех шаблонов через glob — без хардкода
-TEMPLATE_PATHS = sorted(str(p) for p in repo_root().glob("templates/*/ai-platform.yaml"))
+# --- [IMP:7] Типы шаблонов платформы (DevPlan 141: ai-platform.yaml генерируется
+# gen_ai_platform_yaml при scaffold — runtime SoT, шаблоны не хранят манифест).
+# ids сохранены (template-backend/template-frontend) — стабильные nodeid для inventory.
+TEMPLATE_TYPES = ("backend", "frontend")
 SCHEMA_PATH = str(repo_root() / "core/schemas/ai-platform.schema.json")
 
 # Плейсхолдеры, используемые в шаблонах — заменяются add-project.sh
@@ -73,21 +74,52 @@ def _replace_placeholders(obj):
 # · Symptom: ids=p.split("/")[1] → второй сегмент пути: Users0..2 (macOS), private0..2 (worktree
 # ·   в /private/var), home0..2 (CI ubuntu) — inventory-gate ловил фантомные removals между окружениями.
 # · Fix: стабильный ID = имя каталога шаблона (template-backend, ...) — не зависит от корня checkout.
-@pytest.mark.parametrize("template_path", TEMPLATE_PATHS, ids=lambda p: pathlib.Path(p).parent.name)
-def test_template_validates_against_schema(template_path: str) -> None:
-    """Валидация YAML манифеста шаблона против JSON Schema.
+@pytest.fixture(scope="module")
+def runtime_ai_platform_yamls(tmp_path_factory) -> dict[str, str]:
+    """Сгенерировать ai-platform.yaml для каждого типа шаблона через gen_ai_platform_yaml.
 
-    ## @purpose — Гарантирует, что все YAML-манифесты шаблонов соответствуют схеме.
-    ##           Placeholder'ы ($VAR) заменяются на тестовые значения перед
-    ##           валидацией — проверяется структура, а не фактические значения.
-    ## @io — ⇥ template_path: str — путь к ai-platform.yaml шаблона → ⎋ None (pytest assert)
+    ## @purpose — Runtime SoT (DevPlan 141 W1): шаблоны не хранят ai-platform.yaml —
+    ##            генератор единственный источник. Гейт валидирует output генератора
+    ##            против JSON Schema для каждого типа шаблона (backend/frontend).
+    ## @io — ⎋ dict[ptype → str path к сгенерированному ai-platform.yaml]
+    ## @complexity — O(N) где N = типы шаблонов
+    """
+    from core.internal.scaffold.scaffold_helpers import gen_ai_platform_yaml
+
+    root = tmp_path_factory.mktemp("runtime-template-yamls")
+    paths: dict[str, str] = {}
+    for ptype in TEMPLATE_TYPES:
+        out = root / f"template-{ptype}" / "ai-platform.yaml"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        gen_ai_platform_yaml(
+            name=f"test-{ptype}",
+            ptype=ptype,
+            org="tronyx161",
+            node="test-node",
+            domain="example.com",
+            database="",
+            mode="",
+            output_path=str(out),
+        )
+        paths[ptype] = str(out)
+        logger.info("[IMP:8][test_templates] Generated runtime ai-platform.yaml: %s", out)
+    return paths
+
+
+@pytest.mark.parametrize("ptype", TEMPLATE_TYPES, ids=["template-backend", "template-frontend"])
+def test_template_validates_against_schema(ptype: str, runtime_ai_platform_yamls: dict[str, str]) -> None:
+    """Валидация сгенерированного ai-platform.yaml (gen_ai_platform_yaml) против JSON Schema.
+
+    ## @purpose — Гарантирует, что конфиг, генерируемый для каждого типа шаблона,
+    ##           соответствует схеме (DevPlan 141: манифест — runtime, не статика).
+    ## @io — ⇥ ptype: str — тип шаблона → ⎋ None (pytest assert)
     ## @complexity — O(N) — single schema validation per call
     ## @invariants
-    ##   - Шаблон должен быть валидным YAML
-    ##   - После замены placeholder'ов содержимое должно соответствовать схеме
-    ##   - Любое несоответствие (кроме placeholder'ов) вызывает тест-падение
+    ##   - Сгенерированный YAML должен быть валидным
+    ##   - Содержимое должно соответствовать схеме (любое несоответствие — падение)
     """
-    logger.info("[IMP:7][test_template_validates_against_schema] Validating %s", template_path)
+    template_path = runtime_ai_platform_yamls[ptype]
+    logger.info("[IMP:7][test_template_validates_against_schema] Validating %s (runtime)", template_path)
 
     # --- [IMP:8] Загрузка схемы
     with open(SCHEMA_PATH) as f:

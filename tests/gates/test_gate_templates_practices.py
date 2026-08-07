@@ -1,77 +1,164 @@
-# GREP_SUMMARY: gate templates-practices template-backend frontend practices-files GENERATED-header quality-section
-# STRUCTURE: ▶ ┌2 шаблона┐ → ◇ (a) .pre-commit-config.yaml + practices.lock во всех → ◇ (b) pyproject в backend (не frontend) → ◇ (c) GENERATED-шапка во всех практиках-файлах → ◇ (d) ai-platform.yaml quality.level=auto → ⎋ pass|fail
+# GREP_SUMMARY: gate templates-practices runtime sync_practices expected-files LANGUAGE_FOR_TYPE GENERATED-header upstream-only
+# STRUCTURE: ▶ ┌tmp_path scaffold┐ → ◇ sync_practices → ◇ expected set by LANGUAGE_FOR_TYPE → ◇ GENERATED-шапка → ◇ pre-commit upstream-only → ⎋ assert
 # region MODULE_CONTRACT
-## @purpose  Гейт наличия практик-файлов в шаблонах (DevPlan 137 W5): все 2 шаблона содержат
-##           GENERATED-заглушки практик (.pre-commit-config.yaml, practices.lock; pyproject.toml
-##           — только python-семейство) с GENERATED-шапкой, и ai-platform.yaml несёт
-##           quality-секцию (level=auto — решение 2026-08-05). Защищает от дрейфа копий
-##           шаблонов (copy-paste debt, DevPlan 137 §7).
-## @scope    Read-only гейт (make gate MODE=fast).
+## @purpose  Гейт практик шаблонов в RUNTIME-модели (DevPlan 141 §2.1): шаблоны НЕ хранят
+##           практики-файлы как образцы (GENERATED-дубли удалены в W1) — sync_practices
+##           единственный источник. Гейт валидирует, что генератор покрывает ожидаемый
+##           набор файлов по LANGUAGE_FOR_TYPE для backend/frontend, с GENERATED-шапкой,
+##           и что .pre-commit-config.yaml остаётся upstream-only (аудит 137).
+## @scope    Read-only гейт (make gate MODE=fast). Работает в tmp_path — репо не мутирует.
 ## @invariants
-##   - Каждый шаблон: .pre-commit-config.yaml + practices.lock с GENERATED-шапкой
-##   - pyproject.toml — только backend (frontend без pyproject)
-##   - ai-platform.yaml#quality.level == auto (default, эскалатор жив)
-##   - pre-commit-заглушка — ТОЛЬКО upstream (0 путей core/ — аудит 137)
-## @rationale  Шаблоны — payload new-project; отсутствие практик = новый проект без защиты.
-## @changes  2026-08-05 · DevPlan 137 W1 — создан
-##           2026-08-05 · fullstack-шаблон удалён из платформы
+##   - backend (python): pyproject.toml + .pre-commit + conftest + test_health + practices.lock
+##   - frontend (typescript,react): .pre-commit + conftest + test_health + practices.lock
+##   - Все сгенерированные файлы (кроме practices.lock) несут GENERATED-шапку
+##   - .pre-commit-config.yaml: ТОЛЬКО upstream (0 путей core/) + project-push-check
+##   - R5 negative: удаление типа из LANGUAGE_FOR_TYPE детектируется (AssertionError)
+## @rationale  Защита от дрейфа генератора практик (copy-paste debt, DevPlan 137 §7).
+##             Runtime-модель заменяет статическую проверку файлов в шаблонах —
+##             шаблоны больше не несут образцы, генератор — SoT.
+## @changes  2026-08-06 · DevPlan 141 W1 — переработан из статической в runtime-модель
+## @changes  2026-08-05 · DevPlan 137 W5 — создан (статическая проверка)
 # endregion MODULE_CONTRACT
 
 import logging
+from pathlib import Path
 
 import pytest
 
+from core.internal.practices import manifest as practices_manifest
 from core.internal.practices.generators import GENERATED_HEADER
-from tests.helpers.gate_helpers import repo_root
+from core.internal.practices.sync_practices import sync_practices
+from tests.conftest import ldd_trajectory
 
 logger = logging.getLogger(__name__)
 
-ROOT = repo_root()
-_TEMPLATES = {
-    "backend": ROOT / "templates" / "template-backend",
-    "frontend": ROOT / "templates" / "template-frontend",
+# Ожидаемый набор GENERATED-файлов по языковому ключу ("," .join(LANGUAGE_FOR_TYPE[type])).
+# Эталон = render_project_files (generators.py): pyproject.toml — только python-семейство.
+# ⚠️ При изменении render_project_files — синхронизировать эталон здесь (дрейф = RED).
+EXPECTED_BY_LANG: dict[str, set[str]] = {
+    "python": {
+        "pyproject.toml",
+        ".pre-commit-config.yaml",
+        "tests/conftest.py",
+        "tests/test_health.py",
+        "practices.lock",
+    },
+    "typescript,react": {
+        ".pre-commit-config.yaml",
+        "tests/conftest.py",
+        "tests/test_health.py",
+        "practices.lock",
+    },
 }
 
+# Запрещённые платформенные пути в .pre-commit-config.yaml (аудит 137: upstream-only)
+_PRECOMMIT_FORBIDDEN = ("core/entrypoints", "hooks/hygiene.sh", "hooks/commit_msg.sh")
+_PRECOMMIT_REQUIRED = ("https://github.com/pre-commit/pre-commit-hooks", "project-push-check")
 
+
+# region FUNC_expected_for_type
+def _expected_for_type(ptype: str) -> set[str]:
+    """Ожидаемый набор файлов для типа проекта по текущему LANGUAGE_FOR_TYPE.
+
+    ## @purpose  Детектор: покрывает ли EXPECTED_BY_LANG маппинг типа → языки.
+    ##            Динамический доступ к practices_manifest.LANGUAGE_FOR_TYPE —
+    ##            monkeypatch-видимый (R5 negative без мутации источника).
+    ## @io        ⇥ ptype: str → ⎋ set[str] ⚡ AssertionError если тип/язык не покрыт
+    ## @complexity O(1)
+    """
+    lang_map = practices_manifest.LANGUAGE_FOR_TYPE
+    langs = lang_map.get(ptype)
+    assert langs, f"LANGUAGE_FOR_TYPE не содержит тип '{ptype}' — маппинг сломан"
+    lang_key = ",".join(langs)
+    expected = EXPECTED_BY_LANG.get(lang_key)
+    assert expected, f"lang_key {lang_key!r} (type={ptype}) не покрыт EXPECTED_BY_LANG — обновите эталон"
+    return expected
+
+
+# endregion FUNC_expected_for_type
+
+
+# region FUNC_test_sync_generates_expected_files
 @pytest.mark.gate
-def test_gate_templates_contain_practices_files() -> None:
-    """Каждый шаблон содержит .pre-commit-config.yaml + practices.lock; pyproject — python-семейство."""
-    for name, tdir in _TEMPLATES.items():
-        assert (tdir / ".pre-commit-config.yaml").is_file(), f"template-{name}: нет .pre-commit-config.yaml"
-        assert (tdir / "practices.lock").is_file(), f"template-{name}: нет practices.lock"
-    assert (_TEMPLATES["backend"] / "pyproject.toml").is_file()
-    assert not (_TEMPLATES["frontend"] / "pyproject.toml").exists(), "frontend не должен иметь pyproject"
+@ldd_trajectory
+def test_gate_templates_practices_sync_generates_expected_files(caplog, tmp_path: Path) -> None:
+    """sync_practices на свежем проекте из шаблона генерирует ожидаемый набор файлов.
 
+    Новая модель (DevPlan 141): шаблоны НЕ хранят практики-файлы как образцы —
+    sync_practices — единственный источник. Гейт валидирует, что генератор
+    покрывает ожидаемый набор по LANGUAGE_FOR_TYPE.
+    """
+    covered: set[str] = set()
 
-@pytest.mark.gate
-def test_gate_templates_practices_have_generated_header() -> None:
-    """Практики-файлы шаблонов начинаются с GENERATED-шапки (маркер дрейф-детекта)."""
-    for name, tdir in _TEMPLATES.items():
-        for rel in (".pre-commit-config.yaml", "practices.lock"):
-            content = (tdir / rel).read_text(encoding="utf-8")
-            assert content.startswith(GENERATED_HEADER), f"template-{name}/{rel}: нет GENERATED-шапки"
+    for ptype in ("backend", "frontend"):
+        expected = _expected_for_type(ptype)
 
-
-@pytest.mark.gate
-def test_gate_templates_precommit_upstream_only() -> None:
-    """Pre-commit-заглушки шаблонов — только upstream-репозитории (0 платформенных скриптов, аудит 137)."""
-    for name, tdir in _TEMPLATES.items():
-        content = (tdir / ".pre-commit-config.yaml").read_text(encoding="utf-8")
-        assert "core/entrypoints" not in content, f"template-{name}: платформенный entrypoint в pre-commit (аудит 137)"
-        assert "hooks/hygiene.sh" not in content, f"template-{name}: hygiene.sh в pre-commit (аудит 137)"
-        assert "hooks/commit_msg.sh" not in content, f"template-{name}: commit_msg.sh в pre-commit (аудит 137)"
-        assert "https://github.com/pre-commit/pre-commit-hooks" in content
-        assert "project-push-check" in content  # pre-push K5 хук
-
-
-@pytest.mark.gate
-def test_gate_templates_ai_platform_yaml_quality() -> None:
-    """ai-platform.yaml шаблонов несёт quality.level=auto (эскалатор жив, решение 2026-08-05).
-    Текстовый матч quality-блока (YAML-парсинг невозможен: {{PROJECT_NAME}} — flow-синтаксис)."""
-    import re
-
-    for name, tdir in _TEMPLATES.items():
-        content = (tdir / "ai-platform.yaml").read_text(encoding="utf-8")
-        assert re.search(r"^quality:\s*\n\s+level:\s*auto\b", content, re.MULTILINE), (
-            f"template-{name}: quality.level != auto"
+        # Минимальный проект в tmp_path (контракт load_project_yaml: name/type/target_node)
+        project_dir = tmp_path / f"test-{ptype}"
+        project_dir.mkdir()
+        (project_dir / "ai-platform.yaml").write_text(
+            f"name: test-{ptype}\ntype: {ptype}\ntarget_node: test\nquality:\n  level: auto\n"
         )
+
+        report = sync_practices(project_dir, force=True)
+
+        actual: set[str] = set()
+        for p in project_dir.rglob("*"):
+            if p.is_file():
+                rel = str(p.relative_to(project_dir))
+                if rel == "ai-platform.yaml":
+                    continue  # входной контекст sync_practices, не GENERATED-практика
+                actual.add(rel)
+
+        missing = expected - actual
+        extra = actual - expected
+        assert not missing, f"{ptype}: sync_practices не сгенерировал: {sorted(missing)}"
+        assert not extra, f"{ptype}: sync_practices сгенерировал лишнее: {sorted(extra)}"
+        assert report.lock_status == "written", f"{ptype}: practices.lock не записан ({report.lock_status})"
+
+        # GENERATED-шапка во всех сгенерированных файлах (кроме practices.lock)
+        for rel in expected - {"practices.lock"}:
+            content = (project_dir / rel).read_text(encoding="utf-8")
+            assert GENERATED_HEADER in content[:200], f"{ptype}/{rel}: нет GENERATED-шапки"
+
+        # Upstream-only pre-commit (аудит 137, runtime-проверка сгенерированного файла)
+        precommit = (project_dir / ".pre-commit-config.yaml").read_text(encoding="utf-8")
+        for forbidden in _PRECOMMIT_FORBIDDEN:
+            assert forbidden not in precommit, f"{ptype}: '{forbidden}' в .pre-commit-config.yaml (аудит 137)"
+        for required in _PRECOMMIT_REQUIRED:
+            assert required in precommit, f"{ptype}: отсутствует '{required}' в .pre-commit-config.yaml"
+
+        logger.info(
+            "[IMP:8][templates_practices] %s: %d GENERATED-файлов, upstream-only pre-commit ✓",
+            ptype,
+            len(expected),
+        )
+        covered.add(ptype)
+
+    assert covered == {"backend", "frontend"}, f"Покрыты не все типы шаблонов: {covered}"
+    logger.info("[IMP:9][templates_practices] PASS: sync_practices покрывает backend+frontend по LANGUAGE_FOR_TYPE")
+
+
+# endregion FUNC_test_sync_generates_expected_files
+
+
+# region FUNC_test_negative_language_for_type_drop
+@pytest.mark.gate
+def test_negative_language_for_type_drop_detected(monkeypatch, tmp_path: Path) -> None:
+    """R5 negative (DevPlan 141 RED-BLOCKER #1): тип, удалённый из LANGUAGE_FOR_TYPE, детектируется.
+
+    Оригинальный дефект: статический гейт проверял ФАЙЛЫ в шаблонах, а не генератор —
+    поломка маппинга LANGUAGE_FOR_TYPE оставалась бы незамеченной (тип тихо выпадал
+    из проверки). Runtime-детектор _expected_for_type должен падать на сломанном маппинге.
+    """
+    broken = dict(practices_manifest.LANGUAGE_FOR_TYPE)
+    broken.pop("backend", None)  # исходный вход: тип исчез из маппинга
+    monkeypatch.setattr(practices_manifest, "LANGUAGE_FOR_TYPE", broken)
+
+    with pytest.raises(AssertionError):
+        _expected_for_type("backend")
+
+    logger.info("[IMP:9][templates_practices] R5 negative: сломанный LANGUAGE_FOR_TYPE детектирован ✓")
+
+
+# endregion FUNC_test_negative_language_for_type_drop
