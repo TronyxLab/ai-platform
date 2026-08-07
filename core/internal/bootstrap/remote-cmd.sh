@@ -24,9 +24,11 @@ execute_remote_update() {
     local node_name="$1" detected_age_key="$2"; shift 2; local passthrough_args=("$@")
     local remote_cmd; remote_cmd="$(build_update_ssh_cmd "${node_name}" "${detected_age_key}" "${passthrough_args[@]}")"
     local dry_flag=(); if ${DRY_RUN:-false}; then dry_flag=(--dry-run); fi
+    # 142 B32: --passthrough-args=… (форма =): argparse иначе съедает значение "--force"
+    # как опцию → «expected one argument» → remote-execute не выполнялся.
     python3 -m core.internal.bootstrap.remote_executor execute-update \
         --node "${node_name}" --remote-cmd "${remote_cmd}" \
-        --passthrough-args "${passthrough_args[*]}" "${dry_flag[@]}"
+        --passthrough-args="${passthrough_args[*]}" "${dry_flag[@]}"
     return $?
 }
 # endregion FUNC_execute_remote_update
@@ -37,7 +39,7 @@ execute_remote_converge() {
     local dry_flag=(); if ${DRY_RUN:-false}; then dry_flag=(--dry-run); fi
     python3 -m core.internal.bootstrap.remote_executor execute-converge \
         --node "${node_name}" --remote-cmd "${remote_cmd}" \
-        --passthrough-args "${passthrough_args[*]}" "${dry_flag[@]}"
+        --passthrough-args="${passthrough_args[*]}" "${dry_flag[@]}"
     return $?
 }
 # endregion FUNC_execute_remote_converge
@@ -48,7 +50,7 @@ execute_remote_reconcile() {
     local dry_flag=(); if ${DRY_RUN:-false}; then dry_flag=(--dry-run); fi
     python3 -m core.internal.bootstrap.remote_executor execute-reconcile \
         --node "${node_name}" --remote-cmd "${remote_cmd}" \
-        --passthrough-args "${passthrough_args[*]}" "${dry_flag[@]}"
+        --passthrough-args="${passthrough_args[*]}" "${dry_flag[@]}"
     return $?
 }
 # endregion FUNC_execute_remote_reconcile
@@ -59,7 +61,7 @@ execute_remote_check_security() {
     local dry_flag=(); if ${DRY_RUN:-false}; then dry_flag=(--dry-run); fi
     python3 -m core.internal.bootstrap.remote_executor execute-check-security \
         --node "${node_name}" --remote-cmd "${remote_cmd}" \
-        --passthrough-args "${passthrough_args[*]}" "${dry_flag[@]}"
+        --passthrough-args="${passthrough_args[*]}" "${dry_flag[@]}"
     return $?
 }
 # endregion FUNC_execute_remote_check_security
