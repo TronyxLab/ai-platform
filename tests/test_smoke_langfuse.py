@@ -33,7 +33,10 @@ LANGFUSE_CSRF_URL = f"{LANGFUSE_BASE}/api/auth/csrf"
 LANGFUSE_LOGIN_URL = f"{LANGFUSE_BASE}/api/auth/callback/credentials"
 
 LANGFUSE_EMAIL = os.environ.get("LANGFUSE_INIT_USER_EMAIL", "admin@ai-platform.local")
-LANGFUSE_PASS = os.environ.get("LANGFUSE_INIT_USER_PASSWORD", "testpass")
+# 142 W8 (R14): дефолт = канон platform-infra.yaml (LANGFUSE_INIT_USER_PASSWORD: ci-test-langfuse-pwd).
+# Контейнер langfuse-test поднимается со SMOKE_ENV (канон) → дефолт обязан совпадать с каноном,
+# иначе login шлёт неверный пароль → 401. Было "testpass" (не-канон, скрытый RED в главном дереве).
+LANGFUSE_PASS = os.environ.get("LANGFUSE_INIT_USER_PASSWORD", "ci-test-langfuse-pwd")
 
 
 def _langfuse_credentials() -> tuple[str, str]:
@@ -43,9 +46,13 @@ def _langfuse_credentials() -> tuple[str, str]:
     ##            platform_env fixture sets SMOKE_ENV overrides. Reading
     ##            at call time ensures consistency with container env vars.
     ## @io — ⎋ (public_key: str, secret_key: str)
+    ## @invariants — дефолты = канон core/platform-infra.yaml (142 W8 R14):
+    ##            LANGFUSE_PUBLIC_KEY=ci-test-public-key, LANGFUSE_SECRET_KEY=ci-test-secret-key.
+    ##            Контейнер langfuse-test получает SMOKE_ENV из platform-env.yaml (канон) —
+    ##            дефолты ОБЯЗАНЫ совпадать, иначе ingestion шлёт не-канон ключи → 401.
     """
-    pk = os.environ.get("LANGFUSE_PUBLIC_KEY", "pk-test-langfuse-public")
-    sk = os.environ.get("LANGFUSE_SECRET_KEY", "sk-test-langfuse-secret")
+    pk = os.environ.get("LANGFUSE_PUBLIC_KEY", "ci-test-public-key")
+    sk = os.environ.get("LANGFUSE_SECRET_KEY", "ci-test-secret-key")
     return pk, sk
 
 
