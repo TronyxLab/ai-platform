@@ -147,11 +147,11 @@ def _tsdb_host_dir(container: str) -> str | None:
 
 
 # region FUNC__cleanup_tsdb
-## @purpose  Backup + очистка wal/ и blocks/ (mv в .corrupt-<ts>/, НЕ rm — восстановимость).
+## @purpose  Backup + очистка wal/ и blocks/ (mv в .corrupt-{ts}/, НЕ rm — восстановимость).
 ## @io       ⇥ tsdb_dir: str → ⎋ bool (True = очищено)
 ## @complexity O(1) — ≤2 shutil.move
 ## @invariants
-##   - backup внутри volume ({tsdb_dir}/.corrupt-<ts>/) — тот же диск, мгновенный mv
+##   - backup внутри volume ({tsdb_dir}/.corrupt-{ts}/) — тот же диск, мгновенный mv
 ##   - Отсутствующие wal/blocks → не ошибка (prometheus создаст при старте)
 def _cleanup_tsdb(tsdb_dir: str) -> bool:
     """Move wal/ and blocks/ to .corrupt-<ts>/ backup (recoverable), 142 W3."""

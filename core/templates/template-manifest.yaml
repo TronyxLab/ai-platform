@@ -134,21 +134,32 @@ templates:
 
   # ── Nginx dev-config templates (dev-режим: docker-compose.dev.yml — override поверх config/) ──
   # docker-compose.base.yml:54-55 — тот же nginx envsubst-entrypoint, dev-варианты vhost'ов.
-  # ⚠️ TRAP[DECISION] · 2026-07-31 · — · dev-config: зарегистрирован ТОЛЬКО реальный файл
-  # · Rejected: литерал DevPlan 116 T6 (dev-config platform-vhost.conf.template + ssl-params.conf.template)
-  # · Reason: эти два файла НЕ существуют в git — dev-config содержит только
-  # ·   platform-default.conf.template (*.template) + *.conf (nginx.conf, vhost'ы и т.д.).
-  # ·   Остальные /etc/nginx/templates-источники в dev-режиме — *.conf из dev-config/
-  # ·   (basename-матчинг гейта template_manifest_coverage покрывает их через config/-записи).
-  # ·   (пустые директории platform-vhost.conf.template/ ssl-params.conf.template — артефакты
-  # ·   docker bind-mount, не репо-контент; удалены 2026-07-31)
-  # · 2026-08-01 DevPlan 116 D3: dev-режим = docker-compose.dev.yml (НЕ NGINX_CONF_DIR=./dev-config);
-  # ·   security-headers.conf удалён из dev-config (идентичен config/, U-46).
-  # · Rev: если dev-config получит реальные *.template файлы — зарегистрировать их.
+  # 2026-08-07 (142 W8): dev-config получил РЕАЛЬНЫЕ platform-vhost.conf.template +
+  #   ssl-params.conf.template (docker-compose.dev.yml:24,31 — dev-оверрайды) —
+  #   TRAP-условие «Rev: если dev-config получит реальные *.template файлы — зарегистрировать их»
+  #   сработало: обе записи зарегистрированы ниже (гейт template_manifest_coverage (a)).
   - template: ../modules/nginx/dev-config/platform-default.conf.template
     output: null
     type: single
     consumer: core/modules/nginx/docker-compose.dev.yml (dev-оверрайд поверх config/, envsubst)
+    vars:
+      PLATFORM_DOMAIN:
+        required: false
+        source: standard
+
+  # ── Nginx dev-config vhost + ssl-params (142 W8 — реальные файлы, были bind-mount артефакты) ──
+  - template: ../modules/nginx/dev-config/platform-vhost.conf.template
+    output: null
+    type: single
+    consumer: core/modules/nginx/docker-compose.dev.yml:24 (dev-оверрайд vhost, envsubst /etc/nginx/templates/)
+    vars:
+      PLATFORM_DOMAIN:
+        required: false
+        source: standard
+  - template: ../modules/nginx/dev-config/ssl-params.conf.template
+    output: null
+    type: single
+    consumer: core/modules/nginx/docker-compose.dev.yml:31 (dev-оверрайд ssl-params, envsubst /etc/nginx/templates/)
     vars:
       PLATFORM_DOMAIN:
         required: false

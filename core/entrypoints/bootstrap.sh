@@ -45,8 +45,7 @@ while [[ $# -gt 0 ]]; do
         --resolve) RESOLVE_MODE=true; shift ;;
         --dry-run) DRY_RUN=true; shift ;;
         --auto-reconcile) PASSTHROUGH_ARGS+=("--auto-reconcile"); shift ;;
-        # ⚠️ TRAP[BUG] · 2026-08-03 · P1 · --age-secret-key-file уходил в remote passthrough
-        # (локальный путь на VPS). Фикс: локальное чтение через node_detect-цепочку (как node-update.sh).
+        # ⚠️ TRAP[BUG] · 2026-08-03 · P1 · --age-secret-key-file читается ЛОКАЛЬНО (node_detect-цепочка), не уходит в remote passthrough
         --age-secret-key-file) AGE_SECRET_KEY_FILE="$2"; export AGE_SECRET_KEY_FILE; shift 2 ;;
         *) PASSTHROUGH_ARGS+=("$1"); shift ;;
     esac
@@ -95,24 +94,14 @@ main() {
     [[ -z "$CONTEXT" ]] && CONTEXT="$CONTEXT0"   # fallback: top-level context > contexts.0.name
 
     [[ -n "$OWNER_KEY" ]] || { echo "[IMP:10][bootstrap][entrypoint] FATAL: owner_key not found" >&2; exit 1; }
-    echo "[IMP:9][bootstrap][entrypoint] Resolved: node=${NODE_NAME}"
 
     # ⚠️ TRAP[BUG] 2026-07-17 P1 RESOLVED 2026-08-01 (B3 T5/T6): ci_deploy_key — batch --get-many, env-override удалён (D2)
-    if [[ -n "$CI_DEPLOY_KEY" ]]; then
-        echo "[IMP:9][bootstrap][entrypoint] ci_deploy_key resolved"
-    else
-        echo "[IMP:8][bootstrap][entrypoint] ci_deploy_key not set — ci-deploy restricted key setup will be skipped"
-    fi
-    # 142 W1 (A1): ci_root_key — ПУБЛИЧНАЯ часть VPS_SSH_KEY (core-deploy root-канал).
-    # Поле node.ci_root_key добавлено префлайтом P0.1; отсутствие → WARN (не FATAL —
-    # CI-root ключ не блокирует локальный bootstrap, только core-deploy после него).
-    if [[ -n "$CI_ROOT_KEY" ]]; then
-        echo "[IMP:9][bootstrap][entrypoint] ci_root_key resolved"
-    else
-        echo "[IMP:7][bootstrap][entrypoint] ci_root_key not set — CI root-shell канал (core-deploy) будет недоступен"
-    fi
-    [[ -n "$PLATFORM_DOMAIN" ]] && echo "[IMP:9][bootstrap][entrypoint] PLATFORM_DOMAIN=${PLATFORM_DOMAIN}"
-    [[ -n "$CONTEXT" ]] && echo "[IMP:9][bootstrap][entrypoint] CONTEXT=${CONTEXT}"
+    if [[ -n "$CI_DEPLOY_KEY" ]]; then echo "[IMP:9][bootstrap][entrypoint] ci_deploy_key resolved"
+    else echo "[IMP:8][bootstrap][entrypoint] ci_deploy_key not set — ci-deploy restricted key setup will be skipped"; fi
+    # 142 W1 (A1): ci_root_key — публичная VPS_SSH_KEY (core-deploy root-канал); отсутствие → WARN
+    if [[ -n "$CI_ROOT_KEY" ]]; then echo "[IMP:9][bootstrap][entrypoint] ci_root_key resolved"
+    else echo "[IMP:7][bootstrap][entrypoint] ci_root_key not set — CI root-shell канал (core-deploy) будет недоступен"; fi
+    [[ -n "$PLATFORM_DOMAIN" ]] && echo "[IMP:9][bootstrap][entrypoint] PLATFORM_DOMAIN=${PLATFORM_DOMAIN}"; [[ -n "$CONTEXT" ]] && echo "[IMP:9][bootstrap][entrypoint] CONTEXT=${CONTEXT}"
 
     SSH_HOST="$(extract_node_host "${NODE_YAML}")" || { echo "[IMP:8][bootstrap][entrypoint] WARN: No SSH host — local mode" >&2; SSH_HOST=""; }
     # node_detect exit contract (DevPlan 104 D3): 0=key found, 3=module OK+key absent (non-fatal), other=FATAL

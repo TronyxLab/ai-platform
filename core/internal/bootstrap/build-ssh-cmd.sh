@@ -23,7 +23,9 @@
 # ══════════════════════════════════════════════════════════════════════
 # region FUNC_build_ssh_cmd
 build_ssh_cmd() {
-    local node_name="$1" owner_key="$2" ci_deploy_key="$3" age_key="$4" ci_root_key="$5"
+    # 142 W1 (A1): 5-й параметр ci_root_key — backward-compatible (${5:-}): старые
+    # 4-аргументные вызовы (без ci_root_key) не падают при set -u.
+    local node_name="$1" owner_key="$2" ci_deploy_key="$3" age_key="$4" ci_root_key="${5:-}"
     shift 5; local passthrough_args=("$@")
     # ⚠️ TRAP[BUG] · 2026-07-31 · P1 · PLATFORM_ROOT не экспортировался на remote — фазы искали core по /opt/platform
     # · Symptom: state_machine.py:1333 берёт core_dir из PLATFORM_ROOT (default /opt/platform), но remote

@@ -64,6 +64,9 @@ RSYNC_EXCLUDES_SECRETS: list[str] = [  # Phase 3 secrets/ — 1 паттерн
 # аномален (обрыв сети, зависший ssh) — при нормальных трансферах поведение идентично shell.
 MKDIR_TIMEOUT = 30
 RSYNC_TIMEOUT = 600
+# 142 W5 (A6): fallback-деплой — ssh provision/node-update таймаут (канон deploy-дефолт 600s,
+# node-update ~5-30 мин; 1800s = 30 мин запас на полный update-цикл, TRAP lib/ssh.sh).
+SSH_CMD_TIMEOUT = 1800
 
 
 # region EXC_CoreDeliveryError
@@ -455,6 +458,81 @@ def deliver_all(
 # endregion FUNC_deliver_all
 
 
+# region FUNC_deliver_fallback
+## @purpose  Fallback-деплой core (142 W5, A6): rsync-фазы (core, platform-env, Makefile,
+##           makefiles, scripts, root compose) → ssh provision → ssh node-update.
+##           Зеркало core-deploy.yml CI-воркфлоу для GitHub Outage / ручного деплоя.
+##           НЕ трогает /opt/node-configs (орг-репозиторий, gitignored — инвариант core-deliver).
+## @io  input: host, node, core_dir, age_secret_key, remote_user, dry_run;
+##           output: bool True on success, False on step failure (ssh-шаги fail-fast)
+## @complexity  O(F) — rsync-фазы + 2 ssh-шага
+## @invariants
+##   - rsync-фазы делегируют в deliver_core/deliver_platform_env/deliver_makefile/
+##     deliver_scripts/deliver_root_compose (guard'ы источников — TRAP[BUG] 125 T4)
+##   - AGE_SECRET_KEY уходит в remote ТОЛЬКО как env в команде node-update
+##     (канон W4 DevPlan 140; путь к файлу на remote НЕ передаётся)
+##   - dry_run: печатает ssh-команды без мутаций (R5 142 W5)
+##   - ssh-команды через SSH_OPTS (shared/ssh_opts.py — единый SoT, DevPlan 116 B5 T2)
+def deliver_fallback(
+    host: str,
+    node: str,
+    core_dir: str,
+    age_secret_key: str = "",
+    remote_user: str = "root",
+    dry_run: bool = False,
+) -> bool:
+    """Fallback core delivery: rsync phases + provision + node-update (core-deploy.yml mirror)."""
+    base = resolve_remote_base()
+    # ── 1. rsync-фазы (guard'ы внутри каждой функции, TRAP[BUG] 125 T4) ──
+    deliver_core(host, core_dir, remote_user, base, dry_run)
+    deliver_platform_env(host, core_dir, remote_user, base, dry_run)
+    deliver_makefile(host, core_dir, remote_user, base, dry_run)
+    deliver_scripts(host, core_dir, remote_user, base, dry_run)
+    deliver_root_compose(host, core_dir, remote_user, base, dry_run)
+    logger.info("[IMP:9][deliver_fallback][rsync] Core + config + makefiles rsync complete")
+
+    # ── 2. Provision networks + volumes (инвариант 1, канон core-deploy.yml step 5) ──
+    provision_cmd = ["ssh", *SSH_OPTS, f"{remote_user}@{host}", f"cd {base} && make provision SCOPE=networks,volumes"]
+    logger.info("[IMP:9][deliver_fallback][provision] Provisioning networks+volumes on %s", host)
+    if dry_run:
+        logger.info("[IMP:8][deliver_fallback][dry-run] WOULD run: %s", " ".join(provision_cmd))
+    else:
+        r = subprocess.run(provision_cmd, capture_output=True, text=True, timeout=SSH_CMD_TIMEOUT)
+        if r.returncode != 0:
+            logger.error(
+                "[IMP:10][deliver_fallback][provision] FATAL: provision failed (exit=%d): %s",
+                r.returncode,
+                r.stderr.strip()[-500:],
+            )
+            return False
+
+    # ── 3. Node update (канон core-deploy.yml step 6: AGE_SECRET_KEY env + DEPLOY_PARALLEL) ──
+    age_env = f"AGE_SECRET_KEY='{age_secret_key}' " if age_secret_key else ""
+    update_cmd = [
+        "ssh",
+        *SSH_OPTS,
+        f"{remote_user}@{host}",
+        f"cd {base} && {age_env}DEPLOY_PARALLEL=true make node-update NODE={node}",
+    ]
+    logger.info("[IMP:9][deliver_fallback][node-update] Running node-update NODE=%s on %s", node, host)
+    if dry_run:
+        logger.info("[IMP:8][deliver_fallback][dry-run] WOULD run: %s", " ".join(update_cmd))
+        return True
+    r = subprocess.run(update_cmd, capture_output=True, text=True, timeout=SSH_CMD_TIMEOUT)
+    if r.returncode != 0:
+        logger.error(
+            "[IMP:10][deliver_fallback][node-update] FATAL: node-update failed (exit=%d): %s",
+            r.returncode,
+            r.stderr.strip()[-500:],
+        )
+        return False
+    logger.info("[IMP:9][deliver_fallback][done] core-deliver COMPLETE (NODE=%s)", node)
+    return True
+
+
+# endregion FUNC_deliver_fallback
+
+
 # region FUNC_deliver_root_compose
 ## @purpose  Доставка root docker-compose.yml (RC 121, U-49 regression fix): модульный деплой
 ##           docker_orchestrator использует root compose первым -f (volumes/network SoT в root,
@@ -515,9 +593,24 @@ def cli() -> int:
     dp.add_argument("--core-dir", required=True)
     dp.add_argument("--remote-user", default="root")
     dp.add_argument("--dry-run", action="store_true")
+    fp = sp.add_parser(
+        "fallback-deliver",
+        help="Fallback core delivery (142 W5): rsync phases + provision + node-update (core-deploy.yml mirror)",
+    )
+    fp.add_argument("--host", required=True)
+    fp.add_argument("--node", required=True)
+    fp.add_argument("--core-dir", required=True)
+    fp.add_argument("--age-secret-key", default="", help="AGE secret key (LOCAL value; env-only to remote)")
+    fp.add_argument("--remote-user", default="root")
+    fp.add_argument("--dry-run", action="store_true")
     args = p.parse_args()
     try:
-        deliver_all(args.host, args.node, args.node_configs_dir, args.core_dir, args.remote_user, args.dry_run)
+        if args.command == "deliver":
+            deliver_all(args.host, args.node, args.node_configs_dir, args.core_dir, args.remote_user, args.dry_run)
+        elif not deliver_fallback(
+            args.host, args.node, args.core_dir, args.age_secret_key, args.remote_user, args.dry_run
+        ):
+            return 1
     except CoreDeliveryError as exc:
         logger.info("[IMP:10][cli][error] %s", exc)
         return 1
