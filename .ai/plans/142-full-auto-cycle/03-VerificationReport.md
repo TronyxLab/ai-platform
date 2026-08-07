@@ -141,6 +141,7 @@ $END_ARTIFACT_CONTRACT
 | B35 | после записи privoxy-конфига сервис не перезапускался | 0.0.0.0 не вступал в силу (listen на старте) | systemctl restart privoxy при changed | ✅ |
 | B36 | chaos T8/T11: `splitlines()[-1]` на пустом stdout (grep rc=1) | IndexError — тесты падали багом, не платформой | `(splitlines() or ["0"])[-1]` (3 места) | ✅ |
 | B37 | frontend-шаблон без package-lock.json | npm ci FAIL на чистом checkout (K2/CI) | — (Debt R18) | ⚠️ Debt |
+| B38 | pre-push-gate.sh: `pipx install --force` перед каждым push | push «зависал» (pipx пересоздание окружения) + hook-прогоны gate давали flake-фейлы (probe-тесты), отсутствующие в ручном `make gate MODE=fast` (GREEN 10/10) | — (процессный Debt: кэшировать pipx-установку или убрать non-blocking шаг; флаки — известный класс TRAP check-manifest-parity 2026-08-03) | ⚠️ Debt |
 
 **Коммиты:** `5c238054` (B27), `cb568d1f` (B28-B31), `e835335f` (B32), `d2de607d` (B33-B34), `77e3fdad` (B35), `606d2d1d` (B36). Все — make check GREEN + pre-push gate PASSED.
 
