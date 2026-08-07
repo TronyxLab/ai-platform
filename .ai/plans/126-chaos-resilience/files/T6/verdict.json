@@ -1,27 +1,27 @@
 {
   "test": "T6",
-  "verdict": "PARTIAL",
+  "verdict": "FAIL",
   "ttr_s": 11,
-  "incident_start_epoch": 1785795109,
-  "checked_at": "2026-08-03T22:12:57Z",
+  "incident_start_epoch": 1786118717,
+  "checked_at": "2026-08-07T16:06:24Z",
   "markers": [
     {
       "label": "docker:postgres-interrupted",
       "source": "docker",
       "regex": "database system was interrupted",
       "expected": "required",
-      "found": true,
-      "loki_duplicate": true,
-      "detail": "count=1"
+      "found": false,
+      "loki_duplicate": null,
+      "detail": "count=0"
     },
     {
       "label": "docker:postgres-ready",
       "source": "docker",
       "regex": "database system is ready",
       "expected": "required",
-      "found": true,
-      "loki_duplicate": true,
-      "detail": "count=1"
+      "found": false,
+      "loki_duplicate": null,
+      "detail": "count=0"
     },
     {
       "label": "state:postgres-healthy",
@@ -39,7 +39,7 @@
       "expected": "optional",
       "found": false,
       "loki_duplicate": null,
-      "detail": "alerts_total=0"
+      "detail": "rule_states=['inactive', 'inactive']"
     },
     {
       "label": "docker:nginx-no-upstream-errors",

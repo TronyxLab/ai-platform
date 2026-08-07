@@ -1,9 +1,9 @@
 {
   "test": "T2",
   "verdict": "PARTIAL",
-  "ttr_s": 77,
-  "incident_start_epoch": 1785788374,
-  "checked_at": "2026-08-03T20:21:08Z",
+  "ttr_s": 78,
+  "incident_start_epoch": 1786117328,
+  "checked_at": "2026-08-07T15:43:49Z",
   "markers": [
     {
       "label": "journald:resolved-stopped",

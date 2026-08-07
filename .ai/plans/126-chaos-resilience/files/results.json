@@ -5,22 +5,22 @@
   },
   "T2": {
     "verdict": "PARTIAL",
-    "ttr_s": 77
+    "ttr_s": 78
   },
   "T3": {
-    "verdict": "PARTIAL",
-    "ttr_s": 188
+    "verdict": "SUCCESS",
+    "ttr_s": 192
   },
   "T4": {
-    "verdict": "PARTIAL",
-    "ttr_s": 110
+    "verdict": "SUCCESS",
+    "ttr_s": 111
   },
   "T5": {
     "verdict": "PARTIAL",
     "ttr_s": 317
   },
   "T6": {
-    "verdict": "PARTIAL",
+    "verdict": "FAIL",
     "ttr_s": 11
   },
   "T7": {

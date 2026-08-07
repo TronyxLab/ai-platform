@@ -2,8 +2,8 @@
   "test": "T5",
   "verdict": "PARTIAL",
   "ttr_s": 317,
-  "incident_start_epoch": 1785792917,
-  "checked_at": "2026-08-03T21:41:19Z",
+  "incident_start_epoch": 1786117816,
+  "checked_at": "2026-08-07T15:56:25Z",
   "markers": [
     {
       "label": "journald:tor-stopped",
@@ -12,7 +12,7 @@
       "expected": "required",
       "found": true,
       "loki_duplicate": null,
-      "detail": "count=8"
+      "detail": "count=4"
     },
     {
       "label": "journald:privoxy-stopped",
@@ -21,7 +21,7 @@
       "expected": "required",
       "found": true,
       "loki_duplicate": null,
-      "detail": "count=8"
+      "detail": "count=4"
     },
     {
       "label": "journald:tor-started",
@@ -30,7 +30,7 @@
       "expected": "required",
       "found": true,
       "loki_duplicate": null,
-      "detail": "count=5"
+      "detail": "count=3"
     },
     {
       "label": "journald:privoxy-started",
@@ -39,7 +39,7 @@
       "expected": "required",
       "found": true,
       "loki_duplicate": null,
-      "detail": "count=5"
+      "detail": "count=3"
     },
     {
       "label": "journald:cron-tor-check-ran",

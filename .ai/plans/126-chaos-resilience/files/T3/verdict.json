@@ -1,9 +1,9 @@
 {
   "test": "T3",
-  "verdict": "PARTIAL",
-  "ttr_s": 188,
-  "incident_start_epoch": 1785790440,
-  "checked_at": "2026-08-03T20:56:55Z",
+  "verdict": "SUCCESS",
+  "ttr_s": 192,
+  "incident_start_epoch": 1786117430,
+  "checked_at": "2026-08-07T15:46:48Z",
   "markers": [
     {
       "label": "audit:backup-outbound-fail",
@@ -19,18 +19,18 @@
       "source": "journald",
       "regex": "tor-proxy",
       "expected": "optional",
-      "found": false,
+      "found": true,
       "loki_duplicate": null,
-      "detail": "count=0"
+      "detail": "count=1"
     },
     {
       "label": "audit:tor-healthcheck",
       "source": "auditfile",
       "regex": "tor-healthcheck",
       "expected": "optional",
-      "found": false,
+      "found": true,
       "loki_duplicate": null,
-      "detail": "count=0 (file=/var/log/platform/audit.jsonl)"
+      "detail": "count=28 (file=/var/log/platform/audit.jsonl)"
     },
     {
       "label": "state:postgres",

@@ -1,9 +1,9 @@
 {
   "test": "T4",
-  "verdict": "PARTIAL",
-  "ttr_s": 110,
-  "incident_start_epoch": 1785791245,
-  "checked_at": "2026-08-03T21:10:00Z",
+  "verdict": "SUCCESS",
+  "ttr_s": 111,
+  "incident_start_epoch": 1786117610,
+  "checked_at": "2026-08-07T15:49:25Z",
   "markers": [
     {
       "label": "journald:clock-change",
@@ -21,16 +21,16 @@
       "expected": "required",
       "found": true,
       "loki_duplicate": null,
-      "detail": "count=8"
+      "detail": "count=4"
     },
     {
       "label": "loki:nginx-logs-after-skew",
       "source": "loki",
       "regex": ".",
       "expected": "optional",
-      "found": false,
+      "found": true,
       "loki_duplicate": null,
-      "detail": "streams=0"
+      "detail": "streams=5"
     },
     {
       "label": "docker:loki-skew-errors",
@@ -39,7 +39,7 @@
       "expected": "required",
       "found": true,
       "loki_duplicate": true,
-      "detail": "count=18"
+      "detail": "count=3"
     },
     {
       "label": "state:postgres",
