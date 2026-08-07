@@ -796,7 +796,7 @@ def _step_certs(bootstrap_dir: str, node_yaml: str, context: str) -> None:
                 invalid_domains.append(dom)
         if invalid_domains:
             issue_cert_script = os.path.join(bootstrap_dir, "issue-cert.sh")
-            secrets_env = os.environ.get("SECRETS_ENV_FILE", "/run/platform/secrets.env")
+            secrets_env = os.environ.get("SECRETS_ENV_FILE", str(deploy_paths.secrets_env_file()))
             cert_result = orchestrate_certs(domains, issue_cert_script, secrets_env)
             logger.info("[IMP:9][_step_certs] Cert orchestration: %d domains", len(cert_result.domains))
         else:

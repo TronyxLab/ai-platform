@@ -97,6 +97,9 @@ Examples:
     parser.add_argument("--node-yaml", help="Path to node.yaml (NODE_YAML)")
     parser.add_argument("--owner-key", help="Platform owner SSH public key (PLATFORM_OWNER_KEY)")
     parser.add_argument("--ci-deploy-key", help="CI deploy SSH public key (PLATFORM_CI_DEPLOY_KEY)")
+    parser.add_argument(
+        "--ci-root-key", help="CI root SSH public key — VPS_SSH_KEY pub-часть (PLATFORM_CI_ROOT_KEY, 142 W1)"
+    )
     parser.add_argument("--tor-enabled", choices=["true", "false"], default=None, help="Override TOR_ENABLED")
     parser.add_argument("--tor-bridges-file", help="Path to Tor bridges file")
     parser.add_argument("--skip-tor-verify", action="store_true", help="Skip Tor circuit verification")
@@ -139,6 +142,8 @@ def main() -> int:
         os.environ.setdefault("PLATFORM_OWNER_KEY", args.owner_key)
     if args.ci_deploy_key:
         os.environ.setdefault("PLATFORM_CI_DEPLOY_KEY", args.ci_deploy_key)
+    if args.ci_root_key:
+        os.environ.setdefault("PLATFORM_CI_ROOT_KEY", args.ci_root_key)
     if args.tor_enabled is not None:
         os.environ["TOR_ENABLED"] = args.tor_enabled
     if args.ghcr_token:
@@ -169,6 +174,20 @@ def main() -> int:
     except PlatformFatalError as e:
         if args.force:
             logger.warning("[IMP:8][main] Corrupt state + --force: removing %s and starting fresh", args.state_file)
+            # ⚠️ 142 W7 (B26): аудит-запись при удалении state.json — защита от бесследного
+            # исчезновения (цикл 2 141: /var/lib/platform/.bootstrap/state.json исчез,
+            # механизм не выявлен; аудит-след позволяет реконструировать кто/когда).
+            try:
+                from core.internal.shared.audit_logger import write_audit_entry
+
+                write_audit_entry(
+                    "state.json",
+                    "removed",
+                    f"Corrupt state file removed (--force recovery): {args.state_file}",
+                    operation="bootstrap-force",
+                )
+            except Exception as _audit_exc:  # noqa: EXC — audit best-effort, никогда не маскирует recovery
+                logger.warning("[IMP:7][main] Audit entry for state removal failed (non-fatal): %s", _audit_exc)
             Path(args.state_file).unlink(missing_ok=True)
             sm = StateMachine(state_file_path=args.state_file)
         else:
@@ -184,6 +203,18 @@ def main() -> int:
     # ── --force: clear state ──
     if args.force:
         logger.info("[IMP:9][main] --force: Clearing state")
+        # ⚠️ 142 W7 (B26): аудит-запись при reset state.json (--force) — см. TRAP выше.
+        try:
+            from core.internal.shared.audit_logger import write_audit_entry
+
+            write_audit_entry(
+                "state.json",
+                "reset",
+                f"State reset via --force: {args.state_file}",
+                operation="bootstrap-force",
+            )
+        except Exception as _audit_exc:  # noqa: EXC — audit best-effort
+            logger.warning("[IMP:7][main] Audit entry for state reset failed (non-fatal): %s", _audit_exc)
         sm.reset()
 
     # ── --dry-run: print plan, no mutations ──
@@ -199,6 +230,13 @@ def main() -> int:
         ci_key_present = bool(os.environ.get("PLATFORM_CI_DEPLOY_KEY", "").strip())
         if not ci_key_present:
             logger.warning("[IMP:7][main] PLATFORM_CI_DEPLOY_KEY not set — ci-deploy user will have no deploy key")
+        # 142 W1: PLATFORM_CI_ROOT_KEY semi-optional — warn (root authorized_keys для core-deploy)
+        ci_root_key_present = bool(os.environ.get("PLATFORM_CI_ROOT_KEY", "").strip())
+        if not ci_root_key_present:
+            logger.warning(
+                "[IMP:7][main] PLATFORM_CI_ROOT_KEY not set — root authorized_keys не получит CI-root ключ "
+                "(core-deploy root-канал будет недоступен, 142 W1)"
+            )
         if not sm.validate_bootstrap_env(required_vars):
             return 1
 

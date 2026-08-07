@@ -3,7 +3,7 @@
 # STRUCTURE: ▶ main() → NodeYaml → docker_collector → cert_collector → project_collector → host_collector
 #            → host_uptime → docker_images_size_gb → host_memory → host_uname → backup_collector
 #            → merge + errors[] + backup + platform_services
-#            → json_writer.atomic_write(/run/platform/status-metrics.json) → ⎋ exit 0
+#            → json_writer.atomic_write(/var/lib/platform/run/status-metrics.json) → ⎋ exit 0
 # region MODULE_CONTRACT
 ## @purpose  Metrics export coordinator — collects data from all collectors, applies TTL cache,
 ##           merges, writes atomically to status-metrics.json
@@ -15,7 +15,7 @@
 ##   - Atomic write via json_writer.atomic_write — status-page never sees partial file
 ##   - schema_version: 2 injected by json_writer
 ##   - node.yaml path from env var NODE_YAML_PATH or /opt/node-configs/<NODE_NAME>/node.yaml
-##   - Output: /run/platform/status-metrics.json
+##   - Output: /var/lib/platform/run/status-metrics.json
 ##   - Total execution expected <15s (AC10-M)
 ## @rationale  Coordinator pattern (META Δ5) separates collection concerns into testable modules.
 ##             Graceful degradation (Δ13) ensures partial data + errors on any collector failure.
@@ -30,6 +30,9 @@ from datetime import datetime, timezone
 
 # B3: канонический node-configs base — shared/deploy_paths (литерал /opt/node-configs удалён)
 from core.internal.shared.deploy_paths import node_configs_remote
+
+# 142 W2 (B21): status-metrics.json — persistent /var/lib/platform/run (резолвер shared/deploy_paths).
+from core.internal.shared.deploy_paths import status_metrics_json as _status_metrics_json
 from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError
 from core.internal.shared.node_yaml import NodeYaml
 
@@ -56,8 +59,13 @@ def _get_node_yaml_path() -> str:
 
 
 def _get_status_metrics_json() -> str:
-    """Get status-metrics.json output path from env."""
-    return os.environ.get("STATUS_METRICS_JSON", "/run/platform/status-metrics.json")
+    """Get status-metrics.json output path from env.
+
+    # 142 W2 (B21): status-metrics.json переехал из tmpfs /var/lib/platform/run в persistent
+    # /var/lib/platform/run — reboot-устойчивость (bind-mount статус-страницы не пустеет).
+    # Резолвер shared/deploy_paths.status_metrics_json (env STATUS_METRICS_JSON > дефолт).
+    """
+    return os.environ.get("STATUS_METRICS_JSON", str(_status_metrics_json()))
 
 
 def _get_node_name() -> str:

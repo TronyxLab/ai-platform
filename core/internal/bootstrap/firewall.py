@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import re
 import subprocess
 import sys
@@ -79,6 +80,14 @@ MODULE_PORTS_DENY: tuple[int, ...] = (
 FORBIDDEN_EXTRA_PORTS: tuple[int, ...] = (*FORBIDDEN_PORTS, DENY_PORT, *MODULE_PORTS_DENY)
 _PORT_RE = re.compile(r"^[0-9]+$")
 
+# ⚠️ 142 W6 (A2/A3): Privoxy/Tor доступ с docker-мостов.
+# · 2-й цикл 141: после reboot/переустановки privoxy слушал только 127.0.0.1, а ufw-правило
+# · `allow 172.16.0.0/12:8118` добавлялось ВРУЧНУЮ (A2/A3). Теперь — декларативный baseline:
+# · при TOR_ENABLED=1 открываем 8118 для docker-моста 172.16.0.0/12 (grafana/контейнеры ходят
+# · на host.docker.internal:8118 = docker-gateway), verify сверяет правило (W6 Фикс 2).
+TOR_PRIVOXY_NET: str = "172.16.0.0/12"
+TOR_PRIVOXY_PORT: int = 8118
+
 
 # region FUNC_validate_ports
 ## @purpose  Валидация extra_ports: integer 1-65535, запрет FORBIDDEN_EXTRA_PORTS (Docker API +
@@ -109,12 +118,13 @@ def validate_ports(ports: list[str]) -> list[int]:
 
 # region FUNC_build_rules
 ## @purpose  Построить упорядоченный список ufw-команд инкрементальной политики (S-14, T10.10):
-##           enable→defaults→ssh-first→baseline→extra(from ip)→deny модульных→stale-reconcile.
+##           enable→defaults→ssh-first→baseline→extra(from ip)→tor-privoxy(142 W6)→deny модульных→stale-reconcile.
 ##           НИКАКОГО disable/reset — firewall активен на всём протяжении (нет окна без файрвола).
-## @io       ⇥ extra_ports: list[int], source_ip: str|None → ⎋ list[list[str]] — команды для subprocess
+## @io       ⇥ extra_ports: list[int], source_ip: str|None, tor_enabled: bool = False →
+##              ⎋ list[list[str]] — команды для subprocess
 ## @complexity O(B + P + M) — B = baseline, P = extra, M = module-deny
 ## @raises   ConfigValidationError если extra_ports заданы без source_ip (S-8: никогда Anywhere)
-def build_rules(extra_ports: list[int], source_ip: str | None = None) -> list[list[str]]:
+def build_rules(extra_ports: list[int], source_ip: str | None = None, tor_enabled: bool = False) -> list[list[str]]:
     """Build the ordered ufw command list (incremental, firewall никогда не выключается)."""
     if extra_ports and not source_ip:
         raise ConfigValidationError(
@@ -135,6 +145,24 @@ def build_rules(extra_ports: list[int], source_ip: str | None = None) -> list[li
         ["ufw", "allow", "from", source_ip, "to", "any", "port", f"{port}/tcp", "comment", "platform-extra"]
         for port in extra_ports
     )
+    # 142 W6 (A2/A3): Tor/Privoxy — доступ с docker-моста (172.16.0.0/12) к privoxy :8118.
+    # Контейнеры (grafana telegram-канал, B14: host.docker.internal = docker-gateway) ходят
+    # на privoxy; правило было ручным ufw allow — теперь декларативный baseline при TOR_ENABLED.
+    if tor_enabled:
+        rules.append(
+            [
+                "ufw",
+                "allow",
+                "from",
+                TOR_PRIVOXY_NET,
+                "to",
+                "any",
+                "port",
+                f"{TOR_PRIVOXY_PORT}/tcp",
+                "comment",
+                "platform-tor-privoxy",
+            ]
+        )
     # Модульные внутренние порты — явный deny (defense-in-depth поверх 127.0.0.1-bind)
     rules.extend(
         ["ufw", "deny", f"{port}/tcp", "comment", "platform-module-deny"] for port in sorted(MODULE_PORTS_DENY)
@@ -194,10 +222,11 @@ def parse_ufw_status(status_text: str) -> tuple[bool, dict[int, str]]:
 
 # region FUNC_verify_firewall
 ## @purpose  Verify ufw status: active, baseline ALLOW, forbidden NOT ALLOW, 5432 DENY,
-##           модульные порты NOT ALLOW (S-8/T10.6 CHECK по реестру модулей).
-## @io       ⇥ status_text: str → ⎋ bool
+##           модульные порты NOT ALLOW (S-8/T10.6 CHECK по реестру модулей),
+##           tor-privoxy правило 8118 при TOR_ENABLED (142 W6).
+## @io       ⇥ status_text: str, tor_enabled: bool = False → ⎋ bool
 ## @complexity O(1) — parse + проверки
-def verify_firewall(status_text: str) -> bool:
+def verify_firewall(status_text: str, tor_enabled: bool = False) -> bool:
     """Verify ufw status against the policy. True = compliant."""
     active, port_actions = parse_ufw_status(status_text)
     if not active:
@@ -207,6 +236,15 @@ def verify_firewall(status_text: str) -> bool:
         if port_actions.get(port) != "ALLOW":
             logger.error("[IMP:10][firewall][verify] Expected port %d/tcp ALLOW not found", port)
             return False
+    # 142 W6 (A3): при TOR_ENABLED правило privoxy (172.16.0.0/12 → 8118) ОБЯЗАНО быть в статусе.
+    # ufw status verbose показывает его как `8118/tcp ALLOW IN 172.16.0.0/12  # platform-tor-privoxy`.
+    if tor_enabled and not re.search(rf"^\s*{TOR_PRIVOXY_PORT}/tcp\s+ALLOW", status_text, re.M):
+        logger.error(
+            "[IMP:10][firewall][verify] SECURITY: tor-privoxy rule %s→%d ALLOW missing (142 W6)",
+            TOR_PRIVOXY_NET,
+            TOR_PRIVOXY_PORT,
+        )
+        return False
     for port in FORBIDDEN_PORTS:
         if port_actions.get(port) == "ALLOW":
             logger.error("[IMP:10][firewall][verify] SECURITY: Docker API port %d is open in ufw", port)
@@ -220,6 +258,7 @@ def verify_firewall(status_text: str) -> bool:
             return False
     logger.info(
         "[IMP:9][firewall][verify] Firewall verified: active, 22/80/443 open, Docker ports closed, module ports denied"
+        + (" + tor-privoxy 8118 allow" if tor_enabled else "")
     )
     return True
 
@@ -252,13 +291,17 @@ def _apply_rules_subprocess(rules: list[list[str]]) -> bool:
 
 # region FUNC_run
 ## @purpose  Полный прогон: validate → build (incremental) → stale-reconcile → apply → verify.
-## @io       ⇥ extra_ports: list[str], source_ip: str|None → ⎋ bool
+##           142 W6: tor_enabled=None → os.environ TOR_ENABLED (φ1-процесс имеет env; параметр
+##           для тестируемости чистых функций).
+## @io       ⇥ extra_ports: list[str], source_ip: str|None, tor_enabled: bool|None → ⎋ bool
 ## @complexity O(R + L)
-def run(extra_ports: list[str], source_ip: str | None = None) -> bool:
+def run(extra_ports: list[str], source_ip: str | None = None, tor_enabled: bool | None = None) -> bool:
     """Full firewall pipeline: validate ports, build incremental rules, reconcile stale, apply, verify."""
+    if tor_enabled is None:
+        tor_enabled = os.environ.get("TOR_ENABLED", "false").lower() == "true"
     try:
         ports = validate_ports(extra_ports)
-        rules = build_rules(ports, source_ip)
+        rules = build_rules(ports, source_ip, tor_enabled=tor_enabled)
     except ConfigValidationError as exc:
         logger.error("[IMP:10][firewall][run] %s", exc)
         return False
@@ -270,6 +313,8 @@ def run(extra_ports: list[str], source_ip: str | None = None) -> bool:
     except OSError:
         before_text = ""
     desired_allow = set(BASELINE_PORTS) | set(ports)
+    if tor_enabled:
+        desired_allow.add(TOR_PRIVOXY_PORT)
     rules.extend(collect_stale_platform_rules(before_text, desired_allow))
     if not _apply_rules_subprocess(rules):
         return False
@@ -278,7 +323,7 @@ def run(extra_ports: list[str], source_ip: str | None = None) -> bool:
         status_text = status.stdout if status.returncode == 0 else ""
     except OSError:
         status_text = ""
-    return verify_firewall(status_text)
+    return verify_firewall(status_text, tor_enabled=tor_enabled)
 
 
 # endregion FUNC_run
@@ -299,6 +344,8 @@ def main() -> int:
     )
     parser.add_argument("extra_ports", nargs="*", help="Extra ports to allow from --source-ip (space-separated)")
     args = parser.parse_args()
+    # 142 W6: TOR_ENABLED читается из env внутри run() (None → env); CLI не принимает флаг —
+    # фасад firewall.sh вызывается из φ1, где TOR_ENABLED уже в окружении.
     return 0 if run(args.extra_ports, source_ip=args.source_ip) else 1
 
 

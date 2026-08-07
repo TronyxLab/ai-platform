@@ -98,7 +98,10 @@ LISTEN_HOST = os.environ.get("STATUS_PAGE_HOST", "0.0.0.0")
 NODE_NAME = os.environ.get("NODE_NAME", "test-node")
 NODE_CONFIGS_DIR = os.environ.get("NODE_CONFIGS_DIR", "/opt/node-configs")
 PLATFORM_DOMAIN = os.environ.get("PLATFORM_DOMAIN", "ai-platform.local")
-STATUS_METRICS_JSON = os.environ.get("STATUS_METRICS_JSON", "/run/platform/status-metrics.json")
+# 142 W2 (B21): прод-дефолт переехал из tmpfs /run/platform в persistent /var/lib/platform/run —
+# статус-страница переживает reboot (bind-mount не пустеет). Env-параметризация сохранена
+# (контракт core/modules/AGENTS.md §Compose-include: хост-пути через ${VAR:-default}).
+STATUS_METRICS_JSON = os.environ.get("STATUS_METRICS_JSON", "/var/lib/platform/run/status-metrics.json")
 PER_CHECK_TIMEOUT = int(os.environ.get("PER_CHECK_TIMEOUT", "5"))
 TOTAL_TIMEOUT = int(os.environ.get("TOTAL_TIMEOUT", "30"))
 

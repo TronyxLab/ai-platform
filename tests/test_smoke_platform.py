@@ -50,6 +50,7 @@ import time
 
 import pytest
 from _conftest.honesty import require_docker_or_fail
+from _conftest.smoke import _compose_file_args
 from conftest import (
     SMOKE_ENV,
     ldd_trajectory,
@@ -216,6 +217,7 @@ def test_all_compose_configs_valid(
     caplog: pytest.LogCaptureFixture,
     all_compose_files: dict[str, str],
     platform_env: dict[str, str],
+    platform_root: str,
 ) -> None:
     """
     # ▶ [∀ compose ∈ all_compose_files] → ◇ docker compose -f config → ⊕ [IMP:9][{name}] valid → ⎋ pass
@@ -229,6 +231,13 @@ def test_all_compose_configs_valid(
     # обязателен здесь явно. R4: отсутствие Docker → FAIL/skip через honesty-диспетчер,
     # не subprocess.CalledProcessError.
     require_docker_or_fail(reason="compose config validation requires Docker daemon")
+    # ⚠️ 142 W8 (R13): модульные base.yml ссылаются на volumes, объявленные ТОЛЬКО в root
+    # · docker-compose.yml (U-49: root — единственный SoT volumes) → изолированная валидация
+    # · `docker compose -f <base.yml> config` даёт «undefined volume X» (pre-existing R13).
+    # · Fix: валидация через root compose + COMPOSE_PROFILES=<module> — DD3-канон CI
+    # ·   («COMPOSE_PROFILES перед каждым docker compose config») — реальный рантайм-контекст.
+    root_compose = os.path.join(platform_root, "docker-compose.yml")
+    assert os.path.isfile(root_compose), f"root docker-compose.yml not found: {root_compose}"
     # endregion
 
     # region BLOCK_Assert_AtLeastOne
@@ -237,10 +246,18 @@ def test_all_compose_configs_valid(
 
     # region BLOCK_ValidateEach
     failed: list[str] = []
-    for module_name, compose_path in sorted(all_compose_files.items()):
+    for module_name, _compose_path in sorted(all_compose_files.items()):
         # [IMP:8][test_all_compose_configs_valid] Validating '{module_name}' compose
+        # 142 W8: COMPOSE_PROFILES=<module> изолирует один модуль в контексте root;
+        # NGINX_OVERLAY_DIR — B23 fail-fast (деплой-переменная nginx, в SMOKE_ENV отсутствует).
         result = _run_docker(
-            ["docker", "compose", "-f", compose_path, "config"],
+            ["docker", "compose", "-f", root_compose, "config"],
+            env_override={
+                "COMPOSE_PROFILES": module_name,
+                # NGINX_OVERLAY_DIR — B23 fail-fast; SMOKE_ENV несёт пустое значение из
+                # platform-env.yaml (прод-инжекция деплоем) — тест даёт валидный путь.
+                "NGINX_OVERLAY_DIR": "/tmp/nginx-overlay-test",
+            },
             timeout=60,
         )
         if result.returncode != 0:
@@ -252,7 +269,7 @@ def test_all_compose_configs_valid(
             failed.append(module_name)
         else:
             logger.info(
-                "[IMP:9][test_all_compose_configs_valid] ✅ '%s' compose config valid",
+                "[IMP:9][test_all_compose_configs_valid] ✅ '%s' compose config valid (root context)",
                 module_name,
             )
     # endregion
@@ -345,11 +362,18 @@ def test_platform_starts_all_containers(
         # only returns containers matching the current profile, missing other started modules.
         # --all returns ALL project containers regardless of profile, then we deduplicate and
         # filter one-shot containers below.
-        ps_args = ["docker", "compose", "-f", compose_path]
         test_override = os.path.join(os.path.dirname(compose_path), "docker-compose.test.yml")
-        if os.path.exists(test_override):
-            ps_args.extend(["-f", test_override])
-        ps_args.extend(["-p", "ai-platform-test", "ps", "--all", "--format", "{{.Name}}"])
+        ps_args = [
+            "docker",
+            "compose",
+            "-p",
+            "ai-platform-test",
+            *_compose_file_args(compose_path, test_override),
+            "ps",
+            "--all",
+            "--format",
+            "{{.Name}}",
+        ]
         result = _run_docker(
             ps_args,
             timeout=30,
@@ -503,11 +527,18 @@ def test_critical_services_healthy(
                 module_name,
             )
             continue
-        ps_args = ["docker", "compose", "-f", compose_path]
         test_override = os.path.join(os.path.dirname(compose_path), "docker-compose.test.yml")
-        if os.path.exists(test_override):
-            ps_args.extend(["-f", test_override])
-        ps_args.extend(["-p", "ai-platform-test", "ps", "--all", "--format", "{{.Name}}"])
+        ps_args = [
+            "docker",
+            "compose",
+            "-p",
+            "ai-platform-test",
+            *_compose_file_args(compose_path, test_override),
+            "ps",
+            "--all",
+            "--format",
+            "{{.Name}}",
+        ]
         result = _run_docker(
             ps_args,
             timeout=30,
@@ -791,6 +822,7 @@ def test_platform_cleanup(
     caplog: pytest.LogCaptureFixture,
     platform_services: dict[str, list[str]],
     all_compose_files: dict[str, str],
+    platform_env: dict[str, str],
 ) -> None:
     """
     ▶ [project_name] → ◇ == "ai-platform-test" ? → ⊕ [IMP:9] isolation OK

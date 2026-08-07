@@ -72,6 +72,17 @@ FROM nousresearch/hermes-agent:v2026.7.7.2
 COPY --from=validate /tmp/scripts/patch-basic-auth-provider.py /tmp/patch-basic-auth-provider.py
 RUN python3 /tmp/patch-basic-auth-provider.py && rm /tmp/patch-basic-auth-provider.py
 
+# ⚠️ 142 W8 (R13): rsync для context overlay (init.py 02-platform-init)
+# · Symptom: hermes-agent-test smoke падал «02-platform-init: line 131: rsync: command not found»
+# ·   (exited 127 → unhealthy → compose up --wait fail) — init.py использует rsync для
+# ·   CONTEXT_DIR/config → /opt/hermes/config overlay (первый init на чистом volume).
+# · Root: базовый образ nousresearch/hermes-agent (alpine) не содержит rsync (не входит
+# ·   в апстрим-сборку). Локальные dev-сборки и контекстные L2 работали, т.к. overlay
+# ·   доставлялся иначе; smoke на чистом L1-образе падал.
+# · Fix: apk add rsync (небольшой статический бинарь, alpine-репозиторий).
+# · Prevention: init.py — единственный потребитель rsync в рантайме образа.
+RUN apk add --no-cache rsync
+
 LABEL org.tronyxlab.patches="known-issues:#55985-basic-auth-provider-patched-2026-07-24"
 LABEL org.tronyxlab.version="${PLATFORM_VERSION:-dev}"
 

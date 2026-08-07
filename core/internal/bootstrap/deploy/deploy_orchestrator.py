@@ -46,7 +46,7 @@
 ##   _aggregate_severity [W:2] — enriched modules dict lookup, fallback per-module metadata call
 ##   _compute_exit_code [W:1] — CRIT>0 → 2, WARN>0 → 0, else → 0
 ##   _set_hc_marker [W:1] — touch /var/lib/platform/.bootstrap/.hc_done_in_deploy
-##   _create_status_metrics_json [W:1] — pre-create /run/platform/status-metrics.json (P1 fix)
+##   _create_status_metrics_json [W:1] — pre-create /var/lib/platform/run/status-metrics.json (P1 fix)
 ##   _invoke_module_interface [W:2] — bash subprocess wrapper for system module dispatch (D4)
 ## @usecases
 ##   - deploy-modules.sh facade → exec python3 deploy_orchestrator.py --node-yaml ... (prod bootstrap)
@@ -107,6 +107,7 @@ from core.internal.bootstrap.deploy.orchestrator_metrics import (
     status_metrics_json as _metrics_status_metrics_json,
 )
 from core.internal.llm import config_renderer
+from core.internal.shared import deploy_paths  # 142 W2: status-metrics.json → persistent run
 
 # DevPlan 118 C6: единый путь litellm-config.yml — shared/llm_paths (литерал удалён).
 from core.internal.shared.llm_paths import litellm_config_path
@@ -128,7 +129,7 @@ logger = logging.getLogger(__name__)
 # Локальные копии _HC_DONE_MARKER/_STATUS_METRICS_TEMPLATE УДАЛЕНЫ (дубли).
 # Маркер резолвится В CALL-TIME через _metrics_hc_marker_path(os.environ.get("CONTEXT")) —
 # import-time константа убрана (T9.19: per-context путь зависит от env на момент деплоя).
-_STATUS_METRICS_PATH = "/run/platform/status-metrics.json"
+_STATUS_METRICS_PATH = str(deploy_paths.status_metrics_json())
 # C5 (DevPlan 118): сборка bash -c делегирована в shared/module_interface.invoke — локальные
 # константы путей (paths.sh/module-interface.sh) УДАЛЕНЫ (единый источник в shared).
 
@@ -640,7 +641,7 @@ def _deploy_orchestrator(docker_names: list[str]) -> tuple[int, list[str]]:
 ##   - secrets_env_file/platform_root прокидываются в deploy_docker_module (паритет с
 ##     parallel_runner.deploy_docker_group, DevPlan 123 T8). Оба пути сходятся на одних и тех же
 ##     дефолтах _build_compose_args на ноде: platform_root or platform_remote_base() == /opt/platform,
-##     secrets_env_file or "/run/platform/secrets.env" — значения идентичны (дефолты совпадают).
+##     secrets_env_file or "/var/lib/platform/run/secrets.env" — значения идентичны (дефолты совпадают).
 def _deploy_sequential(
     enabled_names: list[str],
     modules_dir: str,
@@ -913,7 +914,7 @@ def _set_hc_marker() -> None:
 
 
 # region FUNC__create_status_metrics_json
-## @purpose  Pre-create /run/platform/status-metrics.json as valid empty JSON (P1 fix) — prevents
+## @purpose  Pre-create /var/lib/platform/run/status-metrics.json as valid empty JSON (P1 fix) — prevents
 ##           Docker from creating it as a directory during bind mount. Сериализация шаблона —
 ##           orchestrator_metrics.status_metrics_json (E6, pure).
 ## @io       ⇥ None → ⎋ None (side-effect: JSON file)

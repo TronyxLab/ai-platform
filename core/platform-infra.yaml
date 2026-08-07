@@ -151,7 +151,7 @@ env_defaults:
   CONTEXT_IMAGE: "ghcr.io/tronyxlab/hermes-agent-context:v2026.7.1"
   # ── Локальные оверрайды (RC-сессия 2026-08-03, dev-локали) ──────────────────
   # Пустые дефолты = прод-поведение compose (${VAR:-default} в base.yml):
-  #   NODE_CONFIGS_DIR → /opt/node-configs, STATUS_METRICS_JSON/HTPASSWD_FILE → /run/platform (tmpfs).
+  #   NODE_CONFIGS_DIR → /opt/node-configs, STATUS_METRICS_JSON/HTPASSWD_FILE → /var/lib/platform/run (142 W2).
   # Локально (macOS, Docker Desktop не шарит /opt и /run) .env переопределяет абсолютными путями.
   NODE_CONFIGS_DIR: ""
   STATUS_METRICS_JSON: ""

@@ -1,17 +1,20 @@
-# GREP_SUMMARY: bootstrap.mk, bootstrap-node, node-update, converge, render-vhosts, deploy-context
-# STRUCTURE: ┌variables┐ → ◇ bootstrap-node → ◇ node-update → ◇ converge → ◇ render-vhosts → ◇ deploy-context
+# GREP_SUMMARY: bootstrap.mk, bootstrap-node, node-update, converge, render-vhosts, deploy-context, core-deliver
+# STRUCTURE: ┌variables┐ → ◇ bootstrap-node → ◇ node-update → ◇ converge → ◇ render-vhosts → ◇ deploy-context → ◇ core-deliver
 # region MODULE_CONTRACT
-## @purpose  Bootstrap and node lifecycle targets — bootstrap-node, node-update, converge, render-vhosts, deploy-context
+## @purpose  Bootstrap and node lifecycle targets — bootstrap-node, node-update, converge, render-vhosts, deploy-context, core-deliver
 ## @scope    Included from root Makefile; delegates to core/entrypoints/
 ## @invariants
 ##   - bootstrap-node must be idempotent (AGENTS.md Invariant 6)
 ##   - converge: warnings (rc=1) не роняют make (exit 0), errors (rc=2) → exit 2 (make не может вернуть 1)
 ##   - deploy-context is idempotent (skips healthy projects)
+##   - core-deliver (142 W5): fallback-таргет CI-канала — rsync core → provision → node-update
+##     (локальное зеркало core-deploy.yml; имя НЕ конфликтует с forbidden-глаголами)
 ## @rationale Makefile include-split W4-E4: bootstrap targets isolated from CI/scaffold.
 ##            DevPlan 047: added deploy-context target for standalone context project deploy.
+##            DevPlan 142 W5: +core-deliver (fallback при GitHub Outage, A6).
 # endregion MODULE_CONTRACT
 
-.PHONY: bootstrap-node node-update converge render-vhosts deploy-context check-security
+.PHONY: bootstrap-node node-update converge render-vhosts deploy-context check-security core-deliver
 
 ## bootstrap-node: Idempotent node bootstrap
 ##   Usage: make bootstrap-node [NODE=<name>] [AGE_SECRET_KEY_FILE=<file>] [DRY_RUN=1] [AUTO_RECONCILE=1]
@@ -133,3 +136,25 @@ deploy-context:
 		--node "$(NODE)" \
 		$(if $(CONTEXT),--context "$(CONTEXT)")
 	@echo "[IMP:9][make][deploy-context] Context deploy complete"
+
+## core-deliver: Fallback-таргет CI-канала (142 W5, A6) — локальное зеркало core-deploy.yml
+##   Usage: make core-deliver NODE=<name> [AGE_SECRET_KEY_FILE=<file>] [DRY_RUN=1]
+##   Поток (как core-deploy.yml): rsync core/ + scripts/ + makefiles/ + platform-env.yaml →
+##     /opt/platform (guard'ы как workflow) → ssh make provision SCOPE=networks,volumes →
+##     ssh make node-update NODE=<n> (AGE_SECRET_KEY из локальной цепочки node_detect)
+##   Использование: GitHub Actions недоступны (Major Outage) / ручной деплой core.
+##   Variables:
+##     NODE               Node name (required)
+##     AGE_SECRET_KEY_FILE (optional) Path to AGE secret key file
+##     DRY_RUN            (optional) Set to 1 for dry-run mode (print commands, no mutations)
+core-deliver:
+	@echo "[IMP:9][make][core-deliver] Delivering core to NODE=$(NODE) (fallback CI-канал)..."
+	@if [[ -z "$(NODE)" ]]; then \
+		echo "[IMP:10][make][core-deliver] ERROR: NODE not set — usage: make core-deliver NODE=<name> [AGE_SECRET_KEY_FILE=<file>] [DRY_RUN=1]" >&2; \
+		exit 1; \
+	fi
+	@PLATFORM_ROOT="$(_platform_root)" bash $(_platform_root)/core/entrypoints/core-deliver.sh \
+		--node "$(NODE)" \
+		$(if $(AGE_SECRET_KEY_FILE),--age-secret-key-file '$(AGE_SECRET_KEY_FILE)') \
+		$(if $(filter 1,$(DRY_RUN)),--dry-run)
+	@echo "[IMP:9][make][core-deliver] Core delivery complete"

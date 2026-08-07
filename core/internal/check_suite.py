@@ -524,45 +524,54 @@ def _run_cmd(
             # ·   → последующий doxygen-check парсил дерево во время мутаций → 46 «unexpanded alias»
             # ·   (flex-баг 1.17.0) → gate/check флакали; орфан жил часами.
             # · Fix: start_new_session + killpg при TimeoutExpired (весь process-group).
-            result = subprocess.run(
+            # ⚠️ TRAP[BUG] · 2026-08-07 · HI · 142 W8: Python 3.14 УДАЛИЛ TimeoutExpired.pid
+            # · Symptom: gate падал «AttributeError: 'TimeoutExpired' object has no attribute 'pid'»
+            # ·   (check_suite._run_cmd killpg-ветка) — pid deprecated с 3.12, удалён в 3.14.
+            # · Root: subprocess.run(timeout=) теряет pid при таймауте — в 3.14 exc.pid больше нет.
+            # · Fix: Popen + communicate(timeout) — pid доступен через proc.pid (процесс жив до kill).
+            proc = subprocess.Popen(
                 tokens,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=timeout,
                 cwd=str(root),
                 env=env,
                 start_new_session=True,
             )
+            try:
+                proc_stdout, proc_stderr = proc.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                duration = (time.monotonic() - start) * 1000
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                    logger.warning(
+                        "[IMP:7][run_cmd][timeout] %s TIMEOUT after %ds — killed process group %d",
+                        cmd_str[:80],
+                        timeout,
+                        proc.pid,
+                    )
+                except (ProcessLookupError, PermissionError):
+                    pass  # процесс уже мёртв
+                proc.wait()
+                return CheckOutcome(
+                    name=tokens[0] if tokens else "?",
+                    exit_code=124,
+                    stderr=f"Timeout after {timeout}s",
+                    duration_ms=duration,
+                )
         duration = (time.monotonic() - start) * 1000
         logger.info(
             "[IMP:8][run_cmd][exec] %s → exit=%d (%.1fs)",
             " ".join(tokens)[:120],
-            result.returncode,
+            proc.returncode,
             duration / 1000,
         )
         return CheckOutcome(
             name=tokens[0],
-            exit_code=result.returncode,
-            stdout=result.stdout,
-            stderr=result.stderr,
+            exit_code=proc.returncode,
+            stdout=proc_stdout,
+            stderr=proc_stderr,
             duration_ms=duration,
-        )
-    except subprocess.TimeoutExpired as exc:
-        duration = (time.monotonic() - start) * 1000
-        # killpg: убить ВЕСЬ process-group (pytest-родитель + xdist-воркеры) — иначе орфаны
-        # продолжают мутировать дерево и ломают doxygen-check (TRAP выше)
-        try:
-            os.killpg(os.getpgid(exc.pid), signal.SIGKILL)
-            logger.warning(
-                "[IMP:7][run_cmd][timeout] %s TIMEOUT after %ds — killed process group %d",
-                cmd_str[:80],
-                timeout,
-                exc.pid,
-            )
-        except (ProcessLookupError, PermissionError):
-            pass  # процесс уже мёртв
-        return CheckOutcome(
-            name=tokens[0] if tokens else "?", exit_code=124, stderr=f"Timeout after {timeout}s", duration_ms=duration
         )
     except FileNotFoundError:
         duration = (time.monotonic() - start) * 1000

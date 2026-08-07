@@ -314,6 +314,80 @@ def test_phase_user_accounts_success_forced_command(monkeypatch, caplog) -> None
 # endregion FUNC_test_phase_user_accounts_success_forced_command
 
 
+# region FUNC_test_phase_user_accounts_ci_root_key_added
+## @purpose  142 W1 (A1): PLATFORM_CI_ROOT_KEY задан → add_ssh_key("root", key, home_dir="/root")
+##           вызывается (root authorized_keys для core-deploy root-канала). Фаза True.
+# 🧪 TRAP[TEST] · phase_user_accounts_ci_root_key · Behavioral · Regression: CI-root ключ не доставлялся
+# · Scenario: PLATFORM_CI_ROOT_KEY=ssh-ed25519 AAAA ci-root → add_ssh_key вызывается с
+# ·   username="root", home_dir="/root" (passwd-резолв root = /root, не /home/root);
+# ·   результат True; WARN-лога «not set» нет
+# · Last fail: 2026-08-06 (цикл 1/2 141) — ci-core-deploy ключ добавлялся ВРУЧНУЮ в authorized_keys
+# ·   после bootstrap (A1 из реестра ручных действий 142 §2)
+# · Remove if: φ2 перестанет доставлять CI-root ключ
+@ldd_trajectory
+def test_phase_user_accounts_ci_root_key_added(monkeypatch, caplog) -> None:
+    """142 W1: PLATFORM_CI_ROOT_KEY → add_ssh_key("root", key, home_dir="/root")."""
+    caplog.set_level(logging.INFO)
+    monkeypatch.setenv("PLATFORM_OWNER_KEY", "ssh-ed25519 AAAA owner")
+    monkeypatch.setenv("PLATFORM_CI_DEPLOY_KEY", "ssh-ed25519 AAAA deploy")
+    monkeypatch.setenv("PLATFORM_CI_ROOT_KEY", "ssh-ed25519 AAAA ci-root")
+    create_mock = mock.Mock()
+    add_key_mock = mock.Mock()
+    ensure_base_mock = mock.Mock()
+    monkeypatch.setattr(helpers_users, "create_user", create_mock)
+    monkeypatch.setattr(helpers_users, "add_ssh_key", add_key_mock)
+    monkeypatch.setattr(helpers_users, "ensure_projects_base", ensure_base_mock)
+
+    result = sys_phases.phase_user_accounts("/tmp/core", node_name="test-node", node_yaml="")
+
+    assert result is True
+    root_calls = [c for c in add_key_mock.call_args_list if c.args[0] == "root"]
+    assert root_calls, "add_ssh_key('root', ...) обязан вызываться (142 W1)"
+    assert root_calls[0].args[1] == "ssh-ed25519 AAAA ci-root", "передан именно ci_root_key"
+    assert root_calls[0].kwargs.get("home_dir") == "/root", (
+        f"root home_dir должен быть /root (не /home/root), got {root_calls[0].kwargs.get('home_dir')!r}"
+    )
+    assert "CI-root SSH key added" in caplog.text
+    logger.critical("[IMP:9][test] φ2: CI-root ключ → add_ssh_key(root, /root) ✓ (142 W1)")
+
+
+# endregion FUNC_test_phase_user_accounts_ci_root_key_added
+
+
+# region FUNC_test_phase_user_accounts_ci_root_key_missing_warns
+## @purpose  142 W1: PLATFORM_CI_ROOT_KEY отсутствует → WARN (semi-optional), фаза НЕ падает,
+##           add_ssh_key("root", ...) не вызывается.
+# 🧪 TRAP[TEST] · phase_user_accounts_ci_root_key_missing · NEGATIVE (R5) · Regression: отсутствие ключа молчит
+# · Scenario: env БЕЗ PLATFORM_CI_ROOT_KEY → WARN «PLATFORM_CI_ROOT_KEY not set», результат True,
+# ·   root-вызовов add_ssh_key нет (не блокирует bootstrap — core-deploy канал падает позже, на CI)
+# · Last fail: N/A (новый negative-тест 142 W1)
+# · Remove if: CI-root ключ становится обязательным (fatal)
+@ldd_trajectory
+def test_phase_user_accounts_ci_root_key_missing_warns(monkeypatch, caplog) -> None:
+    """142 W1: без PLATFORM_CI_ROOT_KEY → WARN + True, root-ключ не добавляется."""
+    caplog.set_level(logging.INFO)
+    monkeypatch.setenv("PLATFORM_OWNER_KEY", "ssh-ed25519 AAAA owner")
+    monkeypatch.setenv("PLATFORM_CI_DEPLOY_KEY", "ssh-ed25519 AAAA deploy")
+    monkeypatch.delenv("PLATFORM_CI_ROOT_KEY", raising=False)
+    create_mock = mock.Mock()
+    add_key_mock = mock.Mock()
+    ensure_base_mock = mock.Mock()
+    monkeypatch.setattr(helpers_users, "create_user", create_mock)
+    monkeypatch.setattr(helpers_users, "add_ssh_key", add_key_mock)
+    monkeypatch.setattr(helpers_users, "ensure_projects_base", ensure_base_mock)
+
+    result = sys_phases.phase_user_accounts("/tmp/core", node_name="test-node", node_yaml="")
+
+    assert result is True, "semi-optional: отсутствие ключа не роняет φ2"
+    root_calls = [c for c in add_key_mock.call_args_list if c.args[0] == "root"]
+    assert not root_calls, "root-ключ не добавляется при отсутствии env"
+    assert "PLATFORM_CI_ROOT_KEY not set" in caplog.text, "WARN обязан быть"
+    logger.critical("[IMP:9][test] φ2: без CI-root ключа → WARN + True ✓ (semi-optional)")
+
+
+# endregion FUNC_test_phase_user_accounts_ci_root_key_missing_warns
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # φ3 phase_platform_setup
 # ═══════════════════════════════════════════════════════════════════════════

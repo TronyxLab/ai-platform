@@ -23,6 +23,9 @@ import logging
 import os
 import sys
 
+# 142 W2: secrets.env → persistent /var/lib/platform/run (резолвер shared/deploy_paths)
+from core.internal.shared import deploy_paths
+
 logger = logging.getLogger(__name__)
 
 
@@ -109,7 +112,7 @@ def ssl_provision_via_orchestrator(core_dir: str, node_yaml: str) -> None:
         return
 
     issue_cert_script = os.path.join(bootstrap_dir, "issue-cert.sh")
-    secrets_env = os.environ.get("SECRETS_ENV_FILE", "/run/platform/secrets.env")
+    secrets_env = os.environ.get("SECRETS_ENV_FILE", str(deploy_paths.secrets_env_file()))
 
     # Dynamic import of cert_orchestrator
     spec = importlib.util.spec_from_file_location(

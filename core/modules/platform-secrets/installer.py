@@ -5,7 +5,7 @@
 ## @purpose  Idempotent systemd oneshot service installation for platform secrets decryption on boot.
 ##           Python-порт platform-secrets/install.sh (DevPlan 118 E7).
 ## @scope    Called during bootstrap deploy of system-type modules (invoke_module_interface install)
-##           via thin facade core/modules/platform-secrets/install.sh; generates /run/platform/secrets.env.
+##           via thin facade core/modules/platform-secrets/install.sh; generates /var/lib/platform/run/secrets.env (142 W2).
 ## @invariants
 ##   - Service runs before docker.service (Before=docker.service in unit file)
 ##   - Service does NOT start during install — runs on next boot (Type=oneshot, RemainAfterExit=yes)
@@ -14,7 +14,8 @@
 ##   - secrets.enc.yaml: ${PLATFORM_ROOT}/secrets/ + /opt/node-configs/secrets/ symlink-fallback
 ##   - ensure_platform_dirs: ${PLATFORM_ROOT}/ + prometheus-targets + secrets, setgid 2775
 ## @rationale Secrets must be available before Docker starts so containers receive env vars from
-##   tmpfs-based secrets.env at boot; systemd oneshot guarantees ordering without blocking boot.
+##   persistent secrets.env (/var/lib/platform/run, 142 W2 — tmpfs /run/platform не переживал reboot);
+##   systemd oneshot guarantees ordering without blocking boot.
 ##   Strangler E7: file-менеджмент + systemd → тестируемые pure functions (subprocess systemctl).
 ## @changes  2026-08-02 | DevPlan 118 E7 — Created (Python-порт platform-secrets/install.sh, 225 LOC)
 ## @see      core/modules/platform-secrets/install.sh (тонкий фасад)

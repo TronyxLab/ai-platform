@@ -74,18 +74,19 @@ main() {
     echo "[IMP:8][bootstrap][entrypoint] Batch-extracting node.yaml fields (--get-many)"
     # Волна 117 D8: stderr не глотаем — отсутствующий ключ = rc 0 + пустое значение (OK), файл не читается = rc 2/3/4 (WARN)
     local _batch_err; _batch_err="$(mktemp)"
-    if BATCH_OUTPUT="$(python3 -m core.internal.shared.node_yaml --file "${NODE_YAML}" --get-many owner_key:node.owner_key,ci_deploy_key:node.ci_deploy_key,platform_domain:domain,context:context,context0:contexts.0.name 2>"${_batch_err}")"; then
+    if BATCH_OUTPUT="$(python3 -m core.internal.shared.node_yaml --file "${NODE_YAML}" --get-many owner_key:node.owner_key,ci_deploy_key:node.ci_deploy_key,ci_root_key:node.ci_root_key,platform_domain:domain,context:context,context0:contexts.0.name 2>"${_batch_err}")"; then
         : # rc=0 — ключи могут отсутствовать → пустые значения (легитимно)
     else
         local _batch_rc=$?
         log_imp 7 "node-yaml" "Batch field extraction failed (rc=${_batch_rc}): $(tr '\n' ' ' < "${_batch_err}" | cut -c1-300)"
     fi
     rm -f "${_batch_err}"
-    OWNER_KEY=""; CI_DEPLOY_KEY=""; PLATFORM_DOMAIN=""; CONTEXT=""; CONTEXT0=""
+    OWNER_KEY=""; CI_DEPLOY_KEY=""; CI_ROOT_KEY=""; PLATFORM_DOMAIN=""; CONTEXT=""; CONTEXT0=""
     while IFS=$'\t' read -r alias value; do
         case "$alias" in
             owner_key)      OWNER_KEY="$value" ;;
             ci_deploy_key)  CI_DEPLOY_KEY="$value" ;;
+            ci_root_key)    CI_ROOT_KEY="$value" ;;
             platform_domain) PLATFORM_DOMAIN="$value" ;;
             context)        CONTEXT="$value" ;;
             context0)       CONTEXT0="$value" ;;
@@ -101,6 +102,14 @@ main() {
         echo "[IMP:9][bootstrap][entrypoint] ci_deploy_key resolved"
     else
         echo "[IMP:8][bootstrap][entrypoint] ci_deploy_key not set — ci-deploy restricted key setup will be skipped"
+    fi
+    # 142 W1 (A1): ci_root_key — ПУБЛИЧНАЯ часть VPS_SSH_KEY (core-deploy root-канал).
+    # Поле node.ci_root_key добавлено префлайтом P0.1; отсутствие → WARN (не FATAL —
+    # CI-root ключ не блокирует локальный bootstrap, только core-deploy после него).
+    if [[ -n "$CI_ROOT_KEY" ]]; then
+        echo "[IMP:9][bootstrap][entrypoint] ci_root_key resolved"
+    else
+        echo "[IMP:7][bootstrap][entrypoint] ci_root_key not set — CI root-shell канал (core-deploy) будет недоступен"
     fi
     [[ -n "$PLATFORM_DOMAIN" ]] && echo "[IMP:9][bootstrap][entrypoint] PLATFORM_DOMAIN=${PLATFORM_DOMAIN}"
     [[ -n "$CONTEXT" ]] && echo "[IMP:9][bootstrap][entrypoint] CONTEXT=${CONTEXT}"
@@ -122,6 +131,7 @@ main() {
         local a=(--node-name "$NODE_NAME" --node-yaml "$NODE_YAML" --owner-key "$OWNER_KEY" --resume)
         [[ -n "${DETECTED_AGE_KEY}" ]] && a+=(--age-secret-key "${DETECTED_AGE_KEY}")
         [[ -n "${CI_DEPLOY_KEY}" ]] && a+=(--ci-deploy-key "${CI_DEPLOY_KEY}")
+        [[ -n "${CI_ROOT_KEY}" ]] && a+=(--ci-root-key "${CI_ROOT_KEY}")
         [[ -n "${PLATFORM_DOMAIN:-}" ]] && a+=(--platform-domain "${PLATFORM_DOMAIN}")
         [[ -n "${CONTEXT:-}" ]] && a+=(--context "${CONTEXT}")
         a+=("${PASSTHROUGH_ARGS[@]}")
@@ -140,7 +150,7 @@ main() {
         echo "[IMP:9][bootstrap][scp] SCP phase complete"
     fi
 
-    REMOTE_CMD="$(build_ssh_cmd "${NODE_NAME}" "${OWNER_KEY}" "${CI_DEPLOY_KEY}" "${DETECTED_AGE_KEY}" "${PASSTHROUGH_ARGS[@]}")"
+    REMOTE_CMD="$(build_ssh_cmd "${NODE_NAME}" "${OWNER_KEY}" "${CI_DEPLOY_KEY}" "${DETECTED_AGE_KEY}" "${CI_ROOT_KEY}" "${PASSTHROUGH_ARGS[@]}")"
     local masked_remote_cmd="${REMOTE_CMD}"
     [[ -n "${DETECTED_AGE_KEY}" ]] && { local m; m="$(echo "${DETECTED_AGE_KEY}" | cut -c1-8)"; masked_remote_cmd="${REMOTE_CMD//${DETECTED_AGE_KEY}/<AGE_KEY:${m}...>}"; }
     $DRY_RUN && { echo "[IMP:8][bootstrap][dry-run] DRY-RUN: ssh ${SSH_OPTS_COMMON[*]} root@${SSH_HOST} ${masked_remote_cmd}" >&2; echo "[IMP:9][bootstrap][dry-run] DRY-RUN complete" >&2; exit 0; }

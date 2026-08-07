@@ -37,6 +37,7 @@ import logging
 import os
 import platform as _platform
 import subprocess
+import sys
 import textwrap
 import threading
 import time as _time
@@ -52,6 +53,38 @@ from _conftest.ldd import _ensure_volume_dirs
 from _conftest.networks import TEST_NETWORKS, get_network_manager, is_production_host
 from _conftest.smoke_env_generated import SMOKE_ENV_GENERATED
 from _conftest.wave_pipeline import _init_wave_events, signal_wave_ready
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Root compose SoT (142 W8, R13)
+# ═══════════════════════════════════════════════════════════════════════════
+# Модульные docker-compose.base.yml ссылаются на volumes, объявленные ТОЛЬКО в root
+# docker-compose.yml (U-49: root — единственный SoT volumes). Изолированная инвокация
+# модульного compose → «undefined volume X» (pre-existing R13: ci-docker давно красная).
+# Канон: root compose ПЕРВЫМ в цепочке -f (include'ит base.yml, объявляет volumes/networks),
+# COMPOSE_PROFILES=<module> изолирует один модуль (DD3-канон CI).
+
+_ROOT_COMPOSE: Path = Path(__file__).resolve().parent.parent.parent / "docker-compose.yml"
+
+
+def _compose_file_args(compose_path: str | Path, test_override: str | Path | None = None) -> list[str]:
+    """Построить цепочку -f для compose-инвокаций: [root, (test)?].
+
+    ## @purpose — 142 W8 (R13): все smoke-инвокации обязаны включать root compose
+    ##            (volumes/networks SoT, U-49). Модульный base НЕ передаётся явно —
+    ##            root include'ит его (FL1-контракт: include сохраняет базу резолюции
+    ##            относительных путей каждого файла; явный -f base первым ломал
+    ##            include-пути root, а root первым ломал модульные ./config/ пути).
+    ## @io — ⇥ compose_path: модульный base.yml (для директории/имени), test_override: test.yml
+    ##       → ⎋ list[str] — аргументы -f для docker compose
+    ## @complexity — O(1)
+    ## @invariants — root compose обязателен (U-49); COMPOSE_PROFILES=<module> изолирует модуль
+    ##               (DD3-канон CI); верифицировано: loki-test Healthy на root+test цепочке (142 W8)
+    """
+    args = ["-f", str(_ROOT_COMPOSE)]
+    if test_override is not None and os.path.exists(str(test_override)):
+        args.extend(["-f", str(test_override)])
+    return args
+
 
 # region SMOKE_PLATFORM_FIXTURES
 ## @purpose — Session-scoped fixtures and helpers for smoke platform tests.
@@ -109,8 +142,23 @@ _COMPOSE_EXTRA_TIMEOUT = 30  # extra timeout added to PLATFORM_COMPOSE_TIMEOUT
 _STATIC_SMOKE_ENV: dict[str, str] = {
     "COMPOSE_PROJECT_NAME": "ai-platform-test",
     "PLATFORM_DIR": "/tmp/ai-platform-test",
+    # 142 W8 (R13): NGINX_OVERLAY_DIR — B23 fail-fast (${VAR:?}), в platform-env.yaml пустое
+    # (прод-инжекция деплоем) → smoke-compose падал «required variable ... missing» на ВСЕХ
+    # модулях (nginx включён в root include каждого стека). Статика побеждает env_defaults
+    # (TRAP[DECISION] 2026-07-31 merge order) — тест-путь для overlay-каталога.
+    "NGINX_OVERLAY_DIR": "/tmp/nginx-overlay-test",
     "S3_ENDPOINT_URL": "",  # 🧐 TRAP[DECISION] · 2026-07-24 · — · Empty — skip S3 in test · Rejected: реальный S3 endpoint в CI · Reason: production endpoint unreachable in CI (deferred workaround) · Rev: CI-доступ к S3
-    "NGINX_CERT_DIR": "/etc/nginx/dev-certs",
+    # 142 W8 (R13): NGINX_CERT_DIR — host-директория с live/<PLATFORM_DOMAIN>/ структурой
+    # (vhost-шаблоны nginx ссылаются на /etc/letsencrypt/live/...). Значение создаётся
+    # в platform_services (generate_dev_certs_smoke) — старый /etc/nginx/dev-certs был
+    # несуществующим host-путём → docker монтировал пустую директорию → nginx emerg.
+    "NGINX_CERT_DIR": "/tmp/nginx-certs",
+    # 142 W8 (R13): PROMETHEUS_TARGETS_DIR/RULES_DIR — прод-пути /opt/platform/* не шарится
+    # Docker Desktop (macOS) → monitoring compose up «mounts denied» (R13 pre-existing).
+    # tmp-директории создаются fixture'ой (_SMOKE_VOLUME_BIND_DIRS); статика побеждает
+    # env_defaults (TRAP[DECISION] 2026-07-31 merge order).
+    "PROMETHEUS_TARGETS_DIR": "/tmp/prometheus-targets",
+    "PROMETHEUS_RULES_DIR": "/tmp/prometheus-rules",
     "NODE_NAME": "test-node",
     # ⚠️ TRAP[BUG] · 2026-07-27 · HI · CONTEXT_IMAGE must be set for smoke tests
     # · Root: base.yml default ${CONTEXT_IMAGE:-ghcr.io/...@sha256:STALE} has stale SHA;
@@ -396,7 +444,13 @@ def _run_docker_smoke(
     ## @io — ⇥ args, env_override, timeout → ⎋ CompletedProcess
     ## @complexity — O(1)
     """
-    cmd_env = {**os.environ, **SMOKE_ENV}  # noqa: F821 — SMOKE_ENV ленивый (PEP 562 __getattr__, T12.4)
+    # ⚠️ TRAP[BUG] · 2026-08-06 · HI · R13 (142 W8): `**SMOKE_ENV` — NameError
+    # · Symptom: ci-docker smoke-шаг падал «NameError: name 'SMOKE_ENV' is not defined»
+    # ·   в _run_docker_smoke (после 139-волны: lazy SMOKE_ENV через PEP 562 __getattr__).
+    # · Root: LOAD_GLOBAL внутри модуля НЕ триггерит module __getattr__ (PEP 562 работает
+    # ·   только для attribute access извне) — глобал SMOKE_ENV не существует.
+    # · Fix: явный вызов get_smoke_env() (тот же кэш, тот же мерж — T12.4).
+    cmd_env = {**os.environ, **get_smoke_env()}
     if env_override:
         cmd_env.update(env_override)
     return subprocess.run(
@@ -612,11 +666,15 @@ def _start_single_module(
         )
         return {"success": False, "module_name": module_name}
 
+    # 142 W8 (R13): TEST_MODULE_DIR — абсолютный путь модуля для относительных bind-маунтов
+    # тестовых оверрайдов (${TEST_MODULE_DIR:-./...} в test.yml). relative-пути в явных -f
+    # файлах резолвятся от project-directory (root compose), не от модуля.
+    _test_module_env = {"COMPOSE_PROFILES": module_name, "TEST_MODULE_DIR": os.path.dirname(compose_path)}
+
     # ── Build compose base args (files + project name) ──────────────
-    compose_base_args = ["docker", "compose", "-f", compose_path]
+    # 142 W8 (R13): root compose первым (volumes/networks SoT, U-49) + модульный base + test
     test_override = os.path.join(os.path.dirname(compose_path), "docker-compose.test.yml")
-    if os.path.exists(test_override):
-        compose_base_args.extend(["-f", test_override])
+    compose_base_args = ["docker", "compose", *_compose_file_args(compose_path, test_override)]
     macos_override = os.path.join(os.path.dirname(compose_path), "docker-compose.macos.yml")
     if _platform.system() == "Darwin" and os.path.exists(macos_override):
         compose_base_args.extend(["-f", macos_override])
@@ -628,7 +686,7 @@ def _start_single_module(
     # share the same compose project name (ai-platform-test) but are defined
     # in different compose files. Global cleanup above already removed orphans.
     _down_args = [*compose_base_args, "down", "--timeout", str(compose_down_timeout)]
-    _run_docker_smoke(_down_args, timeout=20, env_override={"COMPOSE_PROFILES": module_name})
+    _run_docker_smoke(_down_args, timeout=20, env_override=_test_module_env)
 
     # ── Start up (with retry for transient failures) ──────────────────
     # ⚠️ TRAP[DECISION] · 2026-07-23 · → · Retry on transient compose failures
@@ -655,7 +713,7 @@ def _start_single_module(
             _time.sleep(_RETRY_DELAY)
             # ── Re-run pre-cleanup before retry ──────────────────────────
             _down_args = [*compose_base_args, "down", "--timeout", str(compose_down_timeout)]
-            _run_docker_smoke(_down_args, timeout=20, env_override={"COMPOSE_PROFILES": module_name})
+            _run_docker_smoke(_down_args, timeout=20, env_override=_test_module_env)
 
         # ── Start up ──────────────────────────────────────────────────
         if module_name == "minio":
@@ -671,7 +729,7 @@ def _start_single_module(
             result = _run_docker_smoke(
                 compose_up_args,
                 timeout=compose_timeout + compose_extra_timeout,
-                env_override={"COMPOSE_PROFILES": module_name},
+                env_override=_test_module_env,
             )
             if result.returncode == 0:
                 _minio_ok = _wait_for_minio_healthy(
@@ -700,7 +758,7 @@ def _start_single_module(
             result = _run_docker_smoke(
                 compose_up_args,
                 timeout=compose_timeout + compose_extra_timeout,
-                env_override={"COMPOSE_PROFILES": module_name},
+                env_override=_test_module_env,
             )
 
         if result.returncode != 0:
@@ -715,9 +773,7 @@ def _start_single_module(
                 continue
             # ── Diagnostic: collect logs for failure analysis ─────────────
             log_args = [*compose_base_args, "logs", "--tail", "50", "--no-color"]
-            logs = _run_docker_smoke(
-                log_args, timeout=docker_log_timeout, env_override={"COMPOSE_PROFILES": module_name}
-            )
+            logs = _run_docker_smoke(log_args, timeout=docker_log_timeout, env_override=_test_module_env)
             _logger.error(
                 "[IMP:9][conftest][_start_single_module] Failed to start '%s' — "
                 "returncode=%d\nstderr: %s\ndiagnostic logs:\n%s",
@@ -738,7 +794,7 @@ def _start_single_module(
         _ps_check = _run_docker_smoke(
             [*compose_base_args, "ps", "--all", "--format", "{{.Name}}"],
             timeout=15,
-            env_override={"COMPOSE_PROFILES": module_name},
+            env_override=_test_module_env,
         )
         _container_count = len([cname for cname in _ps_check.stdout.strip().splitlines() if cname.strip()])
         if _container_count == 0:
@@ -838,7 +894,32 @@ def _module_container_running(
     if module_name in started:
         return True  # module started successfully
     if module_name not in failed:
-        # Module was never started — not in started, not in failed
+        # Module not yet in started/failed — волна ещё выполняется в фоновом потоке
+        # (wave-pipeline: поздние волны стартуют параллельно с тестами; ресурсная гонка
+        # Docker Desktop → модуль может быть НЕ в списках на момент проверки, 142 W8 R13).
+        # Poll docker inspect до WAVE_WAIT_TIMEOUT — устойчивость вместо ложного False.
+        import subprocess as _sp
+
+        deadline = _time.monotonic() + 120
+        while _time.monotonic() < deadline:
+            try:
+                _r = _sp.run(
+                    ["docker", "inspect", "-f", "{{.State.Running}}", container_name],
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                )
+                if _r.returncode == 0 and _r.stdout.strip() == "true":
+                    logger.info(
+                        "[IMP:8][R4][%s] Module '%s' container '%s' detected running (wave in progress)",
+                        module_name,
+                        module_name,
+                        container_name,
+                    )
+                    return True
+            except (_sp.TimeoutExpired, OSError):
+                pass
+            _time.sleep(5)
         logger.error(
             "[IMP:9][R4][%s] Module '%s' was never started by platform_services "
             "(missing @pytest.mark.requires_docker on test?)",
@@ -1017,6 +1098,12 @@ def platform_services(
 
     _logger.info("[IMP:8][conftest][platform_services] Test data files created for status-page bind-mount")
 
+    # ── 142 W8 (R13): dev-сертификаты для nginx-test (live/<domain>/ структура) ──
+    # vhost-шаблоны nginx (platform-default.conf.template) ссылаются на
+    # /etc/letsencrypt/live/${PLATFORM_DOMAIN}/ — NGINX_CERT_DIR монтируется как
+    # /etc/letsencrypt:ro, источник обязан содержать live/ai-platform.local/{fullchain,privkey}.pem.
+    _generate_dev_certs_smoke()
+
     # ── Acquire external + test networks via NetworkLeaseManager ──────────────
     _logger.info("[IMP:8][conftest][platform_services] Acquiring external and test networks via NetworkLeaseManager")
     _nm = get_network_manager()
@@ -1033,10 +1120,9 @@ def platform_services(
     #    global cleanup at start, per-module down WITHOUT --remove-orphans.
     _logger.info("[IMP:8][conftest][platform_services] Global pre-cleanup: down all compose files")
     for _cleanup_name, _cleanup_path in sorted(all_compose_files.items()):
-        _cleanup_args = ["docker", "compose", "-f", _cleanup_path]
+        # 142 W8 (R13): root compose в цепочке (volumes SoT, U-49)
         _test_override = os.path.join(os.path.dirname(_cleanup_path), "docker-compose.test.yml")
-        if os.path.exists(_test_override):
-            _cleanup_args.extend(["-f", _test_override])
+        _cleanup_args = ["docker", "compose", *_compose_file_args(_cleanup_path, _test_override)]
         _cleanup_args.extend(
             ["-p", "ai-platform-test", "down", "--timeout", str(_COMPOSE_DOWN_TIMEOUT), "--remove-orphans"]
         )
@@ -1086,12 +1172,18 @@ def platform_services(
         _pb_compose = all_compose_files.get(_pb_module)
         if _pb_compose is None:
             continue
-        _pb_build_args = ["docker", "compose", "-f", _pb_compose]
+        # 142 W8 (R13): root compose в цепочке (volumes SoT, U-49)
         _pb_test_override = os.path.join(os.path.dirname(_pb_compose), "docker-compose.test.yml")
-        if os.path.exists(_pb_test_override):
-            _pb_build_args.extend(["-f", _pb_test_override])
+        _pb_build_args = ["docker", "compose", *_compose_file_args(_pb_compose, _pb_test_override)]
         _pb_build_args.extend(["-p", "ai-platform-test", "build", "--no-cache"])
-        _pb_result = _run_docker_smoke(_pb_build_args, timeout=180, env_override={"COMPOSE_PROFILES": _pb_module})
+        _pb_result = _run_docker_smoke(
+            _pb_build_args,
+            timeout=180,
+            env_override={
+                "COMPOSE_PROFILES": _pb_module,
+                "TEST_MODULE_DIR": os.path.dirname(_pb_compose),
+            },
+        )
         if _pb_result.returncode != 0:
             _logger.warning(
                 "[IMP:8][conftest][platform_services] Pre-build failed for '%s' (returncode=%d) — "
@@ -1285,10 +1377,8 @@ def platform_services(
         compose_path = all_compose_files.get(module_name)
         if compose_path is None:
             continue
-        stop_args = ["docker", "compose", "-f", compose_path]
         test_override = os.path.join(os.path.dirname(compose_path), "docker-compose.test.yml")
-        if os.path.exists(test_override):
-            stop_args.extend(["-f", test_override])
+        stop_args = ["docker", "compose", *_compose_file_args(compose_path, test_override)]
         macos_override = os.path.join(os.path.dirname(compose_path), "docker-compose.macos.yml")
         if _platform.system() == "Darwin" and os.path.exists(macos_override):
             stop_args.extend(["-f", macos_override])
@@ -1329,6 +1419,41 @@ def platform_services(
         )
 
     _logger.info("[IMP:9][conftest][platform_services] Cleanup complete")
+
+
+# region FUNC__generate_dev_certs_smoke
+## @purpose  142 W8 (R13): генерация dev-сертификатов для smoke nginx-test.
+##           Создаёт /tmp/nginx-certs/live/ai-platform.local/{fullchain,privkey}.pem
+##           (структура, ожидаемая vhost-шаблонами: /etc/letsencrypt/live/${PLATFORM_DOMAIN}/).
+## @io       ⇥ None → ⎋ None (best-effort; лог при сбое)
+## @complexity O(1) + 1 subprocess (dev_cert_generator)
+def _generate_dev_certs_smoke() -> None:
+    """Generate dev certs for nginx smoke (live/<domain>/ layout, 142 W8)."""
+    cert_root = Path(os.environ.get("NGINX_CERT_DIR", "/tmp/nginx-certs"))
+    domain = os.environ.get("PLATFORM_DOMAIN", "ai-platform.local")
+    live_dir = cert_root / "live" / domain
+    try:
+        live_dir.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "core.modules.nginx.dev_cert_generator",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env={**os.environ, "DEV_CERTS_DIR": str(live_dir)},
+            check=True,
+        )
+        logging.getLogger(__name__).info("[IMP:9][conftest][platform_services] Dev certs generated at %s", live_dir)
+    except (OSError, subprocess.CalledProcessError) as _exc:
+        logging.getLogger(__name__).warning(
+            "[IMP:7][conftest][platform_services] Dev certs generation failed (nginx-test may fail): %s", _exc
+        )
+
+
+# endregion FUNC__generate_dev_certs_smoke
 
 
 # endregion SMOKE_PLATFORM_FIXTURES

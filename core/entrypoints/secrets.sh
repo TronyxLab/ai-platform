@@ -18,7 +18,7 @@ source "${_EP_DIR}/../lib/paths.sh"
 if [[ "${1:-}" == "--help" ]]; then
     echo "Usage: $0 [NODE]"
     echo ""
-    echo "Decrypt SOPS/age secrets to SECRETS_ENV_FILE (default /run/platform/secrets.env)."
+    echo "Decrypt SOPS/age secrets to SECRETS_ENV_FILE (default /var/lib/platform/run/secrets.env)."
     echo "Required env: AGE_SECRET_KEY (or SOPS_AGE_KEY), SECRETS_FILE (or fallback /opt/node-configs/secrets/*.enc.yaml)."
     echo ""
     echo "Implementation: delegates to core/internal/secrets/decrypt-secrets.sh"

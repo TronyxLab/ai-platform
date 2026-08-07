@@ -23,6 +23,9 @@ import shlex
 
 # B3: канонический node-configs base — shared/deploy_paths (литерал /opt/node-configs удалён)
 from core.internal.shared.deploy_paths import node_configs_remote
+
+# 142 W2: secrets.env → persistent /var/lib/platform/run (резолвер shared/deploy_paths)
+from core.internal.shared.deploy_paths import secrets_env_file as _secrets_env_file
 from core.internal.shared.exceptions import ConfigNotFoundError
 from core.internal.shared.subprocess_io import run_subprocess
 
@@ -80,14 +83,14 @@ def decrypt_secrets(core_dir: str) -> None:
 ##   - env отсутствует + enc ЕСТЬ → decrypt FAILED → FATAL (ConfigNotFoundError)
 ##   ⚠️ TRAP[BUG] · 2026-07-31 · P1 · Чистая нода без secrets не могла забутстрапиться
 ##   · Symptom: φ4 secrets_provision FATAL на ноде без AGE-секретов: "secrets.env not found:
-##   ·   /run/platform/secrets.env" — decrypt SKIP (нет enc-файла) → env не создан →
+##   ·   /var/lib/platform/run/secrets.env" — decrypt SKIP (нет enc-файла) → env не создан →
 ##   ·   ensure падал ConfigNotFoundError. E2E DevPlan 095 T6.
 ##   · Fix: env отсутствует + НЕТ enc-файла → нода без операторских секретов → SKIP до autogen.
 ##   · Prevention: no-secrets нода (modules=[], без secrets/) — валидное состояние; FATAL только
 ##   ·   при реальном сбое расшифровки.
 def ensure_secrets_exist(core_dir: str) -> None:
     """Ensure secrets.env exists AND all autogen secrets are generated."""
-    secrets_env = os.environ.get("SECRETS_ENV_FILE", "/run/platform/secrets.env")
+    secrets_env = os.environ.get("SECRETS_ENV_FILE", str(_secrets_env_file()))
 
     # Step 1: Check file exists (after decrypt)
     if not os.path.isfile(secrets_env):

@@ -9,7 +9,7 @@
 ##   - Port: 18082:8080 (shifted from base 8080 for test isolation; 18080 conflicts with nginx-test, 18081 with cadvisor-test)
 ##   - profiles: [status-page] (consistent with base)
 ##   - !override tag on overridden keys per test overlay convention (F-7)
-##   - status-metrics.json: mounted from /tmp/run/platform/status-metrics.json (test fixture)
+##   - status-metrics.json: mounted from /tmp/run/platform/status-metrics.json (test fixture, 142 W2 container path)
 ## @rationale Test overlay pattern from F-7: shifted ports prevent port conflicts in CI;
 ##            unique container_name prevents collision with base compose services
 ##            when both test and base compose files are loaded.
@@ -28,9 +28,9 @@ services:
     ports: !override
       - "18082:8080"
     volumes: !override
-      - ./app.py:/app/app.py:ro
+      - ${TEST_MODULE_DIR:-.}/app.py:/app/app.py:ro
       - /tmp/test-node-configs/test-node/node.yaml:/opt/node-configs/test-node/node.yaml:ro
-      - /tmp/run/platform/status-metrics.json:/run/platform/status-metrics.json:ro
+      - /tmp/run/platform/status-metrics.json:/var/lib/platform/run/status-metrics.json:ro
 
 networks:
   test-proxy-net:

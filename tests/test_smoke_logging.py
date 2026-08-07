@@ -27,6 +27,7 @@ import time
 import pytest
 import requests
 from _conftest.ldd import _print_ldd_trajectory
+from _conftest.smoke import _compose_file_args
 
 from tests.helpers.gate_helpers import repo_root
 
@@ -163,10 +164,7 @@ def logging_compose():
         "compose",
         "-p",
         _SMOKE_PROJECT,
-        "-f",
-        str(_COMPOSE_BASE),
-        "-f",
-        str(_COMPOSE_TEST),
+        *_compose_file_args(_COMPOSE_BASE, _COMPOSE_TEST),
         "up",
         "-d",
         "--wait",
@@ -190,10 +188,7 @@ def logging_compose():
                 "compose",
                 "-p",
                 _SMOKE_PROJECT,
-                "-f",
-                str(_COMPOSE_BASE),
-                "-f",
-                str(_COMPOSE_TEST),
+                *_compose_file_args(_COMPOSE_BASE, _COMPOSE_TEST),
                 "logs",
                 "--tail",
                 "50",
@@ -232,10 +227,7 @@ def logging_compose():
         "compose",
         "-p",
         _SMOKE_PROJECT,
-        "-f",
-        str(_COMPOSE_BASE),
-        "-f",
-        str(_COMPOSE_TEST),
+        *_compose_file_args(_COMPOSE_BASE, _COMPOSE_TEST),
         "down",
         "-v",
         "--remove-orphans",

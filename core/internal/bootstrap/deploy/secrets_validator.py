@@ -61,7 +61,7 @@ logger = logging.getLogger(__name__)
 ##           ⚡ raise FileNotFoundError/ValueError if manifest missing/malformed (strict, DevPlan 116 T4)
 ## @complexity 2 — single YAML parse (delegated to shared iter_secrets) + linear pass over secrets list
 ## @invariants
-##   - Checks both os.environ and SECRETS_ENV_FILE (default /run/platform/secrets.env)
+##   - Checks both os.environ and SECRETS_ENV_FILE (default /var/lib/platform/run/secrets.env)
 ##   - Only secrets where consumers includes module_name AND tier ∈ {required, generated} are checked
 ##   - STRICT: manifest absent/malformed → RAISE (no graceful degradation — manifest always
 ##     delivered with core/; «gate зелёный, система врёт» устранён, invariant 7)

@@ -71,10 +71,10 @@ _PATTERNS: list[dict[str, str]] = [
     },
     {
         "id": "P4",
-        "name": "Shell dot-sourcing absolute /run/platform/secrets",
-        "pattern": r"\.\s+/run/platform/secrets",
+        "name": "Shell dot-sourcing absolute /var/lib/platform/run/secrets",
+        "pattern": r"\.\s+/var/lib/platform/run/secrets",
         "include": "*.sh",
-        "description": "Shell dot-sourcing absolute path /run/platform/secrets.env",
+        "description": "Shell dot-sourcing absolute path /var/lib/platform/run/secrets.env",
     },
     {
         "id": "P5",

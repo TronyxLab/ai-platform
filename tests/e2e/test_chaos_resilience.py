@@ -46,7 +46,7 @@ from tests.e2e.chaos_audit import (
 logger = logging.getLogger(__name__)
 
 _FILES_DIR = Path(__file__).resolve().parents[2] / ".ai" / "plans" / "126-chaos-resilience" / "files"
-_SECRETS_ENV = "/run/platform/secrets.env"
+_SECRETS_ENV = "/var/lib/platform/run/secrets.env"
 
 
 # region FUNC_helpers

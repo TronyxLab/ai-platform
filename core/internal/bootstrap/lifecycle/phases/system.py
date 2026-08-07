@@ -75,7 +75,9 @@ def phase_system_bootstrap(core_dir: str, node_name: str, node_yaml: str) -> boo
     # ── 1. Install apt dependencies ──
     try:
         tor_enabled = os.environ.get("TOR_ENABLED", "false").lower() == "true"
-        packages = ["make", "curl", "ufw", "python3-yaml", "python3-jsonschema"]
+        # 142 W7 (T9): age — CLI для decrypt-проверок chaos T9 (age -d) и операторских
+        # операций на ноде; отсутствовал в φ1 → chaos T9 падал «age: command not found».
+        packages = ["make", "curl", "ufw", "python3-yaml", "python3-jsonschema", "age"]
         if tor_enabled:
             packages.extend(["tor", "privoxy", "obfs4proxy"])
             logger.info("[IMP:8][phase:system_bootstrap] Tor enabled — added tor/privoxy/obfs4proxy packages")
@@ -259,6 +261,9 @@ def phase_system_bootstrap(core_dir: str, node_name: str, node_yaml: str) -> boo
 ## @invariants
 ##   - PLATFORM_OWNER_KEY is REQUIRED — missing key triggers PlatformFatalError
 ##   - PLATFORM_CI_DEPLOY_KEY is semi-optional — missing key logs warning
+##   - PLATFORM_CI_ROOT_KEY (142 W1) is semi-optional — missing key logs warning;
+##     add_ssh_key("root", key) идемпотентен (duplicate-check, T9.18) — существующие
+##     строки не дублируются, owner-root; root authorized_keys вне S7-скоупа (S7 — ci-deploy)
 ##   - Both users get 'docker' group membership
 ##   - ci-deploy gets forced-command prefix for orchestrator_cli dispatch
 ##     (единственный писатель ci-deploy ключа — users.py add_ssh_key, волна 117 D1)
@@ -267,7 +272,8 @@ def phase_user_accounts(core_dir: str, node_name: str, node_yaml: str) -> bool:
     """φ2: User accounts — platform, ci-deploy, SSH keys, projects base.
 
     Pre-check: PLATFORM_OWNER_KEY env var present.
-    Execute: create platform + ci-deploy users → add SSH keys → create projects base.
+    Execute: create platform + ci-deploy users → add SSH keys → CI-root ключ (root) →
+    create projects base.
     Post-check: users exist, keys added, /opt/projects directory created.
     """
     # ── Pre-check: owner key ──
@@ -278,6 +284,15 @@ def phase_user_accounts(core_dir: str, node_name: str, node_yaml: str) -> bool:
     if not ci_deploy_key:
         logger.warning(
             "[IMP:7][phase:user_accounts] PLATFORM_CI_DEPLOY_KEY not set — ci-deploy user will have no deploy key"
+        )
+    # 142 W1 (A1): CI-root ключ (ПУБЛИЧНАЯ часть VPS_SSH_KEY) — root authorized_keys.
+    # Раньше добавлялся ВРУЧНУЮ после bootstrap (2 цикла 141) — core-deploy root-канал
+    # (core-deploy.yml C-8) не мог войти на свежую ноду. Теперь φ2 сам доставляет ключ.
+    ci_root_key = os.environ.get("PLATFORM_CI_ROOT_KEY", "").strip()
+    if not ci_root_key:
+        logger.warning(
+            "[IMP:7][phase:user_accounts] PLATFORM_CI_ROOT_KEY not set — root authorized_keys "
+            "без CI-root ключа (core-deploy root-канал недоступен, 142 W1)"
         )
 
     non_fatal_issues = False
@@ -318,6 +333,25 @@ def phase_user_accounts(core_dir: str, node_name: str, node_yaml: str) -> bool:
     except (PlatformError, subprocess.TimeoutExpired) as e:
         logger.error("[IMP:10][phase:user_accounts] Failed to create ci-deploy user: %s", e)
         raise PlatformFatalError(f"CI deploy user creation failed: {e}") from e
+
+    # ── 2.5 CI-root ключ в root authorized_keys (142 W1, A1) ──
+    # add_ssh_key идемпотентен (duplicate-check по содержимому authorized_keys, T9.18):
+    # повторный bootstrap = no-op. Owner-root ключ — владелец файла root:root (домашняя
+    # директория root = /root, резолв через home_dir=None → /home/root — НЕ верно для root).
+    # ⚠️ TRAP[BUG] · 2026-08-06 · 142 W1 · add_ssh_key("root") требует home_dir="/root"
+    # · Symptom: add_ssh_key("root", key) писал бы в /home/root/.ssh (несуществующая
+    # ·   директория для root; реальный home = /root) → ключ не попал бы в authorized_keys.
+    # · Fix: явный home_dir="/root" для root-пользователя (единственный вызов с override;
+    # ·   остальные пользователи резолвят /home/<user>).
+    # · Prevention: add_ssh_key вызывает os.makedirs(ssh_dir) — молча создала бы
+    # ·   /home/root/.ssh; корень проблемы — passwd-резолв, не хардкод-путь.
+    if ci_root_key:
+        try:
+            helpers_users.add_ssh_key("root", ci_root_key, home_dir="/root")
+            logger.info("[IMP:9][phase:user_accounts] CI-root SSH key added to /root/.ssh/authorized_keys")
+        except (PlatformError, subprocess.TimeoutExpired) as e:
+            logger.error("[IMP:10][phase:user_accounts] Failed to add CI-root SSH key: %s", e)
+            raise PlatformFatalError(f"CI-root SSH key setup failed: {e}") from e
 
     # ── 3. Create projects base directory ──
     try:

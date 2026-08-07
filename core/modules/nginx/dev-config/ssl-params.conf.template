@@ -1,0 +1,3 @@
+# 142 W8 (R13): dev-заглушка ssl-params — dev-режим использует ssl-dev.conf (dev-certs),
+# base ssl-params (letsencrypt live/${PLATFORM_DOMAIN}/) рендерился в conf.d/*.conf
+# и валил nginx emerg в dev. Пустой include безопасен.

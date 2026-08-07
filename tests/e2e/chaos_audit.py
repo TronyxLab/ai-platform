@@ -14,7 +14,7 @@
 ##     источнике → FAIL даже при успешном восстановлении; маркер есть, но первопричина не
 ##     читается → PARTIAL; контейнерный маркер есть в docker logs, но НЕТ в Loki → PARTIAL.
 ##   - Все SSH-команды идут через NodeSSHClient (lib/ssh.sh parity, timeout 124).
-##   - Grafana auth: GF_SECURITY_ADMIN_USER/PASSWORD из /run/platform/secrets.env на хосте.
+##   - Grafana auth: GF_SECURITY_ADMIN_USER/PASSWORD из /var/lib/platform/run/secrets.env на хосте (142 W2).
 ##   - Вердикты пишутся в files/T<N>/verdict.json + files/results.json (агрегат).
 ## @rationale DevPlan 126 §4: единый механизм проверки логов для всех 11 тестов — без
 ##           дублирования SSH/curl-логики в каждом тесте.
@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 # ── Канонические константы ──
 _GRAFANA_ALERTS_API = "http://127.0.0.1:3000/api/alertmanager/grafana/api/v2/alerts"
 _LOKI_API = "http://127.0.0.1:3100/loki/api/v1/query_range"
-_SECRETS_ENV = "/run/platform/secrets.env"
+_SECRETS_ENV = "/var/lib/platform/run/secrets.env"
 
 _MARKER_SOURCES = ("docker", "journald", "loki", "alerts", "http", "state", "auditfile")
 

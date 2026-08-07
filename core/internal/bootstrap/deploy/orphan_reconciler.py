@@ -33,12 +33,11 @@ from pathlib import Path
 
 # DevPlan 128 W1 (P2-5/D6): docker ps/inspect/rm примитивы — shared/docker_ops
 # (единственный слой, гейт docker_sole_path).
-from core.internal.shared import docker_ops
-from core.internal.shared.compose_files import COMPOSE_FILENAMES as COMPOSE_FILE_CANDIDATES
-
 # DevPlan 118 A2: единый канон списков compose-файлов — shared/compose_files.py.
 # Локальный COMPOSE_FILE_CANDIDATES УДАЛЁН (6 копий → 1 SoT; канон расширен docker-compose.yml).
 # B3: канонический platform root — shared/deploy_paths (литерал /opt/platform удалён)
+from core.internal.shared import deploy_paths, docker_ops
+from core.internal.shared.compose_files import COMPOSE_FILENAMES as COMPOSE_FILE_CANDIDATES
 from core.internal.shared.deploy_paths import platform_remote_base
 
 # DevPlan 116 B5 T3: shared docker compose config — sole path (гейт docker_sole_path)
@@ -153,7 +152,7 @@ def _get_existing_containers() -> set:
 ##   - Service container_name resolves to explicit container_name or service name
 ##   - Services without container_name AND without name field are skipped
 ##   - --profile <module_name\> is passed to get the correct config resolution
-##   - --env-file /run/platform/secrets.env добавляется если существует (R7-fix 141 B18:
+##   - --env-file /var/lib/platform/run/secrets.env добавляется если существует (R7-fix 141 B18:
 ##     без env-file ${VAR:?} в base.yml падает — config слеп, orphan-детекция = 0 сервисов)
 ##   - project_name используется для orphan-сравнения (expected project), НЕ module_name
 def _get_compose_services(compose_path: str, module_name: str) -> tuple[list[str], str]:
@@ -175,8 +174,8 @@ def _get_compose_services(compose_path: str, module_name: str) -> tuple[list[str
     # ⚠️ TRAP[BUG] · 2026-08-06 · HI · R7: config без secrets env-file слеп (141 B18)
     # · Symptom: docker compose config падал "required variable POSTGRES_PASSWORD is missing"
     # ·   (26 вхождений/прогон) → orphan-детекция 0 сервисов; R7 volumes — detect-only мимо.
-    # · Fix: --env-file /run/platform/secrets.env если существует (канон _build_compose_args).
-    _secrets_env = os.path.join("/run/platform", "secrets.env")
+    # · Fix: --env-file /var/lib/platform/run/secrets.env если существует (канон _build_compose_args).
+    _secrets_env = str(deploy_paths.secrets_env_file())
     if os.path.isfile(_secrets_env):
         _compose_args = ["--env-file", _secrets_env, *_compose_args]
     cfg_r = _shared_docker_compose_config(

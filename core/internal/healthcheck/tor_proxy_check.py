@@ -27,7 +27,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from core.internal.shared import telegram_notifier
+from core.internal.shared import deploy_paths, telegram_notifier
 from core.internal.shared.timeouts import TOR_PROXY_CURL_TIMEOUT
 
 logger = logging.getLogger(__name__)
@@ -91,7 +91,7 @@ def check_privoxy(proxy_url: str) -> bool:
 
 # region FUNC_check_telegram_api
 ## @purpose  Stage 3: проверить Telegram Bot API getMe через прокси-цепь (shared/telegram_notifier.get_me).
-##           Secrets: /run/platform/secrets.env (TELEGRAM_BOT_TOKEN). Отсутствие → SKIP (return True).
+##           Secrets: /var/lib/platform/run/secrets.env (TELEGRAM_BOT_TOKEN). Отсутствие → SKIP (return True).
 ## @io       ⇥ secrets_file: str, proxy_url: str → ⎋ bool
 ## @complexity O(1) — чтение secrets + 1 HTTP GET
 def check_telegram_api(secrets_file: str, proxy_url: str) -> bool:
@@ -163,7 +163,7 @@ def main() -> int:
     """
     logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stderr)
     proxy_url = os.environ.get("TELEGRAM_PROXY_URL", "") or "http://127.0.0.1:8118"
-    secrets_file = os.environ.get("SECRETS_ENV_FILE", "") or "/run/platform/secrets.env"
+    secrets_file = os.environ.get("SECRETS_ENV_FILE", "") or str(deploy_paths.secrets_env_file())
     return 0 if run_all(proxy_url, secrets_file) else 1
 
 

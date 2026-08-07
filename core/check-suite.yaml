@@ -147,7 +147,10 @@ checks:
   - id: smoke
     cmd: make test MARKER=smoke
     tier: pytest
-    timeout: 600
+    # 142 W8 (R13): 600 → 900 — полный стек 23 контейнера + macOS Docker Desktop +
+    # параллельные dev-сессии; smoke стабильно укладывался в ~6 мин изолированно,
+    # под нагрузкой превышал 600s (таймаут-килл, exit 124).
+    timeout: 900
     gate_modes: [full, ci-docker]
     xdist: true
     junit: tests/report-smoke.xml

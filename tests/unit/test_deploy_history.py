@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
 
@@ -211,3 +212,31 @@ class TestDeployHistory:
     # endregion
 
     # 🧪 TRAP[TEST] · Regression · DeployHistory snapshots enable rollback after crash
+
+    # region FUNC_test_snapshot_dir_chown_ci_deploy
+    ## @purpose  B19 (141 r2 / 142 W7): create_snapshot выполняет best-effort chown
+    ##           ci-deploy:ci-deploy на .deploy-snapshots (root-созданная бутстрапом директория
+    ##           блокировала receive-деплой под ci-deploy: «[Errno 13] Permission denied»).
+    ##           R5-negative: вход бага = снапшот-директория root:root.
+    def test_snapshot_dir_chown_ci_deploy(self, history: DeployHistory, monkeypatch) -> None:
+        """B19: chown ci-deploy:ci-deploy вызывается для снапшот-директории (best-effort)."""
+        chown_calls: list[list[str]] = []
+        import core.internal.deploy.deploy_history as dh_mod
+
+        def fake_run(cmd, **kwargs):
+            if isinstance(cmd, list) and cmd and cmd[0] == "chown":
+                chown_calls.append(cmd)
+            return
+
+        monkeypatch.setattr(dh_mod, "_run_subprocess", fake_run)
+
+        history.create_snapshot(project="test-project", version="v1")
+
+        assert chown_calls, "chown обязан вызываться для снапшот-директории (B19)"
+        assert chown_calls[0][1] == "ci-deploy:ci-deploy", f"владелец ci-deploy: {chown_calls[0]}"
+        logger.info("[IMP:9][test][B19] snapshot dir chown ci-deploy:ci-deploy вызван ✓")
+
+    # endregion
+
+
+logger = logging.getLogger(__name__)
