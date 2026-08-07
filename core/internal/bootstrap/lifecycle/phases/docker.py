@@ -395,6 +395,15 @@ def _registry_step_privoxy_config(core_dir: str) -> bool:
             logger.warning(
                 "[IMP:8][phase:registry_update] Privoxy config was drifted — re-applied canonical config (142 W6)"
             )
+            # 142 B35: после записи конфига сервис обязан перечитать его — systemctl restart
+            # (reload недостаточно: privoxy 3.0.34 перечитывает listen-address только на старте).
+            # Без рестарта 0.0.0.0:8118 не вступает в силу → grafana telegram канал мёртв (C6).
+            from core.internal.shared import subprocess_io as helpers_subprocess
+
+            helpers_subprocess.run_subprocess(
+                ["systemctl", "restart", "privoxy"], non_fatal=True, fatal_rc=(127,), timeout=60
+            )
+            logger.info("[IMP:9][phase:registry_update] Privoxy restarted after config re-apply")
             return True
         logger.info("[IMP:9][phase:registry_update] Privoxy config already canonical — no-op")
         return False
