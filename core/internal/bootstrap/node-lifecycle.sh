@@ -11,8 +11,7 @@ set -euo pipefail; MODE=""; RESUME_MODE=false; FORCE_MODE=""; DRY_RUN_MODE=false
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; SM_SCRIPT="${SCRIPT_DIR}/lifecycle/cli.py"
 # ⚠️ TRAP[BUG] · 2026-07-31 · P1 · PYTHONPATH отсутствовал → ModuleNotFoundError: core (script-path не добавляет CWD в sys.path); Fix: корень + lifecycle/ (паттерн converge.sh:64)
 export PYTHONPATH="${SCRIPT_DIR}/../../..:${SCRIPT_DIR}/lifecycle:${PYTHONPATH:-}"
-[[ "${1:-}" == "--mode" ]] && { shift; MODE="${1:-}"; shift || true; }
-[[ "$MODE" == @(init|update) ]] || { echo "[IMP:10][node-lifecycle][args] ERROR: --mode init|update required" >&2; exit 1; }
+[[ "${1:-}" == "--mode" ]] && { shift; MODE="${1:-}"; shift || true; } && [[ "$MODE" == @(init|update) ]] || { echo "[IMP:10][node-lifecycle][args] ERROR: --mode init|update required" >&2; exit 1; }
 while [[ $# -gt 0 ]]; do case "$1" in
     --resume) RESUME_MODE=true; shift ;;
     --force) FORCE_MODE=true; shift ;;
@@ -21,6 +20,7 @@ while [[ $# -gt 0 ]]; do case "$1" in
     --node-yaml) export NODE_YAML="$2"; shift 2 ;;
     --owner-key) [[ -z "${PLATFORM_OWNER_KEY:-}" ]] && export PLATFORM_OWNER_KEY="$2"; shift 2 ;;
     --ci-deploy-key) [[ -z "${PLATFORM_CI_DEPLOY_KEY:-}" ]] && export PLATFORM_CI_DEPLOY_KEY="$2"; shift 2 ;;
+    --ci-root-key) [[ -z "${PLATFORM_CI_ROOT_KEY:-}" ]] && export PLATFORM_CI_ROOT_KEY="$2"; shift 2 ;;
     --age-secret-key) [[ -z "${AGE_SECRET_KEY:-}" ]] && export AGE_SECRET_KEY="$2"; shift 2 ;;
     --docker-hub-username) [[ -z "${DOCKER_HUB_USERNAME:-}" ]] && export DOCKER_HUB_USERNAME="$2"; shift 2 ;;
     --docker-hub-token) [[ -z "${DOCKER_HUB_TOKEN:-}" ]] && export DOCKER_HUB_TOKEN="$2"; shift 2 ;;
@@ -62,7 +62,7 @@ main() {
         # решение «все фазы done → skip preflight» принимает state_machine. Этот фасад
         # остаётся тонким: только делегирование. SKIP_PREFLIGHT env по-прежнему уважается.
         _delegate --mode init --node-name "${NODE_NAME}" --node-yaml "${NODE_YAML}" \
-            ${PLATFORM_OWNER_KEY:+--owner-key "$PLATFORM_OWNER_KEY"} ${PLATFORM_CI_DEPLOY_KEY:+--ci-deploy-key "$PLATFORM_CI_DEPLOY_KEY"} \
+            ${PLATFORM_OWNER_KEY:+--owner-key "$PLATFORM_OWNER_KEY"} ${PLATFORM_CI_DEPLOY_KEY:+--ci-deploy-key "$PLATFORM_CI_DEPLOY_KEY"} ${PLATFORM_CI_ROOT_KEY:+--ci-root-key "$PLATFORM_CI_ROOT_KEY"} \
             ${CONTEXT:+--context "$CONTEXT"} ${FORCE_MODE:+--force}
     elif [[ "$MODE" == "update" ]]; then
         [[ -z "${NODE_NAME:-}" ]] && { echo "[IMP:10][node-lifecycle][update] NODE_NAME required" >&2; exit 1; }

@@ -226,6 +226,35 @@ def test_entrypoint_flags_contract(caplog) -> None:
         "[IMP:8][test_entrypoint_flags_contract] Check 6 PASS: --age-secret-key-file in entrypoint + node_detect delegation"
     )
 
+    # ── Check 7 (142 W1 B27): bootstrap.sh форвардит --ci-root-key → node-lifecycle.sh имеет явный
+    # case (не catch-all -*) + init-_delegate пробрасывает PLATFORM_CI_ROOT_KEY в cli.py ──
+    # · Regression: W1 реализован в cli.py/build_ssh_cmd.sh, но фасад node-lifecycle.sh НЕ принимал
+    #   --ci-root-key → «ERROR: Unknown: --ci-root-key» на REMOTE bootstrap (bootstrap FAILED, B27).
+    bootstrap_content = (PROJECT_ROOT / "core" / "entrypoints" / "bootstrap.sh").read_text()
+    assert "--ci-root-key" in bootstrap_content, (
+        "[IMP:9][test] FAIL: bootstrap.sh должен форвардить --ci-root-key (142 W1)"
+    )
+    assert "--ci-root-key" in case_block, (
+        "[IMP:9][test] FAIL: case --ci-root-key) должен быть в node-lifecycle.sh parser, не catch-all -*)"
+    )
+    ci_root_lines = [line for line in case_block.split("\n") if "--ci-root-key" in line]
+    assert any("PLATFORM_CI_ROOT_KEY" in line for line in ci_root_lines), (
+        "[IMP:9][test] FAIL: case --ci-root-key) должен export PLATFORM_CI_ROOT_KEY"
+    )
+    # init-_delegate пробрасывает ключ в cli.py (--ci-root-key принимается cli.py)
+    init_delegate = lifecycle_content[
+        lifecycle_content.find("_delegate --mode init") : lifecycle_content.find('elif [[ "$MODE" == "update" ]]')
+    ]
+    assert "PLATFORM_CI_ROOT_KEY:+--ci-root-key" in init_delegate, (
+        "[IMP:9][test] FAIL: init-_delegate должен пробрасывать PLATFORM_CI_ROOT_KEY:+--ci-root-key"
+    )
+    assert "--ci-root-key" in (PROJECT_ROOT / "core" / "internal" / "bootstrap" / "lifecycle" / "cli.py").read_text(), (
+        "[IMP:9][test] FAIL: cli.py должен принимать --ci-root-key (142 W1)"
+    )
+    logger.info(
+        "[IMP:8][test_entrypoint_flags_contract] Check 7 PASS: --ci-root-key проводка W1 (bootstrap → lifecycle → cli)"
+    )
+
     logger.info("[IMP:9][test_entrypoint_flags_contract] ALL CHECKS PASS")
 
 
