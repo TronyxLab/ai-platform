@@ -927,7 +927,7 @@ def test_t08_disk_pressure_92(requires_node: str, node_ssh: NodeSSHClient, caplo
         "conv=notrunc oflag=append status=none 2>/dev/null; done; echo SPOOL_FILLED used=\$U'",
         timeout=600,
     )
-    logger.info("[IMP:9][T8][spool] %s", spool_fill.stdout.strip().splitlines()[-1][-60:])
+    logger.info("[IMP:9][T8][spool] %s", (spool_fill.stdout.strip().splitlines() or ["<empty>"])[-1][-60:])
     backup_probe = node_ssh.ssh_exec(
         "docker exec backup-cron /usr/local/bin/backup-postgres.sh 2>&1 | tail -4", timeout=300
     )
@@ -1321,18 +1321,20 @@ def test_t11_reboot_and_cross_boot_audit(requires_node: str, node_ssh: NodeSSHCl
             res = node_ssh.ssh_read(
                 f"journalctl --since '{since_iso}' --no-pager 2>/dev/null | grep -cE '{regex}'", timeout=90
             )
-            found = int(res.stdout.strip().splitlines()[-1] or "0") > 0
+            # 142 B36: grep -c при 0 совпадений → rc=1 + пустой stdout у ssh_read → splitlines()[-1]
+            # падал IndexError (T8/T11): парсинг через or ["0"] — found=False вместо краха теста.
+            found = int((res.stdout.strip().splitlines() or ["0"])[-1] or "0") > 0
         elif source == "docker":
             res = node_ssh.ssh_read(
                 f"docker logs --since '{since_iso}' {container} 2>&1 | grep -cE '{regex}'", timeout=90
             )
-            found = int(res.stdout.strip().splitlines()[-1] or "0") > 0
+            found = int((res.stdout.strip().splitlines() or ["0"])[-1] or "0") > 0
         elif source == "auditfile":
             path = (
                 "/var/log/platform/audit.jsonl" if label != "restore:drill" else "/var/log/platform/backup/restore.log"
             )
             res = node_ssh.ssh_read(f"grep -cE '{regex}' {path} 2>/dev/null || true", timeout=30)
-            found = int(res.stdout.strip().splitlines()[-1] or "0") > 0
+            found = int((res.stdout.strip().splitlines() or ["0"])[-1] or "0") > 0
         else:  # pragma: no cover
             found = False
         cross_results.append({"incident": test_id, "label": label, "found": found, "source": source})
