@@ -192,6 +192,58 @@ def test_reconcile_runtime_exited(tmp_path, caplog, node_yaml_with_modules, mock
 # endregion FUNC_test_reconcile_runtime_exited
 
 
+# region FUNC_test_reconcile_runtime_exited_oneshot_skipped
+## 🧪 TRAP[TEST] · 142 B28a · R9 oneshot-guard · Scenario: exited + RestartPolicy=no (init/createbuckets
+## · Regression: exited oneshot (platform-minio-createbuckets-1) триггерил self-heal через compose up -d
+## ·   БЕЗ env-секретов → «MINIO_ROOT_USER is not set» → heal fail → converge exit 2 на КАЖДОМ прогоне.
+## · Last fail: 2026-08-07 (bootstrap 142, converge rc=2, R9 errors=1)
+## · Remove if: oneshot-контейнеры будут иметь отличный признак (label/state)
+def test_reconcile_runtime_exited_oneshot_skipped(
+    tmp_path, caplog, node_yaml_with_modules, mock_modules_dir, monkeypatch
+):
+    """R9: exited + RestartPolicy=no (oneshot) → skip self-heal (не ошибка, не compose up)."""
+    caplog.set_level(logging.INFO)
+    logger.info("[IMP:9][test] R9 exited-oneshot — skip self-heal (142 B28a)")
+
+    cooldown_file = tmp_path / ".converge_cooldown.json"
+    monkeypatch.setattr(_converge_runtime, "COOLDOWN_FILE", str(cooldown_file))
+
+    compose_up_calls = []
+
+    def mock_run(cmd, *args, **kwargs):
+        cmd_str = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
+        if "docker info" in cmd_str:
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+        if "docker ps" in cmd_str and "--filter" in cmd_str:
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="postgres\n", stderr="")
+        # State.Status → exited; RestartPolicy.Name → "no" (oneshot)
+        if "docker inspect" in cmd_str and "RestartPolicy.Name" in cmd_str:
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="no", stderr="")
+        if "docker inspect" in cmd_str and "State.Status" in cmd_str:
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="exited", stderr="")
+        if "compose" in cmd_str and "up" in cmd_str and "-d" in cmd_str:
+            compose_up_calls.append(cmd)
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    with patch.object(subprocess, "run", side_effect=mock_run):
+        entry = reconciler.reconcile_runtime_state(
+            node_yaml_path=node_yaml_with_modules,
+            modules_dir=mock_modules_dir,
+            dry_run=False,
+            report_only=False,
+        )
+
+    assert entry["unit"] == "R9"
+    assert entry["status"] == "converged", f"oneshot exited не должен требовать heal: {entry}"
+    assert len(compose_up_calls) == 0, "compose up -d НЕ должен вызываться для exited-oneshot"
+    assert "oneshot" in caplog.text or "skip self-heal" in caplog.text
+    logger.info("[IMP:9][test] R9 exited-oneshot verified: skip self-heal, no compose up")
+
+
+# endregion FUNC_test_reconcile_runtime_exited_oneshot_skipped
+
+
 # region FUNC_test_reconcile_runtime_cooldown
 ## 🧪 TRAP[TEST] · R9 cooldown · Scenario: same container self-healed recently → skip (cooldown)
 ## · Regression: R9 cooldown — skip self-heal if same container was healed in last 3 converge runs

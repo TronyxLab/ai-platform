@@ -148,7 +148,7 @@ def test_build_rules_tor_enabled_privoxy_rule() -> None:
     """build_rules(tor_enabled=True): правило privoxy для docker-моста — декларативный baseline."""
     rules = firewall.build_rules([], source_ip=None, tor_enabled=True)
     cmds = [" ".join(r) for r in rules]
-    assert "ufw allow from 172.16.0.0/12 to any port 8118/tcp comment platform-tor-privoxy" in cmds, (
+    assert "ufw allow from 172.16.0.0/12 to any port 8118 proto tcp comment platform-tor-privoxy" in cmds, (
         f"tor-privoxy правило обязано быть в baseline: {cmds}"
     )
     # Без TOR_ENABLED — правило отсутствует (не открываем privoxy без tor)

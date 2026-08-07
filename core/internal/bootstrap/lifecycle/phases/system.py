@@ -140,7 +140,10 @@ def phase_system_bootstrap(core_dir: str, node_name: str, node_yaml: str) -> boo
             if skip_verify:
                 tor_cmd.append("--skip-tor-verify")
             try:
-                helpers_subprocess.run_subprocess(tor_cmd, non_fatal=True, fatal_rc=(127,), timeout=120)
+                # 141 B7: install-tor-proxy 120s timeout (verify_tor_circuit 60s + apt) —
+                # документирован; 142 B31: W6 (privoxy listen docker-мостов) полагается на
+                # завершение write_privoxy_config → бамп 120→300s (B7-корень устранён).
+                helpers_subprocess.run_subprocess(tor_cmd, non_fatal=True, fatal_rc=(127,), timeout=300)
                 logger.info("[IMP:9][phase:system_bootstrap] Tor proxy installed")
             except Exception as e:  # noqa: EXC — non-fatal: Tor is best-effort
                 logger.warning("[IMP:7][phase:system_bootstrap] Tor installation failed (non-fatal): %s", e)

@@ -89,6 +89,30 @@ def get_container_state(container_name: str) -> str:
 # endregion FUNC_get_container_state
 
 
+# region FUNC_get_container_restart_policy
+## @purpose  142 B28a: restart-политика контейнера — отличие exited-oneshot (RestartPolicy=no)
+##           от упавшего сервиса (unless-stopped). Возвращает "unknown" при ошибке inspect.
+## @io       container_name → docker inspect HostConfig.RestartPolicy.Name → ⎋ str
+## @complexity O(1) — один docker inspect
+## @invariants — non-fatal: ошибка inspect → "unknown" (не блокирует R9)
+def get_container_restart_policy(container_name: str) -> str:
+    """Get container RestartPolicy.Name via docker inspect (142 B28a oneshot-guard)."""
+    inspect_r = docker_ops.docker_inspect(
+        container_name,
+        format="{{.HostConfig.RestartPolicy.Name}}",
+        timeout=DOCKER_TIMEOUT,
+    )
+    if inspect_r.returncode != 0:
+        logger.warning("[IMP:8][get_container_restart_policy] docker inspect failed for %s", container_name)
+        return "unknown"
+    policy = inspect_r.stdout.strip()
+    logger.info("[IMP:7][get_container_restart_policy] Container %s → restart_policy=%s", container_name, policy)
+    return policy
+
+
+# endregion FUNC_get_container_restart_policy
+
+
 # region FUNC_load_cooldown
 ## @purpose  Load cooldown tracking data from JSON file.
 ## @return  Dict with structure: {"run": int, "containers": {name: {"last_healed_run": int}}}
@@ -236,6 +260,17 @@ def reconcile_runtime_state(
         for cname in containers:
             state = get_container_state(cname)
             if state in BAD_DOCKER_STATES:
+                # 142 B28a: exited-oneshot (init/createbuckets, RestartPolicy=no) — штатное
+                # состояние, НЕ self-heal (compose up -d вернёт fail без env-секретов → ложный
+                # exit 2 на каждой converge). Сервисы с restart:unless-stopped в exited — реальная
+                # проблема → heal.
+                if state == "exited" and get_container_restart_policy(cname) == "no":
+                    logger.info(
+                        "[IMP:7][converge][%s] Container %s state=exited — oneshot (RestartPolicy=no), skip self-heal",
+                        unit,
+                        cname,
+                    )
+                    continue
                 logger.warning(
                     "[IMP:9][converge][%s] Container %s state=%s — needs self-heal",
                     unit,

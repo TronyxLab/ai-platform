@@ -158,7 +158,9 @@ def build_rules(extra_ports: list[int], source_ip: str | None = None, tor_enable
                 "to",
                 "any",
                 "port",
-                f"{TOR_PRIVOXY_PORT}/tcp",
+                str(TOR_PRIVOXY_PORT),
+                "proto",
+                "tcp",
                 "comment",
                 "platform-tor-privoxy",
             ]

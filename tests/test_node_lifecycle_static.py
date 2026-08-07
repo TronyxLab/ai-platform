@@ -877,3 +877,38 @@ def test_init_has_more_steps_than_update(caplog) -> None:
 
 
 # endregion FUNC_test_init_has_more_steps_than_update
+
+
+# region FUNC_test_converge_entrypoint_rc2_disambiguation
+## @purpose  142 B28b: converge.sh entrypoint различает rc=2 «no SSH host» (local fallback) от
+##           rc=2 remote converge errors (host есть → forward exit 2, БЕЗ локального прогона).
+##           Regression: remote converge с R-unit errors возвращал 2 сквозь ssh → entrypoint
+##           ложно трактовал «self-detect» → двойной локальный converge на dev-машине (macOS:
+##           R3 mkdir /opt Permission denied, R6 vhost overlay not resolved) → итог exit 2.
+## @io       Script content → grep → assert guard patterns
+## @complexity O(S) — converge.sh entrypoint
+## @invariants — source node-resolver.sh (resolve/extract); guard ssh_host перед local fallback
+@pytest.mark.static_audit
+def test_converge_entrypoint_rc2_disambiguation(caplog: pytest.LogCaptureFixture) -> None:
+    """converge.sh: rc=2 host-guard — remote errors ≠ local fallback (142 B28b)."""
+    logger.info("[IMP:7][test_converge_entrypoint_rc2_disambiguation] START")
+    caplog.set_level(logging.DEBUG)
+
+    converge_entry = PROJECT_ROOT / "core" / "entrypoints" / "converge.sh"
+    content = converge_entry.read_text()
+
+    # Check 1: node-resolver sourced (resolve_node_yaml/extract_node_host доступны)
+    assert "node-resolver.sh" in content, "[IMP:9][test] FAIL: converge.sh должен source node-resolver.sh (142 B28b)"
+    # Check 2: host резолвится ДО execute_remote_converge
+    assert "ssh_host=" in content and "extract_node_host" in content, (
+        "[IMP:9][test] FAIL: converge.sh должен резолвить host до remote-вызова (142 B28b)"
+    )
+    # Check 3: guard — rc=2 при непустом host → forward (exit 2), НЕ локальный fallback
+    assert '[[ -n "${ssh_host}" ]]' in content, (
+        "[IMP:9][test] FAIL: guard -n ssh_host обязан предшествовать локальному fallback"
+    )
+    assert "NO local fallback" in content, "[IMP:9][test] FAIL: rc=2 с host — forward, без локального прогона"
+    logger.info("[IMP:9][test_converge_entrypoint_rc2_disambiguation] ALL CHECKS PASS")
+
+
+# endregion FUNC_test_converge_entrypoint_rc2_disambiguation

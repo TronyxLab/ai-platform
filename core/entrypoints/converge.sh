@@ -23,6 +23,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CORE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 source "${CORE_DIR}/lib/paths.sh"
+source "${CORE_DIR}/lib/node-resolver.sh"   # 142 B28b: resolve_node_yaml/extract_node_host (rc=2 различение)
 source "${CORE_DIR}/internal/bootstrap/remote-cmd.sh"
 source "${CORE_DIR}/lib/args.sh"
 
@@ -78,11 +79,24 @@ main() {
     # · Root: plain-вызов без || в set -e контексте (тот же класс, что node-update.sh:89-90 TRAP 2026-07-23).
     # · Fix: идиома `local rc=0; cmd || rc=$?` — захват non-zero без триггера set -e (копия node-update.sh:89-90).
     # · Prevention: remote-прокси-вызовы в entrypoints всегда через || rc=$? при set -e.
+    # ⚠️ TRAP[BUG] · 2026-08-07 · P1 · 142 B28b: rc=2 от REMOTE converge (R-units errors) ложно
+    # ·   трактовался как «self-detect/no SSH host» → двойной ЛОКАЛЬНЫЙ прогон на dev-машине
+    # ·   (R3 mkdir /opt Permission denied, R6 vhost overlay not resolved — артефакты macOS).
+    # · Root: execute-converge не имеет self-SSH detect (только execute-update); rc=2 сквозь ssh —
+    # ·   это errors converge на ноде. Различение: host из node.yaml ДО вызова — host есть → rc=2
+    # ·   = ошибки ноды (exit 2, БЕЗ локального прогона); host пуст → rc=2 = no-SSH-host (fallback).
+    local ssh_host=""
+    local resolved_yaml=""
+    resolved_yaml="$(resolve_node_yaml "${NODE_NAME}" 2>/dev/null)" && ssh_host="$(extract_node_host "${resolved_yaml}" 2>/dev/null)" || ssh_host=""
     local remote_rc=0
     execute_remote_converge "${NODE_NAME}" "${PASSTHROUGH_ARGS[@]}" || remote_rc=$?
 
     # ── Local exec fallback (no SSH host) ──
     if [[ $remote_rc -eq 2 ]]; then
+        if [[ -n "${ssh_host}" ]]; then
+            echo "[IMP:8][converge][entrypoint] Remote converge on ${ssh_host} returned rc=2 (R-unit errors) — forwarding, NO local fallback" >&2
+            exit 2
+        fi
         echo "[IMP:9][converge][entrypoint] No SSH host — executing converge.sh LOCALLY" >&2
         local internal="${PATHS_INTERNAL_DIR}/bootstrap/converge.sh"
         if [[ ! -f "$internal" ]]; then
