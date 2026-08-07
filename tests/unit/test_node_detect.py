@@ -415,7 +415,9 @@ class TestAutoDetectNodeName:
         caplog.set_level(logging.DEBUG)
 
         ncd = tmp_path / "node-configs"
-        (ncd / "tronyx-vps").mkdir(parents=True)
+        node_dir = ncd / "tronyx-vps"
+        node_dir.mkdir(parents=True)
+        (node_dir / "node.yaml").write_text("node:\n  name: tronyx-vps\n")
 
         logger.info("[IMP:7][test_node_detect] Testing single-node detection")
         result = auto_detect_node_name(str(ncd))
@@ -439,8 +441,10 @@ class TestAutoDetectNodeName:
         caplog.set_level(logging.DEBUG)
 
         ncd = tmp_path / "node-configs"
-        (ncd / "node-alpha").mkdir(parents=True)
-        (ncd / "node-beta").mkdir(parents=True)
+        for name in ("node-alpha", "node-beta"):
+            d = ncd / name
+            d.mkdir(parents=True)
+            (d / "node.yaml").write_text(f"node:\n  name: {name}\n")
 
         logger.info("[IMP:7][test_node_detect] Testing multiple-node ambiguity")
         with pytest.raises(NodeDetectionError, match="Multiple directories"):
@@ -490,7 +494,9 @@ class TestAutoDetectNodeName:
         ncd = tmp_path / "node-configs"
         (ncd / "scripts").mkdir(parents=True)
         (ncd / "secrets").mkdir(parents=True)
-        (ncd / "real-node").mkdir(parents=True)
+        real = ncd / "real-node"
+        real.mkdir(parents=True)
+        (real / "node.yaml").write_text("node:\n  name: real-node\n")
 
         logger.info("[IMP:7][test_node_detect] Testing scripts/secrets exclusion")
         result = auto_detect_node_name(str(ncd))
@@ -519,7 +525,9 @@ class TestAutoDetectNodeName:
         caplog.set_level(logging.DEBUG)
 
         ncd = tmp_path / "node-configs"
-        (ncd / "app").mkdir(parents=True)
+        app = ncd / "app"
+        app.mkdir(parents=True)
+        (app / "node.yaml").write_text("node:\n  name: app\n")
         (ncd / "scripts").mkdir(parents=True)
         (ncd / "secrets").mkdir(parents=True)
 
@@ -529,6 +537,99 @@ class TestAutoDetectNodeName:
         logger.info("[IMP:9][test_node_detect] app resolved with scripts/secrets excluded (T2 fixture)")
 
     # endregion FUNC_test_skips_scripts_secrets_app_fixture
+
+    # region FUNC_test_junk_dir_without_node_yaml_skipped
+    ## @purpose — 142 W4 (A5): junk-каталог БЕЗ node.yaml пропускается с WARN (не кандидат);
+    ##            единственный валидный каталог → резолвится. R5-negative на точный вход бага:
+    ##            «unknown/» мусорный каталог ронял node-detect «Multiple directories».
+    ## @io — ⇥ tmp_path → ⎋ None (asserts "tronyx-vps" + WARN в caplog)
+    ## @complexity — O(N)
+    @pytest.mark.unit
+    @ldd_trajectory
+
+    # 🧪 TRAP[TEST] · 2026-08-06 · NEGATIVE (R5) · 142 W4 — junk «unknown/» без node.yaml (A5)
+    # · Scenario: node-configs = {tronyx-vps (node.yaml), unknown (пусто)} → детект tronyx-vps,
+    # ·   «unknown» пропущен с WARN (раньше: «Multiple directories: tronyx-vps, unknown»)
+    # · Last fail: 2026-08-06 (цикл 2 141, A5) — зачистка /opt/node-configs/unknown/ вручную
+    # · Remove if: auto_detect_node_name junk-skip удаляется
+    def test_junk_dir_without_node_yaml_skipped(
+        self, caplog: pytest.LogCaptureFixture, tmp_path: pytest.TempPathFactory
+    ) -> None:
+        """142 W4: junk-каталог без node.yaml → WARN + skip, валидный резолвится."""
+        caplog.set_level(logging.DEBUG)
+
+        ncd = tmp_path / "node-configs"
+        valid = ncd / "tronyx-vps"
+        valid.mkdir(parents=True)
+        (valid / "node.yaml").write_text("node:\n  name: tronyx-vps\n")
+        (ncd / "unknown").mkdir(parents=True)  # мусорный каталог (A5) — без node.yaml
+
+        result = auto_detect_node_name(str(ncd))
+        assert result == "tronyx-vps", f"валидный каталог обязан резолвиться, got {result}"
+        assert "Skipping junk directory unknown" in caplog.text, "junk-каталог обязан логироваться WARN"
+        logger.info("[IMP:9][test_node_detect] 142 W4: junk 'unknown' пропущен, tronyx-vps детектирован (A5)")
+
+    # endregion FUNC_test_junk_dir_without_node_yaml_skipped
+
+    # region FUNC_test_two_valid_dirs_still_ambiguous
+    ## @purpose — 142 W4: «Multiple directories» сохраняется для >1 ВАЛИДНОГО кандидата (оба с
+    ##            node.yaml) — junk-skip не ослабляет детекцию реальной неоднозначности.
+    ## @io — ⇥ tmp_path → ⎋ None (asserts NodeDetectionError)
+    ## @complexity — O(N)
+    @pytest.mark.unit
+    @ldd_trajectory
+
+    # 🧪 TRAP[TEST] · 2026-08-06 · REGRESSION · 142 W4 — 2 валидных кандидата → Multiple (как раньше)
+    # · Scenario: node-alpha + node-beta, ОБА с node.yaml → NodeDetectionError Multiple directories
+    # · Last fail: N/A (защита контракта: junk-skip не должен скрывать реальную неоднозначность)
+    # · Remove if: auto_detect_node_name semantics change
+    def test_two_valid_dirs_still_ambiguous(
+        self, caplog: pytest.LogCaptureFixture, tmp_path: pytest.TempPathFactory
+    ) -> None:
+        """142 W4: 2 валидных (с node.yaml) → Multiple directories (не ослаблено junk-skip'ом)."""
+        caplog.set_level(logging.DEBUG)
+
+        ncd = tmp_path / "node-configs"
+        for name in ("node-alpha", "node-beta"):
+            d = ncd / name
+            d.mkdir(parents=True)
+            (d / "node.yaml").write_text(f"node:\n  name: {name}\n")
+
+        with pytest.raises(NodeDetectionError, match="Multiple directories"):
+            auto_detect_node_name(str(ncd))
+        logger.info("[IMP:9][test_node_detect] 142 W4: 2 валидных → Multiple directories ✓")
+
+    # endregion FUNC_test_two_valid_dirs_still_ambiguous
+
+    # region FUNC_test_empty_node_yaml_is_junk
+    ## @purpose — 142 W4: каталог с ПУСТЫМ node.yaml (0 байт) = junk (skip с WARN) — не кандидат.
+    ## @io — ⇥ tmp_path → ⎋ None (asserts валидный резолвится + WARN)
+    ## @complexity — O(N)
+    @pytest.mark.unit
+    @ldd_trajectory
+
+    # 🧪 TRAP[TEST] · 2026-08-06 · REGRESSION · 142 W4 — пустой node.yaml = junk
+    # · Scenario: {tronyx-vps (node.yaml), broken (пустой node.yaml)} → tronyx-vps, broken пропущен
+    # · Last fail: N/A (новый защитный тест — пустой файл не должен быть «валидным» кандидатом)
+    # · Remove if: empty-node.yaml junk-детекция меняется
+    def test_empty_node_yaml_is_junk(self, caplog: pytest.LogCaptureFixture, tmp_path: pytest.TempPathFactory) -> None:
+        """142 W4: пустой node.yaml (0 байт) → junk (WARN + skip)."""
+        caplog.set_level(logging.DEBUG)
+
+        ncd = tmp_path / "node-configs"
+        valid = ncd / "tronyx-vps"
+        valid.mkdir(parents=True)
+        (valid / "node.yaml").write_text("node:\n  name: tronyx-vps\n")
+        broken = ncd / "broken"
+        broken.mkdir(parents=True)
+        (broken / "node.yaml").write_text("")  # пустой файл = junk
+
+        result = auto_detect_node_name(str(ncd))
+        assert result == "tronyx-vps", f"got {result}"
+        assert "empty node.yaml" in caplog.text, "пустой node.yaml обязан логироваться WARN"
+        logger.info("[IMP:9][test_node_detect] 142 W4: пустой node.yaml пропущен как junk ✓")
+
+    # endregion FUNC_test_empty_node_yaml_is_junk
 
 
 # endregion CLASS_TestAutoDetectNodeName
@@ -590,7 +691,9 @@ class TestCLI:
         caplog.set_level(logging.DEBUG)
 
         ncd = tmp_path / "node-configs"
-        (ncd / "cli-node").mkdir(parents=True)
+        cli_node = ncd / "cli-node"
+        cli_node.mkdir(parents=True)
+        (cli_node / "node.yaml").write_text("node:\n  name: cli-node\n")
 
         logger.info("[IMP:7][test_node_detect] Testing CLI --detect-node-name")
         rc = main(["--detect-node-name", "--node-configs-dir", str(ncd)])

@@ -23,7 +23,10 @@ from pathlib import Path
 
 import core.internal.bootstrap.converge.infra as infra
 from core.internal.bootstrap.converge.infra import DOCKER_TIMEOUT, report_add, set_exit
-from core.internal.shared import docker_ops  # W1: docker info/volume inspect примитивы (гейт docker_sole_path)
+from core.internal.shared import (
+    deploy_paths,  # 142 W2: secrets.env → persistent /var/lib/platform/run
+    docker_ops,  # W1: docker info/volume inspect примитивы (гейт docker_sole_path)
+)
 from core.internal.shared.compose_files import resolve_compose_file
 from core.internal.shared.docker_compose import docker_compose_config as _shared_docker_compose_config
 
@@ -174,9 +177,9 @@ def reconcile_volumes(
         # ⚠️ TRAP[BUG] · 2026-08-06 · HI · R7: config без secrets env-file слеп (141 B18)
         # · Symptom: "required variable POSTGRES_PASSWORD is missing" (26 вхождений/прогон) —
         # ·   ${VAR:?} в base.yml падал → R7 detect-only мимо (0 сервисов), orphan-детекция слепа.
-        # · Fix: --env-file /run/platform/secrets.env если существует (канон _build_compose_args).
+        # · Fix: --env-file /var/lib/platform/run/secrets.env если существует (канон _build_compose_args).
         _compose_args = ["-f", str(compose_file), "--profile", mod_name]
-        _secrets_env = os.path.join("/run/platform", "secrets.env")
+        _secrets_env = str(deploy_paths.secrets_env_file())
         if os.path.isfile(_secrets_env):
             _compose_args = ["--env-file", _secrets_env, *_compose_args]
         config_r = _shared_docker_compose_config(

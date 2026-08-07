@@ -43,7 +43,9 @@ from typing import Any
 _HC_DONE_MARKER = os.path.join(
     os.environ.get("PLATFORM_STATE_DIR", "/var/lib/platform/.bootstrap"), ".hc_done_in_deploy"
 )
-_STATUS_METRICS_PATH = "/run/platform/status-metrics.json"
+# 142 W2 (B21): persistent /var/lib/platform/run (tmpfs /run/platform не переживает reboot).
+# Pure-модуль (инвариант: 0 I/O/imports) — литерал канона, резолвер — в deploy_orchestrator.
+_STATUS_METRICS_PATH = "/var/lib/platform/run/status-metrics.json"
 _STATUS_METRICS_TEMPLATE: dict[str, Any] = {
     "schema_version": 2,
     "generated_at": None,

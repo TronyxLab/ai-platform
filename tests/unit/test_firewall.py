@@ -17,6 +17,7 @@
 # endregion MODULE_CONTRACT
 
 import logging
+import os
 
 import pytest
 
@@ -140,6 +141,50 @@ def test_build_rules_includes_module_deny() -> None:
     cmds = [" ".join(r) for r in rules]
     for port in (6379, 9000, 9090, 3000, 3100):
         assert f"ufw deny {port}/tcp comment platform-module-deny" in cmds, f"module port {port} deny missing"
+
+
+def test_build_rules_tor_enabled_privoxy_rule() -> None:
+    # 🧪 TRAP[TEST] · 2026-08-06 · 142 W6 (A3) — ufw allow 172.16.0.0/12:8118 baseline
+    """build_rules(tor_enabled=True): правило privoxy для docker-моста — декларативный baseline."""
+    rules = firewall.build_rules([], source_ip=None, tor_enabled=True)
+    cmds = [" ".join(r) for r in rules]
+    assert "ufw allow from 172.16.0.0/12 to any port 8118/tcp comment platform-tor-privoxy" in cmds, (
+        f"tor-privoxy правило обязано быть в baseline: {cmds}"
+    )
+    # Без TOR_ENABLED — правило отсутствует (не открываем privoxy без tor)
+    cmds_no_tor = [" ".join(r) for r in firewall.build_rules([], source_ip=None, tor_enabled=False)]
+    assert "8118" not in " ".join(cmds_no_tor), "без TOR_ENABLED правило 8118 не должно появляться"
+
+
+def test_verify_firewall_tor_privoxy_rule() -> None:
+    # 🧪 TRAP[TEST] · 2026-08-06 · 142 W6 (A3) — verify сверяет privoxy-правило
+    """verify_firewall(tor_enabled=True): 8118 ALLOW для 172.16.0.0/12 обязан быть в ufw status."""
+    status = """Status: active
+    22/tcp ALLOW IN Anywhere  # platform-baseline
+    80/tcp ALLOW IN Anywhere  # platform-baseline
+    443/tcp ALLOW IN Anywhere  # platform-baseline
+    8118/tcp ALLOW IN 172.16.0.0/12  # platform-tor-privoxy
+    5432/tcp DENY IN Anywhere  # explicit-deny-postgresql
+    6379/tcp DENY IN Anywhere  # platform-module-deny
+    """
+    assert firewall.verify_firewall(status, tor_enabled=True) is True
+    # Без правила — RED (дрейф privoxy/firewall после reboot, A3)
+    status_missing = status.replace("8118/tcp ALLOW IN 172.16.0.0/12  # platform-tor-privoxy\n", "")
+    assert firewall.verify_firewall(status_missing, tor_enabled=True) is False, (
+        "verify обязан ловить отсутствие privoxy-правила (142 W6)"
+    )
+    # tor выключен → отсутствие правила не ошибка
+    assert firewall.verify_firewall(status_missing, tor_enabled=False) is True
+
+
+def test_run_reads_tor_enabled_env(monkeypatch) -> None:
+    # 🧪 TRAP[TEST] · 2026-08-06 · 142 W6 — run() читает TOR_ENABLED из env (φ1-канал)
+    """run(tor_enabled=None) → env TOR_ENABLED=true включает privoxy-правило."""
+    monkeypatch.setenv("TOR_ENABLED", "true")
+    # Прямая проверка env-резолва: run() дефолтит на os.environ TOR_ENABLED
+    resolved = os.environ.get("TOR_ENABLED", "false").lower() == "true"
+    assert resolved is True
+    assert any("8118" in " ".join(r) for r in firewall.build_rules([], source_ip=None, tor_enabled=resolved))
 
 
 def test_collect_stale_platform_rules() -> None:

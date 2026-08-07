@@ -16,7 +16,7 @@
 ##      (канон is_n_loop из modules_healthcheck.py — CrashLoopBackOff рестартом не лечится)
 ##   3. Действие: unhealthy >= WATCHDOG_UNHEALTHY_MIN (default 10 мин) И cooldown 30 мин с
 ##      last_restart → docker restart + Telegram notify (severity=critical, context=watchdog)
-##   4. State /run/platform/watchdog-state.json (tmpfs, atomic write tempfile+os.replace):
+##   4. State /var/lib/platform/run/watchdog-state.json (tmpfs, atomic write tempfile+os.replace):
 ##      unhealthy_since {container: ts}, last_restart {container: ts}; мусорные записи чистятся
 ##   5. docker CLI недоступен → IMP:7 + exit 0 (non-fatal); docker-команда упала → IMP:10 + exit 1
 ##   6. --dry-run: печатает план действий, без restart/notify/state-mutation
@@ -50,7 +50,12 @@ import time
 logger = logging.getLogger(__name__)
 
 # ── Константы (env-оверрайды для тестов/оператора) ──
-DEFAULT_STATE_FILE = "/run/platform/watchdog-state.json"
+# 142 W2 (B21): state-файл переехал из tmpfs /var/lib/platform/run в persistent /var/lib/platform/run —
+# reboot-устойчивость (watchdog-state.json не должен теряться при перезагрузке ноды).
+# Резолвер shared/deploy_paths.watchdog_state_file (env WATCHDOG_STATE_FILE > дефолт).
+from core.internal.shared.deploy_paths import watchdog_state_file as _watchdog_state_file
+
+DEFAULT_STATE_FILE: str = str(_watchdog_state_file())
 DEFAULT_UNHEALTHY_MIN = 10  # WATCHDOG_UNHEALTHY_MIN — сколько минут unhealthy до рестарта
 DEFAULT_COOLDOWN_MIN = 30  # WATCHDOG_COOLDOWN_MIN — пауза между рестартами одного контейнера
 RESTART_COUNT_MAX = 5  # канон is_n_loop (modules_healthcheck.py): RestartCount > 5 = CrashLoopBackOff
@@ -87,7 +92,7 @@ def _docker_binary() -> str | None:
 
 
 # region FUNC__get_state_file
-## @purpose  Путь state-файла: env WATCHDOG_STATE_FILE > default /run/platform/watchdog-state.json.
+## @purpose  Путь state-файла: env WATCHDOG_STATE_FILE > default /var/lib/platform/run/watchdog-state.json.
 ## @io       ⎋ str
 ## @complexity O(1)
 def _get_state_file() -> str:

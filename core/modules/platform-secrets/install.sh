@@ -5,7 +5,7 @@
 ## @purpose  Тонкий фасад (DevPlan 118 E7): age-key создание/миграция, permission auto-fix,
 ##           secrets-enc symlink-fallback, systemd unit install, ensure_platform_dirs (setgid 2775)
 ##           — в core/modules/platform-secrets/installer.py.
-## @scope    Called during bootstrap step ⑪ for system-type modules; generates /run/platform/secrets.env
+## @scope    Called during bootstrap step ⑪ for system-type modules; generates /var/lib/platform/run/secrets.env (142 W2)
 ## @invariants
 ##   - <10 LOC thin facade — языковая политика: бизнес-логика в Python
 ##   - AGE_SECRET_KEY / PLATFORM_ROOT передаются через env (как раньше)

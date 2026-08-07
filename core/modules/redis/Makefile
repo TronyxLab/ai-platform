@@ -5,7 +5,7 @@
 ## @scope    Called by platform users per role; sudo-whitelist enforces per-role restrictions
 ## @invariants
 ##   - All docker compose calls use docker-compose.base.yml
-##   - env-file loaded from SECRETS_ENV_FILE (default: /run/platform/secrets.env)
+##   - env-file loaded from SECRETS_ENV_FILE (default: /var/lib/platform/run/secrets.env, 142 W2)
 ##   - agent: NO stop — stop target guarded by sudo-whitelist
 ##   - No backup/restore — Redis data is ephemeral cache; persistence via AOF for restart recovery
 ##   - All targets log at IMP:7 minimum, critical paths at IMP:9

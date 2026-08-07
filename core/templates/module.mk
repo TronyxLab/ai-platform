@@ -11,7 +11,7 @@
 ## @invariants
 ##   - MODULE_NAME, COMPOSE_FILE, CONTAINER must be defined before include
 ##   - All targets use COMPOSE_CMD (docker compose with optional secrets env file)
-##   - Env-file loaded from SECRETS_ENV_FILE (default: /run/platform/secrets.env)
+##   - Env-file loaded from SECRETS_ENV_FILE (default: /var/lib/platform/run/secrets.env, 142 W2)
 ##   - stop = compose stop --timeout $(STOP_TIMEOUT) (default 30) — контейнеры СОХРАНЯЮТСЯ
 ##   - down = compose down — отдельный реальный таргет (удаление контейнеров)
 ##   - restart = stop start — soft restart БЕЗ пересоздания (сеть/монтирования/состояние сохраняются)
@@ -48,7 +48,7 @@ MODULE_NAME ?= my-module
 SHELL := /bin/bash
 MODULE_DIR := $(shell dirname $(realpath $(firstword $(MAKEFILE_LIST))))
 COMPOSE_FILE ?= $(MODULE_DIR)/docker-compose.base.yml
-SECRETS_ENV ?= $(or $(SECRETS_ENV_FILE),/run/platform/secrets.env)
+SECRETS_ENV ?= $(or $(SECRETS_ENV_FILE),/var/lib/platform/run/secrets.env)
 CONTAINER ?= $(MODULE_NAME)
 COMPOSE_PROFILES ?= $(MODULE_NAME)
 

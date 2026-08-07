@@ -11,7 +11,7 @@
 ##   - proxy-net — required for nginx proxy_pass to status-page:8080
 ##   - observability-net — required for Docker DNS resolution to prometheus/loki/langfuse/litellm (platform service healthchecks)
 ##   - node.yaml: mounted ro from host /opt/node-configs/<node>/node.yaml
-##   - status-metrics.json: mounted ro from host /run/platform/status-metrics.json (tmpfs, cron-exported every 1m) — META Δ
+##   - status-metrics.json: mounted ro from host /var/lib/platform/run/status-metrics.json (persistent, 142 W2; cron-exported every 1m) — META Δ
 ##   - healthcheck: curl localhost:8080/health — verifies status-page is responding
 ## @rationale   Profiles enable selective startup via `make up MODULES=status-page`.
 ##              No external ports — all access via nginx Basic Auth proxy.
@@ -44,9 +44,9 @@ services:
       # node.yaml — SSoT for vhost list (projects[].domain with expose:true)
       - ${NODE_CONFIGS_DIR:-/opt/node-configs}/${NODE_NAME:-unknown}/node.yaml:/opt/node-configs/${NODE_NAME:-unknown}/node.yaml:ro
       # status-metrics.json — container/cert/project/host metrics (cron-exported every 1m)
-      # Host source параметризуется: STATUS_METRICS_JSON (dev-локаль, где /run недоступен);
-      # прод-дефолт /run/platform/status-metrics.json (tmpfs) — без изменений.
-      - ${STATUS_METRICS_JSON:-/run/platform/status-metrics.json}:/run/platform/status-metrics.json:ro
+      # Host source параметризуется: STATUS_METRICS_JSON (dev-локаль);
+      # прод-дефолт /var/lib/platform/run/status-metrics.json (persistent, 142 W2).
+      - ${STATUS_METRICS_JSON:-/var/lib/platform/run/status-metrics.json}:/var/lib/platform/run/status-metrics.json:ro
 
     environment:
       PLATFORM_DOMAIN: ${PLATFORM_DOMAIN:-}

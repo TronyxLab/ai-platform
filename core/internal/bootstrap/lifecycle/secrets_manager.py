@@ -41,6 +41,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
+# 142 W2 (B21): канонические резолверы run-артефактов — persistent /var/lib/platform/run
+# (tmpfs /run/platform не переживает reboot; env-оверрайды сохраняют dev-локали macOS).
+from core.internal.shared.deploy_paths import htpasswd_file as _resolve_htpasswd
+from core.internal.shared.deploy_paths import secrets_env_file as _resolve_secrets_env
+
 # ── Shared modules import ──
 # Canonical package import (DevPlan 086 — gate test_gate_secrets_parser_import enforces the
 # `core.internal.shared.secrets_env_parser` form for all direct consumers).
@@ -330,10 +335,12 @@ def _persist_to_sops(var_name: str, var_value: str, enc_file: str) -> bool:
 ##   - Calls _ensure_htpasswd after all secrets generated
 def ensure_secrets(
     manifest_path: str = "",
-    secrets_env: str = "/run/platform/secrets.env",
+    secrets_env: str | None = None,
     persist_to_sops: bool = True,
 ) -> list[str]:
     """Ensure all required secrets exist. Generates missing ones. Returns list of generated names."""
+    if secrets_env is None:
+        secrets_env = str(_resolve_secrets_env())
     generated: list[str] = []
 
     # ── Step 1: Source existing secrets.env into os.environ ──
@@ -481,11 +488,13 @@ def _extract_apr1_salt(entry: str) -> str:
 def _write_htpasswd_file(
     email: str,
     password: str,
-    htpasswd_file: str = "/run/platform/.htpasswd-platform",
+    htpasswd_file: str | None = None,
 ) -> bool:
     """Lazy facade for htpasswd.write_htpasswd_file (DevPlan 117 G T58.3)."""
     from core.internal.bootstrap.lifecycle.htpasswd import write_htpasswd_file as _impl
 
+    if htpasswd_file is None:
+        htpasswd_file = str(_resolve_htpasswd())
     return _impl(email, password, htpasswd_file)
 
 
@@ -494,12 +503,16 @@ def _write_htpasswd_file(
 
 # region FUNC__ensure_htpasswd
 def _ensure_htpasswd(
-    secrets_env: str = "/run/platform/secrets.env",
-    htpasswd_file: str = "/run/platform/.htpasswd-platform",
+    secrets_env: str | None = None,
+    htpasswd_file: str | None = None,
 ) -> bool:
     """Lazy facade for htpasswd.ensure_htpasswd (DevPlan 117 G T58.3)."""
     from core.internal.bootstrap.lifecycle.htpasswd import ensure_htpasswd as _impl
 
+    if secrets_env is None:
+        secrets_env = str(_resolve_secrets_env())
+    if htpasswd_file is None:
+        htpasswd_file = str(_resolve_htpasswd())
     return _impl(secrets_env, htpasswd_file)
 
 
@@ -537,23 +550,21 @@ if __name__ == "__main__":
     ensure_parser.add_argument(
         "--manifest", required=True, help="Path to secrets-manifest.yaml (required — fail-fast, DevPlan 116 T4)"
     )
-    ensure_parser.add_argument("--secrets-env", default="/run/platform/secrets.env", help="Path to secrets.env")
+    ensure_parser.add_argument("--secrets-env", default=None, help="Path to secrets.env")
 
     source_parser = subparsers.add_parser("source", help="Print parsed secrets.env KEY=VALUE lines to stdout")
-    source_parser.add_argument("--secrets-env", default="/run/platform/secrets.env", help="Path to secrets.env")
+    source_parser.add_argument("--secrets-env", default=None, help="Path to secrets.env")
 
     cleanup_parser = subparsers.add_parser(
         "cleanup", help="Strip HTTP_PROXY/HTTPS_PROXY from secrets.env when TOR_ENABLED != true"
     )
-    cleanup_parser.add_argument("--secrets-env", default="/run/platform/secrets.env", help="Path to secrets.env")
+    cleanup_parser.add_argument("--secrets-env", default=None, help="Path to secrets.env")
     cleanup_parser.add_argument("--tor-enabled", default="false", help="TOR_ENABLED flag (true keeps proxy vars)")
 
     htpasswd_parser = subparsers.add_parser("htpasswd", help="Generate .htpasswd-platform from explicit credentials")
     htpasswd_parser.add_argument("--email", required=True, help="Username/email for htpasswd entry")
     htpasswd_parser.add_argument("--password", required=True, help="Password for htpasswd entry")
-    htpasswd_parser.add_argument(
-        "--htpasswd-file", default="/run/platform/.htpasswd-platform", help="Target htpasswd file path"
-    )
+    htpasswd_parser.add_argument("--htpasswd-file", default=None, help="Target htpasswd file path")
 
     args = parser.parse_args()
 
@@ -562,19 +573,19 @@ if __name__ == "__main__":
         if generated:
             print(f"Generated: {','.join(generated)}")
     elif args.action == "source":
-        env_vars = source_secrets_env(args.secrets_env)
+        env_vars = source_secrets_env(args.secrets_env or str(_resolve_secrets_env()))
         for k, v in env_vars.items():
             print(f"{k}={v}")
     elif args.action == "cleanup":
-        if not os.path.isfile(args.secrets_env):
+        if not os.path.isfile(args.secrets_env or str(_resolve_secrets_env())):
             print(f"SKIP: file not found: {args.secrets_env}", file=sys.stderr)
             sys.exit(1)
         try:
-            before = parse_secrets_env(args.secrets_env)
+            before = parse_secrets_env(args.secrets_env or str(_resolve_secrets_env()))
         except (OSError, ValueError) as e:
             print(f"ERROR: cannot read {args.secrets_env}: {e}", file=sys.stderr)
             sys.exit(1)
-        after = cleanup_secrets_env(args.secrets_env, args.tor_enabled)
+        after = cleanup_secrets_env(args.secrets_env or str(_resolve_secrets_env()), args.tor_enabled)
         # DevPlan 123 T6: args.tor_enabled приходит из shell-строки (lib/secrets.sh --tor-enabled
         # "${TOR_ENABLED:-false}") — нормализуем сравнение вместо строгого ==/!=
         if (args.tor_enabled or "").lower() != "true" and ("HTTP_PROXY" in before or "HTTPS_PROXY" in before):

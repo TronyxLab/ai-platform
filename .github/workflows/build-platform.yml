@@ -149,7 +149,9 @@ jobs:
           COMPOSE_PROFILES: hermes-agent
         run: |
           echo "=== Pulling images from compose file ==="
-          docker compose -f core/modules/hermes-agent/docker-compose.base.yml pull --ignore-buildable 2>/dev/null || true
+          # 142 W7 (R10): root docker-compose.yml — SoT volumes hermes-data (U-49);
+          # base.yml в одиночку даёт «undefined volume hermes-data» (R10) — root include'ит его.
+          docker compose -f docker-compose.yml
 
       - name: Smoke test — compose up and healthcheck
         env:
@@ -166,11 +168,13 @@ jobs:
           # ·   container loopback, unreachable from host via port mapping). Use 0.0.0.0 default.
           # · CI credentials come from platform-env.yaml env_defaults (not production secrets).
           # · OPENAI_API_KEY set to CI default to avoid compose warning.
+          # 142 W7 (R10): root docker-compose.yml — SoT volumes hermes-data (U-49);
+          # base.yml в одиночку даёт «undefined volume hermes-data» (R10) — root include'ит его.
           CONTEXT_IMAGE="hermes-agent-base:latest" \
           HERMES_DASHBOARD_PASSWORD="${{ secrets.HERMES_DASHBOARD_PASSWORD }}" \
           OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY }}" \
           API_SERVER_ENABLED="false" \
-          docker compose -f core/modules/hermes-agent/docker-compose.base.yml \
+          docker compose -f docker-compose.yml \
             --project-name build-platform-smoke \
             up -d
 
@@ -182,9 +186,13 @@ jobs:
             fi
             if [ $i -eq 30 ]; then
               echo "=== ERROR: Agent not ready after 60s ==="
-              docker compose -f core/modules/hermes-agent/docker-compose.base.yml \
+              # 142 W7 (R10): root docker-compose.yml — SoT volumes hermes-data (U-49);
+              # base.yml в одиночку даёт «undefined volume hermes-data» (R10) — root include'ит его.
+              docker compose -f docker-compose.yml \
                 --project-name build-platform-smoke logs
-              docker compose -f core/modules/hermes-agent/docker-compose.base.yml \
+              # 142 W7 (R10): root docker-compose.yml — SoT volumes hermes-data (U-49);
+              # base.yml в одиночку даёт «undefined volume hermes-data» (R10) — root include'ит его.
+              docker compose -f docker-compose.yml \
                 --project-name build-platform-smoke down -v
               exit 1
             fi
@@ -199,7 +207,9 @@ jobs:
         env:
           COMPOSE_PROFILES: hermes-agent
         run: |
-          docker compose -f core/modules/hermes-agent/docker-compose.base.yml \
+          # 142 W7 (R10): root docker-compose.yml — SoT volumes hermes-data (U-49);
+          # base.yml в одиночку даёт «undefined volume hermes-data» (R10) — root include'ит его.
+          docker compose -f docker-compose.yml \
             --project-name build-platform-smoke down -v 2>/dev/null || true
 
       # ─── Step 7: Push L1 to ghcr.io (SOURCE ORG ONLY — DR backup + distribution base) ───

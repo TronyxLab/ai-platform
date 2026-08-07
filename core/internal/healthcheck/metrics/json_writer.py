@@ -3,7 +3,7 @@
 # STRUCTURE: ▶ atomic_write(data, target_path) → tempfile.mkstemp → json.dump → os.fsync → validate → direct overwrite (preserves inode) → unlink temp
 # region MODULE_CONTRACT
 ## @purpose  Inode-preserving JSON writer: tempfile + fsync + validate, then overwrite target in-place
-## @scope    Host-side: writes status-metrics.json to /run/platform/
+## @scope    Host-side: writes status-metrics.json to /var/lib/platform/run/
 ## @invariants
 ##   - SCHEMA_VERSION = 2 (META Δ4)
 ##   - tempfile.mkstemp in same directory as target (same filesystem)
@@ -49,7 +49,7 @@ SCHEMA_VERSION = 2
 #   the inode. Race window: target is empty between truncate and write (microseconds for
 #   16KB JSON). Acceptable trade-off for cron-exported metrics (updated every 60s).
 # · Recovery: if the race window becomes problematic (readers consistently see empty file),
-#   switch to directory-level bind mount (/run/platform/ instead of single file).
+#   switch to directory-level bind mount (/var/lib/platform/run/ instead of single file).
 # · Rev: if status-page log shows >1% JSONDecodeError on metrics file reads → escalate to
 #   directory mount solution.
 

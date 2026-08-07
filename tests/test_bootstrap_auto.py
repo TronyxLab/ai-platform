@@ -943,6 +943,87 @@ def test_build_ssh_cmd_empty_ci_deploy_key_omits_flag(caplog) -> None:
 # НЕ должен нарушить. Bash-subprocess pattern (consistent with existing test_bootstrap_auto).
 # ══════════════════════════════════════════════════════════════════════════════
 
+
+# region TEST_test_build_ssh_cmd_includes_ci_root_key
+# 🧪 TRAP[TEST] · 2026-08-06 · 142 W1 (A1) · build_ssh_cmd 5-й ключ ci_root_key
+# · Regression: CI-root ключ (ПУБЛИЧНАЯ часть VPS_SSH_KEY) не доставлялся в remote-команду →
+# ·   φ2 не получал PLATFORM_CI_ROOT_KEY → root authorized_keys без ключа → core-deploy
+# ·   root-канал падал на свежей ноде (ручное добавление ключа, циклы 1/2 141).
+# · Scenario: build_ssh_cmd с 5 аргументами (node, owner, ci-deploy, age, ci-root) →
+# ·   вывод содержит `--ci-root-key` (printf %q) И `export PLATFORM_CI_ROOT_KEY=`.
+# · Remove if: build_ssh_cmd сигнатура меняется (ci_root_key уходит из remote-цепочки)
+def test_build_ssh_cmd_includes_ci_root_key(caplog) -> None:
+    """142 W1: build_ssh_cmd 5-й ключ — --ci-root-key + PLATFORM_CI_ROOT_KEY export."""
+    caplog.set_level(logging.DEBUG)
+
+    ci_root_key = "ssh-ed25519 AAAACiRootKey ci-root@example.com"
+    test_call = f"""build_ssh_cmd "test-node" "ssh-ed25519 AAAATestOwnerKey owner@test" \
+"ssh-ed25519 AAAACiDeployKey ci-deploy@test" "AGE-SECRET-KEY-12345" "{ci_root_key}"
+echo "[IMP:9][build_ssh_cmd_ci_root] Exit=$?"
+"""
+    stdout, stderr, rc = _test_func(
+        BUILD_SSH_CMD_SH,
+        ["build_ssh_cmd"],
+        test_call,
+        env={"__LOG_PREFIX": "test"},
+    )
+
+    found_imp9 = _print_ldd(stderr, stdout)
+    assert rc == 0, f"build_ssh_cmd failed: {stderr}"
+    cmd = stdout.split("\n")[0]
+
+    assert "--ci-root-key" in cmd, f"Expected --ci-root-key flag: {cmd}"
+    assert "export PLATFORM_CI_ROOT_KEY=" in cmd, f"Expected PLATFORM_CI_ROOT_KEY export: {cmd}"
+    # %q-quoting: ключ с пробелами экранируется
+    assert (
+        "ssh-ed25519\\\\\\ AAAACiRootKey\\\\\\ ci-root@example.com" in cmd
+        or "ssh-ed25519\\ AAAACiRootKey\\ ci-root@example.com" in cmd
+        or "'ssh-ed25519 AAAACiRootKey ci-root@example.com'" in cmd
+    ), f"Expected %q-quoted ci_root_key value: {cmd}"
+    # Совместимость: 4-й ключ (ci-deploy) на месте
+    assert "--ci-deploy-key" in cmd
+    logger.info("[IMP:9][test_build_ssh_cmd_ci_root][assert] --ci-root-key + PLATFORM_CI_ROOT_KEY present (142 W1)")
+
+    assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
+
+
+# endregion
+
+
+# region TEST_test_build_ssh_cmd_empty_ci_root_key_omits_flag
+# 🧪 TRAP[TEST] · 2026-08-06 · 142 W1 · пустой ci_root_key не эмитит флаг
+# · Regression: пустой 5-й ключ не должен добавлять --ci-root-key (backward-compat
+# ·   с 4-аргументными вызовами — старые тесты/вызовы остаются валидными)
+# · Remove if: build_ssh_cmd ci_root_key handling changes
+def test_build_ssh_cmd_empty_ci_root_key_omits_flag(caplog) -> None:
+    """142 W1: пустой ci_root_key → нет --ci-root-key (backward-compat)."""
+    caplog.set_level(logging.DEBUG)
+
+    stdout, stderr, rc = _test_func(
+        BUILD_SSH_CMD_SH,
+        ["build_ssh_cmd"],
+        'build_ssh_cmd "test-node" "ssh-ed25519 AAAATestOwnerKey owner@test" "" "AGE-SECRET-KEY-12345" ""\n'
+        'echo "[IMP:9][build_ssh_cmd_empty_ci_root] Exit=$?"',
+        env={"__LOG_PREFIX": "test"},
+    )
+
+    found_imp9 = _print_ldd(stderr, stdout)
+    assert rc == 0, f"build_ssh_cmd empty ci_root_key failed: {stderr}"
+    cmd = stdout.split("\n")[0]
+    assert "--ci-root-key" not in cmd, f"Expected NO --ci-root-key flag: {cmd}"
+    assert "export PLATFORM_CI_ROOT_KEY=" not in cmd, f"Expected NO PLATFORM_CI_ROOT_KEY export: {cmd}"
+    # Остальные флаги на месте (backward compat)
+    assert "--owner-key" in cmd
+    assert "--node-name" in cmd
+    assert "--resume" in cmd
+    logger.info("[IMP:9][test_build_ssh_cmd_empty_ci_root][assert] --ci-root-key omitted when empty (142 W1)")
+
+    assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
+
+
+# endregion
+
+
 # region TEST_test_resolve_node_yaml_multi_path_search
 # 🧪 TRAP[TEST] · 2026-07-22 · W4-E5 resolve_node_yaml 3-candidate-path search
 # · Regression: node.yaml must be discoverable across platform-local → org-repos → VPS fallback

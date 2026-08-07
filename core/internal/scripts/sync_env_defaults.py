@@ -241,7 +241,9 @@ def _section_platform_context(env_defaults: dict[str, str]) -> list[str]:
     lines.append("NODE_NAME=" + _get_env_val(env_defaults, "NODE_NAME", "test-node"))
     lines.append("# Локальные оверрайды dev-локалей (RC-сессия 2026-08-03). Пустой дефолт = прод-")
     lines.append("# поведение compose (${VAR:-default} в base.yml): NODE_CONFIGS_DIR → /opt/node-configs,")
-    lines.append("# STATUS_METRICS_JSON / HTPASSWD_FILE → /run/platform (tmpfs). Локально (macOS, Docker")
+    lines.append(
+        "# STATUS_METRICS_JSON / HTPASSWD_FILE → /var/lib/platform/run (persistent, 142 W2). Локально (macOS, Docker"
+    )
     lines.append("# Desktop не шарит /opt и /run) .env переопределяет абсолютными путями.")
     lines.append("NODE_CONFIGS_DIR=" + _get_env_val(env_defaults, "NODE_CONFIGS_DIR", ""))
     lines.append("STATUS_METRICS_JSON=" + _get_env_val(env_defaults, "STATUS_METRICS_JSON", ""))
@@ -643,7 +645,7 @@ def _section_ssl_dns(env_defaults: dict[str, str]) -> list[str]:
     lines.append("# WEBNAMES_API_KEY — API-ключ webnames.ru для acme.sh DNS-01 wildcard TLS.")
     lines.append("# Требуется при PLATFORM_CERTBOT_DNS_PLUGIN=webnames.")
     lines.append("# Хранится в SOPS-encrypted файле на VPS (/opt/node-configs/secrets/<node>.enc.yaml).")
-    lines.append("# На VPS: sourced из /run/platform/secrets.env перед step 14 (ssl provision).")
+    lines.append("# На VPS: sourced из /var/lib/platform/run/secrets.env перед step 14 (ssl provision) (142 W2).")
     lines.append("# Локально: не требуется (используются dev-certs через mkcert/openssl).")
     lines.append("WEBNAMES_API_KEY=" + _get_env_val(env_defaults, "WEBNAMES_API_KEY", "*test-webnames-api-key"))
     return lines

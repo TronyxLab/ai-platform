@@ -1,13 +1,14 @@
-# GREP_SUMMARY: converge-package, reconciler, desired-state, python-decomposition, infra, perms, audit, projects, networks, vhosts, volumes, sudoers, runtime
-# STRUCTURE: ┌reconciler.py оркестратор R1-R9┐ → ⚡ 8 доменных модулей (perms/audit/projects/networks/vhosts/volumes/sudoers/runtime) → ⊕ infra.py (глобалы+report/exit/subprocess) → ⎋ exit_code {0,1,2} + JSON report
+# GREP_SUMMARY: converge-package, reconciler, desired-state, python-decomposition, infra, perms, audit, projects, networks, vhosts, volumes, sudoers, runtime, monitoring
+# STRUCTURE: ┌reconciler.py оркестратор R1-R10┐ → ⚡ 9 доменных модулей (perms/audit/projects/networks/vhosts/volumes/sudoers/runtime/monitoring) → ⊕ infra.py (глобалы+report/exit/subprocess) → ⎋ exit_code {0,1,2} + JSON report
 # region MODULE_CONTRACT
 ## @purpose  Python decomposition package for converge.sh (W4-E3). Replaces shell reconcile logic
 ##           with typed Python modules. B9 T2 (U-31): SRP-декомпозиция reconciler-монолита (2286 LOC) —
-##           reconciler.py — оркестратор (~250 LOC), 8 доменных модулей + infra.py.
-## @scope    core/internal/bootstrap/converge/ — reconciler.py (оркестратор R1-R9 + main),
+##           reconciler.py — оркестратор (~250 LOC), 9 доменных модулей + infra.py.
+## @scope    core/internal/bootstrap/converge/ — reconciler.py (оркестратор R1-R10 + main),
 ##           infra.py (модульные глобалы + report/exit/subprocess/unit_filter + константы),
 ##           perms.py (R1), audit.py (R2), projects.py (R3), networks.py (R4),
-##           vhosts.py (R5+R6), volumes.py (R7), sudoers.py (R8), runtime.py (R9)
+##           vhosts.py (R5+R6), volumes.py (R7), sudoers.py (R8), runtime.py (R9),
+##           prometheus_tsdb.py (R10 — TSDB self-heal, 142 W3)
 ## @invariants
 ##   - reconciler.py — единственный entrypoint для converge reconciliation (депеширует доменам)
 ##   - Каждый R-unit автономен и независим от других; глобалы — в infra.py (публичные имена)
@@ -22,7 +23,7 @@
 Converge reconciliation package.
 
 Modules:
-  - reconciler.py — оркестратор R1-R9 (main + dispatch)
+  - reconciler.py — оркестратор R1-R10 (main + dispatch)
   - infra.py      — модульные глобалы + report/exit/subprocess/unit_filter + константы
   - perms.py      — R1 reconcile_perms (executable-bit)
   - audit.py      — R2 reconcile_audit_log (audit.jsonl 0664 root:adm + ci-deploy adm)
@@ -32,4 +33,5 @@ Modules:
   - volumes.py    — R7 reconcile_volumes (detect-only named volumes, O7)
   - sudoers.py    — R8 reconcile_sudoers (sudoers.d drift + self-heal)
   - runtime.py    — R9 reconcile_runtime_state (container state + compose up -d + cooldown)
+  - prometheus_tsdb.py — R10 reconcile_prometheus_tsdb (TSDB self-heal, 142 W3)
 """

@@ -65,6 +65,8 @@ import time
 from pathlib import Path
 from typing import ClassVar
 
+import yaml  # B8 (142 W7): node.yaml — YAML (json.load падал); python3-yaml — платформенная зависимость φ1
+
 from core.internal.bootstrap.lifecycle.state_store import (
     BootstrapState,
     StateCorruptError,
@@ -395,11 +397,17 @@ class StateMachine:
         node_yaml = os.environ.get("NODE_YAML", "")
         if node_yaml and os.path.isfile(node_yaml):
             try:
+                # ⚠️ TRAP[BUG] · 2026-08-06 · HI · B8 (142 W7): json.loads на YAML node.yaml
+                # · Symptom: «Cannot parse node.yaml» на КАЖДОЙ фазе + сломанный content-hash —
+                # ·   hash всегда = «node-yaml-unparseable» → done-фазы перевыполнялись/нет (1,2 циклы 141).
+                # · Root: node.yaml — YAML, json.load падает на первом non-JSON токене (node:).
+                # · Fix: yaml.safe_load (PyYAML — платформенная зависимость, python3-yaml в φ1 apt).
+                # · Prevention: node.yaml читается ТОЛЬКО как YAML (канон NodeYaml фасада).
                 with open(node_yaml, encoding="utf-8") as f:
-                    data = json.load(f)
+                    data = yaml.safe_load(f) or {}
                 relevant = {"modules": data.get("modules", {}), "services": data.get("services", {})}
                 hasher.update(json.dumps(relevant, sort_keys=True, default=str).encode("utf-8"))
-            except (OSError, json.JSONDecodeError) as e:
+            except (OSError, yaml.YAMLError, json.JSONDecodeError) as e:
                 # Best-effort: битый node.yaml — детерминированный fallback (не фатально на hash-стадии)
                 logger.warning("[IMP:7][_phase_input_hash] Cannot parse %s: %s", node_yaml, e)
                 hasher.update(b"node-yaml-unparseable")

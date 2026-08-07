@@ -1,8 +1,8 @@
 # GREP_SUMMARY: platform-secrets sops age systemd oneshot secrets.env tmpfs decrypt
-# STRUCTURE: ▶ boot → sops-decrypt → tmpfs:/run/platform/secrets.env → docker.service → ┐
+# STRUCTURE: ▶ boot → sops-decrypt → /var/lib/platform/run/secrets.env (142 W2) → docker.service → ┐
 # region MODULE_CONTRACT
 ## @purpose  Systemd oneshot that decrypts SOPS/age secrets to tmpfs on boot.
-##           Provides /run/platform/secrets.env for all docker containers.
+##           Provides /var/lib/platform/run/secrets.env for all docker containers (142 W2).
 ## @scope    Boot-time secret provisioning; depends on host-age-key being pre-configured.
 ## @invariants
 ##   - install_type: system — NOT Docker, systemd-managed
@@ -29,7 +29,7 @@ install_type: system
 systemd:
   unit: platform-secrets.service
   required_by: docker.service
-description: "Systemd oneshot service that regenerates /run/platform/secrets.env from encrypted SOPS/age secrets"
+description: "Systemd oneshot service that regenerates /var/lib/platform/run/secrets.env from encrypted SOPS/age secrets"
 
 interfaces:
   - install

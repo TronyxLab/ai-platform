@@ -10,7 +10,7 @@
 ##   - Auto-detects NODE_NAME via python3 -m core.internal.shared.node_detect (excludes
 ##     scripts/ and secrets/; fallback: "unknown") — single detector canon (DevPlan 116 B3 T2)
 ##   - Exports PYTHONPATH so `from core.internal.healthcheck.metrics...` works
-##   - Creates /run/platform/ (tmpfs) and /var/cache/platform/metrics/ if missing
+##   - Creates /var/lib/platform/run/ (persistent, 142 W2) and /var/cache/platform/metrics/ if missing
 ##   - Protective: removes status-metrics.json if it exists as directory (P1 safeguard)
 ##   - Exec python3 directly — replaces shell process
 ## @rationale Thin wrapper per language policy — Python does all business logic.
@@ -45,9 +45,10 @@ export PYTHONPATH="${PLATFORM_ROOT}${PYTHONPATH:+:$PYTHONPATH}"
 export NODE_NAME
 
 # Output path: тот же env, что и Python-координатор (STATUS_METRICS_JSON).
-# Прод-дефолт /run/platform/status-metrics.json (tmpfs); dev-локаль (macOS, /run read-only)
+# Прод-дефолт /var/lib/platform/run/status-metrics.json (persistent, 142 W2); dev-локаль (macOS)
 # переопределяет через env — см. .env STATUS_METRICS_JSON.
-STATUS_METRICS_JSON="${STATUS_METRICS_JSON:-/run/platform/status-metrics.json}"
+# 142 W2 (B21): persistent /var/lib/platform/run (tmpfs /run/platform не переживает reboot)
+STATUS_METRICS_JSON="${STATUS_METRICS_JSON:-/var/lib/platform/run/status-metrics.json}"
 export STATUS_METRICS_JSON
 
 # Ensure output directory exists (tmpfs on prod, empty after reboot). Fail-fast на

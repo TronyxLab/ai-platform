@@ -80,11 +80,11 @@ sops set "${NODE_CONFIGS_DIR}/secrets/<node>.enc.yaml" '["POSTGRES_PASSWORD"] "'
 
 3.2. **secrets.env** — пере-декрипт (φ9 secrets_update / `make node-update NODE=<node>`
 или `make secrets-unlock NODE=<node>` → `step_10_decrypt_secrets` пересоздаёт
-`/run/platform/secrets.env` из sops-файла). Проверка:
+`/var/lib/platform/run/secrets.env` из sops-файла). Проверка: (142 W2)
 
 ```bash
-grep -c '^POSTGRES_PASSWORD=' /run/platform/secrets.env   # → 1
-grep '^POSTGRES_PASSWORD=' /run/platform/secrets.env | tail -c 1 | grep -q '=' || true
+grep -c '^POSTGRES_PASSWORD=' /var/lib/platform/run/secrets.env   # → 1
+grep '^POSTGRES_PASSWORD=' /var/lib/platform/run/secrets.env | tail -c 1 | grep -q '=' || true
 ```
 
 ### 4. Перезапустить потребителей (новый env)

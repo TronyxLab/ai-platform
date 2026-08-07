@@ -48,11 +48,11 @@ _STRICT_BOOL_LITERALS = {"true", "True", "false", "False"}
 
 # ⚠️ allowlist — per-line (НЕ per-file; файловый allowlist пуст). Ключ: "<rel-к-core>:<lineno>".
 # Каждая запись требует обоснование-комментарий. Сжимается волнами — новые записи RED.
-# deploy_orchestrator.py:315: `enabled == "true"` — вход УЖЕ нормализован в
-# parse_modules_from_node_yaml (DevPlan 123 T6). Line 315 (не 314) после W9 (136):
-# удалена import-time константа _HC_DONE_MARKER (per-context резолв в call-time, T9.19).
+# deploy_orchestrator.py:316: `enabled == "true"` — вход УЖЕ нормализован в
+# parse_modules_from_node_yaml (DevPlan 123 T6). Line 316 (не 315) после 142 W8:
+# ruff-format сдвинул строки сравнения в _parse_modules.
 _ALLOWLIST_LINES: set[str] = {
-    "internal/bootstrap/deploy/deploy_orchestrator.py:315",  # input normalized by parse_modules_from_node_yaml
+    "internal/bootstrap/deploy/deploy_orchestrator.py:316",  # input normalized by parse_modules_from_node_yaml
 }
 
 

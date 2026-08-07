@@ -1469,3 +1469,111 @@ def test_stepstate_from_dict_done_key_backward_compat(caplog):
 
 
 # endregion
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region B26 (142 W7): state.json аудит при удалении/сбросе
+# ═══════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · 2026-08-06 · NEGATIVE (R5) · 142 W7 B26 — --force reset аудитируется
+# · Scenario: cli.main([..., --force]) на валидном state → write_audit_entry(tag="state.json",
+# ·   status="reset") вызывается ДО sm.reset() (аудит-след операции сброса)
+# · Last fail: 2026-08-06 (цикл 2 141, B26) — state.json исчез без следа, механизм не выявлен;
+# ·   аудит-запись позволяет реконструировать кто/когда
+# · Remove if: B26 аудит-защита удаляется
+@ldd_trajectory
+def test_force_reset_writes_audit_entry(caplog, state_file, monkeypatch):
+    """B26: --force reset state.json → audit-запись (tag=state.json, status=reset)."""
+    caplog.set_level(logging.INFO)
+
+    # Валидный state.json
+    m = sm.StateMachine(state_file_path=str(state_file))
+    m.setup_state(mode="init", node="test-node")
+    m.save()
+
+    audit_calls: list[tuple] = []
+
+    def fake_audit(tag, status, message, **extra):
+        audit_calls.append((tag, status, message, extra))
+        return True
+
+    import core.internal.shared.audit_logger as _audit_mod
+
+    monkeypatch.setattr(_audit_mod, "write_audit_entry", fake_audit)
+    # Останавливаем main() ДО полного цикла фаз: StateMachine.reset() бросает SystemExit
+    # нет — reset не бросает; замокаем sm.reset, чтобы не уходить в полный bootstrap-цикл
+    reset_called = []
+
+    class _FakeSM(sm.StateMachine):
+        def reset(self):
+            reset_called.append(True)
+            super().reset()
+
+    monkeypatch.setattr(cli, "StateMachine", _FakeSM)
+    # Замокаем все фазы (иначе main уйдёт в полный init-цикл)
+    monkeypatch.setattr(cli, "run_init_mode", lambda sm_obj: 0)
+
+    monkeypatch.setattr("sys.argv", ["cli.py", "--mode", "init", "--force", "--state-file", str(state_file)])
+    monkeypatch.setenv("NODE_NAME", "test-node")
+    monkeypatch.setenv("NODE_YAML", str(state_file.parent / "node.yaml"))
+    monkeypatch.setenv("PLATFORM_OWNER_KEY", "ssh-ed25519 AAAA test")
+    rc = cli.main()
+
+    assert rc == 0
+    assert audit_calls, "аудит-запись обязана быть при --force (B26)"
+    assert audit_calls[0][0] == "state.json", f"tag=state.json, got {audit_calls[0][0]}"
+    assert audit_calls[0][1] == "reset", f"status=reset, got {audit_calls[0][1]}"
+    assert reset_called, "sm.reset() обязан вызываться после аудит-записи"
+    logger.critical("[IMP:9][test] B26: --force reset → audit-запись state.json/reset ✓")
+
+
+# endregion
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region B8 (142 W7): _phase_input_hash парсит YAML node.yaml
+# ═══════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · 2026-08-06 · NEGATIVE (R5) · 142 W7 B8 — json.loads на YAML node.yaml
+# · Scenario: node.yaml (YAML-формат: node: / modules: / services:) → _phase_input_hash
+# ·   считает hash из релевантных полей (НЕ fallback «node-yaml-unparseable»)
+# · Last fail: 2026-08-06 (циклы 1/2 141, B8) — json.load падал на YAML → hash всегда
+# ·   «node-yaml-unparseable» → content-hash фаз сломан
+# · Remove if: _phase_input_hash YAML-парсинг меняется
+@ldd_trajectory
+def test_phase_input_hash_parses_yaml_node_yaml(caplog, tmp_path, monkeypatch):
+    """B8: _phase_input_hash корректно парсит YAML node.yaml (не JSON)."""
+    caplog.set_level(logging.INFO)
+    node_yaml = tmp_path / "node.yaml"
+    node_yaml.write_text(
+        "node:\n"
+        "  name: tronyx-vps\n"
+        "  owner_key: ssh-ed25519 AAAA owner\n"
+        "modules:\n"
+        "  nginx:\n"
+        "    enabled: true\n"
+        "services:\n"
+        "  status-page:\n"
+        "    enabled: true\n"
+    )
+    monkeypatch.setenv("NODE_YAML", str(node_yaml))
+
+    m = sm.StateMachine(state_file_path=str(tmp_path / "state.json"))
+    digest = m._phase_input_hash("deploy_services")
+
+    assert digest and len(digest) == 64, f"SHA256 hexdigest ожидался, got {digest!r}"
+    assert "Cannot parse" not in caplog.text, f"B8: парсинг не должен падать: {caplog.text[-300:]}"
+    # Детерминизм + чувствительность: изменение релевантного поля меняет hash
+    digest2 = m._phase_input_hash("deploy_services")
+    assert digest == digest2, "повторный hash детерминирован"
+    node_yaml.write_text(
+        "node:\n  name: tronyx-vps\nmodules:\n  nginx:\n    enabled: false\nservices:\n  status-page:\n    enabled: true\n"
+    )
+    digest3 = m._phase_input_hash("deploy_services")
+    assert digest3 != digest, "изменение modules/services обязано менять hash (T9.3)"
+    logger.critical("[IMP:9][test] B8: _phase_input_hash парсит YAML node.yaml ✓")
+
+
+# endregion

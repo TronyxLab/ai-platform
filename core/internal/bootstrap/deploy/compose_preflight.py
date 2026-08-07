@@ -4,7 +4,7 @@
 # STRUCTURE: ▶ parse_compose_args → ◇ resolve_modules(profiles) → ◇ load_secrets_manifest → ◇ check_secrets(modules) → ◇ validate_charsets → ⊕ missing|invalid → ⎋ exit(0|1)
 # region MODULE_CONTRACT [DOMAIN(DEPLOY): bootstrap; CONCEPT(SECRETS): preflight-validation; TECH(PYTHON): argparse+yaml+re+os]
 ## @purpose  Docker compose preflight validation wrapper — ensures all required secrets for target modules
-##           are present (in os.environ or /run/platform/secrets.env) and pass charset constraints
+##           are present (in os.environ or /var/lib/platform/run/secrets.env) and pass charset constraints
 ##           before allowing `docker compose up` to proceed.
 ## @scope    Called from core/entrypoints/compose-wrapper.sh before `exec docker compose "$@"`.
 ##           Reads secrets-manifest.yaml, checks modules resolved from compose profiles/args.
@@ -13,7 +13,7 @@
 ## @links    REUSES_FROM(core/internal/bootstrap/deploy/secrets_validator.py:_check_env_requires, _validate_secret_charsets)
 ## @invariants
 ##   - Modules are resolved from --profile <name> args OR COMPOSE_PROFILES env var OR all manifest consumers
-##   - Secrets file path: /run/platform/secrets.env (overridable via SECRETS_ENV_FILE env)
+##   - Secrets file path: /var/lib/platform/run/secrets.env (overridable via SECRETS_ENV_FILE env)
 ##   - Checks ALL tier ∈ {required, generated} secrets for resolved modules
 ##   - Charset validation only checks non-empty values (empty = caught by check_secrets)
 ##   - Missing manifest → WARN + exit 0 (graceful degradation, no SSoT = allow)
@@ -51,13 +51,14 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 # B3: канонический platform root — shared/deploy_paths (литерал /opt/platform удалён)
-from core.internal.shared.deploy_paths import platform_remote_base
+# 142 W2: secrets.env → persistent /var/lib/platform/run (резолвер shared/deploy_paths)
+from core.internal.shared.deploy_paths import platform_remote_base, secrets_env_file
 from core.internal.shared.secrets_env_parser import parse as parse_secrets_env
 
 logger = logging.getLogger(__name__)
 
 # Default path for secrets.env
-_SECRETS_ENV_DEFAULT = "/run/platform/secrets.env"
+_SECRETS_ENV_DEFAULT = str(secrets_env_file())
 
 # Default path for secrets-manifest.yaml (relative to platform root)
 _MANIFEST_DEFAULT = os.path.join(
@@ -384,7 +385,7 @@ def main(test_args: list[str] | None = None) -> int:
         print("ERROR: Missing required secrets for compose up:", file=sys.stderr)
         for name in sorted(missing):
             print(f"  - {name}", file=sys.stderr)
-        print("Hint: Run `make secrets-unlock` or source /run/platform/secrets.env", file=sys.stderr)
+        print(f"Hint: Run `make secrets-unlock` or source {_SECRETS_ENV_DEFAULT}", file=sys.stderr)
         logger.error("[IMP:9][main][BLOCKED] %d missing secret(s) — blocking compose up", len(missing))
         return 1
 

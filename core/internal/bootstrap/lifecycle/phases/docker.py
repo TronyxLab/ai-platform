@@ -188,6 +188,9 @@ def phase_registry_update(core_dir: str, node_name: str, node_yaml: str) -> bool
     non_fatal_issues |= _registry_step_ghcr_auth()
     non_fatal_issues |= _registry_step_provision_env(core_dir)
     non_fatal_issues |= _registry_step_nginx_overlays(node_name)
+    # 142 W6 (A2): re-apply конфига privoxy в update-режиме (no-op при корректном конфиге) —
+    # после reboot/переустановки пакета privoxy сбрасывался к 127.0.0.1 → telegram-канал мёртв.
+    non_fatal_issues |= _registry_step_privoxy_config(core_dir)
     non_fatal_issues |= _registry_step_llm_provision(core_dir)
     non_fatal_issues |= _registry_step_healthcheck(node_yaml)
 
@@ -361,6 +364,42 @@ def _registry_step_nginx_overlays(node_name: str) -> bool:
 
 
 # endregion FUNC__registry_step_nginx_overlays
+
+
+# region FUNC__registry_step_privoxy_config
+## @purpose  142 W6 (A2) sub-step: re-apply конфига privoxy в update-режиме. Privoxy после
+##           reboot/переустановки пакета сбрасывался к listen-address 127.0.0.1 → grafana
+##           telegram-канал (host.docker.internal:8118) мёртв (цикл 2 141, R1-корень №1).
+##           Механизм 119 D3 идемпотентен: write_privoxy_config → no-op при корректном конфиге.
+## @io       ⇥ core_dir: str → ⎋ bool (True = non-fatal issue occurred)
+## @complexity O(L) — L = строк конфига (no-op при совпадении)
+## @invariants
+##   - ТОЛЬКО при TOR_ENABLED=true (privoxy не установлен иначе)
+##   - Несуществующий /etc/privoxy/config → no-op (не issue — privoxy может быть не установлен)
+##   - write_privoxy_config True (изменения внесены) → WARN (дрейф был — теперь исправлен)
+def _registry_step_privoxy_config(core_dir: str) -> bool:
+    """Re-apply privoxy config (idempotent, 119 D3) — no-op при корректном конфиге (142 W6)."""
+    if os.environ.get("TOR_ENABLED", "false").lower() != "true":
+        logger.info("[IMP:7][phase:registry_update] TOR_ENABLED != true — skipping privoxy config re-apply")
+        return False
+    try:
+        from core.internal.bootstrap.privoxy_config import write_privoxy_config
+
+        changed = write_privoxy_config("/etc/privoxy/config")
+        if changed:
+            # Дрейф был (конфиг сброшен к дефолту пакета) — перезаписан каноном; WARN-сигнал
+            logger.warning(
+                "[IMP:8][phase:registry_update] Privoxy config was drifted — re-applied canonical config (142 W6)"
+            )
+            return True
+        logger.info("[IMP:9][phase:registry_update] Privoxy config already canonical — no-op")
+        return False
+    except Exception as e:  # noqa: EXC — non-fatal (best-effort, как firewall/tor в φ1)
+        logger.warning("[IMP:7][phase:registry_update] Privoxy config re-apply failed (non-fatal): %s", e)
+        return True
+
+
+# endregion FUNC__registry_step_privoxy_config
 
 
 # region FUNC__registry_step_llm_provision

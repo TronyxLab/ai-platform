@@ -201,3 +201,88 @@ def platform_remote_base(env: dict | None = None) -> Path:
 
 
 # endregion FUNC_platform_remote_base
+
+
+# ── Run-артефакты (142 W2, B21): /run/platform → /var/lib/platform/run ──────────
+# Решение Q2 (вариант «а»): tmpfs /run/platform НЕ переживает reboot (B21, chaos T11) —
+# nginx/status-page Exited(127) после reboot: bind-mount источники (secrets.env,
+# .htpasswd-platform, status-metrics.json) пусты. Перенос в persistent
+# /var/lib/platform/run (тот же каталог, что state.json/.bootstrap — persistent disk).
+# Каждый артефакт: env-override > прод-дефолт (dev-локали macOS сохраняются).
+
+DEFAULT_RUN_BASE: str = "/var/lib/platform/run"
+"""## @invariant Каноническая persistent-директория run-артефактов (142 W2 — замена tmpfs /run/platform)."""
+
+
+# region FUNC_run_base
+## @purpose — Резолвер базы run-артефактов: PLATFORM_RUN_BASE → /var/lib/platform/run.
+##            Единая точка для всех файлов, которые раньше жили в tmpfs /run/platform
+##            (secrets.env, .htpasswd-platform, status-metrics.json, watchdog-state.json).
+## @io — ⇥ env: dict | None → ⎋ Path
+## @complexity — O(1)
+## @invariants
+##   - env PLATFORM_RUN_BASE приоритетнее дефолта (тесты/нестандартные окружения)
+##   - Никогда не raise — всегда возвращает Path
+## @rationale 142 W2: 65 литералов /run/platform в 27 модулях — рассинхрон дефолтов
+##            (W2-риск §8); единый резолвер + env-параметризация сохраняет dev-локали.
+def run_base(env: dict | None = None) -> Path:
+    """Resolve run-artifacts base (PLATFORM_RUN_BASE → /var/lib/platform/run, 142 W2)."""
+    source = os.environ if env is None else env
+    return Path(str(source.get("PLATFORM_RUN_BASE") or DEFAULT_RUN_BASE))
+
+
+# endregion FUNC_run_base
+
+
+# region FUNC_secrets_env_file
+## @purpose — Резолвер SECRETS_ENV_FILE: env → {run_base}/secrets.env.
+##            Ключевой артефакт W2: secrets.env переживает reboot (AGE-ключ недоступен
+##            на boot по канону S-13 — только persistent dir решает полностью, B21).
+## @io — ⇥ env: dict | None → ⎋ Path
+## @complexity — O(1)
+def secrets_env_file(env: dict | None = None) -> Path:
+    """Resolve secrets.env path (SECRETS_ENV_FILE → /var/lib/platform/run/secrets.env, 142 W2)."""
+    source = os.environ if env is None else env
+    return Path(str(source.get("SECRETS_ENV_FILE") or run_base(source) / "secrets.env"))
+
+
+# endregion FUNC_secrets_env_file
+
+
+# region FUNC_htpasswd_file
+## @purpose — Резолвер HTPASSWD_FILE: env → {run_base}/.htpasswd-platform.
+## @io — ⇥ env: dict | None → ⎋ Path
+## @complexity — O(1)
+def htpasswd_file(env: dict | None = None) -> Path:
+    """Resolve htpasswd path (HTPASSWD_FILE → /var/lib/platform/run/.htpasswd-platform, 142 W2)."""
+    source = os.environ if env is None else env
+    return Path(str(source.get("HTPASSWD_FILE") or run_base(source) / ".htpasswd-platform"))
+
+
+# endregion FUNC_htpasswd_file
+
+
+# region FUNC_status_metrics_json
+## @purpose — Резолвер STATUS_METRICS_JSON: env → {run_base}/status-metrics.json.
+## @io — ⇥ env: dict | None → ⎋ Path
+## @complexity — O(1)
+def status_metrics_json(env: dict | None = None) -> Path:
+    """Resolve status-metrics.json path (STATUS_METRICS_JSON → /var/lib/platform/run/status-metrics.json, 142 W2)."""
+    source = os.environ if env is None else env
+    return Path(str(source.get("STATUS_METRICS_JSON") or run_base(source) / "status-metrics.json"))
+
+
+# endregion FUNC_status_metrics_json
+
+
+# region FUNC_watchdog_state_file
+## @purpose — Резолвер watchdog state-файла: env → {run_base}/watchdog-state.json.
+## @io — ⇥ env: dict | None → ⎋ Path
+## @complexity — O(1)
+def watchdog_state_file(env: dict | None = None) -> Path:
+    """Resolve watchdog state path (WATCHDOG_STATE_FILE → /var/lib/platform/run/watchdog-state.json, 142 W2)."""
+    source = os.environ if env is None else env
+    return Path(str(source.get("WATCHDOG_STATE_FILE") or run_base(source) / "watchdog-state.json"))
+
+
+# endregion FUNC_watchdog_state_file

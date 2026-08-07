@@ -21,12 +21,14 @@ services:
       # ── Dev-отличающиеся файлы (override поверх config/ из base.yml) ──
       - ./dev-config/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./dev-config/platform-default.conf.template:/etc/nginx/templates/platform-default.conf.template:ro
+      - ./dev-config/platform-vhost.conf.template:/etc/nginx/templates/platform-vhost.conf.template:ro
       - ./dev-config/platform-http.conf:/etc/nginx/templates/platform-http.conf.template:ro
       - ./dev-config/grafana-vhost.conf:/etc/nginx/templates/grafana-vhost.conf.template:ro
       - ./dev-config/hermes-dashboard.conf:/etc/nginx/templates/hermes-dashboard.conf.template:ro
       - ./dev-config/langfuse-vhost.conf:/etc/nginx/templates/langfuse-vhost.conf.template:ro
       - ./dev-config/loki-vhost.conf:/etc/nginx/templates/loki-vhost.conf.template:ro
       - ./dev-config/prometheus-vhost.conf:/etc/nginx/templates/prometheus-vhost.conf.template:ro
+      - ./dev-config/ssl-params.conf.template:/etc/nginx/templates/ssl-params.conf.template:ro
       # ── Dev SSL (mounted outside conf.d/ to avoid auto-load) ──
       - ./dev-config/ssl-dev.conf:/etc/nginx/ssl-dev.conf:ro
       # ── Dev TLS certs (mkcert, генерируются dev_cert_generator.py) ──

@@ -128,6 +128,24 @@ def nginx_compose(platform_services: dict[str, list[str]]) -> dict:
     _logger = logging.getLogger(__name__)
     _logger.info("[IMP:7][nginx_compose][setup] Starting nginx smoke fixture")
 
+    # ── 142 W8 (R13): дождаться появления платформенного nginx-test (волна 0 в фоне) ──
+    # Раньше check_foreign_containers выполнялся ДО создания контейнера волной →
+    # пусто → fixture поднимал СВОЙ стек (wave-nginx-smoke) → container_name конфликт
+    # с платформенным nginx-test → оба падали (R13-гонка, «connection refused»).
+    _deadline = time.monotonic() + 150
+    while time.monotonic() < _deadline:
+        _probe = subprocess.run(
+            ["docker", "inspect", "-f", "{{.State.Running}}", _CONTAINER_NAME],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if _probe.returncode == 0 and _probe.stdout.strip() == "true":
+            break
+        time.sleep(5)
+    else:
+        _logger.warning("[IMP:8][nginx_compose][setup] Platform nginx-test not detected in 150s — will start own stack")
+
     # ── Foreign container guard (reuse from platform_services) ────────────
     # ⚠️ TRAP[BUG] · 2026-07-22 · HI · own_project was "ai-platform-test" instead of _SMOKE_PROJECT
     # · Same bug as test_smoke_postgres.py: check_foreign_containers treated platform_services
@@ -250,7 +268,9 @@ def nginx_compose(platform_services: dict[str, list[str]]) -> dict:
 
     # ── Step 6: Start compose (dev-режим: base + dev.yml override, NGINX_CONF_DIR default ./config) ────
     _logger.info("[IMP:7][nginx_compose][setup] Starting nginx compose (%s)", _SMOKE_PROJECT)
-    env = {"NGINX_CERT_DIR": "./dev-certs"}
+    # 142 W8 (R13): NGINX_OVERLAY_DIR — B23 fail-fast (${VAR:?}, 141-фикс); _run_docker
+    # этого модуля НЕ мержит SMOKE_ENV (только os.environ + env_override) — задаём явно.
+    env = {"NGINX_CERT_DIR": "./dev-certs", "NGINX_OVERLAY_DIR": "/tmp/nginx-overlay-test"}
     up_args = [
         "docker",
         "compose",
@@ -372,15 +392,18 @@ def test_nginx_http_responds(nginx_compose, caplog) -> None:
     # · Prevention: gate G3 (test_gate_http_retry_policy.py) blocks new unprotected HTTP calls
     for attempt in range(3):
         try:
-            r = requests.get(url, timeout=_CURL_TIMEOUT)
+            # 142 W8 (R13): allow_redirects=False — nginx HTTP default_server редиректит
+            # 301 → https (redirect сам доказывает, что nginx обслуживает запрос).
+            r = requests.get(url, timeout=_CURL_TIMEOUT, allow_redirects=False)
             logger.info(
                 "[IMP:8][test_nginx_http] HTTP returned %s (attempt %d)",
                 r.status_code,
                 attempt + 1,
             )
-            # nginx returns 200 (dev-mode default index), 403 (no index), or 502/404 — any response proves nginx is serving
-            assert r.status_code in (200, 403, 502, 404), (
-                f"nginx HTTP returned {r.status_code}, expected 2xx/4xx/5xx (dev mode)"
+            # nginx returns 301 (HTTP→HTTPS redirect), 200 (dev-mode default index),
+            # 403 (no index), or 502/404 — any response proves nginx is serving
+            assert r.status_code in (200, 301, 403, 502, 404), (
+                f"nginx HTTP returned {r.status_code}, expected 2xx/3xx/4xx/5xx (dev mode)"
             )
             assert "nginx" in r.headers.get("Server", ""), "Response is not from nginx"
             logger.info("[IMP:9][test_nginx_http] ✅ nginx HTTP OK: %s (server: nginx)", r.status_code)
@@ -425,10 +448,19 @@ def test_nginx_https_responds(nginx_compose, caplog) -> None:
     logger.info("[IMP:7][test_nginx_https] Checking HTTPS %s ...", url)
 
     try:
-        r = req.get(url, timeout=_CURL_TIMEOUT, verify=False)
+        # ⚠️ 142 W8 (R13): Host: platform.ai-platform.local — HTTPS server-блоки nginx
+        # (base-шаблоны): apex/unknown хосты → stealth 444 (by design, TRAP 2026-07-18);
+        # platform-vhost (platform.${PLATFORM_DOMAIN}) → proxy_pass status-page:8080 →
+        # 401 (basic-auth) / 200 / 502 — любой ответ доказывает TLS-терминацию nginx.
+        r = req.get(
+            url,
+            timeout=_CURL_TIMEOUT,
+            verify=False,
+            headers={"Host": "platform.ai-platform.local"},
+        )
         logger.info("[IMP:8][test_nginx_https] HTTPS returned %s", r.status_code)
         # HTTP/2 multiplexed — any 2xx/4xx/5xx with nginx server header is success
-        assert r.status_code in (200, 403, 502, 404), (
+        assert r.status_code in (200, 401, 403, 502, 404), (
             f"nginx HTTPS returned {r.status_code}, expected 2xx/4xx/5xx (dev mode)"
         )
         assert "nginx" in r.headers.get("Server", ""), "Response is not from nginx"
@@ -518,9 +550,14 @@ def test_nginx_vhost_routing(nginx_compose, caplog) -> None:
 
     for vhost in _VHOSTS:
         try:
-            r = req.get(base_url, headers={"Host": vhost}, timeout=_CURL_TIMEOUT)
+            # ⚠️ 142 W8 (R13): allow_redirects=False — nginx-дефолт platform-конфига редиректит
+            # HTTP→HTTPS (301); requests с verify=True следовал редиректу на self-signed cert →
+            # SSLCertVerificationError (pre-existing, nginx smoke не стартовал до R13-фиксов).
+            # 301/302 на https://{vhost} сам по себе доказывает роутинг (Host-заголовок принят).
+            r = req.get(base_url, headers={"Host": vhost}, timeout=_CURL_TIMEOUT, allow_redirects=False)
             logger.info("[IMP:8][test_nginx_vhost] %s → HTTP %s", vhost, r.status_code)
             # Any HTTP response proves routing works:
+            # - 301/302 = HTTP→HTTPS redirect (default platform config, dev-mode)
             # - 502 = upstream not available (backend down)
             # - 2xx/3xx = backend is up and responding through nginx
             # - 403/404 = static catch-all
@@ -544,21 +581,28 @@ def test_nginx_error_page(nginx_compose, caplog) -> None:
 
     ## @purpose — Request a non-existent URI; nginx should return a styled 404 page
     ##            from the mounted error-pages directory (not default nginx 404).
-    ## @io — ⇥ nginx_compose → ⚡ curl /nonexistent-test-page → ⎋ None (asserts styled HTML content)
+    ## @io — ⇥ nginx_compose → ⚡ curl /404.html → ⎋ None (asserts styled HTML content)
     ## @complexity — O(1)
     """
     import requests as req
 
-    url = f"http://127.0.0.1:{_HTTP_PORT}/nonexistent-test-page"
+    # 142 W8 (R13): error_page проверяется через /404.html напрямую — базовые шаблоны
+    # nginx: location / (apex/unknown) → stealth 444 by design (TRAP 2026-07-18);
+    # location = /404.html → styled error page из error-pages/ (механика error_page).
+    # HTTPS + Host обязателен (см. test_nginx_https TRAP); verify=False — self-signed.
+    url = f"https://127.0.0.1:{_HTTPS_PORT}/404.html"
     logger.info("[IMP:7][test_nginx_error] Checking error page %s ...", url)
 
     try:
-        r = req.get(url, timeout=_CURL_TIMEOUT)
-        logger.info(
-            "[IMP:8][test_nginx_error] /nonexistent-test-page returned HTTP %s (%d bytes)", r.status_code, len(r.text)
+        r = req.get(
+            url,
+            timeout=_CURL_TIMEOUT,
+            verify=False,
+            headers={"Host": "ai-platform.local"},
         )
+        logger.info("[IMP:8][test_nginx_error] /404.html returned HTTP %s (%d bytes)", r.status_code, len(r.text))
 
-        assert r.status_code == 404, f"Expected 404, got {r.status_code}"
+        assert r.status_code == 200, f"Expected 200 (styled error page), got {r.status_code}"
 
         if "Page Not Found" not in r.text:
             logger.warning(

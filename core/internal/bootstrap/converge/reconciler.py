@@ -45,6 +45,7 @@ from core.internal.bootstrap.converge.audit import reconcile_audit_log
 from core.internal.bootstrap.converge.networks import reconcile_networks
 from core.internal.bootstrap.converge.perms import reconcile_perms
 from core.internal.bootstrap.converge.projects import reconcile_projects
+from core.internal.bootstrap.converge.prometheus_tsdb import reconcile_prometheus_tsdb
 from core.internal.bootstrap.converge.runtime import reconcile_runtime_state
 from core.internal.bootstrap.converge.sudoers import reconcile_sudoers
 from core.internal.bootstrap.converge.vhosts import detect_hosts_drift, verify_vhosts
@@ -225,6 +226,13 @@ def main() -> int:
         )
     else:
         logger.info("[IMP:7][converge][main] SKIP: R9 filtered out by --units=%s", units_filter)
+
+    # ── R10: reconcile_prometheus_tsdb (TSDB self-heal, 142 W3) ──
+    # Двойной guard (коррапт-маркер в логах И недоступные targets) — здоровый TSDB НЕ чистится.
+    if infra.unit_enabled(units_filter, "R10"):
+        reconcile_prometheus_tsdb(infra.node_yaml_path, dry_run=infra.dry_run, report_only=infra.report_only)
+    else:
+        logger.info("[IMP:7][converge][main] SKIP: R10 filtered out by --units=%s", units_filter)
 
     # ── Final summary ──
     logger.info("[IMP:9][converge][main] ==============================")

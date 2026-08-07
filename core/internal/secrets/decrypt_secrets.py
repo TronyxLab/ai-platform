@@ -59,6 +59,8 @@ if _PLATFORM_ROOT not in sys.path:
 
 import contextlib
 
+# 142 W2: канонический резолвер run-артефактов (secrets.env → /var/lib/platform/run)
+from core.internal.shared import deploy_paths
 from core.internal.shared.exceptions import PlatformError, PlatformFatalError
 
 # DevPlan 118 D3: age_key.py (compat-шим) УДАЛЁН — детекция AGE-ключа делегируется
@@ -339,7 +341,7 @@ def write_secrets_env(decrypted_data: str, output_path: str) -> None:
 ## @io — ⇥ sys.argv (or argparse defaults) → ⎋ exit code (0 = success, 1 = error)
 ## @complexity — O(n) where n = encrypted file size
 ## @envvars — SECRETS_FILE (alternative to positional enc_path arg)
-##            SECRETS_ENV_FILE (alternative to positional output_path arg, default /run/platform/secrets.env)
+##            SECRETS_ENV_FILE (alternative to positional output_path arg, default /var/lib/platform/run/secrets.env)
 def main() -> int:
     """CLI entrypoint: parse args, detect key, decrypt, convert to env, write."""
     import argparse
@@ -356,7 +358,8 @@ def main() -> int:
     parser.add_argument(
         "output_path",
         nargs="?",
-        default=os.environ.get("SECRETS_ENV_FILE", "/run/platform/secrets.env"),
+        # 142 W2 (B21): persistent /var/lib/platform/run (tmpfs /var/lib/platform/run не переживает reboot)
+        default=os.environ.get("SECRETS_ENV_FILE", str(deploy_paths.secrets_env_file())),
         help="Output path for decrypted secrets.env. Falls back to SECRETS_ENV_FILE env var.",
     )
     args = parser.parse_args()

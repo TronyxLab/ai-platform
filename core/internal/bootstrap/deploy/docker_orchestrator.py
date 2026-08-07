@@ -105,12 +105,11 @@ from core.internal.bootstrap.deploy import (
 
 # DevPlan 128 W1 (P2-5/D6): docker ps/stop/rm примитивы — shared/docker_ops
 # (единственный слой, гейт docker_sole_path).
-from core.internal.shared import docker_ops
-from core.internal.shared.audit_logger import write_audit_entry as _shared_write_audit_entry
-
 # DevPlan 081 Phase C (TASK-081C3): shared audit_logger for JSON-lines audit
 # DRIFT-D6 resolved: unified JSON-lines audit format
 # B3: канонический platform root — shared/deploy_paths (литерал /opt/platform удалён)
+from core.internal.shared import deploy_paths, docker_ops
+from core.internal.shared.audit_logger import write_audit_entry as _shared_write_audit_entry
 from core.internal.shared.deploy_paths import platform_remote_base
 
 # DevPlan 079 DRIFT-B6 + 116 B5 T4: shared docker compose operations — ЕДИНСТВЕННЫЙ путь
@@ -276,7 +275,7 @@ def _build_compose_args(
         )
 
     # Secrets env file
-    env_file = secrets_env_file or "/run/platform/secrets.env"
+    env_file = secrets_env_file or str(deploy_paths.secrets_env_file())
     if os.path.isfile(env_file):
         args.extend(["--env-file", env_file])
         logger.info("[IMP:8][_build_compose_args][env] Adding secrets env-file: %s", env_file)

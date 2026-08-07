@@ -323,6 +323,40 @@ def docker_exec(
 # endregion FUNC_docker_exec
 
 
+# ── docker logs (142 W3 R10 — TSDB self-heal) ────────────────────────────────────
+
+
+# region FUNC_docker_logs
+def docker_logs(
+    container: str,
+    tail: int = 400,
+    timeout: int = DOCKER_CMD_TIMEOUT,
+) -> subprocess.CompletedProcess[str]:
+    """Run `docker logs --tail <N> <container>` (142 W3 — R10 TSDB corruption scan).
+
+    ▶ ┌container, tail┐ → _run_docker(["docker","logs","--tail",N,C]) → ⎋ CompletedProcess (never raise)
+
+    ## @purpose — Единая точка `docker logs --tail` (converge/monitoring R10 детекция
+    ##            коррапта TSDB prometheus; до 142 W3 примитив отсутствовал — R10 не мог
+    ##            читать логи через docker_ops, гейт docker_sole_path allowlist пуст).
+    ## @io — ⇥ container: str, tail: int (строк), timeout: int → ⎋ CompletedProcess[str]
+    ## @complexity — O(1) + docker logs I/O
+    ## @invariants — Non-fatal; stdout = последние N строк логов контейнера
+    """
+    cmd = ["docker", "logs", "--tail", str(tail), container]
+    result = _run_docker(cmd, timeout=timeout)
+    if result is None:
+        return _failed_process(cmd)
+    if result.returncode == 0:
+        logger.info("[IMP:9][docker_logs] Logs fetched (tail=%d): %s", tail, container)
+    else:
+        logger.warning("[IMP:7][docker_logs] docker logs failed for %s", container)
+    return result
+
+
+# endregion FUNC_docker_logs
+
+
 # ── docker stop / rm / tag ────────────────────────────────────────────────────────
 
 

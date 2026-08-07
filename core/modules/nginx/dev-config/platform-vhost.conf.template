@@ -1,0 +1,102 @@
+# Platform Dashboard vhost — proxy_pass to status-page:8080 with HTTP Basic Auth
+# GREP_SUMMARY: nginx platform-vhost status-page proxy_pass basic-auth wildcard-cert subdomain docker-dns
+# STRUCTURE: HTTP(redirect) → HTTPS(ssl + auth_basic + set $upstream_platform + proxy_pass $upstream_platform)
+# region MODULE_CONTRACT
+## @purpose  Expose Platform Dashboard at https://platform.${PLATFORM_DOMAIN}/ via nginx reverse proxy
+## @scope    Deployed on all platform nodes; uses same wildcard TLS certificate as main platform vhost;
+##           forwards to status-page HTTP API on status-page:8080 via Docker-DNS.
+## @invariants
+##   - Uses ${PLATFORM_DOMAIN} placeholder — substituted by envsubst at container start
+##   - SSL settings via include (ssl-params.conf — shared with other vhosts)
+##   - HTTP Basic Auth required — platform dashboard is internal tool
+##   - .htpasswd-platform file managed by secrets.sh (_ensure_htpasswd_generated)
+##   - /health — CI-gate: curl -f -u email:pass https://platform.domain/health → 200 PASS / 503 FAIL
+##   - /status.json — JSON output of all checks (machine-consumable)
+##   - All paths protected by Basic Auth (401 → browser dialog on auth failure)
+## @rationale Separate subdomain for platform dashboard isolates it from project vhosts.
+##           Basic Auth via nginx (same .htpasswd-platform as prometheus/loki) ensures
+##           unified credential management via PLATFORM_MASTER_EMAIL/PASSWORD.
+## @changes 2026-07-20 · Created to replace inline status-page in platform-default.conf
+## @see core/modules/status-page/app.py — upstream backend
+## @see core/lib/secrets.sh — .htpasswd-platform generation
+# endregion MODULE_CONTRACT
+
+# ⚠️ TRAP[DECISION] · 2026-07-20 · — · Separate vhost for platform dashboard
+# · Rejected: keep status-page in platform-default.conf as location /  (stealth 444 at apex)
+# · Reason: status-page on separate subdomain (platform.tronyx.ru) isolates it from
+#   project vhosts; apex tronyx.ru remains dedicated to tronyx_site via overlay.
+#   Stealth 444 at apex was confusing — proper subdomain is cleaner.
+# · Rev: if platform dashboard needs apex-level precedence — merge back into default vhost.
+
+# ── HTTP → HTTPS redirect ─────────────────────────────────────────────────
+server {
+    listen 80;
+    listen [::]:80;
+    server_name platform.${PLATFORM_DOMAIN};
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+
+    # ACME challenge (DNS-01 handled by acme.sh; HTTP-01 for verification)
+    location /.well-known/acme-challenge/ {
+        root /var/www/acme;
+    }
+}
+
+# ── HTTPS: Platform Dashboard reverse proxy ───────────────────────────────
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name platform.${PLATFORM_DOMAIN};
+
+    # ── SSL configuration ───────────────────────────────────────────────────
+    # ⚠️ 142 W8 (R13): dev-версия — include ssl-dev.conf (dev-certs), НЕ ssl-params
+    # (letsencrypt-пути live/${PLATFORM_DOMAIN}/ — в dev-режиме пусты → nginx emerg).
+    # 🧐 TRAP[DECISION] · 2026-07-26 · — · platform-vhost now uses wildcard cert (same as other vhosts)
+    # · Rejected: keep separate cert for platform.${PLATFORM_DOMAIN}
+    # · Reason: wildcard *.${PLATFORM_DOMAIN} already covers platform subdomain.
+    #   Separate cert was a historical workaround for unreliable DNS-01 (resolved).
+    #   Single cert = simpler failure modes, fewer LE API calls.
+    # · Rev: if wildcard cert is ever revoked or platform needs different TLS policy, revert.
+    include /etc/nginx/ssl-dev.conf;
+
+    # ── Proxy headers ──────────────────────────────────────────────────────
+    proxy_set_header Host               $host;
+    proxy_set_header X-Real-IP          $remote_addr;
+    proxy_set_header X-Forwarded-For    $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto  $scheme;
+
+    # ── Proxy timeouts ─────────────────────────────────────────────────────
+    proxy_connect_timeout 60s;
+    proxy_send_timeout    60s;
+    proxy_read_timeout    60s;
+
+    # ── Security headers ───────────────────────────────────────────────────
+    include /etc/nginx/includes/security-headers.conf;
+
+    # ── Rate limiting (dynamic zone: 10 r/s, burst 20) ─────────────────────
+    limit_req zone=dynamic burst=20 nodelay;
+    limit_req_status 429;
+
+    # ── Main location: Basic Auth + proxy to status-page (docker-dns: status-page:8080) ──
+    # ⚠️ TRAP[BUG] · 2026-07-16 · HI · loopback→Docker-DNS (см. config/nginx.conf)
+    location / {
+        auth_basic "Platform";
+        auth_basic_user_file /etc/nginx/conf.d/.htpasswd-platform;
+
+        set $upstream_platform status-page:8080;
+        proxy_pass http://$upstream_platform;
+    }
+
+    # ── /health — CI-gate: бинарный вердикт — Basic Auth required ──────────
+    # CI uses: curl -f -u email:pass https://platform.${PLATFORM_DOMAIN}/health
+    location /health {
+        auth_basic "Platform";
+        auth_basic_user_file /etc/nginx/conf.d/.htpasswd-platform;
+
+        set $upstream_platform status-page:8080;
+        proxy_pass http://$upstream_platform;
+    }
+}

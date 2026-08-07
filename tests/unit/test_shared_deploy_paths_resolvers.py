@@ -19,10 +19,16 @@ from core.internal.shared.deploy_paths import (
     DEFAULT_LETSENCRYPT_LIVE,
     DEFAULT_NODE_CONFIGS_REMOTE,
     DEFAULT_PLATFORM_BASE,
+    DEFAULT_RUN_BASE,
+    htpasswd_file,
     letsencrypt_live,
     node_configs_remote,
     platform_remote_base,
     projects_base,
+    run_base,
+    secrets_env_file,
+    status_metrics_json,
+    watchdog_state_file,
 )
 
 logger = logging.getLogger(__name__)
@@ -73,3 +79,31 @@ def test_projects_base() -> None:
     """projects_base → /opt/projects (default) или PROJECTS_BASE env."""
     assert str(projects_base({})) == "/opt/projects"
     assert str(projects_base({"PROJECTS_BASE": "/tmp/projects"})) == "/tmp/projects"
+
+
+# 🧪 TRAP[TEST] · Regression · run-артефакты (142 W2, B21)
+# · Scenario: без env → /var/lib/platform/run/* (persistent, замена tmpfs /run/platform);
+# ·   с env → кастомные пути (dev-локали macOS сохраняются через .env)
+# · Last fail: 2026-08-06 (цикл 2 141, chaos T11) — /run/platform (tmpfs) пуст после reboot →
+# ·   nginx/status-page Exited(127); B21 из реестра ручных действий 142 §2
+# · Remove if: run-артефакты снова переезжают (резолверы удаляются)
+def test_run_artifact_resolvers_142w2() -> None:
+    """142 W2: run_base + 4 артефакта → /var/lib/platform/run/* (persistent) с env-override."""
+    assert str(run_base({})) == DEFAULT_RUN_BASE
+    assert str(run_base({"PLATFORM_RUN_BASE": "/tmp/run"})) == "/tmp/run"
+
+    # secrets.env — ключевой артефакт: переживает reboot (AGE-ключ недоступен на boot, S-13)
+    assert str(secrets_env_file({})) == f"{DEFAULT_RUN_BASE}/secrets.env"
+    assert str(secrets_env_file({"SECRETS_ENV_FILE": "/tmp/secrets.env"})) == "/tmp/secrets.env"
+    # env-цепочка: SECRETS_ENV_FILE приоритетнее PLATFORM_RUN_BASE
+    assert str(secrets_env_file({"PLATFORM_RUN_BASE": "/tmp/run", "SECRETS_ENV_FILE": "/tmp/s.env"})) == "/tmp/s.env"
+
+    assert str(htpasswd_file({})) == f"{DEFAULT_RUN_BASE}/.htpasswd-platform"
+    assert str(htpasswd_file({"HTPASSWD_FILE": "/tmp/htp"})) == "/tmp/htp"
+
+    assert str(status_metrics_json({})) == f"{DEFAULT_RUN_BASE}/status-metrics.json"
+    assert str(status_metrics_json({"STATUS_METRICS_JSON": "/tmp/sm.json"})) == "/tmp/sm.json"
+
+    assert str(watchdog_state_file({})) == f"{DEFAULT_RUN_BASE}/watchdog-state.json"
+    assert str(watchdog_state_file({"WATCHDOG_STATE_FILE": "/tmp/wd.json"})) == "/tmp/wd.json"
+    logger.info("[IMP:9][test] 142 W2: run-артефакты → %s (persistent)", DEFAULT_RUN_BASE)

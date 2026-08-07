@@ -133,6 +133,7 @@
 | ✅ | `check-security` | Проверка security-постурa ноды |
 | ✅ | `context-promote` | Промоут платформы в контекст |
 | ✅ | `converge` | Реконсиляция ноды |
+| ✅ | `core-deliver` | Fallback-деплой core (локальное зеркало core-deploy.yml) |
 | ✅ | `deploy` | Деплой проекта |
 | ✅ | `deploy-context` | Деплой проектов контекста на ноде |
 | ✅ | `deploy-project` | Прямой деплой минуя CI (DeployOrchestrator deliver) |

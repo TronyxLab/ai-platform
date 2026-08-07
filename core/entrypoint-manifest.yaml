@@ -48,6 +48,17 @@ bootstrap:
   description: 'Deploy all projects of a context on a bootstrapped node (standalone
     or post-bootstrap). Idempotent: ghcr.io pull primary, build-on-node fallback (DevPlan
     047)'
+- make_target: core-deliver
+  mechanism: ssh+rsync
+  delegates_to: core/entrypoints/core-deliver.sh → rsync core/+scripts/+makefiles/+platform-env.yaml
+    → ssh make provision SCOPE=networks,volumes → ssh make node-update NODE=<n>
+  signature: make core-deliver NODE=<n> [AGE_SECRET_KEY_FILE=<f>] [DRY_RUN=1]
+  operation_ru: Fallback-деплой core (локальное зеркало core-deploy.yml)
+  description: 'Fallback-таргет CI-канала (142 W5, A6): локальное зеркало core-deploy.yml
+    — rsync core → provision → node-update. Использование: GitHub Actions недоступны
+    (Major Outage) / ручной деплой core. Guard''ы rsync как в workflow (TRAP[BUG]
+    125 T4); AGE_SECRET_KEY — локальная цепочка node_detect (env-only, W4 DevPlan
+    140)'
 deploy:
 - make_target: deploy
   mechanism: git-push
@@ -904,6 +915,7 @@ allowed_verbs:
 - check-security
 - context-promote
 - converge
+- core-deliver
 - deploy
 - deploy-context
 - deploy-project

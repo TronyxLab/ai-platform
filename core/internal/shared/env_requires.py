@@ -38,6 +38,7 @@ from typing import Any
 
 import yaml
 
+from core.internal.shared import deploy_paths
 from core.internal.shared.secrets_env_parser import parse as parse_secrets_env
 from core.internal.shared.secrets_manifest_reader import (
     consumers as secret_consumers,
@@ -275,7 +276,7 @@ def check_runtime_env(module_name: str, secrets_manifest_path: str) -> list[str]
         return []
 
     # Build env map from secrets.env file using shared parser
-    secrets_file = os.environ.get("SECRETS_ENV_FILE", "/run/platform/secrets.env")
+    secrets_file = os.environ.get("SECRETS_ENV_FILE", str(deploy_paths.secrets_env_file()))
     env_map: dict[str, str] = {}
     secrets_file_path = Path(secrets_file)
     if secrets_file_path.is_file():

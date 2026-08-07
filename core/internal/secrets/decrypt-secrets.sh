@@ -20,4 +20,4 @@ if [[ -z "${SECRETS_FILE:-}" || ! -f "$SECRETS_FILE" ]]; then
     export SECRETS_FILE
 fi
 
-exec python3 "$SCRIPT_DIR/decrypt_secrets.py" "$SECRETS_FILE" "${SECRETS_ENV_FILE:-/run/platform/secrets.env}"
+exec python3 "$SCRIPT_DIR/decrypt_secrets.py" "$SECRETS_FILE" "${SECRETS_ENV_FILE:-/var/lib/platform/run/secrets.env}"

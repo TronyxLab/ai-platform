@@ -192,19 +192,23 @@ def _log_masked(key_name: str, key_value: str, source: str) -> None:
 
 # region FUNC_auto_detect_node_name
 ## @purpose  Auto-detect the single node name from a node-configs directory.
-##            Skips "scripts" and "secrets" subdirectories; exactly 1 valid dir → name.
-##            Mirrors the removed shell auto_detect_node_name() from bootstrap.sh/converge.sh.
+##           142 W4 (A5): кандидат = каталог, содержащий ВАЛИДНЫЙ node.yaml (непустой файл);
+##           junk-каталоги (без node.yaml — «unknown/» из циклов 141) пропускаются с WARN;
+##           «Multiple directories» — только при >1 ВАЛИДНОМ кандидате.
+##           Skips "scripts" and "secrets" subdirectories; exactly 1 valid dir → name.
 ## @io       ⇥ node_configs_dir: str = DEFAULT_NODE_CONFIGS_DIR → ⎋ str (node name)
 ## @raises   NodeDetectionError on missing dir, 0 candidates, or >1 candidates
 ## @complexity O(N) — N = number of entries in the node-configs directory
 ## @invariants
 ##   - "scripts" and "secrets" are never treated as node candidates
+##   - 142 W4: junk-каталог (нет node.yaml) НЕ кандидат — WARN + skip (A5: «unknown/» ронял
+##     node-detect «Multiple directories» на каждом вызове после 2-го цикла 141)
 ##   - Deterministic diagnostic: candidates listed sorted on ambiguity
 ##   - Success logged at IMP:9 (business logic checkpoint)
 def auto_detect_node_name(node_configs_dir: str = DEFAULT_NODE_CONFIGS_DIR) -> str:
     """Detect the unique node name in the node-configs directory.
 
-    ▶ scan node-configs/*/ → ∋ skip scripts|secrets → ◇ count==1? → ⎋ name | ✗ NodeDetectionError
+    ▶ scan node-configs/*/ → ∋ skip scripts|secrets|junk (без node.yaml) → ◇ count==1? → ⎋ name | ✗ NodeDetectionError
     """
     configs_path = Path(node_configs_dir)
     if not configs_path.is_dir():
@@ -215,6 +219,18 @@ def auto_detect_node_name(node_configs_dir: str = DEFAULT_NODE_CONFIGS_DIR) -> s
         if not entry.is_dir():
             continue
         if entry.name in SKIP_DIRS:
+            continue
+        node_yaml = entry / "node.yaml"
+        if not node_yaml.is_file():
+            # ⚠️ 142 W4 (A5): junk-каталог без node.yaml (источник «unknown/» в циклах 141) —
+            # пропускается с WARN, а не становится кандидатом (раньше → «Multiple directories»).
+            logger.warning(
+                "[IMP:8][node_detect] Skipping junk directory %s (no node.yaml) — not a node candidate (142 W4)",
+                entry.name,
+            )
+            continue
+        if node_yaml.stat().st_size == 0:
+            logger.warning("[IMP:8][node_detect] Skipping empty node.yaml in %s (junk, 142 W4)", entry.name)
             continue
         candidates.append(entry.name)
 

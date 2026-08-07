@@ -8,7 +8,7 @@
 ## @scope    Moved to core/internal/notify/notify-hook.sh from core/scripts/notify-hook.sh.
 ## @invariants
 ##   - Always exits 0 — must never block the calling deploy pipeline
-##   - Secrets loaded from /run/platform/secrets.env by Python notify() (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID*)
+##   - Secrets loaded from /var/lib/platform/run/secrets.env by Python notify() (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID*) (142 W2)
 ##   - Missing secrets → log warning, exit 0 (non-blocking)
 ##   - Messages prefixed with context (default "platform")
 ##   - <25 LOC thin facade — языковая политика: бизнес-логика в Python
@@ -37,7 +37,8 @@ set -- "${ARGS[@]}"
 EMOJI="${1:-✅}"
 MESSAGE="${2:-}"
 CONTEXT="${PLATFORM_CONTEXT:-platform}"
-SECRETS_FILE="${SECRETS_ENV_FILE:-/run/platform/secrets.env}"
+# 142 W2 (B21): persistent /var/lib/platform/run (tmpfs /run/platform не переживает reboot)
+SECRETS_FILE="${SECRETS_ENV_FILE:-/var/lib/platform/run/secrets.env}"
 
 FULL_MESSAGE="${EMOJI}"
 [[ -n "$MESSAGE" ]] && FULL_MESSAGE="[${CONTEXT}] ${EMOJI} ${MESSAGE}"

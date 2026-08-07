@@ -284,7 +284,7 @@ def notify(
     message: str,
     severity: str = "",
     context: str = "platform",
-    secrets_file: str = "/run/platform/secrets.env",
+    secrets_file: str | None = None,
 ) -> bool:
     """Send a non-blocking notification (notify-hook.sh contract, E10). Always returns True.
 
@@ -301,6 +301,11 @@ def notify(
     ##   - always return True (неблокирующий дизайн сохранён)
     """
     env = dict(os.environ)
+    # 142 W2 (B21): дефолт secrets.env — persistent /var/lib/platform/run (резолвер shared/deploy_paths).
+    if secrets_file is None:
+        from core.internal.shared.deploy_paths import secrets_env_file
+
+        secrets_file = str(secrets_env_file())
     if os.path.isfile(secrets_file):
         try:
             # ⚠️ TRAP[BUG] · 2026-08-06 · P1 · Ночная сессия 141 — кавычки в secrets.env ломали доставку
@@ -379,7 +384,9 @@ def main() -> int:
     )
     notify_parser.add_argument("--severity", default="", help="critical|warning|info (chat_id resolution)")
     notify_parser.add_argument("--context", default="platform", help="Context prefix in message")
-    notify_parser.add_argument("--secrets-file", default="/run/platform/secrets.env", help="secrets.env path")
+    notify_parser.add_argument(
+        "--secrets-file", default="", help="secrets.env path (default: /var/lib/platform/run/secrets.env)"
+    )
     notify_parser.add_argument("emoji", default="✅", nargs="?", help="Emoji prefix")
     notify_parser.add_argument("message", nargs="?", default="", help="Message text")
     args = parser.parse_args()
@@ -391,7 +398,7 @@ def main() -> int:
             message=args.message,
             severity=args.severity,
             context=args.context,
-            secrets_file=args.secrets_file,
+            secrets_file=args.secrets_file or None,
         )
         return 0
 

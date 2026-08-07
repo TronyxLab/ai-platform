@@ -598,6 +598,129 @@ def test_cli_exit_codes(delivery_tree, monkeypatch, caplog) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════
+# fallback-deliver (142 W5)
+# ═══════════════════════════════════════════════════════════════════
+
+
+# region FUNC_test_fallback_deliver_success
+def test_fallback_deliver_success(delivery_tree, monkeypatch, caplog) -> None:
+    """fallback-deliver: rsync-фазы + provision + node-update → True (5 subprocess ssh-вызовов)."""
+    caplog.set_level(logging.DEBUG)
+    logger.info("[IMP:7][test_fallback_deliver_success][start] BEGIN")
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "core_deliverer",
+            "fallback-deliver",
+            "--host",
+            "1.2.3.4",
+            "--node",
+            delivery_tree["node"],
+            "--core-dir",
+            delivery_tree["core_dir"],
+            "--age-secret-key",
+            "AGE-KEY-123",
+        ],
+    )
+    with mock.patch.object(subprocess, "run", return_value=_ok_run()) as mock_run:
+        assert cli() == 0, "fallback-deliver success must return 0"
+    # rsync-фазы (5) + provision (1) + node-update (1) — все через subprocess.run
+    ssh_calls = [c for c in mock_run.call_args_list if c.args and c.args[0][0] == "ssh"]
+    assert len(ssh_calls) == 2, f"Expected 2 ssh calls (provision + node-update), got {len(ssh_calls)}"
+    assert "provision" in ssh_calls[0].args[0][-1], "First ssh call must run make provision"
+    assert "node-update" in ssh_calls[1].args[0][-1], "Second ssh call must run make node-update"
+    assert "AGE-KEY-123" in ssh_calls[1].args[0][-1], "AGE_SECRET_KEY must be passed as env in node-update cmd"
+    logger.info("[IMP:9][test_fallback_deliver_success][done] Success path: 5 rsync + 2 ssh verified")
+    # 🧪 TRAP[TEST] · 2026-08-07 · 142 W5 — fallback-деплой: ssh-вызовы provision/node-update
+    # · Scenario: успешный прогон — все фазы, AGE_SECRET_KEY как env в node-update
+    # · Last fail: N/A (new test)
+    # · Remove if: fallback-deliver subcommand removed
+    _assert_imp9(caplog)
+
+
+# endregion FUNC_test_fallback_deliver_success
+
+
+# region FUNC_test_fallback_deliver_provision_fail
+def test_fallback_deliver_provision_fail(delivery_tree, monkeypatch, caplog) -> None:
+    """fallback-deliver: provision FAIL → cli() возвращает 1 (fail-fast)."""
+    caplog.set_level(logging.DEBUG)
+    logger.info("[IMP:7][test_fallback_deliver_provision_fail][start] BEGIN")
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "core_deliverer",
+            "fallback-deliver",
+            "--host",
+            "1.2.3.4",
+            "--node",
+            delivery_tree["node"],
+            "--core-dir",
+            delivery_tree["core_dir"],
+        ],
+    )
+    ok = _ok_run()
+    fail = mock.MagicMock(returncode=1, stderr="make: *** provision FAILED")
+    # 3 rsync (core, platform-env, makefile; scripts/ + root-compose skip — нет файлов) + provision(fail)
+    side_effects = [ok, ok, ok, fail]
+
+    with mock.patch.object(subprocess, "run", side_effect=side_effects) as mock_run:
+        assert cli() == 1, "provision failure must return 1"
+    # node-update НЕ должен вызываться после провала provision
+    ssh_calls = [c for c in mock_run.call_args_list if c.args and c.args[0][0] == "ssh"]
+    assert len(ssh_calls) == 1, f"Expected only provision ssh call, got {len(ssh_calls)}"
+    logger.info("[IMP:9][test_fallback_deliver_provision_fail][done] Fail-fast on provision verified")
+    # 🧪 TRAP[TEST] · 2026-08-07 · 142 W5 — fail-fast: provision failure останавливает pipeline
+    # · Scenario: provision exit!=0 → return False → cli()=1, node-update не выполняется
+    # · Last fail: N/A (new test)
+    # · Remove if: fallback-deliver subcommand removed
+    _assert_imp9(caplog)
+
+
+# endregion FUNC_test_fallback_deliver_provision_fail
+
+
+# region FUNC_test_fallback_deliver_dry_run
+def test_fallback_deliver_dry_run(delivery_tree, monkeypatch, caplog) -> None:
+    """fallback-deliver --dry-run: 0 subprocess-вызовов (R5 142 W5), WOULD-команды печатаются."""
+    caplog.set_level(logging.DEBUG)
+    logger.info("[IMP:7][test_fallback_deliver_dry_run][start] BEGIN")
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "core_deliverer",
+            "fallback-deliver",
+            "--host",
+            "1.2.3.4",
+            "--node",
+            delivery_tree["node"],
+            "--core-dir",
+            delivery_tree["core_dir"],
+            "--dry-run",
+        ],
+    )
+    with mock.patch.object(subprocess, "run", return_value=_ok_run()) as mock_run:
+        assert cli() == 0, "Dry-run must return 0"
+    mock_run.assert_not_called(), "Dry-run must issue ZERO subprocess calls"
+    assert "dry-run" in caplog.text.lower(), "Dry-run WOULD commands must be printed"
+    logger.info("[IMP:9][test_fallback_deliver_dry_run][done] 0 subprocess calls, WOULD printed")
+    # 🧪 TRAP[TEST] · 2026-08-07 · 142 W5 — dry-run: R5 без мутаций
+    # · Scenario: --dry-run → печать команд, 0 subprocess-вызовов, exit 0
+    # · Last fail: N/A (new test)
+    # · Remove if: dry-run mode is removed
+    _assert_imp9(caplog)
+
+
+# endregion FUNC_test_fallback_deliver_dry_run
+
+
+# ═══════════════════════════════════════════════════════════════════
 # HELPER
 # ═══════════════════════════════════════════════════════════════════
 
