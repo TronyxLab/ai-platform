@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: test-monitoring-alert-rules alerting-enabled template-render created skipped failed provisioning loki backup-rules uid-unique service-down-short mountpoint-filter
-# STRUCTURE: ┌4 test functions (generate_alert_rules)┐ → ◇ alerting disabled (1) → ◇ template missing (1) → ◇ created (1) → ◇ render failure (1) → ┤ provisioning alert-rules.yml (uid unique, loki datasource, 3 backup rules, service_down_short, disk_space mountpoint-filter)
+# GREP_SUMMARY: test-monitoring-alert-rules alerting-enabled template-render created skipped failed provisioning loki backup-rules uid-unique service-down-short mountpoint-filter high-memory-guard
+# STRUCTURE: ┌4 test functions (generate_alert_rules)┐ → ◇ alerting disabled (1) → ◇ template missing (1) → ◇ created (1) → ◇ render failure (1) → ┤ provisioning alert-rules.yml (uid unique, loki datasource, 3 backup rules, service_down_short, disk_space mountpoint-filter, high_memory guard)
 # region MODULE_CONTRACT
 ## @purpose  Unit tests for core/internal/monitoring/alert_rules.py — generate_alert_rules()
 #            (DevPlan 117 G T54 extraction) + статическая валидация provisioning-файла
-#            core/modules/monitoring/config/alerting/alert-rules.yml (DevPlan 132 W5, 140 W2).
+#            core/modules/monitoring/config/alerting/alert-rules.yml (DevPlan 132 W5, 140 W2, 143 W2).
 ## @scope    No Docker — tmp_path template/output fixtures; yaml-парс provisioning-файла (read-only).
 ## @invariants
 ##   - All tests use tmp_path (zero hardcoded paths)
@@ -13,12 +13,16 @@
 ##     новые правила присутствуют (backup_freshness/backup_upload_failure/wal_sync_failure)
 ##   - 140 W2 D-4: правило service_down_short присутствует (uid/for=15s/severity=warning/expr up == 0)
 ##   - 140 W2 D-6: expr disk_space содержит {mountpoint="/"} (root-файловая система, не tmpfs/overlay)
+##   - 143 W2: expr high_memory содержит guard `and container_spec_memory_limit_bytes > 0`
+##     (контейнеры без limits → деление на 0 → +Inf → ложное firing; guard отфильтровывает серии)
 ## @rationale  DevPlan 117 G T54 §TEST_SPEC — alert_rules direct tests after extraction.
 ##            DevPlan 132 W5 §TEST_SPEC — валидация структуры новых Loki-правил.
 ##            DevPlan 140 W2 §4.2/§5 — fire-семантика: sub-minute правило + mountpoint-фильтр (negative R5).
+##            DevPlan 143 W2 §TEST_SPEC — high_memory guard (детектор + R5 negative).
 ## @changes  2026-08-01 · DevPlan 117 G T54 — created
 ## @changes  2026-08-04 · DevPlan 132 W5 — +provisioning-файл валидация (3 Loki-правила)
 ## @changes  2026-08-06 · DevPlan 140 W2 — +service_down_short (D-4), +disk_space mountpoint-фильтр (D-6), +R5 negative
+## @changes  2026-08-08 · DevPlan 143 W2 — +high_memory guard (детектор + R5 negative)
 # endregion MODULE_CONTRACT
 
 import logging
@@ -261,3 +265,61 @@ def test_disk_space_mountpoint_filter_negative_removed() -> None:
     legacy_expr = "node_filesystem_avail_bytes / node_filesystem_size_bytes < 0.2"
     with pytest.raises(AssertionError):
         _assert_disk_space_mountpoint_filter(legacy_expr)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# DevPlan 143 W2: high_memory guard `and container_spec_memory_limit_bytes > 0`
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _assert_high_memory_guard(expr: str) -> None:
+    """143 W2 детектор: expr правила high_memory обязан содержать guard
+    `and container_spec_memory_limit_bytes ... > 0`.
+
+    Без guard: контейнеры без deploy.resources.limits.memory → cadvisor не экспортирует
+    container_spec_memory_limit_bytes (0/absent) → usage / 0 = +Inf → +Inf > 0.9 = true →
+    ложное firing ([no value], +Inf). Guard `and limit > 0` отфильтровывает серии без лимита.
+
+    Контракт: guard = отдельный `and`-операнд, содержащий container_spec_memory_limit_bytes
+    с селектором (или без) и `> 0`. Legacy expr `usage / limit > 0.9` (без and-branch) НЕ
+    должен проходить — `limit > 0.9` это порог, а не guard (0.9 ≠ 0; absence-check = `> 0`).
+    """
+    # Guard = `and container_spec_memory_limit_bytes` (отдельный операнд после and).
+    # Проверяем что после and идёт именно container_spec_memory_limit_bytes (guard-операнд),
+    # а не container_memory_usage_bytes (который тоже может быть в делении).
+    assert "and container_spec_memory_limit_bytes" in expr, (
+        f"143 W2 FAIL: high_memory expr без guard 'and container_spec_memory_limit_bytes': {expr}"
+    )
+    # Guard-операнд обязан заканчиваться на '> 0' (absence-check), а не '> 0.9' (порог).
+    # Извлекаем подстроку после 'and container_spec_memory_limit_bytes' и проверяем что она
+    # содержит '> 0' как отдельное сравнение (не '> 0.9').
+    after_guard_metric = expr.split("and container_spec_memory_limit_bytes", 1)[1]
+    # Нормализуем селектор: для per-project шаблона after_guard_metric начинается с '{compose_project=...}'
+    # Ищем '> 0' как конец guard'а (допускаем '> 0}' для селектора или '> 0' в конце).
+    assert "> 0" in after_guard_metric, f"143 W2 FAIL: guard без '> 0' (absence-check): {expr}"
+
+
+# 🧪 TRAP[TEST] · Regression · Scenario: high_memory expr с guard (143 W2)
+# · Expect: expr содержит `and container_spec_memory_limit_bytes > 0` (контейнеры без limits
+#   → деление на 0 → +Inf → ложное firing; guard отфильтровывает серии без лимита)
+# · Last fail: N/A (new test for DevPlan 143 W2)
+# · Remove if: high_memory правило удаляется/меняет семантику guard'а
+def test_provisioning_alert_rules_high_memory_guard(caplog) -> None:
+    """143 W2: HighMemory expr содержит guard `and container_spec_memory_limit_bytes > 0`."""
+    caplog.set_level(logging.INFO)
+    rules = {r["uid"]: r for r in _provisioning_rules()}
+    assert "high_memory" in rules, "правило high_memory отсутствует в alert-rules.yml"
+    _assert_high_memory_guard(_alert_expr(rules["high_memory"]))
+    logger.info("[IMP:9][test_monitoring_alert_rules] high_memory guard (limit>0) PASS")
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · high_memory guard — DevPlan 143 W2
+# · Last fail: исходный вход — expr "container_memory_usage_bytes / container_spec_memory_limit_bytes > 0.9"
+# ·   (без guard; контейнеры без limits → usage / 0 = +Inf → +Inf > 0.9 = true → ложное firing)
+# · Remove if: детектор _assert_high_memory_guard меняет контракт (guard limit > 0)
+def test_high_memory_guard_negative_removed() -> None:
+    """R5 negative (143 W2): expr без guard — исходный вход, поймавший баг —
+    детектор ОБЯЗАН упасть (assert красный). Если он не падает — регрессия guard'а."""
+    legacy_expr = "container_memory_usage_bytes / container_spec_memory_limit_bytes > 0.9"
+    with pytest.raises(AssertionError):
+        _assert_high_memory_guard(legacy_expr)

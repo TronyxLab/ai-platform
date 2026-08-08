@@ -1,5 +1,5 @@
-## GREP_SUMMARY: backup-cron Dockerfile pgdg cron debian bash pg-client-16 date-parser s3-client retention upload wal-sync healthcheck
-## STRUCTURE: FROM debian:bookworm-slim → add PGDG repo → install cron+pg-client-16+python → COPY scripts (incl date_parser+s3_client+wal_sync) → COPY crontab → ENTRYPOINT cron
+## GREP_SUMMARY: backup-cron Dockerfile pgdg cron debian bash pg-client-16 date-parser s3-client retention upload wal-sync healthcheck entrypoint-py
+## STRUCTURE: FROM debian:bookworm-slim → add PGDG repo → install cron+pg-client-16+python → COPY scripts (incl date_parser+s3_client+wal_sync+entrypoint) → COPY crontab → CMD python3 entrypoint
 # region MODULE_CONTRACT
 ## @purpose  Build backup-cron image with cron daemon + backup scripts + pg_dump client
 ## @scope    Phase 02: installs cron schedule; S3 upload = stub (phase 06 fills upload-s3.sh)
@@ -12,6 +12,7 @@
 ##   - No EXPOSE — backup-net internal only
 ##   - Resource limits NOT in image (AR3)
 ## @rationale Separate image (not postgres image) — backup logic may evolve independently of DB version
+## @changes 2026-08-08 | DevPlan 143 W1B — entrypoint.py (cron env dump) + CMD python3 entrypoint
 # endregion MODULE_CONTRACT
 
 FROM debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818
@@ -90,6 +91,11 @@ COPY scripts/wal_sync.py         /usr/local/bin/wal_sync.py
 # Copy healthcheck scripts
 COPY healthcheck.sh  /usr/local/bin/healthcheck.sh
 
+# DevPlan 143 W1B: Python entrypoint — dumps container env to /etc/environment
+# before exec'ing cron -f (Debian cron reads /etc/environment at daemon start →
+# jobs inherit POSTGRES_HOST/S3_*/WAL_*). Language policy: new code = Python.
+COPY scripts/entrypoint.py /usr/local/bin/entrypoint.py
+
 # Copy crontab
 COPY scripts/crontab /etc/cron.d/platform-backup
 
@@ -102,8 +108,10 @@ RUN chmod 0644 /etc/cron.d/platform-backup && \
       /usr/local/bin/backup-app-data.sh \
       /usr/local/bin/backup-cleanup.sh \
       /usr/local/bin/upload-s3.sh \
-      /usr/local/bin/healthcheck.sh
+      /usr/local/bin/healthcheck.sh \
+      /usr/local/bin/entrypoint.py
 
 # [IMP:8][backup-cron][Dockerfile] No EXPOSE — backup-net internal only
-# ENTRYPOINT: start cron in foreground (Docker requires PID 1 to be long-lived)
-CMD ["cron", "-f"]
+# DevPlan 143 W1B: entrypoint.py writes /etc/environment (cron env) then exec's cron -f.
+# PID 1 = cron (healthcheck `pgrep cron` semantics unchanged).
+CMD ["python3", "/usr/local/bin/entrypoint.py"]

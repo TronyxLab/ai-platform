@@ -1,6 +1,6 @@
 # @purpose  Base compose definition for logging module — Loki + Promtail
-# GREP_SUMMARY: logging docker-compose loki promtail observability-net profiles x-logging journald-mounts
-# STRUCTURE: ▶ loki:3.7.3 [profiles:logging] → observability-net → ┬─ ▶ promtail:3.6.11 [profiles:logging] → loki(dep) + journald mounts → ┐
+# GREP_SUMMARY: logging docker-compose loki promtail observability-net profiles x-logging journald-mounts backup-logs-mount
+# STRUCTURE: ▶ loki:3.7.3 [profiles:logging] → observability-net → ┬─ ▶ promtail:3.6.11 [profiles:logging] → loki(dep) + journald mounts + backup-logs mount → ┐
 # region MODULE_CONTRACT
 ## @purpose  Base compose definition for logging Docker module
 ## @scope    Merged with root docker-compose.yml via include:
@@ -124,6 +124,12 @@ services:
       # чтения journal). Host-литералы допустимы как системные (precedent: docker.sock).
       - /var/log/journal:/var/log/journal:ro
       - /etc/machine-id:/etc/machine-id:ro
+      # DevPlan 143 W1A: backup-logs file-scrape — static_config glob /var/log/platform/backup/*.log
+      # в promtail-config.yml. Named-volume (SoT root docker-compose.yml, U-49) — bind-том
+      # backup-logs (device: /var/log/platform/backup). :ro — promtail только читает файлы.
+      # cron пишет маркеры [IMP:9] BACKUP COMPLETE в эти файлы (crontab `>> *.log`) →
+      # file-scrape несёт compose_service="backup-cron" → BackupFreshness alert-expr работает.
+      - backup-logs:/var/log/platform/backup:ro
       # /var/log/nginx mount REMOVED (2026-07-25) — nginx logs captured via docker_sd stdout, not file scrape
 
     networks:

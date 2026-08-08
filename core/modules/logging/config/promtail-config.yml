@@ -1,13 +1,20 @@
-# GREP_SUMMARY: promtail config docker_sd_config journald journal-scrape structured_metadata nginx_match host-label
-# STRUCTURE: ▶ 2-scrape-configs ┌ docker_sd:container-logs → json→match(nginx:status/host)→labels→structured_metadata ┐ ┌ journal:journald→host-label→drop-debug ┐ → loki:3100 → ┘
+# GREP_SUMMARY: promtail config docker_sd_config journald journal-scrape structured_metadata nginx_match host-label backup-logs file-scrape compose_service log_file
+# STRUCTURE: ▶ 3-scrape-configs ┌ docker_sd:container-logs → json→match(nginx:status/host)→labels→structured_metadata ┐ ┌ journal:journald→host-label→drop-debug ┐ ┌ backup-logs:static_config→file-glob→compose_service+log_file-labels ┐ → loki:3100 → ┘
 # region MODULE_CONTRACT
 ## @purpose  Promtail configuration: Docker container log scraping (docker_sd) + host journald
-##           scraping (journal) — закрывает 126 D-1 (journald → Loki)
+##           scraping (journal) + backup-logs file scrape — закрывает 126 D-1 (journald → Loki)
+##           и DevPlan 143 W1A (backup-logs file scrape → Loki stream {compose_service="backup-cron"}).
 ## @scope    Mounted as /etc/promtail/promtail-config.yml in promtail container
 ## @invariants
 ##   - Docker socket scrape: docker_sd_config — auto-discovers all local containers
 ##   - Journal scrape (DevPlan 132 W3, 126 D-1): journal {path: /var/log/journal, max_age: 24h};
 ##     host-лейбл из __journal__hostname; drop debug level (перф, max_age 24h)
+##   - Backup-logs file scrape (DevPlan 143 W1A): static_config glob
+##     /var/log/platform/backup/*.log → Loki stream {compose_service="backup-cron"}.
+##     Маркер [IMP:9] BACKUP COMPLETE из файлов (cron `>> postgres.log`) попадает в Loki →
+##     существующее alert-выражение BackupFreshness начинает работать БЕЗ изменений
+##     (file-scrape несёт тот же лейбл compose_service="backup-cron"). Файлы остаются
+##     персистентным следом (D-7, 142); promtail читает с offsets (positions.yaml).
 ##   - Nginx logs captured via Docker stdout (official image symlinks access.log → /dev/stdout)
 ##   - Nginx-specific JSON fields (status, request_method, host) extracted via match stage
 ##   - pipeline_stages: json → match(nginx,litellm,langfuse) → labels → structured_metadata
@@ -18,6 +25,11 @@
 ##           fields while still enabling LogQL filtering without full JSON scan.
 ##           D-1 (126): journald (docker daemon, OOM, systemd) не попадал в Loki — добавлен
 ##           journal-скрейп; Storage=persistent обеспечивает кросс-бут данные (132 W3 D6).
+##           143 W1A: архитектурный разрыв — cron пишет маркеры в файлы (crontab `>> *.log`),
+##           а promtail скрейпил только docker stdout → BackupFreshness firing вечно.
+##           File-scrape backup-logs несёт compose_service="backup-cron" → alert-expr не
+##           меняется (D-1 канон переиспользования лейбла).
+## @changes 2026-08-08 · DevPlan 143 W1A — добавлен backup-logs static_config file scrape
 # endregion MODULE_CONTRACT
 
 server:
@@ -150,6 +162,32 @@ scrape_configs:
             - drop:
                 source: level
                 expression: "(?i)debug"
+
+  # ── Backup logs file-scrape (DevPlan 143 W1A) ──────────────────────────
+  # · Архитектурный разрыв D1 (142 восстановление): cron пишет маркеры
+  #   [IMP:9] BACKUP COMPLETE в файлы (crontab `>> /var/log/platform/backup/*.log`),
+  #   а promtail скрейпил ТОЛЬКО docker stdout → Loki не видел маркер →
+  #   BackupFreshness firing вечно (count_over_time=0).
+  # · Fix: static_config glob /var/log/platform/backup/*.log → Loki stream с
+  #   labels {compose_service="backup-cron"} — существующее alert-выражение
+  #   BackupFreshness (count_over_time({compose_service="backup-cron"} |~ "BACKUP COMPLETE" [26h]))
+  #   начинает работать БЕЗ изменений (тот же лейбл).
+  # · Том backup-logs монтируется в promtail как named-volume (root docker-compose.yml,
+  #   SoT U-49): backup-logs:/var/log/platform/backup:ro.
+  # · relabel __path__ → log_file: Loki-лейбл имени файла (postgres.log, app-data.log, ...)
+  #   для детализации в LogQL без парсинга строки.
+  # · Файлы остаются персистентным следом (D-7, 142) — promtail читает с offsets (positions.yaml).
+  - job_name: backup-logs
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: backup-logs
+          compose_service: backup-cron
+          __path__: /var/log/platform/backup/*.log
+    relabel_configs:
+      - source_labels: ["__path__"]
+        regex: ".*/(.*)"
+        target_label: "log_file"
 
   # ── Nginx access logs — REMOVED (2026-07-25) ──────────────────────────
   # · Was: static_config file scrape of /var/log/nginx/access.log from host

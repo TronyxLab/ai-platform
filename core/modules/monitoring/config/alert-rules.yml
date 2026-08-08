@@ -1,4 +1,4 @@
-# GREP_SUMMARY: prometheus alert rules ServiceDown HighMemoryUsage HighCPUUsage
+# GREP_SUMMARY: prometheus alert rules ServiceDown HighMemoryUsage HighCPUUsage memory-guard
 # STRUCTURE: ▶ global:rules → per-project template → $PROJECT substitution → /opt/prometheus/rules/ → ┘
 # region MODULE_CONTRACT
 ## @purpose  Prometheus native alerting rules for per-project monitoring
@@ -8,9 +8,13 @@
 ##   - Three base rules: ServiceDown, HighMemoryUsage, HighCPUUsage
 ##   - All rules label alerts with project=$PROJECT for routing
 ##   - Rules use PromQL expressions compatible with cAdvisor + node_exporter metrics
+##   - HighMemoryUsage guard (DevPlan 143 W2): `and container_spec_memory_limit_bytes{...} > 0`
+##     на обоих операндах — контейнеры без limits → деление на 0 → +Inf → ложное firing;
+##     guard отфильтровывает серии без лимита. Parity с Grafana provisioning alert-rules.yml.
 ## @rationale Native Prometheus rules (not Grafana) enable alerting even when Grafana is down.
 ##           Rules are generated per-project so each project's alerts are independent.
 ##           Grafana alerting (in config/alerting/) is the secondary path for dashboard-facing alerts.
+## @changes 2026-08-08 · DevPlan 143 W2 — HighMemoryUsage guard (parity с Grafana provisioning)
 # endregion MODULE_CONTRACT
 # ⚠️ TRAP[DECISION] · 2026-07-02 · — · Per-project rule files vs single consolidated file
 # ·   Chose per-project rule files (/opt/prometheus/rules/<project>-alerts.yml) for:
@@ -39,8 +43,12 @@ groups:
 
       # ── HighMemoryUsage ──────────────────────────────────────────────────────
       # 🟡 Triggers when a container in this project exceeds 90% memory limit for >5 minutes
+      # DevPlan 143 W2: guard `and container_spec_memory_limit_bytes{...} > 0` — контейнеры без
+      # deploy.resources.limits.memory не экспортируют container_spec_memory_limit_bytes (0/absent)
+      # → usage / 0 = +Inf → +Inf > 0.9 = true → ложное firing. Guard отфильтровывает серии без
+      # лимита. Селектор {compose_project="${PROJECT}"} на обоих операндах (parity с Grafana).
       - alert: "${PROJECT}HighMemoryUsage"
-        expr: "container_memory_usage_bytes{compose_project=\"${PROJECT}\"} / container_spec_memory_limit_bytes{compose_project=\"${PROJECT}\"} > 0.9"
+        expr: "container_memory_usage_bytes{compose_project=\"${PROJECT}\"} / container_spec_memory_limit_bytes{compose_project=\"${PROJECT}\"} > 0.9 and container_spec_memory_limit_bytes{compose_project=\"${PROJECT}\"} > 0"
         for: "5m"
         labels:
           severity: "warning"
