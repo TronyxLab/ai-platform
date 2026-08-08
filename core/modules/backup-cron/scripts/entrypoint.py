@@ -49,6 +49,7 @@ before exec'ing cron in foreground.
           (PID 1 = python), breaking signal forwarding and healthcheck semantics.
 @changes 2026-08-08 | DevPlan 143 W1B — created
 """
+# endregion MODULE_CONTRACT
 
 import logging
 import os
