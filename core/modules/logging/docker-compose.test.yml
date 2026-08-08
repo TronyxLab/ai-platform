@@ -1,4 +1,4 @@
-# GREP_SUMMARY: logging docker-compose test override container_name-test loki promtail
+# GREP_SUMMARY: logging docker-compose test override container_name-test loki promtail backup-logs-test
 # STRUCTURE: base.yml + test.yml → loki + promtail with -test suffix and shifted ports
 # region MODULE_CONTRACT
 ## @purpose  Test override for logging — -test container_name for loki and promtail
@@ -8,7 +8,11 @@
 ##   - restart: "no" для всех контейнеров (тестовые контейнеры не auto-рестартуются)
 ##   - Loki port: 127.0.0.1:13100:3100
 ##   - Promtail no ports exposed (internal collector)
+##   - Promtail-test rebind backup-logs → backup-logs-test (канон volume-rename U-62):
+##     compose deep-merge не умеет удалять bind-тома → объявляется НОВЫЙ volume с суффиксом
+##     -test (docker-managed, cross-platform macOS/CI) и сервис перепривязывается к нему.
 ## @rationale Стандартный test-overlay контракт (DevPlan 04 DD2).
+## @changes  2026-08-08 · DevPlan 143 W1A — promtail-test rebind backup-logs-test (file-scrape)
 # endregion MODULE_CONTRACT
 
 services:
@@ -24,8 +28,26 @@ services:
     container_name: promtail-test
     networks: !override  # DevPlan 017 W2.5 — test network isolation
       - test-observability-net
+    # DevPlan 143 W1A: rebind backup-logs → backup-logs-test (канон volume-rename U-62).
+    # Volumes перечислены полностью (!override семантика compose для list-values: список
+    # заменяется целиком). config/promtail mount оставлен (нужен для работы), docker.sock/
+    # journal/machine-id — host-литералы (системные, как в base.yml), backup-logs-test —
+    # docker-managed volume (cross-platform, без bind-mount на macOS).
+    volumes: !override
+      - ./config/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/log/journal:/var/log/journal:ro
+      - /etc/machine-id:/etc/machine-id:ro
+      - backup-logs-test:/var/log/platform/backup:ro
     restart: "no"
 
 networks:
   test-observability-net:
     external: true
+
+volumes:
+  # DevPlan 143 W1A (канон volume-rename U-62): backup-logs-test — docker-managed volume
+  # для promtail-test file-scrape. Если backup-cron test-overlay уже объявил backup-logs-test
+  # в этом compose-стеке — deep-merge идемпотентен (driver: local совпадёт).
+  backup-logs-test:
+    driver: local

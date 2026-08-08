@@ -1,5 +1,5 @@
-# GREP_SUMMARY: grafana alert rules grafana12 service-down service-down-short high-memory disk-space llm-api-errors backup-freshness backup-upload-failure wal-sync-failure telegram webhook loki
-# STRUCTURE: ▶ 8-rules ┌ ServiceDown → CRITICAL ┐ ┌ ServiceDownShort → WARNING ┐ ┌ HighMemory → WARNING ┐ ┌ DiskSpace → CRITICAL (mountpoint=/) ┐ ┌ LLMAPIErrors → WARNING ┐ ┌ BackupFreshness → CRITICAL (loki) ┐ ┌ BackupUploadFailure → WARNING (loki) ┐ ┌ WalSyncFailure → WARNING (loki) ┐ → Grafana-provisioning → ┘
+# GREP_SUMMARY: grafana alert rules grafana12 service-down service-down-short high-memory disk-space llm-api-errors backup-freshness backup-upload-failure wal-sync-failure telegram webhook loki memory-guard
+# STRUCTURE: ▶ 8-rules ┌ ServiceDown → CRITICAL ┐ ┌ ServiceDownShort → WARNING ┐ ┌ HighMemory → WARNING (guard limit>0) ┐ ┌ DiskSpace → CRITICAL (mountpoint=/) ┐ ┌ LLMAPIErrors → WARNING ┐ ┌ BackupFreshness → CRITICAL (loki) ┐ ┌ BackupUploadFailure → WARNING (loki) ┐ ┌ WalSyncFailure → WARNING (loki) ┐ → Grafana-provisioning → ┘
 # region MODULE_CONTRACT
 ## @purpose  8 Grafana 12 alert rules: ServiceDown, ServiceDownShort, HighMemory, DiskSpace,
 ##           LLMAPIErrors (Prometheus, uid: prometheus) + BackupFreshness, BackupUploadFailure,
@@ -23,12 +23,14 @@
 ## RULES:
 ##   1. ServiceDown:          up == 0                    for 1m   → CRITICAL
 ##   2. ServiceDownShort:     up == 0                    for 15s  → WARNING
-##   3. HighMemory:           mem_usage > 90%            for 5m   → WARNING
+##   3. HighMemory:           mem_usage > 90% AND limit>0 for 5m  → WARNING
 ##   4. DiskSpace:            avail < 20% (mountpoint=/) for 0s   → CRITICAL
 ##   5. LLMAPIErrors:         error_rate>0.1/s           for 0s   → WARNING
 ##   6. BackupFreshness:      count(BACKUP COMPLETE 26h)<1 for 30m → CRITICAL (loki)
 ##   7. BackupUploadFailure:  count(off-site NOT confirmed 24h)>0 for 5m → WARNING (loki)
 ##   8. WalSyncFailure:       count(WAL_SYNC FAIL 24h)>0     for 5m → WARNING (loki)
+## @changes 2026-08-08 · DevPlan 143 W2 — HighMemory guard `and container_spec_memory_limit_bytes > 0`
+##           (контейнеры без limits → деление на 0 → +Inf → ложное firing; guard отфильтровывает серии)
 # endregion MODULE_CONTRACT
 
 apiVersion: 1
@@ -139,6 +141,11 @@ groups:
           severity: "warning"
 
       # ── 3. HighMemory ───────────────────────────────────────────────────────
+      # DevPlan 143 W2: guard `and container_spec_memory_limit_bytes > 0` — контейнеры
+      # без deploy.resources.limits.memory не экспортируют container_spec_memory_limit_bytes
+      # (0/absent) → usage / 0 = +Inf → +Inf > 0.9 = true → ложное firing ([no value], +Inf).
+      # Guard отфильтровывает серии без лимита целиком (PromQL: деление на 0 → +Inf;
+      # `and limit > 0` убирает эти серии из результата).
       - uid: "high_memory"
         title: "High Memory Usage"
         condition: "C"
@@ -146,7 +153,7 @@ groups:
           - refId: "A"
             datasourceUid: "prometheus"
             model:
-              expr: "container_memory_usage_bytes / container_spec_memory_limit_bytes > 0.9"
+              expr: "container_memory_usage_bytes / container_spec_memory_limit_bytes > 0.9 and container_spec_memory_limit_bytes > 0"
               refId: "A"
             queryType: ""
             relativeTimeRange:
