@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: test-monitoring-alert-rules alerting-enabled template-render created skipped failed provisioning loki backup-rules uid-unique service-down-short mountpoint-filter high-memory-guard
-# STRUCTURE: ┌4 test functions (generate_alert_rules)┐ → ◇ alerting disabled (1) → ◇ template missing (1) → ◇ created (1) → ◇ render failure (1) → ┤ provisioning alert-rules.yml (uid unique, loki datasource, 3 backup rules, service_down_short, disk_space mountpoint-filter, high_memory guard)
+# GREP_SUMMARY: test-monitoring-alert-rules alerting-enabled template-render created skipped failed provisioning loki backup-rules uid-unique service-down-short mountpoint-filter high-memory-guard loki-no-binop labels-name
+# STRUCTURE: ┌4 test functions (generate_alert_rules)┐ → ◇ alerting disabled (1) → ◇ template missing (1) → ◇ created (1) → ◇ render failure (1) → ┤ provisioning alert-rules.yml (uid unique, loki datasource, 3 backup rules, service_down_short, disk_space mountpoint-filter, high_memory guard, loki expr no-binop, high_memory labels.name)
 # region MODULE_CONTRACT
 ## @purpose  Unit tests for core/internal/monitoring/alert_rules.py — generate_alert_rules()
 #            (DevPlan 117 G T54 extraction) + статическая валидация provisioning-файла
-#            core/modules/monitoring/config/alerting/alert-rules.yml (DevPlan 132 W5, 140 W2, 143 W2).
+#            core/modules/monitoring/config/alerting/alert-rules.yml (DevPlan 132 W5, 140 W2, 143 W2, 144 W1/W2).
 ## @scope    No Docker — tmp_path template/output fixtures; yaml-парс provisioning-файла (read-only).
 ## @invariants
 ##   - All tests use tmp_path (zero hardcoded paths)
@@ -15,14 +15,24 @@
 ##   - 140 W2 D-6: expr disk_space содержит {mountpoint="/"} (root-файловая система, не tmpfs/overlay)
 ##   - 143 W2: expr high_memory содержит guard `and container_spec_memory_limit_bytes > 0`
 ##     (контейнеры без limits → деление на 0 → +Inf → ложное firing; guard отфильтровывает серии)
+##   - 144 W1 (D1): Loki expr backup-правил — чистый count_over_time(...) БЕЗ бинарной операции
+##     (`< 1`/`> 0` внутри expr запрещён: Loki range binop возвращает только истинные точки →
+##     пусто при count≥1 → NoData → ложный Alerting); сравнение — в threshold expression (refId C)
+##   - 144 W2 (D2): аннотации high_memory (provisioning) и HighMemoryUsage/HighCPUUsage
+##     (per-project шаблон) используют {{ $labels.name }}, НЕ {{ $labels.container }}
+##     (cAdvisor экспортирует name; метки container у cAdvisor-метрик нет → «no value»)
 ## @rationale  DevPlan 117 G T54 §TEST_SPEC — alert_rules direct tests after extraction.
 ##            DevPlan 132 W5 §TEST_SPEC — валидация структуры новых Loki-правил.
 ##            DevPlan 140 W2 §4.2/§5 — fire-семантика: sub-minute правило + mountpoint-фильтр (negative R5).
 ##            DevPlan 143 W2 §TEST_SPEC — high_memory guard (детектор + R5 negative).
+##            DevPlan 144 W1/W2 §TEST_SPEC — loki expr no-binop (детектор + R5 negative),
+##            high_memory labels.name (детектор + R5 negative).
 ## @changes  2026-08-01 · DevPlan 117 G T54 — created
 ## @changes  2026-08-04 · DevPlan 132 W5 — +provisioning-файл валидация (3 Loki-правила)
 ## @changes  2026-08-06 · DevPlan 140 W2 — +service_down_short (D-4), +disk_space mountpoint-фильтр (D-6), +R5 negative
 ## @changes  2026-08-08 · DevPlan 143 W2 — +high_memory guard (детектор + R5 negative)
+## @changes  2026-08-09 · DevPlan 144 W1/W2 — +loki expr no-binop (детектор + R5 negative),
+##           +high_memory labels.name (детектор + R5 negative, оба файла правил)
 # endregion MODULE_CONTRACT
 
 import logging
@@ -323,3 +333,146 @@ def test_high_memory_guard_negative_removed() -> None:
     legacy_expr = "container_memory_usage_bytes / container_spec_memory_limit_bytes > 0.9"
     with pytest.raises(AssertionError):
         _assert_high_memory_guard(legacy_expr)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# DevPlan 144 W1 (D1): Loki expr без бинарной операции — сравнение в threshold
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _assert_loki_expr_no_binop(expr: str) -> None:
+    """144 W1 (D1) детектор: Loki expr — чистый count_over_time(...) БЕЗ бинарной операции.
+
+    Контракт: Loki range query с binop (`< 1` / `> 0` внутри expr) возвращает ТОЛЬКО точки,
+    где условие истинно → при count≥1 пустая матрица → reduce NoData → noDataState: Alerting
+    → вечный ложный firing. Loki expr обязан возвращать МЕТРИКУ (count), сравнение —
+    в Grafana threshold expression (refId C). Запрещённая форма: expr с '< N' / '> N' —
+    binop в LogQL-селекторах не встречается, любой '<'/' >' — бинарная операция.
+    """
+    assert expr.startswith("count_over_time("), f"144 W1 FAIL: expr не начинается с count_over_time(: {expr}"
+    # Чистый count_over_time({selector} |~ "..." [range]) заканчивается на ')' (закрытие вызова);
+    # [26h] — range-аргумент ВНУТРИ вызова, не суффикс. Binop добавил бы '< N'/' > N' после ')'.
+    assert expr.rstrip().endswith(")"), f"144 W1 FAIL: expr не заканчивается на ')' (обрыв формы): {expr}"
+    # Никаких бинарных операторов сравнения ('<' / '>') внутри expr
+    assert "<" not in expr, f"144 W1 FAIL: Loki expr содержит '<' (binop): {expr}"
+    assert ">" not in expr, f"144 W1 FAIL: Loki expr содержит '>' (binop): {expr}"
+
+
+def _assert_threshold_evaluator(rule: dict, evaluator_type: str) -> None:
+    """144 W1 контракт: сравнение count выполняется в threshold expression (refId C).
+
+    Loki data-запись возвращает метрику; evaluator (lt/gt) живёт ТОЛЬКО в refId C.
+    """
+    data = rule["data"]
+    c_entries = [d for d in data if d.get("refId") == "C"]
+    assert c_entries, "144 W1 FAIL: threshold expression (refId C) отсутствует"
+    model = c_entries[0]["model"]
+    assert model.get("type") == "threshold", "144 W1 FAIL: refId C не является threshold expression"
+    conditions = model.get("conditions", [])
+    assert conditions, "144 W1 FAIL: threshold без conditions"
+    evaluator = conditions[0].get("evaluator", {})
+    assert evaluator.get("type") == evaluator_type, f"144 W1 FAIL: evaluator type != {evaluator_type}: {evaluator}"
+    assert evaluator.get("params"), f"144 W1 FAIL: evaluator params пустой: {evaluator}"
+
+
+# 🧪 TRAP[TEST] · Regression · Scenario: Loki expr backup-правил без binop (144 W1 D1)
+# · Expect: expr = чистый count_over_time(...) (заканчивается на ']'), сравнение — threshold C
+# · Last fail: backup_freshness expr "... [26h]) < 1" — Loki range binop возвращал только
+# ·   истинные точки → при count=2 пусто → NoData → noDataState Alerting → ложный firing ×5 мин
+# · Remove if: Loki-правила меняют контракт (expr + threshold)
+def test_provisioning_alert_rules_loki_expr_no_binop(caplog) -> None:
+    """144 W1 (D1): все 3 backup-правила — чистый count_over_time без бинарной операции."""
+    caplog.set_level(logging.INFO)
+    rules = {r["uid"]: r for r in _provisioning_rules()}
+    for uid, evaluator in (
+        ("backup_freshness", "lt"),  # count < 1 → firing (бэкап не работал)
+        ("backup_upload_failure", "gt"),  # count > 0 → firing (off-site upload провален)
+        ("wal_sync_failure", "gt"),  # count > 0 → firing (WAL sync S3-ошибка)
+    ):
+        assert uid in rules, f"правило {uid} отсутствует в alert-rules.yml"
+        rule = rules[uid]
+        _assert_loki_expr_no_binop(_alert_expr(rule))
+        _assert_threshold_evaluator(rule, evaluator)
+    logger.info("[IMP:9][test_monitoring_alert_rules] loki expr no-binop + threshold PASS")
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · Loki expr binop — DevPlan 144 W1 (D1)
+# · Last fail: исходный вход — expr 'count_over_time(... [26h]) < 1' (binop внутри Loki expr:
+# ·   range query возвращал только истинные точки → при count=2 пусто → NoData → Alerting)
+# · Remove if: детектор _assert_loki_expr_no_binop меняет контракт (expr без binop)
+def test_loki_expr_binop_negative_removed() -> None:
+    """R5 negative (144 W1): legacy expr с '< 1' внутри Loki-выражения — исходный вход,
+    поймавший баг — детектор ОБЯЗАН упасть. Если он не падает — регрессия W1."""
+    legacy_expr = 'count_over_time({compose_service="backup-cron"} |~ "BACKUP COMPLETE" [26h]) < 1'
+    with pytest.raises(AssertionError):
+        _assert_loki_expr_no_binop(legacy_expr)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# DevPlan 144 W2 (D2): аннотации {{ $labels.name }} (cAdvisor метка name)
+# ═══════════════════════════════════════════════════════════════════════
+
+# Per-project шаблон (generated per-project post-deploy, $PROJECT substitution)
+_PROJECT_TEMPLATE_RULES = (
+    Path(__file__).resolve().parents[2] / "core" / "modules" / "monitoring" / "config" / "alert-rules.yml"
+)
+
+
+def _project_template_rules() -> list[dict]:
+    """Load all rules from the per-project template alert-rules.yml (groups[].rules)."""
+    data = yaml.safe_load(_PROJECT_TEMPLATE_RULES.read_text(encoding="utf-8"))
+    rules: list[dict] = []
+    for group in data.get("groups", []):
+        rules.extend(group.get("rules", []))
+    return rules
+
+
+def _assert_high_memory_label_name(summary: str, description: str) -> None:
+    """144 W2 (D2) детектор: аннотации используют {{ $labels.name }}, НЕ {{ $labels.container }}.
+
+    cAdvisor экспортирует name (имя контейнера: cadvisor/loki/clickhouse/...); метки container
+    у cAdvisor-метрик НЕТ → {{ $labels.container }} давал «no value» в каждом сообщении.
+    """
+    assert "{{ $labels.name }}" in summary, f"144 W2 FAIL: summary без {{{{ $labels.name }}}}: {summary}"
+    assert "{{ $labels.name }}" in description, f"144 W2 FAIL: description без {{{{ $labels.name }}}}: {description}"
+    assert "{{ $labels.container }}" not in summary, (
+        f"144 W2 FAIL: summary содержит {{{{ $labels.container }}}}: {summary}"
+    )
+    assert "{{ $labels.container }}" not in description, (
+        f"144 W2 FAIL: description содержит {{{{ $labels.container }}}}: {description}"
+    )
+
+
+# 🧪 TRAP[TEST] · Regression · Scenario: аннотации high_memory используют labels.name (144 W2 D2)
+# · Expect: summary/description содержат {{ $labels.name }} и НЕ содержат {{ $labels.container }}
+# ·   (Grafana provisioning high_memory + per-project HighMemoryUsage/HighCPUUsage)
+# · Last fail: {{ $labels.container }} → «Container no value memory usage exceeds 90%» ×3 каждые 5 мин
+# · Remove if: cAdvisor-источник меняет метку имени контейнера
+def test_high_memory_annotations_label_name(caplog) -> None:
+    """144 W2 (D2): аннотации в ОБОИХ файлах правил — {{ $labels.name }}, не container."""
+    caplog.set_level(logging.INFO)
+    # Grafana provisioning alert-rules.yml (uid: high_memory)
+    rules = {r["uid"]: r for r in _provisioning_rules()}
+    assert "high_memory" in rules, "правило high_memory отсутствует в alert-rules.yml"
+    high_memory = rules["high_memory"]
+    _assert_high_memory_label_name(high_memory["annotations"]["summary"], high_memory["annotations"]["description"])
+    # Per-project шаблон config/alert-rules.yml (HighMemoryUsage + HighCPUUsage — те же cAdvisor-метки)
+    project_rules = {r["alert"]: r for r in _project_template_rules()}
+    for alert_name in ("${PROJECT}HighMemoryUsage", "${PROJECT}HighCPUUsage"):
+        assert alert_name in project_rules, f"правило {alert_name} отсутствует в per-project шаблоне"
+        annotations = project_rules[alert_name]["annotations"]
+        _assert_high_memory_label_name(annotations["summary"], annotations["description"])
+    logger.info("[IMP:9][test_monitoring_alert_rules] high_memory labels.name annotations PASS")
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · {{ $labels.container }} — DevPlan 144 W2 (D2)
+# · Last fail: исходный вход — summary "Container {{ $labels.container }} memory usage exceeds 90%"
+# ·   (cAdvisor не экспортирует метку container → «no value» в каждом алерте)
+# · Remove if: детектор _assert_high_memory_label_name меняет контракт (labels.name)
+def test_high_memory_container_label_negative_removed() -> None:
+    """R5 negative (144 W2): legacy аннотации с {{ $labels.container }} — исходный вход,
+    поймавший баг — детектор ОБЯЗАН упасть. Если он не падает — регрессия W2."""
+    legacy_summary = "Container {{ $labels.container }} memory usage exceeds 90%"
+    legacy_description = "Memory usage for container {{ $labels.container }} on {{ $labels.instance }} is above 90%."
+    with pytest.raises(AssertionError):
+        _assert_high_memory_label_name(legacy_summary, legacy_description)

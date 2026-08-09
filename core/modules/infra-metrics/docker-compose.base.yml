@@ -43,7 +43,9 @@ services:
     deploy:
       resources:
         limits:
-          memory: 128M
+          # DevPlan 144 W3 (D2): 128M → 256M — факт. потребление 127.3MiB (99.4% лимита);
+          # 256M даёт 50% запас (алерт HighMemory при >90%).
+          memory: 256M
           cpus: "0.5"
     logging: *default-logging
 
