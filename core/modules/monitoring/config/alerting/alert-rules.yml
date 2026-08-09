@@ -159,6 +159,11 @@ groups:
       # (0/absent) → usage / 0 = +Inf → +Inf > 0.9 = true → ложное firing ([no value], +Inf).
       # Guard отфильтровывает серии без лимита целиком (PromQL: деление на 0 → +Inf;
       # `and limit > 0` убирает эти серии из результата).
+      # DevPlan 144 W4 (2026-08-09, деплой-верификация): container_memory_usage_bytes →
+      # container_memory_working_set_bytes. usage включает page cache: cAdvisor (сканирует
+      # /rootfs) показывал 473MiB usage при working_set 364MiB и лимите 512M — cache растёт
+      # до лимита, алерт оставался firing после поднятия лимитов. Working set — реальное
+      # потребление без cache (K8s-канон для OOM-оценки).
       - uid: "high_memory"
         title: "High Memory Usage"
         condition: "C"
@@ -166,7 +171,7 @@ groups:
           - refId: "A"
             datasourceUid: "prometheus"
             model:
-              expr: "container_memory_usage_bytes / container_spec_memory_limit_bytes > 0.9 and container_spec_memory_limit_bytes > 0"
+              expr: "container_memory_working_set_bytes / container_spec_memory_limit_bytes > 0.9 and container_spec_memory_limit_bytes > 0"
               refId: "A"
             queryType: ""
             relativeTimeRange:

@@ -52,8 +52,11 @@ groups:
       # deploy.resources.limits.memory не экспортируют container_spec_memory_limit_bytes (0/absent)
       # → usage / 0 = +Inf → +Inf > 0.9 = true → ложное firing. Guard отфильтровывает серии без
       # лимита. Селектор {compose_project="${PROJECT}"} на обоих операндах (parity с Grafana).
+      # DevPlan 144 W4 (2026-08-09): container_memory_usage_bytes → container_memory_working_set_bytes
+      # — usage включает page cache (cAdvisor cache растёт до лимита → ложный firing после поднятия
+      # лимитов); working set = реальное потребление (parity с Grafana provisioning).
       - alert: "${PROJECT}HighMemoryUsage"
-        expr: "container_memory_usage_bytes{compose_project=\"${PROJECT}\"} / container_spec_memory_limit_bytes{compose_project=\"${PROJECT}\"} > 0.9 and container_spec_memory_limit_bytes{compose_project=\"${PROJECT}\"} > 0"
+        expr: "container_memory_working_set_bytes{compose_project=\"${PROJECT}\"} / container_spec_memory_limit_bytes{compose_project=\"${PROJECT}\"} > 0.9 and container_spec_memory_limit_bytes{compose_project=\"${PROJECT}\"} > 0"
         for: "5m"
         labels:
           severity: "warning"

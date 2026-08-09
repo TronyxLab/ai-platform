@@ -42,6 +42,7 @@ import pytest
 import yaml
 from monitoring.alert_rules import generate_alert_rules
 from monitoring_config_renderer import ProjectMonitoringConfig
+from tests._conftest.r1 import r1_delegates
 
 logger = logging.getLogger(__name__)
 
@@ -275,6 +276,60 @@ def test_disk_space_mountpoint_filter_negative_removed() -> None:
     legacy_expr = "node_filesystem_avail_bytes / node_filesystem_size_bytes < 0.2"
     with pytest.raises(AssertionError):
         _assert_disk_space_mountpoint_filter(legacy_expr)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# DevPlan 144 W4 (D2): high_memory на container_memory_working_set_bytes
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _assert_high_memory_working_set(expr: str) -> None:
+    """144 W4 детектор: expr правила high_memory использует container_memory_working_set_bytes
+    (НЕ container_memory_usage_bytes).
+
+    Деплой-верификация 2026-08-09: usage включает page cache — cAdvisor (сканирует /rootfs)
+    показывал 473MiB usage при working_set 364MiB и лимите 512M (92.5% — firing), cache рос
+    до лимита после каждого поднятия (128→256→512M). Working set = реальное потребление без
+    cache (K8s-канон OOM-оценки) → 71% — Normal.
+    """
+    assert "container_memory_working_set_bytes" in expr, (
+        f"144 W4 FAIL: high_memory expr не использует container_memory_working_set_bytes: {expr}"
+    )
+    assert "container_memory_usage_bytes" not in expr, (
+        f"144 W4 FAIL: high_memory expr использует container_memory_usage_bytes (page cache): {expr}"
+    )
+
+
+# 🧪 TRAP[TEST] · Regression · Scenario: high_memory на working_set (144 W4 D2)
+# · Expect: expr использует container_memory_working_set_bytes (не usage_bytes) —
+# ·   usage включает page cache → ложный firing после поднятия лимитов (деплой-верификация)
+# · Last fail: usage_bytes при 512M лимите = 473MiB (92.5%) — cAdvisor cache растёт до лимита
+# · Remove if: high_memory возвращается на usage_bytes намеренно (архитектурное решение)
+# 🧪 TRAP[TEST] · F1 (DevPlan 118) · @r1_delegates: fail-механизм делегирован
+#   _assert_high_memory_working_set (assert + AssertionError при usage_bytes).
+@r1_delegates
+def test_provisioning_alert_rules_high_memory_working_set(caplog) -> None:
+    """144 W4: HighMemory expr на container_memory_working_set_bytes (Grafana + per-project)."""
+    caplog.set_level(logging.INFO)
+    rules = {r["uid"]: r for r in _provisioning_rules()}
+    _assert_high_memory_working_set(_alert_expr(rules["high_memory"]))
+    # per-project шаблон (config/alert-rules.yml) — тот же контракт
+    per_project = {r["alert"]: r for r in _project_template_rules()}
+    high_memory_rule = next(r for r in per_project.values() if r["alert"].endswith("HighMemoryUsage"))
+    _assert_high_memory_working_set(high_memory_rule["expr"])
+    logger.info("[IMP:9][test_monitoring_alert_rules] high_memory working_set (144 W4) PASS")
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · high_memory usage_bytes — DevPlan 144 W4
+# · Last fail: исходный вход — "container_memory_usage_bytes / ..." (page cache в usage:
+# ·   cAdvisor 473MiB usage vs 364MiB working_set при 512M лимите — ложный firing)
+# · Remove if: детектор _assert_high_memory_working_set меняет контракт (working_set)
+def test_high_memory_usage_bytes_negative_removed() -> None:
+    """R5 negative (144 W4): expr с usage_bytes — исходный вход, поймавший баг —
+    детектор ОБЯЗАН упасть."""
+    legacy_expr = "container_memory_usage_bytes / container_spec_memory_limit_bytes > 0.9"
+    with pytest.raises(AssertionError):
+        _assert_high_memory_working_set(legacy_expr)
 
 
 # ═══════════════════════════════════════════════════════════════════════
