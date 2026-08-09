@@ -11,6 +11,8 @@
 ##   - No host port for Promtail (internal collector)
 ##   - Loki port 3100 on localhost only
 ## @rationale Split from observability module per Phase 3 refactoring (D1)
+## @changes — 2026-08-09 | DevPlan 144 W3 — resources.limits.memory 384M → 640M (loki 256M→512M,
+##           sync по сумме limits: loki 512M + promtail 128M)
 # endregion MODULE_CONTRACT
 
 name: logging
@@ -30,8 +32,10 @@ spool_dir: /var/lib/platform/loki-data
 spool_volume: loki-data
 
 resources:
+  # Синхронизировано с docker-compose.base.yml (DevPlan 144 W3): сумма limits всех сервисов модуля
+  # = loki 512M (256M→512M, факт. потребление 216MiB — 91.3% лимита) + promtail 128M = 640M.
   limits:
-    memory: 384M
+    memory: 640M
   reservations:
     memory: 128M
 

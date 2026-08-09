@@ -11,7 +11,8 @@
 ##   - No ports exposed to host beyond 127.0.0.1 bindings (internal Docker network only)
 ##   - restart: unless-stopped — Docker policy
 ##   - stop_grace_period: 60s — allows merge queue flush and clean shutdown
-##   - Resource limits: 512M memory, 1.0 CPU (no overhead policy)
+##   - Resource limits: 2G memory, 1.0 CPU (no overhead policy) — DevPlan 144 W3: 512M→2G
+##     (compose 1G→2G; факт. потребление 639MiB по docker stats, cAdvisor usage 91.5% при 1G)
 ##   - Version pinned: 24.12 LTS (not latest — platform policy)
 ##   - Users: per-file ro mount config/users.d/10-users.xml (NOT dir mount) — default-user.xml
 ##     stays container-local so password rotation converges automatically
@@ -44,8 +45,10 @@ spool_dir: /var/lib/platform/clickhouse-data
 spool_volume: clickhouse-data
 
 resources:
+  # Синхронизировано с docker-compose.base.yml (DevPlan 144 W3): лимит единственного сервиса
+  # clickhouse 2G (было 1G; module.yaml был 512M — рассинхрон, исправлен до 2G).
   limits:
-    memory: 512M
+    memory: 2G
   reservations:
     memory: 256M
 

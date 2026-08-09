@@ -1,5 +1,5 @@
-# GREP_SUMMARY: grafana alert rules grafana12 service-down service-down-short high-memory disk-space llm-api-errors backup-freshness backup-upload-failure wal-sync-failure telegram webhook loki memory-guard
-# STRUCTURE: ▶ 8-rules ┌ ServiceDown → CRITICAL ┐ ┌ ServiceDownShort → WARNING ┐ ┌ HighMemory → WARNING (guard limit>0) ┐ ┌ DiskSpace → CRITICAL (mountpoint=/) ┐ ┌ LLMAPIErrors → WARNING ┐ ┌ BackupFreshness → CRITICAL (loki) ┐ ┌ BackupUploadFailure → WARNING (loki) ┐ ┌ WalSyncFailure → WARNING (loki) ┐ → Grafana-provisioning → ┘
+# GREP_SUMMARY: grafana alert rules grafana12 service-down service-down-short high-memory disk-space llm-api-errors backup-freshness backup-upload-failure wal-sync-failure telegram webhook loki memory-guard labels-name
+# STRUCTURE: ▶ 8-rules ┌ ServiceDown → CRITICAL ┐ ┌ ServiceDownShort → WARNING ┐ ┌ HighMemory → WARNING (guard limit>0, labels.name) ┐ ┌ DiskSpace → CRITICAL (mountpoint=/) ┐ ┌ LLMAPIErrors → WARNING ┐ ┌ BackupFreshness → CRITICAL (loki, no binop) ┐ ┌ BackupUploadFailure → WARNING (loki) ┐ ┌ WalSyncFailure → WARNING (loki) ┐ → Grafana-provisioning → ┘
 # region MODULE_CONTRACT
 ## @purpose  8 Grafana 12 alert rules: ServiceDown, ServiceDownShort, HighMemory, DiskSpace,
 ##           LLMAPIErrors (Prometheus, uid: prometheus) + BackupFreshness, BackupUploadFailure,
@@ -19,6 +19,15 @@
 ##           в Loki через promtail docker_sd, compose_service="backup-cron").
 ##           BackupFreshness: окно 26h > интервал дампа 24h + for: 30m (защита от ложных
 ##           срабатываний при рестарте стека); failure-правила — for: 5m (анти-флаппинг).
+##           D1 (144) Loki binop-контракт: range query с бинарной операцией (< 1 / > 0) внутри
+##           expr возвращает ТОЛЬКО точки, где условие истинно → при count≥1 пустая матрица →
+##           NoData → noDataState Alerting → ложный firing. Контракт: Loki expr возвращает
+##           МЕТРИКУ (count), сравнение выполняет threshold expression (refId C, evaluator
+##           lt params [1] у backup_freshness). Все 3 состояния корректны: count=0 → firing
+##           (бэкап не работал), count≥1 → Normal, NoData → Alerting (промtail мёртв).
+##           D2 (144): аннотации HighMemory используют {{ $labels.name }} — cAdvisor
+##           экспортирует name (имя контейнера), метки container у cAdvisor-метрик НЕТ
+##           (иначе текст «no value» в каждом алерте).
 ##
 ## RULES:
 ##   1. ServiceDown:          up == 0                    for 1m   → CRITICAL
@@ -26,11 +35,15 @@
 ##   3. HighMemory:           mem_usage > 90% AND limit>0 for 5m  → WARNING
 ##   4. DiskSpace:            avail < 20% (mountpoint=/) for 0s   → CRITICAL
 ##   5. LLMAPIErrors:         error_rate>0.1/s           for 0s   → WARNING
-##   6. BackupFreshness:      count(BACKUP COMPLETE 26h)<1 for 30m → CRITICAL (loki)
-##   7. BackupUploadFailure:  count(off-site NOT confirmed 24h)>0 for 5m → WARNING (loki)
-##   8. WalSyncFailure:       count(WAL_SYNC FAIL 24h)>0     for 5m → WARNING (loki)
+##   6. BackupFreshness:      count(BACKUP COMPLETE 26h) for 30m → CRITICAL (loki, threshold lt 1)
+##   7. BackupUploadFailure:  count(off-site NOT confirmed 24h) for 5m → WARNING (loki, threshold gt 0)
+##   8. WalSyncFailure:       count(WAL_SYNC FAIL 24h)   for 5m → WARNING (loki, threshold gt 0)
 ## @changes 2026-08-08 · DevPlan 143 W2 — HighMemory guard `and container_spec_memory_limit_bytes > 0`
 ##           (контейнеры без limits → деление на 0 → +Inf → ложное firing; guard отфильтровывает серии)
+## @changes 2026-08-09 · DevPlan 144 W1/W2 — BackupFreshness expr без binop `< 1` (Loki range binop
+##           возвращает только истинные точки → пусто при count≥1 → NoData → ложный Alerting;
+##           сравнение остаётся в threshold C lt 1, noDataState Alerting сохранён);
+##           HighMemory аннотации переведены на {{ $labels.name }} (cAdvisor метка name)
 # endregion MODULE_CONTRACT
 
 apiVersion: 1
@@ -189,8 +202,11 @@ groups:
         execErrState: "Error"
         for: "5m"
         annotations:
-          summary: "Container {{ $labels.container }} memory usage exceeds 90%"
-          description: "Memory usage for container {{ $labels.container }} on {{ $labels.instance }} is above 90% for more than 5 minutes."
+          # DevPlan 144 W2 (D2): {{ $labels.name }} — cAdvisor экспортирует name (имя
+          # контейнера), метки container у cAdvisor-метрик НЕТ → прежняя аннотация
+          # давала «no value» в каждом сообщении.
+          summary: "Container {{ $labels.name }} memory usage exceeds 90%"
+          description: "Memory usage for container {{ $labels.name }} on {{ $labels.instance }} is above 90% for more than 5 minutes."
         labels:
           severity: "warning"
 
@@ -293,9 +309,13 @@ groups:
           severity: "warning"
 
       # ── 6. BackupFreshness (DevPlan 132 W5, Loki) ──────────────────────────
-      # count_over_time(BACKUP COMPLETE в 26h окне) < 1 → CRITICAL.
+      # count_over_time(BACKUP COMPLETE в 26h окне) → CRITICAL при count < 1 (threshold C).
       # Окно 26h > интервал дампа 24h (запас на рестарт стека); for: 30m — анти-флаппинг.
       # noDataState: Alerting — нет логов вообще = бэкап не работает.
+      # ⚠️ DevPlan 144 W1 (D1): expr БЕЗ бинарной операции `< 1` — Loki range query с binop
+      # возвращает ТОЛЬКО точки, где условие истинно → при count≥1 пусто → NoData → Alerting
+      # → вечный ложный firing. Loki expr возвращает метрику (count), сравнение — threshold C
+      # (evaluator lt params [1], сохранён). count=0 → firing, count≥1 → Normal, NoData → Alerting.
       - uid: "backup_freshness"
         title: "Backup Freshness"
         condition: "C"
@@ -303,7 +323,7 @@ groups:
           - refId: "A"
             datasourceUid: "loki"
             model:
-              expr: 'count_over_time({compose_service="backup-cron"} |~ "BACKUP COMPLETE" [26h]) < 1'
+              expr: 'count_over_time({compose_service="backup-cron"} |~ "BACKUP COMPLETE" [26h])'
               refId: "A"
             queryType: "range"
             relativeTimeRange:
@@ -345,8 +365,10 @@ groups:
           severity: "critical"
 
       # ── 7. BackupUploadFailure (DevPlan 132 W5, Loki) ──────────────────────
-      # count_over_time("off-site backup NOT confirmed" в 24h) > 0 → WARNING.
+      # count_over_time("off-site backup NOT confirmed" в 24h) → WARNING при count > 0 (threshold C).
       # Лог-строка пишется backup_postgres.py при провале off-site upload.
+      # ⚠️ DevPlan 144 W1 (D1): expr БЕЗ binop `> 0` — Loki возвращает метрику (count),
+      # сравнение — threshold C (evaluator gt params [0]). noDataState OK сохранён.
       - uid: "backup_upload_failure"
         title: "Backup Upload Failure"
         condition: "C"
@@ -354,7 +376,7 @@ groups:
           - refId: "A"
             datasourceUid: "loki"
             model:
-              expr: 'count_over_time({compose_service="backup-cron"} |~ "off-site backup NOT confirmed" [24h]) > 0'
+              expr: 'count_over_time({compose_service="backup-cron"} |~ "off-site backup NOT confirmed" [24h])'
               refId: "A"
             queryType: "range"
             relativeTimeRange:
@@ -396,8 +418,10 @@ groups:
           severity: "warning"
 
       # ── 8. WalSyncFailure (DevPlan 132 W5, Loki) ───────────────────────────
-      # count_over_time("WAL_SYNC FAIL" в 24h) > 0 → WARNING.
+      # count_over_time("WAL_SYNC FAIL" в 24h) → WARNING при count > 0 (threshold C).
       # Строка пишется wal_sync.py при S3-ошибке (exit 1, IMP:10) — RPO-гарантия WAL.
+      # ⚠️ DevPlan 144 W1 (D1): expr БЕЗ binop `> 0` — Loki возвращает метрику (count),
+      # сравнение — threshold C (evaluator gt params [0]). noDataState OK сохранён.
       - uid: "wal_sync_failure"
         title: "WAL Sync Failure"
         condition: "C"
@@ -405,7 +429,7 @@ groups:
           - refId: "A"
             datasourceUid: "loki"
             model:
-              expr: 'count_over_time({compose_service="backup-cron"} |~ "WAL_SYNC FAIL" [24h]) > 0'
+              expr: 'count_over_time({compose_service="backup-cron"} |~ "WAL_SYNC FAIL" [24h])'
               refId: "A"
             queryType: "range"
             relativeTimeRange:
