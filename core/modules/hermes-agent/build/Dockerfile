@@ -76,12 +76,20 @@ RUN python3 /tmp/patch-basic-auth-provider.py && rm /tmp/patch-basic-auth-provid
 # · Symptom: hermes-agent-test smoke падал «02-platform-init: line 131: rsync: command not found»
 # ·   (exited 127 → unhealthy → compose up --wait fail) — init.py использует rsync для
 # ·   CONTEXT_DIR/config → /opt/hermes/config overlay (первый init на чистом volume).
-# · Root: базовый образ nousresearch/hermes-agent (alpine) не содержит rsync (не входит
+# · Root: базовый образ nousresearch/hermes-agent не содержит rsync (не входит
 # ·   в апстрим-сборку). Локальные dev-сборки и контекстные L2 работали, т.к. overlay
 # ·   доставлялся иначе; smoke на чистом L1-образе падал.
-# · Fix: apk add rsync (небольшой статический бинарь, alpine-репозиторий).
+# · Fix: install rsync via пакетный менеджер base-образа.
+# · ⚠️ UPSTREAM-DRIFT · 2026-08-09 · HI · nousresearch/hermes-agent:v2026.7.7.2 сменил
+# ·   базу Alpine → Debian 13 (trixie). `apk` больше НЕ доступен в final-стадии
+# ·   (`/bin/sh: 1: apk: not found`, exit 127 в CI Build Platform Agent).
+# ·   CI ранее ложно классифицировался как Docker Hub rate-limit (B38-external).
+# ·   Замена: apt-get (Debian). validate-стадия (alpine:3.21) НЕ затронута — там apk валиден.
 # · Prevention: init.py — единственный потребитель rsync в рантайме образа.
-RUN apk add --no-cache rsync
+# · Rev: если апстрим вернётся на Alpine — восстановить apk add (меньше слой).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends rsync \
+    && rm -rf /var/lib/apt/lists/*
 
 LABEL org.tronyxlab.patches="known-issues:#55985-basic-auth-provider-patched-2026-07-24"
 LABEL org.tronyxlab.version="${PLATFORM_VERSION:-dev}"
