@@ -20,7 +20,8 @@
 ##   postgres-exporter added per ISS-R2 drift-audit fix for postgres query monitoring
 ## @changes — 2026-07-18 | Added postgres-exporter (ISS-R2)
 ## @changes — 2026-07-15 | Added redis-exporter (wave-redis)
-## @changes — 2026-08-09 | DevPlan 144 W3 — resources.limits.memory 224M → 416M (cadvisor 128M→256M,
+## @changes — 2026-08-09 | DevPlan 144 W3 — resources.limits.memory 224M → 416M → 672M (cadvisor
+##           128M→256M→512M — деплой-верификация: 250MiB при 256M = 98%, поднят до 512M;
 ##           sync по сумме limits всех 5 сервисов модуля)
 # endregion MODULE_CONTRACT
 
@@ -42,10 +43,11 @@ spool_dir: /var/lib/platform/infra-metrics-data
 
 resources:
   # Синхронизировано с docker-compose.base.yml (DevPlan 144 W3): сумма limits всех сервисов модуля
-  # = cadvisor 256M + node-exporter 64M + nginx-prometheus-exporter 32M + redis-exporter 32M
-  # + postgres-exporter 32M = 416M (cadvisor 128M→256M, факт. потребление 127.3MiB — 99.4% лимита).
+  # = cadvisor 512M + node-exporter 64M + nginx-prometheus-exporter 32M + redis-exporter 32M
+  # + postgres-exporter 32M = 672M (cadvisor 128M→256M→512M, деплой-верификация 2026-08-09:
+  # 250MiB при 256M = 98% — лимит поднят до 512M).
   limits:
-    memory: 416M
+    memory: 672M
   reservations:
     memory: 64M
 

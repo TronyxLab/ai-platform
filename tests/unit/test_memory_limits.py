@@ -43,8 +43,9 @@ _MODULE_YAMLS = {
 }
 
 # Канон DevPlan 144 W3: минимальный лимит каждого ключевого сервиса (bytes)
+# cadvisor 512M (деплой-верификация 2026-08-09: 250MiB при 256M = 98% — поднят до 512M)
 _CANON_MIN_LIMITS = {
-    "cadvisor": 256 * 1024 * 1024,  # 256M
+    "cadvisor": 512 * 1024 * 1024,  # 512M
     "loki": 512 * 1024 * 1024,  # 512M
     "clickhouse": 2 * 1024 * 1024 * 1024,  # 2G
 }
@@ -101,9 +102,10 @@ def _assert_module_yaml_sync(module_yaml_path: Path, compose: dict) -> None:
 
 
 # 🧪 TRAP[TEST] · Regression · Scenario: compose-лимиты ≥ канона (144 W3 D2)
-# · Expect: cadvisor ≥256M, loki ≥512M, clickhouse ≥2G (docker-compose.base.yml)
+# · Expect: cadvisor ≥512M, loki ≥512M, clickhouse ≥2G (docker-compose.base.yml)
 # · Last fail: cadvisor 128M (127.3/128MiB = 99.4% — HighMemory firing), loki 256M
-# ·   (216/256MiB = 91.3%), clickhouse 1G (cAdvisor usage 91.5%)
+# ·   (216/256MiB = 91.3%), clickhouse 1G (cAdvisor usage 91.5%); cadvisor 256M после
+# ·   деплой-верификации 2026-08-09 (250MiB = 98% — лимит поднят до 512M)
 # · Remove if: лимиты снижаются ниже канона намеренно (архитектурное решение)
 # 🧪 TRAP[TEST] · F1 (DevPlan 118) · @r1_delegates: fail-механизм делегирован
 #   _assert_memory_limit (assert + AssertionError при нарушении канона).
@@ -118,7 +120,7 @@ def test_compose_limits_canon(caplog) -> None:
     }
     for service, min_bytes in _CANON_MIN_LIMITS.items():
         _assert_memory_limit(_compose_data(service_to_module[service]), service, min_bytes)
-    logger.info("[IMP:9][test_memory_limits] compose limits >= canon (cadvisor 256M, loki 512M, clickhouse 2G) PASS")
+    logger.info("[IMP:9][test_memory_limits] compose limits >= canon (cadvisor 512M, loki 512M, clickhouse 2G) PASS")
 
 
 # 🧪 TRAP[TEST] · Regression · Scenario: module.yaml sync по сумме compose-лимитов (144 W3)
@@ -137,14 +139,23 @@ def test_module_yaml_sync_all(caplog) -> None:
     logger.info("[IMP:9][test_memory_limits] module.yaml resources sync (3 modules) PASS")
 
 
-# 🧪 TRAP[TEST] · NEGATIVE (R5) · cadvisor 128M — DevPlan 144 W3 (D2)
-# · Last fail: исходный лимит 128M — факт. потребление 127.3MiB (99.4%) → HighMemory firing
-# · Remove if: канон cadvisor ≥256M меняется
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · cadvisor 128M/256M — DevPlan 144 W3 (D2)
+# · Last fail: исходный лимит 128M — факт. потребление 127.3MiB (99.4%) → HighMemory firing;
+# ·   256M после деплой-верификации 2026-08-09 (250MiB = 98% — лимит поднят до 512M)
+# · Remove if: канон cadvisor ≥512M меняется
 def test_cadvisor_limit_negative_removed(tmp_path: Path) -> None:
     """R5 negative (144 W3): лимит 128M — исходный вход, поймавший баг — детектор обязан упасть."""
     legacy = tmp_path / "compose.yml"
     legacy.write_text(
         "services:\n  cadvisor:\n    deploy:\n      resources:\n        limits:\n          memory: 128M\n",
+        encoding="utf-8",
+    )
+    compose = yaml.safe_load(legacy.read_text(encoding="utf-8"))
+    with pytest.raises(AssertionError):
+        _assert_memory_limit(compose, "cadvisor", _CANON_MIN_LIMITS["cadvisor"])
+    # 256M тоже ниже канона 512M (деплой-верификация: 250MiB = 98% при 256M)
+    legacy.write_text(
+        "services:\n  cadvisor:\n    deploy:\n      resources:\n        limits:\n          memory: 256M\n",
         encoding="utf-8",
     )
     compose = yaml.safe_load(legacy.read_text(encoding="utf-8"))

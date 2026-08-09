@@ -43,9 +43,10 @@ services:
     deploy:
       resources:
         limits:
-          # DevPlan 144 W3 (D2): 128M → 256M — факт. потребление 127.3MiB (99.4% лимита);
-          # 256M даёт 50% запас (алерт HighMemory при >90%).
-          memory: 256M
+          # DevPlan 144 W3 (D2): 128M → 256M → 512M — факт. потребление ~250MiB при 256M
+          # (98% — деплой-верификация 2026-08-09: cadvisor оставался firing); 512M даёт
+          # ~51% запас (алерт HighMemory при >90%).
+          memory: 512M
           cpus: "0.5"
     logging: *default-logging
 
