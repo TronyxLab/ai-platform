@@ -88,6 +88,7 @@
 | `make dev-metrics` | Генерация dev status-metrics.json + htpasswd | make dev-metrics | core/internal/healthcheck/platform_export_metrics.py + core/internal/bootstrap/lifecycle/secrets_manager.py (htpasswd CLI) |
 | `make dev-hosts` | Управление /etc/hosts dev-блоком | make dev-hosts [APPLY=1] | core/internal/dev_hosts.py |
 | `make render-monitoring` | Рендер конфигурации мониторинга после деплоя проекта | make render-monitoring PROJECT_DIR=\<dir\> PROJECT=\<name\> [NODE=\<node\>] | python3 core/internal/monitoring_config_renderer.py |
+| `make age-key-backup` | Off-node encrypted backup AGE мастер-ключа (DR, dr.md §2) | make age-key-backup [AGE_RECIPIENT=\<pubkey\>] [DRY_RUN=1|NO_UPLOAD=1|OUTPUT_ENC=\<path\>|S3_KEY=\<key\>] | python3 -m core.internal.deploy.age_key_backup (node_detect AGE-ключ → sops encrypt --age AGE_RECIPIENT → S3 private ACL → sha256 verify; docs/age-master-key-dr.md §2) |
 | `make fix-executable-bit` | Исправление executable bit на .sh файлах | make fix-executable-bit [DRY_RUN=1] | git add --chmod=+x + git update-index --chmod=+x |
 | `make fix-ruff` | Форматирование Python файлов через ruff | make fix-ruff [SCOPE=diff|staged|all] [DRY_RUN=1] | ruff check --fix + ruff format |
 | `make fix-gate` | Композитное исправление gate-ошибок | make fix-gate [DRY_RUN=1] | fix-executable-bit + fix-ruff + generate-manifests |

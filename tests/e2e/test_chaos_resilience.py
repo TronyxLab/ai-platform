@@ -747,9 +747,35 @@ def test_t06_postgres_sigkill_under_load(requires_node: str, node_ssh: NodeSSHCl
     # контейнер (namespace-init защищён — SIGKILL не доставляется, проверено на redis).
     # kill -9 host-pid = падение main-процесса → container exit 137 → unless-stopped fires.
     pg_pid = node_ssh.ssh_read("docker inspect --format '{{.State.Pid}}' postgres", timeout=30).stdout.strip()
-    assert pg_pid.isdigit(), f"T6 FAIL: cannot resolve postgres host pid: {pg_pid}"
+    # ⚠️ Guard: kill -9 0 = сигнал группе процессов SSH-сессии, НЕ контейнеру (VR 142 §6:
+    # «postgres не был убит?» — ошибочный PID 0/пустой молча «убивал» не ту группу).
+    assert pg_pid.isdigit() and int(pg_pid) > 0, f"T6 FAIL: cannot resolve postgres host pid: {pg_pid}"
     kill = node_ssh.ssh_exec(f"kill -9 {pg_pid}", timeout=60)
     assert kill.exit_code == 0, f"kill -9 {pg_pid} failed: {kill.stderr}"
+
+    # ── Диагностика инъекции (VR 142 §6, причина RED: маркеры interrupted/ready count=0) ──
+    # ДОКАЗАТЬ, что контейнер реально убит: poll docker state до "exited" (окно 30s).
+    # Без доказательства тест молча пропускал «postgres не был убит»: wait_all_containers
+    # проходил (контейнер healthy), но следа «database system was interrupted» нет.
+    # ⚠️ TRAP[BUG] · 2026-08-11 · P1 · T6 RED: interrupted/ready count=0 без доказательства kill
+    # · Symptom: log-audit маркеры docker:postgres-interrupted/postgres-ready count=0,
+    # ·   а контейнер healthy — контейнер мог не умереть вовсе (kill -9 не доставился)
+    # · Root: инъекция не верифицировалась — wait_all_containers проходил и по живому
+    # ·   контейнеру; маркеры падали на отсутствии следа «interrupted»
+    # · Fix: poll .State.Status → exited (доказательство) + guard pid>0 (kill -9 0 — группа)
+    # · Prevention: любая kill-инъекция обязана подтвердить смерть контейнера до recovery-ждания
+    killed = False
+    state_seen = ""
+    for _ in range(15):
+        state_seen = node_ssh.ssh_read(
+            "docker inspect --format '{{.State.Status}}' postgres", timeout=20
+        ).stdout.strip()
+        if state_seen == "exited":
+            killed = True
+            break
+        time.sleep(2)
+    logger.info("[IMP:9][T6][inject] pg_pid=%s container_killed=%s (state=%s)", pg_pid, killed, state_seen)
+    assert killed, f"T6 FAIL: postgres container NOT killed (state={state_seen!r}) — injection broken"
 
     ok, missing, _ = wait_all_containers(node_ssh, timeout_s=240, containers=["postgres", "pgbouncer"])
     ttr = int(time.monotonic() - t0)
@@ -795,6 +821,12 @@ def test_t06_postgres_sigkill_under_load(requires_node: str, node_ssh: NodeSSHCl
     manifest = LogAuditManifest("T6")
     manifest.add("docker", "database system was interrupted", container="postgres", label="docker:postgres-interrupted")
     manifest.add("docker", "database system is ready", container="postgres", label="docker:postgres-ready")
+    manifest.add(
+        "journald",
+        r"Container .*postgres.*exited|postgres.* exited with code",
+        label="journald:docker-postgres-exited",
+        expected="optional",
+    )
     manifest.add("state", "postgres", container="postgres", label="state:postgres-healthy")
     manifest.add("alerts", "postgres|Service Down", label="alerts:postgres-down", expected="optional")
     manifest.add("docker", "no upstream", container="nginx", negate=True, label="docker:nginx-no-upstream-errors")
@@ -839,16 +871,41 @@ def test_t07_oom_kill_clickhouse(requires_node: str, node_ssh: NodeSSHClient, ca
     ok, missing, _ = wait_all_containers(node_ssh, timeout_s=180, containers=["clickhouse"])
     ttr = int(time.monotonic() - t0)
 
-    # ядро назвало жертву: journalctl -k OOM report с clickhouse cgroup
+    # ядро назвало жертву: journalctl -k OOM report с cgroup clickhouse.
+    # ⚠️ TRAP[BUG] · 2026-08-11 · P1 · T7 RED: «OOM victim not named: 3» (VR 142 §6)
+    # · Symptom: oom_lines=3 (OOM-отчёт ЕСТЬ), но grep -i clickhouse пуст → victim_named=False
+    # · Root: OOM-жертва memcg — bash-аллокатор (comm=bash), НЕ clickhouse-server;
+    # ·   «Killed process … (bash)» не содержит имени clickhouse. Канонический идентификатор
+    # ·   жертвы в OOM-отчёте — cgroup scope: «Memory cgroup stats for /system.slice/docker-<id>.scope»
+    # ·   (docker-инсталляции) или «docker/<id>» (cgroupfs) — маппится на container-id.
+    # · Fix: docker inspect .Id clickhouse → grep docker-<id>.scope | docker/<id> | clickhouse
+    # · Prevention: OOM-victim искать по cgroup container-id, не по comm (comm — жертва, не сервис)
+    ch_id = node_ssh.ssh_read("docker inspect --format '{{.Id}}' clickhouse", timeout=30).stdout.strip()
+    ch_short = ch_id[:12] if len(ch_id) >= 12 else ch_id
+    victim_report = node_ssh.ssh_read(
+        f"journalctl -k --no-pager 2>/dev/null "
+        f"| grep -iE 'docker-{ch_short}\\.scope|docker/{ch_id}|clickhouse' | tail -4",
+        timeout=60,
+    )
     oom_report = node_ssh.ssh_read(
         "journalctl -k --no-pager 2>/dev/null "
-        "| grep -iE 'oom|out of memory' | grep -i clickhouse | head -3; "
+        "| grep -iE 'out of memory|oom-kill|killed process' | tail -6; "
         "journalctl -k --no-pager 2>/dev/null | grep -ciE 'out of memory|oom-kill'",
         timeout=60,
     )
     oom_lines = int(oom_report.stdout.strip().splitlines()[-1] or "0")
-    victim_named = bool(re.search(r"clickhouse", oom_report.stdout, re.I))
-    logger.info("[IMP:9][T7][oom] oom_lines=%s victim_named=%s", oom_lines, victim_named)
+    victim_named = bool(
+        re.search(
+            rf"docker-{re.escape(ch_short)}\.scope|docker/{re.escape(ch_id)}|clickhouse", victim_report.stdout, re.I
+        )
+    )
+    logger.info(
+        "[IMP:9][T7][oom] oom_lines=%s victim_named=%s (container=%s) victim_lines=%s",
+        oom_lines,
+        victim_named,
+        ch_short,
+        victim_report.stdout.strip().splitlines() or ["<empty>"],
+    )
 
     manifest = LogAuditManifest("T7")
     manifest.add("journald", "Out of memory|oom-kill|Killed process", label="journald:kernel-oom", kflag=True)
@@ -918,16 +975,36 @@ def test_t08_disk_pressure_92(requires_node: str, node_ssh: NodeSSHClient, caplo
     # платформенный путь: бэкап в окне переполнения → ENOSPC с ясной причиной.
     # Находка W3: при 92% (6GB free) бэкап УСПЕВАЕТ (дамп ~128KB) — ENOSPC не
     # возникает. Pre-fill spool-тома до ~99% → бэкап падает с No space left.
+    # ⚠️ TRAP[BUG] · 2026-08-11 · P1 · T8 RED: spool-fill не отработал (пустой stdout) (VR 142 §6)
+    # · Symptom: бэкап УСПЕЛ (UPLOAD VERIFIED 90300 байт); spool-fill через docker exec дал
+    # ·   пустой stdout — spool не заполнен, ENOSPC-доказательство отсутствует
+    # · Root: docker exec + df / внутри контейнера — хрупкий канал (df по overlay, ошибки
+    # ·   dd глушились 2>/dev/null в бесконечном цикле → таймаут 600s без вывода)
+    # · Fix: заполнение С ХОСТА в bind-mount-директорию spool (docker-compose.yml device=
+    # ·   /var/lib/platform/backup-spool, тот же root FS), цикл до реального ENOSPC (dd_rc!=0)
+    # ·   или 99%; маркер FS_PRESSURE в stdout + audit-файл /var/log/platform/backup/chaos-t8.log
+    # · Prevention: наполнение диска — хостовая операция (bind-тома платформы доступны с хоста)
     spool_fill = node_ssh.ssh_exec(
-        "docker exec backup-cron sh -c 'dd if=/dev/zero of=/var/lib/platform/backup-spool/chaos-fill "
-        "bs=1M count=128 status=none; while true; do "
-        'U=\$(df / | awk "NR==2 {print \\\$5}" | tr -d "%"); '
-        'if [ "\$U" -ge 99 ]; then break; fi; '
-        "dd if=/dev/zero of=/var/lib/platform/backup-spool/chaos-fill bs=1M count=128 "
-        "conv=notrunc oflag=append status=none 2>/dev/null; done; echo SPOOL_FILLED used=\$U'",
-        timeout=600,
+        "SPOOL=/var/lib/platform/backup-spool; "
+        "rm -f $SPOOL/chaos-fill; "
+        "dd if=/dev/zero of=$SPOOL/chaos-fill bs=1M count=128 status=none; "
+        "while true; do "
+        "U=$(df -P $SPOOL | awk 'NR==2 {print $5}' | tr -d '%'); "
+        "dd if=/dev/zero of=$SPOOL/chaos-fill bs=1M count=128 conv=notrunc oflag=append status=none 2>/dev/null; "
+        "RC=$?; "
+        'if [ "$RC" -ne 0 ] || [ "$U" -ge 99 ]; then '
+        'echo "FS_PRESSURE used=${U}% dd_rc=${RC}" | tee /var/log/platform/backup/chaos-t8.log; '
+        "break; fi; done",
+        timeout=900,
     )
-    logger.info("[IMP:9][T8][spool] %s", (spool_fill.stdout.strip().splitlines() or ["<empty>"])[-1][-60:])
+    fs_pressure_marker = bool(re.search(r"FS_PRESSURE used=\d+%", spool_fill.stdout))
+    logger.info(
+        "[IMP:9][T8][spool] %s",
+        (spool_fill.stdout.strip().splitlines() or ["<empty>"])[-1][-80:],
+    )
+    assert fs_pressure_marker, (
+        f"T8 FAIL: spool-fill produced no FS_PRESSURE marker: {spool_fill.stdout} {spool_fill.stderr}"
+    )
     backup_probe = node_ssh.ssh_exec(
         "docker exec backup-cron /usr/local/bin/backup-postgres.sh 2>&1 | tail -4", timeout=300
     )
@@ -978,8 +1055,10 @@ def test_t08_disk_pressure_92(requires_node: str, node_ssh: NodeSSHClient, caplo
     logger.info("[IMP:9][T8][alert] %s", alert_detail)
     ttr = int(time.monotonic() - t0)
 
-    # восстановление: rm файла → df в норму
-    rm = node_ssh.ssh_exec("rm -f /tmp/chaos-disk && df -h / | tail -1", timeout=60)
+    # восстановление: rm файлов (chaos-disk + spool-заполнитель) → df в норму
+    rm = node_ssh.ssh_exec(
+        "rm -f /tmp/chaos-disk /var/lib/platform/backup-spool/chaos-fill && df -h / | tail -1", timeout=60
+    )
     assert rm.exit_code == 0, f"rm chaos-disk failed: {rm.stderr}"
     resolved = False
     for _ in range(30):
@@ -1004,6 +1083,15 @@ def test_t08_disk_pressure_92(requires_node: str, node_ssh: NodeSSHClient, caplo
     manifest = LogAuditManifest("T8")
     manifest.add("journald", "No space left on device|ENOSPC", label="journald:enspc-evidence")
     manifest.add("docker", "No space left on device|ENOSPC", container="backup-cron", label="docker:backup-enspc")
+    # fs-pressure маркер: spool-fill записал FS_PRESSURE в /var/log/platform/backup/chaos-t8.log
+    # (bind-том backup-logs — доступен из контейнера и переживает reboot для T11 cross-boot)
+    manifest.add(
+        "auditfile",
+        r"FS_PRESSURE used=\d+%",
+        container="backup-cron",
+        path="/var/log/platform/backup/chaos-t8.log",
+        label="audit:fs-pressure",
+    )
     # rule не срабатывает (expr без mountpoint — D-N Debt); data-path проверен выше
     manifest.add("alerts", "Disk|space", label="alerts:diskspace-fired", expected="optional")
     _marker_stack_healthy(manifest)
@@ -1066,13 +1154,29 @@ def test_t09_cert_and_secrets_corruption(requires_node: str, node_ssh: NodeSSHCl
     time.sleep(20)  # дать nginx/системе «заметить» (reload/renew не происходят — serve кеширован)
 
     sites_ok, site_status = wait_sites_up(node_ssh, timeout_s=60)
-    # secrets-unlock fail с ясной ошибкой
-    unlock = node_ssh.ssh_exec(
-        f"age -d {enc_path} 2>&1 | head -3; echo EXIT=$?",
-        timeout=60,
+    # ⚠️ TRAP[BUG] · 2026-08-11 · P1 · T9 RED: «unexpected intro» с rc=0 (VR 142 §6)
+    # · Symptom: unlock_failed=False — age на sops-файле вернул «unexpected intro», rc=0
+    # · Root 1: `age -d {enc} 2>&1 | head -3; echo EXIT=$?` — $? = exit head (всегда 0) —
+    # ·   конвейер крал rc у age (PIPESTATUS[0] не использовался)
+    # · Root 2: age — НЕВЕРНЫЙ инструмент для sops-файла: sops-инкапсуляция даёт
+    # ·   «unexpected intro» и на здоровом файле — age не различает corrupt/healthy
+    # · Fix: канонический канал расшифровки — core.internal.secrets.decrypt_secrets
+    # ·   (sops --decrypt + node_detect ключ + S-13 tmpfs, как make secrets-unlock);
+    # ·   критерий: fail по stderr-паттерну sops/age, не по rc (DevPlan 147 §1.2);
+    # ·   конвейер — через PIPESTATUS[0]
+    # · Prevention: проверять расшифровку тем же инструментом, что и канон secrets-unlock
+    unlock_cmd = (
+        "cd /opt/platform && PYTHONPATH=/opt/platform "
+        f"python3 -m core.internal.secrets.decrypt_secrets {enc_path} /tmp/chaos-t9-dec.env 2>&1 "
+        "| tail -4; echo EXIT=${PIPESTATUS[0]}"
     )
-    unlock_failed = "EXIT=1" in unlock.stdout or "EXIT=2" in unlock.stdout
-    unlock_clear = bool(re.search(r"error|failed|invalid", unlock.stdout, re.I))
+    unlock = node_ssh.ssh_exec(unlock_cmd, timeout=120)
+    unlock_failed = "EXIT=0" not in unlock.stdout
+    # stderr-паттерн sops/age: ясная ошибка (не пустота, не молчаливый успех)
+    unlock_clear = bool(re.search(r"sops|decrypt|error|failed|invalid|cannot", unlock.stdout, re.I))
+    logger.info(
+        "[IMP:9][T9][unlock-fail] unlock_failed=%s clear=%s out=%s", unlock_failed, unlock_clear, unlock.stdout[-200:]
+    )
     ttr = int(time.monotonic() - t0)
 
     # восстановление из бэкапа
@@ -1083,7 +1187,7 @@ def test_t09_cert_and_secrets_corruption(requires_node: str, node_ssh: NodeSSHCl
         timeout=30,
     )
     assert "RESTORE_OK" in restore.stdout, f"T9 restore failed: {restore.stderr}"
-    unlock_after = node_ssh.ssh_exec(f"age -d {enc_path} >/dev/null 2>&1; echo EXIT=$?", timeout=60)
+    unlock_after = node_ssh.ssh_exec(unlock_cmd, timeout=120)
     unlock_recovered = "EXIT=0" in unlock_after.stdout
     sites_after, status_after = wait_sites_up(node_ssh, timeout_s=60)
     cert_valid = node_ssh.ssh_read(
@@ -1108,7 +1212,9 @@ def test_t09_cert_and_secrets_corruption(requires_node: str, node_ssh: NodeSSHCl
     verdict, reasons = compute_verdict(results)
 
     assert sites_ok, f"T9 FAIL: sites down during cert corruption: {site_status}"
-    assert unlock_failed and unlock_clear, f"T9 FAIL: unlock did not fail clearly: {unlock.stdout}"
+    # критерий DevPlan 147 §1.2: fail по stderr-паттерну sops/age (не по rc)
+    assert unlock_clear, f"T9 FAIL: unlock did not fail with clear sops/age error: {unlock.stdout}"
+    assert unlock_failed, f"T9 FAIL: unlock did not exit non-zero: {unlock.stdout}"
     assert unlock_recovered, f"T9 FAIL: unlock not recovered: {unlock_after.stdout}"
     assert sites_after, f"T9 FAIL: sites after restore: {status_after}"
     assert "subject=" in cert_valid.stdout, f"T9 FAIL: restored cert invalid: {cert_valid.stdout}"
@@ -1150,12 +1256,22 @@ def test_t10_restore_drill_drop_db(requires_node: str, node_ssh: NodeSSHClient, 
 
     # штатный бэкап → S3 (лог с S3-ключом + sha)
     backup = node_ssh.ssh_exec("docker exec backup-cron /usr/local/bin/backup-postgres.sh 2>&1 | tail -6", timeout=900)
-    m_key = re.search(r"s3://\S+?/(pgdumpall_\d+T\d+Z\.sql\.gz)", backup.stdout)
+    # ⚠️ TRAP[BUG] · 2026-08-11 · P1 · T10 RED: «extract FAIL: (пусто)» (VR 142 §6)
+    # · Symptom: restore-канал вернул пустой stdout; restore.log без «restore-drill T10»
+    # · Root: heredoc-скрипт читал os.environ['S3_PREFIX'] ВНУТРИ docker exec — KeyError
+    # ·   (S3_PREFIX не гарантирован в env контейнера) → python упал на stderr, stdout пуст,
+    # ·   assert «EXTRACTED» получил пустоту — тест падал без диагностики
+    # · Fix: bucket + полный key извлекаются из лога бэкапа (s3://… UPLOAD COMPLETE) и
+    # ·   подставляются ЛИТЕРАЛАМИ в heredoc (зависимость от контейнерного env устранена);
+    # ·   try/except с traceback в stdout — пустой вывод невозможен, диагностика читаема
+    # · Prevention: docker exec python не должен зависеть от env контейнера — всё через литералы
+    m_full = re.search(r"s3://\S+", backup.stdout)
     m_sha = re.search(r"sha256=([0-9a-f]{64})", backup.stdout)
-    s3_key = m_key.group(1) if m_key else ""
+    s3_full = m_full.group(0)[len("s3://") :] if m_full else ""
+    bucket, _, key = s3_full.partition("/")
     sha256 = m_sha.group(1) if m_sha else ""
-    assert s3_key, f"T10 FAIL: S3 key not found in backup log: {backup.stdout}"
-    logger.info("[IMP:9][T10][backup] s3_key=%s sha256=%s", s3_key, sha256[:16])
+    assert bucket and key, f"T10 FAIL: S3 key not found in backup log: {backup.stdout}"
+    logger.info("[IMP:9][T10][backup] bucket=%s key=%s sha256=%s", bucket, key, sha256[:16])
 
     # инъекция: DROP DATABASE
     drop = _psql(node_ssh, "platform", "DROP DATABASE chaos_drill")
@@ -1163,28 +1279,37 @@ def test_t10_restore_drill_drop_db(requires_node: str, node_ssh: NodeSSHClient, 
     t0 = time.monotonic()
 
     # restore из S3: скачать дамп, вырезать секцию chaos_drill, psql -f
+    # key подставляется ЛИТЕРАЛОМ (bucket + полный s3-key из лога бэкапа) — см. TRAP[BUG] выше
     restore = node_ssh.ssh_exec(
         f"set -a; source {_SECRETS_ENV}; set +a; "
         "docker exec backup-cron python3 - <<PYEOF\n"
-        "import boto3, os, gzip\n"
-        "s3 = boto3.client('s3', endpoint_url=os.environ['S3_ENDPOINT_URL'], region_name=os.environ['S3_REGION'], "
+        "import boto3, gzip, os, traceback\n"
+        f"bucket = {bucket!r}\n"
+        f"s3_key_path = {key!r}\n"
+        "try:\n"
+        "    s3 = boto3.client('s3', endpoint_url=os.environ['S3_ENDPOINT_URL'], region_name=os.environ['S3_REGION'], "
         "aws_access_key_id=os.environ['S3_ACCESS_KEY'], aws_secret_access_key=os.environ['S3_SECRET_KEY'])\n"
-        f"key = os.environ['S3_PREFIX'] + '/postgres/{s3_key}'\n"
-        "obj = s3.get_object(Bucket=os.environ['S3_BUCKET'], Key=key)\n"
-        "text = gzip.decompress(obj['Body'].read()).decode()\n"
-        "out = []\n"
-        "in_db = False\n"
-        "for line in text.splitlines():\n"
-        "    if line.startswith('\\\\connect chaos_drill'):\n"
-        "        in_db = True\n"
-        "        out.append(line)\n"
-        "        continue\n"
-        "    if line.startswith('\\\\connect ') and in_db:\n"
-        "        break\n"
-        "    if in_db:\n"
-        "        out.append(line)\n"
-        "open('/tmp/chaos_drill_restore.sql','w').write('\\n'.join(out))\n"
-        "print('EXTRACTED', len(out), 'lines')\n"
+        "    print('RESOLVED bucket=%s key=%s' % (bucket, s3_key_path))\n"
+        "    obj = s3.get_object(Bucket=bucket, Key=s3_key_path)\n"
+        "    raw = obj['Body'].read()\n"
+        "    print('DOWNLOADED bytes=%d' % len(raw))\n"
+        "    text = gzip.decompress(raw).decode()\n"
+        "    out = []\n"
+        "    in_db = False\n"
+        "    for line in text.splitlines():\n"
+        "        if line.startswith('\\\\connect chaos_drill'):\n"
+        "            in_db = True\n"
+        "            out.append(line)\n"
+        "            continue\n"
+        "        if line.startswith('\\\\connect ') and in_db:\n"
+        "            break\n"
+        "        if in_db:\n"
+        "            out.append(line)\n"
+        "    open('/tmp/chaos_drill_restore.sql','w').write('\\n'.join(out))\n"
+        "    print('EXTRACTED', len(out), 'lines')\n"
+        "except Exception:\n"
+        "    traceback.print_exc()\n"
+        "    raise\n"
         "PYEOF",
         timeout=300,
     )
@@ -1206,7 +1331,7 @@ def test_t10_restore_drill_drop_db(requires_node: str, node_ssh: NodeSSHClient, 
     # audit-trail restore-drill (в лог-директорию бэкапов)
     node_ssh.ssh_exec(
         f'mkdir -p /var/log/platform/backup && echo "$(date -u +%FT%TZ) restore-drill T10: '
-        f's3_key={s3_key} sha={sha256} rows={count_after} checksum_match={checksum_after == checksum_before}" '
+        f's3_key={key} sha={sha256} rows={count_after} checksum_match={checksum_after == checksum_before}" '
         f">> /var/log/platform/backup/restore.log",
         timeout=30,
     )

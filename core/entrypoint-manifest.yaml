@@ -756,6 +756,17 @@ dev:
     dashboards, Loki retention, Langfuse projects, alert rules). Registered make-target
     (U-65, DevPlan 116 B7 T7). Волна 118 B8: module-hook on-project-deploy.sh удалён
     — runtime-путь = make render-monitoring (operator) + DeployOrchestrator deploy-hooks.'
+- make_target: age-key-backup
+  mechanism: python-module
+  delegates_to: python3 -m core.internal.deploy.age_key_backup (node_detect AGE-ключ
+    → sops encrypt --age AGE_RECIPIENT → S3 private ACL → sha256 verify; docs/age-master-key-dr.md
+    §2)
+  signature: make age-key-backup [AGE_RECIPIENT=<pubkey>] [DRY_RUN=1|NO_UPLOAD=1|OUTPUT_ENC=<path>|S3_KEY=<key>]
+  operation_ru: Off-node encrypted backup AGE мастер-ключа (DR, dr.md §2)
+  description: 'Автоматизация DR-процедуры (DevPlan 147 W2, S-13): локальный ключ
+    по env-цепочке node_detect → sops encrypt для age-реципиента → выгрузка в приватный
+    S3 bucket (ACL private) → sha256-сверка загруженного с локальным. --dry-run =
+    0 мутаций; 0 секретов в stdout/stderr (маскирование ключа, паттерн node_detect).'
 module_hooks:
 - script: nginx_reload_hook.sh
   path: core/modules/nginx/nginx_reload_hook.sh
@@ -913,6 +924,7 @@ shared_modules:
   - state_machine.py
 allowed_verbs:
 - adopt-project
+- age-key-backup
 - backup
 - bootstrap-node
 - check

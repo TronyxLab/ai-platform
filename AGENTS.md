@@ -118,6 +118,7 @@
 |--------|--------|----------|
 <!-- GENERATED:START:glossary -->
 | ✅ | `adopt-project` | Адаптация существующего проекта |
+| ✅ | `age-key-backup` | Off-node encrypted backup AGE мастер-ключа (DR, dr.md §2) |
 | ✅ | `backup` | Резервное копирование |
 | ✅ | `bootstrap-node` | Идемпотентный bootstrap ноды |
 | ✅ | `check` | Диагностика — все проверки из core/check-suite.yaml (экс-preflight) |
