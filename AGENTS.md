@@ -163,6 +163,7 @@
 | ✅ | `hermes-push-l1` | Push L1 в ghcr.io |
 | ✅ | `hermes-push-l2` | Push L2 в ghcr.io |
 | ✅ | `lint` | Линтинг |
+| ✅ | `load-test` | Запуск нагрузочного теста (locust-генератор + PromQL-отчёт + baseline) |
 | ✅ | `new-context` | Создание контекста деплоя |
 | ✅ | `new-project` | Создание проекта из шаблона |
 | ✅ | `node-update` | Обновление provisioned ноды |

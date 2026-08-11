@@ -334,6 +334,19 @@ secrets:
   signature: make secrets-unlock [NODE=...]
   operation_ru: Расшифровка секретов
   description: Decrypt SOPS/age secrets (local or remote node)
+loadtest:
+- make_target: load-test
+  mechanism: python
+  delegates_to: python3 -m core.internal.loadtest.runner_cli --scenario <s> --node
+    <n> --mode <m> (locust headless --max-rps + PromQL saturation + baseline)
+  signature: make load-test [SCENARIO=<s>] [NODE=<n>] [MODE=smoke|regression|capacity]
+    [LOAD_RUNNER=local|node] [LOAD_RPS=...] [LOAD_DURATION=...]
+  operation_ru: Запуск нагрузочного теста (locust-генератор + PromQL-отчёт + baseline)
+  description: 'Load-test runner (DevPlan 146) — locust headless with --max-rps, post-run
+    PromQL saturation pull from existing Prometheus, baseline history compare, report.json/markdown.
+    Modes: smoke (>=90s), regression (300s, delta vs previous), capacity (start_rps
+    x2 steps, max_steps=8, safety-stop). LOAD_RUNNER=node runs the generator in docker
+    on the node.'
 test/gate:
 - make_target: gate
   mechanism: pytest+lint
@@ -945,6 +958,7 @@ allowed_verbs:
 - hermes-push-l1
 - hermes-push-l2
 - lint
+- load-test
 - new-context
 - new-project
 - node-update

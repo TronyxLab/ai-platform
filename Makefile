@@ -50,6 +50,7 @@ include makefiles/helpers.mk
 include makefiles/repair.mk
 include makefiles/manifest.mk
 include makefiles/project-practices.mk
+include makefiles/loadtest.mk
 
 # === Default target ===
 .DEFAULT_GOAL := help

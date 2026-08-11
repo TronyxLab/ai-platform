@@ -197,6 +197,7 @@ class TestMakefileIncludeSplit:
             "repair.mk",
             "manifest.mk",
             "project-practices.mk",
+            "loadtest.mk",  # DevPlan 146 W1 — тонкий фасад load-test (python3 -m runner_cli)
         }
         missing = expected - mk_names
         assert not missing, f"Missing .mk files: {missing}"

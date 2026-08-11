@@ -47,6 +47,9 @@ dev = [
     "ruff==0.16.1",
     "types-pyyaml>=6.0.12",
 ]
+load = [
+    "locust>=2.32,<3",  # DevPlan 146: генератор нагрузочных тестов (load extra, НЕ runtime-зависимость)
+]
 
 [tool.pytest.ini_options]
 testpaths = "tests"

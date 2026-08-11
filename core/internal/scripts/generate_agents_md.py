@@ -63,6 +63,7 @@ TABLE_SECTIONS: tuple[str, ...] = (
     "provision",
     "dev",
     "repair",
+    "loadtest",
 )
 
 # endregion CONSTANTS

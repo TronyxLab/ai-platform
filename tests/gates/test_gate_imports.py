@@ -37,6 +37,13 @@ _IMPORT_ALLOWLIST: dict[str, str] = {
     # sibling-пакет внутри контейнерного runtime, НЕ PyPI-зависимость. Сканируется только
     # потому, что живёт под core/modules/hermes-agent/build/ (L1/L2 build-context).
     "providers": "hermes-agent plugin sibling package (build/plugins/model-providers/) — container-internal, not PyPI",
+    # locust — LOAD extra (DevPlan 146, pyproject [project.optional-dependencies] load):
+    # импортируется ТОЛЬКО core/loadtest/scenarios/*.py (запускаются locust-рантаймом),
+    # платформенный код (core/internal/loadtest/) locust не импортирует (preflight find_spec).
+    "locust": "load extra (DevPlan 146) — locust scenario files only (core/loadtest/scenarios/), never imported by platform",
+    # gevent — runtime-зависимость locust: llm_stream.py использует gevent.Timeout
+    # для chunk-timeout SSE (DevPlan 146 W1); импорт внутри locust-рантайма.
+    "gevent": "locust runtime dep — llm_stream.py chunk-timeout (DevPlan 146), import inside locust runtime",
 }
 
 # PyPI-имя → импорт-имя (пакет может экспортировать модуль с другим именем)

@@ -96,6 +96,7 @@
 | `make check-profiles-parity` | Parity-гейт COMPOSE_PROFILES (единый SoT platform-infra.yaml) | make check-profiles-parity | pytest tests/gates/test_gate_profiles_parity.py (COMPOSE_PROFILES SoT parity, DevPlan 116 T9) |
 | `make check-domain-parity` | Parity-гейт PLATFORM_DOMAIN (единое определение, 0 legacy-доменов) | make check-domain-parity | pytest tests/gates/test_gate_domain_parity.py (PLATFORM_DOMAIN SoT parity, DevPlan 116 T9) |
 | `make templates-check` | Проверка покрытия и разрешимости шаблонов | make templates-check | core/internal/template_engine.py check (template-manifest coverage) |
+| `make load-test` | Запуск нагрузочного теста (locust-генератор + PromQL-отчёт + baseline) | make load-test [SCENARIO=\<s\>] [NODE=\<n\>] [MODE=smoke|regression|capacity] [LOAD_RUNNER=local|node] [LOAD_RPS=...] [LOAD_DURATION=...] | python3 -m core.internal.loadtest.runner_cli --scenario \<s\> --node \<n\> --mode \<m\> (locust headless --max-rps + PromQL saturation + baseline) |
 <!-- GENERATED:END:canon_table -->
 
 ---

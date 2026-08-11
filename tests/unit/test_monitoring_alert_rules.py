@@ -42,6 +42,7 @@ import pytest
 import yaml
 from monitoring.alert_rules import generate_alert_rules
 from monitoring_config_renderer import ProjectMonitoringConfig
+
 from tests._conftest.r1 import r1_delegates
 
 logger = logging.getLogger(__name__)

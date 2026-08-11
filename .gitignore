@@ -96,3 +96,7 @@ tests/gates/.test_counter.json
 
 # Make output logs (root Makefile logging shell — scripts/make-log-shell.sh)
 logs/
+
+# Load-test results — полные отчёты (DevPlan 146 инвариант 6): целиком в gitignore
+# без negate-паттернов; baseline history.json живёт в core/loadtest/history/ (коммитится)
+load-results/
