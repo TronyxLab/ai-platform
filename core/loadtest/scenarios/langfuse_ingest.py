@@ -9,7 +9,8 @@
 ##           НЕ импортируется платформенным кодом.
 ## @invariants
 ##   - headers целиком из LT_HEADERS (rendered config.py: публичный ключ langfuse)
-##   - Точный RPS — locust --max-rps (users — размер пула)
+##   - Точный RPS — constant_throughput (wait_time = rps_wait_time(LT_TARGET_RPS,
+##     LT_USERS), единый helper — 146-m1 TASK-2/3); users — размер пула
 ##   - LT_ENABLED != "true" → немедленный выход (защита прямого запуска)
 ## @rationale Инжест трасс — самый нагруженный путь langfuse (запись в postgres+clickhouse);
 ##            отдельный сценарий с низким RPS (5/s) — не валит backend, но виден в saturation.
@@ -19,14 +20,25 @@
 import json
 import os
 import sys
+from pathlib import Path
 
-from locust import HttpUser, between, task
+from locust import HttpUser, task
+
+# RPS-механизм (DevPlan 146-m1 TASK-3): общий helper rps_wait_time из пакета scenarios.
+# locust грузит -f файл как top-level модуль (load_locustfile: module_name = basename),
+# поэтому относительный импорт `from . import rps_wait_time` невозможен — добавляем
+# корень пакета в sys.path и импортируем top-level (local, remote-контейнер и pytest).
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from scenarios import rps_wait_time
 
 LT_ENDPOINT: str = os.environ.get("LT_ENDPOINT", "").strip().rstrip("/")
 LT_PATH: str = os.environ.get("LT_PATH", "/api/public/traces")
 LT_BODY: dict = json.loads(os.environ.get("LT_BODY", "{}"))
 LT_HEADERS: dict = json.loads(os.environ.get("LT_HEADERS", "{}"))
 LT_SSL_VERIFY: bool = os.environ.get("LT_SSL_VERIFY", "false").lower() == "true"
+LT_TARGET_RPS: float = float(os.environ.get("LT_TARGET_RPS", "0"))
+LT_USERS: int = int(os.environ.get("LT_USERS", "1"))
 
 
 # region FUNC__guard_enabled
@@ -55,8 +67,9 @@ class LangfuseIngestUser(HttpUser):
 
     ▶ ┌host=LT_ENDPOINT┐ → ○ task POST LT_PATH (json=LT_BODY, headers=LT_HEADERS) → ○ sleep → ⎋
 
-    ## @purpose  Инжест трассировок через public API langfuse (n.{domain}). host =
-    ##            LT_ENDPOINT (rendered: https://n.{domain}); ключ — в LT_HEADERS.
+    ## @purpose  Инжест трассировок через public API langfuse (langfuse.{domain} — SoT
+    ##            конвенция 146-m1 BUG-2; per-node override: LOAD_ENDPOINT_LANGFUSE_INGEST).
+    ##            host = LT_ENDPOINT (rendered); ключ — в LT_HEADERS.
     ## @io — ⇥ env (модульный уровень) → ⎋ HTTP-запросы в цикле задач
     ## @invariants
     ##   - Authorization из LT_HEADERS (config.py подставил LOAD_LANGFUSE_PUBLIC_KEY)
@@ -64,7 +77,7 @@ class LangfuseIngestUser(HttpUser):
     """
 
     host = LT_ENDPOINT
-    wait_time = between(0.1, 0.3)
+    wait_time = rps_wait_time(LT_TARGET_RPS, LT_USERS)
 
     @task
     def ingest_trace(self) -> None:

@@ -7,15 +7,22 @@
 ##           НЕ содержат хардкодов (инвариант 2) — получают всё через env LT_* при старте.
 ## @scope    core/loadtest/ — только SoT. Правки путей/порогов/RPS — здесь, НЕ в .py сценариях.
 ## @invariants
-##   1. users = РАЗМЕР ПУЛА (users = target_rps × 2), НЕ контроль RPS — точный RPS задаёт
-##      locust --max-rps (RPS = users/latency, users ≠ rps, DevPlan 146 инвариант 11).
-##   2. Плейсхолдеры endpoint/headers/body: {domain} → node.yaml domain (platform_domain,
+##   1. users = РАЗМЕР ПУЛА (users = target_rps × 2), НЕ контроль RPS. Точный RPS —
+##      constant_throughput (locust.wait_time): сценарии строят wait_time =
+##      rps_wait_time(LT_TARGET_RPS, LT_USERS) — единый helper core/loadtest/scenarios/
+##      __init__.py (146-m1 BUG-1; CLI-флаг rate-limit в locust отсутствует).
+##      LT_TARGET_RPS/LT_USERS заполняет runner_cli._locust_env из target_rps/users
+##      (в capacity — per-step RPS).
+##   2. Endpoint сценария — SoT-шаблон; per-node override: LOAD_ENDPOINT_<SCENARIO>
+##      (escape hatch, 146-m1 BUG-2; например LOAD_ENDPOINT_LANGFUSE_INGEST для
+##      нод с нестандартной топологией).
+##   3. Плейсхолдеры endpoint/headers/body: {domain} → node.yaml domain (platform_domain,
 ##      пустой → fallback на host — тестовые ноды без домена), {host} → node.host,
 ##      {model} → model сценария, {ANY_VAR} → одноимённая переменная окружения.
-##   3. optional-сценарии (db, s3) по умолчанию ВЫКЛЮЧЕНЫ; включение: LOAD_SCENARIO_<NAME>=1.
-##   4. Пороги: max_p95/max_p99 — секунды; max_error — доля (0.05 = 5%);
+##   4. optional-сценарии (db, s3) по умолчанию ВЫКЛЮЧЕНЫ; включение: LOAD_SCENARIO_<NAME>=1.
+##   5. Пороги: max_p95/max_p99 — секунды; max_error — доля (0.05 = 5%);
 ##      baseline_delta_p95 — множитель регрессии; baseline_delta_error_pp — процентные пункты.
-##   5. Длительности согласованы со scrape_interval Prometheus (30s global, 60s
+##   6. Длительности согласованы со scrape_interval Prometheus (30s global, 60s
 ##      cadvisor/node-exporter): smoke ≥ 90s (≥3 сэмпла 30s-метрик, ≥2 по 60s, инвариант 10).
 ## @rationale SoT отдельно от кода — воспроизводимость прогонов и правки путей/порогов
 ##            без изменения Python (DevPlan 146 §3.1, инвариант 2).
@@ -72,8 +79,8 @@ scenarios:
     target_rps: 5
     chunk_timeout: 10
   langfuse_ingest:
-    description: "langfuse /api/public/traces (публичный ключ из секретов ноды)"
-    endpoint: "https://n.{domain}"
+    description: "langfuse /api/public/traces (публичный ключ из секретов ноды; override endpoint: LOAD_ENDPOINT_LANGFUSE_INGEST)"
+    endpoint: "https://langfuse.{domain}"
     path: "/api/public/traces"
     method: POST
     headers:

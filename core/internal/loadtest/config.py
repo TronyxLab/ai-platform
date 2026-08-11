@@ -9,7 +9,8 @@
 ##           (node_resolver + NodeYaml — единые фасады чтения node.yaml), merge
 ##           env-оверрайдов (LOAD_RPS, LOAD_DURATION, LOAD_RESULTS_DIR, LOAD_RUNNER,
 ##           LOAD_IMAGE, LOAD_CPUS, LOAD_PROMETHEUS_PORT, LOAD_ALLOW_PROD, LOAD_VERSION,
-##           LOAD_SCENARIO_<NAME> для optional), рендер плейсхолдеров и fail-fast
+##           LOAD_SCENARIO_<NAME> для optional, LOAD_ENDPOINT_<SCENARIO> — endpoint
+##           override, 146-m1 BUG-2), рендер плейсхолдеров и fail-fast
 ##           валидация с exit 4 (ConfigValidationError) по контракту shared/contracts.py.
 ## @scope    Потребитель: runner_cli.py (единственный CLI). Чистые функции тестируются
 ##           native pytest (tests/unit/test_loadtest_config.py) без subprocess.
@@ -17,12 +18,15 @@
 ##   1. exit-коды по shared/contracts.py: 0 ok, 1 generic, 2 ConfigNotFound, 3 ConfigParse,
 ##      4 ConfigValidation, 10 Fatal — НИКАКИХ «exit 2 = FAIL» (инвариант 9 DevPlan 146).
 ##   2. users — РАЗМЕР ПУЛА (users = target_rps × 2), НЕ контроль RPS; точный RPS —
-##      locust --max-rps (инвариант 11).
+##      constant_throughput (wait_time сценариев через LT_TARGET_RPS/LT_USERS,
+##      helper _rps_wait_time — 146-m1 BUG-1 fix).
 ##   3. Плейсхолдеры: {domain} → platform_domain (пустой → host), {host} → node.host,
 ##      {model} → scenario.model, {ANY_ENV_VAR} → os.environ (отсутствие → ConfigValidationError).
 ##   4. optional-сценарий: enabled=False по умолчанию; включение — LOAD_SCENARIO_<UPPER>=1.
-##   5. Прямой YAML-парсинг node.yaml запрещён — только NodeYaml-фасад (shared/AGENTS.md).
-##   6. main() не вызывается — модуль библиотечный (CLI — runner_cli.py).
+##   5. LOAD_ENDPOINT_<UPPER> (непустой) переопределяет SoT-endpoint сценария
+##      (рендер теми же плейсхолдерами) — per-node escape hatch.
+##   6. Прямой YAML-парсинг node.yaml запрещён — только NodeYaml-фасад (shared/AGENTS.md).
+##   7. main() не вызывается — модуль библиотечный (CLI — runner_cli.py).
 ## @rationale SoT scenarios.yaml + env-оверрайды = воспроизводимые прогоны без правок кода;
 ##            NODE-резолв через существующие каноны платформы (node_resolver.py —
 ##            Python SoT, DevPlan 146 инвариант 7).
@@ -56,6 +60,7 @@ ENV_PROMETHEUS_PORT = "LOAD_PROMETHEUS_PORT"
 ENV_ALLOW_PROD = "LOAD_ALLOW_PROD"
 ENV_VERSION = "LOAD_VERSION"
 ENV_OPTIONAL_PREFIX = "LOAD_SCENARIO_"
+ENV_ENDPOINT_PREFIX = "LOAD_ENDPOINT_"  # per-scenario endpoint override (146-m1 BUG-2)
 
 VALID_MODES: tuple[str, ...] = ("smoke", "regression", "capacity")
 _PLACEHOLDER_RE = re.compile(r"\{([A-Za-z0-9_]+)\}")
@@ -248,7 +253,8 @@ def parse_scenario(name: str, raw: dict, defaults: dict) -> ScenarioSpec:
         raise ConfigValidationError(f"scenario '{name}': users должно быть числом > 0, получено {users!r}")
 
     # Env-оверрайд LOAD_RPS → target_rps; users масштабируются до rps×2 (пул, инвариант 11:
-    # users — РАЗМЕР ПУЛА = rps × 2, точный RPS — locust --max-rps). max() сохраняет
+    # users — РАЗМЕР ПУЛА = rps × 2, НЕ контроль RPS — точный RPS задаёт constant_throughput
+    # в wait_time сценариев через LT_TARGET_RPS/LT_USERS, 146-m1 BUG-1). max() сохраняет
     # ручные завышения пула (сценарии с latency > 2s увеличивают users вручную в SoT).
     target_rps = _env_int(ENV_RPS, int(target_rps))
     users = max(int(users), int(target_rps) * 2)
@@ -509,6 +515,20 @@ def load_config(
 
     host, domain = resolve_node(node_name, platform_root=platform_root)
     endpoint = render_template(spec.endpoint_template, spec, host, domain)
+    # Per-scenario env-override (escape hatch, 146-m1 BUG-2): LOAD_ENDPOINT_<SCENARIO>
+    # — кастомный endpoint для нод с иной топологией (например
+    # LOAD_ENDPOINT_LANGFUSE_INGEST=https://n.example.com). Рендерится теми же
+    # плейсхолдерами ({domain}/{host}/{ENV_VAR}), что и SoT-endpoint.
+    env_override = os.environ.get(f"{ENV_ENDPOINT_PREFIX}{scenario_name.upper()}", "").strip()
+    if env_override:
+        endpoint = render_template(env_override, spec, host, domain)
+        logger.info(
+            "[IMP:9][config][load_config] endpoint override %s%s=%s → %s",
+            ENV_ENDPOINT_PREFIX,
+            scenario_name.upper(),
+            env_override,
+            endpoint,
+        )
 
     yaml_path = resolve_node_yaml(node_name=node_name, platform_root=platform_root)
     is_test = _is_test_node(yaml_path)

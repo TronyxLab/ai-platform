@@ -8,7 +8,8 @@
 ##           или в locustio/locust:2.32 на ноде (LOAD_RUNNER=node). НЕ импортируется
 ##           платформенным кодом (core/internal/loadtest/).
 ## @invariants
-##   - Точный RPS задаёт locust --max-rps (из runner_cli); users — размер пула
+##   - Точный RPS — constant_throughput (wait_time = rps_wait_time(LT_TARGET_RPS,
+##     LT_USERS), единый helper из __init__.py — 146-m1 TASK-2/3); users — размер пула
 ##   - Пути — из LT_PATHS (JSON-список строк); ssl_verify — LT_SSL_VERIFY ("true"/"false")
 ##   - LT_ENABLED != "true" → немедленный выход с сообщением (защита прямого запуска)
 ## @rationale Locust-сценарии — executable-спецификация SoT: читают env, не дублируют
@@ -20,12 +21,23 @@ import json
 import os
 import random
 import sys
+from pathlib import Path
 
-from locust import HttpUser, between, task
+from locust import HttpUser, task
+
+# RPS-механизм (DevPlan 146-m1 TASK-3): общий helper rps_wait_time из пакета scenarios.
+# locust грузит -f файл как top-level модуль (load_locustfile: module_name = basename),
+# поэтому относительный импорт `from . import rps_wait_time` невозможен — добавляем
+# корень пакета в sys.path и импортируем top-level (local, remote-контейнер и pytest).
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from scenarios import rps_wait_time
 
 LT_ENDPOINT: str = os.environ.get("LT_ENDPOINT", "").strip().rstrip("/")
 LT_PATHS: list[str] = json.loads(os.environ.get("LT_PATHS", '["/", "/status"]'))
 LT_SSL_VERIFY: bool = os.environ.get("LT_SSL_VERIFY", "false").lower() == "true"
+LT_TARGET_RPS: float = float(os.environ.get("LT_TARGET_RPS", "0"))
+LT_USERS: int = int(os.environ.get("LT_USERS", "1"))
 
 
 # region FUNC__guard_enabled
@@ -60,12 +72,13 @@ class WebUser(HttpUser):
     ## @io — ⇥ env (модульный уровень) → ⎋ HTTP-запросы в цикле задач
     ## @invariants
     ##   - host = LT_ENDPOINT (rendered config.py: https://{domain}/ → домен или host ноды)
-    ##   - wait_time малый (0.05-0.2s) — пул users успевает нагрузить --max-rps
+    ##   - wait_time = rps_wait_time(LT_TARGET_RPS, LT_USERS): constant_throughput при
+    ##     заданном RPS (latency-адаптивно), иначе fallback between(0.05, 0.2)
     ##   - verify=False при LT_SSL_VERIFY=false (тестовые ноды: самоподписанные серты)
     """
 
     host = LT_ENDPOINT
-    wait_time = between(0.05, 0.2)
+    wait_time = rps_wait_time(LT_TARGET_RPS, LT_USERS)
 
     @task
     def get_paths(self) -> None:

@@ -12,7 +12,8 @@
 ##   - Presign: payload hash = UNSIGNED-PAYLOAD (как botocore generate_presigned_url);
 ##     signed header — только host; path-style URL (endpoint/bucket/object)
 ##   - Ключи MinIO приходят env-ом (LT_S3_*), НЕ хардкодятся и не логируются
-##   - RPS — locust --max-rps (users — размер пула)
+##   - RPS — constant_throughput (wait_time = rps_wait_time(LT_TARGET_RPS, LT_USERS),
+##     единый helper — 146-m1 TASK-2/3); users — размер пула
 ## @rationale s3-сценарий реализован поверх HTTP API MinIO (S3-совместимый) — boto3
 ##            недоступен в locust-образе (риск R9, DevPlan 146 §7), SigV4-подпись
 ##            реализуется stdlib-ом без внешних зависимостей.
@@ -25,8 +26,17 @@ import hmac
 import os
 import sys
 import urllib.parse
+from pathlib import Path
 
-from locust import HttpUser, between, task
+from locust import HttpUser, task
+
+# RPS-механизм (DevPlan 146-m1 TASK-3): общий helper rps_wait_time из пакета scenarios.
+# locust грузит -f файл как top-level модуль (load_locustfile: module_name = basename),
+# поэтому относительный импорт `from . import rps_wait_time` невозможен — добавляем
+# корень пакета в sys.path и импортируем top-level (local, remote-контейнер и pytest).
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from scenarios import rps_wait_time
 
 LT_ENDPOINT: str = os.environ.get("LT_ENDPOINT", "").strip().rstrip("/")
 LT_S3_ACCESS_KEY: str = os.environ.get("LT_S3_ACCESS_KEY", "")
@@ -34,6 +44,8 @@ LT_S3_SECRET_KEY: str = os.environ.get("LT_S3_SECRET_KEY", "")
 LT_S3_BUCKET: str = os.environ.get("LT_S3_BUCKET", "loadtest")
 LT_S3_OBJECT: str = os.environ.get("LT_S3_OBJECT", "loadtest-object.bin")
 LT_SSL_VERIFY: bool = os.environ.get("LT_SSL_VERIFY", "false").lower() == "true"
+LT_TARGET_RPS: float = float(os.environ.get("LT_TARGET_RPS", "0"))
+LT_USERS: int = int(os.environ.get("LT_USERS", "1"))
 
 
 # region FUNC__guard_enabled
@@ -149,7 +161,7 @@ class S3User(HttpUser):
     """
 
     host = LT_ENDPOINT
-    wait_time = between(0.1, 0.3)
+    wait_time = rps_wait_time(LT_TARGET_RPS, LT_USERS)
 
     @task
     def put_object(self) -> None:

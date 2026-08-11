@@ -11,7 +11,8 @@
 ##   - Чтение каждого чанка ограничено gevent.Timeout(LT_CHUNK_TIMEOUT) — зависший
 ##     стрим фиксируется как failure("chunk timeout"), а не висит до общего таймаута
 ##   - Тело содержит stream=true и model=LT_MODEL (mock-echo)
-##   - Точный RPS — locust --max-rps (users — размер пула)
+##   - Точный RPS — constant_throughput (wait_time = rps_wait_time(LT_TARGET_RPS,
+##     LT_USERS), единый helper — 146-m1 TASK-2/3); users — размер пула
 ## @rationale SSE-стримы (litellm stream=true) — другой профиль нагрузки (долгие ответы,
 ##            чанки, удержание соединения) — отдельный сценарий с собственным RPS (5/s).
 ## @changes  2026-08-11 | DevPlan 146 W1 — Created
@@ -20,8 +21,17 @@
 import json
 import os
 import sys
+from pathlib import Path
 
-from locust import HttpUser, between, task
+from locust import HttpUser, task
+
+# RPS-механизм (DevPlan 146-m1 TASK-3): общий helper rps_wait_time из пакета scenarios.
+# locust грузит -f файл как top-level модуль (load_locustfile: module_name = basename),
+# поэтому относительный импорт `from . import rps_wait_time` невозможен — добавляем
+# корень пакета в sys.path и импортируем top-level (local, remote-контейнер и pytest).
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from scenarios import rps_wait_time
 
 LT_ENDPOINT: str = os.environ.get("LT_ENDPOINT", "").strip().rstrip("/")
 LT_PATH: str = os.environ.get("LT_PATH", "/chat/completions")
@@ -29,6 +39,8 @@ LT_BODY: dict = json.loads(os.environ.get("LT_BODY", "{}"))
 LT_HEADERS: dict = json.loads(os.environ.get("LT_HEADERS", "{}"))
 LT_CHUNK_TIMEOUT: float = float(os.environ.get("LT_CHUNK_TIMEOUT", "10"))
 LT_SSL_VERIFY: bool = os.environ.get("LT_SSL_VERIFY", "false").lower() == "true"
+LT_TARGET_RPS: float = float(os.environ.get("LT_TARGET_RPS", "0"))
+LT_USERS: int = int(os.environ.get("LT_USERS", "1"))
 
 
 # region FUNC__guard_enabled
@@ -69,7 +81,7 @@ class LlmStreamUser(HttpUser):
     """
 
     host = LT_ENDPOINT
-    wait_time = between(0.05, 0.2)
+    wait_time = rps_wait_time(LT_TARGET_RPS, LT_USERS)
 
     @task
     def stream_chat_completions(self) -> None:

@@ -9,7 +9,8 @@
 ## @invariants
 ##   - model в теле — из LT_MODEL (SoT: mock-echo); без mock-конфига на ноде runner
 ##     делает ранний FAIL с сообщением (AC6) ДО запуска генератора
-##   - Точный RPS — locust --max-rps (users — размер пула, users = rps×2)
+##   - Точный RPS — constant_throughput (wait_time = rps_wait_time(LT_TARGET_RPS,
+##     LT_USERS), единый helper — 146-m1 TASK-2/3); users — размер пула
 ##   - LT_ENABLED != "true" → немедленный выход (защита прямого запуска)
 ## @rationale LLM-сценарии гоняются только против mock-модели (echo) — детерминированный
 ##            ответ и стабильная латентность (~50ms) делают метрики воспроизводимыми (AC6).
@@ -19,14 +20,25 @@
 import json
 import os
 import sys
+from pathlib import Path
 
-from locust import HttpUser, between, task
+from locust import HttpUser, task
+
+# RPS-механизм (DevPlan 146-m1 TASK-3): общий helper rps_wait_time из пакета scenarios.
+# locust грузит -f файл как top-level модуль (load_locustfile: module_name = basename),
+# поэтому относительный импорт `from . import rps_wait_time` невозможен — добавляем
+# корень пакета в sys.path и импортируем top-level (local, remote-контейнер и pytest).
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from scenarios import rps_wait_time
 
 LT_ENDPOINT: str = os.environ.get("LT_ENDPOINT", "").strip().rstrip("/")
 LT_PATH: str = os.environ.get("LT_PATH", "/chat/completions")
 LT_BODY: dict = json.loads(os.environ.get("LT_BODY", "{}"))
 LT_HEADERS: dict = json.loads(os.environ.get("LT_HEADERS", "{}"))
 LT_SSL_VERIFY: bool = os.environ.get("LT_SSL_VERIFY", "false").lower() == "true"
+LT_TARGET_RPS: float = float(os.environ.get("LT_TARGET_RPS", "0"))
+LT_USERS: int = int(os.environ.get("LT_USERS", "1"))
 
 
 # region FUNC__guard_enabled
@@ -64,7 +76,7 @@ class LlmUser(HttpUser):
     """
 
     host = LT_ENDPOINT
-    wait_time = between(0.05, 0.2)
+    wait_time = rps_wait_time(LT_TARGET_RPS, LT_USERS)
 
     @task
     def chat_completions(self) -> None:

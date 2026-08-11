@@ -10,7 +10,8 @@
 ##           НЕ импортируется платформенным кодом.
 ## @invariants
 ##   - optional-контракт: LT_ENABLED != "true" → sys.exit(2) ДО создания user-классов
-##   - GET-пути из LT_PATHS (JSON); RPS — locust --max-rps
+##   - GET-пути из LT_PATHS (JSON); RPS — constant_throughput (wait_time =
+##     rps_wait_time(LT_TARGET_RPS, LT_USERS), единый helper — 146-m1 TASK-2/3)
 ## @rationale db-сценарий — заглушка-контракт для будущего HTTP-моста к pgbouncer
 ##            (DevPlan 146 §3.1: «если HTTP-пути нет — optional и пропускается»);
 ##            сам PostgreSQL в saturation-секции отчёта (pg_stat_database_numbackends).
@@ -20,12 +21,23 @@
 import json
 import os
 import sys
+from pathlib import Path
 
-from locust import HttpUser, between, task
+from locust import HttpUser, task
+
+# RPS-механизм (DevPlan 146-m1 TASK-3): общий helper rps_wait_time из пакета scenarios.
+# locust грузит -f файл как top-level модуль (load_locustfile: module_name = basename),
+# поэтому относительный импорт `from . import rps_wait_time` невозможен — добавляем
+# корень пакета в sys.path и импортируем top-level (local, remote-контейнер и pytest).
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from scenarios import rps_wait_time
 
 LT_ENDPOINT: str = os.environ.get("LT_ENDPOINT", "").strip().rstrip("/")
 LT_PATHS: list[str] = json.loads(os.environ.get("LT_PATHS", '["/"]'))
 LT_SSL_VERIFY: bool = os.environ.get("LT_SSL_VERIFY", "false").lower() == "true"
+LT_TARGET_RPS: float = float(os.environ.get("LT_TARGET_RPS", "0"))
+LT_USERS: int = int(os.environ.get("LT_USERS", "1"))
 
 
 # region FUNC__guard_enabled
@@ -63,7 +75,7 @@ class DbUser(HttpUser):
     """
 
     host = LT_ENDPOINT
-    wait_time = between(0.05, 0.2)
+    wait_time = rps_wait_time(LT_TARGET_RPS, LT_USERS)
 
     @task
     def read_query(self) -> None:
