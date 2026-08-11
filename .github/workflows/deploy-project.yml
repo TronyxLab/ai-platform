@@ -72,7 +72,7 @@ jobs:
       # TRAP[BUG] 2026-08-03: платформенный setup-platform недоступен из caller'а
       # (relative action резолвится в caller'е; qualified = хардкод org, DD9 RED).
       - name: Setup Python + PyYAML
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
