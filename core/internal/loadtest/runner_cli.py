@@ -5,7 +5,9 @@
 #           PromQL saturation → ○ baseline compare+append → ○ report.json/markdown/junit → ⎋ exit 0|1|4|10
 # region MODULE_CONTRACT
 ## @purpose  CLI-оркестратор нагрузочных прогонов (DevPlan 146 W1-W5): строит locust-команду
-##           (headless, --run-time, --users, --spawn-rate, --max-rps, --csv, --csv-full-history),
+##           (headless, --run-time, --users, --spawn-rate, --csv, --csv-full-history),
+##           передаёт RPS-контроль через env LT_TARGET_RPS/LT_USERS (сценарии используют
+##           constant_throughput — helper _rps_wait_time, 146-m1 BUG-1 fix),
 ##           запускает (local subprocess | remote docker run через runner_remote), ждёт с
 ##           timeout-guard, post-run собирает PromQL-saturation, baseline, report и маппит
 ##           вердикт на exit-код контракта shared/contracts.py: 0 PASS/WARN, 1 FAIL/ошибка,
@@ -14,7 +16,9 @@
 ##           core.internal.loadtest.runner_cli). Модуль НЕ импортирует locust —
 ##           только префлайт find_spec (locust — load extra, не runtime-зависимость).
 ## @invariants
-##   1. Точный RPS — locust --max-rps; users — размер пула (users = rps×2, инвариант 11)
+##   1. Точный RPS — constant_throughput из env LT_TARGET_RPS (wait_time сценариев,
+##      helper _rps_wait_time; capacity — per-step RPS); users — размер пула LT_USERS
+##      (users = rps×2, инвариант 11)
 ##   2. Exit-коды по контракту: 0 PASS/WARN, 1 FAIL/ошибка/нет locust/нет Prometheus,
 ##      2/3/4 config-ошибки, 10 capacity на нетестовой ноде без LOAD_ALLOW_PROD=1
 ##   3. timeout-guard прогона = run_time × 2 + 60s; capacity суммарный =
@@ -24,7 +28,8 @@
 ##   6. llm/llm_stream: mock-probe ДО прогона — ранний FAIL с сообщением об
 ##      установке litellm-config.mock.yml (AC6); на проде mock-модели нет —
 ##      LOAD_ALLOW_PROD=1 это не отменяет
-##   7. env LT_* для locust — единый builder (конфиг → env), тот же для local и remote
+##   7. env LT_* для locust — единый builder (конфиг → env), тот же для local и remote;
+##      содержит LT_TARGET_RPS (target_rps прогона) и LT_USERS (размер пула)
 ##   8. sys.exit — только в __main__; main() -> int (канон core/AGENTS.md)
 ## @rationale Один CLI на все режимы (D2 гибридный runner, D6 make-фасад) — единая
 ##            точка exit-контракта и guard-ов; бизнес-логика прогонов в чистом виде
@@ -180,18 +185,27 @@ def _probe_mock_model(config) -> None:
 
 
 # region FUNC__locust_env
-def _locust_env(config) -> dict[str, str]:
+def _locust_env(config, rps: int | None = None, users: int | None = None) -> dict[str, str]:
     """Сборка env LT_* для locust (единый builder: local subprocess | remote -e).
 
-    ▶ ┌config┐ → ○ LT_ENDPOINT/SSL/PATHS/METHOD/STREAM → ⊕ LT_PATH/LT_MODEL/LT_HEADERS/LT_BODY
-      (rendered) → ⊕ passthrough LT_S3_* → ⎋ dict[str, str]
+    ▶ ┌config, rps?, users?┐ → ○ LT_ENDPOINT/SSL/PATHS/METHOD/STREAM → ⊕ LT_PATH/LT_MODEL/
+      LT_HEADERS/LT_BODY (rendered) → ⊕ LT_TARGET_RPS/LT_USERS (RPS-контроль) →
+      ⊕ passthrough LT_S3_* → ⎋ dict[str, str]
 
     ## @purpose  Инвариант 7 + 2 (DevPlan 146): locust-файлы читают ВСЁ из env; значения
     ##            заполняет config.py из SoT (никаких хардкодов в .py сценариях).
-    ## @io — ⇥ config: LoadtestConfig → ⎋ dict[str, str] (готов к subprocess env / docker -e)
+    ##            RPS-контроль (146-m1 BUG-1): LT_TARGET_RPS/LT_USERS → сценарии строят
+    ##            wait_time = constant_throughput(target/users) через _rps_wait_time.
+    ##            rps/users параметры — per-step override (capacity: шаг = свой RPS);
+    ##            по умолчанию — spec.target_rps/spec.users (smoke/regression).
+    ## @io — ⇥ config: LoadtestConfig, rps: int | None (per-step override, capacity),
+    ##         users: int | None (per-step пул, capacity)
+    ##       → ⎋ dict[str, str] (готов к subprocess env / docker -e)
     ## @complexity — O(K) — K = полей сценария
     """
     spec = config.scenario
+    target_rps = rps if rps is not None else spec.target_rps
+    pool_users = users if users is not None else spec.users
     env: dict[str, str] = {
         "LT_ENDPOINT": config.endpoint,
         "LT_SSL_VERIFY": "true" if spec.ssl_verify else "false",
@@ -200,6 +214,8 @@ def _locust_env(config) -> dict[str, str]:
         "LT_PATHS": json.dumps(list(spec.paths)),
         "LT_STREAM": "true" if spec.stream else "false",
         "LT_CHUNK_TIMEOUT": str(spec.chunk_timeout),
+        "LT_TARGET_RPS": str(target_rps),
+        "LT_USERS": str(pool_users),
     }
     if spec.path:
         env["LT_PATH"] = spec.path
@@ -212,7 +228,9 @@ def _locust_env(config) -> dict[str, str]:
     if body:
         env["LT_BODY"] = json.dumps(body)
     env.update({key: value for key, value in os.environ.items() if key.startswith("LT_S3_")})
-    logger.info("[IMP:8][runner][env] LT_* env built: %d vars", len(env))
+    logger.info(
+        "[IMP:8][runner][env] LT_* env built: %d vars (target_rps=%s users=%s)", len(env), target_rps, pool_users
+    )
     return env
 
 
@@ -220,14 +238,17 @@ def _locust_env(config) -> dict[str, str]:
 
 
 # region FUNC__build_locust_args
-def _build_locust_args(scenario_file: str, rps: int, users: int, duration: int, csv_prefix: str) -> list[str]:
-    """Сборка locust-argv: headless, users, spawn-rate, --max-rps (точный RPS), run-time, csv.
+def _build_locust_args(scenario_file: str, users: int, duration: int, csv_prefix: str) -> list[str]:
+    """Сборка locust-argv: headless, users, spawn-rate, run-time, csv.
 
-    ▶ ┌scenario_file, rps, users, duration, csv_prefix┐ → ⎋ ["-f", ..., "--headless", "-u", ...]
+    ▶ ┌scenario_file, users, duration, csv_prefix┐ → ⎋ ["-f", ..., "--headless", "-u", ...]
 
-    ## @purpose  Единственная точка сборки locust-команды (инвариант 1: --max-rps —
-    ##            точный целевой RPS; users — размер пула; spawn-rate = users).
-    ## @io — ⇥ scenario_file: str, rps: int, users: int, duration: int (s),
+    ## @purpose  Единственная точка сборки locust-команды (инвариант 1). RPS-контроль
+    ##            НЕ в argv — флаг rate-limit отсутствует в locust 2.x (146-m1 BUG-1);
+    ##            RPS передаётся env-ом LT_TARGET_RPS/LT_USERS через _locust_env,
+    ##            сценарии строят wait_time = constant_throughput (helper _rps_wait_time).
+    ##            users — размер пула; spawn-rate = users.
+    ## @io — ⇥ scenario_file: str, users: int, duration: int (s),
     ##         csv_prefix: str (базовый путь CSV) → ⎋ list[str]
     ## @complexity — O(1)
     """
@@ -239,8 +260,6 @@ def _build_locust_args(scenario_file: str, rps: int, users: int, duration: int, 
         str(users),
         "-r",
         str(users),
-        "--max-rps",
-        str(rps),
         "--run-time",
         f"{duration}s",
         "--csv",
@@ -306,8 +325,8 @@ def _run_one_step(
         if remote
         else str(REPO_ROOT / "core" / "loadtest" / SCENARIOS_DIR / f"{config.scenario.name}.py")
     )
-    args = _build_locust_args(scenario_file, rps, users, duration, csv_prefix)
-    env = _locust_env(config)
+    args = _build_locust_args(scenario_file, users, duration, csv_prefix)
+    env = _locust_env(config, rps=rps, users=users)
     timeout = duration * 2 + 60
     try:
         if remote:
@@ -518,7 +537,8 @@ def _run_capacity_mode(config, args) -> tuple[int, dict]:
       → ○ t1 → ○ saturation → ○ report (capacity_profile, max_rps) → ○ history append → ⎋ (exit, report)
 
     ## @purpose  Сквозной поток capacity (DevPlan 146 §3.3): последовательные headless-
-    ##            прогоны по шагу, --max-rps <step>, users = step×2, стабилизация 60s/шаг,
+    ##            прогоны по шагу, LT_TARGET_RPS=<step> (constant_throughput per-user через
+    ##            _locust_env, 146-m1 BUG-1), users = step×2, стабилизация 60s/шаг,
     ##            safety-stop (error>5% | p99>3s), max_rps = последний успешный шаг.
     ## @io — ⇥ config, args → ⎋ (exit_code: int, report: dict)
     ## @complexity — O(S×RT + Q×S') — S шагов + pull

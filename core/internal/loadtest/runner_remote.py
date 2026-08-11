@@ -37,6 +37,8 @@ from core.internal.shared.subprocess_io import run_subprocess
 
 logger = logging.getLogger(__name__)
 
+# Пин образа должен совпадать с pyproject.toml pin (locust>=2.32,<2.33) —
+# иначе CLI-дрейф между docker-образом и dev-окружением (146-m1 TASK-6).
 DEFAULT_IMAGE = "locustio/locust:2.32"
 DEFAULT_CPUS = "2"
 

@@ -57,12 +57,16 @@ core/loadtest/history/                — baseline (КОММИТИТСЯ в ре
 load-results/                         — полные отчёты (gitignored целиком)
 ```
 
-**Инварианты (DevPlan 146):**
+**Инварианты (DevPlan 146 + 146-m1):**
 
-1. **users ≠ rps.** Точный RPS задаёт `locust --max-rps`; `users` — размер пула
+1. **users ≠ rps.** Точный RPS задаёт `constant_throughput` (locust.wait_time) через env
+   `LT_TARGET_RPS`/`LT_USERS`: сценарии строят `wait_time = _rps_wait_time(LT_TARGET_RPS,
+   LT_USERS)` — единый helper `core/loadtest/scenarios/__init__.py` (146-m1 BUG-1:
+   CLI-флаг rate-limit в locust отсутствует). `users` — размер пула
    (`users = rps × 2`, запас на latency ≤ 2s; для сценариев с latency > 2s пул
    увеличивается вручную в SoT). RPS = users/latency — пул `users=rps` при latency
-   100ms дал бы ~10× целевой RPS.
+   100ms дал бы ~10× целевой RPS. `constant_throughput` latency-адаптивен
+   (wait = max(0, 1/per_user − run_time)); per-user RPS = target/users.
 2. **Длительности ≥ scrape_interval Prometheus** (30s global, 60s cadvisor/node-exporter):
    smoke ≥ 90s (≥3 сэмпла 30s-метрик, ≥2 по 60s); rate-окна запросов ≤ run_time/2
    (smoke/capacity → `1m`, regression → `2m`); метрика с <2 сэмплами →
@@ -80,7 +84,7 @@ load-results/                         — полные отчёты (gitignored 
 | `web` | nginx front: `https://{domain}/` + `/status` | включён |
 | `llm` | `POST http://{host}:4000/chat/completions` (mock-echo, non-stream) | включён |
 | `llm_stream` | SSE `stream=true`, chunk-timeout 10s (кастомный клиент) | включён |
-| `langfuse_ingest` | `POST https://n.{domain}/api/public/traces` (Bearer `{LANGFUSE_PUBLIC_KEY}`) | включён |
+| `langfuse_ingest` | `POST https://langfuse.{domain}/api/public/traces` (Bearer `{LANGFUSE_PUBLIC_KEY}`; per-node override — `LOAD_ENDPOINT_LANGFUSE_INGEST`) | включён |
 | `db` | pg read через HTTP (нет нативного HTTP-пути) | **optional** — выключен |
 | `s3` | minio PUT/GET через HTTP API (SigV4 presigned, **без boto3**) | **optional** — выключен |
 
@@ -102,7 +106,10 @@ Optional-сценарии: включение `LOAD_SCENARIO_DB=1` / `LOAD_SCENA
 Env-оверрайды: `LOAD_RPS` (target_rps; users масштабируются до rps×2),
 `LOAD_DURATION` (длительность активного режима), `LOAD_RESULTS_DIR` (default
 `load-results/`), `LOAD_PROMETHEUS_PORT` (default 9090), `LOAD_VERSION` (git-sha в
-отчёте; default "unknown").
+отчёте; default "unknown"), `LOAD_ENDPOINT_<SCENARIO>` (per-scenario override
+endpoint — escape hatch для нод с нестандартной топологией, например
+`LOAD_ENDPOINT_LANGFUSE_INGEST=https://n.test.local`; рендерится теми же
+плейсхолдерами, что и SoT-endpoint).
 
 **Guard-ы:**
 - capacity на нетестовой ноде (нет `node.role: test` и `contexts[0].name != "test"`)
@@ -203,7 +210,9 @@ first_run, baseline_reset), `capacity_profile` (шаги).
 
 ## 11. Юнит-тесты
 
-`tests/unit/test_loadtest_config.py` (парсинг/валидация/NODE-резолв),
+`tests/unit/test_loadtest_config.py` (парсинг/валидация/NODE-резолв/endpoint-override),
+`test_loadtest_runner.py` (build locust-argv без rate-limit флага + env LT_TARGET_RPS +
+helper `_rps_wait_time`, 146-m1),
 `test_loadtest_prometheus_pull.py` (PromQL/discovery/insufficient),
 `test_loadtest_report.py` (CSV/verdict/артефакты), `test_loadtest_baseline.py`
 (history/host-reset/пороги), `test_loadtest_capacity.py` (детерминированная

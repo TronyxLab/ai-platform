@@ -74,6 +74,14 @@ class TestLoadTestE2E:
         print("--- END LDD TRAJECTORY ---")
         assert found, "Critical LDD Error: No IMP:9 log found in e2e run"
 
+        # 146-m1 BUG-1 guard: locust-argv не должен содержать несуществующий rate-limit
+        # флаг — иначе stderr/логи содержат "unrecognized arguments: --max-rps" (rc=2).
+        run_logs = "\n".join(r.message for r in caplog.records)
+        assert "unrecognized arguments" not in run_logs, (
+            "locust CLI-флаг не существует (например rate-limit флаг) — runner упал с "
+            "'unrecognized arguments' (146-m1 BUG-1 регрессия)"
+        )
+
         assert exit_code == 0, f"smoke-прогон web завершился с exit={exit_code} (verdict FAIL?)"
         reports = list(tmp_path.rglob("report.json"))
         assert reports, "report.json не создан в LOAD_RESULTS_DIR"

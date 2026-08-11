@@ -1,10 +1,12 @@
-# makefiles/loadtest.mk — тонкий фасад нагрузочного тестирования (DevPlan 146)
-# GREP_SUMMARY: loadtest make load-test facade runner-cli scenarios modes
+# makefiles/loadtest.mk — тонкий фасад нагрузочного тестирования (DevPlan 146, 146-m1)
+# GREP_SUMMARY: loadtest make load-test facade runner-cli scenarios modes constant-throughput rps-env
 # STRUCTURE: ┌vars SCENARIO/NODE/MODE/LOAD_RUNNER┐ → ◇ load-test → python3 -m core.internal.loadtest.runner_cli
 #           → ⎋ exit-code passthrough (0/1/4/10 по контракту shared/contracts.py)
 # region MODULE_CONTRACT
 ## @purpose  Make-фасад подсистемы нагрузочного тестирования (DevPlan 146 W1, D6):
 ##           таргет load-test пробрасывает SCENARIO/NODE/MODE в runner_cli.py.
+##           RPS-контроль — env LT_TARGET_RPS/LT_USERS (constant_throughput в
+##           wait_time сценариев, 146-m1 BUG-1) — runner передаёт прогону сам.
 ##           Языковая политика: НИКАКОЙ бизнес-логики в make — только python3 -m.
 ## @scope    makefiles/loadtest.mk — подключается Makefile; таргет регистрируется
 ##           в entrypoint-manifest.yaml (loadtest: секция) и глоссарии (generate-agents-md).
@@ -16,6 +18,7 @@
 ## @rationale Тонкий фасад (D6 Brief 146): весь exit-контракт и guard-ы — в Python
 ##            (runner_cli.py), make — только удобная точка входа для оператора.
 ## @changes  2026-08-11 | DevPlan 146 W1 — Created
+## @changes  2026-08-11 | DevPlan 146-m1 TASK-10 — комментарии: constant_throughput RPS-механизм
 # endregion MODULE_CONTRACT
 
 LOADTEST_SCENARIO ?= web

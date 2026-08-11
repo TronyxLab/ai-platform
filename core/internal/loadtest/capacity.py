@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: loadtest capacity ramp steps rps doubling stabilization safety-stop error-rate p99 max-rps profile
+# GREP_SUMMARY: loadtest capacity ramp steps rps doubling stabilization safety-stop error-rate p99 constant-throughput profile
 # STRUCTURE: ▶ plan_steps (start×2^i, max_steps) → ◇ run_capacity ∋ per-step: step_runner(rps) →
 #           ◇ error>max_error | p99>max_p99 → safety-stop → ⊕ profile + max_rps (last success) → ⎋ CapacityResult
 # region MODULE_CONTRACT
 ## @purpose  Capacity-режим нагрузочного тестирования (DevPlan 146 W4): итеративный
 ##           профиль шагов (start_rps ×2, max_steps=8), стабилизация 60s/шаг, точный RPS
-##           шага через locust --max-rps (users = step×2 пул, инвариант 11), критерий
+##           шага через LT_TARGET_RPS=<step> (constant_throughput per-user через
+##           _locust_env, 146-m1 BUG-1; users = step×2 пул), критерий
 ##           останова (error > 5% | p99 > max_p99), max_rps = последний успешный шаг.
 ##           Формат: ПОСЛЕДОВАТЕЛЬНЫЕ headless-прогоны по шагу (детерминированнее
 ##           locust --steps — нет встроенной семантики стабилизации+проверки между шагами).
@@ -15,7 +16,8 @@
 ## @invariants
 ##   1. plan_steps: [start, start×2, start×4, ...] — max_steps элементов (default 8)
 ##   2. Каждый шаг — отдельный headless-прогон duration=capacity_step_duration (60s),
-##      --max-rps <step>, users = step×2, spawn-rate = step (DevPlan 146 §3.3)
+##      LT_TARGET_RPS=<step> (constant_throughput per-user), users = step×2,
+##      spawn-rate = step (DevPlan 146 §3.3; 146-m1 BUG-1)
 ##   3. Safety-stop шага: error_rate > max_error ИЛИ p99 > max_p99 → шаг НЕ успешен → стоп
 ##   4. max_rps = RPS последнего успешного шага; 0 если первый шаг уже не успешен
 ##      (вердикт FAIL, exit 1 — capacity-вердикт по контракту)

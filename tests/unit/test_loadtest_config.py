@@ -88,6 +88,14 @@ def repo_dir(tmp_path) -> Path:
                 "users": 20,
                 "target_rps": 5,
             },
+            "langfuse_ingest": {
+                "description": "langfuse traces ingest (146-m1 BUG-2: langfuse.{domain} SoT)",
+                "endpoint": "https://langfuse.{domain}",
+                "path": "/api/public/traces",
+                "method": "POST",
+                "users": 10,
+                "target_rps": 5,
+            },
             "db": {"optional": True, "endpoint": "http://{host}:5432", "paths": ["/"], "users": 10, "target_rps": 5},
         },
     }
@@ -402,6 +410,15 @@ class TestLoadConfig:
         monkeypatch.setenv("LOAD_RESULTS_DIR", "/tmp/lt-results")
         cfg = load_config("web", node_dir["name"], "smoke", str(repo_dir), platform_root=str(repo_dir))
         assert str(cfg.results_dir) == "/tmp/lt-results"
+
+    def test_endpoint_override_langfuse(self, repo_dir, node_dir, monkeypatch):
+        """LOAD_ENDPOINT_LANGFUSE_INGEST переопределяет SoT-endpoint (escape hatch, 146-m1 BUG-2)."""
+        monkeypatch.delenv("LOAD_ENDPOINT_LANGFUSE_INGEST", raising=False)
+        cfg = load_config("langfuse_ingest", node_dir["name"], "smoke", str(repo_dir), platform_root=str(repo_dir))
+        assert cfg.endpoint == "https://langfuse.test.example.com"
+        monkeypatch.setenv("LOAD_ENDPOINT_LANGFUSE_INGEST", "https://n.test.local")
+        cfg = load_config("langfuse_ingest", node_dir["name"], "smoke", str(repo_dir), platform_root=str(repo_dir))
+        assert cfg.endpoint == "https://n.test.local"
 
 
 # endregion TEST_load_config
