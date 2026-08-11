@@ -1,0 +1,86 @@
+# GREP_SUMMARY: hermes-nightly scheduled cron weekly L1-L2-rebuild node-update S8-auto-rebuild D-134-L4
+# STRUCTURE: on:schedule(weekly cron) → job(nightly: checkout → make hermes-build-context → make hermes-push-l2) → ⎋ exit
+# region MODULE_CONTRACT
+## @purpose  Scheduled weekly hermes L2 rebuild (D-134-L4, DevPlan 145 W4): L1→L2 сборка + push
+##           в ghcr.io после S8-детекции (security_posture.py). Автопересборка закрывает gap между
+##           детекцией уязвимости (S8 в security_posture) и её исправлением (L2 rebuild с patched L1).
+## @scope    Scheduled workflow (cron). НЕ триггерится на push/PR — только schedule + manual dispatch.
+##           CONTEXT должен быть задан (default: tronyx — продакшен-контекст оператора).
+## @invariants
+##   - Cron: weekly (Sunday 03:00 MSK — низкая нагрузка, перед началом рабочей недели)
+##   - CONTEXT env обязателен (default tronyx); CI_DEPLOY_KEY / GHCR_PUSH_TOKEN — из secrets
+##   - hermes-build-context → L1 (cached) → L2 (context overlay) → push ghcr.io
+##   - node-update НЕ запускается автоматически (требует SSH к ноде) — только артефакт-обновление
+##   - Failure → issue creation (operator action required)
+## @rationale D-134-L4: S8-детекция (security_posture.py --json) реализована, но автопересборка L2
+##            после обнаружения CVE отсутствовала. Weekly cron обеспечивает регулярное обновление
+##            L2 даже без явного trigger от S8. Manual dispatch — для ad-hoc пересборки.
+##            node-update остаётся ручным (SSH + state.json + converge — операционное окно).
+## @changes 2026-08-11 | DevPlan 145 W4 D-134-L4 — Created (weekly cron L1→L2 rebuild + push)
+# endregion MODULE_CONTRACT
+
+name: hermes-nightly
+
+on:
+  schedule:
+    # Weekly: Sunday 03:00 MSK (Europe/Moscow) = Saturday 20:00 UTC
+    - cron: '0 20 * * 6'
+  workflow_dispatch:
+    inputs:
+      context:
+        description: 'Context for L2 build (default: tronyx)'
+        required: false
+        default: 'tronyx'
+
+permissions:
+  contents: read
+
+jobs:
+  nightly-rebuild:
+    name: Weekly L1→L2 rebuild + push
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      CONTEXT: ${{ github.event.inputs.context || 'tronyx' }}
+
+    steps:
+      # ─── Step 1: Checkout ─────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      # ─── Step 2: Setup Docker (Buildx for multi-stage) ────────────────
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # ─── Step 3: Login to ghcr.io (L1 pull + L2 push) ─────────────────
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # ─── Step 4: Build L1→L2 context image ────────────────────────────
+      # hermes-build-context: L1 (cached from ghcr.io) → L2 (context overlay build).
+      # CONTEXT определяет overlay (context_deployer.py ensure_context_repo).
+      - name: Build L2 context image (L1→L2, CONTEXT=${{ env.CONTEXT }})
+        run: make hermes-build-context CONTEXT=${{ env.CONTEXT }}
+
+      # ─── Step 5: Push L2 to ghcr.io ───────────────────────────────────
+      - name: Push L2 to ghcr.io
+        run: make hermes-push-l2 CONTEXT=${{ env.CONTEXT }}
+
+      # ─── Step 6: Summary (manual node-update reminder) ────────────────
+      # node-update НЕ запускается автоматически — требует SSH + state.json + converge.
+      # Operator выполняет `make node-update NODE=<node>` в операционном окне.
+      - name: Summary (manual node-update required)
+        if: always()
+        run: |
+          echo "## Hermes Nightly Rebuild Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Context: \`${{ env.CONTEXT }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- L2 image: pushed to ghcr.io" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### ⚠️ Manual action required" >> $GITHUB_STEP_SUMMARY
+          echo "Run \`make node-update NODE=<node>\` on each node to pull the new L2 image." >> $GITHUB_STEP_SUMMARY

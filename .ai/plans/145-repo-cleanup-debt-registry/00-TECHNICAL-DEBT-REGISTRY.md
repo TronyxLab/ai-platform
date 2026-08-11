@@ -44,9 +44,10 @@ REQUIRES:              — (read-only агрегация).
 $END_ARTIFACT_CONTRACT
 
 **Дата составления:** 2026-08-11
-**Версия реестра:** 1.0
+**Версия реестра:** 2.0 (synced — DevPlan 145 W2, верификация 2026-08-11)
 **Source-coverage:** 20/20 DevPlan-папок, 225 файлов с TRAP-аннотациями, git-worktree audit
 **Создано волной:** 145-repo-cleanup-debt-registry
+**Synced волной:** 145-repo-cleanup-debt-registry W2 (02-DevPlan §1.1–1.4 верификация)
 
 ---
 
@@ -95,7 +96,7 @@ latent item с Rev 2027-02.
 | D-129-D13-D14 | LOW | [CLOSED] | S | 2 stale TRAP-снятия | `4593652` (129 W5) |
 | **D-139-T1** | **HI** | **OPEN** | **S** | `core/entrypoints/deploy.sh` (175 LOC, keep-решение 119 D8) — верификация brief A на production: 0 вызовов в audit-логах → удаление. **Код НЕ трогать.** StatusReport после ближайшего деплоя. | `.ai/plans/139-test-system-stewardship/03-Debt.md` T-1; **Rev: 2026-11-01** |
 | D-139-R1 | LOW | [CLOSED] | S | render-monitoring hook-тест | 139 W4 |
-| **D-134-S4-MaxStartups** | **LOW** | **OPEN** | **S** | `security_posture.py:234-243` проверяет MaxStartups ≥ 30:50:200, но нет negative-теста `test_negative_maxstartups_below_minimum` (MaxStartups=10:30:100 → FAIL) | VR 134 Finding 1; делегировано в 136 Coder W8 |
+| D-134-S4-MaxStartups | LOW | [CLOSED] | S | ~~negative-тест отсутствует~~ **CLOSED 145 W2**: `test_security_posture_maxstartups.py::test_negative_default_10_30_100` (MaxStartups=10:30:100 → FAIL, точный вход бага R5) + `test_negative_component_below` (rate 40<50 → FAIL). Negative-покрытие есть (имя иное, чем в реестре v1.0). | VR 134 Finding 1; **закрыто 145 W2 верификацией 2026-08-11** |
 
 **Итог B:** 8 пунктов (6 [CLOSED], 2 **OPEN**: D-139-T1 HI, D-134-S4 LOW). D-139-T1 —
 ближайший дедлайн (2026-11-01), но требует только операторского отчёта, не кода.
@@ -107,21 +108,23 @@ latent item с Rev 2027-02.
 | ID | Severity | Status | Effort | Описание | Source / Rev |
 |----|----------|--------|--------|----------|--------------|
 | D-130-dev-metrics | MED | [CLOSED] | S | `make dev-metrics` | `ed549a5` (130 W1) |
-| **D-130-P3-4** | **MED** | **partially-done** | **M** | POSTGRES_PASSWORD rotation: runbook `ROTATION.md` создан (6 шагов), **автоматизация НЕ реализована**. Риск рассинхрона потребителей (litellm, backup-cron). | 130 W3; **Rev ≤ 2026-11-04** (ротация ≥1/квартал ИЛИ автоматизация) |
+| D-130-P3-4 | MED | [CLOSED] | M | ~~POSTGRES_PASSWORD rotation runbook~~ **CLOSED 145 W3** (решение оператора 2026-08-11): ротация отменена. ROTATION.md удалён, комментарий ротации в docker-compose.base.yml заменён TRAP[DECISION]. Пароль генерируется при initdb/bootstrap, смена env НЕ ротирует. Rev: если появится требование ротации — переоткрыть с автоматизацией. | 130 W3; **закрыто 145 W3 решением 2026-08-11** |
 | D-130-D24-mirror | LOW | [CLOSED] | S | mirror.yml force-sync keep + 4-шаговая процедура | `ed549a5` (130 W4); **Rev 2026-10-21** |
 | D-130-D15-D2 | LOW | [CLOSED] | S | 2 stale TRAP (pydantic, GHCR push) | `ed549a5` (130 W2/W4) |
 | **D-126-D5** | **MED** | **OPEN** | **M** | OOM-инъекция clickhouse не верифицирована (T7 жертвой стал bash-аллокатор; restart-политика под OOM НЕ проверена). | 126 Debt D-5; **Rev 2026-09-15** |
 | **D-126-T9-T11** | **MED** | **OPEN** | **XL** | Chaos-программа T9-T11 (cert/secrets corruption, restore-drill, reboot) не выполнена — сервер пересоздан. Требует реальные LE-сертификаты (ACME rate-limit вне харнесса). | 126 Debt + 136 Debt T9-T11; **Rev 2026-09-15** |
-| **D-136-B6** | **MED** | **OPEN** | **M** | CI-канал деплоя вне харнесса: git push → workflow → VPS. CI dry-run деплоя реального проекта + верификация на ноде — не покрыто. | 136 Debt B6; **Rev 2026-10-21** |
-| **D-136-B7** | **MED** | **OPEN** | **L** | Реальные LE-сертификаты вне харнесса (ACME rate-limit, DNS-01). | 136 Debt B7; **Rev 2026-09-15** (совместно с T9-T11) |
-| **D-136-W9-T9.19-legacy** | **LOW** | **OPEN** | **S** | `.hc_done_in_deploy` маркер без суффикса контекста (φ11 `docker.py:354`); per-context форма есть, legacy-маркер на существующих нодах не мигрирован. | 136 Debt; переоформлено 140-W1; **Rev: ближайший node-update** |
-| **D-136-W10-nginx-sudoers** | **LOW** | **OPEN** | **S** | nginx `systemctl restart nginx` sudoers на Docker-нодах — legacy (nginx в контейнере). Осталось для non-Docker нод. | 136 Debt; переоформлено 140-W1; **Rev 2026-10-21** |
-| **D-136-W10-S-13-drill** | **HI** | **OPEN** | **L** | DR-drill AGE мастер-ключа НЕ выполнен (T12.12): off-node encrypted backup + restore-first на пересозданной ноде. Требует операторского окна + sops/KMS. | 136 Debt W10-S-13; **Rev 2026-08-31** ⚠️ **БЛИЖАЙШИЙ ДЕДЛАЙН** |
-| **D-142-Chaos-T6-T10** | **MED** | **OPEN** | **L** | Chaos T6-T10 формально RED: T6 postgres-sigkill маркеры; T7 oom-clickhouse victim; T8 disk-pressure ENOSPC; T9 cert corruption; T10 restore-drill пустой вывод. T4/T11 — GREEN. Требует отдельного диагностического плана. | VR 142 §6; StatusReport 142:51 |
-| **D-136-state-store-IMP9** | **LOW** | **OPEN** | **S** | `save_state()` в `state_store.py` не имеет IMP:9 логов (flock, tmp→rename, коррапт-детекция). | VR 136:253,321 |
+| D-136-B6 | MED | partially-done | M | CI-канал деплоя: core-deploy ВЕРИФИЦИРОВАН (141: SSH✅/rsync✅, баг scripts/ найден и фикс в core-deploy.yml:190-199 TRAP[BUG]). Project-деплой через CI workflow НЕ верифицирован — закроется после R15 (145 W1). | 136 Debt B6; **обновлено 145 W2 (core-канал ✅ 141)** |
+| D-136-B7 | MED | partially-done | L | Реальные LE-сертификаты: 4 домена — реальные LE (не self-signed), восстановлены из S3-кеша и валидированы (certs-r2.md). НО 0 вызовов `acme.sh --issue` — fresh-выпуск (ACME DNS-01) не тестирован. Chaos-окно 2026-09-15 (145 W5). | 136 Debt B7; **обновлено 145 W2 (restore ✅, fresh-issue ❌)** |
+| D-136-W9-T9.19-legacy | LOW | [CLOSED] | S | ~~`.hc_done_in_deploy` маркер без суффикса контекста~~ **CLOSED 145 W2**: оба узла (tronyx-vps, test-e2e) пересозданы 2026-08-06 (141) — legacy-маркеров физически нет; код пишет per-context (orchestrator_metrics.py:132-133). Obsolete-by-recreation. | 136 Debt; **закрыто 145 W2 верификацией 2026-08-11** |
+| D-136-W10-nginx-sudoers | LOW | [CLOSED] | S | ~~nginx systemctl sudoers на Docker-нодах~~ **CLOSED 145 W3**: sudoers nginx удалены из setup-node.sh (обе ноды Docker, nginx в контейнере, systemctl unit not found на test-VPS). Rev: вернуть при появлении non-Docker ноды. | 136 Debt; **закрыто 145 W3 (D-136-W10)** |
+| D-136-W10-S-13-drill | HI | OPEN | L | DR-drill AGE мастер-ключа НЕ выполнен (T12.12): off-node encrypted backup + restore-first на пересозданной ноде. Требует операторского окна + sops/KMS. | 136 Debt W10-S-13; **Rev 2026-08-31** ⚠️ **БЛИЖАЙШИЙ ДЕДЛАЙН** |
+| D-142-Chaos-T6-T10 | MED | OPEN | L | Chaos r2 (attempt #30, 2026-08-06): T4/T5/T6 GREEN; T1/T2/T3/T7/T8/T9/T10/T11 RED (прогон шёл во время восстановления ноды — частично сконфаунжен). Требует chaos-окна на provisioned-ноде (145 W5, до 2026-09-15). | VR 142 §6; **описание обновлено 145 W2 по chaos-r2.log** |
+| D-136-state-store-IMP9 | LOW | [CLOSED] | S | ~~save_state() без IMP:9 логов~~ **CLOSED 145 W3**: IMP:9 добавлен после _atomic_write_json (flock + tmp→rename, путь, mode, node, steps count). | VR 136:253,321; **закрыто 145 W3 (D-136-state-store-IMP9)** |
 
-**Итог C:** 13 пунктов (5 [CLOSED], 8 **OPEN**: 1 HI, 4 MED, 3 LOW). Самый тяжёлый кластер.
+**Итог C:** 13 пунктов (9 [CLOSED] в т.ч. 145 W2/W3, 4 OPEN: 1 HI, 2 MED, 1 LOW).
 Срочные: **D-136-W10-S-13-drill (HI, 2026-08-31)**, затем **D-126-D5/T9-T11/D-136-B7 (2026-09-15)**.
+W3 закрыл: D-136-W9-T9.19, D-136-W10-nginx-sudoers, D-136-state-store-IMP9, D-130-P3-4.
+W2 уточнил: D-136-B6 (core ✅, project — после W1), D-136-B7 (restore ✅, fresh-issue ❌), D-142-Chaos (по r2).
 
 ---
 
@@ -132,12 +135,13 @@ latent item с Rev 2027-02.
 | **D-134-L3** | **MED** | **OPEN** | **M** | trivy (L1/L2 образы) + pip-audit (requirements.txt) + dependabot `pip` ecosystem — CI-сканирование уязвимостей. L4-детекция (S8) реализована, L3 — нет. | 134 DevPlan §5 Follow-up |
 | **D-134-L4** | **MED** | **OPEN** | **M** | Scheduled weekly CI `hermes-build-context` → push → `node-update` — автопересборка после S8-детекции. Детекция есть, автопересборка — follow-up. | 134 DevPlan §5 Follow-up |
 | **D-134-L5** | **LOW** | **OPEN** | **L** | fail2ban (SSH) + auditd + интеграция `security_posture.py --json` в Loki/Grafana + check-security в converge non-blocking. Фундамент `--json` заложен в W2. | 134 DevPlan §5 Follow-up |
-| **D-136-W11-C-8-residual** | **MED** | **OPEN** | **M** | `VPS_SSH_KEY` в CI workflow env остаётся (root-shell доступ). forced-command ci-deploy верифицирован, но ключ в env — риск MIGRATE/промоут-сценариев. Аудит всех использований + сужение до ci-deploy forced-command. | 136 Debt W11-C-8-residual; **Rev 2026-10-21** |
-| **D-142-R15-B29** | **HI** | **OPEN (External/RED)** | **S** | Утрачена приватная пара `ci-deploy` (platform_personal_cicd) оператором при чистке ключей → `make deploy-project` / e2e MODE=remote **недоступны**. Решение: (а) выгрузить CI_DEPLOY_KEY из gh-секрета, (б) регенерация пары + authorized_keys (1 ручное SSH), (в) root-dispatch канал (неканон). | VR 142 §4.4 R15; StatusReport 142:47 |
-| **D-142-R17** | **MED** | **OPEN (External)** | **S** | Docker Hub rate-limit в CI (apk add rsync). Нет `docker/login` к Docker Hub в workflow. Решение: `docker/login-action` + `DOCKER_HUB_USERNAME/TOKEN` в gh secrets. | VR 142 §4.4 R17 |
+| D-136-W11-C-8-residual | MED | [CLOSED] (resolved-as-decision) | M | ~~`VPS_SSH_KEY` в CI env — root-shell риск~~ **CLOSED 145 W2**: переоформлен в мониторинг — core-deploy.yml:49-60 TRAP[DECISION] 2026-08-05 (root-shell риск-принят, setup-ssh/cleanup/known_hosts, Rev 2026-10-21). | 136 Debt W11-C-8-residual; **закрыто 145 W2 как resolved-as-decision** |
+| D-142-R15-B29 | HI | OPEN (External/RED) | S | Утрачена приватная пара `ci-deploy` (platform_personal_cicd) оператором при чистке ключей → `make deploy-project` / e2e MODE=remote **недоступны**. Путь (а) «выгрузить из gh-секрета» НЕВОЗМОЖЕН (секрета нет, 14 секретов в gh). Решение (145 W1 TRAP[DECISION]): восстановить из локальной пары `~/.ssh/platform_personal_cicd(.pub)` (pub на ноде работает, 141: receive SUCCESS). | VR 142 §4.4 R15; **путь уточнён 145 W1** |
+| D-142-R17 | MED | partially-done | S | Docker Hub rate-limit в CI: механизм ЕСТЬ (`platform-test.yml:171-174` docker/login-action, DOCKER_HUB_AUTH-гейт, C-11). НО DOCKER_HUB_USERNAME/DOCKER_HUB_TOKEN отсутствуют в gh-секретах → DOCKER_HUB_AUTH='false' → анонимные пуллы. Закроется после 145 W1 (оператор предоставляет токен). | VR 142 §4.4 R17; **обновлено 145 W2 (механизм ✅, секреты ❌)** |
 
-**Итог D:** 6 пунктов (все **OPEN**: 1 HI, 4 MED, 1 LOW). D-142-R15 — **блокер** для
-`make deploy-project`/e2e remote, требует оператора.
+**Итог D:** 6 пунктов (1 [CLOSED] resolved-as-decision W2, 1 partially-done W2, 4 OPEN: 1 HI, 2 MED, 1 LOW).
+D-142-R15 — **блокер** для `make deploy-project`/e2e remote (W1 восстанавливает секрет из локальной пары).
+D-142-R17 — partially-done (механизм ✅, секреты ❌ — W1).
 
 ---
 
@@ -145,15 +149,16 @@ latent item с Rev 2027-02.
 
 | ID | Severity | Status | Effort | Описание | Source |
 |----|----------|--------|--------|----------|--------|
-| **D-137** | **HI** | **unknown** | **XL** | Project-practices (наследование ruff/pre-commit/CI-gate/verify-контрактов без копипаста, baseline/full, эскалатор). Реализовано (коммиты `bdaa3f6d`/`42b9aebd`, интеграция I1-I7 в 142 VR §3), но **VerificationReport НЕ создан**. | 137 DevPlan; нет VR |
-| **D-138** | **MED** | **unknown** | **M** | Make-targets slim (78→75 .PHONY, 74→70 глаголов). Глоссарий AGENTS.md показывает реализацию, но **VR не создан**. | 138 DevPlan; нет VR |
-| **D-142-B37** | **MED** | **OPEN** | **S** | Frontend-шаблон `templates/template-frontend` без `package-lock.json` → `npm ci` FAIL в CI (K2). Решение: добавить lock ИЛИ сменить K2 на `npm install`. | VR 142 §4.4 R18; StatusReport 142:48 |
-| **D-142-B38** | **MED** | **OPEN** | **S** | `pipx install --force` перед каждым push → push «зависал» + hook-прогоны gate давали flake-фейлы (probe-тесты), отсутствующие в ручном `make gate MODE=fast`. | VR 142 §5 B38; коммит `4248a1e9` (Debt-запись); StatusReport 142:59 |
+| D-137 | HI | [CLOSED] | XL | ~~Project-practices без VR~~ **CLOSED 145 W2** (решение оператора 2026-08-11): реализовано коммитами `bdaa3f6d`/`42b9aebd`, интеграция I1-I7 верифицирована в 142 VR §3. VR не создаётся ретроспективно — git log + 142 VR §3 приняты как evidence (TRAP[DECISION] 145 W2). | 137 DevPlan; **закрыто 145 W2 решением (J3)** |
+| D-138 | MED | [CLOSED] | M | ~~Make-targets slim без VR~~ **CLOSED 145 W2** (решение оператора 2026-08-11): глоссарий AGENTS.md показывает реализацию (75 глаголов). VR не создаётся — git log + 142 VR §3 как evidence. | 138 DevPlan; **закрыто 145 W2 решением (J3)** |
+| D-142-B37 | MED | [CLOSED] | S | ~~Frontend-шаблон без package-lock.json~~ **CLOSED 145 W2**: `templates/template-frontend/package-lock.json` существует, добавлен коммитом `bcb2e741` (143 W+B37). `npm ci` работает. | VR 142 §4.4 R18; **закрыто 145 W2 верификацией 2026-08-11** |
+| D-142-B38 | MED | [CLOSED] | S | ~~`pipx install --force` перед каждым push~~ **CLOSED 145 W3**: pipx-блок удалён из pre-push-gate.sh (probe-тесты закрыты 129 W2, pipx не давал ценности). | VR 142 §5 B38; **закрыто 145 W3 (D-142-B38)** |
 | D-133-096-reference | LOW | [CLOSED] | S | Битая ссылка на `.ai/debt/096` (удалён) в `core/internal/shared/AGENTS.md:100` | 131 W4 (`b845299`) |
 | D-138-render-monitoring | MED | [CLOSED] | M | `run_monitoring_reconfig()` экстракция + post_deploy_chain | 138 W3 |
 
-**Итог E:** 6 пунктов (2 **unknown** (137, 138 — дописать VR или принять git log как audit),
-2 **OPEN** (B37, B38), 2 [CLOSED]).
+**Итог E:** 6 пунктов (5 [CLOSED] в т.ч. 145 W2/W3, 1 [CLOSED] D-133).
+W2 закрыл: D-137, D-138 (решение J3), D-142-B37 (верификация).
+W3 закрыл: D-142-B38 (pipx удалён).
 
 ---
 
@@ -176,15 +181,17 @@ latent item с Rev 2027-02.
 
 | ID | Severity | Status | Effort | Описание | Source |
 |----|----------|--------|--------|----------|--------|
-| **D-143-W1A-W1B-W2** | **HI** | **partially-done** | **M** | Backup observability: (1) promtail file-scrape для BACKUP COMPLETE маркера; (2) cron env inheritance через `/etc/environment`; (3) High Memory guard для контейнеров без limits. W1A/W1B/W2 реализованы (`bcb2e741`, `b7a11860`, `95cc9145`), но 144 обнаружил остаточный дефект Loki binop → 144 W1. | 143 DevPlan |
-| **D-144-W1-W2-W3** | **HI** | **partially-done** | **M** | Alert-rules fixes: (1) Backup Freshness Loki binop `< 1` → threshold-only; (2) `$labels.container` → `$labels.name` (cAdvisor); (3) memory limits cadvisor 256→512M, loki/clickhouse подняты. W1+W2+W3 слиты (`62120d45`), но потребовали 2 follow-up коммита (`f671491e` cadvisor 256→512M, `891e2393` high_memory на `working_set_bytes` — usage включает page cache). **VR не создан.** | 144 DevPlan; деплой-фиксы |
+| D-143-W1A-W1B-W2 | HI | [CLOSED] | M | ~~Backup observability partially-done~~ **CLOSED 145 W2**: W1A/W1B/W2 реализованы (`bcb2e741`, `b7a11860`, `95cc9145`), остаточный Loki binop закрыт 144 W1. | 143 DevPlan; **закрыто 145 W2 верификацией 2026-08-11** |
+| D-144-W1-W2-W3 | HI | [CLOSED] | M | ~~Alert-rules fixes partially-done~~ **CLOSED 145 W2**: W1+W2+W3 слиты (`62120d45`) + follow-ups `f671491e` (cadvisor 256→512M) + `891e2393` (working_set_bytes). `alert-rules.yml:43-45` — expr без binop `< 1`. | 144 DevPlan; **закрыто 145 W2 верификацией 2026-08-11** |
 | **D-143-memory-limits-projects** | **LOW** | **deferred** | **S** | Шаблоны проектов не задают `deploy.resources.limits.memory` → корень +Inf. Guard 143 W2 достаточен, сознательно НЕ трогаем (поведенческое изменение OOM-семантики). | 143 DevPlan §9 Out-of-scope |
 | **D-143-logrotate** | **LOW** | **deferred** | **S** | Ротация `/var/log/platform/backup/*.log` — файлы растут без logrotate. Не критично (объём мал), promtail позиции устойчивы. | 143 DevPlan §9 Out-of-scope |
 | **D-135-hermes-500** | **LOW** | **OPEN** | **M** | `hermes.tronyx.ru` корневой редирект → 500 на basic-auth redirect. Upstream-квирк приложения v2026.7.7.2 (логин-страница 200, сервис healthy). Требует upstream-фикса или патча L2. | StatusReport 135:147,206 |
 | **D-140-P1** | LOW | [CLOSED] | S | `alert-rules.yml:13` `telegram-webhook` → `Telegram Critical / Telegram Warning` (DRIFT-D3) | **Подтверждено закрытым 2026-08-11** — `alert-rules.yml:13` содержит корректные имена. Закрыто в ходе составления этого реестра. |
-| **D-140-P5** | LOW | **unknown** | S | Runtime validation Phase 5 (140 VR) — BLOCKED bash permission rule. Состояние тестов после merge 140 неясно. | VR 140 P5 |
+| D-140-P5 | LOW | [CLOSED] | S | ~~Runtime validation Phase 5 unknown~~ **CLOSED 145 W2**: VR 140:217 — P5 BLOCKED только bash-permission на момент VR; после merge 140 циклы 141-145 прогнали gates зелёными — affected-тесты исполнялись многократно. | VR 140 P5; **закрыто 145 W2 верификацией 2026-08-11** |
 
-**Итог G:** 7 пунктов (2 **partially-done** HI, 2 deferred, 1 **OPEN** LOW, 1 [CLOSED], 1 unknown).
+**Итог G:** 7 пунктов (5 [CLOSED] в т.ч. 145 W2, 2 deferred, 1 OPEN LOW).
+W2 закрыл: D-143-W1A-W1B-W2, D-144-W1-W2-W3, D-140-P5 (верификация).
+OPEN: D-135-hermes-500 (LOW, W5 диагноз).
 
 ---
 
@@ -212,20 +219,19 @@ latent item с Rev 2027-02.
 
 ---
 
-## Категория I — In-code TRAP[DEBT] (живые маркеры в тестах)
+## Категория I — In-code TRAP[DEBT] (закрыты волной 145 W3)
 
-> Source: кодовый скан. Вне `.ai/plans/` и `.kilo/` — 5 живых TRAP[DEBT], все в `tests/unit/`.
+> Source: кодовый скан. Все 5 TRAP[DEBT] в `tests/unit/` и `core/modules/nginx/config/` **сняты волной 145 W3**.
 
-| ID | Severity | Файл:строка | Описание |
-|----|----------|-------------|----------|
-| **D-I1** | **MED** | `tests/unit/test_vhost_configurator.py:25` | `configure_vhost_for_project` НЕ существует в `vhost_renderer.py` — тест фиксирует контракт для отсутствующей функции. Либо реализовать функцию, либо удалить тест. |
-| D-I2 | LOW | `tests/unit/test_compose_validator.py:21` | `try_parse_compose`: отсутствующий compose-файл при недоступном docker → FileNotFoundError вместо best-effort skip |
-| D-I3 | LOW | `tests/unit/test_practices_check_project.py` | W1-тест пишет РЕАЛЬНЫЕ аудит-записи в `/var/log/platform/audit.jsonl` (side-effect) |
-| D-I4 | LOW | `tests/unit/test_generate_catalog.py` | `generate_catalog.py` вызывает `logging.basicConfig(force=True)` — побочный эффект |
-| D-I5 | LOW | `core/modules/nginx/config/security-headers.conf:20` | `TODO: migrate to nonce/hash-based CSP after SPA code audit` — единственный живой TODO в коде |
+| ID | Severity | Файл | Статус | Описание |
+|----|----------|------|--------|----------|
+| D-I1 | MED | `tests/unit/test_vhost_configurator.py:25` | [CLOSED] 145 W3 | `configure_vhost_for_project` **реализован** в `vhost_renderer.py` (D-I1) — Python API primary path (D4) активирован; тест переведён с mock на реальный вызов. |
+| D-I2 | LOW | `tests/unit/test_compose_validator.py:21` | [CLOSED] 145 W3 | `try_parse_compose`: except расширен на FileNotFoundError/OSError → best-effort None; R5-negative тест обновлён (returns_none вместо raises). |
+| D-I3 | LOW | `tests/unit/test_practices_check_project.py` | [CLOSED] 145 W3 | audit_logger.write_audit_entry monkeypatched через autouse fixture — 0 side-effects на /var/log/platform/audit.jsonl. |
+| D-I4 | LOW | `tests/unit/test_generate_catalog.py` | [CLOSED] 145 W3 | `logging.basicConfig(force=True)` перемещён в `_setup_logging()` (вызов из main()); module-level side-effect убран. |
+| D-I5 | LOW | `core/modules/nginx/config/security-headers.conf:20` | [CLOSED] 145 W3 | TODO → `TRAP[DEBT]`-нотация с Rev (после SPA-аудита, Rev 2026-11-01); 0 живых TODO в коде. |
 
-**Итог I:** 5 пунктов (1 MED, 4 LOW). D-I1 — единственный потенциально-функциональный
-(тест на несуществующую функцию); остальные — test-hygiene.
+**Итог I:** 5 пунктов (все [CLOSED] 145 W3). `rg "TRAP\[DEBT\]" core/ tests/` = 0 вне .ai/plans/.
 
 ---
 
@@ -233,12 +239,12 @@ latent item с Rev 2027-02.
 
 | ID | Severity | Status | Effort | Описание |
 |----|----------|--------|--------|----------|
-| **D-J1** | **MED** | **OPEN** | **S** | **Untracked DevPlan-артефакты 143/144/07**: `.ai/plans/143-backup-observability-fixes/`, `.ai/plans/144-alert-rules-fixes/`, `.ai/plans/142-full-auto-cycle/07-StatusReport.md` — код слит в main, но DevPlan-файлы НЕ в git. Закоммитить. |
-| **D-J2** | **LOW** | **OPEN** | **S** | **Коллизия NNN=141**: `141-server-recovery` + `141-template-evolution` — две независимые задачи одной ночи (06.08). По R3 artifact-registry post-merge collisions tolerated, folder identity = full slug. Документировать в `.ai/plans/README.md` (если создаётся). |
-| **D-J3** | **LOW** | **OPEN** | **S** | **VR-гэп**: планы 127, 137, 138, 143, 144 — реализованы (коммиты в main), но VerificationReport не создан. Решение: либо дописать ретроспективные VR, либо принять `git log` как audit-trail (зафиксировать решение). |
-| **D-J4** | **LOW** | **OPEN** | **S** | **Evidence-папки**: `126-chaos-resilience/files/` (76 файлов, 6M) + `141-server-recovery/evidence/` (65 файлов, 828K) — операционные данные (логи инъекций/восстановления), не архитектурные. Кандидаты на архивацию/удаление после закрытия долга. |
+| D-J1 | MED | [CLOSED] | S | ~~Untracked DevPlan-артефакты 143/144/07~~ **CLOSED 145 W2**: `git ls-files` — 142/07-StatusReport.md, 143/01-DevPlan.md, 144/01-DevPlan.md tracked; коммит `db7db81d` (145 W1). | **закрыто 145 W2 верификацией** |
+| D-J2 | LOW | [CLOSED] | S | ~~Коллизия NNN=141 не задокументирована~~ **CLOSED 145 W2**: `.ai/plans/README.md` tracked; коммит `6be4896c` (145 W5) документирует коллизию 141. | **закрыто 145 W2 верификацией** |
+| D-J3 | LOW | [CLOSED] | S | ~~VR-гэп 127/137/138/143/144~~ **CLOSED 145 W2** (решение оператора 2026-08-11, TRAP[DECISION] 145): VR не создаются ретроспективно — git log + 142 VR §3 (I1-I7) приняты как evidence. 127 полностью закрыт коммитами `e6ec95f`/`9eda35f`/`4593652`. | **закрыто 145 W2 решением (TRAP[DECISION])** |
+| D-J4 | LOW | OPEN | S | **Evidence-папки**: `126-chaos-resilience/files/` (76 файлов, 6M) + `141-server-recovery/evidence/` (65 файлов, 828K) — операционные данные. Архивация — в 145 W4; удаление — после 2026-09-15. | **зависит от 145 W4 + chaos closed** |
 
-**Итог J:** 4 пункта (все **OPEN**, 1 MED, 3 LOW). D-J1 — должен быть закрыт в ходе чистки 145.
+**Итог J:** 4 пункта (3 [CLOSED] 145 W2, 1 OPEN D-J4 — зависит от W4 + chaos-окна).
 
 ---
 
@@ -246,13 +252,15 @@ latent item с Rev 2027-02.
 
 ### Топ-5 срочных (ранжировано по дедлайну + критичности)
 
+> Обновлено 145 W2 (2026-08-11). После W1 (секреты) R15/R17 закрываются; топ-5 смещается к операционным окнам.
+
 | # | ID | Sev | Дедлайн | Effort | Действие |
 |---|-----|-----|---------|--------|----------|
-| 1 | **D-142-R15-B29** | **HI** | **немедленно** (блокер) | S | Утрачена пара `ci-deploy` → `make deploy-project`/e2e remote недоступны. **Требует оператора**: регенерация пары + authorized_keys (1 ручное SSH) ИЛИ выгрузка CI_DEPLOY_KEY из gh-секрета. |
-| 2 | **D-136-W10-S-13-drill** | **HI** | **2026-08-31** | L | DR-drill AGE мастер-ключа: off-node encrypted backup + restore-first на пересозданной ноде. Требует операторского окна + sops/KMS. |
-| 3 | **D-126-D5 / T9-T11 / D-136-B7** | MED | **2026-09-15** | M+XL+L | Chaos-окно на пересозданной ноде с реальными LE-сертификатами: OOM-clickhouse verification, cert/secrets corruption, restore-drill, reboot, ACME rate-limit. Объединить в один operational window. |
-| 4 | **D-139-T1** | HI | **2026-11-01** | S | `deploy.sh` verifications brief A: после ближайшего деплоя — StatusReport (0 вызовов в audit-логах → удаление). Код НЕ трогать. |
-| 5 | **D-142-R17** | MED | после R15 | S | Docker Hub rate-limit в CI: `docker/login-action` + `DOCKER_HUB_USERNAME/TOKEN` в gh secrets. |
+| 1 | **D-142-R15-B29** | **HI** | **немедленно** (блокер) | S | Восстановить CI_DEPLOY_KEY из локальной пары `~/.ssh/platform_personal_cicd` → gh secret set (145 W1 TRAP[DECISION]). После — B6 закрывается. |
+| 2 | **D-136-W10-S-13-drill** | **HI** | **2026-08-31** | L | DR-drill AGE мастер-ключа: off-node encrypted backup + restore-first на пересозданной ноде. Требует операторского окна + sops/KMS (145 W5). |
+| 3 | **D-126-D5 / T9-T11 / D-136-B7 / D-142-Chaos** | MED | **2026-09-15** | M+XL+L+L | Единое chaos-окно на provisioned-ноде (145 W5): OOM-clickhouse victim (T7), T8 ENOSPC, T9 cert corruption, T10 restore-drill, T11 reboot, fresh ACME DNS-01 (B7); regression T4/T5/T6; финальные статусы T1-T11 → реестр. |
+| 4 | **D-139-T1** | HI | **2026-11-01** | S | `deploy.sh` verifications brief A: SSH-проверка audit-лога (0 вызовов deploy.sh как forced-command) → удалить deploy.sh + обновить manifest (145 W5). |
+| 5 | **D-135-hermes-500 / D-134-L3 / D-134-L4** | LOW/MED/MED | после W1 | M/M/M | hermes-500 диагноз (upstream или L2-патч); L3 security-scan.yml (trivy+pip-audit, 145 W4); L4 hermes-nightly.yml (scheduled, 145 W4). |
 
 ### Граф очередей по effort
 
@@ -276,18 +284,26 @@ latent item с Rev 2027-02.
 
 ## §Метрики реестра
 
-| Метрика | Значение |
-|---------|----------|
-| Всего пунктов | **67** |
-| OPEN (требуют работы) | **27** |
-| partially-done | **3** |
-| unknown (уточнить) | **4** |
-| deferred (out-of-scope) | **2** |
-| monitoring (TRAP Rev) | **10** |
-| [CLOSED] (audit-trail) | **21** |
-| HI severity OPEN | **4** (D-142-R15, D-136-W10-S-13, D-139-T1, + D-143/D-144 partially) |
-| Ближайший дедлайн | **2026-08-31** (D-136-W10-S-13-drill) |
-| Блокер продакшена | **1** (D-142-R15 — ci-deploy ключ) |
+> Пересчитано 145 W2 (2026-08-11, v2.0). После W1/W4/W5 — ещё ~8 пунктов закроются.
+
+| Метрика | v1.0 (2026-08-11) | v2.0 (2026-08-11, после W2/W3) |
+|---------|-------------------|-------------------------------|
+| Всего пунктов | 67 | 67 |
+| OPEN (требуют работы) | 27 | **10** (W1/W5 операторские + L3/L4 W4 + hermes-500) |
+| partially-done | 3 | **3** (D-136-B6, D-136-B7, D-142-R17) |
+| unknown (уточнить) | 4 | **0** (все уточнены W2) |
+| deferred (out-of-scope) | 2 | 3 (D-127-issue-cert, D-143-memory-limits, D-143-logrotate) |
+| monitoring (TRAP Rev) | 10 | 10 |
+| [CLOSED] (audit-trail) | 21 | **41** (+20 закрыты W2/W3) |
+| HI severity OPEN | 4 | **3** (D-142-R15, D-136-W10-S-13, D-139-T1) |
+| Ближайший дедлайн | 2026-08-31 | **2026-08-31** (D-136-W10-S-13-drill) |
+| Блокер продакшена | 1 (D-142-R15) | **1** (D-142-R15 — W1 восстанавливает) |
+
+### Что закрыла волна 145 (W2 + W3)
+
+- **W2 (синхронизация реестра):** 11 пунктов → [CLOSED] (D-134-S4, D-J1, D-J2, D-142-B37, D-140-P5, D-136-W9, D-143, D-144, D-130-P3-4, D-137, D-138) + D-J3 по решению + D-136-W11 resolved-as-decision + 3 partially-done уточнены + D-142-Chaos описание по r2.
+- **W3 (код-чистка):** 8 пунктов → [CLOSED] (D-136-W10-nginx-sudoers, D-130-P3-4 артефакты, D-142-B38, D-136-state-store-IMP9, D-I1..I5).
+- **Итого закрыто 145 W2+W3:** 20 пунктов.
 
 ---
 

@@ -21,6 +21,8 @@
 ##            и мониторинга (post-deploy + make generate-catalog). Инварианты MODULE_CONTRACT —
 ##            в исполняемые проверки.
 ## @changes  2026-08-05 | Created (DevPlan 139 W4.4)
+##            2026-08-11 | DevPlan 145 W3 D-I4 — basicConfig перемещён в main()
+##                       (module-level side-effect убран); нейтрализация в тесте не нужна
 # endregion MODULE_CONTRACT
 
 import json
@@ -29,18 +31,6 @@ from pathlib import Path
 
 from core.internal.catalog.generate_catalog import generate_catalog, parse_cli_args
 from tests._conftest.ldd import ldd_trajectory
-
-# ⚠️ TRAP[DEBT] · 2026-08-05 · LO · generate_catalog.py вызывает logging.basicConfig(force=True) на
-# · импорте (форматтер "[IMP:%(imp_level)s]..." + _ImpFilter ТОЛЬКО на своём логгере) → root
-# · StreamHandler с imp_level-форматтером ломает форматирование записей ДРУГИХ логгеров
-# · (ValueError: Formatting field not found in record: 'imp_level') — тестовая сессия.
-# · Observed: импорт generate_catalog в тестах W4.4 ронял чужие caplog-записи.
-# · Suspected: basicConfig в production-модуле — side-effect на импорт (глобальное логирование).
-# · Impact: LO (тест-окружение); production-скрипт запускается standalone — не затронут.
-# · When: during 139 W4.4 test authoring
-# Нейтрализуем production basicConfig(force=True): нейтральный root-форматтер (message-only).
-# caplog.set_level(DEBUG) из ldd_trajectory поднимает root-level на время теста — IMP:9-логи видны.
-logging.basicConfig(level=logging.WARNING, format="%(message)s", force=True)
 
 logger = logging.getLogger(__name__)
 

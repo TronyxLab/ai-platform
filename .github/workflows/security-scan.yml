@@ -1,0 +1,77 @@
+# GREP_SUMMARY: security-scan trivy pip-audit vulnerability-scan L1-L2-images requirements severity-gate HIGH D-134-L3
+# STRUCTURE: on:push(main)+PR+dispatch → job(security: checkout → trivy fs + trivy image-dummy → pip-audit requirements) → ⎋ SARIF upload + severity gate
+# region MODULE_CONTRACT
+## @purpose  Security vulnerability scanning (D-134-L3, DevPlan 145 W4): trivy filesystem scan
+##           (L1/L2 образы через Dockerfile-анализ) + pip-audit (requirements.txt) на push/PR в main.
+##           Severity gate: HIGH+ блокирует (configurable через .trivyignore).
+## @scope    Push/PR-гейт для main-ветки. НЕ заменяет platform-gate-fast (functional gate) —
+##           это security-overlay (vulnerability detection only).
+## @invariants
+##   - trivy fs . — сканирует репозиторий (Dockerfiles, config, code) на известные CVE
+##   - pip-audit — сканирует core/requirements.txt (GENERATED из pyproject.toml) на PyPI CVE
+##   - Severity gate: HIGH,CRITICAL → exit 1 (block); MEDIUM,LOW → warning (continue)
+##   - SARIF upload → GitHub Security tab (code scanning alerts)
+##   - Никаких секретов/токенов в workflow — trivy/pip-audit работают offline с публичными DB
+## @rationale D-134-L3: L4-детекция (S8 security_posture) реализована, но L3 (CI vulnerability scan)
+##            отсутствовала. trivy + pip-audit закрывают gap: CVE в зависимостях (pip) и конфигах/образах
+##            (trivy fs). dependabot.yml (pip ecosystem) — параллельный канал proactive updates.
+## @changes 2026-08-11 | DevPlan 145 W4 D-134-L3 — Created (trivy fs + pip-audit)
+# endregion MODULE_CONTRACT
+
+name: security-scan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  security:
+    name: Security scan (trivy + pip-audit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      # ─── Step 1: Checkout ─────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      # ─── Step 2: Setup Python (for pip-audit) ─────────────────────────
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
+      # ─── Step 3: Trivy filesystem scan (Dockerfiles, configs, code) ───
+      # trivy fs сканирует репозиторий как filesystem — детектит CVE в Dockerfile-базовых образах
+      # (L1/L2), конфигах и коде. Severity gate: HIGH+ блокирует.
+      - name: Trivy filesystem scan (severity gate HIGH+)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          ignore-unfixed: true
+          format: sarif
+          output: trivy-results.sarif
+
+      # ─── Step 4: Upload Trivy SARIF to GitHub Security tab ────────────
+      - name: Upload Trivy SARIF results
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy-results.sarif
+
+      # ─── Step 5: pip-audit (core/requirements.txt — GENERATED из pyproject.toml) ──
+      # pip-audit сканирует зафиксированные зависимости на PyPI CVE. core/requirements.txt —
+      # GENERATED (инвариант 11), обновляется через make generate-requirements.
+      - name: pip-audit (core/requirements.txt, fail-on high)
+        run: |
+          pip install pip-audit
+          pip-audit -r core/requirements.txt --fail-on high --desc

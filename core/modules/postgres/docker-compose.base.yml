@@ -54,12 +54,13 @@ services:
     environment:
       POSTGRES_USER: "${POSTGRES_USER:-postgres}"
       POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?PG_PASSWORD_REQUIRED}"
-      # ⚠️ Ротация пароля: POSTGRES_PASSWORD потребляется при initdb и хранится в data dir
-      # (pg_authid) — смена env-переменной НЕ ротирует пароль в работающей БД. Процедура
-      # ротации (ALTER USER + sops + пересоздание потребителей + верификация) — ROTATION.md
-      # в этом модуле (runbook, 130 W3). Решение: runbook вместо автоматизации в
-      # secrets_manager (>30 LOC, не unit-тестируемо без живого postgres — native pytest).
-      # Обязательность: ротация ≥1 раз в квартал (≤2026-11-04).
+      # 🧐 TRAP[DECISION] · 2026-08-11 · — · Ротация POSTGRES_PASSWORD отменена решением 2026-08-11
+      # · Rejected: реализация ротации через secrets_manager (риск: рассинхрон потребителей;
+      # ·   >30 LOC, не unit-тестируема без живого postgres — native pytest)
+      # · Reason: решение оператора 2026-08-11 (DevPlan 145 W3, D-130-P3-4) — пароль генерируется
+      # ·   при initdb/bootstrap и НЕ ротируется. Смена env НЕ ротирует пароль
+      # ·   в работающей БД (pg_authid) — только initdb-время.
+      # · Rev: если появится требование ротации пароля БД — переоткрыть D-130-P3-4 с автоматизацией.
       POSTGRES_DB: "${POSTGRES_DB:-platform}"
 
     volumes:

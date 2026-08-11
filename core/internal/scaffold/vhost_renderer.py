@@ -669,6 +669,75 @@ def remove_vhost(project_name: str, overlays_dir: str, platform_root: str | None
 
 
 # ──────────────────────────────────────────────────────────────────────
+# CONFIGURE_VHOST_FOR_PROJECT (D-I1, DevPlan 145 W3)
+# ──────────────────────────────────────────────────────────────────────
+
+# region FUNC_configure_vhost_for_project
+
+
+def configure_vhost_for_project(
+    project_dir: str | Path,
+    domain: str,
+    node_configs_dir: str | Path | None,
+) -> bool:
+    """Configure nginx vhost for a project (adopt-project step, Python API).
+
+    ▶ ┌project_dir + domain + node_configs_dir┐ → ◇ load_vhost_config → ProjectEntry
+    → ◇ resolve node → ◇ render_vhost → ⎋ True (success) | False (skip/no-config)
+
+    ## @purpose — Python-first API для adopt-project (D4 primary path). Оживляет мёртвый
+    ##            try/except в vhost_configurator.py:63-77 (ранее всегда ImportError →
+    ##            subprocess fallback). Реализует configure_vhost без subprocess add-vhost.sh.
+    ## @io — ⇥ project_dir: str | Path — project root directory (contains ai-platform.yaml)
+    ##       ⇥ domain: str — project domain (already validated by caller, non-empty)
+    ##       ⇥ node_configs_dir: str | Path | None — node-configs root (None → auto-resolve)
+    ##       → ⎋ bool — True if vhost rendered successfully, False if skipped/failed
+    ## @complexity — O(S) where S = template size (delegates to render_vhost)
+    ## @invariants
+    ##   - If node_configs_dir is None → return False (caller falls back to subprocess)
+    ##   - Uses load_vhost_config to read project metadata (name, target_node)
+    ##   - Delegates to render_vhost for actual file generation
+    ##   - Returns False on any parse/render error (no exception escapes — adopt continues)
+    ##   - D-I1 (DevPlan 145 W3): Python API primary path активирован (D4)
+    """
+    if not node_configs_dir:
+        logger.info("[IMP:8][configure_vhost] No node_configs_dir provided — skip (caller falls back)")
+        return False
+
+    try:
+        config = load_vhost_config(str(project_dir))
+        if config is None:
+            logger.info("[IMP:8][configure_vhost] No vhost config (expose:false or no domain) — skip")
+            return False
+
+        # Override domain with caller-provided value (adopt flow sets domain before vhost)
+        entry = ProjectEntry(name=config.name, domain=domain)
+        node = config.target_node
+
+        logger.info(
+            "[IMP:9][configure_vhost] Rendering vhost: project=%s domain=%s node=%s",
+            config.name,
+            domain,
+            node,
+        )
+
+        render_vhost(
+            entry=entry,
+            node=node,
+            node_configs_dir=str(node_configs_dir),
+        )
+        logger.info("[IMP:9][configure_vhost] Vhost rendered successfully: %s → %s", config.name, domain)
+        return True
+
+    except (ConfigNotFoundError, ConfigParseError, OSError, DuplicateDomainError) as e:
+        logger.info("[IMP:8][configure_vhost] Failed to render vhost: %s — skip (caller falls back)", e)
+        return False
+
+
+# endregion FUNC_configure_vhost_for_project
+
+
+# ──────────────────────────────────────────────────────────────────────
 # NGINX -T HARNESS (lazy facade — implementation in nginx_harness.py)
 # ──────────────────────────────────────────────────────────────────────
 

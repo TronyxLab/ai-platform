@@ -464,7 +464,18 @@ def save_state(state: BootstrapState, path: Path) -> None:
         # Shared atomic_writer (E5-канон): NamedTemporaryFile в той же директории →
         # flush + fsync → os.replace. Фиксированный tmp (legacy .json.tmp) удалён — гонка writers.
         _atomic_write_json(path, state.to_dict(), mode=0o644)
-        logger.debug("[IMP:6][StateMachine][save] State saved to %s", path)
+        # IMP:9 business logic: state persisted atomically (flock + unique tmp → fsync → replace).
+        # D-136-state-store-IMP9 (DevPlan 145 W3): подтверждающий лог успешной персистенции
+        # с путём, режимом и числом фаз — коррапт/гонка детектируется по отсутствию этой строки.
+        step_count = len(state.steps)
+        logger.info(
+            "[IMP:9][StateMachine][save] State persisted: path=%s mode=%s node=%s mode_run=%s steps=%d",
+            path,
+            "0o644",
+            state.node,
+            state.mode,
+            step_count,
+        )
     except OSError as e:
         logger.error("[IMP:10][StateMachine][save] Failed to save state: %s", e)
         raise

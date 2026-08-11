@@ -12,10 +12,14 @@
 ##   - catalog.json сохраняется в CATALOG_FILE (по умолчанию /opt/platform/catalog.json)
 ##   - Ошибки YAML-парсинга одного проекта НЕ блокируют остальные — WARN + continue
 ##   - Сортировка по (org, name) для детерминированного вывода
+##   - D-I4 (DevPlan 145 W3): logging.basicConfig(force=True) ONLY в main() (CLI entrypoint),
+##     НЕ на module-level — side-effect на импорт убран (тесты не отравляют root-логгер)
 ## @rationale Единый источник правды для AI-агентов и мониторинга о составе проектов платформы.
 ##           Извлечён из inline python3 heredoc generate-catalog.sh в отдельный тестируемый
 ##           Python-модуль (Strangler-Fig декомпозиция).
 ## @changes  Extracted from generate-catalog.sh inline heredoc → standalone module with CLI args
+##           2026-08-11 · DevPlan 145 W3 D-I4 — basicConfig(force=True) перемещён в main()
+##                      (module-level side-effect ломал чужие логгеры при импорте в тестах)
 ## @usecases
 ##   - make generate-catalog (через generate-catalog.sh facade)
 ##   - reconfigure monitoring после успешного деплоя
@@ -35,6 +39,12 @@ from core.internal.shared.exceptions import PlatformError, PlatformFatalError
 from core.internal.shared.project_yaml import get_monitoring, get_needs, load_project_yaml
 
 # ── logging setup ──────────────────────────────────────────────────────────────
+# D-I4 (DevPlan 145 W3): logging.basicConfig перемещён в main() — module-level side-effect
+# (force=True) ломал форматтеры других логгеров при импорте в pytest-сессиях
+# (ValueError: Formatting field not found in record: 'imp_level'). Module-level импорт
+# остаётся чистым; _setup_logging() вызывается только из CLI entrypoint.
+
+log = logging.getLogger("generate_catalog")
 
 
 class _ImpFilter(logging.Filter):
@@ -46,14 +56,28 @@ class _ImpFilter(logging.Filter):
         return True
 
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="[IMP:%(imp_level)s][%(funcName)s] %(message)s",
-    stream=sys.stderr,
-    force=True,
-)
-log = logging.getLogger("generate_catalog")
 log.addFilter(_ImpFilter())
+
+
+def _setup_logging() -> None:
+    """Configure root logger with IMP-format. Called ONLY from main() (D-I4, DevPlan 145 W3).
+
+    ▶ ┌None┐ → ⚡ logging.basicConfig(force=True) → ⎋ None
+
+    ## @purpose — CLI-only logging setup. Module-level basicConfig removed (D-I4) — side-effect
+    ##            на импорт ломал pytest caplog (imp_level formatter applied to foreign loggers).
+    ## @io — ⇥ None → ⎋ None (mutates root logger config)
+    ## @complexity — O(1)
+    ## @invariants
+    ##   - Called only when module is run as CLI (main / __main__), not on import
+    ##   - _ImpFilter installed on generate_catalog logger (not root) for imp_level default
+    """
+    logging.basicConfig(
+        level=logging.INFO,
+        format="[IMP:%(imp_level)s][%(funcName)s] %(message)s",
+        stream=sys.stderr,
+        force=True,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -246,6 +270,7 @@ def parse_cli_args(argv: list[str]) -> argparse.Namespace:
 ## @complexity O(n) — delegates to generate_catalog
 def main(argv: list[str] | None = None) -> int:
     """CLI entrypoint: parse args, generate catalog, return status code (T4: main() -> int)."""
+    _setup_logging()  # D-I4: IMP-formatter applied only on CLI invocation, not import
     try:
         args = parse_cli_args(argv if argv is not None else sys.argv)
         count = generate_catalog(

@@ -136,6 +136,8 @@ def try_parse_compose(compose_path: Path, *, compose_profiles: str) -> dict | No
                 pass
 
     # Method 2: PyYAML fallback
+    # D-I2 (DevPlan 145 W3): расширен except на FileNotFoundError/OSError → best-effort None
+    # (контракт «best-effort skip на недоступности парсера» обещает valid=True).
     try:
         import yaml
 
@@ -144,6 +146,17 @@ def try_parse_compose(compose_path: Path, *, compose_profiles: str) -> dict | No
         if data and isinstance(data, dict):
             logger.info("[IMP:7][validate_net] Compose parsed via PyYAML")
             return data
+    except FileNotFoundError:
+        logger.info(
+            "[IMP:8][validate_net] Compose file not found: %s — best-effort skip (D-I2)",
+            compose_path,
+        )
+    except OSError as e:
+        logger.info(
+            "[IMP:8][validate_net] OSError reading %s: %s — best-effort skip (D-I2)",
+            compose_path,
+            e,
+        )
     except (ImportError, yaml.YAMLError):
         pass
 

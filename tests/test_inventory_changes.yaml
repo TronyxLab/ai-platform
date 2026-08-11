@@ -2105,3 +2105,12 @@ removed:
     reason: "DevPlan 141: удалён полностью — шаблоны больше не содержат ai-platform.yaml (генерируется gen_ai_platform_yaml, покрыт своими тестами)."
     issue: "141-template-evolution Q1"
     approved_by: "@tronyx"
+
+  # ── DevPlan 145 W3 (repo-cleanup-debt-registry, D-I2) ──
+  # try_parse_compose: missing-file edge закрыт — FileNotFoundError теперь ловится →
+  # best-effort None (контракт «best-effort skip» соблюдён). Тест переименован:
+  # test_try_parse_missing_file_raises → test_try_parse_missing_file_returns_none.
+  - nodeid: "tests/unit/test_compose_validator.py::test_try_parse_missing_file_raises"
+    reason: "Rename → test_try_parse_missing_file_returns_none (D-I2): try_parse_compose missing-file → None вместо FileNotFoundError — drift контракта закрыт, тест фиксирует новое поведение."
+    issue: "145-repo-cleanup-debt-registry D-I2"
+    approved_by: "@tronyx"

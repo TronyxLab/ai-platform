@@ -18,21 +18,16 @@
 ##   - LDD: каждый тест — IMP:9-траектория (ldd_trajectory)
 ## @rationale W4 (139): 219 LOC production без тестов — M4 gate adopt-project (step 6). Поведенческие
 ##            инварианты из MODULE_CONTRACT compose_validator — в исполняемые проверки.
-## ⚠️ TRAP[DEBT] · 2026-08-05 · LO · try_parse_compose: отсутствующий compose-файл (docker недоступен) →
-## ·   FileNotFoundError пробрасывается (except ловит только ImportError/yaml.YAMLError), хотя
-## ·   инвариант «best-effort skip» обещает valid=True на недоступности парсера.
-## · Observed: test_try_parse_missing_file (W4.2) фиксирует фактическое поведение (raise).
-## · Suspected: PyYAML-ветка писалась под существующий файл (adopt flow) — missing-file edge не покрыт.
-## · Impact: LOW — в adopt flow compose существует; edge проявится только при неверном пути.
-## · When: during 139 W4.2 test authoring
+## @changes  2026-08-05 | Created (DevPlan 139 W4.2)
+##            2026-08-11 | DevPlan 145 W3 D-I2 — try_parse_compose FileNotFoundError
+##                       теперь ловится → best-effort None (контракт «best-effort skip» соблюдён);
+##                       test_try_parse_missing_file_returns_none вместо test_try_parse_missing_file_raises
 # endregion MODULE_CONTRACT
 
 import logging
 import subprocess
 from pathlib import Path
 from unittest import mock
-
-import pytest
 
 from core.internal.scaffold.compose_validator import (
     analyze_proxy_net,
@@ -266,26 +261,27 @@ def test_try_parse_none_when_yaml_malformed(tmp_path, monkeypatch, caplog) -> No
 # endregion FUNC_test_try_parse_none_when_yaml_malformed
 
 
-# region FUNC_test_try_parse_missing_file_raises
-## @purpose  Фактическое поведение: docker недоступен + файл отсутствует → FileNotFoundError пробрасывается
-##            (не best-effort skip). Документирует drift контракта — TRAP[DEBT] LO в MODULE_CONTRACT.
-# 🧪 TRAP[TEST] · try_parse_missing_file_raises · NEGATIVE (R5, фактическое поведение) · Drift: missing-file ≠ best-effort
-# · Scenario: which → None; compose_path не существует → FileNotFoundError (фиксирует текущую реализацию)
-# · Last fail: N/A (новый тест W4.2; ловит drift контракта «best-effort skip» vs реализация)
-# · Remove if: try_parse_compose начинает возвращать None на missing-file (drift закрыт) — тест обновить
+# region FUNC_test_try_parse_missing_file_returns_none
+## @purpose  D-I2 закрыт (DevPlan 145 W3): docker недоступен + файл отсутствует → FileNotFoundError
+##            ловится → best-effort None (контракт «best-effort skip» соблюдён, drift устранён).
+# 🧪 TRAP[TEST] · try_parse_missing_file_returns_none · NEGATIVE (R5) · Regression: missing-file роняет парсинг
+# · Scenario: which → None; compose_path не существует → None (best-effort skip, контракт соблюдён)
+# · Last fail: 2026-08-05 — drift контракта (FileNotFoundError пробрасывался); закрыт D-I2
+# · Remove if: try_parse_compose снова начинает пробрасывать missing-file (контракт нарушен)
 @ldd_trajectory
-def test_try_parse_missing_file_raises(tmp_path, monkeypatch, caplog) -> None:
-    """docker недоступен + файл отсутствует → FileNotFoundError (фактическое поведение, TRAP[DEBT])."""
+def test_try_parse_missing_file_returns_none(tmp_path, monkeypatch, caplog) -> None:
+    """docker недоступен + файл отсутствует → None (best-effort skip, D-I2 закрыт)."""
     missing = tmp_path / "does-not-exist" / "compose.yaml"
 
     monkeypatch.setattr("core.internal.scaffold.compose_validator.shutil.which", lambda name: None)
 
-    with pytest.raises(FileNotFoundError):
-        try_parse_compose(missing, compose_profiles="")
-    logger.info("[IMP:9][test] try_parse_compose: missing-file → FileNotFoundError (документированный drift) ✓")
+    data = try_parse_compose(missing, compose_profiles="")
+
+    assert data is None, "Missing-file → None (best-effort skip, контракт соблюдён после D-I2)"
+    logger.info("[IMP:9][test] try_parse_compose: missing-file → None (D-I2 закрыт, best-effort) ✓")
 
 
-# endregion FUNC_test_try_parse_missing_file_raises
+# endregion FUNC_test_try_parse_missing_file_returns_none
 
 
 # ═══════════════════════════════════════════════════════════════════════════

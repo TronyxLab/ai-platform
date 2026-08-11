@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: test-vhost-configurator configure-vhost update-yaml-for-vhost configure-vhost-via-subprocess resolve-node-configs-dir skip-no-domain fallback D4
-# STRUCTURE: fixtures(tmp_path project factory) → ◇ configure_vhost ┌empty domain → SKIP (False) без мутаций┐ → ◇ primary vhost_renderer (mock) → ◇ fallback subprocess (add-vhost.sh) → ◇ update_yaml_for_vhost (needs.domain + expose:true) → ◇ resolve_node_configs_dir (walk-up | PROJECTS_ROOT env) → ⎋ LDD IMP:9
+# STRUCTURE: fixtures(tmp_path project factory) → ◇ configure_vhost ┌empty domain → SKIP (False) без мутаций┐ → ◇ primary vhost_renderer (real call, D-I1 закрыт) → ◇ fallback subprocess (add-vhost.sh) → ◇ update_yaml_for_vhost (needs.domain + expose:true) → ◇ resolve_node_configs_dir (walk-up | PROJECTS_ROOT env) → ⎋ LDD IMP:9
 # region MODULE_CONTRACT
 ## @purpose  Unit tests for scaffold/vhost_configurator.py (DevPlan 139 W4.1 — закрытие blind spot
 ##            vhost_configurator, 222 LOC). Рендер НЕ перетестируется — unit/test_vhost_renderer.py
@@ -22,16 +22,8 @@
 ## @rationale W4 (139): 222 LOC production без тестов — критичный adopt-path (step 8). Поведенческие
 ##            контракты из MODULE_CONTRACT vhost_configurator переносятся в исполняемые проверки.
 ## @changes  2026-08-05 | Created (DevPlan 139 W4.1)
-## ⚠️ TRAP[DEBT] · 2026-08-05 · MED · configure_vhost_for_project НЕ существует в vhost_renderer.py
-## · Observed: vhost_renderer экспортирует render_vhost/render_all/remove_vhost (grep 2026-08-05),
-## ·   но НЕ configure_vhost_for_project — `from core.internal.scaffold.vhost_renderer import
-## ·   configure_vhost_for_project` ВСЕГДА бросает ImportError → путь «Python API primary» (D4)
-## ·   мёртв: configure_vhost всегда идёт в subprocess add-vhost.sh fallback.
-## · Suspected: экстракция B9 T5 из project_adopter перенесла вызов без функции-имплементации
-## ·   (заглушка-контракт); test_project_adopter.py:641-644 мокает атрибут — подтверждает инъекцию.
-## · Impact: dead code (мёртвый try/except); если vhost_renderer когда-либо станет каноном —
-## ·   silent drift; сейчас рабочий путь — subprocess, поведение корректное.
-## · When: during 139 W4.1 test authoring
+##            2026-08-11 | DevPlan 145 W3 D-I1 — configure_vhost_for_project реализован
+##                       в vhost_renderer.py; primary-path тест переведён с mock на реальный вызов
 # endregion MODULE_CONTRACT
 
 import logging
@@ -108,26 +100,37 @@ def test_configure_vhost_empty_domain_skips_no_mutation(tmp_path, monkeypatch, c
 
 
 # region FUNC_test_configure_vhost_renderer_primary_path
-## @purpose  D4 primary: vhost_renderer.configure_vhost_for_project доступен (DI-инъекция) →
-##            вызывается renderer, subprocess fallback НЕ запускается, результат True.
-##            ⚠️ В дереве функция отсутствует (TRAP[DEBT] выше) — тест фиксирует КОНТРАКТ
-##            renderer-пути через monkeypatch-инъекцию (паттерн test_project_adopter.py:641-644).
+## @purpose  D4 primary (D-I1 закрыт): vhost_renderer.configure_vhost_for_project реализован →
+##            вызывается renderer, subprocess fallback НЕ запускается, vhost-файл создан, результат True.
 # 🧪 TRAP[TEST] · configure_vhost_renderer_primary_path · Contract (D4) · Regression: renderer path не исполняется
-# · Scenario: renderer.configure_vhost_for_project → mock True; configure_vhost → True;
-# ·   renderer вызван с project_dir/domain/node_configs_dir; subprocess НЕ вызван
-# · Last fail: N/A (новый тест W4.1; primary path мёртв в дереве — TRAP[DEBT] MED)
+# · Scenario: node_configs_dir задан; configure_vhost → real configure_vhost_for_project → render_vhost;
+# ·   vhost-файл создан в overlays/nginx/{domain}.conf; subprocess НЕ вызван; result=True
+# · Last fail: N/A (после D-I1 primary-path реальный; ранее mock-инъекция)
 # · Remove if: renderer-путь удаляется из configure_vhost (тогда тест удалить с ним)
 @ldd_trajectory
 def test_configure_vhost_renderer_primary_path(tmp_path, monkeypatch, caplog) -> None:
-    """Renderer доступен → configure_vhost_for_project вызывается, subprocess не запускается."""
-    import core.internal.scaffold.vhost_renderer as vr
+    """Renderer доступен (D-I1) → configure_vhost_for_project вызывается, vhost создан, subprocess не запускается."""
+    # D-I1 (DevPlan 145 W3): configure_vhost_for_project реализован — реальный вызов, не mock
+    project_dir = tmp_path / "proj"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    import yaml
 
-    project_dir = _make_project(tmp_path)
+    # ai-platform.yaml с expose:true + target_node (нужно для load_vhost_config)
+    with open(project_dir / "ai-platform.yaml", "w") as f:
+        yaml.dump(
+            {
+                "name": "test-app",
+                "type": "backend",
+                "target_node": "test-node",
+                "needs": {"domain": "example.com", "expose": True},
+            },
+            f,
+            default_flow_style=False,
+            sort_keys=False,
+        )
+
     yaml_file = project_dir / "ai-platform.yaml"
     node_configs_dir = tmp_path / "node-configs"
-
-    renderer_mock = mock.MagicMock(return_value=True)
-    monkeypatch.setattr(vr, "configure_vhost_for_project", renderer_mock, raising=False)
 
     subprocess_mock = mock.MagicMock()
     monkeypatch.setattr(vc.subprocess, "run", subprocess_mock)
@@ -137,36 +140,43 @@ def test_configure_vhost_renderer_primary_path(tmp_path, monkeypatch, caplog) ->
     )
 
     assert result is True, "Renderer-успех обязан вернуть True"
-    renderer_mock.assert_called_once()
-    call_kwargs = renderer_mock.call_args.kwargs
-    assert call_kwargs["project_dir"] == project_dir
-    assert call_kwargs["domain"] == "example.com"
-    assert call_kwargs["node_configs_dir"] == node_configs_dir
     subprocess_mock.assert_not_called(), "Renderer path не должен запускать subprocess fallback"
-    logger.info("[IMP:9][test] configure_vhost: primary renderer path → True, subprocess не запущен ✓")
+    # vhost-файл создан в overlays/nginx/test-node/
+    vhost_file = node_configs_dir / "test-node" / "overlays" / "nginx" / "example.com.conf"
+    assert vhost_file.exists(), f"Ожидался vhost-файл: {vhost_file}"
+    assert "GENERATED" in vhost_file.read_text(), "vhost-файл должен содержать GENERATED-маркер"
+    logger.info("[IMP:9][test] configure_vhost: primary renderer path → True, vhost создан ✓")
 
 
 # endregion FUNC_test_configure_vhost_renderer_primary_path
 
 
 # region FUNC_test_configure_vhost_renderer_false_triggers_subprocess
-## @purpose  Renderer возвращает False → fallback на subprocess add-vhost.sh (D4) → True при rc=0.
+## @purpose  Renderer возвращает False (нет target_node → load_vhost_config=None → configure skip) →
+##            fallback на subprocess add-vhost.sh (D4) → True при rc=0.
 # 🧪 TRAP[TEST] · configure_vhost_renderer_false_fallback · Contract (D4) · Regression: False-рендера не ведёт к fallback
-# · Scenario: renderer → False → configure_vhost_via_subprocess вызывается; subprocess rc=0 → True
-# · Last fail: N/A (новый тест W4.1)
+# · Scenario: ai-platform.yaml без target_node → configure_vhost_for_project returns False →
+# ·   configure_vhost_via_subprocess вызывается; subprocess rc=0 → True
+# · Last fail: N/A (после D-I1: реальный renderer, False через отсутствующий target_node)
 # · Remove if: renderer-False контракт меняется (False перестаёт означать «пробуй fallback»)
 @ldd_trajectory
 def test_configure_vhost_renderer_false_triggers_subprocess(tmp_path, monkeypatch, caplog) -> None:
-    """Renderer → False → subprocess fallback (add-vhost.sh), rc=0 → True."""
-    import core.internal.scaffold.vhost_renderer as vr
+    """Renderer → False (no target_node) → subprocess fallback (add-vhost.sh), rc=0 → True."""
+    project_dir = tmp_path / "proj"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    import yaml
 
-    project_dir = _make_project(tmp_path)
+    # ai-platform.yaml БЕЗ target_node → load_vhost_config вернёт None → configure_vhost_for_project False
+    with open(project_dir / "ai-platform.yaml", "w") as f:
+        yaml.dump(
+            {"name": "test-app", "type": "backend", "needs": {"database": "postgres"}},
+            f,
+            default_flow_style=False,
+            sort_keys=False,
+        )
     yaml_file = project_dir / "ai-platform.yaml"
     node_configs_dir = tmp_path / "node-configs"
     node_configs_dir.mkdir()
-
-    renderer_mock = mock.MagicMock(return_value=False)
-    monkeypatch.setattr(vr, "configure_vhost_for_project", renderer_mock, raising=False)
 
     subprocess_mock = mock.MagicMock(
         return_value=subprocess.CompletedProcess(["bash", str(_ADD_VHOST_SCRIPT)], 0, stdout="", stderr="")
@@ -179,7 +189,7 @@ def test_configure_vhost_renderer_false_triggers_subprocess(tmp_path, monkeypatc
 
     assert result is True, "Fallback rc=0 обязан вернуть True"
     subprocess_mock.assert_called_once(), "Renderer False → subprocess fallback запущен"
-    logger.info("[IMP:9][test] configure_vhost: renderer False → subprocess fallback → True ✓")
+    logger.info("[IMP:9][test] configure_vhost: renderer False (no target_node) → subprocess fallback → True ✓")
 
 
 # endregion FUNC_test_configure_vhost_renderer_false_triggers_subprocess
@@ -191,8 +201,8 @@ def test_configure_vhost_renderer_false_triggers_subprocess(tmp_path, monkeypatc
 
 
 # region FUNC_test_configure_vhost_fallback_subprocess_when_renderer_unavailable
-## @purpose  vhost_renderer НЕДОСТУПЕН (sys.modules=None → ImportError — реальное состояние дерева,
-##            TRAP[DEBT] MED) → fallback configure_vhost_via_subprocess → bash add-vhost.sh с
+## @purpose  vhost_renderer НЕДОСТУПЕН (sys.modules=None → ImportError — тест форсирует
+##            недоступность renderer-модуля) → fallback configure_vhost_via_subprocess → bash add-vhost.sh с
 ##            --project-dir/--node-configs-dir → rc=0 → True. update_yaml_for_vhost отработал ДО fallback.
 # 🧪 TRAP[TEST] · configure_vhost_fallback_subprocess_unavailable_renderer · Regression (реальный путь) · Fallback не работает
 # · Scenario: sys.modules["...vhost_renderer"]=None → ImportError → subprocess add-vhost.sh rc=0 → True;

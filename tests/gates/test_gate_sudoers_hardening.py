@@ -101,19 +101,22 @@ def test_no_dangerous_privesc_patterns_in_setup_node(caplog: pytest.LogCaptureFi
 
 @pytest.mark.gate
 def test_legitimate_ops_entries_present(caplog: pytest.LogCaptureFixture) -> None:
-    """T10.1: легитимные операционные sudoers-записи остаются (nginx systemctl + node-lifecycle.sh)."""
+    """T10.1: легитимные операционные sudoers-записи остаются (node-lifecycle.sh + diagnostics)."""
     # 🧪 TRAP[TEST] · REGRESSION · DevPlan 136 W10 T10.1 — легитимные права не выпилены вместе с PRIVESC
-    # · Scenario: удалить nginx/node-lifecycle sudoers — конверг/операции platform сломаются
+    # · Scenario: удалить node-lifecycle sudoers — конверг/операции platform сломаются
     # · Last fail: N/A (позитив-контракт)
     # · Remove if: операционная модель platform user изменена
+    # · 2026-08-11 · DevPlan 145 W3 D-136-W10: nginx systemctl entries удалены из required —
+    # ·   обе ноды Docker (nginx в контейнере, systemctl unit not found на test-VPS).
+    # ·   Required-список сужен до node-lifecycle.sh + diagnostics (ufw/cat audit/ss/iptables).
     caplog.set_level(logging.INFO)
 
     heredoc = _extract_setup_node_heredoc()
     required = (
-        "/bin/systemctl reload nginx",
-        "/usr/sbin/nginx -t",
         "node-lifecycle.sh",
-        "ci-deploy ALL=(root) NOPASSWD: /bin/systemctl reload nginx",
+        "/usr/sbin/ufw status verbose",
+        "/var/log/platform/audit.jsonl",
+        "/usr/sbin/ss -tlnp",
     )
     missing = [req for req in required if req not in heredoc]
     logger.info("[IMP:9][sudoers-gate] Отсутствующие легитимные записи: %s", missing)

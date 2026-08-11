@@ -43,19 +43,22 @@ _MAKEFILE_PATH: pathlib.Path = repo_root() / "Makefile"
 # Expected workflow files after Plan 2 consolidation + DevPlan 050 build-hermes
 # DevPlan 116 B1 T4: platform-deploy.yml + stage-deploy.yml УДАЛЕНЫ — единый канал deploy-project.yml
 # DevPlan 116 B11 T4 (D2): +platform-gate-fast.yml — лёгкий gate-workflow (push main), downstream на нём
+# DevPlan 145 W4 (D-134-L3/L4): +security-scan.yml + hermes-nightly.yml — security CI overlay
 _EXPECTED_WORKFLOWS: set[str] = {
     "build-hermes.yml",
     "build-platform.yml",
     "core-deploy.yml",
     "deploy-project.yml",
+    "hermes-nightly.yml",
     "mirror.yml",
     "platform-gate-fast.yml",
     "platform-test.yml",
     "push-gate.yml",
+    "security-scan.yml",
 }
 
-# Expected count: 8 (7 + platform-gate-fast.yml, DevPlan 116 B11 T4 D2)
-_EXPECTED_WORKFLOW_COUNT: int = 8
+# Expected count: 10 (8 + security-scan.yml + hermes-nightly.yml, DevPlan 145 W4 D-134-L3/L4)
+_EXPECTED_WORKFLOW_COUNT: int = 10
 
 # Deploy workflows that should trigger on platform-gate-fast (workflow_run, D2 — DevPlan 116 B11 T4)
 _DEPLOY_WORKFLOWS: set[str] = {
@@ -206,14 +209,14 @@ def test_main_full_gate_deleted():
 
 @pytest.mark.gate
 def test_workflow_count_is_correct():
-    """Verify workflow count is 9 (8 pre-existing + 1 build-hermes.yml, DevPlan 050)."""
+    """Verify workflow count is 10 (8 + security-scan.yml + hermes-nightly.yml, DevPlan 145 W4)."""
     yml_files = sorted(f for f in _WORKFLOW_DIR.glob("*.yml"))
     workflow_count = len(yml_files)
     logger.info("[IMP:9][test] Workflow count: %d", workflow_count)
     assert workflow_count == _EXPECTED_WORKFLOW_COUNT, (
         f"Expected {_EXPECTED_WORKFLOW_COUNT} workflow files, found {workflow_count}: {[f.name for f in yml_files]}"
     )
-    logger.info("[IMP:9][test] Workflow count correct: %d (8 pre-existing + build-hermes.yml)", workflow_count)
+    logger.info("[IMP:9][test] Workflow count correct: %d (8 + security-scan.yml + hermes-nightly.yml)", workflow_count)
 
 
 @pytest.mark.gate

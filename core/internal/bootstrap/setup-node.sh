@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# GREP_SUMMARY: setup-node sudoers visudo atomic node platform
+# GREP_SUMMARY: setup-node sudoers visudo atomic node platform node-lifecycle
 # STRUCTURE: ┌NODE_NAME┐ → ⚡ generate_sudoers (visudo -c + atomic mv) → ⎋ exit 0|1
 # region MODULE_CONTRACT
 ## @purpose  Generate sudoers for the platform node safely — temp file → visudo -c → atomic mv (lockout-safe).
 ##           ТОЛЬКО sudoers. Пользователи (platform/ci-deploy) и SSH-ключи создаются Python-фазой φ2
 ##           (lifecycle/helpers/users.py) — setup-node.sh НЕ дублирует их (волна 117 D1).
 ##           DevPlan 136 W10 T10.1: sudoers СУЖЕН — docker/rsync NOPASSWD удалены (PRIVESC, S-1/S-2/S-3).
+##           DevPlan 145 W3 D-136-W10: nginx systemctl sudoers УДАЛЕНЫ — все ноды Docker
+##           (nginx в контейнере, systemctl unit not found). Rev-нота «вернуть при non-Docker ноде».
 ## @scope    Called from lifecycle phases.py φ3 (phase_platform_setup) via subprocess.
 ## @invariants
 ##   - sudoers generated via temp file → visudo -c → atomic mv (lockout-safe, SC5)
@@ -16,12 +18,16 @@
 ##     НИКАКИХ sudo docker compose/exec/ps/logs/restart/stats (S-1/S-2 PRIVESC — удалены, T10.1)
 ##   - НИКАКОГО sudo rsync (S-3 PRIVESC — root-запись в любые файлы; доставка core идёт как root
 ##     по SSH через core_deliverer.py, sudo rsync не используется нигде — верификация W10 на test-VPS)
+##   - НИКАКИХ sudo systemctl nginx (D-136-W10, DevPlan 145 W3) — обе ноды Docker
+##     (nginx — контейнер, systemctl unit not found на test-VPS); вернуть при появлении non-Docker ноды
 ##   - ci-deploy role is SEPARATE from ci role — different scope and sudoers entries (06 §4.2)
 ##   - audit-путь в sudoers — /var/log/platform/audit.jsonl (ЕДИНЫЙ файл audit_logger.py D1;
 ##     audit.log мёртв, T10.9/S-11)
 ## @rationale visudo -c guard: sudoers syntax error = root lockout; temp+validate+mv prevents this (00 §12)
 ##            Волна 117 D1: create_user/add_owner_key/add_ci_deploy_command удалены — дубли φ2
 ##            (users.py). Единственный писатель ci-deploy authorized_keys — Python lifecycle φ2.
+##            DevPlan 145 W3 D-136-W10: nginx sudoers удалены — обе ноды (tronyx-vps, test-e2e) Docker,
+##            nginx работает в контейнере (systemctl unit not found на test-VPS, verификация W10 2026-08-05).
 ## ⚠️ TRAP[DECISION] · 2026-08-05 · HI · sudoers сужение platform: docker/rsync NOPASSWD удалены (T10.1)
 ## · Rejected: оставить docker compose */exec */rsync * (риск: любой docker compose run/exec = root-escape;
 ## ·   rsync * = root-запись в /etc/passwd / authorized_keys — эскалационная цепочка S-1/S-2/S-3)
@@ -29,14 +35,8 @@
 ## ·   user=root по SSH БЕЗ sudo (grep: 0 вызовов sudo docker / sudo rsync в core/); (б) platform и
 ## ·   ci-deploy в docker group (φ2 phases/system.py:262-287) → docker-команды доступны напрямую,
 ## ·   sudo не нужен; (в) deploy-modules/DeployOrchestrator исполняются как root (bootstrap) —
-## ·   sudo не задействован. Оставлено: nginx systemctl*/nginx -t, node-lifecycle.sh (контролируемый
-## ·   операционный скрипт, /opt/platform root-owned — не symlink-вектор), диагностика (ufw/ss/iptables),
-## ·   cat audit.jsonl (диагностика аудита). ci-deploy — только systemctl reload/status nginx (было так).
-## · 2026-08-05 LIVE: сужённый /etc/sudoers.d/platform-test-e2e применён на test-VPS (visudo -c +
-## ·   atomic mv) и верифицирован: docker ps от platform без sudo = OK (docker group);
-## ·   sudo -n cat audit.jsonl = OK (авторизация); sudo -n docker ps = "password is required" (PRIVESC
-## ·   заблокирован). nginx systemctl на test-VPS = "unit not found" (nginx — Docker-модуль, не systemd) —
-## ·   НЕ регрессия sudoers: запись разрешает команду, юнита нет (легаси-запись, как в старом sudoers).
+## ·   sudo не задействован. Оставлено: node-lifecycle.sh (контролируемый операционный скрипт,
+## ·   /opt/platform root-owned — не symlink-вектор), диагностика (ufw/ss/iptables), cat audit.jsonl.
 ## · Rev: если появится реальный потребитель sudo docker/rsync (платформенный, не user-проект) —
 ## ·   добавить точечные записи с конкретными флагами + gate-тест; консенсус-пересмотр 2026-10-21.
 # endregion MODULE_CONTRACT
@@ -82,14 +82,8 @@ generate_sudoers() {
 # и rsync NOPASSWD УДАЛЕНЫ (PRIVESC root-escape). platform/ci-deploy в docker group (φ2) →
 # docker-операции выполняются напрямую, sudo не нужен. Доставка core — rsync user=root (SSH),
 # sudo rsync не используется (верификация W10 на test-VPS). Gate: tests/gates/test_gate_sudoers_hardening.py.
-
-# platform user: nginx management
-platform ALL=(root) NOPASSWD: /bin/systemctl start nginx
-platform ALL=(root) NOPASSWD: /bin/systemctl stop nginx
-platform ALL=(root) NOPASSWD: /bin/systemctl restart nginx
-platform ALL=(root) NOPASSWD: /bin/systemctl reload nginx
-platform ALL=(root) NOPASSWD: /bin/systemctl status nginx
-platform ALL=(root) NOPASSWD: /usr/sbin/nginx -t
+# DevPlan 145 W3 D-136-W10: nginx systemctl sudoers УДАЛЕНЫ — обе ноды Docker (nginx в контейнере,
+# systemctl unit not found на test-VPS). Rev: вернуть при появлении non-Docker ноды.
 
 # platform user: platform operations (контролируемый операционный скрипт, /opt/platform root-owned)
 platform ALL=(root) NOPASSWD: ${PLATFORM_ROOT}/core/internal/bootstrap/node-lifecycle.sh
@@ -100,12 +94,11 @@ platform ALL=(root) NOPASSWD: /usr/bin/cat /var/log/platform/audit.jsonl
 platform ALL=(root) NOPASSWD: /usr/sbin/ss -tlnp
 platform ALL=(root) NOPASSWD: /usr/sbin/iptables -t nat -L -n
 
-# ci-deploy user: nginx reload only — NO docker commands via sudo
+# ci-deploy user: NO docker/nginx commands via sudo
 # ci-deploy is in docker group → direct docker socket access (no sudo needed)
 # /usr/bin/docker compose * intentionally NOT granted — principle of least privilege (06 §4.2)
 # Role ci-deploy is SEPARATE from role ci — different scope, different sudoers entries
-ci-deploy ALL=(root) NOPASSWD: /bin/systemctl reload nginx
-ci-deploy ALL=(root) NOPASSWD: /bin/systemctl status nginx
+# DevPlan 145 W3: nginx systemctl reload/status removed (nginx — Docker module, systemctl unit not found)
 EOF
 
     # [IMP:10][setup-node][sudoers] CRITICAL: validate before atomic replace — lockout-safe

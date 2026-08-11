@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-# GREP_SUMMARY: test-practices-check-project, mock-project, baseline-green, 60s, practices-lock, set-practices, drift-negative, L1, exit-codes
-# STRUCTURE: ▶ _make_mock_project (ai-platform.yaml + compose + src + git init/commit) → ◇ sync_practices → lock (version=1/level=auto/state=baseline) → ◇ check_project → exit 0 ≤60s → ◇ set_practices full → level/state меняются → ◇ drift negative (ручная правка) → FAIL warning
+# GREP_SUMMARY: test-practices-check-project, mock-project, baseline-green, 60s, practices-lock, set-practices, drift-negative, L1, exit-codes, audit-monkeypatch
+# STRUCTURE: ▶ _make_mock_project (ai-platform.yaml + compose + src + git init/commit) → ◇ sync_practices → lock (version=1/level=auto/state=baseline) → ◇ check_project → exit 0 ≤60s → ◇ set_practices full → level/state меняются (audit monkeypatched) → ◇ drift negative (ручная правка) → FAIL warning
 # region MODULE_CONTRACT
 ## @purpose  Unit-тесты check_project/sync_practices/set_practices (DevPlan 137 W1, K1 канал):
 ##           мок-проект (backend, 3 файла + git) проходит baseline-проверки ≤60s (warm),
@@ -14,8 +14,11 @@
 ##   - PROBE_PORT=59999 — детерминированный skip health-тестов (не зависит от порта 80)
 ##   - LDD: IMP:9-траектория через caplog
 ##   - R5: negative-тест дрейфа (ручная правка GENERATED-файла с шапкой → hash mismatch)
+##   - D-I3 (DevPlan 145 W3): audit_logger.write_audit_entry monkeypatched — 0 side-effects
+##     на /var/log/platform/audit.jsonl (фиктивные записи убраны)
 ## @rationale  AC W1: project-check зелёный на моке ≤60s (warm) без правок агента.
 ## @changes  2026-08-05 · DevPlan 137 W1 — создан
+##            2026-08-11 · DevPlan 145 W3 D-I3 — monkeypatch audit_logger (side-effect устранён)
 # endregion MODULE_CONTRACT
 """
 
@@ -24,6 +27,7 @@ import os
 import subprocess
 import time
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -38,6 +42,23 @@ logger = logging.getLogger(__name__)
 
 # Детерминированный skip health-тестов мока (ничего не слушает на этом порту)
 os.environ.setdefault("PROBE_PORT", "59999")
+
+
+# region FIXTURE_audit_logger_mock
+# D-I3 (DevPlan 145 W3): monkeypatch audit_logger.write_audit_entry — предотвращает side-effect
+# записи в /var/log/platform/audit.jsonl при set_practices (фиктивные проекты в продакшен-трейле).
+# Паттерн заимствован из test_escalator_downgrade_audit (137 W3).
+@pytest.fixture(autouse=True)
+def _stub_audit_logger() -> mock.MagicMock:
+    """Перехват audit_logger.write_audit_entry для всех тестов модуля (D-I3)."""
+    with mock.patch(
+        "core.internal.shared.audit_logger.write_audit_entry",
+        return_value=None,
+    ) as m:
+        yield m
+
+
+# endregion FIXTURE_audit_logger_mock
 
 
 # region HELPER__make_mock_project
@@ -132,20 +153,15 @@ def test_check_project_mock_baseline_green(tmp_path: Path, caplog: pytest.LogCap
 # · Regression: level=full → active-full ТОЛЬКО по согласию (автопромоута нет)
 # · Last fail: N/A
 # · Remove if: семантика set-practices меняется
-def test_set_practices_full_changes_level(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+def test_set_practices_full_changes_level(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, _stub_audit_logger: mock.MagicMock
+) -> None:
     """set_practices(project, 'full') → quality.level=full, lock state=active-full, pyproject full."""
     project = _make_mock_project(tmp_path)
     sync_practices(project)
 
-    # 📝 TRAP[DEBT] · 2026-08-05 · LO · W1-тест пишет РЕАЛЬНЫЕ аудит-записи в /var/log/platform/audit.jsonl
-    # · Observed: test_set_practices_full_changes_level вызывает set_practices → _audit_transition →
-    # ·   write_audit_entry (реальный writer) — на dev-машине с правами на /var/log/platform в
-    # ·   продакшен-трейл попадают записи project="mockproject" (проверено 2026-08-05: 2 записи в audit.jsonl)
-    # · Suspected: W1-тест не monkeypatch-ит audit_logger (в отличие от test_practices_escalator W3);
-    # ·   аудит не был в фокусе W1-спеки тестов
-    # · Impact: шум в аудит-трейле платформы (фиктивные проекты); на CI/нодах без прав — молчаливый skip
-    # · When: DevPlan 137 W3 — практическая проверка AC3 (аудит-запись увидела в audit.jsonl)
-    # · Fix (deferred): monkeypatch audit_logger.write_audit_entry как в test_escalator_downgrade_audit
+    # D-I3 (DevPlan 145 W3): audit_logger monkeypatched через _stub_audit_logger fixture —
+    # 0 side-effects на /var/log/platform/audit.jsonl.
     with caplog.at_level(logging.INFO):
         report = set_practices(project, "full")
     assert report.sync.level == "full"
@@ -159,6 +175,8 @@ def test_set_practices_full_changes_level(tmp_path: Path, caplog: pytest.LogCapt
     assert lock.state == "active-full"
     pyproject = (project / "pyproject.toml").read_text(encoding="utf-8")
     assert "select = [" in pyproject and '"E"' in pyproject  # full-конфиг ruff
+    # D-I3: audit вызван (transition зафиксирована), но НЕ записан в /var/log/platform/audit.jsonl
+    assert _stub_audit_logger.called, "audit_logger.write_audit_entry должен вызываться при transition"
     assert _print_ldd_trajectory(caplog), "LDD: нет IMP:9 лога set_practices"
 
 
