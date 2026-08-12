@@ -48,7 +48,7 @@ dev = [
     "types-pyyaml>=6.0.12",
 ]
 load = [
-    "locust>=2.32,<2.33",  # pinned to minor — must match locustio/locust:2.32.10 image (runner_remote.DEFAULT_IMAGE: полный semver, minor-only тега нет — BUG-4 146-m4); load extra, НЕ runtime-зависимость
+    "locust>=2.32,<2.47",  # pinned to minor — must match locustio/locust:2.32.10 image (runner_remote.DEFAULT_IMAGE: полный semver, minor-only тега нет — BUG-4 146-m4); load extra, НЕ runtime-зависимость
 ]
 
 [tool.pytest.ini_options]
