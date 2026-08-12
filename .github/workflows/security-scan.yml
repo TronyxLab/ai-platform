@@ -51,7 +51,7 @@ jobs:
       # trivy fs сканирует репозиторий как filesystem — детектит CVE в Dockerfile-базовых образах
       # (L1/L2), конфигах и коде. Severity gate: HIGH+ блокирует.
       - name: Trivy filesystem scan (severity gate HIGH+)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scan-ref: .
