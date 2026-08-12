@@ -203,6 +203,58 @@ def test_locust_env_has_target_rps(monkeypatch, caplog) -> None:
 # endregion TEST_locust_env_has_target_rps
 
 
+# region TEST_locust_env_passthrough_pg
+
+
+# 🧪 TRAP[TEST] · Scenario: _locust_env пробрасывает LT_PG_*/LT_LANGFUSE_* (DevPlan 148 W3 BUG-1/BUG-5)
+# · Regression: db-сценарий на LOAD_RUNNER=node не получал LT_PG_PASSWORD/LT_PG_USER
+#   (passthrough был только для LT_S3_*) → PgError auth в контейнере (fail 100%);
+#   langfuse-ключи LT_LANGFUSE_* не доходили до контейнера (Basic auth недоступен)
+# · Last fail: 2026-08-12 (W3 runtime, db smoke BLOCKED, langfuse 403)
+# · Remove if: db/langfuse-сценарии переведены на иной канал передачи секретов (не env)
+def test_locust_env_passthrough_pg(monkeypatch, caplog) -> None:
+    """LT_PG_*/LT_LANGFUSE_* из os.environ попадают в env locust (remote-режим, docker -e)."""
+    caplog.set_level(logging.INFO)
+    for key in (
+        "LT_S3_ACCESS_KEY",
+        "LT_S3_SECRET_KEY",
+        "LT_S3_BUCKET",
+        "LT_S3_OBJECT",
+        "LT_PG_USER",
+        "LT_PG_PASSWORD",
+        "LT_PG_DB",
+        "LT_PG_TABLE",
+        "LT_LANGFUSE_PUBLIC_KEY",
+        "LT_LANGFUSE_SECRET_KEY",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("LT_PG_USER", "postgres")
+    monkeypatch.setenv("LT_PG_PASSWORD", "secret-pw")
+    monkeypatch.setenv("LT_PG_DB", "platform")
+    monkeypatch.setenv("LT_LANGFUSE_PUBLIC_KEY", "pk-lf_public")
+    monkeypatch.setenv("LT_LANGFUSE_SECRET_KEY", "sk-lf_secret")
+    monkeypatch.setenv("LT_CHUNK_TIMEOUT", "25")  # BUG-7: env override поверх spec.chunk_timeout
+    env = _locust_env(_make_config(target_rps=10, users=20))
+    logger.info(
+        "[IMP:9][test][locust_env] LT_PG_USER=%s LT_PG_DB=%s pg_passthrough=%s lf_passthrough=%s chunk_timeout=%s",
+        env.get("LT_PG_USER"),
+        env.get("LT_PG_DB"),
+        "LT_PG_PASSWORD" in env,
+        "LT_LANGFUSE_SECRET_KEY" in env,
+        env.get("LT_CHUNK_TIMEOUT"),
+    )
+    _assert_ldd_imp9(caplog)
+    assert env["LT_PG_USER"] == "postgres"
+    assert env["LT_PG_PASSWORD"] == "secret-pw"
+    assert env["LT_PG_DB"] == "platform"
+    assert env["LT_LANGFUSE_PUBLIC_KEY"] == "pk-lf_public"
+    assert env["LT_LANGFUSE_SECRET_KEY"] == "sk-lf_secret"
+    assert env["LT_CHUNK_TIMEOUT"] == "25"
+
+
+# endregion TEST_locust_env_passthrough_pg
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # rps_wait_time — RPS-механизм (locust 2.32, пин <2.33; требуется load extra)
 # ═══════════════════════════════════════════════════════════════════════════════

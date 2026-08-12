@@ -10,11 +10,16 @@
 ##           env-оверрайдов (LOAD_RPS, LOAD_DURATION, LOAD_RESULTS_DIR, LOAD_RUNNER,
 ##           LOAD_IMAGE, LOAD_CPUS, LOAD_PROMETHEUS_PORT, LOAD_ALLOW_PROD, LOAD_VERSION,
 ##           LOAD_SCENARIO_<NAME> для optional, LOAD_ENDPOINT_<SCENARIO> — endpoint
-##           override, 146-m1 BUG-2), рендер плейсхолдеров и fail-fast
+##           override, 146-m1 BUG-2, LOAD_NETWORK — docker-сеть генератора, 148 TASK-5),
+##           рендер плейсхолдеров и fail-fast
 ##           валидация с exit 4 (ConfigValidationError) по контракту shared/contracts.py.
 ##           LOAD_IMAGE default — locustio/locust:2.32.10 (полный semver: minor-only
 ##           тега 2.32 в Docker Hub НЕ существует — BUG-4 146-m4; совпадает с
 ##           runner_remote.DEFAULT_IMAGE и pyproject-пином).
+##           network (148 TASK-3/5): scenarios.yaml#network → ScenarioSpec.network →
+##           LoadtestConfig.network → runner_remote `docker run --network <net>`; default
+##           host (web/s3), db — shared-db-net; override LOAD_NETWORK (приоритет env);
+##           allowlist host|shared-db-net — иначе ConfigValidationError (exit 4).
 ## @scope    Потребитель: runner_cli.py (единственный CLI). Чистые функции тестируются
 ##           native pytest (tests/unit/test_loadtest_config.py) без subprocess.
 ## @invariants
@@ -30,9 +35,15 @@
 ##      (рендер теми же плейсхолдерами) — per-node escape hatch.
 ##   6. Прямой YAML-парсинг node.yaml запрещён — только NodeYaml-фасад (shared/AGENTS.md).
 ##   7. main() не вызывается — модуль библиотечный (CLI — runner_cli.py).
+##   8. network (148 TASK-5): allowlist host|shared-db-net (иное → ConfigValidationError 4);
+##      LOAD_NETWORK override приоритетнее SoT (как LOAD_ENDPOINT_*); db требует
+##      LOAD_RUNNER=node — документируется и предупреждается (logger.warning при db+local),
+##      жёстко НЕ валидируется (dev-локальный запуск — сознательное исключение).
 ## @rationale SoT scenarios.yaml + env-оверрайды = воспроизводимые прогоны без правок кода;
 ##            NODE-резолв через существующие каноны платформы (node_resolver.py —
-##            Python SoT, DevPlan 146 инвариант 7).
+##            Python SoT, DevPlan 146 инвариант 7). network — свойство сценария
+##            (топология доступа: shared-db-net только для db), allowlist защищает от
+##            опечаток в имени docker-сети (docker run --network typo → silent fail).
 ## @changes  2026-08-11 | DevPlan 146 W1 — Created
 # endregion MODULE_CONTRACT
 
@@ -65,8 +76,14 @@ ENV_ALLOW_PROD = "LOAD_ALLOW_PROD"
 ENV_VERSION = "LOAD_VERSION"
 ENV_OPTIONAL_PREFIX = "LOAD_SCENARIO_"
 ENV_ENDPOINT_PREFIX = "LOAD_ENDPOINT_"  # per-scenario endpoint override (146-m1 BUG-2)
+ENV_NETWORK = "LOAD_NETWORK"  # docker-сеть генератора (148 TASK-5): override SoT network
 
 VALID_MODES: tuple[str, ...] = ("smoke", "regression", "capacity")
+# Allowlist docker-сетей контейнера генератора (148 TASK-5): host — web/s3 (эндпоинты
+# сервисов ноды на host-сети), shared-db-net — db (PostgreSQL публикуется ТОЛЬКО в эту
+# docker-сеть, NO ports: directive; DNS-алиас postgres:5432). Опечатка в имени сети →
+# docker run --network typo → silent fail — поэтому любое иное значение → exit 4.
+ALLOWED_NETWORKS: tuple[str, ...] = ("host", "shared-db-net")
 _PLACEHOLDER_RE = re.compile(r"\{([A-Za-z0-9_]+)\}")
 
 
@@ -76,11 +93,12 @@ class ScenarioSpec:
     """Спецификация сценария из SoT (после валидации и merge дефолтов).
 
     ## @purpose  Валидированная спецификация одного сценария — вход для runner_cli
-    ##            (endpoint/users/rps/пороги/длительности). Все поля числовые приведены
-    ##            к float/int; пороги > 0 (fail-fast).
+    ##            (endpoint/users/rps/пороги/длительности/сеть). Все поля числовые приведены
+    ##            к float/int; пороги > 0 (fail-fast); network ∈ allowlist (host|shared-db-net).
     ## @invariants
     ##   - target_rps > 0; users > 0; max_p95/max_p99/max_error > 0 (после валидации)
     ##   - optional → enabled из env LOAD_SCENARIO_<NAME> (по умолчанию False)
+    ##   - network — docker-сеть генератора (148): "host" (web/s3) | "shared-db-net" (db)
     """
 
     name: str
@@ -98,6 +116,7 @@ class ScenarioSpec:
     optional: bool = False
     enabled: bool = True
     ssl_verify: bool = False
+    network: str = "host"
     max_p95: float = 1.0
     max_p99: float = 3.0
     max_error: float = 0.05
@@ -126,6 +145,8 @@ class LoadtestConfig:
     ##   - load_runner ∈ {local, node}; capacity на нетестовой ноде → guard в runner_cli
     ##   - prometheus_host — LOAD_PROMETHEUS_HOST (default node_host): override для
     ##     SSH-туннелей (localhost) и непрямого доступа к Prometheus ноды (146-m2)
+    ##   - network — docker-сеть генератора (148 TASK-5): из scenario.network,
+    ##     LOAD_NETWORK override (приоритет env), allowlist host|shared-db-net
     """
 
     scenario: ScenarioSpec
@@ -140,6 +161,7 @@ class LoadtestConfig:
     load_runner: str
     image: str
     cpus: str
+    network: str
     prometheus_port: int
     prometheus_host: str
     allow_prod: bool
@@ -171,6 +193,31 @@ def _env_int(name: str, default: int) -> int:
 
 
 # endregion FUNC__env_int
+
+
+# region FUNC__validate_network
+def _validate_network(source: str, value: str) -> str:
+    """Валидация docker-сети генератора: allowlist host|shared-db-net (иначе exit 4).
+
+    ▶ ┌source, value┐ → ◇ value not in ALLOWED_NETWORKS → ConfigValidationError → ⎋ value
+
+    ## @purpose  Allowlist сетей (инвариант 8, 148 TASK-5): опечатка в имени docker-сети
+    ##            → `docker run --network typo` падает ПОЗЖЕ (на ноде, молчаливо) —
+    ##            валидация до прогона (fail-fast, exit 4). Вызывается и для SoT-значения
+    ##            (parse_scenario), и для env-оверрайда (load_config).
+    ## @io — ⇥ source: str ("scenarios.yaml" | "LOAD_NETWORK"), value: str → ⎋ value
+    ## @complexity — O(1)
+    ## @raises — ConfigValidationError (exit 4): сеть вне allowlist
+    """
+    if value not in ALLOWED_NETWORKS:
+        raise ConfigValidationError(
+            f"{source}: сеть генератора {value!r} не в allowlist "
+            f"({', '.join(ALLOWED_NETWORKS)}) — db требует shared-db-net, web/s3 — host"
+        )
+    return value
+
+
+# endregion FUNC__validate_network
 
 
 # region FUNC_load_scenarios_yaml
@@ -245,6 +292,7 @@ def parse_scenario(name: str, raw: dict, defaults: dict) -> ScenarioSpec:
     ##   - Пороги: max_p95/max_p99/max_error/baseline_delta_* > 0 числовые
     ##   - capacity_start_rps <= 0 → None (валидация только в capacity-режиме)
     ##   - optional + LOAD_SCENARIO_<UPPER>=1 → enabled=True
+    ##   - network ∈ allowlist host|shared-db-net (148 TASK-5) — иначе ConfigValidationError
     """
     if not isinstance(raw, dict):
         raise ConfigValidationError(f"scenario '{name}': ожидался mapping, получен {raw!r}")
@@ -286,6 +334,12 @@ def parse_scenario(name: str, raw: dict, defaults: dict) -> ScenarioSpec:
     else:
         capacity_start_rps = None
 
+    # docker-сеть генератора (148 TASK-5): SoT → defaults → "host"; allowlist fail-fast
+    network = _validate_network(
+        f"scenario '{name}'",
+        str(raw.get("network", defaults.get("network", "host"))).strip() or "host",
+    )
+
     parsed = ScenarioSpec(
         name=name,
         description=str(raw.get("description", "")),
@@ -302,6 +356,7 @@ def parse_scenario(name: str, raw: dict, defaults: dict) -> ScenarioSpec:
         optional=optional,
         enabled=enabled,
         ssl_verify=bool(raw.get("ssl_verify", defaults.get("ssl_verify", False))),
+        network=network,
         max_p95=_as_float_positive("max_p95", raw.get("max_p95", defaults.get("max_p95", 1.0))),
         max_p99=_as_float_positive("max_p99", raw.get("max_p99", defaults.get("max_p99", 3.0))),
         max_error=_as_float_positive("max_error", raw.get("max_error", defaults.get("max_error", 0.05))),
@@ -318,11 +373,12 @@ def parse_scenario(name: str, raw: dict, defaults: dict) -> ScenarioSpec:
         ),
     )
     logger.info(
-        "[IMP:9][config][parse_scenario] %s: endpoint=%s rps=%d users=%d optional=%s enabled=%s",
+        "[IMP:9][config][parse_scenario] %s: endpoint=%s rps=%d users=%d network=%s optional=%s enabled=%s",
         name,
         endpoint,
         parsed.target_rps,
         parsed.users,
+        parsed.network,
         optional,
         enabled,
     )
@@ -492,6 +548,8 @@ def load_config(
     ##   - capacity требует capacity_start_rps > 0 (иначе 4)
     ##   - results_dir = LOAD_RESULTS_DIR (default <base_dir>/load-results)
     ##   - history_dir = <base_dir>/core/loadtest/history/<node>/<scenario>
+    ##   - network = LOAD_NETWORK override (приоритет env) | scenario.network; allowlist
+    ##   - db + LOAD_RUNNER=local → logger.warning (не жёсткая валидация, инвариант 8)
     """
     mode = mode.strip().lower()
     if mode not in VALID_MODES:
@@ -545,6 +603,22 @@ def load_config(
     if load_runner not in ("local", "node"):
         raise ConfigValidationError(f"{ENV_RUNNER}={load_runner!r} — допустимо: local | node")
 
+    # docker-сеть генератора (148 TASK-5): LOAD_NETWORK override приоритетнее SoT
+    # (как LOAD_ENDPOINT_*), allowlist host|shared-db-net — иначе exit 4.
+    network = _validate_network(
+        ENV_NETWORK,
+        os.environ.get(ENV_NETWORK, "").strip() or spec.network,
+    )
+    # db требует LOAD_RUNNER=node (PostgreSQL только в docker-сети shared-db-net, порт не
+    # на host — SSH-туннель к docker-сети невозможен). Жёстко НЕ валидируем (dev-локальный
+    # запуск — сознательное исключение), но предупреждаем (инвариант 8, 148 TASK-5).
+    if scenario_name == "db" and load_runner == "local":
+        logger.warning(
+            "[IMP:7][config][load_config] db требует LOAD_RUNNER=node + LOAD_NETWORK=shared-db-net "
+            "(PostgreSQL публикуется только в docker-сеть, NO ports: directive) — локальный запуск "
+            "сработает только при доступном postgres:5432"
+        )
+
     config = LoadtestConfig(
         scenario=spec,
         node_name=node_name,
@@ -558,19 +632,21 @@ def load_config(
         load_runner=load_runner,
         image=os.environ.get(ENV_IMAGE, "locustio/locust:2.32.10").strip(),
         cpus=os.environ.get(ENV_CPUS, "2").strip(),
+        network=network,
         prometheus_port=_env_int(ENV_PROMETHEUS_PORT, 9090),
         prometheus_host=os.environ.get(ENV_PROMETHEUS_HOST, "").strip() or host,
         allow_prod=os.environ.get(ENV_ALLOW_PROD, "").strip() == "1",
         is_test_node=is_test,
     )
     logger.info(
-        "[IMP:9][config][load_config] scenario=%s node=%s mode=%s endpoint=%s rps=%d users=%d",
+        "[IMP:9][config][load_config] scenario=%s node=%s mode=%s endpoint=%s rps=%d users=%d network=%s",
         scenario_name,
         node_name,
         mode,
         endpoint,
         spec.target_rps,
         spec.users,
+        network,
     )
     return config
 

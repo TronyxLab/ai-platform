@@ -85,7 +85,7 @@ load-results/                         — полные отчёты (gitignored 
 | `llm` | `POST http://{host}:4000/chat/completions` (mock-echo, non-stream) | включён |
 | `llm_stream` | SSE `stream=true`, chunk-timeout 10s (кастомный клиент) | включён |
 | `langfuse_ingest` | `POST https://langfuse.{domain}/api/public/traces` (Bearer `{LANGFUSE_PUBLIC_KEY}`; per-node override — `LOAD_ENDPOINT_LANGFUSE_INGEST`) | включён |
-| `db` | pg read через HTTP (нет нативного HTTP-пути) | **optional** — выключен |
+| `db` | pg **read/write** через PG wire protocol (stdlib socket+hmac, без драйверов/прокси): read_query (`SELECT count(*)`) / write_query (`INSERT INTO loadtest_metrics`) вес 1:1 | **optional** — выключен |
 | `s3` | minio PUT/GET через HTTP API (SigV4 presigned, **без boto3**) | **optional** — выключен |
 
 Плейсхолдеры: `{domain}` → node.yaml `domain` (пустой → host), `{host}` → node.host,
@@ -95,6 +95,18 @@ load-results/                         — полные отчёты (gitignored 
 Optional-сценарии: включение `LOAD_SCENARIO_DB=1` / `LOAD_SCENARIO_S3=1` (+ ключи
 `LT_S3_ACCESS_KEY`/`LT_S3_SECRET_KEY`/`LT_S3_BUCKET`/`LT_S3_OBJECT` для s3).
 
+**db (PostgreSQL read/write, DevPlan 148):** endpoint `postgres:5432` — DNS-алиас
+docker-сети `shared-db-net` (postgres/pgbouncer публикуются ТОЛЬКО в docker-сеть,
+NO ports: directive). Env: `LT_PG_USER` (default `postgres`), `LT_PG_PASSWORD`,
+`LT_PG_DB` (default `platform`), `LT_PG_TABLE` (default `loadtest_metrics`).
+Прогон **только** с `LOAD_RUNNER=node` + `LOAD_NETWORK=shared-db-net` (контейнер
+генератора входит в docker-сеть postgres — `docker run --network shared-db-net`;
+локальный запуск с SSH-туннелем к docker-сети невозможен: предупреждается
+logger.warning, но не блокируется). На старте каждого пользователя — идемпотентная
+чистая таблица (`CREATE TABLE IF NOT EXISTS` + `DELETE FROM`), ошибки SQL/auth →
+failure locust (error_rate). Статистика per-task: `read_query`/`write_query` отдельно
+в отчёте (скорость записи vs чтения).
+
 ## 4. Режимы
 
 | Режим | Длительность | Критерий вердикта | Применение |
@@ -103,13 +115,20 @@ Optional-сценарии: включение `LOAD_SCENARIO_DB=1` / `LOAD_SCENA
 | `regression` | 300s | p95 ≤ 1.5×prev_p95 AND error ≤ prev+2pp AND p95 < max_p95 | ежемесячно, сравнение по датам |
 | `capacity` | шаг 60s, max_steps=8 | автостоп (error>5% \| p99>3s); max_rps = последний успешный шаг | поиск max нагрузки |
 
+Capacity доступен для `web`, `s3`, `db` и `llm` (`capacity_start_rps` задан в SoT —
+иначе exit 4). На тестовой ноде (`NODE=test-e2e`, `contexts[0].name: test`) — штатный
+guard без `LOAD_ALLOW_PROD`; на production-ноде — только с осознанным
+`LOAD_ALLOW_PROD=1` (exit 10 иначе).
+
 Env-оверрайды: `LOAD_RPS` (target_rps; users масштабируются до rps×2),
 `LOAD_DURATION` (длительность активного режима), `LOAD_RESULTS_DIR` (default
 `load-results/`), `LOAD_PROMETHEUS_PORT` (default 9090), `LOAD_VERSION` (git-sha в
 отчёте; default "unknown"), `LOAD_ENDPOINT_<SCENARIO>` (per-scenario override
 endpoint — escape hatch для нод с нестандартной топологией, например
 `LOAD_ENDPOINT_LANGFUSE_INGEST=https://n.test.local`; рендерится теми же
-плейсхолдерами, что и SoT-endpoint).
+плейсхолдерами, что и SoT-endpoint), `LOAD_NETWORK` (docker-сеть контейнера
+генератора; default — из SoT: `host` для web/s3, `shared-db-net` для db;
+allowlist `host`\|`shared-db-net` — иное → exit 4).
 
 **Guard-ы:**
 - capacity на нетестовой ноде (нет `node.role: test` и `contexts[0].name != "test"`)
@@ -153,7 +172,7 @@ LOAD_RUNNER=node make load-test SCENARIO=web NODE=test-e2e MODE=smoke
 ```
 
 Механика: rsync `core/loadtest/` → `/tmp/loadtest-<ts>/` (SSH через канон
-`shared.ssh_opts`) → `docker run --rm --network host --cpus ${LOAD_CPUS:-2} -v
+`shared.ssh_opts`) → `docker run --rm --network <net> --cpus ${LOAD_CPUS:-2} -v
 /tmp/loadtest-<ts>:/lt -w /lt ${LOAD_IMAGE:-locustio/locust:2.32.10} -f ... --headless`
 → rsync CSV обратно; PromQL-pull и отчёт — локально.
 
@@ -161,6 +180,17 @@ LOAD_RUNNER=node make load-test SCENARIO=web NODE=test-e2e MODE=smoke
 - `LOAD_IMAGE` — ghcr.io-зеркало/кэш при Docker Hub rate-limit (известная проблема
   платформы, StatusReport 045); `--cpus 2` — генератор не съедает хост под capacity;
 - boto3 в locust-образе отсутствует — s3-сценарий через HTTP API minio (SigV4).
+- **`--network` (DevPlan 148):** docker-сеть контейнера из `scenarios.yaml#network`
+  (override — `LOAD_NETWORK`). `host` (default) — web/s3: эндпоинты сервисов ноды
+  на host-сети. `shared-db-net` — db: PostgreSQL публикуется ТОЛЬКО в docker-сеть
+  (NO ports: directive), контейнер входит в неё и достаёт `postgres:5432` по
+  DNS-алиасу. Сеть для db:
+
+```bash
+LOAD_SCENARIO_DB=1 LOAD_RUNNER=node LOAD_NETWORK=shared-db-net \
+LT_PG_USER=postgres LT_PG_PASSWORD=<secret> LT_PG_DB=platform \
+make load-test SCENARIO=db NODE=test-e2e MODE=smoke
+```
 
 ## 8. Mock-модель litellm (установка на тестовую ноду)
 
@@ -190,9 +220,13 @@ mock-модель отсутствует → ранний FAIL с сообщен
 `load-results/<node>/<scenario>/<mode>/<ts>/` (gitignored):
 `report.json` (машиночитаемый), `report.md` (сводка в stdout), `junit.xml` (опция
 `--junit` для CI). Ключевые поля: `verdict` (PASS/WARN/FAIL), `stats` (rps, p50/p95/p99,
-error_rate), `saturation` (avg/max/pct по метрикам), `missing_metrics`/
-`insufficient_metrics` (WARN-причины), `baseline` (prev, delta_p95, delta_error_pp,
-first_run, baseline_reset), `capacity_profile` (шаги).
+error_rate), `duration_s` (t1−t0 прогона, s — «что сколько времени выполняется»),
+`tasks` (per-task breakdown: `{name: {rps, p95, p99, error_rate}}` — для db отдельно
+`read_query`/`write_query`, скорость записи vs чтения), `saturation` (avg/max/pct по
+метрикам), `missing_metrics`/`insufficient_metrics` (WARN-причины), `baseline` (prev,
+delta_p95, delta_error_pp, first_run, baseline_reset), `capacity_profile` (шаги).
+`history.json` (smoke/regression) дополнительно хранит `duration_s` и `tasks` —
+источник сводной статистики по волнам (web/s3/db × smoke/regression/capacity).
 
 **Интерпретация:** PASS при нуле ошибок и p95 под порогом; WARN = PASS + диагностика
 метрик (не блокирует, exit 0); FAIL = ошибки/пороги/регрессия (exit 1). Saturation
@@ -201,8 +235,12 @@ first_run, baseline_reset), `capacity_profile` (шаги).
 
 ## 10. Ограничения
 
-- `db`-сценарий: PostgreSQL не имеет нативного HTTP — сценарий optional и выключен
-  по умолчанию (включается при наличии HTTP-моста, endpoint — в SoT);
+- `db`-сценарий: PostgreSQL публикуется ТОЛЬКО в docker-сеть `shared-db-net`
+  (NO ports: directive) → прогон **только** node-runner'ом (`LOAD_RUNNER=node` +
+  `LOAD_NETWORK=shared-db-net`); локальный dev-запуск без SSH-туннеля к docker-сети
+  невозможен (предупреждение, не блокирует). Transport — чистый stdlib PG wire
+  protocol (`pgwire.py`): auth SCRAM-SHA-256 + md5 (по коду сервера), cleartext
+  (код 3) отклоняется;
 - s3: presigned SigV4 через stdlib — без boto3 (ограничение locust-образа);
 - e2e-тест (`make test-node NODE=<test>`) требует деплоя nginx на ноде и locust
   в окружении; PromQL-pull в e2e отключается (`--skip-prometheus`) — saturation

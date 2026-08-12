@@ -1,0 +1,208 @@
+{
+  "runs": [
+    {
+      "ts": "20260811T234710Z",
+      "host": "103.88.243.151",
+      "mode": "smoke",
+      "duration_s": 96.1,
+      "tasks": {},
+      "rps": 0.0,
+      "p50": null,
+      "p95": null,
+      "p99": null,
+      "error_rate": 0.0,
+      "max_rps": null,
+      "verdict": "FAIL",
+      "delta_vs_prev": null,
+      "version": "unknown"
+    },
+    {
+      "ts": "20260812T003911Z",
+      "host": "103.88.243.151",
+      "mode": "smoke",
+      "duration_s": 95.8,
+      "tasks": {},
+      "rps": 0.0,
+      "p50": null,
+      "p95": null,
+      "p99": null,
+      "error_rate": 0.0,
+      "max_rps": null,
+      "verdict": "FAIL",
+      "delta_vs_prev": {
+        "delta_p95": null,
+        "delta_error_pp": 0.0
+      },
+      "version": "unknown"
+    },
+    {
+      "ts": "20260812T004204Z",
+      "host": "103.88.243.151",
+      "mode": "smoke",
+      "duration_s": 95.5,
+      "tasks": {},
+      "rps": 0.0,
+      "p50": null,
+      "p95": null,
+      "p99": null,
+      "error_rate": 0.0,
+      "max_rps": null,
+      "verdict": "FAIL",
+      "delta_vs_prev": {
+        "delta_p95": null,
+        "delta_error_pp": 0.0
+      },
+      "version": "unknown"
+    },
+    {
+      "ts": "20260812T004718Z",
+      "host": "103.88.243.151",
+      "mode": "smoke",
+      "duration_s": 95.2,
+      "tasks": {},
+      "rps": 0.0,
+      "p50": null,
+      "p95": null,
+      "p99": null,
+      "error_rate": 0.0,
+      "max_rps": null,
+      "verdict": "FAIL",
+      "delta_vs_prev": {
+        "delta_p95": null,
+        "delta_error_pp": 0.0
+      },
+      "version": "unknown"
+    },
+    {
+      "ts": "20260812T005035Z",
+      "host": "103.88.243.151",
+      "mode": "smoke",
+      "duration_s": 95.4,
+      "tasks": {},
+      "rps": 0.0,
+      "p50": null,
+      "p95": null,
+      "p99": null,
+      "error_rate": 0.0,
+      "max_rps": null,
+      "verdict": "FAIL",
+      "delta_vs_prev": {
+        "delta_p95": null,
+        "delta_error_pp": 0.0
+      },
+      "version": "unknown"
+    },
+    {
+      "ts": "20260812T010839Z",
+      "host": "103.88.243.151",
+      "mode": "smoke",
+      "duration_s": 95.3,
+      "tasks": {},
+      "rps": 0.0,
+      "p50": null,
+      "p95": null,
+      "p99": null,
+      "error_rate": 0.0,
+      "max_rps": null,
+      "verdict": "FAIL",
+      "delta_vs_prev": {
+        "delta_p95": null,
+        "delta_error_pp": 0.0
+      },
+      "version": "unknown"
+    },
+    {
+      "ts": "20260812T011108Z",
+      "host": "103.88.243.151",
+      "mode": "smoke",
+      "duration_s": 95.7,
+      "tasks": {
+        "read_query": {
+          "rps": 2.6929159328738623,
+          "p95": 0.006,
+          "p99": 0.009,
+          "error_rate": 0.0
+        },
+        "write_query": {
+          "rps": 2.420215585241066,
+          "p95": 0.006,
+          "p99": 0.025,
+          "error_rate": 0.0
+        }
+      },
+      "rps": 5.113131518114928,
+      "p50": null,
+      "p95": 0.006,
+      "p99": 0.01,
+      "error_rate": 0.0,
+      "max_rps": null,
+      "verdict": "PASS",
+      "delta_vs_prev": {
+        "delta_p95": null,
+        "delta_error_pp": 0.0
+      },
+      "version": "unknown"
+    },
+    {
+      "ts": "20260812T011303Z",
+      "host": "103.88.243.151",
+      "mode": "smoke",
+      "duration_s": 95.4,
+      "tasks": {
+        "read_query": {
+          "rps": 2.408962798306162,
+          "p95": 0.003,
+          "p99": 0.004,
+          "error_rate": 0.0
+        },
+        "write_query": {
+          "rps": 2.704401632060691,
+          "p95": 0.004,
+          "p99": 0.035,
+          "error_rate": 0.0
+        }
+      },
+      "rps": 5.113364430366853,
+      "p50": null,
+      "p95": 0.003,
+      "p99": 0.034,
+      "error_rate": 0.0,
+      "max_rps": null,
+      "verdict": "WARN",
+      "delta_vs_prev": {
+        "delta_p95": 0.5,
+        "delta_error_pp": 0.0
+      },
+      "version": "unknown"
+    },
+    {
+      "ts": "20260812T011459Z",
+      "host": "103.88.243.151",
+      "mode": "regression",
+      "duration_s": 306.9,
+      "tasks": {
+        "read_query": {
+          "rps": 2.5502926344776253,
+          "p95": 0.003,
+          "p99": 0.005,
+          "error_rate": 0.0
+        },
+        "write_query": {
+          "rps": 2.483179670412425,
+          "p95": 0.004,
+          "p99": 0.034,
+          "error_rate": 0.0
+        }
+      },
+      "rps": 5.033472304890051,
+      "p50": null,
+      "p95": 0.004,
+      "p99": 0.03,
+      "error_rate": 0.0,
+      "max_rps": null,
+      "verdict": "WARN",
+      "delta_vs_prev": null,
+      "version": "unknown"
+    }
+  ]
+}

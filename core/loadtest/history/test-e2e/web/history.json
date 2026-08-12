@@ -1,0 +1,34 @@
+{
+  "runs": [
+    {
+      "ts": "20260812T000131Z",
+      "host": "103.88.243.151",
+      "mode": "capacity",
+      "duration_s": 60.4,
+      "rps": null,
+      "p50": null,
+      "p95": null,
+      "p99": null,
+      "error_rate": 0.0,
+      "max_rps": 0,
+      "verdict": "FAIL",
+      "delta_vs_prev": null,
+      "version": "unknown"
+    },
+    {
+      "ts": "20260812T000320Z",
+      "host": "103.88.243.151",
+      "mode": "capacity",
+      "duration_s": 483.1,
+      "rps": 130.30061621648082,
+      "p50": null,
+      "p95": 0.28,
+      "p99": 1.7,
+      "error_rate": 0.0,
+      "max_rps": 128,
+      "verdict": "WARN",
+      "delta_vs_prev": null,
+      "version": "unknown"
+    }
+  ]
+}

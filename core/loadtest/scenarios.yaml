@@ -1,11 +1,11 @@
-# GREP_SUMMARY: loadtest scenarios SoT rps thresholds endpoints ports
-# STRUCTURE: ┌defaults┐ → ◇ per-scenario (endpoint, method, headers, body, target_rps, users, thresholds, optional)
+# GREP_SUMMARY: loadtest scenarios SoT rps thresholds endpoints ports network capacity-start-rps db-read-write per-task
+# STRUCTURE: ┌defaults┐ → ◇ per-scenario (endpoint, network, method, headers, body, target_rps, users, thresholds, capacity_start_rps, optional)
 # region MODULE_CONTRACT
-## @purpose  Единый Source of Truth сценариев нагрузочных тестов (DevPlan 146) — endpoint,
-##           метод, headers, body-шаблон, target_rps, users, пороги FAIL/safety-stop,
-##           стартовый RPS capacity. Читается core/internal/loadtest/config.py; locust-файлы
-##           НЕ содержат хардкодов (инвариант 2) — получают всё через env LT_* при старте.
-## @scope    core/loadtest/ — только SoT. Правки путей/порогов/RPS — здесь, НЕ в .py сценариях.
+## @purpose  Единый Source of Truth сценариев нагрузочных тестов (DevPlan 146 + 148) — endpoint,
+##           docker-сеть, метод, headers, body-шаблон, target_rps, users, пороги FAIL/safety-stop,
+##           стартовый RPS capacity, optional-флаги. Читается core/internal/loadtest/config.py;
+##           locust-файлы НЕ содержат хардкодов (инвариант 2) — получают всё через env LT_* при старте.
+## @scope    core/loadtest/ — только SoT. Правки путей/порогов/RPS/сети — здесь, НЕ в .py сценариях.
 ## @invariants
 ##   1. users = РАЗМЕР ПУЛА (users = target_rps × 2), НЕ контроль RPS. Точный RPS —
 ##      constant_throughput (locust.wait_time): сценарии строят wait_time =
@@ -24,9 +24,23 @@
 ##      baseline_delta_p95 — множитель регрессии; baseline_delta_error_pp — процентные пункты.
 ##   6. Длительности согласованы со scrape_interval Prometheus (30s global, 60s
 ##      cadvisor/node-exporter): smoke ≥ 90s (≥3 сэмпла 30s-метрик, ≥2 по 60s, инвариант 10).
+##   7. network (148 TASK-3/4/5): docker-сеть контейнера генератора (runner_remote
+##      `docker run --network <network>`); default host — web/s3 (эндпоинты сервисов ноды
+##      на host-сети), db — shared-db-net (PostgreSQL публикуется ТОЛЬКО в docker-сеть,
+##      NO ports: directive; DNS-алиас postgres:5432). Override: LOAD_NETWORK (приоритет env).
+##   8. capacity_start_rps (148 TASK-3): обязателен для capacity-режима (иначе exit 4) —
+##      задан для web/s3/db/llm (capacity-прогоны без LOAD_ALLOW_PROD на test-ноде).
+##   9. db (148 TASK-1/2): read/write нагрузка на PostgreSQL через stdlib PG wire protocol
+##      (pgwire.py) — read_query (SELECT count(*)) / write_query (INSERT loadtest_metrics)
+##      вес 1:1; per-task статистика (rps/p95/p99 записи vs чтения) в отчёте; прогон
+##      ТОЛЬКО с LOAD_RUNNER=node + LOAD_NETWORK=shared-db-net (порт не на host).
 ## @rationale SoT отдельно от кода — воспроизводимость прогонов и правки путей/порогов
-##            без изменения Python (DevPlan 146 §3.1, инвариант 2).
+##            без изменения Python (DevPlan 146 §3.1, инвариант 2). network — свойство
+##            сценария (топология доступа к сервису), capacity_start_rps — свойство
+##            профиля: оба живут в SoT, не в коде.
 ## @changes  2026-08-11 | DevPlan 146 W1 — Created
+## @changes  2026-08-12 | DevPlan 148 TASK-3 — db rewrite (wire protocol, network),
+##           capacity_start_rps web/s3/db, network-поле, инварианты 7-9
 # endregion MODULE_CONTRACT
 
 defaults:
@@ -39,6 +53,7 @@ defaults:
   max_p95: 1.0                       # s — FAIL-критерий smoke/regression
   baseline_delta_p95: 1.5            # множитель регрессии (p95 <= 1.5×prev)
   baseline_delta_error_pp: 2.0       # процентных пункта (error <= prev + 2pp)
+  network: host                      # docker-сеть генератора (148): host — web/s3; db — shared-db-net
 
 scenarios:
   web:
@@ -48,8 +63,9 @@ scenarios:
     method: GET
     users: 20
     target_rps: 10
+    capacity_start_rps: 2
   llm:
-    description: "litellm /chat/completions non-stream (mock-модель mock-echo)"
+    description: "litellm /chat/completions non-stream (mock-модель mock-echo; max_p95 3.0 — mock-цепочка: контейнер→host, реальная latency 1.2-1.5s при 20rps)"
     endpoint: "http://{host}:4000"
     path: "/chat/completions"
     method: POST
@@ -62,6 +78,7 @@ scenarios:
     users: 40
     target_rps: 20
     capacity_start_rps: 2
+    max_p95: 3.0
   llm_stream:
     description: "litellm /chat/completions SSE (stream=true, chunk-timeout 10s)"
     endpoint: "http://{host}:4000"
@@ -78,29 +95,35 @@ scenarios:
     users: 20
     target_rps: 5
     chunk_timeout: 10
+    max_p95: 3.0
   langfuse_ingest:
-    description: "langfuse /api/public/traces (публичный ключ из секретов ноды; override endpoint: LOAD_ENDPOINT_LANGFUSE_INGEST)"
+    description: "langfuse /api/public/traces (Basic auth: LT_LANGFUSE_PUBLIC_KEY/LT_LANGFUSE_SECRET_KEY из секретов ноды; max_p95 3.0 — инжест в postgres+clickhouse, реальная latency ~1.2s; override endpoint: LOAD_ENDPOINT_LANGFUSE_INGEST)"
     endpoint: "https://langfuse.{domain}"
     path: "/api/public/traces"
     method: POST
-    headers:
-      Authorization: "Bearer {LANGFUSE_PUBLIC_KEY}"
+    headers: {}
     body_template:
       name: "loadtest-trace"
       timestamp: "2026-01-01T00:00:00.000Z"
       observations: []
     users: 10
     target_rps: 5
+    max_p95: 3.0
   db:
-    description: "pg read через pgbouncer — OPTIONAL: HTTP-пути нет, прогон только с LOAD_SCENARIO_DB=1 и рабочим HTTP-endpoint"
+    description: "pg read/write через wire protocol (LOAD_SCENARIO_DB=1, LOAD_RUNNER=node, LOAD_NETWORK=shared-db-net)"
     optional: true
-    endpoint: "http://{host}:5432"
-    paths: ["/"]
+    endpoint: "postgres:5432"
+    network: "shared-db-net"
     users: 10
     target_rps: 5
+    capacity_start_rps: 2
+    max_p95: 1.0
+    max_p99: 3.0
+    max_error: 0.05
   s3:
     description: "minio PUT/GET через HTTP API (SigV4 presigned, без boto3 — его нет в locust-образе)"
     optional: true
     endpoint: "http://{host}:9000"
     users: 10
     target_rps: 5
+    capacity_start_rps: 2

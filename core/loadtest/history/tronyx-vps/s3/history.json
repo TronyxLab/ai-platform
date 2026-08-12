@@ -16,6 +16,1817 @@
         "delta_error_pp": 0.0
       },
       "version": "unknown"
+    },
+    {
+      "ts": "20260811T235534Z",
+      "host": "103.88.243.151",
+      "mode": "regression",
+      "duration_s": 306.3,
+      "tasks": {
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235541Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=1ce6edfd5f6d238454150db1028374bcece2191f5846aa978aebe1c243b7d783": {
+          "rps": 0.05366365018777234,
+          "p95": 0.14,
+          "p99": 0.14,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235541Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=7fc82b934e81c02b3699974a88852422e54de4c3290bb123715c5645e7591fa2": {
+          "rps": 0.013415912546943085,
+          "p95": 0.076,
+          "p99": 0.076,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235543Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=9ba22c493bcc5dde2ebcb3011e26f0b9510cf29a2d16f15745ef426cfda8f5a2": {
+          "rps": 0.016769890683678856,
+          "p95": 0.11,
+          "p99": 0.11,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235543Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=c70ecc77c9d6242a9423e8518a1ab20c65af77421bcb1a0bbda3d69e6175086c": {
+          "rps": 0.016769890683678856,
+          "p95": 0.05,
+          "p99": 0.05,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235545Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=a7e915edbdccadddc8637a4c8b5f942530fcdcc22c8b083c54cafd455cbb3b00": {
+          "rps": 0.013415912546943085,
+          "p95": 0.047,
+          "p99": 0.047,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235545Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=e1f5a3777cbf46b0e0b63b403f457152187a3d98fe51f463068d8a159d21c367": {
+          "rps": 0.020123868820414628,
+          "p95": 0.061,
+          "p99": 0.061,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235547Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=7d80bdc149ea2612ca67c1db77294740a6dd375e24aebd5fd868399e1dc896d7": {
+          "rps": 0.010061934410207314,
+          "p95": 0.081,
+          "p99": 0.081,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235547Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=c489501f9bda324f846ab6268ea396531a1bf2434ab41087eff656ae45d53e5a": {
+          "rps": 0.023477846957150397,
+          "p95": 0.012,
+          "p99": 0.012,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235549Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=049af956d478fc50ae13a99941ff3ced07fc064ea55d6870702ab36074ffa36a": {
+          "rps": 0.010061934410207314,
+          "p95": 0.051,
+          "p99": 0.051,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235549Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=162c24cb27a4de9a514fb75b8524c779a0adb75b9cf5f31ce071e63bf43733ab": {
+          "rps": 0.023477846957150397,
+          "p95": 0.12,
+          "p99": 0.12,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235551Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=a229c0246b5c2ce59aba561871394430311b8782a0861f5656ad96a4b791fe82": {
+          "rps": 0.016769890683678856,
+          "p95": 0.061,
+          "p99": 0.061,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235551Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=c725f4a76f6190058e4381f45c3450f42f97d9ff0c1b3e8206a0dcc9e776a39f": {
+          "rps": 0.016769890683678856,
+          "p95": 0.056,
+          "p99": 0.056,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235553Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=db7c2693c880a65bbaf3569e7a46bee4eaca611c81a611358b3353f8a53d8434": {
+          "rps": 0.023477846957150397,
+          "p95": 0.093,
+          "p99": 0.093,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235553Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=f7f72a9e21651f676a9dc2cdf0d670f280957b748a2f9c5f0fe15a765c64eb96": {
+          "rps": 0.010061934410207314,
+          "p95": 0.026,
+          "p99": 0.026,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235555Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=2da7897eb7870aeeb93a7e97a165936b3b0b147dd23d7751a3d2718bbe6e126f": {
+          "rps": 0.023477846957150397,
+          "p95": 0.092,
+          "p99": 0.092,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235555Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=c59c4f9ed052f513706c646ab362d36dc47d3a50ba0c742527333f1ac270176f": {
+          "rps": 0.010061934410207314,
+          "p95": 0.049,
+          "p99": 0.049,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235557Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=152be620ee517a9d2f2558343c6853d60aaa86b715947d7bca2c88a7058adeeb": {
+          "rps": 0.016769890683678856,
+          "p95": 0.095,
+          "p99": 0.095,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235557Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=78b4093eeb42067dbee5269a7eef2591f91948e140dc5c16d0aa511260cc1114": {
+          "rps": 0.016769890683678856,
+          "p95": 0.081,
+          "p99": 0.081,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235559Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=1247fe5ff6dd58ffae90b997b0b523051cd5cd73c04c74a2d38899564c59b387": {
+          "rps": 0.016769890683678856,
+          "p95": 0.094,
+          "p99": 0.094,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235559Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=f483957f5a30446e51b1c59d333cff30364e7f2fd5ea0d74dbeec55d2e222c50": {
+          "rps": 0.016769890683678856,
+          "p95": 0.016,
+          "p99": 0.016,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235601Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=5993da83f88ec0c8565c57d3f0eb902479f2c3d91d740b7a44f825af529297b7": {
+          "rps": 0.016769890683678856,
+          "p95": 0.014,
+          "p99": 0.014,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235601Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=e743614e70fcf86e2e89723b605cbb03eb0ddaaab26a7760f4c2478f25f3997c": {
+          "rps": 0.016769890683678856,
+          "p95": 0.062,
+          "p99": 0.062,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235603Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=4a3a61a6e105e7ba2c962d154fc49a92d6bcdc12ac00f7c54b8ea11d1cba119b": {
+          "rps": 0.016769890683678856,
+          "p95": 0.085,
+          "p99": 0.085,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235603Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=942bcb1eec3fd420e8fe7b71ba97673557d0affdccd7e8583bc3172b1b4e329e": {
+          "rps": 0.016769890683678856,
+          "p95": 0.072,
+          "p99": 0.072,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235605Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=64fdb253ef6b02ac88b6fbb7b4a255559f6d26a0a9330f6df3312c9b4578c691": {
+          "rps": 0.0033539781367357712,
+          "p95": 0.029,
+          "p99": 0.029,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235605Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=eb187f5a40482fd723c9ddbefc1e4e13f581dc2e0b0bc9514534d22a9534ce3b": {
+          "rps": 0.03018580323062194,
+          "p95": 0.067,
+          "p99": 0.067,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235607Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=1ae218db72432fd29d183d3c4357bbf586906e92348e43376721de7d2b2f6588": {
+          "rps": 0.020123868820414628,
+          "p95": 0.009,
+          "p99": 0.009,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235607Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=3494ed20fbf78b6eaa8f91e450e2216881a57a25028386632cf29636362402da": {
+          "rps": 0.013415912546943085,
+          "p95": 0.069,
+          "p99": 0.069,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235609Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=4df55b439bd49d9aaa543ac18265b16fbe97ec708356c6fd82f3b56c5b40c15a": {
+          "rps": 0.020123868820414628,
+          "p95": 0.059,
+          "p99": 0.059,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235609Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=f95bb50f32f6d854da42e764cd3fb2a26912df04e7cfb004632c03fc0056064e": {
+          "rps": 0.013415912546943085,
+          "p95": 0.013,
+          "p99": 0.013,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235611Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=629e0f6f073c1ac1156e7df8a49934de599eb8f698906618dfdece1e6231330b": {
+          "rps": 0.023477846957150397,
+          "p95": 0.11,
+          "p99": 0.11,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235611Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=c5e596a1728ccbaa57d44dac31816144b774a5ac726d46cab2485bd5e46d90b5": {
+          "rps": 0.010061934410207314,
+          "p95": 0.038,
+          "p99": 0.038,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235613Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=01fae41110f91699ee968eb5ab8b483f41fd79a68153a6372b2ceb33669a3432": {
+          "rps": 0.013415912546943085,
+          "p95": 0.051,
+          "p99": 0.051,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235613Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=10e6a97b13468619906c5627ed04702bfedcad2aa66e8e859fb11ec8c70dd6dd": {
+          "rps": 0.020123868820414628,
+          "p95": 0.092,
+          "p99": 0.092,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235615Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=53e6e6b205e96fd1ceb78a4b2d4aecef935101d57af4ecf83c50baf900ba7823": {
+          "rps": 0.016769890683678856,
+          "p95": 0.079,
+          "p99": 0.079,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235615Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=54d605bae91581104c70c0d93856b7c7c9142d2e6fa3272e889eeca948f5abb9": {
+          "rps": 0.016769890683678856,
+          "p95": 0.078,
+          "p99": 0.078,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235617Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=300b312a464497d830bd205608399a3d7a10475131b163bc12651ac26476044b": {
+          "rps": 0.020123868820414628,
+          "p95": 0.055,
+          "p99": 0.055,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235617Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=30d92c62c8529a21b673f1456529c95a75fdaec3b21b2f3e37f9bc2fbcdc2ddf": {
+          "rps": 0.013415912546943085,
+          "p95": 0.075,
+          "p99": 0.075,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235619Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=7af8c9fbffd30ef2ee393bf870bf6344dfebc8d59ecd310c04a2506c2dfb447d": {
+          "rps": 0.016769890683678856,
+          "p95": 0.01,
+          "p99": 0.01,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235619Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=ad336a3aebff018bd24d7c6ce25b459802b431f813ddd3ecc91cb30bdd06d076": {
+          "rps": 0.016769890683678856,
+          "p95": 0.076,
+          "p99": 0.076,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235621Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=08cae7b1051035bc76fa7d46b16db1d796439aa1240e9e3413f72f13de08e53b": {
+          "rps": 0.023477846957150397,
+          "p95": 0.015,
+          "p99": 0.015,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235621Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=aa255b08beff0dc5abe05817c11a5d21bddf86f6f1e7c7b84e958b948b6b16ec": {
+          "rps": 0.010061934410207314,
+          "p95": 0.048,
+          "p99": 0.048,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235623Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=39480628bd8c32143e69d8afc742c0a5cefd7d62a6284479e012db1dcf523dcc": {
+          "rps": 0.016769890683678856,
+          "p95": 0.058,
+          "p99": 0.058,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235623Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=c3f98cdd89b564e70dc51f79fdad2b39cbf16d0be1fea3a3970cf3d329bf6e34": {
+          "rps": 0.016769890683678856,
+          "p95": 0.06,
+          "p99": 0.06,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235625Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=2238fa155312ce6179990495ee0aecbf25a2c21f24a3cbeefd5f70872928efe8": {
+          "rps": 0.016769890683678856,
+          "p95": 0.054,
+          "p99": 0.054,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235625Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=2652d1b7d11ee8d1fe75132c7cbe175dc149de785f6f0ae399a909559cbf1314": {
+          "rps": 0.016769890683678856,
+          "p95": 0.054,
+          "p99": 0.054,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235627Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=005408fd4fa7a98adf087556ea11867cd9879903539192265cd79ba0fb38b6bf": {
+          "rps": 0.016769890683678856,
+          "p95": 0.028,
+          "p99": 0.028,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235627Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=6b08fdbc949f0b32a9a2a4007f72b36c73bd157aa110984bac237e3eb86ca39f": {
+          "rps": 0.016769890683678856,
+          "p95": 0.058,
+          "p99": 0.058,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235629Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=258df9a7eb661e073ab3414f76ebe88903623d6e1ef35c199eb1799f920f3b29": {
+          "rps": 0.013415912546943085,
+          "p95": 0.053,
+          "p99": 0.053,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235629Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=c8efc5d88d818603cff1e3ef141db8835b6a4b668795d003e82d7c2097c2e039": {
+          "rps": 0.020123868820414628,
+          "p95": 0.074,
+          "p99": 0.074,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235631Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=7bb027a026f2d4d496560b3f4880c4427b75c653cc6ea184a1c97e859afa79be": {
+          "rps": 0.016769890683678856,
+          "p95": 0.075,
+          "p99": 0.075,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235631Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=ff7676795867145f22522537eb25fba504f61bfcc3044444dd09cbbb3e647205": {
+          "rps": 0.016769890683678856,
+          "p95": 0.093,
+          "p99": 0.093,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235633Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=2b1bfdbb47f266ec88d13b9ccf1171a9deaf81f4f31d696a918eda6239446f93": {
+          "rps": 0.013415912546943085,
+          "p95": 0.006,
+          "p99": 0.006,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235633Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=d01f3b8c7274132f6d105a34750d01f703191cdee2b93be6f19fe32678a28b7d": {
+          "rps": 0.020123868820414628,
+          "p95": 0.084,
+          "p99": 0.084,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235635Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=734a749149b09e9eaeb8a6b54801c077e6202257b8dbf9dfd484c2be68d245b0": {
+          "rps": 0.020123868820414628,
+          "p95": 0.054,
+          "p99": 0.054,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235635Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=a28922423efc72b62ac17e1805240370aa61bd4266a00704cf5ddbc6962f062f": {
+          "rps": 0.013415912546943085,
+          "p95": 0.049,
+          "p99": 0.049,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235637Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=4318e5e3008b7d8b38ba5cce6b76856fc1f8cf2a8bb1b951f5e8f5db97a417b0": {
+          "rps": 0.013415912546943085,
+          "p95": 0.021,
+          "p99": 0.021,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235637Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=89c914521a6047ffae51f823ddf70f48f3f97515b99210a270277d6458f54eea": {
+          "rps": 0.020123868820414628,
+          "p95": 0.081,
+          "p99": 0.081,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235639Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=a6e5bb8692a807f3cb45988be057a525461d48b8040c936ab8de1ebb60725341": {
+          "rps": 0.016769890683678856,
+          "p95": 0.055,
+          "p99": 0.055,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235639Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=b17b71d32bc63f5f56a6392f557df39bd41c8849b199ebcdaa47fb8d514f60b8": {
+          "rps": 0.016769890683678856,
+          "p95": 0.061,
+          "p99": 0.061,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235641Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=3b1f0db8fdc00c4833c9dd871dcf41dd906af37583325013d0cb2b75fb80e146": {
+          "rps": 0.013415912546943085,
+          "p95": 0.097,
+          "p99": 0.097,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235641Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=ca7c27760133c0b03ff099409becf64648e2df5e72e40c4fc3e03d798db6d805": {
+          "rps": 0.020123868820414628,
+          "p95": 0.053,
+          "p99": 0.053,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235643Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=3a05e785f7a0848e282f6ef764ef5fa3abb7ac8b5bed4cbde4e891bef8acccab": {
+          "rps": 0.010061934410207314,
+          "p95": 0.015,
+          "p99": 0.015,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235643Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=7a44222fab95e6bf69348595817d84e17c6d46b26fd1afc6618e460a283527ec": {
+          "rps": 0.023477846957150397,
+          "p95": 0.1,
+          "p99": 0.1,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235645Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=4f049c51fa3e3193ed0ad3b660ae02ddabd062ca87d08904fbb09ed9b50b7aba": {
+          "rps": 0.016769890683678856,
+          "p95": 0.067,
+          "p99": 0.067,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235645Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=aaad250299450ac69ec51a9d64afd1348779942248acc152239bd103bd66ed6f": {
+          "rps": 0.016769890683678856,
+          "p95": 0.044,
+          "p99": 0.044,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235647Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=5c9272f6312346c61c8e27d14cf023b0137c6b9ba7e6cfe8c64593ee92f39691": {
+          "rps": 0.016769890683678856,
+          "p95": 0.044,
+          "p99": 0.044,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235647Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=995a2573dc57185d34f817003b2492ccd9d43674c7c62964b23c1a21f202ce63": {
+          "rps": 0.016769890683678856,
+          "p95": 0.06,
+          "p99": 0.06,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235649Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=0bd53775cad2ac61725f70cfaa7c70a5315770887b18357005c36b09caa4deaa": {
+          "rps": 0.013415912546943085,
+          "p95": 0.073,
+          "p99": 0.073,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235649Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=4cb269f3812c8cfafb6fc63bbe8e7760b817234d2c4a84fb58138df48ed31941": {
+          "rps": 0.020123868820414628,
+          "p95": 0.081,
+          "p99": 0.081,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235651Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=41bf5fe90e9cd1c898d6b900c161ab65d79b1002682a3c914866cbb06105c3d1": {
+          "rps": 0.023477846957150397,
+          "p95": 0.039,
+          "p99": 0.039,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235651Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=ced91718ebe3d7765e9b82e96100ca156d96535f9734d71761f0da31b9e86aa3": {
+          "rps": 0.010061934410207314,
+          "p95": 0.053,
+          "p99": 0.053,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235653Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=9dc2853015f9b85f09b8f31d7d9819b8aafb7d3107f2269e58d3274bf48386f4": {
+          "rps": 0.010061934410207314,
+          "p95": 0.058,
+          "p99": 0.058,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235653Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=e2849cec6690d3f635f62b541bf028b7ff27295fcd7292345b9db782ccc2940e": {
+          "rps": 0.023477846957150397,
+          "p95": 0.021,
+          "p99": 0.021,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235655Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=0b8bdde6a13c996335943c1f3c30e0f883914cc18eaa700a8e13c48188ec617e": {
+          "rps": 0.013415912546943085,
+          "p95": 0.049,
+          "p99": 0.049,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235655Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=e13449713d5abf0bc3a02408d6cfee8b68bf8f10cca895d4263964112791d1d1": {
+          "rps": 0.020123868820414628,
+          "p95": 0.071,
+          "p99": 0.071,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235657Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=5f522a4f2d883d3150011dcbe48d29b7478926c48f878ec5af749a526ccba608": {
+          "rps": 0.023477846957150397,
+          "p95": 0.08,
+          "p99": 0.08,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235657Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=735bfcdb7a5addfe47a5e9b26b3347461e412b79d9b6fdbaf31ed14d76fb5992": {
+          "rps": 0.010061934410207314,
+          "p95": 0.011,
+          "p99": 0.011,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235659Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=380e40da1c01ba4f365d26ca3686f1df3348e4ecd70128da3bbec25319a4cfc3": {
+          "rps": 0.023477846957150397,
+          "p95": 0.059,
+          "p99": 0.059,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235659Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=495b94cff8b9f1db51328f18da4a9b9be13043abc27cce787c34a3d92aadb722": {
+          "rps": 0.010061934410207314,
+          "p95": 0.061,
+          "p99": 0.061,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235701Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=29b1c695e8b7fa379906c12afed098725d4ef6ddcb1f59e8d1e97512841701f3": {
+          "rps": 0.013415912546943085,
+          "p95": 0.035,
+          "p99": 0.035,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235701Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=7c7a8f2b536271342f1b03883078cb8673d280c6fc2bdbd59dd47e7c29eeddd3": {
+          "rps": 0.020123868820414628,
+          "p95": 0.082,
+          "p99": 0.082,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235703Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=281694a266a2d144d27fbb76410e1e241cb0691e54511316b688a211c13dd195": {
+          "rps": 0.013415912546943085,
+          "p95": 0.094,
+          "p99": 0.094,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235703Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=c021b1beea00b800f5b952b46e39883014543939c17240581c6ca3c47858e1de": {
+          "rps": 0.020123868820414628,
+          "p95": 0.062,
+          "p99": 0.062,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235705Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=035286f607d0b56269b994b5ef41837245b32329253dc59b71b2f9e8dd9b55d3": {
+          "rps": 0.016769890683678856,
+          "p95": 0.077,
+          "p99": 0.077,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235705Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=b92bfc68e60185da279050ad007244a3da7b318ce3b96fd218edc9049a221f49": {
+          "rps": 0.016769890683678856,
+          "p95": 0.064,
+          "p99": 0.064,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235707Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=2571888a89e838d7ea88e10376c9241e4aa67eaca8f3ed0759ac657b9102af1d": {
+          "rps": 0.02683182509388617,
+          "p95": 0.06,
+          "p99": 0.06,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235707Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=ae219f7b628269246b77d48df05241e610e9c1f0c931fe53f9553d0e1ace98ef": {
+          "rps": 0.0067079562734715424,
+          "p95": 0.049,
+          "p99": 0.049,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235709Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=201109ab170fafc9f6eb010b2455cc116c6c1f5e9e42a379f971d66a9e635954": {
+          "rps": 0.023477846957150397,
+          "p95": 0.057,
+          "p99": 0.057,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235709Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=dbb8734890f85b80615581ed7a44c4373e224c3b2c8e2b12d0ec7256863cd29b": {
+          "rps": 0.010061934410207314,
+          "p95": 0.076,
+          "p99": 0.076,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235711Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=ae0d20abf73749a9237e8be08aa39732f4fd9f7fba358a5224c80bc264c49de8": {
+          "rps": 0.016769890683678856,
+          "p95": 0.017,
+          "p99": 0.017,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235711Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=f72d601291e946dc8b896f51bede47aded4c43219a00a971e6ff8524c6468812": {
+          "rps": 0.016769890683678856,
+          "p95": 0.083,
+          "p99": 0.083,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235713Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=a22743e8a37951322b22b681d6098dfa4319eaaec810976e7abae02e6cdc9c53": {
+          "rps": 0.013415912546943085,
+          "p95": 0.049,
+          "p99": 0.049,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235713Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=e425924e75434e458132cc016eb7126e5135639bc871d37a2f227d19ec15b4b3": {
+          "rps": 0.020123868820414628,
+          "p95": 0.088,
+          "p99": 0.088,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235715Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=370a199b40e7e8c57e4023e73fb2544949725b1c7016d34fc360be4198884896": {
+          "rps": 0.010061934410207314,
+          "p95": 0.079,
+          "p99": 0.079,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235715Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=da3a87f55d0681c14978fa142f16711f4a280c04ccc5beba3ab977b029a02519": {
+          "rps": 0.023477846957150397,
+          "p95": 0.12,
+          "p99": 0.12,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235717Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=71dbd64611512a927708ad0b2317fd55910771c0610d4bfef7f0a88a66bd0600": {
+          "rps": 0.020123868820414628,
+          "p95": 0.054,
+          "p99": 0.054,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235717Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=d11692cfea4c2472124d9061d4d668c51ee05def372eafc959291c86e65d83bc": {
+          "rps": 0.013415912546943085,
+          "p95": 0.063,
+          "p99": 0.063,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235719Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=51a778786f2ac8d1757f4c49cca38fbd5db9acc16d3d73f7509e7f8090faddb3": {
+          "rps": 0.010061934410207314,
+          "p95": 0.061,
+          "p99": 0.061,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235719Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=a9762d715629304afecf4c798e82072b2052971be102a8318a87a4f1a3351b31": {
+          "rps": 0.023477846957150397,
+          "p95": 0.097,
+          "p99": 0.097,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235721Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=39450693a5de35da0b690ff4e30cc12cbd536756a1275d03dc3be6ce98b2254e": {
+          "rps": 0.02683182509388617,
+          "p95": 0.036,
+          "p99": 0.036,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235721Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=d1647580cf94b51e6739aebb60177f60272c4e8067ed7d3fa06507e59e0f1c55": {
+          "rps": 0.0067079562734715424,
+          "p95": 0.02,
+          "p99": 0.02,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235723Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=6ed9452437147f3e0f6fc42288cbb1174a2d07fafc134e21397d68561951481a": {
+          "rps": 0.010061934410207314,
+          "p95": 0.098,
+          "p99": 0.098,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235723Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=a27f91e616a3ee2341b86fe21ef5294e13cab0123cc3fb47dc5a8bc961f4f0fa": {
+          "rps": 0.023477846957150397,
+          "p95": 0.059,
+          "p99": 0.059,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235725Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=1a960b3ec75905f3e2fd6cd5e5f2d28c859802ed4d80115ef7af0563984fdf0d": {
+          "rps": 0.010061934410207314,
+          "p95": 0.071,
+          "p99": 0.071,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235725Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=cdb1f3b15f2471356fc06d69ba4358bb4a3f047f9dd3ba0d96a42a749c70ea09": {
+          "rps": 0.023477846957150397,
+          "p95": 0.008,
+          "p99": 0.008,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235727Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=380a041425d0fa11cdfb5d6ba07a577a91c894a8bfd625f477268b97983efb14": {
+          "rps": 0.023477846957150397,
+          "p95": 0.076,
+          "p99": 0.076,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235727Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=c7ba74232649d0abf9e4f11fade6059c5e8d99791c52e4dfd517f09d53e55ee7": {
+          "rps": 0.010061934410207314,
+          "p95": 0.015,
+          "p99": 0.015,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235729Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=1fb1629a87644221376c58180f2f76d890336f8c13b9422d081ecd44e4a90951": {
+          "rps": 0.020123868820414628,
+          "p95": 0.057,
+          "p99": 0.057,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235729Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=fa338c4e8534b55944e4df5c7b25eaefd8e87478dd27098e95accf3ca513e171": {
+          "rps": 0.013415912546943085,
+          "p95": 0.089,
+          "p99": 0.089,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235731Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=abf0ca6cf0bcea988596460e05d0fe631925c7ecb8ffa80076501a33fd5b2eb8": {
+          "rps": 0.013415912546943085,
+          "p95": 0.047,
+          "p99": 0.047,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235731Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=dc8aa54ac7c156f42e5ce9305ab31a39b4eaad67904d8eb2fdfd45af379f999b": {
+          "rps": 0.020123868820414628,
+          "p95": 0.082,
+          "p99": 0.082,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235733Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=3411d460714261b23158b5cccfe117dd04f17b08e33b9ac17bcc136e8e1e9250": {
+          "rps": 0.023477846957150397,
+          "p95": 0.057,
+          "p99": 0.057,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235733Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=8393ae86362f0cdc887c2b3088aa68c50864074f11a9dd5f546b90aa4ed96254": {
+          "rps": 0.010061934410207314,
+          "p95": 0.033,
+          "p99": 0.033,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235735Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=3615c606d5263ca7a9f228d18d8ae196a7542b11a1c5bc7a55b2806ca6cba3a1": {
+          "rps": 0.013415912546943085,
+          "p95": 0.014,
+          "p99": 0.014,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235735Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=80ecda7cf414dfd36b67c0d9bce70570df7e7bef638142422eca18501a93b7bb": {
+          "rps": 0.020123868820414628,
+          "p95": 0.062,
+          "p99": 0.062,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235737Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=750ba7983d84e78639e78be982caf42ee1e8da5796bd833f0a98ecff93e55cda": {
+          "rps": 0.020123868820414628,
+          "p95": 0.083,
+          "p99": 0.083,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235737Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=9ae6f4c73fc4fc17675da5ec3782c198affb77bae80b765a1e32446c2f828abe": {
+          "rps": 0.013415912546943085,
+          "p95": 0.079,
+          "p99": 0.079,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235739Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=bf0bd151cac12a4eb167470e39e6f0bf0ec37e348519583cead462bd170631ee": {
+          "rps": 0.023477846957150397,
+          "p95": 0.015,
+          "p99": 0.015,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235739Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=f21b591a10cb8b47bef52714e95f5f190298b27ef0b2e80c7dadd2038a487409": {
+          "rps": 0.010061934410207314,
+          "p95": 0.043,
+          "p99": 0.043,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235741Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=1b0cd233f0572d9da87119d64b1686191a42e30777ae95671a9324825e7cdd3b": {
+          "rps": 0.010061934410207314,
+          "p95": 0.023,
+          "p99": 0.023,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235741Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=d93fa348618845b68981b2a968969259a688a8bdebf8440a609a110ff4351327": {
+          "rps": 0.023477846957150397,
+          "p95": 0.087,
+          "p99": 0.087,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235743Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=04d3418819899589a4f44e92744e435ee791a81870a063fc486880f2b98a48f5": {
+          "rps": 0.023477846957150397,
+          "p95": 0.015,
+          "p99": 0.015,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235743Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=bfdb31529caa0a87dc3376918f8359be4bb34ab3f2d371f97aa278033a23acf3": {
+          "rps": 0.010061934410207314,
+          "p95": 0.045,
+          "p99": 0.045,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235745Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=8bcf8b5b92297e50769f15495366acfe150fa16035d815c5392d453c9d49581d": {
+          "rps": 0.016769890683678856,
+          "p95": 0.086,
+          "p99": 0.086,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235745Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=96dfebeac7623ba5c6c363053ae4ad021916220fd94c33f332f693b12f4b7a2e": {
+          "rps": 0.016769890683678856,
+          "p95": 0.015,
+          "p99": 0.015,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235747Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=5304035763d7a9c091fe05020c7f48b5d30b117197ac6332dac335b22fa4a54a": {
+          "rps": 0.010061934410207314,
+          "p95": 0.065,
+          "p99": 0.065,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235747Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=e0c4467e4217419b05177a50863c89e2f5a6d3d87323f410f55aee5c3f0ba6f9": {
+          "rps": 0.023477846957150397,
+          "p95": 0.075,
+          "p99": 0.075,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235749Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=9d02cc87c50cd9c7f3aca86e582c09ebbb6bf947363abe0701aa68b17160f6a5": {
+          "rps": 0.020123868820414628,
+          "p95": 0.073,
+          "p99": 0.073,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235749Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=ea4ba64eda530552594983668eb29260668540437c5b893a511b11485878411e": {
+          "rps": 0.013415912546943085,
+          "p95": 0.057,
+          "p99": 0.057,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235751Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=34e5b90e1d219e58c324160ecaec8c6c0c481ca7cf04d3c9c841713e78e93e5d": {
+          "rps": 0.013415912546943085,
+          "p95": 0.056,
+          "p99": 0.056,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235751Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=43d84ee8d6dd1ab7929ac3282be1e8a5be8af996a85e5003fa86c44f3961daac": {
+          "rps": 0.020123868820414628,
+          "p95": 0.012,
+          "p99": 0.012,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235753Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=b175f00985b2c9ddeb2a4621556f649158eb289834229547efccfc293865a9db": {
+          "rps": 0.010061934410207314,
+          "p95": 0.043,
+          "p99": 0.043,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235753Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=b949731407203b8f0a2405cb8383c5c629b4a09491e1930b8ac366e6d39afd14": {
+          "rps": 0.023477846957150397,
+          "p95": 0.014,
+          "p99": 0.014,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235755Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=40c5470764d63535a0378e8b63b543b61ee70fdcf640ee97acfe6a0321468db8": {
+          "rps": 0.010061934410207314,
+          "p95": 0.049,
+          "p99": 0.049,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235755Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=dbc5dd97e62c07b6ec14ab10269854e6fb44b84f547083c05296785fe40c68bf": {
+          "rps": 0.023477846957150397,
+          "p95": 0.044,
+          "p99": 0.044,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235757Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=5890e90efc1986e22ff79d6c57df0fb09d102adf00d8d4d96821d4c2ea4f63a9": {
+          "rps": 0.020123868820414628,
+          "p95": 0.11,
+          "p99": 0.11,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235757Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=5a7a7604bf8bdebbe28c46724dc366bb280037149677a687f5ef1a40ef4a3055": {
+          "rps": 0.013415912546943085,
+          "p95": 0.009,
+          "p99": 0.009,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235759Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=106bc29bcbdd48c6b1b3f7f6321d5afb897e56fa9889141cd593282cdd9f40e1": {
+          "rps": 0.016769890683678856,
+          "p95": 0.074,
+          "p99": 0.074,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235759Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=ee3ae39bc2605fc697e11a9166e3a8dd5a3c2f00544e532ff23cc023b757f655": {
+          "rps": 0.016769890683678856,
+          "p95": 0.046,
+          "p99": 0.046,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235801Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=2d190ff181a849ef9934d816d8436457b179978eb3effeff64895c8265cf5a7f": {
+          "rps": 0.020123868820414628,
+          "p95": 0.009,
+          "p99": 0.009,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235801Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=e42d22992e8d7bec57ff2c22d0eec51ac726f2be63644a2f11bf251b015225be": {
+          "rps": 0.013415912546943085,
+          "p95": 0.058,
+          "p99": 0.058,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235803Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=8f018620b92147d4b6ed939e4dbaa77e6c9392d9209a3abccb54897d25d12607": {
+          "rps": 0.013415912546943085,
+          "p95": 0.079,
+          "p99": 0.079,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235803Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=f4c5cc59c0b8383d0e5610ae2068961b03881bfaee521fe54f09c3bf1a768a3d": {
+          "rps": 0.020123868820414628,
+          "p95": 0.079,
+          "p99": 0.079,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235805Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=359d49e686232c2aaa3c6e3ee6bff385084acb5f0bde2a9ac8684ad30591aa11": {
+          "rps": 0.013415912546943085,
+          "p95": 0.059,
+          "p99": 0.059,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235805Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=f330f4efb1a0ef2941696c02dd455da51089128c4260ec7bb72404f085697ed1": {
+          "rps": 0.020123868820414628,
+          "p95": 0.072,
+          "p99": 0.072,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235807Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=201a14c34fb6a20558f986f677c6bc871956e7bc15edb917d63160fb42390011": {
+          "rps": 0.016769890683678856,
+          "p95": 0.016,
+          "p99": 0.016,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235807Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=e4d8d1cc3eb671a3de96b81e1665389729e58d124f5585c23d3e9bafa9c55498": {
+          "rps": 0.016769890683678856,
+          "p95": 0.09,
+          "p99": 0.09,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235809Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=4402a1ce74cc331c2921eeb26db0b49ca0051f6a533ed34bb0fd14f87e17e414": {
+          "rps": 0.020123868820414628,
+          "p95": 0.047,
+          "p99": 0.047,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235809Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=91a788c86ded87edefe89d4d1095835c7adeb730a5c65cd6819b21157c697514": {
+          "rps": 0.013415912546943085,
+          "p95": 0.11,
+          "p99": 0.11,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235811Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=107b26dc8b2f0cc75facab036215aa225c8fc1edf8b1399adf08fb99da6473b2": {
+          "rps": 0.013415912546943085,
+          "p95": 0.092,
+          "p99": 0.092,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235811Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=1a24618d8fd3a93e1a4e07c5e62c7037eed3918e30e9345c2beea0cedd8a6ea1": {
+          "rps": 0.020123868820414628,
+          "p95": 0.029,
+          "p99": 0.029,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235813Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=6dff84a5698938298d84a6316dd4048002238e9a10d181b43c9da7bdea2ed088": {
+          "rps": 0.0067079562734715424,
+          "p95": 0.037,
+          "p99": 0.037,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235813Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=70c6ec2ff0a614d79868661f9786899c73ff5f94734729e95069d34e5a97b60d": {
+          "rps": 0.02683182509388617,
+          "p95": 0.066,
+          "p99": 0.066,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235815Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=617808655072b23dfdc616a4155ea9847ada458bdffe3e5b063d7e25421d549c": {
+          "rps": 0.013415912546943085,
+          "p95": 0.057,
+          "p99": 0.057,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235815Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=776da6f9f7fb19d3df98cedbe49885b1b14efc3eddc3108ad996d9908d55393b": {
+          "rps": 0.020123868820414628,
+          "p95": 0.11,
+          "p99": 0.11,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235817Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=9470be91e245ee09a91552da2c3c2aee88a23573920dd766cb938d582d3d9594": {
+          "rps": 0.016769890683678856,
+          "p95": 0.088,
+          "p99": 0.088,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235817Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=ba2ed801bb16b38f0d269423fed5cf993e086b728658fc00d8e83524807681ab": {
+          "rps": 0.016769890683678856,
+          "p95": 0.04,
+          "p99": 0.04,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235819Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=73961006f9cc846a58a9796bb991ba8b6a008cceb7fd2450ebd756a76213909f": {
+          "rps": 0.03018580323062194,
+          "p95": 0.096,
+          "p99": 0.096,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235819Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=a203b1681475e4bb51b21b4dc891d97a6ba82bdd734f9a0a727c7b5a0d0d9491": {
+          "rps": 0.0033539781367357712,
+          "p95": 0.008,
+          "p99": 0.008,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235821Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=00198170ec847aa1cf0119725850dbd2775cc78d7272cb78ef83fc559866dc8a": {
+          "rps": 0.013415912546943085,
+          "p95": 0.054,
+          "p99": 0.054,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235821Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=a0324d864f64aea7eca51b81b0c57ed6b05612ed3e2ac7d5caa1d4b29b8f21ee": {
+          "rps": 0.020123868820414628,
+          "p95": 0.061,
+          "p99": 0.061,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235823Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=607f1844a940cc8d1091f0955f6327b01358c834b930f26a230e3ef141368cad": {
+          "rps": 0.016769890683678856,
+          "p95": 0.092,
+          "p99": 0.092,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235823Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=aa569adaab0b8c5ea99267630643a2ebfca059d83aaa1aa7fed57d518a8644cc": {
+          "rps": 0.016769890683678856,
+          "p95": 0.054,
+          "p99": 0.054,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235825Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=3e5ac1c7b618df5fac304d91cb2e2d6beee58f184ddacbcc3d5be5c1018658d6": {
+          "rps": 0.016769890683678856,
+          "p95": 0.068,
+          "p99": 0.068,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235825Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=e3807a68c2689b3e0f7690fc607af300a2c444f621501b0ea1fcd02356a0e394": {
+          "rps": 0.016769890683678856,
+          "p95": 0.017,
+          "p99": 0.017,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235827Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=83d84129cce73f1c78fd597de1d7bb2403225f6004a02925db48b9b2dd70e125": {
+          "rps": 0.023477846957150397,
+          "p95": 0.12,
+          "p99": 0.12,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235827Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=a6421b75a55d798bc01f144f1eaa209cd5a6f8d404449ba99c034947f2b3810a": {
+          "rps": 0.010061934410207314,
+          "p95": 0.013,
+          "p99": 0.013,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235829Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=1aad6be965d8517180e0ec5063e6348c9531ba072e48a8ef46aa82e539b1fbe4": {
+          "rps": 0.023477846957150397,
+          "p95": 0.072,
+          "p99": 0.072,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235829Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=a92f140ad775f2f185336e89e4f4cff8f6ac831233c7bf8fcc425f8bc11912a1": {
+          "rps": 0.010061934410207314,
+          "p95": 0.055,
+          "p99": 0.055,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235831Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=330dad6d54f90659531040578c29d6185f7a28dac11451c0b74b28e61cf9af8f": {
+          "rps": 0.010061934410207314,
+          "p95": 0.083,
+          "p99": 0.083,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235831Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=66386e41534d2e5f1f1a9f351e3e0809726ec7e16f4966e346f9fb4cf60d9144": {
+          "rps": 0.023477846957150397,
+          "p95": 0.087,
+          "p99": 0.087,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235833Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=1e336ea05c37e9b62eae130e40f1fce70d1b7aa6df63bdac0d34385ca40b2f18": {
+          "rps": 0.013415912546943085,
+          "p95": 0.065,
+          "p99": 0.065,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235833Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=c91c5e17feb232634a0651d659f00a04dbbaaaa330250e9ff17985ad9e694f9e": {
+          "rps": 0.020123868820414628,
+          "p95": 0.042,
+          "p99": 0.042,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235835Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=51d7c6fc7ee9be1fe39d32bedad83c62adae5353d1982c265cd84a76ffb105f1": {
+          "rps": 0.020123868820414628,
+          "p95": 0.071,
+          "p99": 0.071,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235835Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=80d3fadcce646bfdcee0620e0c8bf9621f48a81b714be098a30e63dbf37615ce": {
+          "rps": 0.013415912546943085,
+          "p95": 0.1,
+          "p99": 0.1,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235837Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=509f81d73629d9032fffd8794c142263582f1897ef741952ef369a2e80064f5a": {
+          "rps": 0.020123868820414628,
+          "p95": 0.09,
+          "p99": 0.09,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235837Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=8e707b81ce4a4a6cc13be72d7e2de8df9edfb14882477c9f046cbe4e1039b296": {
+          "rps": 0.013415912546943085,
+          "p95": 0.071,
+          "p99": 0.071,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235839Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=1d112af6b4eb6317c6e1e35faedf7cfccceb20b08282c05ebf75649752bfc369": {
+          "rps": 0.023477846957150397,
+          "p95": 0.035,
+          "p99": 0.035,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235839Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=1e4fce94a181a300f1052be03cc50d270630c516c9f49c117bbdfe28d46b95bd": {
+          "rps": 0.010061934410207314,
+          "p95": 0.057,
+          "p99": 0.057,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235841Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=17936c5d40550c3238ea2357d50577e512891ee20f31b757d7f2815e19eaf117": {
+          "rps": 0.016769890683678856,
+          "p95": 0.078,
+          "p99": 0.078,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235841Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=b208674b84e259b8ed2f1c8366c3b6226616af33d637bd5a2fe37eb78a8fbea4": {
+          "rps": 0.016769890683678856,
+          "p95": 0.04,
+          "p99": 0.04,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235843Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=2a8c59dc17fd7b3de6e262ffcbbea817eb0938b865c8891b0215567210f7302c": {
+          "rps": 0.016769890683678856,
+          "p95": 0.009,
+          "p99": 0.009,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235843Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=87d0a952a101fcfceb6c0e397bd37708073d14cf1276ee4fc1f66605cb1670cc": {
+          "rps": 0.016769890683678856,
+          "p95": 0.065,
+          "p99": 0.065,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235845Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=7ad6f3cf0a5dc0a382546ba6381de028647e7e28863d4883458e28d8bca2863b": {
+          "rps": 0.0067079562734715424,
+          "p95": 0.051,
+          "p99": 0.051,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235845Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=e9a0e0026062c357e18505f3d8ed601ce10b2e21801268a7206767a78c3520d3": {
+          "rps": 0.02683182509388617,
+          "p95": 0.072,
+          "p99": 0.072,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235847Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=51070e569d80c8b9c8e1ea51aea947d581b46c24f9906b087124becd4800cc84": {
+          "rps": 0.023477846957150397,
+          "p95": 0.011,
+          "p99": 0.011,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235847Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=cae32fa31e38ff7ae013c8a0efdfb07c40782129128f151b75f4ef17b4390a8b": {
+          "rps": 0.010061934410207314,
+          "p95": 0.074,
+          "p99": 0.074,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235849Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=d95bef83822f037ea4dab6790e7b814f3142bbd2dff5899ab45b8f31a38ed3c0": {
+          "rps": 0.023477846957150397,
+          "p95": 0.085,
+          "p99": 0.085,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235849Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=f99a061248c7fd630187ab31f62b483b1fff04e7bec9203c606eb53c32d763c6": {
+          "rps": 0.010061934410207314,
+          "p95": 0.089,
+          "p99": 0.089,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235851Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=a757efb9ec97f81aad730a6ffc58240a8b0ea074cae1eb4e1a686ae17da6a8ba": {
+          "rps": 0.016769890683678856,
+          "p95": 0.08,
+          "p99": 0.08,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235851Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=c7159d55ad7427e5be27e1ac090367e3c921607e2c98e7f265e468d5593df117": {
+          "rps": 0.016769890683678856,
+          "p95": 0.055,
+          "p99": 0.055,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235853Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=202067397b457963a25d8e4bcc7423c1a1546d0d68704641da8d33a7f372dc60": {
+          "rps": 0.013415912546943085,
+          "p95": 0.063,
+          "p99": 0.063,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235853Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=71cc9fbb39d17d26a8c08d01e61bb7fc97989fd76f15708ac9bfdf40ac858102": {
+          "rps": 0.020123868820414628,
+          "p95": 0.058,
+          "p99": 0.058,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235855Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=35f48a91d5566e56d4af43288c35c57ff3521d3de57a94f53bbda53749b7ce7c": {
+          "rps": 0.016769890683678856,
+          "p95": 0.094,
+          "p99": 0.094,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235855Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=3fd7c037a689f99909610af8a257bcbaf4b9fe3f34efca7996de4398cf68fb59": {
+          "rps": 0.016769890683678856,
+          "p95": 0.06,
+          "p99": 0.06,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235857Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=3bc418f99370e02c56170a23e69228d2129d3629e53091c40924814766f2a481": {
+          "rps": 0.010061934410207314,
+          "p95": 0.078,
+          "p99": 0.078,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235857Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=84331f6a27a5918e5a00c0ec664b4d780edf3ed3ea5371fdd4454233c852cba7": {
+          "rps": 0.023477846957150397,
+          "p95": 0.078,
+          "p99": 0.078,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235859Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=958053e14d18bb47fe6d004e2843efb24bc033bcf3c89b2921469ab3cbfaa7f4": {
+          "rps": 0.013415912546943085,
+          "p95": 0.1,
+          "p99": 0.1,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235859Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=b9097049e0d62513d9270ae4d13051cc5b85ce7b8e5d8ed28229d0de468a9905": {
+          "rps": 0.020123868820414628,
+          "p95": 0.05,
+          "p99": 0.05,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235901Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=3a8d4246a17655fd26af5e7738e04e3ae0f60a33015af36b4f53907c6e975387": {
+          "rps": 0.013415912546943085,
+          "p95": 0.082,
+          "p99": 0.082,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235901Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=b144d08f00296d3748b61f3cba26716dd9365ab98c986ac12da20b5e09a7500f": {
+          "rps": 0.020123868820414628,
+          "p95": 0.13,
+          "p99": 0.13,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235903Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=b7dd795dcf74ecac08d05974281518f5b002d3680eca65bcd363757ccdcba7cd": {
+          "rps": 0.020123868820414628,
+          "p95": 0.054,
+          "p99": 0.054,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235903Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=f9acf15a214902c69490179c00b26e122949c72a5fed334bff36376aa700e666": {
+          "rps": 0.013415912546943085,
+          "p95": 0.037,
+          "p99": 0.037,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235905Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=479747d45f9a9b3b79c6c8a5349d5110d02665464a3e4ec5490e575d5018e985": {
+          "rps": 0.023477846957150397,
+          "p95": 0.085,
+          "p99": 0.085,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235905Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=7c1e4a5f677ffa434c1afab9ff7062edaa9577bbd97d6fc5a3c78e9c487b6a63": {
+          "rps": 0.010061934410207314,
+          "p95": 0.073,
+          "p99": 0.073,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235907Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=c8098dbfca2602224bf7c37d2995a344c78426a2f3f203afdd93292bb49aa861": {
+          "rps": 0.010061934410207314,
+          "p95": 0.038,
+          "p99": 0.038,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235907Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=d6c3b613cc59e85a6ae32c6dc6e451f47e761a34fc710598865f1e0f3004b5f3": {
+          "rps": 0.023477846957150397,
+          "p95": 0.015,
+          "p99": 0.015,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235909Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=421fbd04a32fc618dbce6ee968df4ea1d2e704451e8064b7e078505419ef02a7": {
+          "rps": 0.023477846957150397,
+          "p95": 0.11,
+          "p99": 0.11,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235909Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=4e93c55f69b454c57c5d1961034e08e3187e8a5d410b0ce3bb62473b80af0d3e": {
+          "rps": 0.010061934410207314,
+          "p95": 0.057,
+          "p99": 0.057,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235911Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=50e1fd2589c25c3580f94618f48c154745866dbd0ae450b4ae467628ae36fd23": {
+          "rps": 0.02683182509388617,
+          "p95": 0.014,
+          "p99": 0.014,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235911Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=d6adbff5757c2809f105ddef340242a5fa39346188964c720d8d1dda88c08515": {
+          "rps": 0.0067079562734715424,
+          "p95": 0.057,
+          "p99": 0.057,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235913Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=8122be92acd3fe083246b7452723cee2b406583969b93e9a29f9928af98834df": {
+          "rps": 0.010061934410207314,
+          "p95": 0.11,
+          "p99": 0.11,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235913Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=bf7ca831c6c33a7b035193ab6cfdba1ad6580373255ef1fec96ee951fca1ecef": {
+          "rps": 0.023477846957150397,
+          "p95": 0.076,
+          "p99": 0.076,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235915Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=3a09b70293fd393dbc918c5439b300ac91e441a4771a0e44897a713e42850487": {
+          "rps": 0.023477846957150397,
+          "p95": 0.053,
+          "p99": 0.053,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235915Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=6c0efa47e8848fabf3ee131b38f6a5ca623dcefac0025250df6ad71de941ed77": {
+          "rps": 0.010061934410207314,
+          "p95": 0.074,
+          "p99": 0.074,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235917Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=23a805ef051ee3f86a52fd049ca7662f9730b90d70140cc5f91edf2a35afb7f9": {
+          "rps": 0.020123868820414628,
+          "p95": 0.038,
+          "p99": 0.038,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235917Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=eafa6bc97a42d9d79d4eabe1f3940e0f3f7413e88658dc7db838f77c1b91d4cd": {
+          "rps": 0.013415912546943085,
+          "p95": 0.059,
+          "p99": 0.059,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235919Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=b3a77a0901dab0290755d3e44efeed2774d21c7dbac64f2ded6774ce664aebc1": {
+          "rps": 0.016769890683678856,
+          "p95": 0.055,
+          "p99": 0.055,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235919Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=edb859275b53020209243fd8b5c7c189a1bb772e4e49cb146a94ceb148700292": {
+          "rps": 0.016769890683678856,
+          "p95": 0.013,
+          "p99": 0.013,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235921Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=4e248d9f4ee88c53355942c30ffd48d668504f7a3882b172dd31df82b5c5a71a": {
+          "rps": 0.013415912546943085,
+          "p95": 0.055,
+          "p99": 0.055,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235921Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=576657c780e2e20910300725f0ddaaf7bfbe372f6e1406fea5824b8b3236eff0": {
+          "rps": 0.020123868820414628,
+          "p95": 0.058,
+          "p99": 0.058,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235923Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=6ff7cfc786474d916b7c445fef10b1ff5abf35496ad354a7b07752a6029ce8a5": {
+          "rps": 0.016769890683678856,
+          "p95": 0.061,
+          "p99": 0.061,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235923Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=de3d1a9e2285a00578d7491a1712650f8ea5442fd00ebec2554e94c0747deb37": {
+          "rps": 0.016769890683678856,
+          "p95": 0.048,
+          "p99": 0.048,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235925Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=45b993a5a50ef3fd78e28047dde9c7efbb9c246d99fd1a3e81fb1e6df2478bde": {
+          "rps": 0.013415912546943085,
+          "p95": 0.077,
+          "p99": 0.077,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235925Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=a9283a089da5b2ef54cf7d36355b6872528fe91f3a3bb0c80ceb555973c43df6": {
+          "rps": 0.020123868820414628,
+          "p95": 0.017,
+          "p99": 0.017,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235927Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=2d742ff61adf3a32f5bf77cf61b457af2262e6204f0890906b86dd2debed6f4f": {
+          "rps": 0.013415912546943085,
+          "p95": 0.034,
+          "p99": 0.034,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235927Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=7da5fb256a3e80a351126ac267ddb9f5eda7fdbb73e390af7f1ab0c81d364baa": {
+          "rps": 0.020123868820414628,
+          "p95": 0.067,
+          "p99": 0.067,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235929Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=1865bd25a12ae8924aa1b448c8909a25c4ed5d192f39db509a0d1c54a8564867": {
+          "rps": 0.0067079562734715424,
+          "p95": 0.075,
+          "p99": 0.075,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235929Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=94f9bdf0beb201a7ac84c242715e44ba328c5fef0655678e11ca85cd5ecf7185": {
+          "rps": 0.02683182509388617,
+          "p95": 0.1,
+          "p99": 0.1,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235931Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=312fcdd7dfe687fc146bddbe16de35127cada7e0b91a5667d820bd026702555e": {
+          "rps": 0.020123868820414628,
+          "p95": 0.14,
+          "p99": 0.14,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235931Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=92dbbded9317ffcea03f756294975fae1c1d19ead5700d754ae2a04d75959e01": {
+          "rps": 0.013415912546943085,
+          "p95": 0.016,
+          "p99": 0.016,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235933Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=4211cacc1c7423d4090e3d61bcf56e0729ecaf651013412e89b40f759538012d": {
+          "rps": 0.013415912546943085,
+          "p95": 0.055,
+          "p99": 0.055,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235933Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=926f939a46addd8c1fd1eb2daaecae7711daa0fcf5d0c0727b3fc219231cb005": {
+          "rps": 0.020123868820414628,
+          "p95": 0.058,
+          "p99": 0.058,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235935Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=0d344df0fadb0b64864c70760e33d834ff40d52d611498836997bd33e96bb12b": {
+          "rps": 0.013415912546943085,
+          "p95": 0.072,
+          "p99": 0.072,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235935Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=a53a61c2d4e34cc7839df579bcb97dcbb37288777d4e98e90055dd5534e9f564": {
+          "rps": 0.020123868820414628,
+          "p95": 0.058,
+          "p99": 0.058,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235937Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=765ca63b454f484ab2de05d489864c6d836d109117ac9e91b689727321515807": {
+          "rps": 0.020123868820414628,
+          "p95": 0.062,
+          "p99": 0.062,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235937Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=df3215b43d857f14d339ae3e36fe3bfbe1e03b51974c1e5eb03379bc22ef3226": {
+          "rps": 0.013415912546943085,
+          "p95": 0.079,
+          "p99": 0.079,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235939Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=3280117f9ff9668224869acd6f4c8127662f001cf632335762bb1480e9170c0a": {
+          "rps": 0.016769890683678856,
+          "p95": 0.053,
+          "p99": 0.053,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235939Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=bc83b742df275920452c6c7e75c8a1ee3c5db67b87e9a0e92e73cd14143250a3": {
+          "rps": 0.016769890683678856,
+          "p95": 0.012,
+          "p99": 0.012,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235941Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=31a083c8f841e1883017a46d4bc94417c5808ad6eb269657c5427fdd4d682726": {
+          "rps": 0.013415912546943085,
+          "p95": 0.012,
+          "p99": 0.012,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235941Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=9212fa7bf9cad0e412559d23beba01d8c0cacc4996d08cc54e4b467e4b41c789": {
+          "rps": 0.020123868820414628,
+          "p95": 0.068,
+          "p99": 0.068,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235943Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=6c8d93cf2a53323f9487dfb5fc51a3e513d2b97e1034dd52b5929f0a6a5a58d8": {
+          "rps": 0.016769890683678856,
+          "p95": 0.056,
+          "p99": 0.056,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235943Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=fde5963e0080e4ecc77469d4be07bff3926d36d0bd136f2287a777bc1367f66d": {
+          "rps": 0.016769890683678856,
+          "p95": 0.06,
+          "p99": 0.06,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235945Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=0abb2093a251f09af5c3bedfbb4b175e28906709561d5e67190e504763f713ba": {
+          "rps": 0.02683182509388617,
+          "p95": 0.11,
+          "p99": 0.11,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235945Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=4726da1b805004f8d985bcbac6e3ab026ec140c8e151a97669779631e367fe80": {
+          "rps": 0.0067079562734715424,
+          "p95": 0.009,
+          "p99": 0.009,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235947Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=8d4689940040d26a0a2266a67d7f825562750b4122f814c10798ee7c2b3d0d13": {
+          "rps": 0.02683182509388617,
+          "p95": 0.096,
+          "p99": 0.096,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235947Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=f699e426d167bb082741896ecae5d8c20f1645f6862ad7a71018e2289ec9d43b": {
+          "rps": 0.0067079562734715424,
+          "p95": 0.071,
+          "p99": 0.071,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235949Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=5f0200a89f7ab979c69a992e37e5f8b83c5349b96afe2fe5c1b98cfd7f762b28": {
+          "rps": 0.013415912546943085,
+          "p95": 0.01,
+          "p99": 0.01,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235949Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=82825965aa563f90db730875a647cf41b0114a1d39fa3e0c336071ec8442c8ac": {
+          "rps": 0.020123868820414628,
+          "p95": 0.066,
+          "p99": 0.066,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235951Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=3150cccf9f78e993f07ac272f80cf3778c9b69ba8a0ed62aaa36db82f0bcf9f3": {
+          "rps": 0.010061934410207314,
+          "p95": 0.044,
+          "p99": 0.044,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235951Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=7be4720f523e462971c4b92218c8088385178e19aebcf1623d3d425f4bb0585e": {
+          "rps": 0.023477846957150397,
+          "p95": 0.009,
+          "p99": 0.009,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235953Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=58fa5a5fad049059057cc784309d743d1287b156cb6a057e9a08284af89e254d": {
+          "rps": 0.020123868820414628,
+          "p95": 0.092,
+          "p99": 0.092,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235953Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=ce129f1e854b79f8df4eaa2b80104d61c761a52ebaed671f80a727e6e2620088": {
+          "rps": 0.013415912546943085,
+          "p95": 0.051,
+          "p99": 0.051,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235955Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=6efae4d8612e073d99d2d641e1d989977bf516b34ad99e0d6e36d54cdddd82ec": {
+          "rps": 0.016769890683678856,
+          "p95": 0.088,
+          "p99": 0.088,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235955Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=e1b3dc1995c267faf07385c66d6b4fd4f4ea59d6753b2e8a83b73bded8561984": {
+          "rps": 0.016769890683678856,
+          "p95": 0.061,
+          "p99": 0.061,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235957Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=33aab29fd5476429abf80d049a5b5352e975f162fb79d1c4276c04185084156d": {
+          "rps": 0.020123868820414628,
+          "p95": 0.012,
+          "p99": 0.012,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235957Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=fbae9b651970364e4c7fd0f2f9262e74865363aaaf174642c755365b5de2ae65": {
+          "rps": 0.013415912546943085,
+          "p95": 0.062,
+          "p99": 0.062,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235959Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=1464af6a1eb59bf620de8d304292eb82ee8f9ed3883f7a7e2dc3c73a6f9eb48f": {
+          "rps": 0.0067079562734715424,
+          "p95": 0.081,
+          "p99": 0.081,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260811%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260811T235959Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=181e0e17d0515e6da63f0a14f9285406635eb0679c21860391392cb262dc0b22": {
+          "rps": 0.02683182509388617,
+          "p95": 0.062,
+          "p99": 0.062,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260812%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260812T000001Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=b0c070a1c6840ae97a4314a232f2726a190617876b85f0c25eccc8f2b816c38f": {
+          "rps": 0.03353978136735771,
+          "p95": 0.017,
+          "p99": 0.017,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260812%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260812T000003Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=058e342574b7bdbb4092feddd14fa501fc3441a214fefb2f9ace5389ab5ebc6c": {
+          "rps": 0.010061934410207314,
+          "p95": 0.035,
+          "p99": 0.035,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260812%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260812T000003Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=7c2a1d10faf4e091dc63fce91345b6787dcb9dd96cfefc1a72fa06c791972bcf": {
+          "rps": 0.023477846957150397,
+          "p95": 0.081,
+          "p99": 0.081,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260812%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260812T000005Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=0162565901c16b22165d9f004c0e354e9f6489199bd2ef2a17695643153d4eaf": {
+          "rps": 0.016769890683678856,
+          "p95": 0.091,
+          "p99": 0.091,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260812%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260812T000005Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=ca7369852c90e91f6493faaac6af64ccd1ee0e1ebc553c02eb3017bf8091b1a1": {
+          "rps": 0.016769890683678856,
+          "p95": 0.14,
+          "p99": 0.14,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260812%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260812T000007Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=1729a078c71ae0850954fd7de5c9b62eaf447deb6b61f5c0f3d43649fc1b5c61": {
+          "rps": 0.023477846957150397,
+          "p95": 0.1,
+          "p99": 0.1,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260812%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260812T000007Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=8de34be9a8642bdcde34b6f70ae31ab01076095503b635bb55d3474752586b7e": {
+          "rps": 0.010061934410207314,
+          "p95": 0.067,
+          "p99": 0.067,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260812%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260812T000009Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=005bcb0900d2a0c9625888a85c52b8e12a30d2913ece9f2ac6dfa3b115b110c8": {
+          "rps": 0.020123868820414628,
+          "p95": 0.053,
+          "p99": 0.053,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260812%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260812T000009Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=5f5c56fd1526159d7bcccadbef1699df8fe8849e4ceb55f44b9f9118de46a956": {
+          "rps": 0.013415912546943085,
+          "p95": 0.054,
+          "p99": 0.054,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260812%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260812T000011Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=22f948705823ffa712fe4484a52629f9793a8fb0247ad4ffea472736861535dc": {
+          "rps": 0.010061934410207314,
+          "p95": 0.045,
+          "p99": 0.045,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260812%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260812T000011Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=bf5923eae8ada16ba13e83bb79b632d421c3fa54031680a986c11b47a4b6606c": {
+          "rps": 0.023477846957150397,
+          "p95": 0.013,
+          "p99": 0.013,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260812%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260812T000013Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=90a2973d6332c87f99acf7e18959966bf3df1c01057b1bffbff0009190c10198": {
+          "rps": 0.016769890683678856,
+          "p95": 0.06,
+          "p99": 0.06,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260812%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260812T000013Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=e9c187c9e5deae62f3494f1b1c110aaa6da73f35dd5326b8595d8c54b087218d": {
+          "rps": 0.016769890683678856,
+          "p95": 0.049,
+          "p99": 0.049,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260812%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260812T000015Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=324b976e4609eeecd200248cacf7b664838221191736dfe1fe473c7adf060177": {
+          "rps": 0.020123868820414628,
+          "p95": 0.082,
+          "p99": 0.082,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260812%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260812T000015Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=6f6d9dc7d5a55013e1819350e346f3ed37f3ca1fb26bd764e204c83ee7cb6ae1": {
+          "rps": 0.013415912546943085,
+          "p95": 0.052,
+          "p99": 0.052,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260812%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260812T000017Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=3788913a9f0eb2864ed51b49249f31ae6696a42080bf8e43fb4f7b5a4540b24e": {
+          "rps": 0.010061934410207314,
+          "p95": 0.057,
+          "p99": 0.057,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260812%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260812T000017Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=c4dc5d52d38a46bf543fd534c12b03b2397bdbab0dd87a56fd1d14ae99d51111": {
+          "rps": 0.023477846957150397,
+          "p95": 0.1,
+          "p99": 0.1,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260812%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260812T000019Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=928bab43bdf6b7cadb6a08b976d2837a3965df51b977f7f0c46ad5610f755b9c": {
+          "rps": 0.016769890683678856,
+          "p95": 0.011,
+          "p99": 0.011,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260812%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260812T000019Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=d19260ed125e427b7922afcafa4d0c1fbdf0c6d14f0e3d54b38bf76eecd02518": {
+          "rps": 0.016769890683678856,
+          "p95": 0.051,
+          "p99": 0.051,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260812%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260812T000021Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=dca6739810cc30a21e6188c83e7e7b10cbc6ec33912f8c6d68f8bb1446729071": {
+          "rps": 0.016769890683678856,
+          "p95": 0.062,
+          "p99": 0.062,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260812%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260812T000021Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=ee39606da0e2160c4ec59b6deeba0421b70bc73ffe66f87b776c292a36d45b1d": {
+          "rps": 0.016769890683678856,
+          "p95": 0.061,
+          "p99": 0.061,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260812%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260812T000023Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=15d227f80364469f2db36d3eff8e977a3a3dd62dd589591fac4c9b1ac775f1da": {
+          "rps": 0.013415912546943085,
+          "p95": 0.046,
+          "p99": 0.046,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260812%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260812T000023Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=97210639bf678f564e614da3b39af5ff6f8d531e3afe09cb89319e473653aa68": {
+          "rps": 0.020123868820414628,
+          "p95": 0.068,
+          "p99": 0.068,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260812%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260812T000025Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=1fe52c7a8692c906cb1d0f19bc661ff317c88b4b0d869adb6ec209ab37e64cb7": {
+          "rps": 0.023477846957150397,
+          "p95": 0.06,
+          "p99": 0.06,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260812%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260812T000025Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=c72afae3bff213bf3240e1c038811f3ddaae09e04935ff845ae47a84188340d1": {
+          "rps": 0.010061934410207314,
+          "p95": 0.05,
+          "p99": 0.05,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260812%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260812T000027Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=67aa9bd6f0f7169ac01b05071624881a16ae22e0d6a719e9c5b6f7bb20ad0c6c": {
+          "rps": 0.013415912546943085,
+          "p95": 0.034,
+          "p99": 0.034,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260812%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260812T000027Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=a0626ddf3fcfc171c6dcf92f1bad5055a553eb6cddfc91554194d9603772c63a": {
+          "rps": 0.020123868820414628,
+          "p95": 0.078,
+          "p99": 0.078,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260812%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260812T000029Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=8b324110cab92a08c660b307fa53403d9b39ac1e91208e6f528d0b1e5fb9aaaf": {
+          "rps": 0.016769890683678856,
+          "p95": 0.02,
+          "p99": 0.02,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260812%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260812T000029Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=aa78dd61f5c5191b1fbe75386ddca5bed6d6be0ff70e26258182646043846b89": {
+          "rps": 0.016769890683678856,
+          "p95": 0.073,
+          "p99": 0.073,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260812%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260812T000031Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=c8e52ca02286a61359adde46599079942cfc3f7bb8d47207f79dfe3f8acdef50": {
+          "rps": 0.010061934410207314,
+          "p95": 0.072,
+          "p99": 0.072,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260812%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260812T000031Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=d7d257b328b29b38f694048ebc66413e99bed763d84a4cb2ad825988f4569c84": {
+          "rps": 0.023477846957150397,
+          "p95": 0.12,
+          "p99": 0.12,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260812%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260812T000033Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=81c827cec554ae02ae344d35119e7a283e4349f72bd99e1da9afd3c415688e87": {
+          "rps": 0.013415912546943085,
+          "p95": 0.087,
+          "p99": 0.087,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260812%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260812T000033Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=fe1dbb0b1d8806cf438c0e799266fed2b8393b9bd0b04a54c5119550de3ff5c5": {
+          "rps": 0.020123868820414628,
+          "p95": 0.054,
+          "p99": 0.054,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260812%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260812T000035Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=820c0cf59f99cd844c4ebf6465ec6eddf0884995fdd24fce57705829d60a9338": {
+          "rps": 0.020123868820414628,
+          "p95": 0.014,
+          "p99": 0.014,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260812%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260812T000035Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=8bd29e944925f8142dda6ed515a9baa1e77f7c63661ae96c52742ef47de0403c": {
+          "rps": 0.013415912546943085,
+          "p95": 0.058,
+          "p99": 0.058,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260812%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260812T000037Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=af62081939196ebe21fc189a3a50d68e2e9e72d995ab2d24fe70b726a65f1a75": {
+          "rps": 0.013415912546943085,
+          "p95": 0.12,
+          "p99": 0.12,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260812%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260812T000037Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=f49d9394298519cf83930c4abd2a03b26869b1e8478cf6f5f88570392da96b7b": {
+          "rps": 0.020123868820414628,
+          "p95": 0.12,
+          "p99": 0.12,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260812%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260812T000039Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=30c4c323b9e1bd34f5a475fd0a9e60d2e20f0037b341503c9590b8f49fee9b6b": {
+          "rps": 0.013415912546943085,
+          "p95": 0.14,
+          "p99": 0.14,
+          "error_rate": 0.0
+        },
+        "/loadtest/loadtest-object.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=platform-minio%2F20260812%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260812T000039Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=d45c255deb3dc22b8d4a86094777f75324bb17d476b26c8dfdd164e624989f88": {
+          "rps": 0.020123868820414628,
+          "p95": 0.12,
+          "p99": 0.12,
+          "error_rate": 0.0
+        }
+      },
+      "rps": 5.064506986471015,
+      "p50": null,
+      "p95": 0.085,
+      "p99": 0.11,
+      "error_rate": 0.0,
+      "max_rps": null,
+      "verdict": "WARN",
+      "delta_vs_prev": null,
+      "version": "unknown"
     }
   ]
 }

@@ -1,0 +1,53 @@
+{
+  "runs": [
+    {
+      "ts": "20260812T013034Z",
+      "host": "103.88.243.151",
+      "mode": "smoke",
+      "duration_s": 95.4,
+      "tasks": {
+        "/api/public/traces": {
+          "rps": 5.100685539687369,
+          "p95": 1.2,
+          "p99": 1.8,
+          "error_rate": 0.0
+        }
+      },
+      "rps": 5.100685539687369,
+      "p50": null,
+      "p95": 1.2,
+      "p99": 1.8,
+      "error_rate": 0.0,
+      "max_rps": null,
+      "verdict": "FAIL",
+      "delta_vs_prev": null,
+      "version": "unknown"
+    },
+    {
+      "ts": "20260812T023824Z",
+      "host": "103.88.243.151",
+      "mode": "smoke",
+      "duration_s": 90.3,
+      "tasks": {
+        "/api/public/traces": {
+          "rps": 5.048073025026541,
+          "p95": 1.1,
+          "p99": 2.1,
+          "error_rate": 0.0
+        }
+      },
+      "rps": 5.048073025026541,
+      "p50": null,
+      "p95": 1.1,
+      "p99": 2.1,
+      "error_rate": 0.0,
+      "max_rps": null,
+      "verdict": "PASS",
+      "delta_vs_prev": {
+        "delta_p95": 0.9166666666666667,
+        "delta_error_pp": 0.0
+      },
+      "version": "unknown"
+    }
+  ]
+}

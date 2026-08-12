@@ -1,0 +1,19 @@
+{
+  "runs": [
+    {
+      "ts": "20260812T001143Z",
+      "host": "103.88.243.151",
+      "mode": "capacity",
+      "duration_s": 455.5,
+      "rps": 67.92172906938933,
+      "p50": null,
+      "p95": 0.34,
+      "p99": 0.57,
+      "error_rate": 0.0,
+      "max_rps": 64,
+      "verdict": "WARN",
+      "delta_vs_prev": null,
+      "version": "unknown"
+    }
+  ]
+}

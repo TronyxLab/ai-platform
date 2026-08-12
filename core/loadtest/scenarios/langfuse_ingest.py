@@ -1,22 +1,26 @@
-# GREP_SUMMARY: locust langfuse scenario traces ingest public api POST langfuse
-# STRUCTURE: ▶ env LT_ENDPOINT/LT_PATH/LT_HEADERS/LT_BODY → ◇ LangfuseIngestUser(HttpUser) → ○ task POST traces → ⎋
+# GREP_SUMMARY: locust langfuse scenario traces ingest public api POST langfuse basic-auth
+# STRUCTURE: ▶ env LT_ENDPOINT/LT_PATH/LT_HEADERS/LT_BODY/LT_LANGFUSE_* → ◇ Basic auth (pk:sk base64)
+#           → ◇ LangfuseIngestUser(HttpUser) → ○ task POST traces → ⎋
 # region MODULE_CONTRACT
 ## @purpose  Locust-сценарий langfuse_ingest (DevPlan 146 W1): POST /api/public/traces —
 ##           нагрузка на langfuse + postgres + clickhouse (трассировочный инжест).
-##           Authorization: Bearer {LANGFUSE_PUBLIC_KEY} — из env LOAD_LANGFUSE_PUBLIC_KEY
-##           (секреты ноды), подставляется config.py при рендере headers.
+##           Authorization: Basic base64(LT_LANGFUSE_PUBLIC_KEY:LT_LANGFUSE_SECRET_KEY) —
+##           публичный API langfuse принимает ТОЛЬКО Basic (BUG-5, 148 W3 r2: Bearer → 403).
 ## @scope    Запускается ТОЛЬКО locust — локально или в locustio/locust:2.32.10 на ноде.
 ##           НЕ импортируется платформенным кодом.
 ## @invariants
-##   - headers целиком из LT_HEADERS (rendered config.py: публичный ключ langfuse)
+##   - headers целиком из LT_HEADERS (rendered config.py) + Authorization перекрывается Basic
+##     из LT_LANGFUSE_PUBLIC_KEY/LT_LANGFUSE_SECRET_KEY (обязательны — fail-fast на старте)
 ##   - Точный RPS — constant_throughput (wait_time = rps_wait_time(LT_TARGET_RPS,
 ##     LT_USERS), единый helper — 146-m1 TASK-2/3); users — размер пула
 ##   - LT_ENABLED != "true" → немедленный выход (защита прямого запуска)
 ## @rationale Инжест трасс — самый нагруженный путь langfuse (запись в postgres+clickhouse);
 ##            отдельный сценарий с низким RPS (5/s) — не валит backend, но виден в saturation.
 ## @changes  2026-08-11 | DevPlan 146 W1 — Created
+##           2026-08-12 | DevPlan 148 W3 r2 — Basic auth (BUG-5)
 # endregion MODULE_CONTRACT
 
+import base64
 import json
 import os
 import sys
@@ -39,6 +43,18 @@ LT_HEADERS: dict = json.loads(os.environ.get("LT_HEADERS", "{}"))
 LT_SSL_VERIFY: bool = os.environ.get("LT_SSL_VERIFY", "false").lower() == "true"
 LT_TARGET_RPS: float = float(os.environ.get("LT_TARGET_RPS", "0"))
 LT_USERS: int = int(os.environ.get("LT_USERS", "1"))
+
+# Basic auth публичного API langfuse (BUG-5): обязательные ключи, перекрывают LT_HEADERS.
+LT_LANGFUSE_PUBLIC_KEY: str = os.environ.get("LT_LANGFUSE_PUBLIC_KEY", "")
+LT_LANGFUSE_SECRET_KEY: str = os.environ.get("LT_LANGFUSE_SECRET_KEY", "")
+if not (LT_LANGFUSE_PUBLIC_KEY and LT_LANGFUSE_SECRET_KEY):
+    sys.exit(
+        "langfuse_ingest требует LT_LANGFUSE_PUBLIC_KEY и LT_LANGFUSE_SECRET_KEY "
+        "(секреты ноды, Basic auth) — задайте env при прогоне"
+    )
+LT_HEADERS["Authorization"] = (
+    "Basic " + base64.b64encode(f"{LT_LANGFUSE_PUBLIC_KEY}:{LT_LANGFUSE_SECRET_KEY}".encode()).decode()
+)
 
 
 # region FUNC__guard_enabled

@@ -88,12 +88,17 @@ class LlmStreamUser(HttpUser):
         """POST stream=true и чтение SSE-чанков с per-chunk таймаутом."""
         from gevent import Timeout  # locust runtime (gevent — зависимость locust)
 
-        with self.client.stream(
-            "POST",
+        # BUG-8/8v2 (148 W3 r3-r5): для catch_response=True locust ТРЕБУЕТ with-блок
+        # (иначе LocustError «request has not yet been made»); при этом __exit__ без явного
+        # close() drain'ит оставшееся тело стрима → 40-60s блокировка. Решение (проверено
+        # изолированно на VPS, r5): response.close() ВНУТРИ with ДО __exit__ — закрывает
+        # response.raw._fp → при выходе из with drain возвращает b'' (мгновенно).
+        with self.client.post(
             LT_PATH,
             json=LT_BODY,
             headers=LT_HEADERS or None,
             catch_response=True,
+            stream=True,
             verify=LT_SSL_VERIFY,
         ) as response:
             try:
@@ -102,11 +107,12 @@ class LlmStreamUser(HttpUser):
                         pass
             except Timeout:
                 response.failure(f"chunk timeout ({LT_CHUNK_TIMEOUT}s)")
-                return
-            if response.status_code == 200:
-                response.success()
             else:
-                response.failure(f"HTTP {response.status_code}")
+                if response.status_code == 200:
+                    response.success()
+                else:
+                    response.failure(f"HTTP {response.status_code}")
+            response.close()  # внутри with, до __exit__ — без drain-блокировки
 
 
 # endregion CLASS_LlmStreamUser

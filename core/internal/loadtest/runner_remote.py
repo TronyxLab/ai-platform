@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: loadtest remote runner rsync docker-run locust container node LOAD_RUNNER image cpus ssh
-# STRUCTURE: ▶ ship (rsync core/loadtest/ → /tmp/loadtest-<ts>/) → ◇ docker run --rm --network host
+# GREP_SUMMARY: loadtest remote runner rsync docker-run locust container node LOAD_RUNNER image cpus ssh network
+# STRUCTURE: ▶ ship (rsync core/loadtest/ → /tmp/loadtest-<ts>/) → ◇ docker run --rm --network <network>
 #           --cpus ${LOAD_CPUS:-2} -v remote:/lt -w /lt ${LOAD_IMAGE:-locustio/locust:2.32.10} → ◇ fetch
 #           (rsync results обратно) → ⎋ локальная сборка отчёта (PromQL pull с локальной машины)
 # region MODULE_CONTRACT
@@ -21,10 +21,19 @@
 ##   4. CPU-limit LOAD_CPUS (default 2) — генератор не съедает хост под capacity
 ##   5. env в контейнер — только через -e (значения shlex.quote — никакой shell-инъекции)
 ##   6. Модуль не импортирует bootstrap/deploy/* (слой shared — только вниз)
+##   7. Сеть контейнера — параметр network (DevPlan 148 TASK-4): default "host" — web/s3
+##      (эндпоинты сервисов ноды на host-сети); db — "shared-db-net" (PostgreSQL публикуется
+##      ТОЛЬКО в docker-сеть, NO ports: directive — `docker run --network shared-db-net`
+##      даёт доступ по DNS-алиасу postgres:5432). Значение из scenarios.yaml#network
+##      (config.py), override LOAD_NETWORK.
 ## @rationale Генератор на ноде (рядом с сервисами) — минимальная сетевая зависимость
 ##            от слабого канала dev-машины; docker run вместо compose — изоляция от стека
-##            (инвариант 3) и точный контроль ресурсов (--cpus).
+##            (инвариант 3) и точный контроль ресурсов (--cpus). network — расширение
+##            существующего builder'а (не новая инфраструктура): postgres/pgbouncer
+##            публикуются только в shared-db-net, и контейнер генератора должен войти
+##            в эту сеть, чтобы достать их по DNS-алиасу без хардкода IP.
 ## @changes  2026-08-11 | DevPlan 146 W5 — Created
+## @changes  2026-08-12 | DevPlan 148 TASK-4 — network-параметр (--network, default host)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -43,6 +52,9 @@ logger = logging.getLogger(__name__)
 # docker pull locustio/locust:2.32 → not found (BUG-4, 146-m4). Полный semver 2.32.10.
 DEFAULT_IMAGE = "locustio/locust:2.32.10"
 DEFAULT_CPUS = "2"
+# Сеть контейнера генератора (DevPlan 148 TASK-4): web/s3 — host-сеть (эндпоинты
+# сервисов ноды), db — shared-db-net (PostgreSQL только в docker-сети, NO ports: directive).
+DEFAULT_NETWORK = "host"
 
 
 # region DATA_RemoteError
@@ -97,32 +109,36 @@ def build_ssh_docker_run_cmd(
     remote_workdir: str,
     env: dict[str, str],
     locust_args: list[str],
+    network: str = DEFAULT_NETWORK,
 ) -> str:
-    """Сборка remote-команды: ssh "docker run --rm --network host --cpus ... -e ... image locust-args".
+    """Сборка remote-команды: ssh "docker run --rm --network <net> --cpus ... -e ... image locust-args".
 
-    ▶ ┌image, cpus, workdir, env, locust_args┐ → ○ docker run argv (env → -e, shlex.quote)
+    ▶ ┌image, cpus, workdir, env, locust_args, network┐ → ○ docker run argv (env → -e, shlex.quote)
       → ⎋ str — одна shell-команда для ssh (значения экранированы)
 
-    ## @purpose  Единственный builder docker-запуска на ноде (инварианты 1-5): образ
-    ##            LOAD_IMAGE, --network host (доступ к сервисам ноды), --cpus LOAD_CPUS,
-    ##            -v workdir:/lt -w /lt, env через -e с shlex.quote (без shell-инъекции).
+    ## @purpose  Единственный builder docker-запуска на ноде (инварианты 1-5, 7): образ
+    ##            LOAD_IMAGE, --network <network> (default host — web/s3; shared-db-net —
+    ##            db, 148 TASK-4), --cpus LOAD_CPUS, -v workdir:/lt -w /lt, env через -e
+    ##            с shlex.quote (без shell-инъекции).
     ## @io — ⇥ image: str, cpus: str, remote_workdir: str (например /tmp/loadtest-<ts>),
-    ##         env: dict[str, str] (LT_*), locust_args: list[str] (-f ... --headless ...)
+    ##         env: dict[str, str] (LT_*), locust_args: list[str] (-f ... --headless ...),
+    ##         network: str (docker-сеть контейнера; DEFAULT_NETWORK "host")
     ##       → ⎋ str — команда для `ssh user@host <cmd>`
     ## @complexity — O(E) — E = число env-переменных
     ## @invariants
     ##   - ENTRYPOINT образа = locust (locustio/locust) — locust_args передаются как есть
     ##   - Значения env экранируются shlex.quote (кавычки/пробелы/метасимволы)
     ##   - Никаких локальных путей в remote-команде (контракт core/AGENTS.md T9)
+    ##   - --network всегда явный (host — тоже явный флаг, не дефолт docker daemon)
     """
-    docker = ["docker", "run", "--rm", "--network", "host", "--cpus", cpus]
+    docker = ["docker", "run", "--rm", "--network", network, "--cpus", cpus]
     docker += ["-v", f"{remote_workdir}:/lt", "-w", "/lt"]
     for key in sorted(env):
         docker += ["-e", f"{key}={env[key]}"]
     docker.append(image)
     docker += locust_args
     cmd = " ".join(shlex.quote(part) for part in docker)
-    logger.info("[IMP:8][remote][build_docker_run] %s", cmd[:200])
+    logger.info("[IMP:8][remote][build_docker_run] network=%s %s", network, cmd[:200])
     return cmd
 
 
@@ -207,20 +223,23 @@ def run_remote_locust(
     env: dict[str, str],
     locust_args: list[str],
     timeout: int = 600,
+    network: str = DEFAULT_NETWORK,
 ) -> None:
     """ssh docker run locust-контейнера на ноде (шаг 2-3 remote-режима).
 
-    ▶ ┌host, user, image, cpus, workdir, env, locust_args, timeout┐ → ○ build_ssh_docker_run_cmd
+    ▶ ┌host, user, image, cpus, workdir, env, locust_args, timeout, network┐ → ○ build_ssh_docker_run_cmd
       → ○ ssh (SSH_OPTS) → ◇ rc != 0 → RemoteError → ⎋ None
 
     ## @purpose  Исполнение прогона на ноде: docker run изолирован от стека (инвариант 3),
-    ##            --network host (эндпоинты сервисов ноды), --cpus (инвариант 4).
+    ##            --network <network> (инвариант 7: host — web/s3; shared-db-net — db,
+    ##            148 TASK-4), --cpus (инвариант 4).
     ## @io — ⇥ host: str, user: str, image: str, cpus: str, remote_workdir: str,
-    ##         env: dict[str, str] (LT_*), locust_args: list[str], timeout: int → ⎋ None
+    ##         env: dict[str, str] (LT_*), locust_args: list[str], timeout: int,
+    ##         network: str (docker-сеть; default DEFAULT_NETWORK "host") → ⎋ None
     ## @complexity — O(RT) — RT = run_time прогона
     ## @raises — RemoteError: ssh/docker вернул ненулевой rc (вывод docker в сообщении)
     """
-    cmd = build_ssh_docker_run_cmd(image, cpus, remote_workdir, env, locust_args)
+    cmd = build_ssh_docker_run_cmd(image, cpus, remote_workdir, env, locust_args, network=network)
     result = run_subprocess(
         ["ssh", *SSH_OPTS, f"{user}@{host}", cmd],
         timeout=timeout,
@@ -230,7 +249,7 @@ def run_remote_locust(
     if result.returncode != 0:
         tail = result.stdout.strip()[-2000:] if result.stdout.strip() else result.stderr.strip()[-2000:]
         raise RemoteError(f"remote locust run failed (rc={result.returncode}): {tail}")
-    logger.info("[IMP:9][remote][run] locust run completed on %s@%s", user, host)
+    logger.info("[IMP:9][remote][run] locust run completed on %s@%s (network=%s)", user, host, network)
 
 
 # endregion FUNC_run_remote_locust

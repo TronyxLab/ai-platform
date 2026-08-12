@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: loadtest report locust-csv parse verdict json markdown junit stats p95 p99 error-rate
-# STRUCTURE: ▶ parse_stats_csv (header-индекс, Aggregated-строка) → ◇ verdict_smoke/verdict_regression/verdict_capacity
-#           → ⊕ build_report (json) → ○ render_markdown → ○ write_junit_xml → ⎋ report.json + сводка
+# GREP_SUMMARY: loadtest report locust-csv parse verdict json markdown junit stats p95 p99 error-rate tasks duration
+# STRUCTURE: ▶ parse_stats_csv (header-индекс, Aggregated-строка + per-task) → ◇ verdict_smoke/verdict_regression/verdict_capacity
+#           → ⊕ build_report (json: duration_s + tasks) → ○ render_markdown (Duration + tasks-таблица)
+#           → ○ write_junit_xml → ⎋ report.json + сводка
 # region MODULE_CONTRACT
-## @purpose  Отчёт прогона нагрузки (DevPlan 146 W2): парс locust CSV (stats/history),
-##           сборка report.json {scenario, mode, timestamp, rps, p50/p95/p99, error_rate,
-##           max_rps, saturation, verdict}, markdown-сводка, junit.xml (опция --junit).
+## @purpose  Отчёт прогона нагрузки (DevPlan 146 W2 + 148 TASK-6): парс locust CSV
+##           (stats/history), сборка report.json {scenario, mode, timestamp, duration_s,
+##           rps, p50/p95/p99, error_rate, tasks (per-task), max_rps, saturation, verdict},
+##           markdown-сводка, junit.xml (опция --junit).
 ##           Вердикт по контракту: PASS/WARN → exit 0, FAIL → exit 1 (shared/contracts.py).
+##           duration_s (148 TASK-6/7): t1-t0 прогона — «что сколько времени выполняется»;
+##           tasks (148 TASK-6/7): per-task breakdown из stats.csv (read_query/write_query —
+##           скорость записи vs чтения PostgreSQL, SC_DB_RW).
 ## @scope    Потребитель: runner_cli.py (единственный). Чистые функции парса/вердиктов —
 ##           native pytest (tests/unit/test_loadtest_report.py) с CSV-фикстурами.
 ## @invariants
@@ -20,9 +25,17 @@
 ##      - WARN (missing/insufficient метрики) → PASS+WARN → exit 0 (НЕ блокирует)
 ##   4. Отчёт пишется atomic_write_json (канон shared/atomic_writer.py)
 ##   5. Модуль не импортирует bootstrap/deploy/* (слой shared — только вниз)
+##   6. parse_stats_csv возвращает (Stats, tasks) — перцентили в СЕКУНДАХ (÷1000, BUG-3
+##      146-m3), tasks — {name: {rps, p95, p99, error_rate}} для строк Name != Aggregated
+##   7. duration_s/tasks — ОПЦИОНАЛЬНЫЕ параметры build_report (обратная совместимость:
+##      существующие вызовы/тесты не ломаются; без них поля = None)
 ## @rationale Единый формат отчёта (json+markdown+junit) — потребляется оператором
 ##            и CI-скриптами; вердикт маппится на exit-код контракта (инвариант 9 DevPlan 146).
+##            duration_s + per-task закрывают пользовательский запрос 148 («сколько времени
+##            выполняется», «скорость записи vs чтения») — locust stats.csv уже содержит
+##            per-task строки, расширение парсера обратно-совместимо (Aggregated остаётся stats.*).
 ## @changes  2026-08-11 | DevPlan 146 W2 — Created
+## @changes  2026-08-12 | DevPlan 148 TASK-6 — (Stats, tasks), duration_s, tasks-таблица
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -100,39 +113,58 @@ class BaselineBlock:
 
 
 # region FUNC_parse_stats_csv
-def parse_stats_csv(path: str | Path) -> Stats:
-    """Парс locust stats.csv (header-based) → агрегированная статистика.
+def parse_stats_csv(path: str | Path) -> tuple[Stats, dict[str, dict]]:
+    """Парс locust stats.csv (header-based) → (агрегированная статистика, per-task словарь).
 
-    ▶ ┌path┐ → ○ csv.DictReader → ◇ Aggregated-строка → Stats | → ○ суммы по строкам → Stats
+    ▶ ┌path┐ → ○ csv.DictReader → ◇ Aggregated-строка → Stats | → ⊕ строки Name != Aggregated
+      → tasks[name] = {rps, p95, p99, error_rate} → ⎋ (Stats, tasks)
 
     ## @purpose  Парс CSV-фикстуры локаста (invariant 1: по именам колонок). Строка
     ##            "Aggregated" (Type="", Name="Aggregated") — итоги; fallback — суммы.
-    ## @io — ⇥ path: str | Path → ⎋ Stats
+    ##            Per-task строки (read_query/write_query, "/", "/status"...) — словарь
+    ##            tasks (148 TASK-6): скорость записи vs чтения PostgreSQL (SC_DB_RW).
+    ## @io — ⇥ path: str | Path → ⎋ (Stats, tasks: dict[str, dict]) — tasks[name] =
+    ##         {"rps": float|None, "p95": float|None (s), "p99": float|None (s),
+    ##          "error_rate": float} для каждой строки с непустым Name != Aggregated
     ## @complexity — O(R) — R = строк CSV
     ## @invariants
-    ##   - Несуществующий файл / 0 запросов → Stats с нулями (rps/p95=None — insufficient)
+    ##   - Несуществующий файл / 0 запросов → (Stats с нулями, {}) — rps/p95=None (insufficient)
     ##   - Нечисловые ячейки перцентилей → None (не роняем отчёт на мусорной строке)
     ##   - ЕДИНИЦЫ (BUG-3, 146-m3): locust отдаёт перцентили (50%/95%/99%) в МИЛЛИСЕКУНДАХ
-    ##     (270 = 270ms); Stats нормализуется в СЕКУНДЫ (÷1000) — совместимо с порогами
-    ##     SoT (max_p95/max_p99 — s), baseline history и verdict-функциями
+    ##     (270 = 270ms); Stats и tasks нормализуются в СЕКУНДЫ (÷1000) — совместимо с
+    ##     порогами SoT (max_p95/max_p99 — s), baseline history и verdict-функциями
+    ##   - tasks.error_rate — по собственной строке задачи (failures/requests задачи)
     """
     p = Path(path)
     if not p.is_file():
         logger.error("[IMP:10][report][parse_stats_csv] CSV не найден: %s", p)
-        return Stats()
+        return Stats(), {}
     try:
         with open(p, encoding="utf-8", newline="") as f:
             rows = list(csv.DictReader(f))
     except (OSError, csv.Error) as exc:
         logger.error("[IMP:10][report][parse_stats_csv] Ошибка чтения CSV %s: %s", p, exc)
-        return Stats()
+        return Stats(), {}
 
     aggregated: dict | None = None
+    tasks: dict[str, dict] = {}
     total_requests = 0
     total_failures = 0
     for row in rows:
-        if row.get("Name", "").strip() == AGGREGATED_NAME:
+        name = row.get("Name", "").strip()
+        if name == AGGREGATED_NAME:
             aggregated = row
+        elif name:
+            # Per-task строка (read_query/write_query для db — 148 TASK-6): свой rps/p95/p99
+            # и error_rate по собственной строке (перцентили ms → s, BUG-3 146-m3).
+            task_reqs = _int_or(row.get(COL_REQUESTS), 0)
+            task_fails = _int_or(row.get(COL_FAILURES), 0)
+            tasks[name] = {
+                "rps": _float_or(row.get(COL_RPS)),
+                "p95": _ms_to_s(_float_or(row.get(COL_P95))),
+                "p99": _ms_to_s(_float_or(row.get(COL_P99))),
+                "error_rate": (task_fails / task_reqs) if task_reqs > 0 else 0.0,
+            }
         total_requests += _int_or(row.get(COL_REQUESTS), 0)
         total_failures += _int_or(row.get(COL_FAILURES), 0)
     # Aggregated-строка уже содержит итоги — при её наличии суммы по строкам
@@ -152,14 +184,15 @@ def parse_stats_csv(path: str | Path) -> Stats:
         total_failures=total_failures,
     )
     logger.info(
-        "[IMP:9][report][parse_stats_csv] rps=%s p95=%ss p99=%ss errors=%d/%d",
+        "[IMP:9][report][parse_stats_csv] rps=%s p95=%ss p99=%ss errors=%d/%d tasks=%s",
         stats.rps,
         stats.p95,
         stats.p99,
         stats.total_failures,
         stats.total_requests,
+        sorted(tasks),
     )
-    return stats
+    return stats, tasks
 
 
 # endregion FUNC_parse_stats_csv
@@ -314,21 +347,27 @@ def build_report(
     baseline: BaselineBlock | None = None,
     max_rps: int | None = None,
     capacity_profile: list[dict] | None = None,
+    duration_s: float | None = None,
+    tasks: dict | None = None,
     verdict: str,
     warnings: list[str] | None = None,
     timestamp: str | None = None,
 ) -> dict:
     """Сборка полного report.json (единая структура для всех режимов).
 
-    ▶ ┌поля┐ → ⊕ dict {scenario, mode, ..., saturation, baseline, verdict} → ⎋ report dict
+    ▶ ┌поля┐ → ⊕ dict {scenario, mode, ..., duration_s, tasks, saturation, baseline, verdict} → ⎋ report dict
 
-    ## @purpose  Единый формат отчёта (DevPlan 146 §3.5): json + markdown + junit из одного
-    ##            источника. Все секции опциональны — режим определяет заполнение.
-    ## @io — ⇥ именованные поля → ⎋ dict (готов к atomic_write_json)
+    ## @purpose  Единый формат отчёта (DevPlan 146 §3.5 + 148 TASK-6): json + markdown +
+    ##            junit из одного источника. Все секции опциональны — режим определяет
+    ##            заполнение. duration_s (t1-t0) и tasks (per-task breakdown) — новые поля 148.
+    ## @io — ⇥ именованные поля (duration_s/tasks — ОПЦИОНАЛЬНЫ, обратная совместимость)
+    ##       → ⎋ dict (готов к atomic_write_json)
     ## @complexity — O(K) — K = полей
     ## @invariants
     ##   - verdict ∈ {PASS, WARN, FAIL}; warnings — человекочитаемые причины WARN
     ##   - capacity_profile — список шагов {step, rps, p95, p99, error_rate, success, reason}
+    ##   - duration_s: float (s) | None; tasks: dict {name: {rps, p95, p99, error_rate}} | None
+    ##   - Без duration_s/tasks (None) — поля в report.json = null (обратная совместимость)
     """
     report: dict = {
         "scenario": scenario,
@@ -337,6 +376,7 @@ def build_report(
         "endpoint": endpoint,
         "timestamp": timestamp or datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "version": version,
+        "duration_s": duration_s,
         "stats": {
             "rps": stats.rps,
             "p50": stats.p50,
@@ -346,6 +386,7 @@ def build_report(
             "total_requests": stats.total_requests,
             "total_failures": stats.total_failures,
         },
+        "tasks": tasks,
         "saturation": saturation_aggregates or {},
         "missing_metrics": missing_metrics or [],
         "insufficient_metrics": insufficient_metrics or [],
@@ -376,8 +417,9 @@ def render_markdown(report: dict) -> str:
 
     ## @purpose  Человекочитаемая сводка (AC1: «markdown-сводка»). Не дублирует
     ##            report.json — отображает ключевые поля и диагностику WARN.
+    ##            Duration (t1-t0) и per-task таблица (read_query/write_query — 148 TASK-6).
     ## @io — ⇥ report: dict → ⎋ str
-    ## @complexity — O(S) — S = число метрик saturation
+    ## @complexity — O(S + T) — S = число метрик saturation, T = число per-task строк
     """
     stats = report.get("stats", {})
     lines = [
@@ -395,6 +437,21 @@ def render_markdown(report: dict) -> str:
         f"{_fmt(stats.get('p99'))} | {_fmt(stats.get('error_rate'))} | {stats.get('total_requests')} | "
         f"{stats.get('total_failures')} |",
     ]
+    if report.get("duration_s") is not None:
+        lines += ["", f"- **Duration: `{_fmt(report.get('duration_s'))}s`**"]
+    if report.get("tasks"):
+        lines += [
+            "",
+            "## Tasks (per-task)",
+            "",
+            "| task | rps | p95 | p99 | error_rate |",
+            "|------|-----|-----|-----|-----------|",
+        ]
+        for name, task_stats in sorted(report["tasks"].items()):
+            lines.append(
+                f"| {name} | {_fmt(task_stats.get('rps'))} | {_fmt(task_stats.get('p95'))} | "
+                f"{_fmt(task_stats.get('p99'))} | {_fmt(task_stats.get('error_rate'))} |"
+            )
     if report.get("max_rps") is not None:
         lines += ["", f"- **max_rps (capacity): `{report.get('max_rps')}`**"]
     if report.get("capacity_profile"):

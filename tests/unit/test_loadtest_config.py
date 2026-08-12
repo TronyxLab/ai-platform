@@ -1,11 +1,12 @@
-# GREP_SUMMARY: loadtest config unit scenarios-yaml parse validation node-resolve fail-fast exit-4 env-overrides
-# STRUCTURE: ▶ fixtures (tmp repo_dir + node.yaml) → ◇ load/parse (defaults, validation, optional-env)
-#           → ◇ render (domain-fallback, env-плейсхолдеры) → ◇ load_config (NODE-резолв, guard-ы)
-#           → ⎋ 17 tests
+# GREP_SUMMARY: loadtest config unit scenarios-yaml parse validation node-resolve fail-fast exit-4 env-overrides network
+# STRUCTURE: ▶ fixtures (tmp repo_dir + node.yaml) → ◇ load/parse (defaults, validation, optional-env, network)
+#           → ◇ render (domain-fallback, env-плейсхолдеры) → ◇ load_config (NODE-резолв, guard-ы, LOAD_NETWORK)
+#           → ⎋ 21 tests
 # region MODULE_CONTRACT
-## @purpose  Unit-тесты конфигурации loadtest (DevPlan 146 W1, tests/unit/test_loadtest_config.py):
+## @purpose  Unit-тесты конфигурации loadtest (DevPlan 146 W1 + 148 TASK-10, tests/unit/test_loadtest_config.py):
 ##           парсинг scenarios.yaml SoT, defaults-merge, fail-fast валидация (exit 4),
-##           NODE-резолв (tmp_path фикстуры, hermetic), env-оверрайды (LOAD_RPS/LOAD_DURATION),
+##           NODE-резолв (tmp_path фикстуры, hermetic), env-оверрайды (LOAD_RPS/LOAD_DURATION/
+##           LOAD_NETWORK — 148 TASK-5), network-allowlist (host|shared-db-net),
 ##           рендер плейсхолдеров ({domain}/{host}/{model}/{ENV_VAR}), optional-gate.
 ## @scope    Чистые функции core/internal/loadtest/config.py — без subprocess, без сети.
 ##           node.yaml пишется в tmp_path/node-configs/<unique>/ (Path 1 NodeYaml.resolve),
@@ -96,7 +97,14 @@ def repo_dir(tmp_path) -> Path:
                 "users": 10,
                 "target_rps": 5,
             },
-            "db": {"optional": True, "endpoint": "http://{host}:5432", "paths": ["/"], "users": 10, "target_rps": 5},
+            "db": {
+                "optional": True,
+                "endpoint": "postgres:5432",
+                "network": "shared-db-net",
+                "users": 10,
+                "target_rps": 5,
+            },
+            "s3": {"optional": True, "endpoint": "http://{host}:9000", "users": 10, "target_rps": 5},
         },
     }
     p = tmp_path / "core" / "loadtest"
@@ -277,6 +285,84 @@ class TestParseScenario:
 
 
 # endregion TEST_parse_scenario
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# network — docker-сеть генератора (148 TASK-5)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+# region TEST_parse_scenario_network
+# 🧪 TRAP[TEST] · Scenario: network из SoT (db → shared-db-net; default host; LOAD_NETWORK override; allowlist)
+# · Regression: docker-сеть генератора не пробрасывается в runner_remote → db-контейнер
+# ·   не достаёт postgres (NO ports: directive) → ConnectionError молча на ноде
+# · Last fail: 2026-08-12 — db-сценарий не существовал (заглушка 146 W1)
+# · Remove if: механизм сети генератора заменён (не docker run --network)
+class TestParseScenarioNetwork:
+    def test_network_from_sot(self, repo_dir, caplog):
+        """db → network=shared-db-net (из SoT); defaults без network → host."""
+        caplog.set_level(logging.INFO)
+        data = load_scenarios_yaml(str(repo_dir / "core" / "loadtest" / "scenarios.yaml"))
+        db = parse_scenario("db", data["scenarios"]["db"], data["defaults"])
+        logger.info("[IMP:9][test][network] db network из SoT: %s", db.network)
+        _assert_ldd_imp9(caplog)
+        assert db.network == "shared-db-net"
+
+    def test_network_default_host(self, repo_dir, caplog):
+        """web (без network в SoT) → default "host" (web/s3 не меняются)."""
+        caplog.set_level(logging.INFO)
+        data = load_scenarios_yaml(str(repo_dir / "core" / "loadtest" / "scenarios.yaml"))
+        web = parse_scenario("web", data["scenarios"]["web"], data["defaults"])
+        logger.info("[IMP:9][test][network] web network default: %s", web.network)
+        _assert_ldd_imp9(caplog)
+        assert web.network == "host"
+
+    def test_network_invalid_sot_rejected(self):
+        """Сеть вне allowlist в SoT → ConfigValidationError (exit 4)."""
+        with pytest.raises(ConfigValidationError):
+            parse_scenario("db", {"endpoint": "postgres:5432", "network": "typo-net", "target_rps": 5}, {})
+
+
+# endregion TEST_parse_scenario_network
+
+
+# region TEST_load_config_network
+# 🧪 TRAP[TEST] · Scenario: LOAD_NETWORK override + невалидная сеть → exit 4 (148 TASK-5)
+# · Regression: LOAD_NETWORK игнорируется / не валидируется → опечатка сети = silent fail docker run
+# · Last fail: N/A (new) — 148 TASK-5
+# · Remove if: allowlist сетей генератора изменён
+class TestLoadConfigNetwork:
+    def test_network_env_override(self, repo_dir, node_dir, monkeypatch, caplog):
+        """LOAD_NETWORK=shared-db-net приоритетнее SoT (web → host перекрывается env)."""
+        caplog.set_level(logging.INFO)
+        monkeypatch.delenv("LOAD_NETWORK", raising=False)
+        cfg = load_config("web", node_dir["name"], "smoke", str(repo_dir), platform_root=str(repo_dir))
+        assert cfg.network == "host"
+        monkeypatch.setenv("LOAD_NETWORK", "shared-db-net")
+        cfg = load_config("web", node_dir["name"], "smoke", str(repo_dir), platform_root=str(repo_dir))
+        logger.info("[IMP:9][test][network] LOAD_NETWORK override → %s", cfg.network)
+        _assert_ldd_imp9(caplog)
+        assert cfg.network == "shared-db-net"
+
+    def test_network_invalid_rejected(self, repo_dir, node_dir, monkeypatch):
+        """LOAD_NETWORK=badnet → ConfigValidationError (exit 4, allowlist)."""
+        monkeypatch.setenv("LOAD_NETWORK", "badnet")
+        with pytest.raises(ConfigValidationError):
+            load_config("web", node_dir["name"], "smoke", str(repo_dir), platform_root=str(repo_dir))
+
+    def test_db_local_runner_warns(self, repo_dir, node_dir, monkeypatch, caplog):
+        """db + LOAD_RUNNER=local → logger.warning (инвариант 8: db требует node-runner)."""
+        caplog.set_level(logging.INFO)
+        monkeypatch.delenv("LOAD_NETWORK", raising=False)
+        monkeypatch.setenv("LOAD_SCENARIO_DB", "1")  # optional-сценарий включён
+        load_config("db", node_dir["name"], "smoke", str(repo_dir), platform_root=str(repo_dir))
+        warnings = [r.message for r in caplog.records if "LOAD_RUNNER=node" in r.message]
+        assert warnings, "ожидалось предупреждение db + local runner"
+        logger.info("[IMP:9][test][network] db+local предупреждение: %s", warnings[0])
+        _assert_ldd_imp9(caplog)
+
+
+# endregion TEST_load_config_network
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
