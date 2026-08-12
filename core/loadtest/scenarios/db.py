@@ -6,7 +6,7 @@
 ##           HTTP — сценарий помечен optional в SoT и по умолчанию ВЫКЛЮЧЕН (LT_ENABLED=false):
 ##           включается только LOAD_SCENARIO_DB=1, когда оператор указал рабочий HTTP-endpoint
 ##           (LT_ENDPOINT из config.py). Ограничение задокументировано в docs/load-testing.md.
-## @scope    Запускается ТОЛЬКО locust — локально или в locustio/locust:2.32 на ноде.
+## @scope    Запускается ТОЛЬКО locust — локально или в locustio/locust:2.32.10 на ноде.
 ##           НЕ импортируется платформенным кодом.
 ## @invariants
 ##   - optional-контракт: LT_ENABLED != "true" → sys.exit(2) ДО создания user-классов

@@ -1,23 +1,27 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: loadtest runner-cli locust headless orchestration modes exit-code csv env build-command guard preflight
+# GREP_SUMMARY: loadtest runner-cli locust headless orchestration modes exit-code csv env build-command guard preflight network duration tasks
 # STRUCTURE: ▶ preflight (locust import, mock-probe) → ◇ guard (capacity prod → exit 10) → ◇ config.load_config
 #           → ○ режим: smoke|regression (1 прогон) | capacity (plan_steps × run_one_step) → ○ post-run:
-#           PromQL saturation → ○ baseline compare+append → ○ report.json/markdown/junit → ⎋ exit 0|1|4|10
+#           PromQL saturation → ○ baseline compare+append → ○ report.json/markdown/junit (duration_s + tasks)
+#           → ⎋ exit 0|1|4|10
 # region MODULE_CONTRACT
-## @purpose  CLI-оркестратор нагрузочных прогонов (DevPlan 146 W1-W5): строит locust-команду
+## @purpose  CLI-оркестратор нагрузочных прогонов (DevPlan 146 W1-W5 + 148 TASK-7): строит locust-команду
 ##           (headless, --run-time, --users, --spawn-rate, --csv, --csv-full-history),
 ##           передаёт RPS-контроль через env LT_TARGET_RPS/LT_USERS (сценарии используют
-##           constant_throughput — helper _rps_wait_time, 146-m1 BUG-1 fix),
-##           запускает (local subprocess | remote docker run через runner_remote), ждёт с
+##           constant_throughput — helper rps_wait_time, 146-m1 BUG-1 fix),
+##           запускает (local subprocess | remote docker run через runner_remote — docker-сеть
+##           config.network, 148 TASK-4/5), ждёт с
 ##           timeout-guard, post-run собирает PromQL-saturation, baseline, report и маппит
 ##           вердикт на exit-код контракта shared/contracts.py: 0 PASS/WARN, 1 FAIL/ошибка,
 ##           2/3/4 config, 10 guard (инвариант 9).
+##           duration_s (t1-t0) и per-task breakdown (read_query/write_query) — в report.json,
+##           history.json и markdown (148 TASK-7, SC_STATS/SC_DB_RW).
 ## @scope    Единственный CLI-вход подсистемы (make load-test → python3 -m
 ##           core.internal.loadtest.runner_cli). Модуль НЕ импортирует locust —
 ##           только префлайт find_spec (locust — load extra, не runtime-зависимость).
 ## @invariants
 ##   1. Точный RPS — constant_throughput из env LT_TARGET_RPS (wait_time сценариев,
-##      helper _rps_wait_time; capacity — per-step RPS); users — размер пула LT_USERS
+##      helper rps_wait_time; capacity — per-step RPS); users — размер пула LT_USERS
 ##      (users = rps×2, инвариант 11)
 ##   2. Exit-коды по контракту: 0 PASS/WARN, 1 FAIL/ошибка/нет locust/нет Prometheus,
 ##      2/3/4 config-ошибки, 10 capacity на нетестовой ноде без LOAD_ALLOW_PROD=1
@@ -31,10 +35,13 @@
 ##   7. env LT_* для locust — единый builder (конфиг → env), тот же для local и remote;
 ##      содержит LT_TARGET_RPS (target_rps прогона) и LT_USERS (размер пула)
 ##   8. sys.exit — только в __main__; main() -> int (канон core/AGENTS.md)
+##   9. network (148 TASK-4/5): config.network → run_remote_locust --network (host — web/s3,
+##      shared-db-net — db); duration_s + tasks (148 TASK-7) — в report.json/history/markdown
 ## @rationale Один CLI на все режимы (D2 гибридный runner, D6 make-фасад) — единая
 ##            точка exit-контракта и guard-ов; бизнес-логика прогонов в чистом виде
 ##            (диспетчеры режимов) — тестируемость через unit-тесты конфигурации/вердиктов.
 ## @changes  2026-08-11 | DevPlan 146 W1-W5 — Created
+## @changes  2026-08-12 | DevPlan 148 TASK-7 — duration_s + tasks в отчёт/history, network проброс
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -190,12 +197,13 @@ def _locust_env(config, rps: int | None = None, users: int | None = None) -> dic
 
     ▶ ┌config, rps?, users?┐ → ○ LT_ENDPOINT/SSL/PATHS/METHOD/STREAM → ⊕ LT_PATH/LT_MODEL/
       LT_HEADERS/LT_BODY (rendered) → ⊕ LT_TARGET_RPS/LT_USERS (RPS-контроль) →
-      ⊕ passthrough LT_S3_* → ⎋ dict[str, str]
+      ⊕ passthrough LT_* (env override поверх spec: LT_S3_*/LT_PG_*/LT_LANGFUSE_*/
+      LT_CHUNK_TIMEOUT и пр.) → ⎋ dict[str, str]
 
     ## @purpose  Инвариант 7 + 2 (DevPlan 146): locust-файлы читают ВСЁ из env; значения
     ##            заполняет config.py из SoT (никаких хардкодов в .py сценариях).
     ##            RPS-контроль (146-m1 BUG-1): LT_TARGET_RPS/LT_USERS → сценарии строят
-    ##            wait_time = constant_throughput(target/users) через _rps_wait_time.
+    ##            wait_time = constant_throughput(target/users) через rps_wait_time.
     ##            rps/users параметры — per-step override (capacity: шаг = свой RPS);
     ##            по умолчанию — spec.target_rps/spec.users (smoke/regression).
     ## @io — ⇥ config: LoadtestConfig, rps: int | None (per-step override, capacity),
@@ -227,7 +235,7 @@ def _locust_env(config, rps: int | None = None, users: int | None = None) -> dic
     body = render_dict(spec.body_template, spec, config.node_host, config.platform_domain)
     if body:
         env["LT_BODY"] = json.dumps(body)
-    env.update({key: value for key, value in os.environ.items() if key.startswith("LT_S3_")})
+    env.update({key: value for key, value in os.environ.items() if key.startswith("LT_")})
     logger.info(
         "[IMP:8][runner][env] LT_* env built: %d vars (target_rps=%s users=%s)", len(env), target_rps, pool_users
     )
@@ -246,7 +254,7 @@ def _build_locust_args(scenario_file: str, users: int, duration: int, csv_prefix
     ## @purpose  Единственная точка сборки locust-команды (инвариант 1). RPS-контроль
     ##            НЕ в argv — флаг rate-limit отсутствует в locust 2.x (146-m1 BUG-1);
     ##            RPS передаётся env-ом LT_TARGET_RPS/LT_USERS через _locust_env,
-    ##            сценарии строят wait_time = constant_throughput (helper _rps_wait_time).
+    ##            сценарии строят wait_time = constant_throughput (helper rps_wait_time).
     ##            users — размер пула; spawn-rate = users.
     ## @io — ⇥ scenario_file: str, users: int, duration: int (s),
     ##         csv_prefix: str (базовый путь CSV) → ⎋ list[str]
@@ -307,17 +315,26 @@ def _run_one_step(
     duration: int,
     csv_prefix: str,
     remote: runner_remote | None,
+    parse_prefix: str | None = None,
 ) -> dict:
     """Один headless-прогон (шаг smoke/regression/capacity) → метрики | {"error": ...}.
 
-    ▶ ┌config, rps, users, duration, csv_prefix, remote┐ → ◇ remote → run_remote_locust
-      | → _run_locust_process → ◇ rc != 0 → {"error"} → ○ parse_stats_csv → ⎋ stats-dict
+    ▶ ┌config, rps, users, duration, csv_prefix, remote, parse_prefix┐ → ◇ remote →
+      ○ run_remote_locust → ○ fetch (ДО парсинга) | → _run_locust_process → ◇ rc != 0
+      → {"error"} → ○ parse_stats_csv(parse_prefix) → ⎋ stats-dict
 
     ## @purpose  Единая точка исполнения шага (local | remote). Возвращает dict
     ##            capacity-контракта step_runner: {"rps","p95","p99","error_rate"} | {"error"}.
+    ##            Remote (BUG-8, 146-m8): csv_prefix — контейнерный путь (argv locust),
+    ##            parse_prefix — ЛОКАЛЬНЫЙ путь CSV; fetch результатов выполняется ДО
+    ##            парсинга (иначе parse_stats_csv читает /lt/results/... на локальной
+    ##            машине → CSV не найден → нулевые Stats → ложный FAIL).
+    ##            tasks (148 TASK-7): per-task breakdown из parse_stats_csv (read_query/
+    ##            write_query для db — скорость записи vs чтения, SC_DB_RW).
     ## @io — ⇥ config, rps: int, users: int, duration: int (s), csv_prefix: str,
-    ##         remote: runner_remote-модуль (не None при LOAD_RUNNER=node)
-    ##       → ⎋ dict — метрики шага или {"error": str}
+    ##         remote: runner_remote-модуль (не None при LOAD_RUNNER=node),
+    ##         parse_prefix: str | None (локальный CSV-prefix; default = csv_prefix)
+    ##       → ⎋ dict — метрики шага (включая "tasks") или {"error": str}
     ## @complexity — O(RT) — RT = duration + guard
     """
     scenario_file = (
@@ -339,6 +356,15 @@ def _run_one_step(
                 env,
                 args,
                 timeout=timeout,
+                network=config.network,  # 148 TASK-4/5: docker-сеть генератора (host | shared-db-net)
+            )
+            # BUG-8: fetch ДО парсинга — CSV пишется в контейнерный /lt/results,
+            # локально доступен только после rsync-обратного забора.
+            remote.fetch(
+                config.node_host,
+                SSH_USER,
+                f"{_remote_workdir(config)}/results",
+                str(config.results_dir),
             )
         else:
             result = _run_locust_process(["locust", *args], env, timeout=timeout)
@@ -348,14 +374,15 @@ def _run_one_step(
     except runner_remote.RemoteError as exc:
         return {"error": str(exc)}
 
-    stats = report.parse_stats_csv(f"{csv_prefix}_stats.csv")
+    stats, tasks = report.parse_stats_csv(f"{parse_prefix if parse_prefix is not None else csv_prefix}_stats.csv")
     logger.info(
-        "[IMP:9][runner][step] rps=%s p95=%s p99=%s error_rate=%s (requests=%d)",
+        "[IMP:9][runner][step] rps=%s p95=%s p99=%s error_rate=%s (requests=%d, tasks=%s)",
         stats.rps,
         stats.p95,
         stats.p99,
         stats.error_rate,
         stats.total_requests,
+        sorted(tasks),
     )
     return {
         "rps": stats.rps,
@@ -364,6 +391,7 @@ def _run_one_step(
         "error_rate": stats.error_rate,
         "total_requests": stats.total_requests,
         "total_failures": stats.total_failures,
+        "tasks": tasks,
     }
 
 
@@ -393,16 +421,19 @@ def _remote_workdir(config) -> str:
 def _saturation_pull(config, t0: float, t1: float) -> prometheus_pull.SaturationResult:
     """PromQL-saturation (post-run, локальная машина → Prometheus ноды).
 
-    ▶ ┌config, t0, t1┐ → ○ run_saturation(base=host:LOAD_PROMETHEUS_PORT, окно [t0-60, t1+60])
-      → ⎋ SaturationResult | LoadtestRunError
+    ▶ ┌config, t0, t1┐ → ○ run_saturation(base=prometheus_host:LOAD_PROMETHEUS_PORT,
+      окно [t0-60, t1+60]) → ⎋ SaturationResult | LoadtestRunError
 
     ## @purpose  Инвариант 5: saturation — ТОЛЬКО post-run pull из существующего Prometheus.
     ##            Недоступный Prometheus → LoadtestRunError (exit 1, guard-таблица §3.7).
+    ##            host = config.prometheus_host (146-m2): LOAD_PROMETHEUS_HOST override —
+    ##            например localhost при SSH-туннеле (ssh -L 19090:localhost:9090), когда
+    ##            внешний IP ноды принимает TCP на 9090, но HTTP не отвечает (фаервол ноды).
     ## @io — ⇥ config, t0/t1: float (unix) → ⎋ SaturationResult
     ## @complexity — O(Q×(S+M)) — пул запросов
     ## @raises — LoadtestRunError: Prometheus недоступен (через PrometheusError)
     """
-    base_url = f"http://{config.node_host}:{config.prometheus_port}"
+    base_url = f"http://{config.prometheus_host}:{config.prometheus_port}"
     run_time = int(max(1, t1 - t0))
     try:
         return prometheus_pull.run_saturation(base_url, run_time, t0, t1)
@@ -443,13 +474,13 @@ def _run_single_mode(config, args) -> tuple[int, dict]:
 
     t0 = time.time()
     csv_prefix = str(local_dir / "run") if not remote else f"/lt/results/{rel_dir}/run"
-    step_stats = _run_one_step(config, spec.target_rps, spec.users, duration, csv_prefix, remote)
+    step_stats = _run_one_step(
+        config, spec.target_rps, spec.users, duration, csv_prefix, remote, str(local_dir / "run")
+    )
     t1 = time.time()
+    duration_s = round(t1 - t0, 1)  # 148 TASK-7: «что сколько времени выполняется» (SC_STATS)
     if "error" in step_stats:
         raise LoadtestRunError(step_stats["error"])
-
-    if remote:
-        runner_remote.fetch(config.node_host, SSH_USER, f"{_remote_workdir(config)}/results", str(config.results_dir))
 
     stats = report.Stats(
         rps=step_stats.get("rps"),
@@ -500,6 +531,8 @@ def _run_single_mode(config, args) -> tuple[int, dict]:
         missing_metrics=saturation.missing_metrics if saturation else None,
         insufficient_metrics=saturation.insufficient_metrics if saturation else None,
         baseline=comparison,
+        duration_s=duration_s,
+        tasks=step_stats.get("tasks"),
         verdict=verdict,
         warnings=warnings,
         timestamp=ts,
@@ -510,6 +543,8 @@ def _run_single_mode(config, args) -> tuple[int, dict]:
             "ts": ts,
             "host": config.node_host,
             "mode": config.mode,
+            "duration_s": duration_s,
+            "tasks": step_stats.get("tasks"),
             "rps": stats.rps,
             "p50": stats.p50,
             "p95": stats.p95,
@@ -560,8 +595,11 @@ def _run_capacity_mode(config, args) -> tuple[int, dict]:
 
     def _step(rps: int) -> dict:
         csv_prefix = f"/lt/results/{rel_dir}/step-{rps}/run" if remote else str(local_dir / f"step-{rps}" / "run")
-        return _run_one_step(config, rps, rps * 2, duration, csv_prefix, remote)
+        raw = _run_one_step(config, rps, rps * 2, duration, csv_prefix, remote, str(local_dir / f"step-{rps}" / "run"))
+        step_tasks[rps] = raw.get("tasks") or {}
+        return raw
 
+    step_tasks: dict[int, dict] = {}
     t0 = time.time()
     result = capacity_mod.run_capacity(
         _step,
@@ -570,9 +608,7 @@ def _run_capacity_mode(config, args) -> tuple[int, dict]:
         max_p99=spec.max_p99,
     )
     t1 = time.time()
-
-    if remote:
-        runner_remote.fetch(config.node_host, SSH_USER, f"{_remote_workdir(config)}/results", str(config.results_dir))
+    duration_s = round(t1 - t0, 1)  # 148 TASK-7: суммарная длительность capacity-профиля
 
     profile_rows = [
         {
@@ -604,6 +640,7 @@ def _run_capacity_mode(config, args) -> tuple[int, dict]:
         p99=last_ok.p99 if last_ok else None,
         error_rate=float(last_ok.error_rate or 0.0) if last_ok else 0.0,
     )
+    last_ok_tasks = step_tasks.get(last_ok.step) if last_ok else None  # 148 TASK-7: per-task на max-нагрузке
 
     comparison = baseline_mod.BaselineComparison(first_run=True)
     if not args.skip_baseline:
@@ -630,6 +667,8 @@ def _run_capacity_mode(config, args) -> tuple[int, dict]:
         baseline=comparison,
         max_rps=result.max_rps,
         capacity_profile=profile_rows,
+        duration_s=duration_s,
+        tasks=last_ok_tasks,
         verdict=verdict,
         warnings=warnings,
         timestamp=ts,
@@ -640,6 +679,7 @@ def _run_capacity_mode(config, args) -> tuple[int, dict]:
             "ts": ts,
             "host": config.node_host,
             "mode": config.mode,
+            "duration_s": duration_s,
             "rps": stats.rps,
             "p50": stats.p50,
             "p95": stats.p95,

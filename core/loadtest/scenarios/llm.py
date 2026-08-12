@@ -4,7 +4,7 @@
 ## @purpose  Locust-сценарий llm (DevPlan 146 W1): POST /chat/completions на litellm
 ##           (mock-модель mock-echo из litellm-config.mock.yml, детерминизм AC6). Тело и
 ##           заголовки — из env (LT_*), заполняются config.py из core/loadtest/scenarios.yaml.
-## @scope    Запускается ТОЛЬКО locust — локально или в locustio/locust:2.32 на ноде.
+## @scope    Запускается ТОЛЬКО locust — локально или в locustio/locust:2.32.10 на ноде.
 ##           НЕ импортируется платформенным кодом.
 ## @invariants
 ##   - model в теле — из LT_MODEL (SoT: mock-echo); без mock-конфига на ноде runner

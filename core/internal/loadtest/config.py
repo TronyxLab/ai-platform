@@ -12,6 +12,9 @@
 ##           LOAD_SCENARIO_<NAME> для optional, LOAD_ENDPOINT_<SCENARIO> — endpoint
 ##           override, 146-m1 BUG-2), рендер плейсхолдеров и fail-fast
 ##           валидация с exit 4 (ConfigValidationError) по контракту shared/contracts.py.
+##           LOAD_IMAGE default — locustio/locust:2.32.10 (полный semver: minor-only
+##           тега 2.32 в Docker Hub НЕ существует — BUG-4 146-m4; совпадает с
+##           runner_remote.DEFAULT_IMAGE и pyproject-пином).
 ## @scope    Потребитель: runner_cli.py (единственный CLI). Чистые функции тестируются
 ##           native pytest (tests/unit/test_loadtest_config.py) без subprocess.
 ## @invariants
@@ -19,7 +22,7 @@
 ##      4 ConfigValidation, 10 Fatal — НИКАКИХ «exit 2 = FAIL» (инвариант 9 DevPlan 146).
 ##   2. users — РАЗМЕР ПУЛА (users = target_rps × 2), НЕ контроль RPS; точный RPS —
 ##      constant_throughput (wait_time сценариев через LT_TARGET_RPS/LT_USERS,
-##      helper _rps_wait_time — 146-m1 BUG-1 fix).
+##      helper rps_wait_time — 146-m1 BUG-1 fix).
 ##   3. Плейсхолдеры: {domain} → platform_domain (пустой → host), {host} → node.host,
 ##      {model} → scenario.model, {ANY_ENV_VAR} → os.environ (отсутствие → ConfigValidationError).
 ##   4. optional-сценарий: enabled=False по умолчанию; включение — LOAD_SCENARIO_<UPPER>=1.
@@ -57,6 +60,7 @@ ENV_RUNNER = "LOAD_RUNNER"
 ENV_IMAGE = "LOAD_IMAGE"
 ENV_CPUS = "LOAD_CPUS"
 ENV_PROMETHEUS_PORT = "LOAD_PROMETHEUS_PORT"
+ENV_PROMETHEUS_HOST = "LOAD_PROMETHEUS_HOST"  # override для SSH-туннелей/непрямого доступа (146-m2)
 ENV_ALLOW_PROD = "LOAD_ALLOW_PROD"
 ENV_VERSION = "LOAD_VERSION"
 ENV_OPTIONAL_PREFIX = "LOAD_SCENARIO_"
@@ -120,6 +124,8 @@ class LoadtestConfig:
     ##   - results_dir — LOAD_RESULTS_DIR (default load-results/), целиком gitignored
     ##   - history_dir — core/loadtest/history/<node>/<scenario>/ (коммитится)
     ##   - load_runner ∈ {local, node}; capacity на нетестовой ноде → guard в runner_cli
+    ##   - prometheus_host — LOAD_PROMETHEUS_HOST (default node_host): override для
+    ##     SSH-туннелей (localhost) и непрямого доступа к Prometheus ноды (146-m2)
     """
 
     scenario: ScenarioSpec
@@ -135,6 +141,7 @@ class LoadtestConfig:
     image: str
     cpus: str
     prometheus_port: int
+    prometheus_host: str
     allow_prod: bool
     is_test_node: bool
 
@@ -549,9 +556,10 @@ def load_config(
         history_dir=base / "core" / "loadtest" / "history" / node_name / scenario_name,
         version=os.environ.get(ENV_VERSION, "").strip() or "unknown",
         load_runner=load_runner,
-        image=os.environ.get(ENV_IMAGE, "locustio/locust:2.32").strip(),
+        image=os.environ.get(ENV_IMAGE, "locustio/locust:2.32.10").strip(),
         cpus=os.environ.get(ENV_CPUS, "2").strip(),
         prometheus_port=_env_int(ENV_PROMETHEUS_PORT, 9090),
+        prometheus_host=os.environ.get(ENV_PROMETHEUS_HOST, "").strip() or host,
         allow_prod=os.environ.get(ENV_ALLOW_PROD, "").strip() == "1",
         is_test_node=is_test,
     )

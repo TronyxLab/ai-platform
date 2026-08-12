@@ -28,6 +28,15 @@
 # · Suspected: CI gate (static_audit) выполняет test_loadtest_runner.py без locust → importorskip → 2 skipped
 # · Impact: RPS-механизм (constant_throughput) не верифицируется в CI до устранения
 # · When: during DevPlan 146-m1 TASK-8 implementation
+# · Fix: добавить .[load] в setup-python-venv (вне скоупа 146-m1 File Manifest)
+# ⚠️ TRAP[BUG] · 2026-08-11 · P1 · gevent.monkey.patch_all (locust import) ломает ssl в Python 3.14
+# · Symptom: тест s3_ssl_cache падает RecursionError (ssl.SSLContext.options — 947 повторов одной строки)
+# · Root: locust/__init__.py при импорте вызывает monkey.patch_all(); gevent-патч ssl несовместим
+# ·   с Python 3.14 → последующие boto3/ssl вызовы в том же процессе (pytest без xdist) рекурсивны
+# · Fix: LOCUST_SKIP_MONKEY_PATCH=1 (штатный флаг locust) в rps_wait_time-тестах ДО импорта locust —
+# ·   gevent не патчится; helper constant_throughput — чистая функция, патч не нужен
+# · Prevention: импорт locust в тестах — только с флагом; runtime locust (make load-test) —
+# ·   отдельный процесс, patch_all работает штатно
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -203,13 +212,18 @@ _LOCUST_REASON = (
 )
 
 
-# region TESTrps_wait_time_constant_throughput
+# region TEST_rps_wait_time_constant_throughput
 # 🧪 TRAP[TEST] · Scenario: RPS>0 → constant_throughput (per-user = target/users)
 # · Regression: helper вернёт между-fallback или наивную 1/rps (без учёта latency) при заданном RPS
 # · Last fail: N/A (new) — 146-m1 BUG-1 fix
 # · Remove if: RPS-механизм сценариев заменён (не constant_throughput)
-def testrps_wait_time_constant_throughput(caplog) -> None:
+def test_rps_wait_time_constant_throughput(monkeypatch, caplog) -> None:
     """rps_wait_time(10, 20) → constant_throughput(0.5): wait = 1/(target/users) = 2.0s (latency-адаптивно)."""
+    # gevent.monkey.patch_all (locust при импорте) ломает ssl в Python 3.14 — последующие
+    # boto3-тесты падают RecursionError (ssl.SSLContext.options бесконечная рекурсия).
+    # LOCUST_SKIP_MONKEY_PATCH=1 — штатный флаг locust: gevent не патчится (см. TRAP[BUG]).
+    # Флаг ДО importorskip — иначе importorskip импортирует locust первым (patch_all без флага).
+    monkeypatch.setenv("LOCUST_SKIP_MONKEY_PATCH", "1")
     pytest.importorskip("locust", reason=_LOCUST_REASON)
     from core.loadtest.scenarios import rps_wait_time  # locust-dependent — импорт внутри функции
 
@@ -225,16 +239,17 @@ def testrps_wait_time_constant_throughput(caplog) -> None:
     assert wait_hot.__closure__[0].cell_contents == 0.5
 
 
-# endregion TESTrps_wait_time_constant_throughput
+# endregion TEST_rps_wait_time_constant_throughput
 
 
-# region TESTrps_wait_time_fallback
+# region TEST_rps_wait_time_fallback
 # 🧪 TRAP[TEST] · Scenario: RPS=0 или users=0 → between(0.05, 0.2) fallback (без RPS-контроля)
 # · Regression: деление на 0 при users=0 или выход за границы между при отсутствии LT_TARGET_RPS
 # · Last fail: N/A (new) — 146-m1 BUG-1 fix
 # · Remove if: fallback-семантика сценариев изменена
-def testrps_wait_time_fallback(caplog) -> None:
+def test_rps_wait_time_fallback(monkeypatch, caplog) -> None:
     """rps_wait_time(0, 10) и rps_wait_time(10, 0) → between(0.05, 0.2) (без RPS-контроля)."""
+    monkeypatch.setenv("LOCUST_SKIP_MONKEY_PATCH", "1")  # gevent/ssl-конфликт — см. TRAP[BUG]
     pytest.importorskip("locust", reason=_LOCUST_REASON)
     from core.loadtest.scenarios import rps_wait_time  # locust-dependent — импорт внутри функции
 
@@ -249,4 +264,4 @@ def testrps_wait_time_fallback(caplog) -> None:
         assert cells == [0.05, 0.2]  # between(min=0.05, max=0.2)
 
 
-# endregion TESTrps_wait_time_fallback
+# endregion TEST_rps_wait_time_fallback

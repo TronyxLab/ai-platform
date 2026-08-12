@@ -1,4 +1,0 @@
-www.tronyx.ru: 301
-sexydancerostov.ru: 200
-botanika.tronyx.ru: 200
-platform.tronyx.ru: 401

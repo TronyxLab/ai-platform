@@ -290,6 +290,10 @@ def run_saturation(
     ##   - Метрика вне discovery-набора → missing_metrics (НЕ error, НЕ запрос)
     ##   - Найденная метрика с суммарно < MIN_SAMPLES сэмплов → insufficient_metrics
     ##   - cpu_* → дополнительно "pct" = avg×100 (проценты одного ядра)
+    ##   - missing_metrics/insufficient_metrics дедуплицируются (BUG-3, 146-m3): несколько
+    ##     query_range на одну базовую метрику (litellm_proxy_failed_requests ×2,
+    ##     container_cpu_usage_seconds_total ×6) давали дубли в отчёте — первое вхождение
+    ##     сохраняется, итоговый список уникален (sorted, детерминирован)
     """
     window_start = t0 - QUERY_PAD
     window_end = t1 + QUERY_PAD
@@ -301,13 +305,14 @@ def run_saturation(
     insufficient: list[str] = []
     for name, (promql, base_metric) in queries.items():
         if base_metric not in discovered:
-            missing.append(base_metric)
-            logger.info("[IMP:7][prometheus][saturation] Metric missing (WARN): %s", base_metric)
+            if base_metric not in missing:
+                missing.append(base_metric)
+                logger.info("[IMP:7][prometheus][saturation] Metric missing (WARN): %s", base_metric)
             continue
         series = query_range(base_url, promql, window_start, window_end, timeout=timeout)
         sample_count = sum(len(s) for s in series)
         avg, max_val = aggregate_series(series)
-        if sample_count < MIN_SAMPLES:
+        if sample_count < MIN_SAMPLES and base_metric not in insufficient:
             insufficient.append(base_metric)
             logger.info(
                 "[IMP:7][prometheus][saturation] Insufficient samples (WARN): %s (%d < %d)",

@@ -420,5 +420,24 @@ class TestLoadConfig:
         cfg = load_config("langfuse_ingest", node_dir["name"], "smoke", str(repo_dir), platform_root=str(repo_dir))
         assert cfg.endpoint == "https://n.test.local"
 
+    # 🧪 TRAP[TEST] · Scenario: prometheus_host override (146-m2 — SSH-туннель к Prometheus ноды)
+    # · Regression: LOAD_PROMETHEUS_HOST игнорируется → pull идёт на node_host (внешний IP: TCP ок, HTTP timeout)
+    # · Last fail: 2026-08-11 — первый боевой прогон tronyx-vps: Prometheus pull timed out (фаервол/докер-прокси)
+    # · Remove if: Prometheus-доступ к ноде перестанет требовать туннель (LOAD_PROMETHEUS_HOST удалён)
+    def test_prometheus_host_override(self, repo_dir, node_dir, monkeypatch, caplog):
+        """LOAD_PROMETHEUS_HOST=localhost → prometheus_host=localhost; без env → node_host (backward-compat)."""
+        caplog.set_level(logging.INFO)
+        monkeypatch.delenv("LOAD_PROMETHEUS_HOST", raising=False)
+        cfg = load_config("web", node_dir["name"], "smoke", str(repo_dir), platform_root=str(repo_dir))
+        assert cfg.prometheus_host == "203.0.113.10"  # default = node_host (поведение без env не меняется)
+        monkeypatch.setenv("LOAD_PROMETHEUS_HOST", "localhost")
+        cfg = load_config("web", node_dir["name"], "smoke", str(repo_dir), platform_root=str(repo_dir))
+        assert cfg.prometheus_host == "localhost"
+        logger.info(
+            "[IMP:9][test][load_config] prometheus_host override: LOAD_PROMETHEUS_HOST=localhost → %s",
+            cfg.prometheus_host,
+        )
+        _assert_ldd_imp9(caplog)
+
 
 # endregion TEST_load_config

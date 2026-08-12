@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: loadtest remote runner rsync docker-run locust container node LOAD_RUNNER image cpus ssh
 # STRUCTURE: ▶ ship (rsync core/loadtest/ → /tmp/loadtest-<ts>/) → ◇ docker run --rm --network host
-#           --cpus ${LOAD_CPUS:-2} -v remote:/lt -w /lt ${LOAD_IMAGE:-locustio/locust:2.32} → ◇ fetch
+#           --cpus ${LOAD_CPUS:-2} -v remote:/lt -w /lt ${LOAD_IMAGE:-locustio/locust:2.32.10} → ◇ fetch
 #           (rsync results обратно) → ⎋ локальная сборка отчёта (PromQL pull с локальной машины)
 # region MODULE_CONTRACT
 ## @purpose  Remote-режим генератора (DevPlan 146 W5, LOAD_RUNNER=node): locust-прогон
@@ -14,7 +14,8 @@
 ##           чистые функции (unit-тесты), exec-обёртки — subprocess через ssh_opts.
 ## @invariants
 ##   1. docker run ОТДЕЛЬНО от стека: НЕ compose-сервис, НЕ observability-net (инвариант 3)
-##   2. Образ параметризуется LOAD_IMAGE (default locustio/locust:2.32) — Docker Hub
+##   2. Образ параметризуется LOAD_IMAGE (default locustio/locust:2.32.10 — полный semver:
+##      minor-only тега 2.32 в Docker Hub НЕ существует, BUG-4 146-m4) — Docker Hub
 ##      rate-limit митигируется ghcr.io-зеркалом/кэшем (риск R8, DevPlan 146 §7)
 ##   3. boto3 в образе отсутствует — s3-сценарий через HTTP API minio (не boto3)
 ##   4. CPU-limit LOAD_CPUS (default 2) — генератор не съедает хост под capacity
@@ -37,9 +38,10 @@ from core.internal.shared.subprocess_io import run_subprocess
 
 logger = logging.getLogger(__name__)
 
-# Пин образа должен совпадать с pyproject.toml pin (locust>=2.32,<2.33) —
-# иначе CLI-дрейф между docker-образом и dev-окружением (146-m1 TASK-6).
-DEFAULT_IMAGE = "locustio/locust:2.32"
+# Пин образа должен совпадать с pyproject.toml pin (locust>=2.32,<2.33 → установлена
+# 2.32.10) и фактическими тегами Docker Hub: minor-only тега 2.32 НЕ существует,
+# docker pull locustio/locust:2.32 → not found (BUG-4, 146-m4). Полный semver 2.32.10.
+DEFAULT_IMAGE = "locustio/locust:2.32.10"
 DEFAULT_CPUS = "2"
 
 
@@ -59,7 +61,9 @@ def build_rsync_push_cmd(src_dir: str, user: str, host: str, remote_dir: str) ->
 
     ## @purpose  Ship-команда (инвариант: ssh через shared.ssh_opts канон — единый
     ##            источник SSH-флагов платформы, DevPlan 116 B5 D1).
-    ## @io — ⇥ src_dir: str (core/loadtest/), user/host: str, remote_dir: str
+    ## @io — ⇥ src_dir: str — С TRAILING SLASH (контракт, BUG-5 146-m5): rsync без '/'
+    ##         копирует src вложенной папкой в remote_dir; нормализует ship() перед
+    ##         вызовом; user/host: str, remote_dir: str
     ##       → ⎋ list[str] — argv для subprocess
     ## @complexity — O(1)
     """
@@ -129,19 +133,43 @@ def build_ssh_docker_run_cmd(
 def ship(host: str, user: str, src_dir: str, remote_dir: str, timeout: int = 300) -> None:
     """rsync core/loadtest/ → /tmp/loadtest-<ts>/ на ноде (шаг 1 remote-режима).
 
-    ▶ ┌host, user, src, remote_dir┐ → ○ rsync push (ssh_opts) → ◇ rc != 0 → RemoteError → ⎋ None
+    ▶ ┌host, user, src, remote_dir┐ → ○ normalize src trailing slash → ○ rsync push (ssh_opts)
+      → ○ ssh chmod -R a+rwX (write-права для контейнера) → ◇ rc != 0 → RemoteError → ⎋ None
 
     ## @purpose  Доставка сценариев+SoT на ноду. SSH через канон ssh_opts (инвариант:
     ##            runtime НЕ импортирует tests/_conftest — NodeSSHClient только для e2e).
-    ## @io — ⇥ host: str, user: str, src_dir: str, remote_dir: str, timeout: int → ⎋ None
-    ## @complexity — O(F) — F = объём передаваемых файлов
-    ## @raises — RemoteError: rsync вернул ненулевой rc
+    ##            TRAILING SLASH ОБЯЗАТЕЛЕН (BUG-5, 146-m5): rsync БЕЗ '/' копирует src
+    ##            ДИРЕКТОРИЕЙ в remote_dir (→ remote_dir/loadtest/...), а контейнер
+    ##            монтирует workdir в /lt и ждёт /lt/scenarios/<name>.py — вложенность
+    ##            ломает путь (Could not find '/lt/scenarios/s3.py'). Нормализация здесь —
+    ##            single-point fix, защищает всех вызывающих.
+    ##            chmod a+rwX (BUG-6, 146-m6): rsync-ship создаёт remote_dir от root
+    ##            (owner root, mode 755), docker run locust-образа — от non-root → контейнер
+    ##            не может создать /lt/results (csv_prefix) → PermissionError [Errno 13].
+    ##            chmod (не chown к uid 1000 — хрупок при смене версии образа) даёт write-
+    ##            права пользователю контейнера без привязки к конкретному uid.
+    ## @io — ⇥ host: str, user: str, src_dir: str (trailing slash нормализуется
+    ##         rstrip("/") + "/" — содержимое копируется, не вложенная папка),
+    ##         remote_dir: str, timeout: int → ⎋ None
+    ## @complexity — O(F + N) — F = объём передаваемых файлов, N = число файлов (chmod)
+    ## @raises — RemoteError: rsync ИЛИ chmod вернул ненулевой rc
     """
+    src_dir = str(src_dir).rstrip("/") + "/"
     cmd = build_rsync_push_cmd(src_dir, user, host, remote_dir)
     result = run_subprocess(cmd, timeout=timeout, check=False, non_fatal=True)
     if result.returncode != 0:
         raise RemoteError(f"rsync ship failed (rc={result.returncode}): {result.stderr.strip()[:300]}")
-    logger.info("[IMP:9][remote][ship] %s → %s@%s:%s", src_dir, user, host, remote_dir)
+    chmod_cmd = f"chmod -R a+rwX {remote_dir}"
+    chmod_result = run_subprocess(
+        ["ssh", *SSH_OPTS, f"{user}@{host}", chmod_cmd],
+        timeout=timeout,
+        check=False,
+        non_fatal=True,
+    )
+    if chmod_result.returncode != 0:
+        raise RemoteError(f"remote chmod failed (rc={chmod_result.returncode}): {chmod_result.stderr.strip()[:300]}")
+    logger.info("[IMP:8][remote][ship] src normalized to trailing slash: %s", src_dir)
+    logger.info("[IMP:9][remote][ship] %s → %s@%s:%s (chmod a+rwX)", src_dir, user, host, remote_dir)
 
 
 # endregion FUNC_ship

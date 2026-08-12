@@ -5,7 +5,7 @@
 ##           stream=true через self.client.stream (geventhttpclient), чтение чанков с
 ##           явным chunk-timeout (gevent.Timeout, 10s из SoT LT_CHUNK_TIMEOUT).
 ##           Покрывает риск R4 «Locust SSE-клиент не покрывает chunk-timeout».
-## @scope    Запускается ТОЛЬКО locust — локально или в locustio/locust:2.32 на ноде.
+## @scope    Запускается ТОЛЬКО locust — локально или в locustio/locust:2.32.10 на ноде.
 ##           НЕ импортируется платформенным кодом.
 ## @invariants
 ##   - Чтение каждого чанка ограничено gevent.Timeout(LT_CHUNK_TIMEOUT) — зависший

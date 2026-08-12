@@ -5,7 +5,7 @@
 ##           нагрузка на langfuse + postgres + clickhouse (трассировочный инжест).
 ##           Authorization: Bearer {LANGFUSE_PUBLIC_KEY} — из env LOAD_LANGFUSE_PUBLIC_KEY
 ##           (секреты ноды), подставляется config.py при рендере headers.
-## @scope    Запускается ТОЛЬКО locust — локально или в locustio/locust:2.32 на ноде.
+## @scope    Запускается ТОЛЬКО locust — локально или в locustio/locust:2.32.10 на ноде.
 ##           НЕ импортируется платформенным кодом.
 ## @invariants
 ##   - headers целиком из LT_HEADERS (rendered config.py: публичный ключ langfuse)

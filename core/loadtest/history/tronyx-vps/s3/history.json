@@ -1,0 +1,21 @@
+{
+  "runs": [
+    {
+      "ts": "20260811T213355Z",
+      "host": "103.88.243.151",
+      "mode": "smoke",
+      "rps": 5.223224933607106,
+      "p50": null,
+      "p95": 0.099,
+      "p99": 0.12,
+      "error_rate": 0.0,
+      "max_rps": null,
+      "verdict": "WARN",
+      "delta_vs_prev": {
+        "delta_p95": null,
+        "delta_error_pp": 0.0
+      },
+      "version": "unknown"
+    }
+  ]
+}

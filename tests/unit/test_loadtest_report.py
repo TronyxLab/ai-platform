@@ -89,12 +89,13 @@ def write_csv(tmp_path):
 
 # region TEST_parse_stats_csv
 # 🧪 TRAP[TEST] · Scenario: парс locust stats.csv (Aggregated-строка, мусорные ячейки)
-# · Regression: error_rate = failures/requests; p95 None на мусорной ячейке (не crash)
-# · Last fail: N/A (new)
-# · Remove if: формат stats.csv Locust изменён
+# · Regression: error_rate = failures/requests; p95 None на мусорной ячейке (не crash);
+# ·   перцентили нормализуются ms → s (BUG-3, 146-m3: 180ms → 0.18s)
+# · Last fail: 2026-08-11 — боевой прогон tronyx-vps: p95=270 (ms) >= max_p95=1.0 (s) → ложный FAIL
+# · Remove if: формат stats.csv Locust изменён (перцентили в других единицах)
 class TestParseStatsCsv:
     def test_parses_aggregated_row(self, write_csv, caplog):
-        """Aggregated-строка: rps/p95/p99 + error_rate 0.0."""
+        """Aggregated-строка: rps/p95/p99 (ms → s) + error_rate 0.0."""
         caplog.set_level(logging.INFO)
         stats = parse_stats_csv(write_csv(_CSV_OK))
         print("--- LDD TRAJECTORY (IMP:7-10) ---")
@@ -108,7 +109,8 @@ class TestParseStatsCsv:
         assert found, "IMP:9 log missing (CSV parse success)"
         assert stats.total_requests == 1500 and stats.total_failures == 0
         assert stats.error_rate == 0.0
-        assert stats.rps == 16.6 and stats.p95 == 180.0 and stats.p99 == 320.0
+        # locust отдаёт перцентили в ms (180ms / 320ms) — Stats нормализуется в секунды
+        assert stats.rps == 16.6 and stats.p95 == 0.18 and stats.p99 == 0.32
 
     def test_error_rate_computed(self, write_csv):
         """Ошибки: error_rate = 80/1500 ≈ 0.0533."""
@@ -128,7 +130,7 @@ class TestParseStatsCsv:
             ",Aggregated,100,0,90,95,10,400,120,1.1,0.0,80,90,100,110,140,broken,240,320,500,800,1200",
         ]
         stats = parse_stats_csv(write_csv(rows))
-        assert stats.p95 is None and stats.p50 == 80.0 and stats.total_requests == 100
+        assert stats.p95 is None and stats.p50 == 0.08 and stats.total_requests == 100
 
 
 # endregion TEST_parse_stats_csv

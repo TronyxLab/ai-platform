@@ -112,6 +112,9 @@ def parse_stats_csv(path: str | Path) -> Stats:
     ## @invariants
     ##   - Несуществующий файл / 0 запросов → Stats с нулями (rps/p95=None — insufficient)
     ##   - Нечисловые ячейки перцентилей → None (не роняем отчёт на мусорной строке)
+    ##   - ЕДИНИЦЫ (BUG-3, 146-m3): locust отдаёт перцентили (50%/95%/99%) в МИЛЛИСЕКУНДАХ
+    ##     (270 = 270ms); Stats нормализуется в СЕКУНДЫ (÷1000) — совместимо с порогами
+    ##     SoT (max_p95/max_p99 — s), baseline history и verdict-функциями
     """
     p = Path(path)
     if not p.is_file():
@@ -141,15 +144,15 @@ def parse_stats_csv(path: str | Path) -> Stats:
     source: dict = aggregated or (rows[-1] if rows else {})
     stats = Stats(
         rps=_float_or(source.get(COL_RPS)),
-        p50=_float_or(source.get(COL_P50)),
-        p95=_float_or(source.get(COL_P95)),
-        p99=_float_or(source.get(COL_P99)),
+        p50=_ms_to_s(_float_or(source.get(COL_P50))),
+        p95=_ms_to_s(_float_or(source.get(COL_P95))),
+        p99=_ms_to_s(_float_or(source.get(COL_P99))),
         error_rate=(total_failures / total_requests) if total_requests > 0 else 0.0,
         total_requests=total_requests,
         total_failures=total_failures,
     )
     logger.info(
-        "[IMP:9][report][parse_stats_csv] rps=%s p95=%s p99=%s errors=%d/%d",
+        "[IMP:9][report][parse_stats_csv] rps=%s p95=%ss p99=%ss errors=%d/%d",
         stats.rps,
         stats.p95,
         stats.p99,
@@ -185,6 +188,26 @@ def _float_or(value: object) -> float | None:
 
 
 # endregion FUNC__float_or
+
+
+# region FUNC__ms_to_s
+def _ms_to_s(value: float | None) -> float | None:
+    """Нормализация перцентиля locust: миллисекунды → секунды (None → None).
+
+    ▶ ┌value┐ → ◇ None → None → ⎋ value / 1000
+
+    ## @purpose  locust stats.csv отдаёт перцентили (50%/95%/99%) в МИЛЛИСЕКУНДАХ
+    ##            (270 = 270ms); Stats нормализуется в СЕКУНДЫ — совместимо с
+    ##            порогами SoT (max_p95/max_p99 — s), baseline history и
+    ##            verdict-функциями (BUG-3, 146-m3: боевой прогон FAIL при p95=270ms
+    ##            против max_p95=1.0s).
+    ## @io — ⇥ value: float | None (ms) → ⎋ float | None (s)
+    ## @complexity — O(1)
+    """
+    return value / 1000.0 if value is not None else None
+
+
+# endregion FUNC__ms_to_s
 
 
 # region FUNC_verdict_smoke

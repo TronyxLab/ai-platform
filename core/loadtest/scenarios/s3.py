@@ -1,5 +1,6 @@
-# GREP_SUMMARY: locust s3 scenario minio optional PUT GET presigned sigv4 http-api no-boto3
-# STRUCTURE: ▶ env LT_ENABLED (optional gate) → ◇ SigV4 presign (stdlib hmac/sha256) → ◇ S3User → ○ PUT+GET tasks → ⎋
+# GREP_SUMMARY: locust s3 scenario minio optional PUT GET presigned sigv4 http-api no-boto3 on-start seed
+# STRUCTURE: ▶ env LT_ENABLED (optional gate) → ◇ SigV4 presign (stdlib hmac/sha256) → ◇ S3User →
+#           ○ on_start seed PUT (object exists before GET) → ○ PUT+GET tasks → ⎋
 # region MODULE_CONTRACT
 ## @purpose  Locust-сценарий s3 (DevPlan 146 W1, OPTIONAL): PUT/GET объектов MinIO через
 ##           HTTP API с SigV4-presigned URL — БЕЗ boto3 (boto3 отсутствует в locustio/locust
@@ -14,15 +15,18 @@
 ##   - Ключи MinIO приходят env-ом (LT_S3_*), НЕ хардкодятся и не логируются
 ##   - RPS — constant_throughput (wait_time = rps_wait_time(LT_TARGET_RPS, LT_USERS),
 ##     единый helper — 146-m1 TASK-2/3); users — размер пула
+##   - on_start seed (BUG-7, 146-m7): объект гарантированно существует до первых GET
 ## @rationale s3-сценарий реализован поверх HTTP API MinIO (S3-совместимый) — boto3
 ##            недоступен в locust-образе (риск R9, DevPlan 146 §7), SigV4-подпись
 ##            реализуется stdlib-ом без внешних зависимостей.
 ## @changes  2026-08-11 | DevPlan 146 W1 — Created
+## @changes  2026-08-11 | DevPlan 146-m7 BUG-7 — on_start seed (idempotent PUT до первых GET)
 # endregion MODULE_CONTRACT
 
 import datetime
 import hashlib
 import hmac
+import logging
 import os
 import sys
 import urllib.parse
@@ -37,6 +41,8 @@ from locust import HttpUser, task
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scenarios import rps_wait_time
+
+logger = logging.getLogger(__name__)
 
 LT_ENDPOINT: str = os.environ.get("LT_ENDPOINT", "").strip().rstrip("/")
 LT_S3_ACCESS_KEY: str = os.environ.get("LT_S3_ACCESS_KEY", "")
@@ -104,7 +110,7 @@ def presign_url(
       → ○ string-to-sign → ○ signing key → ⊕ X-Amz-Signature → ⎋ presigned URL
 
     ## @purpose  Подпись URL для прямого HTTP-доступа к MinIO/S3 (PUT/GET) без boto3.
-    ##            Полностью stdlib — работает в locustio/locust:2.32 на ноде.
+    ##            Полностью stdlib — работает в locustio/locust:2.32.10 на ноде.
     ## @io — ⇥ method: str (PUT|GET), url: str (http://host:9000/bucket/object),
     ##         access_key/secret_key: str, expires: int (s), region: str
     ##       → ⎋ str — URL с X-Amz-* query-параметрами и сигнатурой
@@ -158,10 +164,37 @@ class S3User(HttpUser):
     ## @invariants
     ##   - PUT-тело — детерминированный 128-байтный объект (не время-зависимый)
     ##   - verify=False при LT_SSL_VERIFY=false (самоподписанные серты тестовых нод)
+    ##   - on_start seed (BUG-7, 146-m7): объект существует до первых GET — idempotent
+    ##     PUT того же объекта (перезапись); иначе на свежем bucket первые GET-задачи
+    ##     (задачи случайны) падают 404 NoSuchKey → error_rate ≠ 0 → smoke FAIL
     """
 
     host = LT_ENDPOINT
     wait_time = rps_wait_time(LT_TARGET_RPS, LT_USERS)
+
+    def on_start(self) -> None:
+        """Seed объекта до первых GET (BUG-7, 146-m7): idempotent PUT того же объекта.
+
+        ▶ ┌env┐ → ○ presign PUT → ○ client.put (128B payload, перезапись) → ⎋ None
+
+        ## @purpose  Гарантия «объект существует до первых GET»: задачи PUT/GET случайны,
+        ##            на свежем bucket первые GET выполняются ДО первого PUT → 404
+        ##            NoSuchKey (боевой s3 smoke: 5 ошибок GET, error_rate 1.1% → FAIL).
+        ##            Seed = тот же idempotent PUT (перезапись, детерминированный 128-байтный
+        ##            payload, тот же presign-механизм). on_start-запросы попадают в locust
+        ##            stats — несколько лишних PUT на старте (допустимый шум, 0 ошибок).
+        ## @io — ⇥ None → ⎋ None
+        ## @complexity — O(1)
+        """
+        object_url = f"{LT_ENDPOINT}/{LT_S3_BUCKET}/{LT_S3_OBJECT}"
+        url = presign_url("PUT", object_url, LT_S3_ACCESS_KEY, LT_S3_SECRET_KEY)
+        self.client.put(
+            url,
+            data=b"loadtest-object-" + b"x" * 112,
+            headers={"Content-Type": "application/octet-stream"},
+            verify=LT_SSL_VERIFY,
+        )
+        logger.info("[IMP:8][s3][on_start] seed object: %s/%s", LT_S3_BUCKET, LT_S3_OBJECT)
 
     @task
     def put_object(self) -> None:

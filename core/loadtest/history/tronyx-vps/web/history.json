@@ -1,0 +1,32 @@
+{
+  "runs": [
+    {
+      "ts": "20260811T200655Z",
+      "host": "103.88.243.151",
+      "mode": "smoke",
+      "rps": 10.196924026071871,
+      "p50": null,
+      "p95": 0.25,
+      "p99": 0.4,
+      "error_rate": 0.0,
+      "max_rps": null,
+      "verdict": "WARN",
+      "delta_vs_prev": null,
+      "version": "6c7f6925"
+    },
+    {
+      "ts": "20260811T200909Z",
+      "host": "103.88.243.151",
+      "mode": "regression",
+      "rps": 10.059970435152696,
+      "p50": null,
+      "p95": 0.22,
+      "p99": 0.31,
+      "error_rate": 0.0,
+      "max_rps": null,
+      "verdict": "WARN",
+      "delta_vs_prev": null,
+      "version": "6c7f6925"
+    }
+  ]
+}

@@ -154,7 +154,7 @@ LOAD_RUNNER=node make load-test SCENARIO=web NODE=test-e2e MODE=smoke
 
 Механика: rsync `core/loadtest/` → `/tmp/loadtest-<ts>/` (SSH через канон
 `shared.ssh_opts`) → `docker run --rm --network host --cpus ${LOAD_CPUS:-2} -v
-/tmp/loadtest-<ts>:/lt -w /lt ${LOAD_IMAGE:-locustio/locust:2.32} -f ... --headless`
+/tmp/loadtest-<ts>:/lt -w /lt ${LOAD_IMAGE:-locustio/locust:2.32.10} -f ... --headless`
 → rsync CSV обратно; PromQL-pull и отчёт — локально.
 
 - Генератор **вне стека**: не compose-сервис, не observability-net (инвариант 3);

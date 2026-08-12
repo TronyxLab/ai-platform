@@ -5,7 +5,7 @@
 ##           status-page). Все параметры — из env (LT_*), НИКАКИХ хардкодов (инвариант 2):
 ##           endpoint/пути/ssl_verify заполняет config.py из core/loadtest/scenarios.yaml.
 ## @scope    Запускается ТОЛЬКО locust (locust -f scenarios/web.py) — локально (dev-машина)
-##           или в locustio/locust:2.32 на ноде (LOAD_RUNNER=node). НЕ импортируется
+##           или в locustio/locust:2.32.10 на ноде (LOAD_RUNNER=node). НЕ импортируется
 ##           платформенным кодом (core/internal/loadtest/).
 ## @invariants
 ##   - Точный RPS — constant_throughput (wait_time = rps_wait_time(LT_TARGET_RPS,
