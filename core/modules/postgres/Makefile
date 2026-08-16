@@ -54,7 +54,13 @@ restore: ## Restore from dump file (owner only, requires DUMP_FILE=)
 	@if [[ ! -f "$(DUMP_FILE)" ]]; then \
 		echo "[IMP:9][postgres-make][restore] ERROR: DUMP_FILE not found: $(DUMP_FILE)" >&2; exit 1; \
 	fi
-	docker exec -i $(CONTAINER) sh -c 'psql -U "$$POSTGRES_USER" < /dev/stdin' < "$(DUMP_FILE)"
+	@# ⚠️ TRAP[BUG] · 1.0.0 · HI · .sql.gz-дампы (backup-cron nightly) скармливались psql сырьём →
+	@# «invalid byte sequence»; .sql — как есть (резервная совместимость).
+	@if [[ "$(DUMP_FILE)" == *.gz ]]; then \
+		gunzip -c "$(DUMP_FILE)" | docker exec -i $(CONTAINER) sh -c 'psql -U "$$POSTGRES_USER" < /dev/stdin'; \
+	else \
+		docker exec -i $(CONTAINER) sh -c 'psql -U "$$POSTGRES_USER" < /dev/stdin' < "$(DUMP_FILE)"; \
+	fi
 	@echo "[IMP:8][postgres-make][restore] Restore complete from $(DUMP_FILE)"
 
 # 🧐 TRAP[DECISION] · 2026-07-18 · — · Custom overrides: postgres-specific lifecycle
