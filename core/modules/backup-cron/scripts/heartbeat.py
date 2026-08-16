@@ -16,7 +16,8 @@
 ##   2. S3-ключ: {prefix}/heartbeat/{node}/heartbeat.json (prefix = S3_PREFIX, default
 ##      "platform/backups" — канон upload-s3.sh / wal_sync)
 ##   3. Body: {"ts": "<ISO8601 UTC now>", "ok": true, "node": "<NODE_NAME>"} (NODE_NAME env,
-##      default "unknown") — JSON-сериализация, перезапись (идемпотентно, overwrite)
+##      default "unknown") — JSON-сериализация, перезапись (идемпотентно, overwrite).
+##      + "tor_chain_down": bool, если canary-файл Tor-цепи прочитан (003 A3).
 ##   4. --dry-run: печатает план, 0 мутаций (нет put_object)
 ##   5. S3-ошибка → [IMP:10][heartbeat] S3 FAIL + exit 1 (heartbeat = off-node сигнал,
 ##      тихий отказ запрещён — stale heartbeat должен быть алертом, а не тишиной)
@@ -43,6 +44,7 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import cast
 
 import boto3
@@ -56,6 +58,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_S3_ENDPOINT_URL = "https://s3.timeweb.cloud"
 DEFAULT_S3_REGION = "ru-1"
 DEFAULT_S3_PREFIX = "platform/backups"  # канон: prefix общий для бэкапов и heartbeat (162 W6-1)
+# 003 A3: canary-файл Tor-цепи (пишет tor_proxy_check.py на ноде; bind в compose base.yml)
+DEFAULT_TOR_CHAIN_STATE_FILE = "/var/lib/platform/run/tor-chain-state.json"
 
 
 # region FUNC__env_str
@@ -135,26 +139,68 @@ def _heartbeat_key(prefix: str, node: str) -> str:
 # endregion FUNC__heartbeat_key
 
 
+# region FUNC__read_tor_chain_down
+## @purpose  Читает canary-файл Tor-цепи (DevPlan 003 A3): {"status": "red"|"green"} →
+##           True/False. Файл отсутствует/невалиден → None (канарейка не ломает heartbeat).
+## @io       ⇥ state_file: str → ⎋ bool | None
+## @complexity O(1)
+## @invariants
+##   - Нечитаемый/отсутствующий/невалидный файл → None + IMP:7 WARN (НЕ fail)
+##   - Контейнерный контракт: 0 импортов core.internal (stdlib json)
+def _read_tor_chain_down(state_file: str) -> bool | None:
+    """Return True if tor-chain state is red, False if green, None if unknown."""
+    try:
+        with Path(state_file).open(encoding="utf-8") as f:
+            data_raw = cast(object, json.load(f))
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.info("[IMP:7][heartbeat][tor-canary] state file unavailable (%s): %s", state_file, exc)
+        return None
+    if not isinstance(data_raw, dict):
+        logger.info("[IMP:7][heartbeat][tor-canary] non-dict body in %s", state_file)
+        return None
+    status = str(data_raw.get("status", "")).lower()
+    if status == "red":
+        return True
+    if status == "green":
+        return False
+    logger.info("[IMP:7][heartbeat][tor-canary] unknown status %r in %s", status, state_file)
+    return None
+
+
+# endregion FUNC__read_tor_chain_down
+
+
 # region FUNC_heartbeat_run
 ## @purpose  Запись heartbeat-объекта: put_object({prefix}/heartbeat/{node}/heartbeat.json,
-##           body {ts: ISO8601 UTC now, ok: true, node}). Идемпотентно (overwrite) — state-free.
-##           --dry-run: план без put_object.
-## @io       ⇥ client: boto3, bucket: str, prefix: str, node: str, dry_run: bool → ⎋ str (key)
+##           body {ts: ISO8601 UTC now, ok: true, node[, tor_chain_down: bool]}). Идемпотентно
+##           (overwrite) — state-free. --dry-run: план без put_object.
+## @io       ⇥ client: boto3, bucket: str, prefix: str, node: str, dry_run: bool,
+##              tor_chain_down: bool | None → ⎋ str (key)
 ##           ⚡ ClientError — S3-ошибка (exit 1 в main)
 ## @complexity O(1) — один PUT-запрос
 ## @invariants
 ##   - body JSON: {"ts": "<ISO8601 UTC>", "ok": true, "node": "<node>"}
+##     + "tor_chain_down": bool ТОЛЬКО если canary прочитан (003 A3: out-of-band читатель)
 ##   - dry-run: IMP:8 план, 0 мутаций
 ##   - S3-ошибка → ClientError raise (exit 1 — heartbeat = off-node сигнал)
-def heartbeat_run(client: Boto3S3, bucket: str, prefix: str, node: str, dry_run: bool = False) -> str:
+def heartbeat_run(
+    client: Boto3S3,
+    bucket: str,
+    prefix: str,
+    node: str,
+    dry_run: bool = False,
+    tor_chain_down: bool | None = None,
+) -> str:
     """Put the heartbeat object to S3 (overwrite, idempotent). Returns the S3 key."""
     key = _heartbeat_key(prefix, node)
     now = datetime.now(timezone.utc)
-    body = {
+    body: dict[str, object] = {
         "ts": now.isoformat(),
         "ok": True,
         "node": node,
     }
+    if tor_chain_down is not None:
+        body["tor_chain_down"] = tor_chain_down
     if dry_run:
         logger.info("[IMP:8][heartbeat][dry-run] WOULD put %s → %s", key, json.dumps(body))
         return key
@@ -200,11 +246,15 @@ def main(
 
     prefix = _env_str("S3_PREFIX", DEFAULT_S3_PREFIX, env)
     node = _env_str("NODE_NAME", "unknown", env)
+    # 003 A3: canary Tor-цепи (tor_proxy_check.py) — мержится в payload для out-of-band
+    # читателя (heartbeat_check.py, CI cron). Файл не читается → ключ отсутствует в body.
+    tor_state_file = _env_str("TOR_CHAIN_STATE_FILE", DEFAULT_TOR_CHAIN_STATE_FILE, env)
     logger.info(
-        "[IMP:7][heartbeat][main] node=%s prefix=%s dry_run=%s",
+        "[IMP:7][heartbeat][main] node=%s prefix=%s dry_run=%s tor_state=%s",
         node,
         prefix,
         dry_run,
+        tor_state_file,
     )
 
     try:
@@ -212,7 +262,14 @@ def main(
             client, bucket = client_factory()
         else:
             client, bucket = build_s3_client(env)
-        key = heartbeat_run(client, bucket, prefix, node, dry_run=dry_run)
+        key = heartbeat_run(
+            client,
+            bucket,
+            prefix,
+            node,
+            dry_run=dry_run,
+            tor_chain_down=_read_tor_chain_down(tor_state_file),
+        )
     except ClientError as exc:
         logger.error("[IMP:10][heartbeat] S3 FAIL during heartbeat: %s", exc)
         return 1

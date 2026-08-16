@@ -230,10 +230,11 @@ def promote_context(
     *,
     audit_log_file: str | None = None,
     ssh_available_fn: Callable[[], bool] | None = None,
+    secrets_fn: Callable[[str, str], bool] | None = None,
 ) -> int:
-    """Orchestrator: audit START → SSH push → verify → audit DONE/FAIL → exit code.
+    """Orchestrator: audit START → SSH push → verify → org-secrets → audit DONE/FAIL → exit code.
 
-    ▶ write_audit_entry(START) → ◇ check_ssh_available → SSH: promote_via_ssh (FATAL if unavailable) → git rev-parse HEAD → ◇ verify_mirror → audit DONE/FAIL → ⎋ 0|1
+    ▶ write_audit_entry(START) → ◇ check_ssh_available → SSH: promote_via_ssh (FATAL if unavailable) → git rev-parse HEAD → ◇ verify_mirror → ◇ ensure_context_secrets (best-effort) → audit DONE/FAIL → ⎋ 0|1
 
     ## @purpose — Single entry point for `make context-promote`: full lifecycle with audit
     ##            trail and fail-fast diagnostics. Returns the process exit code (0/1).
@@ -244,6 +245,7 @@ def promote_context(
     ##   - Audit: START at entry; DONE (rc=0) or FAIL on every non-zero return path
     ##   - Fail-fast: SSH unavailable → IMP:10 FATAL, exit 1 (SSH-only channel, 177 W2.1)
     ##   - CalledProcessError / OSError from git/ssh → IMP:10 FAILED + audit FAIL + return 1
+    ##   - org-secrets: best-effort (не отменяет успешный promote; сбой → DONE с WARN)
     ##   - Audit log file: AUDIT_LOG_FILE env override, else audit_logger.DEFAULT_LOG_FILE
     ##   - Never raises on operational failures — always returns 0/1
     """
@@ -300,8 +302,35 @@ def promote_context(
         return 1
 
     if verify_mirror(org, mirror_head, source_head):
-        logger.info("[IMP:9][promote_context] SUCCESS: platform promoted to %s/ai-platform", org)
-        audit_logger.write_audit_entry(tag, "DONE", "completed successfully (rc=0)", log_file=log_file)
+        # 2026-08-16: авто-провижининг org-секретов контекстной организации (best-effort) —
+        # mirror-org CI (core-deploy/heartbeat-check/deploy-project) без ручной настройки UI.
+        secrets_ok = True
+        try:
+            if secrets_fn is not None:
+                secrets_ok = secrets_fn(org, context)
+            else:
+                from core.internal.deploy.org_secrets_provisioner import ensure_context_secrets  # лениво
+
+                secrets_ok = ensure_context_secrets(org, context)
+        # ruff: ignore[BLE001] — best-effort: сбой gh/секретов не отменяет успешный promote
+        except Exception as exc:  # noqa: EXC — org-secrets best-effort (promote уже успешен)
+            logger.info("[IMP:10][promote_context] org-secrets provisioning error (non-fatal): %s", exc)
+            secrets_ok = False
+        if secrets_ok:
+            logger.info("[IMP:9][promote_context] SUCCESS: platform promoted to %s/ai-platform", org)
+            audit_logger.write_audit_entry(tag, "DONE", "completed successfully (rc=0)", log_file=log_file)
+        else:
+            logger.info(
+                "[IMP:10][promote_context] SUCCESS with WARN: platform promoted to %s/ai-platform, "
+                "но org-секреты настроены не полностью (см. org-secrets строки выше)",
+                org,
+            )
+            audit_logger.write_audit_entry(
+                tag,
+                "DONE",
+                "completed with org-secrets WARN (rc=0) — see log",
+                log_file=log_file,
+            )
         return 0
 
     logger.error("[IMP:10][promote_context] FAIL: mirror HEAD != source HEAD — mirror verification failed")

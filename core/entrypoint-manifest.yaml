@@ -95,7 +95,7 @@ deploy:
   delegates_to: core/entrypoints/context-promote.sh → core/internal/deploy/context_promoter.py
   signature: make context-promote CONTEXT=<context>
   operation_ru: Промоут платформы в контекст
-  description: Promote platform to a context org (copy + CI + auto-deploy)
+  description: Promote platform to a context org (copy + CI + auto-deploy + auto org-secrets provisioning via org_secrets_provisioner.py)
 build:
 - make_target: hermes-build-context
   visibility: public

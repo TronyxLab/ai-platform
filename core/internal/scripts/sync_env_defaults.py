@@ -746,6 +746,15 @@ def _section_monitoring(env_defaults: dict[str, str]) -> list[str]:
     lines.append("# Infra-metrics exporters")
     lines.append("CADVISOR_PORT=" + _get_val_required(env_defaults, "CADVISOR_PORT"))
     lines.append("NODE_EXPORTER_PORT=" + _get_val_required(env_defaults, "NODE_EXPORTER_PORT"))
+    lines.append("# Tor-chain canary host-dir (003 A3: bind backup-cron → heartbeat payload)")
+    lines.append(
+        "TOR_CHAIN_STATE_HOST_DIR="
+        + _get_env_val(
+            env_defaults,
+            "TOR_CHAIN_STATE_HOST_DIR",
+            str(_tor_state_host_default()),
+        )
+    )
     lines.append("# Status Page (внутренний HTTP-порт модуля, DevPlan 117 D31 — зарегистрирован в SoT)")
     lines.append("STATUS_PAGE_PORT=" + _get_val_required(env_defaults, "STATUS_PAGE_PORT"))
     return lines
@@ -833,6 +842,20 @@ def _section_github_actions(env_defaults: dict[str, str]) -> list[str]:
 
 
 # endregion SECTION_github_actions
+
+
+# region FUNC__tor_state_host_default
+## @purpose  Канонический дефолт TOR_CHAIN_STATE_HOST_DIR через deploy_paths.run_base()
+##           (гейт test_gate_run_paths_sole: литералы /var/lib/platform/* в core/internal
+##           запрещены — единственный SoT — shared/deploy_paths.py).
+## @io       ⎋ str — канонический run-каталог платформы
+def _tor_state_host_default() -> Path:
+    from core.internal.shared.deploy_paths import run_base  # лениво (codegen-секция)
+
+    return run_base()
+
+
+# endregion FUNC__tor_state_host_default
 
 
 # region FUNC_generate_env_example

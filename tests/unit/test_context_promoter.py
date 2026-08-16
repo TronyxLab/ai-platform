@@ -289,7 +289,9 @@ def test_audit_step_imp9(
             _proc(rc=0, stdout=f"{SYNC_SHA}\n"),  # git rev-parse HEAD
         ],
     ):
-        rc = context_promoter.promote_context("myctx", audit_log_file=str(audit_file), ssh_available_fn=lambda: True)
+        rc = context_promoter.promote_context(
+            "myctx", audit_log_file=str(audit_file), ssh_available_fn=lambda: True, secrets_fn=lambda _org, _ctx: True
+        )
 
     assert rc == 0, "SSH promote with matching HEADs must return exit code 0"
 

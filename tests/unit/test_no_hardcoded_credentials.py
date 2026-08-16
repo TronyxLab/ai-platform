@@ -1225,7 +1225,7 @@ def test_no_hardcoded_credentials_in_yaml_files(
     core_dir: str = Path(platform_root) / "core"
     yaml_files.extend(sorted(pathlib.Path(core_dir).rglob("*.yaml")))
     yaml_files.extend(sorted(pathlib.Path(core_dir).rglob("*.yml")))
-    # Root-level конфиги (docker-compose*.yml, ai-instructions.yaml) — НЕ .github/workflows
+    # Root-level конфиги (docker-compose*.yml, ai-instructions.lock) — НЕ .github/workflows
     yaml_files.extend(sorted(pathlib.Path(platform_root).glob("*.yaml")))
     yaml_files.extend(sorted(pathlib.Path(platform_root).glob("*.yml")))
 

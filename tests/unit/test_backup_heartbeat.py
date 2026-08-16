@@ -225,3 +225,60 @@ def test_heartbeat_main_s3_failure_exit_one(caplog) -> None:
 
 
 # endregion RUN_LOGIC
+
+
+# region TOR_CANARY_003_A3
+
+
+# 🧪 TRAP[TEST] · Regression · Scenario: tor-chain canary (003 A3) — red → tor_chain_down=true в payload
+# · Expect: payload содержит "tor_chain_down": true при статусе red
+# · Last fail: N/A (new — DevPlan 003 A3: canary мержится в S3-payload для out-of-band читателя)
+# · Remove if: 003 A3-контракт canary меняется
+def test_heartbeat_run_tor_chain_down_red(caplog, tmp_path: Path) -> None:
+    """heartbeat_run: tor_chain_down=True → ключ в S3 body."""
+    caplog.set_level(logging.INFO)
+    fake = FakeBoto()
+    key = heartbeat.heartbeat_run(fake, "test-bucket", "platform/backups", "tronyx-vps", tor_chain_down=True)
+
+    body = json.loads(fake.objects[key].decode("utf-8"))
+    assert body["tor_chain_down"] is True, f"tor_chain_down должен быть true: {body}"
+    logger.info("[IMP:9][test_heartbeat] tor_chain_down=true payload PASS")
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · canary отсутствует → ключ НЕ в payload (003 A3)
+# · Last fail: N/A (new — DevPlan 003 A3)
+# · Remove if: payload-контракт меняется
+def test_heartbeat_run_tor_chain_unknown_absent(caplog) -> None:
+    """tor_chain_down=None → ключ отсутствует в body (backward-compat со старым форматом)."""
+    caplog.set_level(logging.INFO)
+    fake = FakeBoto()
+    key = heartbeat.heartbeat_run(fake, "test-bucket", "platform/backups", "tronyx-vps", tor_chain_down=None)
+
+    body = json.loads(fake.objects[key].decode("utf-8"))
+    assert "tor_chain_down" not in body, f"ключ не должен присутствовать: {body}"
+    logger.info("[IMP:9][test_heartbeat] tor_chain_down absent PASS")
+
+
+# 🧪 TRAP[TEST] · Regression · Scenario: canary-file парсинг (003 A3)
+# · Expect: red → True, green → False, отсутствует/битый → None
+# · Last fail: N/A (new — DevPlan 003 A3)
+# · Remove if: canary-формат меняется
+def test_read_tor_chain_down_states(caplog, tmp_path: Path) -> None:
+    """_read_tor_chain_down: red/green/missing/invalid → True/False/None/None."""
+    caplog.set_level(logging.INFO)
+    red = tmp_path / "red.json"
+    red.write_text('{"status": "red", "ts": "2026-08-16T00:00:00Z"}')
+    green = tmp_path / "green.json"
+    green.write_text('{"status": "green"}')
+    missing = tmp_path / "nope.json"
+    broken = tmp_path / "broken.json"
+    broken.write_text("not json")
+
+    assert heartbeat._read_tor_chain_down(str(red)) is True
+    assert heartbeat._read_tor_chain_down(str(green)) is False
+    assert heartbeat._read_tor_chain_down(str(missing)) is None
+    assert heartbeat._read_tor_chain_down(str(broken)) is None
+    logger.info("[IMP:9][test_heartbeat] tor-canary state parsing PASS")
+
+
+# endregion TOR_CANARY_003_A3

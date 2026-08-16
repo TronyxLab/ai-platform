@@ -41,6 +41,7 @@ import argparse
 import logging
 import os
 import sys
+import typing
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -186,6 +187,72 @@ def list_heartbeats(client: object, bucket: str, prefix: str) -> dict[str, datet
 # endregion FUNC_list_heartbeats
 
 
+# region FUNC__fetch_one_payload
+## @purpose  GET + parse одного heartbeat-объекта (003 A3). Ошибка → None + IMP:7 WARN
+##           (best-effort per-node: битая нода не роняет всего reader'а).
+## @io       ⇥ client, bucket: str, key: str → ⎋ dict[str, object] | None
+## @complexity O(1) — один get_object
+@typing.runtime_checkable
+class _ReadableBody(typing.Protocol):
+    """StreamingBody-подобный протокол: read() → bytes (boto3 get_object Body)."""
+
+    def read(self) -> bytes: ...
+
+
+def _fetch_one_payload(client: object, bucket: str, key: str) -> dict[str, object] | None:
+    """Fetch and parse one heartbeat JSON payload; None on any read/parse error."""
+    import json as _json
+
+    resp = cast(
+        "dict[str, object]",
+        client.get_object(Bucket=bucket, Key=key),  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
+    )
+    body_raw: object = resp.get("Body")
+    data_raw = cast(
+        object,
+        (
+            _json.loads(body_raw.read().decode("utf-8"))
+            if isinstance(body_raw, _ReadableBody)
+            else _json.loads(str(body_raw or "{}"))
+        ),
+    )
+    return cast("dict[str, object]", data_raw) if isinstance(data_raw, dict) else None
+
+
+# endregion FUNC__fetch_one_payload
+
+
+# region FUNC__fetch_payloads
+## @purpose  GET тела heartbeat-объектов (003 A3): {node: dict payload}. Tor-canary
+##           (tor_chain_down) читается out-of-band ТОЛЬКО отсюда. Ошибка GET/JSON —
+##           WARN + пропуск ноды (payload None) — читатель не падает на одной битой ноде.
+## @io       ⇥ client, bucket: str, prefix: str, nodes: dict[str, datetime] → ⎋ dict[str, dict]
+## @complexity O(N) — N get_object
+def _fetch_payloads(
+    client: object, bucket: str, prefix: str, nodes: dict[str, datetime]
+) -> dict[str, dict[str, object]]:
+    """Fetch parsed JSON payloads for each node's heartbeat object. Skips unreadable nodes."""
+    hb_prefix = f"{prefix.rstrip('/')}/heartbeat/"
+    payloads: dict[str, dict[str, object]] = {}
+    for node in sorted(nodes):
+        key = f"{hb_prefix}{node}{HEARTBEAT_OBJECT_SUFFIX}"
+        try:
+            data = _fetch_one_payload(client, bucket, key)
+        # ruff: ignore[BLE001] — best-effort per-node read: битая нода не роняет всего reader'а
+        except Exception as exc:  # noqa: EXC — per-node payload read (003 A3 best-effort)
+            logger.info("[IMP:7][heartbeat_check][payload] %s: payload unreadable (%s) — skipped", node, exc)
+            continue
+        if data is not None:
+            payloads[node] = data
+        else:
+            logger.info("[IMP:7][heartbeat_check][payload] %s: non-dict body — skipped", node)
+    logger.info("[IMP:8][heartbeat_check][payload] %d payload(s) fetched", len(payloads))
+    return payloads
+
+
+# endregion FUNC__fetch_payloads
+
+
 # region FUNC_find_stale
 ## @purpose  Ноды со stale-сердцебиением: LastModified старше порога → [(node, age_hours)].
 ## @io       ⇥ nodes: dict[str, datetime], stale_hours: float, now: datetime | None → ⎋ list[tuple[str, float]]
@@ -213,15 +280,19 @@ def find_stale(
 
 
 # region FUNC_main
-## @purpose  Оркестрация: build client → list → find_stale → stale? notify critical (CI, direct
-##           HTTPS) → exit 0|1. S3-ошибка/конфиг-ошибка → IMP:10 + exit 1 (тихий отказ запрещён).
+## @purpose  Оркестрация: build client → list → payloads → find_stale → stale? notify critical
+##           → tor_chain_down? notify tor.chain_down (CI, direct HTTPS) → exit 0|1.
+##           S3-ошибка/конфиг-ошибка → IMP:10 + exit 1 (тихий отказ запрещён).
 ## @io       ⇥ argv: list | None (--stale-hours/--dry-run), env: dict | None (DI),
 ##              client_factory: Callable | None (DI — FakeS3 вместо boto3),
-##              notify_fn: Callable | None (DI — перехват notify_event)
+##              notify_fn: Callable | None (DI — перехват heartbeat.stale),
+##              tor_notify_fn: Callable | None (DI — перехват tor.chain_down, 003 A3)
 ##           → ⎋ int (0 = ok, 1 = S3/конфиг-ошибка)
 ## @complexity O(N) — N объектов
 ## @invariants
 ##   - stale-ноды → notify_event(Notification(critical, event="heartbeat.stale"), proxy_url=None)
+##   - tor_chain_down в payload → notify_event(critical, event="tor.chain_down") ДАЖЕ при
+##     свежем heartbeat (003 A3: нода жива, Tor мёртв — out-of-band канарейка)
 ##   - dry-run: план без уведомлений; exit 0
 ##   - S3-ошибка → IMP:10 + exit 1 (heartbeat-reader не может молчать)
 ##   - DI (167 D4): env=None → os.environ; client_factory=None → build_s3_client(env)
@@ -230,6 +301,7 @@ def main(
     env: dict[str, str] | None = None,
     client_factory: Callable[[], tuple[object, str]] | None = None,
     notify_fn: Callable[..., bool] | None = None,
+    tor_notify_fn: Callable[..., bool] | None = None,
 ) -> int:
     """Run one heartbeat-check pass. Returns exit code (0 ok / 1 S3/config error)."""
     parser = argparse.ArgumentParser(description="Heartbeat reader: S3 list + staleness → Telegram (DevPlan 003 A2)")
@@ -250,26 +322,39 @@ def main(
             client, bucket = client_factory()
         else:
             client, bucket = build_s3_client(env)
+    # ruff: ignore[BLE001] — top-level CLI handler: S3-ошибка/конфиг → честный exit 1 (тихий отказ запрещён)
+    except Exception as exc:  # noqa: EXC — top-level CLI handler (heartbeat_check main)
+        logger.error("[IMP:10][heartbeat_check] S3 FAIL during client build: %s", exc)
+        return 1
+
+    try:
         nodes = list_heartbeats(client, bucket, prefix)
     # ruff: ignore[BLE001] — top-level CLI handler: S3-ошибка/конфиг → честный exit 1 (тихий отказ запрещён)
     except Exception as exc:  # noqa: EXC — top-level CLI handler (heartbeat_check main)
         logger.error("[IMP:10][heartbeat_check] S3 FAIL during heartbeat check: %s", exc)
         return 1
+    # best-effort: per-node ошибки уже WARN-обработаны внутри _fetch_payloads
+    payloads = _fetch_payloads(client, bucket, prefix, nodes)
 
     stale = find_stale(nodes, args.stale_hours)
-    if not stale:
-        logger.info("[IMP:9][heartbeat_check] All nodes fresh — no notification")
+    tor_down = [n for n in sorted(payloads) if payloads[n].get("tor_chain_down") is True]
+    if not stale and not tor_down:
+        logger.info("[IMP:9][heartbeat_check] All nodes fresh, no tor-chain alerts")
         return 0
     if args.dry_run:
         for node, age in stale:
             logger.info("[IMP:8][heartbeat_check][dry-run] WOULD notify: node=%s stale=%.1fh", node, age)
-        logger.info("[IMP:7][heartbeat_check][dry-run] %d stale node(s) — no mutation", len(stale))
+        for node in tor_down:
+            logger.info("[IMP:8][heartbeat_check][dry-run] WOULD notify tor.chain_down: node=%s", node)
+        logger.info(
+            "[IMP:7][heartbeat_check][dry-run] %d stale + %d tor-down node(s) — no mutation", len(stale), len(tor_down)
+        )
         return 0
 
     details = [f"{node}: stale {age:.1f}h (last heartbeat >{args.stale_hours:.0f}h ago)" for node, age in stale]
-    if notify_fn is not None:
+    if stale and notify_fn is not None:
         notify_fn(details)
-    else:
+    elif stale:
         from core.internal.shared.notifications import Notification, notify_event  # лениво (stdlib канон)
 
         notify_event(
@@ -284,7 +369,33 @@ def main(
             ),
             direct_https=True,  # CI: прямой HTTPS (TRAP[BUG] 141 — direct HTTPS только вне ноды)
         )
-    logger.info("[IMP:9][heartbeat_check] Notified critical for %d stale node(s)", len(stale))
+    tor_details = [f"{n}: tor-chain-state red (canary, 003 A3)" for n in tor_down]
+    if tor_down and tor_notify_fn is not None:
+        tor_notify_fn(tor_details)
+    elif tor_down:
+        from core.internal.shared.notifications import Notification, notify_event  # лениво (stdlib канон)
+
+        notify_event(
+            Notification(
+                severity="critical",
+                context="heartbeat",
+                event="tor.chain_down",
+                message=(
+                    f"Tor→Privoxy→Telegram chain DOWN on {len(tor_down)} node(s): "
+                    + ", ".join(tor_down)
+                    + " — нода жива (heartbeat fresh), но out-of-band Telegram-доставка мертва"
+                ),
+                details=tor_details,
+                corr_id=f"tor-chain-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M')}",
+                action="Check tor proxy on the node: make check-security / tor_proxy_check.py",
+            ),
+            direct_https=True,  # CI: прямой HTTPS — нода не участвует (Tor мёртв)
+        )
+    logger.info(
+        "[IMP:9][heartbeat_check] Notified critical: %d stale node(s), %d tor-down node(s)",
+        len(stale),
+        len(tor_down),
+    )
     return 0
 
 

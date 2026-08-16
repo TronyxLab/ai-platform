@@ -415,7 +415,14 @@ def scaffold_instructions(project_dir: str, template: str, dry_run: bool = False
     ##   - dev-оверрайд канона: env AI_INSTRUCTIONS_CANON_PATH (локальное дерево вместо pin-cache/clone)
     """
     platform_root = Path(__file__).resolve().parents[3]
-    pins_path = platform_root / "core" / "internal" / "ai_instructions" / "ai-instructions-pins.yaml"
+    # ⚠️ TRAP[BUG] · 2026-08-16 · P1 · scaffold_instructions падал на ai_instructions (underscore)
+    # · Symptom: new-project/adopt-project abort (return 1) — pins.yaml не находился,
+    # ·   sync-команда получала несуществующий --config путь.
+    # · Root: путь каталога писался ai_instructions (имя Python-модуля), а каталог в
+    # ·   репозитории — core/internal/ai-instructions (kebab-case, DevPlan 001 T4.x).
+    # · Fix: путь каталога — ai-instructions (дефис); имя модуля в -m остаётся ai_instructions.
+    # · Prevention: pytest-тест scaffold_instructions_path (tests/unit/test_project_scaffolder.py).
+    pins_path = platform_root / "core" / "internal" / "ai-instructions" / "ai-instructions-pins.yaml"
 
     if dry_run:
         logger.info("[IMP:7][scaffold][instructions] [DRY-RUN] Would sync instructions for: %s", project_dir)

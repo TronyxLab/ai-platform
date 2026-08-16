@@ -256,3 +256,39 @@ def test_dry_run_scaffold_no_files(tmp_path: pathlib.Path, monkeypatch, caplog) 
     logger.info("[IMP:9][test][scaffolder] test_dry_run_scaffold_no_files")
     copy_template(str(template_dir), str(project_dir), dry_run=True)
     assert not project_dir.exists()
+
+
+@ldd_trajectory
+def test_scaffold_instructions_pins_path(tmp_path: pathlib.Path, monkeypatch, caplog) -> None:
+    """R5 regression: scaffold_instructions резолвит pins по kebab-case ai-instructions.
+
+    ## @purpose — Поймать регрессию пути ai_instructions (underscore) → ai-instructions
+    ##            (дефис): sync-команда получала несуществующий --config, new-project
+    ##            обрывался (return 1). Проверяет фактический путь в --config-аргументе.
+    ## @io — ⇥ tmp_path, monkeypatch → ⎋ assert (path exists + имя каталога — дефис)
+    ## @usecases — QA 001: project_scaffolder.py:418 (TRAP[BUG] 2026-08-16).
+    """
+    import subprocess as _sp
+
+    from core.internal.scaffold.project_scaffolder import scaffold_instructions
+
+    captured: dict[str, list[str]] = {}
+
+    def _fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return _sp.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("core.internal.scaffold.project_scaffolder.subprocess.run", _fake_run)
+    monkeypatch.setattr("sys.executable", ".venv/bin/python")
+
+    project_dir = tmp_path / "test-proj"
+    project_dir.mkdir()
+    logger.info("[IMP:9][test][scaffolder] test_scaffold_instructions_pins_path")
+    assert scaffold_instructions(str(project_dir), "backend") is True
+
+    cmd = captured["cmd"]
+    config_idx = cmd.index("--config") + 1
+    config_path = pathlib.Path(cmd[config_idx])
+    assert config_path.exists(), f"pins config not found: {config_path}"
+    assert config_path.parent.name == "ai-instructions", f"dir must be ai-instructions (hyphen): {config_path}"
+    assert "ai_instructions" not in str(config_path)

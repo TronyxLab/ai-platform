@@ -276,6 +276,8 @@ env_defaults:
   LOKI_PORT: 3100
   CADVISOR_PORT: 8080
   NODE_EXPORTER_PORT: 9100
+  # 003 A3: host-каталог canary Tor-цепи (bind backup-cron → heartbeat payload)
+  TOR_CHAIN_STATE_HOST_DIR: "/var/lib/platform/run"
   # ── Compose Profiles ──
   COMPOSE_PROFILES: "postgres,redis,nginx,clickhouse,backup-cron,hermes-agent,monitoring,logging,litellm,langfuse,infra-metrics,minio,status-page"
   # ── Misc ──

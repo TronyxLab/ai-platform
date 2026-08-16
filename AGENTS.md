@@ -1,6 +1,6 @@
 <!-- GREP_SUMMARY: AGENTS.md, ai-platform, invariants, deploy-model, verb-glossary, architecture -->
 
-<!-- ai-instructions:0.6.3 -->
+<!-- ai-instructions:0.7.0 -->
 # GREP_SUMMARY: AGENTS.md, ai-platform, invariants, deploy-model, verb-glossary, architecture
 # STRUCTURE: ┌make targets┐ → ◇ invariants (12 rules) → ◇ deploy-model (local→CI→context) → ⊕ verb glossary → ⎋ navigation
 # region MODULE_CONTRACT

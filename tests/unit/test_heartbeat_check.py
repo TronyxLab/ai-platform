@@ -16,6 +16,7 @@
 ## @changes  2026-08-16 | DevPlan 003 A2 — created
 # endregion MODULE_CONTRACT
 
+import json
 import logging
 import re
 from datetime import datetime, timedelta, timezone
@@ -31,10 +32,11 @@ logger = logging.getLogger(__name__)
 
 
 class FakeS3:
-    """In-memory list_objects_v2: {key: LastModified} + error injection."""
+    """In-memory list_objects_v2: {key: LastModified} + optional get_object payloads + error injection."""
 
     def __init__(self, objects: dict[str, datetime] | None = None) -> None:
         self.objects: dict[str, datetime] = objects or {}
+        self.payloads: dict[str, dict] = {}
         self.fail_with: Exception | None = None
 
     def list_objects_v2(self, **kwargs) -> dict:
@@ -45,6 +47,15 @@ class FakeS3:
             {"Key": key, "LastModified": last} for key, last in sorted(self.objects.items()) if key.startswith(prefix)
         ]
         return {"Contents": contents, "IsTruncated": False}
+
+    def get_object(self, Bucket: str | None = None, Key: str | None = None) -> dict:  # ruff: ignore[ARG002]
+        """Возвращает payload объекта (003 A3) — {"Body": BytesIO}. Отсутствует → raise."""
+        import io
+
+        if Key not in self.payloads:
+            msg = f"no payload for {Key}"
+            raise ValueError(msg)
+        return {"Body": io.BytesIO(json.dumps(self.payloads[Key]).encode("utf-8"))}
 
 
 # endregion FAKE_S3
@@ -224,6 +235,73 @@ def test_main_dry_run_no_notify(caplog) -> None:
     assert rc == 0
     assert notified == [], "dry-run: 0 уведомлений"
     logger.info("[IMP:9][test_hb_check] dry-run PASS")
+
+
+# 🧪 TRAP[TEST] · Regression · Scenario: 003 A3 — нода жива, но tor_chain_down в payload
+# · Expect: tor_notify_fn вызывается с деталями ноды ДАЖЕ при свежем heartbeat; notify_fn
+#   (stale) НЕ вызывается; exit 0
+# · Last fail: N/A (new — DevPlan 003 A3: canary читается out-of-band)
+# · Remove if: tor.chain_down-контракт меняется
+def test_main_tor_chain_down_notify_fresh_heartbeat(caplog) -> None:
+    """Свежий heartbeat + tor_chain_down=true → tor_notify_fn, exit 0, без stale-нотификации."""
+    caplog.set_level(logging.INFO)
+    stale_notified: list[list[str]] = []
+    tor_notified: list[list[str]] = []
+
+    def _factory() -> tuple[object, str]:
+        fresh = _now() - timedelta(minutes=10)
+        fake = FakeS3({"platform/backups/heartbeat/node-a/heartbeat.json": fresh})
+        fake.payloads["platform/backups/heartbeat/node-a/heartbeat.json"] = {
+            "ts": fresh.isoformat(),
+            "ok": True,
+            "node": "node-a",
+            "tor_chain_down": True,
+        }
+        return fake, "bucket"
+
+    rc = hb.main(
+        [],
+        env={"S3_PREFIX": "platform/backups"},
+        client_factory=_factory,
+        notify_fn=stale_notified.append,
+        tor_notify_fn=tor_notified.append,
+    )
+    assert rc == 0
+    assert stale_notified == [], f"stale-нотификация не должна сработать: {stale_notified}"
+    assert len(tor_notified) == 1, f"tor_notify_fn должен получить 1 вызов: {tor_notified}"
+    assert any("node-a" in d and "tor-chain-state red" in d for d in tor_notified[0]), f"got {tor_notified}"
+    logger.info("[IMP:9][test_hb_check] tor.chain_down notify PASS")
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · payload с tor_chain_down=false → тишина (003 A3)
+# · Last fail: N/A (new — DevPlan 003 A3)
+# · Remove if: canary-контракт меняется
+def test_main_tor_chain_green_no_notify(caplog) -> None:
+    """tor_chain_down=false → никаких tor-уведомлений."""
+    caplog.set_level(logging.INFO)
+    tor_notified: list[list[str]] = []
+
+    def _factory() -> tuple[object, str]:
+        fresh = _now() - timedelta(minutes=10)
+        fake = FakeS3({"platform/backups/heartbeat/node-a/heartbeat.json": fresh})
+        fake.payloads["platform/backups/heartbeat/node-a/heartbeat.json"] = {
+            "ts": fresh.isoformat(),
+            "ok": True,
+            "node": "node-a",
+            "tor_chain_down": False,
+        }
+        return fake, "bucket"
+
+    rc = hb.main(
+        [],
+        env={"S3_PREFIX": "platform/backups"},
+        client_factory=_factory,
+        notify_fn=lambda _details: None,
+        tor_notify_fn=tor_notified.append,
+    )
+    assert rc == 0
+    assert tor_notified == [], f"green canary — 0 уведомлений: {tor_notified}"
+    logger.info("[IMP:9][test_hb_check] tor green no-notify PASS")
 
 
 # 🧪 TRAP[TEST] · Regression · Scenario: main — S3-ошибка → exit 1 (heartbeat-reader не молчит)
