@@ -17,13 +17,16 @@
 ## @rationale Separate image from base skills allows overlay-based customization per context (06 §5.4)
 ## @changes 2026-08-15 | DevPlan 172 W4.6 — документированы «лишние» элементы модуля
 ##   (структура НЕ трогается — осознанное keep-решение):
-##   - overlays/ — .gitkeep-каталог для контекстных overlay-кастомизаций L1-образа
-##     (плейсхолдер, заполняется в контекстных org — см. core/internal/build/hermes-images.sh)
+##   - overlays/ — .gitkeep-каталог для контекстных overlay-кастомизаций образа
+##     (плейсхолдер, заполняется в контекстных org — см. core/internal/build/hermes_images.py)
 ##   - healthcheck_deps.py — deps-режим healthcheck.sh (DevPlan 119 D6; required PG+LiteLLM,
 ##     optional Redis) — живёт рядом с healthcheck.sh, а не в internal/: модульный код
 ##     не может импортировать core/internal (cross-layer gate #8)
-##   - .env.example / .gitignore / build/ — L1 build payload (ghcr.io hermes-agent-base,
-##     DevPlan 116 B3 D1); .env — gitignored, per-developer
+##   - .env.example / .gitignore / build/ — build payload единого образа (L1→L2 коллапс
+##     DevPlan 002: build/Dockerfile удалён, payload COPY'ится в base-стадию единого Dockerfile);
+##     .env — gitignored, per-developer
+## @changes 2026-08-16 | DevPlan 002 W3 T3.3 — L1→L2 коллапс: единый Dockerfile
+##   (build/Dockerfile + context/Dockerfile удалены), build/ — payload, а не отдельный образ
 # endregion MODULE_CONTRACT
 
 name: hermes-agent

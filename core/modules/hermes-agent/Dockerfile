@@ -1,19 +1,26 @@
-# GREP_SUMMARY: hermes-agent-base Dockerfile multi-stage validate final hermes-agent config profiles skills
+# GREP_SUMMARY: hermes-agent Dockerfile multi-stage validate base final CONTEXT-guard hermes-agent-context user-10000
+# STRUCTURE: ▶ STAGE validate (alpine: shellcheck+yq+chmod) → ▶ STAGE base (FROM L0 + build/ артефакты + monkey-patch + rsync) → ▶ STAGE final (FROM base + context/ + 04-context-init + USER 10000 + HEALTHCHECK)
 # region MODULE_CONTRACT
-## @purpose  Multi-stage build for hermes-agent-base (L1): platform base image with config, profiles, skills, init scripts.
-##           Built in tronyx161 CI and pushed to ghcr.io/tronyx161 as a PUBLIC distribution base
-##           (DevPlan 116 B3 T7, U-60, D1 — package visibility is a manual operator step).
-##           Context orgs pull it anonymously and build only their thin L2.
-## @scope    Build context: ./build/ — only platform artifacts (no orchestration files)
+## @purpose  Единый multi-stage Dockerfile для hermes-agent-context (L1→L2 коллапс, DevPlan 002):
+##           base-стадия (бывший L1) + final-стадия (бывший L2 context overlay).
+##           Строится из repo root (context = корень репозитория) — COPY-пути core/modules/hermes-agent/…
+## @scope    Build context: repo root (.) — paths relative to repo root: core/modules/hermes-agent/build/,
+##           core/modules/hermes-agent/context/. Вызывается `make hermes-build-context CONTEXT=<org>`
+##           → core.internal.build.hermes_images build-context.
 ## @invariants
 ##   - Stage validate: lightweight alpine image for pre-copy validation (shellcheck, yq, chmod)
-##   - Stage final: FROM nousresearch/hermes-agent:v2026.8.3@sha256:16788311e2fa3035456bdc1bafb8ec2b1777db64ebf020af9bb7eb73c3712c9e  # v1.0.1 digest-pin (index-digest, imagetools inspect) — upstream s6-overlay image
-##   - Hermes Agent v2026.8.3 (v0.20.0 «The Herald Release», 2026-08-03) — L0 pin (164 W1-5)
-##   - Configs in /opt/hermes/config/, templates in /opt/hermes/templates/, skills in /opt/hermes/skills/
-##   - Init scripts in /etc/cont-init.d/ for s6-overlay
+##   - Stage base: FROM nousresearch/hermes-agent:v2026.8.3@sha256:… (L0, digest-pin) + platform
+##     artifacts (config/skills/profiles/plugins) + monkey-patch #55985 + rsync (upstream Debian)
+##   - Stage final: FROM base + context config/skills + init-context.sh (04-context-init) +
+##     USER 10000:10000 (non-root, DevPlan 140 W6) + HEALTHCHECK
+##   - REQUIRED build-arg: CONTEXT — persists as runtime ENV (init-context.sh guard exits 1 if empty)
+##   - Порядок COPY: base-слои до context-слоёв (layer-cache — gha-cache переиспользует base-слои)
 ##   - NO EXPOSE — agent accessed through proxy-net (nginx reverse proxy) only
 ##   - Resource limits NOT set (AR3)
-## @rationale Multi-stage keeps final image minimal — validate stage adds shellcheck/yq/alpine only during build
+## @rationale L1 (бывш. отдельный base-образ) схлопнут в L2 (hermes-agent-context): единый образ, один
+##            Dockerfile, L1-distribution больше не публикуется. Version-машинерия (sha/version-теги,
+##            bare-tag, l1-distribution-digest) удалена. Контекстные org собирают L2 из source.
+## @changes  2026-08-16 | DevPlan 002 W1 T1.1 — создан (коллапс build/Dockerfile + context/Dockerfile)
 # endregion MODULE_CONTRACT
 # DOCREF: Hermes Agent documentation references
 #   - GitHub:          https://github.com/NousResearch/hermes-agent
@@ -36,11 +43,11 @@ FROM alpine:3.21@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d650
 RUN --mount=type=cache,target=/var/cache/apk,sharing=locked \
     apk add --no-cache shellcheck yq bash
 
-COPY config/ /tmp/config/
-COPY templates/ /tmp/templates/
-COPY skills/ /tmp/skills/
-COPY scripts/ /tmp/scripts/
-COPY plugins/ /tmp/plugins/
+COPY core/modules/hermes-agent/build/config/ /tmp/config/
+COPY core/modules/hermes-agent/build/templates/ /tmp/templates/
+COPY core/modules/hermes-agent/build/skills/ /tmp/skills/
+COPY core/modules/hermes-agent/build/scripts/ /tmp/scripts/
+COPY core/modules/hermes-agent/build/plugins/ /tmp/plugins/
 
 # Validate scripts syntax
 RUN shellcheck /tmp/scripts/*.sh || true
@@ -53,10 +60,10 @@ RUN chmod +x /tmp/scripts/*.sh
 
 # endregion STAGE: validate
 
-# region STAGE: final
+# region STAGE: base
 # v1.0.1 digest-pin (index-digest, imagetools inspect; комментарий на отдельной строке —
 # см. TRAP[BUG] в STAGE: validate)
-FROM nousresearch/hermes-agent:v2026.8.3@sha256:16788311e2fa3035456bdc1bafb8ec2b1777db64ebf020af9bb7eb73c3712c9e
+FROM nousresearch/hermes-agent:v2026.8.3@sha256:16788311e2fa3035456bdc1bafb8ec2b1777db64ebf020af9bb7eb73c3712c9e AS base
 
 # ═══════════════════════════════════════════════════════════════════════
 # 🐛 TRAP[UPSTREAM] · 2026-07-08 · CRITICAL · #55985 BasicAuthProvider NotImplementedError
@@ -82,13 +89,11 @@ RUN python3 /tmp/patch-basic-auth-provider.py && rm /tmp/patch-basic-auth-provid
 # ·   (exited 127 → unhealthy → compose up --wait fail) — init.py использует rsync для
 # ·   CONTEXT_DIR/config → /opt/hermes/config overlay (первый init на чистом volume).
 # · Root: базовый образ nousresearch/hermes-agent не содержит rsync (не входит
-# ·   в апстрим-сборку). Локальные dev-сборки и контекстные L2 работали, т.к. overlay
-# ·   доставлялся иначе; smoke на чистом L1-образе падал.
+# ·   в апстрим-сборку).
 # · Fix: install rsync via пакетный менеджер base-образа.
 # · ⚠️ UPSTREAM-DRIFT · 2026-08-09 · HI · nousresearch/hermes-agent:v2026.8.3 сменил
 # ·   базу Alpine → Debian 13 (trixie). `apk` больше НЕ доступен в final-стадии
 # ·   (`/bin/sh: 1: apk: not found`, exit 127 в CI Build Platform Agent).
-# ·   CI ранее ложно классифицировался как Docker Hub rate-limit (B38-external).
 # ·   Замена: apt-get (Debian). validate-стадия (alpine:3.21) НЕ затронута — там apk валиден.
 # · Prevention: init.py — единственный потребитель rsync в рантайме образа.
 # · Rev: если апстрим вернётся на Alpine — восстановить apk add (меньше слой).
@@ -100,13 +105,12 @@ LABEL org.tronyxlab.patches="known-issues:#55985-basic-auth-provider-patched-202
 LABEL org.tronyxlab.version="${PLATFORM_VERSION:-dev}"
 
 LABEL org.opencontainers.image.source="https://github.com/Tronyx161/ai-platform"
-LABEL org.opencontainers.image.description="Hermes Agent Base (L1) — platform base image with config, profiles, skills. Pushed to ghcr.io/tronyx161 as PUBLIC distribution base (DevPlan 116 B3 T7, D1)."
-LABEL org.opencontainers.image.name="hermes-agent-base"
-LABEL maintainer="hermes-agent-base" \
+LABEL org.opencontainers.image.description="Hermes Agent Context — единый образ (L1→L2 коллапс): base-артефакты + контекстный overlay + CONTEXT guard. Собирается из source (DevPlan 002)."
+LABEL org.opencontainers.image.name="hermes-agent-context"
+LABEL maintainer="hermes-agent-context" \
       module="hermes-agent" \
       install_type="docker"
-LABEL org.tronyxlab.role="platform-base"
-LABEL org.tronyxlab.do-not-deploy="true"
+LABEL org.tronyxlab.role="context"
 
 # Copy validated platform artifacts
 COPY --from=validate /tmp/config/ /opt/hermes/config/
@@ -121,10 +125,60 @@ COPY --from=validate /tmp/plugins/ /opt/hermes/plugins/
 # [IMP:8] Apply config defaults: ensure directory structure
 RUN mkdir -p /opt/hermes/context && chmod 755 /opt/hermes/context
 
-# [IMP:8] HEALTHCHECK: liveness via dashboard HTTP (port 9119)
+# endregion STAGE: base
+
+# region STAGE: final (context overlay)
+## @purpose     Build context overlay on top of base stage (CONTEXT guard, context skills/configs, non-root)
+FROM base
+
+# ── Labels ────────────────────────────────────────────────────────────────
+LABEL org.tronyxlab.module="hermes-agent-context" \
+      org.tronyxlab.layer="context" \
+      role="context"
+
+# ── Required build-arg: CONTEXT ───────────────────────────────────────────
+# 🧐 TRAP[DECISION] · 2026-07-09 · — · ARG CONTEXT without default enforces build-time awareness
+# · ARG CONTEXT with no default means the build will not fail if omitted, but ENV will be empty.
+# · Runtime guard via init-context.sh (04-context-init) catches empty CONTEXT at container start.
+# · Rejected: ARG CONTEXT=default (would mask missing build arg)
+# · Reason: Better to surface missing CONTEXT immediately at container start than silently use default.
+# · Rev: If Docker adds required ARG syntax in a future version, switch to `ARG --required CONTEXT`.
+ARG CONTEXT
+
+# Persist build-arg as runtime ENV so init-context.sh can read it
+# NOTE: User can override at runtime with `-e CONTEXT=prod`
+ENV CONTEXT=${CONTEXT}
+
+# ── Copy context-specific artifacts ───────────────────────────────────────
+# [IMP:8] Context config overlay (e.g., Telegram config, per-context settings)
+# These files are rsync'd over base configs by init-context.sh at container start
+COPY core/modules/hermes-agent/context/config/ /opt/hermes/context/config/
+
+# [IMP:8] Context skills overlay (per-context custom skills)
+# Placed alongside base skills, merged at container start by init-context.sh
+COPY core/modules/hermes-agent/context/skills/ /opt/hermes/context/skills/
+
+# [IMP:9] Context init script with CONTEXT guard
+# Runs after base s6 init scripts (02-platform-init, 03-register-profiles)
+COPY core/modules/hermes-agent/context/scripts/init-context.sh /etc/cont-init.d/04-context-init
+
+# ── Ensure init script is executable ──────────────────────────────────────
+RUN chmod +x /etc/cont-init.d/04-context-init
+
+# ── Non-root runtime (DevPlan 140 W6: hermes-root-500) ──
+# USER 10000:10000 — соответствует HERMES_UID/HERMES_GID в build/scripts/init.py
+# (chown-if-root страховка в init.py остаётся для base-root случая; final работает non-root)
+# ⚠️ RISK (DevPlan 140 W6 §7): s6-overlay /init (PID 1, ENTRYPOINT унаследован от upstream)
+# спроектирован для root-PID1; non-root запуск верифицируется на test-VPS ДО промоута
+# (docker inspect Config.User + dashboard 9119 + API 8642); откат = revert этого блока.
+USER 10000:10000
+
+# ── HEALTHCHECK ───────────────────────────────────────────────────────────
+# [IMP:8] Liveness via dashboard HTTP endpoint (port 9119)
+# Port 9119 non-privileged — curl as UID 10000 is permitted (no root needed)
 HEALTHCHECK --interval=15s --timeout=10s --retries=3 --start-period=20s \
     CMD curl -f http://127.0.0.1:9119/ || exit 1
 
 # CMD is inherited from upstream hermes-agent image (s6-overlay init)
-# endregion STAGE: final
+# endregion STAGE: final (context overlay)
 # DOCREF: See HERMES_DOCS.md for full documentation reference list

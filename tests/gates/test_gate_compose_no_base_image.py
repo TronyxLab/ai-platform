@@ -1,22 +1,23 @@
-# GREP_SUMMARY: gate compose no-base-image hermes-agent-base context-image platform-dev production anti-drift
-# STRUCTURE: ┌ collect compose files ┐ → ◇ exclude test/platform-dev/macos → ◇ read + scan for hermes-agent-base → ⊕ violations → ∑ fail if any
+# GREP_SUMMARY: gate compose no-base-image hermes-agent-base-nowhere context-image production anti-drift L1-collapse
+# STRUCTURE: ┌ collect compose files ┐ → ◇ read + scan for hermes-agent-base → ⊕ violations → ∑ fail if any → ◇ base.yml CONTEXT_IMAGE var → ⎋ PASS
 # region MODULE_CONTRACT
-## @purpose  Gate test: ensure hermes-agent-base (L1) is only used in platform-dev override, never in production compose files.
-##           Root docker-compose.yml must use ${CONTEXT_IMAGE:-...} variable, not a hardcoded hermes-agent image.
+## @purpose  Gate test: ensure hermes-agent-base (L1) НЕ встречается НИГДЕ (DevPlan 002 L1→L2 коллапс) —
+##           ни в production, ни в test/macos, ни в dev-оверрайдах (docker-compose.platform-dev.yml удалён).
+##           docker-compose.base.yml hermes-agent должен использовать ${CONTEXT_IMAGE:-...} variable.
 ## @scope    Static file analysis — all docker-compose*.yml files at root and core/modules/*/
 ## @invariants
-##   - Production compose files (base, root compose) MUST NOT reference hermes-agent-base image
-##   - docker-compose.platform-dev.yml MUST reference hermes-agent-base:latest (L1 dev override)
-##   - Root docker-compose.yml hermes-agent image MUST use ${CONTEXT_IMAGE:-...} variable pattern
-##   - Test (.test.yml), macOS (.macos.yml), and platform-dev files are excluded from production check
-##   - Template compose files (templates/) are excluded from both globs and thus from all checks
-## @rationale  L1 image (hermes-agent-base) is built locally and pushed to ghcr.io as DR backup. Only
-##             platform-dev override intentionally uses it. Production must use L2 (context overlay)
-##             which is the deployable image. See DevPlan §3.2 and docker-compose.platform-dev.yml TRAP[DECISION].
+##   - hermes-agent-base НЕ встречается ни в одном compose файле (L1-образ не существует)
+##   - docker-compose.platform-dev.yml удалён (T3.4) — никаких dev-оверрайдов L1
+##   - hermes-agent image MUST use ${CONTEXT_IMAGE:-...} variable pattern
+##   - Test (.test.yml) и macOS (.macos.yml) файлы сканируются тоже — hermes-agent-base banned everywhere
+## @rationale  L1 (hermes-agent-base) схлопнут в L2 (hermes-agent-context) — единый образ собирается
+##             из source. Любое упоминание hermes-agent-base = drift (L1-образ не существует,
+##             bare-tag D18 невозможен). DevPlan 002 W5 T5.6.
 ## @changes    CREATED: 2026-07-09 | TASK-5G7
+## @changes    2026-08-16 | DevPlan 002 W5 T5.6 — rewrite: «hermes-agent-base НИГДЕ» + base.yml CONTEXT_IMAGE var
+##             (test_platform_dev_has_l1_image удалён — platform-dev.yml удалён)
 # endregion MODULE_CONTRACT
 
-import fnmatch
 import logging
 import pathlib
 import re
@@ -34,19 +35,10 @@ PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 COMPOSE_GLOB_ROOT = "docker-compose*.yml"
 COMPOSE_GLOB_MODULES = "core/modules/*/docker-compose*.yml"
 
-# Exclude patterns (applied to basename via fnmatch)
-EXCLUDE_BASENAME_PATTERNS = [
-    "docker-compose.platform-dev.yml",
-    "*-platform-dev.yml",
-    "docker-compose.test.yml",
-    "docker-compose.macos.yml",
-]
-
 # Image constants
 HERMES_AGENT_BASE_IMAGE = "hermes-agent-base"
 CONTEXT_IMAGE_VAR_PATTERN = re.compile(r"\$\{CONTEXT_IMAGE(?::-|:\?)[^}]+\}")
-PLATFORM_DEV_PATH = "docker-compose.platform-dev.yml"
-ROOT_COMPOSE_PATH = "docker-compose.yml"
+HERMES_AGENT_BASE_YML = "core/modules/hermes-agent/docker-compose.base.yml"
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -68,22 +60,6 @@ def _collect_compose_files() -> list[pathlib.Path]:
     return files
 
 
-def _is_excluded(filepath: pathlib.Path) -> bool:
-    """Check if a compose file should be excluded from production checks.
-
-    ## @purpose — Apply EXCLUDE_BASENAME_PATTERNS to basename.
-    ## @io — ⇥ filepath: path → ⎋ bool: True if basename matches any exclude pattern
-    ## @complexity — O(P) where P = number of exclude patterns
-    """
-    basename = filepath.name
-    for pattern in EXCLUDE_BASENAME_PATTERNS:
-        if fnmatch.fnmatch(basename, pattern):
-            logger.debug("[IMP:5][_is_excluded]  EXCLUDED %s (matches %s)", filepath.name, pattern)
-            return True
-    logger.debug("[IMP:5][_is_excluded]  INCLUDED %s", filepath.name)
-    return False
-
-
 def _read_file(path: pathlib.Path) -> str:
     """Read file content.
 
@@ -96,52 +72,44 @@ def _read_file(path: pathlib.Path) -> str:
     return content
 
 
-# ── Test 1: No hermes-agent-base in production compose files ──────────────────
+# ── Test 1: hermes-agent-base banned EVERYWHERE (L1 коллапс) ──────────────────
 
 
-# region test_no_base_image_in_production_compose
+# region test_no_base_image_anywhere
 @pytest.mark.gate
 @ldd_trajectory
 
 # 🧪 TRAP[TEST] · 2026-07-18 · REGRESSION · Gate invariant — first line of defense against drift in platform contracts
 # · Last fail: N/A (preventive)
 # · Remove if: entire gate category is superseded by a newer mechanism
-def test_no_base_image_in_production_compose(caplog) -> None:
-    """Ensure no production compose file references hermes-agent-base (L1) image.
+# 🧪 TRAP[TEST] · 2026-08-16 · DevPlan 002 W5 T5.6 — hermes-agent-base banned EVERYWHERE (L1 коллапс)
+def test_no_base_image_anywhere(caplog) -> None:
+    """Ensure NO compose file references hermes-agent-base (L1) — image doesn't exist after collapse.
 
-    ## @purpose  Gate: ensure L1 image (hermes-agent-base) is only in platform-dev,
-    ##            never in production compose files. FAIL code: BASE_IMAGE_IN_PRODUCTION.
+    ## @purpose  Gate: L1 (hermes-agent-base) удалён (DevPlan 002) — любой compose-файл,
+    ##            упоминающий его, — drift. FAIL code: BASE_IMAGE_FOUND.
     ## @io       ⎋ None — assert side-effect (pytest.fail on violations)
     ## @complexity O(N×L) where N = compose files, L = lines per file
-    FAIL code: BASE_IMAGE_IN_PRODUCTION
+    FAIL code: BASE_IMAGE_FOUND
     """
-    # [IMP:9][test_no_base_image_in_production_compose] Start — collecting production compose files
-    logger.info("[IMP:9][test_no_base_image_in_production_compose] Collecting compose files...")
+    logger.info("[IMP:9][test_no_base_image_anywhere] Collecting compose files...")
 
     all_files = _collect_compose_files()
-
-    # Filter to production files only (exclude test, macos, platform-dev)
-    production_files = [f for f in all_files if not _is_excluded(f)]
-    logger.info(
-        "[IMP:8][test_no_base_image_in_production_compose] Production files: %d (excluded %d)",
-        len(production_files),
-        len(all_files) - len(production_files),
-    )
-
     violations: list[tuple[str, int]] = []  # (relative path, line number)
 
-    for fp in production_files:
+    for fp in all_files:
         rel_path = str(fp.relative_to(PROJECT_ROOT))
         content = _read_file(fp)
         for line_no, line in enumerate(content.splitlines(), 1):
-            # Skip pure comment lines (YAML # comments) — only flag actual image references
             stripped = line.strip()
-            if not stripped or stripped.startswith("#"):
+            if not stripped:
                 continue
+            # Сканируем ВСЕ строки (включая комментарии) — L1-образ не существует,
+            # любое упоминание — антипаттерн (drift-детектор, не только image: директивы).
             if HERMES_AGENT_BASE_IMAGE in stripped:
                 violations.append((rel_path, line_no))
                 logger.warning(
-                    "[IMP:8][test_no_base_image_in_production_compose] VIOLATION: %s:%d — %s",
+                    "[IMP:8][test_no_base_image_anywhere] VIOLATION: %s:%d — %s",
                     rel_path,
                     line_no,
                     stripped,
@@ -150,87 +118,26 @@ def test_no_base_image_in_production_compose(caplog) -> None:
     if violations:
         msg_lines = [
             (
-                f"BASE_IMAGE_IN_PRODUCTION: Found {len(violations)} production compose file(s) "
-                f"referencing '{HERMES_AGENT_BASE_IMAGE}':"
+                f"BASE_IMAGE_FOUND: L1 '{HERMES_AGENT_BASE_IMAGE}' встречается в {len(violations)} compose-файлах "
+                f"(DevPlan 002: L1 схлопнут в L2 — образ не существует):"
             )
         ]
         for path_, line_no in violations:
             msg_lines.append(f"  • {path_}:{line_no}")
         msg = "\n".join(msg_lines)
-        logger.error("[IMP:10][test_no_base_image_in_production_compose] %s", msg)
+        logger.error("[IMP:10][test_no_base_image_anywhere] %s", msg)
         pytest.fail(msg)
 
     logger.info(
-        "[IMP:10][test_no_base_image_in_production_compose] PASS — no violations found in %d production files",
-        len(production_files),
+        "[IMP:10][test_no_base_image_anywhere] PASS — hermes-agent-base отсутствует во всех %d compose-файлах",
+        len(all_files),
     )
 
 
-# endregion test_no_base_image_in_production_compose
+# endregion test_no_base_image_anywhere
 
 
-# ── Test 2: Platform-dev has L1 image ────────────────────────────────────────
-
-
-# region test_platform_dev_has_l1_image
-@pytest.mark.gate
-@ldd_trajectory
-def test_platform_dev_has_l1_image(caplog) -> None:
-    """Ensure docker-compose.platform-dev.yml explicitly references hermes-agent-base.
-
-    ## @purpose  Gate: confirm platform-dev.yml references hermes-agent-base as L1 image.
-    ##            FAIL code: PLATFORM_DEV_MISSING_L1.
-    ## @io       ⎋ None — assert side-effect (pytest.fail on missing L1 reference)
-    ## @complexity O(F) where F = file size in bytes
-    FAIL code: PLATFORM_DEV_MISSING_L1
-    """
-    logger.info("[IMP:9][test_platform_dev_has_l1_image] Checking platform dev compose...")
-
-    platform_dev_path = PROJECT_ROOT / PLATFORM_DEV_PATH
-
-    if not platform_dev_path.exists():
-        msg = f"PLATFORM_DEV_MISSING_L1: {PLATFORM_DEV_PATH} not found"
-        logger.error("[IMP:10][test_platform_dev_has_l1_image] %s", msg)
-        pytest.fail(msg)
-
-    content = _read_file(platform_dev_path)
-
-    # Check that hermes-agent-base appears in the file
-    if HERMES_AGENT_BASE_IMAGE not in content:
-        msg = (
-            f"PLATFORM_DEV_MISSING_L1: {PLATFORM_DEV_PATH} does not reference "
-            f"'{HERMES_AGENT_BASE_IMAGE}' — expected L1 image for platform dev"
-        )
-        logger.error("[IMP:10][test_platform_dev_has_l1_image] %s", msg)
-        pytest.fail(msg)
-
-    # Verify the image: line explicitly uses hermes-agent-base (not just in comments)
-    # Look for: image: hermes-agent-base:latest or image: hermes-agent-base
-    image_pattern = re.compile(
-        r"image:\s*" + re.escape(HERMES_AGENT_BASE_IMAGE) + r"(:\S+)?$",
-        re.MULTILINE,
-    )
-    if not image_pattern.search(content):
-        # It might be in a comment-only context; log as warning but don't fail
-        logger.warning(
-            "[IMP:8][test_platform_dev_has_l1_image] '%s' found in %s but not on an 'image:' directive line",
-            HERMES_AGENT_BASE_IMAGE,
-            PLATFORM_DEV_PATH,
-        )
-    else:
-        logger.info(
-            "[IMP:9][test_platform_dev_has_l1_image] '%s' correctly set as image in %s",
-            HERMES_AGENT_BASE_IMAGE,
-            PLATFORM_DEV_PATH,
-        )
-
-    logger.info("[IMP:10][test_platform_dev_has_l1_image] PASS — platform dev has L1 image")
-
-
-# endregion test_platform_dev_has_l1_image
-
-
-# ── Test 3: Root compose uses CONTEXT_IMAGE var ─────────────────────────────
+# ── Test 2: Root compose uses CONTEXT_IMAGE var ─────────────────────────────
 
 
 # region test_root_compose_uses_context_image_var
@@ -238,7 +145,6 @@ def test_platform_dev_has_l1_image(caplog) -> None:
 # (root docker-compose.yml include:-based, образ hermes-agent определён в base.yml с
 # CONTEXT_IMAGE var); тест адаптирован test_root_compose_uses_context_image_var ниже.
 # Rev-условие снято: возврат к inline-сервисам в root compose запрещён инвариантом include-канона.
-HERMES_AGENT_BASE_YML = "core/modules/hermes-agent/docker-compose.base.yml"
 
 
 @pytest.mark.gate
@@ -265,14 +171,11 @@ def test_root_compose_uses_context_image_var(caplog) -> None:
 
     content = _read_file(base_yml_path)
 
-    # Find the hermes-agent service image line
-    # Look for: image: ${CONTEXT_IMAGE:-...}
     lines = content.splitlines()
     found_context_var = False
     found_hardcoded = False
     hardcoded_line = None
 
-    # Scan for image: line in hermes-agent services section
     for i, line in enumerate(lines, 1):
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):

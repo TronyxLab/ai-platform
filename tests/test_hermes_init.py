@@ -1,34 +1,37 @@
-# GREP_SUMMARY: hermes-init test L1 L2 docker build run CONTEXT guard init-script hermes-agent-base hermes-agent-context
+# GREP_SUMMARY: hermes-init test единый образ docker build run CONTEXT guard init-script hermes-agent-context user-10000 L1-collapse
 # STRUCTURE: ⚡ [image_inspect] → ◇ exists? → skip:build → ▶ [docker build] → ⊕ [IMP:9] image built → ▶ [docker run] → ◇ guard CONTEXT? → ⊕ [IMP:9] guard_msg → ⎋ verify
 # region MODULE_CONTRACT
-## @purpose — Unit tests for Hermes Agent init scripts: L1 (hermes-agent-base) starts without CONTEXT,
-##            L2 (hermes-agent-context) guard script prints FATAL and exits 1 when CONTEXT is empty,
-##            L2 with CONTEXT starts successfully.
+## @purpose — Unit tests for Hermes Agent init scripts на ЕДИНОМ образе (L1→L2 коллапс DevPlan 002):
+##            hermes-agent-context guard script prints FATAL and exits 1 when CONTEXT is empty,
+##            with CONTEXT starts successfully; USER 10000 non-root runtime.
 ## @scope — Integration tests requiring Docker daemon (pytest.mark.requires_docker).
-##          Tests build/verify Docker images locally, never push to registry.
+##          Tests build/verify the единый Docker image locally, never push to registry.
 ## @invariants
 ##   - docker CLI must be available for any test to execute
-##   - Images are built only once (skip if already present via docker image inspect)
+##   - Image built only once (skip if already present via docker image inspect)
 ##   - All containers are cleaned up after each test (docker rm -f in finally — even on failure)
 ##   - Tests are atomic and independent (each test uses unique container names)
 ##   - tmp_path fixture used for any temporary files (no hardcoded paths)
-##   - L1 image (hermes-agent-base) has no CONTEXT guard
-##   - L2 image (hermes-agent-context) has CONTEXT guard in init-context.sh
+##   - Единый образ (hermes-agent-context) ВСЕГДА имеет CONTEXT guard в init-context.sh
+##   - USER 10000:10000 non-root runtime (docker inspect Config.User)
 ##   - s6-overlay does NOT propagate cont-init.d exit codes to container exit code
 ##     (container exits 0 even if cont-init.d script fails)
+##   - Контракт «L1 без guard / L2 с guard» УДАЛЁН (DevPlan 002): разницы больше нет —
+##     единый образ всегда с guard (final-стадия)
 ## @requires
 ##   - Docker Desktop: ≥4GB RAM allocated (Settings → Resources → Memory).
 ##     macOS Apple Silicon: amd64 image runs under QEMU (+30-50% memory overhead).
 ##     Test containers are limited to 1G each via --memory flag (matches production limit).
-## @rationale — Validates the L1/L2 init script behavior per Brief_2.md §4 Phase 0, step 0.5.
-##              Ensures the CONTEXT guard prevents silent misconfiguration of L2 containers.
-##              Acceptance criteria AC-0.7: Unit tests init-скриптов проходят (3 passed).
+## @rationale — DevPlan 002 W5 T5.10 (CRITICAL): полный rewrite под единый Dockerfile.
+##              _L1_DOCKERFILE/_L2_DOCKERFILE удалены; guard-поведение проверяется на
+##              едином образе (guard есть + USER 10000).
 ## @changes — CREATED: 2026-07-09 | TASK-0.5: Unit tests for L1/L2 init scripts
 ## @changes — 2026-08-03 | DevPlan 123 T5: container creation/verify wrapped in try/finally —
 ##            _cleanup_container() guarantees removal on ANY outcome (false-lead #10, 503 on /health)
 ## @changes — 2026-08-06 | DevPlan 140 W5 (W12-T13): detached контейнеры создаются с меткой
 ##            ai-platform.test=true (_run_container_detached) — label-first sweep session.py;
 ##            name-fallback в session.py удалён (label-only).
+## @changes — 2026-08-16 | DevPlan 002 W5 T5.10 — rewrite: единый Dockerfile, guard-поведение единого образа
 # endregion MODULE_CONTRACT
 
 import itertools
@@ -68,13 +71,11 @@ def _container_name(prefix: str) -> str:
 
 # ── Paths ───────────────────────────────────────────────────────────────────
 _PROJECT_ROOT: pathlib.Path = pathlib.Path(__file__).resolve().parent.parent
-_L1_BUILD_DIR: pathlib.Path = _PROJECT_ROOT / "core" / "modules" / "hermes-agent" / "build"
-_L1_DOCKERFILE: pathlib.Path = _L1_BUILD_DIR / "Dockerfile"
-_L2_DOCKERFILE: pathlib.Path = _PROJECT_ROOT / "core" / "modules" / "hermes-agent" / "context" / "Dockerfile"
+# DevPlan 002 W5 T5.10: единый Dockerfile (build/Dockerfile + context/Dockerfile удалены)
+_UNIFIED_DOCKERFILE: pathlib.Path = _PROJECT_ROOT / "core" / "modules" / "hermes-agent" / "Dockerfile"
 
 # ── Image tags ──────────────────────────────────────────────────────────────
-_L1_TAG: str = "hermes-agent-base:latest"
-_L2_TAG: str = "hermes-agent-context:latest"
+_IMAGE_TAG: str = "hermes-agent-context:latest"
 
 
 # region HELPERS
@@ -97,7 +98,7 @@ def _cleanup_container(container_name: str) -> None:
     """Best-effort removal of a test container — never masks the test's original error.
 
     ## @purpose — DevPlan 123 T5 (false-lead #10): guarantee removal of exited
-    ##            hermes-test-l1/l2-* containers even when a test fails mid-way.
+    ##            hermes-test-* containers even when a test fails mid-way.
     ##            Called from the finally block of every hermes-init test; a leftover
     ##            exited container causes 503 on the status-page /health endpoint.
     ## @io — ⇥ container_name: str → ⎋ None (side-effect: docker rm -f)
@@ -130,42 +131,18 @@ def _print_docker_imp_logs(output: str) -> None:
                 logger.info("[IMP:7][hermes] MALFORMED IMP tag: %s", line.strip())
 
 
-def _build_l1() -> None:
-    """Build L1 (hermes-agent-base) image if not already present.
+def _build_image() -> None:
+    """Build the единый hermes-agent-context image if not already present.
 
     ## @purpose — Idempotent build: only builds if image missing from local cache.
+    ##            Builds with CONTEXT=test baked in as ENV (build-arg).
     ## @io — ⎛ None (side-effect: docker build, may pytest.fail on build error)
     ## @complexity — O(B) where B = Docker build time
     """
-    if _image_exists(_L1_TAG):
-        logger.info("[IMP:7][_build_l1] L1 image already exists — skipping build")
+    if _image_exists(_IMAGE_TAG):
+        logger.info("[IMP:7][_build_image] Image already exists — skipping build")
         return
-    logger.info("[IMP:7][_build_l1] Building L1 image...")
-    result = subprocess.run(
-        ["docker", "build", "-t", "hermes-agent-base", "-f", str(_L1_DOCKERFILE), str(_L1_BUILD_DIR)],
-        capture_output=True,
-        text=True,
-        timeout=300,
-        check=False,
-    )
-    _print_docker_imp_logs(result.stderr)
-    _print_docker_imp_logs(result.stdout)
-    assert result.returncode == 0, f"L1 build failed:\n{result.stderr[-1000:]}"
-    logger.info("[IMP:9][_build_l1] L1 image built successfully")
-
-
-def _build_l2() -> None:
-    """Build L2 (hermes-agent-context) image if not already present.
-
-    ## @purpose — Idempotent build: only builds if image missing from local cache.
-    ##            Builds with CONTEXT=test baked in as ENV.
-    ## @io — ⎛ None (side-effect: docker build, may pytest.fail on build error)
-    ## @complexity — O(B) where B = Docker build time
-    """
-    if _image_exists(_L2_TAG):
-        logger.info("[IMP:7][_build_l2] L2 image already exists — skipping build")
-        return
-    logger.info("[IMP:7][_build_l2] Building L2 image...")
+    logger.info("[IMP:7][_build_image] Building единый hermes-agent-context image...")
     result = subprocess.run(
         [
             "docker",
@@ -175,7 +152,7 @@ def _build_l2() -> None:
             "--build-arg",
             "CONTEXT=test",
             "-f",
-            str(_L2_DOCKERFILE),
+            str(_UNIFIED_DOCKERFILE),
             str(_PROJECT_ROOT),
         ],
         capture_output=True,
@@ -185,8 +162,8 @@ def _build_l2() -> None:
     )
     _print_docker_imp_logs(result.stderr)
     _print_docker_imp_logs(result.stdout)
-    assert result.returncode == 0, f"L2 build failed:\n{result.stderr[-1000:]}"
-    logger.info("[IMP:9][_build_l2] L2 image built successfully")
+    assert result.returncode == 0, f"Единый hermes build failed:\n{result.stderr[-1000:]}"
+    logger.info("[IMP:9][_build_image] Единый образ built successfully")
 
 
 def _docker_skip_if_unavailable() -> None:
@@ -292,109 +269,21 @@ def _stop_and_verify(container_name: str) -> tuple[int, bool]:
 # region TESTS
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Test 1: L1 with empty CONTEXT → OK
+# Test 1: единый образ без CONTEXT → guard FATAL message printed
 # ══════════════════════════════════════════════════════════════════════════════
 
-# region FUNC_test_l1_without_context_ok
-## @purpose — Verify that L1 (hermes-agent-base) does NOT have a CONTEXT guard
-##            and starts normally even with CONTEXT="" (empty).
-## @io — ⇥ caplog, tmp_path → ⎋ None (asserts container starts with exit code 0)
-## @complexity — O(B + T) where B = build time (if image missing), T = wait time (5s)
-## @invariants
-##   - L1 image is built only if not already present
-##   - Container exit code after stop must be 0 (container ran normally)
-##   - tmp_path is available for any temp files (not used by this test)
-
-
-@pytest.mark.requires_docker
-@ldd_trajectory
-def test_l1_without_context_ok(caplog: pytest.LogCaptureFixture, tmp_path: pathlib.Path) -> None:
-    """
-    L1 image with empty CONTEXT env → container starts successfully.
-
-    # ⚠️ STRUCTURE:
-    #   ▶ [build L1 if missing]       → ⊕ [IMP:9] L1 ready
-    #   ▶ docker run -e CONTEXT=      → ◇ container_running?
-    #     ├── yes → ⊕ [IMP:9] running → stop → ◇ exit_code=0? → ⊕ pass
-    #     └── no  → ⚡ fail
-    """
-    # region BLOCK_Setup
-    _docker_skip_if_unavailable()
-    logger.info("[IMP:7][test_l1_without_context_ok] tmp_path=%s", tmp_path)
-    # endregion
-
-    # region BLOCK_Build
-    _build_l1()
-    # endregion
-
-    # region BLOCK_Run
-    container_name = _container_name("hermes-test-l1")
-    try:
-        logger.info(
-            "[IMP:7][test_l1_without_context_ok] Starting L1 container '%s' with CONTEXT='' ...", container_name
-        )
-        _run_container_detached(_L1_TAG, env_vars={"CONTEXT": ""}, name=container_name)
-        logger.info("[IMP:9][test_l1_without_context_ok] Container '%s' created", container_name)
-        # endregion
-
-        # region BLOCK_WaitAndVerify
-        # Poll docker ps until container appears (max 30s, interval 2s)
-        container_ready = False
-        for _attempt in range(15):  # 15 × 2s = 30s
-            ps_result = subprocess.run(
-                ["docker", "ps", "--filter", f"name={container_name}", "--format", "{{.Names}}"],
-                capture_output=True,
-                text=True,
-                timeout=15,
-                check=False,
-            )
-            if container_name in ps_result.stdout:
-                container_ready = True
-                break
-            time.sleep(2)
-        assert container_ready, f"Container '{container_name}' not running after 30s — init script may have failed"
-        logger.info("[IMP:9][test_l1_without_context_ok] Container is running — L1 init passed")
-        # endregion
-
-        # region BLOCK_StopAndAssert
-        exit_code, oom_killed = _stop_and_verify(container_name)
-        logger.info("[IMP:9][test_l1_without_context_ok] Container exit code: %d, OOMKilled=%s", exit_code, oom_killed)
-        # ⚠️ TRAP[BUG] · 2026-07-27 · exit 137 + OOM=false tolerated — docker stop timeout, not OOM
-        if exit_code == 137 and not oom_killed:
-            logger.info("[IMP:9][test_l1_without_context_ok] Exit 137 accepted: container ran OK, shutdown timed out")
-        else:
-            assert exit_code == 0, (
-                f"Expected exit code 0, got {exit_code}"
-                f"{' (137 + OOM=true — insufficient Docker memory)' if exit_code == 137 and oom_killed else ''}"
-            )
-        # endregion
-    finally:
-        # region BLOCK_Cleanup
-        _cleanup_container(container_name)
-        logger.info("[IMP:9][test_l1_without_context_ok] L1 container cleanup complete")
-        # endregion
-
-
-# endregion FUNC_test_l1_without_context_ok
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# Test 2: L2 without CONTEXT → guard FATAL message printed
-# ══════════════════════════════════════════════════════════════════════════════
-
-# region FUNC_test_l2_without_context_exit1
-## @purpose — Verify that L2 (hermes-agent-context) guard script (init-context.sh)
+# region FUNC_test_without_context_exit1
+## @purpose — Verify that единый образ (hermes-agent-context) guard script (init-context.sh)
 ##            exits 1 and prints [IMP:10][CONTEXT_INIT][FATAL] when CONTEXT env is empty at runtime.
 ##            NOTE: s6-overlay does NOT propagate cont-init.d exit codes to container exit code,
 ##            so we verify the guard message rather than exit code 1.
 ## @io — ⇥ caplog, tmp_path → ⎋ None (asserts guard FATAL message in container output)
 ## @complexity — O(B + T) where B = build time (if image missing), T = container run time
 ## @invariants
-##   - L2 image is built only if not already present
+##   - Image is built only if not already present
 ##   - Guard script exits 1 (visible in s6 cont-init.d log), but s6 continues startup
 ##   - Container exit code is 0 (s6 service supervisor exits cleanly after stop)
 ##   - Guard FATAL message [IMP:10][CONTEXT_INIT][FATAL] MUST appear in stdout
-##   - L1 init warning "No CONTEXT set — running base-only mode" MAY appear
 # 🧐 TRAP[DECISION] · 2026-07-09 · — · s6-overlay absorbs cont-init.d exit code 1
 # · Rejected: Expect container exit code 1 when init script exits 1
 # · Reason: s6-overlay does NOT propagate cont-init.d script exit codes to the
@@ -408,36 +297,36 @@ def test_l1_without_context_ok(caplog: pytest.LogCaptureFixture, tmp_path: pathl
 
 @pytest.mark.requires_docker
 @ldd_trajectory
-def test_l2_without_context_exit1(caplog: pytest.LogCaptureFixture, tmp_path: pathlib.Path) -> None:
+def test_without_context_exit1(caplog: pytest.LogCaptureFixture, tmp_path: pathlib.Path) -> None:
     """
-    L2 image without CONTEXT → guard script prints FATAL message.
+    Единый образ without CONTEXT → guard script prints FATAL message.
 
     # ⚠️ STRUCTURE:
-    #   ▶ [build L2 if missing]         → ⊕ [IMP:9] L2 ready
+    #   ▶ [build if missing]           → ⊕ [IMP:9] ready
     #   ▶ docker run --rm -e CONTEXT=   → ◇ FATAL_msg? → ⊕ [IMP:9] guard fired → ⎋ pass
     #       (s6 absorbs exit code 1)                        ⚡ no FATAL_msg → ⎋ fail
     """
     # region BLOCK_Setup
     _docker_skip_if_unavailable()
-    logger.info("[IMP:7][test_l2_without_context_exit1] tmp_path=%s", tmp_path)
+    logger.info("[IMP:7][test_without_context_exit1] tmp_path=%s", tmp_path)
     # endregion
 
     # region BLOCK_Build
-    _build_l2()
+    _build_image()
     # endregion
 
     # region BLOCK_RunGuardTest
-    # The L2 image is built with CONTEXT=test baked in as ENV.
+    # The image is built with CONTEXT=test baked in as ENV.
     # We pass -e CONTEXT="" at runtime to override the baked-in value and trigger the guard.
     # s6-overlay will NOT propagate the cont-init.d exit code 1 to the container exit code,
     # so we verify the guard FATAL message appears in stdout instead.
     # Container is named (--rm still auto-removes on exit) so finally can force-remove
     # a leaked container if `docker run` times out mid-startup (would 503 status-page /health).
-    container_name = _container_name("hermes-test-l2-guard")
+    container_name = _container_name("hermes-test-guard")
     try:
-        logger.info("[IMP:7][test_l2_without_context_exit1] Running L2 container with empty CONTEXT...")
+        logger.info("[IMP:7][test_without_context_exit1] Running container with empty CONTEXT...")
         run_result = subprocess.run(
-            ["docker", "run", "--rm", "--name", container_name, "--memory", "1g", "-e", "CONTEXT=", _L2_TAG],
+            ["docker", "run", "--rm", "--name", container_name, "--memory", "1g", "-e", "CONTEXT=", _IMAGE_TAG],
             capture_output=True,
             text=True,
             timeout=60,
@@ -446,7 +335,7 @@ def test_l2_without_context_exit1(caplog: pytest.LogCaptureFixture, tmp_path: pa
         _print_docker_imp_logs(run_result.stdout)
         _print_docker_imp_logs(run_result.stderr)
         logger.info(
-            "[IMP:9][test_l2_without_context_exit1] Container exit code: %d (s6 absorbs init script exit)",
+            "[IMP:9][test_without_context_exit1] Container exit code: %d (s6 absorbs init script exit)",
             run_result.returncode,
         )
         # endregion
@@ -461,62 +350,60 @@ def test_l2_without_context_exit1(caplog: pytest.LogCaptureFixture, tmp_path: pa
             "Expected guard FATAL message '[IMP:10][CONTEXT_INIT][FATAL]' "
             "in container output — guard script did not trigger"
         )
-        logger.info("[IMP:9][test_l2_without_context_exit1] ✅ Guard FATAL message confirmed in stdout")
+        logger.info("[IMP:9][test_without_context_exit1] ✅ Guard FATAL message confirmed in stdout")
         # endregion
     finally:
         # region BLOCK_Cleanup
         _cleanup_container(container_name)
-        logger.info("[IMP:9][test_l2_without_context_exit1] L2 guard container cleanup complete")
+        logger.info("[IMP:9][test_without_context_exit1] guard container cleanup complete")
         # endregion
 
 
-# endregion FUNC_test_l2_without_context_exit1
+# endregion FUNC_test_without_context_exit1
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Test 3: L2 with CONTEXT=ci-test → OK
+# Test 2: единый образ with CONTEXT=ci-test → OK
 # ══════════════════════════════════════════════════════════════════════════════
 
-# region FUNC_test_l2_with_context_ok
-## @purpose — Verify that L2 (hermes-agent-context) runs normally when
+# region FUNC_test_with_context_ok
+## @purpose — Verify that единый образ (hermes-agent-context) runs normally when
 ##            CONTEXT env is set to a valid value at runtime.
 ## @io — ⇥ caplog, tmp_path → ⎋ None (asserts container starts with exit code 0)
 ## @complexity — O(T) where T = wait time (5s). Image is already built by previous test.
 ## @invariants
-##   - L2 image is reused from previous test (already built)
+##   - Image is reused from previous test (already built)
 ##   - Container exit code after stop must be 0 (normal operation)
 ##   - Init script logs [IMP:9][CONTEXT_INIT][GUARD] on successful validation
 
 
 @pytest.mark.requires_docker
 @ldd_trajectory
-def test_l2_with_context_ok(caplog: pytest.LogCaptureFixture, tmp_path: pathlib.Path) -> None:
+def test_with_context_ok(caplog: pytest.LogCaptureFixture, tmp_path: pathlib.Path) -> None:
     """
-    L2 image with CONTEXT=ci-test → container starts successfully.
+    Единый образ with CONTEXT=ci-test → container starts successfully.
 
     # ⚠️ STRUCTURE:
-    #   ▶ [ensure L2 image]           → ▶ docker run -e CONTEXT=ci-test
+    #   ▶ [ensure image]           → ▶ docker run -e CONTEXT=ci-test
     #   → ◇ container_running?
     #     ├── yes → ⊕ [IMP:9] running → stop → ◇ exit_code=0? → ⊕ pass
     #     └── no  → ⚡ fail
     """
     # region BLOCK_Setup
     _docker_skip_if_unavailable()
-    logger.info("[IMP:7][test_l2_with_context_ok] tmp_path=%s", tmp_path)
+    logger.info("[IMP:7][test_with_context_ok] tmp_path=%s", tmp_path)
     # endregion
 
     # region BLOCK_EnsureImage
-    _build_l2()  # idempotent — skips if already built
+    _build_image()  # idempotent — skips if already built
     # endregion
 
     # region BLOCK_Run
-    container_name = _container_name("hermes-test-l2")
+    container_name = _container_name("hermes-test-ctx")
     try:
-        logger.info(
-            "[IMP:7][test_l2_with_context_ok] Starting L2 container '%s' with CONTEXT=ci-test ...", container_name
-        )
-        _run_container_detached(_L2_TAG, env_vars={"CONTEXT": "ci-test"}, name=container_name)
-        logger.info("[IMP:9][test_l2_with_context_ok] Container '%s' created", container_name)
+        logger.info("[IMP:7][test_with_context_ok] Starting container '%s' with CONTEXT=ci-test ...", container_name)
+        _run_container_detached(_IMAGE_TAG, env_vars={"CONTEXT": "ci-test"}, name=container_name)
+        logger.info("[IMP:9][test_with_context_ok] Container '%s' created", container_name)
         # endregion
 
         # region BLOCK_WaitAndVerify
@@ -535,15 +422,15 @@ def test_l2_with_context_ok(caplog: pytest.LogCaptureFixture, tmp_path: pathlib.
                 break
             time.sleep(2)
         assert container_ready, f"Container '{container_name}' not running after 30s — CONTEXT guard may have triggered"
-        logger.info("[IMP:9][test_l2_with_context_ok] Container is running — L2 init passed")
+        logger.info("[IMP:9][test_with_context_ok] Container is running — init passed")
         # endregion
 
         # region BLOCK_StopAndAssert
         exit_code, oom_killed = _stop_and_verify(container_name)
-        logger.info("[IMP:9][test_l2_with_context_ok] Container exit code: %d, OOMKilled=%s", exit_code, oom_killed)
+        logger.info("[IMP:9][test_with_context_ok] Container exit code: %d, OOMKilled=%s", exit_code, oom_killed)
         # ⚠️ TRAP[BUG] · 2026-07-27 · exit 137 + OOM=false tolerated — docker stop timeout, not OOM
         if exit_code == 137 and not oom_killed:
-            logger.info("[IMP:9][test_l2_with_context_ok] Exit 137 accepted: container ran OK, shutdown timed out")
+            logger.info("[IMP:9][test_with_context_ok] Exit 137 accepted: container ran OK, shutdown timed out")
         else:
             assert exit_code == 0, (
                 f"Expected exit code 0, got {exit_code}"
@@ -553,11 +440,61 @@ def test_l2_with_context_ok(caplog: pytest.LogCaptureFixture, tmp_path: pathlib.
     finally:
         # region BLOCK_Cleanup
         _cleanup_container(container_name)
-        logger.info("[IMP:9][test_l2_with_context_ok] L2 container cleanup complete")
+        logger.info("[IMP:9][test_with_context_ok] container cleanup complete")
         # endregion
 
 
-# endregion FUNC_test_l2_with_context_ok
+# endregion FUNC_test_with_context_ok
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Test 3: единый образ → USER 10000 non-root runtime (DevPlan 140 W6)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# region FUNC_test_user_10000
+## @purpose — Verify единый образ работает под non-root USER 10000:10000 (docker inspect Config.User).
+##            Контракт «L1 root / L2 non-root» удалён DevPlan 002 — единый образ всегда non-root.
+## @io — ⇥ caplog, tmp_path → ⎋ None (asserts docker inspect Config.User == "10000:10000")
+## @complexity — O(B + T) — build (if missing) + docker inspect
+
+
+@pytest.mark.requires_docker
+@ldd_trajectory
+def test_user_10000_non_root(caplog: pytest.LogCaptureFixture, tmp_path: pathlib.Path) -> None:
+    """
+    Единый образ → docker inspect Config.User == 10000:10000 (non-root runtime).
+
+    # ⚠️ STRUCTURE:
+    #   ▶ [ensure image] → docker inspect --format '{{.Config.User}}' → ◇ == "10000:10000"? → ⊕ pass | ⚡ fail
+    """
+    # region BLOCK_Setup
+    _docker_skip_if_unavailable()
+    logger.info("[IMP:7][test_user_10000_non_root] tmp_path=%s", tmp_path)
+    # endregion
+
+    # region BLOCK_EnsureImage
+    _build_image()  # idempotent — skips if already built
+    # endregion
+
+    # region BLOCK_InspectUser
+    inspect_result = subprocess.run(
+        ["docker", "inspect", _IMAGE_TAG, "--format", "{{.Config.User}}"],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert inspect_result.returncode == 0, f"docker inspect failed:\n{inspect_result.stderr}"
+    user_value = inspect_result.stdout.strip()
+    logger.critical("[IMP:9][test_user_10000_non_root] ASSERT: Config.User=%s", user_value)
+    assert user_value == "10000:10000", (
+        f"Единый образ должен работать non-root USER 10000:10000 (DevPlan 140 W6), got: '{user_value}'"
+    )
+    logger.info("[IMP:9][test_user_10000_non_root] ✅ Non-root runtime confirmed (USER 10000:10000)")
+    # endregion
+
+
+# endregion FUNC_test_user_10000
 
 
 # endregion TESTS

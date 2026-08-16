@@ -1,4 +1,4 @@
-# GREP_SUMMARY: gate workflow-consistency workflow-count-9 main-full-gate-deleted platform-test-single-job no-observability deploy-triggers push-filter make-targets core-deploy-auto-detect basedpyright-removed provisioner module-list-consistency raw-internal-allowlist nightly-gate-removed build-hermes
+# GREP_SUMMARY: gate workflow-consistency workflow-count-8 main-full-gate-deleted platform-test-single-job no-observability deploy-triggers push-filter make-targets core-deploy-auto-detect basedpyright-removed provisioner module-list-consistency raw-internal-allowlist nightly-gate-removed L1-collapse
 # STRUCTURE: ▶ parse workflow YAMLs → ◇ assert invariants (count, jobs, triggers, refs, module-lists, raw-internal) → ⎋ 14 tests (2 new: module-lists, raw-internal-allowlist)
 # region MODULE_CONTRACT
 ## @purpose — Gate test suite for CI workflow structural consistency (Plans 2 + 19 + DevPlan 116 B11 T4/D2).
@@ -13,13 +13,14 @@
 ##   - main-full-gate.yml does not exist
 ##   - platform-test.yml has exactly 1 job (unified, no separate static-gate/basedpyright/platform-integration)
 ##   - No workflow references core/modules/observability/ (D1 fix)
-##   - core-deploy, build-platform, mirror trigger on platform-gate-fast (workflow_run, D2 — лёгкий gate)
+##   - core-deploy, mirror trigger on platform-gate-fast (workflow_run, D2 — лёгкий гейт;
+##     build-platform удалён DevPlan 002 — L1 коллапс)
 ##   - Deploy workflows filter workflow_run.event == 'push'
 ##   - All make <target> in workflows exist as .PHONY targets in Makefile
 ##   - core-deploy.yml uses auto-detection (NODE not passed, bootstrap.sh resolves)
 ##   - basedpyright-tests job removed from platform-test.yml
 ##   - push-gate.yml uses provision-environment.sh (not inline docker network create)
-##   - build-platform.yml uses provision-environment.sh (not inline docker network create)
+##   - build-platform.yml provisioner check removed (DevPlan 002: workflow удалён — L1 коллапс)
 ##   - Module lists in platform-test.yml match core/modules/ filesystem
 ##   - Raw core/internal/*.sh calls in .github YAML only via explicit allowlist (make-facade invariant)
 ## @rationale — Automated validation of Plan 2 + Plan 19 acceptance criteria. Prevents regression
@@ -44,9 +45,8 @@ _MAKEFILE_PATH: pathlib.Path = repo_root() / "Makefile"
 # DevPlan 116 B1 T4: platform-deploy.yml + stage-deploy.yml УДАЛЕНЫ — единый канал deploy-project.yml
 # DevPlan 116 B11 T4 (D2): +platform-gate-fast.yml — лёгкий gate-workflow (push main), downstream на нём
 # DevPlan 145 W4 (D-134-L3/L4): +security-scan.yml + hermes-nightly.yml — security CI overlay
+# DevPlan 002 W5 T5.7: build-hermes.yml + build-platform.yml УДАЛЕНЫ (L1 коллапс) — workflow count 10→8
 _EXPECTED_WORKFLOWS: set[str] = {
-    "build-hermes.yml",
-    "build-platform.yml",
     "core-deploy.yml",
     "deploy-project.yml",
     "hermes-nightly.yml",
@@ -57,13 +57,13 @@ _EXPECTED_WORKFLOWS: set[str] = {
     "security-scan.yml",
 }
 
-# Expected count: 10 (8 + security-scan.yml + hermes-nightly.yml, DevPlan 145 W4 D-134-L3/L4)
-_EXPECTED_WORKFLOW_COUNT: int = 10
+# Expected count: 8 (DevPlan 002: build-hermes.yml + build-platform.yml удалены — L1 схлопнут в L2)
+_EXPECTED_WORKFLOW_COUNT: int = 8
 
 # Deploy workflows that should trigger on platform-gate-fast (workflow_run, D2 — DevPlan 116 B11 T4)
+# DevPlan 002: build-platform.yml удалён (L1 коллапс) — остаются core-deploy + mirror
 _DEPLOY_WORKFLOWS: set[str] = {
     "core-deploy.yml",
-    "build-platform.yml",
     "mirror.yml",
 }
 
@@ -209,14 +209,14 @@ def test_main_full_gate_deleted():
 
 @pytest.mark.gate
 def test_workflow_count_is_correct():
-    """Verify workflow count is 10 (8 + security-scan.yml + hermes-nightly.yml, DevPlan 145 W4)."""
+    """Verify workflow count is 8 (DevPlan 002: build-hermes + build-platform удалены — L1 коллапс)."""
     yml_files = sorted(f for f in _WORKFLOW_DIR.glob("*.yml"))
     workflow_count = len(yml_files)
     logger.info("[IMP:9][test] Workflow count: %d", workflow_count)
     assert workflow_count == _EXPECTED_WORKFLOW_COUNT, (
         f"Expected {_EXPECTED_WORKFLOW_COUNT} workflow files, found {workflow_count}: {[f.name for f in yml_files]}"
     )
-    logger.info("[IMP:9][test] Workflow count correct: %d (8 + security-scan.yml + hermes-nightly.yml)", workflow_count)
+    logger.info("[IMP:9][test] Workflow count correct: %d (DevPlan 002 — L1 workflows удалены)", workflow_count)
 
 
 @pytest.mark.gate
@@ -272,7 +272,7 @@ def test_no_observability_references():
 
 @pytest.mark.gate
 def test_deploy_triggers_on_platform_test():
-    """Verify deploy workflows (core-deploy, build-platform, mirror) trigger on platform-gate-fast (D2)."""
+    """Verify deploy workflows (core-deploy, mirror) trigger on platform-gate-fast (D2)."""
     for wf_name in _DEPLOY_WORKFLOWS:
         wf_path = _WORKFLOW_DIR / wf_name
         data = load_yaml(wf_path)
@@ -427,13 +427,18 @@ def test_push_gate_uses_provisioner():
 
 
 @pytest.mark.gate
-def test_build_platform_uses_provisioner():
-    """Verify build-platform.yml calls provision-environment.sh (not inline docker network create)."""
-    build_platform_path = _WORKFLOW_DIR / "build-platform.yml"
-    content = build_platform_path.read_text()
+def test_build_platform_workflow_deleted():
+    """Verify build-platform.yml and build-hermes.yml are deleted (DevPlan 002 L1 коллапс).
 
-    assert _PROVISIONER_PATTERN.search(content), "build-platform.yml must call provision-environment.sh"
-    logger.info("[IMP:9][test] build-platform.yml uses provision-environment.sh")
+    ## @purpose  L1 distribution base схлопнут в L2 — build-hermes.yml (auto-build L1)
+    ##            и build-platform.yml (L1 build+smoke+push+sync-digest) удалены.
+    ##            Их наличие = drift (L1 workflow мёртв).
+    ## @io       ⎋ None — assert side-effect (pytest.fail if either exists)
+    """
+    for wf in ("build-platform.yml", "build-hermes.yml"):
+        path = _WORKFLOW_DIR / wf
+        assert not path.exists(), f"{wf} must be deleted (DevPlan 002 — L1 distribution base схлопнут в L2)"
+    logger.info("[IMP:9][test] build-platform.yml + build-hermes.yml correctly deleted (L1 коллапс)")
 
 
 @pytest.mark.gate

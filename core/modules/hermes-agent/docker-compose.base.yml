@@ -42,22 +42,13 @@ services:
   hermes-agent:
     # 🧐 TRAP[DECISION] · 2026-07-06 · — · Context overlay image (L2)
     # ·   Image: ghcr.io/tronyxlab/hermes-agent-context:latest (context overlay image with Telegram + skills).
-    # ·   Architecture: L0 (nousresearch/hermes-agent:v2026.7.1, upstream) →
-    # ·   Rev: if L2 build CI pipeline changes or upstream base image format changes
-    # ·   L1 (hermes-agent-base, platform base) →
-    # ·   L2 (ghcr.io/tronyxlab/hermes-agent-context:latest, context overlay with Telegram + skills).
-    # ·   L1 built by build-hermes-images.sh build-platform from build/Dockerfile.
-    # ·   L2 built by tronyx-lab/platform CI from modules/hermes-agent/Dockerfile.
+    # ·   Architecture (DevPlan 002, L1→L2 коллапс): L0 (nousresearch/hermes-agent:v2026.8.3, upstream) →
+    # ·   единый L2 (ghcr.io/<org>/hermes-agent-context, контекстный overlay; base-стадия — бывш. L1).
+    # ·   L1-образ УДАЛЁН (DevPlan 002) — не публикуется, не пушится, L1-версий нет.
     # ·   ⚠️ 2026-07-21: Added build: section for fallback when GHCR image unavailable.
     # ·   Previously: "No build section — context overlay pre-built in tronyx-lab CI, never built locally."
     # ·   Revision: VPS must be able to rebuild hermes-agent from source when GHCR image
     # ·   is absent (VPS recreation, registry outage, disaster recovery).
-    # 🧐 TRAP[DECISION] · 2026-07-07 · — · Layer naming: L0/L1/L2 matching AGENTS.md canonical notation
-    # · AGENTS.md: L0 (upstream), L1 (platform base), L2 (context overlay)
-    # · Previously this file used "Layer 1/2/3" which was off-by-one vs AGENTS.md
-    # · Fix: aligned to L0/L1/L2 exactly matching AGENTS.md canonical layer naming
-    # · Rev: if AGENTS.md layer notation changes
-    # ⚠️ W7 fix: versioned tag (was float tag). Change CONTEXT_IMAGE in .env to upgrade.
     # ⚠️ W7 fix: versioned tag (was float tag). Change CONTEXT_IMAGE in .env to upgrade.
     # ⚡ TRAP[DECISION] · 2026-08-03 · — · CONTEXT_IMAGE default = SoT (DevPlan 122 T4)
     # · Rejected: fallback latest@sha256:dd36… (скрытый второй пин — расходился с SoT v2026.7.1)
@@ -88,13 +79,11 @@ services:
     # · Previously: "No build section — context overlay pre-built in tronyx-lab CI, never built locally"
     # · Revision: VPS must be able to rebuild hermes-agent from source when GHCR image is absent
     # ·   (e.g., after VPS recreation, registry outage, or disaster recovery).
-    # · build: section uses L1 base image (hermes-agent-base:latest) — must exist locally
-    # ·   (deploy-modules.sh ensures L1 via pull from GHCR or local build before compose build).
-    # · context: ${PLATFORM_ROOT:-/opt/platform} — full platform source tree for L2 Dockerfile
+    # · context: ${PLATFORM_ROOT:-/opt/platform} — full platform source tree for единый Dockerfile
     # · Rev: if build-from-source becomes unreliable on low-resource VPS, revert to registry-only
     build:
       context: ${PLATFORM_ROOT:-/opt/platform}
-      dockerfile: core/modules/hermes-agent/context/Dockerfile
+      dockerfile: core/modules/hermes-agent/Dockerfile
       args:
         CONTEXT: ${CONTEXT:-test}
     container_name: hermes-agent

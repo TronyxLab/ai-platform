@@ -318,35 +318,31 @@ def test_init_sh_wrapper_thin(caplog: pytest.LogCaptureFixture) -> None:
 
 # GUARD-PRESERVE (168): единственное покрытие AC-D5.3 — Dockerfile копирует init.py в /usr/local/bin (REGRESSION, DevPlan 119 D5)
 # 🧪 TRAP[TEST] · 2026-08-02 · Regression · Dockerfile копирует init.py (D5, AC-D5.3)
-# · Scenario: build/Dockerfile содержит COPY init.py
+# · Scenario: единый Dockerfile содержит COPY init.py (L1→L2 коллапс DevPlan 002: build/Dockerfile удалён)
 # · Last fail: N/A (new — D5; AC-D5.3)
 # · Remove if: init.py перестаёт копироваться в образ
 def test_dockerfile_copies_init_py(caplog: pytest.LogCaptureFixture) -> None:
-    """Dockerfile: COPY init.py в /usr/local/bin/init.py (AC-D5.3)."""
+    """Dockerfile: COPY init.py в /usr/local/bin/init.py (AC-D5.3, единый Dockerfile)."""
     caplog.set_level(logging.INFO)
-    dockerfile = (
-        Path(__file__).resolve().parent.parent.parent / "core" / "modules" / "hermes-agent" / "build" / "Dockerfile"
-    )
+    dockerfile = Path(__file__).resolve().parent.parent.parent / "core" / "modules" / "hermes-agent" / "Dockerfile"
     content = dockerfile.read_text(encoding="utf-8")
     assert "init.py" in content and "/usr/local/bin/init.py" in content, (
         "Dockerfile должен копировать init.py (AC-D5.3)"
     )
 
 
-# 🧪 TRAP[TEST] · 2026-08-06 · Regression · L2 context/Dockerfile — USER 10000:10000 non-root (DevPlan 140 W6, AC-W6.1)
-# · Scenario: context/Dockerfile содержит USER 10000:10000 ПОСЛЕ последнего RUN, ПЕРЕД HEALTHCHECK
-# · Last fail: hermes-root-500 — L1/L2 без USER (chown-if-root workaround init.py:167)
-# · Remove if: L2 снова переходит на root runtime (напр. s6-overlay несовместим с non-root)
+# 🧪 TRAP[TEST] · 2026-08-06 · Regression · единый Dockerfile — USER 10000:10000 non-root (DevPlan 140 W6, AC-W6.1)
+# · Scenario: единый Dockerfile (final-стадия) содержит USER 10000:10000 ПОСЛЕ последнего RUN, ПЕРЕД HEALTHCHECK
+# · Last fail: hermes-root-500 — без USER (chown-if-root workaround init.py:167)
+# · Remove if: снова переходим на root runtime (напр. s6-overlay несовместим с non-root)
 def test_context_dockerfile_has_nonroot_user(caplog: pytest.LogCaptureFixture) -> None:
-    """L2 context/Dockerfile: USER 10000:10000 после последнего RUN, перед HEALTHCHECK (AC-W6.1)."""
+    """Единый Dockerfile: USER 10000:10000 после последнего RUN, перед HEALTHCHECK (AC-W6.1)."""
     caplog.set_level(logging.INFO)
-    dockerfile = (
-        Path(__file__).resolve().parent.parent.parent / "core" / "modules" / "hermes-agent" / "context" / "Dockerfile"
-    )
+    dockerfile = Path(__file__).resolve().parent.parent.parent / "core" / "modules" / "hermes-agent" / "Dockerfile"
     lines = dockerfile.read_text(encoding="utf-8").splitlines()
 
     user_idx = next((i for i, line in enumerate(lines) if line.strip().startswith("USER 10000")), None)
-    assert user_idx is not None, "L2 context/Dockerfile должен содержать USER 10000:10000 (AC-W6.1)"
+    assert user_idx is not None, "Единый Dockerfile должен содержать USER 10000:10000 (AC-W6.1)"
 
     health_idx = next(i for i, line in enumerate(lines) if line.strip().startswith("HEALTHCHECK"))
     run_idxs = [i for i, line in enumerate(lines) if line.strip().startswith("RUN ")]
@@ -358,7 +354,7 @@ def test_context_dockerfile_has_nonroot_user(caplog: pytest.LogCaptureFixture) -
         f"USER (строка {user_idx + 1}) должен идти ПЕРЕД HEALTHCHECK (строка {health_idx + 1})"
     )
     logger.info(
-        "[IMP:9][test] context/Dockerfile USER 10000:10000 (строка %d) после RUN (строка %d), перед HEALTHCHECK (строка %d) — AC-W6.1 PASS",
+        "[IMP:9][test] единый Dockerfile USER 10000:10000 (строка %d) после RUN (строка %d), перед HEALTHCHECK (строка %d) — AC-W6.1 PASS",
         user_idx + 1,
         last_run_idx + 1,
         health_idx + 1,

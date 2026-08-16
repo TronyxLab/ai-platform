@@ -6,18 +6,19 @@
 ##           + docker-managed); module docker-compose.base.yml files must NOT declare top-level volumes
 ##           sections; CONTEXT_IMAGE: "" empty-string env mechanism is forbidden (D4).
 ## @scope    Static file analysis — root docker-compose.yml, docker-compose.macos.yml,
-##           docker-compose.platform-dev.yml, core/modules/*/docker-compose.base.yml.
+##           core/modules/*/docker-compose.base.yml.
+##           (docker-compose.platform-dev.yml удалён DevPlan 002 — L1 dev-оверрайд мёртв)
 ##           No Docker daemon required.
 ## @invariants
 ##   - Root compose volumes == set of volume names referenced by module service mounts
 ##     (derived at runtime — no hardcoded set literal; every mount resolves, no orphans)
 ##   - Module top-level `volumes:` section must be absent (service mount references remain)
 ##   - Module volume names (if any) must NOT intersect root names — duplicate declaration = RED
-##   - CONTEXT_IMAGE: "" = 0 occurrences across docker-compose*.yml (root/macos/platform-dev)
+##   - CONTEXT_IMAGE: "" = 0 occurrences across docker-compose*.yml (root/macos)
 ##   - All tests @pytest.mark.gate; negative R5 test included (anti-survivorship)
 ## @rationale  U-49: driver_opts of modules merged into root "by accident" (docker compose config) —
 ##             explicit single-SoT declaration in root eliminates drift; empty-string CONTEXT_IMAGE
-##             was the only env path for L1 mode and is replaced by explicit image override (D4).
+##             was the only env path for L1 mode (D4) — удалён вместе с platform-dev (DevPlan 002).
 ## @changes  2026-08-01 · Created (DevPlan 116 B3 T4)
 # endregion MODULE_CONTRACT
 
@@ -28,7 +29,6 @@ import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 ROOT_COMPOSE = PROJECT_ROOT / "docker-compose.yml"
-PLATFORM_DEV = PROJECT_ROOT / "docker-compose.platform-dev.yml"
 MACOS_COMPOSE = PROJECT_ROOT / "docker-compose.macos.yml"
 MODULES_DIR = PROJECT_ROOT / "core" / "modules"
 
@@ -185,13 +185,12 @@ class TestGateVolumesSot:
 
     # 🧪 TRAP[TEST] · 2026-08-01 · REGRESSION · CONTEXT_IMAGE: "" forbidden (DevPlan 116 B3 D4, U-49)
     # · Last fail: docker-compose.platform-dev.yml:34 declared environment: CONTEXT_IMAGE: ""
-    # ·   (empty-string env mechanism for L1 mode)
+    # ·   (empty-string env mechanism for L1 mode) — файл удалён DevPlan 002 (L1 коллапс)
     # · Remove if: an explicit image-override mechanism replaces the empty string (already in place)
     def test_context_image_empty_string_forbidden(self):
         """CONTEXT_IMAGE: \"\" must appear 0 times across docker-compose*.yml (D4)."""
         compose_files = [
             ROOT_COMPOSE,
-            PLATFORM_DEV,
             MACOS_COMPOSE,
             *sorted(MODULES_DIR.glob("*/docker-compose*.yml")),
         ]
@@ -210,7 +209,7 @@ class TestGateVolumesSot:
         assert not violations, (
             f"CONTEXT_IMAGE_EMPTY_STRING: {len(violations)} empty-string CONTEXT_IMAGE occurrence(s):\n"
             + "\n".join(violations)
-            + "\nL1 mechanism = explicit image override (docker-compose.platform-dev.yml), DevPlan 116 B3 D4"
+            + "\nL1-механика empty-string удалена вместе с docker-compose.platform-dev.yml (DevPlan 002)"
         )
 
 

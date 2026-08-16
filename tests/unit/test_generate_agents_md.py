@@ -65,11 +65,11 @@ def test_generate_canon_table(caplog):
         ],
         "build": [
             {
-                "make_target": "hermes-build-platform",
+                "make_target": "hermes-build-context",
                 "mechanism": "docker-build",
-                "description": "Build L1 locally",
-                "signature": "make hermes-build-platform",
-                "operation_ru": "Сборка L1 локально",
+                "description": "Build hermes-agent-context (единый образ)",
+                "signature": "make hermes-build-context CONTEXT=<context>",
+                "operation_ru": "Сборка L2 образа",
             },
         ],
     }
@@ -78,10 +78,10 @@ def test_generate_canon_table(caplog):
 
     assert "make deploy" in result, "Should contain deploy target"
     assert "make bootstrap-node" in result, "Should contain bootstrap-node target"
-    assert "make hermes-build-platform" in result, "Should contain hermes-build-platform target"
+    assert "make hermes-build-context" in result, "Should contain hermes-build-context target"
     assert "Деплой проекта" in result, "Should contain operation_ru for deploy"
     assert "Идемпотентный bootstrap" in result, "Should contain operation_ru for bootstrap"
-    assert "Сборка L1 локально" in result, "Should contain operation_ru field"
+    assert "Сборка L2 образа" in result, "Should contain operation_ru field"
 
     lines = result.strip().split("\n")
     assert len(lines) == 3, f"Expected 3 table rows, got {len(lines)}"

@@ -4,8 +4,8 @@
 ## @purpose  Standardized Docker image build with configurable cache backend (registry|gha).
 ##           Eliminates 3× duplicate docker/build-push-action@v7 boilerplate
 ##           with consistent provenance:false, sbom:false, load:true.
-## @scope    Used by platform-test.yml (backup-cron, hermes-agent-base) and
-##           build-platform.yml (hermes-agent-base) — 3 identical build patterns.
+## @scope    Used by platform-test.yml (backup-cron, hermes-agent-context) —
+##           единый образ после L1→L2 коллапса (DevPlan 002 W4 T4.6).
 ## @invariants
 ##   - Always uses docker/build-push-action@v7
 ##   - load: true — images available locally after build
@@ -13,12 +13,13 @@
 ##   - cache-backend=gha → type=gha,mode=max,scope=<scope>
 ##   - provenance: false, sbom: false — no attestations for local builds
 ##   - НЕТ hashFiles(context) в cache scope/ref — buildkit content-addressed (см. TRAP[DECISION] в runs)
-## @rationale  DevPlan 017 T12: consolidate 3× duplicate docker build configs.
+## @rationale  DevPlan 017 T12: consolidate duplicate docker build configs.
 ##             DevPlan 006 D3: registry cache (ghcr.io) for reliable cache across builds.
 ##             GHA cache suffers from "failed to reserve cache" with large images (>500MB)
 ##             and 10GB eviction policy. Registry cache has no size limits.
 ## @changes — 2026-07-16 | Extracted from 3× identical blocks per DevPlan 017 T12
 ## @changes — 2026-07-17 | Added cache-backend input (gha|registry, default registry) per DevPlan 006 T2
+## @changes — 2026-08-16 | DevPlan 002 W4 T4.6 — hermes-agent-base → hermes-agent-context (единый образ)
 # endregion MODULE_CONTRACT
 
 name: 'Docker Build with Registry/GHA Cache'
@@ -36,7 +37,7 @@ inputs:
     description: 'Image tags (space-separated)'
     required: true
   cache-scope:
-    description: 'Cache scope (e.g. backup-cron, hermes-agent-base) — used as cache key for both gha and registry backends'
+    description: 'Cache scope (e.g. backup-cron, hermes-agent-context) — used as cache key for both gha and registry backends'
     required: true
   cache-backend:
     description: 'Cache backend: registry (ghcr.io) or gha (GitHub Actions cache). Default: registry'
@@ -58,7 +59,7 @@ runs:
     # ·   слои. Статический scope — ТОЛЬКО namespace. Добавление hashFiles() в scope создал бы
     # ·   НОВЫЙ namespace на каждую правку контекста → полный холодный кэш (анти-паттерн,
     # ·   не «stale cache» fix). Гипотеза C-5 верифицирована чтением: кэш НЕ stale by design.
-    # ·   Реальный риск mutable :latest L1 (C-6/C-10) закрыт digest-pinning в build-platform.yml.
+    # ·   Реальный риск mutable :latest был закрыт digest-pinning (build-platform.yml удалён DevPlan 002).
     # · Rev: если buildkit перестанет учитывать context-файлы в digest'ах слоёв (изменение
     # ·   поведения) — пересмотреть добавление hashFiles в scope.
     - name: Set cache parameters (${{ inputs.cache-backend }})

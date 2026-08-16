@@ -9,7 +9,7 @@
 ## @scope — Parses CI workflow YAMLs, Makefile, pre-commit config, and shell scripts
 ##          to verify structural invariants.
 ## @invariants
-##   - Deploy workflows (core-deploy, build-platform, mirror) use SHA-aware aggregator (D4)
+##   - Deploy workflows (core-deploy, mirror) use SHA-aware aggregator (D4; build-platform удалён DevPlan 002)
 ##   - MODE=fast excludes Docker-dependent markers (requires_docker, local_auth)
 ##   - check-doc-headers.sh (facade) delegates all old hook checks to
 ##     core.internal.lint.doc_header_validator; old grepsummary hook is removed
@@ -299,7 +299,7 @@ def _check_concurrency_has_head_sha(workflow: dict, workflow_name: str) -> list[
 def test_deploy_workflows_use_sha_aware_aggregator(caplog) -> None:
     """Verify deploy workflows trigger on workflow_run with single workflow + API check.
 
-    ## @purpose — Validate D4 (SHA-aware aggregator): core-deploy.yml, build-platform.yml,
+    ## @purpose — Validate D4 (SHA-aware aggregator): core-deploy.yml
     ##            and mirror.yml trigger on workflow_run of main-full-gate (not array of
     ##            workflows — prevents OR-semantics), and each has a blocking GitHub API
     ##            check that platform-test also succeeded for the same SHA.
@@ -310,7 +310,8 @@ def test_deploy_workflows_use_sha_aware_aggregator(caplog) -> None:
 
     logger.info("[IMP:8][test_deploy_workflows_use_sha_aware_aggregator] === SHA-aware aggregator audit ===")
 
-    deploy_workflows = ["core-deploy.yml", "build-platform.yml", "mirror.yml"]
+    # DevPlan 002 W5 T5.7: build-platform.yml удалён (L1 коллапс) — остаются core-deploy + mirror
+    deploy_workflows = ["core-deploy.yml", "mirror.yml"]
     all_failures: dict[str, list[str]] = {}
 
     for wf_name in deploy_workflows:
@@ -321,12 +322,12 @@ def test_deploy_workflows_use_sha_aware_aggregator(caplog) -> None:
         # Plan 2: main-full-gate removed, deploy triggers on platform-test with push filter
         failures.extend(_check_workflow_run_on_platform_test(workflow, wf_name))
 
-        # Check 2: blocking SHA API check (core-deploy, build-platform only)
+        # Check 2: blocking SHA API check (core-deploy only; mirror relaxed)
         # mirror.yml has relaxed check (only main-full-gate verification)
         if wf_name != "mirror.yml":
             failures.extend(_check_has_blocking_sha_api_check(workflow, wf_name))
 
-        # Check 3: concurrency with head_sha (core-deploy, build-platform only)
+        # Check 3: concurrency with head_sha (core-deploy only; mirror relaxed)
         # mirror.yml uses github.ref-based concurrency — acceptable for mirror
         if wf_name != "mirror.yml":
             failures.extend(_check_concurrency_has_head_sha(workflow, wf_name))

@@ -79,10 +79,10 @@ _GITHUB_BUILTINS: set[str] = {
 
 # Workflow-LOCAL env vars (defined inline in the workflow for CI-internal use, NOT platform
 # deployment config) — documented exemption from platform-env.yaml registration (F1, DevPlan 118).
+# DevPlan 002 W5 T5.12: L1_IMAGE удалён (L1 коллапс — единый образ hermes-agent-context)
 _WORKFLOW_LOCAL_ENV_VARS: dict[str, str] = {
     "DOCKER_BUILDKIT": "docker buildx flag, workflow-local build constant",
     "REGISTRY": "ghcr.io registry constant, workflow-local",
-    "L1_IMAGE": "L1 image ref, workflow-local build constant",
     "IMAGE_NAME": "derived image name, workflow-local build constant",
     "VPS_USER": "SSH user for VPS ops, workflow-local",
     "NODE_HOST_MAP": "GitHub org variable (vars.NODE_HOST_MAP), not platform env",
@@ -182,7 +182,8 @@ def test_no_hardcoded_ci_secrets(caplog):
 
     # CI smoke-test workflow intentionally uses test-only credentials
     # (no production secrets). Excluded from hardcoded-secret detection.
-    TEST_CREDS_WORKFLOWS = {"build-platform.yml"}
+    # DevPlan 002 W5 T5.7: build-platform.yml удалён (L1 коллапс) — TEST_CREDS_WORKFLOWS пуст
+    TEST_CREDS_WORKFLOWS: set[str] = set()
 
     for wf_file in sorted(_WORKFLOW_DIR.glob("*.yml")):
         if wf_file.name in TEST_CREDS_WORKFLOWS:

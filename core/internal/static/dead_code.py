@@ -232,7 +232,7 @@ def _extract_sh_paths_from_text(text: str) -> set[str]:
 def _extract_sh_path_from_segment(segment: str) -> str | None:
     """Извлечь .sh путь из сегмента delegates_to, отбрасывая аргументы.
 
-    ## @purpose  Обрабатывает "build.sh build-platform" → "build.sh".
+    ## @purpose  Обрабатывает "hermes_images.py build-context" → "hermes_images.py".
     ## @io       ⇥ segment: str → ⎋ str | None
     ## @complexity  O(T) — токены
     """

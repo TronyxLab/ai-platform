@@ -2,7 +2,7 @@
 # STRUCTURE: ▶ scan .github/workflows → ◇ downstream = workflow_run-только (0 PR-direct) → ◇ gate file exists + name matches (typo) → ◇ gate содержит make gate MODE=fast (сила ≥ fast) → ◇ job if: conclusion==success + event==push → ⎋ violations
 # region MODULE_CONTRACT
 ## @purpose  Gate-тест силы CI-trigger (C-1, DevPlan 136 W11 T11.1): deploy-цепочка
-##           (core-deploy/mirror/build-platform) триггерится ТОЛЬКО через workflow_run от
+##           (core-deploy/mirror) триггерится ТОЛЬКО через workflow_run от
 ##           gate-workflow; gate-workflow обязан выполнять `make gate MODE=fast` (никогда слабее);
 ##           typo-защита (workflow_run ref = name файла); push-фильтр + conclusion==success.
 ##           Ограничение (задокументировано): полный full-gate (platform-test) НЕ является
@@ -12,17 +12,19 @@
 ## @scope    Только .github/workflows/*.yml структура. Не проверяет GitHub-remote конфигурацию
 ##           (branch protection/rulesets — вне репозитория).
 ## @invariants
-##   - Downstream workflows (core-deploy/mirror/build-platform): НЕ имеют pull_request/pull_request_target trigger
+##   - Downstream workflows (core-deploy/mirror): НЕ имеют pull_request/pull_request_target trigger
 ##   - workflow_run.workflows ссылается на platform-gate-fast; файл существует; name == ref (typo → silent fail)
 ##   - platform-gate-fast.yml содержит `make gate MODE=fast` (даунгрейд до pre-commit-only = RED)
 ##   - Каждый deploy-job `if` содержит workflow_run.conclusion == 'success' И workflow_run.event == 'push'
 ##   - platform-test.yml (full gate) имеет pull_request_target trigger — full-gate бежит на PR
+##   - build-platform.yml удалён DevPlan 002 (L1 коллапс) — не входит в downstream-цепочку
 ## @rationale C-1 (DevPlan 136 §11.2): «CI зелёный, система врёт» — деплой по слабому гейту.
 ##            Верификация 2026-08-05: branch protection отсутствует (protected: false) → прямые
 ##            push в main возможны; deploy-гейт = fast-gate by design (D2 U-57, TRAP в
 ##            platform-gate-fast.yml). Этот тест — canary: гарантирует, что deploy-канал НЕ
 ##            ослабнет (PR-direct trigger, гейт слабее fast, typo в имени, снятие push-фильтра).
 ## @changes 2026-08-05 | DevPlan 136 W11 T11.1 — Created (C-1 gate-test + TRAP[DECISION])
+## @changes 2026-08-16 | DevPlan 002 W5 T5.7 — build-platform.yml удалён из _DOWNSTREAM_WORKFLOWS
 # endregion MODULE_CONTRACT
 
 import logging
@@ -38,7 +40,8 @@ logger = logging.getLogger(__name__)
 _WORKFLOW_DIR: pathlib.Path = repo_root() / ".github" / "workflows"
 
 # Downstream deploy-цепочка — триггерится workflow_run от platform-gate-fast (D2, 116 B11 T4)
-_DOWNSTREAM_WORKFLOWS: tuple[str, ...] = ("core-deploy.yml", "mirror.yml", "build-platform.yml")
+# DevPlan 002 W5 T5.7: build-platform.yml удалён (L1 коллапс)
+_DOWNSTREAM_WORKFLOWS: tuple[str, ...] = ("core-deploy.yml", "mirror.yml")
 _GATE_WORKFLOW: str = "platform-gate-fast.yml"
 _FULL_GATE_WORKFLOW: str = "platform-test.yml"
 _FAST_GATE_MARKER: str = "make gate MODE=fast"

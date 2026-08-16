@@ -17,7 +17,7 @@
 ##   - Compose file resolution order: compose.yaml → docker-compose.yaml → docker-compose.base.yml
 ##   - Pre-pull failure is non-fatal (compose up -d retries pull internally)
 ##   - Healthcheck failure is non-fatal (logged, does not abort further deploy)
-##   - Hermes-agent L1→L2 build fallback on image 404 (not FAIL — automatic rebuild)
+##   - Hermes-agent build from source fallback on image 404 (not FAIL — automatic rebuild)
 ##   - Orphan container reconciliation runs PER-MODULE before compose up -d
 ##   - --profile is always passed with module_name for standalone compose file deploy
 ##   - Fork-параллелизм и healthcheck — ТОЛЬКО через parallel_runner / healthcheck_runner (D1)
@@ -146,7 +146,8 @@ logger = logging.getLogger(__name__)
 # ruff — ruff-лидирующий).
 
 # ── Constants ──
-# DevPlan 118 D1: L1_BASE_IMAGE/GHCR_ORG перенесены в hermes_workflow.py (спец-workflow hermes).
+# DevPlan 118 D1: спец-workflow hermes перенесён в hermes_workflow.py.
+# DevPlan 002 W2 T2.2: L1-механика (L1_BASE_IMAGE/GHCR_ORG/docker_tag) удалена из hermes_workflow.
 # DevPlan 118 A2: единый канон списков compose-файлов — shared/compose_files.py (гейт
 # compose_files_sole_path). Локальный COMPOSE_FILENAMES УДАЛЁН (6 копий → 1 SoT).
 # DevPlan 170 W10-B: резолв compose-файла и сборка compose-args — leaf compose_args.py
@@ -256,7 +257,7 @@ def _check_image_exists(image_ref: str) -> bool:
 ##           ⎋ bool: True if images are ready or built, False on fatal failure
 ## @complexity 1 — delegate to hermes_workflow
 ## @invariants
-##   - Вся логика (L1 pull/build fallback) — в hermes_workflow.py (D1)
+##   - Вся логика (build-from-source fallback) — в hermes_workflow.py (D1; L1 коллапс DevPlan 002)
 ##   - Фасад не дублирует логику — только делегирование
 def _handle_hermes_agent(compose_args: list[str], module_dir: str, module_name: str) -> bool:
     return hermes_workflow.handle_hermes_agent(compose_args, module_dir, module_name)

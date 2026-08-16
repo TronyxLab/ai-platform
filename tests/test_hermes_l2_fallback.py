@@ -13,6 +13,7 @@
 ##   - Each test scenario maps to one DevPlan W4 acceptance criterion
 ##   - LDD trajectory printed at IMP:7-10 via @ldd_trajectory decorator
 ##   - Temp directories cleaned up via tmp_path fixture
+##   - DevPlan 002 (L1→L2 коллапс): единый build из source — без L1 pull/bare-tag
 ## @rationale  Hermes-agent images may not be pre-pushed to registry on first deploy
 ##             (especially during bootstrap on a bare VPS). Fallback build eliminates
 ##             the deploy-blocking manual build step. DevPlan 024 Wave 4.
@@ -90,21 +91,22 @@ def test_hermes_fallback_code_present(caplog: pytest.LogCaptureFixture) -> None:
     logger.info("[IMP:8][test_hermes_fallback_code_present] Checking BUILD command ...")
     # DevPlan 116 B5 T4 (sole-path): docker compose build больше НЕ вызывается локальным
     # subprocess в hermes_workflow — fallback делегирует в shared docker_compose_build
-    # (гейт docker_sole_path). Проверяем НОВЫЙ (более сильный) контракт: L1→L2 build fallback
-    # идёт через _shared_docker_compose_build с BUILD_TIMEOUT.
+    # (гейт docker_sole_path). Проверяем НОВЫЙ (более сильный) контракт: единый build fallback
+    # идёт через _shared_docker_compose_build с BUILD_TIMEOUT (L1-механика удалена DevPlan 002).
     assert "_shared_docker_compose_build" in content and "BUILD_TIMEOUT" in content, (
-        "W4 violation: hermes-agent L1→L2 build fallback (shared docker_compose_build) not found in handle_hermes_agent"
+        "W4 violation: hermes-agent build fallback (shared docker_compose_build) not found in handle_hermes_agent"
     )
 
     # ── 3. TRAP[BUG] documenting the fallback decision (was TRAP[DECISION] in shell) ──
     logger.info("[IMP:8][test_hermes_fallback_code_present] Checking TRAP documentation ...")
     assert "TRAP[BUG]" in content, "W4 violation: TRAP[BUG] for hermes image drift fix not found in hermes_workflow.py"
 
-    # ── 4. "Local L1→L2 build failed" present ──
+    # ── 4. "Local build failed" present (L1-префикс удалён — коллапс DevPlan 002) ──
     logger.info("[IMP:8][test_hermes_fallback_code_present] Checking build failure error path ...")
-    assert "build_fail" in content and "Local L1" in content, (
-        "W4 violation: 'Local L1→L2 build failed' error path not found in handle_hermes_agent"
+    assert "build_fail" in content and "Local build failed" in content, (
+        "W4 violation: 'Local build failed' error path not found in handle_hermes_agent"
     )
+    assert "Local L1" not in content, "DevPlan 002 violation: 'Local L1' L1-специфичный паттерн удалён (L1 коллапс)"
 
     # ── 5. Old FAIL-for-image pattern is gone ──
     logger.info("[IMP:8][test_hermes_fallback_code_present] Verifying old FAIL-for-image is gone ...")

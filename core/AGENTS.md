@@ -25,9 +25,7 @@
 | `make deploy` | Деплой проекта | make deploy PROJECT=\<dir\> [NODE=\<node\>] [LAUNCH=1] | git push → CI → .github/workflows/deploy-project.yml (receive verb) → orchestrator_cli dispatch receive → core/internal/deploy/orchestrator.py DeployOrchestrator.receive() → core/internal/notify/notify-hook.sh + core/internal/catalog/generate-catalog.sh (post-deploy, D4) |
 | `make deploy-project` | Прямой деплой минуя CI (DeployOrchestrator deliver) | make deploy-project PROJECT=\<dir\> NODE=\<node\> | core/internal/deploy/orchestrator_cli.py deliver (ForcedCommandChannel receive \<project\> \<version\>) → orchestrator_cli dispatch receive → DeployOrchestrator.receive() |
 | `make context-promote` | Промоут платформы в контекст | make context-promote CONTEXT=\<context\> | core/entrypoints/context-promote.sh → core/internal/deploy/context_promoter.py |
-| `make hermes-build-platform` | Сборка L1 образа | make hermes-build-platform | core/entrypoints/build.sh → core/internal/build/hermes_images.py build-platform |
-| `make hermes-build-context` | Сборка L1→L2 образа | make hermes-build-context CONTEXT=\<context\> | core/entrypoints/build.sh → core/internal/build/hermes_images.py build-context |
-| `make hermes-push-l1` | Push L1 в ghcr.io | make hermes-push-l1 | docker tag + docker push to ghcr.io |
+| `make hermes-build-context` | Сборка L2 образа | make hermes-build-context CONTEXT=\<context\> | core/internal/build/hermes_images.py build-context |
 | `make hermes-push-l2` | Push L2 в ghcr.io | make hermes-push-l2 CONTEXT=\<org\> | docker tag + docker push to ghcr.io |
 | `make templates-render` | Рендер шаблонов (internal) | make templates-render | core/internal/template_engine.py render-all |
 | `make validate-modules` | Валидация module.yaml (internal) | make validate-modules | core/internal/scripts/validate_module_yaml.py --all |
@@ -252,9 +250,9 @@ add/delete TXT (listing-эндпоинт ≠ DNS-01 сломан — TRAP[BUG] �
 (mirror push, pub — `.github/mirror-deploy-key.pub`), `GITHUB_TOKEN` (auto),
 `GIT_MIRROR_TOKEN` (PAT, отозван: HTTPS fallback удалён, mirror SSH-only),
 `DOCKER_HUB_USERNAME/TOKEN`, `GHCR_PULL_TOKEN` (node sops), `GHCR_PUSH_TOKEN` (CI),
-`GHCR_OWNER` (derived, не ключ), `TELEGRAM_*` (BOT_TOKEN/CHAT_ID*_WARNING/_CRITICAL/
+`TELEGRAM_*` (BOT_TOKEN/CHAT_ID*_WARNING/_CRITICAL/
 PROXY_URL/API_BASE/ALLOWED_USERS/GETME_URL), `AGE_SECRET_KEY` (мастер-ключ — DR-секция),
-`VPS_HOST`/`NODE_HOST_MAP`.
+`VPS_HOST`/`NODE_HOST_MAP`. (`GHCR_OWNER` удалён DevPlan 002 — L1-образ не публикуется.)
 
 **Чек-листы ротации (суть):** generate `ssh-keygen -t ed25519` → добавить pub (node.yaml /
 repo deploy keys ×N / GitHub-аккаунт / BotFather) → обновить Secrets/sops → проверить канал

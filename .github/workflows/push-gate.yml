@@ -23,7 +23,7 @@
 ##   push-gate.yml (V3) выполняет ПОЛНЫЙ `make gate MODE=fast` для ВСЕХ веток (включая main) —
 ##   это CI-компенсация, а не дубль локального hook'а (локальный hook для feature намеренно
 ##   быстрый). На main происходит задвоение с platform-gate-fast.yml — принято by design (D4):
-##   platform-gate-fast нельзя менять (downstream workflow_run core-deploy/build-platform/mirror
+##   platform-gate-fast нельзя менять (downstream workflow_run core-deploy/mirror
 ##   зависят от него, тесты test_gate_ci_trigger_strength/test_gate_ci_coverage).
 ## @changes — 2026-07-15 | Inline docker network create → provision-environment.sh --scope networks
 ## @changes — 2026-07-15 | Inline gitleaks install → composite action setup-gitleaks

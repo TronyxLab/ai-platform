@@ -342,20 +342,36 @@ def test_all_dockerfiles_from_pinned(caplog) -> None:
 
     ## @purpose — 170 W12 C1: обобщение backup-cron FROM-контракта на ВСЕ Dockerfile
     ##            репозитория (модули + template-payload). Digest-pin 100% (критерий C1).
+    ##            DevPlan 002 (L1→L2 коллапс): внутренние multi-stage алиасы (`FROM base`
+    ##            после `FROM … AS base`) НЕ тянутся из registry — исключение из pin-контракта.
     ## @scenario —
     ##   ▶ discovery Dockerfile-файлов (modules + templates)
-    ##   ▶ каждая FROM-строка → _check_from_image (без AS-суффикса)
+    ##   ▶ каждая FROM-строка → _check_from_image (без AS-суффикса);
+    ##     внутренние stage-алиасы (AS-имена того же файла) пропускаются
     ##   ⎋ pass/fail
     """
     caplog.set_level(logging.INFO)
     dockerfiles = sorted(MODULES_DIR.glob("*/Dockerfile")) + sorted((PLATFORM_ROOT / "templates").glob("*/Dockerfile"))
     failures: list[str] = []
     for df in dockerfiles:
-        for i, line in enumerate(df.read_text(encoding="utf-8").splitlines(), start=1):
+        lines = df.read_text(encoding="utf-8").splitlines()
+        # Собрать имена внутренних stage-алиасов (FROM … AS <name>) — их FROM-ссылки не pull'ятся
+        stage_aliases: set[str] = set()
+        for line in lines:
+            s = line.strip()
+            if not s.startswith("FROM "):
+                continue
+            as_match = re.search(r"\sAS\s+(\S+)\s*$", s)
+            if as_match:
+                stage_aliases.add(as_match.group(1))
+        for i, line in enumerate(lines, start=1):
             s = line.strip()
             if not s.startswith("FROM "):
                 continue
             img = s[5:].strip().split()[0]
+            if img in stage_aliases:
+                logger.info("[IMP:8][from-pin] SKIP %s:%s (внутренний stage-алиас)", df.relative_to(PLATFORM_ROOT), img)
+                continue
             if not _check_from_image(img):
                 failures.append(f"{df.relative_to(PLATFORM_ROOT)}:{i}: FROM {img}")
             else:
