@@ -247,19 +247,38 @@ def should_notify_postpone(state: RebootState, current_hash: str, today: str) ->
 
 
 # region FUNC_notify_telegram
-## @purpose  Telegram-уведомление через subprocess python3 -m shared.telegram_notifier send.
-##           stdlib-only: не импортирует core.internal (паттерн watchdog); PYTHONPATH=/opt/platform.
-## @io       ⇥ text: str, notify_fn: Callable | None = None (DI для тестов) → ⎋ bool
+## @purpose  Telegram-уведомление через subprocess `python3 -m core.internal.shared.notifications notify`
+##           (DevPlan 003 B3: send → notify --severity/--event; stdlib-only: не импортирует
+##           core.internal — паттерн watchdog; PYTHONPATH=platform_base()).
+## @io       ⇥ text: str, severity: str (default warning — reboot.postponed),
+##              event: str (default reboot.postponed), notify_fn: Callable | None = None (DI) → ⎋ bool
 ## @complexity O(1) + 1 subprocess
 ## @invariants  Отказ уведомления — WARN (не меняет политику ребута); никогда не raise
-def notify_telegram(text: str, notify_fn: Callable[[str], bool] | None = None) -> bool:
+def notify_telegram(
+    text: str,
+    severity: str = "warning",
+    event: str = "reboot.postponed",
+    notify_fn: Callable[[str], bool] | None = None,
+) -> bool:
     """Send Telegram notification. DI: notify_fn overrides subprocess channel."""
     if notify_fn is not None:
         return bool(notify_fn(text))
     env = dict(os.environ, PYTHONPATH=platform_base())
     try:
         result = subprocess.run(
-            ["python3", "-m", "core.internal.shared.telegram_notifier", "send", text],
+            [
+                "python3",
+                "-m",
+                "core.internal.shared.notifications",
+                "notify",
+                "--severity",
+                severity,
+                "--event",
+                event,
+                "--context",
+                "reboot",
+                text,
+            ],
             capture_output=True,
             text=True,
             timeout=SYSTEM_CMD_TIMEOUT,
@@ -341,6 +360,8 @@ def check(
             users = ", ".join(active)
             notify_telegram(
                 f"[platform] Ребут отложен: активная SSH-сессия ({users}). Повторная попытка — завтра 04:30.",
+                severity="warning",  # 003 B3: deferred → warning (reboot.postponed)
+                event="reboot.postponed",
                 notify_fn=notify_fn,
             )
             state["content_hash"] = current_hash
@@ -367,6 +388,8 @@ def check(
     if ok:
         notify_telegram(
             "[platform] Ребут выполнен: security-патчи применены (reboot-required закрыт).",
+            severity="info",  # 003 B3: executed → info (reboot.executed)
+            event="reboot.executed",
             notify_fn=notify_fn,
         )
         # Хеш-состояние сбрасываем: после ребута флаг-файл исчезает (apt пересоздаст при необходимости)

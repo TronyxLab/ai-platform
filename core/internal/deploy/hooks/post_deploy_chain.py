@@ -12,7 +12,8 @@
 ##           _module_deploy_hooks). Вызывается DeployOrchestrator._run_post_deploy_chain (делегат)
 ##           и ReceiveFlow (через orchestrator-фабрику, receive_flow.py:385).
 ## @invariants
-##   - Вызывается ТОЛЬКО после успешного деплоя (DEPLOYED/PARTIAL)
+##   - Вызывается после деплоя; статусы DEPLOYED/PARTIAL → notify info (success),
+##     FAILED/ROLLBACK → notify critical (DevPlan 003 A4 — AC-5: deploy FAILED/ROLLBACK уведомляется)
 ##   - notify-hook timeout 30s (CONVERGE_DOCKER_TIMEOUT), generate-catalog timeout 60s
 ##     (SYSTEM_CMD_TIMEOUT), module deploy-hook COMPOSE_UP_TIMEOUT
 ##   - Сбой цепочки → logger.warning (IMP:8), не raise
@@ -22,6 +23,7 @@
 ##     generate-catalog, ДО deploy-hooks; WARN non-fatal (R5)
 ##   - DI (W-H DevPlan 163): run_cmd=None → subprocess.run; platform_root_override=None →
 ##     platform_remote_base(); reconfig_fn=None → lazy run_monitoring_reconfig (канон)
+## @changes 2026-08-16 | DevPlan 003 A4 — _notify_hook: FAILED/ROLLBACK → severity=critical
 ## @rationale research-A §3 B3: единственный прямой subprocess-вызов deploy-кластера
 ##            изолируется в hooks-модуль — orchestrator.py остаётся фасадом, subprocess-
 ##            граница перестаёт смешиваться с оркестрацией.
@@ -55,12 +57,16 @@ _HOOKS_BLOCK = "deploy_hooks"
 # region FUNC__notify_hook
 ## @purpose  Подшаг 1: notify-hook (Telegram) — неблокирующий (always exit 0).
 ##           Best-effort: сбой уведомления НЕ фейлит деплой (D4, дизайн notify-hook).
+##           DevPlan 003 A4: ветка FAILED/ROLLBACK — severity=critical (сейчас шлётся
+##           только success/info); остальные статусы — info.
 ## @io       ⇥ runner: Callable (subprocess-канал), notify_hook: str (путь к скрипту),
 ##              project: str, version: str, status: str → ⎋ None
 ## @complexity — O(1) — single subprocess call with timeout
 ## @invariants
 ##   - timeout=CONVERGE_DOCKER_TIMEOUT (30s), check=False, capture_output=True
 ##   - OSError/TimeoutExpired/SubprocessError → WARN (IMP:8), не raise
+##   - status ∈ {FAILED, ROLLBACK} → --severity critical + 💥-сообщение (AC-5 DevPlan 003)
+##   - прочие статусы (DEPLOYED/PARTIAL/...) → --severity info (существующий контракт)
 def _notify_hook(
     runner: Callable[..., subprocess.CompletedProcess[str]],
     notify_hook: str,
@@ -69,21 +75,29 @@ def _notify_hook(
     status: str,
 ) -> None:
     """Run notify-hook (Telegram) — best-effort, WARN non-fatal."""
+    # DevPlan 003 A4: deploy FAILED/ROLLBACK уведомляется (сейчас только success)
+    failure_status = status.upper() in {"FAILED", "ROLLBACK"}
+    severity = "critical" if failure_status else "info"
+    emoji = "💥" if failure_status else "🚀"
+    if failure_status:
+        message = f"Deploy {project} ({version}) {status.upper()} — healthcheck-rollback"
+    else:
+        message = f"Deployed {project} ({version}) — {status}"
     try:
         runner(
             [
                 notify_hook,
                 "--severity",
-                "info",
-                "🚀",
-                f"Deployed {project} ({version}) — {status}",
+                severity,
+                emoji,
+                message,
             ],
             capture_output=True,
             text=True,
             timeout=CONVERGE_DOCKER_TIMEOUT,
             check=False,
         )
-        logger.info("[IMP:9][DeployOrchestrator][%s] notify-hook sent for %s", _BLOCK, project)
+        logger.info("[IMP:9][DeployOrchestrator][%s] notify-hook sent for %s (status=%s)", _BLOCK, project, status)
     except (OSError, subprocess.TimeoutExpired, subprocess.SubprocessError) as e:
         # Best-effort: сбой уведомления НЕ фейлит деплой (D4, дизайн notify-hook)
         logger.warning("[IMP:8][DeployOrchestrator][%s] notify-hook WARN (non-fatal): %s", _BLOCK, e)

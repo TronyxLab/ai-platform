@@ -361,6 +361,21 @@ def cert_expiry_state_file(env: Mapping[str, str] | None = None) -> Path:
 # endregion FUNC_cert_expiry_state_file
 
 
+# region FUNC_tor_chain_state_file
+## @purpose — Резолвер tor-chain state-файла (DevPlan 003 A3 — канарейка out-of-band):
+##            env TOR_CHAIN_STATE_FILE → {run_base}/tor-chain-state.json.
+##            Дедупликация литерала tor_proxy_check.py (гейт test_gate_run_paths_sole).
+## @io — ⇥ env: dict | None → ⎋ Path
+## @complexity — O(1)
+def tor_chain_state_file(env: Mapping[str, str] | None = None) -> Path:
+    """Resolve tor-chain state path (TOR_CHAIN_STATE_FILE → /var/lib/platform/run/tor-chain-state.json, 003 A3)."""
+    source = os.environ if env is None else env
+    return Path(str(source.get("TOR_CHAIN_STATE_FILE") or run_base(source) / "tor-chain-state.json"))
+
+
+# endregion FUNC_tor_chain_state_file
+
+
 # ── Локальные state/spool-диры (170 W1-A2): /var/lib/platform/* ─────────────────
 # Дедупликация raw-литералов /var/lib/platform/{wal-archive,backup-spool,*-data,.bootstrap,
 # .converge_cooldown.json,.context-pull-ts,.build-cache} в core/internal (гейт

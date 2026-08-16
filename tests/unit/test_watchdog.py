@@ -80,7 +80,7 @@ class FakeDocker:
         if cmd[:2] == ["docker", "restart"]:
             self.restart_calls.append(cmd[2])
             return subprocess.CompletedProcess(cmd, 0, "", "")
-        if cmd[:3] == ["python3", "-m", "core.internal.shared.telegram_notifier"]:
+        if cmd[:3] == ["python3", "-m", "core.internal.shared.notifications"]:
             self.notify_calls.append(cmd)
             return subprocess.CompletedProcess(cmd, 0, "", "")
         msg = f"unexpected cmd: {cmd}"

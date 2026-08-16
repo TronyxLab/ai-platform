@@ -46,9 +46,11 @@ _MAKEFILE_PATH: pathlib.Path = repo_root() / "Makefile"
 # DevPlan 116 B11 T4 (D2): +platform-gate-fast.yml — лёгкий gate-workflow (push main), downstream на нём
 # DevPlan 145 W4 (D-134-L3/L4): +security-scan.yml + hermes-nightly.yml — security CI overlay
 # DevPlan 002 W5 T5.7: build-hermes.yml + build-platform.yml УДАЛЕНЫ (L1 коллапс) — workflow count 10→8
+# DevPlan 003 A2: +heartbeat-check.yml — out-of-band живучесть (cron */30, S3 heartbeat staleness)
 _EXPECTED_WORKFLOWS: set[str] = {
     "core-deploy.yml",
     "deploy-project.yml",
+    "heartbeat-check.yml",
     "hermes-nightly.yml",
     "mirror.yml",
     "platform-gate-fast.yml",
@@ -57,8 +59,9 @@ _EXPECTED_WORKFLOWS: set[str] = {
     "security-scan.yml",
 }
 
-# Expected count: 8 (DevPlan 002: build-hermes.yml + build-platform.yml удалены — L1 схлопнут в L2)
-_EXPECTED_WORKFLOW_COUNT: int = 8
+# Expected count: 9 (DevPlan 002: build-hermes.yml + build-platform.yml удалены — L1 схлопнут в L2;
+# DevPlan 003 A2: +heartbeat-check.yml)
+_EXPECTED_WORKFLOW_COUNT: int = 9
 
 # Deploy workflows that should trigger on platform-gate-fast (workflow_run, D2 — DevPlan 116 B11 T4)
 # DevPlan 002: build-platform.yml удалён (L1 коллапс) — остаются core-deploy + mirror

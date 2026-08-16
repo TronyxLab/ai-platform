@@ -1797,6 +1797,18 @@ gates:
 - id: test_no_yaml_safe_load_node
   test_file: test_gate_node_yaml_single_source.py
   description: 'Auto-discovered gate: test_no_yaml_safe_load_node'
+- id: test_negative_unregistered_event_detected
+  test_file: test_gate_notification_parity.py
+  description: 'Auto-discovered gate: test_negative_unregistered_event_detected'
+- id: test_notification_catalog_valid
+  test_file: test_gate_notification_parity.py
+  description: 'Auto-discovered gate: test_notification_catalog_valid'
+- id: test_notification_channels_parity
+  test_file: test_gate_notification_parity.py
+  description: 'Auto-discovered gate: test_notification_channels_parity'
+- id: test_notification_events_registered
+  test_file: test_gate_notification_parity.py
+  description: 'Auto-discovered gate: test_notification_events_registered'
 - id: test_hermes_compose_has_no_fallback
   test_file: test_gate_password_charset.py
   description: 'Auto-discovered gate: test_hermes_compose_has_no_fallback'

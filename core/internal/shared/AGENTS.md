@@ -1,5 +1,5 @@
-# GREP_SUMMARY: AGENTS.md, shared, inventory, node-yaml, docker-compose, audit-logger, ssh-parser, telegram, docker-auth, age-key, node-detect, vps-readiness, crypto, content-hash, secrets-env, secrets-manifest-reader, deploy-paths, verbs, project-registry, exceptions, timeouts, ssh-opts, contracts, env-requires
-# STRUCTURE: ┌контракт области┐ → ◇ инвентарь 43 модуля (таблица) → ◇ правила добавления → ◇ запреты → ⎋ cross-refs
+# GREP_SUMMARY: AGENTS.md, shared, inventory, node-yaml, docker-compose, audit-logger, ssh-parser, telegram, docker-auth, age-key, node-detect, vps-readiness, crypto, content-hash, secrets-env, secrets-manifest-reader, deploy-paths, verbs, project-registry, exceptions, timeouts, ssh-opts, contracts, env-requires, notifications
+# STRUCTURE: ┌контракт области┐ → ◇ инвентарь 44 модуля (таблица) → ◇ правила добавления → ◇ запреты → ⎋ cross-refs
 # region MODULE_CONTRACT
 ## @purpose  Архитектурный контракт области core/internal/shared/ — инвентарь модулей и правила добавления.
 ## @scope    Все модули под core/internal/shared/.
@@ -14,6 +14,8 @@
 ## @changes 2026-08-15 | DevPlan 172 W5.4 — +http_probe.py (38-й); единый curl-probe (verify + verify_sweep)
 ## @changes 2026-08-16 | DevPlan 177 W3.5 — +yaml_loader.py (39-й); типизированные SoT-YAML читатели
 ## @changes 2026-08-16 | DevPlan 177 W3.1/W3.2 — +retry.py (40-й) +http_client.py (41-й); дедупликация 4 retry-циклов и 5 HTTP-клиентов
+## @changes 2026-08-16 | DevPlan 003 B1 — +notifications.py (44-й); единый notifier-контракт
+##           (Notification/envelope/escape/resolve_chat_id SoT/notify_event; telegram_notifier shim)
 # endregion MODULE_CONTRACT
 
 # core/internal/shared/ — инвентарь модулей
@@ -45,6 +47,7 @@
 | `node_detect.py` | Детекция AGE-ключа (env-цепочка + default key file ~/.config/age/keys.txt — age CLI локация, на dev-машине symlink на ~/.ssh/age-key-personal.txt; только при пустой env) + авто-детекция имени ноды из node-configs (дедупликация bootstrap/converge/node-update) | `detect_age_key()`, `auto_detect_node_name()`, CLI `--detect-age-key` / `--detect-node-name` | bootstrap, converge, node-update |
 | `node_yaml/` | Единый фасад чтения node.yaml — пакет (агрегатор + миксины domains/projects/modules/node/validation/resolve; монолит 1164 LOC разбит) | `NodeYaml(path).get(...)`, CLI `--get/--set` | vhost_renderer, reconciler, converge, scaffold, context_deployer, preflight |
 | `node_resolver.py` | Python-резолв node.yaml (миграция core/lib/node-resolver.sh): 3-path search через NodeYaml.resolve + host-извлечение; CLI resolve/host с exit-контрактом 0/1; shell-фасад node-resolver.sh <100 LOC | `resolve_node_yaml()`, `extract_node_host()`, CLI `resolve --node X` / `host --file F` | node-resolver.sh (фасад: bootstrap.sh, node-update.sh, node-lifecycle.sh, converge.sh, deploy-context.sh, deploy.mk) |
+| `notifications.py` | Единый notifier-контракт (DevPlan 003): Notification dataclass, HTML-конверт, ЕДИНСТВЕННЫЙ escape_html, SoT resolve_chat_id, notify_event (non-blocking/throttle/audit-fallback), CLI notify (нода/Tor) + notify-ci (CI/direct HTTPS) | `notify_event()`, `format_envelope()`, `escape_html()`, `resolve_chat_id()`, `Notification`, CLI `notify`/`notify-ci` | reporting, cert_expiry_check, reboot_policy, security_updates, watchdog, post_deploy_chain, telegram_notifier (shim), notify-telegram action, heartbeat_check |
 | `platform_ports.py` | Единый реестр внутренних (container) портов сервисов платформы (зеркало platform-infra.yaml; 7 RED-дублей портов устранены) | константы портов (`from core.internal.shared.platform_ports import ...`) | llm/key_provisioner, bootstrap/deploy/context_deployer, bootstrap/converge/prometheus_tsdb, monitoring/constants; core/modules НЕ импортируют (cross-layer запрет) |
 | `project_registry.py` | Реестр проектов: регистрация/дерегистрация/список поверх NodeYaml | `validate_project_name()`, `register/unregister/list`, `discover_llm_projects()` (LLM-проекты по ai-platform.yaml llm.enabled=true) | DeployEngine, scaffold, lifecycle, key_provisioner (discover_projects shim → делегирование) |
 | `retry.py` | Единый retry-helper (дедупликация 4 циклов; политики из timeouts.py, exp backoff) | `retry(func, *, attempts, backoff_seconds, retryable, sleep_fn, exception_mode) → T`, `exponential_backoff(retries, *, base, max_seconds)` | state_machine, lifecycle/helpers/system, deploy/channels/base, docker_compose |

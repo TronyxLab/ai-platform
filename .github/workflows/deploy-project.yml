@@ -367,3 +367,29 @@ jobs:
         run: |
           set -euo pipefail
           ssh -i ${{ steps.setup-ssh.outputs.ssh-key-path }} -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o UserKnownHostsFile=${{ steps.setup-ssh.outputs.ssh-known-hosts-path }} ci-deploy@${{ env.ssh_host }} "verify ${{ env.target_node }} ${{ inputs.project_name }}"
+
+      # ─── Failure notification (DevPlan 003 A1) ─────────────────────────
+      # Caller-контекст (TRAP[BUG] 2026-08-03 + гейт test_gate_workflow_org_agnostic):
+      # relative actions (./.github/actions/notify-telegram) и python3 -m core.internal.*
+      # НЕДОСТУПНЫ — workflow исполняется в репозитории ПРОЕКТА (caller). Inline curl —
+      # документированное исключение из дизайн-принципа «CI-хуки не пишут отдельный
+      # curl-клиент» (DevPlan 003 §1): конверт минимален, severity=critical, event=project.deploy_failed.
+      # M4: секреты через env-контекст шага (не shell-интерполяция).
+      - name: Notify on failure
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID_CRITICAL: ${{ secrets.TELEGRAM_CHAT_ID_CRITICAL }}
+        run: |
+          set -uo pipefail
+          if [ -z "${TELEGRAM_BOT_TOKEN}" ] || [ -z "${TELEGRAM_CHAT_ID_CRITICAL}" ]; then
+            echo "::warning::[notify] TELEGRAM secrets not set — failure notification skipped"
+            exit 0
+          fi
+          MSG="🚨 <b>[CRITICAL]</b> [deploy] Deploy project ${{ inputs.project_name }} FAILED (run ${{ github.run_id }})"
+          # non-blocking: уведомление не роняет workflow (результат уже failure)
+          curl -s -m 30 -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID_CRITICAL}" \
+            --data-urlencode "text=${MSG}" \
+            --data-urlencode "parse_mode=HTML" > /dev/null || true
+          echo "[IMP:9][notify] failure notification sent (project=${{ inputs.project_name }})"

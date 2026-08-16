@@ -480,7 +480,7 @@ def test_notify_reads_secrets_and_sends(tmp_path, caplog: pytest.LogCaptureFixtu
 
     with (
         patch.dict(os.environ, {}, clear=True),
-        patch("core.internal.shared.telegram_notifier.send_telegram", side_effect=fake_send),
+        patch("core.internal.shared.notifications.send_telegram", side_effect=fake_send),
     ):
         ok = notify("⚠️", "Disk almost full", severity="warning", secrets_file=str(secrets))
 
@@ -503,7 +503,7 @@ def test_notify_missing_chat_skips_send(tmp_path, caplog: pytest.LogCaptureFixtu
 
     with (
         patch.dict(os.environ, {}, clear=True),
-        patch("core.internal.shared.telegram_notifier.send_telegram", return_value=True) as mock_send,
+        patch("core.internal.shared.notifications.send_telegram", return_value=True) as mock_send,
     ):
         ok = notify("✅", "msg", severity="info", secrets_file=str(secrets))
 
@@ -572,26 +572,27 @@ def test_send_telegram_delivery_failed_marker_http_non200(caplog: pytest.LogCapt
 # 🧪 TRAP[TEST] · NEGATIVE (R5) · notify: send_telegram → False → IMP:9 DELIVERY FAILED (126 D-2)
 # · Scenario: оригинальная форма D-2 — notify() писал «Notification sent» безусловно при
 # ·   send_telegram → False (лживый лог). Точный вход: send_telegram вернул False.
+# ·   DevPlan 003 B3a: notify() делегирует notify_event — маркер сохраняется в новом формате
+# ·   (severity/event/proxy вместо severity/context); контракт «всегда True» сохранён.
 # · Last fail: до 132 W4 — «[IMP:9] Notification sent» даже при провале (telegram_notifier.py:314-316)
 # · Remove if: notify перестанет маркировать провалы доставки
 def test_notify_delivery_failed_marker(tmp_path, caplog: pytest.LogCaptureFixture) -> None:
-    """R5: notify при send_telegram=False логирует IMP:9 DELIVERY FAILED (severity/context) и НЕ «Notification sent»."""
+    """R5: notify при send_telegram=False логирует IMP:9 DELIVERY FAILED (severity/event) и НЕ «Notification sent»."""
     caplog.set_level(logging.INFO)
     secrets = tmp_path / "secrets.env"
     secrets.write_text("TELEGRAM_BOT_TOKEN=123:token\nTELEGRAM_CHAT_ID=-100base\n")
 
     with (
         patch.dict(os.environ, {}, clear=True),
-        patch("core.internal.shared.telegram_notifier.send_telegram", return_value=False),
+        patch("core.internal.shared.notifications.send_telegram", return_value=False),
     ):
         ok = notify("⚠️", "boom", severity="critical", context="watchdog", secrets_file=str(secrets))
 
     assert ok is True, "notify всегда True (неблокирующий контракт сохранён)"
     messages = [r.message for r in caplog.records]
-    assert any(
-        "[IMP:9]" in m and "DELIVERY FAILED" in m and "severity=critical" in m and "context=watchdog" in m
-        for m in messages
-    ), f"R5 FAIL: notify не залогировал IMP:9 DELIVERY FAILED. Logs: {messages}"
+    assert any("[IMP:9]" in m and "DELIVERY FAILED" in m and "severity=critical" in m for m in messages), (
+        f"R5 FAIL: notify не залогировал IMP:9 DELIVERY FAILED. Logs: {messages}"
+    )
     assert not any("Notification sent" in m for m in messages), (
         "R5 FAIL: лживый «Notification sent» при send_telegram=False (исходный вход D-2)"
     )
@@ -608,7 +609,7 @@ def test_notify_success_no_failure_marker(tmp_path, caplog: pytest.LogCaptureFix
 
     with (
         patch.dict(os.environ, {}, clear=True),
-        patch("core.internal.shared.telegram_notifier.send_telegram", return_value=True),
+        patch("core.internal.shared.notifications.send_telegram", return_value=True),
     ):
         ok = notify("✅", "all good", severity="info", context="deploy", secrets_file=str(secrets))
 
@@ -641,7 +642,7 @@ def test_notify_quoted_secrets_env_original_form(tmp_path, caplog: pytest.LogCap
 
     with (
         patch.dict(os.environ, {}, clear=True),
-        patch("core.internal.shared.telegram_notifier.send_telegram", side_effect=_fake_send),
+        patch("core.internal.shared.notifications.send_telegram", side_effect=_fake_send),
     ):
         ok = notify("✅", "quoted env", severity="info", context="deploy", secrets_file=str(secrets))
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: reporting-helpers, run-healthchecks, write-audit-log, send-telegram, telegram-notifier, audit-log
-# STRUCTURE: ▶ run_healthchecks ┌NodeYaml modules → invoke_module_interface liveness┐ → ⚡ write_audit_log ┌/var/log/platform/audit.jsonl JSON-lines (write_audit_entry)┐ → ⚡ send_telegram ┌telegram_notifier (non-fatal)┐ → ⎋
+# GREP_SUMMARY: reporting-helpers, run-healthchecks, write-audit-log, notify-event, telegram, audit-log, severity-routing
+# STRUCTURE: ▶ run_healthchecks ┌NodeYaml modules → invoke_module_interface liveness┐ → ⚡ write_audit_log ┌/var/log/platform/audit.jsonl JSON-lines (write_audit_entry)┐ → ⚡ send_telegram ┌notify_event (shared/notifications, severity errors→critical)┐ → ⎋
 # region MODULE_CONTRACT
 ## @purpose  Reporting I/O-хелперы bootstrap-фаз (healthchecks, audit log, Telegram notify) —
 ##           извлечены из state_machine (B9 T1, U-08). Все функции публичные.
@@ -41,7 +41,6 @@ from core.internal.bootstrap.firewall import PRIVOXY_PORT
 # B3: канонический platform root — shared/deploy_paths (литерал /opt/platform удалён)
 from core.internal.shared.deploy_paths import platform_remote_base
 from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError, ConfigValidationError
-from core.internal.shared.telegram_notifier import send_telegram as _shared_send_telegram
 
 
 class _StateView(Protocol):
@@ -230,10 +229,14 @@ def write_audit_log(sm: StateMachineProtocol, result: str | None = None) -> None
 
 # region FUNC_send_telegram
 ## @purpose  Send Telegram notification with bootstrap/update results (non-fatal).
-## @io       ⇥ sm → ⎋ None (non-fatal); notifier: Callable | None (W4b DI — ленивый default _shared_send_telegram)
+##           DevPlan 003 B3: send_telegram → notify_event (единый конверт/severity-роутинг);
+##           severity: errors>0 → critical, warnings>0 → warning, иначе info.
+## @io       ⇥ sm → ⎋ None (non-fatal); notifier: Callable | None (W4b DI — ленивый default shared send_telegram)
 ## @complexity O(1)
 ## @changes 2026-07-30 | T19 — Replaced inline urllib with shared telegram_notifier.send_telegram()
 ## @changes 2026-08-13 | DevPlan 160 W4b — +notifier (инъекция фабрики send_telegram)
+## @changes 2026-08-16 | DevPlan 003 B3 — миграция на shared/notifications.notify_event
+##           (единый конверт + severity-роутинг; W4b DI-контракт notifier сохранён)
 def send_telegram(
     sm: StateMachineProtocol,
     *,
@@ -254,14 +257,11 @@ def send_telegram(
     errors_count = len(sm.state.errors)
 
     status_suffix = "⚠️ Warnings/Errors:" if errors_count > 0 or warnings_count > 0 else "✅"
-
     msg = f"🚀 [node: {node}] Узел обновлён {status_suffix}\nВремя: {ts}"
-    if warnings_count > 0:
-        for w in sm.state.warnings:
-            msg += f"\n- ⚠️ {w}"
-    if errors_count > 0:
-        for e in sm.state.errors:
-            msg += f"\n- ❌ {e}"
+    details: list[str] = [f"⚠️ {w}" for w in sm.state.warnings] + [f"❌ {e}" for e in sm.state.errors]
+
+    # DevPlan 003 B3: severity по состоянию (errors → critical, warnings → warning, иначе info)
+    severity = "critical" if errors_count > 0 else ("warning" if warnings_count > 0 else "info")
 
     proxy_url = os.environ.get("TELEGRAM_PROXY_URL", f"http://127.0.0.1:{PRIVOXY_PORT}")
     # W4b (160 T4.2): notifier параметром + ленивый default = shared send_telegram (ровно текущее)
@@ -271,10 +271,33 @@ def send_telegram(
     # ·   существующие тесты telegram_notifier патчат urllib.OpenerDirector.open/build_opener (рабочий паттерн);
     # ·   изменение сигнатуры несло бы риск без выгоды — T4.2 «клиент параметром» = инъекция в потребителя.
     # · Rev: если тесты telegram_notifier начнут требовать fake-транспорт без патчей urllib → добавить http_opener.
-    deliver = notifier if notifier is not None else _shared_send_telegram
-    success = deliver(msg, resolved_token, resolved_chat, proxy_url)
-    if success:
-        logger.info("[IMP:9][telegram] Notification sent to chat %s", resolved_chat)
+    # DevPlan 003 B3: DI-контракт сохранён — notifier пробрасывается в notify_event (send_fn).
+    if notifier is not None:
+
+        def _di_send(envelope: str, **kw: object) -> bool:
+            return bool(notifier(envelope, kw.get("bot_token"), kw.get("chat_id"), kw.get("proxy_url")))
+
+        send_fn: Callable[..., bool] | None = _di_send
+    else:
+        send_fn = None
+
+    from core.internal.shared.notifications import Notification, notify_event
+
+    notify_event(
+        Notification(
+            severity=severity,
+            context="bootstrap",
+            event="bootstrap.report",
+            message=msg,
+            details=details,
+            # mode через getattr: тестовые дубли StateMachine не всегда несут mode (W4b DI)
+            corr_id=f"bootstrap-{getattr(sm.state, 'mode', 'update')}-{node}",
+            action="Check bootstrap/update audit log",
+        ),
+        env=dict(os.environ, TELEGRAM_BOT_TOKEN=resolved_token, TELEGRAM_CHAT_ID=resolved_chat),
+        proxy_url=proxy_url,
+        send_fn=send_fn,
+    )
 
 
 # endregion FUNC_send_telegram
