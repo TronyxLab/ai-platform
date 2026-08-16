@@ -47,7 +47,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "ai-instructions @ git+https://github.com/Tronyx161/AI-instructions.git@v0.7.0; python_version >= '3.11'",  # DevPlan 001 R12/T4.3: конвенционный компилятор инструкций (компилятор требует ≥3.11; платформа поддерживает 3.10 — marker разрешает обе)
+    "ai-instructions @ git+https://github.com/Tronyx161/AI-instructions.git@v0.7.0 ; python_version >= '3.11'",  # DevPlan 001 R12/T4.3: конвенционный компилятор инструкций (компилятор требует ≥3.11; платформа поддерживает 3.10 — marker разрешает обе)
     "basedpyright>=1.12.0",
     "boto3-stubs>=1.28.0",
     "deptry>=0.25",  # DevPlan 163 W-D D4 (blocking dep-audit; 0.25.0 yanked → резолвится в 0.25.1)
@@ -77,6 +77,7 @@ ignore = ["DEP001"]
 
 [tool.deptry.per_rule_ignores]
 DEP002 = [
+    "ai-instructions",  # DevPlan 001 T6.1: dev extra git-dep, импортируется тестами
     "basedpyright",
     "boto3-stubs",
     "deptry",
