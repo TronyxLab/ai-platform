@@ -72,6 +72,8 @@ _ALLOWED_MD_PATTERNS: tuple[str, ...] = (
     # сгенерированные (kilo) и процессные артефакты (планы)
     ".kilo/**",
     ".ai/**",
+    # вендоренный runtime ai-instructions (README-контракт апдейта, 2026-08-16)
+    "vendor/**",
 )
 
 # endregion CONSTANTS_ALLOWLIST
