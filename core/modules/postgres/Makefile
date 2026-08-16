@@ -32,12 +32,14 @@ start: ## Start postgres (compose up -d)
 
 # ── Custom backup: pg_dumpall via docker exec ──
 ## backup: Dump all databases to /var/lib/platform/backup-spool/
+## ⚠️ TRAP[BUG] · 1.0.0 · HI · -U postgres хардкод → «role postgres does not exist» на кластерах
+## · с кастомным POSTGRES_USER (secrets). Fix: суперюзер из env КОНТЕЙНЕРА (compose-инъекция).
 backup: ## pg_dump all databases to backup spool
 	@echo "[IMP:7][postgres-make][backup] Starting pg_dump backup"
 	@TIMESTAMP=$$(date -u '+%Y%m%dT%H%M%SZ'); \
 	BACKUP_DIR=/var/lib/platform/backup-spool/postgres; \
 	mkdir -p "$$BACKUP_DIR"; \
-	docker exec $(CONTAINER) pg_dumpall -U postgres \
+	docker exec $(CONTAINER) sh -c 'pg_dumpall -U "$$POSTGRES_USER"' \
 		> "$$BACKUP_DIR/pgdumpall_$${TIMESTAMP}.sql" && \
 	echo "[IMP:9][postgres-make][backup] DONE: pgdumpall_$${TIMESTAMP}.sql" || \
 	{ echo "[IMP:9][postgres-make][backup] FAIL: pg_dump failed" >&2; exit 1; }
@@ -52,7 +54,7 @@ restore: ## Restore from dump file (owner only, requires DUMP_FILE=)
 	@if [[ ! -f "$(DUMP_FILE)" ]]; then \
 		echo "[IMP:9][postgres-make][restore] ERROR: DUMP_FILE not found: $(DUMP_FILE)" >&2; exit 1; \
 	fi
-	docker exec -i $(CONTAINER) psql -U postgres < "$(DUMP_FILE)"
+	docker exec -i $(CONTAINER) sh -c 'psql -U "$$POSTGRES_USER" < /dev/stdin' < "$(DUMP_FILE)"
 	@echo "[IMP:8][postgres-make][restore] Restore complete from $(DUMP_FILE)"
 
 # 🧐 TRAP[DECISION] · 2026-07-18 · — · Custom overrides: postgres-specific lifecycle
