@@ -1,0 +1,43 @@
+# GREP_SUMMARY: status-page test overlay shifted-ports 18082 container_name status-page-test status-metrics-json
+# STRUCTURE: ▶ status-page-test [profiles:status-page] → port 18082:8080 → ┐
+# region MODULE_CONTRACT
+## @purpose  Test overlay for status-page — shifts port to 18082 for CI isolation,
+##           overrides container_name to status-page-test
+## @scope    Included in docker-compose.test.yml via include
+## @invariants
+##   - container_name: status-page-test (prevents collision with base status-page container)
+##   - Port: 18082:8080 (shifted from base 8080 for test isolation; 18080 conflicts with nginx-test, 18081 with cadvisor-test)
+##   - profiles: [status-page] (consistent with base)
+##   - !override tag on overridden keys per test overlay convention (F-7)
+##   - status-metrics.json: mounted from /tmp/run/platform/status-metrics.json (test fixture, 142 W2 container path)
+## @rationale Test overlay pattern from F-7: shifted ports prevent port conflicts in CI;
+##            unique container_name prevents collision with base compose services
+##            when both test and base compose files are loaded.
+## @changes
+##   2026-07-21 | 18080→18082: collided with nginx-test port (wave1-gate-full)
+##   2026-07-23 | docker-health.json → status-metrics.json | META Δ
+##   2026-08-15 | bind-mount collectors/ + renderer/ (Python-пакеты, декомпозиция монолитов) | 170 W7-E2
+# endregion MODULE_CONTRACT
+
+services:
+  status-page:
+    container_name: status-page-test
+    restart: "no"
+    networks: !override
+      - test-proxy-net
+      - test-observability-net
+    ports: !override
+      - "18082:8080"
+    volumes: !override
+      - ${TEST_MODULE_DIR:-.}/app.py:/app/app.py:ro
+      # collectors/ + renderer/ — Python-пакеты (DevPlan 170 W7-E2)
+      - ${TEST_MODULE_DIR:-.}/collectors/:/app/collectors/:ro
+      - ${TEST_MODULE_DIR:-.}/renderer/:/app/renderer/:ro
+      - /tmp/test-node-configs/test-node/node.yaml:/opt/node-configs/test-node/node.yaml:ro
+      - /tmp/run/platform/status-metrics.json:/var/lib/platform/run/status-metrics.json:ro
+
+networks:
+  test-proxy-net:
+    external: true
+  test-observability-net:
+    external: true

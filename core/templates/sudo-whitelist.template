@@ -1,0 +1,62 @@
+# GREP_SUMMARY: sudo-whitelist template roles owner agent ci monitor make-targets no-stop
+# region MODULE_CONTRACT
+## @purpose  Declarative sudo permission map template — parameterized per module
+## @scope    Parsed by sudoers_generator._render_template() via template_engine.render_template to emit /etc/sudoers.d/
+## @usage    template_engine.render_template(sudo-whitelist.template, vars={MODULE_NAME, PLATFORM_ROOT}) (native, DevPlan 094)
+## @invariants
+##   - agent: status, logs, restart, backup — NO stop (agent cannot stop itself, 07 §2.3)
+##   - owner: ALL targets (full control)
+##   - ci: start, stop, restart, status, logs — CI/CD pipeline (no backup triggers from CI)
+##   - monitor: status, logs only (read-only observability)
+##   - Format: <role> make:<target> <absolute-makefile-path>
+##   - Template path: {{PLATFORM_ROOT}}/core/modules/{{MODULE_NAME}}/Makefile
+##   - Generated via visudo -c + atomic mv (lockout-safe, 00 §12)
+## @rationale Agent cannot stop itself — prevents self-shutdown that would break monitoring (07 §2.3)
+##   Restore omitted — Phase 2 scope; if needed later, add make:restore explicitly
+## @changes
+##   2026-07-09 · Created from hermes-agent sudo-whitelist.conf as parameterized template
+##   · Removed build/deploy/build-local targets (removed in Phase 2)
+##   2026-07-18 · T2.D: Migrated from symlink+sources to the template-engine render pipeline
+##   · Replaced hardcoded /opt/core/ paths with {{PLATFORM_ROOT}} variable
+##   · Updated usage docs to reference the template engine instead of inline sed
+##   2026-07-31 · DevPlan 094: shell wrapper deleted — native template_engine.render_template
+## @modulemap MODULE_NAME → module directory and Makefile path
+# endregion MODULE_CONTRACT
+
+# AUTO-GENERATED — do not edit directly.
+# Source of truth: core/templates/sudo-whitelist.template
+# Module name is substituted at bootstrap time: template_engine.render_template
+# Generated from core/templates/sudo-whitelist.template
+
+# Module: {{MODULE_NAME}}
+# Sudo whitelist — merged into /etc/sudoers.d/platform-{{MODULE_NAME}} by setup-node.sh
+# Template: replace {{MODULE_NAME}} with actual module name before deployment
+#
+# Usage:
+#   template_engine.render_template(sudo-whitelist.template, vars={"MODULE_NAME": name, "PLATFORM_ROOT": root})
+#   Generated automatically by sudoers_generator.py / deploy-modules.sh generate_module_sudoers()
+
+# owner — full control (ALL make targets)
+owner make:start    {{PLATFORM_ROOT}}/core/modules/{{MODULE_NAME}}/Makefile
+owner make:stop     {{PLATFORM_ROOT}}/core/modules/{{MODULE_NAME}}/Makefile
+owner make:restart  {{PLATFORM_ROOT}}/core/modules/{{MODULE_NAME}}/Makefile
+owner make:status   {{PLATFORM_ROOT}}/core/modules/{{MODULE_NAME}}/Makefile
+owner make:logs     {{PLATFORM_ROOT}}/core/modules/{{MODULE_NAME}}/Makefile
+owner make:backup   {{PLATFORM_ROOT}}/core/modules/{{MODULE_NAME}}/Makefile
+
+# agent — status, logs, restart, backup — NO stop (07 §2.3)
+agent make:status   {{PLATFORM_ROOT}}/core/modules/{{MODULE_NAME}}/Makefile
+agent make:logs     {{PLATFORM_ROOT}}/core/modules/{{MODULE_NAME}}/Makefile
+agent make:restart  {{PLATFORM_ROOT}}/core/modules/{{MODULE_NAME}}/Makefile
+agent make:backup   {{PLATFORM_ROOT}}/core/modules/{{MODULE_NAME}}/Makefile
+
+# ci — start, stop, restart, status, logs (CI/CD pipeline, no backup from CI)
+ci make:start       {{PLATFORM_ROOT}}/core/modules/{{MODULE_NAME}}/Makefile
+ci make:stop        {{PLATFORM_ROOT}}/core/modules/{{MODULE_NAME}}/Makefile
+ci make:restart     {{PLATFORM_ROOT}}/core/modules/{{MODULE_NAME}}/Makefile
+ci make:status      {{PLATFORM_ROOT}}/core/modules/{{MODULE_NAME}}/Makefile
+ci make:logs        {{PLATFORM_ROOT}}/core/modules/{{MODULE_NAME}}/Makefile
+
+# monitor — read-only status and logs
+monitor make:status {{PLATFORM_ROOT}}/core/modules/{{MODULE_NAME}}/Makefile
+monitor make:logs   {{PLATFORM_ROOT}}/core/modules/{{MODULE_NAME}}/Makefile

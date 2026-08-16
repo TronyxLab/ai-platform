@@ -1,0 +1,48 @@
+# GREP_SUMMARY: litellm docker-compose test override container_name-test cross-platform
+# STRUCTURE: base.yml + test.yml → litellm with -test container_name and shifted port
+# region MODULE_CONTRACT
+## @purpose  Test override for litellm — -test container_name, shifted port (14000:4000), PostgreSQL DATABASE_URL
+## @scope    Only used in test fixtures. Never used in production.
+## @invariants
+##   - container_name: litellm-test — предотвращает конфликт с production litellm
+##   - restart: unless-stopped — тестовые контейнеры перезапускаются при креше (--wait совместимость)
+##   - Port: 127.0.0.1:14000:4000 — избежать production конфликтов
+##   - DATABASE_URL: PostgreSQL — spend_logs запись через pgbouncer:6432 на test-shared-db-net (DevPlan 017 W3.2)
+## @rationale Стандартный test-overlay контракт (DevPlan 04 DD2). PostgreSQL для
+##            spend_logs — тестовый контур должен проверять persistency (T10).
+# endregion MODULE_CONTRACT
+
+services:
+  litellm:
+    container_name: litellm-test
+    networks: !override  # DevPlan 017 W3.2 — test network isolation (db for postgres, observability for scraping, hermes for proxy)
+      - test-shared-db-net
+      - test-observability-net
+      - test-hermes-agent-net
+    ports: !override  # ⚠️ TRAP[BUG] · 2026-07-18 · HIGH · compose merge склеивает ports base+test → тестовый litellm биндит 4000 (F-7) · Fix: !override
+      - "127.0.0.1:14000:4000"
+    restart: "no"
+    healthcheck:
+      # ⚠️ TRAP[BUG] · 2026-07-21 · MED · curl не установлен в litellm образе (ghcr.io/berriai/litellm)
+      # · Root: healthcheck использовал curl, но образ на базе python3 не содержит curl.
+      # · Fix: заменён на python3 — доступен во всех образах litellm.
+      # 🧐 TRAP[DECISION] · 2026-07-21 · — · start_period=45s for test env
+      # · Rejected: start_period=30s (original — borderline during Prisma migrate)
+      # · Reason: test env faster (fewer models), but Prisma migrate still 20-30s
+      # ·   start_period=45s gives 15s buffer beyond typical test startup
+      # · Rev: if test Prisma migrate drops below 10s, revert to start_period=30s
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness', timeout=5)"]
+      interval: 10s
+      start_period: 45s  # 30→45s: test env faster, but Prisma migrate still needs headroom
+      retries: 6
+    environment:
+      # PostgreSQL DSN — pgbouncer:6432 на test-shared-db-net (постгрес запускается тестовой фикстурой)
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@pgbouncer:6432/litellm?sslmode=disable"
+
+networks:
+  test-shared-db-net:
+    external: true
+  test-observability-net:
+    external: true
+  test-hermes-agent-net:
+    external: true

@@ -1,0 +1,44 @@
+# @purpose  macOS-specific Docker Compose override — fixes Docker socket mount for cAdvisor
+# GREP_SUMMARY: docker-compose macos override cadvisor docker-socket
+# STRUCTURE: cadvisor: volumes ← explicit Docker socket mount for macOS Docker Desktop
+# region MODULE_CONTRACT
+## @purpose  macOS-specific override for the root docker-compose stack.
+##           Docker Desktop on macOS stores the Docker socket at
+##           ~/.docker/run/docker.sock with a symlink at /var/run/docker.sock
+##           pointing to it. The /var/run:/var/run:ro mount brings the symlink
+##           but not its target — breaking cAdvisor's Docker API integration.
+##           This override mounts the real socket file directly.
+## @scope    Only affects cAdvisor service.
+## @invariants
+##   - Only applied on macOS (used with -f docker-compose.macos.yml)
+##   - Mounts ${HOME}/.docker/run/docker.sock directly (HOME env var expanded by compose)
+##   - Does NOT affect Linux hosts (they don't need this override)
+## @rationale macOS Docker Desktop uses a different socket path than Linux.
+##           The symlink resolution fails inside the Linux VM. Mounting the
+##           real socket file directly fixes cAdvisor's /docker/ endpoint.
+## @changes  2026-07-10 | Created to fix cAdvisor /docker/ HTTP 500 on macOS
+## @changes  2026-08-01 (DevPlan 116 B3 T4, U-49): consolidated volumes live in root
+##           docker-compose.yml (единый SoT). Этот файл НЕ удаляется — cadvisor — реальный
+##           сервис (infra-metrics, Makefile подключает на darwin). Override согласован с базой.
+# endregion MODULE_CONTRACT
+
+services:
+  cadvisor:
+    # 164 W1-5: v0.60.5 падает на macOS-VM — «could not detect clock speed» (/proc/cpuinfo
+    # без cpu MHz на ARM-VM Docker Desktop); VPS-ноды (x86_64, cpu MHz есть) используют
+    # v0.60.5 из base.yml. Локальный dev-override пинит последний рабочий на macOS.
+    image: gcr.io/cadvisor/cadvisor:v0.55.1@sha256:3de2bd5203120b866d74a9b283b2ffb8ec382fbf9dc321814700c6ea6f44ec57
+    volumes: !override
+      # 🧐 TRAP[DECISION] · 2026-07-12 · — · volumes: !override — force replace, not concatenate
+      # ·   Docker Compose v2 concatenates list values on merge — listing all 4 mounts
+      # ·   in this override still appends them to the base volumes (/var/run:/var/run:ro
+      # ·   from docker-compose.yml persists). The symlink /var/run/docker.sock →
+      # ·   ~/.docker/run/docker.sock resolves inside the container to a non-existent
+      # ·   target, causing cAdvisor /docker/ → HTTP 500.
+      # ·   `volumes: !override` (Compose v2.24+) replaces the entire list instead of
+      # ·   concatenating — only these 4 mounts are applied, without /var/run:/var/run:ro.
+      # ·   Rev: if Compose changes default merge strategy, remove !override.
+      - /:/rootfs:ro
+      - ${HOME}/.docker/run/docker.sock:/var/run/docker.sock:ro
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro

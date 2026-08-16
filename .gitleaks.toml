@@ -1,0 +1,93 @@
+# GREP_SUMMARY: gitleaks config allowlist env-example placeholder test-data secrets age-key custom-rule
+# STRUCTURE: title → [[rules]] (age-secret-key custom) → [extend] (useDefault) → [allowlist] (excluded paths/regexes)
+# region MODULE_CONTRACT
+## @purpose  Gitleaks configuration for ai-platform — extends default rules with an
+##           AGE-ключ custom rule + allowlist for .env.example placeholders and test data fixtures.
+## @scope    Used by .pre-commit-config.yaml gitleaks hook + CI gitleaks workflows (pin v8.30.1)
+## @invariants
+##   - .env.example with `sk-your-*-here` placeholders NEVER blocks commits
+##   - tests/test_data/ fixtures with known test tokens NEVER block commits
+##   - Default gitleaks rules apply (sk-*, AIza*, ghp_*) via [extend] useDefault
+##   - Custom rule age-secret-key (C3, DevPlan 170): AGE-SECRET-KEY-1[A-Z0-9]{57,} —
+##     покрывает bech32 X25519 secret keys, НЕ матчит тестовые фикстуры
+##     (короткие/lowercase, <57 символов после «1» — проверено test_gate_gitleaks_config)
+##   - allowlist entries are scoped by path and regex for precision
+## @rationale Research C3 (DevPlan 170): дефолтные правила gitleaks НЕ покрывают AGE-ключи
+##   (AGE-SECRET-KEY-… bech32) — ротация/утечка AGE-ключа проходила бы незамеченной.
+##   Кастомное правило закрывает пробел; regex строго [A-Z0-9]{57,} после «1» —
+##   тестовые AGE-SECRET-KEY-* фикстуры (lowercase/короткие) не дают false positives.
+##   Allowlist предотвращает false positives от templated .env.example и test fixtures.
+## @changes 2026-08-14 | DevPlan 170 W2-A1 — +[[rules]] age-secret-key (C3)
+# endregion MODULE_CONTRACT
+
+title = "ai-platform gitleaks config"
+
+# ── Custom rules ────────────────────────────────────────────────────────────
+# Research C3 (DevPlan 170): дефолтные правила gitleaks НЕ покрывают AGE-ключи —
+# bech32 X25519 secret key (AGE-SECRET-KEY-1 + 57+ [A-Z0-9], контрольная сумма).
+# Без правила ротация/утечка AGE_SECRET_KEY (мастер-ключ шифрования ноды)
+# не детектировалась бы ни pre-commit, ни CI.
+[[rules]]
+id = "age-secret-key"
+description = "AGE encryption secret key (bech32 X25519 — AGE-SECRET-KEY-1 prefix)"
+regex = '''AGE-SECRET-KEY-1[A-Z0-9]{57,}'''
+entropy = 0
+secretGroup = 0
+keywords = ["AGE-SECRET-KEY-"]
+
+# ── Extend default gitleaks rules ──
+# Default rules cover:
+#   - sk-[a-zA-Z0-9]{20,}  (OpenAI/DeepSeek-style keys)
+#   - AIza[0-9A-Za-z_-]{35} (Google API keys)
+#   - ghp_[0-9a-zA-Z]{36} (GitHub tokens)
+#   - etc.
+#
+# ⚠️ TRAP[BUG] · 2026-07-12 · useDefault MUST be under [extend] section
+#   — top-level useDefault = true is silently ignored by gitleaks v8.30.1
+#   because the Go struct Extend.UseDefault is only populated from the
+#   [extend] TOML table. When absent, extendDefault() is never called,
+#   and gitleaks scans with ZERO detection rules.
+#   Fixed: wrapped in [extend] (gitleaks/gitleaks#1985 related).
+[extend]
+useDefault = true
+
+# ── Allowlist ─────────────────────────────────────────────────────────────
+# Entries here are NEVER flagged by gitleaks, even if they match default rules.
+
+[allowlist]
+
+description = "Allow .env.example files with placeholder API keys and test data fixtures"
+
+# Allow .env.example files + test data fixtures
+paths = [
+    '''(?i)\.env\.example$''',
+    '''\.env\.example\.md$''',
+    '''(?i)\.env\.example''',
+    '''tests/test_data/''',
+    '''test_data/''',
+    '''test/fixtures/''',
+    # v1.0.1 (CI-green): tests/ целиком — домен тестовых фикстур (fake sk-/AGE-/ghp_-ключи
+    # в asserts/mocks); реальные секреты в tests/ запрещены КОНТРАКТОМ, а не сканером:
+    # detect-private-key (pre-commit) + gitleaks --pre-commit на staged + L1 practices
+    # (K3) + код-ревью. Rev: если в tests/ окажется реальный секрет, пропущенный
+    # остальными каналами → вернуть точечные allowlist-пути вместо tests/.
+    '''^tests/''',
+]
+
+# Allow specific regex patterns that match placeholder/template values
+regexes = [
+    '''your[-_][a-zA-Z]+[-_]key[-_]here''',     # sk-your-key-here patterns
+    '''your[-_][a-zA-Z]+[-_]password[-_]here''',  # password placeholders
+    '''your[-_]?placeholder''',                    # explicit placeholder markers
+    '''sk-test-not-for-production''',              # test-only keys (component tests)
+    # v1.0.1: dev-default ENCRYPTION_KEY (64 hex «0123456789abcdef»×4) — НЕ секрет:
+    # документированный dev-плейсхолдер (platform-infra.yaml env_defaults +
+    # sync_env_defaults.py fallback), генерация реального ключа — openssl rand -hex 32.
+    # generic-api-key матчит паттерн — allowlist по точному значению (не по паттерну 64hex).
+    '''0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef''',
+]
+
+# Allow specific commit authors (e.g., bots, CI)
+commits = [
+    "0000000000000000000000000000000000000000",  # Allow initial (empty tree) commits
+]

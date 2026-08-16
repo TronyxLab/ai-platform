@@ -1,0 +1,44 @@
+# GREP_SUMMARY: provisioner-call composite-action provision-environment platform-env-idempotent networks volumes
+# STRUCTURE: inputs:scope(default:all,comma-separated) → ◇ split → ◇ bash provision-environment.sh --scope  per scope → ⎋ idempotent
+# region MODULE_CONTRACT
+## @purpose  Canonical provisioner invocation: thin wrapper over
+##           core/internal/provision-environment.sh. Standardizes provisioning
+##           calls across all CI workflows with a simple input interface.
+## @scope    Used by platform-test.yml, build-platform.yml, push-gate.yml —
+##           replaces 4× raw shell calls to provision-environment.sh.
+## @invariants
+##   - scope: comma-separated (networks,volumes,env,all), default: all
+##   - Delegates to core/internal/provision-environment.sh (Single Source of Truth)
+##   - Idempotent: repeated calls with same scope are no-ops
+## @rationale  DevPlan 017 T12: consolidate 5× raw provisioner calls across workflows.
+##             Single composite action reduces drift risk when adding new scopes/flags.
+##             Comma-separated scope enables callers to pass multiple scopes (e.g.
+##             "networks,volumes" for build-platform.yml) without action-level changes.
+## @changes — 2026-07-16 | Extracted from 5× raw invocations per DevPlan 017 T12
+# endregion MODULE_CONTRACT
+
+name: 'Provision Environment'
+description: 'Create Docker networks, volume directories, and export CI env vars from platform-env.yaml'
+
+inputs:
+  scope:
+    description: 'Provisioning scope — comma-separated (networks,volumes,env,all)'
+    required: false
+    default: 'all'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Provision environment (${{ inputs.scope }})
+      shell: bash
+      run: |
+        # Split comma-separated scope into individual --scope arguments
+        IFS=',' read -ra SCOPES <<< "${{ inputs.scope }}"
+        ARGS=()
+        for s in "${SCOPES[@]}"; do
+          s_trimmed=$(echo "$s" | xargs)
+          if [ -n "$s_trimmed" ]; then
+            ARGS+=("--scope" "$s_trimmed")
+          fi
+        done
+        bash core/internal/provision-environment.sh "${ARGS[@]}"

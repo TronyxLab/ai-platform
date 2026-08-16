@@ -1,0 +1,139 @@
+# @purpose  Base compose definition for postgres Docker module — container_name:postgres/pgbouncer, profiles, x-logging, command loads mounted configs
+# GREP_SUMMARY: postgres docker-compose shared-db-net profiles restart-unless-stopped stop-grace-period pgbouncer command-loads-config wildcard DATABASE_URLS auth-delegation
+# STRUCTURE: ▶ postgres:16 [profiles:postgres] → ⚡ command -c config_file -c hba_file → shared-db-net → pgbouncer:6432 [profiles:postgres] wildcard DATABASE_URLS → pg_isready healthcheck → ┐
+# region MODULE_CONTRACT
+## @purpose  Base compose definition for postgres Docker module
+## @scope    Merged with root docker-compose.yml via include:
+## @invariants
+##   - profiles: [postgres] — pluggability: only included when COMPOSE_PROFILES contains postgres
+##   - NO ports: directive — no host port mapping (internal network only)
+##   - restart: unless-stopped — Docker policy (not manual lifecycle management)
+##   - stop_grace_period: 60s — WAL flush time
+##   - shared-db-net: external: true + name: shared-db-net — фиксированное имя сети
+##     (сужение поверхности дрейфа)
+##   - Data volume mounted for persistence
+##   - command: postgres -c config_file=/etc/postgresql/postgresql.conf -c hba_file=/etc/postgresql/pg_hba.conf
+##     — bind-mounted configs are applied via -c flags, NOT via default paths
+##   - pgbouncer: DATABASE_URLS = URL без имени БД → wildcard '*' маршрутизация (DevPlan 133 D5):
+##     роли проектов auth-делегируются в postgres (auth_query/pg_shadow); новые БД подхватываются
+##     без рестарта пулера
+## @rationale Profiles enable selective startup via `make up MODULES=postgres`.
+##            command -c flags are REQUIRED: without them, postgres ignores bind-mounted
+##            config files and uses its own defaults (B1 fix, T5.2).
+##            Фиксированное имя shared-db-net уменьшает поверхность дрейфа.
+##            Wildcard pgbouncer (D5): регенерация DATABASE_URLS при каждом деплое давала
+##            рестарт пулера и гонки; дикая карта — нативная возможность edoburu/pgbouncer
+##            (entrypoint.sh: `${DB_NAME:-*} = host=... auth_user=postgres`).
+## @changes  2026-08-03 · DevPlan 133 D5 — DATABASE_URLS: 3 URL → 1 wildcard URL (роли проектов)
+# endregion MODULE_CONTRACT
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
+services:
+  postgres:
+    image: postgres:18.4@sha256:4cc13dede823cab4e05290c7fb3350fb4e599ecabd9b07e6706b5d5e8f5bc929
+    container_name: postgres
+    profiles: [postgres]
+    command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf", "-c", "hba_file=/etc/postgresql/pg_hba.conf"]
+    restart: unless-stopped
+    stop_grace_period: 60s
+
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          pids: 256
+        reservations:
+          memory: 512M
+    logging: *default-logging
+
+    environment:
+      POSTGRES_USER: "${POSTGRES_USER:-postgres}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?PG_PASSWORD_REQUIRED}"
+      # 🧐 TRAP[DECISION] · 2026-08-11 · — · Ротация POSTGRES_PASSWORD отменена решением 2026-08-11
+      # · Rejected: реализация ротации через secrets_manager (риск: рассинхрон потребителей;
+      # ·   >30 LOC, не unit-тестируема без живого postgres — native pytest)
+      # · Reason: решение оператора 2026-08-11 (DevPlan 145 W3, D-130-P3-4) — пароль генерируется
+      # ·   при initdb/bootstrap и НЕ ротируется. Смена env НЕ ротирует пароль
+      # ·   в работающей БД (pg_authid) — только initdb-время.
+      # · Rev: если появится требование ротации пароля БД — переоткрыть D-130-P3-4 с автоматизацией.
+      POSTGRES_DB: "${POSTGRES_DB:-platform}"
+
+    volumes:
+      # PG18+ (164 W1-5): mount в PARENT-директорию /var/lib/postgresql — образ 18+
+      # хранит данные в major-специфичной поддиректории (18/docker) и отказывается
+      # стартовать при данных в /var/lib/postgresql/data (docker-library/postgres #1259).
+      - postgres-data:/var/lib/postgresql
+      - ./config/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+      - ./config/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+      - ./init:/docker-entrypoint-initdb.d:ro
+      - wal-archive:/var/lib/platform/wal-archive
+
+    networks:
+      shared-db-net:
+        aliases:
+          - postgres
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -h 127.0.0.1 -t 5"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  pgbouncer:
+    image: ${PGBOUNCER_IMAGE:-edoburu/pgbouncer:v1.25.2-p0@sha256:7d7a27d9e90985cab5cf42256f5c13a3120baa4b055b69df37beb272b89b2340}
+    container_name: pgbouncer
+    profiles: [postgres]
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # DevPlan 133 D5: DATABASE_URLS = одна URL БЕЗ имени БД → entrypoint генерирует
+      # wildcard '* = host=postgres port=5432 auth_user=postgres' (нативная возможность
+      # edoburu/pgbouncer: `${DB_NAME:-*} = ...` в entrypoint.sh). Роли проектов резолвятся
+      # auth_query'ем из postgres (pg_shadow, auth_user=postgres — суперпользователь) —
+      # БЕЗ регенерации pgbouncer.ini при каждой новой БД.
+      DATABASE_URLS: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?PG_PASSWORD_REQUIRED}@postgres:5432/"
+      DB_USER: "${POSTGRES_USER:-postgres}"
+      DB_PASSWORD: "${POSTGRES_PASSWORD:?PG_PASSWORD_REQUIRED}"
+      LISTEN_PORT: "6432"
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: "50"
+      DEFAULT_POOL_SIZE: "10"
+      RESERVE_POOL_SIZE: "5"
+      SERVER_IDLE_TIMEOUT: "600"
+      # scram-sha-256 + auth_query по умолчанию (pg_shadow) — wildcard auth-делегация (D5)
+      AUTH_TYPE: scram-sha-256
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+          pids: 256
+        reservations:
+          memory: 32M
+    networks:
+      shared-db-net:
+        aliases:
+          - pgbouncer
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 6432 -U ${POSTGRES_USER:-postgres} -t 3"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+networks:
+  # ⚠️ TRAP[BUG] · 2026-07-15 · MED · DNS-коллизия алиаса "postgres" при двух стеках на одной shared-db-net
+  # · Symptom: pgbouncer тестового стека коннектится к чужому postgres → wrong password type
+  # · Root: alias postgres не уникален в внешней сети, Docker DNS round-robin
+  # · Fix: shared-db-net фиксирован (имя сети не параметризуется — YAGNI).
+  # ·   Тестовые стеки используют изолированные сети — коллизия не возникает.
+  shared-db-net:
+    external: true
+    name: shared-db-net

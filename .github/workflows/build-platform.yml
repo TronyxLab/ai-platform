@@ -1,0 +1,281 @@
+# GREP_SUMMARY: build-platform sha-aware-aggregator workflow-run platform-gate-fast hermes-agent-base docker-buildx smoke-test load-true provisioner pull-l1 fallback-build
+# STRUCTURE: on:workflow_run(platform-gate-fast:completed,main) + workflow_dispatch → push-filter → verify SHA → ◇ owner==tronyx161 ? build L1 from source : pull public L1 (fallback build) → smoke test → [source org] push L1 → cleanup
+# region MODULE_CONTRACT
+## @purpose  SHA-aware platform agent build: triggered by platform-gate-fast success, acquires the L1
+##           hermes-agent-base image (build from sources in tronyx161, OR pull the public
+##           ghcr.io/tronyx161/hermes-agent-base:latest distribution base in context orgs),
+##           runs smoke test. Manual workflow_dispatch also validates SHA.
+## @scope    Mirrored into context orgs (github.repository_owner != tronyx161) — context-dependent
+##           L1 acquisition (DevPlan 116 B3 T7, U-60, D1). Uses SHA-aware aggregator (D4).
+## @invariants
+##   - Triggers on workflow_run of platform-gate-fast (D2, DevPlan 116 B11 T4 — лёгкий gate)
+##   - Push filter: github.event.workflow_run.event == 'push' prevents build on PR trigger
+##   - Verifies platform-gate-fast succeeded for same SHA via GitHub API
+##   - tronyx161 (source org): builds L1 from sources (load:true) + pushes to ghcr.io (DR backup +
+##     distribution base). Context orgs: pull ghcr.io/tronyx161/hermes-agent-base:latest anonymously
+##     + docker tag hermes-agent-base:latest; pull failure → fallback build from sources.
+##   - L1 is used as BUILD-BASE and smoke target — context orgs NEVER run L1 as runtime (runtime = L2).
+##   - Smoke test: docker compose up + curl :9119/ + docker compose down
+##   - Cache: type=gha,scope=hermes-agent-base (build path only)
+##   - Provisioner: provision-environment.sh replaces inline docker network create
+## @rationale  SHA-aware prevents build after partial pipeline. L1 built ONCE in tronyx161 (public
+##             package — distribution base per D1); context orgs pull anonymously (0 keys in foreign
+##             repos) and build only their thin L2. Fallback build covers registry outage
+##             (eventual-consistency of :latest is documented — releases use digest-pin).
+##             DevPlan 116 B11 T4 (D2, U-57): trigger переключён на platform-gate-fast —
+##             build не ждёт full-gate + integration + docker-степы platform-test.
+## @changes — 2026-07-15 | Trigger: main-full-gate→platform-test + push event filter
+## @changes — 2026-07-15 | Inline docker network create → provision-environment.sh --scope networks --scope volumes
+## @changes — 2026-07-15 | Removed inline sudo mkdir (provisioner volumes scope handles it)
+## @changes — 2026-08-01 | DevPlan 116 B3 T7 (U-60, D1): context-dependent L1 — tronyx161 builds+pulls
+##             nothing; context orgs pull public L1 (fallback → build). Push L1 guarded to source org.
+## @changes — 2026-08-01 | DevPlan 116 B11 T4 (D2): trigger → platform-gate-fast
+# endregion MODULE_CONTRACT
+
+name: Build Platform Agent
+
+on:
+  workflow_run:
+    workflows: ["platform-gate-fast"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.workflow_run.head_sha || github.sha }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/hermes-agent-base
+  DOCKER_BUILDKIT: 1
+
+jobs:
+  verify-and-build:
+    # Push filter: only build when triggered by push event (not PR)
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # C-6/C-10 (DevPlan 136 W11 T11.4): source-org step коммитит .github/l1-distribution-digest
+      packages: write  #   (GITHUB_TOKEN-коммиты НЕ триггерят workflow-раны — GitHub documented, loop'а нет)
+      actions: read
+
+    steps:
+      # ⚠️ TRAP[BUG] · 2026-07-23 · P0 · sha-resolve before checkout — local action not found
+      # · Same fix as core-deploy.yml (F2): checkout must precede any ./.github/actions/* usage
+
+      # ─── Step 1: Checkout ─────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      # ─── Step 2: SHA resolution + verification (canonical composite) ──
+      # DevPlan 116 B11 T4 (D2): верифицируется platform-gate-fast (workflow-file), не platform-test
+      - name: Resolve SHA + verify platform-gate-fast
+        id: sha
+        uses: ./.github/actions/sha-resolve
+        with:
+          verify: 'true'
+          workflow-file: 'platform-gate-fast.yml'
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # ⚠️ TRAP[BUG] · 2026-07-18 · HI · same fix as platform-test.yml — ghcr.io 403 on cache
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # ─── Step 3: Provision environment ────────────────────────────────
+      - name: Provision Docker environment (networks + volumes)
+        uses: ./.github/actions/provisioner-call
+        with:
+          scope: networks,volumes
+
+      # ─── Step 4: Acquire L1 hermes-agent-base (context-dependent, B3 T7/D1 + C-6/C-10 digest-pinning) ──
+      # tronyx161 (source org): builds L1 from sources (docker-build-cache path below).
+      # Context orgs: pull the PUBLIC distribution base by PINNED DIGEST from
+      #   .github/l1-distribution-digest (обновляется source-org шагом ниже; репо доставляется
+      #   через mirror.yml), tag locally as hermes-agent-base:latest.
+      # Digest-pull failure / missing digest file → явный ::error:: маркер + fallback build
+      #   (C-10: :latest eventual-consistency — releases use digest-pin, DevPlan 136 W11 T11.4).
+      - name: Pull L1 distribution base (context org, digest-pinned)
+        id: pull-l1
+        if: github.repository_owner != 'tronyx161'
+        run: |
+          DIGEST_FILE=".github/l1-distribution-digest"
+          if [ ! -f "$DIGEST_FILE" ]; then
+            echo "::error::[IMP:10][CI][L1] $DIGEST_FILE missing — context repo not synced; falling back to build from sources"
+            echo "pulled=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          DIGEST=$(tr -d '[:space:]' < "$DIGEST_FILE")
+          if [ -z "$DIGEST" ]; then
+            echo "::error::[IMP:10][CI][L1] $DIGEST_FILE empty — malformed; falling back to build from sources"
+            echo "pulled=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          REF="ghcr.io/tronyx161/hermes-agent-base@$DIGEST"
+          if docker pull "$REF"; then
+            docker tag "$REF" hermes-agent-base:latest
+            echo "pulled=true" >> "$GITHUB_OUTPUT"
+            echo "[IMP:9][CI][L1] Pulled public L1 distribution base by pinned digest ($DIGEST)"
+          else
+            echo "::error::[IMP:10][CI][L1] L1 digest pull FAILED for $REF — stale digest? Falling back to build from sources"
+            echo "pulled=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ─── Step 5: Build L1 from sources (source org / pull-fallback) ────
+      # ⚠️ TRAP[DECISION] · 2026-08-03 · — · cache-backend=gha (DevPlan 123 T1, P-13)
+      # · Rejected: registry-cache дефолт (type=registry в ghcr.io/<owner>/ai-platform-build-cache)
+      # · Reason: 403 на запись кэша (прецедент 2026-07-18) — GITHUB_TOKEN не имеет write
+      # ·   на пакет ai-platform-build-cache. gha-кэш не требует ghcr-прав (P-13 случай б).
+      # · Rev: если packages:write на ai-platform-build-cache восстановлен — вернуть registry
+      - name: Build hermes-agent-base image
+        if: github.repository_owner == 'tronyx161' || steps.pull-l1.outputs.pulled != 'true'
+        uses: ./.github/actions/docker-build-cache
+        with:
+          context: core/modules/hermes-agent/build
+          file: core/modules/hermes-agent/build/Dockerfile
+          tags: hermes-agent-base:latest
+          cache-scope: hermes-agent-base
+          cache-backend: gha
+
+      # ─── Step 6: Smoke test (L1 standalone = «базовая платформа без контекста для тестирования») ──
+      # v1.0.1 (round 9): .env ← .env.example — dev-defaults из env_defaults SoT
+      # (POSTGRES_PASSWORD=test-pg-pwd и пр., НЕ production-секреты); compose читает .env
+      # автоматически. Без этого «required variable POSTGRES_PASSWORD is missing a value».
+      - name: Prepare dev env (.env from .env.example)
+        run: |
+          cp .env.example .env
+          grep -q "^POSTGRES_PASSWORD=" .env && echo "[IMP:9][dev-env] .env ready (dev-defaults from env_defaults SoT)"
+          mkdir -p /tmp/nginx-overlay
+
+      - name: Pull dependency images
+        env:
+          COMPOSE_PROFILES: hermes-agent
+        run: |
+          echo "=== Pulling images from compose file ==="
+          # 142 W7 (R10): root docker-compose.yml — SoT volumes hermes-data (U-49);
+          # base.yml в одиночку даёт «undefined volume hermes-data» (R10) — root include'ит его.
+          docker compose -f docker-compose.yml
+
+      - name: Smoke test — compose up and healthcheck
+        env:
+          COMPOSE_PROFILES: hermes-agent
+          # v1.0.1: compose-интерполяция ${NGINX_OVERLAY_DIR:?...} срабатывает при ЗАГРУЗКЕ
+          # всех base.yml (до профильной фильтрации) — пустой дефолт .env → error.
+          # Smoke-профиль не поднимает nginx — значение нужно только для интерполяции.
+          NGINX_OVERLAY_DIR: /tmp/nginx-overlay
+        run: |
+          echo "=== Smoke test: Starting hermes-agent with built image ==="
+          SHA="${{ steps.sha.outputs.sha }}"
+
+          # Ensure bind-mount source directory exists (volume: hermes-data → /var/lib/platform/hermes-agent/data)
+          sudo mkdir -p /var/lib/platform/hermes-agent/data
+
+          # ⚠️ TRAP[DECISION] · 2026-07-24 · HI · CI smoke test — use CI credentials, not loopback
+          # · HERMES_DASHBOARD_HOST=127.0.0.1 breaks Docker port mapping (dashboard listens on
+          # ·   container loopback, unreachable from host via port mapping). Use 0.0.0.0 default.
+          # · CI credentials come from platform-env.yaml env_defaults (not production secrets) —
+          # ·   v1.0.1 (round 11): secrets.HERMES_DASHBOARD_PASSWORD был ПУСТЫМ в repo-secrets →
+          # ·   readiness-curl с пустым паролем падал («Agent not ready after 60s»); пароль
+          # ·   теперь из .env (dev-default test-db-pwd, готовится шагом Prepare dev env).
+          # · OPENAI_API_KEY set to CI default to avoid compose warning.
+          # 142 W7 (R10): root docker-compose.yml — SoT volumes hermes-data (U-49);
+          # base.yml в одиночку даёт «undefined volume hermes-data» (R10) — root include'ит его.
+          CONTEXT_IMAGE="hermes-agent-base:latest" \
+          OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY }}" \
+          API_SERVER_ENABLED="false" \
+          docker compose -f docker-compose.yml \
+            --project-name build-platform-smoke \
+            up -d
+
+          DASH_PWD="$(grep '^HERMES_DASHBOARD_PASSWORD=' .env | cut -d= -f2-)"
+          echo "=== Waiting for agent readiness (60s max) ==="
+          for i in $(seq 1 30); do
+            if curl -sf -u "admin@ai-platform.local:${DASH_PWD}" http://localhost:9119/ > /dev/null 2>&1; then
+              echo "=== Agent ready on :9119 after ${i}s ==="
+              break
+            fi
+            if [ $i -eq 30 ]; then
+              echo "=== ERROR: Agent not ready after 60s ==="
+              # 142 W7 (R10): root docker-compose.yml — SoT volumes hermes-data (U-49);
+              # base.yml в одиночку даёт «undefined volume hermes-data» (R10) — root include'ит его.
+              docker compose -f docker-compose.yml \
+                --project-name build-platform-smoke logs
+              # 142 W7 (R10): root docker-compose.yml — SoT volumes hermes-data (U-49);
+              # base.yml в одиночку даёт «undefined volume hermes-data» (R10) — root include'ит его.
+              docker compose -f docker-compose.yml \
+                --project-name build-platform-smoke down -v
+              exit 1
+            fi
+            sleep 2
+          done
+
+          echo "=== Dashboard endpoint: $(curl -s -o /dev/null -w '%{http_code}' -u 'admin@ai-platform.local:${HERMES_DASHBOARD_PASSWORD}' http://localhost:9119/) ==="
+          echo "=== Smoke test PASSED ==="
+
+      - name: Cleanup
+        if: always()
+        env:
+          COMPOSE_PROFILES: hermes-agent
+        run: |
+          # 142 W7 (R10): root docker-compose.yml — SoT volumes hermes-data (U-49);
+          # base.yml в одиночку даёт «undefined volume hermes-data» (R10) — root include'ит его.
+          docker compose -f docker-compose.yml \
+            --project-name build-platform-smoke down -v 2>/dev/null || true
+
+      # ─── Step 7: Push L1 to ghcr.io (SOURCE ORG ONLY — DR backup + distribution base) ───
+      # Context orgs must NOT push L1 — they pull the public base (D1). GHCR_OWNER default
+      # resolves to github.repository_owner in tronyx161; guarded here explicitly.
+      # ⚠️ TRAP[DECISION] · 2026-08-03 · — · strict push в CI (DevPlan 123 T1, P-13)
+      # · Rejected: legacy non-fatal push (make hermes-push-l1 без CI: -docker push || echo)
+      # · Reason: non-fatal маскировал 403 на push L1 (P-13 случай а). GitHub Actions
+      # ·   экспортирует CI=true автоматически → make hermes-push-l1 в строгом режиме:
+      # ·   docker push с проверкой rc и логом ошибки. Локальный DR-backup остаётся non-fatal.
+      # · Rev: если L1 push станет необязательным в CI — вернуть best-effort
+      - name: Push L1 to ghcr.io (source org — backup + distribution base)
+        if: success() && github.repository_owner == 'tronyx161'
+        # v1.0.1 TRAP[BUG]: GitHub Actions НЕ экспортирует CI=true (конвенция Travis) —
+        # make hermes-push-l1 шёл по non-fatal ветке (|| echo «Push skipped») → маскировка
+        # реальной push-ошибки → Sync L1 digest падал на пустых RepoDigests. CI=1 явно.
+        # H13 (security hardening): этот DR-путь (make hermes-push-l1 = docker tag + push) —
+        # НЕ SBOM/provenance-потребитель (attestations генерирует только build-hermes.yml
+        # build-push-action). DR-путь — disaster recovery, не релизный пайплайн.
+        run: CI=1 make hermes-push-l1
+
+      # ─── Step 8: Sync L1 distribution digest (SOURCE ORG ONLY — C-6/C-10, DevPlan 136 W11 T11.4) ───
+      # После push'а L1 фиксирует digest в .github/l1-distribution-digest — context-орги пулят
+      # ПО PINNED DIGEST (не mutable :latest). Коммит через GITHUB_TOKEN:
+      #   · GITHUB_TOKEN-коммиты НЕ триггерят workflow-раны (GitHub documented) → loop'а нет
+      #   · содержимое файла — digest; изменение = только новый L1-релиз
+      #   · eventual consistency: TronyxLab получит новый digest при следующем реальном push
+      #     (mirror.yml слушает workflow_run platform-gate-fast, который для токен-коммита не стреляет)
+      - name: Sync L1 distribution digest (source org)
+        if: success() && github.repository_owner == 'tronyx161'
+        run: |
+          set -euo pipefail
+          DIGEST_FILE=".github/l1-distribution-digest"
+          REF="ghcr.io/tronyx161/hermes-agent-base:latest"
+          REPO_DIGEST=$(docker inspect "$REF" --format '{{index .RepoDigests 0}}' 2>/dev/null || true)
+          DIGEST="${REPO_DIGEST##*@}"
+          if [ -z "$DIGEST" ]; then
+            echo "::error::[IMP:10][CI][L1] Cannot resolve pushed L1 digest — RepoDigests empty for $REF (push failed?)"
+            exit 1
+          fi
+          CURRENT=""
+          [ -f "$DIGEST_FILE" ] && CURRENT=$(tr -d '[:space:]' < "$DIGEST_FILE")
+          if [ "$CURRENT" = "$DIGEST" ]; then
+            echo "[IMP:9][CI][L1] L1 digest unchanged ($DIGEST) — manifest up to date"
+            exit 0
+          fi
+          printf '%s' "$DIGEST" > "$DIGEST_FILE"
+          git config user.email "ci@ai-platform.local"
+          git config user.name "ai-platform-ci"
+          git add "$DIGEST_FILE"
+          git -c commit.gpgsign=false commit -m "ci(136): W11 — update L1 distribution digest $DIGEST"
+          git push origin HEAD:main
+          echo "[IMP:9][CI][L1] L1 digest updated + committed: $DIGEST"

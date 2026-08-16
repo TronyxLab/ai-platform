@@ -1,0 +1,87 @@
+# GREP_SUMMARY: platform-alerts recording-rules deploy-slo burn-rate image-size-budget prometheus native
+# STRUCTURE: ▶ groups → recording (deploy_success/duration rates) → deploy burn-rate alert → image-size budget alert → backup-freshness alert
+# region MODULE_CONTRACT
+## @purpose  Платформенные native Prometheus rules (170 W12 C5, SLO-минимум): recording rules
+##           deploy-success/duration + burn-rate alert + image-size budget alert + backup-freshness.
+## @scope    Копируется config-init'ом в ${PROMETHEUS_RULES_DIR} (host /opt/prometheus/rules) —
+##           prometheus rule_files glob "/opt/prometheus/rules/*-alerts.yml" подхватывает файл.
+##           Метрики — status-page /metrics (scrape job status-page, observability-net).
+## @invariants
+##   - Имена метрик = канон app.py _handle_metrics (platform_deploy_success,
+##     platform_deploy_duration_seconds, platform_image_size_bytes,
+##     platform_backup_last_postgres_age_seconds)
+##   - Image-size budget: 5 GiB на образ (порог обсуждён 170 W12 C6; alert warning-уровня)
+##   - Burn-rate: 5-минутное окно на 24h-период (multi-window не вводится — минимальный набор)
+## @rationale SLO-минимум 170 W12 C5: deploy-путь и backup-freshness — ключевые;
+##            image-size budget — cost-контроль (C7). Burn-rate считает по метрике успеха.
+## @changes  2026-08-15 | DevPlan 170 W12 C5/C6 — Created
+# endregion MODULE_CONTRACT
+
+groups:
+  # ── SLO: deploy success/duration (recording) ──────────────────────────
+  - name: "platform-deploy-slo"
+    interval: 1m
+    rules:
+      # 24h-слайс: доля успешных деплоев среди всех зафиксированных переходов метрики
+      - record: "platform:deploy:success_rate_24h"
+        expr: >
+          sum_over_time(
+            (platform_deploy_success == 1)[24h:]
+          )
+          /
+          clamp_min(
+            sum_over_time((platform_deploy_success >= 0)[24h:]), 1
+          )
+      # Последняя длительность деплоя в секундах (для SLI-графика)
+      - record: "platform:deploy:duration_seconds_last"
+        expr: "platform_deploy_duration_seconds"
+
+  # ── Deploy burn-rate alert (минимальный набор: 24h, порог 0.75 успеха) ──
+  - name: "platform-deploy-alerts"
+    interval: 5m
+    rules:
+      - alert: "PlatformDeployBurnRate"
+        expr: >
+          platform:deploy:success_rate_24h < 0.75
+          and
+          sum_over_time((platform_deploy_success >= 0)[24h:]) >= 1
+        for: "10m"
+        labels:
+          severity: "warning"
+          service: "platform-deploy"
+        annotations:
+          summary: "Deploy success rate below SLO ({{ $value | humanizePercentage }} over 24h)"
+          description: >
+            Less than 75% of platform deploys succeeded in the last 24h.
+            Check deploy audit log: /var/log/platform/audit.jsonl
+
+      # ── Image size budget (C6): 5 GiB на проект-образ — cost-контроль ──
+      - alert: "PlatformImageSizeBudget"
+        expr: "platform_image_size_bytes > 5 * 1024 * 1024 * 1024"
+        for: "15m"
+        labels:
+          severity: "warning"
+          service: "platform-images"
+        annotations:
+          summary: "Docker image over budget: {{ $labels.project }} ({{ $value | humanize1024 }}B)"
+          description: >
+            Project image {{ $labels.image }} exceeds the 5 GiB size budget.
+            Check multi-stage build and dependency pruning.
+
+      # ── Backup freshness (минимальный набор; parity с существующим Grafana-alert) ──
+      # ts == 0 = никогда не было бэкапа (NaN-сравнения в PromQL — false, поэтому
+      # отдельный timestamp-gauge; age > 25h — stale)
+      - alert: "PlatformBackupStale"
+        expr: >
+          platform_backup_last_postgres_timestamp_seconds == 0
+          or
+          platform_backup_last_postgres_age_seconds > 25 * 3600
+        for: "30m"
+        labels:
+          severity: "critical"
+          service: "platform-backup"
+        annotations:
+          summary: "PostgreSQL backup is stale or missing (age {{ $value }}s)"
+          description: >
+            Last successful PostgreSQL backup is older than 25h or never recorded.
+            Check backup-cron module logs.

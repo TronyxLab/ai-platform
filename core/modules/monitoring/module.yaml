@@ -1,0 +1,49 @@
+# GREP_SUMMARY: monitoring module prometheus grafana metrics dashboards observability-net
+# STRUCTURE: ▶ module:monitoring → prometheus:v3.13.1 + grafana:11.6.16 → observability-net + proxy-net → ┐
+# region MODULE_CONTRACT
+## @purpose  Prometheus metrics TSDB + Grafana dashboards for platform observability
+## @scope    Metrics collection (Prometheus), visualization (Grafana), alerting
+## @invariants
+##   - install_type: docker — managed by compose
+##   - Prometheus: 15d retention, file_sd_config for dynamic targets
+##   - Grafana: Alpine-based, provisioning datasources+dashboards+alerting
+##   - Networks: observability-net (internal) + proxy-net (nginx proxy)
+##   - Grafana depends on nginx for proxied access
+## @rationale Split from observability module per Phase 3 refactoring (D1)
+# endregion MODULE_CONTRACT
+
+name: monitoring
+install_type: docker
+description: "Prometheus metrics TSDB and Grafana dashboards — platform monitoring stack"
+
+depends_on:
+  - nginx
+
+# D5 (118 G4): severity/restart — мониторинг, non-critical; restart согласован с base.yml
+# (prometheus/grafana unless-stopped; one-shot init restart:"no" — carve-out)
+severity: normal
+restart: unless-stopped
+
+interfaces:
+  - healthcheck
+
+spool_dir: /var/lib/platform/grafana-data
+spool_volume: grafana-data
+
+# hooks.on_project_deploy: runtime-путь — make render-monitoring (U-65) +
+# DeployOrchestrator post-deploy chain (только зарегистрированные hooks вызываются).
+
+resources:
+  limits:
+    memory: 1024M  # prometheus 512M + grafana 512M (13 OOM-фикс, 164 W1-5)
+  reservations:
+    memory: 512M
+
+env_requires:
+  - GF_SECURITY_ADMIN_PASSWORD
+  - LITELLM_MASTER_KEY
+
+env_shared:
+  NO_PROXY: "${NO_PROXY}"
+  HTTP_PROXY: "${HTTP_PROXY}"
+  HTTPS_PROXY: "${HTTPS_PROXY}"

@@ -1,0 +1,98 @@
+# @purpose  Base compose definition for status-page Docker module — container_name:status-page, profiles, proxy-net+observability-net, volumes
+# GREP_SUMMARY: status-page docker-compose proxy-net observability-net profiles volumes healthcheck node.yaml status-metrics.json
+# STRUCTURE: ▶ status-page:python-3.12-alpine [profiles:status-page] → proxy-net+observability-net → volumes (app, node.yaml ro, status-metrics.json ro) → healthcheck → ┐
+# region MODULE_CONTRACT
+## @purpose  Base compose definition for status-page Docker module — live node status aggregation
+## @scope    Merged with root docker-compose.yml via include:
+## @invariants
+##   - profiles: [status-page] — pluggability: only included when COMPOSE_PROFILES contains status-page
+##   - Port: NO external ports — accessed via nginx proxy_pass on proxy-net
+##   - restart: unless-stopped — Docker policy
+##   - proxy-net — required for nginx proxy_pass to status-page:8080
+##   - observability-net — required for Docker DNS resolution to prometheus/loki/langfuse/litellm (platform service healthchecks)
+##   - node.yaml: mounted ro from host /opt/node-configs/<node>/node.yaml
+##   - status-metrics.json: mounted ro from host /var/lib/platform/run/status-metrics.json (persistent, 142 W2; cron-exported every 1m) — META Δ
+##   - healthcheck: curl localhost:8080/health — verifies status-page is responding
+## @rationale   Profiles enable selective startup via `make up MODULES=status-page`.
+##              No external ports — all access via nginx Basic Auth proxy.
+##              Docker socket NOT mounted — reads pre-exported metrics JSON from cron.
+## @changes
+##   2026-07-24 | Added observability-net — status-page was failing to resolve prometheus/loki/langfuse/litellm (DNS on proxy-net only) | P4 fix
+##   2026-07-23 | docker-health.json → status-metrics.json | META Δ
+##   2026-08-15 | bind-mount collectors/ + renderer/ (Python-пакеты, декомпозиция монолитов) | 170 W7-E2
+# endregion MODULE_CONTRACT
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
+services:
+  status-page:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: status-page:latest
+    container_name: status-page
+    profiles: [status-page]
+    restart: unless-stopped
+
+    volumes:
+      - ./app.py:/app/app.py:ro
+      # collectors/ + renderer/ — Python-пакеты (DevPlan 170 W7-E2, декомпозиция монолитов)
+      - ./collectors/:/app/collectors/:ro
+      - ./renderer/:/app/renderer/:ro
+      # templates/ — Jinja2 templates for HTML rendering (bind-mount for live updates)
+      - ./templates/:/app/templates/:ro
+      # node.yaml — SSoT for vhost list (projects[].domain with expose:true)
+      - ${NODE_CONFIGS_DIR:-/opt/node-configs}/${NODE_NAME:-unknown}/node.yaml:/opt/node-configs/${NODE_NAME:-unknown}/node.yaml:ro
+      # status-metrics.json — container/cert/project/host metrics (cron-exported every 1m)
+      # Host source параметризуется: STATUS_METRICS_JSON (dev-локаль);
+      # прод-дефолт /var/lib/platform/run/status-metrics.json (persistent, 142 W2).
+      - ${STATUS_METRICS_JSON:-/var/lib/platform/run/status-metrics.json}:/var/lib/platform/run/status-metrics.json:ro
+
+    environment:
+      PLATFORM_DOMAIN: ${PLATFORM_DOMAIN:-}
+      NODE_NAME: ${NODE_NAME:-unknown}
+      NODE_CONFIGS_DIR: ${NODE_CONFIGS_DIR:-/opt/node-configs}
+      # STATUS_PAGE_PORT — SoT: platform-infra.yaml env_defaults (DevPlan 122 T3).
+      # Порт внутренний (без host-bind); значение 8080 дублирует CADVISOR_PORT намеренно —
+      # разные интерфейсы: status-page слушает внутри контейнера, cadvisor — host-bind 127.0.0.1.
+      STATUS_PAGE_PORT: ${STATUS_PAGE_PORT:-8080}
+
+    networks:
+      proxy-net:
+        aliases:
+          - status-page
+      observability-net:
+
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          pids: 256
+
+    logging: *default-logging
+
+    # /healthz — lightweight readiness probe (~50ms): checks status-metrics.json exists, readable, fresh.
+    # Unlike /health (full system checks), this is fast enough for Docker HEALTHCHECK timeout (5s).
+    # Порт healthcheck — через ${STATUS_PAGE_PORT} (compose-интерполяция), не hardcode (DevPlan 122 T3).
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:${STATUS_PAGE_PORT:-8080}/healthz')\" || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s  # 5→15s: standardized per DevPlan 083 (default)
+
+    # Override entrypoint to run app.py directly
+    entrypoint: ["python3", "/app/app.py"]
+    working_dir: /app
+
+networks:
+  proxy-net:
+    external: true
+    name: proxy-net
+  observability-net:
+    external: true
+    name: observability-net

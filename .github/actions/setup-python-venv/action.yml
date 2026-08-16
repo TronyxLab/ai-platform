@@ -1,0 +1,66 @@
+# GREP_SUMMARY: composite-action setup-python-venv real-venv pip-cache dev-extra reusable CI
+# STRUCTURE: ▶ actions/setup-python (pip-cache) → ◇ python -m venv .venv → ◇ pip install -e ".[dev]" uv [pre-commit] → ◇ GITHUB_PATH → ⎋ реальный venv со всеми gate-инструментами
+# region MODULE_CONTRACT
+## @purpose  Reusable composite action: РЕАЛЬНЫЙ Python venv с runtime+dev зависимостями
+##           (pyproject SoT) для CI. v1.0.1 (round 7): прежняя схема «симлинк .venv/bin →
+##           system python + удаление pyvenv.cfg» ломала ВСЕ .venv/bin/* gate-инструменты
+##           (import-linter/vulture/deptry/ruff/basedpyright): pip ставил консоль-скрипты
+##           в system site-packages, .venv/bin содержал только python/pip-симлинки →
+##           «Command not found: .venv/bin/import-linter» (exit 127) в CI-гейте.
+##           Реальный venv кладёт консоль-скрипты в .venv/bin — как на dev-машине.
+## @scope    Все .github/workflows/*.yml, которым нужен Python + gate-инструменты.
+## @invariants
+##   - Python: 3.14 (default, overridable) — соответствует локальному .venv
+##   - pip cache: actions/setup-python cache: 'pip' (venv НЕ кэшируется — реальный venv
+##     с pyvenv.cfg не переживает смену python-патча в hostedtoolcache; причина удаления
+##     прежнего .venv-cache)
+##   - Зависимости: pip install -e ".[dev]" (runtime+dev из pyproject.toml SoT) + uv
+##     (uv-audit хук) [+ pre-commit при install-pre-commit]
+##   - .venv/bin добавляется в GITHUB_PATH
+## @rationale  Реальный venv = паритет с dev-машиной; pyproject dev-extra = единый SoT
+##             инструментов (ручные списки pip install расходились: pydantic в 2026-08-03,
+##             basedpyright/uv в v1.0.1 rounds).
+## @changes    2026-07-21 | Created (DevPlan 029 W2-E2) — симлинк-схема
+##             2026-07-23 | TRAP[BUG] fixes: symlink BEFORE pip install, pyvenv.cfg removal,
+##                        stale binaries cleanup (кэшированный .venv)
+##             2026-08-15 | v1.0.1 round 7: ПРЯМОЕ ЗАМЕЩЕНИЕ симлинк-схемы → реальный venv
+##                        (симлинк-схема ломала gate .venv/bin/*; .venv-cache удалён —
+##                        pyvenv.cfg-стальность была первопричиной хаков)
+# endregion MODULE_CONTRACT
+
+name: 'Setup Python venv'
+description: 'Real Python .venv with runtime+dev deps (pyproject SoT) for CI'
+
+inputs:
+  python-version:
+    description: 'Python version'
+    required: false
+    default: '3.14'
+  install-pre-commit:
+    description: 'Install pre-commit in venv (true/false)'
+    required: false
+    default: 'false'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: ${{ inputs.python-version }}
+        cache: 'pip'
+
+    - name: Create real venv + install deps
+      shell: bash
+      run: |
+        python -m venv .venv
+        .venv/bin/pip install --upgrade pip
+        # runtime + dev из pyproject.toml SoT (import-linter/vulture/deptry/ruff/
+        # basedpyright/pytest/pytest-timeout/... — инструменты gate-шагов .venv/bin/*)
+        .venv/bin/pip install -e ".[dev]"
+        # uv — uv-audit pre-commit хук (language: system)
+        .venv/bin/pip install uv
+        if [ "${{ inputs.install-pre-commit }}" = "true" ]; then
+          .venv/bin/pip install pre-commit
+        fi
+        echo "$PWD/.venv/bin" >> "$GITHUB_PATH"

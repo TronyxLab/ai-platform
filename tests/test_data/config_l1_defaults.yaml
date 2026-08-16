@@ -1,0 +1,24 @@
+# GREP_SUMMARY: config-merge L1 defaults test-data monitoring alerts
+# STRUCTURE: ▶ L1(nested defaults) → ◇ merge(L2) → ◇ deep-merge(L3) → ⊕ test_config_merge validates → ⎋ PASS
+# region MODULE_CONTRACT
+## @purpose  L1 defaults layer for config merge tests — simulates platform-wide defaults with nested keys
+## @scope    Used by test_config_merge.py; isolated test data, NOT the real platform defaults.yaml
+## @rationale Three-layer merge: L1 (this file) ← L2 ← L3. Nested keys test deep merge vs shallow replace.
+# endregion MODULE_CONTRACT
+
+monitoring:
+  metrics: false
+  metrics_port: 3000
+  logs_retention: 7d
+  ai_retention: 30d
+  alerting: false
+  dashboard: false
+  alerts:
+    slack:
+      enabled: false
+      webhook: ""
+      channel: "#alerts"
+    email:
+      enabled: true
+      recipients:
+        - "admin@platform.local"

@@ -1,0 +1,33 @@
+# GREP_SUMMARY: litellm mock config echo openai/echo load-testing deterministic no-provider-key
+# STRUCTURE: ┌general_settings (канон)┐ → ◇ model_list: mock-echo → openai/echo → ⎋
+# region MODULE_CONTRACT
+## @purpose  Mock-конфиг LiteLLM для нагрузочного тестирования (DevPlan 146 W1, §3.2):
+##           одна модель mock-echo (openai/echo — встроенная фейковая модель litellm,
+##           детерминированный ответ ~50ms, без API key). Устанавливается на тестовую
+##           ноду ОТДЕЛЬНО (см. секцию «Нагрузочное тестирование» core/AGENTS.md: scp + монтирование + make restart
+##           MODULES=litellm) — НЕ через policy.yaml (инвариант «providers: только
+##           DeepSeek») и НЕ через litellm-config.test.yml (тот только для
+##           docker-compose.test.yml component-тестов).
+## @scope    core/modules/litellm/config/ — доставляется оператором на тестовую VPS;
+##           prod-конфиг (policy.yaml → litellm-config.yml) НЕ затрагивается.
+## @invariants
+##   - model_list содержит РОВНО mock-echo → openai/echo (без api_key — echo не требует)
+##   - general_settings — из канона litellm-config.yml.j2 (master_key, database_url,
+##     disable_master_key_returned) — конфиг полноценен и не ломает реестр
+##   - На проде mock-модель отсутствует: сценарии llm/llm_stream делают ранний FAIL
+##     с сообщением (AC6 DevPlan 146) — LOAD_ALLOW_PROD=1 это не отменяет
+## @rationale Детерминизм LLM-сценариев (AC6): echo-модель даёт стабильную латентность,
+##            нулевую стоимость и воспроизводимые метрики; изоляция от policy.yaml
+##            исключает дрейф прод-конфигурации (DevPlan 146 §3.2, инвариант 8).
+## @changes  2026-08-11 | DevPlan 146 W1 — Created
+# endregion MODULE_CONTRACT
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL
+  disable_master_key_returned: true
+
+model_list:
+  - model_name: mock-echo
+    litellm_params:
+      model: "openai/echo"       # litellm echo (детерминированный ответ, фикс latency ~50ms)

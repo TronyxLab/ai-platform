@@ -1,0 +1,338 @@
+# GREP_SUMMARY: pre-commit gitleaks uv-audit ruff yamllint check-jsonschema shellcheck check-yaml trailing-whitespace end-of-file-fixer check-merge-conflict detect-private-key check-added-large-files mixed-line-ending check-toml check-json basedpyright check-doc-headers name-linter commit-msg pre-push-gate fix-executable-bit DevPlan-163
+# STRUCTURE: repos → gitleaks(v8.30.1) → local(uv-audit + fix-executable-bit + check-doc-headers + name-linter) → ruff(v0.16.2) → yamllint(v1.38) → shellcheck(v0.11) → check-jsonschema(0.37) → pre-commit-hooks(v6.0 + check-merge-conflict + detect-private-key + check-added-large-files + mixed-line-ending + check-toml + check-json) → local(basedpyright + commit-msg + pre-push-gate + check-manifests + scripts-audit + no-new-inline-python3)
+# region MODULE_CONTRACT
+## @purpose  Unified pre-commit hooks via pre-commit framework (per DevPlan 001):
+##           - gitleaks (secret scanning) + uv audit (OSV dep vulnerabilities, DevPlan 163 M6)
+##           - ruff (verify only: check + format --check; auto-fix: ruff check --fix . && ruff format .)
+##           - yamllint (YAML style) + check-jsonschema (GHA workflows + docker-compose)
+##           - basedpyright (static type checking; bandit УДАЛЁН — DevPlan 163 AC-12, ruff S + bandit_parity.md)
+##           - check-doc-headers (GREP_SUMMARY/MODULE_CONTRACT/STRUCTURE/regions)
+##           - name-linter (make-target validation) + shellcheck + check-yaml
+##           - trailing-whitespace + end-of-file-fixer
+##           - DRIFT-PREVENTION: check-merge-conflict + detect-private-key + check-added-large-files
+##           - DRIFT-PREVENTION: mixed-line-ending + check-toml + check-json
+##           - check-manifest-parity (manifest ↔ AGENTS.md ↔ Makefile bidirectional sync)
+##           - commit-msg (Conventional Commits) + pre-push-gate (quick check)
+## @scope    Pre-commit (all hooks + 6 hygiene hooks + manifest-parity drift prevention), commit-msg (commit message validation), pre-push (quick check; полный fast-gate — CI push-gate.yml)
+## @invariants
+##   - gitleaks v8.18.0+ with .gitleaks.toml config
+##   - uv audit (DevPlan 163 M6): repo local, language system, always_run — требует uv
+##     на машине (homebrew/CI runner preinstalled); pip-audit остаётся в CI security-scan
+##   - yamllint v1.38 checks style — complements check-yaml syntax validation
+##   - check-jsonschema validates GHA workflows against GitHub Actions schema and docker-compose against compose-spec
+##   - basedpyright basic→recommended (DevPlan 163 M2, pyrightconfig.json W-A A1); blocking
+##     hook: stages [pre-commit] + --level error (DevPlan 164 W3.5 S8 — handoff «pyright-clean»
+##     исполнен 2026-08-14). Единый измеритель — суит 'pyright' check-suite.yaml (pyright-hook.sh,
+##     basedpyright --level error; make fix-pyright удалён План 175 W2.4 — дубль суита)
+##   - bandit УДАЛЁН (W-G интеграция 2026-08-13, фаза 4): parity files/bandit_parity.md (0 findings
+##     medium+, bandit-ID → S-правило таблица); дефицит S309/S322/S414 — CI security-scan.yml
+##     trivy/pip-audit. Прямое замещение M1′ (AC-12: 0 дублирующих инструментов).
+##   - check-yaml validates all YAML files except .github/workflows/ (delegated to check-jsonschema) and bootstrap/
+##   - trailing-whitespace and end-of-file-fixer are zero-cost hygiene
+##   - check-merge-conflict blocks commit with <<<<<<< markers
+##   - detect-private-key warns on hardcoded private keys (complements gitleaks)
+##   - check-added-large-files blocks files >500KB to prevent binary blobs
+##   - mixed-line-ending normalizes CRLF → LF on text files
+##   - check-toml and check-json validate syntax of TOML/JSON files
+##   - check-manifest-parity: validates bidirectional sync between entrypoint-manifest.yaml,
+##     AGENTS.md, and Makefiles — triggers only on manifest/AGENTS.md/Makefile changes
+##   - commit-msg enforces Conventional Commits 1.0.0 format
+##   - pre-push-gate — quick check (pre-commit --all-files + ruff check . + make check-diff)
+##     для ВСЕХ веток; полный fast-gate — ТОЛЬКО CI push-gate.yml (OOM-политика v1.0.1 0.8:
+##     hook больше не гоняет ~12 параллельных xdist-прогонов на dev-машине)
+##   - Install: make pre-commit-install (= pre-commit install --hook-type pre-commit --hook-type pre-push --hook-type commit-msg)
+## @rationale  Unified pre-commit framework eliminates custom .git/hooks/pre-commit conflicts.
+##             check-doc-headers combines doc validation in one efficient script.
+##             Quick-check pre-push gate prevents pushing broken code to CI
+##             (полный fast-gate — CI push-gate.yml, OOM-политика v1.0.1 0.8).
+##             Four new hooks (yamllint, check-jsonschema, basedpyright, bandit) strengthen static analysis.
+##             DevPlan 163: uv audit (M6) — второй независимый OSV-сигнал; ruff rev пин 0.16.2 (M3);
+##             bandit удалён прямым замещением (M1′/AC-12); basedpyright blocking (stages
+##             [pre-commit] + --level error, DevPlan 164 W3.5 S8 — handoff «pyright-clean» исполнен).
+# endregion MODULE_CONTRACT
+
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+        name: gitleaks
+        description: Detect hardcoded secrets, API keys, and passwords
+        entry: gitleaks git --pre-commit --verbose
+        language: system
+        stages: [pre-commit]
+        args: ["--config", ".gitleaks.toml"]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    # ⚠️ TRAP[DECISION] · 2026-08-13 · MED · ruff rev 0.16.1 → 0.16.2 (DevPlan 163 W-A A3)
+    # · Rejected: оставить 0.16.1 (дерево сейчас красное под 0.16.2: 86 «Invalid noqa» warning'ов
+    # ·   + формат-дрейф на существующих файлах — замер 2026-08-13)
+    # · Reason: план M3/B1 пинит 0.16.2 везде (pyproject + ruff.toml W-B) — единая версия
+    # ·   стека; красное дерево — переходное состояние параллельного ruff-clean W-B (фаза 1),
+    # ·   НЕ причина откатывать rev. Warnings «Invalid # noqa» — не блокируют (только exit-коды).
+    # · Rev: если после ruff-clean W-B (B2) дерево останется красным под 0.16.2 —
+    # ·   пересмотреть пин (версионный дрейф > выигрыша от единой версии).
+    rev: v0.16.2
+    hooks:
+      - id: ruff-check
+        name: ruff-check (lint, verify only)
+        description: "Verify Ruff lint rules on staged Python files (no auto-fix — run: ruff check --fix . && ruff format .)"
+        types_or: [python, pyi]
+        stages: [pre-commit]
+
+      - id: ruff-format
+        name: ruff-format (verify only)
+        description: "Verify Ruff formatting on staged Python files (no auto-format — run: ruff check --fix . && ruff format .)"
+        args: [--check]
+        types_or: [python, pyi]
+        stages: [pre-commit]
+
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.38.0
+    hooks:
+      - id: yamllint
+        name: yamllint
+        description: Check YAML file style (indentation, line-length, key-duplicates, etc.)
+        args: ["--config-file", ".yamllint"]
+        stages: [pre-commit]
+        exclude: >
+          (?x)^(
+            \.github/workflows/|
+            templates/|
+            node_modules/|
+            \.venv/
+          )$
+
+  - repo: local
+    hooks:
+      # ── uv audit: нативный OSV-сканер зависимостей (DevPlan 163 M6) ──
+      # pip-audit остаётся в CI security-scan; uv audit — второй сигнал другой базы,
+      # нулевая цена в pre-commit. Требует uv на машине (homebrew/runner preinstalled).
+      - id: uv-audit
+        name: uv audit (OSV dependency vulnerabilities)
+        description: Scan project dependencies for known OSV vulnerabilities (uv native scanner; M6 DevPlan 163 — coexists with pip-audit in CI security-scan)
+        entry: uv audit
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
+
+      # ⚠️ TRAP[DECISION] · 2026-07-23 · — · chmod +x not git add --chmod=+x in pre-commit hook
+      # · Rejected: git add --chmod=+x (fails with index.lock when pre-commit holds lock)
+      # · Reason: pre-commit run --all-files holds the git index lock. `git add` can't acquire it.
+      # ·            `chmod +x` modifies filesystem — pre-commit detects and includes the change.
+      # · Rev: if pre-commit changes index locking behavior, revert to git add --chmod=+x
+      - id: fix-executable-bit
+        name: "Auto-fix executable bit (staged .sh only)"
+        description: "Sets +x on staged .sh files outside core/lib/ via chmod +x. Safe, idempotent, deterministic."
+        entry: bash -c 'for f in "$@"; do case "$f" in core/lib/*) continue ;; esac; [ -f "$f" ] || continue; chmod +x "$f" && echo "  +x (auto) $f"; done' --
+        language: system
+        files: '\.sh$'
+        stages: [pre-commit]
+
+      - id: check-doc-headers
+        name: Doc headers (GREP_SUMMARY + MODULE_CONTRACT + STRUCTURE + regions + YAML @purpose)
+        entry: core/entrypoints/check-doc-headers.sh
+        language: script
+        files: '\.(py|yaml|yml|sh|md)$'
+        # exclude: test_data/ are test fixtures, not source docs — adding doc headers
+        # would break tests that parse these files for exact content match.
+        exclude: ^\.kilo/|^\.ai/|^\.pytest_cache/|^tests/test_data/|^reports/
+        stages: [pre-commit]
+
+      - id: name-linter
+        name: Validate target/script names against manifest allowed_verbs
+        entry: bash core/entrypoints/lint.sh namelint
+        language: system
+        stages: [pre-commit]
+        files: '^(Makefile|core/Makefile\.common|core/modules/.*/Makefile|core/entrypoints/.*\.sh|core/entrypoint-manifest\.yaml)$'
+        pass_filenames: false
+        always_run: true
+
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.11.0.1
+    hooks:
+      - id: shellcheck
+        name: shellcheck
+        description: Static analysis of shell scripts (error level only)
+        args: ["--severity=error"]
+        stages: [pre-commit]
+        exclude: >
+          (?x)^(
+            core/modules/backup-cron/Dockerfile|
+            core/modules/hermes-agent/build/Dockerfile
+          )$
+
+  - repo: https://github.com/python-jsonschema/check-jsonschema
+    rev: 0.37.4
+    hooks:
+      - id: check-github-workflows
+        name: check-github-workflows
+        description: Validate GitHub Actions workflow files against JSON schema
+        stages: [pre-commit]
+        exclude: >
+          (?x)^(
+            templates/.*|
+            .*docker-compose\.macos\.yml
+          )$
+
+      - id: check-compose-spec
+        name: check-compose-spec
+        description: Validate docker-compose YAML files against compose-spec schema
+        stages: [pre-commit]
+        # F-7: Все test-overlay модулей используют !override (YAML-тег, не парсится
+        # compose-spec валидатором). Изоляция портов покрыта gate-тестами
+        # test_smoke_test_isolation.
+        exclude: >
+          (?x)^(
+            templates/.*|
+            .*docker-compose\.macos\.yml|
+            core/modules/[^/]+/docker-compose\.test\.yml
+          )$
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-yaml
+        name: check-yaml
+        description: Validate YAML syntax in staged files
+        args: [--allow-multiple-documents]
+        stages: [pre-commit]
+        # F-7: Те же test-overlay с !override — check-yaml (yaml.safe_load) не парсит
+        # кастомный YAML-тег. Тесты на изоляцию портов в test_smoke_test_isolation.
+        exclude: >
+          (?x)^(
+            templates/.*|
+            core/bootstrap/.*\.yaml|
+            \.github/workflows/.*\.yml|
+            .*docker-compose\.macos\.yml|
+            core/modules/[^/]+/docker-compose\.test\.yml
+          )$
+
+      - id: trailing-whitespace
+        name: trailing-whitespace
+        description: Trim trailing whitespace from text files
+        stages: [pre-commit]
+
+      - id: end-of-file-fixer
+        name: end-of-file-fixer
+        description: Ensure files end with a single newline
+        stages: [pre-commit]
+        exclude: >
+          (?x)^(
+            .*\.md|
+            tests/\.test_counter\.json
+          )$
+
+      - id: check-merge-conflict
+        name: check-merge-conflict
+        description: Check for merge conflict markers (<<<<<<<, =======, >>>>>>>)
+        stages: [pre-commit]
+
+      - id: detect-private-key
+        name: detect-private-key
+        description: Detect hardcoded private keys (complements gitleaks)
+        stages: [pre-commit]
+
+      - id: check-added-large-files
+        name: check-added-large-files
+        description: Prevent accidentally committing large files (>500KB)
+        args: ["--maxkb=500"]
+        exclude: '^uv\.lock$'
+        stages: [pre-commit]
+
+      - id: mixed-line-ending
+        name: mixed-line-ending
+        description: Normalize mixed line endings (CRLF → LF)
+        args: ["--fix=lf"]
+        stages: [pre-commit]
+
+      - id: check-toml
+        name: check-toml
+        description: Validate TOML file syntax
+        stages: [pre-commit]
+
+      - id: check-json
+        name: check-json
+        description: Validate JSON file syntax
+        stages: [pre-commit]
+
+  - repo: local
+    hooks:
+      - id: basedpyright
+        name: basedpyright (static type checking)
+        description: Check Python type annotations with basedpyright (strict pyright fork)
+        # v1.0.1 CI-fix: language: python + args терялись на CI-раннере (hook исполнялся
+        # с дефолтным уровнем warning → exit 1 на warnings); facade pyright-hook.sh
+        # запекает --level error, резолв .venv/bin → PATH (CI: pip install basedpyright).
+        entry: core/entrypoints/pyright-hook.sh
+        language: system
+        types: [python]
+        stages: [pre-commit]
+
+      # ⚠️ TRAP[DECISION] · 2026-08-13 · HI · bandit-hook УДАЛЁН (DevPlan 163 W-B B4 → W-A A3)
+      # · Rejected: оставить hook (дублирующий security-слой поверх ruff S)
+      # · Reason: bandit retire — консенсус 2; parity files/bandit_parity.md (bandit 1.9.4 medium+:
+      # ·   0 findings; bandit-ID → S-правило таблица; дефицит S309/S322/S414 покрыт CI
+      # ·   security-scan.yml trivy/pip-audit). Прямое замещение (M1′): hook удалён в том же
+      # ·   изменении, что и parity-артефакт; восстановление — git history.
+      # · Rev: если ruff S-покрытие даст пропуск security-класса, пойманного bandit — вернуть hook.
+
+      - id: commit-msg
+        name: Conventional Commits
+        # Волна 118 B9: check-commit-msg.sh не существует — реальный модуль check_commit_msg.py
+        # (Python, Strangler-Fig language policy). .git/hooks/commit-msg уже вызывает его напрямую.
+        entry: core/entrypoints/check_commit_msg.py
+        language: script
+        stages: [commit-msg]
+
+      - id: pre-push-gate
+        name: Quick check before push
+        entry: core/entrypoints/pre-push-gate.sh
+        language: script
+        stages: [pre-push]
+        pass_filenames: false
+        always_run: true
+        # TRAP[BUG] 2026-08-15: БЕЗ pass_filenames: false pre-commit фан-аутил хук по
+        # пачкам файлов (orphan-baseline = ~2000 staged-ADD → сотни параллельных инвокаций,
+        # каждая гоняла вложенный pre-commit run --all-files → meltdown/OOM, 2 зависания).
+        # С pass_filenames: false хук вызывается ОДИН раз (always_run), без файловых аргументов.
+      # ⚠️ TRAP[DECISION] · 2026-08-03 · — · check-manifest-parity УДАЛЁН из pre-commit (DevPlan 124)
+      # · Rejected: оставить хук — flake ~40% в live `make gate MODE=fast` (шаг pre-commit): hook
+      # ·   Failed при 15 passed тестах — процесс pytest выходил non-zero ПОСЛЕ успешного прогона;
+      # ·   воспроизводится ТОЛЬКО внутри gate-шага (0/15 standalone-прогонов, 0/8 make pre-commit-run);
+      # ·   venv-pin (.venv 3.14.5/9.1.1 вместо homebrew 3.14.6/9.0.3) НЕ устранил — не python-версия;
+      # ·   механизм process-lifecycle-флейка не установлен после полного расследования
+      # · Reason: валидация parity ПОЛНОСТЬЮ покрыта gates-чеком (tests/gates/test_gate_manifest_integrity.py,
+      # ·   15 детерминированных тестов — исполняются в КАЖДОМ make gate / make check). Pre-commit-хук —
+      # ·   дублирующий fast-feedback путь, блокировавший gate (главную цель DevPlan 124) ~40% прогонов.
+      # ·   Удаление не ослабляет защиту: parity-тесты продолжают исполняться в gates-чеке.
+      # · Rev: при установлении причины (exit non-zero после 15 passed в контексте gate-шага) —
+      # ·   вернуть хук с фиксом; до тех пор parity живёт только в gates-чеке.
+      - id: scripts-audit
+        name: Audit script registration
+        entry: make scripts-audit
+        language: system
+        files: '^core/.*\.sh$'
+        pass_filenames: false
+        always_run: false
+        stages: [pre-commit]
+
+      - id: check-manifests
+        name: Check generated manifests up to date
+        description: "Verify generated manifests (secrets-manifest.yaml, platform-env.yaml, smoke_env_generated.py, env_defaults_generated.py) are in sync with authoritative sources"
+        entry: make check MARKER=check-manifests
+        language: system
+        files: ^(core/secret-definitions\.yaml|core/platform-infra\.yaml|core/modules/.*/module\.yaml|core/modules/.*/docker-compose\.(base|test)\.yml|core/entrypoint-manifest\.yaml|Makefile|tests/gates/.*\.py)$
+        pass_filenames: false
+        stages: [pre-commit]
+
+      - id: no-new-inline-python3
+        name: Block new inline python3 in shell and CI workflow files
+        description: "Language policy enforcement: blocks adding new python3 -c / heredoc under core/ and .github/*.yml. See AGENTS.md §Языковая политика"
+        entry: bash core/internal/hooks/check-no-new-inline-python3.sh
+        language: system
+        files: '^(core/.*\.sh|\.github/.*\.ya?ml)$'
+        pass_filenames: false
+        always_run: false
+        stages: [pre-commit]

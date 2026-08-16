@@ -1,0 +1,91 @@
+# GREP_SUMMARY: docker-compose root include profiles networks volumes x-logging
+# STRUCTURE: ▶ include: 13 docker modules → networks: 6 external → volumes: 12 (5 bind driver_opts + 7 docker-managed) → x-logging
+# region MODULE_CONTRACT
+## @purpose  Root docker-compose — include: всех docker-модулей + networks + volumes + x-logging
+## @scope    Локальный полный стек (инвариант #7) и VPS; сервисы только через include:, без инлайна
+## @invariants
+##   - Только include: модулей — инлайн-сервисы запрещены (core/modules/AGENTS.md запрет #7)
+##   - Каждый модуль фильтруется profiles: [module-name] (pluggability)
+##   - networks/volumes согласованы с platform-env.yaml
+##   - Количество модулей в STRUCTURE-комментарии — вычисляемое: 13 (DevPlan 116 T8, U-68).
+##     При добавлении/удалении модуля обновляй комментарий (make discover-modules пересчитает include).
+##   - volumes: root compose — ЕДИНСТВЕННЫЙ SoT (13 имён, DevPlan 116 B3 T4, U-49):
+##     5 bind-томов с driver_opts (postgres-data, wal-archive, backup-spool, backup-logs,
+##     hermes-data) + 8 docker-managed driver:local (grafana-data, prometheus-data, loki-data,
+##     alloy-data, clickhouse-data, minio-data, langfuse-redis-data, prometheus-config-gen).
+##     Модульные docker-compose.base.yml НЕ объявляют top-level volumes (гейт test_gate_volumes_sot).
+## @rationale Единая точка компоновки стека; модульность через include + profiles (DD1/DD3).
+##            Консолидация volumes в root (U-49): driver_opts модулей мержились в root случайно
+##            (docker compose config) — явное объявление в одном месте устраняет дрейф.
+# endregion MODULE_CONTRACT
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
+include:
+  - path: core/modules/backup-cron/docker-compose.base.yml
+  - path: core/modules/clickhouse/docker-compose.base.yml
+  - path: core/modules/hermes-agent/docker-compose.base.yml
+  - path: core/modules/infra-metrics/docker-compose.base.yml
+  - path: core/modules/langfuse/docker-compose.base.yml
+  - path: core/modules/litellm/docker-compose.base.yml
+  - path: core/modules/logging/docker-compose.base.yml
+  - path: core/modules/minio/docker-compose.base.yml
+  - path: core/modules/monitoring/docker-compose.base.yml
+  - path: core/modules/nginx/docker-compose.base.yml
+  - path: core/modules/postgres/docker-compose.base.yml
+  - path: core/modules/redis/docker-compose.base.yml
+  - path: core/modules/status-page/docker-compose.base.yml
+networks:
+  proxy-net:           { external: true, name: proxy-net }
+  shared-db-net:       { external: true, name: shared-db-net }
+  shared-cache-net:    { external: true, name: shared-cache-net }
+  hermes-agent-net:    { external: true, name: hermes-agent-net }
+  observability-net:   { external: true, name: observability-net }
+  backup-net:          { external: true, name: backup-net }
+
+volumes:
+  # ── Bind-тома (driver_opts, перенесены из модулей postgres/backup-cron/hermes-agent,
+  #    DevPlan 116 B3 T4 U-49) — host-директории /var/lib/platform/*, /var/log/platform/backup
+  postgres-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/platform/postgres-data
+  wal-archive:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/platform/wal-archive
+  backup-spool:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/platform/backup-spool
+  backup-logs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/log/platform/backup
+  hermes-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/platform/hermes-agent/data
+  # ── Docker-managed тома (driver:local, без opts)
+  grafana-data:        { driver: local }
+  prometheus-data:     { driver: local }
+  loki-data:           { driver: local }
+  alloy-data:          { driver: local }
+  clickhouse-data:     { driver: local }
+  minio-data:          { driver: local }
+  langfuse-redis-data: { driver: local }
+  prometheus-config-gen: { driver: local }

@@ -1,0 +1,134 @@
+# GREP_SUMMARY: backup-cron docker-compose backup-net spool-volume wal-archive-volume restart-always stop-grace-period no-resource-limits wal-sync
+# STRUCTURE: ▶ docker-compose.base → ┌ backup-cron ┐ → backup-net + shared-db-net → wal-archive volume + WAL_* env → liveness + readiness → ┘
+# @purpose  Base compose definition for backup-cron Docker module
+# region MODULE_CONTRACT
+## @purpose  Base compose definition for backup-cron Docker module
+## @scope    Phase 02: cron schedule + spool volume; S3 logic stub until phase 06
+## @invariants
+##   - NO ports: — backup-net internal only (on-demand)
+##   - restart: always — cron daemon must survive container crash
+##   - stop_grace_period: 120s — finish current backup or abort+cleanup (06 §13)
+##   - Spool volume: /var/lib/platform/backup-spool/ (03 §4)
+##   - WAL archive volume: /var/lib/platform/wal-archive/ (DevPlan 132 W2 — wal_sync hourly;
+##     том объявлен в root compose (SoT, U-49) — модуль только маунтит)
+##   - Resource limits: memory 128M (limits protect host from OOM; backup partial-state risk accepted)
+##   - backup-net declared as external: true — pre-created by deploy-modules.sh (TASK-02-03)
+##   - Also connected to shared-db-net for pg_dump access (external: true)
+## @rationale on-demand network model: backup-cron connects to shared-db-net only during backup run
+## ⚠️ TRAP[DECISION] · 2026-07-01 · — · stop_grace_period 120s, parallel cron collision acceptable
+## ·   — Memory limit: 128M (limits protect host from OOM). AR3 cancelled (owner verdict Q2a).
+## ·     Previous AR3 logic: "no limits = no OOM mid-backup" — but 128M limit keeps
+## ·   Rev: if OOM or disk contention observed, add queue or space backups 1h apart
+## ·     backup from exhausting host memory while accepting partial-state risk.
+## ·   — stop_grace_period: 120s — finish current backup or abort+cleanup (06 §13).
+## ·   — Parallel cron collision: v1 design explicitly allows overlapping runs.
+## ·     If 03:00 backup takes >30min, 03:30 starts concurrently. Both write to
+## ·     separate spool subdirs (postgres/ vs app-data/). Risk: CPU/disk contention
+## ·     on low-spec VPS. Accepted for v1 — monitor via cadvisor.
+## ·   Rejected: serial backup queue (systemd timer after completion) — adds complexity
+## ·   Rejected: resource limits (AR3 override) — backup is non-critical best-effort
+## ·   Rev: if OOM or disk contention observed, add queue or space backups 1h apart
+# endregion MODULE_CONTRACT
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
+services:
+  backup-cron:
+    # [IMP:8][backup-cron-compose] Build from local Dockerfile or use pre-built image
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: backup-cron:latest
+    container_name: backup-cron
+    profiles: [backup-cron]
+    restart: always
+    stop_grace_period: 120s
+
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          pids: 256
+    logging: *default-logging
+
+    # [IMP:9][backup-cron-compose] NO ports: — backup-net isolation enforced
+    # ports: deliberately absent
+
+    environment:
+      # 🧐 TRAP[DECISION] · 2026-08-03 · HI · backup-cron → postgres НАПРЯМУЮ, не через pgbouncer
+      # · Rejected: POSTGRES_HOST=pgbouncer + POSTGRES_PORT=6432 (канон platform-infra.yaml)
+      # · Reason: pg_dumpall требует session-level доступ ко ВСЕМ БД кластера (включая template1,
+      # ·   pg_dump_globals); pgbouncer pool_mode=transaction + [databases] без template1 →
+      # ·   «FATAL: no such database: template1» (подтверждено 2026-08-03, chaos W1). Бэкап —
+      # ·   единственный потребитель прямого доступа; сервисы продолжают ходить через pgbouncer.
+      # · Rev: если pgbouncer перейдёт в session pooling + добавит template1 — можно вернуть
+      # ·   6432 (канон единого DB-порта), но pg_dumpall через pgbouncer остаётся рискованным.
+      POSTGRES_HOST: "postgres"
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: "${POSTGRES_USER:-postgres}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?PG_PASSWORD_REQUIRED}"
+      POSTGRES_DB: "${POSTGRES_DB:-platform}"
+      BACKUP_SPOOL_DIR: "/var/lib/platform/backup-spool"
+      # S3 config — Timeweb S3 (AR8: only provider)
+      # All scripts use canonical S3_* variables (no AWS_* cross-chain fallback)
+      S3_ENDPOINT_URL: "${S3_ENDPOINT_URL:-https://s3.timeweb.cloud}"
+      S3_ACCESS_KEY: "${S3_ACCESS_KEY:?S3_ACCESS_KEY is required}"
+      S3_SECRET_KEY: "${S3_SECRET_KEY:?S3_SECRET_KEY is required}"
+      S3_BUCKET: "${S3_BUCKET}"
+      S3_REGION: "${S3_REGION:-ru-1}"
+      S3_PREFIX: "${S3_PREFIX:-platform/backups}"
+      PLATFORM_CONTEXT: "${PLATFORM_CONTEXT:-personal}"
+      NODE_NAME: "${NODE_NAME:-unknown}"
+      # ── WAL sync (DevPlan 132 W2): каталог WAL-архива + retention-пороги + rate-limit ──
+      # Не env_requires (без секретов) — дефолты в wal_sync.py
+      WAL_ARCHIVE_DIR: "/var/lib/platform/wal-archive"
+      WAL_LOCAL_RETENTION_DAYS: "${WAL_LOCAL_RETENTION_DAYS:-7}"
+      WAL_S3_RETENTION_DAYS: "${WAL_S3_RETENTION_DAYS:-14}"
+      WAL_MAX_UPLOAD_PER_RUN: "${WAL_MAX_UPLOAD_PER_RUN:-200}"
+
+    volumes:
+      # [IMP:8][backup-cron-compose] Spool volume: local staging before S3 upload (03 §4)
+      - backup-spool:/var/lib/platform/backup-spool
+      - backup-logs:/var/log/platform/backup
+      # [IMP:8][backup-cron-compose] WAL archive volume (DevPlan 132 W2): pg_wal сегменты для
+      # hourly wal_sync → S3; том объявлен в root compose (SoT, U-49) — модуль только маунтит
+      - wal-archive:/var/lib/platform/wal-archive
+
+    networks:
+      backup-net:
+        aliases:
+          - backup-cron
+      shared-db-net: {}
+
+    tmpfs:
+      - /tmp:size=32M,noexec,nosuid
+      - /run:size=16M,noexec,nosuid
+
+    # LIVENESS healthcheck — pgrep confirms cron daemon is running (readiness внешний:
+    # 164 W1-4 канон — liveness-only допустим с комментарием; бэкап-факт — Loki-алерт
+    #  BackupFreshness). interval 60s — документированное исключение (cron-демон,
+    #  частый проб не даёт информации).
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep cron > /dev/null 2>&1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+    # [IMP:8][backup-cron-compose] Resource limits: 128M — limits protect host from OOM (AR3 cancelled)
+
+networks:
+  # v1.0.1 TRAP[BUG] (CI smoke): include-конфликт «backup-net conflicts with imported
+  # resource» — root docker-compose.yml объявляет сеть с name:, base.yml без name →
+  # merge-конфликт при COMPOSE_PROFILES=hermes-agent (все base.yml включаются всегда).
+  # Выравнивание с root (паттерн postgres base.yml — обе декларации идентичны).
+  backup-net:
+    external: true
+    name: backup-net
+  shared-db-net:
+    external: true
+    name: shared-db-net

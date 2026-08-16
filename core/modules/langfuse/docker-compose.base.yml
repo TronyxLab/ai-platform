@@ -1,0 +1,203 @@
+# @purpose  Base compose definition for langfuse module — LLM Tracing
+# GREP_SUMMARY: langfuse docker-compose langfuse-worker llm-tracing profiles x-logging observability-net shared-db-net postgres clickhouse v4 encryption-key
+# STRUCTURE: ▶ langfuse:4.10.0 [profiles:langfuse] + langfuse-worker (v4: очереди) → observability-net + shared-db-net → ┐
+# region MODULE_CONTRACT
+## @purpose  Base compose definition for langfuse Docker module
+## @scope    Merged with root docker-compose.yml via include:
+## @invariants
+##   - profiles: [langfuse] — pluggability: only included when COMPOSE_PROFILES contains langfuse
+##   - 1.5GB memory limit for cold-start (423 Prisma + ClickHouse migrations)
+##   - NODE_OPTIONS max-old-space-size=1024 to prevent OOM
+##   - Headless initialization via LANGFUSE_INIT_* vars
+##   - Healthcheck via /api/public/health on eth0 IP
+##   - Networks declared as external: true — pre-created by deploy-modules.sh
+##   - v4 (164 W1-5): web + worker — отдельные образы (langfuse/langfuse + langfuse-worker);
+##     общий env-блок через YAML-якорь x-langfuse-env; ENCRYPTION_KEY — required (64 hex)
+## @rationale Profiles enable selective startup via `make up MODULES=langfuse`
+# endregion MODULE_CONTRACT
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
+# Общий env-контракт web + worker (v4: оба контейнера требуют идентичный набор переменных;
+# YAML-якорь — единственный compose-нативный механизм дедупликации env-блоков).
+x-langfuse-env: &langfuse-env
+  # Node.js heap limit — prevents OOM in Docker with cgroup memory limits
+  NODE_OPTIONS: "--max-old-space-size=1024"
+
+  # Listen on all interfaces (Langfuse docs: HOSTNAME=0.0.0.0 for container access)
+  HOSTNAME: "0.0.0.0"
+
+  # Database — shared PostgreSQL
+  DATABASE_URL: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?PG_PASSWORD_REQUIRED}@pgbouncer:6432/langfuse?sslmode=disable"
+
+  # Auth — must be set in .env/SOPS
+  NEXTAUTH_SECRET: "${NEXTAUTH_SECRET}"
+  NEXTAUTH_URL: "${NEXTAUTH_URL:-http://langfuse:3000}"
+  SALT: "${SALT}"
+  # v4 required: 64 hex (openssl rand -hex 32)
+  ENCRYPTION_KEY: "${ENCRYPTION_KEY:?ENCRYPTION_KEY_REQUIRED}"
+
+  # Headless initialization (web-контейнер)
+  LANGFUSE_INIT_ORG_ID: "${LANGFUSE_INIT_ORG_ID:-}"
+  LANGFUSE_INIT_ORG_NAME: "AI-Platform"
+  LANGFUSE_INIT_PROJECT_ID: "${LANGFUSE_INIT_PROJECT_ID:-}"
+  LANGFUSE_INIT_PROJECT_NAME: "Default"
+  LANGFUSE_INIT_PROJECT_PUBLIC_KEY: "${LANGFUSE_PUBLIC_KEY:-}"
+  LANGFUSE_INIT_PROJECT_SECRET_KEY: "${LANGFUSE_SECRET_KEY:-}"
+  LANGFUSE_INIT_USER_EMAIL: "${LANGFUSE_INIT_USER_EMAIL:-admin@${PLATFORM_DOMAIN:-ai-platform.local}}"
+  LANGFUSE_INIT_USER_PASSWORD: "${LANGFUSE_INIT_USER_PASSWORD}"
+
+  # ClickHouse
+  CLICKHOUSE_URL: "${CLICKHOUSE_URL:-http://clickhouse:8123}"
+  CLICKHOUSE_MIGRATION_URL: "clickhouse://${CLICKHOUSE_USER:-default}:${CLICKHOUSE_PASSWORD:?CH_PASSWORD_REQUIRED}@clickhouse:9000"
+  CLICKHOUSE_USER: "${CLICKHOUSE_USER:-default}"
+  CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:?CH_PASSWORD_REQUIRED}"
+  CLICKHOUSE_CLUSTER_ENABLED: "false"
+
+  # S3 event upload — Local MinIO for dev, override via SOPS for production
+  # Правило (дистилляция TRAP 2026-07-15, Rev сработал — MinIO выключен на нодах, 164 W0-3.5):
+  # все 6 S3-переменных — ${VAR:-default} цепочки; каждая переопределима SOPS-ом.
+  # Prod (minio disabled): SOPS ставит S3_ACCESS_KEY/S3_SECRET_KEY (Timeweb S3 endpoint),
+  #   цепочка ${S3_ACCESS_KEY:-${MINIO_ROOT_USER:-dummy}} резолвится в SOPS-креды.
+  # Dev (local stack, minio enabled): MINIO_ROOT_USER/MINIO_ROOT_PASSWORD.
+  # Без SOPS-кредов и без minio → dummy-креды (загрузка событий деградирует, стек жив).
+  LANGFUSE_S3_EVENT_UPLOAD_BUCKET: "${LANGFUSE_S3_BUCKET:-${S3_BUCKET:-test-bucket}}"
+  LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: "${S3_ENDPOINT_URL:-https://s3.timeweb.cloud}"
+  LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: "${S3_ACCESS_KEY:-${MINIO_ROOT_USER:-dummy}}"
+  LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: "${S3_SECRET_KEY:-${MINIO_ROOT_PASSWORD:-dummy}}"
+  LANGFUSE_S3_EVENT_UPLOAD_REGION: "${S3_REGION:-ru-1}"
+  LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "${LANGFUSE_S3_FORCE_PATH_STYLE:-true}"
+
+  # Redis — event queue for ingestion pipeline (dedicated sidecar)
+  REDIS_CONNECTION_STRING: "redis://langfuse-redis:6379"
+
+  # Disable telemetry
+  TELEMETRY_ENABLED: "false"
+
+  # Security: disable public signup (audit 013 C1)
+  AUTH_DISABLE_SIGNUP: "true"
+
+services:
+
+  # ── Langfuse web (LLM Tracing) ────────────────────────────────────────────
+  # region service:langfuse
+  langfuse:
+    image: langfuse/langfuse:4.10.0@sha256:dd40428f7b13acaa17a194ae8c40638554fd497ad41ddc5f944775f83d4d4482
+    container_name: langfuse
+    profiles: [langfuse]
+    stop_signal: SIGTERM
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1536M
+          cpus: "1.0"
+          pids: 256
+    logging: *default-logging
+
+    ports:
+      - "127.0.0.1:${LANGFUSE_PORT:-3001}:3000"
+
+    environment: *langfuse-env
+
+    networks:
+      shared-db-net:
+        aliases:
+          - langfuse
+      observability-net:
+        aliases:
+          - langfuse
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://$$(ip addr show eth0 | grep 'inet ' | awk '{print $$2}' | cut -d/ -f1):3000/api/public/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 15s  # 40→15s: Langfuse starts in 5-10s (standardized per DevPlan 083)
+  # endregion service:langfuse
+
+  # ── Langfuse Worker (v4: владеет очередями ingestion, отдельный образ) ─────
+  # region service:langfuse-worker
+  langfuse-worker:
+    image: langfuse/langfuse-worker:4.10.0@sha256:efff982092fd301deb00d0014170d9602c89670bbb727014e9c1df9c6ed8bb3a
+    container_name: langfuse-worker
+    profiles: [langfuse]
+    stop_signal: SIGTERM
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1024M
+          cpus: "1.0"
+          pids: 256
+    logging: *default-logging
+
+    environment: *langfuse-env
+
+    networks:
+      shared-db-net:
+      observability-net:
+
+    depends_on:
+      langfuse:
+        condition: service_healthy
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:3030/api/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+  # endregion service:langfuse-worker
+
+  # ── Langfuse Redis (event queue) ──────────────────────────────────────────
+  # region service:langfuse-redis
+  langfuse-redis:
+    # 🧐 TRAP[DECISION] · 2026-07-16 · — · redis digest дублируется с core/modules/redis
+    # · Rejected: вынос в platform-env.yaml env_defaults
+    # · Reason: deferred, компенсируется gate'ом TASK-5 (discovery-based digest check)
+    # · Rev: третья копия образа — пересмотреть вынос в единый источник
+    image: redis:8.8.1-alpine@sha256:465aff338d817971674ff1ec3c0d59182e2b687018e87bf94b6e1491d0bb79e2
+    container_name: langfuse-redis
+    profiles: [langfuse]
+    restart: unless-stopped
+    stop_grace_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          pids: 256
+        reservations:
+          memory: 64M
+    logging: *default-logging
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 64mb
+      --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "-h", "127.0.0.1", "ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s  # 10→15s: standardized per DevPlan 083 (default)
+    networks:
+      shared-db-net:
+        aliases:
+          - langfuse-redis
+    volumes:
+      - langfuse-redis-data:/data
+  # endregion service:langfuse-redis
+
+networks:
+  observability-net:
+    external: true
+    name: observability-net
+  shared-db-net:
+    external: true
+    name: shared-db-net

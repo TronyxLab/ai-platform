@@ -1,0 +1,35 @@
+# FP-журнал advisory-правил agent-check (DevPlan 163 W-E E4, W3-T3.2)
+# GREP_SUMMARY: fp-registry advisory-rules verdict blocking advisory off count weekly-review agent-check ruff_policy
+# STRUCTURE: ┌rules (rule → count → verdict → notes)┐ → ◇ protocol weekly review → ⎋ связка ruff_policy.md (W-B)
+# region MODULE_CONTRACT
+## @purpose  Эмпирический FP-журнал advisory-правил L1-сигнала agent-check: вердикт правила
+##           (blocking | advisory | off) управляет секцией находок advisory-прогона
+##           (SLF/FBT/ARG/C90). Единственный механический источник вердиктов — правила
+##           здесь; еженедельный ревью переводит правило в blocking/advisory/off по данным.
+## @scope    Только advisory-правила вне select ruff.toml. Связка с ruff_policy.md (W-B):
+##           правило с >10 FP/нед НЕ включается в select ruff.toml (AC-9).
+## @invariants
+##   - verdict ∈ {blocking, advisory, off}; blocking → находки в blocking-секцию (exit 1),
+##     advisory → отдельная advisory-секция (не блокирует), off → находки подавляются
+##   - count — число находок за неделю (пишет ревьюер из телеметрии agent-loop G4.2)
+##   - Решение по правилу БЕЗ эмпирических данных не принимается (AC-9)
+##   - Читается agent_check.load_fp_registry (yaml.safe_load; невалидный verdict игнорируется)
+## @rationale Advisory-правила валидируются эмпирически ДО включения в глобальный select
+##            (W3-T3.2): FP/неделю на правило; >10 FP/нед → не включается.
+## @changes 2026-08-13 | DevPlan 163 W-E E4 — Created (стартовые записи SLF/FBT/ARG/C90)
+# endregion MODULE_CONTRACT
+
+# ── Протокол еженедельного ревью (W-E E4; связка ruff_policy.md W-B) ─────────────
+# 1. Каждую неделю: count = находок правила за 7 дней из телеметрии agent-loop
+#    (files/agent_loop_metrics.jsonl, G4.2) / manual-подсчёта.
+# 2. count > 10 FP/нед → правило НЕ включается в select ruff.toml (остаётся advisory
+#    или off); вердикт blocking не выставляется.
+# 3. count <= 10 FP/нед и стабильно низкий ≥2 недель → кандидат в blocking:
+#    W-B (владелец ruff.toml) добавляет правило в select + здесь verdict → blocking.
+# 4. Правило, дающее >10 FP/нед 3 недели подряд → verdict → off (подавление сигнала).
+# 5. Ревьюер обновляет count/verdict/notes + дату; коммит — отдельным изменениеием
+#    (реестр — артефакт, не runtime-мутация; agent-check НЕ пишет в этот файл).
+rules: []
+# DevPlan 171 W3.8: advisory-записи с count=0 удалены (пустые записи без эмпирики —
+# мнимая защита). Реестр-механизм жив: первая запись появится вместе с данными
+# еженедельного ревью (count > 0, verdict + notes + дата).

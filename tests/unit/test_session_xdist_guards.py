@@ -1,0 +1,249 @@
+"""
+# GREP_SUMMARY: test-session-xdist-guards, session-hooks, master-worker, PYTEST_XDIST_WORKER, attempt-counter, docker-cleanup, DevPlan-124, T1
+# STRUCTURE: ▶ monkeypatch env (worker/master) + mocks → ◇ pytest_sessionstart (increment? ) → ◇ pytest_sessionfinish (cleanup/reset?) → ⊕ asserts no-op vs executed → ⎋ LDD IMP:9
+# region MODULE_CONTRACT
+## @purpose  Unit tests for DevPlan 124 T1: session-hooks master-guard. При -n auto хуки
+##           pytest_sessionstart/sessionfinish выполняются в каждом xdist-воркере; без гейта
+##           attempt-счётчик инкрементировался N раз (факт 4: -n 2 → Attempt #2 за один прогон),
+##           docker-cleanup в рано завершившемся воркере сносил стек других (факт 5).
+##           Воркер (PYTEST_XDIST_WORKER set) — НЕ инкрементирует/НЕ сбрасывает/НЕ чистит;
+##           master — инкрементирует, чистит, сбрасывает при aggregate-100% PASS.
+## @scope    Только session-хуки tests/_conftest/session.py (T1); counter-семантика —
+##           через mocked функции (counter.py покрыт отдельно, DevPlan 120 §3.3).
+## @invariants
+##   - tmp_path-независимые unit-тесты: реальные файлы НЕ читаются (_validate_test_fixtures mocked)
+##   - Native imports: from _conftest.session import ... (tests/conftest.py site.addsitedir)
+##   - LDD: @ldd_trajectory asserts IMP:9 presence (tests/_conftest/ldd.py)
+##   - Test Honesty R1/R2: real falsifiable assertions, no pass-tests
+## @rationale DevPlan 124 T1 приёмка: «master — делает; воркер — не инкрементирует/
+##            не сбрасывает/не чистит» — прямая проверка master-guard семантики.
+## @changes 2026-08-03 | Created (DevPlan 124 T1)
+# endregion MODULE_CONTRACT
+"""
+
+import logging
+from types import SimpleNamespace
+
+import _conftest.session as session_mod
+import pytest
+
+from tests._conftest.ldd import ldd_trajectory
+
+logger = logging.getLogger(__name__)
+
+
+# region TEST_DOUBLES
+class _FakeConfig:
+    """Config stub: getoption returns default (нет -m маркерного фильтра в тесте)."""
+
+    def getoption(self, _name, default=None):
+        return default
+
+
+class _FakeSession:
+    """Минимальный session-стаб: используется только session.config.getoption."""
+
+    config = _FakeConfig()
+
+    def __init__(self) -> None:
+        self.items: list = []  # поднабор — 0 собранных тестов (reset запрещён, T12.1 T-2)
+
+
+class _FakeFullSession:
+    """Полная сессия (T12.1 T-2): без -m фильтра + >= _FULL_SESSION_MIN_ITEMS items
+    (имитация `pytest tests/` — единственный случай сброса counter)."""
+
+    config = _FakeConfig()
+
+    def __init__(self) -> None:
+        self.items: list = [object()] * 1000
+
+
+def _as_worker(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Смоделировать xdist-воркер: PYTEST_XDIST_WORKER установлен (стандартный env xdist)."""
+    monkeypatch.setenv("PYTEST_XDIST_WORKER", "gw0")
+
+
+def _as_master(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Смоделировать master-процесс: PYTEST_XDIST_WORKER отсутствует (не воркер)."""
+    monkeypatch.delenv("PYTEST_XDIST_WORKER", raising=False)
+
+
+def _guard_hooks() -> tuple[SimpleNamespace, list[str]]:
+    """Fake helper-namespace (DI-канон 163 W-H, DevPlan 167 D3) для session-хуков.
+
+    ## @purpose  Изолировать hooks от реального docker/counter: fake-namespace передаётся
+    ##            параметром `helpers=` в pytest_sessionstart/sessionfinish (0 setattr-патчей).
+    ##            _validate_test_fixtures (чтение test_data — не нужно в unit),
+    ##            _increment_counter/_read_counter/_reset_counter (реальный файл
+    ##            .test_counter.json — не трогаем), cleanup-функции (docker ps/rm — не запускаем).
+    ## @io       ⇥ — → ⎋ (helpers: SimpleNamespace, calls: list[str]) — recorder + fake-функции
+    ## @complexity O(1)
+    """
+    calls: list[str] = []
+
+    def _fake_increment() -> int:
+        calls.append("increment")
+        return 42
+
+    def _fake_read() -> dict:
+        calls.append("read")
+        return {"attempts": 7}
+
+    def _fake_reset(scope: str | None = None) -> None:
+        # T12.1 (T-2): sessionfinish вызывает _reset_counter(scope=...) — записываем reset
+        calls.append(f"reset:{scope}")
+
+    def _fake_compose_cleanup() -> None:
+        calls.append("compose_cleanup")
+
+    def _fake_hermes_cleanup() -> None:
+        calls.append("hermes_cleanup")
+
+    def _fake_network_release() -> None:
+        calls.append("network_release")
+
+    helpers = SimpleNamespace(
+        _validate_test_fixtures=lambda: None,
+        _increment_counter=_fake_increment,
+        _read_counter=_fake_read,
+        _reset_counter=_fake_reset,
+        _final_compose_cleanup=_fake_compose_cleanup,
+        _final_hermes_test_cleanup=_fake_hermes_cleanup,
+        _force_release_test_networks=_fake_network_release,
+    )
+    return helpers, calls
+
+
+# endregion TEST_DOUBLES
+
+
+# ═══════════════════════════════════════════════════════════════
+# region Tests: pytest_sessionstart master-guard
+# ═══════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · DevPlan 124 T1 · sessionstart: воркер НЕ инкрементирует attempt-счётчик
+# · Scenario: PYTEST_XDIST_WORKER=gw0 → pytest_sessionstart не вызывает _increment_counter
+# ·   (no-op + лог worker id); иначе -n auto дал бы Attempt #N за один прогон (факт 4)
+# · Last fail: 2026-08-03 — эксперимент -n 2 → Attempt #2 за ОДИН прогон
+# · Remove if: master-guard снят или инкремент перенесён из sessionstart
+@ldd_trajectory
+def test_sessionstart_worker_skips_counter_increment(caplog, monkeypatch) -> None:
+    """DevPlan 124 T1: xdist-воркер не инкрементирует attempt-счётчик (no-op + worker log)."""
+    helpers, calls = _guard_hooks()
+    _as_worker(monkeypatch)
+
+    session_mod.pytest_sessionstart(_FakeSession(), helpers=helpers)
+
+    assert calls == [], f"воркер не должен мутировать счётчик, calls={calls}"
+    logger.critical("[IMP:9][test] worker sessionstart: increment skipped (calls=%d)", len(calls))
+
+
+# 🧪 TRAP[TEST] · DevPlan 124 T1 · sessionstart: master инкрементирует ровно 1 раз
+# · Scenario: без PYTEST_XDIST_WORKER → _increment_counter вызван (Attempt #42 из fake)
+# · Last fail: N/A (базовое поведение, сохраняемое гейтом)
+# · Remove if: семантика инкремента изменена
+@ldd_trajectory
+def test_sessionstart_master_increments_counter(caplog, monkeypatch) -> None:
+    """DevPlan 124 T1: master-сессия инкрементирует attempt-счётчик (1 раз за сессию)."""
+    helpers, calls = _guard_hooks()
+    _as_master(monkeypatch)
+
+    session_mod.pytest_sessionstart(_FakeSession(), helpers=helpers)
+
+    assert calls == ["increment"], f"master должен инкрементировать ровно 1 раз, calls={calls}"
+    logger.critical("[IMP:9][test] master sessionstart: increment executed (calls=%s)", calls)
+
+
+# endregion Tests: pytest_sessionstart master-guard
+
+
+# ═══════════════════════════════════════════════════════════════
+# region Tests: pytest_sessionfinish master-guard
+# ═══════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · DevPlan 124 T1 · sessionfinish: воркер НЕ чистит docker и НЕ трогает счётчик
+# · Scenario: PYTEST_XDIST_WORKER=gw0 → cleanup-функции и read/reset НЕ вызываются даже при
+# ·   exitstatus==0; иначе рано завершившийся воркер сносил контейнеры/сети других (факт 5)
+# · Last fail: 2026-08-03 — docker-гонка sessionfinish (воркер A удалял стек воркера B)
+# · Remove if: master-guard снят или cleanup перенесён из sessionfinish
+@ldd_trajectory
+def test_sessionfinish_worker_skips_cleanup_and_counter(caplog, monkeypatch) -> None:
+    """DevPlan 124 T1: воркер не выполняет docker-cleanup и не читает/сбрасывает счётчик."""
+    helpers, calls = _guard_hooks()
+    _as_worker(monkeypatch)
+
+    session_mod.pytest_sessionfinish(_FakeSession(), exitstatus=0, helpers=helpers)
+
+    assert calls == [], f"воркер не должен чистить/сбрасывать, calls={calls}"
+    logger.critical("[IMP:9][test] worker sessionfinish: cleanup+reset skipped (calls=%d)", len(calls))
+
+
+# 🧪 TRAP[TEST] · DevPlan 124 T1 + 136 W12 T12.1 · sessionfinish: master чистит; reset — ТОЛЬКО полная сессия
+# · Scenario: без PYTEST_XDIST_WORKER, exitstatus==0, ПОДНАБОР (0 items — нет -m, но < 1000) →
+# ·   cleanup выполняется, счётчик НЕ сбрасывается (T12.1 T-2: reset только при 100% PASS полной
+# ·   сессии; проходящий поднабор не стирает evidence фейла полного прогона)
+# · Last fail: 2026-08-05 — тест кодировал СТАРЫЙ контракт (reset при любом exitstatus==0);
+# ·   T12.1 (T-2) изменил семантику (см. test_sessionfinish_master_full_session_resets)
+# · Remove if: семантика reset при поднаборе изменена
+@ldd_trajectory
+def test_sessionfinish_master_cleans_and_resets(caplog, monkeypatch) -> None:
+    """DevPlan 124 T1 + 136 T12.1: master при exitstatus==0 чистит docker; ПОДНАБОР — НЕ сбрасывает."""
+    helpers, calls = _guard_hooks()
+    _as_master(monkeypatch)
+    monkeypatch.setenv("PYTEST_NO_ESCALATION", "1")
+
+    session_mod.pytest_sessionfinish(_FakeSession(), exitstatus=0, helpers=helpers)
+
+    assert "compose_cleanup" in calls, "master должен выполнить final compose cleanup"
+    assert "hermes_cleanup" in calls, "master должен выполнить hermes-test sweep"
+    assert "network_release" in calls, "master должен выполнить network release"
+    assert "read" in calls, "master должен прочитать счётчик"
+    assert not any(c.startswith("write:") for c in calls), (
+        f"T12.1 T-2: поднабор 100% PASS НЕ сбрасывает счётчик, calls={calls}"
+    )
+    logger.critical("[IMP:9][test] master sessionfinish subset: cleanup executed, counter NOT reset (calls=%s)", calls)
+
+
+# 🧪 TRAP[TEST] · DevPlan 136 W12 T12.1 (T-2) · sessionfinish: reset ТОЛЬКО при полной сессии
+# · Scenario: exitstatus==0 + ПОЛНАЯ сессия (>= 1000 items, без -m) → _write_counter({"attempts": 0})
+# · Last fail: 2026-08-05 — dual counter / reset-поднабором (T-1/T-2 audit finding)
+# · Remove if: полная сессия перестала быть единственным reset-триггером
+@ldd_trajectory
+def test_sessionfinish_master_full_session_resets(caplog, monkeypatch) -> None:
+    """DevPlan 136 W12 T12.1: master при exitstatus==0 + ПОЛНАЯ сессия сбрасывает счётчик в 0."""
+    helpers, calls = _guard_hooks()
+    _as_master(monkeypatch)
+    monkeypatch.setenv("PYTEST_NO_ESCALATION", "1")
+
+    session_mod.pytest_sessionfinish(_FakeFullSession(), exitstatus=0, helpers=helpers)
+
+    assert "compose_cleanup" in calls, "master должен выполнить final compose cleanup"
+    assert "read" in calls, "master должен прочитать счётчик"
+    assert any(c.startswith("reset:") for c in calls), f"полная сессия 100% PASS — сброс счётчика, calls={calls}"
+    logger.critical("[IMP:9][test] master sessionfinish full-session: counter reset (calls=%s)", calls)
+
+
+# 🧪 TRAP[TEST] · DevPlan 124 T1 · sessionfinish: master при фейле НЕ сбрасывает счётчик
+# · Scenario: exitstatus!=0 → cleanup выполняется, но write-сброс НЕ вызывается
+# ·   (счётчик остаётся на инкрементированном значении — анти-loop эскалация)
+# · Last fail: 2026-08-03 — воркер с exitstatus==0 сбрасывал фейл параллельного воркера
+# · Remove if: семантика reset при фейле изменена
+@ldd_trajectory
+def test_sessionfinish_master_failure_keeps_counter(caplog, monkeypatch) -> None:
+    """DevPlan 124 T1: master при фейле чистит docker, но НЕ сбрасывает счётчик."""
+    helpers, calls = _guard_hooks()
+    _as_master(monkeypatch)
+    monkeypatch.setenv("PYTEST_NO_ESCALATION", "1")  # подавить checklist-вывод (git hooks-контракт)
+
+    session_mod.pytest_sessionfinish(_FakeSession(), exitstatus=1, helpers=helpers)
+
+    assert "compose_cleanup" in calls, "master чистит docker и при фейле"
+    assert "read" in calls, "master читает счётчик для эскалации"
+    assert not any(c.startswith("write:") for c in calls), f"сброс при фейле запрещён, calls={calls}"
+    logger.critical("[IMP:9][test] master sessionfinish: failure keeps counter (calls=%s)", calls)
+
+
+# endregion Tests: pytest_sessionfinish master-guard

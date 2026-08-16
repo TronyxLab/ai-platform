@@ -1,0 +1,70 @@
+# GREP_SUMMARY: docker-compose {{PROJECT_NAME}} proxy-net frontend nginx proxy env_file
+# STRUCTURE: service(<project>-app) → env_file(.env.platform) → networks(proxy-net:external) → healthcheck
+# region MODULE_CONTRACT
+## @purpose  Development and production compose definition
+## @scope    Service with platform env_file contract
+## @invariants
+##   - proxy-net is external (created by nginx module)
+##   - env_file: .env.platform — единственный источник платформенных переменных
+##   - Ports NOT published (nginx proxy handles ingress)
+## @rationale .env.platform заменяет environment-блок; исключает дрейф между проектами (DD5)
+# endregion MODULE_CONTRACT
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
+services:
+  {{PROJECT_NAME}}:
+    image: "${IMAGE_REGISTRY:-ghcr.io}/{{ORG_NAME}}/{{PROJECT_NAME}}:${IMAGE_TAG:-latest}"
+    # v1.0.1 (Фаза 3): локальная сборка fallback — `docker compose up --build` поднимает
+    # проект без CI-образа; на VPS образ приходит из ghcr (receive-канал), build-секция
+    # не исполняется (compose берёт существующий image).
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # ⚠️ TRAP[BUG] Docker requires lowercase repo names (e.g., tronyxlab, not TronyxLab).
+    #   Pass --org in lowercase, or the image pull will fail with:
+    #   "repository name (Xxx/yyy) must be lowercase"
+    restart: unless-stopped
+    # Канон restart-политики (164 W1-4): unless-stopped для проектов — `always` только у
+    # stateful-модулей с обоснованием (postgres/redis/backup-cron).
+    stop_grace_period: 30s
+    deploy:
+      resources:
+        limits:
+          # DevPlan 162 W4-3: лимиты 128M/0.25CPU проектам (K3/L1-практики) —
+          # контейнер без memory/cpu лимита = OOM-риск общего стека; L1-контракт limits-present.
+          memory: "128M"
+          cpus: "0.25"
+    logging: *default-logging
+    env_file:
+      - .env.platform
+    environment:
+      - NODE_ENV=production
+    networks:
+      {{PROJECT_NAME}}-net:
+      proxy-net:
+        aliases:
+          - {{PROJECT_NAME}}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:80/health"]
+      # ⚠️ TRAP[BUG] Use 127.0.0.1 NOT localhost — Alpine resolves localhost to ::1 (IPv6),
+      #   but nginx binds to 0.0.0.0 (IPv4), causing healthcheck to always fail
+      interval: 15s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    labels:
+      - "platform.type=frontend"
+      - "platform.domain={{DOMAIN}}"
+
+networks:
+  {{PROJECT_NAME}}-net:
+    name: {{PROJECT_NAME}}-net
+    driver: bridge
+  proxy-net:
+    name: proxy-net
+    external: true

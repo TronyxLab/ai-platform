@@ -1,0 +1,35 @@
+# GREP_SUMMARY: dockerignore project-template frontend build-context node_modules cache exclude
+# STRUCTURE: ┌.dockerignore┐ → исключения build-контекста Docker (node/nginx-проект)
+# region MODULE_CONTRACT
+## @purpose  Build-контекст Docker для frontend-проектов (template-frontend payload, 170 W12 C8):
+##           исключает node_modules/кэши/локальные артефакты.
+## @scope    Копируется в проект при make new-project TEMPLATE=frontend; Dockerfile — multi-stage
+##           node:22.23.0-alpine → nginx:1.28-alpine (digest-pins W12 C1).
+## @invariants
+##   - node_modules исключён (устанавливается in-image с кэшем npm)
+##   - .env* исключены ВСЕГДА (секреты никогда не попадают в build-контекст)
+##   - src/ (исходники) — НЕ исключаются
+## @rationale 170 W12 C8: у проектов из шаблона не было .dockerignore — node_modules уезжал
+##            в контекст docker build (сотни MB).
+## @changes  2026-08-15 | DevPlan 170 W12 C8 — Created
+# endregion MODULE_CONTRACT
+
+# Node
+node_modules/
+dist/
+npm-debug.log*
+.pnpm-store/
+
+# Git
+.git/
+.gitignore
+
+# Секреты и окружение (никогда в образе)
+.env
+.env.*
+!.env.example
+
+# Локальные артефакты
+logs/
+*.log
+.DS_Store

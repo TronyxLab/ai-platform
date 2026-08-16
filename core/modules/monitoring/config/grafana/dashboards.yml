@@ -1,0 +1,26 @@
+# GREP_SUMMARY: grafana dashboard provider provisioning
+# STRUCTURE: ▶ provider:file → path:/etc/grafana/provisioning/dashboards → 4-json-dashboards → editable:false → ┘
+# region MODULE_CONTRACT
+## @purpose  Grafana dashboard provider configuration
+## @scope    Provisioned dashboards from JSON files; read-only (editable: false)
+## @invariants
+##   - All 4 dashboards provisioned from config/dashboards/*.json
+##   - Dashboards are NOT editable in UI — all changes via git
+##   - Folder: "AI Platform" (shared folder for all platform dashboards)
+## @rationale Provisioned dashboards survive container recreation. Edits must
+##           be made in git and redeployed (AC-13).
+# endregion MODULE_CONTRACT
+
+apiVersion: 1
+
+providers:
+  - name: "AI Platform"
+    orgId: 1
+    folder: "AI Platform"
+    folderUid: ""
+    type: file
+    disableDeletion: true
+    updateIntervalSeconds: 30
+    allowUiUpdates: false
+    options:
+      path: /etc/grafana/provisioning/dashboards

@@ -1,0 +1,139 @@
+# GREP_SUMMARY: pyproject, dependencies, pytest, ruff, ai-platform, pytest-timeout, durations, junit-logging, markers, dev-deps, DevPlan-163
+# STRUCTURE: [project] → name+version+python+dependencies → [project.optional-dependencies] dev → [tool.pytest.ini_options] markers → [tool.ruff] ref to ruff.toml
+# region MODULE_CONTRACT
+## @purpose  Project metadata and dependency management for ai-platform
+## @scope    Declares runtime dependencies, dev dependencies (pytest, ruff, basedpyright,
+##           vulture/deptry/import-linter — DevPlan 163 статический стек),
+##           pytest marker registry, ruff configuration reference
+## @invariants
+##   - Runtime dependencies are pinned to minimum compatible versions
+##   - Dev dependencies are in [project.optional-dependencies] dev
+##   - pytest markers registry matches test markers used across the suite (--strict-markers)
+##   - ruff config lives in ruff.toml (not duplicated here)
+##   - pytest-timeout: глобальный дефолт 30s (DevPlan 163 W-A A2); статические сьюты
+##     перекрывают CLI (test_runner --timeout=300); docker-сьюты — см. TRAP[DECISION] в ini
+##   - junit_logging=out + --durations=10 — baseline измерений (консенсус 10 DevPlan 163)
+##   - ruff пин 0.16.2 (DevPlan 163 M3, clean-at-ship; 0.16.2 существует — проверено 2026-08-13)
+## @rationale  Single source of truth for dependencies replaces hardcoded pip install in Makefile.
+##             pyproject.toml is the Python community standard for project metadata (PEP 621).
+##             DevPlan 163: статический стек без переходных состояний — новые dev-инструменты
+##             (vulture advisory, deptry blocking, import-linter)
+##             вводятся прямым замещением, НЕ переходными конфиг-полусостояниями.
+# endregion MODULE_CONTRACT
+
+[build-system]
+requires = ["setuptools>=64.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = []
+
+[project]
+name = "ai-platform"
+version = "1.0.0"
+description = "AI Platform — containerized LLM deployment stack"
+requires-python = ">=3.10"
+dependencies = [
+    "boto3>=1.28.0",
+    "botocore>=1.31.0",  # direct import в core/ (s3_ssl_cache, backup-cron retention/upload) — импорт-гейт B7
+    "cryptography>=41.0.0",
+    "httpx>=0.27.0",  # admin_client.py (httpx.Client/AsyncClient) — runtime (DevPlan 116 B7 T6, U-50)
+    "jinja2>=3.1.0",
+    "jsonschema>=4.17.0",
+    "pydantic>=2.0.0",
+    "psutil>=5.9.0",  # 0.8: xdist memory-guard (check_suite runner) — OOM-защита dev-машины
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "basedpyright>=1.12.0",
+    "boto3-stubs>=1.28.0",
+    "deptry>=0.25",  # DevPlan 163 W-D D4 (blocking dep-audit; 0.25.0 yanked → резолвится в 0.25.1)
+    "grimp>=3.15",  # DevPlan 163 W-D: R5-виртуальный граф test_gate_cross_layer (DEP003-блокер deptry)
+    "import-linter>=2.13",  # DevPlan 163 M5: архитектурные контракты (.importlinter, W-D)
+    "pytest>=7.4.0",
+    "pytest-timeout>=2.3.0",  # DevPlan 129 W4: per-test timeout static_audit (висящий тест падает быстро вместо 1276.8s)
+    "python-dotenv>=1.0.0",  # только тесты (tests/_conftest/e2e.py, tests/test_env_contract.py) — dev extra (D4)
+    "requests>=2.31.0",  # только тесты (tests/test_smoke_*) — dev extra (D4)
+    "urllib3>=2.0",  # DevPlan 163 W-D: tests/test_smoke_nginx.py:435 импортирует напрямую (DEP003)
+    "ruff==0.16.2",  # DevPlan 163 M3: пин 0.16.2 (проверен: 0.16.2 существует, uv dry-run 2026-08-13)
+    "types-pyyaml>=6.0.12",
+    "vulture>=2.16",  # DevPlan 163 W-D D4 (advisory dead-code, whitelist в static-пакете)
+]
+load = [
+    "locust>=2.32,<2.33",  # pinned to minor — must match locustio/locust:2.32.10 image (runner_remote.DEFAULT_IMAGE: полный semver, minor-only тега нет — BUG-4 146-m4); load extra, НЕ runtime-зависимость
+    "gevent>=24.2",  # DevPlan 163 W-D: llm_stream.py импортирует gevent.Timeout напрямую (DEP003)
+]
+
+# DevPlan 163 W-D D4 (deptry blocking dep-audit): DEP001 — шум монолита
+# (core-пакет + модули с container-requirements импортируют необъявленные libs
+# локально — модульные env-зависимости вне root-pyproject); DEP002 — dev-CLI
+# инструменты (вызываются как CLI, не импортируются — deptry-FP по дизайну).
+# DEP003 остаётся blocking: ловит реальные нехватки (grimp-блокер W-D, 2026-08-13).
+[tool.deptry]
+ignore = ["DEP001"]
+
+[tool.deptry.per_rule_ignores]
+DEP002 = [
+    "basedpyright",
+    "boto3-stubs",
+    "deptry",
+    "pytest-timeout",
+    "ruff",
+    "types-pyyaml",
+    "vulture",
+]
+
+[tool.pytest.ini_options]
+testpaths = "tests"
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+# DevPlan 163 консенсус 10 (baseline измерений): junit-durations + pytest-timeout.
+# --durations=10 — 10 самых медленных тестов в конце прогона (agent-loop telemetry).
+addopts = "-v --tb=short -rs --strict-markers --strict-config --durations=10"
+# DevPlan 163: junit_logging=out — stdout тестов попадает в JUnit XML (CI-артефакты, A4).
+junit_logging = "out"
+# ⚠️ TRAP[DECISION] · 2026-08-13 · MED · timeout = 30 — глобальный дефолт pytest-timeout (W-A A2)
+# · Rejected: не ставить дефолт (висящие unit-тесты блокируют прогон — класс дефекта 1276.8s, 129 W4)
+# · Reason: дефолт 30s ловит зависания unit-тестов быстро; статические сьюты перекрывают CLI
+# ·   (test_runner _timeout_args --timeout=300; gates — --timeout 300 в check-suite.yaml, W-G).
+# · RESOLVED 2026-08-13 (W-G интеграция, DevPlan 163 фаза 1): глобальный ini-timeout СНЯТ —
+# ·   docker-сьюты (smoke/component, полный gate) наследуют ini-дефолт, а test_runner
+# ·   _timeout_args НЕ применяет CLI-переопределение к docker (легитимные healthcheck-поллинги
+# ·   >30s → риск падения полного gate). Per-marker таймауты живут в check-suite.yaml cmds
+# ·   (gates --timeout 300; static_audit — test_runner --timeout=300), а не в ini.
+# · Rev: если появится механизм marker-level timeouts без ini-глобального — вернуть дефолт для unit.
+markers = [
+    "static_audit: static analysis tests (schema validation, unit tests, no Docker)",
+    "smoke: compose lifecycle + healthchecks (needs Docker)",
+    "component: hermes-agent + observability health endpoints (needs Docker)",
+    "predeploy: container/config/network validation (needs Docker)",
+    "contract: contract tests for entrypoint scripts (no Docker)",
+    "e2e: manual end-to-end tests against external *.tronyx.ru (no Docker, dev-only)",
+    "integration: integration tests against the local docker stack (needs Docker, single-process, DevPlan 133 W2.5)",
+    "requires_node: E2E pipeline tests against a recreatable test-VPS (needs NODE env, SSH, Docker)",
+    "chaos: chaos-engineering fault injection tests on the test-VPS (126-chaos-resilience; needs NODE env, SSH, operator window; NOT in regular gate)",
+    "gate: CI gate tests",
+    "requires_docker: tests that require a running Docker daemon",
+    "local_auth: tests that require local auth setup",
+    "wave: wave number for Wave-Pipeline test execution ordering",
+    # 177 W2.2: маркер unit удалён из реестра — 130 декораторов снято (13 файлов); сборка
+    # не меняется: catch-all static_audit (test_runner.py _STATIC_AUDIT_EXPR) подхватывает
+    "benchmark: performance benchmarks for critical path operations",
+    "xdist_group: pytest-xdist serial execution group (e.g. 'serial') — git-index-sensitive tests run sequentially",
+]
+# W2 T2.8 (DevPlan 160): удалены 3 мёртвых маркера — backup, skip_enforcement,
+# requires_fresh_state (0 декораторов ^@pytest.mark.X; grep-верификация).
+# Исключения, задокументированные комментарием:
+#   - skip_enforcement: живёт как ФИЛЬТР в check-suite.yaml/ci.mk («gate and not skip_enforcement»)
+#     и gates/AGENTS.md (env-dependent категория) — фильтр на незарегистрированном маркере
+#     валиден (pytest -m не требует регистрации), но возврат маркера в реестр допустим
+#     при появлении декораторов.
+#   - requires_fresh_state: runtime-фикстура _conftest/state_reset.py использует
+#     request.node.get_closest_marker("requires_fresh_state") — строковый lookup,
+#     регистрация не требуется (0 декораторов).
+#   - wave: остаётся (0 декораторов, но динамически применяется pytest_collection_modifyitems).
+
+# Ruff configuration lives in ruff.toml (project root) — auto-discovered by ruff

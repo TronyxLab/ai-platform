@@ -1,0 +1,281 @@
+# core/platform-infra.yaml
+# GREP_SUMMARY: platform-infra, infrastructure-descriptor, networks, volumes, proxy, provides
+# STRUCTURE: ┌networks (12)┐ → ┌volumes (16)┐ → ┌proxy┐ → ┌provides (8)┐
+# region MODULE_CONTRACT
+## @purpose  Canonical infrastructure descriptor — single source of truth for Docker networks,
+##           volume directories, proxy configuration, and service provides (host/port/URL templates).
+##           Generated sections (profiles, port_mappings, test_ports, env_defaults) are produced
+##           dynamically by generate_platform_env.py.
+## @scope    Consumed by generate_platform_env.py, provision-environment.sh, tests/_conftest/infra.py,
+##           deploy-modules.sh, CI workflows.
+## @invariants
+##   - This is the ONLY place where networks, volumes, proxy config, and provides are defined
+##   - Consumers MUST read this file, never hardcode
+##   - profiles, port_mappings, test_ports, env_defaults are GENERATED — not stored here
+##   - provides entries are 1:1 with core/modules/ directory names (Docker modules with host:port)
+## @rationale Splitting infra (static) from generated sections (dynamic) eliminates drift between
+##            platform-env.yaml and actual module state. Static infra rarely changes; generated
+##            sections auto-sync with modules directory + docker-compose files.
+## @changes  Plan 082 — added env_defaults section, expanded no_proxy_internal
+##            Plan 041 — platform-infra split: created from platform-env.yaml, kept only
+##            networks, volumes, proxy, provides sections; removed profiles, port_mappings,
+##            test_ports, env_defaults.
+# endregion MODULE_CONTRACT
+
+networks:
+  - name: proxy-net
+    driver: bridge
+  - name: shared-db-net
+    driver: bridge
+  - name: shared-cache-net
+    driver: bridge
+  - name: hermes-agent-net
+    driver: bridge
+  - name: observability-net
+    driver: bridge
+  - name: backup-net
+    driver: bridge
+  # Staging networks (production VPS only — created idempotently, no-op elsewhere)
+  - name: staging-proxy-net
+    driver: bridge
+  - name: staging-shared-db-net
+    driver: bridge
+  # Test networks (test-only external networks for DNS-alias isolation — DevPlan 017 Option B)
+  - name: test-shared-db-net
+    driver: bridge
+  - name: test-shared-cache-net
+    driver: bridge
+  - name: test-observability-net
+    driver: bridge
+  - name: test-proxy-net
+    driver: bridge
+  - name: test-hermes-agent-net
+    driver: bridge
+
+volumes:
+  # Prometheus config directories (bind-mount for dynamic targets/rules)
+  - path: /opt/platform/prometheus-rules
+  - path: /opt/platform/prometheus-targets
+  # Backup
+  - path: /var/lib/platform/backup-spool
+  - path: /var/lib/platform/backup-spool/app-data
+  - path: /var/lib/platform/backup-spool/postgres
+  # Clickhouse
+  - path: /var/lib/platform/clickhouse-data
+  # Observability (monitoring + logging)
+  - path: /var/lib/platform/grafana-data
+  - path: /var/lib/platform/hermes-agent/data
+  # Infra metrics
+  - path: /var/lib/platform/infra-metrics-data
+  # Langfuse + LiteLLM
+  # langfuse — host-путь не используется: данные в docker-томе langfuse-redis-data; spool_dir: none.
+  - path: /var/lib/platform/litellm-data
+  # Loki
+  - path: /var/lib/platform/loki-data
+  # Minio
+  # minio — host-путь не используется: данные в docker-томе minio-data; spool_dir: none.
+  # Postgres
+  - path: /var/lib/platform/postgres-data
+  - path: /var/lib/platform/prometheus-data
+  # Logs
+  # ⚠️ TRAP[BUG] · 2026-08-03 · P1 · wal-archive root:root → postgres archive_command
+  #   «Permission denied» (обнаружено на chaos-прогоне W1, 126). fix: owner=999:999 —
+  #   chown применяется provisioner'ом при создании и при несовпадении владельца.
+  - path: /var/lib/platform/wal-archive
+    owner: "999:999"
+  - path: /var/log/platform/backup
+
+proxy:
+  # Opt-in контракт: прокси-переменные (HTTP_PROXY/HTTPS_PROXY/NO_PROXY) декларируют
+  # только модули из consumers — единственные реальные потребители прокси-канала
+  # hermes-agent: Telegram → Tor → Privoxy. Все остальные модули — внутренний трафик без прокси.
+  # ⚠️ Добавление модуля сюда БЕЗ env_shared в module.yaml = красный гейт T8.5 (opt-in reverse)
+  consumers:
+    - hermes-agent
+    - monitoring
+  # Канонический список внутренних NO_PROXY-исключений (SoT).
+  # .env/.env.example/fallback в hermes-agent docker-compose ⊇ этого списка
+  no_proxy_internal: "localhost,127.0.0.1,.local,postgres,pgbouncer,redis,clickhouse,litellm,langfuse,minio,grafana,prometheus,loki,nginx,node-exporter,cadvisor,hermes-agent,status-page,backup-cron,nginx-prometheus-exporter,redis-exporter,postgres-exporter"
+
+provides:
+  postgres:
+    host: pgbouncer
+    port: 6432
+    dsn_template: "postgresql://${NAME}_user:***@pgbouncer:6432/${NAME}_db"
+    networks:
+      - shared-db-net
+  redis:
+    host: redis
+    port: 6379
+    url_template: "redis://redis:6379/0"
+    networks:
+      - shared-cache-net
+  nginx:
+    host: nginx-proxy
+    port: 443
+    url_template: "https://${DOMAIN}"
+    networks:
+      - proxy-net
+  litellm:
+    host: litellm
+    port: 4000
+    url_template: "http://litellm:4000"
+    networks:
+      - hermes-agent-net
+  langfuse:
+    host: langfuse
+    port: 3001
+    url_template: "http://langfuse:3001"
+    networks:
+      - hermes-agent-net
+  minio:
+    host: minio
+    port: 9000
+    url_template: "http://minio:9000"
+    networks:
+      - hermes-agent-net
+  clickhouse:
+    host: clickhouse
+    port: 8123
+    url_template: "http://clickhouse:8123"
+    dsn_template: "clickhouse://clickhouse:8123/${NAME}"
+    networks:
+      - hermes-agent-net
+
+env_defaults:
+  # ── Platform / Context ──
+  CONTEXT: "test"
+  NODE_NAME: "test-node"
+  # 170 W12 C1: digest-pin (tag:latest + sha256 index-дайджест = иммутабельная multi-arch ссылка;
+  #  docker pull идёт по дайджесту, тег — документационный). Digest проверен:
+  #  docker buildx imagetools inspect (2026-08-16, актуален).
+  # tag-policy U-60: versioned-теги публикует hermes-push-l2 (:latest + :v<pyproject-version>).
+  CONTEXT_IMAGE: "ghcr.io/tronyxlab/hermes-agent-context:latest@sha256:0105cd5f9ff969b2f6aff035e7e4ff7ec0677546667616423ac2dd6cc690e986"
+  # ── Локальные оверрайды (RC-сессия 2026-08-03, dev-локали) ──────────────────
+  # Пустые дефолты = прод-поведение compose (${VAR:-default} в base.yml):
+  #   NODE_CONFIGS_DIR → /opt/node-configs, STATUS_METRICS_JSON/HTPASSWD_FILE → /var/lib/platform/run (142 W2).
+  # Локально (macOS, Docker Desktop не шарит /opt и /run) .env переопределяет абсолютными путями.
+  NODE_CONFIGS_DIR: ""
+  STATUS_METRICS_JSON: ""
+  HTPASSWD_FILE: ""
+  # PLATFORM_DOMAIN — единственный SoT домена платформы (DevPlan 116 T3, U-16).
+  # Базовое значение: ai-platform.local. При загруженном контексте (context = GitHub org):
+  #   PLATFORM_DOMAIN=<context>.local, SAN дополнительно включает *.${PLATFORM_DOMAIN}.
+  # @domain-scheme DevPlan 012 — тестовый домен упразднён (parity-гейт test_gate_domain_parity).
+  PLATFORM_DOMAIN: "ai-platform.local"
+  # ── Postgres (shared-db) ──
+  POSTGRES_USER: "postgres"
+  POSTGRES_DB: "platform"
+  POSTGRES_PORT: 6432
+  POSTGRES_HOST: "pgbouncer"
+  # ── PgBouncer ──
+  # 170 W12 C1: digest-pin (imagetools inspect edoburu/pgbouncer:v1.25.2-p0, 2026-08-15)
+  PGBOUNCER_IMAGE: "edoburu/pgbouncer:v1.25.2-p0@sha256:7d7a27d9e90985cab5cf42256f5c13a3120baa4b055b69df37beb272b89b2340"
+  # ── Redis (cache) ──
+  REDIS_PORT: 6379
+  REDIS_HOST: "redis"
+  # ── ClickHouse ──
+  CLICKHOUSE_URL: "http://clickhouse:8123"
+  CLICKHOUSE_USER: "default"
+  # 177 W1.1: CLICKHOUSE_HTTP_PORT/CLICKHOUSE_NATIVE_PORT удалены — 0 чтений в коде
+  # (порты захардкожены в clickhouse compose; аудит 01-Brief дерева 175)
+  # ── MinIO ──
+  MINIO_PORT: 9000
+  MINIO_CONSOLE_PORT: 9001
+  MINIO_ROOT_USER: "minioadmin"
+  MINIO_ROOT_PASSWORD: "minioadmin"
+  # ── S3 / Backup ──
+  S3_ENDPOINT_URL: "https://s3.timeweb.cloud"
+  S3_REGION: "ru-1"
+  S3_PREFIX: "platform/backups"
+  S3_BUCKET: "test-bucket"
+  S3_ACCESS_KEY: "test-access-key"
+  S3_SECRET_KEY: "test-secret-key"
+  # AWS-алиасы для upload-s3.sh (AWS SDK совместимость) — SoT (DevPlan 116 T3, U-17).
+  # Литералы ${S3_ACCESS_KEY}/${S3_SECRET_KEY} — compose резолвит их через S3_* (alias, не копия).
+  AWS_ACCESS_KEY_ID: "${S3_ACCESS_KEY}"
+  AWS_SECRET_ACCESS_KEY: "${S3_SECRET_KEY}"
+  PLATFORM_CONTEXT: "personal"
+  # ── LLM Provider API Keys ──
+  DEEPSEEK_API_KEY: "sk-placeholder-key-for-ci"
+  # ── LiteLLM ──
+  LITELLM_MASTER_KEY: "sk-ci-test-master-key"
+  LITELLM_LICENSE: ""
+  LITELLM_PORT: 4000
+  LITELLM_HEALTH_URL: "http://litellm:4000/health/liveliness"
+  OPENAI_BASE_URL: "http://litellm:4000"
+  LITELLM_API_KEY: "sk-placeholder-litellm-api-key"
+  # ── Langfuse ──
+  NEXTAUTH_SECRET: "ci-test-nextauth-secret-32-chars-min!!"
+  NEXTAUTH_URL: "http://langfuse:3000"
+  SALT: "ci-test-salt-value"
+  # v4 required: 64-hex (prod — SOPS/secrets.env, dev — ci-test значение)
+  ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  LANGFUSE_INIT_ORG_ID: "ci-test-org"
+  LANGFUSE_INIT_PROJECT_ID: "ci-test-project"
+  LANGFUSE_INIT_USER_EMAIL: "admin@ai-platform.local"
+  LANGFUSE_INIT_USER_PASSWORD: "ci-test-langfuse-pwd"
+  LANGFUSE_PUBLIC_KEY: "ci-test-public-key"
+  LANGFUSE_SECRET_KEY: "ci-test-secret-key"
+  LANGFUSE_PORT: 3001
+  LANGFUSE_S3_BUCKET: "langfuse-events"
+  LANGFUSE_S3_FORCE_PATH_STYLE: "true"
+  # ── Hermes Agent — Dashboard ──
+  # 177 W1.2: HERMES_DASHBOARD удалён из SoT — 0 чтений (compose хардкодит "1",
+  # docker-compose.base.yml:132); включение/выключение dashboard — через модуль
+  HERMES_DASHBOARD_USERNAME: "admin@ai-platform.local"
+  HERMES_DASHBOARD_PASSWORD: "test-db-pwd"
+  HERMES_DASHBOARD_PORT: 9119
+  HERMES_DESKTOP_PORT: 8642
+  # ── Hermes Agent — API Server ──
+  API_SERVER_ENABLED: "false"
+  API_SERVER_KEY: "test-api-server-key-for-ci-only"
+  API_SERVER_HOST: "0.0.0.0"
+  # ── Telegram ──
+  TELEGRAM_BOT_TOKEN: "1234567890:test-telegram-bot-token-for-ci"
+  TELEGRAM_ALLOWED_USERS: ""
+  TELEGRAM_CHAT_ID: ""  # v1.0.1 D3-фикс: base/info-канал severity-роутинга (fallback CRITICAL/WARNING) — объявлен в SoT
+  TELEGRAM_CHAT_ID_CRITICAL: ""
+  TELEGRAM_CHAT_ID_WARNING: ""
+  # ── CI (workflow env-регистрация, T7 SoT) ──
+  # DOCKER_HUB_AUTH: hoist secrets-присутствия для step-if (ночная сессия 141 —
+  #   secrets недоступен в steps.if; значение вычисляется в job env, см. platform-test.yml)
+  DOCKER_HUB_AUTH: "false"
+  # ── Nginx ──
+  NGINX_CONF_DIR: "./config"
+  # Dev default; production overridden via node-configs/env to /etc/letsencrypt
+  # (VPS certbot/ACME target dir — см. nginx/docker-compose.base.yml, DevPlan 117 D30).
+  NGINX_CERT_DIR: "./dev-certs"
+  NGINX_OVERLAY_DIR: ""
+  NGINX_HTTP_PORT: 80
+  NGINX_HTTPS_PORT: 443
+  NGINX_EXPORTER_PORT: 9113
+  # ── Status Page ──
+  # HTTP-порт status-page модуля (внутренний, без внешних проброшенных портов;
+  #   слушается внутри контейнера, DevPlan 117 D31).
+  STATUS_PAGE_PORT: 8080
+  # ── SSL / DNS ──
+  WEBNAMES_API_KEY: "*test-webnames-api-key"
+  # ── Proxy ──
+  HTTP_PROXY: ""
+  HTTPS_PROXY: ""
+  NO_PROXY: "localhost,127.0.0.1,.local,postgres,pgbouncer,redis,clickhouse,litellm,langfuse,minio,grafana,prometheus,loki,nginx,node-exporter,cadvisor,hermes-agent,status-page,backup-cron,nginx-prometheus-exporter,redis-exporter,postgres-exporter"
+  # ── Monitoring / Observability ──
+  GF_SECURITY_ADMIN_USER: "admin@ai-platform.local"
+  GF_SECURITY_ADMIN_PASSWORD: "testpass"
+  GRAFANA_PORT: 3000
+  PROMETHEUS_TARGETS_DIR: "/opt/platform/prometheus-targets"
+  PROMETHEUS_RULES_DIR: "/opt/platform/prometheus-rules"
+  PROMETHEUS_PORT: 9090
+  LOKI_PORT: 3100
+  CADVISOR_PORT: 8080
+  NODE_EXPORTER_PORT: 9100
+  # ── Compose Profiles ──
+  COMPOSE_PROFILES: "postgres,redis,nginx,clickhouse,backup-cron,hermes-agent,monitoring,logging,litellm,langfuse,infra-metrics,minio,status-page"
+  # ── Misc ──
+  DEPENDENCY_CHECK_TIMEOUT: "2.0"
+  GHCR_PULL_TOKEN: "ghp_test-token-for-ci-only"
+  GHCR_PUSH_TOKEN: ""
+  # ── Deploy (F4 debt: документированные overrides orchestrator) ──
+  PROJECTS_BASE: "/opt/projects"
+  PLATFORM_DEPLOY_TIMEOUT: "600"

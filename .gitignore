@@ -1,0 +1,106 @@
+# ─── OS metadata ──────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ─── Logs & caches ─────────────────────────────────────────────────
+*.log
+.pytest_cache
+__pycache__/
+docker.txt
+
+# ─── IDE ───────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ─── AI tools ──────────────────────────────────────────────────────
+# .ai/plans/ is tracked: cross-session knowledge (Read-before-Act) — shared
+# across worktrees so NNN allocation stays unique per task folder.
+.ai/*
+!.ai/plans/
+# .ai/logs/ — журнал тестовых прогонов (DevPlan 165): runs.jsonl/latest.log —
+# локальное машинное состояние, НЕ коммитится; коммитится только .gitkeep
+# (каталог существует в свежем клоне, симлинк .ai/plans/*/logs → ../../logs
+# не провисает). Raw-логи прогонов — в logs/make/ (см. Makefile §make log).
+!.ai/logs/.gitkeep
+.doxygen/
+
+# ─── Dev certs (mkcert, per-developer) ────────────────────────────
+core/modules/nginx/dev-certs/
+# ─── node-configs (орг-репозиторий, не в платформе) ────────────────
+node-configs/
+
+# ─── projects (локальный symlink, не в платформе) ─────────────────
+/projects
+
+# ─── local dev artifacts (RC-сессия 2026-08-03: status-metrics.json и пр.) ──
+.local/
+
+# ─── Secrets ───────────────────────────────────────────────────────
+.env
+# .env.platform — GENERATED окружение проекта (DevPlan 170 W2-A1, C3):
+# фактическая фактура ноды (PLATFORM_* DSN/URL/ключи, синхронизируется make sync-env);
+# ручные правки запрещены (инвариант root AGENTS.md), в git не коммитится никогда —
+# утечка .env.platform = раскрытие hosts/ports/секретов целевой ноды.
+.env.platform
+*.secret
+*.pem
+*.key
+modules/hermes-agent/.env
+
+# ─── Python build ──────────────────────────────────────────────────
+*.egg-info/
+dist/
+build/
+!core/internal/build/
+!core/modules/hermes-agent/build/
+
+# ─── E2E tests (Playwright) ────────────────────────────────────────
+e2e/screenshots/
+e2e/report/
+e2e/test-results/
+e2e/playwright/.cache/
+e2e/node_modules/
+e2e/.last-run.json
+
+# ─── Kilo agent state ──────────────────────────────────────────────
+.kilo/server-state.json
+.kilo/server-state-vps.json
+.kilo/local/
+.kilo/plans/
+
+# ─── Other ─────────────────────────────────────────────────────────
+INSTALL.md
+*.tsbuildinfo
+
+# ─── ClickHouse auto-generated config (from CLICKHOUSE_PASSWORD env var) ─
+core/modules/clickhouse/config/users.d/default-user.xml
+
+# ─── Docker Compose per-project overrides ──────────────────────────────
+docker-compose.override.yml
+
+# ─── Backup files (temporary stubs) ──────────────────────────────────
+*.bak
+
+# ─── Test reports ────────────────────────────────────────────────────
+tests/report*.xml
+tests/.test_counter.json
+# flock-локи Anti-Loop счётчиков (DevPlan 120 §3.3 — xdist-безопасность, создаются прогонами)
+tests/.test_counter.json.lock
+tests/gates/.test_counter.json.lock
+# Anti-Loop runtime counter для gate-сессий (DevPlan 119 B — ошибочно закоммичен в 095;
+# каждый pytest-прогон перезаписывает → pre-commit «files were modified» → gate RED)
+tests/gates/.test_counter.json
+
+.mypy_cache/
+.docker-mounts/
+.ai/server-state.json
+
+# Make output logs (root Makefile logging shell — scripts/make-log-shell.sh)
+logs/
+
+# Load-test results — полные отчёты (DevPlan 146 инвариант 6): целиком в gitignore
+# без negate-паттернов; baseline history.json живёт в core/loadtest/history/ (коммитится)
+load-results/

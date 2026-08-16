@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# GREP_SUMMARY: platform-export-metrics wrapper → platform_export_metrics.py
+# STRUCTURE: ▶ set vars → auto-detect PLATFORM_ROOT + NODE_NAME → ensure PYTHONPATH + NODE_NAME in env → ensure dirs → protective dir check → exec python3 coordinator → ⎋ exit
+# region MODULE_CONTRACT
+## @purpose  Bash wrapper for platform_export_metrics.py — ensures PYTHONPATH, NODE_NAME, directories, then execs Python coordinator
+## @scope    Called from host cron every minute via flock -n /run/lock/platform-metrics.lock timeout 50s
+## @invariants
+##   - set -euo pipefail — strict error handling
+##   - Auto-detects PLATFORM_ROOT (/opt/platform or 3 levels up from script)
+##   - Auto-detects NODE_NAME via python3 -m core.internal.shared.node_detect (excludes
+##     scripts/ and secrets/; fallback: "unknown") — single detector canon (DevPlan 116 B3 T2)
+##   - Exports PYTHONPATH so `from core.internal.healthcheck.metrics...` works
+##   - Creates /var/lib/platform/run/ (persistent, 142 W2) and /var/cache/platform/metrics/ if missing
+##   - Protective: removes status-metrics.json if it exists as directory (P1 safeguard)
+##   - Exec python3 directly — replaces shell process
+## @rationale Thin wrapper per language policy — Python does all business logic.
+##            Auto-detection of PYTHONPATH + NODE_NAME removes dependency on cron environment setup (P2 fix).
+##            Protective directory check prevents Docker bind-mount race condition (P1 fix).
+## ⚠️ TRAP[KEEP] · 173 W3.4 · platform-export-metrics.sh НЕ схлопывается: CRON-facing фасад
+##   (flock+timeout, минимальный env без PYTHONPATH) — PYTHONPATH export + NODE_NAME auto-detect +
+##   dir-создание НЕ покрыты platform_export_metrics.py (Python читает env). make dev-metrics уже
+##   → .py напрямую (helpers.mk). Контракт cron: helpers/system.py CRON_METRICS_LINE + gate
+##   test_gate_status_page.py (flock -n + timeout 50 + platform-export-metrics.sh).
+##   Rev: при переносе NODE_NAME-detect + dir-создания в Python main() — обновить cron-line + gate.
+# endregion MODULE_CONTRACT
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Auto-detect platform root: /opt/platform (canonical) or 3 levels up from script
+if [ -z "${PLATFORM_ROOT:-}" ]; then
+    PLATFORM_ROOT="/opt/platform"
+    [ -d "$PLATFORM_ROOT" ] || PLATFORM_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+fi
+
+# Set PYTHONPATH BEFORE node_detect: cron env has no PYTHONPATH (only PATH), and
+# `python3 -m core.internal.shared.node_detect` needs core/ importable — otherwise
+# the module import fails, the error is swallowed by 2>/dev/null and NODE_NAME
+# falls back to "unknown" → node.yaml at /opt/node-configs/unknown/node.yaml not
+# found → metrics export writes projects=[], certs=[] (TRAP[BUG] 2026-08-12, U-репорт:
+# status-page показывал «0 project(s)» при живых проектах в node.yaml).
+export PYTHONPATH="${PLATFORM_ROOT}${PYTHONPATH:+:$PYTHONPATH}"
+
+# Auto-detect NODE_NAME via canonical node_detect (DevPlan 116 B3 T2, U-38):
+#   node_detect.auto_detect_node_name excludes scripts/ and secrets/ subdirectories.
+#   Priority: explicit NODE_NAME env → node_detect → "unknown" (WARN).
+# @changes 2026-08-01 · Replaced `ls | grep -v secrets | head -1` hack (did NOT exclude
+#           scripts/ → scripts dir could be picked as NODE_NAME). Single detector now.
+# @changes 2026-08-12 · PYTHONPATH export moved BEFORE detection block (fix: cron env
+#           → ModuleNotFoundError → NODE_NAME=unknown → пустые projects/certs в метриках).
+if [ -z "${NODE_NAME:-}" ]; then
+    NODE_NAME=$(python3 -m core.internal.shared.node_detect --detect-node-name 2>/dev/null) || NODE_NAME="unknown"
+    if [ "$NODE_NAME" = "unknown" ]; then
+        echo "[IMP:7][platform-export-metrics][WARN] Node detection failed — NODE_NAME=unknown" >&2
+    fi
+fi
+export NODE_NAME
+
+# Output path: тот же env, что и Python-координатор (STATUS_METRICS_JSON).
+# Прод-дефолт /var/lib/platform/run/status-metrics.json (persistent, 142 W2); dev-локаль (macOS)
+# переопределяет через env — см. .env STATUS_METRICS_JSON.
+# 142 W2 (B21): persistent /var/lib/platform/run (tmpfs /run/platform не переживает reboot)
+STATUS_METRICS_JSON="${STATUS_METRICS_JSON:-/var/lib/platform/run/status-metrics.json}"
+export STATUS_METRICS_JSON
+
+# Ensure output directory exists (tmpfs on prod, empty after reboot). Fail-fast на
+# НЕсоздаваемом выходном каталоге — это реальная ошибка конфигурации (R4, не skip).
+METRICS_DIR="$(dirname "$STATUS_METRICS_JSON")"
+mkdir -p "$METRICS_DIR"
+
+# Cache dir — best-effort (не-блокирующий): на dev-локаль может не быть /var/cache прав.
+mkdir -p /var/cache/platform/metrics 2>/dev/null || true
+
+# Protective: ensure status-metrics.json is a file, not a directory (P1 safeguard)
+if [ -d "$STATUS_METRICS_JSON" ]; then
+    rmdir "$STATUS_METRICS_JSON" 2>/dev/null || true
+fi
+
+exec python3 "${SCRIPT_DIR}/platform_export_metrics.py" "$@"

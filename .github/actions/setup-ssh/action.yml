@@ -1,0 +1,85 @@
+# GREP_SUMMARY: setup-ssh composite-action ssh-key base64 decode known-hosts identities-only ci-ssh
+# STRUCTURE: inputs(ssh-key,ssh-host,ssh-user,ssh-port,key-encoding) → runs:composite → ○ decode+write key → ⊕ chmod 600 → ○ ssh-keyscan → output ssh-key-path + ssh-known-hosts-path
+# region MODULE_CONTRACT
+## @purpose  Composite action: настраивает SSH-ключ и known_hosts для последующих шагов CI.
+##           Единый source of truth для всех 4 CI workflows, использующих SSH.
+## @scope    Вызывается как setup-шаг во всех .github/workflows/*.yml, требующих SSH-доступа.
+## @invariants
+##   - Все ключи в base64 (единый формат после миграции)
+##   - Всегда добавляет IdentitiesOnly=yes (защита от agent-forwarding)
+##   - Всегда делает ssh-keyscan (предотвращает TOFU prompt)
+##   - key-encoding: 'base64' (default) или 'plain' (deprecated, только для обратной совместимости)
+##   - Порт опционален (default: 22) — для нестандартных SSH-портов
+##   - Outputs: ssh-key-path, ssh-known-hosts-path — для использования в последующих шагах
+## @rationale  DevPlan 065 P1+P3+P5: устраняет 4× дублирование SSH-настройки в CI YAML.
+##             Унифицирует формат ключей (base64), добавляет IdentitiesOnly везде,
+##             заменяет appleboy/ssh-action в deploy-project и stage-deploy.
+## @changes 2026-07-24 | DevPlan 065 — created as shared SSH composite action
+# endregion MODULE_CONTRACT
+
+name: 'Setup SSH'
+description: 'Setup SSH key and known_hosts for CI workflows. Single source of truth for all SSH connections.'
+
+inputs:
+  ssh-key:
+    description: 'SSH private key (base64-encoded by default)'
+    required: true
+  ssh-host:
+    description: 'SSH host (IP or FQDN)'
+    required: true
+  ssh-user:
+    description: 'SSH user'
+    required: true
+  ssh-port:
+    description: 'SSH port (default: 22)'
+    required: false
+    default: '22'
+  key-encoding:
+    description: 'Key encoding: base64 or plain (plain is deprecated)'
+    required: false
+    default: 'base64'
+
+outputs:
+  ssh-key-path:
+    description: 'Path to the SSH private key file'
+    value: '${{ steps.setup.outputs.ssh-key-path }}'
+  ssh-known-hosts-path:
+    description: 'Path to the known_hosts file'
+    value: '${{ steps.setup.outputs.ssh-known-hosts-path }}'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup SSH key and known_hosts
+      id: setup
+      shell: bash
+      run: |
+        set -euo pipefail
+        SSH_KEY_PATH="$HOME/.ssh/id_rsa"
+        KNOWN_HOSTS_PATH="$HOME/.ssh/known_hosts"
+
+        mkdir -p "$HOME/.ssh"
+        chmod 700 "$HOME/.ssh"
+
+        # Decode and write SSH key
+        if [ "${{ inputs.key-encoding }}" = "base64" ]; then
+          printf '%s' "${{ inputs.ssh-key }}" | base64 -d > "$SSH_KEY_PATH"
+        else
+          printf '%s' "${{ inputs.ssh-key }}" > "$SSH_KEY_PATH"
+        fi
+        chmod 600 "$SSH_KEY_PATH"
+
+        # Add host to known_hosts (prevents TOFU prompt)
+        ssh-keyscan -p "${{ inputs.ssh-port }}" -H "${{ inputs.ssh-host }}" >> "$KNOWN_HOSTS_PATH" 2>/dev/null
+
+        echo "ssh-key-path=$SSH_KEY_PATH" >> "$GITHUB_OUTPUT"
+        echo "ssh-known-hosts-path=$KNOWN_HOSTS_PATH" >> "$GITHUB_OUTPUT"
+        echo "[IMP:9][setup-ssh] SSH key configured for ${{ inputs.ssh-user }}@${{ inputs.ssh-host }}:${{ inputs.ssh-port }}"
+
+# ⚠️ TRAP[DECISION] · 2026-07-24 · HI · key-encoding: base64 default
+# · Rejected: plain text default (риск: echo искажает спецсимволы, см. коммит 21b988d)
+# · Reason: base64 — единственный надёжный способ передачи ключей через GitHub Secrets
+# ·   без риска искажения пробелами, переводами строк и спецсимволами.
+# ·   Все существующие секреты (VPS_SSH_KEY, CI_DEPLOY_KEY, MIRROR_SSH_KEY)
+# ·   должны быть перекодированы в base64: cat key | base64 | gh secret set ...
+# · Rev: если GitHub добавит нативный binary secret type — можно пересмотреть.

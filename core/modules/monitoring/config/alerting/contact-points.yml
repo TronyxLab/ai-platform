@@ -1,0 +1,98 @@
+# GREP_SUMMARY: grafana contact-points telegram alerting active severity critical warning routing
+# STRUCTURE: ▶ 2-contact-points ┌ telegram-critical → immediate ┐ ┌ telegram-warning → grouped ┐ → notification-policies → severity-routing → ┘
+# region MODULE_CONTRACT
+## @purpose  Grafana contact points for Telegram alerts routed by severity — АКТИВНЫЙ канал (DevPlan 140 W2 D-3)
+## @scope    Provisioned alongside alert-rules.yml in GF_PROVISIONING_ALERTING_PATH (config/alerting монтируется целиком)
+## @invariants
+##   - Two contact points: telegram-critical (immediate) and telegram-warning (grouped)
+##   - Uses Grafana built-in Telegram type (no external webhook service needed)
+##   - TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID_* from secrets.env (Grafana env substitution)
+##   - No authentication required (Grafana direct Telegram Bot API call)
+##   - Notification policies route by severity label
+##   - Значения bottoken/chatid — placeholder-ссылки на env: docker-compose.base.yml
+##     параметризует ${TELEGRAM_BOT_TOKEN:-} / ${TELEGRAM_CHAT_ID_CRITICAL:-} /
+##     ${TELEGRAM_CHAT_ID_WARNING:-} (реальные токены НЕ хранятся в исходниках)
+## @rationale Grafana 11.6.16 has built-in Telegram Bot API support; avoids the complexity
+##           of maintaining a separate notify-hook-web service and uses the same bot token
+##           as the existing notify-hook.sh CLI script.
+##           Активация 2026-08-06 (DevPlan 140 W2 D-3): safe-default переехал в
+##           contact-points.yml.disabled; откат — поменять файлы местами + restart grafana.
+# endregion MODULE_CONTRACT
+
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: "Telegram Critical"
+    receivers:
+      - uid: "telegram-critical"
+        type: "telegram"
+        settings:
+          bottoken: "${TELEGRAM_BOT_TOKEN}"
+          # ⚠️ TRAP[BUG] · 2026-08-06 · R1 (141-r2) · chatid: «3 провала» → финальный приём
+          # · Symptom: alertmanager «webhook response status 400 Bad Request» на каждом notify.
+          # · Root (механика grafana 11.6.16): env-интерполяция ${VAR} выполняется НА JSON-ТЕКСТЕ
+          # ·   настроек ПОСЛЕ YAML: {"chatid": "${VAR}"} → замена токена голым значением «79xxx9»
+          # ·   → JSON-число → «cannot unmarshal number into string» (provisioning FAIL) ИЛИ,
+          # ·   при block-scalar с дефисом («-\n79xxx9») — строка с мусором → Telegram 400 chat not found.
+          # · Fix: хвостовой пробел «${VAR} » — JSON-строка сохраняется, Telegram тримит пробел
+          # ·   (sendMessage с «79xxx9 » → message_id 488, проверено 141-r2).
+          chatid: "${TELEGRAM_CHAT_ID_CRITICAL} "
+          # ⚠️ TRAP[BUG] · 2026-08-06 · R1 (141-r2) · parse_mode: grafana telegram default = MarkdownV2
+          # · Symptom: alertmanager «webhook response status 400 Bad Request» при ВАЛИДНОМ chatid/токене
+          # · Root: дефолтный parse_mode=MarkdownV2 резервирует { } [ ] ( ) & → summary «{{ $labels.job }}»
+          # ·   и alertname «Service Down (Short)» → «can't parse entities: Character '(' is reserved»
+          # ·   (воспроизведено sendMessage: MarkdownV2=400, HTML=OK, Markdown=OK).
+          # · Fix: parse_mode: "Markdown" (old) — не резервирует { } ( ); message B15-эскейпы для HTML
+          # ·   безвредны в Markdown. HTML-вариант тоже работал в тесте, но Markdown безопаснее для summary.
+          parse_mode: "Markdown"
+          # 141 B15: короткий plain-текст — default-шаблон (HTML) упирался в 4096 runes,
+          #   усечение резало HTML-тег → Telegram 400 Bad Request
+          message: '🚨 {{ range .Alerts }}{{ .Labels.alertname }} [{{ .Labels.severity }}] {{ if .Annotations.summary }}{{ .Annotations.summary | reReplaceAll "<" "&lt;" | reReplaceAll ">" "&gt;" | reReplaceAll "&" "&amp;" }}{{ end }}{{ end }}'
+          disable_notifications: false
+          uploadImage: false
+        disableResolveMessage: false
+
+  - orgId: 1
+    name: "Telegram Warning"
+    receivers:
+      - uid: "telegram-warning"
+        type: "telegram"
+        settings:
+          bottoken: "${TELEGRAM_BOT_TOKEN}"
+          chatid: "${TELEGRAM_CHAT_ID_WARNING} "
+          parse_mode: "Markdown"
+          message: '⚠️ {{ range .Alerts }}{{ .Labels.alertname }} [{{ .Labels.severity }}] {{ if .Annotations.summary }}{{ .Annotations.summary | reReplaceAll "<" "&lt;" | reReplaceAll ">" "&gt;" | reReplaceAll "&" "&amp;" }}{{ end }}{{ end }}'
+          disable_notifications: true
+          uploadImage: false
+        disableResolveMessage: false
+
+# 🧐 TRAP[DECISION] · 2026-07-02 · — · Grafana 11.6.16 receiver names use contactPoint name (not uid)
+# · Grafana provisioning: `receiver` field must match contactPoint `name`
+# · (e.g. "Telegram Critical"), not the receiver `uid` (e.g. "telegram-critical").
+# · Using uid caused "receiver 'telegram-critical' does not exist" at startup.
+# · Rejected: downgrade Grafana · Reason: 11.6.16 is current stable
+policies:
+  - orgId: 1
+    receiver: "Telegram Warning"
+    group_by: ["alertname", "severity"]
+    group_wait: "5m"
+    group_interval: "5m"
+    repeat_interval: "1h"
+    routes:
+      - receiver: "Telegram Critical"
+        matchers:
+          - severity="critical"
+        group_wait: "1s"
+        group_interval: "1s"
+        # DevPlan 161 W1: repeat_interval 5m→24h — уведомление о for-пробросе critical
+        # не чаще раза в сутки (до этого спам каждые 5 мин, пока алерт висит firing).
+        repeat_interval: "24h"
+        sendReminder: false
+      - receiver: "Telegram Warning"
+        matchers:
+          - severity="warning"
+        group_wait: "5m"
+        group_interval: "5m"
+        repeat_interval: "1h"
+        sendReminder: true

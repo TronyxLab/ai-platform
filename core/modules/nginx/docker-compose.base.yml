@@ -1,0 +1,121 @@
+# @purpose  Base compose definition for nginx Docker module — container_name:nginx, profiles, x-logging, envsubst-templates, overlay-mount
+# GREP_SUMMARY: nginx docker-compose proxy-net observability-net profiles volumes envsubst-templates overlay
+# STRUCTURE: ▶ nginx:1.28-alpine [profiles:nginx] → env PLATFORM_DOMAIN → proxy-net + observability-net → port 80:80 443:443 → ┌7 templates + overlay volume + cert volume┐ → nc healthcheck → ┐
+# region MODULE_CONTRACT
+## @purpose  Base compose definition for nginx Docker module — reverse proxy, TLS termination, subdomain routing
+## @scope    Merged with root docker-compose.yml via include:
+## @invariants
+##   - profiles: [nginx] — pluggability: only included when COMPOSE_PROFILES contains nginx
+##   - Ports: 80 (HTTP) + 443 (HTTPS TLS)
+##   - restart: unless-stopped — Docker policy
+##   - proxy-net + observability-net — nginx needs both for proxying to backend services
+##   - Config files are mounted as /etc/nginx/templates/*.conf.template (9 files) —
+##     official nginx entrypoint runs envsubst on templates with PLATFORM_DOMAIN,
+##     outputs rendered configs to /etc/nginx/conf.d/. Shared snippets (security-headers.conf,
+##     ssl-params.conf.template) are mounted to /etc/nginx/includes/ and
+##     /etc/nginx/templates/ respectively. nginx.conf mounted directly (no vars).
+##   - PLATFORM_DOMAIN env var required for production render; passed via environment
+##   - Overlay vhosts: ${NGINX_OVERLAY_DIR:-./overlays} mounted ro into /etc/nginx/conf.d/overlay/
+##     Overlay files are plain *.conf (NOT .conf.template), no envsubst applied.
+##     They MUST use exact server_name (never default_server — conflicts with platform-default).
+##   - Cert directory mounted as ${NGINX_CERT_DIR:-/etc/letsencrypt}:/etc/letsencrypt:ro
+##   - healthcheck: nc -z localhost 80 — verifies nginx is listening, NOT depends on upstream DNS
+## @rationale   Profiles enable selective startup via `make up MODULES=nginx`
+##              nc -z chosen over nginx -t because nginx -t validates ALL upstream proxy_pass blocks,
+##              creating false dependency on backend DNS at healthcheck time.
+##              envsubst-templates: official nginx image's 20-envsubst-on-templates.sh renders only
+##              explicitly allowed env vars — $host, $upstream_*, $request_uri survive unmodified.
+# endregion MODULE_CONTRACT
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
+services:
+  nginx:
+    image: nginx:1.30.4-alpine@sha256:8a4f4b94275ff59d809477799cbbaf1a7ab65ed1871403d05e31fd66bdb8db82
+    container_name: nginx
+    profiles: [nginx]
+    restart: unless-stopped
+
+    environment:
+      # PLATFORM_DOMAIN — rendered into vhost configs via envsubst-templates
+      # Official nginx image's 20-envsubst-on-templates.sh filters env vars:
+      # only explicitly passed env vars are substituted; $host / $upstream_* survive.
+      PLATFORM_DOMAIN: ${PLATFORM_DOMAIN:-}
+
+    ports:
+      - "${NGINX_HTTP_PORT:-80}:80"
+      - "${NGINX_HTTPS_PORT:-443}:443"
+
+    volumes:
+      - ${NGINX_CONF_DIR:-./config}/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ${NGINX_CONF_DIR:-./config}/platform-default.conf.template:/etc/nginx/templates/platform-default.conf.template:ro
+      - ${NGINX_CONF_DIR:-./config}/platform-http.conf:/etc/nginx/templates/platform-http.conf.template:ro
+      - ${NGINX_CONF_DIR:-./config}/grafana-vhost.conf:/etc/nginx/templates/grafana-vhost.conf.template:ro
+      - ${NGINX_CONF_DIR:-./config}/hermes-dashboard.conf:/etc/nginx/templates/hermes-dashboard.conf.template:ro
+      - ${NGINX_CONF_DIR:-./config}/langfuse-vhost.conf:/etc/nginx/templates/langfuse-vhost.conf.template:ro
+      - ${NGINX_CONF_DIR:-./config}/loki-vhost.conf:/etc/nginx/templates/loki-vhost.conf.template:ro
+      - ${NGINX_CONF_DIR:-./config}/prometheus-vhost.conf:/etc/nginx/templates/prometheus-vhost.conf.template:ro
+      - ${NGINX_CONF_DIR:-./config}/platform-vhost.conf.template:/etc/nginx/templates/platform-vhost.conf.template:ro
+      # Shared snippets — included by vhosts via include directive
+      - ${NGINX_CONF_DIR:-./config}/security-headers.conf:/etc/nginx/includes/security-headers.conf:ro
+      - ${NGINX_CONF_DIR:-./config}/ssl-params.conf.template:/etc/nginx/templates/ssl-params.conf.template:ro
+      # Error pages (static content) — mounted for standalone dev mode
+      - ./error-pages:/var/www/platform-default/error-pages:ro
+      # Default index — иначе default vhost отдаёт 403 (root без index)
+      - ./error-pages/index.html:/var/www/platform-default/index.html:ro
+      # VPS TLS certs (/etc/letsencrypt) — production default (certbot/ACME target dir).
+      # Dev override: NGINX_CERT_DIR=./dev-certs (SoT: platform-infra.yaml env_defaults).
+      # Dual-context by design (DevPlan 117 D30) — НЕ менять default.
+      # ⚠️ Dev-only mounts (dev-certs → /etc/nginx/dev-certs, dev-config/ssl-dev.conf) перенесены
+      #    в docker-compose.dev.yml (DevPlan 116 D3) — dev-режим явный opt-in, не в prod-базе.
+      - ${NGINX_CERT_DIR:-/etc/letsencrypt}:/etc/letsencrypt:ro
+      # Overlay vhosts — node-configs/overlays/nginx/*.conf mounted ro into conf.d/overlay/
+      # Production: NGINX_OVERLAY_DIR=/opt/node-configs/<node>/overlays/nginx (docker_orchestrator env)
+      # Dev: .env задаёт NGINX_OVERLAY_DIR (локальный overlay)
+      # ⚠️ TRAP[BUG] · 2026-08-06 · HI · B23 (141 r2): fallback ./overlays тихо монтировал ПУСТОЙ каталог
+      # · Symptom: ручной `docker compose -f root --profile nginx up -d` без NGINX_OVERLAY_DIR →
+      # ·   все vhost-конфиги пропали из контейнера → 0 server-блоков с listen 443 → сайты 444.
+      # · Fix: ${VAR:?} fail-fast — тихая пустота заменена громкой ошибкой. Канонический деплой
+      # ·   (deploy_docker_module → os.environ NGINX_OVERLAY_DIR) и dev (.env) значения задают.
+      - ${NGINX_OVERLAY_DIR:?NGINX_OVERLAY_DIR required — deploy через deploy_docker_module (B23)}:/etc/nginx/conf.d/overlay:ro
+      # htpasswd-platform — generated from PLATFORM_MASTER_CREDENTIALS by secrets.sh
+      # Used by platform-default.conf.template (+ prometheus/loki vhosts) for Basic Auth
+      # Host source параметризуется: HTPASSWD_FILE (dev-локаль); прод-дефолт /var/lib/platform/run (142 W2).
+      - ${HTPASSWD_FILE:-/var/lib/platform/run/.htpasswd-platform}:/etc/nginx/conf.d/.htpasswd-platform:ro
+
+    networks:
+      proxy-net:
+        aliases:
+          - nginx
+      observability-net:
+        aliases:
+          - nginx
+
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          pids: 256
+
+    logging: *default-logging
+
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 80 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # Канон healthcheck-контракта (164 W1-4): start_period 15s default; nginx — 5s
+      # (документированное исключение: быстрый старт, верхний минимум канона 10s не нужен)
+      start_period: 5s
+
+networks:
+  proxy-net:
+    external: true
+    name: proxy-net
+  observability-net:
+    external: true
+    name: observability-net

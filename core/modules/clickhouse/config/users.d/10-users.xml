@@ -1,0 +1,15 @@
+<clickhouse>
+    <users>
+        <default>
+            <!-- Password managed by CLICKHOUSE_PASSWORD env var + CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1 -->
+            <!-- No networks restriction — Docker network access required for Grafana/Prometheus -->
+            <profile>default</profile>
+            <quota>default</quota>
+            <!-- 🧐 TRAP[DECISION] · 2026-07-12 · — · Removed empty password tag and networks restriction -->
+            <!-- · Empty password tag explicitly set no-password, overriding CLICKHOUSE_PASSWORD env var -->
+            <!-- · <networks><ip>127.0.0.1</ip></networks> blocked Grafana (on Docker observability-net) from querying ClickHouse -->
+            <!-- · Fix: password via env var + SQL-driven management; network access unrestricted (protected by Docker port binding 127.0.0.1 only) -->
+            <!-- · Rev: if ClickHouse upstream changes password management in SQL-driven mode -->
+        </default>
+    </users>
+</clickhouse>

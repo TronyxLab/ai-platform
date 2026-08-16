@@ -1,0 +1,241 @@
+# GREP_SUMMARY: mirror auto-sync sha-aware platform-gate-fast workflow_run Tronyx161 TronyxLab mirror.yml git-push workflow actions
+# STRUCTURE: ┌workflow_run[platform-gate-fast] + workflow_dispatch┐ → ◇ if:conclusion=success+push-filter → ○ resolve SHA → ◇ verify → ○ checkout(fetch-depth=0) → ⊕ git push TronyxLab/ai-platform HEAD:main
+# region MODULE_CONTRACT
+## @purpose  SHA-aware mirror sync: triggers on platform-gate-fast completion (push main only).
+##           Verifies gate passed before mirroring. Prevents mirroring untested code.
+## @scope    Source → Destination push only; no force push, no history rewrite
+## @invariants
+##   - Triggers on workflow_run: platform-gate-fast completed successfully (push only) — D2, DevPlan 116 B11 T4
+##   - Push filter: github.event.workflow_run.event == 'push' prevents mirror on PR trigger
+##   - Also supports workflow_dispatch for manual mirror
+##   - Blocking SHA verification for workflow_dispatch (API check)
+##   - Never triggers on push from mirror (recursion guard)
+##   - SSH push via MIRROR_SSH_KEY (user SSH key github-actions, pub in .github/mirror-deploy-key.pub)
+##   - GIT_MIRROR_TOKEN не используется — push только через SSH
+##   - context-promote.sh already uses SSH primary (Plan 015 T3.4)
+##   - Mirror stays up-to-date without force push
+## @rationale SHA-aware aggregator (D4) ensures only tested code is mirrored.
+##            Plan 2 consolidation: main-full-gate removed, trigger on platform-test.
+##            DevPlan 116 B11 T4 (D2, U-57): trigger переключён на platform-gate-fast —
+##            mirror не ждёт full-gate + integration + docker-степы platform-test.
+## @changes — 2026-07-15 | Trigger: main-full-gate→platform-test + push event filter
+## @changes — 2026-07-20 | Deployment flow documented (Plan 018)
+## @changes — 2026-08-01 | DevPlan 116 B11 T4 (D2): trigger → platform-gate-fast
+##
+## ☆ DEPLOYMENT FLOW (canonical — see also context-promote.sh)
+##
+##   Локальная разработка (feature branch)
+##       │
+##       ▼ CI test (platform-test.yml на PR/push)
+##       │
+##       ▼ Слияние в main (Tronyx161/ai-platform) — решение человеком
+##       │
+##       ▼ mirror.yml: автоматическое копирование в TronyxLab/ai-platform
+##       │   (workflow_run trigger — gate пройден, код доставлен в личный контекст)
+##       │
+##       ▼ Ручное тестирование на личном контексте (несколько дней)
+##       │   [IMP:7] Человек вручную убеждается, что платформа работает,
+##       │   обновление делает то что предполагалось.
+##       │
+##       ▼ context-promote.sh: ручная команда (или агент по команде человека)
+##       │   make context-promote CONTEXT=<target-org>
+##       │   Копирует базовую платформу в GitHub-организации контекстов
+##       │   (один или все сразу).
+##       │
+##       ▼ CI/CD в контекстной org: build-platform.yml + deploy-project.yml
+##       │   Запускается в контекстном репозитории <org>/ai-platform
+##       │   (единый канал deploy-project.yml)
+##       │
+##       ▼ Production deployment на VPS контекста
+##
+##   ⚠️ TRAP[DECISION] · 2026-07-20 · HI · mirror — авто, promote — ручной
+##   · Авто-зеркало: Tronyx161→TronyxLab (личный контекст, песочинца).
+##     Безопасно: если сломается — не страшно, там пет-проекты.
+##   · Promote: ручной (человек решает когда и куда копировать платформу).
+##     Причина: только человек может судить о готовности после ручного тестирования
+##     (автоматические тесты не покрывают семантику бизнес-логики).
+##   · Rev: если появится N контекстов и ручное promote станет узким горлом —
+##     добавить `make context-promote-all` с batch-логикой, но не авто-триггер.
+##
+## ⚡ TOKEN NOTE (2026-07-23 — SSH transition complete; 177 W2.1 — fallback removed):
+##   mirror.yml uses MIRROR_SSH_KEY (SSH) for push — GIT_MIRROR_TOKEN no longer needed.
+##   context-promote.sh is SSH-only (HTTPS fallback удалён, 177 W2.1).
+##   Public key: .github/mirror-deploy-key.pub. Private key: ~/.ssh/github_actions.
+##
+## ✅ TRAP[DECISION] · 2026-07-20 → RESOLVED 2026-07-23 · mirror.yml SSH transition complete
+## · Implemented: user SSH key (github-actions, ~/.ssh/github_actions) as MIRROR_SSH_KEY secret.
+## · Push step rewritten: HTTPS+GIT_ASKPASS → SSH with GIT_SSH_COMMAND.
+## · Key is a user SSH key (not deploy key) — has push access via Tronyx161 admin rights.
+## · Public key documented at .github/mirror-deploy-key.pub for recovery.
+##
+# endregion MODULE_CONTRACT
+
+# 🧐 TRAP[DECISION] · 2026-07-07 · — · Recursion guard via repository_owner check
+# · Rejected: `[skip ci]` in commit message of mirrored commits
+# · Reason: `if: github.repository_owner == 'Tronyx161'` prevents the mirror.yml
+# ·   from re-triggering when the mirror push arrives at TronyxLab/ai-platform.
+# · Rev: If this workflow is ever copied to TronyxLab/ai-platform with the same
+# ·   guard, it would never fire — that is the desired invariant.
+
+name: Mirror to TronyxLab
+
+on:
+  workflow_run:
+    workflows: ["platform-gate-fast"]
+    types:
+      - completed
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: mirror-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify-and-mirror:
+    if: >
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success'
+       && github.event.workflow_run.event == 'push'
+       || github.event_name == 'workflow_dispatch')
+      && github.repository_owner == 'Tronyx161'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+
+    steps:
+      # ⚠️ TRAP[BUG] · 2026-07-23 · P0 · sha-resolve before checkout — local action not found
+      # · Same fix as core-deploy.yml (F2): checkout before local actions.
+      # · Mirror needs full history + resolved SHA for exact commit push.
+
+      # ─── Step 1: Checkout (full history for mirror) ───────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # region STEP_ResolveSHA
+      ## @purpose: Resolve SHA + verify platform-gate-fast via canonical composite action
+      ## @io:      Event context → SHA output for subsequent steps
+      ## @changes: 2026-08-01 — DevPlan 116 B11 T4 (D2): workflow-file = platform-gate-fast.yml
+      - name: Resolve SHA + verify platform-gate-fast
+        id: sha
+        uses: ./.github/actions/sha-resolve
+        with:
+          verify: 'true'
+          workflow-file: 'platform-gate-fast.yml'
+      # endregion STEP_ResolveSHA
+
+      # ─── Step 3: Checkout resolved SHA ────────────────────────────────
+      - name: Checkout resolved SHA
+        run: git checkout ${{ steps.sha.outputs.sha }}
+
+      # ═══════════════════════════════════════════════════════════════════
+      # DevPlan 065 P1+P3+P5: setup-ssh composite action — единый source of truth
+      # ═══════════════════════════════════════════════════════════════════
+      - name: Setup SSH for mirror
+        id: setup-ssh-mirror
+        uses: ./.github/actions/setup-ssh
+        with:
+          ssh-key: ${{ secrets.MIRROR_SSH_KEY }}
+          ssh-host: github.com
+          ssh-user: git
+          ssh-port: '22'
+
+      # region STEP_PushToMirror
+      ## @purpose: Push all commits on main to TronyxLab/ai-platform mirror via SSH
+      ## @io:      Local main branch → TronyxLab/ai-platform main branch
+      ## @complexity: O(n) — proportional to commit count since last sync
+      ## @changes:  2026-07-23 · HTTPS+GIT_ASKPASS → SSH (MIRROR_SSH_KEY).
+      ##             Resolves TRAP[DECISION] mirror.yml:62-70 (SSH deploy key transition).
+      ##             Key: ~/.ssh/github_actions (user SSH key, pub in .github/mirror-deploy-key.pub).
+      ## @changes:  2026-07-24 · DevPlan 065 — inline SSH setup migrated to setup-ssh composite action
+      - name: Push to TronyxLab/ai-platform
+        run: |
+          # ──────────────────────────────────────────────────────────
+          # [IMP:9][PUSH][SSH] Push to mirror via SSH
+          # · SSH key configured by setup-ssh composite action
+          # · GIT_SSH_COMMAND uses ~/.ssh/id_rsa (path from setup-ssh)
+          # ──────────────────────────────────────────────────────────
+          set -euo pipefail
+
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/id_rsa -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+
+          # ──────────────────────────────────────────────────────────
+          # [IMP:8][PUSH][EXECUTE] Push main to mirror via SSH
+          # ──────────────────────────────────────────────────────────
+          git remote add mirror git@github.com:TronyxLab/ai-platform.git
+
+          # C-3 (DevPlan 136 W11 T11.5): non-fast-forward recovery.
+          # Push может упасть если mirror diverged (уникальные коммиты) или локальный HEAD
+          # отстал от origin/main (очередь workflow_run, cancel-in-progress: false).
+          # Recovery: синхронизировать HEAD с актуальным origin/main и пушить его.
+          # Verification-цикл ниже использует git rev-parse HEAD → учитывает recovery-ветку.
+          if git -c commit.gpgsign=false push mirror HEAD:main 2>&1; then
+            echo "[IMP:9][MIRROR][PUSH] Push to TronyxLab/ai-platform successful"
+          else
+            echo "[IMP:10][MIRROR][PUSH] Push FAILED (likely non-fast-forward) — re-syncing to origin/main and retrying"
+            git fetch origin main
+            git checkout --detach origin/main
+            if git -c commit.gpgsign=false push mirror HEAD:main 2>&1; then
+              echo "[IMP:9][MIRROR][PUSH] Push to TronyxLab/ai-platform successful after origin/main re-sync"
+            else
+              echo "[IMP:10][MIRROR][PUSH] FAILED: push to TronyxLab/ai-platform failed after re-sync — mirror содержит уникальные коммиты?"
+              echo "::error::Manual recovery: см. force-sync процедуру в комментарии ниже (D24, keep by design)"
+              exit 1
+            fi
+          fi
+
+          # ──────────────────────────────────────────────────────────
+          # [IMP:9][MIRROR][VERIFY] Post-push verification with retry (10×10s)
+          # · Eventual-consistency race (DevPlan 136 W7 T7.4): git ls-remote may
+          # · return the OLD mirror HEAD for a few seconds after push completes
+          # · (GitHub server-side ref propagation). Retry канон — sha-resolve
+          # · (10 attempts, sleep между) — .github/actions/sha-resolve/action.yml.
+          # ──────────────────────────────────────────────────────────
+          SOURCE_HEAD=$(git rev-parse HEAD)
+          echo "[IMP:8][MIRROR][VERIFY] Source HEAD: ${SOURCE_HEAD}"
+
+          MIRROR_HEAD=""
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            # || true: transient ls-remote failure не должен прерывать retry-цикл (set -euo pipefail)
+            MIRROR_HEAD=$(git ls-remote mirror refs/heads/main 2>/dev/null | awk '{print $1}' || true)
+            echo "[IMP:8][MIRROR][VERIFY] Attempt ${attempt}/10: mirror HEAD: ${MIRROR_HEAD}"
+            if [[ "${MIRROR_HEAD}" == "${SOURCE_HEAD}" ]]; then
+              break
+            fi
+            echo "[IMP:7][MIRROR][VERIFY] Attempt ${attempt}/10: mirror not yet in sync — retrying in 10s"
+            sleep 10
+          done
+
+          if [[ "${MIRROR_HEAD}" != "${SOURCE_HEAD}" ]]; then
+            echo "[IMP:10][MIRROR][VERIFY] FAIL: mirror HEAD (${MIRROR_HEAD:0:7}) != source HEAD (${SOURCE_HEAD:0:7}) after 10 attempts"
+            exit 1
+          fi
+          echo "[IMP:9][MIRROR][VERIFY] Mirror sync verified: ${SOURCE_HEAD:0:7}"
+
+      # 💼 Manual force-sync (D24, keep by design, 130 W4)
+      # · Ручной force-sync канал СОХРАНЯЕТСЯ как documented recovery-procedure (keep by design):
+      # · автоматизированный push выше (STEP_PushToMirror) — единственный штатный канал;
+      # · force-sync — ручной recovery при non-fast-forward (mirror diverged).
+      # ·
+      # · ⚠️ ОПАСНО: force-push перезаписывает историю mirror-репозитория (TronyxLab/ai-platform).
+      # · НИКОГДА не force-push в Tronyx161/ai-platform main. Выполнять ТОЛЬКО при поломке
+      # · автоматического push и ТОЛЬКО если mirror отстаёт, а не содержит уникальных коммитов.
+      # ·
+      # · Процедура force-sync (ручной recovery, из корня репо):
+      # ·   1. Убедиться, что mirror НЕ имеет уникальных коммитов (отстаёт от source):
+      # ·        git fetch origin main
+      # ·        git ls-remote mirror refs/heads/main
+      # ·        # зеркальная HEAD должна быть предком origin/main (git merge-base --is-ancestor)
+      # ·   2. Выполнить:
+      # ·        git remote add mirror git@github.com:TronyxLab/ai-platform.git 2>/dev/null || true
+      # ·        GIT_SSH_COMMAND="ssh -i ~/.ssh/github_actions -o IdentitiesOnly=yes \
+      # ·          -o StrictHostKeyChecking=accept-new" git push -f mirror HEAD:main
+      # ·   3. Верифицировать: git ls-remote mirror refs/heads/main == git rev-parse HEAD
+      # ·   4. Закрыть тикет/инцидент с указанием причины divergence.
+      # · Rev (130 W4): пересмотр 2026-10-21 — если automated push стабилен ≥3 мес без
+      # ·   ручных вмешательств, допускается удаление ручного канала (keep→remove).
+      # ·
+      # · ⚠️ DO NOT EDIT code in TronyxLab/ai-platform — changes will be overwritten.
+      # endregion STEP_PushToMirror

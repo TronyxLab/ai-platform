@@ -1,0 +1,403 @@
+# GREP_SUMMARY: platform-test unified-gate full-gate integration-live error-path monitoring-logging cleanup
+# STRUCTURE: on:pull_request+push(main) → job(platform-test:checkout→gitleaks→pre-commit→dora→fast-gate→docker-setup→provision→build→full-gate→integration→cleanup)
+# region MODULE_CONTRACT
+## @purpose — Unified CI gate for platform code quality: fast gate (no Docker) + full gate (Docker) + integration tests.
+##            Consolidates former static-gate + basedpyright-tests + platform-integration into a single job (Plan 2).
+## @scope — Runs in GitHub Actions on ai-platform repository. Serves as the single gate for push to main (replaces main-full-gate.yml).
+## @invariants
+##   - Single unified job: platform-test (replaces 3 separate jobs)
+##   - Fast gate (make gate MODE=fast) runs BEFORE Docker setup — fail-fast on syntax/static issues
+##   - ci-docker gate (make gate MODE=ci-docker) runs AFTER Docker provisioning — includes smoke + component tests
+##   - Integration tests: error-path (always) + live (when secrets available)
+##   - All obsolescence references use monitoring + logging (not observability) — D1 fix
+##   - basedpyright-tests removed (informational only, never blocked merge)
+##   - gitleaks uses composite action setup-gitleaks (single source of truth)
+##   - Provisioner: provision-environment.sh from platform-env.yaml (Plan 1)
+##   - Cleanup runs unconditionally
+## @rationale — Plan 2 CI Unification: 9→7 workflows. Single job eliminates race condition P6
+##   (dual main-full-gate + platform-integration make gate MODE=ci-docker). Fast gate before Docker
+##   provides <3 min feedback for syntax/static issues. D1 fix removes observability dead reference.
+## @changes — 2026-07-15 | Consolidated 3 jobs→1 unified job per DevPlan 002 TASK-3
+## @changes — 2026-07-15 | D1 fix: observability→monitoring+logging paths
+## @changes — 2026-07-15 | Removed basedpyright-tests (informational only, never blocked)
+## @changes — 2026-07-15 | gitleaks inline install→composite action setup-gitleaks
+# endregion MODULE_CONTRACT
+
+name: platform-test
+
+# 🧐 TRAP[DECISION] · 2026-07-11 · — · pull_request_target chosen over pull_request
+# · Rejected: `pull_request` — workflow file runs from PR branch. An attacker with
+# ·   push access to the branch can modify the workflow to exfiltrate secrets
+# ·   (secrets are available in the PR context). GitHub Docs recommend against this.
+# · Reason: `pull_request_target` runs the workflow from the base branch (main),
+# ·   so the workflow file itself cannot be modified by the PR author. Combined
+# ·   with explicit `ref: ${{ github.event.pull_request.head.sha }}`, the checkout
+# ·   still tests the PR's code. This is the recommended pattern per GitHub Docs.
+# · Rev: if `pull_request_target` causes unexpected behavior with fork PRs
+# ·   (e.g., build failures due to missing secrets), consider `pull_request`
+# ·   with explicit secret-availability guards instead.
+#
+# 🧐 TRAP[DECISION] · 2026-07-10 · — · merge_group trigger removed (migrated from main-full-gate.yml)
+# · Rejected: merge_group + Repository Ruleset merge queue (TestsMetaDevPlan2 §4.4.1)
+# · Reason: GitHub Pro required for private repos (Tronyx161/ai-platform is PRIVATE).
+# ·   Branch Protection Rules (free) used instead: required checks on PR
+# ·   (platform-test unified job) block merge without Pro subscription.
+# ·   SHA-aware aggregator in deploy workflows provides additional post-merge safety net.
+# · Rev: when repo visibility changes to PUBLIC OR GitHub Pro is purchased:
+# ·   1. Add `merge_group:` trigger back to this workflow
+# ·   2. Configure Repository Ruleset with merge queue
+# ·   3. Add platform-test to required checks for merge queue
+
+on:
+  pull_request_target:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
+
+jobs:
+  platform-test:
+    name: Platform Test (unified gate)
+    runs-on: ubuntu-latest
+    # 🧐 TRAP[DECISION] · 2026-08-05 · — · Linux-only CI (C-14, DevPlan 136 W11 T11.12)
+    # · Rejected: macOS-leg матрица для non-Docker gate (runs-on: macos-* ~10× cost; все
+    # ·   workflow'ы ubuntu; macOS-специфичные пути платформы — dev-hosts /etc/hosts,
+    # ·   GNU timeout vs gtimeout, ssh/rsync-семантика — остаются непокрытыми и после матрицы).
+    # · Reason: LOW severity. macOS-пути тестируются локальной dev-машиной (make dev-hosts,
+    # ·   lib/ssh.sh gtimeout-doc в AGENTS.md); Linux-only CI не должен создавать иллюзию
+    # ·   кросс-платформенного покрытия. Debt-кандидат — в отчёте W11.
+    # · Rev: 2026-10-21 — пересмотр, если macOS-специфичные баги (dev-hosts/ssh/rsync)
+    # ·   проявятся ≥2 раз в течение квартала → добавить macOS-ножку для static-gate.
+    timeout-minutes: 40
+
+    env:
+      INTEGRATION_MODE: live
+      # ⚠️ TRAP[BUG] · 2026-08-06 · P1 · Ночная сессия 141 — secrets НЕ доступен в step-level if:
+      # · Symptom: workflow падал на старте (0s, «workflow file issue», 0 jobs) — GitHub-парсер
+      # ·   отвергает контекст secrets в jobs.<id>.steps.if (actionlint: context "secrets" is not
+      # ·   allowed here) — строки 162/169 (C-11, DevPlan 136 W11 T11.10). platform-test мёртв
+      # ·   на push/PR с 136 W11.
+      # · Fix: хойст присутствия секрета в job-level env (secrets доступен в env) →
+      # ·   step-условия через env.DOCKER_HUB_AUTH == 'true'/'false'.
+      # · Rev: если GitHub разрешит secrets в steps.if — можно вернуть прямые условия.
+      DOCKER_HUB_AUTH: ${{ secrets.DOCKER_HUB_TOKEN != '' && secrets.DOCKER_HUB_USERNAME != '' }}
+      # H11 (security hardening): HERMES_DASHBOARD_PASSWORD (прод-секрет) УДАЛЁН из job-env —
+      #   мёртвое значение (0 потребителей в шагах; smoke-пароль читается из .env в build-platform.yml,
+      #   компонент-тест задаёт "testpass" сам). Прод-секрет не светится в PR-пути.
+      # Test Honesty R4 (DevPlan 117 Brief F + DevPlan 119 A3): CI-раннеры ИМЕЮТ Docker →
+      # REQUIRE_HONESTY_MODE=fail (отсутствие сервиса = FAIL, не skip — R4 compliant).
+      # Локальная dev-машина остаётся marker: переменная не задана → default "marker"
+      # (tests/_conftest/honesty.py _honesty_mode()).
+      REQUIRE_HONESTY_MODE: fail
+    permissions:
+      contents: read
+      # H11 (security hardening): packages:write → read — platform-test собирает образы load:true
+      # (docker-build-cache) и НИЧЕГО не пушит в ghcr; PR-коду больше не доступен packages:write.
+      packages: read
+
+    steps:
+      # ─── Stage 1: Setup (fast gate — no Docker needed) ──────────────
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
+
+      - name: Setup platform (composite — python + gitleaks)
+        uses: ./.github/actions/setup-platform
+        with:
+          python-version: '3.14'
+          install-pre-commit: 'true'
+          install-gitleaks: 'true'
+          run-provisioner: 'false'
+
+      # C-4 (DevPlan 136 W11 T11.6): слепой `|| true` УБРАН — fetch-провал не маскируется.
+      # Явная семантика: fetch успешен → baseline актуален; fetch упал → rev-parse fallback
+      # (stale ref) с ::warning::; ref отсутствует → ::warning:: (inventory-diff тесты пропустятся).
+      - name: Fetch origin/main for inventory baseline
+        run: |
+          if git fetch origin main:refs/remotes/origin/main --depth=1 2>&1; then
+            echo "[IMP:8][baseline] origin/main fetched for inventory baseline"
+          elif git rev-parse --verify refs/remotes/origin/main >/dev/null 2>&1; then
+            echo "::warning::[IMP:8][baseline] origin/main fetch FAILED — using stale existing baseline ref"
+          else
+            echo "::warning::[IMP:7][baseline] origin/main unavailable — inventory diff tests may skip"
+          fi
+
+      # DevPlan 123 T2 (P-14): ключ включает pyproject.toml hash (ruff-версия) —
+      # прежний ключ только по .pre-commit-config.yaml давал cache-hit со старым venv.
+      - name: Cache pre-commit venv
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}-${{ hashFiles('pyproject.toml') }}
+
+      - name: Run pre-commit hooks (gitleaks + check-doc-headers + code quality)
+        run: make pre-commit-run
+        env:
+          SKIP: "no-commit-to-branch"
+
+      - name: Export COMPOSE_PROFILES from platform-env.yaml
+        uses: ./.github/actions/compose-profiles
+
+      # shellcheck — delegated to pre-commit hooks (single SoT)
+      # D1 fix: observability → monitoring (DORA dashboard path)
+      # StatusReport 046 T3 (CICD-01b): inline python3 → validate_dora_dashboard.py
+      - name: Validate DORA dashboard JSON
+        run: |
+          echo "::group::DORA dashboard JSON validation"
+          python3 core/internal/scripts/validate_dora_dashboard.py
+
+      # Fast gate before Docker setup — fail-fast on syntax/static issues
+      # D71 (DevPlan 117): SKIP_PRECOMMIT=1 — pre-commit уже выполнен явно (Step pre-commit-run,
+      # L99-100). Повторный запуск через make gate MODE=fast (Step 1/8) = двойной прогон ~15s.
+      - name: Run fast gate (syntax + JSON + gates + static + predeploy — no Docker)
+        run: make gate MODE=fast SKIP_PRECOMMIT=1
+
+      # Manifest generation contract — блокирует push если generated files diverged
+      - name: Check generated manifests up to date
+        run: make check MARKER=check-manifests
+
+      # ─── Stage 2: Docker setup + provisioning ───────────────────────
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # C-11 (DevPlan 136 W11 T11.10): секрет передаётся ТОЛЬКО через docker/login-action
+      # (action inputs, НЕ env:-ключи). env:-ключи обязаны регистрироваться в platform-env.yaml
+      # env_defaults (test_gate_ci_env_vars.py — T7 SoT); DOCKER_HUB_TOKEN — CI-секрет, не platform
+      # env-переменная. inline-интерполяция в run: запрещена (C-11: попадает в логи/шелл-историю).
+      # ⚠️ TRAP[BUG] 141: secrets в steps.if ломал парсер workflow (0s fail) — условия через env.DOCKER_HUB_AUTH
+      - name: Authenticate Docker Hub (rate limit mitigation)
+        if: env.DOCKER_HUB_AUTH == 'true'
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
+
+      - name: Note Docker Hub auth status (anonymous)
+        if: env.DOCKER_HUB_AUTH != 'true'
+        run: echo "[IMP:7][docker] DOCKER_HUB_TOKEN not set — using anonymous pulls (100/6h)"
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Provision environment (networks + volumes + CI env defaults)
+        uses: ./.github/actions/provisioner-call
+        with:
+          scope: all
+
+      - name: Generate module list
+        id: module_list
+        uses: ./.github/actions/discover-modules
+
+      # C-11 (DevPlan 136 W11 T11.10): pre-pull — агрегация исходов вместо молчаливой маскировки
+      # (`|| echo WARNING` + continue-on-error). Каждый провал → ::warning:: annotation;
+      # полный провал всех pre-pull'ов → ::error::. Шаг остаётся non-blocking (pre-pull —
+      # оптимизация, не гейт; ci-docker gate перетянет образы по требованию) — НО провалы
+      # теперь видимы в job summary, а не теряются.
+      - name: Pre-pull Docker images (parallel)
+        continue-on-error: true
+        run: |
+          echo "::group::Pre-pulling Docker images (parallel)"
+          PULL_TMP=$(mktemp -d)
+          for compose_file in $(python3 core/internal/scripts/module_discovery.py --format lines); do
+            module=$(basename "$(dirname "$compose_file")")
+            (
+              echo "[pull:$module] Starting..."
+              docker compose -f "$compose_file" pull --ignore-buildable 2>&1 | sed "s/^/[pull:$module] /"
+              echo $? > "$PULL_TMP/$module.rc"
+            ) &
+          done
+          ( docker pull postgres:18-alpine 2>&1 | sed 's/^/[pull:postgres] /'; echo $? > "$PULL_TMP/postgres.rc" ) &
+          ( docker pull nousresearch/hermes-agent:v2026.7.7.2 2>&1 | tail -5 | sed 's/^/[pull:hermes-base] /'; echo $? > "$PULL_TMP/hermes-base.rc" ) &
+          wait || true
+          FAILED=0
+          TOTAL=0
+          for rc_file in "$PULL_TMP"/*.rc; do
+            module=$(basename "$rc_file" .rc)
+            rc=$(cat "$rc_file")
+            TOTAL=$((TOTAL+1))
+            if [ "$rc" != "0" ]; then
+              FAILED=$((FAILED+1))
+              echo "::warning::[pull:$module] pre-pull FAILED (rc=$rc) — image will be pulled on demand or built"
+            else
+              echo "[pull:$module] pre-pull OK"
+            fi
+          done
+          if [ "$FAILED" -gt 0 ]; then
+            if [ "$FAILED" -eq "$TOTAL" ]; then
+              echo "::error::[pull] ALL $TOTAL pre-pulls FAILED — registry outage or auth problem (see warnings)"
+            else
+              echo "::warning::[pull] $FAILED/$TOTAL pre-pull(s) failed — see warnings above"
+            fi
+          else
+            echo "[IMP:9][pre-pull] All images pre-pulled successfully — build/cache step will reuse"
+          fi
+          rm -rf "$PULL_TMP"
+          echo "::endgroup::"
+
+      # ⚠️ TRAP[DECISION] · 2026-08-03 · — · cache-backend=gha (DevPlan 123 T1, P-13)
+      # · Rejected: registry-cache дефолт (403 на запись ai-platform-build-cache, прецедент 2026-07-18)
+      # · Reason: gha-кэш не требует ghcr-прав — устраняет 403-риск обоих сборок (backup-cron, L1)
+      - name: Build backup-cron image (scoped GHA cache)
+        uses: ./.github/actions/docker-build-cache
+        with:
+          context: core/modules/backup-cron
+          tags: backup-cron:latest
+          cache-scope: backup-cron
+          cache-backend: gha
+
+      - name: Build hermes-agent-base image (scoped GHA cache)
+        uses: ./.github/actions/docker-build-cache
+        with:
+          context: core/modules/hermes-agent/build
+          file: core/modules/hermes-agent/build/Dockerfile
+          tags: hermes-agent-base:latest
+          cache-scope: hermes-agent-base
+          cache-backend: gha
+
+      - name: Diagnostic — verify built images
+        run: |
+          echo "=== Built images ==="
+          docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}" | grep -E "(hermes-agent-base|backup-cron)"
+          echo ""
+          echo "=== Hermes-agent-base layers ==="
+          docker history hermes-agent-base:latest --no-trunc --format "table {{.Size}}\t{{.CreatedBy}}" 2>/dev/null | head -15 || echo "(image not found)"
+
+      - name: Diagnostic — LiteLLM pre-flight (stale containers + image digest)
+        run: |
+          echo "=== LiteLLM Pre-flight Diagnostic ==="
+          echo ""
+          echo "--- Stale litellm-test containers ---"
+          docker ps -a --filter "name=litellm-test" --format "table {{.Names}}\t{{.Status}}\t{{.Image}}" || echo "(none)"
+          echo ""
+          echo "--- LiteLLM image existence check ---"
+          LITELLM_IMAGE="ghcr.io/berriai/litellm:v1.91.2"
+          if docker image inspect "${LITELLM_IMAGE}" >/dev/null 2>&1; then
+            echo "[IMP:9][litellm-preflight] Image ${LITELLM_IMAGE} present"
+          else
+            echo "[IMP:9][litellm-preflight] Image ${LITELLM_IMAGE} NOT found — pull required"
+            echo "Run: docker pull ${LITELLM_IMAGE}"
+          fi
+          echo ""
+          echo "--- Docker disk usage ---"
+          docker system df --format "table {{.Type}}\t{{.TotalCount}}\t{{.Size}}\t{{.Reclaimable}}" 2>/dev/null || echo "(df failed)"
+          echo ""
+          echo "--- System memory ---"
+          free -h 2>/dev/null || vm_stat 2>/dev/null || echo "(memory info unavailable)"
+        shell: bash
+
+      - name: Generate dev SSL certs for nginx tests
+        run: |
+          echo "[IMP:7][dev-certs-pregen] Generating dev SSL certs for nginx tests..."
+          make dev-certs CERT_BACKEND=openssl
+          echo "[IMP:9][dev-certs-pregen] ✅ Dev SSL certs generated in core/modules/nginx/dev-certs/"
+        shell: bash
+
+      - name: Run ci-docker gate (smoke + component + predeploy-docker — no static duplication, contract/static/predeploy in fast gate)
+        id: full_gate
+        env:
+          CONTEXT_IMAGE: hermes-agent-base:latest
+        run: |
+          make gate MODE=ci-docker SKIP_PRECOMMIT=1
+
+      - name: Diagnostic — dump container states on failure
+        run: |
+          echo "=== All Running Containers ==="
+          docker ps -a --format "table {{.Names}}\t{{.Status}}\t{{.Image}}\t{{.Ports}}"
+          echo ""
+          echo "=== LiteLLM Container Logs (full startup, litellm-test) ==="
+          if docker ps -a --format "{{.Names}}" | grep -q "litellm-test"; then
+            docker logs litellm-test 2>&1 || echo "(no logs)"
+          else
+            echo "litellm-test container not found — may have been cleaned up"
+          fi
+          echo ""
+          echo "=== Failed Container Logs (last 100 lines each) ==="
+          for c in $(docker ps -a --format "{{.Names}}" | grep -E "(test$|ai-platform)" || true); do
+            echo "--- Logs for $c ---"
+            docker logs "$c" --tail 100 2>&1 || echo "(no logs)"
+            echo ""
+          done
+          echo "=== Healthcheck Status ==="
+          for c in $(docker ps -a --format "{{.Names}}" | grep -E "(test$|ai-platform)" || true); do
+            echo "$c: $(docker inspect "$c" --format '{{.State.Health.Status}}' 2>/dev/null || echo 'no healthcheck')"
+          done
+          echo ""
+          echo "=== Docker Compose Debug Log ==="
+          if [ -f /tmp/docker-compose-up-failed.log ]; then
+            cat /tmp/docker-compose-up-failed.log
+          else
+            echo "/tmp/docker-compose-up-failed.log not found"
+          fi
+        shell: bash
+
+      # C-2 (DevPlan 136 W11 T11.2): continue-on-error УБРАН — провал integration-степа
+      # теперь честно роняет job (CI «зелёный, система врёт»). error-path не требует
+      # API-ключей (fork PR-safe); rc=5 (нет тестов) → exit 0 обрабатывается явно.
+      - name: Integration test — error-path mode (no API keys needed)
+        id: integration_error_path
+        run: |
+          INTEGRATION_MODE=error-path make check MARKER=integration CHECK_CACHE=0 && rc=0 || rc=$?
+          if [ $rc -eq 5 ]; then
+            echo "[integration-error-path] No integration tests collected — skipping (exit 5 is OK)"
+            exit 0
+          fi
+          exit $rc
+
+      # C-2 (DevPlan 136 W11 T11.2): continue-on-error УБРАН (см. integration_error_path).
+      # live-mode сам выходит 0 при отсутствии API-ключей (fork PR path) — строгий режим безопасен.
+      - name: Integration test — live mode (requires API keys)
+        id: integration_live
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY }}
+        run: |
+          # M4 (security hardening): проверка через env-контекст шага (${VAR}), НЕ ${{ secrets.X }}
+          # в shell-интерполяции — секреты не попадают в командную строку inline-выражением.
+          if [ -z "${DEEPSEEK_API_KEY}" ] || [ -z "${LITELLM_MASTER_KEY}" ]; then
+            echo "[IMP:9][integration-live] Required API keys not available — skipping live integration (fork PR path)"
+            exit 0
+          fi
+          make check MARKER=integration CHECK_CACHE=0 && rc=0 || rc=$?
+          if [ $rc -eq 5 ]; then
+            echo "[integration-live] No integration tests collected — skipping (exit 5 is OK)"
+            exit 0
+          fi
+          exit $rc
+
+      - name: Generate Job Summary with stage timing
+        run: |
+          {
+            echo "## ⏱️ CI Stage Timing — platform-test (unified)"
+            echo ""
+            echo "| Stage | Duration |"
+            echo "|-------|----------|"
+            echo "| Setup + Fast Gate | (see individual step logs) |"
+            echo "| Docker Setup + Provision | (see individual step logs) |"
+            echo "| Pre-pull + Build  | (see individual step logs) |"
+            echo "| Full Gate         | (see step timing in UI) |"
+            echo "| Integration (error-path) | (see step timing in UI) |"
+            echo "| Integration (live) | (see step timing in UI) |"
+            echo "| Cleanup           | (see step timing in UI) |"
+            echo ""
+            echo "_Timing details available in individual step logs._"
+            echo ""
+            echo "### Gate Strategy"
+            echo "- Fast gate: gates + contract + static + predeploy (no Docker, <3 min)"
+            echo "- ci-docker gate: smoke + component + predeploy-docker (Docker stack, no static duplication)"
+            echo "- Integration: error-path (no tokens) + live (real API call)"
+            echo ""
+            echo "### Links"
+            echo "- [Workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Cleanup Docker resources
+        uses: ./.github/actions/cleanup-docker

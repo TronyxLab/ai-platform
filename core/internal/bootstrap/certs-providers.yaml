@@ -1,0 +1,45 @@
+# GREP_SUMMARY: certs-providers registry acme dns-01 providers per-domain declarative regru webnames http01
+# STRUCTURE: ┌providers: реестр┐ → ◇ name/plugin/mode/creds → ◇ provider_registry.py читает → ⎋ env issue_cert.py
+# region MODULE_CONTRACT
+## @purpose  SoT реестра DNS-провайдеров для выпуска Let's Encrypt сертификатов (DevPlan 154 W1)
+## @scope    Читается ТОЛЬКО provider_registry.py (core/internal/bootstrap/provider_registry.py).
+##           Имена провайдеров = значения node.yaml#acme_dns_plugin / ключи node.yaml#acme_dns_plugins.
+## @invariants
+##   1. Новый провайдер = запись в этом файле, БЕЗ изменения кода (вариант C, Brief 154 S1)
+##   2. mode=env    — креды передаются env-переменными acme.sh (конвенция dnsapi, mutable account.conf)
+##   3. mode=inject — инъекция кредов в dnsapi-скрипт + shred после issue (webnames-паттерн, TRAP 2026-06-11)
+##   4. mode=http01 — HTTP-01 standalone (без DNS API, без wildcard)
+##   5. creds — строгий allowlist: только эти имена попадают из secrets.env в env процесса issue
+##   6. dnsapi_ext=true — плагин клонируется install_acme.py из dnsapi_ext/ (не в официальном acme.sh)
+## @rationale Один плагин на ноду (acme_dns_plugin) не покрывает «домены у разных регистраторов»;
+##           per-domain маппинг (acme_dns_plugins) + декларативный реестр = модульная структура.
+## @changes 2026-08-12 | DevPlan 154 W1 — создан
+# endregion MODULE_CONTRACT
+providers:
+  - name: webnames
+    plugin: webnames
+    mode: inject
+    creds: [WEBNAMES_API_KEY]
+    dnsapi_ext: true
+    note: "webnames.ru API — совместимость (инъекция ключа + shred, TRAP 2026-06-11)"
+
+  - name: regru
+    plugin: regru
+    mode: env
+    creds: [REGRU_API_Username, REGRU_API_Password]
+    dnsapi_ext: false
+    note: "reg.ru regru2 API (api.reg.ru/api/regru2) — username/password аккаунта; нативный плагин acme.sh dns_regru; креды сохраняются в /opt/acme.sh/account.conf (root:600) — TRAP[2026-08-12] DevPlan 154 W1. ⚠️ Напоминание: в панели reg.ru (user/account/api) включить API-доступ ДЛЯ IP ноды (ACCESS_DENIED_FROM_IP — 2026-08-12, asi-team-vps) — там же можно добавить SSH-ключ"
+
+  - name: cf
+    plugin: cf
+    mode: env
+    creds: [CF_Token, CF_Account_ID, CF_Zone_ID, CF_Key, CF_Email]
+    dnsapi_ext: false
+    note: "Cloudflare DNS — токен/глобальный ключ (конвенция acme.sh dns_cf)"
+
+  - name: http01
+    plugin: null
+    mode: http01
+    creds: []
+    dnsapi_ext: false
+    note: "HTTP-01 standalone — fallback без DNS API; без wildcard; требует свободный порт 80"

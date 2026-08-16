@@ -1,0 +1,91 @@
+# GREP_SUMMARY: AGENTS.md, shared, inventory, node-yaml, docker-compose, audit-logger, ssh-parser, telegram, docker-auth, age-key, node-detect, vps-readiness, crypto, content-hash, secrets-env, secrets-manifest-reader, deploy-paths, verbs, project-registry, exceptions, timeouts, ssh-opts, contracts, env-requires
+# STRUCTURE: ┌контракт области┐ → ◇ инвентарь 43 модуля (таблица) → ◇ правила добавления → ◇ запреты → ⎋ cross-refs
+# region MODULE_CONTRACT
+## @purpose  Архитектурный контракт области core/internal/shared/ — инвентарь модулей и правила добавления.
+## @scope    Все модули под core/internal/shared/.
+## @invariants
+##   1. shared/ — единственное место для переиспользуемой бизнес-логики уровня internal (НЕ infra-фасадов).
+##   2. Каждый модуль имеет MODULE_CONTRACT с @purpose/@scope/@invariants (doxygen-python standard).
+##   3. Новый модуль в shared/ требует: (а) минимум 2 потребителей ИЛИ дедупликацию ≥2 существующих реализаций,
+##      (б) unit-тесты в tests/unit/, (в) запись в таблицу ниже.
+##   4. Facade-паттерн: shell-скрипты НЕ дублируют логику — вызывают python3 -m core.internal.shared.MODULE.
+##   5. НИКОГДА не импортировать core/internal/bootstrap/deploy/* из shared/ (слой зависимостей — только вниз).
+## @rationale Единый инвентарь предотвращает ad-hoc добавление модулей и дублирование реализаций.
+## @changes 2026-08-15 | DevPlan 172 W5.4 — +http_probe.py (38-й); единый curl-probe (verify + verify_sweep)
+## @changes 2026-08-16 | DevPlan 177 W3.5 — +yaml_loader.py (39-й); типизированные SoT-YAML читатели
+## @changes 2026-08-16 | DevPlan 177 W3.1/W3.2 — +retry.py (40-й) +http_client.py (41-й); дедупликация 4 retry-циклов и 5 HTTP-клиентов
+# endregion MODULE_CONTRACT
+
+# core/internal/shared/ — инвентарь модулей
+
+| Модуль | Назначение | Ключевой API | Потребители |
+|--------|-----------|--------------|-------------|
+| `app_config.py` | AppConfig — единая точка конфигурации приложений из env (только конфигурация, без side-effects при импорте) | `AppConfig` | deploy/{receive_flow,orchestrator,channels/base}, scaffold/project_scaffolder, loadtest/runner_cli, bootstrap/deploy/sudoers_generator |
+| `atomic_writer.py` | Канонический атомарный writer (tempfile+fsync+os.replace+optional validator). Заменяет 12+ локальных копий os.replace/NamedTemporaryFile с разной семантикой. Исключение: json_writer.py (Docker bind mount TRAP) | `atomic_write(path, content, mode, validator)`, `atomic_write_json()`, `atomic_write_text()` | secrets_env_parser, docker_registry_auth, docker_daemon, s3_ssl_cache, sudoers_generator, lifecycle/helpers/system (cron), metrics/cache, sync_env_defaults, template_engine, node_yaml._write_back |
+| `audit_logger.py` | Единый JSON-lines audit логгер — ЕДИНСТВЕННЫЙ writer. Расширенная схема ts/tag/status/msg + extra (operation/project/channel/result/duration_s/snapshot_id) | `write_audit_entry(tag, status, msg, **extra)`, `read_audit_log()`, CLI `write/read --log-file` | context_deployer, deploy_orchestrator (DeployAuditLogger adapter), lifecycle/helpers/reporting, scaffold/vhost_renderer, lib/audit.sh |
+| `content_hash.py` | SHA256 content-hash для идемпотентности bootstrap (state.json sub-steps) | `compute_step_hash()`, `step_hash_changed()` | state_machine |
+| `compose_files.py` | Единый SoT списков compose-файлов и резолва (заменяет 6 локальных кортежей: docker_orchestrator, converge/runtime, converge/volumes, orphan_reconciler, payload_deliverer, project_adopter) | `COMPOSE_FILENAMES`, `PROJECT_COMPOSE_FILENAMES`, `resolve_compose_file()`, `requires_compose_project()` | docker_orchestrator, converge/runtime, converge/volumes, orphan_reconciler, payload_deliverer, project_adopter, gate compose_files_sole_path |
+| `compose_profiles.py` | Единый loader COMPOSE_PROFILES (заменяет чтение platform-env.yaml в scaffold_helpers + platform_config в docker_orchestrator; SoT platform-infra.yaml) | `load_profiles()` | scaffold_helpers, docker_orchestrator, gate profiles_parity |
+| `contracts.py` | Контракт операционных политик — DEPLOY_BEST_EFFORT (best-effort) + machine-readable exit-коды | `DEPLOY_BEST_EFFORT`, `EXIT_OK/GENERIC/CONFIG_NOT_FOUND/CONFIG_PARSE/CONFIG_VALIDATION/FATAL` | deploy_orchestrator, гейты B4 (broad-except-allowlist, exit-codes-documented) |
+| `crypto.py` | APR1/htpasswd хэширование (openssl passwd -apr1, детерминизм через salt) | `hash_apr1()`, `generate_htpasswd_entry()`, CLI `hash/entry [--salt]` | lib/secrets.sh, secrets_manager |
+| `deploy_paths.py` | Канонический реестр путей доставки кода (SoT для удаления deprecated путей) + резолверы /etc/letsencrypt/live, /opt/node-configs, /opt/platform, /opt/projects | `get_canonical_paths()`, `DEPRECATED_DEPLOY_PATHS`, `projects_base()`, `letsencrypt_live()`, `node_configs_remote()`, `platform_remote_base()` | core-deploy CI, deploy, s3_ssl_cache, cert_orchestrator, cert_collector, core_deliverer, overlay_deliverer |
+| `docker_auth.py` | Единый Docker registry auth (заменяет 5 дублирующихся точек) | `docker_login()`, `ghcr_login()`, `configure_docker_auth()` | bootstrap registry-auth, phases.py |
+| `docker_compose.py` | Shared compose-операции: pull/build/up/healthcheck_poll | `docker_compose_pull()`, `docker_compose_build()`, `docker_compose_up()`, `healthcheck_poll()` | context_deployer, docker_orchestrator, DeployEngine |
+| `docker_ops.py` | Единый слой docker-операций — ps/inspect/exec/stop/rm/tag/image/network/volume/stats/info/manifest/pull + CLI `--shell` для shell-фасадов | `docker_ps()`, `ps_container_names()`, `docker_inspect()`, `docker_exec()`, `docker_stop()`, `docker_rm()`, `docker_tag()`, `docker_image_inspect(_exists/_many)()`, `docker_manifest_inspect(_raw)()`, `docker_pull()`, `docker_network_inspect(_raw/_create)()`, `docker_volume_inspect()`, `docker_info()`, `docker_stats()` | deploy_engine, docker_orchestrator, observability, orphan_reconciler, converge/{vhosts,networks,volumes,runtime}, modules_healthcheck, docker_collector, deploy/orchestrator, provisioner, reconciler_projects, preflight, hermes_workflow, phases/docker, docker_registry_auth, state_store, security_posture, docker_compose (примитивы), lib/docker.sh (--shell фасад), gate docker_sole_path |
+| `env_facts.py` | Абстракция системных фактов окружения (is_root, which и др.; 7 модулей читали os.geteuid()/shutil.which() напрямую) | `EnvironmentFacts` (Protocol), `SystemEnvironmentFacts`, `default_env_facts()` | bootstrap/install_tor_proxy (root-guard), bootstrap/security_posture (root-guard), healthcheck/watchdog (which docker), bootstrap/tor_transport (which transport-bin), validate/validate_orchestrator (which ajv), deploy/verify_contracts |
+| `env_reader.py` | Чтение значений из env-файла для make-рецептов (last-match + export-строки + пусто при отсутствии) | `get_env_value()`, CLI `get VAR --file .env` | makefiles/helpers.mk (dev-certs/dev-metrics/provision-llm), makefiles/dev.mk (dev-hosts) |
+| `env_requires.py` | Единый env-requires чекер (объединяет module.yaml-driven presence и manifest-driven runtime; устраняет расхождение вердиктов validate_module_yaml vs secrets_validator) | `check_requires_presence()`, `check_runtime_env()`, `check_env_requires()`, `env_var_in_dotenv()`, `env_var_in_secrets_manifest()` | validate_module_yaml (фасад), secrets_validator (фасад) |
+| `http_probe.py` | Единый curl-probe примитив (флаги -sS -o /dev/null -w %{http_code}, timeout+5, fail-verbose) | `curl_http_code(url, timeout, *, timeout_label, extra_args, runner)` | verify/domain_verifier (verify_domain/verify_status_page), verify_sweep/http_check (check_http) |
+| `http_client.py` | Тонкий urllib-HTTP клиент (timeout из timeouts.py, proxy, JSON; дедупликация 5 потребителей) | `request(url, *, method, timeout, headers, data, proxy_url, opener)`, `get_json(url, ...) → object`, `post_json(url, payload, ...)`, `build_opener(proxy_url)`, `HttpRequestError`, `HttpJsonError` | monitoring/service_reload, monitoring/langfuse_projects, loadtest/prometheus_pull, loadtest/runner_cli, deploy/healthcheck_poller |
+| `project_yaml.py` | Общий читатель ai-platform.yaml — ЕДИНСТВЕННЫЙ парсер (8 потребителей прямого YAML-парсинга мигрированы) + auto-detect (org-from-path, casing vs node.yaml) | `load_project_yaml()`, `read_project_yaml()`, `get_expose()/get_domain()/get_target_node()/get_needs()/get_llm()/get_monitoring()/get_name()/get_project_type()/get_expose_config()`, `derive_org_from_path()`, `detect_project_config()` | vhost_renderer, vhost_configurator, conflict_checks, monitoring/config_renderer, project_registry, deploy_engine, generate_catalog, orchestrator, project_adopter (detect_project_config re-export) |
+| `exceptions.py` | Типизированная иерархия ошибок платформы | `PlatformError`, `ConfigValidationError`, `ConfigNotFoundError`, `ConfigParseError`, ... | все Python-модули |
+| `file_lock.py` | Canonical fcntl.flock-based advisory file lock (ядро снимает блокировку при смерти процесса — надёжнее PID-lockfile) | `FileLock`, `platform_lock_path(project)`, `FileLockError` | deploy/orchestrator, deploy/deploy_history, bootstrap/lifecycle/state_store (через re-export lifecycle/lock.py) |
+| `llm_paths.py` | Единый источник пути litellm-config.yml (заменяет 4 копии вывода + 1 шаблон) | `litellm_config_path(core_dir)`, `litellm_template_path(core_dir)` | context_deployer, deploy_orchestrator, llm_provision, phases, config_renderer |
+| `module_interface.py` | Единая bash-обёртка invoke_module_interface (дедупликация docker_orchestrator._invoke_healthcheck_full + deploy_orchestrator._invoke_module_interface; **вход для B8 wire module-hooks**) | `invoke(module, interface, *args, timeout=...) → (bool, output)` | docker_orchestrator, deploy_orchestrator |
+| `node_detect.py` | Детекция AGE-ключа (env-цепочка + default key file ~/.config/age/keys.txt — age CLI локация, на dev-машине symlink на ~/.ssh/age-key-personal.txt; только при пустой env) + авто-детекция имени ноды из node-configs (дедупликация bootstrap/converge/node-update) | `detect_age_key()`, `auto_detect_node_name()`, CLI `--detect-age-key` / `--detect-node-name` | bootstrap, converge, node-update |
+| `node_yaml/` | Единый фасад чтения node.yaml — пакет (агрегатор + миксины domains/projects/modules/node/validation/resolve; монолит 1164 LOC разбит) | `NodeYaml(path).get(...)`, CLI `--get/--set` | vhost_renderer, reconciler, converge, scaffold, context_deployer, preflight |
+| `node_resolver.py` | Python-резолв node.yaml (миграция core/lib/node-resolver.sh): 3-path search через NodeYaml.resolve + host-извлечение; CLI resolve/host с exit-контрактом 0/1; shell-фасад node-resolver.sh <100 LOC | `resolve_node_yaml()`, `extract_node_host()`, CLI `resolve --node X` / `host --file F` | node-resolver.sh (фасад: bootstrap.sh, node-update.sh, node-lifecycle.sh, converge.sh, deploy-context.sh, deploy.mk) |
+| `platform_ports.py` | Единый реестр внутренних (container) портов сервисов платформы (зеркало platform-infra.yaml; 7 RED-дублей портов устранены) | константы портов (`from core.internal.shared.platform_ports import ...`) | llm/key_provisioner, bootstrap/deploy/context_deployer, bootstrap/converge/prometheus_tsdb, monitoring/constants; core/modules НЕ импортируют (cross-layer запрет) |
+| `project_registry.py` | Реестр проектов: регистрация/дерегистрация/список поверх NodeYaml | `validate_project_name()`, `register/unregister/list`, `discover_llm_projects()` (LLM-проекты по ai-platform.yaml llm.enabled=true) | DeployEngine, scaffold, lifecycle, key_provisioner (discover_projects shim → делегирование) |
+| `retry.py` | Единый retry-helper (дедупликация 4 циклов; политики из timeouts.py, exp backoff) | `retry(func, *, attempts, backoff_seconds, retryable, sleep_fn, exception_mode) → T`, `exponential_backoff(retries, *, base, max_seconds)` | state_machine, lifecycle/helpers/system, deploy/channels/base, docker_compose |
+| `s3_client.py` | Единая boto3 S3-фабрика платформенного домена (дедупликация s3_ssl_cache._get_s3_client + preflight инлайн; backup-cron upload/retention вне скоупа) | `get_s3_client(endpoint=None, access_key=None, secret_key=None, max_attempts=3, region=None)` | s3_ssl_cache, preflight |
+| `schema_validator.py` | Единый schema-валидатор YAML↔JSON-Schema (draft-07) — единственная Draft7Validator-точка (дедупликация jsonschema_validate.py + node_yaml.validate) | `validate_yaml_against_schema()`, `validate_dict_against_schema()` | jsonschema_validate, node_yaml.validate |
+| `secrets_env_parser.py` | Единый парсер secrets.env (заменяет 7 inline-парсеров) | `parse()`, `write()`, `merge()`, `export_shell()` | decrypt-secrets, secrets-init, bootstrap |
+| `secrets_manifest_reader.py` | Строгий ридер secrets-manifest.yaml (заменяет 3 парсера с разными graceful-degradation семантиками; отсутствие = громкий fail, не silent `[]`) | `iter_secrets()`, `tier()`, `consumers()`, `charset()`, `gen_command()` | secrets_manager, secrets_validator |
+| `ssh_opts.py` | Единый SoT SSH-флагов (заменяет 5 Python-копий «SSH_OPTS» + shell lib/ssh.sh фасад) | `SSH_OPTS`, `build_rsync_ssh_opts()`, CLI `--shell`/`--rsync-e` | core_deliverer, overlay_deliverer, remote_executor, channels ×2, lib/ssh.sh (python3 -m) |
+| `ssh_cmd_builder.py` | Единый строитель remote-команд bootstrap/update/converge/check-security/deploy-context (SH→Python build-ssh-cmd.sh; printf %q byte-parity, stdlib-only watchdog-паттерн) | `printf_q()`, `build_ssh_cmd()`, `build_update_ssh_cmd()`, `build_converge_ssh_cmd()`, `build_check_security_ssh_cmd()`, `build_deploy_context_ssh_cmd()`, CLI `init/update/converge/check-security/deploy-context` | bootstrap.sh, remote-cmd.sh (фасад), tests/test_bootstrap_auto, test_node_lifecycle_static |
+| `ssl_certs.py` | Единый SoT openssl x509-примитивов (дедупликация s3_ssl_cache._validate_cert + cert_orchestrator._is_cert_valid/_is_le_issuer; cert_is_valid() единая комбинация parseable+LE+domain+expiry) | `cert_is_parseable()`, `cert_check_expiry()`, `cert_get_issuer()`, `cert_get_subject()`, `cert_is_le_issuer()`, `cert_subject_matches_domain()`, `cert_is_valid()`, `DEFAULT_OPENSSL_TIMEOUT=10`, `DEFAULT_EXPIRY_THRESHOLD=2592000` | s3_ssl_cache, cert_orchestrator, context_deployer |
+| `stub_detection.py` | Единая is_stub-детекция ai-platform.yaml (консолидирует дубль reconciler_projects + converge/reconciler) | `is_stub_ai_platform_yaml(path)` | reconciler_projects (wrapper is_stub_project), converge/projects (R3) |
+| `subprocess_io.py` | Единый канон run_subprocess (raise-семантика и graceful-семантика выражаются параметрами check/non_fatal; exit=127 всегда fatal) | `run_subprocess(cmd, *, timeout, check, non_fatal, fatal_rc)` | converge/infra (делегирование, check=False), lifecycle/helpers/{system,users,secrets,validation}.py + phases.py |
+| `telegram_notifier.py` | Единый Telegram-клиент (заменяет 6 реализаций: 3 shell + 3 Python) | `send_telegram()` | notify-hook, hermes-agent, deploy |
+| `test_journal.py` | Единый структурированный журнал тестовых прогонов платформы (.ai/logs/runs.jsonl + latest.log симлинк; append-only JSONL, атомарная запись) | `record_run(...)`, `git_context()`, `junit_counts()`, CLI `record`/`latest` | check_suite executor (импорт record_run), make-таргеты спецкоманд (CLI record) |
+| `timeouts.py` | Единый реестр таймаутов операционных политик (единственный источник числовых timeout= в docker/ssh/healthcheck-домене) | `COMPOSE_UP_TIMEOUT`, `PULL_TIMEOUT`, `BUILD_TIMEOUT`, `HEALTHCHECK_POLL_TIMEOUT`, `SSH_CONNECT_TIMEOUT`, `DEPLOY_TIMEOUT`, `SSH_READ_TIMEOUT`, `RETRY_BACKOFF_SECONDS`, `IMAGE_CHECK_TIMEOUT`, `DOCKER_CMD_TIMEOUT`, `DOCKER_STOP_TIMEOUT`, `RSYNC_TIMEOUT`, `RETRY_COUNT` | docker_compose, ssh_opts, channels, docker_orchestrator, deploy_engine, reconciler, context_deployer, remote_executor, overlay_deliverer, context_promoter, orphan_reconciler, deploy_orchestrator |
+| `vps_readiness.py` | VPS pre-flight проверки (SSH, forced-command ping, /opt/projects/, Docker) — Strangler-миграция vps-readiness.sh (дедупликация deploy.mk/CI pre-flight) | `check_vps_ready()`, CLI `NODE [--json|--quick]` | deploy.mk pre-flight, deploy-project.yml (через фасад core/lib/vps-readiness.sh) |
+| `verbs.py` | Канонический verb-словарь forced-command диспетчера — единый источник CANONICAL_VERBS + reserve-имен для проектов | `CANONICAL_VERBS`, `VERB_RESERVE`, `is_verb()` | deploy/ssh_command_parser (classify_verb), project_registry (validate_project_name), gate канала |
+| `yaml_loader.py` | Типизированные читатели SoT-YAML (дедупликация 3 локальных парсеров; PlatformEnv/NetworkConfig/VolumeConfig перенесены из provisioner) | `load_platform_env(path) → PlatformEnv` (env_defaults str-нормализация, None → ""), `load_secret_definitions(path) → list[dict[str, object]]` (missing → [] + warning) | provisioner, sync_env_defaults (проекция _project_secret_defs), generate_secrets_manifest |
+| `__init__.py` | Пакетный контракт shared-области | — | — |
+
+## Правила добавления нового модуля
+
+1. **Обоснование:** минимум 2 потребителя ИЛИ дедупликация ≥2 существующих реализаций.
+2. **Контракт:** MODULE_CONTRACT с @purpose/@scope/@invariants + GREP_SUMMARY/STRUCTURE (doxygen-python).
+3. **Тесты:** unit-тесты в `tests/unit/test_shared_MODULE.py` (нативные импорты, tmp_path, LDD).
+4. **Реестр:** строка в таблице ниже — ЕДИНСТВЕННЫЙ перечень (root/core AGENTS.md содержат указатели).
+5. **Запрет ad-hoc:** одноразовая утилита для одного потребителя → живёт рядом с потребителем, НЕ в shared/.
+
+## Запреты
+
+| # | Запрет | Причина |
+|---|--------|---------|
+| 1 | Импорт из `bootstrap/deploy/` или `bootstrap/lifecycle/` | Layer violation — shared ниже по зависимостям (инвариант 5) |
+| 2 | Прямой YAML-парсинг node.yaml вне NodeYaml фасада | DRIFT-088-7: единая точка чтения node.yaml |
+| 3 | Дублирование логики модуля в shell (inline python3 -c) | Языковая политика — facade вызывает `python3 -m core.internal.shared.MODULE` |
+| 4 | Новый модуль без unit-тестов | R1-R5 Test Honesty (tests/AGENTS.md) |
+
+## Cross-references
+
+| Файл | Назначение |
+|------|-----------|
+| root AGENTS.md | Архитектурные инварианты, языковая политика; **§Shell-исключения — SoT keep-решений фасадов core/lib/\*.sh** |
+| core/AGENTS.md | Канонические операции core, cross-layer import rules, указатель на этот инвентарь |
+| tests/unit/test_shared_*.py | Unit-тесты shared-модулей |

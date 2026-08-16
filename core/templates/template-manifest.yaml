@@ -1,0 +1,248 @@
+# GREP_SUMMARY: template-manifest yaml template-engine render check vars
+# STRUCTURE: ┌version┐ → ◇ standard_vars → ◇ templates[] (template→consumer→vars)
+# region MODULE_CONTRACT
+## @purpose  Single source of truth: template → consumer → vars mapping
+## @scope    Used by template-engine.py (render-all, check), CI gates (syntax, drift)
+## @invariants
+##   - Every template path is relative to this manifest file's directory
+##   - type: single — single file template; type: directory — recursive directory
+##   - dual_role: true — file is both a template AND a live config (e.g., alert-rules.yml)
+##   - consumer documents WHERE the template is consumed (script:function)
+##   - output: null means render-at-use (no committed artifact)
+## @rationale Single registry eliminates scattered sed/envsubst calls.
+##            YAML chosen for inline comments and readability in code review.
+## @usecases
+##   - make templates-check → check_all() validates all templates resolvable
+##   - make templates-render → render_all() renders to output paths
+##   - CI gates validate strict grammar and drift
+# endregion MODULE_CONTRACT
+
+version: 1
+
+standard_vars:
+  PLATFORM_ROOT:
+    source: auto
+    default: /opt/platform
+    resolve_from:
+      - env.PLATFORM_ROOT
+  PLATFORM_DOMAIN:
+    source: auto
+    default: null
+    resolve_from:
+      - env.PLATFORM_DOMAIN
+
+templates:
+  # ── Sudo whitelist template (render-at-use) ──────────────────────────────
+  - template: ../templates/sudo-whitelist.template
+    output: null
+    type: single
+    consumer: core/internal/bootstrap/deploy-modules.sh:generate_module_sudoers()
+    vars:
+      MODULE_NAME:
+        required: true
+        source: per-module
+      PLATFORM_ROOT:
+        required: true
+        source: standard
+
+  # ── SSL params template ──────────────────────────────────────────────────
+  - template: ../modules/nginx/config/ssl-params.conf.template
+    output: null
+    type: single
+    consumer: core/modules/nginx/docker-compose.base.yml:nginx_envsubst_entrypoint()
+    vars:
+      PLATFORM_DOMAIN:
+        required: false
+        source: standard
+
+  # ── Nginx default vhost template ─────────────────────────────────────────
+  - template: ../modules/nginx/config/platform-default.conf.template
+    output: null
+    type: single
+    consumer: core/modules/nginx/docker-compose.base.yml:nginx_envsubst_entrypoint()
+    vars:
+      PLATFORM_DOMAIN:
+        required: false
+        source: standard
+
+  # ── Nginx vhost templates (config/, envsubst ${VAR} syntax — 20-envsubst-on-templates.sh) ──
+  # 9 монтирований в /etc/nginx/templates/*.conf.template (DevPlan 116 T6, U-47):
+  #   docker-compose.base.yml:55-65. ${VAR}-синтаксис — {{}}-плейсхолдеров нет →
+  #   check_all проходит тривиально; vars документирующие.
+  - template: ../modules/nginx/config/platform-http.conf
+    output: null
+    type: single
+    consumer: core/modules/nginx/docker-compose.base.yml:56 (envsubst, /etc/nginx/templates/platform-http.conf.template)
+    vars:
+      PLATFORM_DOMAIN:
+        required: false
+        source: standard
+
+  - template: ../modules/nginx/config/grafana-vhost.conf
+    output: null
+    type: single
+    consumer: core/modules/nginx/docker-compose.base.yml:57 (envsubst, /etc/nginx/templates/grafana-vhost.conf.template)
+    vars:
+      PLATFORM_DOMAIN:
+        required: false
+        source: standard
+
+  - template: ../modules/nginx/config/hermes-dashboard.conf
+    output: null
+    type: single
+    consumer: core/modules/nginx/docker-compose.base.yml:58 (envsubst, /etc/nginx/templates/hermes-dashboard.conf.template)
+    vars:
+      PLATFORM_DOMAIN:
+        required: false
+        source: standard
+
+  - template: ../modules/nginx/config/langfuse-vhost.conf
+    output: null
+    type: single
+    consumer: core/modules/nginx/docker-compose.base.yml:59 (envsubst, /etc/nginx/templates/langfuse-vhost.conf.template)
+    vars:
+      PLATFORM_DOMAIN:
+        required: false
+        source: standard
+
+  - template: ../modules/nginx/config/loki-vhost.conf
+    output: null
+    type: single
+    consumer: core/modules/nginx/docker-compose.base.yml:60 (envsubst, /etc/nginx/templates/loki-vhost.conf.template)
+    vars:
+      PLATFORM_DOMAIN:
+        required: false
+        source: standard
+
+  - template: ../modules/nginx/config/prometheus-vhost.conf
+    output: null
+    type: single
+    consumer: core/modules/nginx/docker-compose.base.yml:61 (envsubst, /etc/nginx/templates/prometheus-vhost.conf.template)
+    vars:
+      PLATFORM_DOMAIN:
+        required: false
+        source: standard
+
+  - template: ../modules/nginx/config/platform-vhost.conf.template
+    output: null
+    type: single
+    consumer: core/modules/nginx/docker-compose.base.yml:62 (envsubst, /etc/nginx/templates/platform-vhost.conf.template)
+    vars:
+      PLATFORM_DOMAIN:
+        required: false
+        source: standard
+
+  # ── Nginx dev-config templates (dev-режим: docker-compose.dev.yml — override поверх config/) ──
+  # docker-compose.base.yml:54-55 — тот же nginx envsubst-entrypoint, dev-варианты vhost'ов.
+  # 2026-08-07 (142 W8): dev-config получил РЕАЛЬНЫЕ platform-vhost.conf.template +
+  #   ssl-params.conf.template (docker-compose.dev.yml:24,31 — dev-оверрайды) —
+  #   TRAP-условие «Rev: если dev-config получит реальные *.template файлы — зарегистрировать их»
+  #   сработало: обе записи зарегистрированы ниже (гейт template_manifest_coverage (a)).
+  - template: ../modules/nginx/dev-config/platform-default.conf.template
+    output: null
+    type: single
+    consumer: core/modules/nginx/docker-compose.dev.yml (dev-оверрайд поверх config/, envsubst)
+    vars:
+      PLATFORM_DOMAIN:
+        required: false
+        source: standard
+
+  # ── Nginx dev-config vhost + ssl-params (142 W8 — реальные файлы, были bind-mount артефакты) ──
+  - template: ../modules/nginx/dev-config/platform-vhost.conf.template
+    output: null
+    type: single
+    consumer: core/modules/nginx/docker-compose.dev.yml:24 (dev-оверрайд vhost, envsubst /etc/nginx/templates/)
+    vars:
+      PLATFORM_DOMAIN:
+        required: false
+        source: standard
+  - template: ../modules/nginx/dev-config/ssl-params.conf.template
+    output: null
+    type: single
+    consumer: core/modules/nginx/docker-compose.dev.yml:31 (dev-оверрайд ssl-params, envsubst /etc/nginx/templates/)
+    vars:
+      PLATFORM_DOMAIN:
+        required: false
+        source: standard
+
+  # ── Tor proxy templates (cp-потребители — install_tor_proxy.py, DevPlan 127 W1) ──────────
+  # ⚠️ TRAP[DECISION] · 2026-07-31 · — · Путь `../bootstrap/tor/` (НЕ `../../bootstrap/tor/`)
+  # · Rejected: литерал DevPlan 116 T6 `../../bootstrap/tor/torrc.template` — резолвится
+  # ·   в root/bootstrap/ (не существует). Манифест-пути относительны core/templates/ →
+  # ·   `../bootstrap/tor/...` = core/bootstrap/tor/... (фактическое расположение).
+  # · Rev: если tor-шаблоны переедут — обновить пути.
+  # · 2026-08-04 (127 W1): write_torrc()/write_privoxy_config() мигрированы в Python —
+  # ·   TORRC_TEMPLATE = core/bootstrap/tor/torrc.template (install_tor_proxy.py) — потребляется;
+  # ·   privoxy-config.template: privoxy_config.TEMPLATE_PATH указывает на
+  # ·   core/internal/bootstrap/tor/privoxy-config.template (не существует) → всегда
+  # ·   mutation-fallback. Потенциальный DEBT (вне скоупа 127) — см. отчёт волны.
+  - template: ../bootstrap/tor/torrc.template
+    output: null
+    type: single
+    consumer: core/internal/bootstrap/install_tor_proxy.py:write_torrc() (TORRC_TEMPLATE → /etc/tor/torrc)
+    vars: {}
+
+  - template: ../bootstrap/tor/privoxy-config.template
+    output: null
+    type: single
+    consumer: core/internal/bootstrap/privoxy_config.py:write_privoxy_config() (template-ветка; fallback mutation)
+    vars: {}
+
+  # ── Alert rules (dual-role: template + live config) ──────────────────────
+  - template: ../modules/monitoring/config/alert-rules.yml
+    output: null
+    type: single
+    dual_role: true
+    consumer: core/modules/monitoring/hooks/on-project-deploy.sh:generate_alert_rules()
+    vars:
+      PROJECT:
+        required: true
+        source: CLI
+
+  # ── Template directories (scaffold) ──────────────────────────────────────
+  - template: ../../templates/template-backend/
+    output: null
+    type: directory
+    recursive: true
+    consumer: core/internal/scaffold/add-project.sh:render_project_template()
+    vars:
+      PROJECT_NAME:
+        required: true
+      ORG_NAME:
+        required: true
+      DOMAIN:
+        required: false
+      NODE_NAME:
+        required: true
+      PLATFORM_DOMAIN:
+        required: false
+
+  - template: ../../templates/template-frontend/
+    output: null
+    type: directory
+    recursive: true
+    consumer: core/internal/scaffold/add-project.sh
+    vars:
+      PROJECT_NAME:
+        required: true
+      ORG_NAME:
+        required: true
+      DOMAIN:
+        required: false
+      NODE_NAME:
+        required: true
+      PLATFORM_DOMAIN:
+        required: false
+
+  - template: ../../templates/template-context/
+    output: null
+    type: directory
+    recursive: true
+    consumer: core/internal/scaffold/context-init.sh
+    vars:
+      CONTEXT:
+        required: true
+      ORG_NAME:
+        required: true
+      NODE_NAME:
+        required: true

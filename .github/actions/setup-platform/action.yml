@@ -1,0 +1,70 @@
+# GREP_SUMMARY: setup-platform composite-action python-venv gitleaks provisioner reusable unified-ci
+# STRUCTURE: ◇ [optional] setup-python-venv → ◇ [optional] setup-gitleaks → ◇ [optional] provisioner-call → ⎋ unified CI setup
+# region MODULE_CONTRACT
+## @purpose  Unified CI setup composite action: replaces 3-step boilerplate (python + gitleaks + provisioner)
+##           with a single reusable action. Inherits cache key from setup-python-venv (R-RISK-10 mitigation).
+##           DevPlan 029 W2-E2 — CI Composite Action.
+##           NOTE: checkout must be called as a separate step BEFORE this action (local composite actions
+##           need repo checked out first — cannot include actions/checkout internally).
+## @scope    All .github/workflows/*.yml — 7+ workflow consumers targeted in W2-E2
+## @invariants
+##   - Cache key: venv-${{ runner.os }}-${{ inputs.python-version }}-${{ hashFiles('Makefile', 'pyproject.toml') }} (inherited from setup-python-venv; python-version included so a version bump invalidates the cache)
+##   - Python venv is optional — controlled by python-version input (empty = skip)
+##   - Gitleaks installation is optional — controlled by install-gitleaks boolean
+##   - Provisioner-call is optional — controlled by run-provisioner + provisioner-scope
+##   - Boolean inputs are strings in composite actions: use 'true'/'false'
+##   - Checkout — отдельный шаг до этого action (local composite actions требуют checkout заранее)
+## @rationale  Consolidate 7+ CI setup sequences into single composite action.
+##             Reduces CI setup overhead by ~30s per python workflow (3→1 composite steps),
+##             eliminates DRIFT-risk from duplicated setup logic, preserves cache-key continuity.
+## @changes    2026-07-21 | Created per DevPlan 029 W2-E2
+## @changes    2026-07-22 | Removed checkout step — must be called separately before this action (local composite actions need repo checked out first)
+# endregion MODULE_CONTRACT
+
+name: 'Setup Platform'
+description: 'Composite action: optional Python venv + optional gitleaks + optional provisioner (checkout must be called separately before this action)'
+
+inputs:
+  python-version:
+    description: 'Python version for setup-python-venv. Empty string skips Python setup entirely.'
+    required: false
+    default: '3.14'
+  install-pre-commit:
+    description: 'Install pre-commit in venv (true/false)'
+    required: false
+    default: 'false'
+  install-gitleaks:
+    description: 'Install gitleaks binary (true/false)'
+    required: false
+    default: 'true'
+  run-provisioner:
+    description: 'Run environment provisioner (true/false)'
+    required: false
+    default: 'false'
+  provisioner-scope:
+    description: 'Provisioner scope (networks,volumes,env,all — comma-separated)'
+    required: false
+    default: 'all'
+
+runs:
+  using: 'composite'
+  steps:
+    # ─── Step 1: Python venv (optional — skip if python-version is empty) ─
+    - name: Setup Python venv
+      if: ${{ inputs.python-version != '' }}
+      uses: ./.github/actions/setup-python-venv
+      with:
+        python-version: ${{ inputs.python-version }}
+        install-pre-commit: ${{ inputs.install-pre-commit }}
+
+    # ─── Step 2: Gitleaks (optional) ─────────────────────────────────────
+    - name: Setup gitleaks
+      if: ${{ inputs.install-gitleaks == 'true' }}
+      uses: ./.github/actions/setup-gitleaks
+
+    # ─── Step 3: Provisioner (optional) ──────────────────────────────────
+    - name: Provision environment
+      if: ${{ inputs.run-provisioner == 'true' }}
+      uses: ./.github/actions/provisioner-call
+      with:
+        scope: ${{ inputs.provisioner-scope }}

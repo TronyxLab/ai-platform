@@ -1,0 +1,50 @@
+# GREP_SUMMARY: langfuse module llm-tracing langfuse-worker postgres clickhouse observability-net v4 encryption-key
+# STRUCTURE: ▶ module:langfuse → langfuse:4.10.0 + worker → observability-net + shared-db-net → ┐
+# region MODULE_CONTRACT
+## @purpose  Langfuse LLM Tracing — trace, monitor, debug LLM application calls
+## @scope    LLM trace storage with PostgreSQL + ClickHouse backend
+## @invariants
+##   - install_type: docker — managed by compose
+##   - 1.5GB memory limit for cold-start (423 Prisma + ClickHouse migrations)
+##   - NODE_OPTIONS max-old-space-size=1024 to prevent OOM
+##   - depends_on: [postgres, clickhouse] for startup ordering
+##   - Headless initialization via LANGFUSE_INIT_* vars
+##   - Healthcheck via /api/public/health on eth0 IP
+##   - v4 (164 W1-5): web+worker (langfuse-worker, порт 3030, тот же env-контракт через
+##     YAML-якорь); ENCRYPTION_KEY — required 64-hex; ClickHouse ≥25.12 — satisfied (26.7)
+## @rationale Split from observability module per Phase 3 refactoring (D1)
+# endregion MODULE_CONTRACT
+
+name: langfuse
+install_type: docker
+description: "Langfuse LLM Tracing — trace, monitor, and debug LLM application calls with PostgreSQL + ClickHouse (v4: web + worker)"
+
+depends_on:
+  - postgres
+  - clickhouse
+
+# D5 (118 G4): severity/restart — LLM-tracing, non-critical; restart согласован с base.yml (unless-stopped)
+severity: normal
+restart: unless-stopped
+
+interfaces:
+  - healthcheck
+
+# @changes 2026-08-01 (DevPlan 116 B3 T8, U-67, D3): spool_dir → none — host-путь langfuse-data
+# удалён из provision (контейнеры не монтируют его);
+# данные живут в docker-томах (langfuse-redis-data / postgres / clickhouse).
+spool_dir: none
+
+resources:
+  limits:
+    memory: 1536M
+  reservations:
+    memory: 512M
+
+env_requires:
+  - NEXTAUTH_SECRET
+  - SALT
+  - ENCRYPTION_KEY
+  - LANGFUSE_INIT_ORG_ID
+  - LANGFUSE_INIT_PROJECT_ID
+  - CLICKHOUSE_PASSWORD

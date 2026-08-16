@@ -1,0 +1,38 @@
+# Tor configuration — managed by install-tor-proxy.sh
+# GREP_SUMMARY: tor torrc socks5 proxy template bridges obfs4 webtunnel russia
+#
+# 🔧 BRIDGES REQUIRED IN RUSSIA:
+#    Tor is blocked by RKN/ISPs — without bridges, Tor circuit will FAIL.
+#    Bridges are injected from $BRIDGES_FILE when --tor-bridges-file is passed
+#    to install-tor-proxy.sh (via bootstrap orchestrator --tor-bridges-file).
+#
+#    SHARED bridges file (all nodes):  core/bootstrap/tor/bridges.txt
+#    Per-node bridges file:            /opt/node-configs/$NODE_NAME/overlays/tor/bridges.txt
+#    Explicit override:                --tor-bridges-file /path/to/bridges.txt
+#
+#    Resolution order: 1. TOR_BRIDGES_FILE env → 2. per-node overlay → 3. shared bridges.txt
+#
+#    Bridges file format (one bridge per line, mixed transports supported):
+#      Bridge obfs4 <IP>:<PORT> <FINGERPRINT> cert=<CERT> iat-mode=0
+#      Bridge webtunnel <addr> <fingerprint> url=<URL> ver=<VER>
+#
+#    Get obfs4 bridges:     https://bridges.torproject.org/bridges?transport=obfs4
+#    Get webtunnel bridges: https://bridges.torproject.org/bridges?transport=webtunnel
+#    Or email bridges@torproject.org with subject "get transport obfs4"
+#
+#    Transport auto-detection:
+#      write_torrc() reads Bridge lines → parses 2nd token as transport name
+#      → emits ClientTransportPlugin per unique transport dynamically
+#      → unknown transport = FAIL fast (exit 1, prevents config errors)
+#      → webtunnel binary absent = degradation: drop webtunnel lines, continue obfs4-only
+#
+#    If bridges file is NOT provided, Tor will try direct connection (WILL FAIL in Russia).
+#
+SOCKSPort 127.0.0.1:9050
+Log notice file /var/log/tor/notices.log
+DataDirectory /var/lib/tor
+
+# Bridges and ClientTransportPlugin lines are injected dynamically from bridges file.
+# See install-tor-proxy.sh write_torrc() for the transport detection logic.
+# UseBridges 1
+# ClientTransportPlugin <transport> exec /usr/bin/<transport>proxy

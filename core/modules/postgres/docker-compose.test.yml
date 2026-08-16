@@ -1,0 +1,104 @@
+# GREP_SUMMARY: postgres docker-compose test override managed-volume renamed-volume cross-platform
+# STRUCTURE: ↑ overrides base.yml service.volumes + top-level volumes → postgres-data-test (no bind-mount driver_opts, Docker-managed)
+# region MODULE_CONTRACT
+## @purpose  Test environment override for postgres — replaces bind-mount volume
+##           (base.yml:117-123) with a Docker-managed volume for cross-platform compatibility.
+##           Uses a renamed volume (postgres-data-test) because Docker Compose deep-merges
+##           top-level map keys, so an override with the same volume name would retain
+##           driver_opts from base.yml.
+## @scope    Only used in test fixtures via `docker compose -f base.yml -f test.yml`.
+##           Never used in production deployments.
+## @invariants
+##   - Service volumes array is REPLACED (not merged) by Docker Compose override
+##   - Volume postgres-data-test: uses local driver without driver_opts — no bind-mount
+##   - Volume postgres-data (from base.yml) remains defined but UNUSED — no service references it
+##   - All config bind-mounts (postgresql.conf, pg_hba.conf, init/) are preserved
+##   - Docker-managed volume works on all platforms (macOS Docker Desktop, Linux, CI)
+##   - Does NOT affect production deployments (test.yml is never used in production)
+##   - When used with `docker compose down -v`, the test volume is cleaned up properly
+## @rationale
+##   Q: Why rename the volume to postgres-data-test instead of overriding in-place?
+##   A: Docker Compose merge strategy for top-level map keys (volumes) is DEEP MERGE,
+##      not REPLACE. Overriding `volumes.postgres-data: {driver: local}` would merge
+##      with base.yml's `volumes.postgres-data: {driver: local, driver_opts: {...}}`,
+##      keeping driver_opts. A renamed volume avoids this.
+##
+##   Q: Why does the services volumes array need to be overridden too?
+##   A: Because the service references the volume by name (`postgres-data:/var/lib/...`).
+##      To use postgres-data-test, we must change the volume reference in the service.
+##      Docker Compose REPLACES (not merges) the service-level volumes array, so the
+##      full list must be repeated including all config bind-mounts.
+##
+##   Q: Why not modify base.yml directly?
+##   A: base.yml uses bind-mount for production (data persists on host filesystem at
+##      /var/lib/platform/postgres-data). Only tests need the cross-platform volume.
+## @changes — CREATED: 2026-07-03 | C1: macOS bind-mount workaround for tests
+# endregion MODULE_CONTRACT
+
+services:
+  postgres:
+    container_name: postgres-test
+    restart: "no"
+    networks: !override  # DevPlan 017 W2.1 — test network isolation
+      - test-shared-db-net
+    environment:
+      # 🧐 TRAP[DECISION] · 2026-07-03 · — · POSTGRES_HOST_AUTH_METHOD=trust для тестов
+      # · Rejected: md5/scram-sha-256 (production)
+      # · Reason: pgbouncer тесты требуют беспарольного доступа к postgres.
+      # ·   pg_hba.conf в data-директории переопределяет bind-mount в /etc/postgresql/.
+      # ·   POSTGRES_HOST_AUTH_METHOD=trust — стандартный метод Docker-образа postgres.
+      # · Rev: если тесты перейдут на SCRAM-аутентификацию — удалить
+      POSTGRES_HOST_AUTH_METHOD: trust
+    volumes:
+      # PG18+ (164 W1-5): parent-mount /var/lib/postgresql (образ 18+ хранит данные
+      # в major-поддиректории 18/docker; отказывается при данных в .../data)
+      - postgres-data-test:/var/lib/postgresql
+      - wal-archive-test:/var/lib/platform/wal-archive
+      # 142 W8 (R13): абсолютный путь модуля через TEST_MODULE_DIR (см. _run_docker_smoke) —
+      # relative-пути в явных -f файлах резолвятся от project-directory (root compose), не от модуля.
+      - ${TEST_MODULE_DIR:-.}/config/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+      - ${TEST_MODULE_DIR:-.}/config/pg_hba.test.conf:/etc/postgresql/pg_hba.conf:ro
+      - ${TEST_MODULE_DIR:-.}/init:/docker-entrypoint-initdb.d:ro
+
+  pgbouncer:
+    container_name: pgbouncer-test
+    restart: "no"
+    networks: !override  # DevPlan 017 W2.1 — test network isolation
+      - test-shared-db-net
+    environment:
+      # 🔧 B3 fix (DevPlan 034): Docker Compose override replaces environment mappings,
+      # not deep-merges. base.yml DATABASE_URLS/DB_USER/DB_PASSWORD were lost in test.yml.
+      # See DevPlan 034 §Root Cause Analysis for details.
+      DATABASE_URLS: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-test-pg-pwd}@postgres:5432/platform,postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-test-pg-pwd}@postgres:5432/litellm,postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-test-pg-pwd}@postgres:5432/langfuse"
+      DB_USER: "${POSTGRES_USER:-postgres}"
+      # ⚠️ Uses :-test-pg-pwd instead of :?PG_PASSWORD_REQUIRED from base.yml.
+      # In test environment POSTGRES_HOST_AUTH_METHOD=trust — password is not required,
+      # but DATABASE_URLS must be parsable. The `:-` fallback avoids fail-fast.
+      # 🧐 TRAP[DECISION] · 2026-07-21 · — · :-test-pg-pwd vs :?PG_PASSWORD_REQUIRED
+      # · Rejected: :? (fail-fast) — would kill pgbouncer in trust-auth test env
+      # · Reason: test.yml uses trust auth, password variable may be unset.
+      # ·   :? will crash pgbouncer container. :- provides safe default.
+      # · Rev: if test auth switches to SCRAM — restore :? for PIN entry.
+      DB_PASSWORD: "${POSTGRES_PASSWORD:-test-pg-pwd}"
+      # 🧐 TRAP[DECISION] · 2026-07-03 · — · AUTH_TYPE=trust для тестов
+      # · Rejected: scram-sha-256 (production) / md5 (не работает с PGPASSWORD)
+      # · Reason: psql + PGPASSWORD отправляет пароль открытым текстом, pgbouncer
+      # ·   с AUTH_TYPE=md5 ожидает MD5-хеш. trust позволяет тестам подключаться
+      # ·   без пароля. В production используется scram-sha-256 с proper auth.
+      # · Rev: если тесты перейдут на SCRAM-аутентификацию — вернуть scram-sha-256
+      AUTH_TYPE: trust
+      # 🧐 TRAP[BUG] · 2026-07-11 · — · Pgbouncer LISTEN_PORT race condition
+      # · edoburu/pgbouncer entrypoint uses ${LISTEN_PORT:-5432}. On some environments
+      # · the variable from base.yml doesn't propagate to container env (race with
+      # · Docker Compose merge ordering). Explicit value in test.yml guarantees override.
+      LISTEN_PORT: "6432"
+
+volumes:
+  postgres-data-test:
+    driver: local
+  wal-archive-test:
+    driver: local
+
+networks:
+  test-shared-db-net:
+    external: true

@@ -1,0 +1,219 @@
+# core/check-suite.yaml
+# GREP_SUMMARY: check-suite, manifest, SoT, checks, gate-modes, xdist, diagnostic, tiers, junit, allow-no-tests
+# STRUCTURE: ┌version: 1┐ → ◇ checks[] (id → tier fix|static|pytest → cmd|cmds → gate_modes → flags) → ⎋ канонический порядок шагов gate
+# region MODULE_CONTRACT
+## @purpose  Единый SoT-манифест набора проверок платформы (DevPlan 120 §3.1, схема v1).
+##           Устраняет дрейф 3 hardcoded-списков: ci.mk gate, прежняя фаза 3,
+##           CI-workflows + инструкции. Оба executor'а (диагностический `make check` /
+##           `make check-diff` и канонический `make gate`) читают ТОЛЬКО этот манифест —
+##           дрейф невозможен конструктивно (инвариант «два executor'а одного манифеста»).
+## @scope    Схема v1: поля id, tier (fix|static|pytest), timeout, gate_modes (⊆ {fast, full,
+##           ci-docker}), cmd ИЛИ cmds (per gate-mode), diagnostic, xdist, allow_no_tests,
+##           non_blocking, junit, project_filter, docker, repair. Порядок записей =
+##           канонический порядок шагов gate (супермножество fast ∪ full ∪ ci-docker).
+## @invariants
+##   - version: 1 — bump при несовместимом изменении схемы (инвалидирует fingerprint-кэш)
+##   - id — kebab-case, уникальный; junit-пути уникальны
+##   - tier ∈ {fix, static, pytest}; timeout > 0
+##   - gate_modes ⊆ {fast, full, ci-docker}; отсутствие = только диагностика
+##   - diagnostic: default true для tier fix/static/pytest; false для lint/check-file-lines/
+##     smoke/component/predeploy-docker (диагностический прогон их не включает)
+##   - xdist: default true для tier pytest; для test_runner-команд xdist применяется
+##     внутри test_runner (Wave 1), для прямых pytest-команд — executor'ом
+##   - allow_no_tests: pytest exit 5 (0 тестов) → PASS
+##   - non_blocking: провал не роняет gate (check-file-lines)
+##   - check-manifests и ruff-check — ТОЛЬКО диагностика (в gate не входят — паритет ci.mk:
+##     check-manifests живёт в pre-commit hook, ruff — тоже)
+## @rationale DevPlan 120: манифест — единый источник правды. Закрывает дыры AC-2
+##            (check-manifests, ruff check ., gates-docker с allow_no_tests). Параметр
+##            project_filter (predeploy) — PROJECT=<name> → -k, как в ci.mk.
+## ⚠️ TRAP[DECISION] · — · gates-docker: gate_modes=[fast] (НЕ [fast, full]) — docker-гейты в full исполняются ВНУТРИ шага gates (паритет ci.mk full); отдельный шаг gates-docker с allow_no_tests нужен ТОЛЬКО fast-режиму · Rev: если full-режим решит отделять docker-гейты — добавить full в gate_modes и обновить golden
+## @changes 2026-08-02 | Created (DevPlan 120 Wave 1)
+# endregion MODULE_CONTRACT
+
+version: 1
+checks:
+  - id: pre-commit
+    cmd: make pre-commit-run
+    tier: fix
+    timeout: 120
+    gate_modes: [fast, full]
+  - id: validate
+    cmd: bash core/entrypoints/validate.sh
+    tier: static
+    timeout: 60
+    gate_modes: [fast, full]
+  - id: check-dead-code
+    cmd: bash core/entrypoints/check-dead-code.sh
+    tier: static
+    timeout: 60
+    gate_modes: [fast, full]
+  - id: static-ast
+    cmd: python3 -m core.internal.static check
+    tier: static
+    timeout: 30
+    gate_modes: [fast, full]
+    # DevPlan 163 W-C C3: AST/структурные детекторы (14), <5 s полный проход;
+    # ~20 grep-гейтов мигрированы в этот слой (AC-4)
+  - id: arch-imports
+    cmd: .venv/bin/import-linter lint --config .importlinter
+    tier: static
+    timeout: 30
+    gate_modes: [fast, full]
+    # DevPlan 163 W-D D1 (AC-5): декларативные контракты layers/forbidden/independence/acyclic
+  - id: vulture
+    cmd: .venv/bin/vulture core core/internal/static/vulture_whitelist.py --exclude .venv --min-confidence 100
+    tier: static
+    timeout: 60
+    gate_modes: [fast, full]
+    non_blocking: true
+    # DevPlan 163 W-D D4 (AC-5): advisory dead-code (whitelist registry-паттернов)
+  - id: deptry
+    # v1.0.1: --exclude '.kilo' — параллельные сессии заводят worktree'ы с собственными
+    # .venv внутри .kilo/ (план 172) — deptry сканировал их site-packages (DEP003 шум)
+    cmd: .venv/bin/deptry . --exclude .venv --exclude '.kilo'
+    tier: static
+    timeout: 60
+    gate_modes: [fast, full]
+    # DevPlan 163 W-D D4 (AC-5): blocking dep-audit (DEP001/002 ignore, DEP003 blocking)
+  - id: check-exception-patterns
+    cmd: python3 -m core.internal.static check --only exception_patterns
+    tier: static
+    timeout: 30
+    gate_modes: [fast]
+  - id: lint
+    cmd: bash core/entrypoints/validate.sh --lint
+    tier: static
+    timeout: 120
+    gate_modes: [full]
+    diagnostic: false
+  - id: doxygen-check
+    cmd: python3 core/internal/lint/doxygen_checker.py
+    tier: static
+    timeout: 30
+    sequential: true
+    gate_modes: [fast, full]
+    # ⚠️ TRAP[DECISION] · — · Doxygen-стек сохранён (177 W4 S12): контрактные теги
+    # (@purpose/@scope/@invariants/@changes) — машиночитаемая семантика для агентов,
+    # doxygen_checker — единственный валидатор их полноты; вывод = потеря AI-first
+    # контрактов. · Rev: если теги потеряют потребителей (агенты/генераторы) — вывести.
+  - id: check-file-lines
+    cmd: bash core/entrypoints/check-file-lines.sh
+    tier: static
+    timeout: 60
+    gate_modes: [full]
+    non_blocking: true
+    diagnostic: false
+  - id: check-manifests
+    cmd: python3 core/internal/scripts/manifest_driver.py check
+    tier: static
+    timeout: 60
+  - id: check-requirements
+    cmd: python3 core/internal/scripts/sync_requirements.py --pyproject pyproject.toml --output core/requirements.txt --check
+    tier: static
+    timeout: 30
+  - id: ruff-check
+    cmd: .venv/bin/ruff check .
+    tier: static
+    timeout: 60
+  - id: pyright
+    cmd: core/entrypoints/pyright-hook.sh
+    tier: static
+    timeout: 120
+    gate_modes: [fast, full]
+    # DevPlan 164 W3.5 (S8): basedpyright blocking — recommended-режим (pyrightconfig.json).
+    # v1.0.1: cmd → facade pyright-hook.sh (вердикт по grep ': error:', резолв .venv/bin →
+    # PATH; .venv/bin/basedpyright на CI-раннере не существует — pip ставит в system
+    # site-packages из-за удалённого pyvenv.cfg). Единый измеритель make fix-pyright.
+  - id: e2e-verify
+    cmd: make e2e-verify NODE=<node>
+    tier: static
+    timeout: 600
+    diagnostic: false
+  - id: gates
+    tier: pytest
+    timeout: 300
+    gate_modes: [fast, full]
+    xdist: true
+    cmds:
+      fast: pytest tests/gates/ -m "gate and not requires_docker" --timeout 300
+      full: pytest tests/gates/ -m "gate and not skip_enforcement" --timeout 300
+  - id: gates-docker
+    tier: pytest
+    timeout: 180
+    gate_modes: [fast]
+    allow_no_tests: true
+    docker: true
+    xdist: false
+    cmds:
+      fast: pytest tests/gates/ -m "gate and requires_docker"
+  - id: contract
+    cmd: python3 -m core.internal.test_runner --marker contract --junit-output tests/report-contract.xml
+    tier: pytest
+    timeout: 180
+    gate_modes: [fast, full]
+    xdist: true
+    junit: tests/report-contract.xml
+  - id: static_audit
+    tier: pytest
+    timeout: 900
+    gate_modes: [fast, full]
+    xdist: true
+    junit: tests/report-static.xml
+    cmds:
+      fast: python3 -m core.internal.test_runner --marker static_audit --junit-output tests/report-static.xml
+      full: python3 -m core.internal.test_runner --marker static_audit --junit-output tests/report-static.xml
+  - id: predeploy
+    tier: pytest
+    timeout: 180
+    gate_modes: [fast, full]
+    xdist: true
+    junit: tests/report-predeploy.xml
+    project_filter: true
+    cmds:
+      fast: pytest tests/ -m "predeploy and not requires_docker" --tb=short -rs --junitxml=tests/report-predeploy.xml
+      full: pytest tests/ -m "predeploy" --tb=short -rs --junitxml=tests/report-predeploy.xml
+  - id: predeploy-docker
+    cmd: pytest tests/ -m "predeploy and requires_docker" --tb=short -rs --junitxml=tests/report-predeploy.xml
+    tier: pytest
+    timeout: 600
+    gate_modes: [ci-docker]
+    xdist: false
+    allow_no_tests: true
+    junit: tests/report-predeploy.xml
+    diagnostic: false
+  - id: smoke
+    cmd: pytest tests/ -m "smoke" -v --tb=short -rs --junitxml=tests/report-smoke.xml
+    tier: pytest
+    # 142 W8 (R13): 600 → 900 — полный стек 23 контейнера + macOS Docker Desktop +
+    # параллельные dev-сессии; smoke стабильно укладывался в ~6 мин изолированно,
+    # под нагрузкой превышал 600s (таймаут-килл, exit 124).
+    timeout: 900
+    gate_modes: [full, ci-docker]
+    xdist: true
+    junit: tests/report-smoke.xml
+    diagnostic: false
+  - id: component
+    # DevPlan 172 W3.1: корень tests/ = только Docker-зависимые component-тесты
+    # (таксономия tests/AGENTS.md). ⚠️ TRAP[BUG] merge 173→main: glob tests/test_component_*.py
+    # НЕ раскрывается — run_cmd исполняет через shlex.split + Popen БЕЗ shell (pytest получает
+    # литеральный glob → rc=4 «file not found», ci-docker gate platform-test). Возврат к
+    # каталогу + -m "component" (канон integration-шага): результат идентичен (маркер только
+    # у test_component_{hermes,clickhouse}.py), коллекция сканирует tests/ целиком.
+    cmd: pytest tests/ -m "component" -v --tb=short -rs --junitxml=tests/report-component.xml
+    tier: pytest
+    timeout: 600
+    gate_modes: [full, ci-docker]
+    xdist: true
+    junit: tests/report-component.xml
+    diagnostic: false
+  - id: integration
+    cmd: pytest tests/ -m "integration" -v --tb=short -rs --junitxml=tests/report-integration.xml
+    tier: pytest
+    timeout: 900
+    # DevPlan 165: integration — полный hermes LLM-стек (Docker). diagnostic: false —
+    # НЕ входит в make check; запуск только явно: make check MARKER=integration
+    # (CI platform-test.yml) или --only integration. gate_modes отсутствует.
+    diagnostic: false
+    xdist: true
+    junit: tests/report-integration.xml

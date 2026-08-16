@@ -1,0 +1,4 @@
+# DevPlan 124 T2c: process-level docker-suite lock — runtime artifact, никогда не коммитится.
+# Создаётся docker-pytest-процессами (test_runner._docker_suite_lock / check_suite) при
+# прогоне docker-сьютов; gitignore исключает его из git status и fingerprint-дерева.
+.docker-suite.lock

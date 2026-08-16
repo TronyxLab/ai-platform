@@ -1,0 +1,65 @@
+# GREP_SUMMARY: fixture test-project compose nginx alpine healthcheck L1-compliant mirror-gcr no-ports
+# STRUCTURE: ┌compose manifest┐ → service test-project (mirror.gcr.io/library/nginx:alpine) → healthcheck wget → labels platform.* + limits → ⎋ fixture
+# region MODULE_CONTRACT
+## @purpose  Canonical E2E test-project compose (DevPlan 095 T18) — deterministic per Anti-Loop
+##           Note (0 parameterized). Deployed on the test-VPS via DeployOrchestrator.receive()
+##           (SCP payload → compose up -d).
+## @scope    E2E fixture compose consumed during forced-command receive tests.
+## @invariants
+##   - Service name `test-project` matches ai-platform.yaml#service
+##     (канон B1 D5/U-37: receive() использует service = project_name — phantom-read service
+##     из ai-platform.yaml УДАЛЁН; compose-сервис обязан называться как project_name)
+##   - container_name `test-project-web` — сохраняется (e2e-ассерты docker ps/inspect по имени)
+##   - image: mirror.gcr.io/library/nginx:alpine — СТАТИЧНЫЙ публичный image
+##     (DevPlan T18: "nginx:alpine" — зеркало Docker Hub от Google)
+##   - L1-комплаентность (DevPlan 176 A.2 — receive исполняет pre-deploy L1-гейт):
+##     БЕЗ ports (публикация host-порта запрещена проектам), healthcheck: + labels platform.* +
+##     deploy.resources.limits.memory+cpus — фикстура обязана ПРОХОДИТЬ pre-up L1-гейт.
+##     ⚠️ Прежний ports: ["8080:80"] удалён (M19/audit-registry: фикстура публиковала порт
+##     на 0.0.0.0; E.6-план «bind 127.0.0.1:8080» устарел — L1 запрещает ЛЮБЫЕ порты;
+##     e2e-проверка HTTP 200 переведена на docker exec внутри контейнера).
+##   - Healthcheck: busybox wget against nginx — container becomes healthy (~5-10s)
+## 🧐 TRAP[DECISION] · 2026-07-31 · HI · Статичный mirror-образ вместо nginx:${IMAGE_TAG:-alpine}
+## · Rejected: (1) `nginx:${IMAGE_TAG:-alpine}` — DeployEngine тянет с IMAGE_TAG=$ref (v1.0.0) →
+## ·   тег nginx:v1.0.0 НЕ существует на Docker Hub → pull всегда падал бы;
+## ·   (2) docker.io/library/nginx:alpine — анонимный pull с datacenter-IP test-VPS упирается
+## ·   в rate limit Docker Hub (429 Too Many Requests — подтверждено на tronyx-vps 2026-07-31).
+## · Reason: mirror.gcr.io — публичный pull-through mirror без rate-limit (инвариант платформы,
+## ·   docker_registry_auth.py:16 "mirror.gcr.io is a public Google mirror — no auth required").
+## ·   Для E2E-фикстуры важен детерминированный pull, не production-схема тегов CI-образов.
+## · Rev: если deploy-пайплайн получит собственный registry с реальными тегами — вернуть
+## ·   ${IMAGE_TAG}-подстановку с ghcr.io/<org>/test-project.
+## 🧐 TRAP[DECISION] · 2026-08-16 · — · Порты убраны из e2e-фикстуры (176 A.2)
+## · Rejected: оставить ports: ["8080:80"] + gate-SKIP для e2e (SKIP_PREFLIGHT в receive) —
+## ·   обход security-гейта = та же C1 root-эскалация; HTTP-проверка через host-порт.
+## · Reason: receive теперь исполняет L1-гейт (A.2); фикстура — «легитимный проект» A.2-верификации
+## ·   и обязана проходить L1. HTTP 200 проверяется docker exec внутри контейнера (тот же
+## ·   семантический сигнал: nginx обслуживает 200; wget уже используется healthcheck'ом).
+## · Rev: если e2e потребуется реальный ingress-тест — через platform nginx proxy-net
+## ·   (не host-порт), по образцу проектов платформы.
+## @changes 2026-08-01 · B10 (QA-approved fix) — compose-сервис `web` → `test-project` (канон B1 D5:
+##           receive() резолвит service = project_name; прежнее имя `web` давало
+##           «no such service: test-project» — предсуществующая e2e-регрессия B1).
+## @changes 2026-08-16 · DevPlan 176 A.2 — ports: удалены (L1 ports-published блокирует receive);
+##           +labels platform.* +limits memory/cpus (L1-комплаентность pre-deploy гейта)
+# endregion MODULE_CONTRACT
+
+services:
+  test-project:
+    image: mirror.gcr.io/library/nginx:alpine
+    container_name: test-project-web
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1/"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          memory: "128M"
+          cpus: "0.25"
+    labels:
+      - "platform.type=backend"
+      - "platform.project=test-project"
+    restart: unless-stopped

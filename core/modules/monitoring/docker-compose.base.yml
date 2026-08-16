@@ -1,0 +1,258 @@
+# @purpose  Base compose definition for monitoring module — Prometheus + Grafana
+# GREP_SUMMARY: monitoring docker-compose prometheus grafana observability-net profiles x-logging
+# STRUCTURE: ▶ prometheus:v3.13.1 [profiles:monitoring] → observability-net → ┬─ ▶ grafana:11.6.16 [profiles:monitoring] → observability-net + proxy-net → ┐
+# region MODULE_CONTRACT
+## @purpose  Base compose definition for monitoring Docker module
+## @scope    Merged with root docker-compose.yml via include:
+## @invariants
+##   - profiles: [monitoring] — pluggability: only included when COMPOSE_PROFILES contains monitoring
+##   - Prometheus: 15d retention, file_sd_config, 512M memory limit
+##   - Grafana: Alpine-based, provisioning datasources+dashboards+alerting, 256M limit
+##   - Networks declared as external: true — pre-created by deploy-modules.sh
+##   - All TRAP comments from root compose preserved
+##   - GF_SECURITY_ADMIN_PASSWORD requires explicit setting and does NOT inherit HERMES_DASHBOARD_PASSWORD
+## @rationale Profiles enable selective startup via `make up MODULES=monitoring`
+# endregion MODULE_CONTRACT
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
+services:
+
+  # ⚠️ TRAP[BUG] · 2026-07-18 · P2 · LITELLM_MASTER_KEY envsubst — init-контейнер
+  # · Symptom: после `docker compose up` трекаемый файл config/prometheus.yml обнуляется (0 байт).
+  # ·   Лог init-контейнера: «sed: no previous regexp», при этом печатает «generated» (ошибка проглочена).
+  # · Root (compose-interpolation): sed-паттерн 's/${LITELLM_MASTER_KEY}/...' НЕ экранирован
+  # ·   для compose-интерполяции — compose подставляет пустое значение → s//.../ → «no previous regexp».
+  # ·   Нужен $$ для literal-паттерна. Также нет `set -eu` — sed падает, redirect уже обнулил файл,
+  # ·   контейнер выходит с 0. Архитектурный дефект: init пишет в bind-mount ./config:rw ПОВЕРХ
+  # ·   трекаемого файла — dirty working tree.
+  # · Fix v2:
+  # ·   1. $$-escape compose-интерполяции в sed-паттерне
+  # ·   2. set -eu для fail-fast
+  # ·   3. Генерация в Docker named volume (prometheus-config-gen), а НЕ в ./config
+  # ·   4. mount ./config:/config:ro (read-only, не перезаписывает трекаемый файл)
+  # ·   5. Prometheus читает сгенерированный конфиг из named volume
+  # · Fix v3 (2026-07-24): LITELLM_METRICS_TOKEN → LITELLM_MASTER_KEY — единый токен для Prometheus→LiteLLM /metrics auth
+  # · Prevention: gate-тест test_prometheus_config_no_unexpanded_vars проверяет отсутствие literal placeholder'ов
+  # ── Prometheus Config Init (envsubst) ──────────────────────────────────────
+  prometheus-config-init:
+    image: busybox:1.38.0@sha256:1cfa4e2b09e127b9c4ed43578d3f3c18e7d44ea47b9ea98475c0cbe9086525f8
+    profiles: [monitoring]
+    container_name: prometheus-config-init
+    restart: "no"
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          pids: 256
+    entrypoint: ["/bin/sh", "-ceu"]
+    command:
+      - |
+        echo "[IMP:7][prometheus-config-init] Generating prometheus.yml from template..."
+        # Template — единственный источник конфига; дубль prometheus.yml не должен
+        # возвращаться (гейт test_gate_env_chain.py).
+        sed 's/$${LITELLM_MASTER_KEY}/'"${LITELLM_MASTER_KEY}"'/g' \
+          /config/prometheus.yml.tmpl > /generated/prometheus.yml
+        # 170 W12 C5: статический platform-alerts.yml → host rules dir (prometheus glob
+        # подхватывает *-alerts.yml); idempotent copy (cp -f)
+        cp -f /config/platform-alerts.yml /rules/platform-alerts.yml
+        echo "[IMP:9][prometheus-config-init] prometheus.yml generated + platform-alerts.yml delivered"
+    environment:
+      LITELLM_MASTER_KEY: "${LITELLM_MASTER_KEY:-}"
+    volumes:
+      - ./config:/config:ro
+      - prometheus-config-gen:/generated:rw
+      - ${PROMETHEUS_RULES_DIR:-/opt/prometheus/rules}:/rules:rw
+
+  # ── Prometheus (Metrics TSDB) ─────────────────────────────────────────────
+  # region service:prometheus
+  prometheus:
+    # 🧐 TRAP[DECISION] · 2026-07-12 · — · Prometheus upgraded v3.13.0 → v3.13.1 (BulkV0)
+    # · v3.13.1 is latest patch — no breaking changes
+    # · CHANGELOG: no breaking changes for our config (file_sd, static_configs, rules)
+    # · Rev: on next major upstream release — reevaluate pin
+    image: prom/prometheus:v3.13.2@sha256:1147c92841726a6fef55fe6124491d6f85480f8de204f7d420304ca5bbd0a8f7
+    container_name: prometheus
+    profiles: [monitoring]
+    restart: unless-stopped
+    stop_signal: SIGTERM
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
+          pids: 256
+        reservations:
+          memory: 256M
+    logging: *default-logging
+
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+
+    command:
+      - "--config.file=/etc/prometheus/generated/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
+      - "--web.console.templates=/usr/share/prometheus/consoles"
+
+    volumes:
+      - prometheus-config-gen:/etc/prometheus/generated:ro
+      - prometheus-data:/prometheus
+      - ${PROMETHEUS_TARGETS_DIR:-/opt/platform/prometheus-targets}:/prometheus-targets:ro
+      # 170 W12 C5 (drift-фикс): контейнерный путь = rule_files glob
+      # "/opt/prometheus/rules/*-alerts.yml" (прежний mount давал /opt/platform/prometheus-rules —
+      # правила молча не загружались). Host-сторона — единый SoT PROMETHEUS_RULES_DIR.
+      - ${PROMETHEUS_RULES_DIR:-/opt/prometheus/rules}:/opt/prometheus/rules:ro
+
+    networks:
+      - observability-net
+
+    tmpfs:
+      - /tmp:size=64M,noexec,nosuid
+
+    depends_on:
+      prometheus-config-init:
+        condition: service_completed_successfully
+
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+  # endregion service:prometheus
+
+  # ── Grafana (Dashboards) ──────────────────────────────────────────────────
+  # 🧐 TRAP[DECISION] · 2026-07-01 · — · Datasources simplified, dashboards disabled
+  # · Rejected: Full datasources.yml with uid/editable/jsonData/derivedFields
+  # · Reason: Grafana 11+ rejects provisioning with "data source not found" when
+  # ·   datasources.yml has uid/editable/jsonData fields conflicting with grafana.db.
+  # ·   Minimal datasources.yml (name+type+url only) works. Dashboards also cause
+  # ·   provisioning failure — root cause TBD, disabled for now.
+  # · Rev: Restore dashboards and full datasource config when provisioning format
+  # ·   is fixed for Grafana 11+. Re-enable GF_PROVISIONING_DASHBOARDS_PATH
+  # ·   and dashboard volume mounts.
+  # · ✅ RESOLVED 2026-07-08: Dashboards re-enabled. GF_PROVISIONING_DASHBOARDS_PATH + 7
+  # ·   dashboard mounts uncommented. Fixed by validating dashboard JSON & provisioning
+  # ·   format against Grafana 11.6.16.
+  # region service:grafana
+  grafana:
+    # 🧐 TRAP[DECISION] · 2026-07-07 · — · Grafana upgraded 11.5.1 → 11.6.16 (TASK-2)
+    # · 11.6.16 is latest stable (Alpine-based default variant)
+    # · Healthcheck uses wget (Alpine-compatible), provisioning format unchanged
+    # · Rev: on next major upstream release — reevaluate pin
+    image: grafana/grafana:13.1.3@sha256:e27e68cfd5795c1bea54950766078a02e84dfa3bafe0a4d0e5382f713dfd8e4e
+    container_name: grafana
+    profiles: [monitoring]
+    restart: unless-stopped
+    stop_signal: SIGTERM
+    # 141 B14: host.docker.internal → host-gateway (Linux-нода; Docker Desktop резолвит сам)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    deploy:
+      resources:
+        limits:
+          # 164 W1-5: 256M→512M — Grafana 13 OOM-kill (rc=137) под 256M
+          # (миграции unified storage + alerting provisioning на старте)
+          memory: 512M
+          cpus: "0.5"
+          pids: 256
+    logging: *default-logging
+
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
+
+    environment:
+      # Admin credentials — unified with platform auth (same user as Hermes Dashboard)
+      GF_SECURITY_ADMIN_USER: "${GF_SECURITY_ADMIN_USER:-admin@${PLATFORM_DOMAIN:-ai-platform.local}}"
+      GF_SECURITY_ADMIN_PASSWORD: "${GF_SECURITY_ADMIN_PASSWORD:-}"
+
+      # Provisioning paths
+      GF_PROVISIONING_DATASOURCES_PATH: "/etc/grafana/provisioning/datasources"
+      GF_PROVISIONING_DASHBOARDS_PATH: "/etc/grafana/provisioning/dashboards"
+
+      # Server config
+      GF_SERVER_HTTP_PORT: "3000"
+      # PLATFORM_DOMAIN:-localhost — compose-level fallback (легитимный, DevPlan 117 D33):
+      # runtime PLATFORM_DOMAIN всегда задаётся через platform-env.yaml (SoT env_defaults).
+      GF_SERVER_DOMAIN: "grafana.${PLATFORM_DOMAIN:-localhost}"
+      GF_SERVER_ROOT_URL: "https://grafana.${PLATFORM_DOMAIN:-localhost}"
+
+      # Disable Grafana Analytics
+      GF_INSTALL_PLUGINS: ""
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+
+      # Allow embedding in iframe (Hermes dashboard panels)
+      GF_SECURITY_ALLOW_EMBEDDING: "true"
+
+      # Telegram alerting — contact-points.yml читает эти env vars.
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
+      TELEGRAM_CHAT_ID_CRITICAL: "${TELEGRAM_CHAT_ID_CRITICAL:-}"
+      TELEGRAM_CHAT_ID_WARNING: "${TELEGRAM_CHAT_ID_WARNING:-}"
+
+      # ⚠️ TRAP[BUG] · 2026-08-06 · P1 · Ночная сессия 141 — telegram из контейнера без tor
+      # · Symptom: alertmanager «Notify for alerts failed: context deadline exceeded» —
+      # ·   api.telegram.org НЕДОСТУПЕН напрямую с ноды (000), контейнер не имел прокси.
+      # · Root: секреты несут TELEGRAM_PROXY_URL=127.0.0.1:8118 (host-уровень), но compose
+      # ·   его не пробрасывал; внутри контейнера 127.0.0.1 = сам контейнер.
+      # · Fix: docker-уровневый прокси host.docker.internal:8118 (host tor/privoxy) для grafana.
+      # · Rev: если api.telegram.org станет доступен напрямую — прокси можно убрать.
+      # ⚠️ TRAP[BUG] 141 B15: прокси ТОЛЬКО для telegram; datasource-запросы (prometheus/loki)
+      #   шли через privoxy → 503 Forwarding failure → DatasourceError-шторм.
+      #   NO_PROXY покрывает внутренние сервисы + домены платформы (прямые запросы).
+      TELEGRAM_PROXY_URL: "http://host.docker.internal:8118"
+      HTTP_PROXY: "${HTTP_PROXY:-http://host.docker.internal:8118}"
+      HTTPS_PROXY: "${HTTPS_PROXY:-http://host.docker.internal:8118}"
+      NO_PROXY: "${NO_PROXY:-localhost,127.0.0.1,.local,postgres,pgbouncer,redis,clickhouse,litellm,langfuse,minio,grafana,prometheus,loki,nginx,node-exporter,cadvisor,hermes-agent,status-page,backup-cron,nginx-prometheus-exporter,redis-exporter,postgres-exporter}"
+      no_proxy: "${NO_PROXY:-localhost,127.0.0.1,.local,postgres,pgbouncer,redis,clickhouse,litellm,langfuse,minio,grafana,prometheus,loki,nginx,node-exporter,cadvisor,hermes-agent,status-page,backup-cron,nginx-prometheus-exporter,redis-exporter,postgres-exporter}"
+
+    volumes:
+      # 🧐 TRAP[DECISION] · 2026-07-21 · — · project-template.json НЕ монтируется сюда (template, а не dashboard)
+      # · Rejected: прямой mount в provisioning path (Grafana пытается импортировать UID с $PROJECT → $ illegal в UID regex)
+      # · Reason: template рендерится только через on-project-deploy.sh → /opt/grafana/provisioning/dashboards/
+      # · Rev: если появится другой template с UID без спецсимволов — можно пересмотреть
+      - grafana-data:/var/lib/grafana
+      - ./config/grafana/datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro
+      - ./config/grafana/dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml:ro
+      - ./config/dashboards/ai-overview.json:/etc/grafana/provisioning/dashboards/ai-overview.json:ro
+      - ./config/dashboards/infrastructure.json:/etc/grafana/provisioning/dashboards/infrastructure.json:ro
+      - ./config/dashboards/llm-usage-breakdown.json:/etc/grafana/provisioning/dashboards/llm-usage-breakdown.json:ro
+      - ./config/dashboards/logs-incident-inspector.json:/etc/grafana/provisioning/dashboards/logs-incident-inspector.json:ro
+      - ./config/dashboards/dora-ci-cd.json:/etc/grafana/provisioning/dashboards/dora-ci-cd.json:ro
+      - ./config/dashboards/clickhouse.json:/etc/grafana/provisioning/dashboards/clickhouse.json:ro
+      - ./config/dashboards/redis.json:/etc/grafana/provisioning/dashboards/redis.json:ro
+      - ./config/alerting:/etc/grafana/provisioning/alerting:ro
+
+    networks:
+      - observability-net
+      - proxy-net
+
+    healthcheck:
+      # ⚠️ TASK-9 · 2026-07-03 · Alpine: curl → wget (busybox wget in alpine image, curl absent)
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+    depends_on:
+      prometheus:
+        condition: service_healthy
+  # endregion service:grafana
+
+networks:
+  observability-net:
+    external: true
+    name: observability-net
+  proxy-net:
+    external: true
+    name: proxy-net

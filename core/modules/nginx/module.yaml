@@ -1,0 +1,49 @@
+# GREP_SUMMARY: nginx docker reverse-proxy tls-termination module
+# STRUCTURE: ▶ module:nginx → container:nginx:1.28-alpine → proxy-net + observability-net → ┐
+# region MODULE_CONTRACT
+## @purpose  nginx reverse proxy — TLS termination, subdomain routing, auth for all platform services
+## @scope    Managed as Docker container (install_type: docker), NOT systemd
+## @invariants
+##   - install_type: docker — managed by compose, NOT systemd
+##   - Ports: 80 (HTTP) + 443 (HTTPS TLS) — defined in docker-compose.base.yml
+##   - Runs as Docker container on proxy-net + observability-net
+##   - Healthcheck: nc -z localhost 80 (liveness), curl HTTP (deep)
+## @rationale Converted from system (apt) to Docker module — unified Docker lifecycle across all modules
+# endregion MODULE_CONTRACT
+
+name: nginx
+install_type: docker
+description: "Reverse proxy — TLS termination, subdomain routing, auth"
+
+depends_on: []
+
+# D5 (118 G4): severity/restart/resources/env_requires — reverse proxy, critical
+# (TLS-терминация и маршрутизация ВСЕХ сервисов — deploy failure блокирует node-update);
+# restart согласован с base.yml (unless-stopped); resources — limits 256M из base.yml;
+# env_requires: [] — секреты не требуются (PLATFORM_DOMAIN передаётся через env_shared)
+severity: critical
+restart: unless-stopped
+
+interfaces:
+  - healthcheck
+  - deploy-hook
+
+env_shared:
+  PLATFORM_DOMAIN: "${PLATFORM_DOMAIN}"
+
+resources:
+  limits:
+    memory: 256M
+
+env_requires: []
+
+spool_dir: none  # reverse proxy — no persistent data (stateless)
+
+# region HOOKS
+## @purpose  Module hooks invoked by project deploy lifecycle phases.
+##           Each key = lifecycle event, value = script path relative to module directory.
+##           Simple string format for compatibility with _trigger_deploy_hooks().
+##           See nginx_reload_hook.sh for implementation.
+hooks:
+  on_project_deploy: nginx_reload_hook.sh
+# endregion HOOKS

@@ -1,0 +1,45 @@
+# GREP_SUMMARY: dependabot github-actions pip python weekly automated-updates D-134-L3
+# STRUCTURE: ┌weekly schedule┐ → ◇ scan GHA workflows + pip requirements → ○ check version bumps → ⊕ create PR → ⎋ exit
+# region MODULE_CONTRACT
+## @purpose  Automated dependency updates for GitHub Actions + Python (pip) via Dependabot
+## @scope    Scans all workflow files in / for action version bumps + core/requirements.txt
+##           (GENERATED из pyproject.toml) for Python package updates
+## @invariants
+##   - Weekly schedule: Monday 09:00 MSK (Europe/Moscow)
+##   - Max 5 open PRs at once per ecosystem
+##   - Commit message prefix: "chore(scope)"
+##   - pip ecosystem: directory / (scans core/requirements.txt via pyproject.toml)
+## @rationale
+##   SHA-pinned actions need regular updates to stay current with security patches.
+##   Dependabot automates this while keeping PR volume manageable (5 limit).
+##   Weekly cadence matches typical GHA + PyPI release cycle.
+##   D-134-L3 (DevPlan 145 W4): pip ecosystem added — proactive Python CVE updates
+##   (параллельно pip-audit в security-scan.yml — dependabot предлагает, pip-audit блокирует).
+## @changes 2026-08-11 | DevPlan 145 W4 D-134-L3 — added pip ecosystem
+# endregion MODULE_CONTRACT
+
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Europe/Moscow"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Europe/Moscow"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore"
+      include: "scope"

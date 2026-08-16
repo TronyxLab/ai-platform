@@ -1,0 +1,211 @@
+# @purpose  Base compose definition for hermes-agent — official image with dashboard, gateway, Tor proxy
+# GREP_SUMMARY: hermes-agent docker-compose official-image dashboard gateway basic-auth proxy-net healthcheck
+# STRUCTURE: ▶ official-image → dashboard:9119 → gateway:8642 → proxy-net + hermes-agent-net → ┘
+# region MODULE_CONTRACT
+## @purpose  Base compose definition for hermes-agent — uses official nousresearch/hermes-agent image with web dashboard
+## @scope    Phase 04: AI agent with web dashboard (port 9119), API gateway (port 8642); networks proxy-net + hermes-agent-net + observability-net
+## @invariants
+  ##   - Image: ghcr.io/tronyxlab/hermes-agent-context:latest (context overlay, extends platform base, adds Telegram config + skills)
+##   - Dashboard port 9119: bound to localhost (127.0.0.1) — nginx reverse proxy on host
+##   - API port 8642: bound to localhost (127.0.0.1) — for Hermes Desktop remote connectivity
+##   - restart: unless-stopped — per Hermes recommendation (not always, allows controlled stop)
+##   - stdin_open + tty: true — Hermes requires TTY allocation (even in detached mode)
+##   - Networks: proxy-net + hermes-agent-net + observability-net — all external:true
+##   - Data volume: /opt/data mapped to /var/lib/platform/hermes-agent/data on host
+##   - Docker socket: read-only, for container uptime monitoring
+##   - Dashboard auth: Basic Auth via secrets.env (HERMES_DASHBOARD_BASIC_AUTH_USERNAME/PASSWORD)
+##   - Resource limits: memory 1G — intentional (AR3 cancelled: limits protect host from OOM)
+##   - Container name: hermes-agent (matching existing healthchecks and service references)
+## @rationale Official NousResearch image includes full web dashboard (FastAPI + React SPA),
+##           replacing the earlier custom stdlib-only fallback server.
+##           Loopback-only port binding ensures dashboard not publicly exposed without nginx auth.
+## 🧐 TRAP[DECISION] · 2026-07-03 · — · Cross-compose depends_on not supported
+## ·   hermes-agent depends on postgres (session storage) and litellm (LLM proxy).
+## ·   These services are in DIFFERENT compose files (postgres/compose.yaml and
+## ·   observability/docker-compose.base.yml). Docker Compose does NOT support
+## ·   depends_on across compose files — each compose file is an independent deployment unit.
+## ·   Rejected: depends_on with condition: service_healthy in this compose file
+## ·   Reason: cross-compose dependency resolution is not implemented in Docker Compose.
+## ·   Startup ordering is enforced by deploy-modules.sh via topological sort of module.yaml
+## ·   depends_on chains, deploying in groups: G1 (postgres+redis) → G2 (observability) →
+## ·   G3 (hermes-agent). See deploy-modules.sh lines 773-817 for parallel group logic.
+## ·   Rev: If Docker Compose adds cross-file depends_on in a future version, adopt it here.
+# endregion MODULE_CONTRACT
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
+services:
+  hermes-agent:
+    # 🧐 TRAP[DECISION] · 2026-07-06 · — · Context overlay image (L2)
+    # ·   Image: ghcr.io/tronyxlab/hermes-agent-context:latest (context overlay image with Telegram + skills).
+    # ·   Architecture: L0 (nousresearch/hermes-agent:v2026.7.1, upstream) →
+    # ·   Rev: if L2 build CI pipeline changes or upstream base image format changes
+    # ·   L1 (hermes-agent-base, platform base) →
+    # ·   L2 (ghcr.io/tronyxlab/hermes-agent-context:latest, context overlay with Telegram + skills).
+    # ·   L1 built by build-hermes-images.sh build-platform from build/Dockerfile.
+    # ·   L2 built by tronyx-lab/platform CI from modules/hermes-agent/Dockerfile.
+    # ·   ⚠️ 2026-07-21: Added build: section for fallback when GHCR image unavailable.
+    # ·   Previously: "No build section — context overlay pre-built in tronyx-lab CI, never built locally."
+    # ·   Revision: VPS must be able to rebuild hermes-agent from source when GHCR image
+    # ·   is absent (VPS recreation, registry outage, disaster recovery).
+    # 🧐 TRAP[DECISION] · 2026-07-07 · — · Layer naming: L0/L1/L2 matching AGENTS.md canonical notation
+    # · AGENTS.md: L0 (upstream), L1 (platform base), L2 (context overlay)
+    # · Previously this file used "Layer 1/2/3" which was off-by-one vs AGENTS.md
+    # · Fix: aligned to L0/L1/L2 exactly matching AGENTS.md canonical layer naming
+    # · Rev: if AGENTS.md layer notation changes
+    # ⚠️ W7 fix: versioned tag (was float tag). Change CONTEXT_IMAGE in .env to upgrade.
+    # ⚠️ W7 fix: versioned tag (was float tag). Change CONTEXT_IMAGE in .env to upgrade.
+    # ⚡ TRAP[DECISION] · 2026-08-03 · — · CONTEXT_IMAGE default = SoT (DevPlan 122 T4)
+    # · Rejected: fallback latest@sha256:dd36… (скрытый второй пин — расходился с SoT v2026.7.1)
+    # · Reason: единый источник тега — platform-infra.yaml env_defaults.CONTEXT_IMAGE
+    # ·   (parity-гейт test_gate_image_tag_form). Digest-pin вернётся, когда CI начнёт
+    # ·   публиковать v2026.x.y@sha256:… (см. TRAP[PERF] ниже — Rev-условие живо).
+    # · Rev: при появлении digest-пинов от CI — переключить default на tag@digest.
+    # ⚡ TRAP[PERF] · 2026-07-18 · >0 · hermes-agent-context — no digest pin (временно)
+    # · Root: context overlay image has no versioned tag in ghcr.io; tag@digest pinned
+    # ·   below. Update digest when CI pushes new overlay image.
+    # · 2026-08-01 (B3 T7, U-60): CI pushes versioned tags (см. tag-политику T7) —
+    # ·   при появлении версии v2026.x.y переключить default на версионный тег@digest.
+    # ·   Default image НЕ меняется в этой волне (digest-pin — канон прод-дефолта).
+    # · Rev: when CI pipeline pushes versioned tags (e.g. v2026.7.2), switch to tag@digest.
+    image: ${CONTEXT_IMAGE:-ghcr.io/tronyxlab/hermes-agent-context:latest@sha256:0105cd5f9ff969b2f6aff035e7e4ff7ec0677546667616423ac2dd6cc690e986}
+    # 🧐 TRAP[DECISION] · 2026-07-11 · — · Platform pin: linux/amd64 for cross-platform compatibility
+    # · Hermes-agent upstream image (nousresearch/hermes-agent:v2026.7.1) and context overlay
+    # · (ghcr.io/tronyxlab/hermes-agent-context:latest) are built for x86_64 only.
+    # · Rev: If ARM64 native images become available, consider conditional platform
+    # · On Apple Silicon (ARM64) macOS, Docker Desktop uses QEMU emulation when platform
+    # · is explicitly set to linux/amd64. Without this, Docker fails with:
+    # ·   "no matching manifest for linux/arm64/v8 in the manifest list entries"
+    # · On Linux x86_64, platform: linux/amd64 is native — no performance impact.
+    # · Rejected: multi-arch build (buildx) — overkill; QEMU emulation is sufficient
+    # ·   for local dev smoke tests. CI always runs on x86_64 native.
+    platform: linux/amd64
+    # ⚠️ TRAP[DECISION] · 2026-07-21 · — · build: section for fallback when GHCR image unavailable
+    # · Previously: "No build section — context overlay pre-built in tronyx-lab CI, never built locally"
+    # · Revision: VPS must be able to rebuild hermes-agent from source when GHCR image is absent
+    # ·   (e.g., after VPS recreation, registry outage, or disaster recovery).
+    # · build: section uses L1 base image (hermes-agent-base:latest) — must exist locally
+    # ·   (deploy-modules.sh ensures L1 via pull from GHCR or local build before compose build).
+    # · context: ${PLATFORM_ROOT:-/opt/platform} — full platform source tree for L2 Dockerfile
+    # · Rev: if build-from-source becomes unreliable on low-resource VPS, revert to registry-only
+    build:
+      context: ${PLATFORM_ROOT:-/opt/platform}
+      dockerfile: core/modules/hermes-agent/context/Dockerfile
+      args:
+        CONTEXT: ${CONTEXT:-test}
+    container_name: hermes-agent
+    profiles: [hermes-agent]
+    restart: unless-stopped
+    stop_grace_period: 30s
+    stdin_open: true
+    tty: true
+
+    # 🧐 TRAP[DECISION] · 2026-07-16 · — · AR3 cancelled — resource limits intentional
+    # · Previously: NO resource limits (AR3 rule from 00 §15, owner verdict Q2a)
+    # · Decision: limits protect host from OOM — remain in place
+    # · Rev: if OOM becomes issue for this module, consider adjusting limits
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          pids: 256
+    logging: *default-logging
+
+    # [IMP:9][hermes-agent-compose] Gateway mode — runs as daemon instead of CLI
+    command: gateway run
+
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    # [IMP:9][hermes-agent-compose] Dashboard bound to localhost only. Host:9119→container:9119 (dashboard port).
+    # nginx on host proxies to localhost:9119; 8642 reserved for Hermes Desktop remote connectivity.
+    ports:
+      - "127.0.0.1:${HERMES_DASHBOARD_PORT:-9119}:9119"
+      - "127.0.0.1:${HERMES_DESKTOP_PORT:-8642}:8642"
+
+    environment:
+      # Dashboard
+      HERMES_DASHBOARD: "1"
+      HERMES_DASHBOARD_HOST: "${HERMES_DASHBOARD_HOST:-0.0.0.0}"
+      # HERMES_DASHBOARD_INSECURE is NOT set — dashboard always behind Basic Auth (ai-platform.yaml §security)
+      HERMES_DASHBOARD_BASIC_AUTH_USERNAME: "${HERMES_DASHBOARD_USERNAME:-admin@${PLATFORM_DOMAIN:-ai-platform.local}}"
+      HERMES_DASHBOARD_BASIC_AUTH_PASSWORD: "${HERMES_DASHBOARD_PASSWORD}"
+
+      # LLM API Keys — virtual key for LiteLLM access (provisioned at runtime by key_provisioner.py)
+      OPENAI_BASE_URL: "${OPENAI_BASE_URL:-http://litellm:4000}"
+      LITELLM_API_KEY: "${LITELLM_API_KEY:-}"
+
+      # API Server — OpenAI-compatible HTTP API on port 8642
+      # 177 W2.6: дефолт выровнен с SoT (platform-infra.yaml API_SERVER_ENABLED: "false") —
+      #   ранее `:-true` расходился с каноном; явное включение — через env/модульный .env
+      API_SERVER_ENABLED: "${API_SERVER_ENABLED:-false}"
+      API_SERVER_HOST: "${API_SERVER_HOST:-0.0.0.0}"
+      API_SERVER_PORT: "8642"
+      API_SERVER_KEY: "${API_SERVER_KEY:-}"
+
+      # Telegram Gateway
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
+      TELEGRAM_ALLOWED_USERS: "${TELEGRAM_ALLOWED_USERS:-}"
+
+      # Proxy for Telegram Bot API (Tor → Privoxy on host)
+      # ⚠️ TRAP[BUSINESS] · 2026-06-24 · HI · Tor proxy — единственный канал обхода IP-блокировки РФ
+      # ⚠️ TRAP[DECISION] · 2026-07-16 · HI · Opt-in proxy: ONLY hermes-agent declares HTTP_PROXY/HTTPS_PROXY/NO_PROXY
+      # · Rejected: adding proxy vars to all modules via env_shared (creates leak, see DRIFT-A)
+      # · Reason: hermes-agent is the only module that routes external traffic through Privoxy
+      # · Rev: if another module needs proxy — add to env_shared AND platform-env.yaml proxy.consumers
+      HTTP_PROXY: "${HTTP_PROXY:-}"
+      HTTPS_PROXY: "${HTTPS_PROXY:-}"
+      NO_PROXY: "${NO_PROXY:-localhost,127.0.0.1,.local,postgres,pgbouncer,redis,clickhouse,litellm,langfuse,minio,grafana,prometheus,loki,nginx,node-exporter,cadvisor,hermes-agent,status-page,backup-cron,nginx-prometheus-exporter,redis-exporter,postgres-exporter}"
+
+      # Agent identity
+      NODE_NAME: "${NODE_NAME:-unknown}"
+      CONTEXT: "${CONTEXT:-test}"
+
+      # Dependency health check endpoints (used by Hermes /ready endpoint)
+      POSTGRES_HOST: "${POSTGRES_HOST:-pgbouncer}"
+      POSTGRES_PORT: "${POSTGRES_PORT:-6432}"
+      REDIS_HOST: "${REDIS_HOST:-redis}"
+      REDIS_PORT: "${REDIS_PORT:-6379}"
+      LITELLM_HEALTH_URL: "${LITELLM_HEALTH_URL:-http://litellm:4000/health/liveliness}"
+      DEPENDENCY_CHECK_TIMEOUT: "${DEPENDENCY_CHECK_TIMEOUT:-2.0}"
+
+    volumes:
+      # [IMP:9][hermes-agent-compose] Persistent state (sessions, skills, config)
+      - hermes-data:/opt/data:rw
+
+      # 🧐 TRAP[DECISION] · 2026-08-13 · HI · docker.sock НЕ маунтится в hermes-agent (host-root вектор)
+      # · Rejected: socket-proxy (tecnativa/docker-socket-proxy CONTAINERS=1 read-only) — оркестрация
+      # ·   контейнеров агентом не требуется, платформенные каналы (deploy/converge) её заменяют
+      # · Reason: :ro на unix-сокете не блокирует API; прямой доступ = host-root вектор
+      # · Rev: если агенту понадобятся docker-операции — вернуть через socket-proxy, НЕ напрямую
+
+    networks:
+      - proxy-net
+      - hermes-agent-net
+      - observability-net
+
+    # [IMP:8][hermes-agent-compose] LIVENESS healthcheck via dashboard HTTP endpoint
+    # [IMP:8][hermes-agent-compose] Optimized: start_period 30s→20s, interval 30s→15s (TASK-4)
+    healthcheck:
+      test: ["CMD", "curl", "http://127.0.0.1:9119/"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 15s  # 20→15s: standardized per DevPlan 083 (default)
+
+    # [IMP:8][hermes-agent-compose] Resource limits: 1G — intentional (limits protect host from OOM)
+
+networks:
+  proxy-net:
+    external: true
+    name: proxy-net
+  hermes-agent-net:
+    external: true
+    name: hermes-agent-net
+  observability-net:
+    external: true
+    name: observability-net

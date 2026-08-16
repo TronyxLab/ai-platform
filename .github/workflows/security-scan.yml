@@ -1,0 +1,145 @@
+# GREP_SUMMARY: security-scan trivy pip-audit gitleaks vulnerability-scan L1-L2-images requirements severity-gate HIGH D-134-L3
+# STRUCTURE: on:push(main)+PR+dispatch → job(security: checkout → setup-gitleaks → gitleaks detect → trivy fs + trivy image-dummy → pip-audit requirements) → ⎋ SARIF upload + severity gate
+# region MODULE_CONTRACT
+## @purpose  Security vulnerability scanning (D-134-L3, DevPlan 145 W4): trivy filesystem scan
+##           (L1/L2 образы через Dockerfile-анализ) + pip-audit (requirements.txt) на push/PR в main.
+##           Severity gate: HIGH+ блокирует. Супрессия CVE — ТОЛЬКО через `.trivyignore`
+##           в корне репо (DevPlan 171 W3.8: файл создаётся вместе с первой записью;
+##           формат строки: CVE-ID + причина + Rev-дата — комментарий в той же строке).
+##           W3 T3.4: + gitleaks secret-scan (composite setup-gitleaks, exit 1 на finding) —
+##           security-scan становится единой точкой CI-детекции утечек секретов.
+## @scope    Push/PR-гейт для main-ветки. НЕ заменяет platform-gate-fast (functional gate) —
+##           это security-overlay (vulnerability + secret detection only).
+## @invariants
+##   - trivy fs . — сканирует репозиторий (Dockerfiles, config, code) на известные CVE
+##   - pip-audit — сканирует core/requirements.txt (GENERATED из pyproject.toml) на PyPI CVE
+##   - gitleaks — secret-scan через composite setup-gitleaks (SoT v8.30.1, .gitleaks.toml);
+##     `gitleaks git --no-banner -v` — канонический инвойкейшн (deploy-project.yml L1)
+##   - Severity gate: HIGH,CRITICAL → exit 1 (block); MEDIUM,LOW → warning (continue)
+##   - Gitleaks finding → exit 1 (block) — детекция утечки секрета блокирует merge
+##   - SARIF upload → GitHub Security tab (code scanning alerts)
+##   - Никаких секретов/токенов в workflow — trivy/pip-audit/gitleaks работают offline с публичными DB
+## @rationale D-134-L3: L4-детекция (S8 security_posture) реализована, но L3 (CI vulnerability scan)
+##            отсутствовала. trivy + pip-audit закрывают gap: CVE в зависимостях (pip) и конфигах/образах
+##            (trivy fs). dependabot.yml (pip ecosystem) — параллельный канал proactive updates.
+##            W3 T3.4 (Protection Gaps): gitleaks был только в pre-commit/локально и в
+##            deploy-project.yml L1 — security-scan.yml (главный security-гейт) его не имел;
+##            утечка секрета проходила CI, если pre-commit был пропущен (--no-verify).
+## @changes 2026-08-11 | DevPlan 145 W4 D-134-L3 — Created (trivy fs + pip-audit)
+## @changes 2026-08-12 | DevPlan 160 W3 T3.4 — + gitleaks setup + detect (composite SoT, exit 1)
+# endregion MODULE_CONTRACT
+
+name: security-scan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write  # upload-sarif (GHAS); приватный репо без GHAS → шаг non-blocking (v1.0.1 round 7)
+
+jobs:
+  security:
+    name: Security scan (trivy + pip-audit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      # ─── Step 1: Checkout ─────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      # ─── Step 2: Setup gitleaks (composite SoT, v8.30.1) ───────────────
+      # Тот же механизм, что push-gate/platform-test/deploy-project L1:
+      # composite action ./.github/actions/setup-gitleaks (кэш + install).
+      - name: Setup gitleaks (composite SoT)
+        uses: ./.github/actions/setup-gitleaks
+
+      # ─── Step 3: Gitleaks secret scan (W3 T3.4 — exit 1 на finding) ──
+      # Канонический инвойкейшн `gitleaks git --no-banner -v` (deploy-project.yml L1,
+      # practices_manifest.yaml#pins.gitleaks = v8.30.1 = setup-gitleaks default).
+      # Конфиг: .gitleaks.toml (pre-commit parity). Finding → блок (утечка секрета).
+      - name: Gitleaks secret scan (exit 1 on finding)
+        run: |
+          set -uo pipefail
+          if ! gitleaks git --no-banner -v; then
+            echo "::error::[SECURITY:GITLEAKS] secret leak detected — gitleaks scan FAILED"
+            exit 1
+          fi
+          echo "[IMP:9][gitleaks] secret scan passed"
+
+      # ─── Step 4: Setup Python (for pip-audit) ─────────────────────────
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
+      # ─── Step 5: Trivy filesystem scan (Dockerfiles, configs, code) ───
+      # trivy fs сканирует репозиторий как filesystem — детектит CVE в Dockerfile-базовых образах
+      # (L1/L2), конфигах и коде. Severity gate: HIGH+ блокирует.
+      # v1.0.1: пин 0.28.0 → v0.36.0 (0.28.0 удалён из апстрима — CI падал «unable to find
+      # version»; v0.36.0 — версия из dependabot-ветки, удалённой в Фазе 0.5; ВАЖЕН v-префикс:
+      # все теги trivy-action имеют v-префикс, @0.36.0 без v → «unable to find version»).
+      - name: Trivy filesystem scan (severity gate HIGH+)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          ignore-unfixed: true
+          format: sarif
+          output: trivy-results.sarif
+
+      # ─── Step 6: Upload Trivy SARIF to GitHub Security tab ────────────
+      # v1.0.1 (round 7): приватный репозиторий БЕЗ GitHub Advanced Security →
+      # upload-sarif падал «Resource not accessible by integration» (get-a-workflow-run)
+      # и валил ВЕСЬ security-scan. SARIF-аплоад — не gate-критерий (CVE-блок делает
+      # trivy exit-code=1 выше): continue-on-error, permissions: security-events: write
+      # оставлен — при включении GHAS аплоад заработает без правок.
+      # Rev: если включён GHAS — убрать continue-on-error (аплоад должен стать честным).
+      - name: Upload Trivy SARIF results
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy-results.sarif
+
+      # ─── Step 7: pip-audit (core/requirements.txt — GENERATED из pyproject.toml) ──
+      # pip-audit сканирует зафиксированные зависимости на PyPI CVE. core/requirements.txt —
+      # GENERATED (инвариант 11), обновляется через make generate-requirements.
+      # v1.0.1 (round 8): pip-audit 2.10 УДАЛИЛ --fail-on → severity-gate (HIGH,CRITICAL
+      # блокирует; MEDIUM/LOW — warning) реализован через -f json + jq (jq — штатный
+      # пакет ubuntu-latest runner).
+      - name: pip-audit (core/requirements.txt, fail-on high)
+        run: |
+          set -uo pipefail
+          # M5 (security hardening): пин pip-audit — сканер зависимостей сам в supply-chain.
+          pip install "pip-audit==2.10.0"
+          # M2 (security hardening): честный fail — `|| true` убран. rc=2 (ошибка сканера:
+          # нет сети/неверные аргументы) валит CI, а не даёт «зелёный» на пустом отчёте.
+          pip-audit -r core/requirements.txt -f json --desc > pip-audit-results.json
+          PIP_AUDIT_RC=$?
+          if [ "${PIP_AUDIT_RC}" -eq 2 ]; then
+            echo "::error::[SECURITY:PIP-AUDIT] scanner FAILED (rc=2) — no vulnerability data"
+            exit 1
+          fi
+          if [ ! -s pip-audit-results.json ]; then
+            echo "::error::[SECURITY:PIP-AUDIT] empty scan results — scanner produced no data"
+            exit 1
+          fi
+          jq -r '.dependencies[] | .vulns[]? | select(.severity == "HIGH" or .severity == "CRITICAL") | "\(.severity): \(.id)"' pip-audit-results.json > high-crit.txt
+          if [ -s high-crit.txt ]; then
+            echo "::error::[SECURITY:PIP-AUDIT] HIGH/CRITICAL vulnerabilities found:"
+            cat high-crit.txt
+            exit 1
+          fi
+          MED_LOW=$(jq -r '.dependencies[] | .vulns[]? | select(.severity == "MEDIUM" or .severity == "LOW") | "\(.severity): \(.id)"' pip-audit-results.json | wc -l | tr -d '[:space:]')
+          if [ "${MED_LOW:-0}" != "0" ]; then
+            echo "::warning::[SECURITY:PIP-AUDIT] ${MED_LOW} MEDIUM/LOW vuln(s) — continue (severity gate HIGH+)"
+          fi
+          echo "[IMP:9][pip-audit] severity gate HIGH+ passed (0 HIGH/CRITICAL)"

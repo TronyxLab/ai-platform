@@ -1,0 +1,50 @@
+# GREP_SUMMARY: redis module docker shared-cache-net cache-only allkeys-lfu no-persistence
+# STRUCTURE: ▶ module:redis → shared-cache-net → cache-only → allkeys-lfu → maxmemory:256mb → ┐
+# region MODULE_CONTRACT
+## @purpose  Redis shared cache instance available to all platform projects via shared-cache-net
+## @scope    Pure cache: no persistence (no AOF, no RDB), allkeys-lfu eviction at 256mb max
+## @invariants
+##   - install_type: docker — managed by compose, NOT systemd
+##   - depends_on: [] — standalone service, no platform dependencies
+##   - Network: shared-cache-net (external:true, pre-created by deploy-modules.sh) — isolated cache network
+##   - No ports exposed to host (internal network only)
+##   - restart: always — Docker policy (not manual up/down)
+##   - stop_grace_period: 10s
+##   - NO persistence: --appendonly no, --save "" (cache-only, owner verdict wave-redis 2026-07-15)
+##   - NO spool dirs or volumes: no data directory, no bind mount (cache-only)
+##   - maxmemory: 256mb with allkeys-lfu — frequency-based eviction (owner verdict wave-redis)
+##   - Resource limits: memory 256M (синхронизировано с compose)
+##   - env_requires: [] — no .env secrets required for cache-only redis
+## @rationale Owner verdict wave-redis 2026-07-15: redis is pure cache, no persistence.
+##   Separate shared-cache-net for cache services, not mixed with shared-db-net (D4).
+##   Eviction changed from allkeys-lru to allkeys-lfu for better cache efficiency.
+# endregion MODULE_CONTRACT
+
+name: redis
+install_type: docker
+description: >
+  Redis shared cache instance for all platform projects.
+  Cache-only: no persistence (no AOF, no RDB),
+  allkeys-lfu eviction at 256mb,
+  isolated shared-cache-net.
+
+depends_on: []
+
+# D5 (118 G4): severity — cache, non-critical
+severity: normal
+
+# restart: always — согласовано с docker-compose.base.yml (restart: always, DevPlan 116 B7 T8)
+restart: always
+
+interfaces:
+  - healthcheck
+
+resources:
+  limits:
+    memory: 256M
+  reservations:
+    memory: 128M
+
+env_requires: []
+
+spool_dir: none  # cache-only redis — no persistence (owner verdict wave-redis 2026-07-15)

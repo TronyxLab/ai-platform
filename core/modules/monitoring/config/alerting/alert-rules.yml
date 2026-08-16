@@ -1,0 +1,639 @@
+# GREP_SUMMARY: grafana alert rules grafana12 service-down service-down-short high-memory disk-space llm-api-errors backup-freshness backup-upload-failure wal-sync-failure psi-memory-pressure nginx-5xx telegram webhook loki memory-guard labels-name
+# STRUCTURE: ▶ 10-rules ┌ ServiceDown → CRITICAL ┐ ┌ ServiceDownShort → WARNING ┐ ┌ HighMemory → WARNING (guard limit>0, labels.name) ┐ ┌ DiskSpace → CRITICAL (mountpoint=/) ┐ ┌ LLMAPIErrors → WARNING ┐ ┌ BackupFreshness → CRITICAL (loki, no binop) ┐ ┌ BackupUploadFailure → WARNING (loki) ┐ ┌ WalSyncFailure → WARNING (loki) ┐ ┌ PsiMemoryPressure → WARNING (prometheus, 162 W4-1) ┐ ┌ Nginx5xxErrors → WARNING (loki, 162 W6-3) ┐ → Grafana-provisioning → ┘
+# region MODULE_CONTRACT
+## @purpose  10 Grafana 12 alert rules: ServiceDown, ServiceDownShort, HighMemory, DiskSpace,
+##           LLMAPIErrors, PsiMemoryPressure (Prometheus, uid: prometheus) + BackupFreshness,
+##           BackupUploadFailure, WalSyncFailure, Nginx5xxErrors (Loki, uid: loki —
+##           DevPlan 132 W5 приоритет E; PsiMemoryPressure — DevPlan 162 W4-1 validation;
+##           Nginx5xxErrors — DevPlan 162 W6-3)
+## @scope    Provisioned via GF_PROVISIONING_ALERTING_PATH; Prometheus datasource (uid: prometheus)
+##           + Loki datasource (uid: loki, provisioned в datasources.yml)
+## @invariants
+##   - Prometheus-правила используют datasource UID "prometheus"; Loki-правила — "loki"
+##     (должно совпадать с provisioning datasources.yml)
+##   - Каждое правило использует reduce+threshold expression для оценки
+##   - Contact point: Telegram Critical / Telegram Warning (provisioned в contact-points.yml,
+##     DevPlan 140 W2 D-3) — severity-routing через default notification policy
+##   - Правила идемпотентны — безопасно пере-провиженить на каждом деплое
+## @rationale Grafana 12 требует data section с datasourceUid, refId, и model.expr;
+##           classic_conditions pattern обеспечивает кросс-версионную совместимость.
+##           D5 (132): Loki-правила по бэкапам — 0 новой инфраструктуры (backup-cron логи уже
+##           в Loki через Alloy discovery.docker, compose_service="backup-cron").
+##           BackupFreshness: окно 26h > интервал дампа 24h + for: 30m (защита от ложных
+##           срабатываний при рестарте стека); failure-правила — for: 5m (анти-флаппинг).
+##           D1 (144) Loki binop-контракт: range query с бинарной операцией (< 1 / > 0) внутри
+##           expr возвращает ТОЛЬКО точки, где условие истинно → при count≥1 пустая матрица →
+##           NoData → noDataState Alerting → ложный firing. Контракт: Loki expr возвращает
+##           МЕТРИКУ (count), сравнение выполняет threshold expression (refId C, evaluator
+##           lt params [1] у backup_freshness). Все 3 состояния корректны: count=0 → firing
+##           (бэкап не работал), count≥1 → Normal, NoData → Alerting (промtail мёртв).
+##           D2 (144): аннотации HighMemory используют {{ $labels.name }} — cAdvisor
+##           экспортирует name (имя контейнера), метки container у cAdvisor-метрик НЕТ
+##           (иначе текст «no value» в каждом алерте).
+##           162 W4-1: PsiMemoryPressure — rate(node_pressure_memory_stalled_seconds_total[5m])
+##           > 0.05 («PSI memory some >5%», zram-алерт DevPlan 162 W4-1; node-exporter уже
+##           собирает node_pressure_*). noDataState OK — нет stalled-серий = нет давления.
+##           162 W6-3: Nginx5xxErrors — count_over_time(nginx access JSON status=~"5xx" [5m])
+##           gt 2 (5xx-доля; healthcheck покрывает только liveness порта, не 502). Loki
+##           expr БЕЗ binop (контракт D1) — сравнение в threshold C (gt params [2]).
+##           nginx json_combined: "status":$status — Alloy json-парсит в label status.
+##
+## RULES:
+##   1. ServiceDown:          up == 0                    for 1m   → CRITICAL
+##   2. ServiceDownShort:     up == 0                    for 15s  → WARNING
+##   3. HighMemory:           mem_usage > 90% AND limit>0 for 5m  → WARNING
+##   4. DiskSpace:            avail < 20% (mountpoint=/) for 0s   → CRITICAL
+##   5. LLMAPIErrors:         error_rate>0.1/s           for 0s   → WARNING
+##   6. BackupFreshness:      count(BACKUP COMPLETE 26h) for 30m → CRITICAL (loki, threshold lt 1, time-gate 07:00 МСК)
+##   7. BackupUploadFailure:  count(off-site NOT confirmed 24h) for 5m → WARNING (loki, threshold gt 0)
+##   8. WalSyncFailure:       count(WAL_SYNC FAIL 24h)   for 5m → WARNING (loki, threshold gt 0)
+##   9. PsiMemoryPressure:    rate(psi stalled 5m) > 0.05 for 5m → WARNING (prometheus, threshold gt 0)
+##   10. Nginx5xxErrors:      count(nginx status=~5xx 5m) for 5m → WARNING (loki, threshold gt 2)
+## @changes 2026-08-08 · DevPlan 143 W2 — HighMemory guard `and container_spec_memory_limit_bytes > 0`
+##           (контейнеры без limits → деление на 0 → +Inf → ложное firing; guard отфильтровывает серии)
+## @changes 2026-08-09 · DevPlan 144 W1/W2 — BackupFreshness expr без binop `< 1` (Loki range binop
+##           возвращает только истинные точки → пусто при count≥1 → NoData → ложный Alerting;
+##           сравнение остаётся в threshold C lt 1, noDataState Alerting сохранён);
+##           HighMemory аннотации переведены на {{ $labels.name }} (cAdvisor метка name)
+## @changes 2026-08-13 · DevPlan 161 W1 — BackupFreshness time-gate 07:00–07:59 МСК: добавлены
+##           refId D (Prometheus hour() gate, always-defined через `or vector(0)`), E (reduce),
+##           F (math $B*$E+(1-$E)*100); threshold C переключён на F. Проверка теперь раз в сутки
+##           в утреннем окне, а не непрерывно (совместно с repeat_interval 24h в contact-points.yml).
+## @changes 2026-08-13 · DevPlan 162 W4-1/W6-3 — +PsiMemoryPressure (PSI memory some >5%),
+##           +Nginx5xxErrors (nginx access JSON 5xx, loki, threshold gt 2)
+# endregion MODULE_CONTRACT
+
+apiVersion: 1
+
+groups:
+  - name: "AI Platform Alerts"
+    folder: "AI Platform"
+    interval: 30s
+    rules:
+      # ── 1. ServiceDown ───────────────────────────────────────────────────────
+      - uid: "service_down"
+        title: "Service Down"
+        condition: "C"
+        data:
+          - refId: "A"
+            datasourceUid: "prometheus"
+            model:
+              expr: "up == bool 0"
+              refId: "A"
+            queryType: ""
+            relativeTimeRange:
+              from: 120
+              to: 0
+          - refId: "B"
+            datasourceUid: "__expr__"
+            model:
+              expression: "A"
+              refId: "B"
+              reducer: "last"
+              type: "reduce"
+            queryType: ""
+            relativeTimeRange:
+              from: 0
+              to: 0
+          - refId: "C"
+            datasourceUid: "__expr__"
+            model:
+              conditions:
+                - evaluator:
+                    params: [0]
+                    type: "gt"
+                  type: "query"
+              expression: "B"
+              refId: "C"
+              type: "threshold"
+            queryType: ""
+            relativeTimeRange:
+              from: 0
+              to: 0
+        noDataState: "NoData"
+        execErrState: "Error"
+        for: "1m"
+        annotations:
+          summary: "Service {{ $labels.job }} is down on {{ $labels.instance }}"
+          description: "Prometheus target {{ $labels.instance }} (job={{ $labels.job }}) has been unreachable for over 1 minute."
+        labels:
+          severity: "critical"
+
+      # ── 2. ServiceDownShort (DevPlan 140 W2, D-4) ─────────────────────────
+      # Sub-minute покрытие падения (например postgres <1m): тот же expr up == 0,
+      # for: 15s, severity warning — анти-флаппинг critical сохранён правилом #1 (for: 1m).
+      - uid: "service_down_short"
+        title: "Service Down (Short)"
+        condition: "C"
+        data:
+          - refId: "A"
+            datasourceUid: "prometheus"
+            model:
+              expr: "up == bool 0"
+              refId: "A"
+            queryType: ""
+            relativeTimeRange:
+              from: 120
+              to: 0
+          - refId: "B"
+            datasourceUid: "__expr__"
+            model:
+              expression: "A"
+              refId: "B"
+              reducer: "last"
+              type: "reduce"
+            queryType: ""
+            relativeTimeRange:
+              from: 0
+              to: 0
+          - refId: "C"
+            datasourceUid: "__expr__"
+            model:
+              conditions:
+                - evaluator:
+                    params: [0]
+                    type: "gt"
+                  type: "query"
+              expression: "B"
+              refId: "C"
+              type: "threshold"
+            queryType: ""
+            relativeTimeRange:
+              from: 0
+              to: 0
+        noDataState: "NoData"
+        execErrState: "Error"
+        for: "15s"
+        annotations:
+          summary: "Service {{ $labels.job }} down (short)"
+          description: "Prometheus target {{ $labels.instance }} (job={{ $labels.job }}) has been unreachable for over 15 seconds."
+        labels:
+          severity: "warning"
+
+      # ── 3. HighMemory ───────────────────────────────────────────────────────
+      # DevPlan 143 W2: guard `and container_spec_memory_limit_bytes > 0` — контейнеры
+      # без deploy.resources.limits.memory не экспортируют container_spec_memory_limit_bytes
+      # (0/absent) → usage / 0 = +Inf → +Inf > 0.9 = true → ложное firing ([no value], +Inf).
+      # Guard отфильтровывает серии без лимита целиком (PromQL: деление на 0 → +Inf;
+      # `and limit > 0` убирает эти серии из результата).
+      # DevPlan 144 W4 (2026-08-09, деплой-верификация): container_memory_usage_bytes →
+      # container_memory_working_set_bytes. usage включает page cache: cAdvisor (сканирует
+      # /rootfs) показывал 473MiB usage при working_set 364MiB и лимите 512M — cache растёт
+      # до лимита, алерт оставался firing после поднятия лимитов. Working set — реальное
+      # потребление без cache (K8s-канон для OOM-оценки).
+      - uid: "high_memory"
+        title: "High Memory Usage"
+        condition: "C"
+        data:
+          - refId: "A"
+            datasourceUid: "prometheus"
+            model:
+              expr: "container_memory_working_set_bytes / container_spec_memory_limit_bytes > 0.9 and container_spec_memory_limit_bytes > 0"
+              refId: "A"
+            queryType: ""
+            relativeTimeRange:
+              from: 600
+              to: 0
+          - refId: "B"
+            datasourceUid: "__expr__"
+            model:
+              expression: "A"
+              refId: "B"
+              reducer: "last"
+              type: "reduce"
+            queryType: ""
+            relativeTimeRange:
+              from: 0
+              to: 0
+          - refId: "C"
+            datasourceUid: "__expr__"
+            model:
+              conditions:
+                - evaluator:
+                    params: [0]
+                    type: "gt"
+                  type: "query"
+              expression: "B"
+              refId: "C"
+              type: "threshold"
+            queryType: ""
+            relativeTimeRange:
+              from: 0
+              to: 0
+        noDataState: "OK"
+        execErrState: "Error"
+        for: "5m"
+        annotations:
+          # DevPlan 144 W2 (D2): {{ $labels.name }} — cAdvisor экспортирует name (имя
+          # контейнера), метки container у cAdvisor-метрик НЕТ → прежняя аннотация
+          # давала «no value» в каждом сообщении.
+          summary: "Container {{ $labels.name }} memory usage exceeds 90%"
+          description: "Memory usage for container {{ $labels.name }} on {{ $labels.instance }} is above 90% for more than 5 minutes."
+        labels:
+          severity: "warning"
+
+      # ── 4. DiskSpace ────────────────────────────────────────────────────────
+      - uid: "disk_space"
+        title: "Disk Space Low"
+        condition: "C"
+        data:
+          - refId: "A"
+            datasourceUid: "prometheus"
+            model:
+              expr: "node_filesystem_avail_bytes{mountpoint=\"/\"} / node_filesystem_size_bytes{mountpoint=\"/\"} < 0.2"
+              refId: "A"
+            queryType: ""
+            relativeTimeRange:
+              from: 600
+              to: 0
+          - refId: "B"
+            datasourceUid: "__expr__"
+            model:
+              expression: "A"
+              refId: "B"
+              reducer: "last"
+              type: "reduce"
+            queryType: ""
+            relativeTimeRange:
+              from: 0
+              to: 0
+          - refId: "C"
+            datasourceUid: "__expr__"
+            model:
+              conditions:
+                - evaluator:
+                    params: [0]
+                    type: "gt"
+                  type: "query"
+              expression: "B"
+              refId: "C"
+              type: "threshold"
+            queryType: ""
+            relativeTimeRange:
+              from: 0
+              to: 0
+        noDataState: "OK"
+        execErrState: "Error"
+        for: "0s"
+        annotations:
+          summary: "Disk space below 20% on {{ $labels.device }} ({{ $labels.mountpoint }})"
+          # 🧐 TRAP[DECISION] · 2026-08-14 · — · Диск-алерт: ratio 0.2 (20%) вместо абсолютного 15G (план 164) · Rejected: фиксированный порог 15G · Reason: переменный размер диска на VPS — процент адаптивен к железу; закрывает DRIFT-2 VR 164 (документированное отклонение)
+          description: "Available disk space on {{ $labels.device }} mounted at {{ $labels.mountpoint }} is below 20%. Current usage: {{ $value | humanizePercentage }}."
+        labels:
+          severity: "critical"
+
+      # ── 5. LLMAPIErrors ─────────────────────────────────────────────────────
+      - uid: "llm_api_errors"
+        title: "LLM API Error Rate High"
+        condition: "C"
+        data:
+          - refId: "A"
+            datasourceUid: "prometheus"
+            model:
+              expr: "rate(litellm_proxy_total_requests_metric_total{status=\"failure\"}[5m]) > 0.1"
+              refId: "A"
+            queryType: ""
+            relativeTimeRange:
+              from: 600
+              to: 0
+          - refId: "B"
+            datasourceUid: "__expr__"
+            model:
+              expression: "A"
+              refId: "B"
+              reducer: "last"
+              type: "reduce"
+            queryType: ""
+            relativeTimeRange:
+              from: 0
+              to: 0
+          - refId: "C"
+            datasourceUid: "__expr__"
+            model:
+              conditions:
+                - evaluator:
+                    params: [0]
+                    type: "gt"
+                  type: "query"
+              expression: "B"
+              refId: "C"
+              type: "threshold"
+            queryType: ""
+            relativeTimeRange:
+              from: 0
+              to: 0
+        noDataState: "OK"
+        execErrState: "Error"
+        for: "0s"
+        annotations:
+          summary: "LLM API error rate exceeds 0.1/s over the last 5 minutes"
+          description: "The LiteLLM failure rate is {{ $value | humanize }} per second over the last 5 minutes. Check upstream LLM provider status."
+        labels:
+          severity: "warning"
+
+      # ── 6. BackupFreshness (DevPlan 132 W5, Loki) ──────────────────────────
+      # count_over_time(BACKUP COMPLETE в 26h окне) → CRITICAL при count < 1 (threshold C).
+      # Окно 26h > интервал дампа 24h (запас на рестарт стека); for: 30m — анти-флаппинг.
+      # noDataState: Alerting — нет логов вообще = бэкап не работает.
+      # ⚠️ DevPlan 144 W1 (D1): expr БЕЗ бинарной операции `< 1` — Loki range query с binop
+      # возвращает ТОЛЬКО точки, где условие истинно → при count≥1 пусто → NoData → Alerting
+      # → вечный ложный firing. Loki expr возвращает метрику (count), сравнение — threshold C
+      # (evaluator lt params [1], сохранён). count=0 → firing, count≥1 → Normal, NoData → Alerting.
+      # ⚠️ DevPlan 161 W1 (D2): time-gate 07:00–07:59 МСК — проверка раз в сутки, не непрерывно.
+      # D (Prometheus) = `(hour() >= 4 and hour() < 5) or vector(0)` → 1 в окне 04:00–04:59 UTC
+      # (07:00–07:59 МСК), 0 вне окна (always-defined, нет NoData-дыры). E = reduce last. F = math
+      # `$B * $E + (1 - $E) * 100`: в окне (E=1) F = count, вне (E=0) F = 100 → не firing.
+      # threshold C переключён на F (expression: F, evaluator lt 1). noDataState: Alerting
+      # сохранён — Alloy мёртв → A NoData → F NoData → Alerting (канарейка жива).
+      - uid: "backup_freshness"
+        title: "Backup Freshness"
+        condition: "C"
+        data:
+          - refId: "A"
+            datasourceUid: "loki"
+            model:
+              expr: 'count_over_time({compose_service="backup-cron"} |~ "BACKUP COMPLETE" [26h])'
+              refId: "A"
+            queryType: "range"
+            relativeTimeRange:
+              from: 93600
+              to: 0
+          - refId: "B"
+            datasourceUid: "__expr__"
+            model:
+              expression: "A"
+              refId: "B"
+              reducer: "last"
+              type: "reduce"
+            queryType: ""
+            relativeTimeRange:
+              from: 0
+              to: 0
+          - refId: "D"
+            datasourceUid: "prometheus"
+            model:
+              expr: '(hour() >= 4 and hour() < 5) or vector(0)'
+              refId: "D"
+            queryType: ""
+            relativeTimeRange:
+              # Grafana 13 (164 W1-5): from:0,to:0 — invalid relative time range
+              # (валидация alert-rule query); 5-минутное окно покрывает hour()-гейт
+              from: 300
+              to: 0
+          - refId: "E"
+            datasourceUid: "__expr__"
+            model:
+              expression: "D"
+              refId: "E"
+              reducer: "last"
+              type: "reduce"
+            queryType: ""
+            relativeTimeRange:
+              from: 0
+              to: 0
+          - refId: "F"
+            datasourceUid: "__expr__"
+            model:
+              expression: '$B * $E + (1 - $E) * 100'
+              refId: "F"
+              type: "math"
+            queryType: ""
+            relativeTimeRange:
+              from: 0
+              to: 0
+          - refId: "C"
+            datasourceUid: "__expr__"
+            model:
+              conditions:
+                - evaluator:
+                    params: [1]
+                    type: "lt"
+                  type: "query"
+              expression: "F"
+              refId: "C"
+              type: "threshold"
+            queryType: ""
+            relativeTimeRange:
+              from: 0
+              to: 0
+        noDataState: "Alerting"
+        execErrState: "Error"
+        for: "30m"
+        annotations:
+          summary: "No BACKUP COMPLETE in the last 26h"
+          description: "No successful backup ({{ $labels.compose_service }}) in the last 26h — RPO=24h window breached."
+        labels:
+          severity: "critical"
+
+      # ── 7. BackupUploadFailure (DevPlan 132 W5, Loki) ──────────────────────
+      # count_over_time("off-site backup NOT confirmed" в 24h) → WARNING при count > 0 (threshold C).
+      # Лог-строка пишется backup_postgres.py при провале off-site upload.
+      # ⚠️ DevPlan 144 W1 (D1): expr БЕЗ binop `> 0` — Loki возвращает метрику (count),
+      # сравнение — threshold C (evaluator gt params [0]). noDataState OK сохранён.
+      - uid: "backup_upload_failure"
+        title: "Backup Upload Failure"
+        condition: "C"
+        data:
+          - refId: "A"
+            datasourceUid: "loki"
+            model:
+              expr: 'count_over_time({compose_service="backup-cron"} |~ "off-site backup NOT confirmed" [24h])'
+              refId: "A"
+            queryType: "range"
+            relativeTimeRange:
+              from: 86400
+              to: 0
+          - refId: "B"
+            datasourceUid: "__expr__"
+            model:
+              expression: "A"
+              refId: "B"
+              reducer: "last"
+              type: "reduce"
+            queryType: ""
+            relativeTimeRange:
+              from: 0
+              to: 0
+          - refId: "C"
+            datasourceUid: "__expr__"
+            model:
+              conditions:
+                - evaluator:
+                    params: [0]
+                    type: "gt"
+                  type: "query"
+              expression: "B"
+              refId: "C"
+              type: "threshold"
+            queryType: ""
+            relativeTimeRange:
+              from: 0
+              to: 0
+        noDataState: "OK"
+        execErrState: "Error"
+        for: "5m"
+        annotations:
+          summary: "Off-site backup upload NOT confirmed in the last 24h"
+          description: "backup-cron ({{ $labels.compose_service }}) failed to confirm an off-site S3 upload in the last 24h."
+        labels:
+          severity: "warning"
+
+      # ── 8. WalSyncFailure (DevPlan 132 W5, Loki) ───────────────────────────
+      # count_over_time("WAL_SYNC FAIL" в 24h) → WARNING при count > 0 (threshold C).
+      # Строка пишется wal_sync.py при S3-ошибке (exit 1, IMP:10) — RPO-гарантия WAL.
+      # ⚠️ DevPlan 144 W1 (D1): expr БЕЗ binop `> 0` — Loki возвращает метрику (count),
+      # сравнение — threshold C (evaluator gt params [0]). noDataState OK сохранён.
+      - uid: "wal_sync_failure"
+        title: "WAL Sync Failure"
+        condition: "C"
+        data:
+          - refId: "A"
+            datasourceUid: "loki"
+            model:
+              expr: 'count_over_time({compose_service="backup-cron"} |~ "WAL_SYNC FAIL" [24h])'
+              refId: "A"
+            queryType: "range"
+            relativeTimeRange:
+              from: 86400
+              to: 0
+          - refId: "B"
+            datasourceUid: "__expr__"
+            model:
+              expression: "A"
+              refId: "B"
+              reducer: "last"
+              type: "reduce"
+            queryType: ""
+            relativeTimeRange:
+              from: 0
+              to: 0
+          - refId: "C"
+            datasourceUid: "__expr__"
+            model:
+              conditions:
+                - evaluator:
+                    params: [0]
+                    type: "gt"
+                  type: "query"
+              expression: "B"
+              refId: "C"
+              type: "threshold"
+            queryType: ""
+            relativeTimeRange:
+              from: 0
+              to: 0
+        noDataState: "OK"
+        execErrState: "Error"
+        for: "5m"
+        annotations:
+          summary: "WAL_SYNC FAIL detected in the last 24h"
+          description: "wal_sync ({{ $labels.compose_service }}) reported S3 failure in the last 24h — WAL RPO guarantee at risk."
+        labels:
+          severity: "warning"
+
+      # ── 9. PsiMemoryPressure (DevPlan 162 W4-1) ────────────────────────────
+      # PSI memory some >5%: rate(node_pressure_memory_stalled_seconds_total[5m]) — доля
+      # времени, когда таски стояли в очереди на память (stall). zram/swap-алерт: PSI mem=0.00
+      # на baseline (162 W0), порог 0.05 = 5% stalled-времени — ранний сигнал OOM-давления
+      # ДО OOM-killer (суммарные лимиты ~10.5G > 7.8G RAM). node-exporter собирает node_pressure_*.
+      - uid: "psi_memory_pressure"
+        title: "PSI Memory Pressure"
+        condition: "C"
+        data:
+          - refId: "A"
+            datasourceUid: "prometheus"
+            model:
+              expr: "rate(node_pressure_memory_stalled_seconds_total[5m]) > 0.05"
+              refId: "A"
+            queryType: ""
+            relativeTimeRange:
+              from: 600
+              to: 0
+          - refId: "B"
+            datasourceUid: "__expr__"
+            model:
+              expression: "A"
+              refId: "B"
+              reducer: "last"
+              type: "reduce"
+            queryType: ""
+            relativeTimeRange:
+              from: 0
+              to: 0
+          - refId: "C"
+            datasourceUid: "__expr__"
+            model:
+              conditions:
+                - evaluator:
+                    params: [0]
+                    type: "gt"
+                  type: "query"
+              expression: "B"
+              refId: "C"
+              type: "threshold"
+            queryType: ""
+            relativeTimeRange:
+              from: 0
+              to: 0
+        noDataState: "OK"
+        execErrState: "Error"
+        for: "5m"
+        annotations:
+          summary: "PSI memory pressure exceeds 5% (stalled)"
+          description: "Memory stall ratio {{ $value | humanize }} over the last 5 minutes — memory pressure approaching OOM territory. Check zram/swap and container limits."
+        labels:
+          severity: "warning"
+
+      # ── 10. Nginx5xxErrors (DevPlan 162 W6-3) ──────────────────────────────
+      # 502/5xx от nginx не детектируется healthcheck'ом (liveness порта). nginx access log —
+      # json_combined (config/nginx.conf): "status":$status → Alloy json-парсит в label status.
+      # count_over_time(nginx 5xx [5m]) > 2 (threshold C gt params [2]) — анти-флаппинг для
+      # одиночных 5xx; >2 за 5 мин = реальная деградация бэкенда.
+      # ⚠️ DevPlan 144 W1 (D1): expr БЕЗ binop — Loki возвращает count, сравнение в threshold C.
+      - uid: "nginx_5xx_errors"
+        title: "Nginx 5xx Errors"
+        condition: "C"
+        data:
+          - refId: "A"
+            datasourceUid: "loki"
+            model:
+              expr: 'count_over_time({compose_service="nginx"} | json | status=~"5[0-9][0-9]" [5m])'
+              refId: "A"
+            queryType: "range"
+            relativeTimeRange:
+              from: 86400
+              to: 0
+          - refId: "B"
+            datasourceUid: "__expr__"
+            model:
+              expression: "A"
+              refId: "B"
+              reducer: "last"
+              type: "reduce"
+            queryType: ""
+            relativeTimeRange:
+              from: 0
+              to: 0
+          - refId: "C"
+            datasourceUid: "__expr__"
+            model:
+              conditions:
+                - evaluator:
+                    params: [2]
+                    type: "gt"
+                  type: "query"
+              expression: "B"
+              refId: "C"
+              type: "threshold"
+            queryType: ""
+            relativeTimeRange:
+              from: 0
+              to: 0
+        noDataState: "OK"
+        execErrState: "Error"
+        for: "5m"
+        annotations:
+          summary: "More than 2 nginx 5xx responses in the last 5 minutes"
+          description: "Nginx returned {{ $value | humanize }} 5xx responses in the last 5 minutes — backend degradation (502/503/504). Check upstream health."
+        labels:
+          severity: "warning"

@@ -1,0 +1,52 @@
+# platform.service — AI Platform auto-start on boot
+#
+# GREP_SUMMARY: systemd platform auto-start deploy-modules docker-compose
+# STRUCTURE: After(docker.service,network-online.target) → ExecStart(deploy-modules.sh) → ExecStop(compose down) → WantedBy(multi-user.target)
+#
+# region MODULE_CONTRACT
+## @purpose  Systemd unit that runs deploy-modules.sh on boot and ensures all platform containers are running
+## @scope    Designed for bare-server deployment where platform containers must survive reboots
+## @invariants
+##   - Starts AFTER docker.service and network-online.target
+##   - REQUIRES docker.service — if Docker fails to start, platform.service stays inactive
+##   - Type=oneshot with RemainAfterExit=yes — tracks service state, not process PID
+##   - ExecStop runs docker compose down to stop all platform containers gracefully
+##   - Restart=on-failure with 30s delay — retries if deploy-modules.sh fails transiently
+##   - User=root — required for Docker socket access and /var/lib/platform/ directory creation
+##   - Output to journal — logs available via journalctl -u platform.service -f
+## @rationale
+##   Systemd ensures deterministic startup order: Docker → network → platform modules.
+##   Oneshot type prevents the unit from being considered "started" until deploy-modules.sh exits.
+##   RemainAfterExit marks the unit as active after successful run.
+##   Restart=on-failure handles transient errors (Docker not ready, network flapping).
+##
+## ⚠️ TRAP[DECISION] · 2026-07-03 · — · Type=oneshot vs Type=simple
+## ·   Rejected: Type=simple — systemd considers unit "started" as soon as fork() returns
+## ·   Reason: with simple, "active" does not mean "deploy complete". oneshot + RemainAfterExit
+## ·   ensures systemd reports active only after full deploy-modules.sh execution.
+## ·   Rev: if deploy-modules.sh takes >5min on cold boot (image pulls), consider
+## ·   Type=oneshot with TimeoutStartSec=300
+# endregion MODULE_CONTRACT
+
+[Unit]
+Description=AI Platform Deploy Modules
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/platform
+EnvironmentFile=-/opt/platform/.env
+ExecStart=/opt/platform/core/internal/bootstrap/deploy-modules.sh
+ExecStop=/bin/bash -c 'for f in /opt/platform/core/modules/*/docker-compose.base.yml; do [ -f "$$f" ] && docker compose -f "$$f" down; done'
+Restart=on-failure
+RestartSec=30s
+TimeoutStartSec=600
+User=root
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

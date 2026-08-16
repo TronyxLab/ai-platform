@@ -1,0 +1,26 @@
+# GREP_SUMMARY: profile research deep-analysis deepseek image-gen
+# STRUCTURE: ▶ profile:research → model:0.5/8192 → provider:deepseek → image_gen → ⎋
+# region MODULE_CONTRACT
+## @purpose  Research and deep analysis profile
+## @scope    Deep analysis profile with lower temperature, larger context, image generation
+## @invariants
+##   - model.temperature: 0.5 — lower for analytical tasks
+##   - model.max_tokens: 8192 — larger context for deep analysis
+##   - model.provider: deepseek — primary LLM provider
+##   - image_gen.provider: openai-codex — image generation via OpenAI
+## @rationale Research profile needs lower temperature for analytical accuracy and larger context for deep dives
+# endregion MODULE_CONTRACT
+
+profile:
+  name: research
+  description: Research and deep analysis profile
+
+model:
+  temperature: 0.5
+  max_tokens: 8192
+  provider: deepseek
+  default: deepseek-v4-flash
+
+image_gen:
+  provider: openai-codex
+  use_gateway: false

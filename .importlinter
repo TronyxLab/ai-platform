@@ -1,0 +1,150 @@
+# GREP_SUMMARY: import-linter, .importlinter, architecture-contracts, cross-layer, forbidden, layers, independence, acyclic, bootstrap-deploy, postgres-hook-allowlist, shared-leaf, arch-imports
+# STRUCTURE: ┌root_package=core┐ → ◇ layers (entrypoints > internal > modules) → ◇ forbidden (ep→modules, deploy→bootstrap, modules→internal, shared→domains) → ◇ independence (bootstrap↔deploy) → ◇ acyclic_siblings (internal) → ⎋ ignore-imports (документированные исключения)
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+# .importlinter — декларативные архитектурные контракты импортов (DevPlan 163 W-D D1).
+#
+# ## @purpose  Единый machine-readable источник cross-layer правил импортов (замена
+#             Python-dotted-части tests/helpers/cross_layer_linter.py, 881 LOC, M5).
+#             Контракты выражают таблицу слоёв и доменные запреты core/AGENTS.md.
+# ## @scope    Python-импорты внутри пакета `core` (namespace-пакеты, PEP 420).
+#             Shell-source-паттерны (source/. /bash/python3 -m в .sh) НЕ анализируются
+#             import-linter — их ловит кастомный slim-линтер
+#             (tests/helpers/cross_layer_linter.py, shell-only, <200 LOC).
+# ## @invariants
+#   - root_package = core; внешние пакеты (stdlib, boto3, ...) squash — не анализируются
+#   - Контракты зелёные на чистом дереве; ЛЮБОЕ новое нарушение вне ignore-imports → RED
+#   - ignore-imports — точечные (модуль -> модуль), каждая запись имеет обоснование
+#   - unmatched_ignore_imports_alerting = ERROR: игнор, чьё ребро исчезло → контракт RED
+#     (заигноренные существующие циклы нельзя «забыть» — фикс цикла требует удаления ignore)
+# ## @rationale  import-linter 2.13 (grimp) даёт детерминированные контракты слоёв за <0.05 s;
+#             декларативный конфиг вместо 881 LOC кастомного сканера (DevPlan 163 M5).
+#             Python-импорты — AST-точная гарантия (grimp), недостижимая grep-гейтом.
+# ## @changes  2026-08-13 | DevPlan 163 W-D D1 — создан; parity-таблица files/importlinter_parity.md
+# ## @changes  2026-08-14 | S8-3 (DevPlan 164 W3.5) — pyrightconfig reportImportCycles=none:
+# ##             pyright-циклы — file-level diagnostics БЕЗ позиции (pyright: ignore не работает);
+# ##             единственный авторитетный цикл-гейт — настоящий контракт acyclic-internal-domains
+# ##             (allowlist ниже + unmatched_alerting=error). Документированные lazy-циклы
+# ##             (parallel_runner↔docker_orchestrator, state_machine↔phases/state_store,
+# ##             receive_flow↔orchestrator) НЕ runtime-циклы — см. ignore_imports.
+# ## @changes  2026-08-15 | DevPlan 170 W10-B — ВСЕ lazy-циклы разорваны (compose_args leaf +
+# ##             DI receive_flow/orchestrator + node_yaml/cli.py); acyclic ignore_imports ПУСТ
+# ═══════════════════════════════════════════════════════════════════════════════
+
+[importlinter]
+# ── Session-настройки ──────────────────────────────────────────────────────────
+root_package = core
+# Внешние пакеты (stdlib, PyPI) схлопываются в один узел и не участвуют в контрактах.
+include_external_packages = false
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 1. LAYERS — таблица слоёв core/AGENTS.md
+#    entrypoints → internal → modules: каждый слой может импортировать себя и ниже,
+#    но НЕ выше. lib/ — shell-only слой (core.lib не существует как Python-модуль:
+#    grimp его не видит) — Python-импортов в lib нет и не будет (языковая политика).
+#    Исключение: postgres-hook (D1 by design, контейнерный runtime) modules→shared.
+# ═══════════════════════════════════════════════════════════════════════════════
+[importlinter:contract:layers-core]
+name = AGENTS.md cross-layer table
+type = layers
+layers =
+    core.entrypoints
+    core.internal
+    core.modules
+ignore_imports =
+    # modules→internal: postgres/hooks/on_project_deploy.py — D1 by design
+    # (контейнерный модуль, shared — единственный путь; core/modules/postgres/hooks/,
+    #  DevPlan 133 W2). Совпадает с direction-allowlist старого линтера.
+    core.modules.postgres.hooks.on_project_deploy -> core.internal.shared.node_yaml
+    core.modules.postgres.hooks.on_project_deploy -> core.internal.shared.subprocess_io
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 2. FORBIDDEN — точечные стрелки запрета
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# 2.1 entrypoints → modules: 0 легитимных (core/AGENTS.md: entrypoints вызывает
+#     ТОЛЬКО internal/ и lib/). layers-контракт разрешает «вниз», этот сужает.
+[importlinter:contract:forbidden-entrypoints-modules]
+name = entrypoints never -> modules
+type = forbidden
+source_modules =
+    core.entrypoints
+forbidden_modules =
+    core.modules
+
+# 2.2 deploy → bootstrap: 0 легитимных (DevPlan 119 G3 / AUDIT-4 C1: bootstrap
+#     оркестрирует деплой — направление ТОЛЬКО bootstrap→deploy; инверсия создала
+#     бы цикл «transport vs orchestration»). Обратное направление разрешено и
+#     зафиксировано контрактом independence-bootstrap-deploy (ниже).
+[importlinter:contract:forbidden-deploy-bootstrap]
+name = deploy never imports bootstrap
+type = forbidden
+source_modules =
+    core.internal.deploy
+forbidden_modules =
+    core.internal.bootstrap
+
+# 2.3 modules → internal: 0 легитимных кроме postgres-hook (D1 by design).
+#     R5-негатив U-09: `from core.internal.shared.telegram_notifier import ...`
+#     в modules-фикстуре — RED.
+[importlinter:contract:forbidden-modules-internal]
+name = modules never -> internal (postgres-hook D1 allowlist)
+type = forbidden
+source_modules =
+    core.modules
+forbidden_modules =
+    core.internal
+ignore_imports =
+    # modules→internal: postgres/hooks/on_project_deploy.py — D1 by design
+    # (контейнерный модуль, shared — единственный путь; core/modules/postgres/hooks/).
+    core.modules.postgres.hooks.on_project_deploy -> core.internal.shared.node_yaml
+    core.modules.postgres.hooks.on_project_deploy -> core.internal.shared.subprocess_io
+
+# 2.4 shared — чистый leaf: НИКОГДА не импортирует внутренние домены
+#     (shared/AGENTS.md инвариант 5: «слой зависимостей — только вниз»).
+#     Исключение из независимости: shared — общий сервисный слой, его импортируют ВСЕ.
+[importlinter:contract:forbidden-shared-domains]
+name = shared is a leaf (never imports internal domains)
+type = forbidden
+source_modules =
+    core.internal.shared
+forbidden_modules =
+    core.internal.bootstrap
+    core.internal.deploy
+    core.internal.static
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 3. INDEPENDENCE — взаимная изоляция доменов
+#    bootstrap ↔ deploy изолированы, КРОМЕ двух контрактных точек (AGENTS.md G3):
+#    context_deployer.py → deploy.channels.LocalChannel / deploy.orchestrator.
+#    reconciler_projects.py живёт в core/internal/ (не в bootstrap/) — его импорты
+#    в deploy.* не затрагивает этот контракт (покрывает layers: internal→internal).
+# ═══════════════════════════════════════════════════════════════════════════════
+[importlinter:contract:independence-bootstrap-deploy]
+name = bootstrap<->deploy isolated except typed contract points
+type = independence
+modules =
+    core.internal.bootstrap
+    core.internal.deploy
+ignore_imports =
+    # bootstrap→deploy: context_deployer.py — bootstrap оркестрирует деплой как фазу
+    # φ8 (deploy_services); deploy — нижележащий транспортный слой (DevPlan 119 G3).
+    core.internal.bootstrap.deploy.context_deployer -> core.internal.deploy.channels
+    core.internal.bootstrap.deploy.context_deployer -> core.internal.deploy.orchestrator
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 4. ACYCLIC-SIBLINGS — ацикличность внутренних доменов core.internal
+#    Проверяет отсутствие импорт-циклов между подмодулями каждого прямого дочернего
+#    пакета core.internal (bootstrap, deploy, shared, static, scaffold, config, ...).
+#    Междоменные циклы дополнительно исключены направленными контрактами выше.
+#    170 W10-B: ВСЕ документированные lazy-циклы разорваны (compose_args leaf + DI
+#    receive_flow/orchestrator, node_yaml/cli.py) — ignore_imports ПУСТ.
+#    unmatched_ignore_imports_alerting=ERROR — новый цикл без ignore-записи = RED.
+# ═══════════════════════════════════════════════════════════════════════════════
+[importlinter:contract:acyclic-internal-domains]
+name = internal domains are acyclic
+type = acyclic_siblings
+ancestors =
+    core.internal
+unmatched_ignore_imports_alerting = error
+ignore_imports =

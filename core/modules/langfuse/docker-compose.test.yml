@@ -1,0 +1,45 @@
+# GREP_SUMMARY: langfuse docker-compose test override container_name-test cross-platform langfuse-redis-test
+# STRUCTURE: base.yml + test.yml → langfuse + langfuse-redis with -test suffix and shifted port
+# region MODULE_CONTRACT
+## @purpose  Test override for langfuse — -test container_name for langfuse AND langfuse-redis,
+##           shifted port (13000:3000), REDIS_CONNECTION_STRING переопределён на -test контейнер
+## @scope    Only used in test fixtures. Never used in production.
+## @invariants
+##   - container_name: langfuse-test, langfuse-redis-test
+##   - restart: unless-stopped для всех контейнеров (--wait совместимость)
+##   - Port: 127.0.0.1:13000:3000 — избежать production конфликтов
+##   - langfuse-redis: networks: !override — test-shared-db-net БЕЗ aliases (предотвращает DNS-загрязнение, DevPlan 017 W3.1)
+##   - REDIS_CONNECTION_STRING указывает на langfuse-redis-test, а не на langfuse-redis (прода)
+## @rationale Стандартный test-overlay контракт (DevPlan 04 DD2). langfuse-redis добавлен
+##            post-factum (F-7 class): фикс изоляции второго контейнера в модуле.
+# endregion MODULE_CONTRACT
+
+services:
+  langfuse:
+    container_name: langfuse-test
+    networks: !override  # DevPlan 017 W3.1 — test network isolation (db for postgres + observability for scraping)
+      - test-shared-db-net
+      - test-observability-net
+    ports: !override  # ⚠️ TRAP[BUG] · 2026-07-18 · HIGH · compose merge склеивает ports base+test → тестовый langfuse биндит 3001 (F-7) · Fix: !override
+      - "127.0.0.1:13000:3000"
+    restart: "no"
+
+  langfuse-redis:
+    container_name: langfuse-redis-test
+    networks: !override  # DevPlan 017 W3.1 — test network isolation (shared-db-net → test-shared-db-net)
+      - test-shared-db-net
+    restart: "no"
+
+  # v4 worker (164 W1-5) — тот же env-контракт, порт 3030 внутренний
+  langfuse-worker:
+    container_name: langfuse-worker-test
+    networks: !override
+      - test-shared-db-net
+      - test-observability-net
+    restart: "no"
+
+networks:
+  test-shared-db-net:
+    external: true
+  test-observability-net:
+    external: true

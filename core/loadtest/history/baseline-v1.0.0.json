@@ -1,0 +1,45 @@
+{
+  "version": "1.0.0",
+  "timestamp": "2026-08-14T16:48:24Z",
+  "tree_sha": "6a0ad66ee65edda58076f21cdfceb1904175dd8f",
+  "node": "local-stack (macOS Docker Desktop, test-e2e node.yaml host-параметризация)",
+  "runs": [
+    {
+      "scenario": "web",
+      "mode": "smoke",
+      "endpoint": "http://127.0.0.1:8080/healthz",
+      "rps": 10.22488730923341,
+      "p50": null,
+      "p95": 0.032,
+      "p99": 0.035,
+      "error_rate": 0.0,
+      "total_requests": 900,
+      "total_failures": 0,
+      "verdict": "WARN",
+      "warnings": [
+        "метрика отсутствует на ноде: litellm_proxy_failed_requests",
+        "метрика отсутствует на ноде: litellm_proxy_total_requests",
+        "недостаточно сэмплов (<2): container_cpu_usage_seconds_total",
+        "недостаточно сэмплов (<2): container_memory_working_set_bytes",
+        "недостаточно сэмплов (<2): node_network_receive_bytes_total"
+      ],
+      "note": "WARN-причины: litellm-метрики отсутствуют на локальном стеке (модуль не нагружался); cadvisor-сэмплы <2 — короткое окно smoke 90s + rate-window. PASS-критерии (0 errors, p95 < max_p95) выполнены."
+    }
+  ],
+  "profiles": {
+    "web": {
+      "enabled": true,
+      "endpoint_override": "http://127.0.0.1:8080/healthz",
+      "prometheus": "127.0.0.1:9090"
+    },
+    "db": {"enabled": false, "note": "LOAD_RUNNER=node + shared-db-net (node-only)"},
+    "s3": {"enabled": false, "note": "minio disabled на prod; local — при LOAD_SCENARIO_S3=1"},
+    "llm": {"enabled": false, "note": "требует mock-echo модели на litellm (node-only)"},
+    "langfuse_ingest": {"enabled": false, "note": "требует LANGFUSE_PUBLIC_KEY (node-only)"}
+  },
+  "artifact_contract": {
+    "purpose": "Точка отсчёта регрессии v1.0.0 (W4-3 169, закрытие W6-1.5 164)",
+    "resets_with": "Волна 5 169 сбрасывает history.json КРОМЕ baseline-v1.0.0.json",
+    "regression_compare": "последующие прогоны того же режима через baseline.py (delta_p95 ≤ 1.5x, delta_error ≤ 2pp)"
+  }
+}

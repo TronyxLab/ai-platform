@@ -1,0 +1,146 @@
+# GREP_SUMMARY: loki config retention compactor filesystem storage
+# STRUCTURE: ▶ filesystem-storage → compactor → retention:7d → structured-metadata → runtime-config → ┘
+# region MODULE_CONTRACT
+## @purpose  Loki configuration: filesystem storage, 7d retention, compactor-enabled
+## @scope    Mounted as /etc/loki/loki-config.yml in loki container
+## @invariants
+##   - storage: filesystem (no S3/GCS — single-node deployment, D3)
+##   - retention_period: 7d (SC-3: operational logs)
+##   - compactor block with retention_enabled: true (D9: mandatory for filesystem retention)
+##   - structured_metadata enabled for high-cardinality fields (session_id, user_id)
+##   - Single ingester instance (single-node mode)
+##   - HTTP server on port 3100 (default)
+##   - Out-of-order toleration (D-8, DevPlan 140 W3): ingester.max_chunk_age: 72h →
+##     out-of-order window 36h (Loki 3.x: window = max_chunk_age/2, `out_of_order_time_window`
+##     removed from schema — config error at startup). Clock skew ±24h → 0 rejected.
+## @rationale D9: Without compactor block, retention settings are silently ignored
+##           on filesystem storage. Disk grows unbounded despite configured retention.
+# endregion MODULE_CONTRACT
+
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+
+common:
+  path_prefix: /loki
+
+ingester:
+  lifecycler:
+    address: 127.0.0.1
+    ring:
+      kvstore:
+        store: inmemory
+      replication_factor: 1
+    final_sleep: 0s
+    # ⚠️ TRAP[DECISION] · 2026-07-26 · LOW · min_ready_duration: 0s — macOS Docker Desktop
+    # · Default 15s causes /ready to return 503 during test window.
+    # · Single-node deployment — no ring synchronization needed.
+    # · Safe for both test and production (single ingester).
+    # · Rev: if switching to multi-ingester mode, restore default 15s
+    min_ready_duration: 0s
+  chunk_idle_period: 30m
+  # 🧐 TRAP[DECISION] · 2026-08-06 · MED · D-8 (DevPlan 140 W3): out-of-order окно = max_chunk_age/2
+  # · Loki 3.7.3: параметр `out_of_order_time_window` УДАЛЁН из схемы (deprecated в 3.0,
+  # ·   удалён в 3.3+). Его настройка = отказ старта: «yaml: unmarshal errors: field
+  # ·   out_of_order_time_window not found in type validation.plain» (проверено локально,
+  # ·   docker run grafana/loki:3.7.3, 2026-08-06).
+  # ·   В 3.x out-of-order (unordered) записи ВКЛЮЧЕНЫ по умолчанию (limits_config.unordered_writes,
+  # ·   deprecated, default true), а единственный ограничитель глубины приёма — ingester.max_chunk_age:
+  # ·   cutoff = highest_stream_ts - max_chunk_age/2 (pkg/ingester/stream.go:441-443);
+  # ·   docs: «the allowed out-of-order window is half of the configured max_chunk_age».
+  # · Было: 1h → окно 30m → chaos T4 (skew ±24h, tests/e2e/test_chaos_resilience.py) =
+  # ·   1943 rejected «entry too far behind» (воспроизведено локально: push записи 24h назад
+  # ·   при max_chunk_age 1h → HTTP 400 «oldest acceptable timestamp is: highestTs - 30m»).
+  # · Стало: 72h → окно 36h ≥ 24h требуемого toleration + margin (Alloy retry-backlog ~30m).
+  # · Цена: открытые chunk'и активных стримов живут до 72h; память ограничена
+  # ·   chunk_target_size 1MB (флаш по размеру), idle-стримы флашатся по chunk_idle_period 30m.
+  # · Rejected: reject_old_samples:false — это ДРУГОЙ чек (validation.GreaterThanMaxSampleAge,
+  # ·   «timestamp too old», абсолютный пол-флор от now), он НЕ управляет «too far behind» —
+  # ·   проблему не решает (проверено по исходникам pkg/validation/validate.go).
+  # · Rev: если в новых версиях Loki появится выделенный параметр окна out-of-order —
+  # ·   вернуть max_chunk_age к 1h и использовать его.
+  max_chunk_age: 72h
+  chunk_target_size: 1048576  # 1MB
+  wal:
+    enabled: true
+    dir: /loki/wal
+
+schema_config:
+  configs:
+    - from: 2024-01-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+storage_config:
+  tsdb_shipper:
+    active_index_directory: /loki/tsdb-shipper-active
+    cache_location: /loki/tsdb-shipper-cache
+    cache_ttl: 24h
+  filesystem:
+    directory: /loki/chunks
+
+# ── Compactor: required for retention on filesystem storage (D9) ──────────
+compactor:
+  working_directory: /loki/compactor
+  delete_request_store: filesystem
+  retention_enabled: true
+  retention_delete_delay: 2h
+  retention_delete_worker_count: 8
+
+# ⚠️ TRAP[DECISION] · 2026-07-01 · — · runtime-config preferred over mutating main config
+# ·   Per-project retention overrides are written to runtime-config.yml (separate file),
+# ·   NOT to this main loki-config.yml. receive-пост-деплой (monitoring_config_renderer.py)
+# ·   updates runtime-config.yml via HTTP POST to /reload — no container restart needed.
+# ·   Rev: if Loki changes runtime config endpoint or format — update _reconfigure_monitoring()
+# ·   Rationale: mutating main config requires restarting Loki (downtime). Runtime config
+# ·   is hot-reloaded. Main config is the source of truth for infrastructure settings;
+# ·   runtime config handles per-project dynamic overrides.
+# · ⚠️ TRAP[DECISION] · 2026-07-01 · — · retention_stream for per-project retention
+# ·   Each project's logs_retention from ai-platform.yaml becomes a retention_stream rule
+# ·   with label selector {compose_project="<project>"}. Default catch-all rule is 7d.
+# ·   Rev: if project count exceeds 100, switch to per-tenant Loki or separate Loki instances
+# ·   Rejected: single global retention_period — all projects get same retention, wastes
+# ·     storage on chatty low-value projects
+# ·   Rejected: per-tenant Loki — overkill for single-node deployment
+# ── Runtime config ─────────────────────────────────────────────────────────
+# External file for per-project overrides; main config is NOT mutated by deploy.
+runtime_config:
+  file: /etc/loki/runtime-config.yml
+
+# ── Retention ──────────────────────────────────────────────────────────────
+limits_config:
+  retention_period: 168h  # 7 days (default fallback)
+
+  # ── Per-stream retention (TASK-13) ─────────────────────────────────────────
+  # Each project can override retention via ai-platform.yaml monitoring.logs_retention.
+  # Dynamic rules are generated post-deploy (receive verb → monitoring_config_renderer.py)
+  # and written to runtime-config.yml (NOT to this file — see TASK-5.4).
+  # Default rule: 7d for all streams without explicit per-project config.
+  # ⚠️ D-8 (DevPlan 140 W3): reject_old_samples — НЕ out-of-order механизм. Это абсолютный
+  #   пол-флор «older than now - reject_old_samples_max_age» (validation.GreaterThanMaxSampleAge,
+  #   ошибка «timestamp too old»), защита от абсурдно старых записей (WAL-replay/restore).
+  #   Окно приёма out-of-order записей задаётся ingester.max_chunk_age (см. ingester-секцию):
+  #   в Loki 3.x окно = max_chunk_age/2, `out_of_order_time_window` удалён из схемы.
+  #   168h = 7d оставляем без изменений (не мешает ±24h skew: 168h >> 36h окна).
+  reject_old_samples: true
+  reject_old_samples_max_age: 168h
+  max_query_series: 500
+  max_query_parallelism: 8
+  max_query_lookback: 168h  # 7 days (replaces chunk_store_config.max_look_back_period)
+
+  # Structured metadata indexing — enables LogQL filtering on high-cardinality
+  # fields (session_id, user_id) without indexing them as stream labels (D7).
+  # ⚠️ TRAP[DECISION] · 2026-06-28 · — · structured_metadata vs stream labels
+  # · Rejected: stream labels for session_id/user_id · Reason: high cardinality
+  # ·   would cause TSDB index explosion and degrade ALL queries, not just those
+  # ·   filtering by these fields. Structured metadata keeps them in a separate
+  # ·   index without cardinality blowup risk.
+  # · Rev: if Loki adds better high-cardinality label support, revisit.
+  allow_structured_metadata: true
+
+# table_manager removed — deprecated in Loki 3.x (retention now handled by compactor)

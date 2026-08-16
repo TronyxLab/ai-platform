@@ -1,0 +1,88 @@
+# GREP_SUMMARY: infra-metrics docker-compose test override container_name-test cadvisor node-exporter nginx-exporter redis-exporter postgres-exporter
+# STRUCTURE: base.yml + test.yml → all infra-metrics containers with -test suffix
+# region MODULE_CONTRACT
+## @purpose  Test override for infra-metrics — -test container_name for all 5 containers
+## @scope    Only used in test fixtures. Never used in production.
+## @invariants
+##   - container_name: cadvisor-test, node-exporter-test, nginx-prometheus-exporter-test, redis-exporter-test, postgres-exporter-test
+##   - restart: unless-stopped для всех контейнеров (--wait совместимость)
+##   - Port mappings: смещённые (1XXXX:YYYY)
+## @rationale Стандартный test-overlay контракт (DevPlan 04 DD2).
+## @changes — 2026-07-18 | Added postgres-exporter-test (ISS-R2)
+## @changes — 2026-07-16 | 18080→18081 cadvisor-test: collided with nginx-test port (F-8)
+## @changes — 2026-07-15 | Added redis-exporter-test (wave-redis)
+# endregion MODULE_CONTRACT
+
+services:
+  cadvisor:
+    container_name: cadvisor-test
+    # 164 W1-5: v0.60.5 падает на macOS-VM («could not detect clock speed» — /proc/cpuinfo
+    # без cpu MHz); test-оверлей пинит последний рабочий на macOS (VPS-ноды используют 0.60.5).
+    image: gcr.io/cadvisor/cadvisor:v0.55.1@sha256:3de2bd5203120b866d74a9b283b2ffb8ec382fbf9dc321814700c6ea6f44ec57
+    networks: !override  # DevPlan 017 W2.6 — test network isolation
+      - test-observability-net
+    # ⚠️ TRAP[BUG] · 2026-07-16 · HI · cadvisor-test port 18080 collided with nginx-test
+    # · Symptom: smoke test infra-metrics compose failed — Bind for 127.0.0.1:18080 already allocated
+    # · Root: nginx-test (18080:80) and cadvisor-test (18080:8080) used same host port 18080.
+    #   Tests run in parallel/same session — nginx-test occupies 18080 first.
+    # · Fix: cadvisor-test shifted to 18081 (free port, verified no collisions).
+    # · Prevention: coordinate test-overlay port assignments across modules.
+    ports: !override  # ⚠️ TRAP[BUG] · 2026-07-18 · HIGH · compose merge склеивает ports base+test → тестовый cadvisor биндит 8080 (F-7) · Fix: !override
+      - "127.0.0.1:18081:8080"
+    restart: "no"
+    # ⚠️ TRAP[BUG] · 2026-07-27 · HI · cadvisor-test inherited broken wget-based HEALTHCHECK from base
+    # · Root: base.yml changed wget→/usr/bin/cadvisor --version, but test.yml should also
+    # ·   accelerate healthcheck for CI (shorter intervals like other test exporters).
+    # · Fix: override healthcheck with accelerated intervals + binary-based check.
+    healthcheck:
+      test: ["CMD", "/usr/bin/cadvisor", "--version"]
+      interval: 5s
+      timeout: 3s
+      retries: 1
+      start_period: 2s
+
+  node-exporter:
+    container_name: node-exporter-test
+    networks: !override  # DevPlan 017 W2.6 — test network isolation
+      - test-observability-net
+    ports: !override  # ⚠️ TRAP[BUG] · 2026-07-18 · HIGH · compose merge склеивает ports base+test → тестовый node-exporter биндит 9100 (F-7) · Fix: !override
+      - "127.0.0.1:19100:9100"
+    restart: "no"
+
+  nginx-prometheus-exporter:
+    container_name: nginx-prometheus-exporter-test
+    networks: !override  # DevPlan 017 W2.6 — test network isolation
+      - test-observability-net
+    ports: !override  # ⚠️ TRAP[BUG] · 2026-07-18 · HIGH · compose merge склеивает ports base+test → тестовый nginx-exporter биндит 9113 (F-7) · Fix: !override
+      - "127.0.0.1:19113:9113"
+    restart: "no"
+
+  redis-exporter:
+    container_name: redis-exporter-test
+    networks: !override  # DevPlan 017 W2.6 — test network isolation (dual: cache for collect, observability for metrics exposure)
+      - test-shared-cache-net
+      - test-observability-net
+    restart: "no"
+
+  postgres-exporter:
+    container_name: postgres-exporter-test
+    networks: !override  # DevPlan 017 W2.6 — test network isolation (dual: db for collect, observability for metrics exposure)
+      - test-shared-db-net
+      - test-observability-net
+    restart: "no"
+    # Override healthcheck to always pass — no postgres dependency in smoke tests
+    # ⚠️ Binary at /bin/postgres_exporter (not /postgres_exporter)
+    healthcheck:
+      test: ["CMD", "/bin/postgres_exporter", "--version"]
+      interval: 5s
+      timeout: 3s
+      retries: 1
+      start_period: 2s
+
+networks:
+  test-observability-net:
+    external: true
+  test-shared-cache-net:
+    external: true
+  test-shared-db-net:
+    external: true

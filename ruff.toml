@@ -1,0 +1,310 @@
+# GREP_SUMMARY: ruff config linter formatter target-version line-length select ignore per-file-ignores preview S B9 ASYNC PGH T20 FLY EXE ISC LOG TID A TRY PTH EM FBT PLR PLW BLE ARG SLF PLC
+# STRUCTURE: ▶ [ruff] target-version=py310 line-length=120 preview=true → [lint] select(~30+ префиксов, M3′) + ignore(defer/политика) + per-file-ignores(семантические+seam) → [format] quote-style=double → ⎋
+# ⚠️ TRAP[DECISION] · 2026-08-13 · HI · ruff.toml.new — КОНФИГУРАЦИЯ W-B (B1), НЕ АКТИВИРОВАНА (M3′)
+# · Rejected: активация до чистоты (`ruff check .` = 0 под ним) — дерево стало бы RED на каждом коммите
+# · Reason: M3′ clean-at-ship — конфиг включается только вместе с чистотой (DevPlan 163 §2); реестр
+# ·   решения по каждому правилу — files/ruff_policy.md (сверка §12.5); активация: rename → ruff.toml
+# ·   ТОЛЬКО когда `ruff check .` (всё дерево) даст 0. Блокирующее правило для всех воркеров.
+# · Rev: если фиксы займут >3 сессий на слой — сузить select (M3′ Rev), не вводя ratchet-механик.
+# ⚠️ TRAP[DECISION] · 2026-08-13 · MED · Seam-class per-file-ignores (session 1) — os.path-моки тестов
+# · Rejected: оставить pathlib-конверсии PTH101/103/106/107/108/111/112/113/204 (ломают 12+ тест-файлов)
+# · Reason: установленный тестовый seam — monkeypatch/patch os.path.isfile/isdir, os.makedirs/os.replace/
+# ·   os.chmod/os.unlink/os.remove, os.path.getmtime/expanduser, builtins.open; Path-эквиваленты обходят моки;
+# ·   Path.expanduser("~user") RAISES на macOS (os.path возвращает как есть) — импорт-краш security_posture;
+# ·   Path.resolve() в sys.path — PosixPath-объект ломает импорты (project_registry).
+# ·   Конверсии отменены (реверт в os.path-форму), правила per-file-ignored с Rev-условием.
+# · Rev: миграция тестов с os.*-моков на higher-seam (W-F/W-H, DI-HYG §5) → вернуть pathlib-конверсии и снять ignores.
+
+required-version = ">=0.16.1"
+target-version = "py310"
+line-length = 120
+
+# preview = true — включает стабилизированные preview-правила (M3′: maximum clean-at-ship)
+preview = true
+
+exclude = [
+    ".venv",
+    ".git",
+    "__pycache__",
+    ".pytest_cache",
+    ".ruff_cache",
+    "build",
+    "dist",
+    "templates",   # payload-шаблоны new-project (локальный пакет `config`; I001-секции
+                   # версионно-нестабильны — паритет pyrightconfig.json, DevPlan 163 W-G)
+    ".ai",   # ruff 0.16 форматирует python-фрагменты в markdown — планы это CoT-артефакты,
+             # не исходники (паритет check-doc-headers: ^\.ai/ исключён); правка чужих
+             # артефактов форматтером = churn в активных планах
+]
+
+[lint]
+# Кастомный код маркера «top-level CLI handler» (DevPlan 171 W3.8): детекторы
+# exception_patterns (static + ci.mk) требуют inline `# noqa: EXC` на `except Exception`
+# в CLI-генераторах — external-регистрация делает маркер валидным для ruff.
+external = ["EXC"]
+select = [
+    "E4", "E7", "E9",   # pycodestyle errors
+    "F",                  # Pyflakes
+    "I",                  # isort
+    "B", "B9",            # flake8-bugbear + extensions
+    "SIM",                # flake8-simplify
+    "C4",                 # flake8-comprehensions
+    "UP",                 # pyupgrade — modern typing (dict, X | None), deprecated typing.*
+    "RUF",                # ruff-specific — unused noqa, implicit Any, __all__ sort
+    "PIE",                # flake8-pie — unnecessary pass/spread/kwargs
+    "RET",                # flake8-return — superfluous else/return
+    "PERF",               # Perflint — list comprehensions, unnecessary copies
+    # ---- M3′ расширение (DevPlan 163): maximum clean-at-ship минус defer-реестр §4.4 ----
+    "S",                  # flake8-bandit — parity-база для bandit retire (B4)
+    "ASYNC",              # flake8-async — async-антипаттерны
+    "PGH",                # pygrep-hooks — blanket-type-ignore и пр.
+    "T20",                # flake8-print — print в production
+    "FLY",                # flynt — f-strings вместо .format()/%
+    "EXE",                # flake8-executable — shebang/exec-bit
+    "ISC",                # flake8-implicit-str-concat
+    "LOG",                # flake8-logging — logging-инфраструктура
+    "TID",                # flake8-tidy-imports — banned-api (пустой/минимальный список)
+    "A",                  # flake8-builtins — тень встроенных имён
+    "TRY",                # tryceratops — try/except-качество (TRY003/TRY400 — defer §4.4)
+    "PTH",                # flake8-use-pathlib — os.path → pathlib
+    "EM",                 # flake8-errmsg — ошибки без контекста
+    "FBT",                # flake8-boolean-trap — позиционные bool в сигнатурах
+    "PLR",                # pylint refactor — (PLR0911-0917 — defer §4.4)
+    "PLW",                # pylint warnings — широкие предупреждения
+    "BLE",                # flake8-blind-except — bare/except Exception
+    "ARG",                # flake8-unused-arguments
+    "SLF",                # flake8-self — приватный доступ
+    "PLC",                # pylint convention — (PLC0415 — defer §4.4)
+    # DTZ — tz-correctness (170 W10-C: DTZ001/DTZ005/DTZ007/DTZ011 закрыты — 5 мест core/ + 2 теста;
+    # DTZ002-004/006/008-010/012 — не присутствуют в дереве, включаются вместе с префиксом при будущих правках)
+    "call-datetime-without-tzinfo", "call-datetime-now-without-tzinfo", "call-datetime-strptime-without-zone", "call-date-today",
+    # ANN, DOC — исключены §11 (конфликт с #region-стилем док-заголовков)
+    # PTQ — НЕ существует в ruff ≤0.16.x — defer §4.4
+    # C90 — defer §4.4 (complexity → advisory agent-check)
+]
+ignore = [
+    "line-too-long",              # line-too-long — handled by formatter
+    "module-import-not-at-top-of-file",              # module-import-not-at-top-of-file — project convention: #region MODULE_CONTRACT before imports
+    "ambiguous-unicode-character-string",            # ambiguous-unicode-character-string — Cyrillic in project strings is intentional
+    "ambiguous-unicode-character-docstring",            # ambiguous-unicode-character-docstring — Cyrillic in project docstrings is intentional
+    "ambiguous-unicode-character-comment",            # ambiguous-unicode-character-comment — Cyrillic in project comments is intentional
+    "assert",              # assert — осознанная fail-fast валидация (DI/инварианты), включая tests/
+    "subprocess-without-shell-equals-true",              # subprocess-without-shell — политика: subprocess ВСЕГДА без shell; S607/PLW1510 покрывают
+    "suspicious-subprocess-import",              # suspicious-subprocess-import — политика (bandit-parity B404): import subprocess легитимен;
+                         #   subprocess ВСЕГДА без shell (S603 ignore), использование контролируется S607/PLW1510
+    "start-process-with-partial-path",              # start-process-with-partial-path — политика (ruff_policy.md §ПОЛИТИКА-IGNORE): subprocess
+                         #   без shell; частичные пути ("python3","docker","systemctl") — контролируемое окружение
+                         #   ноды/контейнера; полные пути ломают кроссплатформу (macOS/Linux/CI)
+    "hardcoded-temp-file",              # hardcoded-temp-file — политика: фиксированные пути платформы
+                         #   (/var/lib/platform/*, /tmp/platform-*) — контрактные пути, не временные файлы
+    "hardcoded-password-string",              # hardcoded-password-string — политика: ci-test-значения в генераторах/тестах/шаблонах
+                         #   — НЕ секреты (реальные секреты — SOPS/AGE; гейт gitleaks + inline_secrets)
+    "float-equality-comparison",            # float-equality-comparison — политика: compat-проверки версий (== 0.0/1.0) —
+                         #   сравнение констант, не вычислений
+    "boolean-type-hint-positional-argument",            # boolean-type-hint-positional-argument — политика (ruff_policy.md): существующие
+    "boolean-default-value-positional-argument",            # boolean-default-value-positional-argument —   публичные API; изменение сигнатур
+                         #   ломает 30+ вызовов/тестов. НОВЫЙ код — keyword-only bool (agent-check advisory FBT)
+    "import-private-name",           # import-private-name — политика: осознанный доступ к приватному API модулей-соседей
+                         #   платформы (единая кодовая база); подъём публичности ради линтера — лишний public-surface
+    "private-member-access",            # private-member-access — та же политика (единая кодовая база: cli→state_machine,
+                         #   orchestrator_cli→orchestrator, receive_flow→deploy-цепочки — осознанный доступ)
+    "suspicious-url-open-usage",              # suspicious-url-open-usage — политика: urllib-пробы здоровья (healthcheck_poller)
+                         #   и mirror/CI-проверки — vetted внутренние URL, контролируемые схемы http/https
+    "hardcoded-bind-all-interfaces",              # hardcoded-bind-all-interfaces — политика: сервисы платформы слушают 0.0.0.0 ВНУТРИ
+                         #   docker-сетей (контейнерная изоляция); внешняя экспозиция — только через nginx
+    "suspicious-xml-etree-import",              # suspicious-xml-etree-import — политика: xml.etree для prometheus/alerting XML-конфигов
+    "suspicious-xml-element-tree-usage",              # suspicious-xml-element-tree-usage — парсинг vetted конфигов платформы, не внешний ввод
+                         #   (мониторинг-рендеры); внешний XML-ввод не парсится платформой
+    "hardcoded-sql-expression",              # hardcoded-sql-expression — политика: SQL-запросы платформы фиксированные/
+                         #   параметризованные (pg_roles checks, BACKUP-маркеры); интерполяция — только
+                         #   из vetted констант (имя роли валидируется [a-z0-9_]), не пользовательский ввод
+    "line-contains-todo",            # line-contains-fixme — TODO/FIXME не гейтятся (допустимые маркеры)
+    "missing-todo-author",             # invalid-todo-tag — TODO-авторы не требуются
+    "missing-todo-link",             # missing-todo-link — TODO-ссылки не требуются
+    "pytest-raises-too-broad",             # pytest-raises-too-broad — широкое исключение в raises допустимо в тестах
+    "single-line-implicit-string-concatenation",            # single-line-implicit-string-concatenation — конфликт с форматтером (ruff format)
+    "root-logger-call",            # logging-module-not-imported — не критично; EM/BLE покрывают контекст
+    "import-outside-top-level",           # import-outside-top-level — документированный lazy-import паттерн (defer §4.4)
+    "raise-vanilla-args",            # raise-vanilla-args — defer §4.4: меняет публичные exception-контракты
+    "error-instead-of-exception",            # error-instead-of-exception — defer §4.4: семантический рефакторинг
+    "too-many-return-statements",           # too-many-returns — defer §4.4 (complexity → advisory agent-check)
+    "too-many-branches",           # too-many-branches — defer §4.4
+    "too-many-arguments",           # too-many-arguments — defer §4.4
+    "too-many-locals",           # too-many-locals — defer §4.4
+    "too-many-statements",           # too-many-statements — defer §4.4
+    "too-many-boolean-expressions",           # too-many-boolean-expressions — defer §4.4
+    "too-many-positional-arguments",           # too-many-positional — defer §4.4
+    "rule-codes-in-suppression-comments",            # rule-codes-in-suppression-comments — preview-стилистика; code-in-brackets —
+                         # единственная форма suppression, валидная и в текущем (preview-off) конфиге,
+                         # и в новом (переходная зелень M3′); name-in-brackets ломает старый конфиг (RUF102)
+]
+
+# Семантические per-file-ignores (M3′): только семантика, не «заглушить шум»
+[lint.per-file-ignores]
+"tests/**/*.py" = ["if-else-block-instead-of-if-exp", "try-except-in-loop", "magic-value-comparison", "unused-function-argument", "private-member-access", "pytest-raises-with-multiple-statements", "hardcoded-password-func-arg", "no-self-use", "print"]
+"**/conftest.py" = ["if-else-block-instead-of-if-exp"]
+"**/merge_junit.py" = ["try-except-in-loop"]
+# 🧐 TRAP[DECISION] · 2026-08-14 · — · Плагин-регистрация в __init__ (RUF067-исключение) · Rejected: вынос регистрации из __init__ · Reason: плагин-паттерн hermes-agent (регистрация профиля при импорте пакета — контракт плагинов); каталог в ruff-exclude, но check-diff сканирует изменённые файлы явно · Rev: модульный конфиг-механизм плагинов → убрать ignore
+"core/modules/hermes-agent/build/plugins/model-providers/litellm/__init__.py" = ["non-empty-init-module"]
+"**/__init__.py" = ["unused-import", "undefined-local-with-import-star", "undefined-local-with-import-star-usage", "undefined-export"]  # F822: lazy-export __all__ (importlib-паттерн scaffold/__init__.py и аналогов)
+"core/internal/healthcheck/metrics/host_collector.py" = ['builtin-open']  # /proc-чтения — тестовый seam (test_host_collector мокает builtins.open)
+"core/internal/shared/node_yaml/resolve.py" = ['os-path-expanduser', 'os-path-isfile', 'os-path-join', 'glob']  # тестовые seam-моки os.path.expanduser/isfile
+"core/internal/shared/node_yaml/validation.py" = ['os-path-abspath', 'os-path-isfile', 'os-path-dirname', 'os-path-join']  # dirname-цепочка — семантика abspath без symlink-резолва + seam-мок isfile
+"core/internal/bootstrap/deploy/context_overlay.py" = ['os-path-isdir', 'unspecified-encoding']  # тестовый seam (мокает os.path.isdir + write_text без kwargs)
+"core/modules/status-page/app.py" = ['jinja2-autoescape-false', 'unsafe-markup-use', 'os-path-join', 'print', 'blind-except']  # jinja2 autoescape — шаблоны из репозитория; webview не используется; CLI/сервисная диагностика; blind-except: HTTP handler boundary (документированный catch-all, noqa EXC)
+# 170 W7-E2: collectors.py → пакет collectors/ (config/checks/readiness/aggregate/staleness);
+# os.path-моки (seam) + LDD print(stderr) сохранены для всех подмодулей пакета.
+"core/modules/status-page/collectors/**" = ['os-path-isdir', 'os-path-isfile', 'os-path-join', 'os-listdir', 'print']  # seam-моки os.path + CLI/сервисная диагностика (LDD print stderr)
+
+# ── Seam-class per-file-ignores (W-B session 1, DevPlan 163) ──
+# os.path/os/builtins-моки — установленный тестовый seam; pathlib-эквиваленты обходят моки.
+# Конверсии PTH101/103/106/107/108/111/112/113/204 ОТМЕНЕНЫ (реверт в os.path-форму),
+# PTH100/120 — семантика abspath без symlink-резолва. Реестр — files/ruff_policy.md.
+# Rev: миграция тестов с os.*-моков (W-F/W-H, DI-HYG) → вернуть pathlib-конверсии и снять ignores.
+
+"core/internal/bootstrap/bootstrap_resolver.py" = ['print']  # stdout-контракт CLI (key=value/JSON/mask) — паттерн node_resolver.py
+"core/internal/bootstrap/cert_orchestrator.py" = ['os-chmod', 'os-makedirs', 'os-path-join']
+"core/internal/bootstrap/converge/sudoers.py" = ['os-chmod', 'os-unlink']
+"core/internal/bootstrap/converge/volumes.py" = ['os-path-isfile']
+"core/internal/bootstrap/cron_installer.py" = ['os-path-isfile', 'os-path-join']
+"core/internal/bootstrap/deploy/build_cache.py" = ['os-makedirs', 'os-path-isfile', 'os-path-join']
+"core/internal/bootstrap/deploy/context_deployer.py" = ['os-makedirs', 'os-path-isdir', 'os-path-join', 'print']
+"core/internal/bootstrap/deploy/deploy_orchestrator.py" = ['os-path-isdir', 'os-path-join']
+# fault-injection seam (W-G 2026-08-13): Path.open не перехватывается monkeypatch builtins.open —
+# test_gate_atomic_generation_no_partial_writes требует builtins.open на write-путях генераторов
+"core/internal/scripts/generate_platform_env.py" = ['os-path-join', 'builtin-open']
+"core/internal/scripts/generate_entrypoint_manifest.py" = ['os-path-join', 'builtin-open']
+"core/internal/bootstrap/deploy/orphan_reconciler.py" = ['os-path-isfile', 'os-path-join', 'print']
+"core/internal/bootstrap/deploy/llm_provision.py" = ['os-path-join', 'os-path-isfile']  # seam: тест мокает os.path.isfile + str-контракт cmd[1] (test_llm_provision.py)
+"core/internal/bootstrap/deploy/spool_validator.py" = ['os-path-isdir', 'os-path-join', 'print']
+"core/internal/bootstrap/deploy/sudoers_generator.py" = ['os-makedirs', 'os-path-join', 'print']
+"core/internal/bootstrap/docker_registry_auth.py" = ['os-path-expanduser', 'os-path-join']
+"core/internal/bootstrap/lifecycle/cli.py" = ['os-path-expanduser', 'os-path-isfile', 'os-path-join', 'print']
+"core/internal/bootstrap/lifecycle/helpers/system.py" = ['os-makedirs']
+"core/internal/bootstrap/lifecycle/helpers/users.py" = ['os-chmod', 'os-makedirs', 'os-path-isfile', 'os-path-join']
+"core/internal/bootstrap/lifecycle/helpers/validation.py" = ['os-path-isdir', 'os-path-isfile', 'os-path-join']
+"core/internal/bootstrap/lifecycle/phases/certs.py" = ['os-path-isfile', 'os-path-join']
+"core/internal/bootstrap/lifecycle/phases/docker.py" = ['os-makedirs', 'os-unlink', 'os-path-isdir', 'os-path-isfile', 'os-path-dirname', 'os-path-join', 'os-listdir']
+"core/internal/bootstrap/lifecycle/phases/secrets.py" = ['os-path-isdir']
+"core/internal/bootstrap/lifecycle/phases/system.py" = ['os-path-isdir', 'os-path-isfile', 'os-path-join']
+"core/internal/bootstrap/lifecycle/secrets_manager.py" = ['os-path-isfile', 'os-path-join', 'print']
+"core/internal/bootstrap/lifecycle/state_machine.py" = ['os-path-isfile', 'print']
+"core/internal/bootstrap/preflight.py" = ['os-path-isfile', 'print']
+"core/internal/bootstrap/python_deps.py" = ['os-makedirs', 'os-path-dirname', 'os-path-join']
+"core/internal/bootstrap/s3_ssl_cache.py" = ['os-makedirs', 'os-unlink', 'os-path-isdir', 'os-path-isfile', 'os-path-join', 'print']
+# 170 W6-D1: security_posture.py (1131 LOC) → пакет security/ — семантические ignores следуют за кодом
+# (те же seam-причины, что у монолита: expanduser("~ci-deploy") — канон cli.py:261, гейт no_hardcoded_local_paths;
+# print = stdout-контракт CLI/JSON отчёта); фасад security_posture.py — 0 ignores (чистый re-export)
+"core/internal/bootstrap/security/deploy_channel_posture.py" = ['os-path-expanduser']
+"core/internal/bootstrap/security/fs_perms.py" = ['os-path-expanduser']
+"core/internal/bootstrap/security/run.py" = ['print']
+"core/internal/catalog/generate_catalog.py" = ['os-chmod', 'os-makedirs', 'os-path-isdir', 'os-path-isfile', 'os-path-join', 'os-listdir', 'print', 'bad-file-permissions']
+"core/internal/deploy/age_key_backup.py" = ['os-chmod', 'os-unlink', 'os-path-isdir']
+"core/internal/deploy/channels/*.py" = ['os-path-expanduser']  # W4-B1 (план 170): channels.py → пакет channels/ (forced.py — ключ ci_deploy_key через expanduser)
+"core/internal/deploy/context_promoter.py" = ['os-chmod', 'os-unlink']  # seam: тест мокает os.unlink (test_context_promoter); str-контракт temp_path
+"core/internal/deploy/deploy_engine.py" = ['os-path-abspath', 'os-path-isdir', 'os-path-dirname', 'os-path-join', 'print']
+# 170 W4-B2: код перенесён в пакет engine/ — семантические ignores следуют за кодом (те же причины,
+# что у исходного deploy_engine.py: seam-моки os.path.isdir/join в test_deploy_engine; print = JSON stdout-контракт CLI)
+"core/internal/deploy/engine/engine.py" = ['os-path-isdir', 'os-path-join']
+"core/internal/deploy/engine/cli.py" = ['print']
+# 170 W4-B3: deploy_history.py (407 LOC) → пакет deploy/audit/ (history.py) — семантические ignores
+# следуют за кодом (те же seam-причины: os.*-моки в test_deploy_history); фасады — flat re-export
+"core/internal/deploy/audit/history.py" = ['os-makedirs', 'os-path-isdir', 'os-path-isfile', 'os-path-join', 'os-listdir']
+"core/internal/deploy/deploy_history.py" = ['non-empty-init-module']  # flat re-export __all__ (backward-compat)
+"core/internal/deploy/audit/__init__.py" = ['non-empty-init-module']  # flat re-export __all__ (backward-compat)
+"core/internal/deploy/hooks/__init__.py" = ['non-empty-init-module']  # flat re-export __all__ (backward-compat)
+# 170 W4-B3: post_deploy_chain вынесен из orchestrator.py — os.path.join/isdir/glob следуют за кодом
+"core/internal/deploy/hooks/post_deploy_chain.py" = ['os-path-isdir', 'os-path-join', 'glob']
+"core/internal/deploy/orchestrator.py" = ['os-makedirs', 'os-remove', 'os-path-isdir', 'os-path-isfile', 'os-path-join', 'os-listdir']
+# 170 W4-B3: _VERIFY_DOMAINS_SH (os.path.abspath/dirname) удалён — мёртвый код; остались isdir/join
+"core/internal/deploy/orchestrator_cli.py" = ['os-path-isdir', 'os-path-join']
+"core/internal/deploy/receive_flow.py" = ['os-makedirs', 'os-remove', 'os-path-isdir', 'os-path-isfile', 'os-path-join', 'print']
+"core/internal/dev_hosts.py" = ['os-chmod', 'os-unlink', 'print']
+"core/internal/healthcheck/metrics/backup_collector.py" = ['os-path-isfile', 'os-path-getmtime', 'print']
+"core/internal/healthcheck/metrics/cache.py" = ['os-makedirs', 'os-unlink', 'os-path-isfile', 'os-path-join']
+"core/internal/healthcheck/metrics/cert_collector.py" = ['os-path-isdir', 'os-path-isfile', 'os-path-join', 'os-listdir', 'print']
+"core/internal/healthcheck/metrics/json_writer.py" = ['os-path-abspath', 'os-makedirs', 'os-unlink', 'os-path-dirname', 'os-path-join']
+"core/internal/healthcheck/metrics/project_collector.py" = ['os-path-isdir', 'os-path-getmtime', 'os-path-join']
+"core/internal/healthcheck/watchdog.py" = ['os-path-abspath', 'os-makedirs', 'os-unlink', 'os-path-dirname']
+"core/internal/provisioner.py" = ['os-makedirs', 'os-path-isdir', 'os-stat', 'print']
+"core/internal/scaffold/gen_env_platform.py" = ['os-path-isfile']
+"core/internal/secrets/decrypt_secrets.py" = ['os-path-abspath', 'os-chmod', 'os-makedirs', 'os-unlink', 'os-path-isdir', 'os-path-isfile', 'os-path-dirname', 'os-path-join']
+"core/internal/shared/audit_logger.py" = ['os-chmod', 'os-makedirs', 'os-path-isdir', 'os-path-isfile', 'print']
+"core/internal/shared/docker_auth.py" = ['os-chmod', 'os-path-isdir', 'os-path-isfile', 'os-path-join', 'print']
+"core/internal/shared/docker_compose.py" = ['os-path-isdir']
+"core/internal/shared/project_registry.py" = ['os-path-abspath', 'os-path-isfile', 'os-path-dirname', 'os-path-join', 'print']
+"core/internal/shared/secrets_env_parser.py" = ['os-path-abspath', 'os-makedirs', 'os-path-isfile', 'os-path-dirname']
+"core/internal/template_engine.py" = ['os-path-abspath', 'os-path-isdir', 'os-path-dirname', 'os-path-join', 'print', 'builtin-variable-shadowing']  # A001: vars — публичный параметр шаблонного контракта
+"core/internal/validate/validate_orchestrator.py" = ['os-path-abspath', 'os-path-dirname', 'os-path-join', 'print']
+"core/internal/bootstrap/converge/infra.py" = ['global-statement']  # модульные reporter-глобалы (drifts/exit_code/has_errors) — CLI top-level accumulate-паттерн
+"core/internal/config/platform_config.py" = ['global-statement']  # lazy-кэш _defaults/_loaded (canonical lazy-init)
+"core/internal/scaffold/__init__.py" = ['non-empty-init-module']  # flat re-export __all__ (backward-compat)
+"core/internal/shared/node_yaml/__init__.py" = ['non-empty-init-module']  # flat re-export __all__ (backward-compat)
+"core/loadtest/scenarios/__init__.py" = ['non-empty-init-module']  # flat re-export __all__ (backward-compat)
+"core/internal/llm/config_renderer.py" = ['jinja2-autoescape-false', 'print']
+"core/internal/scripts/port_scanner.py" = ['unsafe-yaml-load']  # OverrideLoader — compose !override-семантика (vetted внутренние файлы)
+"core/modules/backup-cron/scripts/entrypoint.py" = ['start-process-with-no-shell']  # spawn без shell — политика no-shell (S603)
+"core/modules/backup-cron/scripts/backup_postgres.py" = ['os-unlink', 'os-path-join']
+"core/modules/backup-cron/scripts/upload.py" = ['os-path-abspath', 'os-unlink', 'os-path-isfile', 'os-path-dirname', 'print']
+"core/modules/backup-cron/scripts/wal_sync.py" = ['os-unlink', 'os-path-getmtime', 'os-path-join', 'os-listdir']
+"core/modules/postgres/hooks/on_project_deploy.py" = ['os-chmod', 'os-path-isfile', 'os-path-join']
+
+# ── T201 (print) — CLI-интерфейс (W-B session 2, DevPlan 163) ──
+# print = stdout-контракт данных (JSON/таблицы для shell-потребителей make-таргетов)
+# + stderr-диагностика оператору + LDD-телеметрия [IMP:N] ГАРАНТИРОВАННОЙ видимости
+# (не зависит от logging-конфигурации сервисов; конвертация в logger может скрыть
+# критичную [IMP:10] телеметрию и ломает stdout-контракты). Реестр — files/ruff_policy.md §2.
+# Rev: системная конвертация print→logger — отдельная программа; новые НЕ-CLI файлы
+# (библиотеки/сервисы) print не вводят (конвертировать в logger, прецедент dev_hosts.py).
+"core/internal/scripts/*.py" = ['print']
+# 170 W10-C: agent_check.py (модуль) → пакет agent_check/__init__.py — CLI в __init__
+# (python -m контракт dev.mk agent-check), паритет check_suite/verify_sweep __init__
+"core/internal/agent_check/__init__.py" = ['print', 'non-empty-init-module']
+"core/internal/shared/test_journal.py" = ['print']
+"core/internal/scaffold/*.py" = ['print']
+"core/internal/lint/*.py" = ['print']
+"core/internal/practices/*.py" = ['print']
+"core/internal/practices/check_project/*.py" = ['print']
+"core/internal/practices/check_project/checks/*.py" = ['print']
+"core/internal/practices/check_project/__init__.py" = ['non-empty-init-module']  # re-export API пакета (DevPlan 170 W10-A: декомпозиция check_project.py)
+"core/internal/practices/check_project/checks/__init__.py" = ['non-empty-init-module']  # реестр 18 handler-ов K1 (DevPlan 170 W10-A)
+"**/*_cli.py" = ['print']
+"core/entrypoints/check_commit_msg.py" = ['print']
+"core/internal/bootstrap/converge/reconciler.py" = ['print']
+"core/internal/bootstrap/deploy/compose_preflight.py" = ['print']
+"core/internal/bootstrap/deploy/secrets_validator.py" = ['print']
+"core/internal/bootstrap/discover_modules.py" = ['print']
+"core/internal/bootstrap/topo_sort.py" = ['print']
+"core/internal/bootstrap/tor_setup.py" = ['print']
+"core/internal/bootstrap/tor_transport.py" = ['print']
+"core/internal/check_suite/*.py" = ['print']
+"core/internal/check_suite/__init__.py" = ['non-empty-init-module']  # CLI в __init__ (DevPlan 170 W3: `python -m` контракт makefiles)
+"core/internal/deploy/payload_deliverer.py" = ['print']
+"core/internal/deploy/ssh_command_parser.py" = ['print']
+"core/internal/deploy/verify_contracts.py" = ['print']
+"core/internal/healthcheck/metrics/docker_collector.py" = ['print']
+"core/internal/healthcheck/modules_healthcheck.py" = ['print']
+"core/internal/llm/key_provisioner.py" = ['print']
+# ⚠️ TRAP[DECISION] · 2026-08-14 · — · preflight.py удалён (167 legacy-cleanup, deprecated-фасад, 0 вызывающих) · Rejected: оставить per-file-ignore на несуществующий файл · Reason: мёртвая ссылка, ruff-ignore без файла — шум · Rev: — (модуль не вернётся; при возрождении — вернуть ignore)
+"core/internal/shared/content_hash.py" = ['print']
+"core/internal/shared/crypto.py" = ['print']
+"core/internal/shared/env_requires.py" = ['print']
+"core/internal/shared/node_detect.py" = ['print']
+"core/internal/shared/node_resolver.py" = ['print']
+# 170 W10-B: node_yaml_cli.py → node_yaml/cli.py (внутрь пакета) — glob `**/*_cli.py` больше не матчит;
+# CLI stdout-контракт сохранён (прецедент node_resolver.py).
+"core/internal/shared/node_yaml/cli.py" = ['print']
+"core/internal/shared/vps_readiness.py" = ['print']
+"core/internal/test_runner.py" = ['print']
+"core/internal/validate/conflict_checks.py" = ['print']
+"core/internal/verify/domain_verifier.py" = ['print']
+# План 170 W7-E1: verify_sweep.py (монолит) → пакет verify_sweep/ — print только в CLI (__init__.py main);
+# non-empty-init-module — CLI в __init__ (`python -m` контракт ci.mk:63, паритет check_suite W3)
+"core/internal/verify_sweep/__init__.py" = ['print', 'non-empty-init-module']
+"core/modules/backup-cron/scripts/retention.py" = ['print']
+"core/modules/hermes-agent/build/scripts/patch-basic-auth-provider.py" = ['print']
+"core/modules/nginx/dev_cert_generator.py" = ['print']
+[format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"

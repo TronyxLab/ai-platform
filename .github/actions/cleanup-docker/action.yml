@@ -1,0 +1,46 @@
+# GREP_SUMMARY: cleanup-docker composite-action compose-down remove-orphans module-discovery
+# STRUCTURE: inputs:project-names → runs:composite → ○ module_discovery --format lines → ⚡ docker compose down per project → ⎋ done
+# region MODULE_CONTRACT
+## @purpose  Composite action: останавливает и удаляет Docker Compose стеки для всех модулей.
+##           Заменяет дублирующуюся cleanup-логику в platform-test.yml.
+## @scope    Вызывается из CI workflow steps. Делегирует в core/internal/scripts/module_discovery.py.
+## @invariants
+##   - Итерирует все docker-модули через module_discovery.py --format lines
+##   - Для каждого модуля: docker compose down --timeout 5 --remove-orphans для каждого project-name
+##   - Никогда не фейлит сборку (|| true на каждом down)
+##   - inputs.project-names: comma-separated, default "ai-platform-test,ai-platform-integration-test"
+## @rationale  DevPlan 064 S2: устраняет 2× дублирование cleanup-логики.
+##             При добавлении нового CI project-name — один input, не две копии кода.
+# endregion MODULE_CONTRACT
+
+name: 'Cleanup Docker Resources'
+description: 'Stops and removes Docker Compose stacks for all discovered modules'
+
+inputs:
+  project-names:
+    description: 'Comma-separated project names to clean up'
+    required: false
+    default: 'ai-platform-test,ai-platform-integration-test'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Cleanup Docker Compose stacks
+      shell: bash
+      run: |
+        echo "::group::Cleanup Docker Compose stacks"
+        PROJECTS="${{ inputs.project-names }}"
+        IFS=',' read -ra PROJ_ARR <<< "$PROJECTS"
+        if [ -f /tmp/module_list.json ]; then
+          while IFS= read -r compose_file; do
+            if [ -f "$compose_file" ]; then
+              for proj in "${PROJ_ARR[@]}"; do
+                proj_trimmed=$(echo "$proj" | xargs)
+                docker compose -f "$compose_file" -p "$proj_trimmed" down --timeout 5 --remove-orphans 2>/dev/null || true
+              done
+            fi
+          done < <(python3 core/internal/scripts/module_discovery.py --format lines)
+        else
+          echo "[cleanup] /tmp/module_list.json not found — skipping cleanup"
+        fi
+        echo "::endgroup::"

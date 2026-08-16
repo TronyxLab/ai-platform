@@ -1,0 +1,153 @@
+# @purpose  Base compose definition for litellm module — LiteLLM LLM Gateway
+# GREP_SUMMARY: litellm docker-compose litellm llm-gateway profiles x-logging observability-net shared-db-net postgres
+# STRUCTURE: ▶ litellm:v1.91.2 [profiles:litellm] → observability-net + shared-db-net + hermes-agent-net → ┐
+# region MODULE_CONTRACT
+## @purpose  Base compose definition for litellm Docker module
+## @scope    Merged with root docker-compose.yml via include:
+## @invariants
+##   - profiles: [litellm] — pluggability: only included when COMPOSE_PROFILES contains litellm
+##   - Wolfi-based image (Chainguard), v1.91.2 with digest pin
+##   - PostgreSQL backend for spend_logs via pgbouncer
+##   - No memory limit — LiteLLM needs ~700MB at startup before GC
+##   - Healthcheck: /health/liveliness (no auth required)
+##   - Networks declared as external: true — pre-created by deploy-modules.sh
+##   - All TRAP comments from root compose preserved
+## @rationale Profiles enable selective startup via `make up MODULES=litellm`
+# endregion MODULE_CONTRACT
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
+services:
+
+  # ── LiteLLM Proxy (LLM Gateway) ──────────────────────────────────────────
+  # region service:litellm
+  litellm:
+    # 🧐 TRAP[DECISION] · 2026-07-07 · — · LiteLLM upgraded 1.34→1.55→1.91.2 over 3 waves (see commit history)
+    # · SQLite-local removed — PostgreSQL active in all environments
+    # · Rev: on next major upstream release — reevaluate pin
+    # 🧐 TRAP[DECISION] · 2026-07-12 · — · LiteLLM upgraded v1.90.2 → v1.91.2 (BulkV0)
+    # · v1.91.2 is Wolfi-based (Chainguard wolfi-base), NOT Debian
+    # · Prisma + PostgreSQL works correctly — no Wolfi/Prisma incompatibility
+    # · ⚠️ Digest pin removed — update-tag only. To re-pin by digest:
+    # ·   docker pull ghcr.io/berriai/litellm:v1.91.2 && docker inspect --format='{{index .RepoDigests 0}}' ghcr.io/berriai/litellm:v1.91.2
+    # · Rev: when upgrading LiteLLM, update both tag AND digest. Run:
+    # ·   docker pull ghcr.io/berriai/litellm:vX.Y.Z && docker inspect --format='{{index .RepoDigests 0}}' ghcr.io/berriai/litellm:vX.Y.Z
+    # 🧐 TRAP[DECISION] · 2026-07-12 · — · LiteLLM digest pin — mutable-tag risk
+    # · Digest pin гарантирует воспроизводимость билда и защищает от supply-chain атак.
+    # · При обновлении: docker pull ghcr.io/berriai/litellm:vX.Y.Z && docker inspect
+    # ·   --format='{{index .RepoDigests 0}}' ghcr.io/berriai/litellm:vX.Y.Z
+    # · Затем заменить tag И digest в этой строке.
+    # · Rev: on next major upstream release — reevaluate pin
+    image: ghcr.io/berriai/litellm:v1.96.2@sha256:6378c0f68aa9d91820b80cd2ac68b8bb8d70f6c498f504edc7296a9dfd44b0a8
+    container_name: litellm
+    profiles: [litellm]
+    stop_signal: SIGTERM
+    restart: unless-stopped
+    stop_grace_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+          pids: 256
+    logging: *default-logging
+
+    ports:
+      - "127.0.0.1:${LITELLM_PORT:-4000}:4000"
+
+    # --config flag required to load model list from mounted config file
+    command:
+      - "--port"
+      - "4000"
+      - "--config"
+      - "/app/config/litellm-config.yml"
+
+    environment:
+      # ✅ TRAP[DECISION] · 2026-07-12 · — · DATABASE_URL — PostgreSQL for v1.90.2
+      # · v1.90.2 is Wolfi-based (Chainguard) — Prisma + PostgreSQL works correctly
+      # · Prisma Wolfi incompatibility that affected v1.55+ is resolved in v1.90+
+      # · This enables LiteLLM UI (dashboard), API key management, spend_logs persistence
+      # · Rev: if Prisma Wolfi breaks in a future upgrade, remove DATABASE_URL and switch to SQLite
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?PG_PASSWORD_REQUIRED}@pgbouncer:6432/litellm?sslmode=disable"
+
+      # Master key — required for LiteLLM proxy admin operations
+      # ⚠️ No fallback — must be set in secrets.env or env file
+      LITELLM_MASTER_KEY: "${LITELLM_MASTER_KEY:?LITELLM_MASTER_KEY is required}"
+
+      # LITELLM_LICENSE — реальный env (secrets.env); пустая строка подавляет enterprise-проверку
+      LITELLM_LICENSE: "${LITELLM_LICENSE:-}"
+
+      # Langfuse tracing — sends LLM call metadata to Langfuse for observability
+      LANGFUSE_PUBLIC_KEY: "${LANGFUSE_PUBLIC_KEY:-}"
+      LANGFUSE_SECRET_KEY: "${LANGFUSE_SECRET_KEY:-}"
+      LANGFUSE_HOST: "http://langfuse:3000"
+
+      # Config file path
+      CONFIG_FILE: "/app/config/litellm-config.yml"
+
+      # LLM API Keys (passthrough from secrets.env)
+      # DEEPSEEK_API_KEY — единственный реальный AI-провайдер ключ
+      DEEPSEEK_API_KEY: "${DEEPSEEK_API_KEY:?required}"
+
+      # ⚠️ TRAP[DECISION] · 2026-07-24 · — · LITELLM_ENVIRONMENT required for supported_environments
+      # · Without this, models with supported_environments are filtered out at startup
+      # · DevPlan 049: all models have supported_environments: [production, local]
+      # · Rev: if multi-environment deployment needed, make this configurable per context
+      LITELLM_ENVIRONMENT: "development"
+
+      # Disable auth for health/metrics (public endpoints)
+      LITELLM_REQUIRE_AUTH_FOR_METRICS: "true"
+      LITELLM_DISABLE_AUTH_FOR_HEALTH_CHECK: "true"
+
+    extra_hosts:
+      # ⚠️ TRAP[BUG] · 2026-06-28 · host.docker.internal needed for HTTP_PROXY resolution.
+      - "host.docker.internal:host-gateway"
+
+    volumes:
+      - ./config/litellm-config.yml:/app/config/litellm-config.yml:ro
+
+    networks:
+      observability-net:
+        aliases:
+          - litellm
+      shared-db-net:
+        aliases:
+          - litellm
+      hermes-agent-net:
+        aliases:
+          - litellm
+
+    # /health/liveliness — reliable liveness check for all configs (no auth, no model_list)
+    # 🧐 TRAP[DECISION] · 2026-08-03 · — · Единый health-эндпоинт LiteLLM (DevPlan 122 T2)
+    # · Rejected: /health (требует Bearer в production — disable_auth_for_health_check только в test.yml)
+    # ·   и /health/readiness (проверяет коннект к БД — сбой БД = рестарт-цикл)
+    # · Reason: /health/liveliness — unauth, чистая проверка «сервер поднят», эталон в test.yml.
+    # ·   SoT: platform-infra.yaml env_defaults.LITELLM_HEALTH_URL (parity-гейт test_gate_litellm_health_url_parity).
+    # · Rev: если LiteLLM изменит семантику эндпоинтов — менять канон в одном месте.
+    # 🧐 TRAP[DECISION] · 2026-07-26 · — · start_period=60s / retries=3 standard per DevPlan 083
+    # · Rejected: start_period=120s / retries=5 (overly conservative — verified Prisma migrate 45-55s)
+    # · Reason: DevPlan 083 standardized 60s for litellm (40-60s Prisma migrate + 5-10s model cost fetch
+    # ·   + 5-10s Python init = 50-80s total; 60s start_period + 3×15s = 105s grace window)
+    # · Rev: if Prisma migrate latency exceeds 60s on slow storage, revert to start_period=120s
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness', timeout=5)"]
+      interval: 15s
+      timeout: 10s
+      retries: 3          # 5→3: standardized per DevPlan 083 (3 retries × 15s = 45s after start_period)
+      start_period: 60s   # 120→60s: standardized per DevPlan 083
+  # endregion service:litellm
+
+networks:
+  observability-net:
+    external: true
+    name: observability-net
+  shared-db-net:
+    external: true
+    name: shared-db-net
+  hermes-agent-net:
+    external: true
+    name: hermes-agent-net

@@ -1,0 +1,45 @@
+# GREP_SUMMARY: composite-action setup-gitleaks cache-install gitleaks-v8.30.1 reusable
+# STRUCTURE: ▶ actions/cache@v6 → ◇ key:gitleaks-version-runner_os → ◇ conditional download → ⎋ /usr/local/bin/gitleaks
+# region MODULE_CONTRACT
+## @purpose  Reusable composite action: install and cache gitleaks binary (v8.30.1).
+##           Eliminates 3× duplicate gitleaks install sequences across CI workflows.
+## @scope    All .github/workflows/*.yml that need gitleaks secret scanning
+## @invariants
+##   - Version: 8.30.1 (default, overridable via input)
+##   - Cache: /usr/local/bin/gitleaks, keyed by version + runner.os
+##   - Download: conditional on cache miss
+##   - Architecture: linux_x64 only (GitHub Actions ubuntu-latest)
+## @rationale  DevPlan 002 — TASK-1: Composite action standardizes gitleaks setup across
+##             2 workflow consumers (push-gate, platform-test).
+##             Single source of truth for gitleaks version eliminates version drift (P5).
+# endregion MODULE_CONTRACT
+
+name: 'Setup Gitleaks'
+description: 'Install and cache gitleaks binary (v8.30.1)'
+
+inputs:
+  version:
+    description: 'Gitleaks version'
+    required: false
+    default: '8.30.1'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Cache gitleaks binary
+      uses: actions/cache@v6
+      with:
+        path: /usr/local/bin/gitleaks
+        key: gitleaks-${{ inputs.version }}-${{ runner.os }}
+
+    - name: Install gitleaks (skip if cache hit)
+      shell: bash
+      run: |
+        if [ ! -f /usr/local/bin/gitleaks ]; then
+          VERSION="${{ inputs.version }}"
+          curl -L -o /tmp/gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz"
+          tar -xzf /tmp/gitleaks.tar.gz -C /usr/local/bin/ gitleaks
+          chmod +x /usr/local/bin/gitleaks
+          rm /tmp/gitleaks.tar.gz
+        fi

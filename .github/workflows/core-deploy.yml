@@ -1,0 +1,280 @@
+# GREP_SUMMARY: core-deploy sha-aware-aggregator workflow-run platform-gate-fast rsync ssh-native bootstrap node-arg ci-pipeline audit-trail
+# STRUCTURE: on:workflow_run(platform-gate-fast:completed,main) + workflow_dispatch → push-filter → verify SHA via GitHub API → rsync core/ → /opt/platform/ → ssh make node-update NODE=<name> → cleanup
+# region MODULE_CONTRACT
+## @purpose  CI pipeline for core code delivery to VPS — SHA-aware aggregator:
+##           Triggers on platform-gate-fast completion (push to main only), verifies platform-gate-fast
+##           success for same SHA, then rsyncs core/ and bootstraps on VPS with NODE= argument.
+## @scope    Triggered by workflow_run on platform-gate-fast (completed, success, push event) OR manual workflow_dispatch
+## @invariants
+##   - Triggers ONLY on platform-gate-fast success (D2, DevPlan 116 B11 T4 — лёгкий gate, не full platform-test)
+##   - Push filter: github.event.workflow_run.event == 'push' prevents deploy on PR trigger
+##   - Verifies platform-gate-fast succeeded for the same SHA via GitHub API
+##   - SHA from workflow_run.head_sha (not github.sha)
+##   - Rsync excludes: .git/, __pycache__/, *.pyc
+##   - Destination: /opt/platform/core/ on VPS
+##   - SSH user default: ci-deploy
+##   - Node-update: `cd /opt/platform && make node-update NODE=<name>` (bootstrap-node сохранён как INIT-only manual fallback)
+##   - NODE= auto-detected from /opt/node-configs/ on VPS (P11 fix replaced by auto-detection)
+##   - Audit trail via GITHUB_SHA logged at deploy time
+##   - workflow_dispatch: manual override with SHA validation
+## @rationale  SHA-aware aggregator prevents deploy after partial pipeline (D4).
+##             Plan 2 consolidation: main-full-gate removed, deploy workflows trigger
+##             on platform-test with push event filter (no race condition P6).
+##             DevPlan 116 B11 T4 (D2, U-57): trigger переключён на platform-gate-fast —
+##             downstream НЕ ждёт full-gate + integration + docker-степы (flaky-изоляция).
+##             NODE= auto-detected via auto_detect_node_name() in bootstrap.sh (replaces P11 fix).
+## @changes — 2026-07-15 | Trigger: main-full-gate→platform-test + push event filter
+## @changes — 2026-07-15 | NODE auto-detected (Option A, replacing P11 secrets-based fix)
+## @changes — 2026-08-01 | DevPlan 116 B11 T4 (D2): trigger → platform-gate-fast
+# endregion MODULE_CONTRACT
+
+name: core-deploy
+
+on:
+  workflow_run:
+    workflows: ["platform-gate-fast"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  VPS_USER: root
+  # 🧐 TRAP[DECISION] · 2026-08-05 · HI · core-deploy: root-shell канал (C-8, DevPlan 136 W11 T11.8)
+  # · Rejected: ci-deploy forced-command канал (orchestrator_cli dispatch verbs: ping/exit/status/
+  # ·   verify/remove/receive, verbs.py) — rsync --server и `make node-update`/`make provision`
+  # ·   требуют полноценный shell; dispatch не имеет verbs для core-доставки (receive = только
+  # ·   payload-деплой проектов). Верифицировано: фактический SSH-канал — setup-ssh action
+  # ·   (.github/actions/setup-ssh) + ssh_opts SoT (core.internal.shared.ssh_opts --shell),
+  # ·   user = env.VPS_USER = root.
+  # · Reason: VPS_SSH_KEY (base64, setup-ssh, cleanup после рана) даёт ROOT SHELL на VPS. Это
+  # ·   ОТДЕЛЬНЫЙ канал от ci-deploy forced-command (другой ключ, другой пользователь). Risk-
+  # ·   acceptance: ключ ограничен known_hosts (ssh-keyscan), удаляется в cleanup (always),
+  # ·   audit-trail деплоя логирует SHA. Связано с W10 sudoers-сужением (S-1/S-2/S-3).
+  # · Rev: 2026-10-21 — если core-доставка получит dispatch-verb (node-update/provision) или
+  # ·   ограниченного non-root пользователя с точечным sudoers (rsync-флаги) — перевести с root.
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.workflow_run.head_sha || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  verify-and-deploy:
+    # Push filter: only deploy when triggered by push event (not PR)
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push') }}
+    runs-on: ubuntu-latest
+    # C-9 (DevPlan 136 W11 T11.9): 15 → 30 мин — rsync (core+makefiles+node-configs) +
+    # provision + node-update (DEPLOY_PARALLEL=true, deploy-modules timeout 600s, W9 T9.15)
+    # превышали 15 мин на холодном пуше/первом деплое. Вариант B (split rsync/node-update
+    # jobs) отклонён: увеличивает латентность цепочки без выигрыша (rsync ~2-4 мин).
+    timeout-minutes: 30
+
+    steps:
+      # ⚠️ TRAP[BUG] · 2026-07-23 · P0 · sha-resolve before checkout broke core-deploy
+      # · Symptom: "Can't find 'action.yml' under .../.github/actions/sha-resolve"
+      # · Root: local composite action requires checkout first (same fix as e8ad2a9 for setup-platform)
+      # · Fix: checkout before any local action; sha-resolve skip still gates subsequent steps
+      # · Prevention: G2 gate test (test_gate_workflow_checkout_order.py)
+
+      # ─── Step 1: Checkout repository ───────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      # ─── Step 2: Resolve SHA + verify platform-gate-fast (composite) ────
+      # StatusReport 046 T7 (CICD-03): inline SHA verification → sha-resolve composite action.
+      # DevPlan 116 B11 T4 (D2): верифицируется platform-gate-fast (workflow-file), не platform-test.
+      - name: Resolve SHA and verify platform-gate-fast
+        id: sha
+        uses: ./.github/actions/sha-resolve
+        with:
+          verify: 'true'
+          workflow-file: 'platform-gate-fast.yml'
+
+      - name: Setup platform (composite — python only)
+        if: steps.sha.outputs.skip != 'true'
+        uses: ./.github/actions/setup-platform
+        with:
+          # python-version intentionally left '' — core-deploy is a pure SSH/rsync wrapper:
+          # all make targets (provision, node-update) run REMOTELY on the VPS (apt python3
+          # 3.10-3.12), no local Python execution on the runner. Step is effectively a no-op.
+          python-version: ''
+          install-gitleaks: 'false'
+          run-provisioner: 'false'
+
+      # ═══════════════════════════════════════════════════════════════════
+      # DevPlan 065 P1+P3+P5: setup-ssh composite action — единый source of truth
+      # ═══════════════════════════════════════════════════════════════════
+      - name: Setup SSH for VPS
+        if: steps.sha.outputs.skip != 'true'
+        id: setup-ssh
+        uses: ./.github/actions/setup-ssh
+        with:
+          ssh-key: ${{ secrets.VPS_SSH_KEY }}
+          ssh-host: ${{ secrets.VPS_HOST }}
+          ssh-user: ${{ env.VPS_USER }}
+
+      # ═══════════════════════════════════════════════════════════════════
+      # DevPlan 117 D27: SSH_OPTS — единый SoT (core/internal/shared/ssh_opts.py).
+      # CI-воркфлоу не импортируют Python напрямую — получают флаги через CLI --shell
+      # (ConnectTimeout из timeouts.SSH_CONNECT_TIMEOUT=30, канон; raw-литералы в CI запрещены, D69).
+      # ═══════════════════════════════════════════════════════════════════
+      - name: Get SSH_OPTS from SoT
+        if: steps.sha.outputs.skip != 'true'
+        id: ssh_opts
+        run: echo "opts=$(python3 -m core.internal.shared.ssh_opts --shell)" >> $GITHUB_OUTPUT
+
+      # ═══════════════════════════════════════════════════════════════════
+      # DevPlan 065 P2: SSH pre-flight check — fail-fast before deploy
+      # ═══════════════════════════════════════════════════════════════════
+      - name: SSH pre-flight check
+        if: steps.sha.outputs.skip != 'true'
+        run: |
+          if ssh ${{ steps.ssh_opts.outputs.opts }} \
+            ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }} "echo OK" 2>&1; then
+            echo "[IMP:9][preflight] SSH connectivity to ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }} verified"
+          else
+            echo "::error::[IMP:10][preflight] SSH pre-flight FAILED — check key format, host, and connectivity"
+            exit 1
+          fi
+
+      # ─── Step 4: Rsync core + config to VPS (S5 consolidated) ─────────
+      # ⚠️ TRAP[BUG] · 2026-07-23 · P0 · secrets-check шаг не используется — fail-fast на SSH
+      # · Symptom: secrets were set but $GITHUB_OUTPUT skip=true was ignored,
+      #   OR SSH key format issue. Either way, the gate added a silent-skip
+      #   surface — better to fail fast on SSH error.
+      # · Fix: без промежуточного secrets-check — fail-fast при SSH-ошибке.
+      # · SSH key: stored base64-encoded to preserve exact format across gh secret set.
+      # · 2026-07-24: inline SSH setup moved to setup-ssh composite action (DevPlan 065)
+      - name: Rsync core + config to VPS
+        if: steps.sha.outputs.skip != 'true'
+        run: |
+          SHA="${{ steps.sha.outputs.sha }}"
+          ssh ${{ steps.ssh_opts.outputs.opts }} \
+            ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }} "mkdir -p /opt/platform/core"
+          # ⚠️ TRAP[BUG] 2026-08-03 · rsync --delete без guard'а — молчаливый унос файлов (DevPlan 125 T4)
+          # · Symptom: при отсутствии/пустом источнике rsync --delete удалил бы /opt/platform/core/*
+          #   (symmetрия с node-configs guard ниже отсутствовала — guard был только у node-configs)
+          # · Root: --delete требует непустой источник; проверка была только у 1 из 3 rsync-шагов
+          # · Fix: guard [ -d ./core ] + непустота источника ПЕРЕД --delete (DevPlan 125 T4)
+          if [ -d ./core ] && [ -n "$(ls -A ./core 2>/dev/null)" ]; then
+            # Rsync core/ with --delete (excludes .git, __pycache__, *.pyc)
+            rsync -avz --delete \
+              --exclude '.git/' \
+              --exclude '__pycache__/' \
+              --exclude '*.pyc' \
+              --exclude 'default-user.xml' \
+              --exclude '.env' \
+              ./core/ ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/platform/core/
+          else
+            echo "[IMP:8][deploy][rsync] core/ отсутствует/пуст на раннере — rsync --delete ПРОПУЩЕН (предотвращение уноса /opt/platform/core)"
+          fi
+          # Rsync root-level config files + makefiles (required by Makefile include-split W4-E4)
+          # ⚠️ TRAP[BUG] · 2026-07-23 · P0 · makefiles/ trailing slash copies CONTENTS not directory
+          # · Symptom: make: *** No rule to make target 'makefiles/repair.mk'.  Stop.
+          # · Root: rsync ./makefiles/ → copies *.mk to /opt/platform/, but
+          #   Makefile does `include makefiles/bootstrap.mk` (expects subdirectory)
+          # · Fix: rsync ./makefiles (no trailing slash) copies directory itself → /opt/platform/makefiles/
+          # ⚠️ TRAP[BUG] 2026-08-03 · makefiles-шаг без guard'а (DevPlan 125 T4)
+          # · Symptom: отсутствие источников → rsync change_dir fail (code 23) → падение шага без контекста
+          # · Fix: guard по образцу node-configs — симметричный skip-лог вместо молчаливой ошибки
+          if [ -f ./platform-env.yaml ] && [ -f ./Makefile ] && [ -d ./makefiles ]; then
+            rsync -avz \
+              ./platform-env.yaml ./Makefile ./makefiles \
+              ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/platform/
+          else
+            echo "[IMP:8][deploy][rsync] platform-env.yaml/Makefile/makefiles отсутствуют на раннере — пропуск"
+          fi
+          # ⚠️ TRAP[BUG] · 2026-08-06 · HI · REQ_FIX (141 r2): scripts/ не доставлялась CI-каналом
+          # · Symptom: /opt/platform/scripts/make-log-shell.sh отсутствовал → Makefile:80 SHELL →
+          # ·   make на ноде Error 127 (provision). Синк с guard'ом по образцу makefiles-шага.
+          if [ -d ./scripts ]; then
+            ssh ${{ steps.ssh_opts.outputs.opts }} \
+              ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }} "mkdir -p /opt/platform/scripts"
+            rsync -avz \
+              ./scripts/ ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/platform/scripts/
+          else
+            echo "[IMP:8][deploy][rsync] scripts/ отсутствует на раннере — пропуск"
+          fi
+          # Rsync node-configs (per-node config + encrypted secrets)
+          # · Excludes .git, __pycache__
+          # · Destination: /opt/node-configs/ on VPS
+          # ⚠️ TRAP[BUG] 2026-08-03 · node-configs gitignored (орг-репозиторий) —
+          #   отсутствует на CI-раннере → rsync change_dir fail (code 23), core-deploy
+          #   падал после первого зелёного gate-fast. node-configs на VPS доставляются
+          #   операторским каналом (bootstrap SCP / орг-репозиторий) — CI НЕ должен
+          #   перетирать /opt/node-configs. Условный rsync: источник есть → синхронизировать.
+          if [ -d ./node-configs ]; then
+            rsync -avz \
+              --exclude '.git/' \
+              --exclude '__pycache__/' \
+              --exclude '*.pyc' \
+              ./node-configs/ ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/node-configs/
+          else
+            echo "[IMP:8][deploy][rsync] node-configs/ отсутствует (gitignored, орг-репозиторий) — пропуск (доставлен bootstrap'ом)"
+          fi
+          echo "[IMP:9][deploy][rsync] Core + config + makefiles + node-configs rsync complete — SHA $SHA"
+
+      # ─── Step 5: Provision networks + volumes on VPS via make provision (Invariant 1) ───
+      - name: Provision environment on VPS (networks + volumes)
+        if: steps.sha.outputs.skip != 'true'
+        run: |
+          ssh ${{ steps.ssh_opts.outputs.opts }} \
+            ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }} \
+            "cd /opt/platform && make provision SCOPE=networks,volumes"
+
+      # ─── Step 6: Node update on VPS (5m) ──────────────────────────────
+      # T18: заменён make bootstrap-node → make node-update.
+      # bootstrap-node сохранён как manual fallback (INIT-only) через
+      # make bootstrap-node NODE=<name> — недоступен через CI, только shell.
+      # 2026-07-24: SSH опции (-i, -o IdentitiesOnly, -o StrictHostKeyChecking)
+      # обеспечены setup-ssh composite action (DevPlan 065).
+      - name: Node update on VPS
+        if: steps.sha.outputs.skip != 'true'
+        run: |
+          SHA="${{ steps.sha.outputs.sha }}"
+          # Auto-detect NODE name via canonical node_detect on the VPS
+          # (DevPlan 116 B3 T2, U-38 — single detector, excludes scripts/secrets).
+          # python3 = 3.14 after φ1; core lives in /opt/platform.
+          # Same logic as converge.sh / platform-export-metrics.sh wrapper.
+          NODE=$(ssh ${{ steps.ssh_opts.outputs.opts }} \
+            ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }} \
+            'cd /opt/platform && python3 -m core.internal.shared.node_detect --detect-node-name' 2>/dev/null) || NODE=""
+          if [ -z "$NODE" ]; then
+            echo "::error::[IMP:10][deploy] Cannot auto-detect NODE — no node directories in /opt/node-configs/"
+            echo "::error::Action required: run make bootstrap-node NODE=<name> first, or check VPS state"
+            exit 1
+          fi
+          echo "[IMP:8][deploy][node-detect] Auto-detected NODE=${NODE}"
+          # W4 (DevPlan 140): AGE_SECRET_KEY env в remote-команду node-update — канон для
+          # φ9 secrets_update decrypt (ключ НЕ живёт на диске ноды: persist удалён из φ4;
+          # decrypt — tmpfs decrypt-only, S-13). Секрет настраивается оператором в GitHub
+          # Secrets org (AGE_SECRET_KEY). Если секрет НЕ настроен → Actions подставит пустую
+          # строку → detect_age_key деградирует мягко на restore-first fallback /etc/age/key.txt.
+          ssh ${{ steps.ssh_opts.outputs.opts }} \
+            ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }} \
+            "cd /opt/platform && AGE_SECRET_KEY=\"${{ secrets.AGE_SECRET_KEY }}\" DEPLOY_PARALLEL=true GITHUB_SHA=$SHA make node-update NODE=$NODE"
+
+      # ─── Step 6: Audit trail ──────────────────────────────────────────
+      - name: Log deployment audit trail
+        if: steps.sha.outputs.skip != 'true'
+        run: |
+          SHA="${{ steps.sha.outputs.sha }}"
+          echo "[DEPLOY] core SHA $SHA → ${{ secrets.VPS_HOST }}:/opt/platform/core/"
+
+      # ─── Step 7: Failure notification ─────────────────────────────────
+      - name: Notify on failure
+        if: failure() && steps.sha.outputs.skip != 'true'
+        run: |
+          SHA="${{ steps.sha.outputs.sha }}"
+          echo "::error::core-deploy FAILED for SHA $SHA on ${{ secrets.VPS_HOST }}"
+          echo "::error::Action required: investigate and rollback if needed"
+
+      # ─── Step 8: Cleanup SSH key ─────────────────────────────────────
+      - name: Cleanup SSH key
+        if: always()
+        run: |
+          rm -f ~/.ssh/id_rsa ~/.ssh/known_hosts
+          echo "[IMP:7][deploy][cleanup] SSH key cleaned up"

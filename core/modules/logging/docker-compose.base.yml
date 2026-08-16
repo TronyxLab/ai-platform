@@ -1,0 +1,174 @@
+# @purpose  Base compose definition for logging module — Loki + Grafana Alloy
+# GREP_SUMMARY: logging docker-compose loki alloy observability-net profiles x-logging journald-mounts backup-logs-mount promtail-eol
+# STRUCTURE: ▶ loki:3.7.6 [profiles:logging] → observability-net → ┬─ ▶ alloy:1.18.1 [profiles:logging] → loki(dep) + journald mounts + backup-logs mount + alloy-data → ┐
+# region MODULE_CONTRACT
+## @purpose  Base compose definition for logging Docker module
+## @scope    Merged with root docker-compose.yml via include:
+## @invariants
+##   - profiles: [logging] — pluggability: only included when COMPOSE_PROFILES contains logging
+##   - Loki: scratch image (no shell/wget/curl), liveness via /usr/bin/loki -version
+##   - Alloy: depends on loki (same module), Docker socket only (nginx logs via stdout → discovery.docker)
+##   - Alloy journal-скрейп (DevPlan 132 W3, 126 D-1): host-литералы /var/log/journal +
+##     /etc/machine-id (системные mount'ы — precedent /var/run/docker.sock; compose-include
+##     контракт разрешает host-литералы как системные)
+##   - Канон (164 W1-5): логи — Alloy → Loki (promtail EOL 2026-03-02)
+##   - Networks declared as external: true — pre-created by deploy-modules.sh
+##   - All TRAP comments from root compose preserved
+## @rationale Profiles enable selective startup via `make up MODULES=logging`
+# endregion MODULE_CONTRACT
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
+services:
+
+  # ── Loki (Log Storage) ───────────────────────────────────────────────────
+  # region service:loki
+  loki:
+    # 🧐 TRAP[DECISION] · 2026-07-07 · — · Loki upgraded 3.6.0 → 3.7.3 (TASK-2); 3.7.6 (164 W1-5)
+    # · 3.7.6 is latest stable (2026-08-06); scratch image (no wget/curl)
+    # · CHANGELOG: breaking change only for OpenShift operator — not relevant
+    # · Our loki-config.yml (filesystem storage, compactor, v13 schema) is compatible
+    # · Rev: on next major upstream release — reevaluate pin
+    image: grafana/loki:3.7.6@sha256:83c76da7858a8f4f88117ac521864ac33896fdae7a352a1df4068556e7513f64
+    container_name: loki
+    profiles: [logging]
+    restart: unless-stopped
+    stop_signal: SIGTERM
+    deploy:
+      resources:
+        limits:
+          # DevPlan 144 W3 (D2): 256M → 512M — факт. потребление 216MiB (91.3% лимита);
+          # 512M даёт 42% запас (алерт HighMemory при >90%).
+          memory: 512M
+          cpus: "1.0"
+          pids: 256
+        reservations:
+          memory: 128M
+    logging: *default-logging
+
+    ports:
+      - "127.0.0.1:${LOKI_PORT:-3100}:3100"
+
+    command:
+      - "-config.file=/etc/loki/loki-config.yml"
+
+    volumes:
+      - ./config/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - ./config/loki-runtime-config.yml:/etc/loki/runtime-config.yml:rw
+      - loki-data:/loki
+
+    networks:
+      - observability-net
+
+    tmpfs:
+      - /tmp:size=64M,noexec,nosuid
+
+    # ⚠️ TRAP[BUG] · 2026-07-08 · Loki scratch-образ не содержит shell/wget/curl.
+    # · /ready endpoint (port 3100) невозможно прозвонить изнутри контейнера —
+    #   scratch-образ физически не включает HTTP-клиент (ни busybox, ни wget, ни curl).
+    # · Вариант docker healthcheck: test: ["CMD", "wget", "http://127.0.0.1:3100/ready"]
+    #   НЕРАБОТОСПОСОБЕН — нет бинарника wget в $PATH scratch-контейнера.
+    # · Принятое решение:
+    #   - Liveness: check /usr/bin/loki -version (процесс жив → alive),
+    #     потеря readiness при зависшем event-loop НЕ детектируется этим чеком.
+    #   - Readiness: мониторинг метрики loki_ready через Prometheus +
+    #     алерт-правило (alert-rules.yml: LokiNotReady) — внешний HTTP-проб
+    #     на http://loki:3100/ready, выполняемый Prometheus, не изнутри контейнера.
+    #   - Deep-диагностика модуля: healthcheck.sh MODE=deep → check_http /ready
+    #     (core/modules/logging/healthcheck.sh) — внешний проб с хоста.
+    # · Альтернатива: перейти на shell-based образ (grafana/loki:3.7.3-alpine),
+    #   если такой существует — требует отдельного исследования совместимости
+    #   (конфиги, сигналы, entrypoint). Не реализовано.
+    # · 2026-08-06 (D-8, DevPlan 140 W3): инспекция образа подтверждена —
+    #   docker export grafana/loki:3.7.3 → файловая система содержит ЕДИНСТВЕННЫЙ
+    #   бинарник usr/bin/loki, shell/wget/curl/busybox/pgrep отсутствуют (0 утилит).
+    #   HTTP-ready проверка изнутри scratch-контейнера невозможна в принципе —
+    #   ready-критерий остаётся внешним (deep check_http + Prometheus loki_ready),
+    #   liveness-критерий НЕ меняется.
+    # · Rev: при появлении Loki alpine-образа — заменить liveness на wget /ready,
+    #   убрать внешний readiness-мониторинг loki_ready (станет избыточным).
+    healthcheck:
+      test: ["CMD", "/usr/bin/loki", "-version"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+  # endregion service:loki
+
+  # ── Grafana Alloy (Log Collector; promtail EOL 2026-03-02 → REPLACE) ──────
+  # region service:alloy
+  alloy:
+    # ✅ TRAP[DECISION] · 2026-08-13 · — · Promtail → Grafana Alloy v1.18.1 (164 W1-5)
+    # · Promtail EOL 2026-03-02 (Grafana: «No future support or updates will be provided»);
+    #   разработка — в Alloy. Конфиг promtail-config.yml → config.alloy (портированы ВСЕ
+    #   3 источника: docker_sd, journal, backup-logs file-scrape; labels-контракт сохранён —
+    #   compose_service/compose_project/container/host/log_file + nginx json-лейблы).
+    # · Digest: sha256:754409730f1a4ed9781f8a2ea3b6a8c55750ee125a267ecf8fb449f9a25c109a
+    # · Rev: при EOL Alloy — пересмотреть канал логов (канон: Alloy → Loki)
+    image: grafana/alloy:v1.18.1@sha256:754409730f1a4ed9781f8a2ea3b6a8c55750ee125a267ecf8fb449f9a25c109a
+    container_name: alloy
+    profiles: [logging]
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          # 164 W1-5: 128M→256M — Alloy перечитывает docker-history при холодном WAL
+          # и OOM-kill (rc=137) под 128M; steady-state ниже лимита
+          memory: 256M
+          cpus: "0.5"
+          pids: 256
+    logging: *default-logging
+
+    command:
+      - "run"
+      - "/etc/alloy/config.alloy"
+      # WAL/positions — обязателен writable volume (иначе Alloy не стартует)
+      - "--storage.path=/var/lib/alloy/data"
+
+    volumes:
+      - ./config/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # DevPlan 132 W3 (126 D-1): journal-скрейп хоста — /var/log/journal (journald logs,
+      # Storage=persistent) + /etc/machine-id (journald requires machine-id для корректного
+      # чтения journal). Host-литералы допустимы как системные (precedent: docker.sock).
+      - /var/log/journal:/var/log/journal:ro
+      - /etc/machine-id:/etc/machine-id:ro
+      # DevPlan 143 W1A: backup-logs file-scrape — glob /var/log/platform/backup/*.log
+      # в config.alloy (local.file_match). Named-volume (SoT root docker-compose.yml, U-49).
+      # cron пишет маркеры [IMP:9] BACKUP COMPLETE в эти файлы (crontab `>> *.log`) →
+      # file-scrape несёт compose_service="backup-cron" → BackupFreshness alert-expr работает.
+      - backup-logs:/var/log/platform/backup:ro
+      # WAL/positions storage (write required)
+      - alloy-data:/var/lib/alloy/data
+
+    networks:
+      - observability-net
+
+    tmpfs:
+      - /tmp:size=64M,noexec,nosuid
+
+    depends_on:
+      loki:
+        condition: service_healthy
+
+    # Liveness: /bin/alloy -version (Alloy-образ содержит единственный бинарник — тот же
+    # scratch-паттерн, что Loki). Readiness внешний: логи доходят до Loki — индикатор
+    # через alert-rules (BackupFreshness/5xx) + deep-диагностика healthcheck.sh.
+    healthcheck:
+      test: ["CMD", "/bin/alloy", "--version"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+  # endregion service:alloy
+
+networks:
+  # @changes 2026-08-13 (164 W1-5): promtail → alloy (EOL REPLACE); alloy-data том —
+  #   root docker-compose.yml SoT (U-49 канон).
+  observability-net:
+    external: true
+    name: observability-net

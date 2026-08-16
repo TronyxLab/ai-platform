@@ -1,0 +1,25 @@
+# @purpose Test fixture for NodeYaml unit tests — valid node.yaml with all fields (schema-compliant)
+# GREP_SUMMARY: test-data node-yaml-facade valid schema-compliant
+node:
+  host: 1.2.3.4
+  name: test-node
+  owner_key: age1abc123
+contexts:
+  - name: myorg
+domain: example.com
+email: admin@example.com
+acme_dns_plugin: cf
+projects:
+  - name: app1
+    domain: app1.example.com
+    repo: git@github.com:org/app1.git
+    type: backend
+  - name: app2
+    domain: app2.example.com
+    repo: git@github.com:org/app2.git
+    type: backend
+modules:
+  - name: nginx
+    enabled: true
+  - name: postgres
+    enabled: false

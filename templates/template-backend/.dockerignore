@@ -1,0 +1,37 @@
+# GREP_SUMMARY: dockerignore project-template backend build-context venv cache exclude
+# STRUCTURE: ┌.dockerignore┐ → исключения build-контекста Docker (python-проект)
+# region MODULE_CONTRACT
+## @purpose  Build-контекст Docker для backend-проектов (template-backend payload, 170 W12 C8):
+##           исключает venv/кэши/локальные артефакты — контекст меньше, сборка быстрее.
+## @scope    Копируется в проект при make new-project TEMPLATE=backend; Dockerfile — multi-stage python:3.12.13-slim.
+## @invariants
+##   - .env* исключены ВСЕГДА (секреты никогда не попадают в build-контекст)
+##   - src/ (исходники) — НЕ исключаются
+## @rationale 170 W12 C8: у проектов из шаблона не было .dockerignore — node_modules-эквивалент
+##            (.venv, __pycache__) уезжал в контекст docker build.
+## @changes  2026-08-15 | DevPlan 170 W12 C8 — Created
+# endregion MODULE_CONTRACT
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Git
+.git/
+.gitignore
+
+# Секреты и окружение (никогда в образе)
+.env
+.env.*
+!.env.example
+
+# Локальные артефакты
+logs/
+*.log
+.DS_Store

@@ -1,0 +1,26 @@
+# @purpose Test node.yaml fixture for predeploy gate testing — provides a coherent minimal node config
+#   with a single project (test-site) and schema-valid fields. Referenced by predeploy gate tests and
+#   auto-validated against node.schema.json at pytest_sessionstart.
+# GREP_SUMMARY: test-data node-yaml predeploy-gate test-site schema-coherent
+# Auto-validated against core/schemas/node.schema.json at pytest_sessionstart
+# Update this file whenever node.schema.json evolves — sessionstart will catch drift
+
+contexts:
+  - name: test
+
+node:
+  name: test-node
+  host: 127.0.0.1
+  owner_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA test-key-for-gate"
+  timezone: UTC
+
+domain: test.example.com
+email: test@example.com
+
+modules: []
+
+projects:
+  - name: test-site
+    domain: test-site.example.com
+    repo: https://github.com/example/test-site.git
+    type: backend

@@ -1,0 +1,81 @@
+# GREP_SUMMARY: prometheus alert rules ServiceDown HighMemoryUsage HighCPUUsage memory-guard labels-name
+# STRUCTURE: ▶ global:rules → per-project template → $PROJECT substitution → /opt/prometheus/rules/ → ┘
+# region MODULE_CONTRACT
+## @purpose  Prometheus native alerting rules for per-project monitoring
+## @scope    Generated per-project post-deploy (receive verb → monitoring_config_renderer.py)
+##           $PROJECT placeholder is substituted at generation time
+## @invariants
+##   - Three base rules: ServiceDown, HighMemoryUsage, HighCPUUsage
+##   - All rules label alerts with project=$PROJECT for routing
+##   - Rules use PromQL expressions compatible with cAdvisor + node_exporter metrics
+##   - HighMemoryUsage guard (DevPlan 143 W2): `and container_spec_memory_limit_bytes{...} > 0`
+##     на обоих операндах — контейнеры без limits → деление на 0 → +Inf → ложное firing;
+##     guard отфильтровывает серии без лимита. Parity с Grafana provisioning alert-rules.yml.
+##   - Аннотации HighMemoryUsage/HighCPUUsage используют {{ $labels.name }} (DevPlan 144 W2):
+##     cAdvisor экспортирует name (имя контейнера), метки container у cAdvisor-метрик НЕТ —
+##     прежняя аннотация давала «no value» в каждом сообщении. Parity с Grafana provisioning.
+## @rationale Native Prometheus rules (not Grafana) enable alerting even when Grafana is down.
+##           Rules are generated per-project so each project's alerts are independent.
+##           Grafana alerting (in config/alerting/) is the secondary path for dashboard-facing alerts.
+## @changes 2026-08-08 · DevPlan 143 W2 — HighMemoryUsage guard (parity с Grafana provisioning)
+## @changes 2026-08-09 · DevPlan 144 W2 — HighMemoryUsage/HighCPUUsage аннотации
+##           переведены на {{ $labels.name }} (cAdvisor метка name, parity с Grafana)
+# endregion MODULE_CONTRACT
+# ⚠️ TRAP[DECISION] · 2026-07-02 · — · Per-project rule files vs single consolidated file
+# ·   Chose per-project rule files (/opt/prometheus/rules/<project>-alerts.yml) for:
+# ·   - Independent lifecycle per project (add/remove without touching other rules)
+# ·   - Clear ownership — each project knows its own alert rules
+# ·   - Simpler template substitution (single $PROJECT variable)
+# ·   Rev: if project count exceeds 100, reconsider single vs per-project rule files
+# ·   Rejected: single consolidated file — merge conflicts when adding/removing projects
+# ·   Rejected: relabel-based routing from one rule set — doesn't scale with 10+ projects
+
+groups:
+  - name: "${PROJECT}-alerts"
+    interval: 30s
+    rules:
+      # ── ServiceDown ──────────────────────────────────────────────────────────
+      # 🔴 Triggers when a project's metrics target disappears for >2 minutes
+      - alert: "${PROJECT}ServiceDown"
+        expr: "up{project=\"${PROJECT}\"} == 0"
+        for: "2m"
+        labels:
+          severity: "critical"
+          project: "${PROJECT}"
+        annotations:
+          summary: "Service {{ $labels.job }} is down (project: ${PROJECT})"
+          description: "Prometheus target {{ $labels.instance }} for project ${PROJECT} has been unreachable for over 2 minutes."
+
+      # ── HighMemoryUsage ──────────────────────────────────────────────────────
+      # 🟡 Triggers when a container in this project exceeds 90% memory limit for >5 minutes
+      # DevPlan 143 W2: guard `and container_spec_memory_limit_bytes{...} > 0` — контейнеры без
+      # deploy.resources.limits.memory не экспортируют container_spec_memory_limit_bytes (0/absent)
+      # → usage / 0 = +Inf → +Inf > 0.9 = true → ложное firing. Guard отфильтровывает серии без
+      # лимита. Селектор {compose_project="${PROJECT}"} на обоих операндах (parity с Grafana).
+      # DevPlan 144 W4 (2026-08-09): container_memory_usage_bytes → container_memory_working_set_bytes
+      # — usage включает page cache (cAdvisor cache растёт до лимита → ложный firing после поднятия
+      # лимитов); working set = реальное потребление (parity с Grafana provisioning).
+      - alert: "${PROJECT}HighMemoryUsage"
+        expr: "container_memory_working_set_bytes{compose_project=\"${PROJECT}\"} / container_spec_memory_limit_bytes{compose_project=\"${PROJECT}\"} > 0.9 and container_spec_memory_limit_bytes{compose_project=\"${PROJECT}\"} > 0"
+        for: "5m"
+        labels:
+          severity: "warning"
+          project: "${PROJECT}"
+        annotations:
+          # DevPlan 144 W2 (D2): {{ $labels.name }} — cAdvisor метка имени контейнера
+          # (метки container у cAdvisor-метрик нет → «no value»). Parity с Grafana provisioning.
+          summary: "Container {{ $labels.name }} memory > 90% (project: ${PROJECT})"
+          description: "Memory usage for container {{ $labels.name }} in project ${PROJECT} exceeds 90% for more than 5 minutes."
+
+      # ── HighCPUUsage ─────────────────────────────────────────────────────────
+      # 🟡 Triggers when a container in this project exceeds 0.9 CPU cores for >5 minutes
+      - alert: "${PROJECT}HighCPUUsage"
+        expr: "rate(container_cpu_usage_seconds_total{compose_project=\"${PROJECT}\"}[5m]) > 0.9"
+        for: "5m"
+        labels:
+          severity: "warning"
+          project: "${PROJECT}"
+        annotations:
+          # DevPlan 144 W2 (D2): {{ $labels.name }} — см. HighMemoryUsage выше.
+          summary: "Container {{ $labels.name }} CPU usage > 0.9 (project: ${PROJECT})"
+          description: "CPU usage for container {{ $labels.name }} in project ${PROJECT} exceeds 0.9 cores for more than 5 minutes."

@@ -1,0 +1,23 @@
+# GREP_SUMMARY: Makefile.common restart compose include shared-soft-restart
+# STRUCTURE: COMPOSE_CMD default → restart (soft: stop start) — единственный shared-таргет
+# Makefile.common — Shared restart for Docker modules
+# Usage: include ../../Makefile.common (через core/templates/module.mk — не напрямую)
+#
+# ⚠️ TRAP[DECISION] · 2026-08-15 · — · Makefile.common сведён к restart (DevPlan 172 W2.1)
+# · Rejected: оставить 10 таргетов (start/stop/down/status/logs/build/up/restart-hard/restart)
+# · Reason: 9 из 10 перекрывались module.mk:114-169 (last-definition-wins) — мёртвый слой
+# ·   и двойной SoT глаголов. Единственный НЕ перекрытый таргет — restart (soft).
+# ·   Гейт test_gate_make_contract.py::test_module_mk_restart_hard_exists требует
+# ·   restart_section is None в module.mk (наследование из Makefile.common) — поэтому
+# ·   restart остаётся здесь, а не переносится в module.mk.
+# · Rev: если module.mk потребует модуль-специфичный restart — добавить override ПОСЛЕ include.
+#
+# Канонический список таргетов модуля — в module.mk (start/stop/down/restart-hard/
+# status/logs/build/up + опциональные backup/restore); COMPOSE_CMD определён в module.mk
+# ДО include (флаг --env-file + COMPOSE_FILE), ?= здесь — no-op fallback для прямых инклюдов.
+
+COMPOSE_CMD ?= docker compose
+
+.PHONY: restart
+
+restart: stop start

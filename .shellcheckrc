@@ -1,0 +1,26 @@
+# GREP_SUMMARY: shellcheckrc shellcheck config disable severity error
+# STRUCTURE: ▶ disable=SC1091,SC1090,SC2002,SC2015,SC2154,SC2317 → severity=error → ⎋
+# region MODULE_CONTRACT
+## @purpose  Shellcheck configuration for ai-platform shell scripts
+## @scope    Applied by shellcheck CLI and pre-commit hook (shellcheck-py)
+## @invariants
+##   - SC1091, SC1090 disabled: source resolution fails in CI (files not present at static analysis time)
+##   - SC2002 disabled: useless cat — intentional for readability in some scripts
+##   - SC2015 disabled: note that A && B || C is not if-then-else — intentional in simple guard patterns
+##   - SC2154 disabled: variable referenced but not assigned — sourced vars from external files
+##   - SC2317 disabled: command appears unreachable — false positives in trap/exit handlers
+##   - severity=error: only error-level issues cause non-zero exit; warnings/info are informational
+## @rationale — Aligns with pre-commit shellcheck args: --severity=error.
+##              Disabled rules are all "informational" or "style" — not security/correctness.
+# endregion MODULE_CONTRACT
+
+# Disable rules that are too strict for platform scripts
+disable=SC1091,SC1090,SC2002,SC2015,SC2154,SC2317
+
+# Enable error-level only by default
+severity=error
+
+# Force SC2086 (unquoted variables in eval/substitutions) to error even with severity=error
+# SC2086 is warning-level by default in shellcheck, but enable= forces it to error
+# This prevents unquoted variable expansion in bootstrap scripts (post-refactoring audit A4)
+enable=SC2086

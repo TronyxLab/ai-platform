@@ -1,0 +1,51 @@
+# GREP_SUMMARY: monitoring docker-compose test override container_name-test prometheus grafana prometheus-config-init
+# STRUCTURE: base.yml + test.yml → prometheus + grafana + prometheus-config-init with -test suffix and shifted ports
+# region MODULE_CONTRACT
+## @purpose  Test override for monitoring — -test container_name for prometheus, grafana, and prometheus-config-init
+## @scope    Only used in test fixtures. Never used in production.
+## @invariants
+##   - container_name: prometheus-test, grafana-test, prometheus-config-init-test
+##   - restart: unless-stopped для prometheus/grafana, restart: "no" для prometheus-config-init (one-shot)
+##   - Prometheus port: 127.0.0.1:19090:9090
+##   - Grafana port: 127.0.0.1:13030:3000
+## @rationale Стандартный test-overlay контракт (DevPlan 04 DD2). prometheus-config-init-test
+##            добавлен post-factum: init-контейнер конфликтовал по container_name с продом.
+# endregion MODULE_CONTRACT
+
+services:
+  prometheus:
+    container_name: prometheus-test
+    networks: !override  # DevPlan 017 W3.4 — test network isolation
+      - test-observability-net
+    ports: !override  # ⚠️ TRAP[BUG] · 2026-07-18 · HIGH · compose merge склеивает ports base+test → тестовый prometheus биндит 9090 (F-7) · Fix: !override
+      - "127.0.0.1:19090:9090"
+    restart: "no"
+
+  grafana:
+    container_name: grafana-test
+    networks: !override  # DevPlan 017 W3.4 — test network isolation (dual: observability for metrics, proxy for nginx)
+      - test-observability-net
+      - test-proxy-net
+    ports: !override  # ⚠️ TRAP[BUG] · 2026-07-18 · HIGH · compose merge склеивает ports base+test → тестовый grafana биндит 3000 (F-7) · Fix: !override
+      - "127.0.0.1:13030:3000"
+    restart: "no"
+
+  prometheus-config-init:
+    container_name: prometheus-config-init-test
+    restart: "no"
+
+networks:
+  test-observability-net:
+    external: true
+  test-proxy-net:
+    external: true
+
+# 2026-08-04 (DevPlan 129 W3): prometheus-config-gen объявлен в test-overlay —
+# test-стек (base.yml + test.yml, НЕ наследует root compose) ссылается на volume
+# (base.yml:67,104), но не объявлял его → compose up «refers to undefined volume».
+# Root compose объявляет volume для прод-стека; test.yml — только тестовый оверлей
+# (гейт test_gate_volumes_sot сканирует module docker-compose.base.yml top-level
+# volumes, не test.yml — SoT-контракт не нарушен).
+volumes:
+  prometheus-config-gen:
+    driver: local

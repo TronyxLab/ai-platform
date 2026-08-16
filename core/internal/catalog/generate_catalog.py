@@ -1,0 +1,305 @@
+#!/usr/bin/env python3
+# GREP_SUMMARY: generate-catalog, catalog.json, project-registry, ai-platform-yaml, index
+# STRUCTURE: ▶ init args → ○ scan $PROJECTS_BASE/*/*/ai-platform.yaml → ⊕ parse YAML → ⊕ build catalog[] → ∑ sort(org, name) → write catalog.json → ⎋ return count
+# region MODULE_CONTRACT
+## @purpose  Generate catalog.json — центральный реестр всех проектов платформы. Сканирует
+##           PROJECTS_BASE/*/*/ai-platform.yaml, извлекает метаданные, пишет JSON-массив.
+## @scope    Вызывается после успешного деплоя (reconfigure monitoring),
+##           а также standalone через make generate-catalog.
+## @invariants
+##   - Обходит $PROJECTS_BASE/*/*/ai-platform.yaml (org/project двухуровневая вложенность)
+##   - Генерирует валидный JSON-массив с name, type, node, org, domain, database, metrics_port
+##   - catalog.json сохраняется в CATALOG_FILE (по умолчанию /opt/platform/catalog.json)
+##   - Ошибки YAML-парсинга одного проекта НЕ блокируют остальные — WARN + continue
+##   - Сортировка по (org, name) для детерминированного вывода
+##   - D-I4 (DevPlan 145 W3): logging.basicConfig(force=True) ONLY в main() (CLI entrypoint),
+##     НЕ на module-level — side-effect на импорт убран (тесты не отравляют root-логгер)
+## @rationale Единый источник правды для AI-агентов и мониторинга о составе проектов платформы.
+##           Извлечён из inline python3 heredoc generate-catalog.sh в отдельный тестируемый
+##           Python-модуль (Strangler-Fig декомпозиция).
+## @changes  Extracted from generate-catalog.sh inline heredoc → standalone module with CLI args
+##           2026-08-11 · DevPlan 145 W3 D-I4 — basicConfig(force=True) перемещён в main()
+##                      (module-level side-effect ломал чужие логгеры при импорте в тестах)
+## @usecases
+##   - make generate-catalog (через generate-catalog.sh facade)
+##   - reconfigure monitoring после успешного деплоя
+##   - node-update → deploy-modules → healthcheck pipeline
+# endregion MODULE_CONTRACT
+
+import argparse
+import json
+import logging
+import os
+import sys
+from pathlib import Path
+from typing import ClassVar
+
+from core.internal.shared.deploy_paths import DEFAULT_PROJECTS_BASE, platform_remote_base
+from core.internal.shared.exceptions import PlatformError, PlatformFatalError
+from core.internal.shared.project_yaml import get_monitoring, get_needs, load_project_yaml
+
+# ── logging setup ──────────────────────────────────────────────────────────────
+# D-I4 (DevPlan 145 W3): logging.basicConfig перемещён в main() — module-level side-effect
+# (force=True) ломал форматтеры других логгеров при импорте в pytest-сессиях
+# (ValueError: Formatting field not found in record: 'imp_level'). Module-level импорт
+# остаётся чистым; _setup_logging() вызывается только из CLI entrypoint.
+
+log = logging.getLogger("generate_catalog")
+
+
+class _ImpFilter(logging.Filter):
+    """Ensure every log record has a default imp_level for the formatter."""
+
+    # ruff: ignore[PLR6301]  # интерфейс-колбек: override logging.Filter.filter (instance-метод базового класса)
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not hasattr(record, "imp_level"):
+            record.imp_level = 0  # type: ignore[attr-defined]
+        return True
+
+
+log.addFilter(_ImpFilter())
+
+
+def _setup_logging() -> None:
+    """Configure root logger with IMP-format. Called ONLY from main() (D-I4, DevPlan 145 W3).
+
+    ▶ ┌None┐ → ⚡ logging.basicConfig(force=True) → ⎋ None
+
+    ## @purpose — CLI-only logging setup. Module-level basicConfig removed (D-I4) — side-effect
+    ##            на импорт ломал pytest caplog (imp_level formatter applied to foreign loggers).
+    ## @io — ⇥ None → ⎋ None (mutates root logger config)
+    ## @complexity — O(1)
+    ## @invariants
+    ##   - Called only when module is run as CLI (main / __main__), not on import
+    ##   - _ImpFilter installed on generate_catalog logger (not root) for imp_level default
+    """
+    logging.basicConfig(
+        level=logging.INFO,
+        format="[IMP:%(imp_level)s][%(funcName)s] %(message)s",
+        stream=sys.stderr,
+        force=True,
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# region FUNC_generate_catalog
+## @purpose  Scan projects_root for ai-platform.yaml files, build and write catalog JSON
+## @io       Input:  projects_root (str) — root directory with org/project/ layout
+##                   catalog_file (str) — output JSON file path
+##           Output: int — number of projects registered in catalog
+## @complexity O(n) where n = total project directories scanned
+def generate_catalog(projects_root: str, catalog_file: str) -> int:
+    """
+    Scan PROJECTS_BASE/*/*/ai-platform.yaml and produce catalog.json.
+
+    Args:
+        projects_root: Path to projects root directory (e.g. /opt/projects)
+        catalog_file: Path to output JSON file (e.g. /opt/platform/catalog.json)
+
+    Returns:
+        Number of projects registered in the catalog.
+
+    Raises:
+        SystemExit(1) on unrecoverable I/O errors writing the catalog file.
+    """
+    # region FUNC_generate_catalog_impl
+
+    catalog: list[dict[str, object]] = []
+
+    # ▶ discover: iterate org/project two-level hierarchy
+    # ────────────────────────────────────────────────────────────────────────────
+    if not os.path.isdir(projects_root):
+        log.warning("PROJECTS_BASE does not exist or is not a directory: %s", projects_root, extra={"imp_level": 6})  # type: ignore[call-arg]
+        return 0
+
+    for org_dir in os.listdir(projects_root):
+        org_path = os.path.join(projects_root, org_dir)
+        if not os.path.isdir(org_path):
+            continue
+
+        for proj_dir in os.listdir(org_path):
+            proj_path = os.path.join(org_path, proj_dir)
+            if not os.path.isdir(proj_path):
+                continue
+
+            yaml_file = os.path.join(proj_path, "ai-platform.yaml")
+            if not os.path.isfile(yaml_file):
+                continue
+
+            # ⚡ parse YAML: extract metadata per project
+            # ────────────────────────────────────────────────────────────────────
+            try:
+                entry: dict[str, object] = _parse_project_yaml(yaml_file, org_dir, proj_dir)
+                catalog.append(entry)
+                log.log(8, "%s/%s (type=%s)", org_dir, proj_dir, entry["type"], extra={"imp_level": 8})  # type: ignore[call-arg]
+            except (OSError, AttributeError) as exc:
+                log.log(6, "WARN: %s: %s", yaml_file, exc, extra={"imp_level": 6})  # type: ignore[call-arg]
+
+    # ∑ sort and persist
+    # ────────────────────────────────────────────────────────────────────────────
+    catalog.sort(key=lambda x: (x["org"], x["name"]))
+
+    try:
+        catalog_dir = Path(catalog_file).parent
+        os.makedirs(catalog_dir, exist_ok=True)
+        with Path(catalog_file).open("w", encoding="utf-8") as f:
+            json.dump(catalog, f, indent=2, ensure_ascii=False)
+        # ⚠️ TRAP[BUG] · 2026-08-06 · HI · B20b (141 r2): catalog.json 644 root:platform —
+        # ·   пост-деплой чейн (generate-catalog под ci-deploy, теперь в группе platform)
+        # ·   не мог перезаписать файл (group write отсутствовал) → каталог не регенерировался.
+        # · Fix: 0664 при создании — group write для ci-deploy (группа platform).
+        # · Rev: если артефакты /opt/platform сменят группу — синхронизировать с users.py.
+        os.chmod(catalog_file, 0o664)  # nosec B103 — group-write намеренный (B20b)
+    except OSError as exc:
+        log.log(9, "FATAL: cannot write %s: %s", catalog_file, exc, extra={"imp_level": 9})  # type: ignore[call-arg]
+        # T3.6 (DevPlan 116 B4): business sys.exit → raise PlatformFatalError (IO — ручное вмешательство)
+        msg = f"Cannot write catalog {catalog_file}: {exc}"
+        raise PlatformFatalError(msg) from exc
+
+    count = len(catalog)
+    log.log(9, "DONE: %d projects registered in %s", count, catalog_file, extra={"imp_level": 9})  # type: ignore[call-arg]
+    return count
+
+    # endregion FUNC_generate_catalog_impl
+
+
+# endregion FUNC_generate_catalog
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# region FUNC__parse_project_yaml
+## @purpose  Parse a single ai-platform.yaml and extract catalog entry fields
+## @io       Input:  yaml_file (str) — path to ai-platform.yaml
+##                   org_dir  (str) — organization directory name
+##                   proj_dir (str) — project directory name
+##           Output: dict with keys: name, type, node, org, domain, database, metrics_port
+## @complexity O(1) — single file parse + dict lookups
+## @rationale Extracted to separate function for testability of individual project parsing
+def _parse_project_yaml(yaml_file: str, org_dir: str, proj_dir: str) -> dict[str, object]:
+    """
+    Read and parse a single ai-platform.yaml, returning a catalog entry dict.
+
+    Args:
+        yaml_file: Absolute path to the YAML file.
+        org_dir:   Organization directory name (e.g. "myorg").
+        proj_dir:  Project directory name (e.g. "myproject").
+
+    Returns:
+        Dictionary with catalog entry fields.
+
+    Raises:
+        Various exceptions from file I/O — caller handles them. YAML-парсинг — shared reader (B1).
+    """
+    # B1: единый shared-ридер ai-platform.yaml (yaml.safe_load вне shared удалён)
+    data = load_project_yaml(Path(yaml_file).parent)
+    if not data:
+        data = {}
+
+    entry: dict[str, object] = {
+        "name": data.get("name", proj_dir),
+        "type": data.get("type", "unknown"),
+        "node": data.get("target_node", ""),
+        "org": org_dir,
+        "domain": None,
+        "database": None,
+        "metrics_port": None,
+    }
+
+    # Extract optional 'needs' block (через shared аксессор get_needs, B1)
+    needs = get_needs(data)
+    if needs:
+        domain_val = needs.get("domain")
+        if domain_val and domain_val is not False:
+            entry["domain"] = domain_val
+        db_val = needs.get("database")
+        if db_val and db_val is not False:
+            entry["database"] = db_val
+
+    # Extract optional 'monitoring' block (через shared аксессор get_monitoring, B1)
+    monitoring = get_monitoring(data)
+    if monitoring:
+        entry["metrics_port"] = monitoring.get("metrics_port")
+
+    return entry
+
+
+# endregion FUNC__parse_project_yaml
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# region FUNC_parse_cli_args
+class _CatalogArgs(argparse.Namespace):
+    """Typed argparse namespace (W11: Namespace attribute access is Any).
+
+    ClassVar-аннотации БЕЗ значений (только типы) — значения ломают hasattr/parser-дефолты
+    (hasattr(args, 'catalog_file') до parse = False — parser default из env/SoT применяется).
+    """
+
+    catalog_file: ClassVar[str]
+    projects_root: ClassVar[str]
+
+
+## @purpose  Parse CLI arguments with env var fallback for catalog-file and projects-root
+## @io       Input:  argv (list[str]) — command-line arguments
+##           Output: argparse.Namespace with catalog_file, projects_root
+## @complexity O(1)
+def parse_cli_args(argv: list[str]) -> _CatalogArgs:
+    """
+    Parse CLI arguments, falling back to environment variables if not provided.
+
+    Priority: CLI arg > env var > built-in default.
+
+    Environment variables:
+        CATALOG_FILE   — default /opt/platform/catalog.json
+        PROJECTS_BASE  — default /opt/projects
+
+    Returns:
+        Namespace with .catalog_file and .projects_root attributes.
+    """
+    parser = argparse.ArgumentParser(
+        description="Generate platform project catalog from ai-platform.yaml files",
+    )
+    parser.add_argument(
+        "--catalog-file",
+        default=os.environ.get("CATALOG_FILE", str(platform_remote_base() / "catalog.json")),
+        help="Output catalog JSON path (default: $CATALOG_FILE or <platform>/catalog.json)",
+    )
+    parser.add_argument(
+        "--projects-root",
+        default=os.environ.get("PROJECTS_BASE", DEFAULT_PROJECTS_BASE),
+        help="Projects root directory (default: $PROJECTS_BASE or /opt/projects)",
+    )
+    return parser.parse_args(argv[1:], namespace=_CatalogArgs())
+
+
+# endregion FUNC_parse_cli_args
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# region FUNC_main
+## @purpose  CLI entrypoint — parse args, call generate_catalog, exit with code
+## @io       Input:  argv (list[str]) — command-line arguments
+##           Output: None (calls sys.exit)
+## @complexity O(n) — delegates to generate_catalog
+def main(argv: list[str] | None = None) -> int:
+    """CLI entrypoint: parse args, generate catalog, return status code (T4: main() -> int)."""
+    _setup_logging()  # D-I4: IMP-formatter applied only on CLI invocation, not import
+    try:
+        args = parse_cli_args(argv if argv is not None else sys.argv)
+        count = generate_catalog(
+            projects_root=args.projects_root,
+            catalog_file=args.catalog_file,
+        )
+    except PlatformError as e:
+        log.log(10, "[IMP:10][main] Unhandled platform error (exit=%d): %s", e.exit_code, e)  # type: ignore[call-arg]
+        print(f"[FATAL] {e}", file=sys.stderr)
+        return e.exit_code
+    else:
+        return 0 if count >= 0 else 1
+
+
+# endregion FUNC_main
+
+
+if __name__ == "__main__":
+    sys.exit(main())

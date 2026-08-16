@@ -1,0 +1,27 @@
+# GREP_SUMMARY: compose-profiles composite-action platform-env profiles csv env-export
+# STRUCTURE: runs:composite → ○ yaml_query --get profiles --items → ⊕ paste -sd, → export GITHUB_ENV
+# region MODULE_CONTRACT
+## @purpose  Composite action: читает список профилей из platform-env.yaml и экспортирует
+##           COMPOSE_PROFILES в $GITHUB_ENV для всех последующих шагов.
+## @scope    Вызывается в CI workflows как setup-шаг. Делегирует в core/internal/scripts/yaml_query.py.
+## @invariants
+##   - Читает platform-env.yaml#profiles (authoritative source)
+##   - Экспортирует COMPOSE_PROFILES как comma-separated string в $GITHUB_ENV
+##   - Идемпотентен: повторный вызов перезаписывает то же значение
+## @rationale  DevPlan 064 S1: устраняет 3× хардкод COMPOSE_PROFILES.
+##             При добавлении нового модуля через generate-manifests список обновляется
+##             автоматически во всех CI workflows без ручных правок.
+# endregion MODULE_CONTRACT
+
+name: 'Export COMPOSE_PROFILES'
+description: 'Reads profiles from platform-env.yaml and exports COMPOSE_PROFILES env variable'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Export COMPOSE_PROFILES from platform-env.yaml
+      shell: bash
+      run: |
+        PROFILES=$(python3 core/internal/scripts/yaml_query.py --file platform-env.yaml --get profiles --items | paste -sd, -)
+        echo "COMPOSE_PROFILES=$PROFILES" >> "$GITHUB_ENV"
+        echo "[IMP:9][compose-profiles] Exported COMPOSE_PROFILES=$PROFILES"

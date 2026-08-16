@@ -1,0 +1,13 @@
+{
+  "typeCheckingMode": "basic",
+  "include": ["tests"],
+  "exclude": [".venv", ".pytest_cache", "__pycache__"],
+  "reportMissingImports": "warning",
+  "reportMissingTypeStubs": "none",
+  "reportUnknownVariableType": "none",
+  "reportUnknownMemberType": "none",
+  "reportUnknownArgumentType": "none",
+  "reportUnusedVariable": "warning",
+  "reportUnusedImport": "warning",
+  "pythonVersion": "3.10"
+}

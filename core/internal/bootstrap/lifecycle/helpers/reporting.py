@@ -1,0 +1,280 @@
+#!/usr/bin/env python3
+# GREP_SUMMARY: reporting-helpers, run-healthchecks, write-audit-log, send-telegram, telegram-notifier, audit-log
+# STRUCTURE: ▶ run_healthchecks ┌NodeYaml modules → invoke_module_interface liveness┐ → ⚡ write_audit_log ┌/var/log/platform/audit.jsonl JSON-lines (write_audit_entry)┐ → ⚡ send_telegram ┌telegram_notifier (non-fatal)┐ → ⎋
+# region MODULE_CONTRACT
+## @purpose  Reporting I/O-хелперы bootstrap-фаз (healthchecks, audit log, Telegram notify) —
+##           извлечены из state_machine (B9 T1, U-08). Все функции публичные.
+## @scope    reporting.py: run_healthchecks, write_audit_log, send_telegram.
+##           write_audit_log/send_telegram принимают sm: StateMachineProtocol — читают только
+##           sm.state (duck-typing через Protocol, БЕЗ импорта state_machine — разрыв цикла
+##           state_machine→phases→helpers→reporting→state_machine, W10-design п.2 / W5-C2).
+##           Используются phases.py (φ11 healthcheck) и lifecycle/cli.py (audit/telegram после run).
+## @invariants
+##   - Все reporting-функции non-fatal (best-effort) — не блокируют lifecycle
+##   - run_healthchecks: invoke_module_interface — bash-функция, запускается через bash -c
+##     с source paths.sh (TRAP[BUG] 2026-07-24 P0)
+##   - send_telegram: TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID отсутствуют → skip
+##   - StateMachineProtocol — read-only вью: reporting НЕ вызывает методы sm, только читает
+##     sm.state.{mode,node,warnings,errors} (SimpleNamespace-дубли в тестах совместимы)
+## @rationale Strangler-Fig: извлечение I/O из state_machine-монолита (DevPlan 116 B9 D1).
+## @changes  2026-08-01 · Extracted from state_machine (B9 T1)
+## @changes  2026-08-14 · DevPlan 170 W1-A3 — proxy-URL порт из SoT firewall.PRIVOXY_PORT
+## @changes  2026-08-15 · DevPlan 170 W5-C2 (W10-design п.2) — тип-only импорт StateMachine
+##           заменён на StateMachineProtocol (duck-typing) —
+##           цикл импортов state_machine→phases→helpers→reporting разорван
+# endregion MODULE_CONTRACT
+
+from __future__ import annotations
+
+import logging
+import os
+import pathlib
+import shlex
+import subprocess
+import time
+from collections.abc import Callable
+from typing import Protocol, cast
+
+# DevPlan 170 W1-A3: приватный порт Privoxy из SoT firewall.py (литерал 8118 удалён)
+from core.internal.bootstrap.firewall import PRIVOXY_PORT
+
+# B3: канонический platform root — shared/deploy_paths (литерал /opt/platform удалён)
+from core.internal.shared.deploy_paths import platform_remote_base
+from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError, ConfigValidationError
+from core.internal.shared.telegram_notifier import send_telegram as _shared_send_telegram
+
+
+class _StateView(Protocol):
+    """Read-only вью BootstrapState — контракт reporting-хелперов (mode/node/warnings/errors)."""
+
+    @property
+    def mode(self) -> str: ...
+
+    @property
+    def node(self) -> str | None: ...
+
+    @property
+    def warnings(self) -> list[str]: ...
+
+    @property
+    def errors(self) -> list[str]: ...
+
+
+class StateMachineProtocol(Protocol):
+    """Duck-typing протокол StateMachine для reporting (W10-design п.2).
+
+    Заменяет тип-only импорт StateMachine: reporting читает ТОЛЬКО sm.state — структурная
+    совместимость с StateMachine (state_store.BootstrapState) и тестовыми
+    SimpleNamespace-дублями; импорт state_machine отсутствует → цикл разорван.
+    """
+
+    @property
+    def state(self) -> _StateView: ...
+
+
+logger = logging.getLogger(__name__)
+
+
+# region FUNC_run_healthchecks
+## @purpose  Run healthchecks on all deployed modules (liveness via invoke_module_interface).
+## @io       ⇥ node_yaml → ⎋ None (non-fatal)
+## @complexity O(M * R) where M = modules, R = retries
+## @invariants
+##   - invoke_module_interface — bash-функция из module-interface.sh (НЕ executable) —
+##     вызывается через bash -c с source paths.sh (TRAP[BUG] 2026-07-24 P0)
+def run_healthchecks(node_yaml: str) -> None:
+    """Run healthchecks on all deployed modules."""
+    if not node_yaml or not pathlib.Path(node_yaml).is_file():
+        logger.warning("[IMP:7][healthcheck] NODE_YAML not set or not found — skipping healthchecks")
+        return
+
+    hc_max_retries = 10
+    hc_retry_interval = 10
+    hc_fail = 0
+
+    # ruff: ignore[PLW0717] — тело try присваивает имена, читаемые except/после — извлечение ломает видимость
+    try:
+        from core.internal.shared.node_yaml import NodeYaml
+
+        node = NodeYaml(node_yaml)
+        modules = cast(
+            "object", node.get("modules", default=dict[str, object]())
+        )  # W11-G1 cross-file: NodeYaml.get → Any; default типизирован
+        if isinstance(modules, dict):
+            module_items = list(
+                cast("dict[str, object]", modules).items()
+            )  # W11-G1 cross-file: каскад от node_yaml.get → Any
+        elif isinstance(modules, list):
+            mod_list = cast("list[dict[str, object]]", modules)  # W11-G1 cross-file: каскад от node_yaml.get → Any
+            module_items = [(cast("str", mod.get("name", "")), cast("object", mod)) for mod in mod_list]
+        else:
+            module_items = []
+
+        for mod_name, mod_value in module_items:
+            if not mod_name:
+                continue
+            if isinstance(mod_value, dict):
+                enabled = str(
+                    cast("dict[str, object]", mod_value).get("enabled", True)
+                ).lower()  # W11-G1 cross-file: каскад от node_yaml.get
+            else:
+                enabled = str(mod_value).lower()
+            if enabled != "true":
+                continue
+
+            passed = False
+            # ⚠️ TRAP[BUG] · 2026-07-24 · P0 · invoke_module_interface is a bash function, not an executable
+            # · Symptom: subprocess.run(["invoke_module_interface", ...]) → FileNotFoundError
+            # · Root: invoke_module_interface is sourced from module-interface.sh (via paths.sh)
+            # · Fix: wrap in bash -c with proper sourcing
+            platform_root = str(platform_remote_base())
+            for attempt in range(1, hc_max_retries + 1):
+                # ruff: ignore[PLW0717] — try вложен в условный блок внутри функции — после-try чтение локалей неанал...
+                try:
+                    hc_cmd = (
+                        f"source {shlex.quote(platform_root + '/core/lib/paths.sh')} && "
+                        f"invoke_module_interface {shlex.quote(mod_name)} healthcheck liveness"
+                    )
+                    hc_result = subprocess.run(
+                        ["bash", "-c", hc_cmd], capture_output=True, text=True, timeout=30, check=False
+                    )
+                    if hc_result.returncode == 0:
+                        logger.info(
+                            "[IMP:9][healthcheck:%s] Healthcheck PASS (attempt %d/%d)",
+                            mod_name,
+                            attempt,
+                            hc_max_retries,
+                        )
+                        passed = True
+                        break
+                    if attempt == 1:
+                        logger.warning(
+                            "[IMP:7][healthcheck:%s] stderr: %s",
+                            mod_name,
+                            hc_result.stderr.strip()[-200:] if hc_result.stderr else "(empty)",
+                        )
+                except subprocess.TimeoutExpired:
+                    logger.warning("[IMP:7][healthcheck:%s] Timeout (attempt %d/%d)", mod_name, attempt, hc_max_retries)
+                except FileNotFoundError:
+                    logger.warning(
+                        "[IMP:7][healthcheck:%s] bash not found (attempt %d/%d)", mod_name, attempt, hc_max_retries
+                    )
+                if attempt < hc_max_retries:
+                    time.sleep(hc_retry_interval)
+
+            if not passed:
+                logger.warning("[IMP:7][healthcheck:%s] Healthcheck FAILED after %d attempts", mod_name, hc_max_retries)
+                hc_fail += 1
+    except ImportError:
+        logger.warning("[IMP:7][healthcheck] NodeYaml library not available — skipping inline healthchecks")
+    except (ConfigNotFoundError, ConfigParseError, ConfigValidationError) as e:
+        logger.warning("[IMP:7][healthcheck] Failed to parse node.yaml: %s", e)
+
+    if hc_fail > 0:
+        logger.warning("[IMP:7][healthcheck] %d healthcheck(s) failed — node partially ready", hc_fail)
+    else:
+        logger.info("[IMP:9][healthcheck] All healthchecks passed")
+
+
+# endregion FUNC_run_healthchecks
+
+
+# region FUNC_write_audit_log
+## @purpose  Write bootstrap/update audit summary to the ЕДИНЫЙ audit log (shared audit_logger).
+## @io       ⇥ sm → ⎋ None (side-effect: writes JSON-lines entries to /var/log/platform/audit.jsonl)
+## @complexity O(1)
+## @changes 2026-08-01 | DevPlan 116 B11 T2 (U-10, D1): free-text pipe → shared write_audit_entry;
+##           единый файл audit.jsonl; warnings/errors — отдельные WARN/ERROR записи
+## @changes 2026-08-05 | DevPlan 136 W9 T9.6 (L-5/L-11): +result param — FAILED-записи из
+##           failure-путей run_init/run_update (audit больше не только в успешном хвосте)
+def write_audit_log(sm: StateMachineProtocol, result: str | None = None) -> None:
+    """Write bootstrap/update audit summary to the unified audit log (JSON-lines, D1).
+
+    result="FAILED" → summary status FAILED (failure paths, T9.6); default — DONE/ERROR по errors.
+    """
+    from core.internal.shared.audit_logger import write_audit_entry
+
+    # ruff: ignore[PLW0717] — тело try присваивает имена, читаемые except/после — извлечение ломает видимость
+    try:
+        mode = sm.state.mode
+        node = sm.state.node or "unknown"
+        warnings_count = len(sm.state.warnings)
+        errors_count = len(sm.state.errors)
+        summary_status = result if result is not None else ("DONE" if errors_count == 0 else "ERROR")
+        summary = f"bootstrap:{mode} {summary_status} | node={node} | warnings={warnings_count} | errors={errors_count}"
+        write_audit_entry(
+            tag=f"bootstrap:{mode}",
+            status=summary_status,
+            message=summary,
+            node=node,
+            warnings_count=warnings_count,
+            errors_count=errors_count,
+        )
+        for w in sm.state.warnings:
+            write_audit_entry(tag=f"bootstrap:{mode}", status="WARN", message=str(w), node=node)
+        for e in sm.state.errors:
+            write_audit_entry(tag=f"bootstrap:{mode}", status="ERROR", message=str(e), node=node)
+        logger.info(
+            "[IMP:9][audit] Audit entries written (bootstrap:%s %s, %d warnings, %d errors)",
+            mode,
+            summary_status,
+            warnings_count,
+            errors_count,
+        )
+    except OSError as e:
+        logger.warning("[IMP:7][audit] Failed to write audit entries: %s", e)
+
+
+# endregion FUNC_write_audit_log
+
+
+# region FUNC_send_telegram
+## @purpose  Send Telegram notification with bootstrap/update results (non-fatal).
+## @io       ⇥ sm → ⎋ None (non-fatal); notifier: Callable | None (W4b DI — ленивый default _shared_send_telegram)
+## @complexity O(1)
+## @changes 2026-07-30 | T19 — Replaced inline urllib with shared telegram_notifier.send_telegram()
+## @changes 2026-08-13 | DevPlan 160 W4b — +notifier (инъекция фабрики send_telegram)
+def send_telegram(
+    sm: StateMachineProtocol,
+    *,
+    notifier: Callable[..., object] | None = None,
+    bot_token: str | None = None,
+    chat_id: str | None = None,
+) -> None:
+    """Send Telegram notification with bootstrap/update results."""
+    resolved_token = os.environ.get("TELEGRAM_BOT_TOKEN", "") if bot_token is None else bot_token
+    resolved_chat = os.environ.get("TELEGRAM_CHAT_ID", "") if chat_id is None else chat_id
+    if not resolved_token or not resolved_chat:
+        logger.info("[IMP:9][telegram] TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set — notifications disabled")
+        return
+
+    ts = time.strftime("%d.%m.%Y %H:%M:%S")
+    node = sm.state.node or "unknown"
+    warnings_count = len(sm.state.warnings)
+    errors_count = len(sm.state.errors)
+
+    status_suffix = "⚠️ Warnings/Errors:" if errors_count > 0 or warnings_count > 0 else "✅"
+
+    msg = f"🚀 [node: {node}] Узел обновлён {status_suffix}\nВремя: {ts}"
+    if warnings_count > 0:
+        for w in sm.state.warnings:
+            msg += f"\n- ⚠️ {w}"
+    if errors_count > 0:
+        for e in sm.state.errors:
+            msg += f"\n- ❌ {e}"
+
+    proxy_url = os.environ.get("TELEGRAM_PROXY_URL", f"http://127.0.0.1:{PRIVOXY_PORT}")
+    # W4b (160 T4.2): notifier параметром + ленивый default = shared send_telegram (ровно текущее)
+    # 🧐 TRAP[DECISION] · 2026-08-13 · — · send_telegram DI: notifier в ПОТРЕБИТЕЛЕ, не http_opener в самой send_telegram
+    # · Rejected: добавить http_opener/opener_factory в shared telegram_notifier.send_telegram (инъекция HTTP-транспорта)
+    # · Reason: send_telegram — публичный API с 6+ потребителями (shell-фасады, notify CLI, watchdog subprocess);
+    # ·   существующие тесты telegram_notifier патчат urllib.OpenerDirector.open/build_opener (рабочий паттерн);
+    # ·   изменение сигнатуры несло бы риск без выгоды — T4.2 «клиент параметром» = инъекция в потребителя.
+    # · Rev: если тесты telegram_notifier начнут требовать fake-транспорт без патчей urllib → добавить http_opener.
+    deliver = notifier if notifier is not None else _shared_send_telegram
+    success = deliver(msg, resolved_token, resolved_chat, proxy_url)
+    if success:
+        logger.info("[IMP:9][telegram] Notification sent to chat %s", resolved_chat)
+
+
+# endregion FUNC_send_telegram

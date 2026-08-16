@@ -1,0 +1,43 @@
+# GREP_SUMMARY: logging module loki alloy logs observability-net promtail-eol
+# STRUCTURE: ▶ module:logging → loki:3.7.6 + alloy:1.18.1 → observability-net → ┐
+# region MODULE_CONTRACT
+## @purpose  Loki log storage + Grafana Alloy log collector for platform observability
+## @scope    Log aggregation (Loki), log collection (Alloy via Docker socket + journal + backup-logs; promtail EOL)
+## @invariants
+##   - install_type: docker — managed by compose
+##   - Loki: scratch image, 3.7.6, filesystem storage with compactor
+##   - Alloy: Docker socket + journal + backup-logs scraping (канон: Alloy → Loki, 164 W1-5)
+##   - Alloy depends on Loki (same-module)
+##   - No host port for Alloy (internal collector)
+##   - Loki port 3100 on localhost only
+## @rationale Split from observability module per Phase 3 refactoring (D1)
+## @changes — 2026-08-09 | DevPlan 144 W3 — resources.limits.memory 384M → 640M (loki 256M→512M,
+##           sync по сумме limits: loki 512M + alloy 256M)
+## @changes — 2026-08-13 | DevPlan 164 W1-5 — promtail→Alloy (EOL REPLACE; alloy 128M→256M OOM-фикс)
+# endregion MODULE_CONTRACT
+
+name: logging
+install_type: docker
+description: "Loki log storage and Grafana Alloy log collector — platform logging stack (promtail EOL)"
+
+depends_on: []
+
+# D5 (118 G4): severity/restart — логи, non-critical; restart согласован с base.yml (loki/alloy unless-stopped)
+severity: normal
+restart: unless-stopped
+
+interfaces:
+  - healthcheck
+
+spool_dir: /var/lib/platform/loki-data
+spool_volume: loki-data
+
+resources:
+  # Синхронизировано с docker-compose.base.yml (DevPlan 144 W3): сумма limits всех сервисов модуля
+  # = loki 512M (256M→512M, факт. потребление 216MiB — 91.3% лимита) + alloy 256M = 768M.
+  limits:
+    memory: 768M
+  reservations:
+    memory: 128M
+
+env_requires: []

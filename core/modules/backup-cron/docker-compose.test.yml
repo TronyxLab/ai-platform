@@ -1,0 +1,65 @@
+# @purpose  Docker Compose test override for backup-cron — Docker-managed volumes, test container name, faster healthcheck
+# GREP_SUMMARY: docker-compose test-override backup-cron managed-volume wal-archive-test test-container cross-platform
+# STRUCTURE: ▶ base.yml + test.yml → merge → ⚡ backup-cron-test override → Docker-managed volumes (incl wal-archive-test) → ┘
+# region MODULE_CONTRACT
+## @purpose  Test override for backup-cron: Docker-managed volumes (cross-platform), test container name,
+##           faster healthcheck intervals for CI
+## @scope    CI/test environments only. Merged with docker-compose.base.yml via `docker compose -f base.yml -f test.yml`.
+## @invariants
+##   - container_name: backup-cron-test (avoids conflicts with production backup-cron container)
+##   - volumes: backup-spool-test + backup-logs-test Docker-managed volumes (no bind-mount — cross-platform, macOS compatible)
+##   - Healthcheck interval reduced to 15s (vs 60s production) for faster CI feedback
+##   - restart: unless-stopped — containers restart on crash (--wait compatible; D5 fix)
+##   - Build context and Dockerfile preserved from base.yml
+##   - Environment variables preserved from base.yml
+##   - Networks: test-shared-db-net only — external network (test isolation, DevPlan 017 W3.6)
+##   - tmpfs mounts preserved from base.yml
+## @rationale
+##   Q: Why Docker-managed volumes instead of bind-mount?
+##   A: Docker Desktop on macOS doesn't support bind-mount driver_opts. Docker-managed volumes
+##      work on all platforms. Follows same pattern as postgres/docker-compose.test.yml.
+##   Q: Why faster healthcheck (15s vs 60s)?
+##   A: CI tests need faster feedback. 60s healthcheck would add unnecessary delay to test suite.
+## @changes
+##   2026-07-12 · CREATED · backup-cron docker-compose.test.yml for CI compatibility
+## @modulemap
+##   base.yml + test.yml → full backup-cron compose config for CI/component tests
+## @usecases
+##   pytest test_component_backup_cron.py (uses docker compose -f base.yml -f test.yml up --wait)
+# endregion MODULE_CONTRACT
+
+services:
+  backup-cron:
+    container_name: backup-cron-test
+    networks: !override  # DevPlan 017 W3.6 — test network isolation (db for backup)
+      - test-shared-db-net
+    # ── Docker-managed volumes (cross-platform, no bind-mount) ──
+    volumes:
+      - backup-spool-test:/var/lib/platform/backup-spool
+      - backup-logs-test:/var/log/platform/backup
+      # DevPlan 132 W2 (канон volume-rename U-62): НЕ переопределяем wal-archive in-place —
+      # объявляем НОВЫЙ volume wal-archive-test и перепривязываем сервис
+      - wal-archive-test:/var/lib/platform/wal-archive
+    # ── Test env override: WAL-архив в test-volume (DevPlan 132 W2) ──
+    environment:
+      WAL_ARCHIVE_DIR: "/var/lib/platform/wal-archive"
+    # ── Faster healthcheck for CI ──
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep cron > /dev/null 2>&1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: "no"
+
+volumes:
+  backup-spool-test:
+    driver: local
+  backup-logs-test:
+    driver: local
+  wal-archive-test:
+    driver: local
+
+networks:
+  test-shared-db-net:
+    external: true

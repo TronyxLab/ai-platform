@@ -1,0 +1,57 @@
+# GREP_SUMMARY: infra-metrics module cadvisor node-exporter nginx-exporter redis-exporter postgres-exporter metrics
+# STRUCTURE: ▶ module:infra-metrics → cadvisor:v0.55.1 + node-exp:v1.12.0 + nginx-exp:1.5.1 + redis-exp:v1.86.0 + postgres-exp:v0.16.0 → observability-net + shared-cache-net + shared-db-net → ┐
+# region MODULE_CONTRACT
+## @purpose  Infrastructure metrics collection: cAdvisor, Node Exporter, Nginx Prometheus Exporter, Redis Exporter, Postgres Exporter
+## @scope    Container metrics (cAdvisor), host metrics (Node Exporter), nginx stub_status bridge, redis cache metrics, postgres db metrics
+## @invariants
+##   - install_type: docker — managed by compose
+##   - cAdvisor: granular caps (SYS_ADMIN + DAC_READ_SEARCH), no privileged mode
+##   - Node Exporter: bind mount /host:ro (no rslave — macOS compatible)
+##   - Nginx Exporter: scrape URI → http://nginx:8081/stub_status (Docker DNS)
+##   - Redis Exporter: scrape redis://redis:6379 (Docker DNS, via shared-cache-net)
+##   - Postgres Exporter: DATA_SOURCE_NAME → postgres://postgres:5432 (via shared-db-net)
+##   - redis-exporter on both observability-net (Prometheus) and shared-cache-net (Redis access)
+##   - postgres-exporter on both observability-net (Prometheus) and shared-db-net (Postgres access)
+##   - All services on observability-net for Prometheus scraping
+##   - No host machine access needed beyond bind mounts
+## @rationale Split from observability module per Phase 3 refactoring (D1)
+##   nginx-exporter now uses Docker DNS (nginx container) instead of host.docker.internal
+##   redis-exporter added per owner verdict wave-redis 2026-07-15 for cache monitoring
+##   postgres-exporter added per ISS-R2 drift-audit fix for postgres query monitoring
+## @changes — 2026-07-18 | Added postgres-exporter (ISS-R2)
+## @changes — 2026-07-15 | Added redis-exporter (wave-redis)
+## @changes — 2026-08-09 | DevPlan 144 W3 — resources.limits.memory 224M → 416M → 672M (cadvisor
+##           128M→256M→512M — деплой-верификация: 250MiB при 256M = 98%, поднят до 512M;
+##           sync по сумме limits всех 5 сервисов модуля)
+# endregion MODULE_CONTRACT
+
+name: infra-metrics
+install_type: docker
+description: "Infrastructure metrics: cAdvisor (container), Node Exporter (host), Nginx Prometheus Exporter, Redis Exporter"
+
+depends_on:
+  - nginx
+
+# D5 (118 G4): severity/restart — метрики, non-critical; restart согласован с base.yml (все 5 сервисов unless-stopped)
+severity: normal
+restart: unless-stopped
+
+interfaces:
+  - healthcheck
+
+spool_dir: /var/lib/platform/infra-metrics-data
+
+resources:
+  # Синхронизировано с docker-compose.base.yml (DevPlan 144 W3): сумма limits всех сервисов модуля
+  # = cadvisor 512M + node-exporter 64M + nginx-prometheus-exporter 32M + redis-exporter 128M
+  # + postgres-exporter 128M = 864M (cadvisor 128M→256M→512M, деплой-верификация 2026-08-09:
+  # 250MiB при 256M = 98% — лимит поднят до 512M; exporters 32M→128M — 165 sync-fix
+  # против дрейфа base.yml, гейт test_memory_limits.test_module_yaml_sync_all).
+  limits:
+    memory: 864M
+  reservations:
+    memory: 64M
+
+env_requires:
+  - POSTGRES_USER
+  - POSTGRES_PASSWORD

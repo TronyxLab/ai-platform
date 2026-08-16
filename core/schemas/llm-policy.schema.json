@@ -1,0 +1,184 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://core/schemas/llm-policy.schema.json",
+  "$comment": "GREP_SUMMARY: llm-policy schema aliases providers profiles auto_provision jsonschema Draft-07\nSTRUCTURE: root(properties) → providers(object) → aliases(object) → profiles(object) → auto_provision(object) → required(4 fields)",
+  "title": "LLM Policy Schema",
+  "description": "Schema for core/internal/llm/policy.yaml — canonical alias dictionary, providers, profiles, auto-provision rules. Validates the SSoT for LiteLLM multi-tenant gateway configuration.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "providers": {
+      "type": "object",
+      "description": "AI provider definitions — each provider maps to an environment variable containing the API key",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "key_env": {
+            "type": "string",
+            "description": "Environment variable name that holds the API key for this provider"
+          }
+        },
+        "required": ["key_env"],
+        "additionalProperties": false
+      }
+    },
+    "aliases": {
+      "type": "object",
+      "description": "Semantic model aliases — consumers call these names, not raw model strings",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string",
+            "description": "Human-readable alias description"
+          },
+          "context_window": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Maximum context window in tokens"
+          },
+          "features": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Capability tags: reasoning, chat, code, vision, multimodal, structured_output, embedding"
+          },
+          "deployments": {
+            "description": "Active deployments with primary/fallback, or empty list for reserved (inactive) aliases",
+            "oneOf": [
+              {
+                "type": "array",
+                "maxItems": 0,
+                "description": "Empty list = alias is reserved but not active (no model routed)"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "primary": {
+                    "type": "object",
+                    "properties": {
+                      "provider": {
+                        "type": "string",
+                        "description": "Provider name (must exist in providers section)"
+                      },
+                      "model": {
+                        "type": "string",
+                        "description": "LiteLLM model string, e.g. deepseek/deepseek-v4-pro"
+                      }
+                    },
+                    "required": ["provider", "model"],
+                    "additionalProperties": false
+                  },
+                  "fallback": {
+                    "type": "object",
+                    "properties": {
+                      "provider": {
+                        "type": "string",
+                        "description": "Provider name for fallback"
+                      },
+                      "model": {
+                        "type": "string",
+                        "description": "LiteLLM model string for fallback"
+                      }
+                    },
+                    "required": ["provider", "model"],
+                    "additionalProperties": false
+                  }
+                },
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "required": ["label", "features", "deployments"],
+        "additionalProperties": false
+      }
+    },
+    "profiles": {
+      "type": "object",
+      "description": "Access profiles — each profile defines which models a project can access, budget limits, and rate limits",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string",
+            "description": "Human-readable profile description"
+          },
+          "models": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "List of alias names this profile grants access to"
+          },
+          "budget": {
+            "type": "object",
+            "properties": {
+              "daily": {
+                "type": "number",
+                "minimum": 0,
+                "description": "Daily budget in USD"
+              },
+              "monthly": {
+                "type": "number",
+                "minimum": 0,
+                "description": "Monthly budget in USD"
+              }
+            },
+            "additionalProperties": false
+          },
+          "rpm_limit": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Requests per minute limit"
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Arbitrary metadata key-value pairs (e.g. tier, environment)"
+          }
+        },
+        "required": ["label", "models", "budget", "rpm_limit"],
+        "additionalProperties": false
+      }
+    },
+    "auto_provision": {
+      "type": "object",
+      "description": "Auto-provisioning rules for virtual keys — which profile to assign by default and special overrides",
+      "properties": {
+        "default_profile": {
+          "type": "string",
+          "description": "Profile name assigned when a project doesn't specify one"
+        },
+        "profile_rules": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "match": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Match criteria (e.g. name: hermes-agent)"
+              },
+              "profile": {
+                "type": "string",
+                "description": "Profile to assign when match succeeds"
+              }
+            },
+            "required": ["match", "profile"],
+            "additionalProperties": false
+          },
+          "description": "Override rules — first match wins"
+        }
+      },
+      "required": ["default_profile", "profile_rules"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["providers", "aliases", "profiles", "auto_provision"]
+}

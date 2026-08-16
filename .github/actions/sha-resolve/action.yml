@@ -1,0 +1,122 @@
+# GREP_SUMMARY: sha-resolve composite-action sha-verification platform-test platform-gate-fast workflow_run workflow_dispatch skip-output
+# STRUCTURE: inputs:verify(default:true)+workflow-file(default:platform-test.yml) → ○ resolve SHA from event context → ◇ verify <workflow-file>:SHA succeeds → ⊕ skip output → ⎋ sha+skip outputs
+# region MODULE_CONTRACT
+## @purpose  Canonical SHA resolution + gate-workflow verification in one composite action.
+##           Eliminates 3× duplicate SHA resolution blocks across workflows (build-platform,
+##           mirror, core-deploy) with a single Source of Truth for SHA-aware aggregator pattern.
+##           DevPlan 116 B11 T4 (D2): вход workflow-file параметризует, КАКОЙ gate-workflow
+##           верифицируется (platform-gate-fast для downstream, platform-test по умолчанию).
+## @scope    Used by build-platform.yml, mirror.yml, core-deploy.yml and similar workflows that need
+##           to resolve SHA from workflow_run or workflow_dispatch event and verify that
+##           the gate workflow succeeded for that commit.
+## @invariants
+##   - Resolves SHA from workflow_run.head_sha or github.sha depending on event
+##   - When verify=true (default): calls GitHub API to verify <workflow-file> success for SHA
+##   - workflow-file: имя файла workflow для верификации (default platform-test.yml;
+##     downstream передаёт platform-gate-fast.yml — D2, DevPlan 116 B11 T4)
+##   - When verify=false: only resolves SHA without API call (for workflows without gating)
+##   - Requires GH_TOKEN env when verify=true (set at action level)
+##   - skip output: 'true' if verification failed (downstream should skip), 'false' otherwise.
+##     Only meaningful when verify=true. Document in downstream: `if: steps.<id>.outputs.skip != 'true'`
+## @rationale SHA-aware aggregator (D4) pattern was duplicated across build-platform.yml, mirror.yml
+##            and core-deploy.yml with identical blocks. Consolidation reduces drift risk.
+##            StatusReport 046 T7 (CICD-03): added `skip` output to absorb core-deploy.yml inline logic.
+## @changes — 2026-07-16 | Extracted from build-platform.yml + mirror.yml per DevPlan 017 T12
+##           — 2026-07-22 | Added `skip` output for core-deploy.yml migration (StatusReport 046 T7 — CICD-03)
+##           — 2026-08-01 | DevPlan 116 B11 T4 (D2): workflow-file input (platform-gate-fast для downstream)
+# endregion MODULE_CONTRACT
+
+name: 'Resolve SHA'
+description: 'Determine SHA from event context and optionally verify the gate workflow succeeded for SHA'
+
+inputs:
+  verify:
+    description: 'Verify the gate workflow succeeded for the SHA via GitHub API (true/false)'
+    required: false
+    default: 'true'
+  workflow-file:
+    description: 'Workflow file to verify (default platform-test.yml; downstream uses platform-gate-fast.yml — D2)'
+    required: false
+    default: 'platform-test.yml'
+
+outputs:
+  sha:
+    description: 'Resolved commit SHA'
+    value: ${{ steps.resolve.outputs.sha }}
+  skip:
+    description: 'Whether downstream steps should be skipped (true if verification failed). Only meaningful when verify=true.'
+    value: ${{ steps.verify.outputs.skip }}
+
+runs:
+  using: 'composite'
+  steps:
+    # ─── Step 1: Resolve SHA from event context ──────────────────────────
+    - name: Resolve SHA from event
+      id: resolve
+      shell: bash
+      run: |
+        if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+          SHA="${{ github.sha }}"
+          echo "[IMP:9][sha-resolve] Manual trigger — using SHA: $SHA"
+        elif [[ "${{ github.event_name }}" == "workflow_run" ]]; then
+          SHA="${{ github.event.workflow_run.head_sha }}"
+          echo "[IMP:9][sha-resolve] workflow_run trigger — using head SHA: $SHA"
+        else
+          SHA="${{ github.sha }}"
+          echo "[IMP:9][sha-resolve] Default — using github.sha: $SHA"
+        fi
+        echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+    # ─── Step 2: Verify gate workflow success (optional) ─────────────────
+    # StatusReport 046 T7 (CICD-03): added skip output for core-deploy.yml migration.
+    # DevPlan 116 B11 T4 (D2): workflow-file параметризует gate-workflow
+    # (platform-gate-fast для downstream; platform-test по умолчанию).
+    # ⚠️ TRAP[DESIGN] · 2026-07-22 · MED · `skip` output — leaky abstraction
+    # · sha-resolve изначально stateless SHA resolver. `skip` делает его осведомлённым о downstream flow.
+    # · Mitigation: skip существует только когда verify=true. Semantically transparent:
+    # ·   `if: steps.sha.outputs.skip != 'true'` reads naturally.
+    - name: Verify gate workflow succeeded for SHA
+      if: inputs.verify == 'true'
+      id: verify
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        SHA="${{ steps.resolve.outputs.sha }}"
+        WF="${{ inputs.workflow-file }}"
+        echo "[IMP:9][sha-resolve][verify] Verifying $WF for SHA: $SHA"
+
+        # Retry-цикл: workflow_run триггерится при завершении гейта, но GitHub API
+        # может отдавать conclusion с задержкой 1-5 мин (eventual consistency) —
+        # без retry core-deploy падал «no successful run» сразу после зелёного гейта.
+        # C-12 (DevPlan 136 W11 T11.11): fail-fast при ЗАВЕРШЁННОМ неуспешном ране гейта —
+        # не ждать 5 мин слепого retry, если гейт уже упал/отменён (bounded retry 10×30s +
+        # fail при итоговой неопределённости — канон D10 сохранён).
+        COUNT=0
+        FAILED=0
+        for attempt in 1 2 3 4 5 6 7 8 9 10; do
+          DATA=$(gh api \
+            "/repos/${{ github.repository }}/actions/workflows/$WF/runs?head_sha=$SHA&per_page=10" \
+            2>/dev/null || echo '{}')
+          COUNT=$(printf '%s' "$DATA" | jq '[.workflow_runs[]? | select(.conclusion == "success")] | length' 2>/dev/null || echo 0)
+          if [ "$COUNT" -gt 0 ]; then
+            break
+          fi
+          FAILED=$(printf '%s' "$DATA" | jq '[.workflow_runs[]? | select(.status == "completed" and .conclusion != "success")] | length' 2>/dev/null || echo 0)
+          if [ "$FAILED" -gt 0 ]; then
+            echo "[IMP:10][sha-resolve][verify] ERROR: $WF has a FAILED/completed-non-success run for SHA $SHA — no retry needed"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "[IMP:7][sha-resolve][verify] Attempt $attempt/10: no successful $WF run for $SHA yet — retrying in 30s"
+          sleep 30
+        done
+
+        if [ "$COUNT" -eq 0 ]; then
+          echo "[IMP:10][sha-resolve][verify] ERROR: $WF has no successful run for SHA $SHA"
+          echo "skip=true" >> "$GITHUB_OUTPUT"
+          exit 1
+        fi
+
+        echo "[IMP:9][sha-resolve][verify] $WF succeeded for SHA $SHA"
+        echo "skip=false" >> "$GITHUB_OUTPUT"

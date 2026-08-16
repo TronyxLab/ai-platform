@@ -1,0 +1,143 @@
+# GREP_SUMMARY: platform-gate-fast fast-gate push-main gitleaks make-gate-fast workflow-trigger downstream-decoupling D2 ruff-sarif basedpyright-json junit-artifacts DevPlan-163
+# STRUCTURE: on:push(main)+workflow_dispatch → job(fast-gate: checkout → setup-platform+gitleaks → compose-profiles → make gate MODE=fast → check-manifests → artifacts(ruff SARIF + basedpyright JSON + junit)) → ⎋ downstream (core-deploy/build-platform/mirror) триггерятся workflow_run
+# region MODULE_CONTRACT
+## @purpose  Лёгкий gate-workflow (D2, DevPlan 116 B11 T4, U-57): развязка downstream
+##           (core-deploy/build-platform/mirror) от полного platform-test (~20 мин + integration/docker).
+##           Триггерится на push в main (и workflow_dispatch), выполняет gitleaks + `make gate MODE=fast`
+##           (~2-3 мин). Downstream workflows слушают workflow_run этого workflow.
+## @scope    Push-гейт для main-ветки. НЕ заменяет platform-test (PR-валидация + full-gate остаются).
+## @invariants
+##   - Имя workflow ТОЧНО "platform-gate-fast" (workflow_run ищет по имени — опечатка = тихий отказ)
+##   - gitleaks через композитный setup-platform (install-gitleaks: 'true') — единый SoT
+##   - concurrency-группа по SHA (паттерн platform-test) — защита от двойного запуска push+dispatch
+##   - COMPOSE_PROFILES экспортируется из platform-env.yaml (compose-profiles action)
+##   - Никаких Docker/integration-степов — flaky-изоляция downstream (D2)
+## @rationale U-57: downstream ждали 20-минутный full-gate + integration — хрупкая цепочка.
+##            Отдельный лёгкий gate-workflow (fast-gate) — единственный триггер downstream.
+## @changes 2026-08-01 | DevPlan 116 B11 T4 (D2, U-57) — Created
+## @changes 2026-08-13 | DevPlan 163 W-A A4: +диагностические артефакты (ruff SARIF,
+##   basedpyright --outputjson, pytest junit tests/report-*.xml) — upload-artifact, if: always,
+##   НЕ гейты (гейт — шаг make gate MODE=fast). basedpyright exit маскируется (514 errors
+##   recommended до W-B «pyright-clean»); ruff не маскируется (clean-at-ship M3).
+# 🧐 TRAP[DECISION] · 2026-08-05 · HI · deploys on fast-gate by design — full-gate PR-only (C-1, DevPlan 136 W11 T11.1)
+# · Rejected: workflow_run-trigger на platform-test (full gate) — downstream ждал бы 20+ мин
+# ·   full-gate + integration + docker-степы (хрупкая цепочка, U-57); это и есть D2 (116 B11 T4).
+# · Reason: верифицировано 2026-08-05 — branch protection API → `protected: false` (private repo,
+# ·   GitHub Free; rulesets API тоже 403). Прямые push в main ВОЗМОЖНЫ (история: single-parent
+# ·   коммиты W1-W7). Для прямого push единственный гейт перед деплоем = fast-gate (этот workflow).
+# ·   full-gate (platform-test) на main-коммите — PR-time + async push-main (не precondition деплоя).
+# ·   Mitigation: gate-тест tests/gates/test_gate_ci_trigger_strength.py (canary) enforce-ит, что
+# ·   downstream триггерится ТОЛЬКО workflow_run от гейта, гейт содержит `make gate MODE=fast`
+# ·   (никогда слабее fast), push-filter + conclusion==success. Сужение до full-gate = отдельная задача.
+# · Rev: 2026-10-21 — пересмотр: (а) если появятся ложные деплои багов, прошедших fast и упавших
+# ·   на full → переключить downstream на platform-test (workflow_run), (б) если GitHub Free
+# ·   получит branch protection для private — включить require PR + required checks.
+# endregion MODULE_CONTRACT
+
+name: platform-gate-fast
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  fast-gate:
+    name: Fast Gate (gitleaks + make gate MODE=fast)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # Test Honesty R4 (DevPlan 117 Brief F + DevPlan 119 A3): CI-раннеры ИМЕЮТ Docker →
+    # REQUIRE_HONESTY_MODE=fail (отсутствие сервиса = FAIL, не skip — R4 compliant).
+    # Локальная dev-машина остаётся marker: переменная не задана → default "marker"
+    # (tests/_conftest/honesty.py _honesty_mode()).
+    env:
+      REQUIRE_HONESTY_MODE: fail
+
+    steps:
+      # ─── Step 1: Checkout ─────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      # ─── Step 2: Setup platform + gitleaks (composite SoT) ────────────
+      - name: Setup platform (composite — python + gitleaks)
+        uses: ./.github/actions/setup-platform
+        with:
+          python-version: '3.14'
+          # D67 (DevPlan 117): pre-commit НЕОБХОДИМ — make gate MODE=fast Step 1 = pre-commit-run.
+          # install-pre-commit: 'false' → cache-miss = command not found (K3). Вариант A: true + cache.
+          install-pre-commit: 'true'
+          install-gitleaks: 'true'
+          run-provisioner: 'false'
+
+      # ─── Step 2b: Cache pre-commit venv (D67 — mirror platform-test.yml) ──
+      # DevPlan 123 T2 (P-14): ключ включает pyproject.toml hash (ruff-версия) —
+      # прежний ключ только по .pre-commit-config.yaml давал cache-hit со старым venv.
+      - name: Cache pre-commit venv
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}-${{ hashFiles('pyproject.toml') }}
+
+      # ─── Step 3: Export COMPOSE_PROFILES (SoT platform-env.yaml) ──────
+      - name: Export COMPOSE_PROFILES from platform-env.yaml
+        uses: ./.github/actions/compose-profiles
+
+      # ─── Step 4: Fast gate (syntax + JSON + gates + static + predeploy) ──
+      - name: Run fast gate (syntax + JSON + gates + static + predeploy — no Docker)
+        run: make gate MODE=fast
+
+      # ─── Step 5: Manifest generation contract (G1-G6 + G4-root glossary) ──
+      - name: Check generated manifests up to date
+        run: make check MARKER=check-manifests
+
+      # ─── DevPlan 163 W-A A4: диагностические артефакты статики (аддитивно; гейт — шаг выше) ──
+      # SARIF/outputjson/junit — артефакты для агента/человека (download-artifact), НЕ гейты.
+      # Блокирующее решение — `make gate MODE=fast` (pre-commit ruff-check + gates). Шаги
+      # генерируют артефакты ДАЖЕ при падении гейта (if: always) — полезно для дебага.
+      # ruff НЕ маскируется (0 violations — жёсткий инвариант clean-at-ship M3, DevPlan 163);
+      # basedpyright exit маскируется shell'ом: до W-B «pyright-clean» recommended даёт 514
+      # ошибок (fact-base §1) — сигнал здесь НЕ exit-код, а сам JSON-артефакт (гейт-статус
+      # basedpyright в pre-commit stages: [manual]; блокировка — после handoff W-B).
+      - name: Generate ruff SARIF artifact (DevPlan 163 A4)
+        if: always()
+        run: |
+          .venv/bin/pip install --quiet ruff==0.16.2
+          .venv/bin/ruff check . --output-format=sarif --output-file ruff-check.sarif
+
+      - name: Upload ruff SARIF artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ruff-check-sarif
+          path: ruff-check.sarif
+          if-no-files-found: warn
+
+      - name: Generate basedpyright JSON artifact (DevPlan 163 A4)
+        if: always()
+        run: |
+          .venv/bin/pip install --quiet basedpyright==1.39.9
+          .venv/bin/basedpyright --outputjson > basedpyright-report.json || true
+
+      - name: Upload basedpyright JSON artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: basedpyright-report
+          path: basedpyright-report.json
+          if-no-files-found: warn
+
+      - name: Upload pytest JUnit reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-junit-reports
+          path: tests/report-*.xml
+          if-no-files-found: warn

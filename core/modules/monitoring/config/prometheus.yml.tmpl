@@ -1,0 +1,157 @@
+# GREP_SUMMARY: prometheus scrape_config litellm node-exporter cadvisor redis-exporter postgres-exporter
+# STRUCTURE: ▶ global:30s → rule_files:* -alerts.yml → 8-scrape-configs → file_sd dynamic-targets → ┘
+# region MODULE_CONTRACT
+## @purpose  Prometheus scrape configuration for observability stack
+## @scope    Mounted as /etc/prometheus/prometheus.yml in prometheus container
+## @invariants
+##   - scrape_interval: 30s (global, reduced from 15s for memory/CPU efficiency)
+##   - All targets are on observability-net or host network
+##   - Node Exporter scraped on observability-net (node-exporter:9100) — observability-net
+##   - cAdvisor scraped on observability-net (cadvisor:8080)
+##   - LiteLLM scraped on observability-net (litellm:4000)
+##   - Self-scrape: prometheus:9090
+##   - LiteLLM metrics require bearer_token auth (LITELLM_MASTER_KEY — same as litellm master key)
+##   - Postgres Exporter scraped on observability-net (postgres-exporter:9187) via shared-db-net
+## @rationale 30s interval balances metric granularity with storage/CPU cost on 4-core 8GB VPS.
+# endregion MODULE_CONTRACT
+# ⚠️ TRAP[DECISION] · 2026-07-01 · — · file_sd_configs for dynamic targets
+# ·   Project metrics targets are NOT hardcoded in this file. Instead, receive-пост-деплой
+# ·   writes per-project target JSON to /prometheus-targets/<project>.json via file_sd_configs.
+# ·   Prometheus auto-discovers new targets by scanning the directory every 30s.
+# ·   Rev: if multi-node, switch to consul_sd or DNS SRV record discovery
+# ·   Rationale: projects are added dynamically (add-project.sh → deploy), and updating
+# ·   prometheus.yml would require container restart. file_sd is zero-downtime.
+# ·   Rejected: consul_sd_configs / dns_sd_configs — overkill for single-node deployment
+# ·   Rejected: static_configs with all projects — requires config regeneration + reload
+# @rationale 30s interval balances metric granularity with storage/CPU cost on 4-core 8GB VPS.
+#           Slow jobs (cadvisor, node-exporter) at 60s — host metrics change slowly.
+
+global:
+  scrape_interval:     30s
+  evaluation_interval: 30s
+
+  external_labels:
+    monitor: "ai-platform"
+
+# Alerting rules — per-project rule files generated post-deploy (monitoring_config_renderer.py)
+# Glob pattern loads all project rule files from the shared rules directory.
+rule_files:
+  - "/opt/prometheus/rules/*-alerts.yml"
+
+# Alertmanager (not configured — Grafana Alerting handles notification delivery)
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets: []
+
+scrape_configs:
+
+  # ── Prometheus self-scrape ────────────────────────────────────────────────
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["127.0.0.1:9090"]
+
+  # ── LiteLLM Proxy (LLM usage metrics) ─────────────────────────────────────
+  - job_name: "litellm"
+    scrape_interval: 30s
+    metrics_path: /metrics
+    scheme: http
+    bearer_token: "${LITELLM_MASTER_KEY}"
+    static_configs:
+      - targets:
+          - "litellm:4000"
+        labels:
+          service: "litellm"
+          component: "llm-gateway"
+
+  # ── cAdvisor (container resource metrics) ─────────────────────────────────
+  - job_name: "cadvisor"
+    scrape_interval: 60s
+    static_configs:
+      - targets:
+          - "cadvisor:8080"
+        labels:
+          service: "cadvisor"
+          component: "container-monitor"
+
+  # ── Node Exporter (host OS metrics) ───────────────────────────────────────
+  # node-exporter is on observability-net with container name node-exporter.
+  - job_name: "node-exporter"
+    scrape_interval: 60s
+    static_configs:
+      - targets:
+          - "node-exporter:9100"
+        labels:
+          service: "node-exporter"
+          component: "host-monitor"
+
+  # ── Nginx Exporter (via nginx-prometheus-exporter) (TASK-16) ──────────────
+  # Requires nginx-prometheus-exporter container alongside nginx.
+  # Container image: nginx/nginx-prometheus-exporter:1.5.1 (upgraded TASK-2)
+  # Command: --nginx.scrape-uri=http://host.docker.internal:8081/stub_status
+  - job_name: "nginx-exporter"
+    scrape_interval: 30s
+    static_configs:
+      - targets:
+          - "nginx-prometheus-exporter:9113"
+        labels:
+          service: "nginx"
+          component: "reverse-proxy"
+
+  # ── ClickHouse (built-in metrics endpoint, port 9363) ──────────────────
+  - job_name: "clickhouse"
+    scrape_interval: 30s
+    static_configs:
+      - targets:
+          - "clickhouse:9363"
+        labels:
+          service: "clickhouse"
+          component: "analytical-db"
+
+  # ── Status-page /metrics (platform SLO: deploy success/duration, image sizes,
+  #    backup freshness; 170 W12 C5) — status-page на observability-net, порт 8080 ──
+  - job_name: "status-page"
+    scrape_interval: 1m
+    static_configs:
+      - targets:
+          - "status-page:8080"
+        labels:
+          service: "status-page"
+          component: "platform-slo"
+
+  # ── Redis Exporter (cache metrics via redis-exporter) ─────────────────────
+  # Added per owner verdict wave-redis 2026-07-15: monitor redis cache hit ratio,
+  # memory usage, eviction rate, ops/sec. Targets redis-exporter:9121 on
+  # observability-net (scrape) and shared-cache-net (redis access).
+  - job_name: "redis-exporter"
+    scrape_interval: 30s
+    static_configs:
+      - targets:
+          - "redis-exporter:9121"
+        labels:
+          service: "redis"
+          component: "cache"
+
+  # ── Postgres Exporter (database metrics via postgres-exporter) ─────────────
+  # Added per drift-audit ISS-R2: monitor postgres query performance,
+  # connection count, replication lag, deadlocks. Targets postgres-exporter:9187
+  # on observability-net (scrape) and shared-db-net (postgres access).
+  - job_name: "postgres-exporter"
+    scrape_interval: 30s
+    static_configs:
+      - targets:
+          - "postgres-exporter:9187"
+        labels:
+          service: "postgres"
+          component: "database"
+
+  # ── Platform Projects (dynamic via file_sd_configs, TASK-12) ─────────────
+  - job_name: "platform-projects"
+    file_sd_configs:
+      - files: ["/prometheus-targets/*.json"]
+        refresh_interval: 30s
+    relabel_configs:
+      - source_labels: [__meta_filepath]
+        target_label: project
+        regex: '.*/(.+)\.json'
+        replacement: '$1'

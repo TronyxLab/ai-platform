@@ -1,0 +1,147 @@
+# GREP_SUMMARY: push-gate full-gate all-branches make-gate-fast gitleaks-composite provisioner ci-compensation D4 ruff-sarif basedpyright-json junit-artifacts DevPlan-163
+# STRUCTURE: on:push(branches:'**') → gate(make gate MODE=fast — все ветки) → artifacts(ruff SARIF + basedpyright JSON + junit, if: always) → teardown(docker-network-cleanup)
+# region MODULE_CONTRACT
+## @purpose — CI-гейт на push в ЛЮБУЮ ветку (включая main): ПОЛНЫЙ `make gate MODE=fast`
+##            (gitleaks + pre-commit + gates + static + predeploy). Компенсация гибридного
+##            локального pre-push hook'а (DevPlan 160 W6 T6.2 D4): feature-ветки локально
+##            гоняют БЫСТРЫЙ чек (pre-commit + ruff + check-diff), полный fast-gate для них
+##            гарантирует этот CI-workflow.
+## @scope — Runs on every git push to ANY branch (including main); cancelled on new pushes to same branch.
+##            main-branch gate + R4-honesty (REQUIRE_HONESTY_MODE=fail) = platform-gate-fast.yml
+##            (downstream workflow_run-триггеры остаются на нём — НЕ меняется).
+##            PR-валидация (полный gate + Docker/integration) = platform-test.yml.
+## @invariants
+##   - No Docker compose stacks are started — only Docker networks for provisioner
+##   - Pre-commit run includes: gitleaks, check-yaml, trailing-whitespace, end-of-file-fixer
+##   - FULL `make gate MODE=fast` step (V3, D4 — CI-компенсация гибридного hook'а)
+##   - Timeout: 25 minutes (fast-gate 5-15 мин + холодный pre-commit venv cache + xdist)
+##   - Docker networks created via provision-environment.sh (Plan 1 foundation)
+##   - Gitleaks uses composite action setup-gitleaks (single source of truth)
+##   - Cleanup runs unconditionally — removes Docker networks created by provisioner
+## @rationale — DevPlan 160 W6 T6.2 (D4): гибридный pre-push hook — main/release → полный
+##   fast-gate локально, feature → быстрый чек. Чтобы feature-ветки не теряли полный гейт,
+##   push-gate.yml (V3) выполняет ПОЛНЫЙ `make gate MODE=fast` для ВСЕХ веток (включая main) —
+##   это CI-компенсация, а не дубль локального hook'а (локальный hook для feature намеренно
+##   быстрый). На main происходит задвоение с platform-gate-fast.yml — принято by design (D4):
+##   platform-gate-fast нельзя менять (downstream workflow_run core-deploy/build-platform/mirror
+##   зависят от него, тесты test_gate_ci_trigger_strength/test_gate_ci_coverage).
+## @changes — 2026-07-15 | Inline docker network create → provision-environment.sh --scope networks
+## @changes — 2026-07-15 | Inline gitleaks install → composite action setup-gitleaks
+## @changes — 2026-08-05 | V2 (superposition): removed `make gate MODE=fast` step — точный дубль локального
+##   pre-push hook (pre-push-gate.sh, blocking). Остаётся только make pre-commit-run (лёгкая страховка среды).
+## @changes — 2026-08-13 | V3 (DevPlan 160 W6 T6.2 D4): ВОЗВРАЩЁН ПОЛНЫЙ `make gate MODE=fast`
+##   для ВСЕХ веток (branches: ['**']), timeout 5 → 25 мин. V2-обоснование «дубль устранён»
+##   устарело: локальный pre-push hook стал ГИБРИДНЫМ (feature → быстрый чек), поэтому полный
+##   CI-гейт обязателен для feature-веток.
+## @changes — 2026-08-13 | DevPlan 163 W-A A4: +диагностические артефакты (ruff SARIF,
+##   basedpyright --outputjson, pytest junit tests/report-*.xml) — upload-artifact, if: always,
+##   НЕ гейты (гейт — шаг make gate MODE=fast). basedpyright exit маскируется (514 errors
+##   recommended до W-B «pyright-clean»); ruff не маскируется (clean-at-ship M3).
+# endregion MODULE_CONTRACT
+
+name: push-gate
+
+on:
+  push:
+    branches: ['**']
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: Gate (make gate MODE=fast — all branches)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+
+    # COMPOSE_PROFILES — exported by compose-profiles composite action (DevPlan 064 S1).
+    # Reads from platform-env.yaml (authoritative source). Replaces hardcoded string.
+    # Required for ${VAR:?error} enforcement (DevPlan 033 W3-E3 Option A).
+    #
+    # Test Honesty R4 (DevPlan 117 Brief F + DevPlan 119 A3): CI-раннеры ИМЕЮТ Docker →
+    # REQUIRE_HONESTY_MODE=fail (отсутствие сервиса = FAIL, не skip — R4 compliant).
+    # Паритет platform-gate-fast.yml.
+    env:
+      REQUIRE_HONESTY_MODE: fail
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup platform (composite — python + gitleaks + provisioner)
+        uses: ./.github/actions/setup-platform
+        with:
+          python-version: '3.14'
+          install-pre-commit: 'true'
+          install-gitleaks: 'true'
+          run-provisioner: 'true'
+          provisioner-scope: 'networks'
+
+      # Pre-commit cache — separate from .venv cache (different key: .pre-commit-config.yaml)
+      - name: Export COMPOSE_PROFILES from platform-env.yaml
+        uses: ./.github/actions/compose-profiles
+
+      - name: Cache pre-commit venv
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
+
+      - name: Run full gate (syntax + JSON + gates + static + predeploy — no Docker)
+        run: make gate MODE=fast
+        # V3 (2026-08-13, DevPlan 160 W6 T6.2 D4): ПОЛНЫЙ fast-gate для ВСЕХ веток —
+        # CI-компенсация гибридного pre-push hook (feature → быстрый локальный чек).
+        # V2-комментарий «дубль устранён» переписан: локальный hook больше НЕ всегда
+        # гоняет полный gate, поэтому CI обязан его гарантировать.
+
+      # ─── DevPlan 163 W-A A4: диагностические артефакты статики (аддитивно; гейт — шаг выше) ──
+      # SARIF/outputjson/junit — артефакты для агента/человека (download-artifact), НЕ гейты.
+      # Блокирующее решение — `make gate MODE=fast` (pre-commit ruff-check + gates). Шаги
+      # генерируют артефакты ДАЖЕ при падении гейта (if: always) — полезно для дебага.
+      # ruff НЕ маскируется (0 violations — жёсткий инвариант clean-at-ship M3, DevPlan 163);
+      # basedpyright exit маскируется shell'ом: до W-B «pyright-clean» recommended даёт 514
+      # ошибок (fact-base §1) — сигнал здесь НЕ exit-код, а сам JSON-артефакт (гейт-статус
+      # basedpyright в pre-commit stages: [manual]; блокировка — после handoff W-B).
+      - name: Generate ruff SARIF artifact (DevPlan 163 A4)
+        if: always()
+        run: |
+          .venv/bin/pip install --quiet ruff==0.16.2
+          .venv/bin/ruff check . --output-format=sarif --output-file ruff-check.sarif
+
+      - name: Upload ruff SARIF artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ruff-check-sarif
+          path: ruff-check.sarif
+          if-no-files-found: warn
+
+      - name: Generate basedpyright JSON artifact (DevPlan 163 A4)
+        if: always()
+        run: |
+          .venv/bin/pip install --quiet basedpyright==1.39.9
+          .venv/bin/basedpyright --outputjson > basedpyright-report.json || true
+
+      - name: Upload basedpyright JSON artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: basedpyright-report
+          path: basedpyright-report.json
+          if-no-files-found: warn
+
+      - name: Upload pytest JUnit reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-junit-reports
+          path: tests/report-*.xml
+          if-no-files-found: warn
+
+      - name: Cleanup Docker networks
+        if: always()
+        run: |
+          docker network rm proxy-net shared-db-net hermes-agent-net backup-net shared-cache-net observability-net 2>/dev/null || true

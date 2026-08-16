@@ -1,0 +1,18 @@
+# {{PROJECT_NAME}} dependencies
+# ── Core (обязательно) ─────────────────────────────────────────────────────
+fastapi>=0.139.0
+uvicorn[standard]>=0.51.0
+python-dotenv>=1.0.0
+pydantic-settings>=2.0
+
+# ── Prometheus metrics (/metrics endpoint — контракт monitoring, metrics: true) ──
+prometheus-client>=0.21
+
+# ── Опционально — раскомментируйте при необходимости ───────────────────────
+# ── PostgreSQL (PLATFORM_POSTGRES_DSN) — см. snippets/db.py ──
+# asyncpg>=0.30
+# ── Redis (PLATFORM_REDIS_URL) ──
+# redis[hiredis]>=5.0
+
+# Прочее
+requests>=2.31.0

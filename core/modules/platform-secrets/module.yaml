@@ -1,0 +1,49 @@
+# GREP_SUMMARY: platform-secrets sops age systemd oneshot secrets.env tmpfs decrypt
+# STRUCTURE: ▶ boot → sops-decrypt → /var/lib/platform/run/secrets.env (142 W2) → docker.service → ┐
+# region MODULE_CONTRACT
+## @purpose  Systemd oneshot that decrypts SOPS/age secrets to tmpfs on boot.
+##           Provides /var/lib/platform/run/secrets.env for all docker containers (142 W2).
+## @scope    Boot-time secret provisioning; depends on host-age-key being pre-configured.
+## @invariants
+##   - install_type: system — NOT Docker, systemd-managed
+##   - Runs before docker.service (RequiredBy=docker.service)
+##   - Secrets written to tmpfs (in-memory, never touches disk decrypted)
+##   - Fails closed: if age key missing, service fails and docker doesn't start
+##   # ⚠️ TRAP[BUG] · 2026-07-18 · P1 · RequiredBy=docker.service added — fails-closed invariant enforced
+##   # · Symptom: drift-аудит выявил отсутствие RequiredBy — unit had only Before=docker.service +
+##   #   WantedBy=multi-user.target; docker started even if platform-secrets failed, violating
+##   #   the declared fails-closed contract
+##   # · Root: RequiredBy dropped during unit authoring; [Install] section lacked RequiredBy
+##   # · Fix: added RequiredBy=docker.service to platform-secrets.service [Install] section (D3b)
+##   # · Prevention: predeploy gate checks that `systemctl show docker -p Requires` contains
+##   #   platform-secrets.service
+## @rationale  Centralised secret management avoids per-container .env files on disk.
+##             SOPS/age chosen for simplicity over Vault (no cluster needed).
+## @changes
+##   2026-07-18 · Replaced with TRAP[BUG] — RequiredBy=docker.service added (D3b)
+##              · Added systemd.required_by field to module.yaml
+# endregion MODULE_CONTRACT
+
+name: platform-secrets
+install_type: system
+systemd:
+  unit: platform-secrets.service
+  required_by: docker.service
+description: "Systemd oneshot service that regenerates /var/lib/platform/run/secrets.env from encrypted SOPS/age secrets"
+
+interfaces:
+  - install
+
+depends_on: []
+
+# D5 (118 G4): severity — critical (fails-closed: docker.service RequiredBy platform-secrets.service,
+# отказ = docker не стартует). restart: "no" — systemd oneshot, авто-re-старта нет (unit без Restart=);
+# жизненный цикл — через systemctl (module-system.mk restart). resources: {} — N/A для systemd (нет контейнера)
+severity: critical
+restart: "no"
+resources: {}
+
+env_requires:
+  - AGE_SECRET_KEY
+
+spool_dir: none  # systemd oneshot — tmpfs-based, no persistent data

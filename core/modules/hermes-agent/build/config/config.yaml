@@ -1,0 +1,161 @@
+# GREP_SUMMARY: config.yaml blank-slate base-agent platform hermes guardrails checkpoints approvals compression session security
+# STRUCTURE: ▶ model:litellm → terminal:docker → browser → stt → agent → compression → session → security → guardrails → checkpoints → approvals → ⎋
+# @purpose — Base platform Hermes agent configuration — Blank Slate foundation
+# region MODULE_CONTRACT
+## @purpose     Base platform Hermes agent configuration — Blank Slate foundation
+## @scope       Minimal infrastructure layer; profiles add personality, tools, and task-specific settings
+## @invariants
+##   - model.provider: litellm (primary), model.model: reasoning (semantic alias from policy.yaml)
+##   - fallback_model.provider: litellm, model: chat (all models through LiteLLM)
+##   - auxiliary.*.provider: litellm — vision and compression through LiteLLM
+##   - fallback.enabled: false — LiteLLM manages fallback routing
+##   - platform.dashboard.insecure: false — MANDATORY, never true
+##   - terminal.backend: docker — production mode
+##   - approvals.mode: smart — auxiliary LLM auto-approves low-risk commands
+##   - tool_loop_guardrails.hard_stop_enabled: true — runaway loop prevention
+##   - security.redact_secrets: true — never expose credentials in output
+##   - compression.threshold: 0.65 — trigger before model degrades on long contexts (~83K tokens)
+## @rationale   Blank Slate: base provides security-critical infrastructure (provider, sandbox, guardrails,
+##              compression, session lifecycle, browser sandbox). Profiles carry personality params only.
+## @changes     LAST_CHANGE: 2026-07-06 | Config v30→v32, z.ai fallback, DOCREF
+# endregion MODULE_CONTRACT
+
+_config_version: 32                      # Hermes config schema version (v2026.7.1)
+
+# GREP_SUMMARY: config.yaml blank-slate base-agent platform hermes guardrails checkpoints approvals compression session security
+# STRUCTURE: ▶ model:litellm → terminal:docker → browser → stt → agent → compression → session → security → guardrails → checkpoints → approvals → ⎋
+# DOCREF: Hermes Agent documentation references
+#   - GitHub:          https://github.com/NousResearch/hermes-agent
+#   - Releases:        https://github.com/NousResearch/hermes-agent/releases
+#   - Docs:            https://hermes-agent.nousresearch.com/docs
+#   - Config Ref:      https://hermes-agent.nousresearch.com/docs/user-guide/configuration
+#   - Env Vars:        https://hermes-agent.nousresearch.com/docs/user-guide/configuration/environment-variables
+#   - Profiles:        https://hermes-agent.nousresearch.com/docs/user-guide/profiles
+#   - Blank Slate:     https://hermes-agent.nousresearch.com/docs/user-guide/blank-slate
+
+# 💼 TRAP[BUSINESS] · 2026-06-28 · HI · Blank Slate base config.
+#   Source: user-request · Risk: profiles must carry their own temperature/max_tokens now
+# 🧐 TRAP[DECISION] · 2026-07-24 · — · LiteLLM as sole provider (DevPlan 049)
+# · Rejected: direct DeepSeek provider + z.ai fallback (old model) · Reason: LiteLLM manages provider
+# ·   routing, fallbacks, and aliases centrally. Hermes-agent sends semantic aliases (reasoning, chat).
+# ·   Direct provider config preserved as git history if rollback needed.
+# · Rev: if LiteLLM becomes unavailable, revert to direct provider config
+
+model:
+  provider: litellm                        # Provider: litellm (custom plugin), routes through LiteLLM proxy
+  model: reasoning                         # Semantic alias — LiteLLM resolves to deepseek/deepseek-v4-pro
+  api_timeout: 300                        # 5 min — достаточн для multi-turn reasoning DeepSeek
+  stream_timeouts:
+    read: 120
+    connect: 30
+
+fallback_model:
+  provider: litellm
+  model: chat                            # Semantic alias — LiteLLM resolves fallback to chat model
+  api_timeout: 600                       # 10 min — fallback may be slower for first request
+
+platform:
+  telegram:
+    enabled: true
+    reactions: true
+    extra:
+      rich_messages: true
+  api:
+    rate_limit: 60
+  dashboard:
+    insecure: false                       # MANDATORY: never true
+
+terminal:
+  backend: docker                         # Production: docker backend
+  # ⚠️ TRAP[DECISION] · 2026-08-13 · HI · docker.sock mount удалён (162 W2-5) — backend docker
+  # · требует docker API через /var/run/docker.sock, которого больше нет в контейнере.
+  # · :ro на unix-сокете НЕ блокирует connect() → prompt injection → docker API → host root.
+  # · Воздействие: terminal backend docker недоступен до переключения на local backend
+  # · (или socket-proxy, если оркестрация контейнеров агентом станет необходимой).
+  # · Решение по переключению backend → local принимает оркестратор/архитектор — см. DevPlan 162 W2-5.
+  docker:
+    read_only_rootfs: true
+    remove_after_exit: true
+
+browser:
+  engine: auto                            # Auto-detect available engine
+  session_timeout: 300                    # 5 min browser session
+
+stt:
+  provider: local                         # Local whisper for voice input
+
+agent:
+  background_notifications: result        # Notify on background task completion
+
+compression:
+  enabled: true
+  threshold: 0.65                         # Trigger at 65% context (~83K tokens) before quality degrades
+  target_ratio: 0.25                      # Compress only 25% of context — rest untouched
+  protect_last_n: 15                      # Keep last 15 turns uncompressed
+  preserve_system_message: true
+
+session:
+  idle_minutes: 180                       # Reset after 3 hours of inactivity
+  reset_hour: 4                           # Daily reset at 04:00
+
+security:
+  redact_secrets: true                    # Scan output for API keys, tokens, passwords → [REDACTED]
+
+tool_loop_guardrails:
+  hard_stop_enabled: true
+  max_consecutive_auto_tool_calls: 20
+
+checkpoints:
+  enabled: true
+  max_snapshots: 20
+  max_total_size_mb: 500
+
+approvals:
+  mode: smart                             # Auxiliary LLM auto-approves low-risk commands
+  auto_approve_patterns:
+    - ls
+    - cat
+    - git status
+    - git diff
+    - pip list
+    - npm list
+    - grep
+  max_denial_retries: 3
+  require_approval_for_unknown_tools: true
+
+gateway:
+  message_timestamps:
+    enabled: true
+
+telemetry:
+  log_level: INFO
+
+memory:
+  flush_min_turns: 3
+
+display:
+  show_reasoning: true
+  show_cost: true
+  runtime_footer:
+    enabled: true
+
+auxiliary:
+  vision:
+    provider: litellm
+    model: chat                            # Semantic alias — through LiteLLM
+  compression:
+    provider: litellm
+    model: chat                            # Semantic alias — through LiteLLM
+
+# 🧐 TRAP[DECISION] · 2026-07-24 · — · Fallback disabled — LiteLLM manages routing
+# · Rejected: direct fallback via config (old model) · Reason: LiteLLM handles provider fallback
+# ·   routing centrally via policy.yaml. Hermes-agent disabled fallback to avoid double fallback.
+# · Rev: if LiteLLM fallback chain fails, re-enable hermes-agent fallback as safety net
+fallback:
+  enabled: false                           # LiteLLM manages fallback routing centrally
+  max_retries: 0
+  cooldown_minutes: 5
+  notify_on_fallback: true
+
+streaming:
+  enabled: true

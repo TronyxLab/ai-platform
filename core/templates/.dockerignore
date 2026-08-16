@@ -1,0 +1,19 @@
+# GREP_SUMMARY: dockerignore template git ds_store env pycache
+# region MODULE_CONTRACT
+## @purpose  Universal .dockerignore template for ai-platform Docker modules
+## @scope    Used by all core/modules/* to exclude non-essential files from Docker build context
+## @invariants
+##   - Identical across all modules (RC-6: structural deduplication)
+##   - After Phase 3.4: modules symlink to this canonical copy
+##   - Excludes: git metadata, markdown docs, logs, secrets env, node/python artifacts, macOS dust
+## @rationale Single source of truth prevents drift — 5 identical copies existed before templates (RC-6)
+# endregion MODULE_CONTRACT
+
+.git/
+.gitignore
+.DS_Store
+.env
+*.md
+__pycache__/
+*.pyc
+overlays/README.md

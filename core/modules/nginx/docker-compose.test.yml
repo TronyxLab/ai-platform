@@ -1,0 +1,31 @@
+# GREP_SUMMARY: nginx docker-compose test override container_name-test cross-platform
+# STRUCTURE: base.yml + test.yml → nginx with -test container_name and shifted ports
+# region MODULE_CONTRACT
+## @purpose  Test override for nginx — -test container_name, shifted ports (18080:80, 18443:443)
+## @scope    Only used in test fixtures. Never used in production.
+## @invariants
+##   - container_name: nginx-test — предотвращает конфликт с production nginx
+##   - restart: unless-stopped — тестовые контейнеры перезапускаются при креше (--wait совместимость)
+##   - Port mappings: !override — смещённые порты (18080, 18443); порты из base.yml (80:80, 443:443) НЕ склеиваются
+##   - Все конфиги сохраняются через bind-mount (read-only)
+## @rationale container_name override через отдельный test.yml — единственный способ
+##   переопределить container_name в Docker Compose (DD2 из DevPlan 04). ports: !override
+##   предотвращает склейку портов base+test (F-7).
+# endregion MODULE_CONTRACT
+
+services:
+  nginx:
+    container_name: nginx-test
+    networks: !override  # DevPlan 017 W3.5 — test network isolation (proxy for frontend, observability for metrics)
+      - test-proxy-net
+      - test-observability-net
+    ports: !override  # ⚠️ TRAP[BUG] · 2026-07-16 · HIGH · compose merge склеивает ports base+test → тестовый nginx биндил 80/443 (F-7) · Fix: !override
+      - "127.0.0.1:18080:80"
+      - "127.0.0.1:18443:443"
+    restart: "no"
+
+networks:
+  test-proxy-net:
+    external: true
+  test-observability-net:
+    external: true

@@ -1,0 +1,27 @@
+# GREP_SUMMARY: minio docker-compose test-override container_name-test
+# STRUCTURE: ┌minio-test.yml┐ → container_name: minio-test
+# region MODULE_CONTRACT
+## @purpose  Test environment override for minio — container_name: minio-test
+## @scope    Test isolation only. Never used in production.
+## @invariants
+##   - container_name: minio-test
+##   - No port mappings (minio is internal-only in test mode)
+## @rationale Standard test-overlay contract per DevPlan 04 DD2
+# endregion MODULE_CONTRACT
+
+services:
+  minio:
+    container_name: minio-test
+    restart: "no"
+    networks: !override  # DevPlan 017 W2.3 — test-shared-db-net only (no backup-net in tests)
+      - test-shared-db-net
+    ports: !override []  # ⚠️ TRAP[BUG] · 2026-07-18 · HIGH · compose merge склеивает ports base+test → тестовый minio биндит 9000/9001 (F-7) · Fix: !override — minio internal-only в тестах
+
+  minio-createbuckets:
+    restart: "no"
+    networks: !override  # DevPlan 017 W2.3 — test-shared-db-net only (no backup-net in tests)
+      - test-shared-db-net
+
+networks:
+  test-shared-db-net:
+    external: true
