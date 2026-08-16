@@ -309,10 +309,17 @@ jobs:
         env:
           # DevPlan 002 W4 T4.4: единый образ hermes-agent-context (собран выше)
           CONTEXT_IMAGE: hermes-agent-context:latest
+          # 2026-08-16: PYTHONUNBUFFERED — pytest-вывод стримится сразу (run_cmd capture
+          # печатает в конце шага; при таймаут-килле буфер терялся — hang был невидим).
+          PYTHONUNBUFFERED: 1
         run: |
           make gate MODE=ci-docker SKIP_PRECOMMIT=1
 
+      # 2026-08-16: if: failure() добавлен — диагностика контейнеров РЕАЛЬНО выполняется
+      # после падения gate (раньше шаг пропускался — steps after failure skipped),
+      # CI smoke-hang (900s) был без дампа состояний контейнеров.
       - name: Diagnostic — dump container states on failure
+        if: failure()
         run: |
           echo "=== All Running Containers ==="
           docker ps -a --format "table {{.Names}}\t{{.Status}}\t{{.Image}}\t{{.Ports}}"
