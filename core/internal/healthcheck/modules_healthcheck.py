@@ -262,23 +262,65 @@ def check_module(
 # endregion FUNC_check_module
 
 
+# region FUNC__resolve_enabled_modules
+def _resolve_enabled_modules() -> set[str] | None:
+    """Разрешить enabled-модули ноды из node.yaml; None → фильтр выключен (все модули).
+
+    ## @purpose  Честный healthcheck на минимальных нодах: только enabled-модули (релиз 1.0.0).
+    ## @io       ⇥ None → ⎋ set[str] | None
+    ## @complexity  O(1) — одно чтение node.yaml
+    ## @invariants
+    ##   - node.yaml: NODE_YAML env → /opt/node-configs/<NODE_NAME>/node.yaml (нода) → None
+    ##   - modules[] с enabled: true → set; нечитаемый/отсутствующий yaml → None (все модули)
+    """
+    import os
+
+    node_yaml = os.environ.get("NODE_YAML", "")
+    if not node_yaml:
+        node_name = os.environ.get("NODE_NAME", "")
+        if node_name:
+            candidate = Path(f"/opt/node-configs/{node_name}/node.yaml")
+            if candidate.is_file():
+                node_yaml = str(candidate)
+    if not node_yaml or not Path(node_yaml).is_file():
+        return None
+    try:
+        data = yaml.safe_load(Path(node_yaml).read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return None
+    modules = data.get("modules")
+    if not isinstance(modules, list):
+        return None
+    enabled = {str(m.get("name")) for m in modules if isinstance(m, dict) and m.get("enabled") is not False}
+    logger.info("[IMP:8][modules-healthcheck][enabled] node.yaml filter: %d enabled module(s)", len(enabled))
+    return enabled
+
+
+# endregion FUNC__resolve_enabled_modules
+
+
 # region FUNC_run_healthchecks
-## @purpose  Полный прогон: итерировать все модули, собрать healthy-флаг.
+## @purpose  Полный прогон: итерировать модули, собрать healthy-флаг.
 ## @io       ⇥ modules_dir: Path, mode: str = "", invoke_fn: Callable | None (DI),
-##           restart_loop_fn: Callable | None (DI) → ⎋ bool — all healthy
+##           restart_loop_fn: Callable | None (DI), enabled_modules: set[str] | None → ⎋ bool
 ## @complexity O(M) — M = модулей
 ## @changes 2026-08-13 | E1 (160): +invoke_fn/restart_loop_fn DI (проброс в check_module)
+##           2026-08-16 | релиз 1.0.0: +enabled_modules (node.yaml-фильтр минимальных нод)
 def run_healthchecks(
     modules_dir: Path,
     mode: str = "",
     *,
     invoke_fn: InvokeFn | None = None,
     restart_loop_fn: RestartLoopFn | None = None,
+    enabled_modules: set[str] | None = None,
 ) -> bool:
-    """Run healthchecks for all modules. Returns True if all healthy."""
+    """Run healthchecks for modules (enabled-фильтр при наличии). Returns True if all healthy."""
     module_yamls = discover_module_yamls(modules_dir)
     all_healthy = True
     for module_yaml in module_yamls:
+        if enabled_modules is not None and module_yaml.parent.name not in enabled_modules:
+            logger.info("[IMP:8][modules-healthcheck][skip] %s — not enabled in node.yaml", module_yaml.parent.name)
+            continue
         if not check_module(module_yaml, mode=mode, invoke_fn=invoke_fn, restart_loop_fn=restart_loop_fn):
             all_healthy = False
     if all_healthy:
@@ -295,21 +337,29 @@ def run_healthchecks(
 def main() -> int:
     """CLI entry: `python3 -m core.internal.healthcheck.modules_healthcheck [MODE=deep]`.
 
-    ▶ ┌argv (optional MODE=deep)┐ → ○ run_healthchecks → ⎋ exit 0|1
+    ▶ ┌argv (optional MODE=deep)┐ → ○ enabled-фильтр (node.yaml, если доступен) → ○ run_healthchecks → ⎋ exit 0|1
+
+    ## @invariants
+    ##   - node.yaml доступен (NODE_YAML env или /opt/node-configs/<NODE_NAME>/node.yaml)
+    ##     → проверяются ТОЛЬКО enabled-модули ноды (минимальные ноды без backup-cron/clickhouse/
+    ##     hermes-agent не дают ложных FAIL) — релиз 1.0.0
+    ##   - node.yaml недоступен (dev-машина) → все модули (прежнее поведение)
     """
     logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stderr)
     mode = sys.argv[1] if len(sys.argv) > 1 else ""
     if mode in {"--help", "-h"}:
         print("Usage: modules_healthcheck [MODE=deep]")
         print()
-        print("Iterate all platform module healthcheck scripts and run them.")
-        print("Default: liveness check (via module_interface dispatch) for all modules.")
-        print("MODE=deep: run module-specific deep diagnostics for all modules.")
+        print("Iterate platform module healthcheck scripts and run them.")
+        print("Default: liveness check for all modules (или только enabled-модули ноды,")
+        print("если node.yaml доступен: NODE_YAML env или /opt/node-configs/<NODE_NAME>/node.yaml).")
+        print("MODE=deep: run module-specific deep diagnostics.")
         print()
         print("Returns 0 if all pass, 1 if any fail.")
         return 0
     modules_dir = Path(__file__).resolve().parents[2] / "modules"  # core/modules
-    return 0 if run_healthchecks(modules_dir, mode=mode) else 1
+    enabled: set[str] | None = _resolve_enabled_modules()
+    return 0 if run_healthchecks(modules_dir, mode=mode, enabled_modules=enabled) else 1
 
 
 # endregion FUNC_main
