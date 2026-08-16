@@ -111,7 +111,10 @@ def handle_hermes_agent(
     dops = docker if docker is not None else docker_ops
     ghcr = ghcr_org or GHCR_ORG
     # ── Resolve actual images from compose config (T4 fix — single source of truth, shared) ──
-    compose_dir = module_dir
+    # ⚠️ TRAP[BUG] · 1.0.0 · HI · module_dir от caller'а = PARENT (core/modules), compose-файл —
+    # · в module_dir/<module_name>/; старый init (compose_dir = module_dir) ломал compose config
+    # · и L1 build fallback (bootstrap 1.0.0: /opt/platform/core/modules/docker-compose.base.yml).
+    compose_dir = Path(module_dir) / module_name
     for i, arg in enumerate(compose_args):
         if arg == "-f" and i + 1 < len(compose_args):
             compose_dir = Path(compose_args[i + 1]).parent
@@ -158,8 +161,11 @@ def handle_hermes_agent(
         # W1: docker pull — shared/docker_ops (non-fatal; сбой → build from source)
         if not dops.docker_pull(f"{ghcr}/{L1_BASE_IMAGE}:latest", timeout=PULL_TIMEOUT):
             logger.warning("[IMP:5][handle_hermes_agent][l1_pull_fail] L1 pull failed — building L1 from source")
-            # Build L1 from source (shared docker_compose_build — sole path)
-            base_compose = str(Path(module_dir) / "docker-compose.base.yml")
+            # Build L1 from source (shared docker_compose_build — sole path).
+            # ⚠️ TRAP[BUG] · 1.0.0 · HI · base_compose брался как module_dir/docker-compose.base.yml
+            # · (не существует — module_dir = PARENT); compose-файл лежит в module_dir/<module_name>/.
+            # · Fix: переиспользовать compose-файл из -f в compose_args (резолвен выше в compose_dir).
+            base_compose = str(Path(compose_dir) / "docker-compose.base.yml")
             compose_build = compose_build_fn if compose_build_fn is not None else _shared_docker_compose_build
             l1_ok = compose_build(
                 str(Path(base_compose).parent),
