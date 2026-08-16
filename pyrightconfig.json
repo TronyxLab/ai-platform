@@ -11,6 +11,7 @@
     ".kilo",
     ".ai",
     ".pytest_cache",
+    "vendor",
     "**/__pycache__",
     "**/node_modules"
   ],

@@ -25,7 +25,7 @@
 .PHONY: ai-instructions-sync
 ai-instructions-sync:
 	@echo "[IMP:7][make][ai-instructions-sync] compiling instructions (canon + .ai -> .kilo)..." 1>&2
-	@$(PYTHON) -m ai_instructions sync --config core/internal/ai-instructions/ai-instructions-pins.yaml \
+	@PYTHONPATH="$(_platform_root)/vendor:$${PYTHONPATH:-}" $(PYTHON) -m ai_instructions sync --config core/internal/ai-instructions/ai-instructions-pins.yaml \
 		$(if $(PROJECT),--project-dir '$(PROJECT)',) \
 		$(if $(TEMPLATE),--template '$(TEMPLATE)',) \
 		$(if $(CANON_PATH),--canon-path '$(CANON_PATH)',); _rc=$$?; \

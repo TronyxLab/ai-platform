@@ -38,7 +38,7 @@ import yaml
 # 65 индивидуальных sys.path.insert (policy-раздел в tests/AGENTS.md §sys.path policy).
 # site.addsitedir идемпотентен (повторные вызовы не дублируют пути).
 _PKG_ROOT: pathlib.Path = pathlib.Path(__file__).resolve().parent.parent
-for _p in (_PKG_ROOT, _PKG_ROOT / "core", _PKG_ROOT / "core" / "internal"):
+for _p in (_PKG_ROOT, _PKG_ROOT / "core", _PKG_ROOT / "core" / "internal", _PKG_ROOT / "vendor"):
     site.addsitedir(str(_p))
 
 from _conftest import *  # ruff: ignore[F403]

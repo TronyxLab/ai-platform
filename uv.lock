@@ -10,14 +10,6 @@ resolution-markers = [
 ]
 
 [[package]]
-name = "ai-instructions"
-version = "0.7.0"
-source = { git = "https://github.com/Tronyx161/AI-instructions.git?rev=v0.7.0#056552993d8d893e35fe2c56cd9e898c0aef0d5f" }
-dependencies = [
-    { name = "pyyaml", marker = "python_full_version >= '3.11'" },
-]
-
-[[package]]
 name = "ai-platform"
 version = "1.0.0"
 source = { editable = "." }
@@ -35,7 +27,6 @@ dependencies = [
 
 [package.optional-dependencies]
 dev = [
-    { name = "ai-instructions", marker = "python_full_version >= '3.11'" },
     { name = "basedpyright" },
     { name = "boto3-stubs" },
     { name = "deptry" },
@@ -57,7 +48,6 @@ load = [
 
 [package.metadata]
 requires-dist = [
-    { name = "ai-instructions", marker = "python_full_version >= '3.11' and extra == 'dev'", git = "https://github.com/Tronyx161/AI-instructions.git?rev=v0.7.0" },
     { name = "basedpyright", marker = "extra == 'dev'", specifier = ">=1.12.0" },
     { name = "boto3", specifier = ">=1.28.0" },
     { name = "boto3-stubs", marker = "extra == 'dev'", specifier = ">=1.28.0" },

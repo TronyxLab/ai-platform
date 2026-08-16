@@ -1,5 +1,5 @@
 canon_version: 0.7.0
-platform_version: 4865fb603c2122d983b989f58592d47ca17436e8
+platform_version: 26f72d2f4f43073752f67ac4e07327366821d98a
 files:
 - path: .kilo/agents/architect.md
   sha256: 01f8197949f0aa34cb180aff44883f237874230ef295fb2a581ae45d6fb474c6

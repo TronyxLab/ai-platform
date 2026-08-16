@@ -463,8 +463,15 @@ def scaffold_instructions(project_dir: str, template: str, dry_run: bool = False
     canon_override = os.environ.get("AI_INSTRUCTIONS_CANON_PATH")
     if canon_override:
         cmd += ["--canon-path", canon_override]
+    # 2026-08-16: ai_instructions вендорится (vendor/) — -m-вызов резолвит модуль через PYTHONPATH
+    env = dict(os.environ)
+    vendor_path = str(platform_root / "vendor")
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = vendor_path + (os.pathsep + existing if existing else "")
     try:
-        result = subprocess.run(cmd, cwd=platform_root, capture_output=True, text=True, check=False, timeout=300)
+        result = subprocess.run(
+            cmd, cwd=platform_root, env=env, capture_output=True, text=True, check=False, timeout=300
+        )
     except (OSError, subprocess.SubprocessError) as exc:
         logger.info("[IMP:10][scaffold][instructions] ai-instructions sync failed: %s", exc)
         print(f"ERROR: ai-instructions sync unavailable: {exc} (dev-setup: uv pip install -e ../ai-instructions)")
