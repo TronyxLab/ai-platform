@@ -90,6 +90,7 @@ _WORKFLOW_LOCAL_ENV_VARS: dict[str, str] = {
     "REQUIRE_HONESTY_MODE": "test honesty mode selector, workflow-local",
     "INTEGRATION_MODE": "test integration mode, workflow-local",
     "SKIP": "pre-commit SKIP filter, workflow-local",
+    "PYTHONUNBUFFERED": "CPython runtime flag (стрим pytest-вывода в CI-шаге), workflow-local",
 }
 
 
