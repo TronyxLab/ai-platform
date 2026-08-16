@@ -63,7 +63,8 @@ def test_notification_channels_parity(caplog) -> None:
     m = re.search(r"SEVERITY_CHAT_ENV:\s*Mapping\[str,\s*str\]\s*=\s*\{(.*?)\}", src, re.DOTALL)
     assert m, "SEVERITY_CHAT_ENV отсутствует в notifications.py (SoT B2)"
     severity_env = dict(re.findall(r'"(critical|warning|info)"\s*:\s*"(TELEGRAM_CHAT_ID(?:_[A-Z_]+)?)"', m.group(1)))
-    assert {"critical", "warning", "info"} <= set(severity_env), f"SoT severity неполон: {severity_env}"
+    for required in ("critical", "warning", "info"):
+        assert required in severity_env, f"SoT severity неполон (missing {required}): {severity_env}"
 
     # ── Grafana contact-points.yml ──
     data = yaml.safe_load(CONTACT_POINTS.read_text(encoding="utf-8")) or {}

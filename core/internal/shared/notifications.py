@@ -586,7 +586,7 @@ def notify_event(
             # telegram_notifier ↔ notifications; telegram_notifier — shim-реэкспорт)
             ok = send_telegram(envelope, bot_token=token, chat_id=chat_id, proxy_url=proxy, parse_mode="HTML")
     # ruff: ignore[BLE001] — best-effort контракт: ЛЮБОЙ сбой транспорта → fallback, True
-    except Exception as e:  # noqa: EXC — non-blocking контракт notify_event (DevPlan 003)
+    except Exception as e:  # noqa: EXC — best-effort non-blocking контракт notify_event (DevPlan 003)
         logger.warning(
             "[IMP:9][notifications][notify_event] DELIVERY FAILED (severity=%s, event=%s, proxy=%s): %s",
             severity,

@@ -251,8 +251,8 @@ def main(
         else:
             client, bucket = build_s3_client(env)
         nodes = list_heartbeats(client, bucket, prefix)
-    # ruff: ignore[BLE001] — top-level: S3-ошибка/конфиг → честный exit 1 (тихий отказ запрещён)
-    except Exception as exc:
+    # ruff: ignore[BLE001] — top-level CLI handler: S3-ошибка/конфиг → честный exit 1 (тихий отказ запрещён)
+    except Exception as exc:  # noqa: EXC — top-level CLI handler (heartbeat_check main)
         logger.error("[IMP:10][heartbeat_check] S3 FAIL during heartbeat check: %s", exc)
         return 1
 
