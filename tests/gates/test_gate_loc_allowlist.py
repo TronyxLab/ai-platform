@@ -42,7 +42,9 @@ PLATFORM_ROOT: pathlib.Path = pathlib.Path(__file__).resolve().parent.parent.par
 ALLOWLIST: dict[str, int] = {
     "core/internal/bootstrap/lifecycle/state_machine.py": 1200,
     "core/internal/bootstrap/converge/reconciler.py": 800,
-    "core/internal/scaffold/project_adopter.py": 650,
+    # 650 → 700 (DevPlan 001 T5.4, 2026-08-16): +_sync_instructions (Step 5b) + _detect_project_type —
+    # .kilo/-синк из живого канона при adopt; декомпозиция adopter — follow-up вне скоупа
+    "core/internal/scaffold/project_adopter.py": 700,
 }
 
 # Test giants (DevPlan 172 W3.3, Brief H1/H10): лимиты = текущий размер + headroom 5-8%.

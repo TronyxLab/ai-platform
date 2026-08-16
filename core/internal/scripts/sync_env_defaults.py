@@ -447,6 +447,10 @@ def _section_s3_backup(env_defaults: dict[str, str]) -> list[str]:
     lines.append("S3_BUCKET=" + _get_env_val(env_defaults, "S3_BUCKET", "test-bucket"))
     lines.append("S3_ACCESS_KEY=" + _get_env_val(env_defaults, "S3_ACCESS_KEY", "test-access-key"))
     lines.append("S3_SECRET_KEY=" + _get_env_val(env_defaults, "S3_SECRET_KEY", "test-secret-key"))
+    # S3 read-only creds для heartbeat-checker (DevPlan 003 B5): отдельный read-only IAM ключ
+    # для CI-крона heartbeat-check.yml — НЕ мастер-ключи; значения — GitHub Secrets, не .env
+    lines.append("S3_READONLY_ACCESS_KEY=" + _get_env_val(env_defaults, "S3_READONLY_ACCESS_KEY", ""))
+    lines.append("S3_READONLY_SECRET_KEY=" + _get_env_val(env_defaults, "S3_READONLY_SECRET_KEY", ""))
     # Дублирующие ключи для upload-s3.sh (AWS SDK совместимость) — значения из SoT
     # (platform-infra.yaml env_defaults; compose резолвит алиасы через S3_*). Генератор без хардкода.
     lines.append("AWS_ACCESS_KEY_ID=" + _get_env_val(env_defaults, "AWS_ACCESS_KEY_ID"))

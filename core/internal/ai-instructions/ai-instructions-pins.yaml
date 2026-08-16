@@ -1,0 +1,38 @@
+# GREP_SUMMARY: ai-instructions-pins, SoT, canon-pin, digest, hermes-profile, requires-instructions-version
+# STRUCTURE: ┌canon tag@digest┐ → ◇ hermes {roles_as_skills, profile, emit_dir} → ◇ templates.requires → ⎋ pins
+# region MODULE_CONTRACT
+## @purpose  Единый SoT-пин канона ai-instructions для платформы (DevPlan 001 R11/T4.1):
+##           tag@digest, hermes-профиль эмиссии скиллов, версия инструкций для scaffold
+## @scope    Консьюмерский конфиг компилятора; читается `python3 -m ai_instructions sync --config …`
+## @invariants
+##   - canon.tag — семантический тег канона (формат v<major>.<minor>.<patch>)
+##   - canon.digest — digest-pin артефакта (формат sha256:<64 hex>); отсутствует ТОЛЬКО
+##     в dev-состоянии до релиза (финализируется в W7, DevPlan 001 риск 2)
+##   - hermes.emit_dir — относительный путь от корня платформы до каталога профилей
+##   - Файл — SoT: parity-гейт test_gate_ai_instructions_pins.py сверяет формат/консистентность
+## @rationale Конвенция digest-pin платформы (инвариант 11) распространяется на артефакт
+##   канона; единый манифест вместо хардкода версий в Makefile/CI
+# endregion MODULE_CONTRACT
+
+canon:
+  tag: v0.7.0
+  # digest: sha256:<64 hex> — финализируется после первого успешного ORAS-push в ghcr.io
+  # (org-конфигурация пакетов заблокировала push 2026-08-16: permission_denied — см.
+  # TRAP[DECISION] в ai-instructions-pins.yaml; workflow oci-release.yml готов и запустится
+  # на следующем теге после настройки org "Package creation")
+  remote: https://github.com/Tronyx161/AI-instructions.git
+
+hermes:
+  enabled: true
+  roles_as_skills: true
+  profile: platform
+  emit_dir: core/modules/hermes-agent/build/templates/profiles
+
+templates:
+  requires_instructions_version: 0.7.0
+
+# 🧐 TRAP[DECISION] · 2026-08-16 · — · OCI-артефакт ghcr.io/ai-instructions отложен —
+# org ghcr-конфигурация (Package creation) · Rejected: локальный ORAS-push и GITHUB_TOKEN
+# workflow — оба permission_denied ("The requested installation does not exist") · Reason:
+# экологический блок (настройка org), не код — workflow oci-release.yml готов (DevPlan 001 W3.4)
+# · Rev: org разрешит ghcr-пакеты → прогон workflow на теге v0.7.0 → заполнить canon.digest

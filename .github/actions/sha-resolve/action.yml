@@ -2,13 +2,14 @@
 # STRUCTURE: inputs:verify(default:true)+workflow-file(default:platform-test.yml) → ○ resolve SHA from event context → ◇ verify <workflow-file>:SHA succeeds → ⊕ skip output → ⎋ sha+skip outputs
 # region MODULE_CONTRACT
 ## @purpose  Canonical SHA resolution + gate-workflow verification in one composite action.
-##           Eliminates 3× duplicate SHA resolution blocks across workflows (build-platform,
-##           mirror, core-deploy) with a single Source of Truth for SHA-aware aggregator pattern.
+##           Eliminates duplicate SHA resolution blocks across workflows (mirror, core-deploy)
+##           with a single Source of Truth for SHA-aware aggregator pattern.
 ##           DevPlan 116 B11 T4 (D2): вход workflow-file параметризует, КАКОЙ gate-workflow
 ##           верифицируется (platform-gate-fast для downstream, platform-test по умолчанию).
-## @scope    Used by build-platform.yml, mirror.yml, core-deploy.yml and similar workflows that need
+## @scope    Used by mirror.yml, core-deploy.yml and similar workflows that need
 ##           to resolve SHA from workflow_run or workflow_dispatch event and verify that
 ##           the gate workflow succeeded for that commit.
+##           (build-platform.yml удалён DevPlan 002 — L1 distribution base схлопнут в L2.)
 ## @invariants
 ##   - Resolves SHA from workflow_run.head_sha or github.sha depending on event
 ##   - When verify=true (default): calls GitHub API to verify <workflow-file> success for SHA
@@ -18,8 +19,8 @@
 ##   - Requires GH_TOKEN env when verify=true (set at action level)
 ##   - skip output: 'true' if verification failed (downstream should skip), 'false' otherwise.
 ##     Only meaningful when verify=true. Document in downstream: `if: steps.<id>.outputs.skip != 'true'`
-## @rationale SHA-aware aggregator (D4) pattern was duplicated across build-platform.yml, mirror.yml
-##            and core-deploy.yml with identical blocks. Consolidation reduces drift risk.
+## @rationale SHA-aware aggregator (D4) pattern was duplicated across workflows
+##            (build-platform.yml удалён DevPlan 002; mirror.yml, core-deploy.yml) — consolidated.
 ##            StatusReport 046 T7 (CICD-03): added `skip` output to absorb core-deploy.yml inline logic.
 ## @changes — 2026-07-16 | Extracted from build-platform.yml + mirror.yml per DevPlan 017 T12
 ##           — 2026-07-22 | Added `skip` output for core-deploy.yml migration (StatusReport 046 T7 — CICD-03)

@@ -97,34 +97,20 @@ deploy:
   operation_ru: Промоут платформы в контекст
   description: Promote platform to a context org (copy + CI + auto-deploy)
 build:
-- make_target: hermes-build-platform
-  visibility: public
-  mechanism: docker-build
-  delegates_to: core/entrypoints/build.sh → core/internal/build/hermes_images.py build-platform
-  signature: make hermes-build-platform
-  operation_ru: Сборка L1 образа
-  description: Build L1 (hermes-agent-base) locally + push to ghcr.io as backup
 - make_target: hermes-build-context
   visibility: public
   mechanism: docker-build
-  delegates_to: core/entrypoints/build.sh → core/internal/build/hermes_images.py build-context
+  delegates_to: core/internal/build/hermes_images.py build-context
   signature: make hermes-build-context CONTEXT=<context>
-  operation_ru: Сборка L1→L2 образа
-  description: Build L1→L2 (hermes-agent-context), optionally push to GHCR
-- make_target: hermes-push-l1
-  visibility: public
-  mechanism: docker-push
-  delegates_to: docker tag + docker push to ghcr.io
-  signature: make hermes-push-l1
-  operation_ru: Push L1 в ghcr.io
-  description: Push L1 (hermes-agent-base) to ghcr.io as disaster recovery backup
+  operation_ru: Сборка L2 образа
+  description: Build hermes-agent-context (единый multi-stage Dockerfile, L1→L2 коллапс DevPlan 002)
 - make_target: hermes-push-l2
   visibility: public
   mechanism: docker-push
   delegates_to: docker tag + docker push to ghcr.io
   signature: make hermes-push-l2 CONTEXT=<org>
   operation_ru: Push L2 в ghcr.io
-  description: Push L2 (hermes-agent-context) to ghcr.io for a specific context/org
+  description: Push hermes-agent-context to ghcr.io for a specific context/org
 validate:
 - make_target: templates-render
   visibility: internal
@@ -247,6 +233,17 @@ scaffold:
   operation_ru: L1-статический сигнал агента (DevPlan 163 W-E)
   description: 'ОБЯЗАТЕЛЬНЫЙ шаг агента перед объявлением готовности (AGENTS.md root):
     <5 s на типовом изменении; exit 0/1 + JSON {rule, file, line, message, fixable}.'
+- make_target: ai-instructions-sync
+  visibility: public
+  mechanism: python-script
+  delegates_to: python3 -m ai_instructions sync --config core/internal/ai-instructions/ai-instructions-pins.yaml
+    (canon + .ai/ -> .kilo/ + hermes platform-профиль + ai-instructions.lock; DevPlan 001 R16/T4.2)
+  signature: make ai-instructions-sync [PROJECT=<dir>] [TEMPLATE=<all|backend|frontend>] [CANON_PATH=<dir>]
+  operation_ru: Пересборка инструкций (канон + проектные дополнения)
+  description: 'Конвенционный компилятор ai-instructions: детерминированная пересборка
+    .kilo/ (rules/agents/skills) из канона + .ai/ потребителя; PROJECT=<dir> — проектный
+    режим (эмиссия в проект, hermes off, TEMPLATE-фильтр наследования); повторный
+    прогон на неизменённом дереве — no-op.'
 - make_target: project-list
   visibility: public
   mechanism: shell-script
@@ -785,7 +782,6 @@ lib:
   type: sourced
   consumers:
   - core/internal/provision-environment.sh
-  - core/entrypoints/build.sh
   - core/internal/notify/notify-hook.sh
   - core/internal/healthcheck/tor-proxy-healthcheck.sh
   description: Thin facade over core.internal.shared.audit_logger (JSON-lines + syslog)
@@ -908,12 +904,13 @@ scenarios:
   node: [bootstrap-node, node-update, converge, verify-domains, check-security, render-monitoring, render-vhosts]
   generate: [generate-manifests]
   quality: [check, check-diff, gate, agent-check, scripts-audit, test-node, e2e-verify, fix-gate, fix-pycache]
-  dev-dr: [dev-hosts, dev-certs, dev-metrics, age-key-backup, provision, provision-llm, secrets-unlock, load-test, hermes-build-platform, hermes-push-l1, hermes-push-l2, hermes-build-context]
+  dev-dr: [dev-hosts, dev-certs, dev-metrics, age-key-backup, provision, provision-llm, secrets-unlock, load-test, hermes-push-l2, hermes-build-context]
 # ═══ GENERATED SECTION START (allowed_verbs + gates — make generate-entrypoint-manifest) ═══
 allowed_verbs:
 - adopt-project
 - age-key-backup
 - agent-check
+- ai-instructions-sync
 - backup
 - bootstrap-node
 - check
@@ -947,8 +944,6 @@ allowed_verbs:
 - generate-secrets-manifest
 - healthcheck
 - hermes-build-context
-- hermes-build-platform
-- hermes-push-l1
 - hermes-push-l2
 - load-test
 - new-context
@@ -977,6 +972,15 @@ allowed_verbs:
 - validate-modules
 - verify-domains
 gates:
+- id: test_negative_invalid_pins_rejected
+  test_file: test_gate_ai_instructions_pins.py
+  description: 'Auto-discovered gate: test_negative_invalid_pins_rejected'
+- id: test_pins_sot_format_and_hermes_config
+  test_file: test_gate_ai_instructions_pins.py
+  description: 'Auto-discovered gate: test_pins_sot_format_and_hermes_config'
+- id: test_templates_instructions_parity
+  test_file: test_gate_ai_instructions_pins.py
+  description: 'Auto-discovered gate: test_templates_instructions_parity'
 - id: test_generator_atomicity_audit
   test_file: test_gate_atomic_generation_no_partial_writes.py
   description: 'Auto-discovered gate: test_generator_atomicity_audit'
@@ -1085,12 +1089,9 @@ gates:
 - id: test_root_compose_uses_include
   test_file: test_gate_compose_include_sync.py
   description: 'Auto-discovered gate: test_root_compose_uses_include'
-- id: test_no_base_image_in_production_compose
+- id: test_no_base_image_anywhere
   test_file: test_gate_compose_no_base_image.py
-  description: 'Auto-discovered gate: test_no_base_image_in_production_compose'
-- id: test_platform_dev_has_l1_image
-  test_file: test_gate_compose_no_base_image.py
-  description: 'Auto-discovered gate: test_platform_dev_has_l1_image'
+  description: 'Auto-discovered gate: test_no_base_image_anywhere'
 - id: test_root_compose_uses_context_image_var
   test_file: test_gate_compose_no_base_image.py
   description: 'Auto-discovered gate: test_root_compose_uses_context_image_var'
@@ -1796,6 +1797,18 @@ gates:
 - id: test_no_yaml_safe_load_node
   test_file: test_gate_node_yaml_single_source.py
   description: 'Auto-discovered gate: test_no_yaml_safe_load_node'
+- id: test_negative_unregistered_event_detected
+  test_file: test_gate_notification_parity.py
+  description: 'Auto-discovered gate: test_negative_unregistered_event_detected'
+- id: test_notification_catalog_valid
+  test_file: test_gate_notification_parity.py
+  description: 'Auto-discovered gate: test_notification_catalog_valid'
+- id: test_notification_channels_parity
+  test_file: test_gate_notification_parity.py
+  description: 'Auto-discovered gate: test_notification_channels_parity'
+- id: test_notification_events_registered
+  test_file: test_gate_notification_parity.py
+  description: 'Auto-discovered gate: test_notification_events_registered'
 - id: test_hermes_compose_has_no_fallback
   test_file: test_gate_password_charset.py
   description: 'Auto-discovered gate: test_hermes_compose_has_no_fallback'
@@ -2471,9 +2484,9 @@ gates:
 - id: test_basedpyright_tests_removed
   test_file: test_gate_workflow_consistency.py
   description: 'Auto-discovered gate: test_basedpyright_tests_removed'
-- id: test_build_platform_uses_provisioner
+- id: test_build_platform_workflow_deleted
   test_file: test_gate_workflow_consistency.py
-  description: 'Auto-discovered gate: test_build_platform_uses_provisioner'
+  description: 'Auto-discovered gate: test_build_platform_workflow_deleted'
 - id: test_core_deploy_auto_detects_node
   test_file: test_gate_workflow_consistency.py
   description: 'Auto-discovered gate: test_core_deploy_auto_detects_node'

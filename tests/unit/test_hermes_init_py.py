@@ -158,6 +158,77 @@ def test_setup_dirs_idempotent_skip_existing(caplog: pytest.LogCaptureFixture, t
 # endregion TEST_setup_dirs
 
 
+# region TEST_sync_profile_skills (D3, DevPlan 001 T4.7)
+
+
+def _make_skills_fixture(tmp_path: Path) -> dict:
+    """Fixture с шаблонными скиллами профиля (stamped + без stamp)."""
+    templates = tmp_path / "templates" / "profiles"
+    data = tmp_path / "data" / "profiles"
+    skills = templates / "platform" / "skills" / "superposition"
+    skills.mkdir(parents=True)
+    (skills / "SKILL.md").write_text(
+        "---\nname: superposition\n---\n# Superposition\n<!-- ai-instructions:0.7.0 -->\n", encoding="utf-8"
+    )
+    return {"templates": templates, "data": data}
+
+
+# 🧪 TRAP[TEST] · 2026-08-16 · Regression · sync_profile_skills: первый старт доставляет скиллы (D3)
+# · Scenario: шаблонные скиллы профиля отсутствуют на volume → копируются при первом старте
+# · Last fail: N/A (new — DevPlan 001 T4.7 test-first)
+# · Remove if: sync-шаг профильных скиллов упраздняется (native hermes-механизм, Rev D3)
+def test_sync_profile_skills_first_start(caplog: pytest.LogCaptureFixture, tmp_path) -> None:
+    """D3 first start: skills шаблона копируются в data/profiles/<name>/skills/."""
+    caplog.set_level(logging.INFO)
+    fx = _make_skills_fixture(tmp_path)
+    init = HermesInit(templates=fx["templates"], data=fx["data"])
+    init.sync_profile_skills()
+    dest = fx["data"] / "platform" / "skills" / "superposition" / "SKILL.md"
+    assert dest.is_file(), "скилл профиля должен быть доставлен на volume"
+    assert "ai-instructions:0.7.0" in dest.read_text(encoding="utf-8")
+    _assert_imp9(caplog, "SKILLS")
+
+
+# 🧪 TRAP[TEST] · 2026-08-16 · Regression · sync_profile_skills: обновлённый шаблон перезаписывает stamped (D3)
+# · Scenario: образ обновлён (шаблон изменён) → stamped-файл на volume перезаписывается
+# · Last fail: N/A (new — DevPlan 001 T4.7 test-first)
+# · Remove if: sync-шаг профильных скиллов упраздняется
+def test_sync_profile_skills_updated_template_overwrites_stamped(caplog: pytest.LogCaptureFixture, tmp_path) -> None:
+    """D3 restart with updated image: stamped dest перезаписывается новым контентом шаблона."""
+    caplog.set_level(logging.INFO)
+    fx = _make_skills_fixture(tmp_path)
+    init = HermesInit(templates=fx["templates"], data=fx["data"])
+    init.sync_profile_skills()
+    # Обновление образа: шаблон изменился
+    skill_file = fx["templates"] / "platform" / "skills" / "superposition" / "SKILL.md"
+    skill_file.write_text(
+        "---\nname: superposition\n---\n# Superposition v2\n<!-- ai-instructions:0.7.0 -->\n", encoding="utf-8"
+    )
+    init.sync_profile_skills()
+    dest = fx["data"] / "platform" / "skills" / "superposition" / "SKILL.md"
+    assert "# Superposition v2" in dest.read_text(encoding="utf-8"), "stamped-файл должен перезаписаться"
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · sync_profile_skills: файл без stamp не трогается (D3)
+# · Scenario: оператор вручную правил скилл на volume (stamp стёрт/отсутствует) → never overwrite
+# · Last fail: N/A (new — DevPlan 001 T4.7 test-first)
+# · Remove if: never-overwrite семантика sync-шага меняется
+def test_sync_profile_skills_manual_file_untouched(caplog: pytest.LogCaptureFixture, tmp_path) -> None:
+    """R5 negative: ручной файл без stamp на volume не перезаписывается ни при каком прогоне."""
+    caplog.set_level(logging.INFO)
+    fx = _make_skills_fixture(tmp_path)
+    init = HermesInit(templates=fx["templates"], data=fx["data"])
+    init.sync_profile_skills()
+    dest = fx["data"] / "platform" / "skills" / "superposition" / "SKILL.md"
+    dest.write_text("---\nname: superposition\n---\n# Operator edit (no stamp)\n", encoding="utf-8")
+    init.sync_profile_skills()  # повторный старт с новым шаблоном
+    assert "# Operator edit (no stamp)" in dest.read_text(encoding="utf-8"), "ручной файл должен сохраниться"
+    _assert_imp9(caplog, "SKILLS")
+
+
+# endregion TEST_sync_profile_skills
+
+
 # region TEST_check_config (context config overlay)
 
 
@@ -318,35 +389,31 @@ def test_init_sh_wrapper_thin(caplog: pytest.LogCaptureFixture) -> None:
 
 # GUARD-PRESERVE (168): единственное покрытие AC-D5.3 — Dockerfile копирует init.py в /usr/local/bin (REGRESSION, DevPlan 119 D5)
 # 🧪 TRAP[TEST] · 2026-08-02 · Regression · Dockerfile копирует init.py (D5, AC-D5.3)
-# · Scenario: build/Dockerfile содержит COPY init.py
+# · Scenario: единый Dockerfile содержит COPY init.py (L1→L2 коллапс DevPlan 002: build/Dockerfile удалён)
 # · Last fail: N/A (new — D5; AC-D5.3)
 # · Remove if: init.py перестаёт копироваться в образ
 def test_dockerfile_copies_init_py(caplog: pytest.LogCaptureFixture) -> None:
-    """Dockerfile: COPY init.py в /usr/local/bin/init.py (AC-D5.3)."""
+    """Dockerfile: COPY init.py в /usr/local/bin/init.py (AC-D5.3, единый Dockerfile)."""
     caplog.set_level(logging.INFO)
-    dockerfile = (
-        Path(__file__).resolve().parent.parent.parent / "core" / "modules" / "hermes-agent" / "build" / "Dockerfile"
-    )
+    dockerfile = Path(__file__).resolve().parent.parent.parent / "core" / "modules" / "hermes-agent" / "Dockerfile"
     content = dockerfile.read_text(encoding="utf-8")
     assert "init.py" in content and "/usr/local/bin/init.py" in content, (
         "Dockerfile должен копировать init.py (AC-D5.3)"
     )
 
 
-# 🧪 TRAP[TEST] · 2026-08-06 · Regression · L2 context/Dockerfile — USER 10000:10000 non-root (DevPlan 140 W6, AC-W6.1)
-# · Scenario: context/Dockerfile содержит USER 10000:10000 ПОСЛЕ последнего RUN, ПЕРЕД HEALTHCHECK
-# · Last fail: hermes-root-500 — L1/L2 без USER (chown-if-root workaround init.py:167)
-# · Remove if: L2 снова переходит на root runtime (напр. s6-overlay несовместим с non-root)
+# 🧪 TRAP[TEST] · 2026-08-06 · Regression · единый Dockerfile — USER 10000:10000 non-root (DevPlan 140 W6, AC-W6.1)
+# · Scenario: единый Dockerfile (final-стадия) содержит USER 10000:10000 ПОСЛЕ последнего RUN, ПЕРЕД HEALTHCHECK
+# · Last fail: hermes-root-500 — без USER (chown-if-root workaround init.py:167)
+# · Remove if: снова переходим на root runtime (напр. s6-overlay несовместим с non-root)
 def test_context_dockerfile_has_nonroot_user(caplog: pytest.LogCaptureFixture) -> None:
-    """L2 context/Dockerfile: USER 10000:10000 после последнего RUN, перед HEALTHCHECK (AC-W6.1)."""
+    """Единый Dockerfile: USER 10000:10000 после последнего RUN, перед HEALTHCHECK (AC-W6.1)."""
     caplog.set_level(logging.INFO)
-    dockerfile = (
-        Path(__file__).resolve().parent.parent.parent / "core" / "modules" / "hermes-agent" / "context" / "Dockerfile"
-    )
+    dockerfile = Path(__file__).resolve().parent.parent.parent / "core" / "modules" / "hermes-agent" / "Dockerfile"
     lines = dockerfile.read_text(encoding="utf-8").splitlines()
 
     user_idx = next((i for i, line in enumerate(lines) if line.strip().startswith("USER 10000")), None)
-    assert user_idx is not None, "L2 context/Dockerfile должен содержать USER 10000:10000 (AC-W6.1)"
+    assert user_idx is not None, "Единый Dockerfile должен содержать USER 10000:10000 (AC-W6.1)"
 
     health_idx = next(i for i, line in enumerate(lines) if line.strip().startswith("HEALTHCHECK"))
     run_idxs = [i for i, line in enumerate(lines) if line.strip().startswith("RUN ")]
@@ -358,7 +425,7 @@ def test_context_dockerfile_has_nonroot_user(caplog: pytest.LogCaptureFixture) -
         f"USER (строка {user_idx + 1}) должен идти ПЕРЕД HEALTHCHECK (строка {health_idx + 1})"
     )
     logger.info(
-        "[IMP:9][test] context/Dockerfile USER 10000:10000 (строка %d) после RUN (строка %d), перед HEALTHCHECK (строка %d) — AC-W6.1 PASS",
+        "[IMP:9][test] единый Dockerfile USER 10000:10000 (строка %d) после RUN (строка %d), перед HEALTHCHECK (строка %d) — AC-W6.1 PASS",
         user_idx + 1,
         last_run_idx + 1,
         health_idx + 1,

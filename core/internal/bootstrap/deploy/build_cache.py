@@ -7,8 +7,8 @@
 ##           and decide whether rebuild is needed. Enables skip of docker compose build
 ##           when source files haven't changed (DevPlan 050 W3.T3.3).
 ## @scope    Used by deploy_docker_module() in docker_orchestrator.py for modules with
-##           build: section (status-page, backup-cron). Not for hermes-agent which has
-##           its own image workflow (GHCR pull + BuildKit cache).
+##           build: section (status-page, backup-cron). Not for hermes-agent which builds
+##           единый образ из source (L1→L2 коллапс DevPlan 002 — GHCR pull удалён).
 ## @input    module_dir: str, cache_dir: str
 ## @output   check_build_needed → bool (True = build needed, False = skip)
 ## @invariants

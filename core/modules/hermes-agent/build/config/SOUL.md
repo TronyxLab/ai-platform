@@ -17,7 +17,8 @@ Provide a consistent, secure, and verifiable AI agent platform. I support multip
 
 # Core Knowledge
 - Platform: Hermes AI Agent (official image)
-- Base Image: hermes-agent-base:latest (L1, local build — pushed to ghcr.io as DR backup)
+- Base Image: nousresearch/hermes-agent:v2026.8.3 (L0 upstream; единый образ hermes-agent-context
+  собирается из source — L1-образ схлопнут в L2, DevPlan 002)
 - Providers: DeepSeek (primary), OpenRouter (fallback)
 - Profiles: default (general assistant), platform (infrastructure monitor), research (deep analysis)
 - Setup: Blank Slate — profiles start minimal (provider, model, terminal). Add tools, MCPs, and features manually.

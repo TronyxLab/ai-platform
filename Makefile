@@ -32,7 +32,9 @@ _platform_root := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 export COMPOSE_PROFILES ?= $(shell python3 core/internal/scripts/yaml_query.py --file core/platform-infra.yaml --get env_defaults.COMPOSE_PROFILES)
 
 # === Docker Compose shared files (resolved at parse time, used by modules.mk) ===
-COMPOSE_BASE_FILES := -f docker-compose.yml -f docker-compose.platform-dev.yml
+# DevPlan 002 W3 T3.4: docker-compose.platform-dev.yml удалён (L1 dev-оверрайд мёртв —
+# единый образ hermes-agent-context с CONTEXT=test)
+COMPOSE_BASE_FILES := -f docker-compose.yml
 ifeq ($(shell uname -s),Darwin)
     ifneq ($(wildcard docker-compose.macos.yml),)
         COMPOSE_BASE_FILES += -f docker-compose.macos.yml
@@ -51,6 +53,7 @@ include makefiles/repair.mk
 include makefiles/manifest.mk
 include makefiles/project-practices.mk
 include makefiles/loadtest.mk
+include makefiles/ai-instructions.mk
 
 # === Default target ===
 .DEFAULT_GOAL := help

@@ -11,10 +11,10 @@
 ##   - Standard actions (actions/checkout, docker/setup-buildx-action, etc.)
 ##     don't require local checkout and can appear anywhere
 ## @rationale — P0 incident 2026-07-23: sha-resolve composite action before checkout
-##            broke core-deploy, build-platform, and mirror workflows. The same bug
-##            was fixed for setup-platform (commit e8ad2a9) but wasn't caught
+##            broke core-deploy and mirror workflows (build-platform удалён DevPlan 002).
+##            The same bug was fixed for setup-platform (commit e8ad2a9) but wasn't caught
 ##            systematically for other local actions. This gate prevents recurrence.
-## @see F2/F3/F4 fixes in core-deploy.yml, build-platform.yml, mirror.yml
+## @see F2/F3/F4 fixes in core-deploy.yml, mirror.yml
 # endregion MODULE_CONTRACT
 
 import logging
@@ -148,7 +148,7 @@ def test_local_actions_after_checkout(caplog):
             f"Found {len(findings)} local composite action(s) used before checkout.\n"
             f"Local actions (.github/actions/*) require actions/checkout to run first.\n"
             f"Reorder steps: move actions/checkout BEFORE any .github/actions/* usage.\n"
-            f"See F2/F3/F4 fixes (core-deploy, build-platform, mirror) as reference.\n\n" + "\n".join(detail_lines)
+            f"See F2/F3/F4 fixes (core-deploy, mirror) as reference.\n\n" + "\n".join(detail_lines)
         )
 
     logger.info("[IMP:9][gate][checkout-order] ✅ All local actions appear after checkout in workflow files")

@@ -187,28 +187,37 @@ def ensure(
 
 # region FUNC__notify_config_failure
 ## @purpose  Telegram-хук OnError (DevPlan 162 W6-2): silent-failure unattended-upgrades
-##           устраняется — отказ конфигурации не молчит. Non-fatal по контракту
-##           shared/telegram_notifier (send_telegram никогда не raise'ит).
+##           устраняется — отказ конфигурации не молчит. DevPlan 003 B3: send_telegram →
+##           notify_event(severity=critical, event="security.updates_failed") — единый конверт.
+##           Non-fatal по контракту shared/notifications (notify_event никогда не raise'ит).
 ## @io       ⇥ reason: str — причина провала (вставляется в сообщение) → ⎋ None
 ## @complexity O(1) + 1 HTTP POST (best-effort)
 ## @invariants
 ##   - Только failure-путь: вызывается при ensure() → False или исключении в main()
-##   - send_telegram: token/chat из env (TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID) — отсутствие →
-##     False (WARN, non-fatal) — не блокирует exit-код
-##   - Lazy import: shared.telegram_notifier импортируется в момент вызова (unit-тесты
+##   - notify_event: token/chat из env (TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID) — отсутствие →
+##     True (WARN, non-fatal) — не блокирует exit-код; прокси — TELEGRAM_PROXY_URL (нода: Tor)
+##   - Lazy import: shared.notifications импортируется в момент вызова (unit-тесты
 ##     monkeypatch-ят без импорта на module-level)
 ##   - Любое исключение в хуке → WARN + continue (хук никогда не маскирует основной сбой)
 ## @rationale DevPlan 162 W6-2: отказ unattended-upgrades молчалив (нет Mail/MailOnlyOnError,
-##            нет telegram-хука). OnError → telegram_notifier — оператор узнаёт о провале
+##            нет telegram-хука). OnError → notify_event — оператор узнаёт о провале
 ##            security-политики в реальном времени.
 def _notify_config_failure(reason: str) -> None:
     """Send Telegram failure notification (DevPlan 162 W6-2). Non-fatal, best-effort."""
     try:
-        from core.internal.shared.telegram_notifier import send_telegram
+        from core.internal.shared.notifications import Notification, notify_event
 
-        ok = send_telegram(f"[platform] unattended-upgrades config FAILED: {reason}", parse_mode="HTML")
-        if not ok:
-            logger.warning("[IMP:7][security_updates][telegram] Failure notification not delivered (non-fatal)")
+        notify_event(
+            Notification(
+                severity="critical",
+                context="security",
+                event="security.updates_failed",
+                message=f"unattended-upgrades config FAILED: {reason}",
+                corr_id="security-updates",
+                action="Fix unattended-upgrades config/apt state",
+            ),
+            # нода: прокси auto-resolve из env TELEGRAM_PROXY_URL (Tor/Privoxy, TRAP[BUG] 141)
+        )
     # ruff: ignore[BLE001] — telegram best-effort — не маскирует сбой security-политики (162 W6-2)
     except Exception as e:  # noqa: EXC — best-effort: notification must never mask the config failure (162 W6-2, DEPLOY_BEST_EFFORT)
         logger.warning("[IMP:7][security_updates][telegram] Notification failed (non-fatal): %s", e)

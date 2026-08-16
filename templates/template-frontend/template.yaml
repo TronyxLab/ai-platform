@@ -1,17 +1,22 @@
-# GREP_SUMMARY: template.yaml scaffold metadata version practices-version
-# STRUCTURE: ┌template.yaml┐ → ◇ name/version/requires_practices_version → ⎋ read_template_yaml validation
+# GREP_SUMMARY: template.yaml scaffold metadata version practices-version instructions-version
+# STRUCTURE: ┌template.yaml┐ → ◇ name/version/requires_practices_version/requires_instructions_version → ⎋ read_template_yaml + scaffold_instructions validation
 # region MODULE_CONTRACT
-## @purpose  Scaffold metadata шаблона (DevPlan 141 A7): сверка requires_practices_version
-##           против practices_manifest.version при scaffold (read_template_yaml)
+## @purpose  Scaffold metadata шаблона (DevPlan 141 A7 + DevPlan 001 T5.2): сверка
+##           requires_practices_version против practices_manifest.version (read_template_yaml)
+##           и requires_instructions_version против pin платформы (scaffold_instructions)
 ## @scope    template-frontend; потребляется core/internal/scaffold/scaffold_helpers.py
+##           и core/internal/scaffold/project_scaffolder.py
 ## @invariants
 ##   - requires_practices_version > practices_manifest.version → scaffold fail (ConfigValidationError)
+##   - requires_instructions_version > pins templates.requires_instructions_version → scaffold fail
 ##   - Отсутствие файла — graceful (scaffold не блокируется)
-## @rationale Дрейф-детект версии практик между шаблоном и платформой + фундамент фазы C
+## @rationale Дрейф-детект версии практик/инструкций между шаблоном и платформой;
+##   шаблон НЕ несёт снапшот инструкций (TRAP §6 DevPlan 001) — только анти-дрейф версии
 # endregion MODULE_CONTRACT
 
 # template.yaml — scaffold metadata
 name: template-frontend
 version: 1
 requires_practices_version: 1
+requires_instructions_version: 0.7.0
 description: "Frontend project template (Vite/React/TypeScript)"

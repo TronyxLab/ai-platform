@@ -17,7 +17,7 @@
 ##   7. Полный локальный стек через `docker compose up` на macOS разработчика.
 ##   8. LiteLLM — PostgreSQL во всех окружениях (никакого SQLite).
 ##   9. Тестовый сервер может быть пересоздан заново — обратная совместимость не требуется.
-##   10. Сборка образов hermes: `make hermes-build-platform` (L1, локально + push в ghcr.io как backup), `make hermes-push-l1` (L1 push в ghcr.io как disaster recovery + дистрибутивная база, public package) и `make hermes-build-context CONTEXT=<context>` (L1→L2, контекстная разработка и production).
+##   10. Сборка образов hermes: единый L2-образ `hermes-agent-context` из multi-stage Dockerfile (`make hermes-build-context CONTEXT=<context>` — локально/CI; `make hermes-push-l2` — push в org контекста). L1-distribution base (hermes-agent-base), её версии/digest и `hermes-build-platform`/`hermes-push-l1` удалены (DevPlan 002: L1 схлопнут в L2, base-стадия единого Dockerfile).
 ##   11. Manifest Generation Contract — authoritative sources (module.yaml, secret-definitions.yaml, platform-infra.yaml, Makefile .PHONY, @pytest.mark.gate) порождают generated files (secrets-manifest.yaml, platform-env.yaml, smoke_env_generated.py, env_defaults_generated.py, entrypoint-manifest.yaml#allowed_verbs/gates, core/AGENTS.md generated-секции). Generated files коммитятся, но НЕ редактируются вручную. CI gate `make check MARKER=check-manifests` блокирует divergence.
 ##   12. docs-in-code — вся операционная документация только в коде: AGENTS.md-файлы
 ##       (канонические + вспомогательные), module.yaml-контракты, docstrings, GREP_SUMMARY/STRUCTURE.
@@ -26,7 +26,7 @@
 ## @rationale Single source of truth for platform architecture consumed by autonomous agents and developers
 ## ⚠️ TRAP[DECISION] · — · SSH-флаги — единый Python SoT `core/internal/shared/ssh_opts.py`; lib/ssh.sh — тонкий фасад через `--shell`; гейт ssh_opts_sole_path enforce-ит · Rev: если появится второй shell-потребитель флагов — пересмотреть фасад
 ## ⚠️ TRAP[DECISION] · — · Единый канон healthcheck-критерия: контейнер running AND (healthy|""|none) = здоров, "unhealthy" → ждать (стартовые гонки); Python-реализация — только deploy/healthcheck_poller.py (static-детектор docker_sole_path), lib/healthcheck.sh — shell-фасад с тем же критерием · Rev: если появится состояние контейнера, требующее иного трактования — менять канон в одном месте
-## ⚠️ TRAP[DECISION] · — · L1 (hermes-agent-base) публикуется в ghcr.io как disaster recovery + дистрибутивная build-база (без секретов, только Python-зависимости); контексты НЕ используют L1 как runtime (runtime = L2), L1 — build-base + smoke-цель · Rev: если L1 начнёт нести контекстные данные — вернуть local-only
+## ⚠️ TRAP[DECISION] · — · L1 (бывш. hermes-agent-base) схлопнут в L2 (DevPlan 002): единый multi-stage Dockerfile (base-стадия = бывш. L1 + final = context overlay + CONTEXT guard + USER 10000); L1-distribution не публикуется, контекстные org собирают L2 из source (gha-cache переиспользует base-слои) · Rev: если появится >1 org, тянущих L1 анонимно (цена анонимного pull станет критичной) — вернуть отдельную base-стадию с публикацией
 ## ⚠️ TRAP[DECISION] · — · Shell→Python миграция — только Strangler-Fig: бизнес-логика извлекается в Python-модуль с unit-тестами, shell остаётся тонким фасадом (<100-200 LOC), 0 inline python3 · Rev: если новый shell-скрипт достигает >500 LOC с inline python3 → применять Strangler-Fig немедленно
 ## ⚠️ TRAP[DECISION] · — · Bootstrap pipeline: deploy-context — канонический шаг (state machine φ8/φ12 → bootstrap/deploy/context_deployer.py); 1 нода = 1 контекст (CONTEXT из node.yaml contexts[].name или CLI --context) · Rev: если deploy-context шаг добавит >5 мин к bootstrap → сделать async (background job + telegram notify)
 ## ⚠️ TRAP[DECISION] · — · Проект контекста живёт ТОЛЬКО в ~/projects/<context>/<project>/ (путь резолвит context); имя kebab-case, глобально уникальное, БЕЗ префикса org; реестр platform/projects/*.yaml — L2-оверрайды мониторинга (реестр без папки проекта — ошибка, папка без реестра — норма) · Rev: при появлении multi-component проектов — рассмотреть суффиксы -web/-api/-bot
@@ -52,7 +52,7 @@
 └─────────────────────────────────────────────────────┘
                            ↓ make context-promote CONTEXT=<context>
 ┌─ Context CI (<org>/ai-platform) ───────────────────┐
-│  Сборка L1→L2 → push ghcr.io → авто-деплой на VPS  │
+│  Сборка единого L2-образа → push ghcr.io → деплой   │
 └─────────────────────────────────────────────────────┘
                     ▲
                     │ ┌─ Context-overlay (git, pull-based)
@@ -87,6 +87,7 @@
 | ✅ | `adopt-project` | Адаптация существующего проекта |
 | ✅ | `age-key-backup` | Off-node encrypted backup AGE мастер-ключа (DR, секция «DR мастер-ключа AGE» core/AGENTS.md) |
 | ✅ | `agent-check` | L1-статический сигнал агента (DevPlan 163 W-E) |
+| ✅ | `ai-instructions-sync` | Пересборка инструкций (канон + проектные дополнения) |
 | ✅ | `backup` | Резервное копирование |
 | ✅ | `bootstrap-node` | Идемпотентный bootstrap ноды |
 | ✅ | `check` | Диагностика — все проверки из core/check-suite.yaml |
@@ -119,9 +120,7 @@
 | ⚙️ | `generate-requirements` (internal) | Генерация requirements.txt из pyproject.toml |
 | ⚙️ | `generate-secrets-manifest` (internal) | Генерация secrets-manifest.yaml |
 | ✅ | `healthcheck` | Проверка здоровья |
-| ✅ | `hermes-build-context` | Сборка L1→L2 образа |
-| ✅ | `hermes-build-platform` | Сборка L1 образа |
-| ✅ | `hermes-push-l1` | Push L1 в ghcr.io |
+| ✅ | `hermes-build-context` | Сборка L2 образа |
 | ✅ | `hermes-push-l2` | Push L2 в ghcr.io |
 | ✅ | `load-test` | Запуск нагрузочного теста (locust-генератор + PromQL-отчёт + baseline) |
 | ✅ | `new-context` | Создание контекста деплоя |
@@ -228,12 +227,15 @@ docker-compose.yml, ai-platform.yaml, .env.platform, practices.lock — посл
 `AI-PLATFORM.md`) · `make project-check` (практики, K1, [PRACTICES:...] отчёт) ·
 `make project-check --fix` (автофикс) · `make project-sync-practices` (repair дрейфа GENERATED) ·
 `make project-set-practices LEVEL=<baseline|full|auto>` (full — ТОЛЬКО по явному согласию) ·
+`make ai-sync` (пересборка `.kilo/` проекта из живого канона инструкций, DevPlan 001 T5.3) ·
 `make status` (live-статус проекта на целевой ноде) · `make help` (все команды проекта).
 Деплой = `git push` (main → production, staging → staging). Секреты в проекте настраивать не нужно.
 
 **Из платформы (`ai-platform/`):** `make new-project` · `make adopt-project` ·
 `make remove-project` · `make project-list` · `make project-status` · `make new-context` ·
 `make context-promote` · `make deploy-project PROJECT=<dir> NODE=<node>` (прямой деплой, emergency) ·
+`make ai-instructions-sync [PROJECT=<dir>] [TEMPLATE=all|backend|frontend] [CANON_PATH=<dir>]`
+(пересборка инструкций платформы или проекта, SoT: `core/internal/ai-instructions/ai-instructions-pins.yaml`) ·
 `make converge NODE=<node>`.
 
 ### Канонические env-имена (SoT: core/secret-definitions.yaml, platform-infra.yaml)
@@ -485,6 +487,9 @@ FP-журнал: `core/internal/agent_check/fp_registry.yaml` (правило с
 | [`core/internal/bootstrap/AGENTS.md`](core/internal/bootstrap/AGENTS.md) | Bootstrap pipeline, node lifecycle | Вспомогательный |
 | [`core/internal/shared/AGENTS.md`](core/internal/shared/AGENTS.md) | Инвентарь shared-модулей, критерии размещения | Вспомогательный |
 | [`core/modules/nginx/AGENTS.md`](core/modules/nginx/AGENTS.md) | Контракт nginx-модуля | Вспомогательный |
+| [`core/internal/ai-instructions/ai-instructions-pins.yaml`](core/internal/ai-instructions/ai-instructions-pins.yaml) | SoT-пин канона ai-instructions (tag/digest, hermes-профиль) — DevPlan 001 R11 | Вспомогательный |
+| [`ai-instructions.lock`](ai-instructions.lock) | Lock-манифест сгенерированных инструкций (drift-детект, `ai-instructions check`) | Generated |
+| `.ai/rules/`, `.ai/roles/` | Проектные источники инструкций платформы (компилируются в `.kilo/`) | Канонический |
 | `AGENTS.md` → «Контракт окружения проекта» | Канон окружения проекта (AI-PLATFORM.md) | Вспомогательный |
 | `AGENTS.md` → «Корневой контракт ~/projects/» | Корневой контракт ~/projects/ (walk-up, symlink) | Вспомогательный |
 | [`tests/gates/AGENTS.md`](tests/gates/AGENTS.md) | Gate test conventions, invariant testing | Вспомогательный |

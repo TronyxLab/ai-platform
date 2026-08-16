@@ -7,8 +7,9 @@
 ##           быть в каноне core/platform-infra.yaml#networks или в allowlist.
 ##           По образцу test_gate_volumes_sot.py (асимметрия покрытия закрыта).
 ## @scope    Статический файловый анализ — docker-compose.yml (root), docker-compose.macos.yml,
-##           docker-compose.platform-dev.yml, core/modules/*/docker-compose.base.yml,
+##           core/modules/*/docker-compose.base.yml,
 ##           core/modules/*/docker-compose.test.yml. Docker daemon не требуется.
+##           (docker-compose.platform-dev.yml удалён DevPlan 002 — L1 dev-оверрайд мёртв)
 ## @invariants
 ##   - Канон имён сетей — core/platform-infra.yaml#networks (список {name, driver})
 ##   - Каждое имя сети (top-level networks: + service networks:) ∈ канон ∪ allowlist
@@ -30,7 +31,6 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 PLATFORM_INFRA = PROJECT_ROOT / "core" / "platform-infra.yaml"
 ROOT_COMPOSE = PROJECT_ROOT / "docker-compose.yml"
 MACOS_COMPOSE = PROJECT_ROOT / "docker-compose.macos.yml"
-PLATFORM_DEV = PROJECT_ROOT / "docker-compose.platform-dev.yml"
 MODULES_DIR = PROJECT_ROOT / "core" / "modules"
 
 # Compose автоматическая сеть — сервис без networks: получает network "default".
@@ -86,7 +86,7 @@ def _discover_compose_files() -> list[Path]:
     ## @complexity — O(F) — glob
     """
     files: list[Path] = [ROOT_COMPOSE]
-    files.extend(p for p in (MACOS_COMPOSE, PLATFORM_DEV) if p.is_file())
+    files.extend(p for p in (MACOS_COMPOSE,) if p.is_file())
     files.extend(sorted(MODULES_DIR.glob("*/docker-compose.base.yml")))
     files.extend(sorted(MODULES_DIR.glob("*/docker-compose.test.yml")))
     return [p for p in files if p.is_file()]

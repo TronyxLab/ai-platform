@@ -121,7 +121,7 @@ def _parse_delegates_to_files(manifest_path: pathlib.Path) -> list[str]:
     ##   - Splits chained delegates_to by ' → ' separator
     ##   - Filters out non-file values (make commands, docker compose, descriptions)
     ##   - Handles ' + ' separator for multiple scripts in one segment
-    ##   - Strips trailing flags ('--lint') and subcommand arguments ('build-platform') from paths
+    ##   - Strips trailing flags ('--lint') and subcommand arguments ('build-context') from paths
     """
     with pathlib.Path(manifest_path).open(encoding="utf-8") as f:
         data = yaml.safe_load(f)
@@ -175,8 +175,8 @@ def _parse_delegates_to_files(manifest_path: pathlib.Path) -> list[str]:
     seen: set[str] = set()
     unique_files: list[str] = []
     for f in files:
-        # Strip trailing flags like '--lint' and trailing subcommand args like 'build-platform'
-        # e.g. 'core/internal/build/hermes-images.sh build-platform' → 'core/internal/build/hermes-images.sh'
+        # Strip trailing flags like '--lint' and trailing subcommand args like 'build-context'
+        # e.g. 'core/internal/build/hermes-images.sh build-context' → 'core/internal/build/hermes-images.sh'
         # Also handle .py scripts with trailing args like 'orchestrator_cli.py receive'
         words = f.split()
         if len(words) > 1 and (words[0].endswith(".sh") or words[0].endswith(".py")) and not words[1].startswith("--"):

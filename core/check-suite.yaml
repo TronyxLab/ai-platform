@@ -154,6 +154,15 @@ checks:
     gate_modes: [fast, full]
     xdist: true
     junit: tests/report-contract.xml
+  - id: ai-instructions
+    tier: pytest
+    timeout: 300
+    gate_modes: [fast, full]
+    xdist: true
+    junit: tests/report-ai-instructions.xml
+    cmds:
+      fast: python3 -m core.internal.test_runner --marker ai-instructions --timeout=300 --junit-output tests/report-ai-instructions.xml
+      full: python3 -m core.internal.test_runner --marker ai-instructions --timeout=300 --junit-output tests/report-ai-instructions.xml
   - id: static_audit
     tier: pytest
     timeout: 900

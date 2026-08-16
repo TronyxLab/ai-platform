@@ -226,7 +226,8 @@ def test_discovery() -> None:
 
     names: set[str] = {f.name for f in files}
     assert "bootstrap.sh" in names, "bootstrap.sh not found in entrypoints"
-    assert "build.sh" in names, "build.sh not found in entrypoints"
+    # DevPlan 002 W5 T5.9 (CRITICAL): build.sh удалён (L1 коллапс — прямой вызов python3)
+    assert "build.sh" not in names, "build.sh must be deleted (DevPlan 002 — hermes build через python3 -m)"
 
     logger.info("[IMP:9][test_discovery] PASS — %d entrypoints found, baseline files present", len(files))
 

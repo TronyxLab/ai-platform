@@ -191,6 +191,12 @@ env_defaults:
   S3_BUCKET: "test-bucket"
   S3_ACCESS_KEY: "test-access-key"
   S3_SECRET_KEY: "test-secret-key"
+  # S3 read-only creds для heartbeat-checker (DevPlan 003 B5): отдельный read-only IAM ключ,
+  # НЕ мастер-ключи. Пустые дефолты = CI-значения приходят из GitHub Secrets
+  # (S3_READONLY_ACCESS_KEY/S3_READONLY_SECRET_KEY, ci-secret); env: блок heartbeat-check.yml
+  # требует регистрации в env_defaults (гейт test_gate_ci_env_vars_match_platform_env).
+  S3_READONLY_ACCESS_KEY: ""
+  S3_READONLY_SECRET_KEY: ""
   # AWS-алиасы для upload-s3.sh (AWS SDK совместимость) — SoT (DevPlan 116 T3, U-17).
   # Литералы ${S3_ACCESS_KEY}/${S3_SECRET_KEY} — compose резолвит их через S3_* (alias, не копия).
   AWS_ACCESS_KEY_ID: "${S3_ACCESS_KEY}"

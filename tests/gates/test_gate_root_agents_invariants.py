@@ -66,8 +66,8 @@ _INVARIANTS: list[tuple[int, list[tuple[str, ...]]]] = [
     (8, [("LiteLLM", "PostgreSQL"), ("LiteLLM", "SQLite"), ("PostgreSQL", "SQLite")]),
     # 9. Тестовый сервер может быть пересоздан заново
     (9, [("Тестовый сервер",), ("пересоздан",), ("обратная совместимость",)]),
-    # 10. Сборка образов hermes: hermes-build-platform / hermes-push-l1 / hermes-build-context
-    (10, [("hermes-build-platform",), ("hermes-build-context",), ("hermes-push-l1",)]),
+    # 10. Сборка образов hermes: hermes-build-context / hermes-push-l2 (L1→L2 коллапс DevPlan 002)
+    (10, [("hermes-build-context",), ("hermes-push-l2",)]),
     # 11. Manifest Generation Contract — generated files коммитятся, НЕ редактируются вручную
     (11, [("Manifest Generation Contract",), ("generated files",), ("check-manifests",)]),
     # 12. docs-in-code — вся операционная документация только в коде, каталог docs/ запрещён

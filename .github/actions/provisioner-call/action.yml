@@ -4,8 +4,9 @@
 ## @purpose  Canonical provisioner invocation: thin wrapper over
 ##           core/internal/provision-environment.sh. Standardizes provisioning
 ##           calls across all CI workflows with a simple input interface.
-## @scope    Used by platform-test.yml, build-platform.yml, push-gate.yml —
-##           replaces 4× raw shell calls to provision-environment.sh.
+## @scope    Used by platform-test.yml, push-gate.yml —
+##           replaces raw shell calls to provision-environment.sh.
+##           (build-platform.yml удалён DevPlan 002 — L1 distribution base схлопнут в L2.)
 ## @invariants
 ##   - scope: comma-separated (networks,volumes,env,all), default: all
 ##   - Delegates to core/internal/provision-environment.sh (Single Source of Truth)
@@ -13,7 +14,7 @@
 ## @rationale  DevPlan 017 T12: consolidate 5× raw provisioner calls across workflows.
 ##             Single composite action reduces drift risk when adding new scopes/flags.
 ##             Comma-separated scope enables callers to pass multiple scopes (e.g.
-##             "networks,volumes" for build-platform.yml) without action-level changes.
+##             "networks,volumes" for platform-test.yml) without action-level changes.
 ## @changes — 2026-07-16 | Extracted from 5× raw invocations per DevPlan 017 T12
 # endregion MODULE_CONTRACT
 

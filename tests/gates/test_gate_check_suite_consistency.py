@@ -64,14 +64,15 @@ _GOLDEN_FAST: tuple[str, ...] = (
     "gates",
     "gates-docker",
     "contract",
+    "ai-instructions",  # DevPlan 001 T4.6: сьют конвенционного компилятора инструкций
     "static_audit",
     "predeploy",
 )
 
 # full (прежний ci.mk:169-213 + DevPlan 163 статический стек): pre-commit → validate →
 #   check-dead-code → static-ast → arch-imports → vulture → deptry → lint →
-#   doxygen-check → check-file-lines → gates → contract → static_audit → predeploy →
-#   smoke → component
+#   doxygen-check → check-file-lines → gates → contract → ai-instructions →
+#   static_audit → predeploy → smoke → component
 _GOLDEN_FULL: tuple[str, ...] = (
     "pre-commit",
     "validate",
@@ -86,6 +87,7 @@ _GOLDEN_FULL: tuple[str, ...] = (
     "pyright",
     "gates",
     "contract",
+    "ai-instructions",  # DevPlan 001 T4.6
     "static_audit",
     "predeploy",
     "smoke",

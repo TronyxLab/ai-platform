@@ -33,9 +33,11 @@ core/modules/{module}/
 │                               #   dedup-контракт test_dedup_contract; sudoers_generator
 │                               #   рендерит template, НЕ читает conf)
 ├── Dockerfile                  # (опционально) модуль с собственным образом
-│                               #   (backup-cron, postgres, status-page)
+│                               #   (backup-cron, postgres, status-page, hermes-agent —
+│                               #   единый multi-stage, L1→L2 коллапс DevPlan 002)
 ├── config/                     # (опционально)
-└── {build,context}/            # (только hermes-agent) Dockerfile L1/L2
+└── {build,context}/            # (только hermes-agent) payload-деревья единого Dockerfile
+                                #   (build/ = base-артефакты, context/ = overlay final-стадии)
 ```
 
 ## Структура модуля (System)
@@ -217,7 +219,8 @@ include ../../templates/module.mk
 
 1. **Колокализация обязательна:** bind-источники, на которые ссылается модульный base-файл (`./app.py`, `./templates/`), ДОЛЖНЫ лежать в директории модуля — иначе резолюция зависит от того, кто включает файл (дрейф).
 2. **Хост-пути вне директории модуля — только через env-параметризацию** `${VAR:-default}` (НЕ литералы `/var/lib/platform/*`, `/opt/*`): dev-машина (macOS) не имеет этих директорий, прод-нода не имеет локальных dev-путей. Прецеденты канона: `STATUS_METRICS_JSON` (status-page), `NODE_CONFIGS_DIR` (status-page), `PROMETHEUS_TARGETS_DIR`/`PROMETHEUS_RULES_DIR` (monitoring), `NGINX_CERT_DIR` (nginx).
-3. **dev-оверрайды:** `.env` (локальный, не коммитится в payload) или `docker-compose.platform-dev.yml`/`docker-compose.macos.yml` — единственное место dev-переопределений путей.
+3. **dev-оверрайды:** `.env` (локальный, не коммитится в payload) или `docker-compose.macos.yml` — единственное место dev-переопределений путей.
+   (`docker-compose.platform-dev.yml` удалён DevPlan 002 — L1 dev-оверрайд hermes мёртв; dev = единый образ hermes-agent-context с CONTEXT=test.)
 4. **Контракт локального стека:** локальный `make up` работает healthy с dev-оверрайдами `.env`; новые модули обязаны следовать п.2 (env-параметризация) — литерал `/var/lib/platform/*` в новом модульном base-файле = нарушение.
 
 # ⚠️ TRAP[DECISION] · — · Compose-include резолюция путей: относительные bind-пути резолвятся от файла, где объявлены (include-файла), НЕ от корня стека; колокализация обязательна; хост-пути вне директории модуля — только через env-параметризацию · Rev: если docker compose изменит резолюцию относительных путей — обновить правило
@@ -263,7 +266,23 @@ make up                        → все модули (profiles не фильт
 ## docker-compose.override.yml
 
 - `docker-compose.override.yml` — per-project кастомизация (autodiscovery, в `.gitignore`)
-- Платформенные overrides (`docker-compose.platform-dev.yml`, `docker-compose.macos.yml`) — явные через `-f`
+- Платформенные overrides (`docker-compose.macos.yml`) — явные через `-f`
+  (`docker-compose.platform-dev.yml` удалён DevPlan 002 — L1 dev-оверрайд hermes мёртв)
+
+---
+
+## Зоны скиллов hermes-agent (DevPlan 001 D2/D3)
+
+| Зона | Содержимое | Статус |
+|------|-----------|--------|
+| `core/modules/hermes-agent/build/templates/profiles/platform/skills/` | Эмитируемые скиллы профиля platform: 13 канона + 4 role-`<id>` (ai-instructions) | **Generated** — пересборка `make ai-instructions-sync`; ручные правки перезапишутся |
+| `core/modules/hermes-agent/build/skills/` | hermes-нативные скиллы (monitor-http/tls/uptime, server-status) — доступны всем профилям | Ручные — компилятор их не трогает |
+| `context/skills/` | Контекстный overlay проектных скиллов (вне scope 001) | Ручные (вне scope) |
+| Профили `build/templates/profiles/{default,platform,research}/` | Профили hermes (config.yaml, SOUL.md) — ручная система, компилятор НЕ генерирует | Ручные |
+
+**Delivery (D3):** `init.py` (s6 02-platform-init) sync-шагом rsync'ит шаблонные скиллы
+профиля → `/opt/data/profiles/<name>/skills/` при каждом старте: stamped-файлы
+(`<!-- ai-instructions:… -->`) перезаписываются, файлы без stamp — never overwrite.
 
 ---
 

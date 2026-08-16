@@ -1,22 +1,24 @@
-# GREP_SUMMARY: hermes-nightly scheduled cron weekly L1-L2-rebuild node-update S8-auto-rebuild D-134-L4
+# GREP_SUMMARY: hermes-nightly scheduled cron weekly L2-rebuild node-update S8-auto-rebuild D-134-L4
 # STRUCTURE: on:schedule(weekly cron) → job(nightly: checkout → make hermes-build-context → make hermes-push-l2) → ⎋ exit
 # region MODULE_CONTRACT
-## @purpose  Scheduled weekly hermes L2 rebuild (D-134-L4, DevPlan 145 W4): L1→L2 сборка + push
-##           в ghcr.io после S8-детекции (security_posture.py). Автопересборка закрывает gap между
-##           детекцией уязвимости (S8 в security_posture) и её исправлением (L2 rebuild с patched L1).
+## @purpose  Scheduled weekly hermes rebuild (D-134-L4, DevPlan 145 W4): единый L2-образ
+##           (L1→L2 коллапс DevPlan 002) сборка + push в ghcr.io после S8-детекции
+##           (security_posture.py). Автопересборка закрывает gap между детекцией уязвимости
+##           (S8 в security_posture) и её исправлением (rebuild с patched upstream).
 ## @scope    Scheduled workflow (cron). НЕ триггерится на push/PR — только schedule + manual dispatch.
 ##           CONTEXT должен быть задан (default: tronyx — продакшен-контекст оператора).
 ## @invariants
 ##   - Cron: weekly (Sunday 03:00 MSK — низкая нагрузка, перед началом рабочей недели)
 ##   - CONTEXT env обязателен (default tronyx); CI_DEPLOY_KEY / GHCR_PUSH_TOKEN — из secrets
-##   - hermes-build-context → L1 (cached) → L2 (context overlay) → push ghcr.io
+##   - hermes-build-context → единый L2 образ (base-стадия cached) → push ghcr.io
 ##   - node-update НЕ запускается автоматически (требует SSH к ноде) — только артефакт-обновление
 ##   - Failure → issue creation (operator action required)
-## @rationale D-134-L4: S8-детекция (security_posture.py --json) реализована, но автопересборка L2
+## @rationale D-134-L4: S8-детекция (security_posture.py --json) реализована, но автопересборка
 ##            после обнаружения CVE отсутствовала. Weekly cron обеспечивает регулярное обновление
-##            L2 даже без явного trigger от S8. Manual dispatch — для ad-hoc пересборки.
+##            даже без явного trigger от S8. Manual dispatch — для ad-hoc пересборки.
 ##            node-update остаётся ручным (SSH + state.json + converge — операционное окно).
-## @changes 2026-08-11 | DevPlan 145 W4 D-134-L4 — Created (weekly cron L1→L2 rebuild + push)
+## @changes 2026-08-11 | DevPlan 145 W4 D-134-L4 — Created (weekly cron rebuild + push)
+## @changes 2026-08-16 | DevPlan 002 W4 T4.5 — комментарии L1→L2 → «единый L2-образ» (таргеты не меняются)
 # endregion MODULE_CONTRACT
 
 name: hermes-nightly
@@ -61,10 +63,10 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # ─── Step 4: Build L1→L2 context image ────────────────────────────
-      # hermes-build-context: L1 (cached from ghcr.io) → L2 (context overlay build).
+      # ─── Step 4: Build единый L2 context image ───────────────────────────
+      # hermes-build-context: единый образ (base-стадия cached из BuildKit, final = context overlay).
       # CONTEXT определяет overlay (context_deployer.py ensure_context_repo).
-      - name: Build L2 context image (L1→L2, CONTEXT=${{ env.CONTEXT }})
+      - name: Build L2 context image (CONTEXT=${{ env.CONTEXT }})
         run: make hermes-build-context CONTEXT=${{ env.CONTEXT }}
 
       # ─── Step 5: Push L2 to ghcr.io ───────────────────────────────────
@@ -84,3 +86,19 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### ⚠️ Manual action required" >> $GITHUB_STEP_SUMMARY
           echo "Run \`make node-update NODE=<node>\` on each node to pull the new L2 image." >> $GITHUB_STEP_SUMMARY
+
+      # ─── Failure notification (DevPlan 003 A1) ─────────────────────────
+      # Build-fail → warning severity (сборка L2 не критична в моменте, но должна быть видима)
+      - name: Notify on failure
+        if: failure()
+        uses: ./.github/actions/notify-telegram
+        with:
+          bot-token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          chat-id-critical: ${{ secrets.TELEGRAM_CHAT_ID_CRITICAL }}
+          chat-id-warning: ${{ secrets.TELEGRAM_CHAT_ID_WARNING }}
+          severity: warning
+          context: hermes-nightly
+          event: ci.build_failed
+          message: "hermes-nightly build FAILED (CONTEXT=${{ env.CONTEXT }}, run ${{ github.run_id }})"
+          link: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          action: "Check build logs and retry"

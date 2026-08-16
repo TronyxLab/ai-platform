@@ -71,7 +71,7 @@ REQUIRED_SECRET_KEYS: list[str] = [
 
 # Forbidden CONTEXT_IMAGE patterns per Brief §3.5:
 # · ai-platform-context — deleted, use hermes-agent-context (L2)
-# · hermes-agent-platform — deleted, use hermes-agent-base (L1, local only)
+# · hermes-agent-platform — deleted, use hermes-agent-context (единый образ после L1 коллапса DevPlan 002)
 # ⚠️ TRAP[BUG] · 2026-07-08 · CONTEXT_IMAGE pointing to deleted/obsolete image names
 OLD_CONTEXT_IMAGE_PATTERNS: list[str] = [
     "ai-platform-context",

@@ -23,7 +23,7 @@
 ##   push-gate.yml (V3) выполняет ПОЛНЫЙ `make gate MODE=fast` для ВСЕХ веток (включая main) —
 ##   это CI-компенсация, а не дубль локального hook'а (локальный hook для feature намеренно
 ##   быстрый). На main происходит задвоение с platform-gate-fast.yml — принято by design (D4):
-##   platform-gate-fast нельзя менять (downstream workflow_run core-deploy/build-platform/mirror
+##   platform-gate-fast нельзя менять (downstream workflow_run core-deploy/mirror
 ##   зависят от него, тесты test_gate_ci_trigger_strength/test_gate_ci_coverage).
 ## @changes — 2026-07-15 | Inline docker network create → provision-environment.sh --scope networks
 ## @changes — 2026-07-15 | Inline gitleaks install → composite action setup-gitleaks
@@ -145,3 +145,18 @@ jobs:
         if: always()
         run: |
           docker network rm proxy-net shared-db-net hermes-agent-net backup-net shared-cache-net observability-net 2>/dev/null || true
+
+      # ─── Failure notification (DevPlan 003 A1) ─────────────────────────
+      - name: Notify on failure
+        if: failure()
+        uses: ./.github/actions/notify-telegram
+        with:
+          bot-token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          chat-id-critical: ${{ secrets.TELEGRAM_CHAT_ID_CRITICAL }}
+          chat-id-warning: ${{ secrets.TELEGRAM_CHAT_ID_WARNING }}
+          severity: critical
+          context: push-gate
+          event: ci.failure
+          message: "push-gate FAILED (branch ${{ github.ref_name }}, run ${{ github.run_id }})"
+          link: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          action: "Investigate the failed gate and fix forward"

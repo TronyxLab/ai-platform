@@ -6,7 +6,8 @@
 ##           core/modules/*/docker-compose.base.yml image lines) must be a versioned tag (v<Y>.<M>.<D>),
 ##           a digest-pin (tag@sha256:<64hex> — tag irrelevant, immutable), or a bare repo name.
 ##           BARE `:latest` (no digest) is RED. Dev/test files are allowlisted (NOT scanned):
-##           docker-compose.platform-dev.yml, tests/_conftest/smoke.py, docker-compose.test.yml.
+##           tests/_conftest/smoke.py, docker-compose.test.yml.
+##           (docker-compose.platform-dev.yml удалён DevPlan 002 — L1 dev-оверрайд мёртв)
 ## @scope    Static file analysis — no Docker daemon, no network. Scans:
 ##           1. core/platform-infra.yaml → env_defaults.CONTEXT_IMAGE
 ##           2. core/modules/*/docker-compose.base.yml → image: lines containing ghcr.io
@@ -36,8 +37,8 @@ PLATFORM_INFRA = PROJECT_ROOT / "core" / "platform-infra.yaml"
 MODULES_DIR = PROJECT_ROOT / "core" / "modules"
 
 # Allowlisted dev/test files — NOT scanned (tag policy: :latest only for dev/test).
+# DevPlan 002 W5 T5.13: docker-compose.platform-dev.yml удалён (L1 коллапс)
 ALLOWLIST = {
-    "docker-compose.platform-dev.yml",
     "tests/_conftest/smoke.py",
     "docker-compose.test.yml",
 }
@@ -140,7 +141,7 @@ class TestGateImageTagForm:
         assert _is_valid_ghcr_ref("ghcr.io/tronyxlab/hermes-agent-context:v2026.7.1")
         assert _is_valid_ghcr_ref("ghcr.io/tronyxlab/hermes-agent-context:latest@sha256:" + "a" * 64)
         assert _is_valid_ghcr_ref("ghcr.io/tronyxlab/hermes-agent-context@sha256:" + "a" * 64)
-        assert _is_valid_ghcr_ref("ghcr.io/tronyx161/hermes-agent-base")
+        # DevPlan 002 W5 T5.8: hermes-agent-base удалён из valid-набора (L1 коллапс)
         # Context image default in platform-infra.yaml (v2026.7.1) must pass
         infra = yaml.safe_load(PLATFORM_INFRA.read_text())
         ctx = infra["env_defaults"]["CONTEXT_IMAGE"]

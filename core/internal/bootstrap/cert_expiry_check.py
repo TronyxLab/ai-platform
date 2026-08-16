@@ -258,7 +258,9 @@ def save_state(data: CertExpiryState, path: str = STATE_FILE) -> bool:
 
 
 # region FUNC_notify_telegram
-## @purpose  Telegram через subprocess telegram_notifier send (тот же канал, что reboot_policy).
+## @purpose  Telegram через subprocess `python3 -m core.internal.shared.notifications notify`
+##           (DevPlan 003 B3: send → notify --severity critical --event cert.expiry;
+##           stdlib-only канон сохранён — systemd без PYTHONPATH, PYTHONPATH из __file__).
 ## @io       ⇥ text: str, notify_fn | None → ⎋ bool
 ## @complexity O(1) + 1 subprocess
 def notify_telegram(text: str, notify_fn: Callable[[str], bool] | None = None) -> bool:
@@ -269,7 +271,21 @@ def notify_telegram(text: str, notify_fn: Callable[[str], bool] | None = None) -
     env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[3]))
     try:
         result = subprocess.run(
-            ["python3", "-m", "core.internal.shared.telegram_notifier", "send", text],
+            [
+                "python3",
+                "-m",
+                "core.internal.shared.notifications",
+                "notify",
+                "--severity",
+                "critical",
+                "--event",
+                "cert.expiry",
+                "--context",
+                "cert",
+                "--action",
+                "Renew the certificate (acme.sh --renew) within the threshold",
+                text,
+            ],
             capture_output=True,
             text=True,
             timeout=SYSTEM_CMD_TIMEOUT,

@@ -86,7 +86,7 @@ jobs:
       # · Rev: если GitHub разрешит secrets в steps.if — можно вернуть прямые условия.
       DOCKER_HUB_AUTH: ${{ secrets.DOCKER_HUB_TOKEN != '' && secrets.DOCKER_HUB_USERNAME != '' }}
       # H11 (security hardening): HERMES_DASHBOARD_PASSWORD (прод-секрет) УДАЛЁН из job-env —
-      #   мёртвое значение (0 потребителей в шагах; smoke-пароль читается из .env в build-platform.yml,
+      #   мёртвое значение (0 потребителей в шагах; smoke-пароль читается из .env,
       #   компонент-тест задаёт "testpass" сам). Прод-секрет не светится в PR-пути.
       # Test Honesty R4 (DevPlan 117 Brief F + DevPlan 119 A3): CI-раннеры ИМЕЮТ Docker →
       # REQUIRE_HONESTY_MODE=fail (отсутствие сервиса = FAIL, не skip — R4 compliant).
@@ -216,7 +216,8 @@ jobs:
             ) &
           done
           ( docker pull postgres:18-alpine 2>&1 | sed 's/^/[pull:postgres] /'; echo $? > "$PULL_TMP/postgres.rc" ) &
-          ( docker pull nousresearch/hermes-agent:v2026.7.7.2 2>&1 | tail -5 | sed 's/^/[pull:hermes-base] /'; echo $? > "$PULL_TMP/hermes-base.rc" ) &
+          # DevPlan 002 W4 T4.4: pre-pull L0 upstream (единый Dockerfile base-стадия)
+          ( docker pull nousresearch/hermes-agent:v2026.8.3 2>&1 | tail -5 | sed 's/^/[pull:hermes-base] /'; echo $? > "$PULL_TMP/hermes-base.rc" ) &
           wait || true
           FAILED=0
           TOTAL=0
@@ -245,7 +246,7 @@ jobs:
 
       # ⚠️ TRAP[DECISION] · 2026-08-03 · — · cache-backend=gha (DevPlan 123 T1, P-13)
       # · Rejected: registry-cache дефолт (403 на запись ai-platform-build-cache, прецедент 2026-07-18)
-      # · Reason: gha-кэш не требует ghcr-прав — устраняет 403-риск обоих сборок (backup-cron, L1)
+      # · Reason: gha-кэш не требует ghcr-прав — устраняет 403-риск обеих сборок (backup-cron, hermes)
       - name: Build backup-cron image (scoped GHA cache)
         uses: ./.github/actions/docker-build-cache
         with:
@@ -254,22 +255,24 @@ jobs:
           cache-scope: backup-cron
           cache-backend: gha
 
-      - name: Build hermes-agent-base image (scoped GHA cache)
+      # DevPlan 002 W4 T4.4: единый образ hermes-agent-context (L1→L2 коллапс) — context = repo root,
+      # file = единый Dockerfile; gha-cache переиспользует base-слои (multi-stage).
+      - name: Build hermes-agent-context image (scoped GHA cache)
         uses: ./.github/actions/docker-build-cache
         with:
-          context: core/modules/hermes-agent/build
-          file: core/modules/hermes-agent/build/Dockerfile
-          tags: hermes-agent-base:latest
-          cache-scope: hermes-agent-base
+          context: .
+          file: core/modules/hermes-agent/Dockerfile
+          tags: hermes-agent-context:latest
+          cache-scope: hermes-agent-context
           cache-backend: gha
 
       - name: Diagnostic — verify built images
         run: |
           echo "=== Built images ==="
-          docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}" | grep -E "(hermes-agent-base|backup-cron)"
+          docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}" | grep -E "(hermes-agent-context|backup-cron)"
           echo ""
-          echo "=== Hermes-agent-base layers ==="
-          docker history hermes-agent-base:latest --no-trunc --format "table {{.Size}}\t{{.CreatedBy}}" 2>/dev/null | head -15 || echo "(image not found)"
+          echo "=== Hermes-agent-context layers ==="
+          docker history hermes-agent-context:latest --no-trunc --format "table {{.Size}}\t{{.CreatedBy}}" 2>/dev/null | head -15 || echo "(image not found)"
 
       - name: Diagnostic — LiteLLM pre-flight (stale containers + image digest)
         run: |
@@ -304,7 +307,8 @@ jobs:
       - name: Run ci-docker gate (smoke + component + predeploy-docker — no static duplication, contract/static/predeploy in fast gate)
         id: full_gate
         env:
-          CONTEXT_IMAGE: hermes-agent-base:latest
+          # DevPlan 002 W4 T4.4: единый образ hermes-agent-context (собран выше)
+          CONTEXT_IMAGE: hermes-agent-context:latest
         run: |
           make gate MODE=ci-docker SKIP_PRECOMMIT=1
 
@@ -401,3 +405,18 @@ jobs:
 
       - name: Cleanup Docker resources
         uses: ./.github/actions/cleanup-docker
+
+      # ─── Failure notification (DevPlan 003 A1) ─────────────────────────
+      - name: Notify on failure
+        if: failure()
+        uses: ./.github/actions/notify-telegram
+        with:
+          bot-token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          chat-id-critical: ${{ secrets.TELEGRAM_CHAT_ID_CRITICAL }}
+          chat-id-warning: ${{ secrets.TELEGRAM_CHAT_ID_WARNING }}
+          severity: critical
+          context: platform-test
+          event: ci.failure
+          message: "platform-test FAILED (full gate/integration RED, run ${{ github.run_id }})"
+          link: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          action: "Investigate the failed test suite and fix forward"

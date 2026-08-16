@@ -26,7 +26,6 @@ from tests.helpers.gate_helpers import repo_root
 PLATFORM_ENV_PATH = repo_root() / "platform-env.yaml"
 PROVISIONER_PATH = repo_root() / "core" / "internal" / "provision-environment.sh"
 COMPOSE_FILE = repo_root() / "docker-compose.yml"
-COMPOSE_DEV_FILE = repo_root() / "docker-compose.platform-dev.yml"
 
 
 @pytest.mark.requires_docker

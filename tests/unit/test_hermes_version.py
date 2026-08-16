@@ -1,18 +1,19 @@
-# GREP_SUMMARY: test-hermes-version hermes-agent-base hermes-agent-context nousresearch-hermes-agent PLATFORM_CONTEXT_REPO LDD IMP caplog
-# STRUCTURE: ◇ test_platform_base_image_name[read Dockerfile→LABEL+FROM assert] → ◇ test_context_image_default[read compose→image assert] → ◇ test_hermes_version_module_present[PLATFORM_CONTEXT_REPO→skip|fail|OK]
+# GREP_SUMMARY: test-hermes-version hermes-agent-context nousresearch-hermes-agent Dockerfile CONTEXT_IMAGE LDD IMP caplog L1-collapse
+# STRUCTURE: ◇ test_platform_base_image_name[read Dockerfile→LABEL+FROM assert] → ◇ test_context_image_default[read compose→image assert]
 # region MODULE_CONTRACT
-## @purpose  Verify platform Docker image names follow L0→L1→L2 naming convention:
-##           hermes-agent-base (L1, local only) and hermes-agent-context (L2, publishable).
+## @purpose  Verify platform Docker image names follow canonical naming after L1→L2 коллапс
+##           (DevPlan 002): единый образ hermes-agent-context (L2) собирается из единого
+##           multi-stage Dockerfile (base-стадия = бывш. L1, final = context overlay).
 ##           L0 = nousresearch/hermes-agent (immutable upstream).
-##           Also verifies context overlay repository is available via PLATFORM_CONTEXT_REPO.
 ## @scope    Unit tests; no Docker daemon required. Reads YAML and Dockerfile from disk.
 ## @invariants
-##   - L1 LABEL = hermes-agent-base (local build, pushed to ghcr.io as DR backup)
+##   - Единый Dockerfile LABEL = hermes-agent-context (L1-лейбл удалён)
 ##   - L2 image = ghcr.io/<context\>/hermes-agent-context (publishable)
 ##   - L0 FROM = nousresearch/hermes-agent (immutable upstream)
-##   - PLATFORM_CONTEXT_REPO unset → skip (L2 context optional); set but missing → fail
-## @rationale — Brief §3.5: L1=hermes-agent-base (local-only), L2=hermes-agent-context (GHCR).
-##              Organisation-agnostic: PLATFORM_CONTEXT_REPO replaces hardcoded paths.
+##   - hermes-agent-base НЕ должен встречаться ни в Dockerfile, ни в compose (кроме негативных
+##     drift-детекторов) — L1 коллапс
+## @rationale — DevPlan 002 W5 T5.4: L1 label удалён; единый образ. Organisation-agnostic.
+## @changes  2026-08-16 | DevPlan 002 W5 T5.4 — rewrite под единый образ (build/Dockerfile удалён)
 def _module_contract():
     pass
 
@@ -47,27 +48,35 @@ def _read_file_line(path: str, search: str) -> str | None:
 @pytest.mark.static_audit
 @ldd_trajectory
 def test_platform_base_image_name(caplog: pytest.LogCaptureFixture) -> None:
-    """Verify platform base image in build/Dockerfile uses hermes-agent-base (L1, local only)."""
+    """Verify единый Dockerfile uses hermes-agent-context (L1 hermes-agent-base удалён)."""
     dockerfile_path = (
-        Path(pathlib.Path(__file__).resolve().parent.parent.parent)
-        / "core"
-        / "modules"
-        / "hermes-agent"
-        / "build"
-        / "Dockerfile"
+        Path(pathlib.Path(__file__).resolve().parent.parent.parent) / "core" / "modules" / "hermes-agent" / "Dockerfile"
     )
     assert pathlib.Path(dockerfile_path).is_file(), f"Dockerfile not found at {dockerfile_path}"
     logger.info("[IMP:7][test_platform_base_image_name] Checking Dockerfile: %s", dockerfile_path)
 
+    content = pathlib.Path(dockerfile_path).read_text(encoding="utf-8")
+
     label_line = _read_file_line(dockerfile_path, "org.opencontainers.image.name=")
     assert label_line is not None, "Dockerfile missing LABEL org.opencontainers.image.name"
-    assert "hermes-agent-base" in label_line, f"LABEL does not contain hermes-agent-base: '{label_line}'"
+    assert "hermes-agent-context" in label_line, f"LABEL does not contain hermes-agent-context: '{label_line}'"
+    assert "hermes-agent-base" not in label_line, (
+        f"L1 LABEL удалён — hermes-agent-base не должен присутствовать: '{label_line}'"
+    )
     logger.critical("[IMP:9][test_platform_base_image_name] ASSERT: label=%s", label_line)
 
-    from_line = _read_file_line(dockerfile_path, "FROM ")
-    assert from_line is not None, "Dockerfile missing FROM statement"
-    assert "nousresearch/hermes-agent" in from_line, f"FROM does not reference nousresearch/hermes-agent: '{from_line}'"
-    logger.critical("[IMP:9][test_platform_base_image_name] ASSERT: from=%s", from_line)
+    # FROM-директивы — строки, реально начинающиеся с FROM (не STRUCTURE-комментарий)
+    from_lines = [line for line in content.splitlines() if line.strip().startswith("FROM ")]
+    assert from_lines, "Dockerfile missing FROM statement"
+    assert any("nousresearch/hermes-agent" in line for line in from_lines), (
+        f"FROM does not reference nousresearch/hermes-agent: {from_lines}"
+    )
+    logger.critical("[IMP:9][test_platform_base_image_name] ASSERT: from=%s", from_lines[0].strip())
+
+    # L1 коллапс: единый Dockerfile не содержит hermes-agent-base (нет L1-стадии, публикующейся отдельно)
+    assert "hermes-agent-base" not in content, (
+        "L1 hermes-agent-base удалён (DevPlan 002) — не должен встречаться в Dockerfile"
+    )
 
 
 @pytest.mark.static_audit
@@ -89,10 +98,17 @@ def test_context_image_default(caplog: pytest.LogCaptureFixture) -> None:
     assert "hermes-agent-context" in image_line, f"Image must reference hermes-agent-context: '{image_line}'"
     logger.critical("[IMP:9][test_context_image_default] ASSERT: image=%s", image_line)
 
+    # L1 коллапс: compose build.dockerfile → единый Dockerfile
+    dockerfile_line = _read_file_line(compose_path, "dockerfile: ")
+    assert dockerfile_line is not None, "docker-compose.base.yml missing build.dockerfile"
+    assert "core/modules/hermes-agent/Dockerfile" in dockerfile_line, (
+        f"build.dockerfile должен указывать на единый Dockerfile: '{dockerfile_line}'"
+    )
+    logger.critical("[IMP:9][test_context_image_default] ASSERT: dockerfile=%s", dockerfile_line)
+
 
 # 🧐 TRAP[DECISION] · 2026-07-11 · — · test_hermes_version_module_present removed
 # · Rejected: keeping as conditional L2 gate
 # · Reason: always SKIP without PLATFORM_CONTEXT_REPO env var — dead test in local/CI
 # ·   Added no value; test_context_image_default already validates L2 image naming.
-# ·   If L2 context overlay testing is needed, restore with requires_docker marker.
 # · Rev: restore if PLATFORM_CONTEXT_REPO becomes a mandatory env var in CI

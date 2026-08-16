@@ -42,7 +42,7 @@
 ##       │   Копирует базовую платформу в GitHub-организации контекстов
 ##       │   (один или все сразу).
 ##       │
-##       ▼ CI/CD в контекстной org: build-platform.yml + deploy-project.yml
+##       ▼ CI/CD в контекстной org: deploy-project.yml (build-platform.yml удалён DevPlan 002 — L1 схлопнут)
 ##       │   Запускается в контекстном репозитории <org>/ai-platform
 ##       │   (единый канал deploy-project.yml)
 ##       │

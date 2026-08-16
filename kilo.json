@@ -13,6 +13,9 @@
     "code": {
       "disable": true
     },
+    "coder": {
+      "disable": true
+    },
     "docs": {
       "disable": true
     },

@@ -81,9 +81,8 @@ ENV_HERMES = {
     "POSTGRES_PASSWORD": "test-pg-pwd",
     "COMPOSE_PROFILES": "hermes-agent",
     "OPENAI_API_KEY": "sk-test-not-for-production",
-    "CONTEXT_IMAGE": os.environ.get(
-        "CONTEXT_IMAGE", f"ghcr.io/{os.environ.get('GHCR_ORG', 'tronyxlab')}/hermes-agent-context:latest"
-    ),
+    # DevPlan 002 W5 T5.11: единый образ hermes-agent-context (L1 коллапс); GHCR_ORG удалён
+    "CONTEXT_IMAGE": os.environ.get("CONTEXT_IMAGE", "hermes-agent-context:latest"),
     "HERMES_DASHBOARD_PASSWORD": "testpass",
     "PLATFORM_ROOT": _PLATFORM_ROOT,
 }
@@ -333,10 +332,10 @@ def hermes_up(platform_services: dict[str, list[str]], postgres_up, modules_dir)
     #          build: is now in compose file; explicit build ensures image
     #          exists before up, avoiding 'denied' on GHCR cross-repo pull.
     # ⚠️ TRAP[BUG] · 2026-07-23 · P0 · docker compose build fails when CONTEXT_IMAGE
-    # ·   is pre-built locally (e.g., hermes-agent-base:latest in CI).
-    # ·   Root: docker compose build triggers L2 context Dockerfile which
-    # ·   requires FROM hermes-agent-base:latest, but buildx load:true may
-    # ·   not propagate the image to the compose builder's image store.
+    # ·   is pre-built locally (e.g., единый hermes-agent-context:latest in CI).
+    # ·   Root: docker compose build triggers единый Dockerfile which
+    # ·   builds from source (base-стадия + final-стадия, L1 коллапс DevPlan 002),
+    # ·   но buildx load:true may not propagate the image to the compose builder's image store.
     # ·   Fix: check if CONTEXT_IMAGE already exists locally — skip build.
     # ·   Prevention: this check + CI diagnostic step verifying image presence.
     context_image = ENV_HERMES.get("CONTEXT_IMAGE", "")

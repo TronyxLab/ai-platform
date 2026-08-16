@@ -1,0 +1,100 @@
+# GREP_SUMMARY: notification-catalog, registry, events, severity, throttle, action, parity
+# STRUCTURE: ┌version: 1┐ → ◇ events[] (id → severity/context/throttle_min/action) → ⎋ parity-гейт «код шлёт только зарегистрированные события»
+# region MODULE_CONTRACT
+## @purpose  Декларативный реестр событий уведомлений платформы (DevPlan 003 B4 — лёгкий S5):
+##           каждый event-id, который шлёт код (notify_event / CLI notify / CI notify-telegram),
+##           обязан быть зарегистрирован здесь. Поля: severity (дефолт канала), context,
+##           throttle_min (dedup-окно), action (предлагаемое действие в футере конверта).
+## @scope    core/notification-catalog.yaml — единый реестр событий; runtime читается
+##           shared/notifications.py (_load_catalog — throttle-окна); статически сверяется
+##           tests/gates/test_gate_notification_parity.py (call-sites ⊆ каталог).
+## @invariants
+##   1. id — уникальный kebab-case идентификатор события (grep-совместимый)
+##   2. severity ∈ {critical, warning, info} — дефолт канала; call-site может эскалировать
+##      (runtime-условия, напр. bootstrap.report: errors>0 → critical)
+##   3. throttle_min > 0 — dedup-окно в минутах (по (event, fingerprint)); отсутствует →
+##      DEFAULT_THROTTLE_SECONDS (3600s) в notifications.py
+##   4. action — человекочитаемое предлагаемое действие (футер 💡 конверта)
+##   5. НОВОЕ событие: добавить id в каталог ДО использования в коде (иначе parity-гейт RED)
+## @rationale Полный event-bus (S5) отклонён (DevPlan 003 §1): реестр + parity-гейт дают
+##           декларативную карту событий без инфраструктуры шины.
+## @changes 2026-08-16 | DevPlan 003 B4 — created
+# endregion MODULE_CONTRACT
+
+version: 1
+events:
+  # ── CI / GitHub Actions ──────────────────────────────────────────────
+  - id: ci.failure
+    severity: critical
+    context: ci
+    throttle_min: 30
+    action: "Investigate the failed CI run and fix forward"
+  - id: ci.build_failed
+    severity: warning
+    context: ci
+    throttle_min: 30
+    action: "Check build logs and retry"
+  - id: project.deploy_failed
+    severity: critical
+    context: deploy
+    throttle_min: 30
+    action: "Fix project quality gates and re-push"
+
+  # ── Deploy (post_deploy_chain, нода) ─────────────────────────────────
+  - id: deploy.success
+    severity: info
+    context: deploy
+    action: "None — routine deploy"
+  - id: deploy.failed
+    severity: critical
+    context: deploy
+    action: "fix-forward: новый коммит (healthcheck-rollback откатил образ)"
+  - id: deploy.rollback
+    severity: critical
+    context: deploy
+    action: "Rollback выполнен — старый образ активен, investigate failure"
+
+  # ── Healthcheck / watchdog / heartbeat ───────────────────────────────
+  - id: watchdog.restart
+    severity: critical
+    context: watchdog
+    throttle_min: 30
+    action: "Check container logs after restart"
+  - id: heartbeat.stale
+    severity: critical
+    context: heartbeat
+    throttle_min: 30
+    action: "Node may be down — check VPS console / SSH"
+  - id: tor.chain_down
+    severity: critical
+    context: tor
+    throttle_min: 60
+    action: "Restore Tor/Privoxy chain (node cannot reach Telegram directly)"
+
+  # ── Maintenance (platform-reboot.service, нода) ──────────────────────
+  - id: cert.expiry
+    severity: critical
+    context: cert
+    throttle_min: 1440
+    action: "Renew the certificate (acme.sh --renew) within the threshold"
+  - id: reboot.postponed
+    severity: warning
+    context: reboot
+    throttle_min: 1440
+    action: "Active SSH session — reboot retried tomorrow 04:30"
+  - id: reboot.executed
+    severity: info
+    context: reboot
+    action: "None — reboot completed"
+  - id: security.updates_failed
+    severity: critical
+    context: security
+    throttle_min: 60
+    action: "Fix unattended-upgrades config/apt state"
+
+  # ── Bootstrap / update отчёты ────────────────────────────────────────
+  - id: bootstrap.report
+    severity: info
+    context: bootstrap
+    throttle_min: 60
+    action: "Check bootstrap/update audit log (errors → critical escalation)"

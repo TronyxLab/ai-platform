@@ -44,7 +44,6 @@
 ##      | DOCKER_HUB_USERNAME / DOCKER_HUB_TOKEN | Docker Hub учётка CI | pull-лимит-обход в CI + docker auth на ноде | platform-test.yml, docker_registry_auth.py, docker_auth.py | GitHub Secrets + node secrets.env | утечка, плановая 90д |
 ##      | GHCR_PULL_TOKEN | fine-grained PAT read:packages (все orgs) | pull ghcr.io образов на ноде | node secrets.env (sops), docker_auth.py, lifecycle phases | node sops-secret (НЕ GH Secret) | утечка, плановая 90д |
 ##      | GHCR_PUSH_TOKEN | fine-grained PAT write:packages | ручной push L2 (CI использует GITHUB_TOKEN) | manual hermes-push-l2 | GitHub Secrets (optional) | утечка |
-##      | GHCR_OWNER | производное: github.repository_owner (lowercase) | ghcr.io путь образов (ghcr.io/${GHCR_OWNER}/…) | build-platform.yml, makefiles/deploy.mk | derived (не секрет) | N/A — org-имя |
 ##      | TELEGRAM_BOT_TOKEN | BotFather-токен (digits:alphanumeric) | нотификации: healthcheck, deploy, hermes-agent, alerting | telegram_notifier.py, notify-hook.sh, hermes-agent, alerting/contact-points.yml | node secrets.env (sops) + GitHub Secrets | компрометация бота |
 ##      | TELEGRAM_CHAT_ID (+ _WARNING, _CRITICAL) | Telegram chat-идентификаторы | маршрутизация alerting по severity | alerting, telegram_notifier | node secrets.env (sops) | смена чата/канала |
 ##      | TELEGRAM_PROXY_URL / TELEGRAM_API_BASE | proxy/API override | tor-обход для Telegram (SPOF-митигация D-2) | telegram_notifier, tor-proxy-healthcheck | node secrets.env (sops) | смена proxy |
@@ -95,13 +94,12 @@
 ##                применяют на следующем bootstrap/up)
 ##        [ ] 4. Проверить: CI-прогон platform-test (docker pulls), make up на ноде
 ##        [ ] 5. Отозвать старый токен в Docker Hub; окно отката 30 дней
-##      2.7 GHCR_PULL_TOKEN / GHCR_PUSH_TOKEN / GHCR_OWNER:
+##      2.7 GHCR_PULL_TOKEN / GHCR_PUSH_TOKEN (GHCR_OWNER удалён DevPlan 002 — L1-образ не публикуется):
 ##        GHCR_PULL_TOKEN (node sops-secret): пересоздать fine-grained PAT read:packages на все
 ##        orgs → обновить sops secrets.env → make bootstrap-node/node-update; проверка
 ##        docker pull ghcr.io/${GHCR_OWNER}/….
 ##        GHCR_PUSH_TOKEN (CI): пересоздать write:packages PAT → GitHub Secrets; только для
 ##        ручного L2 push.
-##        GHCR_OWNER — НЕ ключ: derived от github.repository_owner (lowercase); ротация N/A.
 ##      2.8 TELEGRAM_* (BOT_TOKEN, CHAT_ID, CHAT_ID_WARNING, CHAT_ID_CRITICAL, PROXY_URL,
 ##        API_BASE, ALLOWED_USERS):
 ##        [ ] 1. BotFather (telegram) → /newbot → новый токен (или /revoke + /token для текущего)
@@ -150,8 +148,8 @@
 ##
 ## §5. grep-гейт имён секретов
 ##      До создания runbook следующие имена ОТСУТСТВОВАЛИ в предыдущей документации
-##      (каталог документации удалён Волной D DevPlan 164): GHCR_OWNER (§2.7 derived),
-##      GIT_MIRROR_TOKEN (§2.5 deprecated), TELEGRAM_BOT_TOKEN/CHAT_ID*/PROXY_URL/API_BASE/
+##      (каталог документации удалён Волной D DevPlan 164): GHCR_OWNER (§2.7 — удалён
+##      DevPlan 002), GIT_MIRROR_TOKEN (§2.5 deprecated), TELEGRAM_BOT_TOKEN/CHAT_ID*/PROXY_URL/API_BASE/
 ##      ALLOWED_USERS (§2.8), MIRROR_SSH_KEY (§2.3); VPS_SSH_KEY/CI_DEPLOY_KEY упоминались без
 ##      процедур; GITHUB_TOKEN/DOCKER_HUB_TOKEN — только в workflow-комментариях. Инвариант
 ##      grep-гейта: любой новый CI-секрет в .github//makefiles//core/ обязан попадать в

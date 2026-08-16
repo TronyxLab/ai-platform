@@ -1,3 +1,13 @@
+<!-- GREP_SUMMARY: project-context, ai-platform, CI-preflight, make-check, commit-policy, verification-cycle -->
+# region MODULE_CONTRACT
+## @purpose  Проектный контекст ai-platform: CI pre-flight, верификация реализации (make check),
+##           журнал прогонов, commit policy — дополнение канона спецификой платформы
+## @scope    Локальный dev-цикл агентов платформы; не переопределяет канон (не @protected)
+## @invariants
+##   - Не перекрывает защищённые правила канона (конфликт → fail-fast с обоими путями)
+##   - Содержимое — миграция прежнего ручного .kilo/rules/_project.md (ренейм Code→Coder, DevPlan 001 T4.4)
+# endregion MODULE_CONTRACT
+
 # Project Context
 
 ## CI Pre-flight Rules
@@ -14,7 +24,7 @@
 5. Диагностические ветки — от origin/main: `git checkout -b <branch> origin/main`, не от локального main
 6. После merge/конфликтов: `make fix-gate && git add -u && make check`
 
-## Верификация реализации (Code-агент)
+## Верификация реализации (Coder-агент)
 
 **Цикл (DevPlan 120/165):** per-task `make check TEST_FILE=...` / `make check-diff` → фикс-цикл `make check` → финальная верификация `make check` до чистоты. `make gate MODE=fast` в dev-цикле НЕ запускается (OOM-политика 0.8 v1.0.1: hook гоняет только quick check — pre-commit + ruff + check-diff — для ВСЕХ веток; полный fast-gate — CI push-gate.yml). Все проверки читаются из единого SoT `core/check-suite.yaml` — ручные check-manifests/ruff из инструкции удалены (дыры закрыты манифестом).
 
@@ -35,7 +45,7 @@
 3. Быстрые статические проверки (`ruff check .`, `ruff format --check .`, `make check MARKER=doxygen-check`, LOC-гейты против лимитов `tests/gates/test_gate_loc_allowlist.py`) — напрямую, не через полный gate
 4. Финальная верификация — `make check` до чистоты; pre-push hook прогонит гейт автоматически (без кэша; quick check для ВСЕХ веток, полный fast-gate — CI push-gate.yml, OOM-политика 0.8 v1.0.1). Ручной `make gate MODE=fast` НЕ нужен — вручную только при `--no-verify` или отсутствии hooks
 5. Запрещён `git checkout`/`git restore` для отката одиночных файлов — откатывает все незакоммиченные изменения (инцидент Wave 6, потеря E11); откатывай точечным `edit`
-6. В промтах Code-субагентам последовательность писать шагами: «`make check` (до чистоты)», не одной цепочкой через `&&`; `make gate MODE=fast` в промптах НЕ упоминать — арбитр pre-push hook (quick check) + CI push-gate.yml
+6. В промтах Coder-субагентам последовательность писать шагами: «`make check` (до чистоты)», не одной цепочкой через `&&`; `make gate MODE=fast` в промптах НЕ упоминать — арбитр pre-push hook (quick check) + CI push-gate.yml
 7. Первая зацепка — текст ошибки (правило 5, DevPlan 157): при фейле любой проверки: 1) прочитай файл/идентификатор из сообщения об ошибке; 2) grep канона (имя probe `_gate_probe_*`, DevPlan-номер в `.ai/plans/*/`); 3) только потом воспроизводи/фикси. Канон 119H/129W2 существовал — агент 156 нашёл его после ~33 вызовов
 
 ## Commit Policy (U-83, DevPlan 116 B11 T8)
@@ -45,3 +55,5 @@
 - `feat(116): <N> implementation — ...` — реализация (код + тесты + манифесты)
 
 Раздельные коммиты по волнам — норма (волна = свой feat-коммит). Big-bang (один коммит на N волн) — запрещён: теряется per-wave аудит-трейл.
+
+<!-- ai-instructions:0.7.0 -->

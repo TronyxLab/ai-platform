@@ -264,13 +264,22 @@ jobs:
           SHA="${{ steps.sha.outputs.sha }}"
           echo "[DEPLOY] core SHA $SHA → ${{ secrets.VPS_HOST }}:/opt/platform/core/"
 
-      # ─── Step 7: Failure notification ─────────────────────────────────
+      # ─── Step 7: Failure notification (DevPlan 003 A1) ─────────────────
+      # Единый CI-хук: notify-telegram action → shared/notifications.py notify-ci
+      # (прямой HTTPS из CI, критический severity). Секреты — inputs → env шага.
       - name: Notify on failure
         if: failure() && steps.sha.outputs.skip != 'true'
-        run: |
-          SHA="${{ steps.sha.outputs.sha }}"
-          echo "::error::core-deploy FAILED for SHA $SHA on ${{ secrets.VPS_HOST }}"
-          echo "::error::Action required: investigate and rollback if needed"
+        uses: ./.github/actions/notify-telegram
+        with:
+          bot-token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          chat-id-critical: ${{ secrets.TELEGRAM_CHAT_ID_CRITICAL }}
+          chat-id-warning: ${{ secrets.TELEGRAM_CHAT_ID_WARNING }}
+          severity: critical
+          context: core-deploy
+          event: ci.failure
+          message: "core-deploy FAILED for SHA ${{ steps.sha.outputs.sha }} on ${{ secrets.VPS_HOST }}"
+          link: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          action: "Investigate the failed deploy and fix forward"
 
       # ─── Step 8: Cleanup SSH key ─────────────────────────────────────
       - name: Cleanup SSH key

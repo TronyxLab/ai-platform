@@ -25,9 +25,7 @@
 | `make deploy` | Деплой проекта | make deploy PROJECT=\<dir\> [NODE=\<node\>] [LAUNCH=1] | git push → CI → .github/workflows/deploy-project.yml (receive verb) → orchestrator_cli dispatch receive → core/internal/deploy/orchestrator.py DeployOrchestrator.receive() → core/internal/notify/notify-hook.sh + core/internal/catalog/generate-catalog.sh (post-deploy, D4) |
 | `make deploy-project` | Прямой деплой минуя CI (DeployOrchestrator deliver) | make deploy-project PROJECT=\<dir\> NODE=\<node\> | core/internal/deploy/orchestrator_cli.py deliver (ForcedCommandChannel receive \<project\> \<version\>) → orchestrator_cli dispatch receive → DeployOrchestrator.receive() |
 | `make context-promote` | Промоут платформы в контекст | make context-promote CONTEXT=\<context\> | core/entrypoints/context-promote.sh → core/internal/deploy/context_promoter.py |
-| `make hermes-build-platform` | Сборка L1 образа | make hermes-build-platform | core/entrypoints/build.sh → core/internal/build/hermes_images.py build-platform |
-| `make hermes-build-context` | Сборка L1→L2 образа | make hermes-build-context CONTEXT=\<context\> | core/entrypoints/build.sh → core/internal/build/hermes_images.py build-context |
-| `make hermes-push-l1` | Push L1 в ghcr.io | make hermes-push-l1 | docker tag + docker push to ghcr.io |
+| `make hermes-build-context` | Сборка L2 образа | make hermes-build-context CONTEXT=\<context\> | core/internal/build/hermes_images.py build-context |
 | `make hermes-push-l2` | Push L2 в ghcr.io | make hermes-push-l2 CONTEXT=\<org\> | docker tag + docker push to ghcr.io |
 | `make templates-render` | Рендер шаблонов (internal) | make templates-render | core/internal/template_engine.py render-all |
 | `make validate-modules` | Валидация module.yaml (internal) | make validate-modules | core/internal/scripts/validate_module_yaml.py --all |
@@ -49,6 +47,7 @@
 | `make remove-project` | Удаление проекта из lifecycle | make remove-project NAME=\<name\> | core/entrypoints/scaffold.sh → core/internal/scaffold/remove-project.sh |
 | `make adopt-project` | Адаптация существующего проекта | make adopt-project DIR=\<dir\> | core/entrypoints/scaffold.sh → core/internal/scaffold/adopt-project.sh → core/internal/scaffold/gen_env_platform.py |
 | `make agent-check` | L1-статический сигнал агента (DevPlan 163 W-E) | make agent-check [JSON=1] | python3 -m core.internal.agent_check (ruff + advisory SLF/FBT/ARG/C90 + basedpyright + static check --changed + bespoke doc-headers) |
+| `make ai-instructions-sync` | Пересборка инструкций (канон + проектные дополнения) | make ai-instructions-sync [PROJECT=\<dir\>] [TEMPLATE=\<all|backend|frontend\>] [CANON_PATH=\<dir\>] | python3 -m ai_instructions sync --config core/internal/ai-instructions/ai-instructions-pins.yaml (canon + .ai/ -\> .kilo/ + hermes platform-профиль + ai-instructions.lock; DevPlan 001 R16/T4.2) |
 | `make project-list` | Список проектов | make project-list [NODE=\<node\>] | core/entrypoints/scaffold.sh → core/internal/scaffold/project-list.sh |
 | `make project-status` | Статус проекта | make project-status NAME=\<name\> | core/entrypoints/scaffold.sh → core/internal/scaffold/project-list.sh --status |
 | `make render-vhosts` | Генерация vhost конфигов | make render-vhosts NODE=\<name\> | core/internal/scaffold/add-vhost.sh → core/internal/scaffold/vhost_renderer.py render-all |
@@ -132,6 +131,22 @@ degradation при отсутствии ShellCheck).
 (`SYSTEM_EXCEPTIONS` + `SYSTEM_PREFIXES` в `generate_entrypoint_manifest.py`) из `allowed_verbs`.
 Валидатор — `core/internal/lint/doc_header_validator.py` (`STANDARD_MAKE_SERVICE_TARGETS`).
 Новый служебный таргет не требует правок — достаточно попасть в категорию.
+
+---
+### Компилятор инструкций ai-instructions (DevPlan 001)
+
+| Файл/глагол | Роль |
+|-------------|------|
+| `make ai-instructions-sync [PROJECT=<dir>] [TEMPLATE=…] [CANON_PATH=<dir>]` | Пересборка `.kilo/` из канона + `.ai/` потребителя (+ hermes-профиль platform) |
+| `core/internal/ai-instructions/ai-instructions-pins.yaml` | **SoT-пин** канона (tag@digest, hermes-профиль, requires_instructions_version) — parity-гейт `test_gate_ai_instructions_pins.py` |
+| `ai-instructions.lock` | Lock-манифест сгенерированных файлов (sha256) — drift-детект `ai-instructions check` |
+| `.ai/rules/`, `.ai/roles/` | Проектные источники платформы (компилируются в `.kilo/` со stamp) |
+| `core/modules/hermes-agent/build/templates/profiles/platform/skills/` | Generated-зона скиллов hermes-профиля (13 канон + 4 role-`<id>`); `build/skills/` (monitor-*, server-status) — ручные, не трогаются |
+
+**Контракты:** stamped-файлы (`<!-- ai-instructions:<version> -->`) перезаписываются/удаляются
+как сироты; файлы без stamp — never overwrite. Резолв канона: `--canon-path` → pin-кэш
+`~/.cache/ai-instructions/<tag>` → git clone по тегу. Проектный режим (`PROJECT=<dir>`) —
+эмиссия в проект, hermes off, `TEMPLATE`-фильтр наследования по директивам language/stack.
 
 ---
 
@@ -252,9 +267,11 @@ add/delete TXT (listing-эндпоинт ≠ DNS-01 сломан — TRAP[BUG] �
 (mirror push, pub — `.github/mirror-deploy-key.pub`), `GITHUB_TOKEN` (auto),
 `GIT_MIRROR_TOKEN` (PAT, отозван: HTTPS fallback удалён, mirror SSH-only),
 `DOCKER_HUB_USERNAME/TOKEN`, `GHCR_PULL_TOKEN` (node sops), `GHCR_PUSH_TOKEN` (CI),
-`GHCR_OWNER` (derived, не ключ), `TELEGRAM_*` (BOT_TOKEN/CHAT_ID*_WARNING/_CRITICAL/
+`TELEGRAM_*` (BOT_TOKEN/CHAT_ID*_WARNING/_CRITICAL/
 PROXY_URL/API_BASE/ALLOWED_USERS/GETME_URL), `AGE_SECRET_KEY` (мастер-ключ — DR-секция),
-`VPS_HOST`/`NODE_HOST_MAP`.
+`S3_READONLY_ACCESS_KEY`/`S3_READONLY_SECRET_KEY` (read-only IAM, heartbeat-checker CI-крон —
+DevPlan 003 B5; отдельный ключ, мастер-ключи S3_ACCESS_KEY/S3_SECRET_KEY не переиспользуются),
+`VPS_HOST`/`NODE_HOST_MAP`. (`GHCR_OWNER` удалён DevPlan 002 — L1-образ не публикуется.)
 
 **Чек-листы ротации (суть):** generate `ssh-keygen -t ed25519` → добавить pub (node.yaml /
 repo deploy keys ×N / GitHub-аккаунт / BotFather) → обновить Secrets/sops → проверить канал

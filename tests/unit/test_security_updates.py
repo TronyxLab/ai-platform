@@ -273,13 +273,14 @@ class TestMain:
         logger.critical("[IMP:9][test] main ensure False → notify_fn с причиной — OK (W6-2)")
 
     def test_notify_config_failure_missing_env_non_fatal(self, caplog, monkeypatch):
-        """162 W6-2: send_telegram без токена/чата → False (WARN) — хук non-fatal, exit 1 сохраняется."""
+        """162 W6-2: notify_event без токена/чата → skip (IMP:7) — хук non-fatal, exit 1 сохраняется.
+        DevPlan 003 B3: send_telegram → notify_event (единый контракт); skip-лог нового формата."""
         monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
         monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
         with caplog.at_level(logging.INFO):
             assert security_updates.main([], ensure_fn=lambda _: False) == 1, "notifier failure не меняет exit-код"
-        assert "Failure notification not delivered" in caplog.text
-        logger.critical("[IMP:9][test] notifier missing env → WARN, exit 1 сохраняется — OK (W6-2)")
+        assert "TELEGRAM_BOT_TOKEN not set" in caplog.text, "skip-маркер notify_event (W6-2 non-fatal)"
+        logger.critical("[IMP:9][test] notifier missing env → skip, exit 1 сохраняется — OK (W6-2/003)")
 
 
 # endregion Tests: main

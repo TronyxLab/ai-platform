@@ -1,8 +1,8 @@
 # GREP_SUMMARY: platform-gate-fast fast-gate push-main gitleaks make-gate-fast workflow-trigger downstream-decoupling D2 ruff-sarif basedpyright-json junit-artifacts DevPlan-163
-# STRUCTURE: on:push(main)+workflow_dispatch → job(fast-gate: checkout → setup-platform+gitleaks → compose-profiles → make gate MODE=fast → check-manifests → artifacts(ruff SARIF + basedpyright JSON + junit)) → ⎋ downstream (core-deploy/build-platform/mirror) триггерятся workflow_run
+# STRUCTURE: on:push(main)+workflow_dispatch → job(fast-gate: checkout → setup-platform+gitleaks → compose-profiles → make gate MODE=fast → check-manifests → artifacts(ruff SARIF + basedpyright JSON + junit)) → ⎋ downstream (core-deploy/mirror) триггерятся workflow_run
 # region MODULE_CONTRACT
 ## @purpose  Лёгкий gate-workflow (D2, DevPlan 116 B11 T4, U-57): развязка downstream
-##           (core-deploy/build-platform/mirror) от полного platform-test (~20 мин + integration/docker).
+##           (core-deploy/mirror) от полного platform-test (~20 мин + integration/docker).
 ##           Триггерится на push в main (и workflow_dispatch), выполняет gitleaks + `make gate MODE=fast`
 ##           (~2-3 мин). Downstream workflows слушают workflow_run этого workflow.
 ## @scope    Push-гейт для main-ветки. НЕ заменяет platform-test (PR-валидация + full-gate остаются).
@@ -141,3 +141,19 @@ jobs:
           name: pytest-junit-reports
           path: tests/report-*.xml
           if-no-files-found: warn
+
+      # ─── Failure notification (DevPlan 003 A1) ─────────────────────────
+      # Единый CI-хук: notify-telegram action → shared/notifications.py notify-ci (прямой HTTPS).
+      - name: Notify on failure
+        if: failure()
+        uses: ./.github/actions/notify-telegram
+        with:
+          bot-token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          chat-id-critical: ${{ secrets.TELEGRAM_CHAT_ID_CRITICAL }}
+          chat-id-warning: ${{ secrets.TELEGRAM_CHAT_ID_WARNING }}
+          severity: critical
+          context: platform-gate-fast
+          event: ci.failure
+          message: "platform-gate-fast FAILED (fast gate RED, run ${{ github.run_id }})"
+          link: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          action: "Investigate the failed gate and fix forward"
