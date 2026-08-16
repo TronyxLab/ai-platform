@@ -36,7 +36,9 @@ from typing import cast
 import yaml
 
 from core.internal.shared import docker_ops  # W1: docker inspect примитив (гейт docker_sole_path)
+from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError
 from core.internal.shared.module_interface import invoke as invoke_module_interface
+from core.internal.shared.node_yaml import NodeYaml
 from core.internal.shared.timeouts import DOCKER_CMD_TIMEOUT
 
 logger = logging.getLogger(__name__)
@@ -285,11 +287,9 @@ def _resolve_enabled_modules() -> set[str] | None:
     if not node_yaml or not Path(node_yaml).is_file():
         return None
     try:
-        data = yaml.safe_load(Path(node_yaml).read_text(encoding="utf-8")) or {}
-    except (OSError, yaml.YAMLError):
-        return None
-    modules = data.get("modules")
-    if not isinstance(modules, list):
+        # node.yaml ТОЛЬКО через NodeYaml-фасад (gate node_yaml_single_source — DRIFT-088-7)
+        modules = NodeYaml(node_yaml).get_modules()
+    except (ConfigNotFoundError, ConfigParseError, OSError):
         return None
     enabled = {str(m.get("name")) for m in modules if isinstance(m, dict) and m.get("enabled") is not False}
     logger.info("[IMP:8][modules-healthcheck][enabled] node.yaml filter: %d enabled module(s)", len(enabled))
