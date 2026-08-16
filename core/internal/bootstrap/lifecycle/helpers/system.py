@@ -811,14 +811,32 @@ def purge_cruft(*, runner: CommandRunner | None = None) -> bool:
         return True
     logger.info("[IMP:8][purge] Purging %d cruft packages: %s", len(installed), " ".join(installed))
     try:
-        _run_with_retry(["apt-get", "purge", "-y", "--auto-remove", *installed], timeout=APT_TIMEOUT, runner=active)
-        _run_with_retry(["apt-get", "autoremove", "-y"], timeout=APT_TIMEOUT, runner=active)
-        _run_with_retry(["apt-get", "clean"], timeout=APT_TIMEOUT, runner=active)
+        _purge_cruft_apt(installed, runner=active)
+        # ⚠️ TRAP[BUG] · 1.0.0 · HI · purge update-manager удаляет update-notifier-common
+        # · (/usr/lib/update-notifier/apt-check) — инструмент S2 check-security (rc=127, «cannot
+        # · assess»). Restore: update-notifier-common — маленький пакет, НЕ update-manager (cruft).
+        if "update-manager" in installed:
+            _run_with_retry(
+                ["apt-get", "install", "-y", "-qq", "update-notifier-common"], timeout=APT_TIMEOUT, runner=active
+            )
+            logger.info("[IMP:9][purge] update-notifier-common restored (check-security S2 apt-check)")
     except PlatformError as e:
         logger.warning("[IMP:7][purge] Cruft purge failed (non-fatal): %s", e)
         return False
     logger.info("[IMP:9][purge] Cruft purged (%d packages) + autoremove + clean", len(installed))
     return True
+
+
+# region FUNC__purge_cruft_apt
+def _purge_cruft_apt(installed: list[str], *, runner: CommandRunner | None = None) -> None:
+    """Три apt-шага purge-цепочки (выделено из try — PYTHON-too-many-statements)."""
+    active = runner if runner is not None else default_command_runner()
+    _run_with_retry(["apt-get", "purge", "-y", "--auto-remove", *installed], timeout=APT_TIMEOUT, runner=active)
+    _run_with_retry(["apt-get", "autoremove", "-y"], timeout=APT_TIMEOUT, runner=active)
+    _run_with_retry(["apt-get", "clean"], timeout=APT_TIMEOUT, runner=active)
+
+
+# endregion FUNC__purge_cruft_apt
 
 
 # endregion FUNC_purge_cruft
