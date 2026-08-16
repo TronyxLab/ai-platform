@@ -273,7 +273,10 @@ jobs:
           fi
           FILES_COUNT=$(find src backend frontend app tests scripts -type f \
             \( -name '*.py' -o -name '*.ts' -o -name '*.tsx' -o -name '*.js' -o -name '*.jsx' -o -name '*.sh' \) \
-            2>/dev/null | grep -vE '/(node_modules|\.venv|dist|build|coverage|\.next)/' | wc -l | tr -d '[:space:]')
+            2>/dev/null | grep -vE '/(node_modules|\.venv|dist|build|coverage|\.next)/' | wc -l | tr -d '[:space:]' || true)
+          # ⚠️ TRAP[BUG] · 1.0.0 · HI · `|| true` обязателен: find с отсутствующими каталогами
+          # · (src/backend/...) возвращает 1 → pipefail + runner bash -e убивали шаг Maturity warn
+          # · (релиз 1.0.0: репозитории проектов без src/-дерева — деплой падал до receive).
           LOCK_STATE=""
           [ -f practices.lock ] && LOCK_STATE=$(grep -E '^state:' practices.lock | head -1 | awk '{print $2}' | tr -d '[:space:]')
           echo "[IMP:9][maturity] age=${AGE_DAYS}d files=${FILES_COUNT} lock.state=${LOCK_STATE:-missing}"
