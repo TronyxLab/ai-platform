@@ -53,6 +53,7 @@ include makefiles/repair.mk
 include makefiles/manifest.mk
 include makefiles/project-practices.mk
 include makefiles/loadtest.mk
+include makefiles/ai-instructions.mk
 
 # === Default target ===
 .DEFAULT_GOAL := help

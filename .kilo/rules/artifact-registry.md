@@ -1,5 +1,16 @@
-# §ARTIFACT_REGISTRY
-## $ARTIFACT_REGISTRY
+<!-- GREP_SUMMARY: artifact, registry, path, plans, brief, devplan, verification, status, debt, SMALL, STANDARD, LARGE, naming, grammar, journal, NNN, slug, NN -->
+# region MODULE_CONTRACT
+## @purpose  Centralized artifact registry with journal-model naming grammar for all management artifacts
+## @scope    architect, coder, qa, sysadmin
+## @invariants
+##   - @protected  true
+##   - Контент — 1:1 перенос framework-source 0.6.3 (только XML-обёртка → markdown)
+# endregion MODULE_CONTRACT
+
+<!-- @protect: Artifact registry — centralizes all management artifact paths, naming grammar, and size classification. -->
+
+
+    ## $ARTIFACT_REGISTRY
 
     Every management artifact follows the journal naming model: sequential NN prefix within a NNN-slug task folder.
 
@@ -51,10 +62,6 @@
     - All artifacts for one task share the same .ai/plans/NNN-slug/ folder
     - NN starts at 01 and increments globally across the folder
     - Readers resolve "the DevPlan" as the highest-NN `*-DevPlan*.md` (R1)
-    - В каждой папке плана создаётся symlink `logs → ../../logs` (канонический журнал
-      тестовых прогонов `.ai/logs/`, DevPlan 165): агент, работающий по плану, читает
-      `logs/runs.jsonl` (структурированные записи прогонов) и `logs/latest.log`
-      (симлинк на raw-лог последнего прогона) — результаты тестов видны всем агентам
-      одной ветки/плана.
 
-<!-- ai-instructions:0.6.3 -->
+
+<!-- ai-instructions:0.7.0 -->

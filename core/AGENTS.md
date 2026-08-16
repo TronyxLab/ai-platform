@@ -47,6 +47,7 @@
 | `make remove-project` | Удаление проекта из lifecycle | make remove-project NAME=\<name\> | core/entrypoints/scaffold.sh → core/internal/scaffold/remove-project.sh |
 | `make adopt-project` | Адаптация существующего проекта | make adopt-project DIR=\<dir\> | core/entrypoints/scaffold.sh → core/internal/scaffold/adopt-project.sh → core/internal/scaffold/gen_env_platform.py |
 | `make agent-check` | L1-статический сигнал агента (DevPlan 163 W-E) | make agent-check [JSON=1] | python3 -m core.internal.agent_check (ruff + advisory SLF/FBT/ARG/C90 + basedpyright + static check --changed + bespoke doc-headers) |
+| `make ai-instructions-sync` | Пересборка инструкций (канон + проектные дополнения) | make ai-instructions-sync [PROJECT=\<dir\>] [TEMPLATE=\<all|backend|frontend\>] [CANON_PATH=\<dir\>] | python3 -m ai_instructions sync --config core/internal/ai-instructions/ai-instructions-pins.yaml (canon + .ai/ -\> .kilo/ + hermes platform-профиль + ai-instructions.lock; DevPlan 001 R16/T4.2) |
 | `make project-list` | Список проектов | make project-list [NODE=\<node\>] | core/entrypoints/scaffold.sh → core/internal/scaffold/project-list.sh |
 | `make project-status` | Статус проекта | make project-status NAME=\<name\> | core/entrypoints/scaffold.sh → core/internal/scaffold/project-list.sh --status |
 | `make render-vhosts` | Генерация vhost конфигов | make render-vhosts NODE=\<name\> | core/internal/scaffold/add-vhost.sh → core/internal/scaffold/vhost_renderer.py render-all |
@@ -130,6 +131,22 @@ degradation при отсутствии ShellCheck).
 (`SYSTEM_EXCEPTIONS` + `SYSTEM_PREFIXES` в `generate_entrypoint_manifest.py`) из `allowed_verbs`.
 Валидатор — `core/internal/lint/doc_header_validator.py` (`STANDARD_MAKE_SERVICE_TARGETS`).
 Новый служебный таргет не требует правок — достаточно попасть в категорию.
+
+---
+### Компилятор инструкций ai-instructions (DevPlan 001)
+
+| Файл/глагол | Роль |
+|-------------|------|
+| `make ai-instructions-sync [PROJECT=<dir>] [TEMPLATE=…] [CANON_PATH=<dir>]` | Пересборка `.kilo/` из канона + `.ai/` потребителя (+ hermes-профиль platform) |
+| `core/internal/ai-instructions/ai-instructions-pins.yaml` | **SoT-пин** канона (tag@digest, hermes-профиль, requires_instructions_version) — parity-гейт `test_gate_ai_instructions_pins.py` |
+| `ai-instructions.lock` | Lock-манифест сгенерированных файлов (sha256) — drift-детект `ai-instructions check` |
+| `.ai/rules/`, `.ai/roles/` | Проектные источники платформы (компилируются в `.kilo/` со stamp) |
+| `core/modules/hermes-agent/build/templates/profiles/platform/skills/` | Generated-зона скиллов hermes-профиля (13 канон + 4 role-`<id>`); `build/skills/` (monitor-*, server-status) — ручные, не трогаются |
+
+**Контракты:** stamped-файлы (`<!-- ai-instructions:<version> -->`) перезаписываются/удаляются
+как сироты; файлы без stamp — never overwrite. Резолв канона: `--canon-path` → pin-кэш
+`~/.cache/ai-instructions/<tag>` → git clone по тегу. Проектный режим (`PROJECT=<dir>`) —
+эмиссия в проект, hermes off, `TEMPLATE`-фильтр наследования по директивам language/stack.
 
 ---
 

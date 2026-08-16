@@ -137,7 +137,9 @@ repos:
         files: '\.(py|yaml|yml|sh|md)$'
         # exclude: test_data/ are test fixtures, not source docs — adding doc headers
         # would break tests that parse these files for exact content match.
-        exclude: ^\.kilo/|^\.ai/|^\.pytest_cache/|^tests/test_data/|^reports/
+        # build/templates/profiles/ — generated-зона ai-instructions (DevPlan 001 D2/D3):
+        # скиллы эмитятся 1:1 из канона (формат канона — HTML-комментарии), как .kilo/
+        exclude: ^\.kilo/|^\.ai/|^\.pytest_cache/|^tests/test_data/|^reports/|^core/modules/hermes-agent/build/templates/profiles/
         stages: [pre-commit]
 
       - id: name-linter

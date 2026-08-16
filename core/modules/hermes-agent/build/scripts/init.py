@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: hermes-init s6 cont-init profile-creation context-overlay guard idempotent chown volume-permissions
-# STRUCTURE: ▶ read CONTEXT (env|s6 file) → setup_dirs (templates→profiles, idempotent) → check_config (context config rsync) → init_state (profiles overlay + guard + volume perms + chown) → ⎋ exit 0
+# STRUCTURE: ▶ read CONTEXT (env|s6 file) → setup_dirs (templates→profiles, idempotent) → sync_profile_skills (stamped→overwrite, D3) → check_config (context config rsync) → init_state (profiles overlay + guard + volume perms + chown) → ⎋ exit 0
 # region MODULE_CONTRACT
 ## @purpose  s6 cont-init.d бизнес-логика hermes-agent: создание профилей из шаблонов + context overlay
 ##           (DevPlan 119 D5, AUDIT-1 F7). Перенос init.sh (157 LOC) → init.py; init.sh — тонкий wrapper.
@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -41,6 +42,10 @@ DEFAULT_HERMES_CONFIG = Path("/opt/hermes/config")
 DEFAULT_S6_ENV_DIR = Path("/run/s6/container_environment")
 HERMES_UID = 10000
 HERMES_GID = 10000
+
+# Stamp компилятора ai-instructions — маркер owned-файлов профильных скиллов (DevPlan 001 D3):
+# файлы со stamp перезаписываются sync-шагом, файлы без stamp (ручные правки оператора) — нет.
+STAMP_RE = re.compile(r"<!--\s*ai-instructions:\d+\.\d+\.\d+\s*-->")
 
 
 # region FUNC__default_rsync
@@ -65,9 +70,9 @@ RsyncFn = Callable[..., None]
 
 # region CLASS_HermesInit
 class HermesInit:
-    """s6 cont-init.d логика (DevPlan 119 D5) — профили + context overlay + ownership.
+    """s6 cont-init.d логика (DevPlan 119 D5) — профили + профильные скиллы (D3) + context overlay + ownership.
 
-    ▶ ┌paths┐ → ○ read_s6_env(CONTEXT) → ○ setup_dirs() → ○ check_config() → ○ init_state() → ⎋ run() -> int
+    ▶ ┌paths┐ → ○ read_s6_env(CONTEXT) → ○ setup_dirs() → ○ sync_profile_skills() → ○ check_config() → ○ init_state() → ⎋ run() -> int
     """
 
     # region FUNC___init__
@@ -141,6 +146,52 @@ class HermesInit:
             logger.info("[IMP:9][INIT][%s] Profile created from template", template_dir.name)
 
     # endregion FUNC_setup_dirs
+
+    # region FUNC_sync_profile_skills
+    def sync_profile_skills(self) -> None:
+        """Step 1.5 (D3, DevPlan 001 T4.7): sync профильных скиллов шаблонов на volume.
+
+        ## @purpose — delivery скиллов профиля при КАЖДОМ старте контейнера: /opt/data —
+        ##   persistent volume, setup_dirs() копирует шаблон только при отсутствии config.yaml
+        ##   → обновление образа не доносит скиллы профиля до существующих нод (регрессия
+        ##   delivery). Sync-шаг: templates/profiles/<name>/skills/ → data/profiles/<name>/skills/.
+        ## @io — ⇥ None → ⎋ None
+        ## @invariants
+        ##   - Файлы со stamp `<!-- ai-instructions:… -->` — перезаписываются
+        ##   - Файлы без stamp — never overwrite (ручные правки оператора сохраняются)
+        ##   - Идемпотентно по контенту: идентичный контент → no-op (без перезаписи)
+        ##   - Удаления не производятся (orphans — вне scope; только доставка шаблона)
+        """
+        if not self.templates.is_dir():
+            logger.warning("[IMP:7][INIT][SKILLS] No templates at %s — skipping profile skills sync", self.templates)
+            return
+        synced = 0
+        for template_dir in sorted(self.templates.iterdir()):
+            if not template_dir.is_dir():
+                continue
+            src_skills = template_dir / "skills"
+            if not src_skills.is_dir():
+                continue
+            dest_skills = self.data / template_dir.name / "skills"
+            for src_file in sorted(src_skills.rglob("*")):
+                if not src_file.is_file():
+                    continue
+                rel = src_file.relative_to(src_skills)
+                dest_file = dest_skills / rel
+                if dest_file.is_file():
+                    existing = dest_file.read_text(encoding="utf-8", errors="replace")
+                    if STAMP_RE.search(existing) is None:
+                        logger.info("[IMP:7][INIT][SKILLS] manual file, never overwrite: %s", dest_file)
+                        continue
+                    if existing == src_file.read_text(encoding="utf-8"):
+                        continue  # идемпотентно по контенту — уже актуальный
+                dest_file.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src_file, dest_file)
+                synced += 1
+                logger.info("[IMP:9][INIT][SKILLS] synced %s -> %s", src_file, dest_file)
+        logger.info("[IMP:9][INIT][SKILLS] profile skills sync complete (%d files)", synced)
+
+    # endregion FUNC_sync_profile_skills
 
     # region FUNC_check_config
     def check_config(self) -> None:
@@ -253,7 +304,7 @@ class HermesInit:
     def run(self, context: str | None = None) -> int:
         """Оркестрация init (эквивалент init.sh main flow).
 
-        ▶ ┌context┐ → ○ read CONTEXT → ○ setup_dirs → ○ check_config → ○ init_state → ⎋ 0
+        ▶ ┌context┐ → ○ read CONTEXT → ○ setup_dirs → ○ sync_profile_skills (D3) → ○ check_config → ○ init_state → ⎋ 0
 
         ## @purpose — точка входа CLI (init.sh exec python3 init.py).
         ## @io — ⇥ context: str | None → ⎋ int (0 = ok, 1 = OSError)
@@ -267,6 +318,7 @@ class HermesInit:
         logger.info("=== Platform init started ===")
         try:
             self.setup_dirs()
+            self.sync_profile_skills()
             self.check_config()
             self.init_state()
         except (OSError, subprocess.CalledProcessError) as exc:

@@ -11,7 +11,9 @@ OUTPUT_DIRECTORY       = .doxygen/
 INPUT                  = core/ tests/
 FILE_PATTERNS          = *.py *.xml *.yaml *.md
 RECURSIVE              = YES
-EXCLUDE                = .kilo/ __pycache__/ .git/ .doxygen/ build/ node-configs/
+# core/modules/*/build/ — runtime payload (вкл. generated-скиллы hermes-профиля platform,
+# DevPlan 001 D2/D3): не исходники документации — вне doxygen-индекса
+EXCLUDE                = .kilo/ __pycache__/ .git/ .doxygen/ build/ node-configs/ core/modules/hermes-agent/build/
 EXCLUDE_PATTERNS       = *.pyc *.egg-info report*.xml .docker-suite.lock
 
 # ── Mode ─────────────────────────────────────────────────

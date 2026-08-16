@@ -158,6 +158,77 @@ def test_setup_dirs_idempotent_skip_existing(caplog: pytest.LogCaptureFixture, t
 # endregion TEST_setup_dirs
 
 
+# region TEST_sync_profile_skills (D3, DevPlan 001 T4.7)
+
+
+def _make_skills_fixture(tmp_path: Path) -> dict:
+    """Fixture с шаблонными скиллами профиля (stamped + без stamp)."""
+    templates = tmp_path / "templates" / "profiles"
+    data = tmp_path / "data" / "profiles"
+    skills = templates / "platform" / "skills" / "superposition"
+    skills.mkdir(parents=True)
+    (skills / "SKILL.md").write_text(
+        "---\nname: superposition\n---\n# Superposition\n<!-- ai-instructions:0.7.0 -->\n", encoding="utf-8"
+    )
+    return {"templates": templates, "data": data}
+
+
+# 🧪 TRAP[TEST] · 2026-08-16 · Regression · sync_profile_skills: первый старт доставляет скиллы (D3)
+# · Scenario: шаблонные скиллы профиля отсутствуют на volume → копируются при первом старте
+# · Last fail: N/A (new — DevPlan 001 T4.7 test-first)
+# · Remove if: sync-шаг профильных скиллов упраздняется (native hermes-механизм, Rev D3)
+def test_sync_profile_skills_first_start(caplog: pytest.LogCaptureFixture, tmp_path) -> None:
+    """D3 first start: skills шаблона копируются в data/profiles/<name>/skills/."""
+    caplog.set_level(logging.INFO)
+    fx = _make_skills_fixture(tmp_path)
+    init = HermesInit(templates=fx["templates"], data=fx["data"])
+    init.sync_profile_skills()
+    dest = fx["data"] / "platform" / "skills" / "superposition" / "SKILL.md"
+    assert dest.is_file(), "скилл профиля должен быть доставлен на volume"
+    assert "ai-instructions:0.7.0" in dest.read_text(encoding="utf-8")
+    _assert_imp9(caplog, "SKILLS")
+
+
+# 🧪 TRAP[TEST] · 2026-08-16 · Regression · sync_profile_skills: обновлённый шаблон перезаписывает stamped (D3)
+# · Scenario: образ обновлён (шаблон изменён) → stamped-файл на volume перезаписывается
+# · Last fail: N/A (new — DevPlan 001 T4.7 test-first)
+# · Remove if: sync-шаг профильных скиллов упраздняется
+def test_sync_profile_skills_updated_template_overwrites_stamped(caplog: pytest.LogCaptureFixture, tmp_path) -> None:
+    """D3 restart with updated image: stamped dest перезаписывается новым контентом шаблона."""
+    caplog.set_level(logging.INFO)
+    fx = _make_skills_fixture(tmp_path)
+    init = HermesInit(templates=fx["templates"], data=fx["data"])
+    init.sync_profile_skills()
+    # Обновление образа: шаблон изменился
+    skill_file = fx["templates"] / "platform" / "skills" / "superposition" / "SKILL.md"
+    skill_file.write_text(
+        "---\nname: superposition\n---\n# Superposition v2\n<!-- ai-instructions:0.7.0 -->\n", encoding="utf-8"
+    )
+    init.sync_profile_skills()
+    dest = fx["data"] / "platform" / "skills" / "superposition" / "SKILL.md"
+    assert "# Superposition v2" in dest.read_text(encoding="utf-8"), "stamped-файл должен перезаписаться"
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · sync_profile_skills: файл без stamp не трогается (D3)
+# · Scenario: оператор вручную правил скилл на volume (stamp стёрт/отсутствует) → never overwrite
+# · Last fail: N/A (new — DevPlan 001 T4.7 test-first)
+# · Remove if: never-overwrite семантика sync-шага меняется
+def test_sync_profile_skills_manual_file_untouched(caplog: pytest.LogCaptureFixture, tmp_path) -> None:
+    """R5 negative: ручной файл без stamp на volume не перезаписывается ни при каком прогоне."""
+    caplog.set_level(logging.INFO)
+    fx = _make_skills_fixture(tmp_path)
+    init = HermesInit(templates=fx["templates"], data=fx["data"])
+    init.sync_profile_skills()
+    dest = fx["data"] / "platform" / "skills" / "superposition" / "SKILL.md"
+    dest.write_text("---\nname: superposition\n---\n# Operator edit (no stamp)\n", encoding="utf-8")
+    init.sync_profile_skills()  # повторный старт с новым шаблоном
+    assert "# Operator edit (no stamp)" in dest.read_text(encoding="utf-8"), "ручной файл должен сохраниться"
+    _assert_imp9(caplog, "SKILLS")
+
+
+# endregion TEST_sync_profile_skills
+
+
 # region TEST_check_config (context config overlay)
 
 

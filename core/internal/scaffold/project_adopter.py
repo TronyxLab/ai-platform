@@ -495,6 +495,10 @@ jobs:
             f"✔ Makefile/AGENTS.md/AI-PLATFORM.md ensured (Makefile={mk}, AGENTS.md={ag}, AI-PLATFORM.md={pm})"
         )
 
+        # ── Step 5b: ai-instructions sync (DevPlan 001 T5.4) — .kilo/ из живого канона ──
+        logger.info("[IMP:7][%s][adopt] Step 5b: Sync project instructions (.kilo/)", self._log_prefix)
+        self._sync_instructions(result)
+
         # ── Step 6: Validate compose networks (proxy-net) ──
         logger.info("[IMP:7][%s][adopt] Step 6/8: Validate compose proxy-net (M4 gate)", self._log_prefix)
         # DevPlan 118 A2: единый канон compose-резолва — shared/compose_files (4 имён)
@@ -530,6 +534,53 @@ jobs:
         # ── Print report ──
         self.print_diff_report(result.changes)
         return result
+
+    def _sync_instructions(self, result: AdoptionResult) -> None:
+        """Шаг 5b: синк инструкций проекта (DevPlan 001 T5.4) — не роняет adopt при недоступности.
+
+        ## @purpose  .kilo/ проекта из живого канона после адаптации; graceful degradation.
+        ## @io        ⇥ result (мутируется: changes.append) → ⎋ None
+        """
+        try:
+            from core.internal.scaffold.project_scaffolder import scaffold_instructions
+
+            ptype = self._detect_project_type()
+            synced = scaffold_instructions(str(self.project_dir), ptype, dry_run=False)
+
+        # ruff: ignore[BLE001] — graceful: adopt не должен падать из-за инструкций (best-effort)
+        except Exception as exc:  # noqa: EXC — best-effort: adopt не должен падать из-за инструкций
+            logger.info("[IMP:8][%s][adopt] Instructions sync skipped: %s", self._log_prefix, exc)
+            result.changes.append("- Instructions sync skipped (ai-instructions недоступен)")
+            return
+        if synced:
+            result.changes.append("✔ Project instructions synced (.kilo/ + ai-instructions.lock)")
+        else:
+            result.changes.append("⚠️  Project instructions sync FAILED — .kilo/ может отсутствовать")
+
+    def _detect_project_type(self) -> str:
+        """Determine template level for instructions sync: ai-platform.yaml#type → backend|frontend.
+
+        ## @purpose  У adopt нет template-параметра — тип выводится из ai-platform.yaml
+        ##           (поле type) с fallback на эвристику каталогов (как generate_minimal_ai_platform_yaml).
+        ## @io        ⎋ str — "backend" | "frontend"
+        """
+        ptype = ""
+        try:
+            import yaml as _yaml
+
+            if self.yaml_file.is_file():
+                data = _yaml.safe_load(self.yaml_file.read_text(encoding="utf-8")) or {}
+                ptype = str(data.get("type") or "").strip().lower()
+
+        # ruff: ignore[BLE001] — деградация на эвристику каталогов (best-effort)
+        except Exception:  # noqa: EXC — best-effort: ai-platform.yaml unreadable, тип угадывается
+            logger.info("[IMP:6][%s][adopt] ai-platform.yaml unreadable — type guessed", self._log_prefix)
+        if ptype in {"backend", "frontend"}:
+            logger.info("[IMP:7][%s][adopt] Project type from ai-platform.yaml: %s", self._log_prefix, ptype)
+            return ptype
+        ptype = "frontend" if (self.project_dir / "src" / "index.html").exists() else "backend"
+        logger.info("[IMP:7][%s][adopt] Project type guessed: %s", self._log_prefix, ptype)
+        return ptype
 
     def _resolve_node_yaml_path(self) -> Path | None:
         """Resolve node.yaml path via canonical NodeYaml.resolve (DevPlan 116 B6 T8.1).

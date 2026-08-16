@@ -400,6 +400,93 @@ def gen_project_practices(project_dir: str, dry_run: bool = False) -> bool:
 # endregion FUNC_gen_project_practices
 
 
+# region FUNC_scaffold_instructions
+def scaffold_instructions(project_dir: str, template: str, dry_run: bool = False) -> bool:
+    """Generate project .kilo instructions from the live canon (DevPlan 001 T5.2).
+
+    ## @purpose  После gen_project_practices и ДО git_init: ai-instructions sync --project-dir
+    ##           кладёт .kilo/ (rules/agents/skills с уровнями наследования по template) +
+    ##           kilo.json instructions + ai-instructions.lock в init-коммит проекта.
+    ##           Шаблоны НЕ содержат снапшот инструкций (TRAP §6) — генерация из живого канона.
+    ## @io        ⇥ project_dir, template (backend|frontend), dry_run → ⎋ bool
+    ## @invariants
+    ##   - requires_instructions_version шаблона > pin платформы → fail (анти-дрейф, по образцу practices)
+    ##   - Синхронизация идемпотентна (повторный scaffold — no-op по контенту)
+    ##   - dev-оверрайд канона: env AI_INSTRUCTIONS_CANON_PATH (локальное дерево вместо pin-cache/clone)
+    """
+    platform_root = Path(__file__).resolve().parents[3]
+    pins_path = platform_root / "core" / "internal" / "ai_instructions" / "ai-instructions-pins.yaml"
+
+    if dry_run:
+        logger.info("[IMP:7][scaffold][instructions] [DRY-RUN] Would sync instructions for: %s", project_dir)
+        return True
+
+    # ── Сверка requires_instructions_version (анти-дрейф, по образцу practices) ──
+    template_yaml = Path(project_dir) / "template.yaml"
+    if template_yaml.is_file():
+        import yaml as _yaml
+
+        tpl_data = _yaml.safe_load(template_yaml.read_text(encoding="utf-8")) or {}
+        required = str(tpl_data.get("requires_instructions_version") or "").strip()
+        if required:
+            pins_data = _yaml.safe_load(pins_path.read_text(encoding="utf-8")) or {}
+            pinned = str((pins_data.get("templates") or {}).get("requires_instructions_version") or "").strip()
+            if pinned and _ver_tuple(required) > _ver_tuple(pinned):
+                msg = (
+                    f"Template {tpl_data.get('name', 'unknown')} requires instructions v{required}, "
+                    f"but platform pins v{pinned}. Update the platform first."
+                )
+                logger.info("[IMP:10][scaffold][instructions] %s", msg)
+                print(f"ERROR: {msg}")
+                return False
+
+    # ── Синк компилятором (контракт: python3 -m ai_instructions sync --config <pins> …) ──
+    cmd = [
+        sys.executable,
+        "-m",
+        "ai_instructions",
+        "sync",
+        "--config",
+        str(pins_path),
+        "--project-dir",
+        str(project_dir),
+        "--template",
+        template,
+    ]
+    canon_override = os.environ.get("AI_INSTRUCTIONS_CANON_PATH")
+    if canon_override:
+        cmd += ["--canon-path", canon_override]
+    try:
+        result = subprocess.run(cmd, cwd=platform_root, capture_output=True, text=True, check=False, timeout=300)
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.info("[IMP:10][scaffold][instructions] ai-instructions sync failed: %s", exc)
+        print(f"ERROR: ai-instructions sync unavailable: {exc} (dev-setup: uv pip install -e ../ai-instructions)")
+        return False
+    if result.returncode != 0:
+        logger.info(
+            "[IMP:10][scaffold][instructions] ai-instructions sync exit=%d: %s",
+            result.returncode,
+            result.stderr.strip(),
+        )
+        print(f"ERROR: ai-instructions sync failed (exit {result.returncode}): {result.stderr.strip()[-400:]}")
+        return False
+    logger.info("[IMP:9][scaffold][instructions] Instructions generated: %s/.kilo (template=%s)", project_dir, template)
+    return True
+
+
+def _ver_tuple(version: str) -> tuple[int, ...]:
+    """'0.7.0' → (0, 7, 0); нечисловые сегменты отбрасываются (сравнение по int-префиксу)."""
+    parts: list[int] = []
+    for seg in version.lstrip("v").split("."):
+        if not seg.isdigit():
+            break
+        parts.append(int(seg))
+    return tuple(parts)
+
+
+# endregion FUNC_scaffold_instructions
+
+
 # region FUNC_git_init_project
 def git_init_project(project_dir: str, name: str, template: str, dry_run: bool = False) -> bool:
     """Initialize git repository and create initial commit.
@@ -780,6 +867,11 @@ def main(argv: list[str] | None = None, config: AppConfig | None = None) -> int:
     # DevPlan 137 W1 шаг 11: baseline-практики (ВСЕГДА, level=auto → state=baseline).
     # До git_init (шаг 6) — GENERATED-файлы и practices.lock попадают в init-коммит.
     gen_project_practices(str(project_dir), args.dry_run)
+
+    # DevPlan 001 T5.2: инструкции проекта из ЖИВОГО канона (шаблон снапшота не несёт).
+    # После practices и ДО git_init — .kilo/ + kilo.json + ai-instructions.lock в init-коммит.
+    if not scaffold_instructions(str(project_dir), args.template, args.dry_run):
+        return 1
 
     # Step 6: Git init
     git_init_project(str(project_dir), args.name, args.template, args.dry_run)

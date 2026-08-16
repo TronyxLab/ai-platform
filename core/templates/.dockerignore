@@ -1,4 +1,4 @@
-# GREP_SUMMARY: dockerignore template git ds_store env pycache
+# GREP_SUMMARY: dockerignore template git ds_store env pycache skills-profile
 # region MODULE_CONTRACT
 ## @purpose  Universal .dockerignore template for ai-platform Docker modules
 ## @scope    Used by all core/modules/* to exclude non-essential files from Docker build context
@@ -6,7 +6,10 @@
 ##   - Identical across all modules (RC-6: structural deduplication)
 ##   - After Phase 3.4: modules symlink to this canonical copy
 ##   - Excludes: git metadata, markdown docs, logs, secrets env, node/python artifacts, macOS dust
-## @rationale Single source of truth prevents drift — 5 identical copies existed before templates (RC-6)
+##   - Исключение: скиллы hermes-профиля platform (DevPlan 001 D3) — *.md КАК runtime-payload,
+##     не документация; исключение скоупнуто на build/templates/profiles (Dockerfile COPY /tmp/templates/)
+## @rationale Single source of truth prevents drift — 5 identical copies existed before templates (RC-6);
+##   negation-исключение скоупнуто — остальные *.md (документация) по-прежнему вне контекста
 # endregion MODULE_CONTRACT
 
 .git/
@@ -14,6 +17,7 @@
 .DS_Store
 .env
 *.md
+!core/modules/hermes-agent/build/templates/profiles/**/*.md
 __pycache__/
 *.pyc
 overlays/README.md

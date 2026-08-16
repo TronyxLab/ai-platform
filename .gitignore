@@ -20,6 +20,10 @@ docker.txt
 # across worktrees so NNN allocation stays unique per task folder.
 .ai/*
 !.ai/plans/
+# .ai/rules/ и .ai/roles/ — ПРОЕКТНЫЕ ИСТОЧНИКИ ai-instructions (DevPlan 001):
+# коммитятся; компилятор эмитит их в .kilo/ со stamp.
+!.ai/rules/
+!.ai/roles/
 # .ai/logs/ — журнал тестовых прогонов (DevPlan 165): runs.jsonl/latest.log —
 # локальное машинное состояние, НЕ коммитится; коммитится только .gitkeep
 # (каталог существует в свежем клоне, симлинк .ai/plans/*/logs → ../../logs

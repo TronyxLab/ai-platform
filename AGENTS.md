@@ -87,6 +87,7 @@
 | ✅ | `adopt-project` | Адаптация существующего проекта |
 | ✅ | `age-key-backup` | Off-node encrypted backup AGE мастер-ключа (DR, секция «DR мастер-ключа AGE» core/AGENTS.md) |
 | ✅ | `agent-check` | L1-статический сигнал агента (DevPlan 163 W-E) |
+| ✅ | `ai-instructions-sync` | Пересборка инструкций (канон + проектные дополнения) |
 | ✅ | `backup` | Резервное копирование |
 | ✅ | `bootstrap-node` | Идемпотентный bootstrap ноды |
 | ✅ | `check` | Диагностика — все проверки из core/check-suite.yaml |
@@ -226,12 +227,15 @@ docker-compose.yml, ai-platform.yaml, .env.platform, practices.lock — посл
 `AI-PLATFORM.md`) · `make project-check` (практики, K1, [PRACTICES:...] отчёт) ·
 `make project-check --fix` (автофикс) · `make project-sync-practices` (repair дрейфа GENERATED) ·
 `make project-set-practices LEVEL=<baseline|full|auto>` (full — ТОЛЬКО по явному согласию) ·
+`make ai-sync` (пересборка `.kilo/` проекта из живого канона инструкций, DevPlan 001 T5.3) ·
 `make status` (live-статус проекта на целевой ноде) · `make help` (все команды проекта).
 Деплой = `git push` (main → production, staging → staging). Секреты в проекте настраивать не нужно.
 
 **Из платформы (`ai-platform/`):** `make new-project` · `make adopt-project` ·
 `make remove-project` · `make project-list` · `make project-status` · `make new-context` ·
 `make context-promote` · `make deploy-project PROJECT=<dir> NODE=<node>` (прямой деплой, emergency) ·
+`make ai-instructions-sync [PROJECT=<dir>] [TEMPLATE=all|backend|frontend] [CANON_PATH=<dir>]`
+(пересборка инструкций платформы или проекта, SoT: `core/internal/ai-instructions/ai-instructions-pins.yaml`) ·
 `make converge NODE=<node>`.
 
 ### Канонические env-имена (SoT: core/secret-definitions.yaml, platform-infra.yaml)
@@ -483,6 +487,9 @@ FP-журнал: `core/internal/agent_check/fp_registry.yaml` (правило с
 | [`core/internal/bootstrap/AGENTS.md`](core/internal/bootstrap/AGENTS.md) | Bootstrap pipeline, node lifecycle | Вспомогательный |
 | [`core/internal/shared/AGENTS.md`](core/internal/shared/AGENTS.md) | Инвентарь shared-модулей, критерии размещения | Вспомогательный |
 | [`core/modules/nginx/AGENTS.md`](core/modules/nginx/AGENTS.md) | Контракт nginx-модуля | Вспомогательный |
+| [`core/internal/ai-instructions/ai-instructions-pins.yaml`](core/internal/ai-instructions/ai-instructions-pins.yaml) | SoT-пин канона ai-instructions (tag/digest, hermes-профиль) — DevPlan 001 R11 | Вспомогательный |
+| [`ai-instructions.lock`](ai-instructions.lock) | Lock-манифест сгенерированных инструкций (drift-детект, `ai-instructions check`) | Generated |
+| `.ai/rules/`, `.ai/roles/` | Проектные источники инструкций платформы (компилируются в `.kilo/`) | Канонический |
 | `AGENTS.md` → «Контракт окружения проекта» | Канон окружения проекта (AI-PLATFORM.md) | Вспомогательный |
 | `AGENTS.md` → «Корневой контракт ~/projects/» | Корневой контракт ~/projects/ (walk-up, symlink) | Вспомогательный |
 | [`tests/gates/AGENTS.md`](tests/gates/AGENTS.md) | Gate test conventions, invariant testing | Вспомогательный |

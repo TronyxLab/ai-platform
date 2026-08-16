@@ -271,6 +271,21 @@ make up                        → все модули (profiles не фильт
 
 ---
 
+## Зоны скиллов hermes-agent (DevPlan 001 D2/D3)
+
+| Зона | Содержимое | Статус |
+|------|-----------|--------|
+| `core/modules/hermes-agent/build/templates/profiles/platform/skills/` | Эмитируемые скиллы профиля platform: 13 канона + 4 role-`<id>` (ai-instructions) | **Generated** — пересборка `make ai-instructions-sync`; ручные правки перезапишутся |
+| `core/modules/hermes-agent/build/skills/` | hermes-нативные скиллы (monitor-http/tls/uptime, server-status) — доступны всем профилям | Ручные — компилятор их не трогает |
+| `context/skills/` | Контекстный overlay проектных скиллов (вне scope 001) | Ручные (вне scope) |
+| Профили `build/templates/profiles/{default,platform,research}/` | Профили hermes (config.yaml, SOUL.md) — ручная система, компилятор НЕ генерирует | Ручные |
+
+**Delivery (D3):** `init.py` (s6 02-platform-init) sync-шагом rsync'ит шаблонные скиллы
+профиля → `/opt/data/profiles/<name>/skills/` при каждом старте: stamped-файлы
+(`<!-- ai-instructions:… -->`) перезаписываются, файлы без stamp — never overwrite.
+
+---
+
 ## Запреты
 
 | # | Запрет | Причина |

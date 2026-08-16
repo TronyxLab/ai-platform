@@ -1,5 +1,15 @@
-# §PRINCIPLES
-**Design Principles**
+<!-- GREP_SUMMARY: constitution, core, directives, safety, secrets, validation, errors, completeness -->
+# region MODULE_CONTRACT
+## @purpose  Core constitution section — PRINCIPLES directives for all agents
+## @scope    architect, coder, qa, sysadmin, docs
+## @invariants
+##   - @protected  true
+##   - Контент — 1:1 перенос framework-source 0.6.3 (только XML-обёртка → markdown)
+# endregion MODULE_CONTRACT
+
+<!-- @protect: Core constitution — changing these directives breaks all agent behavior. -->
+
+    **Design Principles**
 
     1. **Semantic Markup** — Code is read by agents, not humans. Use GREP_SUMMARY, STRUCTURE, LDD logs.
     2. **Zero-Context Survival** — Every file self-documents; the next agent sees only the file, not the chat.
@@ -19,4 +29,4 @@
         (.ai/plans/*/*-Debt.md), VerificationReports from prior waves. Knowledge
         recorded but not read is wasted.
 
-<!-- ai-instructions:0.6.3 -->
+<!-- ai-instructions:0.7.0 -->

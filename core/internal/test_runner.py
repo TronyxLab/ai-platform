@@ -93,6 +93,7 @@ MARKER_MAP: dict[str, list[str] | None] = {
     "contract": ["-m", "contract"],
     "e2e": ["-m", "e2e", "-rs"],
     "local_auth": ["-m", "local_auth"],
+    "ai-instructions": ["-m", "ai_instructions"],  # DevPlan 001 T4.6: сьют компилятора инструкций
 }
 
 # MARKER=all suite order — зеркало бывшего make test MARKER=all (ci.mk, удалён DevPlan 165):
