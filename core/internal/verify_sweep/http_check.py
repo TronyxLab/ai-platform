@@ -107,13 +107,17 @@ def check_http(
     url = f"https://{ep.fqdn}/"
     logger.info("[IMP:7][check_http] curl %s (resolve → %s:%d)", url, ep.host, SSL_PORT)
 
-    # 172 W5.4: общий probe-примитив shared/http_probe (дедуп domain_verifier._curl_http_code)
+    # 172 W5.4: общий probe-примитив shared/http_probe (дедуп domain_verifier._curl_http_code).
+    # ⚠️ TRAP[BUG] · 1.0.0 · HI · runner=curl_runner (None по умолчанию) → http_probe падал в
+    # · свой внутренний subprocess.run БЕЗ capture_output → при rc=0 (валидный TLS) stdout=None →
+    # · AttributeError (e2e-verify релиза 1.0.0). Fix: резолв дефолта В ТЕЛЕ (паттерн http_probe).
+    probe_runner = curl_runner if curl_runner is not None else _default_curl_runner
     code, probe_error = _probe(
         url,
         timeout,
         timeout_label="Connection",
         extra_args=["--resolve", f"{ep.fqdn}:{SSL_PORT}:{ep.host}"],
-        runner=curl_runner,
+        runner=probe_runner,
     )
     if probe_error is not None:
         logger.info("[IMP:9][check_http] Probe failed for %s: %s", ep.fqdn, probe_error)
