@@ -130,16 +130,20 @@ def default_remote_nginx_conf_dir(node: str) -> str:
 
 # region FUNC_parse_nginx_server_names
 def parse_nginx_server_names(conf_text: str) -> list[str]:
-    """Извлечь server_name FQDN из nginx conf текста (80/443 server блоки).
+    """Извлечь server_name FQDN из HTTPS (443 ssl) server-блоков nginx conf.
 
-    ▶ ┌conf_text┐ → ○ re server_name (…;) → ⊕ split + strip ';' → ○ lowercase + dedup → ⎋ list[str]
+    ▶ ┌conf_text┐ → ○ split server-блоки → ◇ listen 443 ssl? → ○ server_name (…;) → ⊕ split +
+    strip ';' → ○ lowercase + dedup → ⎋ list[str]
 
     ## @purpose — Pure-парсер server_name директив nginx (vhost .conf и remote conf.d cat).
     ##            Используется локальной (overlays/nginx/*.conf) и remote (ssh cat) коллекцией.
     ## @io — ⇥ conf_text: str — содержимое одного/нескольких nginx conf файлов
-    ##       → ⎋ list[str] — lowercase уникальные FQDN (пустой при отсутствии server_name)
+    ##       → ⎋ list[str] — lowercase уникальные FQDN из 443-блоков (пустой при отсутствии)
     ## @complexity — O(L) где L = строки конфига
     ## @invariants
+    ##   - ТОЛЬКО server-блоки с `listen 443` (HTTPS) — порт-80-only vhost (redirect-заглушки,
+    ##     apex без проекта) НЕ endpoint: sweep проверяет https:// (релиз 1.0.0: asiteam.ru
+    ##     apex 444-stealth давал вечный FAIL)
     ##   - server_name может содержать несколько имён через пробел — все извлекаются
     ##   - Терминальная ';' обрезается; регистр нормализуется в lowercase
     ##   - Пустые значения / подчёркнутые виртуальные имена (_) игнорируются
@@ -147,15 +151,22 @@ def parse_nginx_server_names(conf_text: str) -> list[str]:
     ##   - server_name_in_redirect НЕ матчится (\b-якорь, R5-negative тест T5)
     """
     names: list[str] = []
-    for match in _SERVER_NAME_RE.finditer(conf_text):
-        raw = match.group(1).strip()
-        for raw_token in raw.split():
-            token = raw_token.strip().rstrip(";")
-            if not token or token == "_":
-                continue
-            token = token.lower()
-            if token not in names:
-                names.append(token)
+    # Сплит по server-блокам: блок = от «server {» до парного «}» (нестрогий рекурсивный
+    # сплит не нужен — nginx-конфиги однострочные директивы, вложенных фигурных скобок
+    # в server-блоках нет).
+    blocks = re.split(r"(?=\bserver\s*\{)", conf_text)
+    for block in blocks:
+        if not re.search(r"listen\s+(\[[^\]]+\]\s*:\s*)?443\b", block):
+            continue
+        for match in _SERVER_NAME_RE.finditer(block):
+            raw = match.group(1).strip()
+            for raw_token in raw.split():
+                token = raw_token.strip().rstrip(";")
+                if not token or token == "_":
+                    continue
+                token = token.lower()
+                if token not in names:
+                    names.append(token)
     logger.info("[IMP:9][parse_nginx_server_names] Parsed %d server_name(s)", len(names))
     return names
 

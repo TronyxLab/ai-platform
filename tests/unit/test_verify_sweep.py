@@ -140,7 +140,10 @@ def test_collect_remote_via_ssh(caplog, tmp_path, monkeypatch) -> None:
         # DevPlan 153 T5 (N2): дефолт remote_conf_dir резолвится из имени ноды —
         # /opt/node-configs/<node>/overlays/nginx (путь на хосте, не внутри контейнера)
         assert f"cat /opt/node-configs/{NODE}/overlays/nginx/*.conf" in cmd
-        return 0, "server_name api.example.com;\nserver_name admin.example.com;"
+        return 0, (
+            "server { listen 443 ssl; server_name api.example.com; }\n"
+            "server { listen 443 ssl; server_name admin.example.com; }\n"
+        )
 
     logger.info("[IMP:7][test] T2: remote collect scenario")
     eps = collect_endpoints(
@@ -197,7 +200,7 @@ def test_collect_remote_ssh_unavailable_fails_r4(caplog, tmp_path, monkeypatch) 
 # · Last fail: N/A (new module)
 # · Remove if: parse_nginx_server_names reworked
 def test_parse_nginx_server_names(caplog) -> None:
-    """server_name directives: multiple names, dedup, '_' ignored, lowercase."""
+    """server_name directives: 443-блоки, multiple names, dedup, '_' ignored, lowercase."""
     caplog.set_level(logging.DEBUG)
     conf = (
         "server { listen 80; server_name Example.COM; }\n"
@@ -206,8 +209,24 @@ def test_parse_nginx_server_names(caplog) -> None:
     )
     logger.info("[IMP:7][test] T4: parser scenario")
     names = parse_nginx_server_names(conf)
-    assert names == ["example.com", "api.example.com", "admin.example.com"], f"Got {names}"
-    logger.info("[IMP:9][test] T4 PASS: 3 unique lowercase names, '_' ignored")
+    assert names == ["api.example.com", "admin.example.com"], f"Got {names}"
+    logger.info("[IMP:9][test] T4 PASS: 2 unique lowercase names из 443-блоков, '_' ignored")
+
+
+# 🧪 TRAP[TEST] · 2026-08-16 · NEGATIVE (R5) · релиз 1.0.0 — port-80-only vhost не endpoint
+# · Scenario: apex-заглушка (listen 80 redirect, без 443) не попадает в HTTPS-свип
+# ·   (asiteam.ru 444-stealth давал вечный e2e FAIL на минимальных нодах).
+# · Remove if: sweep начнёт проверять HTTP-эндпоинты
+@ldd_trajectory
+def test_parse_nginx_server_names_port80_excluded(caplog) -> None:
+    """R5-negative (1.0.0): server_name из listen-80-only блока НЕ извлекается."""
+    conf = (
+        "server { listen 80; listen [::]:80; server_name apex.example.com; "
+        "location / { return 301 https://$host$request_uri; } }\n"
+        "server { listen 443 ssl; server_name real.example.com; }\n"
+    )
+    names = parse_nginx_server_names(conf)
+    assert names == ["real.example.com"], f"Got {names}"
 
 
 # endregion FUNC_test_parse_nginx_server_names
@@ -225,7 +244,7 @@ def test_parse_nginx_server_names(caplog) -> None:
 def test_parse_nginx_server_names_negative_substring(caplog) -> None:
     """R5 negative: server_name_in_redirect directive must NOT be parsed as a server_name."""
     caplog.set_level(logging.DEBUG)
-    conf = "server { server_name_in_redirect on; listen 80; server_name real.example.com; }\n"
+    conf = "server { server_name_in_redirect on; listen 443 ssl; server_name real.example.com; }\n"
     logger.info("[IMP:7][test] T5: substring-trap scenario")
     names = parse_nginx_server_names(conf)
     assert names == ["real.example.com"], f"server_name_in_redirect must not match, got {names}"
