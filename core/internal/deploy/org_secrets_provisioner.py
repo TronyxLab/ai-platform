@@ -12,7 +12,8 @@
 ##      IMP:10 WARN + audit FAIL-запись, но return True (promote продолжает).
 ##   2. Значения НЕ печатаются в логи (только имена секретов и источники).
 ##   3. Единый visibility-план: TELEGRAM_* → all (нужны project-репо org); VPS_HOST/
-##      VPS_SSH_KEY/AGE_SECRET_KEY/S3_READONLY_* → private с --repos ai-platform.
+##      VPS_SSH_KEY/AGE_SECRET_KEY/S3_READONLY_* → selected с --repos ai-platform
+##      (gh CLI: --visibility selected, не private).
 ##   4. Источники значений (порядок): env → локальный .env платформы → node.yaml →
 ##      ~/.ssh/ai-platform/{node}-ci → node_detect.detect_age_key() (AGE).
 ##   5. DRY_RUN: план без gh-вызовов.
@@ -43,11 +44,11 @@ _ORG_SECRET_PLAN: dict[str, tuple[str, list[str] | None]] = {
     "TELEGRAM_CHAT_ID_WARNING": ("all", None),
     "TELEGRAM_ALLOWED_USERS": ("all", None),
     "TELEGRAM_CHAT_ID": ("all", None),
-    "VPS_HOST": ("private", ["ai-platform"]),
-    "VPS_SSH_KEY": ("private", ["ai-platform"]),
-    "AGE_SECRET_KEY": ("private", ["ai-platform"]),
-    "S3_READONLY_ACCESS_KEY": ("private", ["ai-platform"]),
-    "S3_READONLY_SECRET_KEY": ("private", ["ai-platform"]),
+    "VPS_HOST": ("selected", ["ai-platform"]),
+    "VPS_SSH_KEY": ("selected", ["ai-platform"]),
+    "AGE_SECRET_KEY": ("selected", ["ai-platform"]),
+    "S3_READONLY_ACCESS_KEY": ("selected", ["ai-platform"]),
+    "S3_READONLY_SECRET_KEY": ("selected", ["ai-platform"]),
 }
 
 # Источники значений (в порядке приоритета): env-имя → файловые кандидаты

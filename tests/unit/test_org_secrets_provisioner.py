@@ -82,11 +82,11 @@ def test_resolve_secret_values_sources(tmp_path, monkeypatch) -> None:
 
 
 def test_visibility_plan() -> None:
-    """Единый план: TELEGRAM_* → all; VPS/AGE/S3_READONLY_* → private с --repos ai-platform."""
+    """Единый план: TELEGRAM_* → all; VPS/AGE/S3_READONLY_* → selected с --repos ai-platform."""
     assert _ORG_SECRET_PLAN["TELEGRAM_BOT_TOKEN"] == ("all", None)
-    assert _ORG_SECRET_PLAN["VPS_HOST"] == ("private", ["ai-platform"])
-    assert _ORG_SECRET_PLAN["AGE_SECRET_KEY"] == ("private", ["ai-platform"])
-    assert _ORG_SECRET_PLAN["S3_READONLY_ACCESS_KEY"] == ("private", ["ai-platform"])
+    assert _ORG_SECRET_PLAN["VPS_HOST"] == ("selected", ["ai-platform"])
+    assert _ORG_SECRET_PLAN["AGE_SECRET_KEY"] == ("selected", ["ai-platform"])
+    assert _ORG_SECRET_PLAN["S3_READONLY_ACCESS_KEY"] == ("selected", ["ai-platform"])
     logger.info("[IMP:9][test_org_secrets] visibility plan PASS")
 
 
@@ -128,11 +128,11 @@ def test_ensure_context_secrets_run_fn_commands(tmp_path, monkeypatch) -> None:
     assert "VPS_HOST" in by_name, f"gh-вызовы: {list(by_name)}"
     vps_cmd, vps_val = by_name["VPS_HOST"]
     assert vps_val == "9.9.9.9"
-    assert "--visibility" in vps_cmd and vps_cmd[vps_cmd.index("--visibility") + 1] == "private"
+    assert "--visibility" in vps_cmd and vps_cmd[vps_cmd.index("--visibility") + 1] == "selected"
     assert "--repos" in vps_cmd and vps_cmd[vps_cmd.index("--repos") + 1] == "ai-platform"
     age_cmd, age_val = by_name["AGE_SECRET_KEY"]
     assert age_val == "age-secret"
-    assert age_cmd[age_cmd.index("--visibility") + 1] == "private"
+    assert age_cmd[age_cmd.index("--visibility") + 1] == "selected"
     # значения не печатаются — проверяем только структуру команд
     assert "VPS_SSH_KEY" in by_name
     logger.info("[IMP:9][test_org_secrets] run_fn commands PASS")
