@@ -145,3 +145,18 @@ jobs:
         if: always()
         run: |
           docker network rm proxy-net shared-db-net hermes-agent-net backup-net shared-cache-net observability-net 2>/dev/null || true
+
+      # ─── Failure notification (DevPlan 003 A1) ─────────────────────────
+      - name: Notify on failure
+        if: failure()
+        uses: ./.github/actions/notify-telegram
+        with:
+          bot-token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          chat-id-critical: ${{ secrets.TELEGRAM_CHAT_ID_CRITICAL }}
+          chat-id-warning: ${{ secrets.TELEGRAM_CHAT_ID_WARNING }}
+          severity: critical
+          context: push-gate
+          event: ci.failure
+          message: "push-gate FAILED (branch ${{ github.ref_name }}, run ${{ github.run_id }})"
+          link: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          action: "Investigate the failed gate and fix forward"

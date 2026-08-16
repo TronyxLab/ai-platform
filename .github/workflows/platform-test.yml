@@ -405,3 +405,18 @@ jobs:
 
       - name: Cleanup Docker resources
         uses: ./.github/actions/cleanup-docker
+
+      # ─── Failure notification (DevPlan 003 A1) ─────────────────────────
+      - name: Notify on failure
+        if: failure()
+        uses: ./.github/actions/notify-telegram
+        with:
+          bot-token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          chat-id-critical: ${{ secrets.TELEGRAM_CHAT_ID_CRITICAL }}
+          chat-id-warning: ${{ secrets.TELEGRAM_CHAT_ID_WARNING }}
+          severity: critical
+          context: platform-test
+          event: ci.failure
+          message: "platform-test FAILED (full gate/integration RED, run ${{ github.run_id }})"
+          link: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          action: "Investigate the failed test suite and fix forward"

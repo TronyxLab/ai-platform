@@ -86,3 +86,19 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### ⚠️ Manual action required" >> $GITHUB_STEP_SUMMARY
           echo "Run \`make node-update NODE=<node>\` on each node to pull the new L2 image." >> $GITHUB_STEP_SUMMARY
+
+      # ─── Failure notification (DevPlan 003 A1) ─────────────────────────
+      # Build-fail → warning severity (сборка L2 не критична в моменте, но должна быть видима)
+      - name: Notify on failure
+        if: failure()
+        uses: ./.github/actions/notify-telegram
+        with:
+          bot-token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          chat-id-critical: ${{ secrets.TELEGRAM_CHAT_ID_CRITICAL }}
+          chat-id-warning: ${{ secrets.TELEGRAM_CHAT_ID_WARNING }}
+          severity: warning
+          context: hermes-nightly
+          event: ci.build_failed
+          message: "hermes-nightly build FAILED (CONTEXT=${{ env.CONTEXT }}, run ${{ github.run_id }})"
+          link: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          action: "Check build logs and retry"

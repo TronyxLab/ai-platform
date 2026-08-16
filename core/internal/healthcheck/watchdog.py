@@ -531,8 +531,9 @@ def restart_container(name: str, cid: str, since: float, dry_run: bool = False, 
 
 
 # region FUNC_notify_telegram
-## @purpose  Telegram-уведомление о рестарте через subprocess python3 -m core.internal.shared.telegram_notifier
-##           notify --severity critical --context watchdog (best-effort, non-blocking).
+## @purpose  Telegram-уведомление о рестарте через subprocess python3 -m core.internal.shared.notifications
+##           notify --severity critical --event watchdog.restart --corr-id ... (DevPlan 003 B3:
+##           единый контракт — event id + corr_id; best-effort, non-blocking).
 ## @io       ⇥ name: str, since: float, dry_run: bool → ⎋ bool
 ## @complexity O(1) — один subprocess
 ## @invariants
@@ -550,12 +551,16 @@ def notify_telegram(name: str, since: float, dry_run: bool = False, run_cmd: Run
     cmd = [
         "python3",
         "-m",
-        "core.internal.shared.telegram_notifier",
+        "core.internal.shared.notifications",
         "notify",
         "--severity",
         "critical",
         "--context",
         "watchdog",
+        "--event",
+        "watchdog.restart",
+        "--corr-id",
+        f"watchdog-{name}-{int(since)}",
         "🔄",
         f"watchdog restarted {name} (unhealthy since {int(since)})",
     ]

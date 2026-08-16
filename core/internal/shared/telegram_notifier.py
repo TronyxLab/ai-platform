@@ -6,6 +6,9 @@
 ##           (3 shell + 3 Python: steps.py _send_telegram_notification,
 ##           notify-hook.sh shell curl variants). Single shared module that all platform
 ##           components import for sending Telegram alerts.
+##           DevPlan 003 B3a: severity-mapping (resolve_chat_id), форматтер (format_notify_message)
+##           и экранизатор (escape_html) — SHIM'ы над единым SoT shared/notifications.py;
+##           транспорт (send_telegram) остаётся здесь и вызывается notifications.notify_event.
 ## @scope    Shared library consumed by bootstrap steps, deploy hooks,
 ##           and any other platform component needing Telegram notification. Uses urllib
 ##           only (stdlib) — zero external dependencies. No requests library.
@@ -31,6 +34,8 @@
 ##           2026-08-02 | DevPlan 118 E10 — +resolve_chat_id/format_notify_message/notify()
 ##                      (severity-mapping merged from notify-hook.sh); CLI +notify subcommand
 ##           2026-08-04 | DevPlan 132 W4 — failure-маркеры IMP:9 (D-2), notify-fix
+##           2026-08-16 | DevPlan 003 B3a — resolve_chat_id/format_notify_message/escape_html
+##                      → shim над shared/notifications.py (единый SoT severity→chat + конверт)
 # endregion MODULE_CONTRACT
 
 import json
@@ -38,7 +43,6 @@ import logging
 import os
 import pathlib
 import urllib.error
-import urllib.parse
 import urllib.request
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -46,16 +50,12 @@ from http.client import HTTPResponse
 from typing import TypedDict, cast
 
 from core.internal.shared import secrets_env_parser
-
-# W1-A1 (план 170): DEFAULT_TIMEOUT=30 (дубль SoT) → SSH_CONNECT_TIMEOUT (30) — каноническое
-# 30s окно сетевых вызовов; значение идентично, источник значений — единый реестр timeouts.py.
+from core.internal.shared.notifications import HTTP_OK, send_telegram
 from core.internal.shared.timeouts import SSH_CONNECT_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
-TELEGRAM_API_BASE = "https://api.telegram.org/bot{token}/sendMessage"
 TELEGRAM_GETME_URL = "https://api.telegram.org/bot{token}/getMe"
-HTTP_OK: int = 200  # успешный ответ Telegram Bot API
 
 
 # region TYPEDDICT_GetMe
@@ -91,113 +91,8 @@ class _CliArgs:
 
 
 # region FUNC_send_telegram
-
-
-def send_telegram(
-    message: str,
-    bot_token: str | None = None,
-    chat_id: str | None = None,
-    proxy_url: str | None = None,
-    parse_mode: str | None = None,
-) -> bool:
-    """Send a message to a Telegram chat via the Bot API.
-
-    ▶ ┌message, [token], [chat_id], [proxy], [parse_mode]┐ →
-    ◇ resolve token/chat_id (param → env) →
-    ◇ missing? → IMP:7 warning → return False → ◇ urlencode POST data →
-    ◇ ProxyHandler if proxy_url → ◇ POST /sendMessage → ⊕ HTTP 200? → ⎋ bool
-
-    ## @purpose  Send a text message to Telegram using the Bot API. Single entrypoint
-    ##            for all platform Telegram notifications. Non-fatal: never raises.
-    ## @io — ⇥ message: str — text to send (URL-encoded automatically via urlencode)
-    ##       ⇥ bot_token: str | None — Telegram bot token (falls back to TELEGRAM_BOT_TOKEN env)
-    ##       ⇥ chat_id: str | None — Telegram chat ID (falls back to TELEGRAM_CHAT_ID env)
-    ##       ⇥ proxy_url: str | None — optional SOCKS/HTTP proxy URL (e.g. "http://127.0.0.1:8118")
-    ##       ⇥ parse_mode: str | None — optional Telegram parse_mode (HTML, MarkdownV2, etc.)
-    ##       → ⎋ bool — True if HTTP 200 received, False on any failure
-    ## @complexity — O(1) + 1 HTTP POST request with 30s timeout
-    ## @invariants
-    ##   - Never raises: all exceptions caught, logged with IMP:9 DELIVERY FAILED marker, return False
-    ##   - Token/chat_id resolution: param > env > fail
-    ##   - POST body is application/x-www-form-urlencoded (not query string in URL)
-    ##   - ProxyHandler configured for both http and https schemes when proxy_url set
-    ##   - 30s timeout prevents hanging on unreachable Telegram API
-    ##   - Каждый failure-путь логирует [IMP:9] DELIVERY FAILED: <reason> (proxy=<set|none>) — 126 D-2
-    """
-    # ── Resolve credentials: parameter > environment variable ──
-    token = bot_token or os.environ.get("TELEGRAM_BOT_TOKEN")
-    chat = chat_id or os.environ.get("TELEGRAM_CHAT_ID")
-    proxy_state = "set" if proxy_url else "none"
-
-    if not token or not chat:
-        logger.warning(
-            "[IMP:9][telegram_notifier][send_telegram] DELIVERY FAILED: TELEGRAM_BOT_TOKEN or "
-            "TELEGRAM_CHAT_ID not set (proxy=%s)",
-            proxy_state,
-        )
-        return False
-
-    # ── Build POST data (application/x-www-form-urlencoded) ──
-    post_params: dict[str, str] = {"chat_id": chat, "text": message}
-    if parse_mode:
-        post_params["parse_mode"] = parse_mode
-    post_data = urllib.parse.urlencode(
-        post_params,
-        quote_via=urllib.parse.quote,
-    ).encode("ascii")
-
-    url = TELEGRAM_API_BASE.format(token=token)
-    req = urllib.request.Request(
-        url,
-        data=post_data,
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-        method="POST",
-    )
-
-    # ── Configure proxy handler if requested ──
-    opener: urllib.request.OpenerDirector
-    if proxy_url:
-        logger.info(
-            "[IMP:7][telegram_notifier][send_telegram] Using proxy: %s",
-            proxy_url,
-        )
-        proxy_handler = urllib.request.ProxyHandler({
-            "http": proxy_url,
-            "https": proxy_url,
-        })
-        opener = urllib.request.build_opener(proxy_handler)
-    else:
-        opener = urllib.request.build_opener()
-
-    # ── Execute POST ──
-    try:
-        logger.info(
-            "[IMP:7][telegram_notifier][send_telegram] Sending notification to chat %s",
-            chat,
-        )
-        # opener.open → Any (typeshed urllib); HTTPResponse-граница (W11) — .status типизирован
-        with cast(HTTPResponse, opener.open(req, timeout=SSH_CONNECT_TIMEOUT)) as resp:
-            if resp.status == HTTP_OK:
-                logger.info(
-                    "[IMP:9][telegram_notifier][send_telegram] Notification sent successfully to chat %s",
-                    chat,
-                )
-                return True
-            logger.warning(
-                "[IMP:9][telegram_notifier][send_telegram] DELIVERY FAILED: Telegram API returned HTTP %d (proxy=%s)",
-                resp.status,
-                proxy_state,
-            )
-            return False
-    except (OSError, urllib.error.URLError) as e:
-        logger.warning(
-            "[IMP:9][telegram_notifier][send_telegram] DELIVERY FAILED: %s (proxy=%s)",
-            e,
-            proxy_state,
-        )
-        return False
-
-
+# DevPlan 003 B1: транспорт send_telegram перенесён в shared/notifications.py (единый
+# notifier-контракт, разрыв цикла импортов); здесь — re-export (см. импорт выше).
 # endregion FUNC_send_telegram
 
 # region FUNC_get_me
@@ -295,28 +190,16 @@ def get_me(
 def resolve_chat_id(severity: str, env: Mapping[str, str]) -> str | None:
     """Resolve Telegram chat_id by notification severity (critical/warning/info).
 
-    ## @purpose  Resolve TELEGRAM_CHAT_ID by severity (DevPlan 118 E10 — merged from notify-hook.sh):
-    ##           critical → TELEGRAM_CHAT_ID_CRITICAL (fallback TELEGRAM_CHAT_ID),
-    ##           warning  → TELEGRAM_CHAT_ID_WARNING (fallback TELEGRAM_CHAT_ID),
-    ##           info/other → TELEGRAM_CHAT_ID.
+    ## @purpose  SHIM над shared/notifications.resolve_chat_id (DevPlan 003 B3a): SoT
+    ##            severity→chat перенесён в notifications.py — эта функция делегирует.
+    ##            Backward-compat: сигнатура/поведение без изменений для 6+ потребителей.
     ## @io       ⇥ severity: str, env: Mapping[str, str] → ⎋ str | None — chat_id (None if unresolvable)
     ## @complexity O(1) — 2 env lookups
-    ## @invariants
-    ##   - critical/warning use their dedicated vars with TELEGRAM_CHAT_ID as fallback
-    ##   - info and unknown severities resolve to TELEGRAM_CHAT_ID only
-    ## 🧐 TRAP[DECISION] · 2026-08-15 · — · TELEGRAM_CHAT_ID — FALLBACK, не SoT · Rejected: удалить
-    ##   TELEGRAM_CHAT_ID полностью (severity-роутинг в shell/Grafana: contact-points.yml читает
-    ##   TELEGRAM_CHAT_ID_CRITICAL/WARNING) · Reason: backward-compat для CLI-путей send_telegram
-    ##   (bootstrap/update отчёты reporting.py без severity) — единый базовый chat для non-severity
-    ##   потребителей; SoT для severity — TELEGRAM_CHAT_ID_CRITICAL/WARNING (паритет shell, 170 W10-C) ·
-    ##   Rev: если все потребители перейдут на severity-схему — удалить fallback
+    ## @invariants  Никакой логики здесь — только делегация (единый SoT в notifications.py)
     """
-    base = env.get("TELEGRAM_CHAT_ID", "")
-    if severity == "critical":
-        return env.get("TELEGRAM_CHAT_ID_CRITICAL") or base or None
-    if severity == "warning":
-        return env.get("TELEGRAM_CHAT_ID_WARNING") or base or None
-    return base or None
+    from core.internal.shared.notifications import resolve_chat_id as _resolve
+
+    return _resolve(severity, env)
 
 
 # endregion FUNC_resolve_chat_id
@@ -326,17 +209,35 @@ def resolve_chat_id(severity: str, env: Mapping[str, str]) -> str | None:
 def format_notify_message(emoji: str, message: str, context: str) -> str:
     """Build the full notification text: [context] emoji message (message optional).
 
-    ## @purpose  Format notification message: "[context] emoji message" — or bare emoji if message empty
-    ##           (DevPlan 118 E10 — merged from notify-hook.sh).
+    ## @purpose  SHIM над shared/notifications.format_notify_message (DevPlan 003 B3a):
+    ##            backward-compat формат "[context] emoji message" — делегация в SoT.
     ## @io       ⇥ emoji: str, message: str, context: str → ⎋ str
     ## @complexity O(1) — string concat
+    ## @invariants  Никакой логики здесь — только делегация (единая реализация в notifications.py)
     """
-    if not message:
-        return emoji
-    return f"[{context}] {emoji} {message}"
+    from core.internal.shared.notifications import format_notify_message as _format
+
+    return _format(emoji, message, context)
 
 
 # endregion FUNC_format_notify_message
+
+
+# region FUNC_escape_html
+def escape_html(text: str) -> str:
+    """Единый экранизатор HTML (DevPlan 003 B3a) — shim над notifications.escape_html.
+
+    ## @purpose  Единственный экранизатор платформы живёт в shared/notifications.py;
+    ##            telegram_notifier ре-экспортирует его для старых потребителей.
+    ## @io       ⇥ text: str → ⎋ str — HTML-экранированный
+    ## @complexity O(N)
+    """
+    from core.internal.shared.notifications import escape_html as _escape
+
+    return _escape(text)
+
+
+# endregion FUNC_escape_html
 
 
 # region FUNC_notify
@@ -350,15 +251,17 @@ def notify(
     """Send a non-blocking notification (notify-hook.sh contract, E10). Always returns True.
 
     ## @purpose  Полный non-blocking notify: load secrets env → resolve token/chat by severity → format →
-    ##           send_telegram (HTML). Всегда возвращает True (exit 0) — неблокирующий по дизайну.
-    ##           (DevPlan 118 E10 — Python-порт notify-hook.sh логики.)
+    ##           notify_event (единый конверт + SoT severity-роутинг, DevPlan 003 B3a — shim-делегация).
+    ##           Всегда возвращает True (exit 0) — неблокирующий по дизайну.
+    ##           (DevPlan 118 E10 — Python-порт notify-hook.sh логики; 003: транспорт/формат — единый
+    ##           shared/notifications, конверт HTML: badge + [ctx] emoji msg + footer.)
     ## @io       ⇥ emoji: str, message: str, severity: str, context: str, secrets_file: str → ⎋ bool (всегда True)
     ## @complexity O(N) — чтение secrets.env (N строк) + 1 HTTP POST
     ## @invariants
     ##   - Отсутствие secrets-файла / токена / chat → IMP:7 log, return True (неблокирующий)
-    ##   - send_telegram с parse_mode="HTML" — HTML-разметка в сообщениях деплоя
-    ##   - ok = send_telegram(...); при not ok → IMP:9 DELIVERY FAILED (severity, context) — 126 D-2;
-    ##     «Notification sent» пишется ТОЛЬКО при ok (фикс лживого лога, DevPlan 132 W4)
+    ##   - format_envelope с parse_mode="HTML" — HTML-разметка в сообщениях деплоя
+    ##   - Провал доставки → IMP:9 DELIVERY FAILED + audit-fallback (126 D-2; единый fallback 003);
+    ##     «Notification sent» пишется ТОЛЬКО при успехе (фикс лживого лога, DevPlan 132 W4)
     ##   - always return True (неблокирующий дизайн сохранён)
     """
     env = dict(os.environ)
@@ -380,39 +283,21 @@ def notify(
         except OSError as exc:
             logger.warning("[IMP:7][telegram_notifier][notify] Cannot read secrets %s: %s", secrets_file, exc)
 
-    token = env.get("TELEGRAM_BOT_TOKEN", "")
-    if not token:
-        logger.warning("[IMP:7][telegram_notifier][notify] TELEGRAM_BOT_TOKEN not set — notification skipped")
-        return True
-    chat_id = resolve_chat_id(severity, env)
-    if not chat_id:
-        logger.warning(
-            "[IMP:7][telegram_notifier][notify] No TELEGRAM_CHAT_ID resolved (severity=%s)", severity or "none"
-        )
-        return True
+    # DevPlan 003 B3a: делегация в единую точку отправки (конверт + severity-роутинг + fallback)
+    from core.internal.shared.notifications import Notification, notify_event
 
     full_message = format_notify_message(emoji, message, context)
-    proxy = env.get("TELEGRAM_PROXY_URL")
-    ok = send_telegram(full_message, bot_token=token, chat_id=chat_id, proxy_url=proxy, parse_mode="HTML")
-    if not ok:
-        # ⚠️ TRAP[BUG] · 2026-08-04 · P1 · Лживый лог «Notification sent» при неудаче (126 D-2)
-        # · Symptom: notify() писал «[IMP:9] Notification sent» БЕЗУСЛОВНО (telegram_notifier.py:314-316),
-        # ·   даже когда send_telegram вернул False — оператор видел успех при реальном провале.
-        # · Root: результат send_telegram не захватывался; лог писался всегда.
-        # · Fix: ok = send_telegram(...); при not ok — IMP:9 DELIVERY FAILED (severity/context);
-        # ·   «Notification sent» — только при ok. Контракт «always exit 0 / always True» сохранён.
-        # · Prevention: маркер DELIVERY FAILED делает провалы реконструируемыми по логам (D-2).
-        logger.warning(
-            "[IMP:9][telegram_notifier][notify] DELIVERY FAILED (severity=%s, context=%s)",
-            severity or "none",
-            context,
-        )
-    else:
-        logger.info(
-            "[IMP:9][telegram_notifier][notify] Notification sent (severity=%s, context=%s)",
-            severity or "none",
-            context,
-        )
+    notify_event(
+        Notification(
+            severity=severity or "info",
+            context=context,
+            message=full_message,
+            fingerprint=f"notify:{context}:{full_message}",
+        ),
+        env=env,
+        secrets_file=None,  # env уже слит с secrets.env выше (TRAP[BUG] 141-фикс)
+        proxy_url=env.get("TELEGRAM_PROXY_URL"),
+    )
     return True
 
 

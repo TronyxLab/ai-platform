@@ -141,3 +141,19 @@ jobs:
           name: pytest-junit-reports
           path: tests/report-*.xml
           if-no-files-found: warn
+
+      # ─── Failure notification (DevPlan 003 A1) ─────────────────────────
+      # Единый CI-хук: notify-telegram action → shared/notifications.py notify-ci (прямой HTTPS).
+      - name: Notify on failure
+        if: failure()
+        uses: ./.github/actions/notify-telegram
+        with:
+          bot-token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          chat-id-critical: ${{ secrets.TELEGRAM_CHAT_ID_CRITICAL }}
+          chat-id-warning: ${{ secrets.TELEGRAM_CHAT_ID_WARNING }}
+          severity: critical
+          context: platform-gate-fast
+          event: ci.failure
+          message: "platform-gate-fast FAILED (fast gate RED, run ${{ github.run_id }})"
+          link: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          action: "Investigate the failed gate and fix forward"

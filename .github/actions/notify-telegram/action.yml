@@ -1,0 +1,95 @@
+# GREP_SUMMARY: notify-telegram composite-action direct-https notify-ci failure-hook ci-notification
+# STRUCTURE: ┌inputs (severity/context/event/message/links/secrets)┐ → env NOTIFY_* + TELEGRAM_* → python3 -m core.internal.shared.notifications notify-ci (прямой HTTPS) → ⎋ exit 0 (non-blocking)
+# region MODULE_CONTRACT
+## @purpose  Composite action — единый CI-хук Telegram-уведомлений (DevPlan 003 A1):
+##           вызывает ТОТ ЖЕ shared/notifications.py (notify-ci), что и нода —
+##           один конверт, один экранизатор, один клиент на обе среды. Прямой HTTPS
+##           из GitHub Actions (нода не задействована, Tor не нужен — TRAP[BUG] 141
+##           разрешает direct HTTPS ТОЛЬКО вне ноды).
+## @scope    Все CI-workflows платформы (.github/workflows/*.yml): failure()-шаги гейтов,
+##           деплоев, security-скана, сборок. Требует checkout ДО вызова (локальные
+##           composite actions — канон setup-platform).
+## @invariants
+##   - Транспорт: notify-ci (proxy_url=None) — прямой HTTPS; НИКОГДА не используется с ноды
+##   - Секреты — inputs (bot-token/chat-id-*), пробрасываются в env шага (не в командную строку)
+##   - Сообщение/контекст/детали — через env (NOTIFY_*), не через argv (shell-injection-safe)
+##   - exit 0 ВСЕГДА (non-blocking: уведомление не роняет workflow — контракт notify_event)
+##   - Стандартные дефолты: severity=critical, context=ci, corr-id=github.run_id
+## @rationale  Ключевой дизайн-принцип DevPlan 003 §1: CI-хуки НЕ пишут отдельный
+##             curl/HTTP-клиент — иначе дублирование конверта между нодой и CI = новый
+##             рассинхрон. Исключение — deploy-project.yml (caller-контекст, org-agnostic
+##             гейт запрещает relative actions: test_gate_workflow_org_agnostic).
+## @changes  2026-08-16 | DevPlan 003 A1 — created
+# endregion MODULE_CONTRACT
+
+name: 'Notify Telegram'
+description: 'Send a Telegram notification from CI via shared notifications.py notify-ci (direct HTTPS, non-blocking)'
+
+inputs:
+  bot-token:
+    description: 'Telegram bot token (secret)'
+    required: true
+  chat-id-critical:
+    description: 'Critical-severity chat id (secret)'
+    required: false
+    default: ''
+  chat-id-warning:
+    description: 'Warning-severity chat id (secret)'
+    required: false
+    default: ''
+  chat-id:
+    description: 'Base/info chat id (secret, fallback for critical/warning)'
+    required: false
+    default: ''
+  severity:
+    description: 'critical|warning|info'
+    required: false
+    default: 'critical'
+  context:
+    description: 'Context prefix (workflow name)'
+    required: false
+    default: 'ci'
+  event:
+    description: 'Notification-catalog event id (must be registered in core/notification-catalog.yaml)'
+    required: true
+  message:
+    description: 'Notification text'
+    required: true
+  details:
+    description: 'Detail lines (newline-separated)'
+    required: false
+    default: ''
+  link:
+    description: 'Link URLs (newline-separated)'
+    required: false
+    default: ''
+  action:
+    description: 'Suggested action (footer)'
+    required: false
+    default: ''
+  corr-id:
+    description: 'Correlation id'
+    required: false
+    default: '${{ github.run_id }}'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Notify Telegram (direct HTTPS)
+      shell: bash
+      env:
+        NOTIFY_SEVERITY: ${{ inputs.severity }}
+        NOTIFY_CONTEXT: ${{ inputs.context }}
+        NOTIFY_EVENT: ${{ inputs.event }}
+        NOTIFY_CORR_ID: ${{ inputs.corr-id }}
+        NOTIFY_MESSAGE: ${{ inputs.message }}
+        NOTIFY_DETAILS: ${{ inputs.details }}
+        NOTIFY_LINK: ${{ inputs.link }}
+        NOTIFY_ACTION: ${{ inputs.action }}
+        TELEGRAM_BOT_TOKEN: ${{ inputs.bot-token }}
+        TELEGRAM_CHAT_ID_CRITICAL: ${{ inputs.chat-id-critical }}
+        TELEGRAM_CHAT_ID_WARNING: ${{ inputs.chat-id-warning }}
+        TELEGRAM_CHAT_ID: ${{ inputs.chat-id }}
+      run: |
+        # non-blocking: exit 0 всегда (контракт notify_event) — уведомление не роняет workflow
+        python3 -m core.internal.shared.notifications notify-ci || true

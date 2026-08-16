@@ -143,3 +143,18 @@ jobs:
             echo "::warning::[SECURITY:PIP-AUDIT] ${MED_LOW} MEDIUM/LOW vuln(s) — continue (severity gate HIGH+)"
           fi
           echo "[IMP:9][pip-audit] severity gate HIGH+ passed (0 HIGH/CRITICAL)"
+
+      # ─── Failure notification (DevPlan 003 A1) ─────────────────────────
+      - name: Notify on failure
+        if: failure()
+        uses: ./.github/actions/notify-telegram
+        with:
+          bot-token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          chat-id-critical: ${{ secrets.TELEGRAM_CHAT_ID_CRITICAL }}
+          chat-id-warning: ${{ secrets.TELEGRAM_CHAT_ID_WARNING }}
+          severity: critical
+          context: security-scan
+          event: ci.failure
+          message: "security-scan FAILED (trivy/pip-audit gate RED, run ${{ github.run_id }})"
+          link: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          action: "Fix HIGH/CRITICAL findings or scanner config and re-push"
