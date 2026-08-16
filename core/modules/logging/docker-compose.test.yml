@@ -29,6 +29,13 @@ services:
     container_name: alloy-test
     networks: !override  # DevPlan 017 W2.5 — test network isolation
       - test-observability-net
+    # 2026-08-16: 256M→512M — alloy-test стабильно OOM-killed (exit 137) под 256M при
+    # холодном WAL (docker-history перечитывание) + ARM-эмуляция + dev-стек параллельно;
+    # base-лимит 256M — прод-контракт (не трогаем), test-оверрайд получает свой бюджет.
+    deploy:
+      resources:
+        limits: !override
+          memory: 512M
     # DevPlan 143 W1A: rebind backup-logs → backup-logs-test (канон volume-rename U-62).
     # Volumes перечислены полностью (!override семантика compose для list-values: список
     # заменяется целиком). config.alloy mount оставлен (нужен для работы), docker.sock/

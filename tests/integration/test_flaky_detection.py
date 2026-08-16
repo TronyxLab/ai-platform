@@ -250,7 +250,13 @@ def test_flaky_detection_5x_under_load(caplog, tmp_path: Path) -> None:
     logger.info("--- END LDD TRAJECTORY ---")
 
 
-@pytest.mark.integration
+# 🧐 TRAP[DECISION] · 2026-08-16 · — · Маркер integration СНЯТ с docker-harness (30-40 мин)
+# · Rejected: оставить @pytest.mark.integration — 900s-шаг make check MARKER=integration /
+# ·   CI integration умирал таймаут-киллом (exit 124) на harness, не доходя до реальных тестов.
+# · Reason: harness — РУЧНОЙ инструмент flaky-детекции (DevPlan 160 W1 T1.3, «Remove if:
+# ·   harness заменён CI-уровневой flaky-детекцией»); запуск — явный вызов
+# ·   pytest tests/integration/test_flaky_detection.py, НЕ интеграционный сьют CI.
+# · Rev: если появится CI-джоба flaky-детекции — вернуть маркер + отдельный сьют с таймаутом.
 @pytest.mark.requires_docker
 @r1_delegates
 def test_flaky_detection_docker_5x_under_load(caplog, tmp_path: Path) -> None:

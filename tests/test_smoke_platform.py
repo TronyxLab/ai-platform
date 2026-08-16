@@ -408,8 +408,10 @@ def test_platform_starts_all_containers(
     # ⚠️ TRAP[BUG] · 2026-07-22 · MED · Wave-Pipeline extra event not signaled
     # · platform_services tests get wave max_wave+1, but _init_wave_events only
     # · creates events 0..max_wave-1 → _ensure_wave_ready passes through without
-    # · waiting. Mitigation: polling with max_retries=12 (60s window).
-    max_retries = 12
+    # · waiting. Mitigation: polling. Окно 120s (2026-08-16): root cause длинных
+    #   окон — alloy-test OOM (exit 137) под 256M — закрыт лимитом 512M в
+    #   docker-compose.test.yml; 120s = запас на холодные волны 1+ (CI 2-core).
+    max_retries = 24
     retry_interval = 5  # seconds
     all_running = False
 

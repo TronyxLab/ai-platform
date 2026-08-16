@@ -40,18 +40,24 @@ from typing import ClassVar, TypedDict, cast
 
 import yaml
 
-from core.internal.shared.exceptions import PlatformError
-
 logger = logging.getLogger(__name__)
 
 # ── sys.path bootstrap: standalone CLI invocation (python3 script.py) ──
 # core.internal.shared.* резолвится без PYTHONPATH (паттерн on_project_deploy.py):
 # core/internal/scaffold/ → parents[3] = repo root.
+# ⚠️ TRAP[BUG] · 2026-08-16 · P1 · import core.* ДО bootstrap — standalone-запуск падал
+# · Symptom: hook postgres → sys.executable gen_env_platform.py → ModuleNotFoundError
+# ·   'core' (import на строке ДО sys.path-insert; core/ не пакет — site-packages
+# ·   editable-маппинг не покрывает; tests живут на conftest addsitedir).
+# · Root: порядок блоков — bootstrap (parents[3] → repo root) был ПОСЛЕ import'а.
+# · Fix: bootstrap ДО импорта core.internal.* (проверка BROKEN-ORDER-сканом scaffold).
 _PLATFORM_VARS_MIN: int = 8  # минимальное ожидаемое число PLATFORM_* переменных
 
 _PROJECT_ROOT = str(Path(__file__).resolve().parents[3])
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
+
+from core.internal.shared.exceptions import PlatformError  # намеренно ПОСЛЕ bootstrap (TRAP[BUG] выше)
 
 __all__ = [
     "GenEnvPlatformError",
