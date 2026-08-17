@@ -269,8 +269,6 @@ add/delete TXT (listing-эндпоинт ≠ DNS-01 сломан — TRAP[BUG] �
 `DOCKER_HUB_USERNAME/TOKEN`, `GHCR_PULL_TOKEN` (node sops), `GHCR_PUSH_TOKEN` (CI),
 `TELEGRAM_*` (BOT_TOKEN/CHAT_ID*_WARNING/_CRITICAL/
 PROXY_URL/API_BASE/ALLOWED_USERS/GETME_URL), `AGE_SECRET_KEY` (мастер-ключ — DR-секция),
-`S3_READONLY_ACCESS_KEY`/`S3_READONLY_SECRET_KEY` (read-only IAM, heartbeat-checker CI-крон —
-DevPlan 003 B5; отдельный ключ, мастер-ключи S3_ACCESS_KEY/S3_SECRET_KEY не переиспользуются),
 `VPS_HOST`/`NODE_HOST_MAP`. (`GHCR_OWNER` удалён DevPlan 002 — L1-образ не публикуется.)
 
 **Чек-листы ротации (суть):** generate `ssh-keygen -t ed25519` → добавить pub (node.yaml /

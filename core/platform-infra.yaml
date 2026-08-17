@@ -191,12 +191,6 @@ env_defaults:
   S3_BUCKET: "test-bucket"
   S3_ACCESS_KEY: "test-access-key"
   S3_SECRET_KEY: "test-secret-key"
-  # S3 read-only creds для heartbeat-checker (DevPlan 003 B5): отдельный read-only IAM ключ,
-  # НЕ мастер-ключи. Пустые дефолты = CI-значения приходят из GitHub Secrets
-  # (S3_READONLY_ACCESS_KEY/S3_READONLY_SECRET_KEY, ci-secret); env: блок heartbeat-check.yml
-  # требует регистрации в env_defaults (гейт test_gate_ci_env_vars_match_platform_env).
-  S3_READONLY_ACCESS_KEY: ""
-  S3_READONLY_SECRET_KEY: ""
   # AWS-алиасы для upload-s3.sh (AWS SDK совместимость) — SoT (DevPlan 116 T3, U-17).
   # Литералы ${S3_ACCESS_KEY}/${S3_SECRET_KEY} — compose резолвит их через S3_* (alias, не копия).
   AWS_ACCESS_KEY_ID: "${S3_ACCESS_KEY}"
@@ -276,8 +270,6 @@ env_defaults:
   LOKI_PORT: 3100
   CADVISOR_PORT: 8080
   NODE_EXPORTER_PORT: 9100
-  # 003 A3: host-каталог canary Tor-цепи (bind backup-cron → heartbeat payload)
-  TOR_CHAIN_STATE_HOST_DIR: "/var/lib/platform/run"
   # ── Compose Profiles ──
   COMPOSE_PROFILES: "postgres,redis,nginx,clickhouse,backup-cron,hermes-agent,monitoring,logging,litellm,langfuse,infra-metrics,minio,status-page"
   # ── Misc ──

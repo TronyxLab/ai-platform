@@ -41,11 +41,6 @@ PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 # · Run до 03:00 дампа — не пересекается; после upload локальный retention чистит старьё
 10  *   *   *   *   root python3 /usr/local/bin/wal_sync.py >> /var/log/platform/backup/wal-sync.log 2>&1
 
-# [IMP:8][crontab] */15 * * * * UTC — dead-man's switch heartbeat → S3 (162 W6-1)
-# · PUT {prefix}/heartbeat/{node}/heartbeat.json {ts, ok: true, node} — off-node сигнал жизни;
-# · внешний checker алертит если heartbeat stale >2ч (100% in-band → out-of-band, W6-1)
-*/15 *   *   *   *   root python3 /usr/local/bin/heartbeat.py >> /var/log/platform/backup/heartbeat.log 2>&1
-
 # ⚠️ TRAP[BUG] · 2026-07-18 · P1 · Cron paths used /opt/core/ instead of /opt/platform/core/
 # · Symptom: cron jobs silently failed — /opt/core/ does not exist on VPS; only /opt/platform/ exists
 # · Root: path written before PLATFORM_ROOT canonicalization (core/lib/paths.sh → PLATFORM_ROOT=/opt/platform)

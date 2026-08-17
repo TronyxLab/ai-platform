@@ -303,7 +303,7 @@ def promote_context(
 
     if verify_mirror(org, mirror_head, source_head):
         # 2026-08-16: авто-провижининг org-секретов контекстной организации (best-effort) —
-        # mirror-org CI (core-deploy/heartbeat-check/deploy-project) без ручной настройки UI.
+        # mirror-org CI (core-deploy/deploy-project) без ручной настройки UI.
         secrets_ok = True
         try:
             if secrets_fn is not None:

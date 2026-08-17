@@ -567,7 +567,7 @@ def notify_event(
     # ⚠️ TRAP[BUG] · 2026-08-06 · P1 · Telegram из контейнера/ноды ТОЛЬКО через Tor/Privoxy
     # · Symptom: api.telegram.org недоступен напрямую из ноды (IP-block); прямой HTTPS с ноды = утечка IP
     # · Root: direct-HTTP fallback добавлялся как «простое решение» (141)
-    # · Fix: safe default — env TELEGRAM_PROXY_URL; direct_https=True ТОЛЬКО из CI (notify-ci/heartbeat-check)
+    # · Fix: safe default — env TELEGRAM_PROXY_URL; direct_https=True ТОЛЬКО из CI (notify-ci)
     # · Prevention: direct_https — явный opt-in флаг; нода без прокси → skip (не direct)
     if direct_https:
         proxy = None

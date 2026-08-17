@@ -1,4 +1,4 @@
-# GREP_SUMMARY: org-secrets provisioner gh-cli context-promote VPS_HOST VPS_SSH_KEY AGE TELEGRAM S3_READONLY visibility auto-configure
+# GREP_SUMMARY: org-secrets provisioner gh-cli context-promote VPS_HOST VPS_SSH_KEY AGE TELEGRAM visibility auto-configure
 # STRUCTURE: ▶ resolve_node(context) → ◇ resolve_values (node.yaml + local env/.env + ssh/age-файлы) → ◇ gh secret set ×N (visibility plan) → ⊕ audit → ⎋ bool (best-effort)
 # region MODULE_CONTRACT
 ## @purpose  Авто-провижининг org-секретов контекстной GitHub-организации при context-promote
@@ -12,7 +12,7 @@
 ##      IMP:10 WARN + audit FAIL-запись, но return True (promote продолжает).
 ##   2. Значения НЕ печатаются в логи (только имена секретов и источники).
 ##   3. Единый visibility-план: TELEGRAM_* → all (нужны project-репо org); VPS_HOST/
-##      VPS_SSH_KEY/AGE_SECRET_KEY/S3_READONLY_* → selected с --repos ai-platform
+##      VPS_SSH_KEY/AGE_SECRET_KEY → selected с --repos ai-platform
 ##      (gh CLI: --visibility selected, не private).
 ##   4. Источники значений (порядок): env → локальный .env платформы → node.yaml →
 ##      ~/.ssh/ai-platform/{node}-ci → node_detect.detect_age_key() (AGE).
@@ -47,8 +47,6 @@ _ORG_SECRET_PLAN: dict[str, tuple[str, list[str] | None]] = {
     "VPS_HOST": ("selected", ["ai-platform"]),
     "VPS_SSH_KEY": ("selected", ["ai-platform"]),
     "AGE_SECRET_KEY": ("selected", ["ai-platform"]),
-    "S3_READONLY_ACCESS_KEY": ("selected", ["ai-platform"]),
-    "S3_READONLY_SECRET_KEY": ("selected", ["ai-platform"]),
 }
 
 # Источники значений (в порядке приоритета): env-имя → файловые кандидаты
@@ -140,7 +138,7 @@ def _env_file_lookup(name: str, env_file: Path) -> str | None:
 ##   - VPS_HOST ← node.yaml; пустой host → пропуск (WARN на выходе)
 ##   - VPS_SSH_KEY ← ~/.ssh/ai-platform/{node}-ci (приватный ключ; отсутствует → пропуск)
 ##   - AGE_SECRET_KEY ← env AGE_SECRET_KEY → node_detect.detect_age_key()
-##   - TELEGRAM_*/S3_READONLY_* ← env → .env платформы
+##   - TELEGRAM_* ← env → .env платформы
 def resolve_secret_values(
     context: str,
     env: Mapping[str, str] | None = None,

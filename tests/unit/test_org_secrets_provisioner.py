@@ -55,9 +55,7 @@ def test_resolve_node_for_context_missing(tmp_path) -> None:
 def test_resolve_secret_values_sources(tmp_path, monkeypatch) -> None:
     _write_node_config(tmp_path, "tronyx-vps", "9.9.9.9", ["tronyx-lab"])
     env_file = tmp_path / ".env"
-    env_file.write_text(
-        "TELEGRAM_BOT_TOKEN=tg-token\nTELEGRAM_CHAT_ID_CRITICAL=crit-chat\nS3_READONLY_ACCESS_KEY=ro-ak\n"
-    )
+    env_file.write_text("TELEGRAM_BOT_TOKEN=tg-token\nTELEGRAM_CHAT_ID_CRITICAL=crit-chat\n")
     ssh_dir = tmp_path / "home" / ".ssh" / "ai-platform"
     ssh_dir.mkdir(parents=True)
     (ssh_dir / "tronyx-vps-ci").write_text("PRIVATE-KEY-CONTENT")
@@ -78,17 +76,15 @@ def test_resolve_secret_values_sources(tmp_path, monkeypatch) -> None:
     assert values["AGE_SECRET_KEY"] == "AGE-SECRET-TEST"
     assert values["TELEGRAM_BOT_TOKEN"] == "tg-token"
     assert values["TELEGRAM_CHAT_ID_CRITICAL"] == "crit-chat"
-    assert values["S3_READONLY_ACCESS_KEY"] == "ro-ak"
     assert "TELEGRAM_CHAT_ID_WARNING" not in values
     logger.info("[IMP:9][test_org_secrets] resolve values PASS")
 
 
 def test_visibility_plan() -> None:
-    """Единый план: TELEGRAM_* → all; VPS/AGE/S3_READONLY_* → selected с --repos ai-platform."""
+    """Единый план: TELEGRAM_* → all; VPS/AGE → selected с --repos ai-platform."""
     assert _ORG_SECRET_PLAN["TELEGRAM_BOT_TOKEN"] == ("all", None)
     assert _ORG_SECRET_PLAN["VPS_HOST"] == ("selected", ["ai-platform"])
     assert _ORG_SECRET_PLAN["AGE_SECRET_KEY"] == ("selected", ["ai-platform"])
-    assert _ORG_SECRET_PLAN["S3_READONLY_ACCESS_KEY"] == ("selected", ["ai-platform"])
     logger.info("[IMP:9][test_org_secrets] visibility plan PASS")
 
 

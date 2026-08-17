@@ -54,22 +54,12 @@ events:
     context: deploy
     action: "Rollback выполнен — старый образ активен, investigate failure"
 
-  # ── Healthcheck / watchdog / heartbeat ───────────────────────────────
+  # ── Healthcheck / watchdog ───────────────────────────────────────────
   - id: watchdog.restart
     severity: critical
     context: watchdog
     throttle_min: 30
     action: "Check container logs after restart"
-  - id: heartbeat.stale
-    severity: critical
-    context: heartbeat
-    throttle_min: 30
-    action: "Node may be down — check VPS console / SSH"
-  - id: tor.chain_down
-    severity: critical
-    context: tor
-    throttle_min: 60
-    action: "Restore Tor/Privoxy chain (node cannot reach Telegram directly)"
 
   # ── Maintenance (platform-reboot.service, нода) ──────────────────────
   - id: cert.expiry

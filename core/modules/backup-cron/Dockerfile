@@ -84,8 +84,6 @@ COPY scripts/date_parser.py      /usr/local/bin/date_parser.py
 COPY scripts/s3_client.py        /usr/local/bin/s3_client.py
 # DevPlan 132 W2: wal_sync.py (WAL → S3, hourly cron) — импортирует s3_client (уже скопирован)
 COPY scripts/wal_sync.py         /usr/local/bin/wal_sync.py
-# DevPlan 162 W6-1: heartbeat.py (dead-man's switch → S3, */15 cron) — импортирует boto3 (уже установлен)
-COPY scripts/heartbeat.py        /usr/local/bin/heartbeat.py
 
 # Copy healthcheck scripts
 COPY healthcheck.sh  /usr/local/bin/healthcheck.sh
@@ -109,8 +107,6 @@ RUN chmod 0644 /etc/cron.d/platform-backup && \
       /usr/local/bin/upload-s3.sh \
       /usr/local/bin/healthcheck.sh \
       /usr/local/bin/entrypoint.py
-# heartbeat.py запускается через `python3 /usr/local/bin/heartbeat.py` (crontab) —
-# исполняемый бит не требуется (паритет wal_sync.py, который также вызывается python3).
 
 # [IMP:8][backup-cron][Dockerfile] No EXPOSE — backup-net internal only
 # DevPlan 143 W1B: entrypoint.py writes /etc/environment (cron env) then exec's cron -f.

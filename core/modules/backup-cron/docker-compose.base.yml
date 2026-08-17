@@ -89,9 +89,6 @@ services:
       WAL_LOCAL_RETENTION_DAYS: "${WAL_LOCAL_RETENTION_DAYS:-7}"
       WAL_S3_RETENTION_DAYS: "${WAL_S3_RETENTION_DAYS:-14}"
       WAL_MAX_UPLOAD_PER_RUN: "${WAL_MAX_UPLOAD_PER_RUN:-200}"
-      # 003 A3: canary Tor-цепи (пишет tor_proxy_check.py на ноде) — heartbeat.py мержит
-      # статус в S3-payload; читатель — heartbeat_check.py (CI cron, out-of-band)
-      TOR_CHAIN_STATE_FILE: "/var/lib/platform/run/tor-chain-state.json"
 
     volumes:
       # [IMP:8][backup-cron-compose] Spool volume: local staging before S3 upload (03 §4)
@@ -100,10 +97,6 @@ services:
       # [IMP:8][backup-cron-compose] WAL archive volume (DevPlan 132 W2): pg_wal сегменты для
       # hourly wal_sync → S3; том объявлен в root compose (SoT, U-49) — модуль только маунтит
       - wal-archive:/var/lib/platform/wal-archive
-      # 003 A3: read-only bind на node run-dir (tor-chain-state.json). Env-параметризация —
-      # канон compose-include (хост-путь вне директории модуля); macOS dev — Docker Desktop
-      # создаёт пустой каталог, canary отсутствует → heartbeat payload без tor-ключа.
-      - ${TOR_CHAIN_STATE_HOST_DIR:-/var/lib/platform/run}:/var/lib/platform/run:ro
 
     networks:
       backup-net:

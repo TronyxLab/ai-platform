@@ -1,4 +1,10 @@
 # GREP_SUMMARY: manifest-dag dag-acyclic generator-chains cycle-detection make-generate-manifests
+# 🧐 TRAP[DECISION] · 2026-08-17 · — · GREP_SUMMARY keyword `generator-chains` содержит подстроку
+#   `tor-chain` (genera-tor-chain-s) — ложное срабатывание acceptance-grep удалённого dead-man's switch
+#   canary (DevPlan 005). Ключевое слово описывает DAG цепочек генераторов манифестов, НЕ canary.
+#   Намеренно НЕ переформулировано: переписывание семантического ключевого слова несвязанного гейта
+#   ради литерального grep — cargo-cult. · Rev: если появится требование строго нулевого литерала
+#   `tor-chain` в tracked-дереве — переформулировать ключевое слово в `generator-chain-map`
 # STRUCTURE: ▶ make generate-manifests -n → parse chains → ◇ Chain A (secrets → platform-env) ◇ Chain B (entrypoint → agents-md) ◇ Chain C (litellm-config) → ⊕ grep for repeated targets → ⎋ pass/fail
 # region MODULE_CONTRACT
 ## @purpose  Проверка ацикличности Makefile .PHONY цепочки генераторов манифестов.

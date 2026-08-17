@@ -225,10 +225,9 @@ deadsnakes PPA (φ1, FATAL); системный /usr/bin/python3 НЕ трога
 mirrors из daemon.json (mirror.gcr.io даёт 404 на docker.io-пулах); fstab — убрать
 `nobarrier,commit=30` → `defaults/relatime,commit=5` (weekly fstrim остаётся).
 
-**7. Операционные проверки:** heartbeat — S3-объект с timestamp каждый прогон (dead-man's
-switch) + внешний checker (UptimeRobot/StatusCake ИЛИ GitHub Actions cron; stale > 2ч → Telegram);
-квартальный DR-drill на временном VPS (restore postgres из S3 + checksum-сверка); chaos-сьют
-T1-T12 — только test-node (`PYTEST_NO_ESCALATION=1 pytest tests/e2e/test_chaos_resilience.py -m chaos`).
+**7. Операционные проверки:** квартальный DR-drill на временном VPS (restore postgres из S3 +
+checksum-сверка); chaos-сьют T1-T12 — только test-node
+(`PYTEST_NO_ESCALATION=1 pytest tests/e2e/test_chaos_resilience.py -m chaos`).
 
 ## Cross-references
 
