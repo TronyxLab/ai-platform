@@ -27,6 +27,7 @@ import time
 import pytest
 import requests
 from _conftest.compose import _compose_file_args  # DevPlan 170 W8: canonical compose module
+from _conftest.env import get_smoke_env  # T12.3: compose-subprocess-ы получают SMOKE_ENV через merge
 from _conftest.ldd import _print_ldd_trajectory
 
 from tests.helpers.gate_helpers import repo_root
@@ -160,7 +161,9 @@ def logging_compose():
         "--timeout",
         "5",
     ]
-    env_down = {**subprocess.os.environ, "COMPOSE_PROFILES": "logging"}
+    # T12.3 (2026-08-17): merge get_smoke_env() — в CI os.environ НЕ содержит статик-smoк-env
+    # (NGINX_OVERLAY_DIR и др.); без merge root-compose interpolation (${VAR:?} B23) падал.
+    env_down = {**subprocess.os.environ, **get_smoke_env(), "COMPOSE_PROFILES": "logging"}
     try:
         result = subprocess.run(
             down_args, capture_output=True, text=True, timeout=_COMPOSE_DOWN_TIMEOUT, env=env_down, check=False
@@ -205,7 +208,7 @@ def logging_compose():
         "--wait-timeout",
         "90",
     ]
-    env_up = {**subprocess.os.environ, "COMPOSE_PROFILES": "logging"}
+    env_up = {**subprocess.os.environ, **get_smoke_env(), "COMPOSE_PROFILES": "logging"}
 
     try:
         _compose_up_with_logs(compose_up_args, env_up)

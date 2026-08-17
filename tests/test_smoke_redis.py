@@ -27,6 +27,7 @@ import logging
 import subprocess
 
 import pytest
+from _conftest.env import get_smoke_env  # T12.3: compose-subprocess-ы получают SMOKE_ENV через merge
 from _conftest.infra import infra as _infra
 from _conftest.ldd import _print_ldd_trajectory
 from _conftest.reuse import check_foreign_containers, wait_for_containers_healthy
@@ -205,7 +206,8 @@ def redis_compose(platform_services: dict[str, list[str]]) -> dict:
         "--timeout",
         "5",
     ]
-    env_down = {**subprocess.os.environ, "COMPOSE_PROFILES": "redis"}
+    # T12.3 (2026-08-17): merge get_smoke_env() — без него CI-интерполяция root-compose падала.
+    env_down = {**subprocess.os.environ, **get_smoke_env(), "COMPOSE_PROFILES": "redis"}
     try:
         result = subprocess.run(
             down_args, capture_output=True, text=True, timeout=_COMPOSE_DOWN_TIMEOUT, env=env_down, check=False
@@ -253,7 +255,7 @@ def redis_compose(platform_services: dict[str, list[str]]) -> dict:
         "--wait-timeout",
         "60",
     ]
-    env_up = {**subprocess.os.environ, "COMPOSE_PROFILES": "redis"}
+    env_up = {**subprocess.os.environ, **get_smoke_env(), "COMPOSE_PROFILES": "redis"}
 
     try:
         _redis_compose_up(compose_up_args, env_up)
@@ -354,7 +356,7 @@ def _compose_exec(redis_compose: dict, cmd: list[str], timeout: int = _EXEC_TIME
         "redis",
         *cmd,
     ]
-    env = {**subprocess.os.environ, "COMPOSE_PROFILES": "redis"}
+    env = {**subprocess.os.environ, **get_smoke_env(), "COMPOSE_PROFILES": "redis"}
     return subprocess.run(exec_args, capture_output=True, text=True, timeout=timeout, env=env, check=False)
 
 
@@ -551,7 +553,7 @@ def test_redis_no_host_ports(redis_compose, caplog):
             "--format",
             "{{json .NetworkSettings.Ports}}",
         ]
-        env = {**subprocess.os.environ, "COMPOSE_PROFILES": "redis"}
+        env = {**subprocess.os.environ, **get_smoke_env(), "COMPOSE_PROFILES": "redis"}
 
         result = subprocess.run(
             inspect_args, capture_output=True, text=True, timeout=_INSPECT_TIMEOUT, env=env, check=False

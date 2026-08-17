@@ -26,6 +26,7 @@ import time
 
 import pytest
 import requests
+from _conftest.env import get_smoke_env  # T12.3: compose-subprocess-ы получают SMOKE_ENV через merge
 from _conftest.infra import infra as _infra
 from _conftest.reuse import check_foreign_containers, wait_for_containers_healthy
 
@@ -91,7 +92,8 @@ def _run_docker(
     """
     cmd_env = None
     if env_override:
-        cmd_env = {**__import__("os").environ, **env_override}
+        # T12.3 (2026-08-17): merge SMOKE_ENV — CI os.environ не содержит статик-smoke-env
+        cmd_env = {**__import__("os").environ, **get_smoke_env(), **env_override}
     try:
         result = subprocess.run(args, capture_output=True, text=True, timeout=timeout, env=cmd_env, check=False)
         if check and result.returncode != 0:
@@ -262,8 +264,8 @@ def nginx_compose(platform_services: dict[str, list[str]]) -> dict:
     # ── Step 6: Start compose (dev-режим: base + dev.yml override, NGINX_CONF_DIR default ./config) ────
     logger.info("[IMP:7][nginx_compose][setup] Starting nginx compose (%s)", _SMOKE_PROJECT)
     # 142 W8 (R13): NGINX_OVERLAY_DIR — B23 fail-fast (${VAR:?}, 141-фикс); _run_docker
-    # этого модуля НЕ мержит SMOKE_ENV (только os.environ + env_override) — задаём явно.
-    env = {"NGINX_CERT_DIR": "./dev-certs", "NGINX_OVERLAY_DIR": "/tmp/nginx-overlay-test"}
+    # теперь мержит SMOKE_ENV (T12.3, 2026-08-17) — явные значения теста побеждают merge.
+    env = {**get_smoke_env(), "NGINX_CERT_DIR": "./dev-certs", "NGINX_OVERLAY_DIR": "/tmp/nginx-overlay-test"}
     up_args = [
         "docker",
         "compose",

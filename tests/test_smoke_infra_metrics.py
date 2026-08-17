@@ -24,6 +24,7 @@ import time
 
 import pytest
 import requests
+from _conftest.env import get_smoke_env  # T12.3: compose-subprocess-ы получают SMOKE_ENV через merge
 from _conftest.networks import get_network_manager
 
 from tests.helpers.gate_helpers import repo_root
@@ -81,7 +82,8 @@ def _run_docker(
     """
     cmd_env = None
     if env_override:
-        cmd_env = {**__import__("os").environ, **env_override}
+        # T12.3 (2026-08-17): merge SMOKE_ENV — CI os.environ не содержит статик-smoke-env
+        cmd_env = {**__import__("os").environ, **get_smoke_env(), **env_override}
     try:
         result = subprocess.run(args, capture_output=True, text=True, timeout=timeout, env=cmd_env, check=False)
         if check and result.returncode != 0:

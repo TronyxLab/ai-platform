@@ -27,6 +27,7 @@ import time
 import pytest
 import requests
 from _conftest.compose import _compose_file_args  # DevPlan 170 W8: canonical compose module
+from _conftest.env import get_smoke_env  # T12.3: compose-subprocess-ы получают SMOKE_ENV через merge
 from _conftest.ldd import _print_ldd_trajectory
 
 from tests.helpers.gate_helpers import repo_root
@@ -180,7 +181,9 @@ def monitoring_compose():
         "--timeout",
         "5",
     ]
-    env_down = {**subprocess.os.environ, "COMPOSE_PROFILES": "monitoring"}
+    # T12.3 (2026-08-17): merge get_smoke_env() — без него CI-интерполяция root-compose
+    # (${VAR:?} B23) падала на недостающих статик-переменных.
+    env_down = {**subprocess.os.environ, **get_smoke_env(), "COMPOSE_PROFILES": "monitoring"}
     try:
         result = subprocess.run(
             down_args, capture_output=True, text=True, timeout=_COMPOSE_DOWN_TIMEOUT, env=env_down, check=False
@@ -256,6 +259,7 @@ def monitoring_compose():
     # Pass --env-file .env explicitly, but also fall back to env vars for robustness.
     env_up = {
         **subprocess.os.environ,
+        **get_smoke_env(),
         "COMPOSE_PROFILES": "monitoring",
         "PROMETHEUS_TARGETS_DIR": subprocess.os.environ.get("PROMETHEUS_TARGETS_DIR", "/tmp/prometheus-targets"),
         "PROMETHEUS_RULES_DIR": subprocess.os.environ.get("PROMETHEUS_RULES_DIR", "/tmp/prometheus-rules"),
