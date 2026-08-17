@@ -234,10 +234,17 @@ checks:
     junit: tests/report-component.xml
     diagnostic: false
   - id: integration
-    cmd: pytest tests/ -m "integration" -v --tb=short -rs --junitxml=tests/report-integration.xml
+    cmd: pytest tests/ -m "integration and not local_stack" -v --tb=short -rs --junitxml=tests/report-integration.xml
     tier: pytest
     timeout: 900
-    # DevPlan 165: integration — полный hermes LLM-стек (Docker). diagnostic: false —
+    # DevPlan 007 W2: allow_no_tests — CI-интеграция может собрать 0 тестов, если
+    # единственные integration-тесты — local_stack (требуют make up production-стек).
+    # Workflow platform-test.yml обрабатывает rc=5 → exit 0 (тот же контракт).
+    allow_no_tests: true
+    # DevPlan 007 W2: local_stack-тесты (test_shared_db_access) исключены из CI — они
+    # требуют production-именованный стек (make up: postgres/pgbouncer), которого CI не имеет.
+    # Локально: make check MARKER=integration запускает их при поднятом стеке (make up).
+        # DevPlan 165: integration — полный hermes LLM-стек (Docker). diagnostic: false —
     # НЕ входит в make check; запуск только явно: make check MARKER=integration
     # (CI platform-test.yml) или --only integration. gate_modes отсутствует.
     diagnostic: false

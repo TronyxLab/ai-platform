@@ -119,6 +119,7 @@ def shared_db_stack() -> None:
 # ═══════════════════════════════════════════════════════════════════
 # region TEST_full_cycle
 @pytest.mark.integration
+@pytest.mark.local_stack
 @pytest.mark.requires_docker
 # 🧪 TRAP[TEST] · Scenario: needs.database → хук → БД+роль+GRANT+credentials → psql через pgbouncer
 # · Regression: роль не создавалась / pgbouncer «no such database» для новых БД (жёсткий список)
@@ -225,6 +226,7 @@ def test_shared_db_full_cycle_via_pgbouncer(shared_db_stack, tmp_path, caplog) -
 # ═══════════════════════════════════════════════════════════════════
 # region TEST_negative_r5
 @pytest.mark.integration
+@pytest.mark.local_stack
 @pytest.mark.requires_docker
 # 🧪 TRAP[TEST] · NEGATIVE (R5) · pgbouncer wildcard — несуществующая роль → auth failure
 # · Scenario: подключение несуществующей ролью к существующей БД → auth failure,
@@ -278,6 +280,7 @@ def test_negative_nonexistent_role_auth_failure_not_no_such_database(shared_db_s
 # ═══════════════════════════════════════════════════════════════════
 # region TEST_idempotent_redeploy
 @pytest.mark.integration
+@pytest.mark.local_stack
 @pytest.mark.requires_docker
 # 🧪 TRAP[TEST] · Scenario: повторный деплой — роль НЕ пересоздаётся, пароль не меняется
 # · Regression: идемпотентность хука (повторный запуск не ломает выданный credentials)
