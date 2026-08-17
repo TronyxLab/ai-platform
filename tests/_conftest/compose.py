@@ -661,8 +661,15 @@ def _guard_and_activate(request: pytest.FixtureRequest) -> bool:
 ## @complexity O(1) + 1 subprocess (dev_cert_generator)
 def _generate_dev_certs_smoke() -> None:
     """Generate dev certs for nginx smoke (live/${PLATFORM_DOMAIN}/ layout, 142 W8)."""
-    cert_root = Path(os.environ.get("NGINX_CERT_DIR", "/tmp/nginx-certs"))
-    domain = os.environ.get("PLATFORM_DOMAIN", "ai-platform.local")
+    # DevPlan 007 W2 (CI Linux): источник NGINX_CERT_DIR — get_smoke_env(), а НЕ os.environ.
+    # CI provisioner экспортирует NGINX_CERT_DIR=./dev-certs (platform-infra env_defaults) в job-env,
+    # но compose-инвокации (_run_docker_smoke) мержат {**os.environ, **get_smoke_env()} — статик
+    # /tmp/nginx-certs ПОБЕЖДАЕТ. Сертогенерация по os.environ писала в ./dev-certs, а nginx
+    # монтировал /tmp/nginx-certs → [emerg] cannot load certificate (nginx-test Exited 1).
+    # Локально (macOS) os.environ без NGINX_CERT_DIR → оба пути дефолт → совпадали (38 passed).
+    smoke_env = get_smoke_env()
+    cert_root = Path(smoke_env.get("NGINX_CERT_DIR", "/tmp/nginx-certs"))
+    domain = smoke_env.get("PLATFORM_DOMAIN", "ai-platform.local")
     live_dir = cert_root / "live" / domain
     try:
         live_dir.mkdir(parents=True, exist_ok=True)
