@@ -1,4 +1,3 @@
-<!-- GREP_SUMMARY: debt_trap, TRAP, DEBT, technical debt, TODO, FIXME, latent, observation, investigation -->
 # region MODULE_CONTRACT
 ## @purpose  Debt Trap (TRAP[DEBT]) — preserves observations of latent codebase problems that require separate investigation, preventing context loss across sessions
 ## @scope    *

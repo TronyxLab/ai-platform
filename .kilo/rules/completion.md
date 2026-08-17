@@ -1,4 +1,3 @@
-<!-- GREP_SUMMARY: completion, session, stop, platform override, post-completion, prime directive, no questions, protocol -->
 # region MODULE_CONTRACT
 ## @purpose  Centralized completion protocol for all roles: PRIME DIRECTIVE, platform override, legitimate exceptions
 ## @scope    architect, coder, qa, sysadmin

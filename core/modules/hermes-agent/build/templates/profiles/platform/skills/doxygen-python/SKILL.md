@@ -3,8 +3,6 @@ name: doxygen-python
 description: Python Doxygen Markup Template — Doxygen-style contract tags for Python modules with region markers and dummy function
 ---
 
-<!-- GREP_SUMMARY: doxygen, python, @modulecontract, @purpose, @scope, @invariants, @rationale, @io, @complexity, @modulemap, @usecases, Doxyfile aliases, region, dummy function -->
-
 # region MODULE_CONTRACT
 ## @purpose  SKILL: Python Doxygen Markup Template — Doxygen-style contract tags for Python modules with region markers and dummy function
 ## @scope    architect, coder, qa, docs

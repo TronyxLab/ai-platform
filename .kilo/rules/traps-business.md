@@ -1,4 +1,3 @@
-<!-- GREP_SUMMARY: business_trap, TRAP, BUSINESS, owner, priority, accent, requirement, decision -->
 # region MODULE_CONTRACT
 ## @purpose  Business Trap (TRAP[BUSINESS]) — captures explicit business priorities and owner accent decisions inline
 ## @scope    architect

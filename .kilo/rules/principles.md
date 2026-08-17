@@ -1,4 +1,3 @@
-<!-- GREP_SUMMARY: constitution, core, directives, safety, secrets, validation, errors, completeness -->
 # region MODULE_CONTRACT
 ## @purpose  Core constitution section — PRINCIPLES directives for all agents
 ## @scope    architect, coder, qa, sysadmin, docs

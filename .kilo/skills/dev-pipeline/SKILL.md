@@ -3,8 +3,6 @@ name: dev-pipeline
 description: Development Pipeline — full Brief → Architect → Coder → QA → Fix conveyor via subagents
 ---
 
-<!-- GREP_SUMMARY: pipeline, conveyor, orchestration, brief, architect, coder, qa, fix loop, subagents, delegation, waves -->
-
 # region MODULE_CONTRACT
 ## @purpose  SKILL: Development Pipeline — full Brief → Architect → Coder → QA → Fix conveyor via subagents
 ## @scope    architect, coder, qa, sysadmin

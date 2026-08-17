@@ -1,4 +1,3 @@
-<!-- GREP_SUMMARY: semantic, distillation, DevPlan, business requirements, code contracts, Doxygen, @purpose, @invariants, @rationale, @usecases, CoT, extraction, ephemeral -->
 # region MODULE_CONTRACT
 ## @purpose  Semantic Distillation from Plans to Code — extract business goals, constraints, architectural decisions from .md plans into Doxygen contracts (@purpose, @invariants, @rationale, @usecases)
 ## @scope    architect, coder, qa, docs

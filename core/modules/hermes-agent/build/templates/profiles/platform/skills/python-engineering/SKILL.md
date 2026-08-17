@@ -3,7 +3,6 @@ name: python-engineering
 description: Python Engineering Rules — modern Python 3.14+, Pyright strict, typed data models, correct async, explicit lifecycle, LDD-compliant structured logging
 ---
 
-<!-- GREP_SUMMARY: python, typing, Pyright, strict, dataclass, TypedDict, Protocol, async, asyncio, TaskGroup, timeout, mutability, imports, side-effect, lifecycle, context manager, exception, composition, singleton, generator, datetime, timezone, logging, LDD, pathlib, subprocess, tests, change discipline, execution model, abstraction, caller, use case, YAGNI -->
 <!-- @protect: Coder produces Python that ignores language discipline — untyped public APIs, blocking I/O in async, implicit state, silent exception swallowing. -->
 
 # region MODULE_CONTRACT

@@ -3,7 +3,6 @@ name: superposition
 description: Superposition Protocol — 5 decision modes (FULL, BINARY, GUIDED, ADVERSARIAL, AUTO-COLLAPSE) for multi-hypothesis exploration before committing to implementation
 ---
 
-<!-- GREP_SUMMARY: superposition, multi-hypothesis, decision, collapse, AUTO-COLLAPSE, FULL, BINARY, GUIDED, ADVERSARIAL, trade-off, ambiguity, alternatives, score, recommendation -->
 <!-- @protect: Agents will commit to first idea without exploring alternatives — autoregressive generation penalizes mid-stream correction. AUTO-COLLAPSE mode required for autonomous sessions. -->
 
 # region MODULE_CONTRACT

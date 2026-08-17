@@ -3,7 +3,6 @@ name: role-retrospective
 description: Role Retrospective — critical analysis of agent logic after an inefficient session to identify systemic problems in the role
 ---
 
-<!-- GREP_SUMMARY: role-retrospective, retrospective, self-critique, quality gate, meta-rule, confidence, bias, architect review -->
 <!-- @protect: After a long inefficient session, the agent does not analyze its own errors — lack of retrospective leads to repeating the same patterns. The skill is activated via skill tool for structured self-analysis. -->
 
 # region MODULE_CONTRACT

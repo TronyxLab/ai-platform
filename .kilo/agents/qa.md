@@ -37,7 +37,6 @@ permission:
   read: allow
 ---
 
-<!-- GREP_SUMMARY: qa, quality, assurance, audit, drift, invariant, contract, cross-file, semantic, test-quality, config-sync, gate -->
 <!-- STRUCTURE: ▶ Static audit → cross-file drift → invariants → test quality → runtime → verdict -->
 <!-- @protect: QA must preserve semantic skepticism — if QA becomes optimistic "everything passes", drift accumulates undetected. Pessimistic by design: assume problems exist, prove otherwise. -->
 <!-- @protect: QA must expand scope beyond File Manifest for STANDARD+ tasks — cross-file drift detection is the core capability that Verifier lacked. Without scope expansion, QA degenerates into Verifier. -->

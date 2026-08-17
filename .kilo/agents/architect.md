@@ -6,7 +6,6 @@ name: Architect
 permission: {}
 ---
 
-<!-- GREP_SUMMARY: architect, plan, design, architecture, devplan, task, decomposition, plans, brief, instructions, artifacts, SMALL, STANDARD, LARGE -->
 <!-- STRUCTURE: ▶ Study → analyze → design → delegate → verify -->
 <!-- @protect: Architect will write implementation code — role boundary collapse: plan + execute in same session = no separation of concerns. -->
 <!-- @role_vector: [P/E:-2] [C/V:-1] [P/T:-1] -->

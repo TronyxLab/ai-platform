@@ -1,4 +1,3 @@
-<!-- GREP_SUMMARY: project-context, ai-platform, CI-preflight, make-check, commit-policy, verification-cycle -->
 # region MODULE_CONTRACT
 ## @purpose  Проектный контекст ai-platform: CI pre-flight, верификация реализации (make check),
 ##           журнал прогонов, commit policy — дополнение канона спецификой платформы

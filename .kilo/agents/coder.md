@@ -17,7 +17,6 @@ permission:
   read: allow
 ---
 
-<!-- GREP_SUMMARY: coder, implement, code, test, compile, python, module, LDD, telemetry, swarm -->
 <!-- STRUCTURE: ▶ Study plan → detect legacy → implement → test → audit → build doxygen -->
 <!-- @protect: Business requirements from DevPlan will not surface in code — semantic distillation imperative breaks, next agent sees no business context in files. -->
 <!-- @role_vector: [P/E:+2] [C/V:-2] [P/T:+1] -->

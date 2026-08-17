@@ -1,4 +1,3 @@
-<!-- GREP_SUMMARY: fail-fast, validation, input validation, preconditions, early termination, IMP:10, semantic validity, REQUIRED_SECTIONS, assert, $DOCUMENT_PLAN, exit code -->
 # region MODULE_CONTRACT
 ## @purpose  Fail-Fast Principle — validate inputs/state before output at compiler, code, document, test, and runtime levels; immediate termination on unrecoverable errors
 ## @scope    architect, coder, qa, sysadmin, docs

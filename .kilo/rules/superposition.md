@@ -1,4 +1,3 @@
-<!-- GREP_SUMMARY: superposition, protocol, modes, full, binary, guided, adversarial, state, snapshot, diff, rollback -->
 # region MODULE_CONTRACT
 ## @purpose  SUPERPOSITION, STATE_MANAGEMENT
 ## @scope    architect, sysadmin

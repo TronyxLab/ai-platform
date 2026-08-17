@@ -3,8 +3,6 @@ name: data-etl
 description: Data Transformation Rules — pandas-first principle, vectorized operations, staging table pattern, pandas-vs-SQL trade-offs, Small Simple Blocks
 ---
 
-<!-- GREP_SUMMARY: ETL, pandas, data transformation, SQL, vectorized, groupby, merge, staging table, EditState, N+1, small simple blocks, astype category, iterrows -->
-
 # region MODULE_CONTRACT
 ## @purpose  SKILL: Data Transformation Rules — pandas-first principle, vectorized operations, staging table pattern, pandas-vs-SQL trade-offs, Small Simple Blocks
 ## @scope    architect, coder, qa, docs

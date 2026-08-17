@@ -3,7 +3,6 @@ name: drift-detection
 description: Drift Detection — Principal Engineer Pattern. Finds systemic degradation (drift) across 12 dimensions using expanded superposition protocol. Does NOT fix — only detects and reports.
 ---
 
-<!-- GREP_SUMMARY: drift-detection, drift, knowledge-duplication, logic-duplication, config-drift, contract-drift, test-drift, compose-drift, ci-drift, healthcheck-drift, env-drift, doc-drift, adr-drift, rule-drift, superposition, entropy, degradation, source-of-truth, regression-probability -->
 <!-- @protect: Agents naturally look for bugs (local, discrete, fixable). Drift is global, continuous, and accumulates silently. Without explicit drift-seeking instructions, agents miss systemic degradation — they find symptoms but not the disease. The superposition expansion prevents sequential tunnel vision by running all drift dimensions in parallel. -->
 
 # region MODULE_CONTRACT

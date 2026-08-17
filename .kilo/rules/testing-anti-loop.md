@@ -1,4 +1,3 @@
-<!-- GREP_SUMMARY: anti-loop, anti_loop, test_counter, escalation, conftest, pytest_sessionstart, pytest_sessionfinish, infinite retry, looping, pytest, caplog, checklist, batched, preflight, test-summary -->
 # region MODULE_CONTRACT
 ## @purpose  Anti-Loop Protocol — attempt tracking via .test_counter.json, escalation levels 1-5, caplog integration, batched verification (make preflight / make test-summary)
 ## @scope    architect, coder, qa, docs

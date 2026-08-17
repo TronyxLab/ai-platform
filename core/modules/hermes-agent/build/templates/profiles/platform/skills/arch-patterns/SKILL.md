@@ -3,8 +3,6 @@ name: arch-patterns
 description: AI-First Architectural Principles — lightweight DDD, simplified onion layers, modular boundaries, typed public contracts, plugin API, lazy import, interrupt handling
 ---
 
-<!-- GREP_SUMMARY: architecture, AI-first, DDD, onion, domain, application, infrastructure, module boundaries, contracts, plugin API, lazy import, interrupt handling -->
-
 # region MODULE_CONTRACT
 ## @purpose  SKILL: AI-First Architectural Principles — lightweight DDD, simplified onion layers, modular boundaries, typed public contracts, plugin API, lazy import, interrupt handling
 ## @scope    architect, coder, qa, docs

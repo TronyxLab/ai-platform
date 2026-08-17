@@ -3,8 +3,6 @@ name: doc-protocols
 description: Documentation Protocols for AI-Friendly Artifacts — $DOCUMENT_PLAN skeleton, $START/$END tags, $ARTIFACT_CONTRACT, DevPlan protocol, artifact lifecycle, unified severity and verdict, XML knowledge graph
 ---
 
-<!-- GREP_SUMMARY: documentation, protocols, $DOCUMENT_PLAN, $ARTIFACT_CONTRACT, DevPlan, XML knowledge graph, semantic context, draft code graph, acceptance criteria, $START, $END, artifact lifecycle, severity, verdict -->
-
 # region MODULE_CONTRACT
 ## @purpose  SKILL: Documentation Protocols for AI-Friendly Artifacts — $DOCUMENT_PLAN skeleton, $START/$END tags, $ARTIFACT_CONTRACT, DevPlan protocol, artifact lifecycle, unified severity and verdict, XML knowledge graph
 ## @scope    architect, coder, qa, docs

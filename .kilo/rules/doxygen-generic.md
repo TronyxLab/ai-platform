@@ -1,4 +1,3 @@
-<!-- GREP_SUMMARY: doxygen, inline documentation, module contract, function contract, GREP_SUMMARY, STRUCTURE, region markers, LDD, input, output, invariants, rationale, cross-language -->
 # region MODULE_CONTRACT
 ## @purpose  Universal Inline Documentation Rules — module/function/class contracts, GREP_SUMMARY keyword line, STRUCTURE block diagram, paired region markers, LDD logging, bug fix context
 ## @scope    architect, coder, qa, docs

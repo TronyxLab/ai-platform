@@ -1,4 +1,3 @@
-<!-- GREP_SUMMARY: bug_trap, TRAP, BUG, bug fix, swarm, looping, rationale, symptom, root cause, fix, prevention -->
 # region MODULE_CONTRACT
 ## @purpose  Bug Trap (TRAP[BUG]) — captures fix rationale with Symptom/Root/Fix/Prevention format to prevent agent swarm from repeating the same bug
 ## @scope    architect, coder, qa

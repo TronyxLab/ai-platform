@@ -1,4 +1,3 @@
-<!-- GREP_SUMMARY: artifact, registry, path, plans, brief, devplan, verification, status, debt, SMALL, STANDARD, LARGE, naming, grammar, journal, NNN, slug, NN -->
 # region MODULE_CONTRACT
 ## @purpose  Centralized artifact registry with journal-model naming grammar for all management artifacts
 ## @scope    architect, coder, qa, sysadmin

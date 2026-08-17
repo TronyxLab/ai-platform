@@ -3,8 +3,6 @@ name: doxygen-typescript
 description: TypeScript/JSDoc Semantic Markup Adaptation — JSDoc-style Doxygen contracts with region markers, GREP_SUMMARY, and LDD console.log adaptation
 ---
 
-<!-- GREP_SUMMARY: doxygen, typescript, JSDoc, @modulecontract, @purpose, @invariants, @rationale, @io, @complexity, region, LDD, console.log, FUNC, METHOD, CLASS -->
-
 # region MODULE_CONTRACT
 ## @purpose  SKILL: TypeScript/JSDoc Semantic Markup Adaptation — JSDoc-style Doxygen contracts with region markers, GREP_SUMMARY, and LDD console.log adaptation
 ## @scope    architect, coder, qa, docs

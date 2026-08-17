@@ -1,183 +1,183 @@
 canon_version: 0.7.0
-platform_version: 26f72d2f4f43073752f67ac4e07327366821d98a
+platform_version: 3932b96cc630e2f885feae09d1a5c32df33556cf
 files:
 - path: .kilo/agents/architect.md
-  sha256: 01f8197949f0aa34cb180aff44883f237874230ef295fb2a581ae45d6fb474c6
+  sha256: 2fb8b97f1a0acfdc15a0a1dc1658073422807f727881bcd298f692cc5efb8b8f
   source: canon
 - path: .kilo/agents/coder.md
-  sha256: 3bfcb9a24c44e0689f036fc6e123352a0b3b6b1b609b81a3ad8617ef82b9a557
+  sha256: 946dd7a21291a84ee6477a34b4719bea9a03520d51a340c9cfd8f38dd54716ce
   source: canon
 - path: .kilo/agents/explore.md
   sha256: 2c9aad2e20b2be1c4259426e94811fb0bfaa5e51c918779eadaa73421329d555
   source: project
 - path: .kilo/agents/qa.md
-  sha256: 9693a8fda28bf14d16e85e1ca5853a40a5323f6f64c3384544bcf7e7eb0c211f
+  sha256: f7ba4bbfdd3da8ecc4af3640978ddf673d15338def0a6934599c8a4d6ab0b2e5
   source: canon
 - path: .kilo/agents/scanner.md
   sha256: 4b8db5e4b65a9c8ba028d69935c2f0005e09f1929af2e4071db579504b770d14
   source: project
 - path: .kilo/agents/sysadmin.md
-  sha256: 698f4fea9c9bbf930a968e01430499da66baffe1afb09995dab791ea1f6ad8ce
+  sha256: e5adc4b530c0bcc7d5ea2a6701c68be48e90d51e6f4a8ba08cef4240aac64c86
   source: canon
 - path: .kilo/rules/_project.md
-  sha256: 4fbee2291135f4c1ea7fab1d964b40ebfdcd67d9454f603012838f1ac5d311af
+  sha256: e283f901e587218b407b158ce6cbdb7ad5b52d240f135ca51e66c680ef70b02e
   source: project
 - path: .kilo/rules/artifact-registry.md
-  sha256: cce78823f55cec7adebdb31eede654263d0f09d27051e5694cc71b3b4eb005a1
+  sha256: 89b8ee6f304a3708ae1bbd0210d701d3a01c57fb5474bca4813e715c9e0e13b4
   source: canon
 - path: .kilo/rules/bash-output-to-tmp.md
-  sha256: e1a54511ddd9a28a6336b2e8c0a2541fa337f31e204a93595e9309763bf46468
+  sha256: d6c56c10b1c94dc1a024edd27e05c80aad56caf5fe53d3085c19bad042f9f881
   source: canon
 - path: .kilo/rules/communication.md
-  sha256: 3e42aea74bba3ea1a0a9e9a6edc05f7333fe64237da4253c1c63d9f9d9148794
+  sha256: 5831581f5e4ea21108ddf367dc3905aa1aa3fb75b664ba42bc23230896792265
   source: canon
 - path: .kilo/rules/completion.md
-  sha256: 0fcde160a330fe747d60780337bd65415ff5960fb2b1dd545c95a545d81db949
+  sha256: 51a722bc6788a6b3491feb09a2a06d11f0178dd10b541221c3a829050e6e5b99
   source: canon
 - path: .kilo/rules/constitution.md
-  sha256: 2b96b30fd6042d7671efdbfca9adaeb74549a1448e1ea3516686ff4e9e5face2
+  sha256: de9ef667467a50eb1626fa35b0e47f4d665bbda40142763230dce903605643f6
   source: canon
 - path: .kilo/rules/doxygen-generic.md
-  sha256: 40361e82f3bb7778983af020343056e3710e5ecf8b463d9d032ebff902921f6d
+  sha256: b4632f7306d766c33e554e72def424282df8f3cebffebd52664bfc5616cce1a7
   source: canon
 - path: .kilo/rules/fail-fast.md
-  sha256: 647e925477330e47a9e6a567153eed0676e7084cf14546ef3f8ae21ff3ec075b
+  sha256: 3a6ec571559a4292545e6ebbc75890cc97d7c572d891394af789cce257d165de
   source: canon
 - path: .kilo/rules/markup.md
-  sha256: 466d6ede2f50ab5abede465c998ecd1800b3844b5276787c8da7939b85d4d69c
+  sha256: abb097008c6a129903da827404d03ba3ba024796867a7e0c6e82fa730d875b29
   source: canon
 - path: .kilo/rules/mini-diagrams.md
-  sha256: a0eddc63b8a4a70fc91e11e52e247444545a8886c7c341d118d2d413e2d4b83b
+  sha256: 2210b7fa5dbc76b1b2a9a92b918b8de775fa09438fb3ce8fdca35f4bd762a038
   source: canon
 - path: .kilo/rules/principles.md
-  sha256: e42840d5a769a9684e495c56bf4987d027622e7fea9efe53fdeb53b2e07bccad
+  sha256: 32a824ccffc5f19c26e31a282ec65fe521c7cf723ca5fcfe32d92c4e1e7a94ac
   source: canon
 - path: .kilo/rules/search-escalation.md
-  sha256: 10821872d5810c6509218da79a8f5c6a8dffd6fbfb0c60ffab6ac7ef6ae554e3
+  sha256: ef5cc3cda7c897c1e0459d1ac0a8fadfda1f964687aea64242c535e786b9f273
   source: canon
 - path: .kilo/rules/semantic-distillation.md
-  sha256: 512f04ca02461c263e56185b46f86e63235d23f1cddc34a4dc9f0ea584f996d0
+  sha256: 8745db7ac03fc586c91a613f5e9e50bb6189964bd85ec0274d8dea61429a4dd9
   source: canon
 - path: .kilo/rules/superposition.md
-  sha256: 8f816dc4c315e56ecda5a03f94fe42b7e3039bf5d344529061cdd5dd0d387bb4
+  sha256: bd801b08a475b8c8c28eca20f4ad509a8b1e6c8e3b7aaef86e8d386a93d8484d
   source: canon
 - path: .kilo/rules/testing-anti-loop.md
-  sha256: 43ed0a3086a89b957a13432c9d42ea91f31e979ff4537d0e11632d1b4662127f
+  sha256: 0b0012f1782d5adb5580d77ac5e427764ea6f0b70602ec4f19df8bf1b999e8ab
   source: canon
 - path: .kilo/rules/testing-ldd-telemetry.md
-  sha256: a24072ae7d774373431d8a601c64a32b0a82388c1b69ac82ba40ea3d0557f8df
+  sha256: 1d5ba4e6942a1735f433faef8baa5958ff6cab89c7d39a08c93bc099c41a1ac6
   source: canon
 - path: .kilo/rules/testing-pytest-infra.md
-  sha256: 32ade05f0420c96cf76760b1683e9d0f3c2c2813ee06b8821cef0b43b6ad086d
+  sha256: 9566e97294493dfd11f6d733d3036e4f8051ee034294738b0a028522d30c9351
   source: canon
 - path: .kilo/rules/testing-test-honesty.md
-  sha256: 9231644e8e7078d4cd627912c5839ca1e6f902af1b6bcf8220758119f214e802
+  sha256: 41750502836e96abb042fc73fe9b8477ac297884ae16e104bfa5c8cf1e304ade
   source: canon
 - path: .kilo/rules/traps-bug.md
-  sha256: b1a00b4d3e6c2263f25a174f9233d206bbec74ce29d668ac61332732c6f5113f
+  sha256: b2008fd3b7ec30316c41c82d41fbdbd6824cd6cdc0a65035e87ef826ce0be174
   source: canon
 - path: .kilo/rules/traps-business.md
-  sha256: 624fa84b6e854f55ed26a7792c5e72f85d7701a7f693a575cfd144104c4097b6
+  sha256: 39ac6c15923c0e01dd6d4bf53e624f89d1a4e401fea4bcb74b1f2b2218fff9a1
   source: canon
 - path: .kilo/rules/traps-debt.md
-  sha256: d3d2f5bbed2dff542548683e54e696412ceb8d887bb160307a9e9c0209830172
+  sha256: e500e8502379d1f907df85834b3725fce9b81031e7b79142edb0e2f2cb012933
   source: canon
 - path: .kilo/rules/traps-decision.md
-  sha256: fa89c6c679065534d214a310eca30c7086d22ffd2928fa4e5ddf14a058bf4e01
+  sha256: f6ee1914b85f423448d655c984cbafaa8cddd9619f909089ab38b39d054efba6
   source: canon
 - path: .kilo/rules/traps-incident.md
-  sha256: 2f8ae4c2d818eb9dcd88aebd8780e8966f84e4cb0e792cfc0e3160eff2acdf86
+  sha256: 917490ecdf2e2f1aa5055c8d3c0be269ea167c341f33996d0650b79341b451eb
   source: canon
 - path: .kilo/rules/traps-perf.md
-  sha256: 548992c06cdf5bc60977cb343559523d4b4790f9e1318507758b789897f66377
+  sha256: 403d3fe3d1584de2f38f849fc23571700e251ad04450c04aca0215c7d3e42db3
   source: canon
 - path: .kilo/skills/arch-forensics/SKILL.md
-  sha256: e527bc7b0f27fbe5ca255de0b87038317fe2b57c4ba79792a25ab0bdfd22edcb
+  sha256: 04d3dcb762c73ca231ca3c63d2008cb3d19c13303a190cfcc45395584d1315db
   source: canon
 - path: .kilo/skills/arch-patterns/SKILL.md
-  sha256: ef84f5ff75d230fab690affd600bc6cdc35c250aad7cda81ea2ac5d5d21a3639
+  sha256: 90e444eed48130716f24a6c830c6f453532f17aa34cae06fe212bb53f4b3344c
   source: canon
 - path: .kilo/skills/data-etl/SKILL.md
-  sha256: 3379447097feb0c73adb0ca4d22321b7a6b96cb733af191926123da0afc2b104
+  sha256: c1558ffc02ca6221956f3f7e332eb33318a231009b61a866e10b250d0504a80e
   source: canon
 - path: .kilo/skills/dev-pipeline/SKILL.md
-  sha256: 4076d980e3486a0a882c800ab2c30afa7a83866072856ae1972cec63662071a6
+  sha256: d1dd0668e1c1da04ea4958709591dac1d949170f9146cd593d42efebc06b017f
   source: canon
 - path: .kilo/skills/doc-protocols/SKILL.md
-  sha256: 01486cda081c2f8cfc4bbaf360ae875bf6ee00605e2695ca4452f0ed10750f7b
+  sha256: c1a6372785075e24d92b88fc4b0e9f7794f290892a58adef73d652b01e87469d
   source: canon
 - path: .kilo/skills/doxygen-python/SKILL.md
-  sha256: a7a0c087c66270d0d974924f0715041b440ddb76e187886b9700627a24babe95
+  sha256: baeb5ab80726954ee1b225fa1b136affe77a6fd47d65e8a07f7e7905ed02a9ee
   source: canon
 - path: .kilo/skills/doxygen-typescript/SKILL.md
-  sha256: 4c94231f33ec38a884d068ecb0146d29bb16edb77e133489c4ec70b8a76d138f
+  sha256: 7fb9ec254a382ffcda2eedb08876405e7860ae34aecd604c5a5536c31a9b8a04
   source: canon
 - path: .kilo/skills/drift-detection/SKILL.md
-  sha256: dc1638224c9b30d1d8c9816ad73c13741dfebd1c93307b529b075ec81cedf1e9
+  sha256: b9fe2a26770dc08df38566eb553cc0bbeb8b2d4a5c1b67eca26f0d78e238e62c
   source: canon
 - path: .kilo/skills/python-engineering/SKILL.md
-  sha256: 4c5cddf09c1ac1ad7853f614dbbbbe835c2f03dda5a7f627a35da9a027b63154
+  sha256: bfb25c6888537758df4d201a2ae2c8403d69c9c0ed530cddb52b432c0d0b4cea
   source: canon
 - path: .kilo/skills/react-engineering/SKILL.md
-  sha256: 19db0c0357dc7979c1f57b10fd41e35e15d9946fdb3992c0a3dd02df9d493222
+  sha256: 3936187aef1b8be4bd5060d2ad7c1382dc6ad41a92b19fbc904474aea9df0821
   source: canon
 - path: .kilo/skills/role-retrospective/SKILL.md
-  sha256: c9a5f30e68d115ea02b0d28e0bb09dfc36a64943feffa913197e6516a5862620
+  sha256: 02cfe5257eff5f5dd7287359af6909ffb042a442474a0310bfc0fcfb08e0f19c
   source: canon
 - path: .kilo/skills/superposition/SKILL.md
-  sha256: 974b57f2fca8e37222e7b033997329d57493cd2bdd6c473b5c96a9203cb7795a
+  sha256: 0ad867fa32ca8259f2c63e2b0d30ae87d7021bd5f00e0bba4f31eb61a6ab55b3
   source: canon
 - path: .kilo/skills/test-auditor/SKILL.md
-  sha256: caa1297ef9ec061e7ceb9899dbf638d780786bbdb45f31d3ed422bc1ea117611
+  sha256: 0622e57362119a4bb8ae1c404393018e6a09220ee4eb51c3f619f0e0021b4374
   source: canon
 - path: core/modules/hermes-agent/build/templates/profiles/platform/skills/arch-forensics/SKILL.md
-  sha256: e527bc7b0f27fbe5ca255de0b87038317fe2b57c4ba79792a25ab0bdfd22edcb
+  sha256: 04d3dcb762c73ca231ca3c63d2008cb3d19c13303a190cfcc45395584d1315db
   source: hermes
 - path: core/modules/hermes-agent/build/templates/profiles/platform/skills/arch-patterns/SKILL.md
-  sha256: ef84f5ff75d230fab690affd600bc6cdc35c250aad7cda81ea2ac5d5d21a3639
+  sha256: 90e444eed48130716f24a6c830c6f453532f17aa34cae06fe212bb53f4b3344c
   source: hermes
 - path: core/modules/hermes-agent/build/templates/profiles/platform/skills/data-etl/SKILL.md
-  sha256: 3379447097feb0c73adb0ca4d22321b7a6b96cb733af191926123da0afc2b104
+  sha256: c1558ffc02ca6221956f3f7e332eb33318a231009b61a866e10b250d0504a80e
   source: hermes
 - path: core/modules/hermes-agent/build/templates/profiles/platform/skills/dev-pipeline/SKILL.md
-  sha256: 4076d980e3486a0a882c800ab2c30afa7a83866072856ae1972cec63662071a6
+  sha256: d1dd0668e1c1da04ea4958709591dac1d949170f9146cd593d42efebc06b017f
   source: hermes
 - path: core/modules/hermes-agent/build/templates/profiles/platform/skills/doc-protocols/SKILL.md
-  sha256: 01486cda081c2f8cfc4bbaf360ae875bf6ee00605e2695ca4452f0ed10750f7b
+  sha256: c1a6372785075e24d92b88fc4b0e9f7794f290892a58adef73d652b01e87469d
   source: hermes
 - path: core/modules/hermes-agent/build/templates/profiles/platform/skills/doxygen-python/SKILL.md
-  sha256: a7a0c087c66270d0d974924f0715041b440ddb76e187886b9700627a24babe95
+  sha256: baeb5ab80726954ee1b225fa1b136affe77a6fd47d65e8a07f7e7905ed02a9ee
   source: hermes
 - path: core/modules/hermes-agent/build/templates/profiles/platform/skills/doxygen-typescript/SKILL.md
-  sha256: 4c94231f33ec38a884d068ecb0146d29bb16edb77e133489c4ec70b8a76d138f
+  sha256: 7fb9ec254a382ffcda2eedb08876405e7860ae34aecd604c5a5536c31a9b8a04
   source: hermes
 - path: core/modules/hermes-agent/build/templates/profiles/platform/skills/drift-detection/SKILL.md
-  sha256: dc1638224c9b30d1d8c9816ad73c13741dfebd1c93307b529b075ec81cedf1e9
+  sha256: b9fe2a26770dc08df38566eb553cc0bbeb8b2d4a5c1b67eca26f0d78e238e62c
   source: hermes
 - path: core/modules/hermes-agent/build/templates/profiles/platform/skills/python-engineering/SKILL.md
-  sha256: 4c5cddf09c1ac1ad7853f614dbbbbe835c2f03dda5a7f627a35da9a027b63154
+  sha256: bfb25c6888537758df4d201a2ae2c8403d69c9c0ed530cddb52b432c0d0b4cea
   source: hermes
 - path: core/modules/hermes-agent/build/templates/profiles/platform/skills/react-engineering/SKILL.md
-  sha256: 19db0c0357dc7979c1f57b10fd41e35e15d9946fdb3992c0a3dd02df9d493222
+  sha256: 3936187aef1b8be4bd5060d2ad7c1382dc6ad41a92b19fbc904474aea9df0821
   source: hermes
 - path: core/modules/hermes-agent/build/templates/profiles/platform/skills/role-architect/SKILL.md
-  sha256: 6f8cab3067c64d9f274105dc0dcbaf6fc8a618889a89dde5bbded9d98ad6aaa6
+  sha256: 7f3957e11488d4d37b3e0a591d9367f2ceab158544a4c9ad3024278f9d27062e
   source: hermes
 - path: core/modules/hermes-agent/build/templates/profiles/platform/skills/role-coder/SKILL.md
-  sha256: f3e4c4bc16f0c96f53cd837309a236305fc00db67bbb5284a4ed6808217262e5
+  sha256: 7f3421a8796c476bd835cc8aaed3dec643af3f39352df5780af7cae00fa3ea20
   source: hermes
 - path: core/modules/hermes-agent/build/templates/profiles/platform/skills/role-qa/SKILL.md
-  sha256: 8e8adcf44c0281318bc21045508108f76f5000b92b9ffb0baffaabdc195734bb
+  sha256: dce51f37083e5792f267700540f2587a5f66e020a7fe658f277a9471303e14b5
   source: hermes
 - path: core/modules/hermes-agent/build/templates/profiles/platform/skills/role-retrospective/SKILL.md
-  sha256: c9a5f30e68d115ea02b0d28e0bb09dfc36a64943feffa913197e6516a5862620
+  sha256: 02cfe5257eff5f5dd7287359af6909ffb042a442474a0310bfc0fcfb08e0f19c
   source: hermes
 - path: core/modules/hermes-agent/build/templates/profiles/platform/skills/role-sysadmin/SKILL.md
-  sha256: ecff72eda97ce8b25cd0a69b3efe4e5802cbb15feb55ab9fb431cddd2e914d76
+  sha256: 9be4a8ebef9a52da149842b17938e9822e665fd6d1308fe9ed962649cd20c1f9
   source: hermes
 - path: core/modules/hermes-agent/build/templates/profiles/platform/skills/superposition/SKILL.md
-  sha256: 974b57f2fca8e37222e7b033997329d57493cd2bdd6c473b5c96a9203cb7795a
+  sha256: 0ad867fa32ca8259f2c63e2b0d30ae87d7021bd5f00e0bba4f31eb61a6ab55b3
   source: hermes
 - path: core/modules/hermes-agent/build/templates/profiles/platform/skills/test-auditor/SKILL.md
-  sha256: caa1297ef9ec061e7ceb9899dbf638d780786bbdb45f31d3ed422bc1ea117611
+  sha256: 0622e57362119a4bb8ae1c404393018e6a09220ee4eb51c3f619f0e0021b4374
   source: hermes

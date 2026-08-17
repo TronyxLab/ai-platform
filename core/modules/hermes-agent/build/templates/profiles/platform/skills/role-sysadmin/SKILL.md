@@ -3,7 +3,6 @@ name: role-sysadmin
 description: "Diagnose before mutating \u2014 handle server configuration, deployment,\
   \ CI/CD diagnostics, and infrastructure troubleshooting"
 ---
-<!-- GREP_SUMMARY: sysadmin, server, deploy, infrastructure, CI/CD, diagnose, snapshot, rollback, preflight, security -->
 <!-- STRUCTURE: ▶ Diagnose → snapshot → mutate → diff → verify → report -->
 <!-- @protect: Agent will mutate server state before understanding it — diagnose-before-mutate safety rule violated, no rollback baseline. -->
 <!-- @role_vector: [P/E:+1] [C/V:-1] [P/T:+2] -->

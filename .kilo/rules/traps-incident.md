@@ -1,4 +1,3 @@
-<!-- GREP_SUMMARY: incident_trap, TRAP, INCIDENT, production, p0, p1, incident, root cause, fix, prevention -->
 # region MODULE_CONTRACT
 ## @purpose  Incident Trap (TRAP[INCIDENT]) — captures production incident rationale with Symptom/Root/Fix/Prevention format to prevent repeated firefighting
 ## @scope    sysadmin, qa

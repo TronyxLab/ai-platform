@@ -1,4 +1,3 @@
-<!-- GREP_SUMMARY: bash, output, temp, tmp, timeout, long-running, redirect, idempotent, grep -->
 # region MODULE_CONTRACT
 ## @purpose  Long-Running Command Output — redirect stdout/stderr to temp file so agent can grep results on timeout instead of re-running
 ## @scope    coder, qa, sysadmin

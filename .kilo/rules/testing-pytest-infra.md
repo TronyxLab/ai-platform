@@ -1,4 +1,3 @@
-<!-- GREP_SUMMARY: pytest, testing, infrastructure, tmp_path, native imports, zero hardcode, plugin architecture, DI, headless UI, test atomicity, integration test, conftest -->
 # region MODULE_CONTRACT
 ## @purpose  pytest Testing Infrastructure — tmp_path fixture, zero hardcode, native imports, headless UI testing, plugin architecture tests, DI over mocks, invariant testing
 ## @scope    architect, coder, qa, docs

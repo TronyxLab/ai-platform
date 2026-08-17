@@ -1,4 +1,3 @@
-<!-- GREP_SUMMARY: test_honesty, pass_test, unfalsifiable, stale_skip, anti_survivorship, negative_test, gate_test -->
 # region MODULE_CONTRACT
 ## @purpose  Test Honesty Rules — prevents degradation of test suites into unfalsifiable pass-collections
 ## @scope    coder, qa

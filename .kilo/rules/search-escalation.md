@@ -1,4 +1,3 @@
-<!-- GREP_SUMMARY: search, escalation, websearch, webfetch, internet, lookup, unknown, protocol -->
 # region MODULE_CONTRACT
 ## @purpose  Meta-rules for web search: when to consider it, when to skip it, and that the user has the final say. Injected into all roles.
 ## @scope    architect, coder, qa, sysadmin

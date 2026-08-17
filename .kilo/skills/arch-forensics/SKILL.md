@@ -3,7 +3,6 @@ name: arch-forensics
 description: Architecture Forensics — Staff Software Architect Pattern. Recover objective system architecture without fixes or refactoring. 7 core tasks + 9 superposition dimensions (S7–S15) for multi-hypothesis architectural analysis.
 ---
 
-<!-- GREP_SUMMARY: arch-forensics, architecture-forensics, criminalist, architecture-analysis, system-boundaries, coupling-matrix, ownership, blast-radius, risk-map, invariants, hidden-dependencies, change-impact, fragility-map, superposition-collapse -->
 <!-- @protect: Agents naturally want to fix what they find. This skill exists to resist that — the architect-criminalist does NOT fix, does NOT refactor, does NOT suggest code. Only objective model. Without explicit protection, agents will optimize locally (fix a bug) instead of mapping globally (understand the system). -->
 
 # region MODULE_CONTRACT

@@ -3,7 +3,6 @@ name: react-engineering
 description: React Engineering Rules — function components and hooks, local and derived state, synchronization effects, stable identity, race-safe async, typed boundaries
 ---
 
-<!-- GREP_SUMMARY: react, reactjs, component, function component, hooks, useEffect, useState, derived state, server state, local state, context, props, key, identity, useMemo, useCallback, memo, async, race, stale, cleanup, exhaustive-deps, warnings, TypeScript, discriminated union, any, casts, optional chaining, fallback, uncertainty, accessibility, ARIA, composition, god component, prop drilling, state management, consumers, shared component, single source of truth, change discipline -->
 <!-- @protect: Coder produces React that ignores React discipline — legacy class components, duplicated server state in local state, speculative memoization, uncontrolled side effects during render, untyped API data propagating through the component tree. -->
 
 # region MODULE_CONTRACT

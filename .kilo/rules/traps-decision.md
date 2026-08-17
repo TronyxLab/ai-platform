@@ -1,4 +1,3 @@
-<!-- GREP_SUMMARY: decision_trap, TRAP, DECISION, rejected, alternative, rationale, debate, adr -->
 # region MODULE_CONTRACT
 ## @purpose  Decision Trap (TRAP[DECISION]) — captures rejected alternatives and their rationale to prevent debate loops
 ## @scope    architect,coder,sysadmin

@@ -1,4 +1,3 @@
-<!-- GREP_SUMMARY: perf_trap, TRAP, PERF, performance, latency, throughput, N+1, bottleneck, mitigation -->
 # region MODULE_CONTRACT
 ## @purpose  Performance Trap (TRAP[PERF]) — captures performance analysis results and mitigation strategies inline
 ## @scope    sysadmin,coder

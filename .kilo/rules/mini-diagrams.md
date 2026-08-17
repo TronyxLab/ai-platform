@@ -1,4 +1,3 @@
-<!-- GREP_SUMMARY: mini diagram, block diagram, one-line, algorithm, visualization, Unicode, symbols, polysemy, STRUCTURE, init, loop, return, dataframe -->
 # region MODULE_CONTRACT
 ## @purpose  Mini Block Diagrams — creative one-line algorithm visualization using low-polysemy Unicode symbols (▶ ◇ ⊕ ∑ ⟦⟧ ⚡ ∋ ⎋) as structural graphics
 ## @scope    architect, coder, qa, docs

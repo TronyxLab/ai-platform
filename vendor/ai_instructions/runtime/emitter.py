@@ -1,5 +1,5 @@
 # GREP_SUMMARY: emitter, emit, stamp, never-overwrite, hermes, role-skill, project-mode, template-filter, cleanup-orphans, manage-config, kilo.json
-# STRUCTURE: ┌effective map┐ → ○ filter (project mode) → ○ plan dest paths (kilo + hermes) → ○ write verbatim+stamp ┌skip manual┐ → ○ cleanup orphans → ○ manage_config → ⎋ list[Path]
+# STRUCTURE: ┌effective map┐ → ○ filter (project mode) → ○ plan dest paths (kilo + hermes) → ○ strip GREP_SUMMARY → ○ write stripped+stamp ┌skip manual┐ → ○ cleanup orphans → ○ manage_config → ⎋ list[Path]
 # region MODULE_CONTRACT
 ## @purpose  Emit the effective entry map into .kilo/ (and hermes profile skills),
 ##   stamping every output and never overwriting unstamped manual files
@@ -13,6 +13,9 @@
 ##   - role-<id> hermes skills are generated ONLY for canon roles with roles_as_skills,
 ##     and NEVER for roles with frontmatter mode: subagent
 ##   - Cleanup deletes stamped orphans only; unstamped files are never touched
+##   - GREP_SUMMARY HTML-комментарии (<!-- GREP_SUMMARY: … -->) вырезаются из эмиссии
+##     (платформенный патч — см. TRAP[DECISION] у _strip_grep_summary): .md-инструкции
+##     не несут этого маркера, чек-система платформы его в .md не требует
 ## @rationale The stamp regex is the compiler's ownership marker: stamped files are
 ##   compiler-managed and safe to overwrite/delete, unstamped files are user-owned
 # endregion MODULE_CONTRACT
@@ -31,6 +34,20 @@ from ai_instructions.runtime.walker import Entry
 logger = logging.getLogger(__name__)
 
 STAMP_RE = re.compile(r"<!-- ai-instructions:\d+\.\d+\.\d+ -->")
+
+# ⚠️ TRAP[DECISION] · 2026-08-17 · — · Платформенный патч вендоренного эмиттера: strip
+# `<!-- GREP_SUMMARY: … -->` из эмитируемого контента · Rejected: полагаться на чистый канон
+# (канон v0.7.0 несёт GREP_SUMMARY в markdown; upstream-фикс — в Tronyx161/AI-instructions) ·
+# Reason: GREP_SUMMARY в .md не требуется ни одним чеком платформы (grep-summary — только
+# кодовые расширения; doc-headers исключает .kilo/ и .ai/); verbatim-эмиссия тащила мусор
+# в .kilo/skills и hermes platform-профиль · Rev: канон очищен upstream → снять патч
+# (вернуть verbatim-эмиссию) и удалить _strip_grep_summary
+_GREP_SUMMARY_LINE_RE = re.compile(r"^[ \t]*<!--[ \t]*GREP_SUMMARY:.*?-->\s*\n?", re.MULTILINE)
+
+
+def _strip_grep_summary(content: str) -> str:
+    """Remove own-line `<!-- GREP_SUMMARY: ... -->` comments from emitted content."""
+    return _GREP_SUMMARY_LINE_RE.sub("", content)
 
 
 class EmitError(Exception):
@@ -79,8 +96,8 @@ def _filter_entries(
         if template == "backend":
             if has_ls and d.get("language") != "python":
                 continue
-        elif template == "frontend" and has_ls and not (
-            d.get("stack") == "react" and d.get("language") == "typescript"
+        elif (
+            template == "frontend" and has_ls and not (d.get("stack") == "react" and d.get("language") == "typescript")
         ):
             continue
         out[eid] = entry
@@ -115,14 +132,11 @@ def output_paths_for_entry(
         dests.append(kilo / "skills" / f"playbook-{entry.id}" / entry.source_path.name)
     elif kind == "policies":
         dests.append(kilo / "policies" / f"{entry.id}.md")
-    if (
-        hermes_roles
-        and kind == "roles"
-        and entry.is_canon
-        and entry.frontmatter.get("mode") != "subagent"
-    ):
+    if hermes_roles and kind == "roles" and entry.is_canon and entry.frontmatter.get("mode") != "subagent":
         dests.append(hermes_skills_root(config, consumer_root) / f"role-{entry.id}" / "SKILL.md")
     return dests
+
+
 # endregion FUNC_output_paths_for_entry
 
 
@@ -152,6 +166,8 @@ def plan_outputs(
         ):
             plan[dst] = entry
     return plan
+
+
 # endregion FUNC_plan_outputs
 
 
@@ -176,8 +192,8 @@ def _role_skill_content(entry: Entry) -> str:
 
 def _content_for(entry: Entry, dst: Path, config: Config, consumer_root: Path, version: str) -> str:
     if entry.kind == "roles" and _is_under(dst, hermes_skills_root(config, consumer_root)):
-        return _role_skill_content(entry) + _stamp(version)
-    return entry.content + _stamp(version)
+        return _strip_grep_summary(_role_skill_content(entry)) + _stamp(version)
+    return _strip_grep_summary(entry.content) + _stamp(version)
 
 
 def _write_with_stamp(path: Path, content: str) -> bool:
@@ -237,6 +253,8 @@ def emit(
     if project_mode:
         manage_config(consumer_root)
     return written
+
+
 # endregion FUNC_emit
 
 
@@ -284,6 +302,8 @@ def cleanup_orphans(
 
     logger.info("[IMP:9][EMIT][CLEAN] deleted %d orphans", len(deleted))
     return deleted
+
+
 # endregion FUNC_cleanup_orphans
 
 
@@ -326,4 +346,6 @@ def manage_config(project_dir: Path) -> bool:
     _write_json(cfg_path, {"instructions": [instructions_glob]})
     logger.info("[IMP:9][CONFIG][MANAGED] created %s", cfg_path)
     return True
+
+
 # endregion FUNC_manage_config

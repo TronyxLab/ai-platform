@@ -1,4 +1,3 @@
-<!-- GREP_SUMMARY: LDD, telemetry, caplog, IMP:7, IMP:8, IMP:9, IMP:10, Anti-Illusion, trajectory, Semantic Trace Verification, log filtering, conftest, false-positive -->
 # region MODULE_CONTRACT
 ## @purpose  LDD Telemetry in Tests — caplog trajectory output, IMP:7-10 log filtering, Anti-Illusion Rule enforcement, Semantic Trace Verification
 ## @scope    architect, coder, qa, docs

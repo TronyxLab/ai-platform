@@ -3,7 +3,6 @@ name: test-auditor
 description: Test Suite Auditor — аудит набора тестов на деградацию, дубли, хрупкость, мёртвые тесты, производительность. Plan выполняет статический анализ, QA — рантайм-валидацию через делегирование.
 ---
 
-<!-- GREP_SUMMARY: test-auditor, audit, test duplication, fragile tests, dead tests, redundancy, missing checks, test architecture, D1, D2, D3, D4, D5, D6, D10, Plan, QA, delegation, static analysis, runtime validation -->
 <!-- @protect: Plan repeats QA test-quality checks already covered by QA Phase 1 step 5 and Phase 2 step 2, producing redundant findings. The skill prevents audit-dimension overlap via explicit "What QA already covers" section. -->
 
 # region MODULE_CONTRACT
