@@ -781,7 +781,7 @@ def _pre_cleanup(
                     str(_COMPOSE_DOWN_TIMEOUT),
                     "--remove-orphans",
                 ],
-                15,
+                timeout=15,
             ): cleanup_path
             for cleanup_path, test_override in cleanup_pairs
         }
