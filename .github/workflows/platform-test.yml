@@ -312,6 +312,12 @@ jobs:
           # 2026-08-16: PYTHONUNBUFFERED — pytest-вывод стримится сразу (run_cmd capture
           # печатает в конце шага; при таймаут-килле буфер терялся — hang был невидим).
           PYTHONUNBUFFERED: 1
+          # 2026-08-17 (CI smoke 900s-hang): PLATFORM_COMPOSE_TIMEOUT 90s (Linux-дефолт) на
+          # CI-раннере ловил медленные healthcheck-и (cold-stack) -> compose up --wait rc=1 на
+          # 90s -> retry-спираль (down + повторный up) раздувала setup за 900s-бюджет gate.
+          # 180s = ОДНОКРАТНЫЙ health-wait (успех вместо retry-спирали; worst-case setup
+          # остаётся в бюджете после параллельного pre-cleanup).
+          PLATFORM_COMPOSE_TIMEOUT: 180
         run: |
           make gate MODE=ci-docker SKIP_PRECOMMIT=1
 

@@ -144,7 +144,10 @@ def postgres_up(platform_services: dict[str, list[str]], modules_dir) -> None:
         logger.info(
             "[IMP:8][postgres_up] Reusing postgres/pgbouncer from platform_services — skipping compose lifecycle"
         )
-        statuses = wait_for_containers_healthy(["postgres-test", "pgbouncer-test"])
+        # 2026-08-17 (run 32012756576): postgres-test после smoke-hang оставался unhealthy
+        # дольше дефолтного окна 60s (20×3) — reuse давал 7 setup-errors. Окно 120s (40×3)
+        # поглощает CI-контенцию (cold-stack healthcheck медленнее локального).
+        statuses = wait_for_containers_healthy(["postgres-test", "pgbouncer-test"], max_retries=40, retry_interval=3)
         if not all(s == "healthy" for s in statuses.values()):
             pytest.fail(f"Reused containers not healthy: {statuses}")
         yield
@@ -189,7 +192,9 @@ def postgres_up(platform_services: dict[str, list[str]], modules_dir) -> None:
     if pathlib.Path(test_override).exists():
         compose_args.extend(["-f", test_override])
         logger.info("[IMP:7][postgres_up] Using test override: %s", test_override)
-    compose_args.extend(["--project-name", COMPOSE_PROJECT, "up", "-d", "--wait", "--wait-timeout", "30"])
+    # 2026-08-17: --wait-timeout 30 → 90 — postgres healthcheck в CI (cold-stack, контенция)
+    #    превышал 30s → compose up rc=1 → ложный FAIL компонента (run 32012756576 postgres unhealthy).
+    compose_args.extend(["--project-name", COMPOSE_PROJECT, "up", "-d", "--wait", "--wait-timeout", "90"])
 
     try:
         result = subprocess.run(
@@ -303,7 +308,8 @@ def hermes_up(platform_services: dict[str, list[str]], postgres_up, modules_dir)
     foreign = check_foreign_containers(["hermes-agent-test"], COMPOSE_PROJECT_HERMES)
     if foreign:
         logger.info("[IMP:8][hermes_up] Reusing hermes-agent from platform_services — skipping compose lifecycle")
-        statuses = wait_for_containers_healthy(["hermes-agent-test"])
+        # 2026-08-17: hermes-agent healthcheck в CI (cold-stack) медленнее 60s — окно 120s
+        statuses = wait_for_containers_healthy(["hermes-agent-test"], max_retries=40, retry_interval=3)
         if not all(s == "healthy" for s in statuses.values()):
             pytest.fail(f"Reused containers not healthy: {statuses}")
         yield compose_file

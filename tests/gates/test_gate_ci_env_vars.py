@@ -91,6 +91,7 @@ _WORKFLOW_LOCAL_ENV_VARS: dict[str, str] = {
     "INTEGRATION_MODE": "test integration mode, workflow-local",
     "SKIP": "pre-commit SKIP filter, workflow-local",
     "PYTHONUNBUFFERED": "CPython runtime flag (стрим pytest-вывода в CI-шаге), workflow-local",
+    "PLATFORM_COMPOSE_TIMEOUT": "smoke compose-up health-wait (CI single-shot, 2026-08-17), workflow-local test tuning",
 }
 
 

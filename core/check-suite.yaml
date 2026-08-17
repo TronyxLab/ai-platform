@@ -192,7 +192,11 @@ checks:
     junit: tests/report-predeploy.xml
     diagnostic: false
   - id: smoke
-    cmd: pytest tests/ -m "smoke" -v --tb=short -rs --timeout=600 --junitxml=tests/report-smoke.xml
+    # 2026-08-17 (CI smoke 900s-hang — висит session-фикстура platform_services с НУЛЕВЫМ
+    # видимым выводом): -s + --log-cli-level=INFO — прогресс фикстуры стримится в лог gate
+    # ЖИВЬЁМ (pytest capture глотал [IMP:...] логи до конца сессии; при таймаут-килле всё
+    # терялось). Следующий hang покажет ТОЧКУ зависания вместо чёрного ящика.
+    cmd: pytest tests/ -m "smoke" -v -s --log-cli-level=INFO --tb=short -rs --timeout=600 --junitxml=tests/report-smoke.xml
     tier: pytest
     # 142 W8 (R13): 600 → 900 — полный стек 23 контейнера + macOS Docker Desktop +
     # параллельные dev-сессии; smoke стабильно укладывался в ~6 мин изолированно,

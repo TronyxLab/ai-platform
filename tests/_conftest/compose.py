@@ -100,6 +100,31 @@ _COMPOSE_DOWN_TIMEOUT = 5  # docker compose down --timeout
 _DOCKER_LOG_TIMEOUT = 30  # timeout for docker compose logs
 _STDERR_TAIL_LINES = 300  # tail lines for stderr truncation
 _COMPOSE_EXTRA_TIMEOUT = 30  # extra timeout added to PLATFORM_COMPOSE_TIMEOUT
+# 2026-08-17 (CI smoke 900s-hang): жёсткий дедлайн setup session-фикстуры platform_services.
+# Бюджет gate для смоука = 900s; setup обязан уложиться в 540s — остальное время тестам.
+# Превышение → fail-fast с именем фазы (вместо тихого 900s-килла с нулевым выводом).
+_SMOKE_SETUP_DEADLINE_SECONDS = 540
+
+
+def _assert_setup_within_deadline(deadline: float, phase: str) -> None:
+    """Fail-fast: setup фикстуры превысил дедлайн — RuntimeError с именем фазы (CI-видимость).
+
+    ## @purpose  2026-08-17 (CI smoke 900s-hang): раньше превышение setup-бюджета давало
+    ##            тихий 900s-килл процесса (0 тестов, 0 вывода). Теперь фазы setup проверяют
+    ##            дедлайн — превышение падает БЫСТРО с именем фазы (test error в отчёте).
+    ## @io       ⇥ deadline: float (monotonic), phase: str → ⎋ None | RuntimeError
+    ## @complexity O(1)
+    """
+    elapsed = _time.monotonic() - (deadline - _SMOKE_SETUP_DEADLINE_SECONDS)
+    if _time.monotonic() > deadline:
+        msg = (
+            "[IMP:10][compose][platform_services] SETUP DEADLINE exceeded at phase "
+            f"'{phase}' after {elapsed:.0f}s ({_SMOKE_SETUP_DEADLINE_SECONDS}s budget) — "
+            "docker-операции медленнее ожидаемого (CI-ресурсы/регрессия). Лог выше показывает "
+            "последнюю фазу; см. [IMP:8] wave/cleanup-сообщения."
+        )
+        raise RuntimeError(msg)
+
 
 # ── Host bind-mount directories pre-created by platform_services (T12.9 T-14) ──
 _SMOKE_VOLUME_BIND_DIRS: list[str] = [
@@ -731,20 +756,37 @@ def _pre_cleanup(
     # ⚠️ TRAP[BUG] · 2026-07-17 · HI · per-module `down --remove-orphans` killed
     #    previously started modules (all share project=ai-platform-test). Fix:
     #    global cleanup at start, per-module down WITHOUT --remove-orphans.
+    # 2026-08-17 (CI smoke 900s-hang): downs шли ПОСЛЕДОВАТЕЛЬНО (13 модулей × до 20s =
+    # 260s worst-case) — с суммой stale-sweep + pre-build + Wave 0 setup упирались в
+    # 900s-бюджет gate и тихо килялись (0 тестов, 0 контейнеров). Параллельный down
+    # (один процесс, тот же проект ai-platform-test, семантика per-module сохранена)
+    # срезает 260s → ~20s. Таймаут 20 → 15 (down пустого проекта — <1s; 15s — запас).
     logger.info("[IMP:8][compose][platform_services] Global pre-cleanup: down all compose files")
-    for _cleanup_name, cleanup_path in sorted(all_compose_files.items()):
-        # 142 W8 (R13): root compose в цепочке (volumes SoT, U-49)
-        test_override = Path(cleanup_path).parent / "docker-compose.test.yml"
-        cleanup_args = ["docker", "compose", *_compose_file_args(cleanup_path, test_override)]
-        cleanup_args.extend([
-            "-p",
-            "ai-platform-test",
-            "down",
-            "--timeout",
-            str(_COMPOSE_DOWN_TIMEOUT),
-            "--remove-orphans",
-        ])
-        _run_docker_smoke(cleanup_args, timeout=20)
+    cleanup_pairs = [
+        (cleanup_path, Path(cleanup_path).parent / "docker-compose.test.yml")
+        for _cleanup_name, cleanup_path in sorted(all_compose_files.items())
+    ]
+    with ThreadPoolExecutor(max_workers=min(6, len(cleanup_pairs) or 1)) as down_exec:
+        down_futures = {
+            down_exec.submit(
+                _run_docker_smoke,
+                [
+                    "docker",
+                    "compose",
+                    *_compose_file_args(cleanup_path, test_override),
+                    "-p",
+                    "ai-platform-test",
+                    "down",
+                    "--timeout",
+                    str(_COMPOSE_DOWN_TIMEOUT),
+                    "--remove-orphans",
+                ],
+                15,
+            ): cleanup_path
+            for cleanup_path, test_override in cleanup_pairs
+        }
+        for future in as_completed(down_futures):
+            future.result()  # TimeoutExpired/OSError — как в последовательной версии (fail-fast cleanup)
     logger.info("[IMP:8][compose][platform_services] Global pre-cleanup complete")
 
     # ── Safety net: remove stale test containers from crashed previous runs ──
@@ -768,9 +810,29 @@ def _pre_cleanup(
     # ·   discover_modules.py --test-infra. List is always in sync with compose files.
     # · Rev: if infra._load_test_infra() becomes a performance bottleneck (>500ms),
     # ·   add file-based cache with mtime check.
+    # 2026-08-17 (CI smoke 900s-hang): stale-sweep шёл ПОСЛЕДОВАТЕЛЬНО (N имён × до 10s =
+    # ~150-200s worst-case). Параллельный rm -f (семантика та же — идемпотентный sweep)
+    # срезает до ~10s. Best-effort: TimeoutExpired/OSError — warn, не fail (sweep — защита,
+    # не контракт).
     STALE_CONTAINER_NAMES = _infra.stale_container_names
-    for cname in STALE_CONTAINER_NAMES:
-        subprocess.run(["docker", "rm", "-f", cname], capture_output=True, text=True, timeout=10, check=False)
+    with ThreadPoolExecutor(max_workers=min(8, len(STALE_CONTAINER_NAMES) or 1)) as stale_exec:
+        stale_futures = {
+            stale_exec.submit(
+                subprocess.run,
+                ["docker", "rm", "-f", cname],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            ): cname
+            for cname in STALE_CONTAINER_NAMES
+        }
+        for future in as_completed(stale_futures):
+            cname = stale_futures[future]
+            try:
+                future.result()
+            except (subprocess.TimeoutExpired, OSError) as exc:
+                logger.warning("[IMP:7][compose][platform_services] Stale sweep rm -f %s failed: %s", cname, exc)
     logger.info("[IMP:8][compose][platform_services] Safety net: stale containers removed")
 
     # ── Pre-build images for modules with build: directive ──────────────────
@@ -1118,15 +1180,22 @@ def platform_services(
         return
 
     logger.info("[IMP:7][compose][platform_services] Starting platform services")
+    # 2026-08-17 (CI smoke 900s-hang): setup фикстуры был «чёрным ящиком» — при превышении
+    # бюджета gate (900s) процесс килялся с НУЛЕВЫМ выводом (тесты не стартовали, логи
+    # глотались capture). Deadline-гвард фазы: fail-fast с именем фазы вместо тихого килла.
+    setup_deadline = _time.monotonic() + _SMOKE_SETUP_DEADLINE_SECONDS
 
     # ── 2) Host artifacts: volume dirs + test data files + dev certs (T12.9) ──
     created_host_dirs = _setup_host_artifacts()
+    _assert_setup_within_deadline(setup_deadline, "host artifacts")
 
     # ── 3) Pre-cleanup: networks + global down + stale sweep + pre-build ──────
     nm, all_nets = _pre_cleanup(all_compose_files)
+    _assert_setup_within_deadline(setup_deadline, "pre-cleanup")
 
     # ── 4) Wave-parallel start (Wave 0 sync → Wave 1+ background) ─────────────
     started, failed, waves, bg_thread = _start_waves(module_graph, all_compose_files, platform_port_mappings_dict)
+    _assert_setup_within_deadline(setup_deadline, "wave 0 start")
 
     # T12.2 (T-3): СНИМОК started/failed под lock перед yield — тесты получают
     # консистентный снимок, не «живые» списки (фон дописывает их после старта).
