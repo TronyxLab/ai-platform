@@ -113,7 +113,7 @@ jobs:
 
       - name: Upload ruff SARIF artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ruff-check-sarif
           path: ruff-check.sarif
@@ -127,7 +127,7 @@ jobs:
 
       - name: Upload basedpyright JSON artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: basedpyright-report
           path: basedpyright-report.json
@@ -135,7 +135,7 @@ jobs:
 
       - name: Upload pytest JUnit reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pytest-junit-reports
           path: tests/report-*.xml
