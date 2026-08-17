@@ -97,7 +97,7 @@ _STATIC_SMOKE_ENV: dict[str, str] = {
     # ·   and remove this static override.
     # · Allowlist: bare :latest here is dev/test-only — excluded from tag-form gate
     # ·   (tests/gates/test_gate_image_tag_form.py, DevPlan 116 B3 T7).
-    "CONTEXT_IMAGE": "ghcr.io/tronyxlab/hermes-agent-context:latest",
+    "CONTEXT_IMAGE": "hermes-agent-context:latest",
     "LITELLM_TEST_PORT": "14000",
     "HERMES_DASHBOARD_TEST_PORT": "19119",
     "HERMES_DESKTOP_TEST_PORT": "18642",
