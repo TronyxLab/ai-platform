@@ -159,7 +159,11 @@ def resolve_secret_values(
     if node_info is not None:
         ssh_key = Path.home() / ".ssh" / "ai-platform" / f"{node_info.name}-ci"
         if ssh_key.is_file():
-            values["VPS_SSH_KEY"] = ssh_key.read_text(encoding="utf-8").strip()
+            import base64 as _b64
+
+            # setup-ssh action (core-deploy.yml, key-encoding: base64) декодирует base64 —
+            # raw PEM ломает шаг («base64: invalid input»); храним base64(PEM).
+            values["VPS_SSH_KEY"] = _b64.b64encode(ssh_key.read_bytes()).decode("ascii")
 
     age_value = _env_lookup("AGE_SECRET_KEY", env_map)
     if age_value is None:

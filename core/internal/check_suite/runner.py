@@ -279,6 +279,11 @@ def run_cmd(
     """Run a single check command; never raises on check failure."""
     tokens = _resolve_command_tokens(shlex.split(cmd_str), root)
     start = time.monotonic()
+    # 2026-08-16: python-дети всегда unbuffered — вывод стримится в pipe по строкам;
+    # блок-буфер (8KB) терял частичный вывод при таймаут-килле (CI smoke-hang 900s
+    # с 0 видимым выводом — pytest-вывод не флашился до смерти процесса).
+    child_env = dict(env)
+    child_env["PYTHONUNBUFFERED"] = "1"
     # ruff: ignore[PLW0717] — тело try присваивает имена, читаемые except/после — извлечение ломает видимость
     try:
         with cs.docker_suite_lock(root) if docker_lock else contextlib.nullcontext():  # late-binding: DI-HYG
@@ -294,7 +299,7 @@ def run_cmd(
                 stderr=subprocess.PIPE,
                 text=True,
                 cwd=str(root),
-                env=env,
+                env=child_env,
                 start_new_session=True,
             )
             try:

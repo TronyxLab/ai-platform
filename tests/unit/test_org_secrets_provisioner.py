@@ -72,7 +72,9 @@ def test_resolve_secret_values_sources(tmp_path, monkeypatch) -> None:
     )
 
     assert values["VPS_HOST"] == "9.9.9.9"
-    assert values["VPS_SSH_KEY"] == "PRIVATE-KEY-CONTENT"
+    import base64 as _b64
+
+    assert values["VPS_SSH_KEY"] == _b64.b64encode(b"PRIVATE-KEY-CONTENT").decode("ascii")
     assert values["AGE_SECRET_KEY"] == "AGE-SECRET-TEST"
     assert values["TELEGRAM_BOT_TOKEN"] == "tg-token"
     assert values["TELEGRAM_CHAT_ID_CRITICAL"] == "crit-chat"
