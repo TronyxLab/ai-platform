@@ -32,6 +32,21 @@ import site
 import pytest
 import yaml
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# CI smoke-hang диагностика (2026-08-17, platform-test): флаки-hang смоука ДО баннера
+# pytest (900s, 0 вывода; run 32025761115/32029164898) происходит ДО pytest_configure —
+# в import-цепочке conftest. SMOKE_HANG_PROBE=1 (CI) включает: (1) faulthandler-арм
+# ПРЯМО ЗДЕСЬ (самое начало module-уровня — до импортов _conftest) — dump_traceback_later(600s)
+# дампит СТЕКИ ВСЕХ ПОТОКОВ через 10 минут; (2) bisect-печати между импорт-блоками —
+# последняя печать перед зависанием указывает точный модуль. Локально env не задан → no-op.
+_HANG_PROBE = os.environ.get("SMOKE_HANG_PROBE") == "1"
+if _HANG_PROBE:
+    import faulthandler
+
+    faulthandler.dump_traceback_later(600, exit=False)
+    print("[conftest-import] begin (faulthandler armed 600s)", flush=True)
+
+
 # ── Test import paths: canonical roots for all test files ────────────────────
 # DevPlan 117 Brief F (T6 #47, D47-A): добавляем repo_root/, core/, core/internal/
 # через site.addsitedir — общие пути, используемые >50% тестов. Это легитимизирует
@@ -42,11 +57,20 @@ for _p in (_PKG_ROOT, _PKG_ROOT / "core", _PKG_ROOT / "core" / "internal", _PKG_
     site.addsitedir(str(_p))
 
 from _conftest import *  # ruff: ignore[F403]
+
+if _HANG_PROBE:
+    print("[conftest-import] _conftest star done", flush=True)
 from _conftest.containers import _module_container_running  # ruff: ignore[F401]  # DevPlan 170 W8: containers.py
+
+if _HANG_PROBE:
+    print("[conftest-import] containers done", flush=True)
 
 # Also import underscore-prefixed names explicitly (not included in *)
 # — autouse fixtures (needed for pytest discovery) —
 from _conftest.e2e import _e2e_disable_proxy, _load_test_env  # ruff: ignore[F401]
+
+if _HANG_PROBE:
+    print("[conftest-import] e2e done", flush=True)
 
 # — consumed by test files via `from conftest import ...` —
 from _conftest.infra import _test_infra_was_active  # ruff: ignore[F401]
@@ -62,6 +86,9 @@ from _conftest.quarantine import pytest_collection_modifyitems as _quarantine_co
 from _conftest.session import _fixture_schema_integrity  # ruff: ignore[F401] — autouse per-test fail (T12.5 T-8)
 from _conftest.state_reset import _reset_fresh_state  # ruff: ignore[F401]
 from _conftest.wave_pipeline import _ensure_wave_ready  # ruff: ignore[F401]
+
+if _HANG_PROBE:
+    print("[conftest-import] wave_pipeline done", flush=True)
 
 logger = logging.getLogger(__name__)
 
