@@ -324,6 +324,39 @@ jobs:
         run: |
           make gate MODE=ci-docker SKIP_PRECOMMIT=1
 
+      # ─── DevPlan 007 W1: langfuse crash dump (container logs + disk state) ──────────
+      # run 32058540726: langfuse-test Exited(1) — ClickHouse error 243 NOT_ENOUGH_SPACE
+      # во время clickhouse-миграций langfuse ("Cannot reserve 1.00 MiB, not enough space").
+      # Гипотеза: диск CI-раннера (14GB) исчерпан полным smoke-стеком (23 контейнера +
+      # логи + volumes) → ClickHouse (keep_free_space_bytes=1GB в 40-storage.xml) не может
+      # зарезервировать место. df -h / docker system df ПЕРЕЖИВАЮТ pytest-teardown
+      # (контейнеры уже удалены к моменту if: failure()) — это ключевое доказательство.
+      # Контейнерные логи (langfuse/worker/hermes) дублируются на случай fail-fast.
+      - name: Diagnostic — langfuse crash dump (logs + disk state)
+        if: failure()
+        run: |
+          echo "=== Disk state (df -h) — survives pytest teardown ==="
+          df -h / /mnt 2>/dev/null || df -h /
+          echo ""
+          echo "=== Docker disk usage (docker system df) ==="
+          docker system df
+          echo ""
+          echo "=== Docker volume sizes ==="
+          docker system df -v 2>/dev/null | head -40 || true
+          echo ""
+          echo "=== langfuse-test logs (full) ==="
+          docker logs langfuse-test 2>&1 || echo "(langfuse-test not found — cleaned up by pytest teardown)"
+          echo ""
+          echo "=== langfuse-worker-test logs (full) ==="
+          docker logs langfuse-worker-test 2>&1 || echo "(langfuse-worker-test not found — cleaned up by pytest teardown)"
+          echo ""
+          echo "=== hermes-agent-test logs (full) ==="
+          docker logs hermes-agent-test 2>&1 || echo "(hermes-agent-test not found — cleaned up by pytest teardown)"
+          echo ""
+          echo "=== clickhouse-test logs (tail 100) ==="
+          docker logs clickhouse-test --tail 100 2>&1 || echo "(clickhouse-test not found — cleaned up by pytest teardown)"
+        shell: bash
+
       # 2026-08-16: if: failure() добавлен — диагностика контейнеров РЕАЛЬНО выполняется
       # после падения gate (раньше шаг пропускался — steps after failure skipped),
       # CI smoke-hang (900s) был без дампа состояний контейнеров.
