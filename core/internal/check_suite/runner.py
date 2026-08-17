@@ -299,7 +299,7 @@ def run_cmd(
             )
             try:
                 proc_stdout, proc_stderr = proc.communicate(timeout=timeout)
-            except subprocess.TimeoutExpired:
+            except subprocess.TimeoutExpired as exc:
                 duration = (time.monotonic() - start) * 1000
                 try:
                     os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
@@ -312,6 +312,17 @@ def run_cmd(
                 except (ProcessLookupError, PermissionError):
                     pass  # процесс уже мёртв
                 proc.wait()
+                # 2026-08-16: частичный вывод НЕ теряется (communicate-timeout буферы
+                # exc.output/exc.stderr) — CI smoke-hang (900s, 0 видимого вывода) не давал
+                # диагностики. PYTHONUNBUFFERED=1 в CI-шаге + хвост частичного вывода.
+                partial_out_raw = cast(object, exc.output) or ""
+                partial_err_raw = cast(object, exc.stderr) or ""
+                partial_out = partial_out_raw if isinstance(partial_out_raw, str) else ""
+                partial_err = partial_err_raw if isinstance(partial_err_raw, str) else ""
+                if partial_out:
+                    logger.info("[IMP:9][run_cmd][timeout][partial-stdout] %s", partial_out[-4000:])
+                if partial_err:
+                    logger.info("[IMP:9][run_cmd][timeout][partial-stderr] %s", partial_err[-4000:])
                 return CheckOutcome(
                     name=tokens[0] if tokens else "?",
                     exit_code=124,

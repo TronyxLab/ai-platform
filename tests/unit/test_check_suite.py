@@ -23,6 +23,7 @@
 """
 
 import importlib
+import logging
 import subprocess
 from pathlib import Path
 
@@ -796,6 +797,23 @@ def test_run_cmd_docker_lock_applied(caplog, tmp_path, monkeypatch) -> None:
     assert out2.exit_code == 0
     assert entered == [], f"docker_lock=False не должен трогать лок, entered={entered}"
     logger.critical("[IMP:9][test] _run_cmd: docker_lock=True → lock entered; False → no lock")
+
+
+# 🧪 TRAP[TEST] · Regression · 2026-08-16 · таймаут-килл НЕ теряет частичный вывод
+# · Scenario: команда пишет в stdout и висит → timeout → exit 124 + partial-stdout в логе
+#   (CI smoke-hang 900s был недиагностируем — communicate-timeout буферы отбрасывались)
+# · Last fail: N/A (new — run_cmd partial-output on timeout)
+# · Remove if: run_cmd-таймаут-семантика меняется
+@ldd_trajectory
+def test_run_cmd_timeout_keeps_partial_output(caplog, tmp_path) -> None:
+    """timeout-килл → exit 124 и частичный stdout попадает в лог (partial-stdout)."""
+    import os
+
+    caplog.set_level(logging.INFO)
+    out = _run_cmd("python3 -c \"print('marker-line'); import time; time.sleep(30)\"", 1, os.environ.copy(), tmp_path)
+    assert out.exit_code == 124, f"ожидался exit 124 (timeout), rc={out.exit_code}"
+    assert "marker-line" in caplog.text, f"частичный stdout должен быть в логе: {caplog.text[-500:]}"
+    logger.critical("[IMP:9][test] _run_cmd timeout partial-output PASS")
 
 
 # endregion Tests: xdist application
