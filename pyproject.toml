@@ -101,6 +101,11 @@ python_functions = "test_*"
 # DevPlan 163 консенсус 10 (baseline измерений): junit-durations + pytest-timeout.
 # --durations=10 — 10 самых медленных тестов в конце прогона (agent-loop telemetry).
 addopts = "-v --tb=short -rs --strict-markers --strict-config --durations=10"
+# DevPlan 006 O3 (консолидация faulthandler-wrapper 65881db в канон): pytest-native
+# faulthandler_timeout=600 — дамп стеков ВСЕХ ПОТОКОВ в stderr, если тест/фаза висит >600s
+# (бывший python3 -c wrapper в check-suite.yaml smoke cmd + SMOKE_HANG_PROBE удалены).
+# Не блокирует выход: exit=False по умолчанию (dump-only диагностика).
+faulthandler_timeout = "600"
 # DevPlan 163: junit_logging=out — stdout тестов попадает в JUnit XML (CI-артефакты, A4).
 junit_logging = "out"
 # ⚠️ TRAP[DECISION] · 2026-08-13 · MED · timeout = 30 — глобальный дефолт pytest-timeout (W-A A2)

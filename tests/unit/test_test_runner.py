@@ -494,4 +494,66 @@ def test_run_docker_pytest_uses_lock(caplog, tmp_path, monkeypatch):
     logger.critical("[IMP:9][test] _run_docker_pytest: lock entered=%s, rc=%d", entered, proc.returncode)
 
 
+# 🧪 TRAP[TEST] · Regression · DevPlan 006 W3 · main: таймаут → exit 124 (streaming-канон)
+# · Scenario: run_subprocess_streaming возвращает timed_out=True → main() печатает TIMEOUT и
+# ·   возвращает 124 (паритет прежнего subprocess.TimeoutExpired-пути)
+# · Last fail: N/A (new — parity main после миграции на run_subprocess_streaming)
+# · Remove if: run_subprocess_streaming удалён из main-пути
+@ldd_trajectory
+def test_main_timeout_returns_124(caplog, monkeypatch, capsys, tmp_path):
+    """main(): timed_out → rc=124 + TIMEOUT (паритет exit-кода 124, DevPlan 006 W3)."""
+    from core.internal import test_runner as tr
+    from core.internal.shared.subprocess_io import StreamingResult
+
+    def _fake_streaming(cmd, **kwargs):
+        return StreamingResult(
+            cmd=cmd,
+            returncode=124,
+            stdout="partial-out",
+            stderr="partial-err",
+            duration_ms=100,
+            timed_out=True,
+        )
+
+    monkeypatch.setattr(tr, "run_subprocess_streaming", _fake_streaming)
+    rc = tr.main(["--marker", "contract", "--timeout", "1", "--junit-output", str(tmp_path / "out.xml")])
+    assert rc == 124, f"таймаут обязан давать exit 124, rc={rc}"
+    captured = capsys.readouterr()
+    assert "TIMEOUT after 1s" in captured.err or "TIMEOUT after 1s" in captured.out
+    logger.critical("[IMP:9][test] main timeout parity: rc=124")
+
+
+# 🧪 TRAP[TEST] · Regression · DevPlan 006 W3 · main: краш до XML → JUnit-fallback (streaming-канон)
+# · Scenario: pytest упал до записи junitxml (rc!=0, файла нет) → main() печатает
+# ·   _print_no_xml_fallback (хвост вывода) и возвращает rc процесса
+# · Last fail: N/A (new — parity JUnit-fallback после миграции на run_subprocess_streaming)
+# · Remove if: run_subprocess_streaming удалён из main-пути
+@ldd_trajectory
+def test_main_junit_fallback_on_crash(caplog, monkeypatch, capsys, tmp_path):
+    """main(): краш pytest до XML → JUnit-fallback с хвостом вывода (DevPlan 006 W3 parity)."""
+    from core.internal import test_runner as tr
+    from core.internal.shared.subprocess_io import StreamingResult
+
+    junit_out = tmp_path / "out.xml"
+
+    def _fake_streaming(cmd, **kwargs):
+        return StreamingResult(
+            cmd=cmd,
+            returncode=2,
+            stdout="",
+            stderr='collection error: import failed\n  File "tests/test_x.py", line 1\n    boom',
+            duration_ms=50,
+            timed_out=False,
+        )
+
+    monkeypatch.setattr(tr, "run_subprocess_streaming", _fake_streaming)
+    rc = tr.main(["--marker", "contract", "--timeout", "1", "--junit-output", str(junit_out)])
+    assert rc == 2, f"rc процесса обязан прокидываться, rc={rc}"
+    assert not junit_out.exists(), "junitxml не должен появиться (краш до записи)"
+    captured = capsys.readouterr()
+    assert "JUnit XML not produced" in captured.out, "fallback обязан печататься при краше до XML"
+    assert "collection error: import failed" in captured.out, "fallback должен показывать хвост stderr"
+    logger.critical("[IMP:9][test] main junit-fallback parity: rc=2, fallback printed")
+
+
 # endregion Tests: xdist args (DevPlan 120)

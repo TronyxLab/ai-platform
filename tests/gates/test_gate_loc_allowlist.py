@@ -57,7 +57,11 @@ TEST_ALLOWLIST: dict[str, int] = {
     "tests/unit/test_state_machine.py": 1650,  # characterization state_machine (B9)
     "tests/unit/test_no_hardcoded_credentials.py": 1450,  # predeploy regex-sweep
     "tests/gates/test_gate_manifest_integrity.py": 1250,  # manifest trinity integrity
-    "tests/_conftest/compose.py": 1250,  # docker-fixture каркас (xdist-критичный)
+    # 1250 → 1300 (DevPlan 006 W4/W5, 2026-08-17): +run_subprocess_streaming-миграция
+    # (streaming-канон, _run_docker_smoke/_generate_dev_certs_smoke/_rm_stale) + SMOKE_NO_DOCKER/
+    # SMOKE_MODULES рычаги быстрой итерации (W5 bisect) — осознанное расширение фикстурного
+    # каркаса, декомпозиция _conftest/compose.py — follow-up вне скоупа 006
+    "tests/_conftest/compose.py": 1300,  # docker-fixture каркас (xdist-критичный)
 }
 
 

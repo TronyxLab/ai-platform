@@ -1,5 +1,5 @@
-# GREP_SUMMARY: test-shared-subprocess-io run-subprocess canonical check non-fatal rc-127 rc-124 unit C10
-# STRUCTURE: ▶ test_graceful_not_found (rc=127) → test_graceful_timeout (rc=124) → test_check_raises → test_non_fatal_warns → test_success
+# GREP_SUMMARY: test-shared-subprocess-io run-subprocess run-subprocess-streaming canonical check non-fatal rc-127 rc-124 killpg heartbeat unit C10 006
+# STRUCTURE: ▶ test_graceful_not_found (rc=127) → test_graceful_timeout (rc=124) → test_check_raises → test_non_fatal_warns → test_success → ⊕ streaming (tee/heartbeat/killpg/124/127/env)
 # region MODULE_CONTRACT
 ## @purpose  Unit tests for core/internal/shared/subprocess_io.py — единый канон run_subprocess (DevPlan 118 C10).
 ##           Обе семантики: graceful (check=False, rc 127/124) и raise (check=True).
@@ -13,9 +13,12 @@
 ## @rationale DevPlan 118 C10 §TEST — unit: обе семантики (raise и no-raise) через один канон.
 ## @changes 2026-08-02 | DevPlan 118 C10 — created
 ## @changes 2026-08-13 | DevPlan 160 W4b — +CommandRunner DI-тесты
+## @changes 2026-08-17 | DevPlan 006 W1 — +streaming-тесты: tee в stderr, накопление,
+##           heartbeat, killpg при таймауте (без орфанов), rc=127/124, PYTHONUNBUFFERED
 # endregion MODULE_CONTRACT
 
 import logging
+import sys
 from unittest import mock
 
 import pytest
@@ -27,6 +30,7 @@ from core.internal.shared.subprocess_io import (
     SubprocessCommandRunner,
     default_command_runner,
     run_subprocess,
+    run_subprocess_streaming,
 )
 
 pytestmark = pytest.mark.static_audit
@@ -148,3 +152,143 @@ def test_default_command_runner_factory() -> None:
     runner = default_command_runner()
     assert isinstance(runner, CommandRunner), "SubprocessCommandRunner обязан соответствовать CommandRunner Protocol"
     assert isinstance(runner, SubprocessCommandRunner)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# run_subprocess_streaming (DevPlan 006 W1) — реальные subprocess'ы (python3 -c)
+# ══════════════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · Regression · streaming: накопление полного вывода + rc=0 (006 W1)
+# · Scenario: child печатает строки в stdout/stderr → StreamingResult содержит обе, rc=0
+# · Last fail: N/A (new — DevPlan 006 W1 streaming-канон)
+# · Remove if: run_subprocess_streaming удалён
+def test_streaming_accumulates_output_and_rc0() -> None:
+    """Стриминг: полный stdout/stderr накапливается, rc=0, timed_out=False."""
+    result = run_subprocess_streaming(
+        [sys.executable, "-c", "import sys; print('out1'); print('err1', file=sys.stderr)"],
+        timeout=30,
+        stream=False,
+    )
+    assert result.returncode == 0
+    assert result.timed_out is False
+    assert result.stdout == "out1"
+    assert result.stderr == "err1"
+    assert result.duration_ms >= 0
+
+
+# 🧪 TRAP[TEST] · Regression · streaming: tee в stderr с префиксом [child] (006 W1)
+# · Scenario: stream=True → строки child'а появляются в sys.stderr вызывающего с [child]
+# · Last fail: N/A (new — DevPlan 006 W1; R1: stdout остаётся чистым)
+# · Remove if: run_subprocess_streaming удалён
+def test_streaming_tee_to_stderr_with_child_prefix(capsys) -> None:
+    """stream=True: построчный tee в stderr с префиксом [child]; stdout вызывающего чист."""
+    run_subprocess_streaming(
+        [sys.executable, "-c", "print('visible-line')"],
+        timeout=30,
+        stream=True,
+        heartbeat=0,
+    )
+    captured = capsys.readouterr()
+    assert not captured.out, "R1: stdout вызывающего обязан оставаться чистым"
+    assert "[child] visible-line" in captured.err
+
+
+# 🧪 TRAP[TEST] · Regression · streaming: heartbeat каждые N секунд (006 W1)
+# · Scenario: heartbeat=1, спящий 2.5s child → ≥1 heartbeat-строка в stderr
+# · Last fail: N/A (new — DevPlan 006 W1)
+# · Remove if: run_subprocess_streaming удалён
+def test_streaming_heartbeat_emits_to_stderr(capsys) -> None:
+    """heartbeat>0: тишина ≠ зависание — [stream][heartbeat] появляется в stderr."""
+    run_subprocess_streaming(
+        [sys.executable, "-c", "import time; time.sleep(2.5)"],
+        timeout=30,
+        stream=False,
+        heartbeat=1,
+    )
+    captured = capsys.readouterr()
+    assert "[stream][heartbeat]" in captured.err
+    assert "pid=" in captured.err
+
+
+# 🧪 TRAP[TEST] · Regression · streaming: таймаут → killpg, rc=124, без орфанов (006 W1, R2/R6)
+# · Scenario: sleep 300 с timeout=2 → StreamingResult(rc=124, timed_out=True), группа убита
+# · Last fail: N/A (new — DevPlan 006 W1; орфаны ночь-141 исключены конструктивно)
+# · Remove if: run_subprocess_streaming удалён
+def test_streaming_timeout_killpg_no_orphans() -> None:
+    """Таймаут: killpg → rc=124 + timed_out=True, partial вывод сохранён, НИКОГДА не raise."""
+    marker = "before-hang"
+    result = run_subprocess_streaming(
+        [
+            sys.executable,
+            "-c",
+            f"print('{marker}', flush=True); import time; time.sleep(300)",
+        ],
+        timeout=2,
+        stream=False,
+        heartbeat=0,
+    )
+    assert result.returncode == 124
+    assert result.timed_out is True
+    assert marker in result.stdout, "partial stdout обязан сохраняться после killpg"
+
+
+# 🧪 TRAP[TEST] · Regression · streaming: FileNotFoundError → rc=127 graceful (006 W1)
+# · Scenario: несуществующий бинарный → StreamingResult(rc=127), check=False — не raise
+# · Last fail: N/A (new — DevPlan 006 W1)
+# · Remove if: run_subprocess_streaming удалён
+def test_streaming_not_found_rc127() -> None:
+    """FileNotFoundError → rc=127 graceful; check=True → PlatformFatalError."""
+    result = run_subprocess_streaming(["definitely-not-a-binary-006"], timeout=5, stream=False)
+    assert result.returncode == 127
+    assert "not found" in result.stderr
+    with pytest.raises(PlatformFatalError):
+        run_subprocess_streaming(["definitely-not-a-binary-006"], timeout=5, stream=False, check=True)
+
+
+# 🧪 TRAP[TEST] · Regression · streaming: child env содержит PYTHONUNBUFFERED=1 (006 W1)
+# · Scenario: child печатает os.environ['PYTHONUNBUFFERED'] → '1'
+# · Last fail: N/A (new — DevPlan 006 W1; перенос PYTHONUNBUFFERED из run_cmd)
+# · Remove if: run_subprocess_streaming удалён
+def test_streaming_child_env_pythonunbuffered() -> None:
+    """child_env всегда содержит PYTHONUNBUFFERED=1 — дети не буферизуют Python-вывод."""
+    result = run_subprocess_streaming(
+        [sys.executable, "-c", "import os; print(os.environ.get('PYTHONUNBUFFERED', ''))"],
+        timeout=30,
+        stream=False,
+        heartbeat=0,
+    )
+    assert result.stdout.strip() == "1"
+
+
+# 🧪 TRAP[TEST] · Regression · streaming: env-merge — пользовательский env поверх os.environ (006 W1)
+# · Scenario: env={'PROBE_006': 'x'} → child видит PROBE_006 И PATH (наследованный)
+# · Last fail: N/A (new — DevPlan 006 W1)
+# · Remove if: run_subprocess_streaming удалён
+def test_streaming_env_merges_over_environ() -> None:
+    """env мержится поверх os.environ (не замещает PATH и пр.)."""
+    result = run_subprocess_streaming(
+        [
+            sys.executable,
+            "-c",
+            "import os; print(os.environ.get('PROBE_006', ''), os.environ.get('PATH', '') != '')",
+        ],
+        timeout=30,
+        stream=False,
+        heartbeat=0,
+        env={"PROBE_006": "seen"},
+    )
+    assert result.stdout.strip() == "seen True"
+
+
+# 🧪 TRAP[TEST] · Regression · streaming: check=True на ненулевом rc → PlatformFatalError (006 W1)
+# · Scenario: rc=3 + check=True → raise; graceful-путь rc=3 возвращается
+# · Last fail: N/A (new — DevPlan 006 W1, parity с run_subprocess)
+# · Remove if: run_subprocess_streaming удалён
+def test_streaming_check_true_raises() -> None:
+    """check=True: ненулевой rc → PlatformFatalError; check=False → graceful."""
+    code = "import sys; sys.exit(3)"
+    with pytest.raises(PlatformFatalError):
+        run_subprocess_streaming([sys.executable, "-c", code], timeout=30, stream=False, check=True)
+    result = run_subprocess_streaming([sys.executable, "-c", code], timeout=30, stream=False)
+    assert result.returncode == 3

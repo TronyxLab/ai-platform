@@ -24,6 +24,9 @@
 ##            и retry-once (fix 895-901, gate 1198-1204) — механическая консолидация с семантикой
 ##            1:1 (research-A §1). Late-binding через пакет — требование совместимости
 ##            monkeypatch-контракта тестов (check_suite.X), не рост DI.
+## @changes 2026-08-17 | DevPlan 006 W2 — run_cmd мигрирован на run_subprocess_streaming
+##           (единый streaming-канон: tee в stderr, heartbeat, killpg, partial-вывод; PYTHONUNBUFFERED
+##           и orphan-TRAP 141 теперь в каноне shared/subprocess_io)
 ## @changes 170 W3 — extracted from check_suite.py (monolith 1666→package); 170 private-imports:
 ##           приватные имена переименованы в публичные (U-07)
 ##           v1.0.1 (0.8) — xdist memory-guard: TRAP[BUG] OOM на dev-машине (16 GB, 12 CPU):
@@ -40,16 +43,14 @@ import contextlib
 import logging
 import os
 import shlex
-import signal
-import subprocess
 import sys
-import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
 from core.internal import check_suite as cs
 from core.internal.check_suite.models import CheckOutcome, CheckSpec
+from core.internal.shared.subprocess_io import run_subprocess, run_subprocess_streaming
 
 logger = logging.getLogger(__name__)
 
@@ -90,12 +91,9 @@ def _resolve_command_tokens(tokens: list[str], root: Path) -> list[str]:
 ## @complexity O(1) — subprocess python -c "import xdist"
 def has_xdist(python_path: str) -> bool:
     """Best-effort availability check for pytest-xdist."""
-    try:
-        result = subprocess.run([python_path, "-c", "import xdist"], capture_output=True, timeout=5, check=False)
-    except (OSError, subprocess.TimeoutExpired):  # noqa: EXC — best-effort check
-        return False
-    else:
-        return result.returncode == 0
+    # DevPlan 006 W3: subprocess.run → run_subprocess (graceful-канон, rc 127/124 не raise)
+    result = run_subprocess([python_path, "-c", "import xdist"], timeout=5, check=False)
+    return result.returncode == 0
 
 
 # endregion FUNC_has_xdist
@@ -278,85 +276,52 @@ def run_cmd(
 ) -> CheckOutcome:
     """Run a single check command; never raises on check failure."""
     tokens = _resolve_command_tokens(shlex.split(cmd_str), root)
-    start = time.monotonic()
-    # 2026-08-16: python-дети всегда unbuffered — вывод стримится в pipe по строкам;
-    # блок-буфер (8KB) терял частичный вывод при таймаут-килле (CI smoke-hang 900s
-    # с 0 видимым выводом — pytest-вывод не флашился до смерти процесса).
-    child_env = dict(env)
-    child_env["PYTHONUNBUFFERED"] = "1"
-    # ruff: ignore[PLW0717] — тело try присваивает имена, читаемые except/после — извлечение ломает видимость
-    try:
-        with cs.docker_suite_lock(root) if docker_lock else contextlib.nullcontext():  # late-binding: DI-HYG
-            # ⚠️ TRAP[BUG] · 2026-08-06 · P1 · Ночная сессия 141 — таймаут-килл оставлял орфанов
-            # · Symptom: static_audit >300s → subprocess.run(timeout) убивал ТОЛЬКО pytest-родителя;
-            # ·   xdist-воркеры/дети осиротевали и ПРОДОЛЖАЛИ мутировать tests/ (junitxml, __pycache__)
-            # ·   → последующий doxygen-check парсил дерево во время мутаций → 46 «unexpanded alias»
-            # ·   (flex-баг 1.17.0) → gate/check флакали; орфан жил часами.
-            # · Fix: start_new_session + killpg при TimeoutExpired (весь process-group).
-            proc = subprocess.Popen(
-                tokens,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                cwd=str(root),
-                env=child_env,
-                start_new_session=True,
-            )
-            try:
-                proc_stdout, proc_stderr = proc.communicate(timeout=timeout)
-            except subprocess.TimeoutExpired as exc:
-                duration = (time.monotonic() - start) * 1000
-                try:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                    logger.warning(
-                        "[IMP:7][run_cmd][timeout] %s TIMEOUT after %ds — killed process group %d",
-                        cmd_str[:80],
-                        timeout,
-                        proc.pid,
-                    )
-                except (ProcessLookupError, PermissionError):
-                    pass  # процесс уже мёртв
-                proc.wait()
-                # 2026-08-16: частичный вывод НЕ теряется (communicate-timeout буферы
-                # exc.output/exc.stderr) — CI smoke-hang (900s, 0 видимого вывода) не давал
-                # диагностики. PYTHONUNBUFFERED=1 в CI-шаге + хвост частичного вывода.
-                partial_out_raw = cast(object, exc.output) or ""
-                partial_err_raw = cast(object, exc.stderr) or ""
-                partial_out = partial_out_raw if isinstance(partial_out_raw, str) else ""
-                partial_err = partial_err_raw if isinstance(partial_err_raw, str) else ""
-                if partial_out:
-                    logger.info("[IMP:9][run_cmd][timeout][partial-stdout] %s", partial_out[-4000:])
-                if partial_err:
-                    logger.info("[IMP:9][run_cmd][timeout][partial-stderr] %s", partial_err[-4000:])
-                return CheckOutcome(
-                    name=tokens[0] if tokens else "?",
-                    exit_code=124,
-                    stderr=f"Timeout after {timeout}s",
-                    duration_ms=duration,
-                )
-        duration = (time.monotonic() - start) * 1000
-        logger.info(
-            "[IMP:8][run_cmd][exec] %s → exit=%d (%.1fs)",
-            " ".join(tokens)[:120],
-            proc.returncode,
-            duration / 1000,
+    # DevPlan 006 W2: Popen+communicate → run_subprocess_streaming (единый streaming-канон
+    # shared/subprocess_io: tee в stderr по строкам, heartbeat, killpg при таймауте, partial
+    # вывод всегда сохранён; PYTHONUNBUFFERED=1 канон задаёт сам; TRAP[BUG] 141-орфаны —
+    # start_new_session+killpg внутри канона).
+    with cs.docker_suite_lock(root) if docker_lock else contextlib.nullcontext():  # late-binding: DI-HYG
+        result = run_subprocess_streaming(
+            tokens,
+            timeout=timeout,
+            env=env,
+            cwd=str(root),
+            stream=True,
+            heartbeat=30,
         )
+    if result.timed_out:
+        if result.stdout:
+            logger.info("[IMP:9][run_cmd][timeout][partial-stdout] %s", result.stdout[-4000:])
+        if result.stderr:
+            logger.info("[IMP:9][run_cmd][timeout][partial-stderr] %s", result.stderr[-4000:])
         return CheckOutcome(
-            name=tokens[0],
-            exit_code=proc.returncode,
-            stdout=proc_stdout,
-            stderr=proc_stderr,
-            duration_ms=duration,
+            name=tokens[0] if tokens else "?",
+            exit_code=124,
+            stderr=f"Timeout after {timeout}s",
+            duration_ms=result.duration_ms,
         )
-    except FileNotFoundError:
-        duration = (time.monotonic() - start) * 1000
+    rc_not_found = 127  # паритет run_cmd: FileNotFoundError-семантика канона → CheckOutcome
+    if result.returncode == rc_not_found and result.stderr.endswith(": not found"):
         logger.error("[IMP:9][run_cmd][missing] Command not found: %s", tokens[0] if tokens else "?")
         return CheckOutcome(
             name=tokens[0] if tokens else "?",
             exit_code=127,
             stderr=f"Command not found: {tokens[0] if tokens else '?'}",
-            duration_ms=duration,
+            duration_ms=result.duration_ms,
         )
+    logger.info(
+        "[IMP:8][run_cmd][exec] %s → exit=%d (%.1fs)",
+        " ".join(tokens)[:120],
+        result.returncode,
+        result.duration_ms / 1000,
+    )
+    return CheckOutcome(
+        name=tokens[0],
+        exit_code=result.returncode,
+        stdout=result.stdout,
+        stderr=result.stderr,
+        duration_ms=result.duration_ms,
+    )
 
 
 # endregion FUNC_run_cmd

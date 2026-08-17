@@ -24,13 +24,13 @@ import logging
 import os
 import re
 import shlex
-import subprocess
 import sys
 import time
 from pathlib import Path
 
 from core.internal import check_suite as cs
 from core.internal.check_suite.report import format_report
+from core.internal.shared.subprocess_io import run_subprocess_streaming
 
 logger = logging.getLogger(__name__)
 
@@ -47,30 +47,21 @@ def diff_files(root: Path) -> list[str] | None:
     """Collect changed files: tracked (vs HEAD) + untracked non-ignored."""
     changed: list[str] = []
     # ruff: ignore[PLW0717] — try-тело содержит return-ветки с fall-through (после-try код) — извлечение небезопасно
+    # DevPlan 006 W3: subprocess.run → run_subprocess_streaming (graceful; rc!=0 → None)
     try:
-        r1 = subprocess.run(
-            ["git", "diff", "--name-only", "HEAD"],
-            capture_output=True,
-            text=True,
-            cwd=str(root),
-            timeout=30,
-            check=False,
+        r1 = run_subprocess_streaming(
+            ["git", "diff", "--name-only", "HEAD"], timeout=30, cwd=str(root), stream=False, heartbeat=0
         )
         if r1.returncode != 0:
             return None
         changed.extend(line for line in r1.stdout.splitlines() if line.strip())
-        r2 = subprocess.run(
-            ["git", "ls-files", "-o", "--exclude-standard"],
-            capture_output=True,
-            text=True,
-            cwd=str(root),
-            timeout=30,
-            check=False,
+        r2 = run_subprocess_streaming(
+            ["git", "ls-files", "-o", "--exclude-standard"], timeout=30, cwd=str(root), stream=False, heartbeat=0
         )
         if r2.returncode != 0:
             return None
         changed.extend(line for line in r2.stdout.splitlines() if line.strip())
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+    except OSError:
         return None
     return sorted(set(changed))
 

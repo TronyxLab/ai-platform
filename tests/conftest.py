@@ -33,20 +33,6 @@ import pytest
 import yaml
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# CI smoke-hang диагностика (2026-08-17, platform-test): флаки-hang смоука ДО баннера
-# pytest (900s, 0 вывода; run 32025761115/32029164898) происходит ДО pytest_configure —
-# в import-цепочке conftest. SMOKE_HANG_PROBE=1 (CI) включает: (1) faulthandler-арм
-# ПРЯМО ЗДЕСЬ (самое начало module-уровня — до импортов _conftest) — dump_traceback_later(600s)
-# дампит СТЕКИ ВСЕХ ПОТОКОВ через 10 минут; (2) bisect-печати между импорт-блоками —
-# последняя печать перед зависанием указывает точный модуль. Локально env не задан → no-op.
-_HANG_PROBE = os.environ.get("SMOKE_HANG_PROBE") == "1"
-if _HANG_PROBE:
-    import faulthandler
-
-    faulthandler.dump_traceback_later(600, exit=False)
-    print("[conftest-import] begin (faulthandler armed 600s)", flush=True)
-
-
 # ── Test import paths: canonical roots for all test files ────────────────────
 # DevPlan 117 Brief F (T6 #47, D47-A): добавляем repo_root/, core/, core/internal/
 # через site.addsitedir — общие пути, используемые >50% тестов. Это легитимизирует
@@ -57,20 +43,11 @@ for _p in (_PKG_ROOT, _PKG_ROOT / "core", _PKG_ROOT / "core" / "internal", _PKG_
     site.addsitedir(str(_p))
 
 from _conftest import *  # ruff: ignore[F403]
-
-if _HANG_PROBE:
-    print("[conftest-import] _conftest star done", flush=True)
 from _conftest.containers import _module_container_running  # ruff: ignore[F401]  # DevPlan 170 W8: containers.py
-
-if _HANG_PROBE:
-    print("[conftest-import] containers done", flush=True)
 
 # Also import underscore-prefixed names explicitly (not included in *)
 # — autouse fixtures (needed for pytest discovery) —
 from _conftest.e2e import _e2e_disable_proxy, _load_test_env  # ruff: ignore[F401]
-
-if _HANG_PROBE:
-    print("[conftest-import] e2e done", flush=True)
 
 # — consumed by test files via `from conftest import ...` —
 from _conftest.infra import _test_infra_was_active  # ruff: ignore[F401]
@@ -86,9 +63,6 @@ from _conftest.quarantine import pytest_collection_modifyitems as _quarantine_co
 from _conftest.session import _fixture_schema_integrity  # ruff: ignore[F401] — autouse per-test fail (T12.5 T-8)
 from _conftest.state_reset import _reset_fresh_state  # ruff: ignore[F401]
 from _conftest.wave_pipeline import _ensure_wave_ready  # ruff: ignore[F401]
-
-if _HANG_PROBE:
-    print("[conftest-import] wave_pipeline done", flush=True)
 
 logger = logging.getLogger(__name__)
 
@@ -241,32 +215,3 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 from _conftest.shared import _is_xdist_worker
 
 # endregion FUNC_is_xdist_worker
-
-
-# region FUNC_hang_probe
-## @purpose  CI smoke-hang диагностика (2026-08-17, platform-test): флаки-hang смоука ДО баннера
-##            pytest (900s, 0 вывода, run 32025761115) происходит в фазах вне pytest-timeout
-##            (pytest_sessionstart/collection). При SMOKE_HANG_PROBE=1 (CI gate-step env)
-##            pytest_configure вооружает faulthandler.dump_traceback_later(600s, exit=False) —
-##            дамп СТЕКОВ ВСЕХ ПОТОКОВ в stderr через 10 минут (exit=False: здоровый медленный
-##            прогон не роняется; отмена в sessionfinish). Следующий hang покажет ТОЧКУ.
-## @io       → ⎋ None (side-effect: faulthandler-таймер)
-## @complexity O(1)
-_HANG_PROBE_ARMED = False
-
-
-def pytest_configure(config: object) -> None:
-    """Arm faulthandler dump BEFORE sessionstart/collection when SMOKE_HANG_PROBE=1."""
-    global _HANG_PROBE_ARMED  # ruff: ignore[PLW0603] — diagnostic state, single-threaded startup
-    if os.environ.get("SMOKE_HANG_PROBE") == "1":
-        import faulthandler
-
-        faulthandler.dump_traceback_later(600, exit=False)
-        _HANG_PROBE_ARMED = True
-        logger.info("[IMP:7][hang_probe] faulthandler.dump_traceback_later(600s) armed — SMOKE_HANG_PROBE=1")
-    # NOTE: cancel в pytest_sessionfinish НЕ добавляем — tests/conftest.py НЕ определяет этот
-    # хук (зашэдоулил бы re-export pytest_sessionfinish из _conftest.session — counter/cleanup).
-    # Таймер faulthandler не блокирует выход процесса; здоровый прогон просто не доживает до 600s.
-
-
-# endregion FUNC_hang_probe

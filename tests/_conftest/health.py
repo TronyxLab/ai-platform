@@ -25,6 +25,7 @@
 
 import json
 import logging
+import os
 import subprocess
 import threading
 import time as _time
@@ -171,12 +172,27 @@ def _poll_minio_health_once(compose_base_args: list[str]) -> bool:
     ## @io — ⇥ compose_base_args → ⎋ bool (minio running+healthy в этом снимке)
     ## @complexity — O(N) где N = строки JSONL вывода
     """
+    # DevPlan 006 W6: SMOKE_ENV обязана попасть и в compose ps — root compose включает
+    # nginx с ${NGINX_OVERLAY_DIR:?} (B23): без smoke-env интерполяция ВСЕГДА падает
+    # → poll вечно возвращает False → minio ложно «not healthy within 120s» (корень
+    # флака ci-docker smoke). Плюс stderr-tail в warning (прежний лог глотал причину).
+    from _conftest.env import get_smoke_env
+
     try:
         ps_result = subprocess.run(
-            [*compose_base_args, "ps", "--format", "json"], capture_output=True, text=True, timeout=15, check=False
+            [*compose_base_args, "ps", "--format", "json"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+            env={**os.environ, **get_smoke_env()},
         )
         if ps_result.returncode != 0:
-            logger.warning("[IMP:8][health][_wait_for_minio_healthy] docker compose ps failed")
+            logger.warning(
+                "[IMP:8][health][_wait_for_minio_healthy] docker compose ps failed rc=%d: %s",
+                ps_result.returncode,
+                (ps_result.stderr or "").strip()[-200:],
+            )
             return False
         return _minio_healthy_in_output(ps_result.stdout)
     except subprocess.TimeoutExpired:

@@ -60,6 +60,7 @@ from _conftest.ldd import _ensure_volume_dirs
 from _conftest.networks import TEST_NETWORKS, get_network_manager, is_production_host
 from _conftest.shared import build_waves
 from _conftest.wave_pipeline import _init_wave_events, signal_wave_ready
+from core.internal.shared.subprocess_io import StreamingResult, run_subprocess_streaming
 
 logger = logging.getLogger(__name__)
 
@@ -208,12 +209,15 @@ def _run_docker_smoke(
     args: list[str],
     env_override: dict[str, str] | None = None,
     timeout: int = 60,
-) -> subprocess.CompletedProcess:
-    """Run a docker subprocess with SMOKE_ENV merged into os.environ.
+) -> StreamingResult:
+    """Run a docker subprocess with SMOKE_ENV merged into os.environ (streaming canon).
 
     ## @purpose — Centralised docker subprocess runner for smoke tests.
-    ## @io — ⇥ args, env_override, timeout → ⎋ CompletedProcess
+    ## @io — ⇥ args, env_override, timeout → ⎋ StreamingResult (.stdout/.stderr/.returncode
+    ##        совместимы с CompletedProcess; потребители читают result.stderr)
     ## @complexity — O(1)
+    ## @invariants — DevPlan 006 W4: run_subprocess_streaming — построчный tee в stderr
+    ##        (живой docker compose вывод в CI), killpg при таймауте, partial-вывод сохранён.
     """
     # ⚠️ TRAP[BUG] · 2026-08-06 · HI · R13 (142 W8): `**SMOKE_ENV` — NameError
     # · Symptom: ci-docker smoke-шаг падал «NameError: name 'SMOKE_ENV' is not defined»
@@ -224,7 +228,13 @@ def _run_docker_smoke(
     cmd_env = {**os.environ, **get_smoke_env()}
     if env_override:
         cmd_env.update(env_override)
-    return subprocess.run(args, capture_output=True, text=True, timeout=timeout, env=cmd_env, check=False)
+    return run_subprocess_streaming(
+        args,
+        timeout=timeout,
+        env=cmd_env,
+        stream=True,
+        heartbeat=30,
+    )
 
 
 def _collect_external_networks() -> set[str]:
@@ -625,6 +635,12 @@ def _start_single_module(
 ## @complexity O(I) где I = собранные items сессии
 def _guard_and_activate(request: pytest.FixtureRequest) -> bool:
     """Docker guard + conditional activation (T2.2): True = start the stack."""
+    # DevPlan 006 W5: SMOKE_NO_DOCKER=1 — off-switch без подъёма стека (fast-iteration:
+    # proves «без Docker = мгновенно»; тесты продолжают идти против несуществующих сервисов)
+    if os.environ.get("SMOKE_NO_DOCKER") == "1":
+        logger.info("[IMP:8][compose][guard] SMOKE_NO_DOCKER=1 — стек НЕ поднимается (fast-iteration режим)")
+        return False
+
     if is_production_host():
         pytest.skip("Production host detected — skip smoke suite to prevent container overwrite")
 
@@ -650,21 +666,23 @@ def _generate_dev_certs_smoke() -> None:
     live_dir = cert_root / "live" / domain
     try:
         live_dir.mkdir(parents=True, exist_ok=True)
-        subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "core.modules.nginx.dev_cert_generator",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=60,
-            env={**os.environ, "DEV_CERTS_DIR": str(live_dir)},
-            check=True,
-        )
-        logger.info("[IMP:9][compose][platform_services] Dev certs generated at %s", live_dir)
-    except (OSError, subprocess.CalledProcessError) as exc:
+    except OSError as exc:
         logger.warning("[IMP:7][compose][platform_services] Dev certs generation failed (nginx-test may fail): %s", exc)
+        return
+    # DevPlan 006 W4: streaming-канон (stream=False — быстрый генератор, вывод не нужен;
+    # check-семантика прежнего check=True выражена явной проверкой rc; best-effort — warn)
+    result = run_subprocess_streaming(
+        [sys.executable, "-m", "core.modules.nginx.dev_cert_generator"],
+        timeout=60,
+        env={"DEV_CERTS_DIR": str(live_dir)},
+        stream=False,
+        heartbeat=0,
+    )
+    if result.returncode != 0:
+        msg = f"dev_cert_generator exited {result.returncode}: {result.stderr.strip()[-300:]}"
+        logger.warning("[IMP:7][compose][platform_services] Dev certs generation failed (nginx-test may fail): %s", msg)
+        return
+    logger.info("[IMP:9][compose][platform_services] Dev certs generated at %s", live_dir)
 
 
 # endregion FUNC_generate_dev_certs_smoke
@@ -814,24 +832,18 @@ def _pre_cleanup(
     # ~150-200s worst-case). Параллельный rm -f (семантика та же — идемпотентный sweep)
     # срезает до ~10s. Best-effort: TimeoutExpired/OSError — warn, не fail (sweep — защита,
     # не контракт).
+    def _rm_stale(name: str) -> int:
+        # DevPlan 006 W4: streaming-канон (timeout → rc=124 graceful; OSError — наружу)
+        return run_subprocess_streaming(["docker", "rm", "-f", name], timeout=10, stream=False, heartbeat=0).returncode
+
     STALE_CONTAINER_NAMES = _infra.stale_container_names
     with ThreadPoolExecutor(max_workers=min(8, len(STALE_CONTAINER_NAMES) or 1)) as stale_exec:
-        stale_futures = {
-            stale_exec.submit(
-                subprocess.run,
-                ["docker", "rm", "-f", cname],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                check=False,
-            ): cname
-            for cname in STALE_CONTAINER_NAMES
-        }
+        stale_futures = {stale_exec.submit(_rm_stale, cname): cname for cname in STALE_CONTAINER_NAMES}
         for future in as_completed(stale_futures):
             cname = stale_futures[future]
             try:
                 future.result()
-            except (subprocess.TimeoutExpired, OSError) as exc:
+            except OSError as exc:
                 logger.warning("[IMP:7][compose][platform_services] Stale sweep rm -f %s failed: %s", cname, exc)
     logger.info("[IMP:8][compose][platform_services] Safety net: stale containers removed")
 
@@ -984,6 +996,24 @@ def _start_waves(
     """Start compose files in wave-parallel order (Wave 0 sync → Wave 1+ background)."""
     started: list[str] = []
     failed: list[str] = []
+    # DevPlan 006 W5: SMOKE_MODULES=<csv> — фильтр волн до минимального набора модулей
+    # (bisect ci-docker smoke-hang: 1–3 модуля вместо полного стека). Зависимости фильтра
+    # сохраняются (build_waves по подграфу).
+    smoke_modules = os.environ.get("SMOKE_MODULES", "").strip()
+    if smoke_modules:
+        wanted = {m.strip() for m in smoke_modules.split(",") if m.strip()}
+        missing = wanted - set(module_graph)
+        if missing:
+            logger.warning(
+                "[IMP:7][compose][platform_services] SMOKE_MODULES: unknown module(s) ignored: %s",
+                ",".join(sorted(missing)),
+            )
+        module_graph = {m: deps for m, deps in module_graph.items() if m in wanted}
+        logger.info(
+            "[IMP:8][compose][platform_services] SMOKE_MODULES filter: %d module(s): %s",
+            len(module_graph),
+            ",".join(sorted(module_graph)),
+        )
     waves = build_waves(module_graph)
     logger.info(
         "[IMP:8][compose][platform_services] Built %d wave(s) from %d module(s)",

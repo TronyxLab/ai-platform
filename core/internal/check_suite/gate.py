@@ -29,7 +29,6 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -40,6 +39,7 @@ from core.internal.check_suite.manifest import list_checks, validate_manifest
 from core.internal.check_suite.models import CheckOutcome, CheckSpec
 from core.internal.check_suite.report import format_report
 from core.internal.check_suite.runner import run_pytest_check, run_retry_once
+from core.internal.shared.subprocess_io import run_subprocess_streaming
 
 logger = logging.getLogger(__name__)
 
@@ -80,13 +80,12 @@ def _merge_junit(root: Path, junit_paths: list[str]) -> None:
     if not merge_script.is_file():
         merge_script = PROJECT_ROOT / "tests" / "merge_junit.py"
     out = root / "tests" / "report.xml"
-    proc = subprocess.run(
+    proc = run_subprocess_streaming(
         [sys.executable, str(merge_script), *existing, "-o", str(out)],
-        capture_output=True,
-        text=True,
         timeout=120,
         cwd=str(root),
-        check=False,
+        stream=False,
+        heartbeat=0,
     )
     if proc.returncode != 0:
         print(

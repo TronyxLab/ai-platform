@@ -92,7 +92,6 @@ _WORKFLOW_LOCAL_ENV_VARS: dict[str, str] = {
     "SKIP": "pre-commit SKIP filter, workflow-local",
     "PYTHONUNBUFFERED": "CPython runtime flag (стрим pytest-вывода в CI-шаге), workflow-local",
     "PLATFORM_COMPOSE_TIMEOUT": "smoke compose-up health-wait (CI single-shot, 2026-08-17), workflow-local test tuning",
-    "SMOKE_HANG_PROBE": "faulthandler-диагностика smoke-hang (hang_probe_plugin, 2026-08-17), workflow-local",
 }
 
 

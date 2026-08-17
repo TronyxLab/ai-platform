@@ -34,12 +34,17 @@
 ## @changes  2026-08-02 | DevPlan 119 B4 — +fatal_rc=(127,); lifecycle/helpers/subprocess_io.py удалён
 ## @changes  2026-08-13 | DevPlan 160 W4b — +CommandRunner Protocol / SubprocessCommandRunner /
 ##            default_command_runner (DI-шов для users.py и тестов; поведение без изменений)
+## @changes 2026-08-17 | DevPlan 006 W1 — +StreamingResult / run_subprocess_streaming: Popen
+##            +start_new_session + reader-потоки (tee в stderr) + heartbeat + killpg при таймауте;
+##            сигнатура run_subprocess НЕ меняется (инвариант — расширение, не ломка)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import subprocess
+from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 from core.internal.shared.exceptions import PlatformFatalError
@@ -203,3 +208,194 @@ def run_subprocess(
 
 
 # endregion FUNC_run_subprocess
+
+
+# region CLASS_StreamingResult
+@dataclass
+class StreamingResult:
+    """Результат run_subprocess_streaming (DevPlan 006 W1).
+
+    ## @purpose — Совместим по атрибутам с потребностями CheckOutcome и CompletedProcess-
+    ##            контрактом потребителей: .stdout/.stderr/.returncode доступны всегда.
+    ## @io — поля данных, без side-effects
+    ## @invariants
+    ##   - stdout/stderr — ПОЛНЫЙ накопленный вывод (даже после таймаут-килла — partial)
+    ##   - timed_out=True ⇔ rc=124 (синтетический); FileNotFoundError → rc=127
+    """
+
+    cmd: list[str]
+    returncode: int
+    stdout: str
+    stderr: str
+    duration_ms: int = 0
+    timed_out: bool = False
+
+
+# endregion CLASS_StreamingResult
+
+
+# region FUNC_run_subprocess_streaming
+## @purpose  Streaming-канон subprocess (DevPlan 006 §1.1): построчный tee вывода в stderr,
+##           heartbeat, killpg при таймауте — НИКОГДА не raise при check=False.
+## @io       ⇥ cmd + timeout/env/cwd/stream/heartbeat/check/non_fatal/fatal_rc
+##           ⎋ StreamingResult (stdout/stderr/returncode/duration_ms/timed_out)
+##           ⚡ PlatformFatalError (check=True / реальный rc ∈ fatal_rc)
+## @complexity O(M) where M = command execution time
+## @invariants
+##   - Popen(stdout=PIPE, stderr=PIPE, text=True, start_new_session=True); child env всегда
+##     содержит PYTHONUNBUFFERED=1 (дети не буферизуют Python-вывод)
+##   - 2 reader-потока: при stream=True — tee каждой строки в sys.stderr с префиксом [child];
+##     всегда накапливают полный вывод в буфере (для отчёта/asserts)
+##   - heartbeat>0: каждые heartbeat секунд в sys.stderr «[stream][heartbeat] elapsed=Xs pid=Y»
+##   - Таймаут → os.killpg(SIGKILL) всей группы → drain reader-потоков → StreamingResult(rc=124,
+##     timed_out=True, partial stdout/stderr) — graceful, никогда не raise (R2/R6: без орфанов)
+##   - FileNotFoundError → StreamingResult(rc=127) graceful при check=False
+##   - stdout вызывающего процесса остаётся чистым: стрим и heartbeat — ТОЛЬКО в sys.stderr
+def run_subprocess_streaming(
+    cmd: list[str],
+    *,
+    timeout: int | None = DEFAULT_TIMEOUT,
+    env: dict[str, str] | None = None,
+    cwd: str | None = None,
+    stream: bool = True,
+    heartbeat: int = 30,
+    check: bool = False,
+    non_fatal: bool = False,
+    fatal_rc: tuple[int, ...] = (),
+) -> StreamingResult:
+    """Run a subprocess streaming output line-by-line to stderr (DevPlan 006 W1).
+
+    ▶ ┌cmd┐ → ○ Popen(new_session) → ⊕ reader-потоки (tee в stderr) + heartbeat-поток →
+      ◇ таймаут? killpg+drain → ⎋ rc=124 timed_out → ◇ не найден? ⎋ rc=127 →
+      ◇ rc!=0 → check/fatal_rc? raise │ non_fatal? WARN │ ⎋ StreamingResult
+    """
+    import os
+    import signal
+    import sys
+    import threading
+    import time
+
+    logger.info(
+        "[IMP:8][run_subprocess_streaming][exec] Running: %s (timeout=%ss, stream=%s)",
+        " ".join(cmd),
+        timeout,
+        stream,
+    )
+    child_env = dict(os.environ if env is None else {**os.environ, **env})
+    child_env["PYTHONUNBUFFERED"] = "1"
+
+    stdout_lines: list[str] = []
+    stderr_lines: list[str] = []
+
+    def _emit(line: str) -> None:
+        if stream and line:
+            sys.stderr.write(f"[child] {line}\n")
+            sys.stderr.flush()
+
+    def _reader(pipe, sink: list[str]) -> None:
+        try:
+            for raw in pipe:
+                line = raw.rstrip("\n")
+                sink.append(line)
+                _emit(line)
+        finally:
+            with contextlib.suppress(OSError):
+                pipe.close()
+
+    def _heartbeat_loop(pid: int, stop: threading.Event) -> None:
+        started = time.monotonic()
+        while not stop.wait(heartbeat):
+            sys.stderr.write(f"[IMP:8][stream][heartbeat] elapsed={int(time.monotonic() - started)}s pid={pid}\n")
+            sys.stderr.flush()
+
+    start = time.monotonic()
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+            env=child_env,
+            cwd=cwd,
+        )
+    except FileNotFoundError:
+        logger.warning("[IMP:7][run_subprocess_streaming][not-found] Binary not found: %s", cmd[0])
+        if check:
+            msg = f"Command not found: {cmd[0]}"
+            raise PlatformFatalError(msg) from None
+        return StreamingResult(cmd, 127, "", f"{cmd[0]}: not found")
+
+    hb_thread: threading.Thread | None = None
+    hb_stop = threading.Event()
+    if heartbeat and heartbeat > 0:
+        hb_thread = threading.Thread(
+            target=_heartbeat_loop, args=(proc.pid, hb_stop), daemon=True, name="stream-heartbeat"
+        )
+        hb_thread.start()
+
+    t_out = threading.Thread(target=_reader, args=(proc.stdout, stdout_lines), daemon=True)
+    t_err = threading.Thread(target=_reader, args=(proc.stderr, stderr_lines), daemon=True)
+    t_out.start()
+    t_err.start()
+
+    timed_out = False
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        logger.warning(
+            "[IMP:7][run_subprocess_streaming][timeout] Timed out after %ss: %s — killpg",
+            timeout,
+            " ".join(cmd),
+        )
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            proc.kill()  # группа уже умерла или недоступна — добить напрямую
+        proc.wait()
+
+    hb_stop.set()
+    # R2: drain reader-потоков после килла — pipe закрыт, потоки завершаются сами
+    t_out.join(timeout=10)
+    t_err.join(timeout=10)
+
+    duration_ms = int((time.monotonic() - start) * 1000)
+    stdout_text = "\n".join(stdout_lines)
+    stderr_text = "\n".join(stderr_lines)
+    returncode = 124 if timed_out else proc.returncode
+
+    result = StreamingResult(
+        cmd,
+        returncode,
+        stdout_text,
+        stderr_text,
+        duration_ms=duration_ms,
+        timed_out=timed_out,
+    )
+
+    if timed_out:
+        return result  # graceful: rc=124 + partial вывод, никогда не raise при check=False
+
+    if result.returncode != 0:
+        if check or result.returncode in fatal_rc:
+            msg = f"Command {' '.join(cmd)} failed (exit={result.returncode}): {stderr_text.strip()[:500]}"
+            raise PlatformFatalError(msg)
+        if non_fatal:
+            logger.warning(
+                "[IMP:7][run_subprocess_streaming][warn] Command returned %d: %s",
+                result.returncode,
+                stderr_text.strip()[:200],
+            )
+        else:
+            logger.info(
+                "[IMP:8][run_subprocess_streaming][rc] Command returned %d (graceful): %s",
+                result.returncode,
+                stderr_text.strip()[:120],
+            )
+    else:
+        logger.info("[IMP:9][run_subprocess_streaming][ok] Command succeeded (exit=0): %s", " ".join(cmd))
+    return result
+
+
+# endregion FUNC_run_subprocess_streaming

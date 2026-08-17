@@ -34,6 +34,7 @@ from typing import TypedDict, cast
 
 from core.internal import check_suite as cs
 from core.internal.check_suite.report import CheckPayload
+from core.internal.shared.subprocess_io import run_subprocess_streaming
 
 logger = logging.getLogger(__name__)
 
@@ -75,19 +76,20 @@ _FINGERPRINT_EXTRA_FILES = ("core/check-suite.yaml", ".pre-commit-config.yaml", 
 def tree_files(root: Path) -> list[str] | None:
     """List tree files (tracked + untracked non-ignored) via one git subprocess."""
     try:
-        result = subprocess.run(
+        # DevPlan 006 W3: subprocess.run → run_subprocess_streaming (graceful; rc!=0 → None)
+        result = run_subprocess_streaming(
             ["git", "ls-files", "-c", "-o", "--exclude-standard", "-z"],
-            capture_output=True,
-            cwd=str(root),
             timeout=60,
-            check=False,
+            cwd=str(root),
+            stream=False,
+            heartbeat=0,
         )
         if result.returncode != 0:
             return None
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+    except OSError:
         return None
     files: list[str] = []
-    for raw in result.stdout.decode("utf-8", errors="replace").split("\0"):
+    for raw in result.stdout.split("\0"):
         if not raw:
             continue
         if any(part in FINGERPRINT_EXCLUDE_PARTS for part in raw.split("/")):
@@ -149,8 +151,8 @@ def compute_fingerprint(root: Path) -> str | None:
 ## @io       ⇥ root → ⎋ результат try-тела
 ## @complexity O(1) — извлечение управляющего потока
 def _plw_body__cache_path(root):
-    result = subprocess.run(
-        ["git", "rev-parse", "--git-dir"], capture_output=True, text=True, cwd=str(root), timeout=15, check=False
+    result = run_subprocess_streaming(
+        ["git", "rev-parse", "--git-dir"], timeout=15, cwd=str(root), stream=False, heartbeat=0
     )
     if result.returncode != 0:
         return None

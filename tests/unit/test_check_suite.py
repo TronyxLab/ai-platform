@@ -820,6 +820,22 @@ def test_run_cmd_timeout_keeps_partial_output(caplog, tmp_path) -> None:
     logger.critical("[IMP:9][test] _run_cmd timeout partial-output PASS")
 
 
+# 🧪 TRAP[TEST] · Regression · DevPlan 006 W2 · run_cmd: FileNotFoundError → exit 127 (streaming-канон)
+# · Scenario: несуществующий бинарный → CheckOutcome(exit_code=127, "Command not found"), не raise
+# · Last fail: N/A (new — parity run_cmd после миграции на run_subprocess_streaming)
+# · Remove if: run_cmd 127-семантика меняется
+@ldd_trajectory
+def test_run_cmd_not_found_rc127(caplog, tmp_path) -> None:
+    """FileNotFoundError → CheckOutcome exit_code=127 (graceful, никогда не raise)."""
+    import os
+
+    caplog.set_level(logging.INFO)
+    out = _run_cmd("definitely-not-a-binary-006 --flag", 10, os.environ.copy(), tmp_path)
+    assert out.exit_code == 127, f"ожидался exit 127 (not found), rc={out.exit_code}"
+    assert "not found" in (out.stderr or "")
+    logger.critical("[IMP:9][test] _run_cmd not-found rc=127 PASS")
+
+
 # endregion Tests: xdist application
 
 

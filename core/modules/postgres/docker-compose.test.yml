@@ -39,8 +39,14 @@ services:
   postgres:
     container_name: postgres-test
     restart: "no"
+    # DevPlan 006 W6 (закрытие Dep 017 DNS-alias): alias = service-name — pgbouncer
+    # (DATABASE_URLS @postgres:5432) и wave-1 потребители (litellm/langfuse Prisma
+    # @postgres:5432) резолвят прод-имена; без alias на external test-сети резолвится
+    # только container_name (postgres-test) → P1001 «Can't reach database server».
+    # DNS-загрязнения нет: production-стек НЕ подключён к test-shared-db-net.
     networks: !override  # DevPlan 017 W2.1 — test network isolation
-      - test-shared-db-net
+      test-shared-db-net:
+        aliases: [postgres]
     environment:
       # 🧐 TRAP[DECISION] · 2026-07-03 · — · POSTGRES_HOST_AUTH_METHOD=trust для тестов
       # · Rejected: md5/scram-sha-256 (production)
@@ -63,8 +69,13 @@ services:
   pgbouncer:
     container_name: pgbouncer-test
     restart: "no"
+    # DevPlan 006 W6 (закрытие Dep 017 DNS-alias): alias = service-name — langfuse
+    # (DATABASE_URL @pgbouncer:6432) и litellm (@pgbouncer:6432) резолвят прод-имя;
+    # без alias → P1001 + 120s poll-петля в _module_container_running на каждый тест
+    # (корень ci-docker smoke 900s-hang).
     networks: !override  # DevPlan 017 W2.1 — test network isolation
-      - test-shared-db-net
+      test-shared-db-net:
+        aliases: [pgbouncer]
     environment:
       # 🔧 B3 fix (DevPlan 034): Docker Compose override replaces environment mappings,
       # not deep-merges. base.yml DATABASE_URLS/DB_USER/DB_PASSWORD were lost in test.yml.

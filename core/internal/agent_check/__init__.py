@@ -66,6 +66,7 @@ import yaml
 # W1-A1 (план 170): литералы таймаутов → канон SoT (AMBER-зачистка research-D §D1).
 # 30 (команды-пробы) → CONVERGE_DOCKER_TIMEOUT; 60 (ruff/static) → SYSTEM_CMD_TIMEOUT;
 # 120 (basedpyright) → LIFECYCLE_CMD_TIMEOUT.
+from core.internal.shared.subprocess_io import run_subprocess_streaming
 from core.internal.shared.timeouts import (
     CONVERGE_DOCKER_TIMEOUT,
     LIFECYCLE_CMD_TIMEOUT,
@@ -422,19 +423,19 @@ def _git_changed(root: Path, environ: Mapping[str, str]) -> ChangedFiles:
     """
     git_bin = _venv_tool("git", environ) or "git"
     rels: set[str] = set()
-    commands: tuple[tuple[str, ...], ...] = (
-        (git_bin, "diff", "--name-only", "HEAD", "--"),
-        (git_bin, "ls-files", "--others", "--exclude-standard"),
+    commands: tuple[list[str], ...] = (
+        [git_bin, "diff", "--name-only", "HEAD", "--"],
+        [git_bin, "ls-files", "--others", "--exclude-standard"],
     )
     for cmd in commands:
         try:
-            proc = subprocess.run(
+            # DevPlan 006 W4: streaming-канон (killpg/heartbeat; stream=False — быстрый git-вызов)
+            proc = run_subprocess_streaming(
                 cmd,
-                cwd=root,
-                capture_output=True,
-                text=True,
+                cwd=str(root),
                 timeout=CONVERGE_DOCKER_TIMEOUT,
-                check=False,
+                stream=False,
+                heartbeat=0,
             )
         except (OSError, subprocess.SubprocessError) as exc:
             logger.warning("[IMP:7][git][changed] %s failed: %s — empty changed set", cmd[1], exc)
@@ -525,7 +526,8 @@ def run_ruff(
     cmd += list(files)
     logger.info("[IMP:8][ruff][run] %s (%d file(s))", "advisory" if select else "blocking", len(files))
     try:
-        proc = subprocess.run(cmd, cwd=root, capture_output=True, text=True, timeout=SYSTEM_CMD_TIMEOUT, check=False)
+        # DevPlan 006 W4: streaming-канон; stream=False — stdout = ruff JSON (machine-readable)
+        proc = run_subprocess_streaming(cmd, cwd=str(root), timeout=SYSTEM_CMD_TIMEOUT, stream=False, heartbeat=0)
     except (OSError, subprocess.SubprocessError) as exc:
         return [_infra_finding("ruff", f"subprocess failed: {exc}")], _elapsed_ms(start)
     if proc.returncode != 0 and not proc.stdout.strip():
@@ -590,7 +592,8 @@ def run_basedpyright(
     cmd = [basedpyright, "--level", "error", "--outputjson", *files]
     logger.info("[IMP:8][basedpyright][run] %d file(s)", len(files))
     try:
-        proc = subprocess.run(cmd, cwd=root, capture_output=True, text=True, timeout=LIFECYCLE_CMD_TIMEOUT, check=False)
+        # DevPlan 006 W4: streaming-канон; stream=False — stdout = basedpyright JSON
+        proc = run_subprocess_streaming(cmd, cwd=str(root), timeout=LIFECYCLE_CMD_TIMEOUT, stream=False, heartbeat=0)
     except (OSError, subprocess.SubprocessError) as exc:
         return [_infra_finding("basedpyright", f"subprocess failed: {exc}")], _elapsed_ms(start)
     if not proc.stdout.strip():
@@ -654,9 +657,8 @@ def run_static(root: Path) -> tuple[list[AgentFinding], float]:
     cmd = [sys.executable, "-m", "core.internal.static", "check", "--changed", "--json", "--root", str(root)]
     logger.info("[IMP:8][static][run] %s", " ".join(cmd))
     try:
-        proc = subprocess.run(
-            cmd, cwd=_REPO_ROOT, capture_output=True, text=True, timeout=SYSTEM_CMD_TIMEOUT, check=False
-        )
+        # DevPlan 006 W4: streaming-канон; stream=False — stdout = static JSON
+        proc = run_subprocess_streaming(cmd, cwd=str(_REPO_ROOT), timeout=SYSTEM_CMD_TIMEOUT, stream=False, heartbeat=0)
     except (OSError, subprocess.SubprocessError) as exc:
         return [_infra_finding("static", f"subprocess failed: {exc}")], _elapsed_ms(start)
     if not proc.stdout.strip():

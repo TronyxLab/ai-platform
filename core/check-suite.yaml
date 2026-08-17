@@ -192,15 +192,14 @@ checks:
     junit: tests/report-predeploy.xml
     diagnostic: false
   - id: smoke
-    # 2026-08-17 (CI smoke 900s-hang — висит session-фикстура platform_services с НУЛЕВЫМ
-    # видимым выводом): -s + --log-cli-level=INFO — прогресс фикстуры стримится в лог gate
-    # ЖИВЬЁМ (pytest capture глотал [IMP:...] логи до конца сессии; при таймаут-килле всё
-    # терялось). Следующий hang покажет ТОЧКУ зависания вместо чёрного ящика.
-    # SMOKE_HANG_PROBE=1 (CI): python3 -c wrapper вооружает faulthandler.dump_traceback_later(600s)
-    # ДО импорта pytest (sys.path[0]=cwd) — флаки-hang смоука происходит ДО tests/conftest.py
-    # (run 32029164898/32031577141: 900s, 0 вывода, даже [conftest-import] begin не печатался),
-    # поэтому арм в conftest не срабатывал. Wrapper покрывает import/collection/sessionstart.
-    cmd: python3 -c "import faulthandler, os; faulthandler.dump_traceback_later(600, exit=False) if os.environ.get('SMOKE_HANG_PROBE') == '1' else None; import sys; from pytest import main; sys.exit(main(sys.argv[1:]))" tests/ -m "smoke" -v -s --log-cli-level=INFO --tb=short -rs --timeout=600 --junitxml=tests/report-smoke.xml
+    # 2026-08-17 (CI smoke 900s-hang): локализован и исправлен в DevPlan 006 W6 — корни:
+    # (1) DNS-alias'ы postgres/pgbouncer на test-shared-db-net (P1001 + 120s poll-петли),
+    # (2) SMOKE_ENV не попадала в compose ps (minio health-poll вечно False). Плюс единый
+    # streaming-канон run_subprocess_streaming (DevPlan 006 W1-W4): вывод docker compose
+    # стримится в stderr ЖИВЬЁМ с префиксом [child] + heartbeat — следующий hang покажет
+    # ТОЧКУ зависания вместо чёрного ящика. faulthandler-диагностика консолидирована в
+    # pytest-native faulthandler_timeout=600 (pyproject.toml, O3) — wrapper удалён.
+    cmd: pytest tests/ -m "smoke" -v -s --log-cli-level=INFO --tb=short -rs --timeout=600 --junitxml=tests/report-smoke.xml
     tier: pytest
     # 142 W8 (R13): 600 → 900 — полный стек 23 контейнера + macOS Docker Desktop +
     # параллельные dev-сессии; smoke стабильно укладывался в ~6 мин изолированно,

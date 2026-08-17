@@ -318,9 +318,9 @@ jobs:
           # 180s = ОДНОКРАТНЫЙ health-wait (успех вместо retry-спирали; worst-case setup
           # остаётся в бюджете после параллельного pre-cleanup).
           PLATFORM_COMPOSE_TIMEOUT: 180
-          # 2026-08-17: SMOKE_HANG_PROBE=1 — активирует -p hang_probe_plugin (faulthandler-дамп
-          # всех потоков через 420s) для флаки-hang смоука ДО баннера pytest (0 вывода за 900s).
-          SMOKE_HANG_PROBE: 1
+          # DevPlan 006 W6: hang локализован (DNS-alias'ы + SMOKE_ENV в health-poll) и исправлен;
+          # faulthandler-диагностика консолидирована в pytest-native faulthandler_timeout=600
+          # (pyproject.toml, O3) — SMOKE_HANG_PROBE удалён.
         run: |
           make gate MODE=ci-docker SKIP_PRECOMMIT=1
 

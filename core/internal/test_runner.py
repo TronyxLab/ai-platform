@@ -38,6 +38,9 @@
 ##            (_docker_suite_lock/_run_docker_pytest) — межсессионная сериализация (F4)
 ## @changes 2026-08-12 | DevPlan 157 W2 T1 — test_file-режим валидирует существование файла
 ##            до запуска pytest: usage в stderr (канон ci.mk:149), exit 2, pytest не стартует
+## @changes 2026-08-17 | DevPlan 006 W3 — все subprocess-сайты мигрированы на streaming-канон
+##            run_subprocess_streaming (tee в stderr, heartbeat, killpg, partial-вывод);
+##            has_xdist — на run_subprocess; stdout summary остаётся machine-readable
 # endregion MODULE_CONTRACT
 
 import argparse
@@ -56,6 +59,7 @@ from pathlib import Path
 from typing import Protocol, TypedDict, cast
 
 from core.internal.shared.exceptions import ConfigValidationError, PlatformError
+from core.internal.shared.subprocess_io import StreamingResult, run_subprocess, run_subprocess_streaming
 
 logger = logging.getLogger(__name__)
 
@@ -132,12 +136,9 @@ _DOCKER_MARKERS = {"smoke", "component", "integration", "predeploy-docker"}
 ## @complexity O(1) — subprocess python -c "import xdist"
 def _has_xdist(python_path: str) -> bool:
     """Check if pytest-xdist is available for the given Python."""
-    try:
-        result = subprocess.run([python_path, "-c", "import xdist"], capture_output=True, timeout=5, check=False)
-    except (OSError, subprocess.TimeoutExpired):  # noqa: EXC — best-effort availability check
-        return False
-    else:
-        return result.returncode == 0
+    # DevPlan 006 W3: subprocess.run → run_subprocess (graceful-канон, rc 127/124 не raise)
+    result = run_subprocess([python_path, "-c", "import xdist"], timeout=5, check=False)
+    return result.returncode == 0
 
 
 # endregion FUNC_HAS_XDIST
@@ -263,7 +264,8 @@ def _docker_suite_lock(platform_root: Path):
 ## @io       ⇥ pytest_args (list[str]), env (dict), timeout (int), platform_root (Path),
 ##          lock_fn: Callable | None = None (DI, W-H DevPlan 163 — lock-contextmanager;
 ##              None = _docker_suite_lock), run_cmd: Callable | None = None (DI — subprocess-канал;
-##              None = subprocess.run) → ⎋ subprocess.CompletedProcess[str]
+##              None = run_subprocess_streaming, DevPlan 006 W3) → ⎋ StreamingResult
+##              (атрибуты .stdout/.stderr/.returncode совместимы с CompletedProcess)
 ## @complexity O(1) + время subprocess
 def _run_docker_pytest(
     pytest_args: list[str],
@@ -272,19 +274,18 @@ def _run_docker_pytest(
     platform_root: Path,
     *,
     lock_fn: Callable[..., object] | None = None,
-    run_cmd: Callable[..., subprocess.CompletedProcess[str]] | None = None,
-) -> subprocess.CompletedProcess[str]:
+    run_cmd: Callable[..., StreamingResult] | None = None,
+) -> StreamingResult:
     """Run a docker-suite pytest process under the process-level docker-suite flock (T2c)."""
     lock_impl = _docker_suite_lock if lock_fn is None else lock_fn
-    runner = subprocess.run if run_cmd is None else run_cmd
+    runner = run_subprocess_streaming if run_cmd is None else run_cmd
     with lock_impl(platform_root):
         return runner(
             [sys.executable, "-m", "pytest", str(platform_root / "tests"), *pytest_args],
             env=env,
             timeout=timeout,
-            capture_output=True,
-            text=True,
-            check=False,
+            stream=True,
+            heartbeat=30,
         )
 
 
@@ -530,53 +531,52 @@ def _run_static_full(platform_root: Path, junit_path: Path, timeout: int) -> int
         return 2
 
     env = {**os.environ, "PYTEST_NO_ESCALATION": "1"}
-    # ruff: ignore[PLW0717] — тело try присваивает имена, читаемые except/после — извлечение ломает видимость
-    try:
-        logger.info("[IMP:7][static_full][validate] Running schema validation: %s", validate)
-        r1 = subprocess.run(
-            ["bash", str(validate)], env=env, timeout=timeout, capture_output=True, text=True, check=False
-        )
-        if r1.returncode != 0:
-            logger.critical("[IMP:9][static_full][validate] FAIL: validate.sh exit=%d", r1.returncode)
-            print(f"[IMP:9][test_runner] FAIL: validate.sh exited {r1.returncode}", file=sys.stderr)
-            print((r1.stderr or r1.stdout or "")[-4000:], file=sys.stderr)
-            return r1.returncode
+    # DevPlan 006 W3: streaming-канон — tee в stderr, heartbeat, killpg, partial-вывод
+    logger.info("[IMP:7][static_full][validate] Running schema validation: %s", validate)
+    r1 = run_subprocess_streaming(["bash", str(validate)], env=env, timeout=timeout)
+    if r1.timed_out:
+        logger.critical("[IMP:9][static_full][timeout] TIMEOUT after %ds", timeout)
+        print(f"TIMEOUT after {timeout}s (validate.sh)")
+        return 124
+    if r1.returncode != 0:
+        logger.critical("[IMP:9][static_full][validate] FAIL: validate.sh exit=%d", r1.returncode)
+        print(f"[IMP:9][test_runner] FAIL: validate.sh exited {r1.returncode}", file=sys.stderr)
+        print((r1.stderr or r1.stdout or "")[-4000:], file=sys.stderr)
+        return r1.returncode
 
-        logger.info("[IMP:7][static_full][lint] Running lint: validate.sh --lint")
-        r2 = subprocess.run(
-            ["bash", str(validate), "--lint"], env=env, timeout=timeout, capture_output=True, text=True, check=False
-        )
-        if r2.returncode != 0:
-            logger.critical("[IMP:9][static_full][lint] FAIL: lint exit=%d", r2.returncode)
-            print(f"[IMP:9][test_runner] FAIL: validate.sh --lint exited {r2.returncode}", file=sys.stderr)
-            print((r2.stderr or r2.stdout or "")[-4000:], file=sys.stderr)
-            return r2.returncode
+    logger.info("[IMP:7][static_full][lint] Running lint: validate.sh --lint")
+    r2 = run_subprocess_streaming(["bash", str(validate), "--lint"], env=env, timeout=timeout)
+    if r2.timed_out:
+        logger.critical("[IMP:9][static_full][timeout] TIMEOUT after %ds", timeout)
+        print(f"TIMEOUT after {timeout}s (validate.sh --lint)")
+        return 124
+    if r2.returncode != 0:
+        logger.critical("[IMP:9][static_full][lint] FAIL: lint exit=%d", r2.returncode)
+        print(f"[IMP:9][test_runner] FAIL: validate.sh --lint exited {r2.returncode}", file=sys.stderr)
+        print((r2.stderr or r2.stdout or "")[-4000:], file=sys.stderr)
+        return r2.returncode
 
-        pytest_args = [
-            *_xdist_args("static"),
-            *_timeout_args("static"),
-            "-m",
-            _STATIC_AUDIT_EXPR,
-            "--junitxml",
-            str(junit_path),
-        ]
-        logger.info("[IMP:7][static_full][pytest] Running pytest static_audit: %s", " ".join(pytest_args))
-        proc = subprocess.run(
-            [sys.executable, "-m", "pytest", str(platform_root / "tests"), *pytest_args],
-            env=env,
-            timeout=timeout,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if not junit_path.exists():
-            _print_no_xml_fallback("static", proc.stderr or proc.stdout or "")
-    except subprocess.TimeoutExpired:
+    pytest_args = [
+        *_xdist_args("static"),
+        *_timeout_args("static"),
+        "-m",
+        _STATIC_AUDIT_EXPR,
+        "--junitxml",
+        str(junit_path),
+    ]
+    logger.info("[IMP:7][static_full][pytest] Running pytest static_audit: %s", " ".join(pytest_args))
+    proc = run_subprocess_streaming(
+        [sys.executable, "-m", "pytest", str(platform_root / "tests"), *pytest_args],
+        env=env,
+        timeout=timeout,
+    )
+    if proc.timed_out:
         logger.critical("[IMP:9][static_full][timeout] TIMEOUT after %ds", timeout)
         print(f"TIMEOUT after {timeout}s")
         return 124
-    else:
-        return proc.returncode
+    if not junit_path.exists():
+        _print_no_xml_fallback("static", proc.stderr or proc.stdout or "")
+    return proc.returncode
 
 
 # endregion FUNC_RUN_STATIC_FULL
@@ -611,26 +611,22 @@ def _run_all_suites(platform_root: Path, junit_path: Path, timeout: int) -> int:
         suite_junit = suite_dir / f"junit-{marker}.xml"
         pytest_args = [*_xdist_args(marker), *_timeout_args(marker), *args, "--junitxml", str(suite_junit)]
         logger.info("[IMP:7][all_suites][run] Suite marker=%s", marker)
-        proc: subprocess.CompletedProcess[str] | None = None
-        try:
-            if marker in _DOCKER_MARKERS:
-                # DevPlan 124 T2c: docker-сьюты внутри MARKER=all — под процессным локом
-                # (межсессионная гонка F4; T2a уже убрал их из -n auto)
-                proc = _run_docker_pytest(pytest_args, env, timeout, platform_root)
-            else:
-                proc = subprocess.run(
-                    [sys.executable, "-m", "pytest", str(platform_root / "tests"), *pytest_args],
-                    env=env,
-                    timeout=timeout,
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-            exit_codes.append(proc.returncode)
-        except subprocess.TimeoutExpired:
+        proc: StreamingResult | None = None
+        if marker in _DOCKER_MARKERS:
+            # DevPlan 124 T2c: docker-сьюты внутри MARKER=all — под процессным локом
+            # (межсессионная гонка F4; T2a уже убрал их из -n auto)
+            proc = _run_docker_pytest(pytest_args, env, timeout, platform_root)
+        else:
+            # DevPlan 006 W3: streaming-канон (tee/heartbeat/killpg; timeout → rc=124)
+            proc = run_subprocess_streaming(
+                [sys.executable, "-m", "pytest", str(platform_root / "tests"), *pytest_args],
+                env=env,
+                timeout=timeout,
+            )
+        if proc.timed_out:
             logger.critical("[IMP:9][all_suites][timeout] Suite marker=%s TIMEOUT after %ds", marker, timeout)
             print(f"TIMEOUT after {timeout}s (suite={marker})", file=sys.stderr)
-            exit_codes.append(124)
+        exit_codes.append(proc.returncode)
         if suite_junit.exists():
             junit_files.append(suite_junit)
             logger.info("[IMP:7][all_suites][junit] Suite marker=%s → %s", marker, suite_junit)
@@ -647,7 +643,7 @@ def _run_all_suites(platform_root: Path, junit_path: Path, timeout: int) -> int:
 
     # Агрегация: tests/merge_junit.py (DevPlan §6 — reuse, missing files skip)
     merged = suite_dir / "merged.xml"
-    merge_proc = subprocess.run(
+    merge_proc = run_subprocess_streaming(
         [
             sys.executable,
             str(platform_root / "tests" / "merge_junit.py"),
@@ -657,9 +653,6 @@ def _run_all_suites(platform_root: Path, junit_path: Path, timeout: int) -> int:
         ],
         env=env,
         timeout=timeout,
-        capture_output=True,
-        text=True,
-        check=False,
     )
     if merge_proc.returncode != 0 or not merged.exists():
         logger.critical("[IMP:9][all_suites][merge] merge_junit failed exit=%d", merge_proc.returncode)
@@ -807,7 +800,8 @@ def main(argv: list[str] | None = None) -> int:
         junit_path.parent.mkdir(parents=True, exist_ok=True)
 
     run_start = time.monotonic()
-    proc: subprocess.CompletedProcess[str] | None = None
+    # DevPlan 006 W3: StreamingResult (атрибуты .stdout/.stderr/.returncode совместимы)
+    proc: StreamingResult | subprocess.CompletedProcess[str] | None = None
     # ruff: ignore[PLW0717] — тело try присваивает имена, читаемые except/после — извлечение ломает видимость
     try:
         # ── Mode selection: test_file (AC6) vs marker ──
@@ -827,25 +821,21 @@ def main(argv: list[str] | None = None) -> int:
             pytest_args = [*pytest_args, "--junitxml", str(junit_path)]
             test_target = str(platform_root / args.test_file)
             env = {**os.environ, "PYTEST_NO_ESCALATION": "1"}
-            try:
-                logger.info(
-                    "[IMP:7][main][pytest] Running: python -m pytest %s %s",
-                    test_target,
-                    " ".join(pytest_args),
-                )
-                proc = subprocess.run(
-                    [sys.executable, "-m", "pytest", test_target, *pytest_args],
-                    env=env,
-                    timeout=args.timeout,
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-                result_code = proc.returncode
-            except subprocess.TimeoutExpired:
+            logger.info(
+                "[IMP:7][main][pytest] Running: python -m pytest %s %s",
+                test_target,
+                " ".join(pytest_args),
+            )
+            proc = run_subprocess_streaming(
+                [sys.executable, "-m", "pytest", test_target, *pytest_args],
+                env=env,
+                timeout=args.timeout,
+            )
+            if proc.timed_out:
                 logger.critical("[IMP:9][main][timeout] TIMEOUT after %ds", args.timeout)
                 print(f"TIMEOUT after {args.timeout}s")
                 return 124
+            result_code = proc.returncode
         # Marker mode: resolve marker → pytest args
         elif args.marker == "static":
             # static special handler (AC7): validate.sh → lint → pytest
@@ -864,31 +854,27 @@ def main(argv: list[str] | None = None) -> int:
                 str(junit_path),
             ]
             env = {**os.environ, "PYTEST_NO_ESCALATION": "1"}
-            # ruff: ignore[PLW0717] — try вложен в условный блок внутри функции — после-try чтение локалей неанализир...
-            try:
-                logger.info(
-                    "[IMP:7][main][pytest] Running: python -m pytest %s %s",
-                    platform_root / "tests",
-                    " ".join(pytest_args),
+            logger.info(
+                "[IMP:7][main][pytest] Running: python -m pytest %s %s",
+                platform_root / "tests",
+                " ".join(pytest_args),
+            )
+            if args.marker in _DOCKER_MARKERS:
+                # DevPlan 124 T2c: docker-сьюты — под процессным локом (агентский путь
+                # MARKER=smoke; межсессионная гонка F4)
+                proc = _run_docker_pytest(pytest_args, env, args.timeout, platform_root)
+            else:
+                # DevPlan 006 W3: streaming-канон (tee/heartbeat/killpg; timeout → rc=124)
+                proc = run_subprocess_streaming(
+                    [sys.executable, "-m", "pytest", str(platform_root / "tests"), *pytest_args],
+                    env=env,
+                    timeout=args.timeout,
                 )
-                if args.marker in _DOCKER_MARKERS:
-                    # DevPlan 124 T2c: docker-сьюты — под процессным локом (агентский путь
-                    # MARKER=smoke; межсессионная гонка F4)
-                    proc = _run_docker_pytest(pytest_args, env, args.timeout, platform_root)
-                else:
-                    proc = subprocess.run(
-                        [sys.executable, "-m", "pytest", str(platform_root / "tests"), *pytest_args],
-                        env=env,
-                        timeout=args.timeout,
-                        capture_output=True,
-                        text=True,
-                        check=False,
-                    )
-                result_code = proc.returncode
-            except subprocess.TimeoutExpired:
+            if proc.timed_out:
                 logger.critical("[IMP:9][main][timeout] TIMEOUT after %ds", args.timeout)
                 print(f"TIMEOUT after {args.timeout}s")
                 return 124
+            result_code = proc.returncode
 
         duration = time.monotonic() - run_start
         display_label = args.test_file if args.test_file else args.marker
