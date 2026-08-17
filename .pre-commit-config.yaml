@@ -1,5 +1,5 @@
 # GREP_SUMMARY: pre-commit gitleaks uv-audit ruff yamllint check-jsonschema shellcheck check-yaml trailing-whitespace end-of-file-fixer check-merge-conflict detect-private-key check-added-large-files mixed-line-ending check-toml check-json basedpyright check-doc-headers name-linter commit-msg pre-push-gate fix-executable-bit DevPlan-163
-# STRUCTURE: repos → gitleaks(v8.30.1) → local(uv-audit + fix-executable-bit + check-doc-headers + name-linter) → ruff(v0.16.2) → yamllint(v1.38) → shellcheck(v0.11) → check-jsonschema(0.37) → pre-commit-hooks(v6.0 + check-merge-conflict + detect-private-key + check-added-large-files + mixed-line-ending + check-toml + check-json) → local(basedpyright + commit-msg + pre-push-gate + check-manifests + scripts-audit + no-new-inline-python3)
+# STRUCTURE: repos → gitleaks(v8.30.1) → local(uv-audit-locked + fix-executable-bit + check-doc-headers + name-linter) → ruff(v0.16.2) → yamllint(v1.38) → shellcheck(v0.11) → check-jsonschema(0.37) → pre-commit-hooks(v6.0 + check-merge-conflict + detect-private-key + check-added-large-files + mixed-line-ending + check-toml + check-json) → local(basedpyright + commit-msg + pre-push-gate + scripts-audit + no-new-inline-python3)
 # region MODULE_CONTRACT
 ## @purpose  Unified pre-commit hooks via pre-commit framework (per DevPlan 001):
 ##           - gitleaks (secret scanning) + uv audit (OSV dep vulnerabilities, DevPlan 163 M6)
@@ -11,12 +11,14 @@
 ##           - trailing-whitespace + end-of-file-fixer
 ##           - DRIFT-PREVENTION: check-merge-conflict + detect-private-key + check-added-large-files
 ##           - DRIFT-PREVENTION: mixed-line-ending + check-toml + check-json
-##           - check-manifest-parity (manifest ↔ AGENTS.md ↔ Makefile bidirectional sync)
+##           - manifest freshness: ЕДИНЫЙ арбитр — pytest-гейт test_gate_manifests_up_to_date
+##             (static_audit, каждый make check/gate/CI); pre-commit-хук удалён как дубль (2026-08-17)
 ##           - commit-msg (Conventional Commits) + pre-push-gate (quick check)
 ## @scope    Pre-commit (all hooks + 6 hygiene hooks + manifest-parity drift prevention), commit-msg (commit message validation), pre-push (quick check; полный fast-gate — CI push-gate.yml)
 ## @invariants
 ##   - gitleaks v8.18.0+ with .gitleaks.toml config
-##   - uv audit (DevPlan 163 M6): repo local, language system, always_run — требует uv
+##   - uv audit --locked (DevPlan 163 M6): repo local, language system, always_run, read-only
+##     (аудит против uv.lock; БЕЗ --locked перезаписывает lock → RED в CI) — требует uv
 ##     на машине (homebrew/CI runner preinstalled); pip-audit остаётся в CI security-scan
 ##   - yamllint v1.38 checks style — complements check-yaml syntax validation
 ##   - check-jsonschema validates GHA workflows against GitHub Actions schema and docker-compose against compose-spec
@@ -34,8 +36,8 @@
 ##   - check-added-large-files blocks files >500KB to prevent binary blobs
 ##   - mixed-line-ending normalizes CRLF → LF on text files
 ##   - check-toml and check-json validate syntax of TOML/JSON files
-##   - check-manifest-parity: validates bidirectional sync between entrypoint-manifest.yaml,
-##     AGENTS.md, and Makefiles — triggers only on manifest/AGENTS.md/Makefile changes
+##   - manifest freshness gate: единственный экземпляр — pytest (см. @purpose); pre-commit
+##     дубль удалён 2026-08-17 (удваивал флейк-поверхность локально и в CI)
 ##   - commit-msg enforces Conventional Commits 1.0.0 format
 ##   - pre-push-gate — quick check (pre-commit --all-files + ruff check . + make check-diff)
 ##     для ВСЕХ веток; полный fast-gate — ТОЛЬКО CI push-gate.yml (OOM-политика v1.0.1 0.8:
@@ -111,7 +113,10 @@ repos:
       - id: uv-audit
         name: uv audit (OSV dependency vulnerabilities)
         description: Scan project dependencies for known OSV vulnerabilities (uv native scanner; M6 DevPlan 163 — coexists with pip-audit in CI security-scan)
-        entry: uv audit
+        # TRAP[BUG] 2026-08-17: БЕЗ --locked uv audit ре-резолвит дерево и перезаписывает
+        # uv.lock → pre-commit "files were modified by this hook" → RED в CI при 0 CVE.
+        # --locked = аудит против закоммиченного lock-файла, read-only.
+        entry: uv audit --locked
         language: system
         pass_filenames: false
         always_run: true
@@ -320,14 +325,16 @@ repos:
         always_run: false
         stages: [pre-commit]
 
-      - id: check-manifests
-        name: Check generated manifests up to date
-        description: "Verify generated manifests (secrets-manifest.yaml, platform-env.yaml, smoke_env_generated.py, env_defaults_generated.py) are in sync with authoritative sources"
-        entry: make check MARKER=check-manifests
-        language: system
-        files: ^(core/secret-definitions\.yaml|core/platform-infra\.yaml|core/modules/.*/module\.yaml|core/modules/.*/docker-compose\.(base|test)\.yml|core/entrypoint-manifest\.yaml|Makefile|tests/gates/.*\.py)$
-        pass_filenames: false
-        stages: [pre-commit]
+      # ⚠️ TRAP[DECISION] · 2026-08-17 · — · check-manifests pre-commit хук УДАЛЁН (2-й дубль)
+      # · Rejected: оставить хук рядом с pytest-гейтом
+      # · Reason: защита манифестов уже исполняется ЕДИНЫМ экземпляром — pytest-гейтом
+      #   tests/gates/test_gate_manifests_up_to_date.py (static_audit, каждый make check/gate/CI).
+      #   Pre-commit-хук был вторым экземпляром той же проверки: локально это удваивало
+      #   флейк-поверхность (commit блокируется хуком + gate падает до make fix-gate;
+      #   журнал runs.jsonl: 26 RED-прогонов check), в CI — гонка с dependabot-ветками.
+      #   Удаление не ослабляет защиту: pytest-гейт остаётся единственным арбитром.
+      # · Rev: при появлении сценария «drift нужен ДО commit'а» — вернуть как
+      #   `pre-commit run --hook-stage manual check-manifests` (manual, не auto).
 
       - id: no-new-inline-python3
         name: Block new inline python3 in shell and CI workflow files
