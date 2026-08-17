@@ -196,9 +196,11 @@ checks:
     # видимым выводом): -s + --log-cli-level=INFO — прогресс фикстуры стримится в лог gate
     # ЖИВЬЁМ (pytest capture глотал [IMP:...] логи до конца сессии; при таймаут-килле всё
     # терялось). Следующий hang покажет ТОЧКУ зависания вместо чёрного ящика.
-    # SMOKE_HANG_PROBE=1 (CI): conftest.pytest_configure вооружает faulthandler.dump_traceback_later(600s)
-    # — дамп ВСЕХ потоков при флаки-hang смоука ДО баннера (run 32025761115: 900s, 0 вывода).
-    cmd: pytest tests/ -m "smoke" -v -s --log-cli-level=INFO --tb=short -rs --timeout=600 --junitxml=tests/report-smoke.xml
+    # SMOKE_HANG_PROBE=1 (CI): python3 -c wrapper вооружает faulthandler.dump_traceback_later(600s)
+    # ДО импорта pytest (sys.path[0]=cwd) — флаки-hang смоука происходит ДО tests/conftest.py
+    # (run 32029164898/32031577141: 900s, 0 вывода, даже [conftest-import] begin не печатался),
+    # поэтому арм в conftest не срабатывал. Wrapper покрывает import/collection/sessionstart.
+    cmd: python3 -c "import faulthandler, os; faulthandler.dump_traceback_later(600, exit=False) if os.environ.get('SMOKE_HANG_PROBE') == '1' else None; import sys; from pytest import main; sys.exit(main(sys.argv[1:]))" tests/ -m "smoke" -v -s --log-cli-level=INFO --tb=short -rs --timeout=600 --junitxml=tests/report-smoke.xml
     tier: pytest
     # 142 W8 (R13): 600 → 900 — полный стек 23 контейнера + macOS Docker Desktop +
     # параллельные dev-сессии; smoke стабильно укладывался в ~6 мин изолированно,
