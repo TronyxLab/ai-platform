@@ -188,6 +188,27 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # ─── DevPlan 007 W2: free disk BEFORE pre-pull (root cause: runner disk 100%) ──
+      # run 32063949669 (langfuse crash): /dev/root 72G used, 383M free (100%). Полный
+      # smoke-стек (23 контейнера + volumes + логи) + preinstalled-образы GitHub-runner
+      # (~7GB: ghcr.io/dependabot, gh-aw-firewall/*, github-mcp-server, dangling <none>)
+      # исчерпали 14GB-диск → ClickHouse (keep_free_space_bytes=1GB в 40-storage.xml)
+      # не может зарезервировать место → langfuse clickhouse-миграции падают с
+      # error 243 NOT_ENOUGH_SPACE → langfuse exit 1 → каскад (hermes не стартует).
+      # Fix: docker system prune -af ПЕРЕД pre-pull — удаляет ВСЕ неиспользуемые образы
+      # (в т.ч. preinstalled-мусор раннера), pre-pull потом тянет ровно нужные.
+      # Buildx-builder (running) и GHA cache backend (внешний) не затрагиваются.
+      - name: Free disk space — remove preinstalled runner images (DevPlan 007 W2)
+        run: |
+          echo "=== Disk before cleanup ==="
+          df -h /
+          docker system df
+          docker system prune -af 2>&1 | tail -3 || true
+          echo "=== Disk after cleanup ==="
+          df -h /
+          docker system df
+        shell: bash
+
       - name: Provision environment (networks + volumes + CI env defaults)
         uses: ./.github/actions/provisioner-call
         with:
