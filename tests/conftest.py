@@ -213,5 +213,33 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 ## @complexity O(1)
 from _conftest.shared import _is_xdist_worker
 
-
 # endregion FUNC_is_xdist_worker
+
+
+# region FUNC_hang_probe
+## @purpose  CI smoke-hang диагностика (2026-08-17, platform-test): флаки-hang смоука ДО баннера
+##            pytest (900s, 0 вывода, run 32025761115) происходит в фазах вне pytest-timeout
+##            (pytest_sessionstart/collection). При SMOKE_HANG_PROBE=1 (CI gate-step env)
+##            pytest_configure вооружает faulthandler.dump_traceback_later(600s, exit=False) —
+##            дамп СТЕКОВ ВСЕХ ПОТОКОВ в stderr через 10 минут (exit=False: здоровый медленный
+##            прогон не роняется; отмена в sessionfinish). Следующий hang покажет ТОЧКУ.
+## @io       → ⎋ None (side-effect: faulthandler-таймер)
+## @complexity O(1)
+_HANG_PROBE_ARMED = False
+
+
+def pytest_configure(config: object) -> None:
+    """Arm faulthandler dump BEFORE sessionstart/collection when SMOKE_HANG_PROBE=1."""
+    global _HANG_PROBE_ARMED  # ruff: ignore[PLW0603] — diagnostic state, single-threaded startup
+    if os.environ.get("SMOKE_HANG_PROBE") == "1":
+        import faulthandler
+
+        faulthandler.dump_traceback_later(600, exit=False)
+        _HANG_PROBE_ARMED = True
+        logger.info("[IMP:7][hang_probe] faulthandler.dump_traceback_later(600s) armed — SMOKE_HANG_PROBE=1")
+    # NOTE: cancel в pytest_sessionfinish НЕ добавляем — tests/conftest.py НЕ определяет этот
+    # хук (зашэдоулил бы re-export pytest_sessionfinish из _conftest.session — counter/cleanup).
+    # Таймер faulthandler не блокирует выход процесса; здоровый прогон просто не доживает до 600s.
+
+
+# endregion FUNC_hang_probe

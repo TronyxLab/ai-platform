@@ -196,6 +196,8 @@ checks:
     # видимым выводом): -s + --log-cli-level=INFO — прогресс фикстуры стримится в лог gate
     # ЖИВЬЁМ (pytest capture глотал [IMP:...] логи до конца сессии; при таймаут-килле всё
     # терялось). Следующий hang покажет ТОЧКУ зависания вместо чёрного ящика.
+    # SMOKE_HANG_PROBE=1 (CI): conftest.pytest_configure вооружает faulthandler.dump_traceback_later(600s)
+    # — дамп ВСЕХ потоков при флаки-hang смоука ДО баннера (run 32025761115: 900s, 0 вывода).
     cmd: pytest tests/ -m "smoke" -v -s --log-cli-level=INFO --tb=short -rs --timeout=600 --junitxml=tests/report-smoke.xml
     tier: pytest
     # 142 W8 (R13): 600 → 900 — полный стек 23 контейнера + macOS Docker Desktop +
