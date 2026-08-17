@@ -200,9 +200,16 @@ checks:
     # 2026-08-16 (CI smoke 900s hang): per-test --timeout=600 — висящий тест падает
     # БЫСТРО с именем (pytest-timeout убивает), вместо тихого 900s-килла всего сьюта.
     # 600s = семантика wave-event (threading.Event 600s); локально cold-stack ~200s.
+    # 2026-08-17 (TRAP[BUG] xdist-hang): xdist: false — дрейф от канона DevPlan 124 T2a
+    # (tests/_conftest/compose.py TRAP[DECISION] 2026-08-05: docker-сьюты single-process,
+    # один стек на машину, tests/AGENTS.md §Параллельный запуск п.10). check-suite executor
+    # (apply_xdist) вставлял -n auto в smoke → CI-воркеры конкурентно дрались за session-фикстуру
+    # platform_services (flock/master-семантика) → дедлок ДО compose up → 900s килл с нулём
+    # контейнеров (диагностика platform-test: только buildx-builder, стек не создан). Локально
+    # single-process smoke: 37 passed, 390s — в 900s укладывается с запасом.
     timeout: 900
     gate_modes: [full, ci-docker]
-    xdist: true
+    xdist: false
     junit: tests/report-smoke.xml
     diagnostic: false
   - id: component

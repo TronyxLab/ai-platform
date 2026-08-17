@@ -764,7 +764,11 @@ def test_manifest_gates_docker_xdist_false(caplog) -> None:
     assert specs["gates-docker"].docker is True, "gates-docker должен быть docker-чеком"
     assert specs["gates-docker"].xdist is False, "gates-docker: xdist должен быть false (T2b)"
     assert specs["predeploy-docker"].xdist is False, "predeploy-docker: xdist: false (прецедент)"
-    assert specs["smoke"].xdist is True, "smoke — metadata xdist: true, реальный контроль в test_runner (T2a)"
+    # 2026-08-17: smoke xdist: false (было true) — дрейф от канона T2a чинил CI 900s-hang
+    # (executor apply_xdist вставлял -n auto в docker-сьют вопреки single-process-инварианту)
+    assert specs["smoke"].xdist is False, (
+        "smoke: xdist должен быть false (single-process docker, T2a + 2026-08-17 hang-fix)"
+    )
     logger.critical("[IMP:9][test] gates-docker xdist=False, predeploy-docker xdist=False (single-process docker)")
 
 
