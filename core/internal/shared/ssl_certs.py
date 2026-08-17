@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: ssl-certs, openssl, x509, expiry, issuer, lets-encrypt, parseable, shared, checkend
+# GREP_SUMMARY: ssl-certs, openssl, x509, expiry, issuer, lets-encrypt, parseable, shared, checkend, san, wildcard
 # STRUCTURE: ▶ cert_is_parseable ┌cert┐ → ◇ openssl x509 -noout → ⎋ bool → ▶ cert_check_expiry ┌cert,threshold┐ → ◇ openssl x509 -checkend → ⎋ bool
 #            → ▶ cert_get_issuer ┌cert┐ → ◇ openssl x509 -issuer → ⎋ str|None → ▶ cert_is_le_issuer ┌cert┐ → ◇ issuer contains "Let's Encrypt" → ⎋ bool
+#            → ▶ cert_get_san_list ┌cert┐ → ◇ openssl x509 -ext subjectAltName → ⊕ DNS-entries → ⎋ list[str]
+#            → ▶ _cert_covers_domain ┌cert,domain┐ → ◇ SAN? (exact|wildcard одноуровневый) : CN-fallback → ⎋ bool
 # region MODULE_CONTRACT
 ## @purpose  Shared openssl x509 primitives for certificate validation — единый SoT openssl-проверок
 ##           (DevPlan 117 D21 + 118 C9). Заменяет дублирующиеся openssl subprocess-блоки в
@@ -9,15 +11,22 @@
 ##           DevPlan 118 C9: cert_is_valid() — ЕДИНАЯ комбинация «cert валиден» (parseable + LE +
 ##           domain match + expiry); s3_ssl_cache/cert_orchestrator/context_deployer делегируют в него.
 ## @scope    Импортируется s3_ssl_cache.py, cert_orchestrator.py и context_deployer.py (≥2 потребителя —
-##           критерий shared/). Чистые функции без состояния: subprocess openssl + возврат bool/str.
+##            критерий shared/). Чистые функции без состояния: subprocess openssl + возврат bool/str/list.
 ## @invariants
 ##   - cert_check_expiry: openssl x509 -in <cert> -checkend <threshold> -noout → returncode==0 = не истёк
 ##   - cert_get_issuer: openssl x509 -in <cert> -issuer -noout → строка issuer (или None при ошибке)
 ##   - cert_get_subject: openssl x509 -in <cert> -subject -noout → строка subject (или None при ошибке)
 ##   - cert_is_le_issuer: case-sensitive "Let's Encrypt" в issuer
+##   - cert_get_san_list: openssl x509 -in <cert> -noout -ext subjectAltName → список DNS-имён SAN
+##     (префикс DNS: срезается регистронезависимо, trim, trailing dot убирается; IP:... игнорируются;
+##     ошибки subprocess/timeout/rc!=0 → [] — никогда не raise)
 ##   - cert_is_valid (C9): parseable → LE → (domain if expected_domains) → (expiry if check_expiry);
 ##     expected_domains=None → без domain-check; check_expiry=False → без expiry-check
-##   - Non-fatal: никогда не raise — subprocess ошибки/timeout → False/None (graceful degradation)
+##   - Domain match (DevPlan 004 W1) — SAN primary / CN fallback (RFC 6125): SAN непуст → матч
+##     ТОЛЬКО по SAN (exact или одноуровневый wildcard; *.example.com НЕ покрывает apex
+##     example.com и глубже одного label); SAN пуст → CN-fallback (cert_subject_matches_domain).
+##     SAN-ветка — case-insensitive; CN-ветка сохраняет прежнее поведение (подстрока, без lower)
+##   - Non-fatal: никогда не raise — subprocess ошибки/timeout → False/None/[] (graceful degradation)
 ##   - DEFAULT_OPENSSL_TIMEOUT=10, DEFAULT_EXPIRY_THRESHOLD=2592000 (30 дней) — единственные
 ##     литералы в этом домене (DevPlan 117 D21)
 ## @rationale Две openssl-валидации (s3_ssl_cache.py:125-221, cert_orchestrator.py:271-320) дублировали
@@ -25,11 +34,16 @@
 ##            в shared/ssl_certs.py устраняет дубль и централизует константы (U-14).
 ##            C9 (DevPlan 118): три реализации «валиден» (s3: parseable+LE+domain+expiry;
 ##            cert_orchestrator: expiry+LE; context_deployer: expiry+LE inline) → одна cert_is_valid().
+##            DevPlan 004 W1: SAN-aware domain matching — современные LE-сертификаты SAN-only
+##            (subject пуст), CN-only матчинг отвергал валидные серты из S3-кеша → false-miss →
+##            пере-выпуск (риск LE rate-limit). Семантика wildcard — канон verify_sweep/tls_check.
 ## @changes  2026-08-01 | DevPlan 117 D21 — создан (дедупликация openssl-валидаций)
 ##           2026-08-02 | DevPlan 118 C9 — +cert_is_valid() единая комбинация; +cert_get_subject/
 ##                      cert_subject_matches_domain (domain-match из s3_ssl_cache)
 ##           2026-08-02 | DevPlan 119 D1 — +CLI-фасад main() (--is-le/--check-expiry, паттерн
 ##                      ssh_opts --shell): issue-cert.sh _is_le_cert/_acme_verify_cert удалены (AUDIT-1 F1/F2)
+##           2026-08-16 | DevPlan 004 W1 — +SAN-aware domain matching (cert_get_san_list,
+##                      _cert_covers_domain), RFC2253 CN patterns
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -221,9 +235,11 @@ def cert_get_subject(cert_path: str, timeout: int = DEFAULT_OPENSSL_TIMEOUT) -> 
 ## @complexity — O(1) — подстрока-матчинг
 ## @invariants
 ##   - Матчит: "CN = example.com", "CN= example.com", "CN=*.example.com", "CN = *.example.com"
+##     (slashed-формат openssl -subject) + "CN=example.com", "CN=*.example.com" (RFC2253 без
+##     пробелов, DevPlan 004 W1) + trailing-dot варианты ("CN = example.com.", "CN=example.com.")
 ##   - Регистро-нечувствительность НЕ гарантируется (прежнее поведение s3_ssl_cache)
 def cert_subject_matches_domain(subject: str, domain: str) -> bool:
-    """Check that a cert subject CN covers the given domain (exact or wildcard, C9)."""
+    """Check that a cert subject CN covers the given domain (exact or wildcard, C9 + RFC2253 W1)."""
     return any(
         pattern in subject
         for pattern in (
@@ -231,6 +247,9 @@ def cert_subject_matches_domain(subject: str, domain: str) -> bool:
             f"CN= {domain}",
             f"CN=*.{domain}",
             f"CN = *.{domain}",
+            f"CN={domain}",
+            f"CN = {domain}.",
+            f"CN={domain}.",
         )
     )
 
@@ -238,17 +257,122 @@ def cert_subject_matches_domain(subject: str, domain: str) -> bool:
 # endregion FUNC_cert_subject_matches_domain
 
 
+# region FUNC_cert_get_san_list
+## @purpose  Extract DNS SAN entries from a certificate (DevPlan 004 W1 — SAN primary matching).
+##           openssl x509 -ext subjectAltName → список DNS-имён; IP-записи (IP:...) игнорируются.
+## @io       ⇥ cert_path: str, timeout: int → ⎋ list[str] (DNS SAN entries; [] on error/no SAN)
+## @complexity — O(1) + openssl subprocess
+## @invariants
+##   - Uses `openssl x509 -in <cert> -noout -ext subjectAltName`
+##   - Multiline-парсинг (референс verify_sweep/tls_check._cert_san_matches): строки,
+##     начинающиеся с DNS: (case-insensitive), split по запятой
+##   - Нормализация: срез префикса DNS: (case-insensitive), trim, убрать trailing dot
+##     ("example.com." → "example.com"); IP:... записи — игнорируются отдельной веткой (не DNS)
+##   - Non-fatal: subprocess error/timeout/rc!=0 → [] (никогда не raise)
+def cert_get_san_list(cert_path: str, timeout: int = DEFAULT_OPENSSL_TIMEOUT) -> list[str]:
+    """Extract DNS SAN entries from cert, or [] on failure/no SAN (W1)."""
+    try:
+        result = subprocess.run(
+            ["openssl", "x509", "-in", cert_path, "-noout", "-ext", "subjectAltName"],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+        if result.returncode != 0:
+            return []
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+        logger.warning("[IMP:7][ssl_certs] openssl SAN check failed for %s: %s", cert_path, e)
+        return []
+    else:
+        sans: list[str] = []
+        for raw_line in result.stdout.splitlines():
+            line = raw_line.strip()
+            if not line.upper().startswith("DNS:"):
+                continue  # IP:... и прочие не-DNS записи — игнорируются отдельной веткой
+            for raw_token in line.split(","):
+                token = raw_token.strip()
+                if not token.upper().startswith("DNS:"):
+                    continue
+                entry = token[4:].strip().rstrip(".")
+                if entry:
+                    sans.append(entry)
+        return sans
+
+
+# endregion FUNC_cert_get_san_list
+
+
+# region FUNC__san_entry_covers
+## @purpose  Проверить, покрывает ли ОДНА SAN-запись домен: точное совпадение ИЛИ wildcard
+##           *.parent (ровно одна метка слева). Эквивалент семантики
+##           verify_sweep/tls_check.san_matches_domain (канон одноуровневого wildcard),
+##           внедрён локально — shared ниже по слоям, импорт из verify_sweep запрещён.
+## @io       ⇥ san: str (нормализованная DNS-запись без "DNS:"), domain: str → ⎋ bool
+## @complexity — O(N) где N = len(domain)
+## @invariants
+##   - Case-insensitive (lowercase с обеих сторон)
+##   - Wildcard '*.example.com' матчит ровно один уровень: app.example.com ✅,
+##     a.b.example.com ❌, example.com ❌ (apex — отдельная запись)
+##   - '*' не в первом сегменте (foo.*.com) → False; пустые san/domain → False
+def _san_entry_covers(san: str, domain: str) -> bool:
+    """Check that a single SAN entry covers domain (exact or one-level wildcard, W1)."""
+    san_l = san.strip().lower()
+    domain_l = domain.strip().lower()
+    if not san_l or not domain_l:
+        return False
+    if san_l == domain_l:
+        return True
+    if san_l.startswith("*."):
+        wildcard_suffix = san_l[1:]  # ".example.com"
+        if domain_l.endswith(wildcard_suffix):
+            prefix = domain_l[: -len(wildcard_suffix)]
+            if prefix and "." not in prefix:
+                return True
+    return False
+
+
+# endregion FUNC__san_entry_covers
+
+
+# region FUNC__cert_covers_domain
+## @purpose  SAN-aware domain matching (DevPlan 004 W1): SAN primary / CN fallback (RFC 6125).
+##           SAN непуст → матч ТОЛЬКО по SAN (без CN-fallback); SAN пуст → CN через
+##           cert_get_subject + cert_subject_matches_domain (прежняя семантика).
+## @io       ⇥ cert_path: str, domain: str, timeout: int → ⎋ bool
+## @complexity — O(1) + 1-2 openssl subprocess
+## @invariants
+##   - SAN непуст И ни одна запись не совпала → False БЕЗ fallback на CN
+##   - SAN-ветка — case-insensitive; CN-ветка — прежнее поведение (подстрока)
+##   - Non-fatal: subprocess ошибки → [] SAN → CN-fallback ветка (никогда не raise)
+def _cert_covers_domain(cert_path: str, domain: str, timeout: int = DEFAULT_OPENSSL_TIMEOUT) -> bool:
+    """Check cert covers domain: SAN primary (exact|wildcard), CN fallback only if SAN empty (W1)."""
+    san_list = cert_get_san_list(cert_path, timeout=timeout)
+    if san_list:
+        # 🧐 TRAP[DECISION] · 2026-08-16 · — · SAN present → CN non-authoritative (RFC 6125 / CA-B Forum) · Rejected: CN-fallback всегда — держит баг-класс «CN совпал случайно» · Reason: SAN presence deprecates CN matching · Rev: появление legacy-сертификатов с рассинхроном CN/SAN
+        return any(_san_entry_covers(san, domain) for san in san_list)
+    subject = cert_get_subject(cert_path, timeout=timeout)
+    if subject is None:
+        return False
+    return cert_subject_matches_domain(subject, domain)
+
+
+# endregion FUNC__cert_covers_domain
+
+
 # region FUNC_cert_is_valid
 ## @purpose  Единая комбинация «сертификат валиден» (DevPlan 118 C9): parseable + LE issuer +
 ##           (domain match — если expected_domains задан) + (expiry — если check_expiry).
 ##           Дедупликация трёх реализаций: s3_ssl_cache._validate_cert (parseable+LE+domain+expiry),
 ##           cert_orchestrator._is_cert_valid (expiry+LE), context_deployer (expiry+LE inline).
+##           Domain match — SAN primary / CN fallback (DevPlan 004 W1, _cert_covers_domain).
 ## @io       ⇥ cert_path: str; threshold: int (сек до истечения, default 30 дней);
 ##              expected_domains: str | list[str] | None; check_expiry: bool; timeout: int
 ##           ⎋ bool (True = валиден)
 ## @complexity — O(1) + 2-4 openssl subprocess
 ## @invariants
-##   - Порядок: parseable → LE issuer → (domain match) → (expiry) — fail-fast на первом False
+##   - Порядок: parseable → LE issuer → (domain match: SAN primary, CN fallback) → (expiry)
+##     — fail-fast на первом False
 ##   - expected_domains=None → domain-check пропускается (cert_orchestrator/context_deployer семантика)
 ##   - check_expiry=False → expiry-check пропускается (s3_ssl_cache download-семантика)
 ##   - Non-fatal: никогда не raise — subprocess ошибки → False (graceful degradation)
@@ -259,7 +383,7 @@ def cert_is_valid(
     check_expiry: bool = True,
     timeout: int = DEFAULT_OPENSSL_TIMEOUT,
 ) -> bool:
-    """Check a cert is valid: parseable + LE issuer + optional domain match + optional expiry (C9)."""
+    """Check cert is valid: parseable + LE issuer + optional domain match (SAN primary, CN fallback) + optional expiry (C9+W1)."""
     # 1. Parseable (openssl x509 -noout)
     if not cert_is_parseable(cert_path, timeout=timeout):
         return False
@@ -269,17 +393,17 @@ def cert_is_valid(
         logger.info("[IMP:8][ssl_certs] cert_is_valid: not Let's Encrypt issuer — invalid: %s", cert_path)
         return False
 
-    # 3. Domain match (опционально — expected_domains)
+    # 3. Domain match (опционально — expected_domains; SAN primary / CN fallback, W1)
     domains = [expected_domains] if isinstance(expected_domains, str) else (expected_domains or [])
-    if domains:
-        subject = cert_get_subject(cert_path, timeout=timeout)
-        if subject is None or not any(cert_subject_matches_domain(subject, d) for d in domains):
-            logger.info(
-                "[IMP:8][ssl_certs] cert_is_valid: subject does not match domains %s: %s",
-                domains,
-                (subject or "<none>")[:120],
-            )
-            return False
+    if domains and not any(_cert_covers_domain(cert_path, d, timeout=timeout) for d in domains):
+        san_list = cert_get_san_list(cert_path, timeout=timeout)
+        logger.info(
+            "[IMP:8][ssl_certs] cert_is_valid: SAN/CN does not match domains %s: SAN=%r: %s",
+            domains,
+            san_list,
+            cert_path,
+        )
+        return False
 
     # 4. Expiry (>threshold до истечения, опционально — check_expiry)
     if check_expiry and not cert_check_expiry(cert_path, threshold, timeout=timeout):

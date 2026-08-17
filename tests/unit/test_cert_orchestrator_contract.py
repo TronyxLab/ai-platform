@@ -1,7 +1,8 @@
 """
-# GREP_SUMMARY: test cert-orchestrator contract orchestrate_certs restore-first s3-restore issue-fallback disk-synced non-fatal monkeypatch B10-T2 DI
+# GREP_SUMMARY: test cert-orchestrator contract orchestrate_certs restore-first s3-restore issue-fallback disk-synced non-fatal monkeypatch B10-T2 DI san-only
 # STRUCTURE: ▶ import cert_orchestrator (native) → ◇ S3_BUCKET env → ○ scenarios (parametrize):
-#            ┌disk-valid→skip+upload┐ ┌s3-hit→restored┐ ┌s3-miss→issue-fallback┐ ┌s3-fail→non-fatal┐ ┌no-domains→noop┐ → ⊕ assert DomainCertResult fields → ⎋ IMP:9
+#            ┌disk-valid→skip+upload┐ ┌s3-hit→restored┐ ┌s3-miss→issue-fallback┐ ┌s3-fail→non-fatal┐ ┌no-domains→noop┐
+#            ┌s3-hit+SAN-only real cert→restored┐ → ⊕ assert DomainCertResult fields → ⎋ IMP:9
 # region MODULE_CONTRACT
 ## @purpose  Native behavioral contract tests for core/internal/bootstrap/cert_orchestrator.py —
 ##           replaces deleted grep-asserts in tests/test_cert_backup_gap.py (386-396, 566-582) and
@@ -9,6 +10,8 @@
 ## @scope    Tests orchestrate_certs() restore-first strategy: disk-valid skip, S3 restore, issue-cert
 ##           fallback (stub script in tmp_path), S3 failure non-fatal. ВСЯ инъекция через DI-параметры
 ##           orchestrate_certs (validity_path/cert_validity_fn/s3_cache/runner/environ) — 0 monkeypatch.
+##           Scenario 6 (DevPlan 004 W2 AC4): S3 restore с РЕАЛЬНЫМ SAN-only LE-подобным fullchain
+##           (openssl-генерация в tmp_path; monkeypatch ТОЛЬКО cert_is_le_issuer — issuer self-generated).
 ## @invariants
 ##   - s3_ssl_cache functions НЕ патчатся — fake s3_cache объект (check_cert/download_cert/upload_cert)
 ##   - issue-cert fallback via stub bash script in tmp_path (exit 0) — no real acme.sh
@@ -19,8 +22,11 @@
 ##             restore-first ordering, upload-on-skip, graceful S3 degradation (non-fatal).
 ##             W3.5-4 (164 S8): тесты переведены на существующие DI-швы orchestrate_certs
 ##             (добавлены E1/160) — setattr 12 → 0, DI-HYG 0 отклонений.
+##             DevPlan 004 W2: SAN-only серт из S3-кеша больше НЕ отвергается (SAN-aware W1) —
+##             сценарий 6 фиксирует исходную форму бага (false-miss → re-issue → LE rate-limit).
 ## @changes  2026-08-01 · Created (DevPlan 116 B10 T2)
 ##           2026-08-14 · W3.5-4 (164 S8) — DI-конверсия (setattr 12 → 0)
+##           2026-08-16 · DevPlan 004 W2 — +Scenario 6: S3 restore реального SAN-only fullchain (AC4)
 # endregion MODULE_CONTRACT
 """
 
@@ -34,6 +40,9 @@ import pytest
 _BOOTSTRAP_DIR = Path(__file__).resolve().parent.parent.parent / "core" / "internal" / "bootstrap"
 sys.path.insert(0, str(_BOOTSTRAP_DIR))
 import cert_orchestrator as co
+
+# ssl_certs для monkeypatch cert_is_le_issuer (Scenario 6: issuer self-generated)
+import core.internal.shared.ssl_certs as ssl_certs_module
 
 pytestmark = pytest.mark.static_audit
 
@@ -249,6 +258,100 @@ def test_orchestrate_certs_s3_failure_non_fatal(cert_env, caplog) -> None:
     assert result.domains[domain].status == "failed", "S3 failure must degrade to failed, not crash"
     assert result.failed == 1
     logger.critical("[IMP:9][test] S3 failure non-fatal — orchestrate_certs returned without raising")
+
+
+# endregion
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# region Scenario 6: S3 hit + SAN-only LE-style real cert → restored (DevPlan 004 W2 AC4)
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+class _FakeS3CacheSanRestore(_FakeS3Cache):
+    """Fake S3-кэш для SAN-restore: download_cert пишет РЕАЛЬНЫЙ SAN-only openssl-сертификат.
+
+    ## @purpose — Scenario 6 (DevPlan 004 W2 AC4): download_cert кладёт настоящий
+    ##            SAN-only LE-подобный fullchain (openssl-генерация) в cert_dir/<domain>/ —
+    ##            как настоящий s3_ssl_cache.download_cert после успешной загрузки из S3.
+    ## @io       ⇥ domain/cert_dir через download_cert-параметры → ⎋ True (cert на диске)
+    ## @complexity O(1) + openssl subprocess (генерация фикстуры)
+    """
+
+    def __init__(self, tmp_path: Path) -> None:
+        super().__init__(check_hit=True)
+        self._tmp_path = tmp_path
+
+    def download_cert(self, domain: str, cert_dir: str, _acme_home: str, _s3_bucket: str) -> bool:
+        self.downloaded.append(domain)
+        live_dir = Path(cert_dir) / domain
+        live_dir.mkdir(parents=True, exist_ok=True)
+        key_out = self._tmp_path / f"{domain}.key"
+        subprocess.run(
+            [
+                "openssl",
+                "req",
+                "-x509",
+                "-nodes",
+                "-newkey",
+                "rsa:2048",
+                "-days",
+                "60",
+                "-subj",
+                "/",  # SAN-only LE-style: subject пуст
+                "-addext",
+                f"subjectAltName=DNS:{domain}",
+                "-keyout",
+                str(key_out),
+                "-out",
+                str(live_dir / "fullchain.pem"),
+            ],
+            check=True,
+            capture_output=True,
+            timeout=30,
+        )
+        return True
+
+
+# 🧪 TRAP[TEST] · 2026-08-16 · Regression · SAN-only LE-серт из S3-кеша восстанавливается (AC4)
+# · Scenario: S3 hit + download пишет РЕАЛЬНЫЙ SAN-only fullchain (subject пуст, SAN=DNS:domain);
+#   валидация (cert_is_valid DI-default + monkeypatch cert_is_le_issuer — issuer self-generated)
+#   проходит через SAN-ветку W1 → status='restored', source='s3'; issue_script НЕ запускался
+#   (/tmp/nonexistent-issue.sh: запуск дал бы failed — assert restored гарантирует не-issue)
+# · Last fail: bootstrap 2026-08-16 — SAN-only certs rejected on restore → re-issue (LE rate-limit)
+# · Remove if: _try_s3_restore flow changes или SAN-aware matching удалён из ssl_certs
+def test_orchestrate_certs_restores_san_only_from_s3(
+    tmp_path: Path, cert_env: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SAN-only real cert из S3 → restored (не issue-fallback); баг false-miss закрыт (AC4)."""
+    caplog.set_level(0)
+    domain = "example.com"
+    # Garbage-серт на диске: Step 1 (реальная cert_is_valid) его отвергает → путь S3-restore
+    (cert_env / domain).mkdir(parents=True)
+    (cert_env / domain / "fullchain.pem").write_text("garbage-not-a-cert")
+
+    # Issuer у openssl-генерированных сертов self-generated → патчим ТОЛЬКО LE-точку
+    # (cert_is_valid вызывает cert_is_le_issuer из namespace ssl_certs на момент вызова)
+    monkeypatch.setattr(ssl_certs_module, "cert_is_le_issuer", lambda *_a, **_k: True)
+
+    fake_cache = _FakeS3CacheSanRestore(tmp_path)
+    result = co.orchestrate_certs(
+        [domain],
+        "/tmp/nonexistent-issue.sh",
+        validity_path=str(cert_env),
+        s3_cache=fake_cache,
+        environ={"S3_BUCKET": "test-bucket"},
+    )
+
+    entry = result.domains[domain]
+    assert entry.status == "restored", f"Expected restored, got {entry.status}"
+    assert entry.source == "s3", f"Expected source s3, got {entry.source}"
+    assert fake_cache.downloaded == [domain], "S3 download must be invoked on cache hit"
+    assert result.restored == 1
+    # Реальный SAN-only fullchain действительно на диске
+    restored_cert = (cert_env / domain / "fullchain.pem").read_text()
+    assert "BEGIN CERTIFICATE" in restored_cert, "download must place the real PEM cert"
+    logger.critical("[IMP:9][test] SAN-only S3 restore → restored(source=s3) — W1 SAN-aware confirmed")
 
 
 # endregion

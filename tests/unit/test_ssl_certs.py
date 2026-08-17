@@ -1,28 +1,43 @@
-# GREP_SUMMARY: test-shared-ssl-certs openssl x509 parseable expiry issuer lets-encrypt checkend constants
+# GREP_SUMMARY: test-shared-ssl-certs openssl x509 parseable expiry issuer lets-encrypt checkend constants san wildcard cn-fallback
 # STRUCTURE: ▶ test_parseable [ok|fail|timeout] → test_expiry [ok|expired] → test_issuer [le|non-le|fail] → test_constants
+#            → ▶ REAL-openssl certs (tmp_path): san-only → wildcard → cn-fallback → san-no-cn-fallback → R5-original-bug
 # region MODULE_CONTRACT
-## @purpose  Unit tests for core/internal/shared/ssl_certs.py — единый SoT openssl-примитивов (DevPlan 117 D21).
-## @scope    Tests: cert_is_parseable, cert_check_expiry, cert_get_issuer, cert_is_le_issuer, константы.
+## @purpose  Unit tests for core/internal/shared/ssl_certs.py — единый SoT openssl-примитивов (DevPlan 117 D21)
+##           + SAN-aware domain matching (DevPlan 004 W1/W2 — реальные openssl-сертификаты).
+## @scope    Tests: cert_is_parseable, cert_check_expiry, cert_get_issuer, cert_is_le_issuer, константы;
+##           W2: cert_get_san_list, _cert_covers_domain (SAN primary/CN fallback/wildcard), cert_is_valid
+##           на РЕАЛЬНЫХ openssl-сертификатах (SAN-only LE-style, CN-only legacy, wildcard, SAN+CN).
 ## @invariants
-##   - Все openssl вызовы мокаются (subprocess.run) — нет реальных вызовов openssl
-##   - Non-fatal контракт: subprocess ошибки → False/None (никогда не raise)
+##   - Мок-секции (parseable/expiry/issuer/CLI): openssl вызовы мокаются (subprocess.run)
+##   - W2 SAN-секции: РЕАЛЬНЫЕ openssl-сертификаты в tmp_path (TRAP[TEST]-принцип: моки subprocess
+##     не ловят класс SAN-only — нужны настоящие PEM из openssl); monkeypatch cert_is_le_issuer
+##     (issuer self-generated; существующий DI-паттерн — cert_is_valid вызывает точку модуля)
+##   - Non-fatal контракт: subprocess ошибки → False/None/[] (никогда не raise)
 ##   - LDD: IMP:9 в успешных сценариях (assert в каждом тесте)
 ## @changes 2026-08-01 | DevPlan 117 D21 — создан
+## @changes 2026-08-16 | DevPlan 004 W2 — +SAN-aware секция: _make_cert helper (openssl в tmp_path),
+##           test_cert_is_valid_san_only_cert / _san_wildcard / _cn_fallback / _san_present_no_cn_fallback /
+##           _san_only_original_bug (R5), параметризованные subject-паттерны cert_subject_matches_domain
 # endregion MODULE_CONTRACT
 
 import logging
+import subprocess
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+import core.internal.shared.ssl_certs as ssl_certs_module
 from core.internal.shared.ssl_certs import (
     DEFAULT_EXPIRY_THRESHOLD,
     DEFAULT_OPENSSL_TIMEOUT,
     cert_check_expiry,
     cert_get_issuer,
+    cert_get_san_list,
     cert_is_le_issuer,
     cert_is_parseable,
     cert_is_valid,
+    cert_subject_matches_domain,
 )
 from core.internal.shared.ssl_certs import (
     main as ssl_certs_cli_main,
@@ -274,6 +289,187 @@ def test_cert_is_valid_check_expiry_false(caplog: pytest.LogCaptureFixture) -> N
 
 
 # endregion TEST_cert_is_valid
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# region TEST_SAN_AWARE (DevPlan 004 W2 — РЕАЛЬНЫЕ openssl-сертификаты)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _make_cert(tmp_path: Path, subject: str, san: str | None = None, days: int = 60) -> Path:
+    """Сгенерировать РЕАЛЬНЫЙ openssl-сертификат в tmp_path (TRAP[TEST]-принцип W2).
+
+    ▶ ┌tmp_path, subject, san?┐ → ⚡ openssl req -x509 -newkey rsa:2048 (-addext SAN)?
+      → ⎋ Path (cert.pem)
+
+    ## @purpose — Моки subprocess не ловят класс SAN-only (subj "/" + SAN): нужны настоящие
+    ##            PEM из openssl. subprocess в тестах разрешён для генерации фикстур.
+    ## @io — ⇥ tmp_path: Path; subject: str (openssl -subj; "/" = SAN-only LE-style);
+    ##       san: str | None (DNS-имя для subjectAltName; None = без -addext);
+    ##       days: int (срок) → ⎋ Path к cert.pem
+    ## @invariants
+    ##   - SAN-only LE-style: subject="/", san="example.com" (subject пуст — как современные LE)
+    ##   - CN-only legacy: subject="/CN=example.com", san=None
+    ##   - Wildcard: san="*.example.com"
+    ##   - check=True: fail-fast если openssl недоступен/сломан (окружение dev-машины)
+    """
+    cert = tmp_path / f"cert_{abs(hash((subject, san, days)))}.pem"
+    key = tmp_path / f"key_{abs(hash((subject, san, days)))}.pem"
+    cmd = [
+        "openssl",
+        "req",
+        "-x509",
+        "-nodes",
+        "-newkey",
+        "rsa:2048",
+        "-days",
+        str(days),
+        "-subj",
+        subject,
+        "-keyout",
+        str(key),
+        "-out",
+        str(cert),
+    ]
+    if san is not None:
+        cmd += ["-addext", f"subjectAltName=DNS:{san}"]
+    subprocess.run(cmd, check=True, capture_output=True, timeout=30)
+    return cert
+
+
+@pytest.fixture
+def le_issuer_always_true(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Патч cert_is_le_issuer → True: issuer у тест-сертов self-generated (DI-паттерн W2).
+
+    cert_is_valid вызывает точку модуля (cert_is_le_issuer разрешается в namespace
+    ssl_certs на момент вызова) — патчим атрибут модуля.
+    """
+    monkeypatch.setattr(ssl_certs_module, "cert_is_le_issuer", lambda *_a, **_k: True)
+
+
+# 🧪 TRAP[TEST] · 2026-08-16 · Regression · SAN-only LE-style сертификат проходит cert_is_valid (AC1)
+# · Scenario: openssl-сертификат subject="/" + SAN=DNS:example.com; expected_domains="example.com" → True
+# · Last fail: bootstrap 2026-08-16 — SAN-only certs rejected on restore → re-issue (LE rate-limit риск)
+# · Remove if: SAN-aware matching удалён из ssl_certs (возврат CN-only)
+def test_cert_is_valid_san_only_cert(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, le_issuer_always_true: None
+) -> None:
+    """SAN-only серт (subject пуст) + expected_domains → True (AC1, W1 SAN primary)."""
+    caplog.set_level(logging.INFO)
+    cert = _make_cert(tmp_path, subject="/", san="example.com")
+    assert cert_get_san_list(str(cert)) == ["example.com"], "SAN extraction must return the DNS entry"
+    assert cert_is_valid(str(cert), expected_domains="example.com") is True
+    _assert_imp9(caplog, "cert_is_valid: OK")
+
+
+# 🧪 TRAP[TEST] · 2026-08-16 · Regression · Wildcard SAN — одноуровневая семантика (AC2)
+# · Scenario: SAN=*.example.com: app.example.com → True; apex example.com → False,
+#   a.b.example.com → False, other.com → False. РАСХОЖДЕНИЕ с формулировкой DevPlan AC2
+#   («покрывает example.com и app.example.com»): канон verify_sweep/tls_check.san_matches_domain —
+#   wildcard НЕ покрывает apex (пример: «*.example.com» не соответствует «example.com»,
+#   RFC 6125 §6.4.3 — wildcard матчит ровно одну метку слева). Семантика canonical wildcard
+#   одноуровневая — следует канону verify_sweep, НЕ буквальной формулировке AC2.
+# · Last fail: N/A (new — W1 wildcard semantics)
+# · Remove if: wildcard-семантика меняется (многоуровневый wildcard / apex-покрытие)
+@pytest.mark.parametrize(
+    "domain,expected",
+    [
+        ("app.example.com", True),  # ровно одна метка слева — wildcard покрывает
+        ("example.com", False),  # apex НЕ покрывается wildcard (канон verify_sweep, не AC2-буквально)
+        ("a.b.example.com", False),  # две метки слева — wildcard не покрывает
+        ("other.com", False),  # чужой домен
+    ],
+    ids=["one_label", "apex_not_covered", "two_labels", "other_domain"],
+)
+def test_cert_is_valid_san_wildcard(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    le_issuer_always_true: None,
+    domain: str,
+    expected: bool,
+) -> None:
+    """SAN=*.example.com: одноуровневое wildcard-покрытие (app.example.com True; apex False)."""
+    caplog.set_level(logging.INFO)
+    cert = _make_cert(tmp_path, subject="/", san="*.example.com")
+    result = cert_is_valid(str(cert), expected_domains=domain)
+    assert result is expected
+    if expected:
+        _assert_imp9(caplog, "cert_is_valid: OK")
+    else:
+        assert any("SAN/CN does not match" in r.message for r in caplog.records), "mismatch must log IMP:8 reason"
+
+
+# 🧪 TRAP[TEST] · 2026-08-16 · Regression · CN-only legacy сертификат — CN-fallback работает (AC3)
+# · Scenario: openssl-сертификат subject="/CN=example.com" без SAN → cert_is_valid True;
+#   параметризованные subject-строки для cert_subject_matches_domain (pure-string, без subprocess)
+# · Last fail: N/A ( RFC2253/trailing-dot паттерны — new W1 T1.3)
+# · Remove if: CN-fallback ветка удалена (SAN-only будущее)
+@pytest.mark.parametrize(
+    "subject",
+    [
+        "subject=CN = example.com",  # slashed-формат с пробелами
+        "subject=CN= example.com",  # slashed-формат, = и пробел
+        "subject=CN=example.com",  # RFC2253 без пробелов (W1)
+        "subject=CN=example.com.",  # trailing dot (W1)
+        "subject=CN = example.com.",  # trailing dot + пробелы (W1)
+    ],
+    ids=["spaced", "eq_space", "rfc2253", "trailing_dot", "trailing_dot_spaced"],
+)
+def test_cert_subject_matches_domain_patterns(subject: str, caplog: pytest.LogCaptureFixture) -> None:
+    """cert_subject_matches_domain: slashed + RFC2253 + trailing-dot паттерны (T1.3)."""
+    caplog.set_level(logging.INFO)
+    assert cert_subject_matches_domain(subject, "example.com") is True
+    assert cert_subject_matches_domain(subject, "other.com") is False
+    logger.info("[IMP:9][test][subject_patterns] %r matches example.com, not other.com", subject)
+
+
+def test_cert_is_valid_cn_fallback(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, le_issuer_always_true: None
+) -> None:
+    """CN-only legacy серт (без SAN) → True через CN-fallback (AC3)."""
+    caplog.set_level(logging.INFO)
+    cert = _make_cert(tmp_path, subject="/CN=example.com", san=None)
+    assert cert_get_san_list(str(cert)) == [], "CN-only cert must have empty SAN list"
+    assert cert_is_valid(str(cert), expected_domains="example.com") is True
+    _assert_imp9(caplog, "cert_is_valid: OK")
+
+
+# 🧪 TRAP[TEST] · 2026-08-16 · Regression · SAN present → CN non-authoritative (TRAP[DECISION] T1.2)
+# · Scenario: серт SAN=other.com + CN=example.com, expected_domains="example.com" → False
+#   (CN-fallback при непустом SAN запрещён — RFC 6125; иначе «CN совпал случайно»)
+# · Last fail: N/A (new — W1 SAN-deprecates-CN)
+# · Remove if: появление legacy-сертификатов с рассинхроном CN/SAN (Rev TRAP[DECISION])
+def test_cert_is_valid_san_present_no_cn_fallback(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, le_issuer_always_true: None
+) -> None:
+    """SAN=other.com + CN=example.com, expected example.com → False (CN non-authoritative)."""
+    caplog.set_level(logging.INFO)
+    cert = _make_cert(tmp_path, subject="/CN=example.com", san="other.com")
+    assert cert_is_valid(str(cert), expected_domains="example.com") is False
+    assert any("SAN/CN does not match" in r.message for r in caplog.records)
+    # Контр-кейс: тот же серт, expected=other.com → True (SAN матчится)
+    assert cert_is_valid(str(cert), expected_domains="other.com") is True
+    _assert_imp9(caplog, "cert_is_valid: OK")
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · SAN-only original bug — исходная форма бага DevPlan 004
+# · Scenario: SAN-only серт (subject пуст), expected_domains=domain → True. До фикса W1
+#   cert_is_valid матчил ТОЛЬКО по subject-CN → SAN-only серт отвергался («Cached cert failed
+#   validation» → S3 miss → пере-выпуск → LE rate-limit 50/домен/нед).
+# · Last fail: bootstrap 2026-08-16 — SAN-only certs rejected on restore → re-issue
+# · Remove if: SAN-aware matching удалён из ssl_certs
+def test_cert_is_valid_san_only_original_bug(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, le_issuer_always_true: None
+) -> None:
+    """R5: исходная форма бага (SAN-only, subject пуст) больше НЕ отвергается."""
+    caplog.set_level(logging.INFO)
+    cert = _make_cert(tmp_path, subject="/", san="botanika.tronyx.ru")
+    # Исходный вход бага: валидный LE-серт из S3-кеша, subject пуст, SAN=domain
+    assert cert_is_valid(str(cert), expected_domains="botanika.tronyx.ru") is True
+    _assert_imp9(caplog, "cert_is_valid: OK")
+
+
+# endregion TEST_SAN_AWARE
 
 
 # ═══════════════════════════════════════════════════════════════════════════
