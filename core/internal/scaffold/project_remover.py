@@ -211,8 +211,8 @@ def unregister_from_node_yaml(node_yaml_path: str, name: str) -> bool:
 # region FUNC_remove_vhost
 ## @purpose  Remove nginx vhost file for the project, if a domain is configured.
 ##           T2.10: делегирует канону vhost_renderer.remove_vhost — lookup по GENERATED-заголовку
-##           (# Source: node.yaml#projects[<name>]) + audit-запись vhost:remove (shared audit_logger).
-##           Legacy-fallback: exact-path удаление <domain>.conf для файлов БЕЗ canon-заголовка
+##           (# Source: node.yaml#projects[NAME]) + audit-запись vhost:remove (shared audit_logger).
+##           Legacy-fallback: exact-path удаление DOMAIN.conf для файлов БЕЗ canon-заголовка
 ##           (add-vhost.sh legacy / ручные) — сохраняет disk-поведение прежней реализации 1:1.
 ## @param domain            Domain name (empty = skip)
 ## @param node_configs_dir  Path to node-configs directory
@@ -226,7 +226,7 @@ def remove_vhost(domain: str, node_configs_dir: str, project_name: str = "") -> 
     ## @purpose  T2.10: единый канон удаления vhost — vhost_renderer.remove_vhost
     ##            (GENERATED-заголовочный lookup + аудит vhost:remove). Файлы без canon-
     ##            заголовка (legacy add-vhost.sh / ручные) canon не находит → exact-path
-    ##            fallback <domain>.conf сохраняет публичное disk-поведение 1:1.
+    ##            fallback DOMAIN.conf сохраняет публичное disk-поведение 1:1.
     ## @io        ⇥ domain, node_configs_dir, project_name → ⎋ bool
     ## @complexity O(F)
     """
@@ -251,7 +251,7 @@ def remove_vhost(domain: str, node_configs_dir: str, project_name: str = "") -> 
     _canon_remove_vhost(project_name=project_name, overlays_dir=str(overlays_dir))
 
     # Legacy fallback (T2.10): canon матчит только файлы с GENERATED-заголовком
-    # (# Source: node.yaml#projects[<name>]); legacy/ручные vhost'ы удаляются по имени
+    # (# Source: node.yaml#projects[NAME]); legacy/ручные vhost'ы удаляются по имени
     # файла <domain>.conf — как в прежней реализации remove-project.sh:207-228.
     if existed_before and vhost_file.exists():
         logger.info("[IMP:7][remove][vhost] Removing nginx vhost: %s", vhost_file)

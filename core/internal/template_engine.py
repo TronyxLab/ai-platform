@@ -328,7 +328,7 @@ def _load_manifest(manifest_path: str) -> _TemplateManifest | None:
 ## @complexity O(v) where v = number of variables
 ## @invariants
 ##   - render-режим: standard_vars (default + env resolve_from) + entry vars + extra_vars
-##   - check-режим: entry vars с плейсхолдером <name> для required-no-default + extra_vars
+##   - check-режим: entry vars с плейсхолдером NAME для required-no-default + extra_vars
 ##     (не наследует standard_vars — check_all прежнего поведения не использовал их)
 ##   - extra_vars (CLI-оверрайды): None-значения не мержатся
 def _build_standard_vars(std_defs: dict[str, _VarDef]) -> dict[str, str]:
@@ -382,10 +382,10 @@ def _merge_check_vars(
     entry_vars: dict[str, _VarDef | str],
     extra_vars: dict[str, str] | None,
 ) -> dict[str, str]:
-    """Build test vars for check_all: defaults; <name>-плейсхолдер для required-no-default.
+    """Build test vars for check_all: defaults; NAME-плейсхолдер для required-no-default.
 
     Отличие от render-режима (T2.9): required-переменная без default получает тестовое
-    значение ``<name>`` вместо silent-отсутствия — dry-run render проходит до проверки
+    значение NAME вместо silent-отсутствия — dry-run render проходит до проверки
     фактического файла (test_check_all_single_file_entries_validated, T1.2).
     """
     test_vars: dict[str, str] = {}
@@ -442,7 +442,7 @@ class _ResolvedEntry(NamedTuple):
 ## @complexity O(t * v) where t = number of templates, v = vars per entry
 ## @invariants
 ##   - vars_mode="render" (render_all): merged = standard_vars + entry vars + extra_vars
-##   - vars_mode="check" (check_all): merged = entry vars (<name>-плейсхолдеры) + extra_vars
+##   - vars_mode="check" (check_all): merged = entry vars (NAME-плейсхолдеры) + extra_vars
 ##   - Empty manifest (нет templates / templates: []) → []
 ##   - Manifest load ошибки (FileNotFoundError/ImportError) → наружу (как прежние callers)
 def _iter_manifest_entries(

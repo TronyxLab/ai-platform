@@ -353,7 +353,7 @@ def _acme_sh_available(ctx: IssueContext, log_step: str) -> bool:
 # region FUNC__acme_issue_with_retry
 ## @purpose  Единый retry-цикл acme.sh --issue (T2.2): 3 копии (_issue_acme_webnames/
 ##           _issue_acme_generic/_issue_http01_cert) различались только CLI-аргументами
-##           (--dns <plugin> | --standalone), log_step и текстами WARN/FAIL — консолидированы.
+##           (--dns PLUGIN | --standalone), log_step и текстами WARN/FAIL — консолидированы.
 ##           Возвращает last_rc (0 = успех) — вызывающий решает про install-cert/False.
 ## @io       ⇥ ctx: IssueContext, email: str, domains: list[str] (сырые имена — флаги -d здесь),
 ##              extra_args: list[str] (различающаяся CLI-часть), log_step: str,
@@ -361,8 +361,8 @@ def _acme_sh_available(ctx: IssueContext, log_step: str) -> bool:
 ## @complexity — O(A) — A = ctx.max_attempts, каждая попытка — 1 acme.sh subprocess
 ## @invariants
 ##   - check=False (rc управляется циклом); rc=0 → break; иначе WARN per attempt + FAIL
-##   - timeout=ACME_CMD_TIMEOUT; CLI-порядок прежний (--issue --home <home> <extra> --server
-##     --email <email> <(-d d)*> --keylength) — AcmeFakeRunner различает ветки по --standalone/--dns
+##   - timeout=ACME_CMD_TIMEOUT; CLI-порядок прежний (--issue --home HOME EXTRA --server
+##     --email EMAIL (-d DOMAIN)* --keylength) — AcmeFakeRunner различает ветки по --standalone/--dns
 ##   - Тексты WARN/FAIL — callables (байт-идентичны прежним per-ветка)
 def _acme_issue_with_retry(
     *,

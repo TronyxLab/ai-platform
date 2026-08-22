@@ -83,21 +83,21 @@ DEFAULT_EXPIRY_THRESHOLD: int = 2592000  # 30 days in seconds
 
 # region FUNC__run_openssl
 ## @purpose  Единый openssl x509 subprocess-хелпер (T2.4 дедупликация): 5 повторяющихся блоков
-##           subprocess.run(["openssl", "x509", "-in", <cert>, ...]) в cert_is_parseable/
+##           subprocess.run(["openssl", "x509", "-in", CERT, ...]) в cert_is_parseable/
 ##           cert_check_expiry/cert_get_issuer/cert_get_subject/cert_get_san_list сведены
 ##           к одному приватному хелперу. Subprocess-ошибки (timeout/FileNotFoundError/OSError)
 ##           логируются здесь ОДИН раз (IMP:7) и возвращают None — публичные функции трактуют
 ##           None как graceful degradation (False/None/[]), НИКОГДА не raise (канон ssl_certs).
-## @io       ⇥ args: list[str] (флаги после `openssl x509 -in <cert>`), cert_path: str,
+## @io       ⇥ args: list[str] (флаги после openssl x509 -in CERT), cert_path: str,
 ##              timeout: int, op: str (метка операции для лога: parse|expiry|issuer|subject|SAN)
 ##           ⎋ subprocess.CompletedProcess[str] | None (None = subprocess error/timeout)
 ## @complexity O(1) + 1 openssl subprocess
 ## @invariants
 ##   - Всегда text=True (stdout нужен issuer/subject/san; parseable/expiry — stdout пуст)
 ##   - check=False: returncode проверяет вызывающий (не raise на rc!=0)
-##   - Subprocess error → IMP:7 warning «openssl <op> check failed» + None (никогда не raise)
+##   - Subprocess error → IMP:7 warning openssl OP check failed + None (никогда не raise)
 def _run_openssl(args: list[str], cert_path: str, timeout: int, *, op: str) -> subprocess.CompletedProcess[str] | None:
-    """Run `openssl x509 -in <cert> <args>` with единым error-handling; None on subprocess error."""
+    """Run openssl x509 -in CERT ARGS with единым error-handling; None on subprocess error."""
     try:
         return subprocess.run(
             ["openssl", "x509", "-in", cert_path, *args],
