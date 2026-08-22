@@ -26,6 +26,7 @@
 ## @changes — 2026-07-15 | Trigger: main-full-gate→platform-test + push event filter
 ## @changes — 2026-07-15 | NODE auto-detected (Option A, replacing P11 secrets-based fix)
 ## @changes — 2026-08-01 | DevPlan 116 B11 T4 (D2): trigger → platform-gate-fast
+## @changes — 2026-08-22 | T2.15: rsync-excludes (.git/ __pycache__/ *.pyc) хойстнуты в job-level env RSYNC_EXCLUDES
 # endregion MODULE_CONTRACT
 
 name: core-deploy
@@ -71,6 +72,14 @@ jobs:
     # превышали 15 мин на холодном пуше/первом деплое. Вариант B (split rsync/node-update
     # jobs) отклонён: увеличивает латентность цепочки без выигрыша (rsync ~2-4 мин).
     timeout-minutes: 30
+
+    # T2.15: общий набор rsync-excludes (core/ + node-configs/) — единое определение вместо
+    # дублирования в 2 rsync-шагах. --exclude=FORM — эквивалентная rsync-форма (без кавычек
+    # внутри env: word-splitting при $RSYNC_EXCLUDES; `--exclude=*.pyc` не глоббится — префикс
+    # `--exclude=` исключает совпадение с файлами cwd). core/ дополнительно исключает
+    # default-user.xml и .env (специфичны только для core/) — остаются inline.
+    env:
+      RSYNC_EXCLUDES: "--exclude=.git/ --exclude=__pycache__/ --exclude=*.pyc"
 
     steps:
       # ⚠️ TRAP[BUG] · 2026-07-23 · P0 · sha-resolve before checkout broke core-deploy
@@ -162,9 +171,7 @@ jobs:
           if [ -d ./core ] && [ -n "$(ls -A ./core 2>/dev/null)" ]; then
             # Rsync core/ with --delete (excludes .git, __pycache__, *.pyc)
             rsync -avz --delete \
-              --exclude '.git/' \
-              --exclude '__pycache__/' \
-              --exclude '*.pyc' \
+              $RSYNC_EXCLUDES \
               --exclude 'default-user.xml' \
               --exclude '.env' \
               ./core/ ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/platform/core/
@@ -208,9 +215,7 @@ jobs:
           #   перетирать /opt/node-configs. Условный rsync: источник есть → синхронизировать.
           if [ -d ./node-configs ]; then
             rsync -avz \
-              --exclude '.git/' \
-              --exclude '__pycache__/' \
-              --exclude '*.pyc' \
+              $RSYNC_EXCLUDES \
               ./node-configs/ ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/node-configs/
           else
             echo "[IMP:8][deploy][rsync] node-configs/ отсутствует (gitignored, орг-репозиторий) — пропуск (доставлен bootstrap'ом)"

@@ -1,5 +1,5 @@
 # GREP_SUMMARY: check-project-runner, check_project, resolve-language, select-checks, exit-code, L1-block, maturity, escalator, level-override
-# STRUCTURE: ▶ check_project(project_dir, level, fix, facts) → load_manifest (exit 4) → resolve_language → quality.level (+validate override) → compute_maturity → read_lock → evaluate (state) → select_checks (baseline|full × language × local + L1 always) → ⊕ run_check × N → _compute_exit_code (L1 | active-full) → ⎋ CheckReport
+# STRUCTURE: ▶ check_project(project_dir, level, fix, facts) → load_manifest (exit 4) → project_profile (languages+level, T2.12) → compute_maturity → read_lock → evaluate (state) → select_checks (baseline|full × language × local + L1 always) → ⊕ run_check × N → _compute_exit_code (L1 | active-full) → ⎋ CheckReport
 # region MODULE_CONTRACT
 ## @purpose  Оркестратор K1-канала практик (DevPlan 137 §2.1A/§4.7, 170 W10-A декомпозиция):
 ##           канон → язык → maturity → state эскалатора → выбор проверок (L1 всегда;
@@ -7,7 +7,8 @@
 ##           (exec.run_check) → exit-код (L1 FAIL → 1 при ЛЮБОМ состоянии; L2/L3 FAIL → 1
 ##           только в active-full). Library-функция check_project() — тесты вызывают напрямую.
 ## @scope    Потребители: cli.py (main → check_project), __init__.py (re-export), drift.py
-##           (resolve_language для canon-hash), tests/unit/test_practices_check_project.py.
+##           (project_profile для canon-hash), checks/file.py (resolve_language re-export),
+##           tests/unit/test_practices_check_project.py.
 ## @invariants
 ##   - exit-коды из shared/contracts.py (0/1/4) — НЕ хардкодить; ConfigValidationError → 4
 ##   - L1 FAIL → exit 1 при ЛЮБОМ состоянии; L2/L3 FAIL → exit 1 ТОЛЬКО в active-full
@@ -18,6 +19,8 @@
 ## @rationale Выделение runner-слоя из монолита: оркестрация (maturity/evaluate/select/exit)
 ##            отделена от исполнения (exec) и CLI (cli) — тестируемость и SRP (research-A §2).
 ## @changes  2026-08-15 · DevPlan 170 W10-A — создан (выделен из check_project.py:142-305)
+##           2026-08-22 · T2.12 — resolve_language перенесён в practices/profile.py (re-export
+##                      сохранён для drift.py/checks/file.py); check_project → project_profile()
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -30,49 +33,20 @@ from core.internal.practices.check_project.models import CheckReport, CheckResul
 from core.internal.practices.escalator import evaluate, validate_level_setting
 from core.internal.practices.generators import read_lock
 from core.internal.practices.manifest import (
-    LANGUAGE_FOR_TYPE,
     PracticeCheck,
     PracticesManifest,
     l1_checks,
     load_manifest,
 )
 from core.internal.practices.maturity import compute_maturity
+from core.internal.practices.profile import (
+    project_profile,
+    resolve_language,  # ruff: ignore[F401] — re-export: checks/file.py импортирует runner.resolve_language (T2.12, слой совместимости)
+)
 from core.internal.shared.contracts import EXIT_GENERIC, EXIT_OK
 from core.internal.shared.env_facts import EnvironmentFacts
-from core.internal.shared.project_yaml import get_project_type, load_project_yaml
 
 logger = logging.getLogger(__name__)
-
-
-# region FUNC_resolve_language
-## @purpose  Определить языки проекта из ai-platform.yaml type (см. LANGUAGE_FOR_TYPE).
-##           Неизвестный/отсутствующий type → ("python",) дефолт? НЕТ — "all"-only безопаснее:
-##           пустой кортеж → только all-проверки (безопасно). fallback: type backend-подобный.
-## @io       ⇥ project_dir: Path → ⎋ tuple[str, ...] языков канона
-## @complexity O(1)
-## @invariants
-##   - type frontend → (typescript, react)
-##   - Неизвестный type → ("all",)-эквивалент: пустой кортеж языков → только all-проверки
-def resolve_language(project_dir: Path) -> tuple[str, ...]:
-    """Resolve canon languages from ai-platform.yaml type (backend → python, frontend → ts).
-
-    ## @purpose  type из ai-platform.yaml (backend|frontend|python|typescript|react|sh)
-    ##           → кортеж языков канона (§3.2). Неизвестный/отсутствующий type → пустой кортеж
-    ##           (только all-проверки — безопасный fallback, не угадываем язык).
-    ## @io       ⇥ project_dir: Path → ⎋ tuple[str, ...]
-    ## @complexity O(1)
-    """
-    data = load_project_yaml(project_dir)
-    ptype = get_project_type(data)
-    languages = LANGUAGE_FOR_TYPE.get(ptype)
-    if languages is None:
-        logger.info("[IMP:7][check_project][lang] Unknown type '%s' — only all-language checks", ptype or "<none>")
-        return ()
-    logger.info("[IMP:8][check_project][lang] type=%s → languages=%s", ptype, languages)
-    return languages
-
-
-# endregion FUNC_resolve_language
 
 
 # region FUNC_select_checks
@@ -134,14 +108,10 @@ def check_project(
     project_dir = Path(project_dir)
     manifest = load_manifest()
 
-    # ── language + level_setting ──
-    languages = resolve_language(project_dir)
-    data = load_project_yaml(project_dir)
-    # W11-G4 cross-file (shared/project_yaml → dict[str, object] после типизации G1):
-    # .get возвращает object — isinstance-гейт сохраняет прежнюю семантику `or {}`
-    quality_data = data.get("quality")
-    quality: dict[str, object] = quality_data if isinstance(quality_data, dict) else {}
-    level_setting = str(quality.get("level", "auto") or "auto")
+    # ── language + level_setting (T2.12: единый project_profile — 1 чтение ai-platform.yaml) ──
+    profile = project_profile(project_dir)
+    languages = profile.languages
+    level_setting = profile.level
     if level is not None:
         level_setting = validate_level_setting(level)
 

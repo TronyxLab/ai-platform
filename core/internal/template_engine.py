@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: template-engine Python-core render check grammars placeholder {{UPPER_SNAKE}}
-# STRUCTURE: ┌parse_vars→StrictGrammar RE┐ → ◇ render_template → ◇ render_all → ◇ check_all
+# GREP_SUMMARY: template-engine Python-core render check grammars placeholder {{UPPER_SNAKE}} manifest-iterator dedup walker-writer
+# STRUCTURE: ┌parse_vars→StrictGrammar RE┐ → ◇ render_template → ◇ _iter_manifest_entries (vars_mode render|check) → ◇ render_all / check_all → ◇ _walk_render_directory (dry-run | in-place)
 # region MODULE_CONTRACT
 ## @purpose  Core template rendering engine with strict placeholder grammar {{UPPER_SNAKE}}
 ## @scope    Вызывается из CLI, CI-gates, тестов и напрямую через import
@@ -19,7 +19,8 @@ import os
 import pathlib
 import re
 import sys
-from typing import TypedDict, cast
+from collections.abc import Callable
+from typing import Literal, NamedTuple, TypedDict, cast
 
 # DevPlan 119 E5: атомарная запись — единый канон shared/atomic_writer (tempfile+fsync+replace).
 from core.internal.shared.atomic_writer import atomic_write_text as _atomic_write_text
@@ -183,24 +184,16 @@ def render_template(
 
     log.log(7, "[IMP:7][render_template] Reading template: %s", real_path)
 
-    # Check file size for streaming threshold (>100MB)
-    file_size = pathlib.Path(real_path).stat().st_size
-    large_file = file_size > 100 * 1024 * 1024  # 100MB
-
-    if large_file:
-        log.log(8, "[IMP:8][render_template] Large template detected (%d bytes), streaming", file_size)
-        content = _read_large_file(real_path)
-    else:
-        with pathlib.Path(real_path).open("rb") as f:
-            raw = f.read()
-        # Check for binary content (null byte detection)
-        if b"\x00" in raw:
-            msg = "binary content detected"
-            raise TemplateError(
-                msg,
-                template_path=template_path,
-            )
-        content = raw.decode("utf-8")
+    with pathlib.Path(real_path).open("rb") as f:
+        raw = f.read()
+    # Check for binary content (null byte detection)
+    if b"\x00" in raw:
+        msg = "binary content detected"
+        raise TemplateError(
+            msg,
+            template_path=template_path,
+        )
+    content = raw.decode("utf-8")
 
     # Check for unclosed {{ (starts without matching }})
     _check_unclosed(content, template_path)
@@ -288,29 +281,6 @@ def _check_unclosed(content: str, template_path: str) -> None:
 # endregion FUNC_CHECK_UNCLOSED
 
 
-# region FUNC_READ_LARGE_FILE
-def _read_large_file(path: str, chunk_size: int = 64 * 1024) -> str:
-    """Read a large file (>100MB) in chunks to avoid memory detonation."""
-    parts: list[str] = []
-    null_detected = False
-    with pathlib.Path(path).open("rb") as f:
-        while True:
-            chunk = f.read(chunk_size)
-            if not chunk:
-                break
-            if b"\x00" in chunk:
-                null_detected = True
-                break
-            parts.append(chunk.decode("utf-8"))
-    if null_detected:
-        msg = "binary content detected"
-        raise TemplateError(msg, template_path=path)
-    return "".join(parts)
-
-
-# endregion FUNC_READ_LARGE_FILE
-
-
 # region FUNC_ATOMIC_WRITE
 def _atomic_write(content: str, output_path: str) -> None:
     """Write content atomically via shared atomic_writer (E5 — tempfile + fsync + os.replace).
@@ -325,6 +295,196 @@ def _atomic_write(content: str, output_path: str) -> None:
 
 
 # endregion FUNC_ATOMIC_WRITE
+
+
+# region FUNC_LOAD_MANIFEST
+## @purpose  Load and parse template-manifest.yaml (shared T2.9: render_all/check_all)
+## @io       Input: manifest_path → Output: _TemplateManifest | None (cast YAML boundary, W11)
+## @complexity O(m) where m = manifest file size
+## @invariants
+##   - Missing manifest → FileNotFoundError
+##   - PyYAML unavailable → ImportError
+def _load_manifest(manifest_path: str) -> _TemplateManifest | None:
+    """Load template-manifest.yaml (shared between render_all and check_all, T2.9)."""
+    if not pathlib.Path(manifest_path).exists():
+        msg = f"Manifest not found: {manifest_path}"
+        raise FileNotFoundError(msg)
+
+    if yaml is None:
+        msg = "PyYAML is required for manifest support"
+        raise ImportError(msg)
+
+    with pathlib.Path(manifest_path).open(encoding="utf-8") as f:
+        # W11: yaml.safe_load returns Any → cast to template-manifest boundary TypedDict
+        return cast(_TemplateManifest | None, yaml.safe_load(f))
+
+
+# endregion FUNC_LOAD_MANIFEST
+
+
+# region FUNC_MERGE_VARS
+## @purpose  Per-entry merged-vars builders — параметризация отличия render_all/check_all (T2.9)
+## @io       ⇥ standard_vars/entry_vars/extra_vars → ⎋ merged vars dict
+## @complexity O(v) where v = number of variables
+## @invariants
+##   - render-режим: standard_vars (default + env resolve_from) + entry vars + extra_vars
+##   - check-режим: entry vars с плейсхолдером <name> для required-no-default + extra_vars
+##     (не наследует standard_vars — check_all прежнего поведения не использовал их)
+##   - extra_vars (CLI-оверрайды): None-значения не мержатся
+def _build_standard_vars(std_defs: dict[str, _VarDef]) -> dict[str, str]:
+    """Resolve top-level standard_vars: default + env (resolve_from) — render-режим."""
+    standard_vars: dict[str, str] = {}
+    for var_name, var_def in std_defs.items():
+        default = var_def.get("default")
+        if default is not None:
+            standard_vars[var_name] = str(default)
+        # Try env
+        resolve_from = var_def.get("resolve_from", [])
+        for source in resolve_from:
+            if source.startswith("env."):
+                env_key = source[4:]
+                env_val = os.environ.get(env_key)
+                if env_val:
+                    standard_vars[var_name] = env_val
+                    break
+    return standard_vars
+
+
+def _merge_render_vars(
+    standard_vars: dict[str, str],
+    entry_vars: dict[str, _VarDef | str],
+    extra_vars: dict[str, str] | None,
+) -> dict[str, str]:
+    """Merge vars for render_all: standard vars + entry-specific vars + extra_vars."""
+    merged_vars = dict(standard_vars)
+    for var_name, var_def in entry_vars.items():
+        if isinstance(var_def, dict):
+            default = var_def.get("default")
+            if default is not None:
+                merged_vars[var_name] = str(default)
+            # Source from env if configured
+            source = var_def.get("source")
+            if source == "env":
+                env_val = os.environ.get(var_name)
+                if env_val:
+                    merged_vars[var_name] = env_val
+        else:
+            # Simple string value
+            merged_vars[var_name] = str(var_def)
+
+    # Merge extra_vars (CLI overrides)
+    if extra_vars:
+        merged_vars.update({k: v for k, v in extra_vars.items() if v is not None})
+    return merged_vars
+
+
+def _merge_check_vars(
+    entry_vars: dict[str, _VarDef | str],
+    extra_vars: dict[str, str] | None,
+) -> dict[str, str]:
+    """Build test vars for check_all: defaults; <name>-плейсхолдер для required-no-default.
+
+    Отличие от render-режима (T2.9): required-переменная без default получает тестовое
+    значение ``<name>`` вместо silent-отсутствия — dry-run render проходит до проверки
+    фактического файла (test_check_all_single_file_entries_validated, T1.2).
+    """
+    test_vars: dict[str, str] = {}
+    for var_name, var_def in entry_vars.items():
+        if isinstance(var_def, dict):
+            default = var_def.get("default")
+            if default is not None:
+                test_vars[var_name] = str(default)
+            elif not var_def.get("required", True):
+                # Optional, no default — skip (allow_missing will handle)
+                pass
+            else:
+                # Required, no default — use placeholder name as test value
+                test_vars[var_name] = f"<{var_name}>"
+        else:
+            test_vars[var_name] = str(var_def)
+
+    # Merge extra_vars
+    if extra_vars:
+        test_vars.update({k: v for k, v in extra_vars.items() if v is not None})
+    return test_vars
+
+
+def _required_vars(entry_vars: dict[str, _VarDef | str]) -> list[str]:
+    """Required (non-optional) var names — allow_missing computation (render-режим)."""
+    required_vars_list: list[str] = []
+    for var_name, var_def in entry_vars.items():
+        if isinstance(var_def, dict):
+            if var_def.get("required", True):
+                required_vars_list.append(var_name)
+        else:
+            # Simple string — assumed required
+            required_vars_list.append(var_name)
+    return required_vars_list
+
+
+# endregion FUNC_MERGE_VARS
+
+
+# region FUNC_ITER_MANIFEST_ENTRIES
+class _ResolvedEntry(NamedTuple):
+    """One resolved template-manifest entry yielded by _iter_manifest_entries (T2.9)."""
+
+    tmpl_path: str
+    abs_tmpl_path: str
+    merged_vars: dict[str, str]
+    entry_type: str
+    output: str | None
+    required_vars: list[str]
+
+
+## @purpose  Shared manifest reading + per-entry merged vars for render_all/check_all (T2.9)
+## @io       Input: manifest_path (+ extra_vars, vars_mode) → Output: list[_ResolvedEntry]
+## @complexity O(t * v) where t = number of templates, v = vars per entry
+## @invariants
+##   - vars_mode="render" (render_all): merged = standard_vars + entry vars + extra_vars
+##   - vars_mode="check" (check_all): merged = entry vars (<name>-плейсхолдеры) + extra_vars
+##   - Empty manifest (нет templates / templates: []) → []
+##   - Manifest load ошибки (FileNotFoundError/ImportError) → наружу (как прежние callers)
+def _iter_manifest_entries(
+    manifest_path: str,
+    *,
+    extra_vars: dict[str, str] | None = None,
+    vars_mode: Literal["render", "check"] = "render",
+) -> list[_ResolvedEntry]:
+    """Load template-manifest.yaml and resolve per-entry render data (T2.9 dedup ~90 LOC)."""
+    manifest = _load_manifest(manifest_path)
+
+    if not manifest or "templates" not in manifest:
+        return []
+
+    standard_vars = _build_standard_vars(manifest.get("standard_vars", {}))
+    manifest_dir = os.path.dirname(os.path.abspath(manifest_path))
+
+    resolved: list[_ResolvedEntry] = []
+    for entry in manifest["templates"]:
+        tmpl_path = entry["template"]
+        entry_vars = entry.get("vars", {})
+        entry_type = entry.get("type", "single")
+        output = entry.get("output")
+
+        if vars_mode == "check":
+            merged_vars = _merge_check_vars(entry_vars, extra_vars)
+            required_vars: list[str] = []
+        else:
+            merged_vars = _merge_render_vars(standard_vars, entry_vars, extra_vars)
+            required_vars = _required_vars(entry_vars)
+
+        # Resolve template path relative to manifest dir
+        abs_tmpl_path = (
+            os.path.join(manifest_dir, tmpl_path) if not pathlib.Path(tmpl_path).is_absolute() else tmpl_path
+        )
+
+        resolved.append(_ResolvedEntry(tmpl_path, abs_tmpl_path, merged_vars, entry_type, output, required_vars))
+
+    return resolved
+
+
+# endregion FUNC_ITER_MANIFEST_ENTRIES
 
 
 # region FUNC_RENDER_ALL
@@ -355,81 +515,15 @@ def render_all(
     log = logging.getLogger(__name__)
     log.log(7, "[IMP:7][render_all] Reading manifest: %s", manifest_path)
 
-    if not pathlib.Path(manifest_path).exists():
-        msg = f"Manifest not found: {manifest_path}"
-        raise FileNotFoundError(msg)
+    entries = _iter_manifest_entries(manifest_path, extra_vars=extra_vars, vars_mode="render")
 
-    if yaml is None:
-        msg = "PyYAML is required for manifest support"
-        raise ImportError(msg)
-
-    with pathlib.Path(manifest_path).open(encoding="utf-8") as f:
-        # W11: yaml.safe_load returns Any → cast to template-manifest boundary TypedDict
-        manifest = cast(_TemplateManifest | None, yaml.safe_load(f))
-
-    if not manifest or "templates" not in manifest:
+    if not entries:
         log.log(8, "[IMP:8][render_all] No templates in manifest")
         return 0
 
-    standard_vars: dict[str, str] = {}
-    std_defs = manifest.get("standard_vars", {})
-    for var_name, var_def in std_defs.items():
-        default = var_def.get("default")
-        if default is not None:
-            standard_vars[var_name] = str(default)
-        # Try env
-        resolve_from = var_def.get("resolve_from", [])
-        for source in resolve_from:
-            if source.startswith("env."):
-                env_key = source[4:]
-                env_val = os.environ.get(env_key)
-                if env_val:
-                    standard_vars[var_name] = env_val
-                    break
-
     errors = 0
-    for entry in manifest["templates"]:
-        tmpl_path = entry["template"]
-        output = entry.get("output")
-        entry_type = entry.get("type", "single")
-
-        # Merge vars: standard vars + entry-specific vars + extra_vars
-        merged_vars = dict(standard_vars)
-        entry_vars = entry.get("vars", {})
-        for var_name, var_def in entry_vars.items():
-            if isinstance(var_def, dict):
-                default = var_def.get("default")
-                if default is not None:
-                    merged_vars[var_name] = str(default)
-                # Source from env if configured
-                source = var_def.get("source")
-                if source == "env":
-                    env_val = os.environ.get(var_name)
-                    if env_val:
-                        merged_vars[var_name] = env_val
-            else:
-                # Simple string value
-                merged_vars[var_name] = str(var_def)
-
-        # Merge extra_vars (CLI overrides)
-        if extra_vars:
-            merged_vars.update({k: v for k, v in extra_vars.items() if v is not None})
-
-        # Determine which vars are required (not optional) when allow_missing=False
-        required_vars_list: list[str] = []
-        for var_name, var_def in entry_vars.items():
-            if isinstance(var_def, dict):
-                if var_def.get("required", True):
-                    required_vars_list.append(var_name)
-            else:
-                # Simple string — assumed required
-                required_vars_list.append(var_name)
-
-        # Resolve template path relative to manifest dir
-        manifest_dir = os.path.dirname(os.path.abspath(manifest_path))
-        abs_tmpl_path = (
-            os.path.join(manifest_dir, tmpl_path) if not pathlib.Path(tmpl_path).is_absolute() else tmpl_path
-        )
+    for resolved in entries:
+        tmpl_path, abs_tmpl_path, merged_vars, entry_type, output, required_vars = resolved
 
         # ruff: ignore[PLW0717] — try вложен в условный блок внутри функции — после-try чтение локалей неанализируемо
         try:
@@ -450,7 +544,7 @@ def render_all(
                 # For committed artifacts (output path set), required vars must be resolvable.
                 # v1.0.1 (TRAP[BUG] Фаза 3): render_template вызывался и для directory-записей
                 # (после _render_directory) → IsADirectoryError → make templates-render RED.
-                allow_missing = (output is None) or (not required_vars_list)
+                allow_missing = (output is None) or (not required_vars)
                 render_template(
                     abs_tmpl_path,
                     output_path=output if not dry_run else None,
@@ -470,15 +564,22 @@ def render_all(
 # endregion FUNC_RENDER_ALL
 
 
-# region FUNC_RENDER_DIRECTORY
-# ruff: ignore[A002]  # `vars` — единый с render_template/public API (caller передаёт vars=)
-def _render_directory(dir_path: str, vars: dict[str, str], *, dry_run: bool = False) -> None:
-    """Recursively render all text files in a directory.
-
-    Used for project template directories (template-backend/, template-frontend/, etc.).
-    """
-    import logging
-
+# region FUNC_WALK_RENDER_DIRECTORY
+## @purpose  Shared os.walk traversal with binary skip for directory renderers (T2.9 merge)
+## @io       Input: dir_path, writer (per-file render callback), log_prefix
+##           Output: None — writer отвечает за рендер и обработку ошибок
+## @complexity O(n) where n = number of files in directory tree
+## @invariants
+##   - Binary files (null byte in first 1024 bytes) are skipped
+##   - OSError при бинарной проверке → файл пропускается (не фатально)
+##   - Различие dry-run vs in-place write — в writer-колбэке (T2.9)
+def _walk_render_directory(
+    dir_path: str,
+    writer: Callable[[str], None],
+    *,
+    log_prefix: str,
+) -> None:
+    """Walk a directory tree and dispatch each text file to the writer callback."""
     log = logging.getLogger(__name__)
     for root, _dirs, files in os.walk(dir_path):
         for fname in files:
@@ -488,14 +589,36 @@ def _render_directory(dir_path: str, vars: dict[str, str], *, dry_run: bool = Fa
                 with pathlib.Path(fpath).open("rb") as f:
                     head = f.read(1024)
                     if b"\x00" in head:
-                        log.log(6, "[IMP:6][render_directory] Skipping binary: %s", fpath)
+                        log.log(6, "[IMP:6][%s] Skipping binary: %s", log_prefix, fpath)
                         continue
             except OSError:
                 continue
-            try:
-                render_template(fpath, vars=vars, allow_missing=True, dry_run=dry_run)
-            except TemplateError as e:
-                log.log(8, "[IMP:8][render_directory] Template error in %s: %s", fpath, e)
+            writer(fpath)
+
+
+# endregion FUNC_WALK_RENDER_DIRECTORY
+
+
+# region FUNC_RENDER_DIRECTORY
+# ruff: ignore[A002]  # `vars` — единый с render_template/public API (caller передаёт vars=)
+def _render_directory(dir_path: str, vars: dict[str, str], *, dry_run: bool = False) -> None:
+    """Recursively render all text files in a directory (dry-run mode — no disk writes).
+
+    Used for project template directories (template-backend/, template-frontend/, etc.)
+    and manifest check (check_all dry-run). Ошибки рендера файла логируются и НЕ считаются
+    (контракт: возвращает None; исключения кроме TemplateError — наружу, как в прежнем коде).
+    """
+    import logging
+
+    log = logging.getLogger(__name__)
+
+    def _writer(fpath: str) -> None:
+        try:
+            render_template(fpath, vars=vars, allow_missing=True, dry_run=dry_run)
+        except TemplateError as e:
+            log.log(8, "[IMP:8][render_directory] Template error in %s: %s", fpath, e)
+
+    _walk_render_directory(dir_path, _writer, log_prefix="render_directory")
 
 
 # endregion FUNC_RENDER_DIRECTORY
@@ -523,53 +646,16 @@ def check_all(
     log = logging.getLogger(__name__)
     log.log(7, "[IMP:7][check_all] Checking manifest: %s", manifest_path)
 
-    if not pathlib.Path(manifest_path).exists():
-        msg = f"Manifest not found: {manifest_path}"
-        raise FileNotFoundError(msg)
+    entries = _iter_manifest_entries(manifest_path, extra_vars=extra_vars, vars_mode="check")
 
-    if yaml is None:
-        msg = "PyYAML is required for manifest support"
-        raise ImportError(msg)
-
-    with pathlib.Path(manifest_path).open(encoding="utf-8") as f:
-        # W11: yaml.safe_load returns Any → cast to template-manifest boundary TypedDict
-        manifest = cast(_TemplateManifest | None, yaml.safe_load(f))
-
-    if not manifest or "templates" not in manifest:
+    if not entries:
         return True, ["No templates in manifest"]
 
     diagnostics: list[str] = []
     errors = 0
 
-    for entry in manifest["templates"]:
-        tmpl_path = entry["template"]
-        entry_vars_def = entry.get("vars", {})
-        entry_type = entry.get("type", "single")
-
-        # Build test vars with defaults
-        test_vars: dict[str, str] = {}
-        for var_name, var_def in entry_vars_def.items():
-            if isinstance(var_def, dict):
-                default = var_def.get("default")
-                if default is not None:
-                    test_vars[var_name] = str(default)
-                elif not var_def.get("required", True):
-                    # Optional, no default — skip (allow_missing will handle)
-                    pass
-                else:
-                    # Required, no default — use placeholder name as test value
-                    test_vars[var_name] = f"<{var_name}>"
-            else:
-                test_vars[var_name] = str(var_def)
-
-        # Merge extra_vars
-        if extra_vars:
-            test_vars.update({k: v for k, v in extra_vars.items() if v is not None})
-
-        manifest_dir = os.path.dirname(os.path.abspath(manifest_path))
-        abs_tmpl_path = (
-            os.path.join(manifest_dir, tmpl_path) if not pathlib.Path(tmpl_path).is_absolute() else tmpl_path
-        )
+    for resolved in entries:
+        tmpl_path, abs_tmpl_path, test_vars, entry_type, output, _required = resolved
 
         # ruff: ignore[PLW0717] — try вложен в условный блок внутри функции — после-try чтение локалей неанализируемо
         try:
@@ -582,6 +668,21 @@ def check_all(
                 # Directory-entry: рекурсивный dry-run через _render_directory (render_template
                 # на директорию даёт IsADirectoryError — файл-ориентированный рендер).
                 _render_directory(abs_tmpl_path, test_vars, dry_run=True)
+            else:
+                # Single-file entry: dry-run render (T1.2, аудит 2026-08-22 — до фикса
+                # single-file записи проходили check_all БЕЗ валидации: 16/19 манифеста,
+                # гейт templates-check молчал). output: null (render-at-use) → allow_missing=True
+                # (vars поставит consumer); committed-артефакт → required-vars резолвятся
+                # test_vars-плейсхолдерами, необъявленные → TemplateError → UNRESOLVED.
+                allow_missing = output is None
+                render_template(
+                    abs_tmpl_path,
+                    output_path=None,
+                    vars=test_vars,
+                    allow_missing=allow_missing,
+                    dry_run=True,
+                )
+                diagnostics.append(f"OK: {tmpl_path}")
         except (TemplateError, FileNotFoundError, PermissionError) as e:
             diagnostics.append(f"UNRESOLVED: {tmpl_path}: {e}")
             errors += 1
@@ -628,31 +729,23 @@ def render_directory_in_place(
         log.log(9, "[IMP:9][render_directory_in_place] Path not found: %s", dir_path)
         return 1
 
-    for root, _dirs, files in os.walk(dir_path):
-        for fname in files:
-            fpath = os.path.join(root, fname)
-            # Skip binary files
-            try:
-                with pathlib.Path(fpath).open("rb") as f:
-                    head = f.read(1024)
-                    if b"\x00" in head:
-                        log.log(6, "[IMP:6][render_directory_in_place] Skipping binary: %s", fpath)
-                        continue
-            except OSError:
-                continue
-            try:
-                render_template(
-                    fpath,
-                    output_path=fpath,
-                    vars=vars,
-                    allow_missing=True,
-                )
-            except TemplateError as e:
-                log.log(8, "[IMP:8][render_directory_in_place] Template error in %s: %s", fpath, e)
-                errors += 1
-            except (FileNotFoundError, PermissionError) as e:
-                log.log(8, "[IMP:8][render_directory_in_place] Error in %s: %s", fpath, e)
-                errors += 1
+    def _writer(fpath: str) -> None:
+        nonlocal errors
+        try:
+            render_template(
+                fpath,
+                output_path=fpath,
+                vars=vars,
+                allow_missing=True,
+            )
+        except TemplateError as e:
+            log.log(8, "[IMP:8][render_directory_in_place] Template error in %s: %s", fpath, e)
+            errors += 1
+        except (FileNotFoundError, PermissionError) as e:
+            log.log(8, "[IMP:8][render_directory_in_place] Error in %s: %s", fpath, e)
+            errors += 1
+
+    _walk_render_directory(dir_path, _writer, log_prefix="render_directory_in_place")
 
     status = "OK" if errors == 0 else f"FAIL({errors})"
     log.log(9, "[IMP:9][render_directory_in_place] Render complete: %s", status)

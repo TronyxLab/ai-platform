@@ -39,6 +39,7 @@ from core.internal.loadtest.config import (
     render_template,
 )
 from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError, ConfigValidationError
+from tests.helpers.gate_helpers import assert_ldd_imp9
 
 logger = logging.getLogger(__name__)
 
@@ -158,25 +159,7 @@ def no_domain_node_dir(tmp_path) -> dict:
 # endregion FIXTURE_no_domain_node_dir
 
 
-# region HELPER_assert_ldd_imp9
-def _assert_ldd_imp9(caplog) -> None:
-    """Печать LDD-траектории IMP:7-10 + assert наличия IMP:9 (Anti-Illusion Rule).
-
-    ## @purpose — Единая точка LDD-телеметрии тестов config (контракт .kilo/rules/testing.md).
-    ## @io — ⇥ caplog → ⎋ None (assert found IMP:9)
-    """
-    logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-    found = False
-    for record in list(caplog.records):
-        if "[IMP:" in record.message:
-            logger.info("%s", record.message)
-            if "[IMP:9]" in record.message:
-                found = True
-    logger.info("--- END LDD TRAJECTORY ---")
-    assert found, "Critical LDD Error: No IMP:9 business logic log found"
-
-
-# endregion HELPER_assert_ldd_imp9
+# T2.16a: _assert_ldd_imp9 консолидирован в gate_helpers.assert_ldd_imp9
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -194,7 +177,7 @@ class TestLoadScenariosYaml:
         """SoT парсится: scenarios + defaults присутствуют."""
         caplog.set_level(logging.INFO)
         data = load_scenarios_yaml(str(repo_dir / "core" / "loadtest" / "scenarios.yaml"))
-        _assert_ldd_imp9(caplog)
+        assert_ldd_imp9(caplog)
         assert "web" in data["scenarios"] and "defaults" in data
         assert data["scenarios"]["llm"]["capacity_start_rps"] == 2
 
@@ -231,7 +214,7 @@ class TestParseScenario:
         spec = parse_scenario(
             "web", {"endpoint": "https://x/", "paths": ["/", "/status"], "target_rps": 5, "users": 10}, {}
         )
-        _assert_ldd_imp9(caplog)
+        assert_ldd_imp9(caplog)
         assert spec.max_p95 == 1.0 and spec.max_p99 == 3.0 and spec.max_error == 0.05
         assert spec.run_time == 300 and spec.smoke_duration == 90
         assert spec.baseline_delta_p95 == 1.5 and spec.baseline_delta_error_pp == 2.0
@@ -308,7 +291,7 @@ class TestParseScenarioNetwork:
         data = load_scenarios_yaml(str(repo_dir / "core" / "loadtest" / "scenarios.yaml"))
         scenario = parse_scenario(scenario_name, data["scenarios"][scenario_name], data["defaults"])
         logger.info("[IMP:9][test][network] %s network: %s", scenario_name, scenario.network)
-        _assert_ldd_imp9(caplog)
+        assert_ldd_imp9(caplog)
         assert scenario.network == expected_network
 
     def test_network_invalid_sot_rejected(self):
@@ -340,7 +323,7 @@ class TestLoadConfigNetwork:
             env={"LOAD_NETWORK": "shared-db-net"},
         )
         logger.info("[IMP:9][test][network] LOAD_NETWORK override → %s", cfg.network)
-        _assert_ldd_imp9(caplog)
+        assert_ldd_imp9(caplog)
         assert cfg.network == "shared-db-net"
 
     def test_network_invalid_rejected(self, repo_dir, node_dir):
@@ -369,7 +352,7 @@ class TestLoadConfigNetwork:
         warnings = [r.message for r in caplog.records if "LOAD_RUNNER=node" in r.message]
         assert warnings, "ожидалось предупреждение db + local runner"
         logger.info("[IMP:9][test][network] db+local предупреждение: %s", warnings[0])
-        _assert_ldd_imp9(caplog)
+        assert_ldd_imp9(caplog)
 
 
 # endregion TEST_load_config_network
@@ -443,7 +426,7 @@ class TestLoadConfig:
         """web + нода с domain: endpoint=https://test.example.com/, is_test_node=True."""
         caplog.set_level(logging.INFO)
         cfg = load_config("web", node_dir["name"], "smoke", str(repo_dir), platform_root=str(repo_dir), env={})
-        _assert_ldd_imp9(caplog)
+        assert_ldd_imp9(caplog)
         assert isinstance(cfg, LoadtestConfig)
         assert cfg.endpoint == "https://test.example.com/"
         assert cfg.node_host == "203.0.113.10"
@@ -554,7 +537,7 @@ class TestLoadConfig:
             "[IMP:9][test][load_config] prometheus_host override: LOAD_PROMETHEUS_HOST=localhost → %s",
             cfg.prometheus_host,
         )
-        _assert_ldd_imp9(caplog)
+        assert_ldd_imp9(caplog)
 
 
 # endregion TEST_load_config

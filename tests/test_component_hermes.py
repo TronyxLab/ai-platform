@@ -28,8 +28,6 @@
 ##              T5: test_hermes_dashboard_auth → Basic Auth (form-login removed)
 ##              T6: test_hermes_gateway_listens → no docker exec fallback, /v1/models
 ##              T7: test_ready_endpoint → :9119, removed dependency checks
-def _module_contract():
-    pass
 
 
 # endregion MODULE_CONTRACT

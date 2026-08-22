@@ -50,7 +50,13 @@ def test_healthcheck_port_3000(caplog: pytest.LogCaptureFixture) -> None:
     """poll_project: 200 на порту 3000 → healthy (AC-B6.2)."""
     caplog.set_level(logging.INFO)
     poller = HealthcheckPoller(timeout=1, interval=1, max_retries=1)
-    with mock.patch.object(poller, "_try_url", side_effect=lambda url: url == "http://myapp:3000/health") as mock_try:
+
+    # T2.8: _try_url вызывается с keyword timeout= (per-URL scaling) — мок обязан принять kwarg;
+    # параметр назван timeout, чтобы принять keyword (значение не используется — сетевая симуляция)
+    def _fake_try_url(url: str, timeout: int | None = None) -> bool:
+        return url == "http://myapp:3000/health"
+
+    with mock.patch.object(poller, "_try_url", side_effect=_fake_try_url) as mock_try:
         result = poller.poll_project("myapp")
     assert result.status == "healthy"
     assert result.method == "http"

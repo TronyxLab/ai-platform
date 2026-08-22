@@ -415,6 +415,10 @@ def test_infra_exporter_image(service: str, port: str, caplog) -> None:
     svc = data["services"][service]
 
     image = svc["image"]
+    # T1.4 (аудит 2026-08-22): cadvisor параметризован ${CADVISOR_IMAGE:-default} — гейт
+    # пинит DEFAULT (prod-пин); явный оверрайд разрешён (macOS TRAP 164 W1-5), молчаливый — нет.
+    if service == "cadvisor" and image.startswith("${CADVISOR_IMAGE:-") and image.endswith("}"):
+        image = image[len("${CADVISOR_IMAGE:-") : -1]
     assert image == INFRA_EXPECTED_IMAGES[service], (
         f"{service} image={image}, expected {INFRA_EXPECTED_IMAGES[service]}"
     )

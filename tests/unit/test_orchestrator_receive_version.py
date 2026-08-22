@@ -30,27 +30,14 @@ import pytest
 
 from core.internal.deploy.healthcheck_poller import HealthcheckResult
 from core.internal.deploy.orchestrator import DeployOrchestrator
+from tests.helpers.gate_helpers import assert_ldd_imp9
 
 pytestmark = pytest.mark.static_audit
 
 logger = logging.getLogger(__name__)
 
 
-def _assert_imp9_logged(caplog: pytest.LogCaptureFixture) -> None:
-    """Print IMP:7-10 trajectory and assert at least one IMP:9 log present."""
-    found_imp9 = False
-    logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-    for record in list(caplog.records):
-        if "[IMP:" in record.message:
-            imp_level = int(record.message.split("[IMP:")[1].split("]")[0])
-            if imp_level >= 7:
-                logger.info("%s", record.message)
-            if imp_level >= 9:
-                found_imp9 = True
-    logger.info("--- END LDD TRAJECTORY ---")
-    assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
-
-
+# T2.16a: _assert_imp9_logged консолидирован в gate_helpers.assert_ldd_imp9
 # ── L1-валидный payload-compose (176 A.2: receive исполняет pre-deploy L1-гейт) ──
 _VALID_COMPOSE: str = """\
 services:
@@ -163,7 +150,7 @@ def test_receive_version_from_args(tmp_path, caplog: pytest.LogCaptureFixture, c
     )
 
     out = capsys.readouterr().out
-    _assert_imp9_logged(caplog)
+    assert_ldd_imp9(caplog)
     payload = json.loads(out.strip().splitlines()[-1])
     assert rc == 0
     assert payload["project"] == "testproj"
@@ -198,7 +185,7 @@ def test_receive_yaml_version_field_ignored(tmp_path, caplog: pytest.LogCaptureF
     )
 
     out = capsys.readouterr().out
-    _assert_imp9_logged(caplog)
+    assert_ldd_imp9(caplog)
     payload = json.loads(out.strip().splitlines()[-1])
     assert rc == 0
     assert payload["version"] == "abc123", f"yaml version-поле должно игнорироваться, got {payload['version']!r}"
@@ -229,7 +216,7 @@ def test_receive_chain_skipped_on_failed(tmp_path, caplog: pytest.LogCaptureFixt
     )
 
     out = capsys.readouterr().out
-    _assert_imp9_logged(caplog)
+    assert_ldd_imp9(caplog)
     payload = json.loads(out.strip().splitlines()[-1])
     assert rc == 1
     assert payload["status"] == "FAILED"
@@ -278,7 +265,7 @@ def test_receive_chain_failure_warns_not_fails(tmp_path, caplog: pytest.LogCaptu
     )
 
     out = capsys.readouterr().out
-    _assert_imp9_logged(caplog)
+    assert_ldd_imp9(caplog)
     payload = json.loads(out.strip().splitlines()[-1])
     assert rc == 0, "D4: сбой цепочки НЕ должен фейлить деплой"
     assert payload["status"] == "DEPLOYED"

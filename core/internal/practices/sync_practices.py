@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: sync-practices, project-sync-practices, regenerate, repair, drift, GENERATED-files, practices-lock, atomic-write
-# STRUCTURE: ▶ sync_practices(project_dir) → load_manifest → resolve language/level → maturity → evaluate (state) → render_project_files → write_generated_file × N (skip manual) → render_lock (maturity-снапшот + generator_hash) → write_lock_file → ⎋ SyncReport
+# STRUCTURE: ▶ sync_practices(project_dir) → load_manifest → project_profile (name/type/language/level, T2.12) → maturity → evaluate (state) → render_project_files → write_generated_file × N (skip manual) → render_lock (maturity-снапшот + generator_hash) → write_lock_file → ⎋ SyncReport
 # region MODULE_CONTRACT
 ## @purpose  Перегенерация GENERATED-файлов практик до канона (DevPlan 137 §2.1A, аналог
 ##           generate-manifests / sync_env_defaults): рендер pyproject/.pre-commit/conftest/
@@ -20,6 +20,7 @@
 ## @rationale Один repair-канал вместо ручных правок GENERATED-файлов (дрейф → байт-сверка
 ##            канона, как check-manifests). Паритет sync_env_defaults (библиотека + CLI).
 ## @changes  2026-08-05 · DevPlan 137 W1 — создан
+##           2026-08-22 · T2.12 — name/type/language/level резолвятся через practices/profile.py
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -39,11 +40,11 @@ from core.internal.practices.generators import (
     write_generated_file,
     write_lock_file,
 )
-from core.internal.practices.manifest import LANGUAGE_FOR_TYPE, load_manifest
+from core.internal.practices.manifest import load_manifest
 from core.internal.practices.maturity import compute_maturity
+from core.internal.practices.profile import project_profile
 from core.internal.shared.contracts import EXIT_CONFIG_VALIDATION, EXIT_OK
 from core.internal.shared.exceptions import ConfigValidationError, PlatformError
-from core.internal.shared.project_yaml import get_name, get_project_type, load_project_yaml
 
 logger = logging.getLogger(__name__)
 
@@ -80,16 +81,12 @@ def sync_practices(project_dir: Path, *, force: bool = False) -> SyncReport:
     project_dir = Path(project_dir)
     manifest = load_manifest()
 
-    data = load_project_yaml(project_dir)
-    project_name = get_name(data) or project_dir.name
-    ptype = get_project_type(data)
-    languages = LANGUAGE_FOR_TYPE.get(ptype)
-    language = languages[0] if languages else "python"
-    # W11-G4 cross-file (shared/project_yaml → dict[str, object] после типизации G1):
-    # .get возвращает object — isinstance-гейт сохраняет прежнюю семантику `or {}`
-    quality_data = data.get("quality")
-    quality: dict[str, object] = quality_data if isinstance(quality_data, dict) else {}
-    level_setting = str(quality.get("level", "auto") or "auto")
+    # T2.12: единый project_profile — name/type/language/level одним чтением ai-platform.yaml
+    profile = project_profile(project_dir)
+    project_name = profile.name
+    ptype = profile.ptype
+    language = profile.language
+    level_setting = profile.level
 
     maturity = compute_maturity(project_dir)
     from core.internal.practices.generators import read_lock

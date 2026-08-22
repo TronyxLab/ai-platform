@@ -39,6 +39,7 @@ if str(_BOOTSTRAP_DIR) not in sys.path:
 import topo_sort
 
 from core.internal.shared.exceptions import ConfigValidationError
+from tests.helpers.gate_helpers import assert_ldd_imp9
 
 logger = logging.getLogger("test_topo_sort")
 
@@ -75,27 +76,6 @@ def _setup_module_yaml(
 # endregion FUNC__setup_module_yaml
 
 
-# region FUNC_print_ldd_trajectory
-## @purpose  Print LDD trajectory from caplog and assert IMP:9 found
-## @io       caplog -> None, raises AssertionError if no IMP:9 log
-## @complexity 1
-def _assert_ldd_trajectory(caplog) -> None:
-    found_imp9 = False
-    logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-    for record in list(caplog.records):
-        if "[IMP:" in record.message:
-            imp_level = int(record.message.split("[IMP:")[1].split("]")[0])
-            if imp_level >= 7:
-                logger.info("%s", record.message)
-            if imp_level >= 9:
-                found_imp9 = True
-    logger.info("--- END LDD TRAJECTORY ---")
-    assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
-
-
-# endregion FUNC_print_ldd_trajectory
-
-
 # region FUNC_test_topo_sort_linear
 ## @purpose  Linear dependency chain: a -> b -> c -> correct 3-group order
 ## @io       tmp_path + caplog -> assert groups == [["c"], ["b"], ["a"]]
@@ -121,7 +101,7 @@ def test_topo_sort_linear(tmp_path: Path, caplog) -> None:
     assert groups[1] == ["b"], f"Group 1 should be ['b'], got {groups[1]}"
     assert groups[2] == ["a"], f"Group 2 should be ['a'], got {groups[2]}"
 
-    _assert_ldd_trajectory(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_topo_sort_linear
@@ -154,7 +134,7 @@ def test_topo_sort_parallel_groups(tmp_path: Path, caplog) -> None:
     assert sorted(groups[1]) == ["b", "c"], f"Group 1 should be ['b', 'c'], got {groups[1]}"
     assert groups[2] == ["a"], f"Group 2 should be ['a'], got {groups[2]}"
 
-    _assert_ldd_trajectory(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_topo_sort_parallel_groups
@@ -185,7 +165,7 @@ def test_topo_sort_cycle_detection(tmp_path: Path, caplog) -> None:
     error_msg = str(excinfo.value)
     assert "Cycle detected" in error_msg, f"Expected 'Cycle detected' in error, got: {error_msg}"
 
-    _assert_ldd_trajectory(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_topo_sort_cycle_detection
@@ -216,7 +196,7 @@ def test_topo_sort_no_deps(tmp_path: Path, caplog) -> None:
     for name in ("alpha", "beta", "gamma"):
         assert name in all_in_group0, f"Expected {name} in first group, got {groups[0]}"
 
-    _assert_ldd_trajectory(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_topo_sort_no_deps
@@ -253,7 +233,7 @@ def test_topo_sort_filter_names(tmp_path: Path, caplog) -> None:
     assert len(groups) == 1, f"Expected 1 group, got {len(groups)}: {groups}"
     assert sorted(groups[0]) == ["a", "c"], f"Group 0 should contain ['a', 'c'], got {groups[0]}"
 
-    _assert_ldd_trajectory(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_topo_sort_filter_names

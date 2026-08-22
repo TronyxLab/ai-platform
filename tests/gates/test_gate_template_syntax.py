@@ -55,8 +55,10 @@ def test_all_templates_use_strict_grammar(caplog):
 
     try:
         import yaml
-    except ImportError:
-        pytest.skip("PyYAML not available")
+    except ImportError as e:
+        # T1.7 триаж (аудит 2026-08-22): pyyaml — платформенная зависимость (инвариант 8);
+        # её отсутствие = сломанный venv → FAIL (R4), не молчаливый skip.
+        pytest.fail(f"PyYAML is a required platform dependency (broken venv): {e}")
 
     with pathlib.Path(manifest_path).open(encoding="utf-8") as f:
         manifest = yaml.safe_load(f)

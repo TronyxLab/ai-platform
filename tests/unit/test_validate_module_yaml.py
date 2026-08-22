@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import logging
 import pathlib
-from typing import Any
 
 import pytest
 
@@ -33,6 +32,7 @@ from core.internal.scripts.validate_module_yaml import (
     validate_module,
     validate_schema,
 )
+from tests.helpers.gate_helpers import write_yaml
 
 logger = logging.getLogger(__name__)
 VALIDATOR_LOG = "core.internal.scripts.validate_module_yaml"
@@ -163,18 +163,13 @@ secrets:
     return manifest_path
 
 
-def _write_module_yaml(path: pathlib.Path, content: dict[str, Any]) -> None:
-    """Helper: write dict as YAML to path."""
-    import yaml
-
-    with pathlib.Path(path).open("w", encoding="utf-8") as f:
-        yaml.dump(content, f)
+# T2.16b: _write_module_yaml консолидирован в gate_helpers.write_yaml(path, data)
 
 
 def _create_module(tmp: pathlib.Path, data: dict) -> pathlib.Path:
     """Create a module.yaml in tmp with given data."""
     path = tmp / "module.yaml"
-    _write_module_yaml(path, data)
+    write_yaml(path, data)
     return path
 
 
@@ -661,7 +656,7 @@ class TestMainCLI:
         for mod_name in ["test-a", "test-b"]:
             mod_dir = modules_dir / mod_name
             mod_dir.mkdir()
-            _write_module_yaml(
+            write_yaml(
                 mod_dir / "module.yaml",
                 {
                     "name": mod_name,
@@ -694,7 +689,7 @@ class TestMainCLI:
         """--schema-strict on module without compose → exit 1."""
         modules_dir = tmp_path / "core" / "modules" / "broken-mod"
         modules_dir.mkdir(parents=True)
-        _write_module_yaml(
+        write_yaml(
             modules_dir / "module.yaml",
             {
                 "name": "broken-mod",

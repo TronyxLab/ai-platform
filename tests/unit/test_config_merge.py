@@ -29,8 +29,6 @@
 ## @rationale Python dict merge gives precise control over deep merge semantics.
 ##            Shell-based YAML merge (yq) depends on external tooling.
 ##            Mirrors the monitoring post-deploy merge (receive verb → monitoring_config_renderer.py).
-def _module_contract():
-    pass
 
 
 # endregion MODULE_CONTRACT

@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
-# GREP_SUMMARY: audit-log logger platform-audit append-only jsonl step status audit_step audit_log wrapper START DONE FAIL entrypoint shared-audit-logger
-# STRUCTURE: ▶ init PYTHONPATH → ◇ audit_log (thin facade) → ◇ audit_step (wrapper START→exec→capture rc→DONE|FAIL) → ⎋ exit
+# GREP_SUMMARY: audit-log logger platform-audit append-only jsonl status audit_log entrypoint shared-audit-logger
+# STRUCTURE: ▶ init PYTHONPATH → ◇ audit_log (thin facade → shared audit_logger) → ⎋ exit
 # region MODULE_CONTRACT
 ## @purpose  Единственный shell-канал аудита — тонкий фасад над shared/audit_logger.
 ##           Все audit-записи идут через core/internal/shared/audit_logger.py
 ##           (write_audit_entry, JSON-lines, syslog, non-fatal).
 ## @scope    Sourced by bootstrap scripts, modules, and entrypoints; provides
-##           audit_log(), audit_step(), PLATFORM_LOG_DIR, PLATFORM_AUDIT_LOG (compat).
+##           audit_log(), PLATFORM_LOG_DIR, PLATFORM_AUDIT_LOG (compat).
+##           (audit_step() удалён как мёртвый — аудит 2026-08-22; 0 callers.)
 ## @invariants
 ##   - audit_log()  — non-fatal: python failure is warned, never aborts caller
-##   - audit_step() — wrapper-style (NO trap-on-EXIT): explicit capture $? → DONE/FAIL emit
-##   - audit_step() returns the wrapped command's exit code (never masks it)
 ##   - PYTHONPATH exported with repo root (computed from own path) so
 ##     `python3 -m core.internal.shared.audit_logger` resolves in any cwd
 ##   - Формат: JSON-lines /var/log/platform/audit.jsonl
 ## @rationale Centralized audit trail enables post-hoc forensics and compliance review.
 ##   Python-first policy: shell facade stays a thin wrapper; all logic in Python module.
 ## @changes 2026-07-31 | DevPlan 089 follow-up (debt C-5) — recreated as thin facade
+## @changes 2026-08-22 | Аудит simplify-refactor-waves T0.3 — audit_step удалён (0 callers)
 ## @links    DELEGATES_TO: core/internal/shared/audit_logger.py
 # endregion MODULE_CONTRACT
 
@@ -53,29 +53,3 @@ audit_log() {
         echo "[IMP:6][audit][audit_log] WARN: audit entry dropped (tag=${tag} status=${status})" >&2
 }
 # endregion FUNC_audit_log
-
-# region FUNC_audit_step
-## @purpose  Wrapper-style audit around a command: emit START, run, emit DONE/FAIL.
-## @param  $1  step   — logical step name
-## @param  $@  cmd    — command and arguments to execute (rest of argv)
-## @io       out: command stdout passes through unchanged
-##           side-effect: START/DONE/FAIL audit entries
-## @complexity O(1) overhead + wrapped command cost
-## @invariants — returns wrapped command's exit code (does NOT mask failures)
-##             — NO trap-on-EXIT: explicit $? capture per DRIFT-7 fix
-audit_step() {
-    local step="${1:-unknown}"
-    shift || true
-    audit_log "${step}" "START" "starting"
-    set +e
-    "$@"
-    local rc=$?
-    set -e
-    if [[ $rc -eq 0 ]]; then
-        audit_log "${step}" "DONE" "completed (rc=0)"
-    else
-        audit_log "${step}" "FAIL" "failed (rc=${rc})"
-    fi
-    return $rc
-}
-# endregion FUNC_audit_step

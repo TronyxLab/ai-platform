@@ -25,6 +25,7 @@ from types import SimpleNamespace
 import pytest
 
 from core.internal.deploy import age_key_backup as akb
+from tests.helpers.gate_helpers import assert_ldd_imp9
 
 pytestmark = pytest.mark.static_audit
 
@@ -62,23 +63,7 @@ class FakeS3Client:
 # endregion CLASS_FakeS3Client
 
 
-# region HELPER_assert_ldd_imp9
-def _assert_ldd_imp9(caplog) -> None:
-    """Print LDD trajectory (IMP:7-10) and assert ≥1 IMP:9 log present (Anti-Illusion)."""
-    found_imp9 = False
-    logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-    for record in list(caplog.records):
-        if hasattr(record, "message") and "[IMP:" in record.message:
-            imp_level = int(record.message.split("[IMP:")[1].split("]")[0])
-            if imp_level >= 7:
-                logger.info("%s", record.message)
-            if imp_level >= 9:
-                found_imp9 = True
-    logger.info("--- END LDD TRAJECTORY ---")
-    assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
-
-
-# endregion HELPER_assert_ldd_imp9
+# T2.16a: _assert_ldd_imp9 консолидирован в gate_helpers.assert_ldd_imp9
 
 
 # region FIXTURE_sops_ok
@@ -145,7 +130,7 @@ def test_full_pipeline_encrypt_upload_sha256(caplog, sops_ok, s3_ready: FakeS3Cl
     assert put_kwargs["Metadata"]["sha256"] == local_sha
     # sha256-сверка выполнена (get_object после put)
     assert any(c[0] == "get_object" for c in s3_ready.calls), "sha256 verify requires get_object"
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion TEST_full_pipeline
@@ -176,7 +161,7 @@ def test_dry_run_no_mutation(caplog, sops_ok, tmp_path) -> None:
     assert rc == 0
     assert fake.calls == [], f"dry-run must not touch S3: {fake.calls}"
     assert not out_enc.exists(), "dry-run must not write --output-enc file (0 mutations)"
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion TEST_dry_run
@@ -204,7 +189,7 @@ def test_no_upload_encrypt_only(caplog, sops_ok) -> None:
 
     assert rc == 0
     assert fake.calls == [], f"--no-upload must not call S3: {fake.calls}"
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion TEST_no_upload
@@ -238,7 +223,7 @@ def test_no_secrets_in_stdout_and_caplog(caplog, sops_ok, s3_ready: FakeS3Client
     assert akb._mask_key(_FAKE_KEY) in " ".join(getattr(r, "message", "") for r in caplog.records), (
         "masked key (first 8 chars) should be logged"
     )
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion TEST_no_secrets_stdout
@@ -265,7 +250,7 @@ def test_output_enc_written(caplog, sops_ok, tmp_path) -> None:
 
     assert rc == 0
     assert out_enc.read_bytes() == _FAKE_ENC.encode("utf-8")
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion TEST_output_enc
@@ -285,7 +270,7 @@ def test_exit_code_key_missing(caplog, monkeypatch: pytest.MonkeyPatch) -> None:
     rc = akb.run_backup(_args("--recipient", _FAKE_RECIPIENT), age_key=None)
 
     assert rc == 10, "missing AGE key must be FATAL (10) — operator must set AGE_SECRET_KEY"
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 def test_exit_code_recipient_missing(caplog, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -302,7 +287,7 @@ def test_exit_code_recipient_missing(caplog, monkeypatch: pytest.MonkeyPatch) ->
     rc = akb.run_backup(_args(), age_key=_FAKE_KEY)  # W5 T5.3: age_key= DI
 
     assert rc == 2, "missing AGE_RECIPIENT must be ConfigNotFound (2)"
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # GUARD-PRESERVE (168): единственное покрытие sops-missing exit-path (rc=10 FATAL, fallback age-native TRAP S-13) — sops-absent никогда не проходит молча
@@ -323,7 +308,7 @@ def test_exit_code_sops_missing(caplog) -> None:
     )
 
     assert rc == 10, "missing sops must be FATAL (10)"
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 def test_exit_code_sha256_mismatch(caplog, sops_ok, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -355,7 +340,7 @@ def test_exit_code_sha256_mismatch(caplog, sops_ok, monkeypatch: pytest.MonkeyPa
     )
 
     assert rc == 10, "sha256 mismatch after upload must be FATAL (10) — integrity gate"
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion TEST_exit_codes
@@ -382,7 +367,7 @@ def test_main_returns_int_and_ok(caplog, sops_ok, s3_ready: FakeS3Client) -> Non
 
     assert isinstance(rc, int)
     assert rc == 0
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 def test_default_s3_key_timestamped() -> None:

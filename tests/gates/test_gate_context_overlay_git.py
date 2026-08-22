@@ -27,10 +27,11 @@ import re
 from pathlib import Path
 
 import pytest
+import yaml
 
 from core.internal.bootstrap.core_deliverer import RSYNC_EXCLUDES_CORE, RSYNC_EXCLUDES_NODE, RSYNC_EXCLUDES_SECRETS
 from tests._conftest.ldd import ldd_trajectory
-from tests.helpers.gate_helpers import repo_root
+from tests.helpers.gate_helpers import load_yaml, repo_root
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,11 @@ _RSYNC_DELETE_PATTERN = re.compile(r"\brsync\s+.*--delete\b")
 # Exclude pattern — check for --exclude=.git, --exclude '.git/', --exclude '.git'
 # Both = and space separators are valid rsync syntax
 _EXCLUDE_GIT_PATTERN = re.compile(r"--exclude[=\s]+['\"]?\.git/?['\"]?")
+
+# Env-var reference in run blocks — T2.15: RSYNC_EXCLUDES hoisted в job-level env core-deploy.yml;
+# сканер резолвит $VAR/${VAR} по env-определениям workflow'а, чтобы проверка семантики
+# (.git исключён из rsync --delete доставок) не зависела от inline-литералов.
+_ENV_REF_RE = re.compile(r"\$\{(\w+)\}|\$(\w+)")
 
 # rsync calls that do NOT need --exclude (single-file deliveries)
 # These rsync lines deliver individual files, not directory trees
@@ -212,6 +218,51 @@ def _check_rsync_buffer(buffer: list[str], start_lineno: int, violations: list[d
 
 
 # region HELPER_CI_RSYNC_SCAN
+def _load_workflow_env(workflow_path: Path) -> dict[str, str]:
+    """Извлечь workflow- и job-level `env: VAR: value` из workflow YAML (строковые значения).
+
+    ## @purpose  T2.15: excludes/ssh-флаги хойстнуты в env-блоки — сканер резолвит
+    ##            $VAR-ссылки в run-блоках по реальным env-определениям workflow'а.
+    ## @complexity O(N) — YAML-дерево workflow'а
+    """
+    try:
+        data = load_yaml(workflow_path)
+    except (FileNotFoundError, yaml.YAMLError):
+        logger.warning(
+            "[IMP:7][gate][context_overlay_git] %s: unparseable YAML — env-резолв $RSYNC_EXCLUDES недоступен "
+            "(rsync-блоки сканируются без расширения env-ссылок)",
+            workflow_path.name,
+        )
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    env: dict[str, str] = {}
+    top_env = data.get("env")
+    if isinstance(top_env, dict):
+        env.update({k: v for k, v in top_env.items() if isinstance(v, str)})
+    jobs = data.get("jobs")
+    if isinstance(jobs, dict):
+        for job in jobs.values():
+            if isinstance(job, dict) and isinstance(job.get("env"), dict):
+                env.update({k: v for k, v in job["env"].items() if isinstance(v, str)})
+    return env
+
+
+def _expand_env_refs(block: str, env: dict[str, str]) -> str:
+    """Заменить $VAR/${VAR} ссылки значениями из env (T2.15 — hoisted переменные).
+
+    ## @purpose  Расширение выполняется ДО поиска --exclude-паттерна: семантика проверки
+    ##            (.git исключён) сохраняется при любом способе определения excludes.
+    ## @complexity O(B * V) — блок × число env-переменных
+    """
+
+    def _repl(match: re.Match) -> str:
+        name = match.group(1) or match.group(2)
+        return env.get(name, match.group(0))
+
+    return _ENV_REF_RE.sub(_repl, block)
+
+
 def _scan_ci_rsync(workflow_path: Path) -> list[dict]:
     """Scan a CI workflow YAML for rsync steps with --delete and check
     for --exclude=.git. Handles multi-line YAML run: | blocks.
@@ -228,6 +279,9 @@ def _scan_ci_rsync(workflow_path: Path) -> list[dict]:
         lines = workflow_path.read_text(encoding="utf-8", errors="replace").split("\n")
     except (OSError, UnicodeDecodeError):
         return violations
+
+    # T2.15: env-определения workflow'а (workflow- + job-level) — для резолва $RSYNC_EXCLUDES
+    workflow_env = _load_workflow_env(workflow_path)
 
     # Track multi-line run: | blocks — accumulate shell commands
     in_run_block = False
@@ -255,7 +309,7 @@ def _scan_ci_rsync(workflow_path: Path) -> list[dict]:
             current_indent = len(line) - len(line.lstrip())
             if current_indent <= run_indent and stripped:
                 # Block ended — check accumulated shell commands
-                _check_ci_run_block(run_buffer, run_start_lineno, violations)
+                _check_ci_run_block(run_buffer, run_start_lineno, violations, workflow_env)
                 in_run_block = False
                 # Reprocess this line normally (it might be another run: |)
                 continue
@@ -264,14 +318,21 @@ def _scan_ci_rsync(workflow_path: Path) -> list[dict]:
 
     # Check last block if file ends inside one
     if in_run_block and run_buffer:
-        _check_ci_run_block(run_buffer, run_start_lineno, violations)
+        _check_ci_run_block(run_buffer, run_start_lineno, violations, workflow_env)
 
     return violations
 
 
-def _check_ci_run_block(buffer: list[str], start_lineno: int, violations: list[dict]) -> None:
+def _check_ci_run_block(
+    buffer: list[str],
+    start_lineno: int,
+    violations: list[dict],
+    env: dict[str, str] | None = None,
+) -> None:
     """Check accumulated CI run: | block for rsync --delete without --exclude=.git."""
     full_block = " ".join(buffer)
+    if env:
+        full_block = _expand_env_refs(full_block, env)
 
     if not _RSYNC_DELETE_PATTERN.search(full_block):
         return

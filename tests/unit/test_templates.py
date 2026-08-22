@@ -13,8 +13,6 @@
 ## @rationale Q: Почему paramtrize вместо хардкода? A: Устраняет рассинхронизацию
 ##            при добавлении новых шаблонов — не нужно обновлять список тестов.
 ## @changes — CREATED: 2026-07-02 | Wave 2 TASK-5 — parameterized template validation
-def _module_contract():
-    pass
 
 
 # endregion MODULE_CONTRACT

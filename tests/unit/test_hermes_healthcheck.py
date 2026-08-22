@@ -23,6 +23,8 @@ from unittest import mock
 
 import pytest
 
+from tests.helpers.gate_helpers import assert_ldd_imp9
+
 logger = logging.getLogger(__name__)
 
 # module-specific path (tests/AGENTS.md §sys.path policy)
@@ -35,23 +37,7 @@ from healthcheck_deps import (
     check_redis,
 )
 
-
-def _assert_imp9(caplog: pytest.LogCaptureFixture, needle: str | None = None) -> None:
-    """Assert at least one IMP:9 log (LDD telemetry standard)."""
-    logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-    found = False
-    for record in list(caplog.records):
-        if "[IMP:" in record.message:
-            logger.info("%s", record.message)
-            if needle and needle in record.message:
-                found = True
-    logger.info("--- END LDD TRAJECTORY ---")
-    if needle:
-        assert found, f"Critical LDD Error: No IMP:9 log containing '{needle}'"
-    else:
-        assert any("[IMP:9]" in r.message for r in caplog.records), "Critical LDD Error: No IMP:9 log found"
-
-
+# T2.16a: _assert_imp9 консолидирован в gate_helpers.assert_ldd_imp9
 # region TEST_check_deps (агрегация, DI checkers)
 
 
@@ -74,7 +60,7 @@ def test_check_deps_all_ok(caplog: pytest.LogCaptureFixture) -> None:
     )
     assert result.healthy() is True
     assert result.pg_ok and result.litellm_ok and result.redis_ok
-    _assert_imp9(caplog, "All required dependencies ok")
+    assert_ldd_imp9(caplog, needle="All required dependencies ok")
 
 
 # 🧪 TRAP[TEST] · NEGATIVE (R5) · test_hc_deps_aggregation — required missing → unhealthy (D6, TEST_SPEC)

@@ -24,6 +24,7 @@ from pathlib import Path
 import pytest
 
 from tests._conftest.ldd import ldd_trajectory
+from tests.helpers.gate_helpers import write_yaml
 
 logger = logging.getLogger(__name__)
 
@@ -38,11 +39,7 @@ pytestmark = pytest.mark.static_audit
 # ═══════════════════════════════════════════════════════════════════
 
 
-def _write_yaml(tmp_path: Path, content: str) -> Path:
-    """Write YAML content to a temp file."""
-    p = tmp_path / "node.yaml"
-    p.write_text(content)
-    return p
+# T2.16b: _write_yaml консолидирован в gate_helpers.write_yaml(path, data)
 
 
 @pytest.fixture
@@ -173,8 +170,8 @@ def test_get_many_context_priority(
     logger.info("[IMP:7][test_get_many] Testing context priority (top-level > contexts.0.name)")
 
     # node.yaml WITHOUT top-level context — only contexts[0].name (fallback case)
-    p = _write_yaml(
-        tmp_path,
+    p = write_yaml(
+        tmp_path / "node.yaml",
         """\
 node:
   name: test-node
@@ -214,8 +211,8 @@ def test_get_many_non_dict_traversal_empty(caplog: pytest.LogCaptureFixture, tmp
     caplog.set_level(logging.DEBUG)
     logger.info("[IMP:7][test_get_many] Testing non-dict traversal tolerance")
 
-    p = _write_yaml(
-        tmp_path,
+    p = write_yaml(
+        tmp_path / "node.yaml",
         """\
 node:
   name: test-node

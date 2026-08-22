@@ -40,6 +40,7 @@ from core.internal.shared.node_yaml import (
     NodeYaml,
 )
 from tests._conftest.ldd import ldd_trajectory
+from tests.helpers.gate_helpers import write_yaml
 
 pytestmark = pytest.mark.static_audit
 
@@ -66,16 +67,7 @@ def _run_cli(args: list[str], cwd: str | None = None) -> subprocess.CompletedPro
     return subprocess.run(cmd, capture_output=True, text=True, cwd=cwd or str(_PROJECT_ROOT), check=False)
 
 
-def _write_yaml(tmp_path: Path, content: str) -> Path:
-    """Write YAML content to a temp file.
-
-    ## @purpose  Helper — creates a temporary YAML file for testing.
-    ## @io — ⇥ tmp_path: Path, content: str → ⎋ Path to written file
-    ## @complexity — O(1)
-    """
-    path = tmp_path / "node.yaml"
-    path.write_text(content, encoding="utf-8")
-    return path
+# T2.16b: _write_yaml консолидирован в gate_helpers.write_yaml(path, data)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -93,7 +85,7 @@ def test_load_valid_yaml(caplog, tmp_path):
 
     ## @purpose  Verify basic YAML parsing works.
     """
-    yaml_path = _write_yaml(tmp_path, "node:\n  host: 1.2.3.4\ncontext: myorg\n")
+    yaml_path = write_yaml(tmp_path / "node.yaml", "node:\n  host: 1.2.3.4\ncontext: myorg\n")
     node = NodeYaml(str(yaml_path))
     data = node.load()
     assert isinstance(data, dict)
@@ -132,7 +124,7 @@ def test_load_malformed_yaml(caplog, tmp_path):
 
     ## @purpose  Verify YAML syntax errors are wrapped in ConfigParseError.
     """
-    yaml_path = _write_yaml(tmp_path, "node: [unclosed list\n")
+    yaml_path = write_yaml(tmp_path / "node.yaml", "node: [unclosed list\n")
     node = NodeYaml(str(yaml_path))
     with pytest.raises(ConfigParseError) as exc_info:
         node.load()
@@ -151,7 +143,7 @@ def test_load_non_dict_root(caplog, tmp_path):
 
     ## @purpose  Verify YAML with scalar/list root is rejected.
     """
-    yaml_path = _write_yaml(tmp_path, "[1, 2, 3]\n")
+    yaml_path = write_yaml(tmp_path / "node.yaml", "[1, 2, 3]\n")
     node = NodeYaml(str(yaml_path))
     with pytest.raises(ConfigParseError) as exc_info:
         node.load()
@@ -170,7 +162,7 @@ def test_load_empty_file(caplog, tmp_path):
 
     ## @purpose  Verify empty file returns empty dict, not None.
     """
-    yaml_path = _write_yaml(tmp_path, "")
+    yaml_path = write_yaml(tmp_path / "node.yaml", "")
     node = NodeYaml(str(yaml_path))
     data = node.load()
     assert data == {}
@@ -188,7 +180,7 @@ def test_load_none_yaml(caplog, tmp_path):
 
     ## @purpose  Verify yaml.safe_load returning None is handled.
     """
-    yaml_path = _write_yaml(tmp_path, "null\n")
+    yaml_path = write_yaml(tmp_path / "node.yaml", "null\n")
     node = NodeYaml(str(yaml_path))
     data = node.load()
     assert data == {}
@@ -214,7 +206,7 @@ def test_cache_hit(caplog, tmp_path):
 
     ## @purpose  Verify cache works: modifying file between loads returns old data.
     """
-    yaml_path = _write_yaml(tmp_path, "value: original\n")
+    yaml_path = write_yaml(tmp_path / "node.yaml", "value: original\n")
     node = NodeYaml(str(yaml_path))
     data1 = node.load()
     assert data1["value"] == "original"
@@ -239,7 +231,7 @@ def test_reload_invalidates_cache(caplog, tmp_path):
 
     ## @purpose  Verify reload() invalidates cache and re-reads file.
     """
-    yaml_path = _write_yaml(tmp_path, "value: original\n")
+    yaml_path = write_yaml(tmp_path / "node.yaml", "value: original\n")
     node = NodeYaml(str(yaml_path))
     data1 = node.load()
     assert data1["value"] == "original"
@@ -272,7 +264,7 @@ def test_get_simple_key(caplog, tmp_path):
 
     ## @purpose  Verify basic dotted-key traversal.
     """
-    yaml_path = _write_yaml(tmp_path, "node:\n  host: 1.2.3.4\n")
+    yaml_path = write_yaml(tmp_path / "node.yaml", "node:\n  host: 1.2.3.4\n")
     node = NodeYaml(str(yaml_path))
     result = node.get("node.host")
     assert result == "1.2.3.4"
@@ -290,7 +282,7 @@ def test_get_nested_key(caplog, tmp_path):
 
     ## @purpose  Verify 2-level dotted-key traversal.
     """
-    yaml_path = _write_yaml(tmp_path, "domain:\n  platform: example.com\n")
+    yaml_path = write_yaml(tmp_path / "node.yaml", "domain:\n  platform: example.com\n")
     node = NodeYaml(str(yaml_path))
     result = node.get("domain.platform")
     assert result == "example.com"
@@ -308,7 +300,7 @@ def test_get_deeply_nested(caplog, tmp_path):
 
     ## @purpose  Verify multi-level dotted-key traversal.
     """
-    yaml_path = _write_yaml(tmp_path, "a:\n  b:\n    c: deep_value\n")
+    yaml_path = write_yaml(tmp_path / "node.yaml", "a:\n  b:\n    c: deep_value\n")
     node = NodeYaml(str(yaml_path))
     result = node.get("a.b.c")
     assert result == "deep_value"
@@ -326,7 +318,7 @@ def test_get_missing_key_no_default(caplog, tmp_path):
 
     ## @purpose  Verify missing key without default is an error.
     """
-    yaml_path = _write_yaml(tmp_path, "node:\n  host: 1.2.3.4\n")
+    yaml_path = write_yaml(tmp_path / "node.yaml", "node:\n  host: 1.2.3.4\n")
     node = NodeYaml(str(yaml_path))
     with pytest.raises(ConfigValidationError) as exc_info:
         node.get("nonexistent")
@@ -345,7 +337,7 @@ def test_get_missing_key_with_default(caplog, tmp_path):
 
     ## @purpose  Verify missing key returns default when provided.
     """
-    yaml_path = _write_yaml(tmp_path, "node:\n  host: 1.2.3.4\n")
+    yaml_path = write_yaml(tmp_path / "node.yaml", "node:\n  host: 1.2.3.4\n")
     node = NodeYaml(str(yaml_path))
     result = node.get("nonexistent", default="fb")
     assert result == "fb"
@@ -363,8 +355,8 @@ def test_get_list(caplog, tmp_path):
 
     ## @purpose  Verify typed list access works.
     """
-    yaml_path = _write_yaml(
-        tmp_path,
+    yaml_path = write_yaml(
+        tmp_path / "node.yaml",
         "projects:\n  - name: app1\n  - name: app2\n",
     )
     node = NodeYaml(str(yaml_path))
@@ -387,8 +379,8 @@ def test_get_list_not_a_list(caplog, tmp_path):
 
     ## @purpose  Verify get_list rejects non-list values.
     """
-    yaml_path = _write_yaml(
-        tmp_path,
+    yaml_path = write_yaml(
+        tmp_path / "node.yaml",
         "domain:\n  platform: example.com\n",
     )
     node = NodeYaml(str(yaml_path))
@@ -409,7 +401,7 @@ def test_get_list_missing_key(caplog, tmp_path):
 
     ## @purpose  Verify get_list returns empty list for missing key.
     """
-    yaml_path = _write_yaml(tmp_path, "node:\n  host: 1.2.3.4\n")
+    yaml_path = write_yaml(tmp_path / "node.yaml", "node:\n  host: 1.2.3.4\n")
     node = NodeYaml(str(yaml_path))
     result = node.get_list("nonexistent")
     assert result == []
@@ -435,7 +427,7 @@ def test_get_context_string(caplog, tmp_path):
 
     ## @purpose  Verify primary context extraction path (contexts[] canon, DevPlan 116 B6 T1).
     """
-    yaml_path = _write_yaml(tmp_path, "contexts:\n  - name: myorg\n")
+    yaml_path = write_yaml(tmp_path / "node.yaml", "contexts:\n  - name: myorg\n")
     node = NodeYaml(str(yaml_path))
     result = node.get_context()
     assert result == "myorg"
@@ -453,8 +445,8 @@ def test_get_context_array(caplog, tmp_path):
 
     ## @purpose  Verify fallback path from contexts array.
     """
-    yaml_path = _write_yaml(
-        tmp_path,
+    yaml_path = write_yaml(
+        tmp_path / "node.yaml",
         "contexts:\n  - name: myorg\n    repo: git@github.com:myorg/ai-platform.git\n",
     )
     node = NodeYaml(str(yaml_path))
@@ -474,7 +466,7 @@ def test_get_context_empty(caplog, tmp_path):
 
     ## @purpose  Verify graceful handling of missing context fields.
     """
-    yaml_path = _write_yaml(tmp_path, "domain: example.com\n")
+    yaml_path = write_yaml(tmp_path / "node.yaml", "domain: example.com\n")
     node = NodeYaml(str(yaml_path))
     result = node.get_context()
     assert not result
@@ -500,8 +492,8 @@ def test_get_projects(caplog, tmp_path):
 
     ## @purpose  Verify projects extraction.
     """
-    yaml_path = _write_yaml(
-        tmp_path,
+    yaml_path = write_yaml(
+        tmp_path / "node.yaml",
         "projects:\n  - name: app1\n  - name: app2\n  - name: app3\n",
     )
     node = NodeYaml(str(yaml_path))
@@ -523,8 +515,8 @@ def test_get_modules(caplog, tmp_path):
 
     ## @purpose  Verify modules extraction.
     """
-    yaml_path = _write_yaml(
-        tmp_path,
+    yaml_path = write_yaml(
+        tmp_path / "node.yaml",
         "modules:\n  - name: nginx\n    enabled: true\n  - name: postgres\n    enabled: false\n",
     )
     node = NodeYaml(str(yaml_path))
@@ -555,8 +547,8 @@ def test_get_domain_config(caplog, tmp_path):
 
     ## @purpose  Verify domain configuration extraction (flat-only, DevPlan 116 B6 T7).
     """
-    yaml_path = _write_yaml(
-        tmp_path,
+    yaml_path = write_yaml(
+        tmp_path / "node.yaml",
         "domain: example.com\n"
         "email: admin@example.com\n"
         "acme_dns_plugin: cloudflare\n"
@@ -586,8 +578,8 @@ def test_get_node_info(caplog, tmp_path):
 
     ## @purpose  Verify node metadata extraction.
     """
-    yaml_path = _write_yaml(
-        tmp_path,
+    yaml_path = write_yaml(
+        tmp_path / "node.yaml",
         "node:\n  fqdn: node1.example.com\n  owner_key: age1abc123\n  docker_mirror: https://mirror.example.com\n",
     )
     node = NodeYaml(str(yaml_path))
@@ -618,8 +610,8 @@ def test_validate_valid(caplog, tmp_path):
 
     ## @purpose  Verify validation passes for well-formed YAML.
     """
-    yaml_path = _write_yaml(
-        tmp_path,
+    yaml_path = write_yaml(
+        tmp_path / "node.yaml",
         "node:\n  name: test-node\n  host: 1.2.3.4\n  owner_key: test-key\ncontexts:\n  - name: test\ndomain: test.example.com\nmodules: []\n",
     )
     node = NodeYaml(str(yaml_path))
@@ -639,7 +631,7 @@ def test_validate_invalid(caplog, tmp_path):
 
     ## @purpose  Verify validation catches missing sections.
     """
-    yaml_path = _write_yaml(tmp_path, "projects: []\n")
+    yaml_path = write_yaml(tmp_path / "node.yaml", "projects: []\n")
     node = NodeYaml(str(yaml_path))
     errors = node.validate()
     assert len(errors) >= 1
@@ -658,7 +650,7 @@ def test_raw(caplog, tmp_path):
 
     ## @purpose  Verify raw data access works.
     """
-    yaml_path = _write_yaml(tmp_path, "node:\n  host: 1.2.3.4\ncontext: myorg\n")
+    yaml_path = write_yaml(tmp_path / "node.yaml", "node:\n  host: 1.2.3.4\ncontext: myorg\n")
     node = NodeYaml(str(yaml_path))
     data = node.raw()
     assert isinstance(data, dict)
@@ -685,7 +677,7 @@ def test_get_non_dict_intermediate(caplog, tmp_path):
 
     ## @purpose  Verify traversal error when navigating into scalar.
     """
-    yaml_path = _write_yaml(tmp_path, "node:\n  host: 1.2.3.4\n")
+    yaml_path = write_yaml(tmp_path / "node.yaml", "node:\n  host: 1.2.3.4\n")
     node = NodeYaml(str(yaml_path))
     with pytest.raises(ConfigValidationError) as exc_info:
         node.get("node.host.nonexistent")
@@ -704,7 +696,7 @@ def test_get_context_string_array(caplog, tmp_path):
 
     ## @purpose  Verify str-form contexts[0] is no longer read (node.schema.json requires dict).
     """
-    yaml_path = _write_yaml(tmp_path, "contexts:\n  - first\n  - second\n")
+    yaml_path = write_yaml(tmp_path / "node.yaml", "contexts:\n  - first\n  - second\n")
     node = NodeYaml(str(yaml_path))
     result = node.get_context()
     assert not result
@@ -828,7 +820,7 @@ def test_cli_validate_invalid(caplog, tmp_path):
 
     ## @purpose  Verify validation CLI detects missing required sections.
     """
-    yaml_path = _write_yaml(tmp_path, "projects: []\n")
+    yaml_path = write_yaml(tmp_path / "node.yaml", "projects: []\n")
     result = _run_cli(["--file", str(yaml_path), "--validate"])
     assert result.returncode >= 2  # missing node + domain = 2 errors
     assert "ERROR:" in result.stderr

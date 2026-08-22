@@ -14,7 +14,9 @@
 ## @invariants
 ##   - .env.example is byte-identical to sync_env_defaults.py generated output
 ##   - .env.example NO_PROXY is superset of platform-infra.yaml no_proxy_internal
-##   - env_defaults (platform-env.yaml) ↔ .env.example key/value parity (exact count)
+##   - env_defaults (platform-env.yaml) ↔ .env.example key/value parity (exact count);
+##     NO_PROXY — единственное исключение: SoT = proxy.no_proxy_internal (T2.17, дедупликация
+##     env_defaults.NO_PROXY; value-контракт покрыт test_no_proxy_superset)
 ##   - PROMETHEUS_TARGETS_DIR/RULES_DIR — canonical /opt/platform/ paths, registered in volumes
 ##   - .env.example без дублирующихся ключей; .env ↔ .env.example key/order mirror; NO_PROXY ⊆
 ##   - Template .env.example PLATFORM_* ∈ provides (gen_env_platform contract)
@@ -25,6 +27,8 @@
 ##            regressions in S3_ENDPOINT removal. gen-env-platform.sh deleted per DevPlan 090.
 ## @changes  2026-07-26 | Created per DevPlan 082 TASK-8
 ##           2026-08-12 | DevPlan 160 W2 T2.3 — MERGE env-семейства (env_contract/sync/template)
+##           2026-08-22 | T2.17 — NO_PROXY исключён из env_defaults-parity (SoT — proxy.no_proxy_internal;
+##                      env_defaults.NO_PROXY удалён как дубль; value проверяет test_no_proxy_superset)
 # endregion MODULE_CONTRACT
 
 import logging
@@ -323,7 +327,9 @@ def test_env_example_matches_platform_env_defaults(caplog):
 
     # v1.0.1 (research-E6 A2): count-assert заменён двусторонней key-parity —
     # missing_keys (SoT→example) + extra_keys (example→SoT, старые/мёртвые ключи).
-    extra_keys = [k for k in env_example if k not in env_defaults]
+    # T2.17: NO_PROXY — единственное исключение из extra_keys: его SoT = proxy.no_proxy_internal
+    # (env_defaults.NO_PROXY удалён как дубль); value-контракт покрыт test_no_proxy_superset.
+    extra_keys = [k for k in env_example if k not in env_defaults and k != "NO_PROXY"]
 
     mismatches: list[str] = []
     missing_keys: list[str] = []
@@ -484,7 +490,8 @@ def test_env_example_key_order_matches_dotenv(caplog):
 def test_hermes_agent_env_example_well_formed(caplog):
     """hermes-agent/.env.example must have no duplicate keys (if exists, merged W2 T2.3)."""
     if not HERMES_AGENT_ENV_EXAMPLE.is_file():
-        pytest.skip("hermes-agent/.env.example not found")
+        # T1.7 триаж (аудит 2026-08-22): .env.example — статический repo-файл → FAIL (R4).
+        pytest.fail(f"hermes-agent/.env.example not found (repo file must exist): {HERMES_AGENT_ENV_EXAMPLE}")
 
     keys = _parse_keys_in_order(HERMES_AGENT_ENV_EXAMPLE)
     key_set = set(keys)

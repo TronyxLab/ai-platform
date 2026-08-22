@@ -29,6 +29,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.helpers.gate_helpers import write_yaml
+
 pytestmark = pytest.mark.static_audit
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -92,10 +94,7 @@ def _run_cli(yaml_file: Path, schema_file: Path) -> subprocess.CompletedProcess[
     )
 
 
-def _write_yaml(tmp_path: Path, content: str) -> Path:
-    p = tmp_path / "node.yaml"
-    p.write_text(content, encoding="utf-8")
-    return p
+# T2.16b: _write_yaml консолидирован в gate_helpers.write_yaml(path, data)
 
 
 # endregion HELPER
@@ -108,7 +107,7 @@ def test_cli_valid_yaml_exit0_silent(tmp_path) -> None:
     # · Scenario: valid node.yaml → CLI must stay fully silent (PYOF printed nothing)
     # · Last fail: N/A (new CLI)
     # · Remove if: silence contract changes
-    yaml_f = _write_yaml(tmp_path, VALID_NODE_YAML)
+    yaml_f = write_yaml(tmp_path / "node.yaml", VALID_NODE_YAML)
 
     result = _run_cli(yaml_f, _NODE_SCHEMA)
 
@@ -127,7 +126,7 @@ def test_cli_missing_field_exit1_golden(tmp_path) -> None:
     # · Scenario: missing 'modules' → exact error line
     # · Last fail: N/A (new CLI)
     # · Remove if: error format contract changes
-    yaml_f = _write_yaml(tmp_path, INVALID_MISSING_FIELD_YAML)
+    yaml_f = write_yaml(tmp_path / "node.yaml", INVALID_MISSING_FIELD_YAML)
 
     result = _run_cli(yaml_f, _NODE_SCHEMA)
 
@@ -148,7 +147,7 @@ def test_cli_type_mismatch_exit1_golden(tmp_path) -> None:
     # · Scenario: name: 123 → "  Error at 'node > name': ..." (" > " separator)
     # · Last fail: N/A (new CLI)
     # · Remove if: path-rendering contract changes
-    yaml_f = _write_yaml(tmp_path, INVALID_TYPE_MISMATCH_YAML)
+    yaml_f = write_yaml(tmp_path / "node.yaml", INVALID_TYPE_MISMATCH_YAML)
 
     result = _run_cli(yaml_f, _NODE_SCHEMA)
 

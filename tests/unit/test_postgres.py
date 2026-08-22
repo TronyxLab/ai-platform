@@ -21,8 +21,6 @@
 ## @changes — LAST_CHANGE: 2026-07-11 | Extracted pgbouncer tests → test_pgbouncer_static.py (TASK-4: 17→12)
 ##            LAST_CHANGE: 2026-07-01 | Added MODULE_CONTRACT region for pre-commit compliance
 ##            REFACTORED: 2026-07-08 | Hardcoded paths→fixtures (Wave 2.2)
-def _module_contract():
-    pass
 
 
 # endregion MODULE_CONTRACT

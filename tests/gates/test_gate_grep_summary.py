@@ -25,8 +25,6 @@
 ##             without the mandatory header. Without this gate, files silently
 ##             drift out of compliance and the next agent misses context.
 ## @changes  CREATED: 2026-07-09 | TASK-5G5a GREP_SUMMARY presence gate
-def _module_contract():
-    pass
 
 
 # endregion MODULE_CONTRACT

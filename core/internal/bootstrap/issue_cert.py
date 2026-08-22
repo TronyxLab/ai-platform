@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: issue-cert, acme.sh, letsencrypt, tls, dns-01, webnames, dnsapi, wildcard-cert, idempotent, cert-expiry, project-certs, http-01, standalone, shred, inject, retry, DI, runner, node-yaml
+# GREP_SUMMARY: issue-cert, acme.sh, letsencrypt, tls, dns-01, webnames, dnsapi, wildcard-cert, idempotent, cert-expiry, project-certs, http-01, standalone, shred, inject, retry, DI, runner, node-yaml, T2.2, acme-issue-with-retry
 # STRUCTURE: ▶ ┌environ (NODE_YAML/PLATFORM_*)┐ → ○ resolve_domain_config (NodeYaml | env fallback) → ◇ main LE-valid? SKIP
 #           → ◇ validate env → issue_tls_cert (dns/http/auto + retry) → ◇ http/auto → platform.domain individual
 #           → ⊕ cert_check_expiry (30d) → ○ issue_project_certs (subdomain-skip) → ⎋ exit 0|1
+#           → ◇ T2.2: 3 retry-цикла acme.sh --issue → общий _acme_issue_with_retry (+_acme_sh_available guard)
 # region MODULE_CONTRACT
 ## @purpose  SSL/TLS certificate issuance via acme.sh DNS-01/HTTP-01 (DevPlan 164 W3.5-1 S8).
 ##           Strangler-декомпозиция issue-cert.sh (708 LOC shell → тестируемый Python-модуль):
@@ -38,6 +39,9 @@
 ##                      (_resolve_inputs/_ensure_dns01_challenge/_run_acme/_verify_result/_finalize);
 ##                      webnames inject+shred → webnames_protocol.py (inject_webnames/shred_secrets,
 ##                      re-export inject_webnames_key/_shred_paths для тест-контракта)
+## @changes  2026-08-22 | T2.2 — 3 retry-цикла acme.sh --issue (_issue_acme_webnames/_issue_acme_generic/
+##                      _issue_http01_cert) → общий _acme_issue_with_retry; acme.sh-guard →
+##                      _acme_sh_available (дубль _issue_acme_cert/_issue_http01_cert)
 ## ⚠️ TRAP[DECISION] · 2026-07-23 · D1 — DNS-01 primary, HTTP-01 graceful degradation
 ## · Rejected: HTTP-01 only (no wildcard certs)
 ## · Reason: DNS-01 preferred (wildcard), HTTP-01 fallback when DNS-01 unavailable
@@ -328,6 +332,78 @@ def issue_tls_cert(
 # endregion FUNC_issue_tls_cert
 
 
+# region FUNC__acme_sh_available
+## @purpose  Guard acme.sh существует+исполняемый (T2.2): дубль _issue_acme_cert/
+##           _issue_http01_cert (различались только log_step) — консолидирован.
+## @io       ⇥ ctx: IssueContext, log_step: str ("acme"|"acme-http") → ⎋ bool (True = доступен)
+## @complexity — O(1) — isfile + X_OK
+## @invariants — отсутствие/неисполняемый → FAIL + False
+def _acme_sh_available(ctx: IssueContext, log_step: str) -> bool:
+    """True if acme.sh exists and is executable — shared guard (T2.2)."""
+    acme_sh = str(Path(ctx.acme_home) / "acme.sh")
+    if ctx.facts.path_isfile(acme_sh) and os.access(acme_sh, os.X_OK):
+        return True
+    _log_step(log_step, "FAIL", f"acme.sh not found at {acme_sh}")
+    return False
+
+
+# endregion FUNC__acme_sh_available
+
+
+# region FUNC__acme_issue_with_retry
+## @purpose  Единый retry-цикл acme.sh --issue (T2.2): 3 копии (_issue_acme_webnames/
+##           _issue_acme_generic/_issue_http01_cert) различались только CLI-аргументами
+##           (--dns <plugin> | --standalone), log_step и текстами WARN/FAIL — консолидированы.
+##           Возвращает last_rc (0 = успех) — вызывающий решает про install-cert/False.
+## @io       ⇥ ctx: IssueContext, email: str, domains: list[str] (сырые имена — флаги -d здесь),
+##              extra_args: list[str] (различающаяся CLI-часть), log_step: str,
+##              warn_fn: Callable[[int, int], str], fail_fn: Callable[[int], str] → ⎋ int (last_rc)
+## @complexity — O(A) — A = ctx.max_attempts, каждая попытка — 1 acme.sh subprocess
+## @invariants
+##   - check=False (rc управляется циклом); rc=0 → break; иначе WARN per attempt + FAIL
+##   - timeout=ACME_CMD_TIMEOUT; CLI-порядок прежний (--issue --home <home> <extra> --server
+##     --email <email> <(-d d)*> --keylength) — AcmeFakeRunner различает ветки по --standalone/--dns
+##   - Тексты WARN/FAIL — callables (байт-идентичны прежним per-ветка)
+def _acme_issue_with_retry(
+    *,
+    ctx: IssueContext,
+    email: str,
+    domains: list[str],
+    extra_args: list[str],
+    log_step: str,
+    warn_fn: Callable[[int, int], str],
+    fail_fn: Callable[[int], str],
+) -> int:
+    """Run acme.sh --issue with retry (max_attempts). Returns last returncode (0 = success)."""
+    acme_args = [
+        str(Path(ctx.acme_home) / "acme.sh"),
+        "--issue",
+        "--home",
+        ctx.acme_home,
+        *extra_args,
+        "--server",
+        ACME_SERVER,
+        "--email",
+        email,
+        *[arg for d in domains for arg in ("-d", d)],
+        "--keylength",
+        KEY_LENGTH,
+    ]
+    last_rc = 1
+    for attempt in range(1, ctx.max_attempts + 1):
+        result = ctx.runner.run(acme_args, timeout=ACME_CMD_TIMEOUT, check=False)
+        last_rc = result.returncode
+        if last_rc == 0:
+            break
+        _log_step(log_step, "WARN", warn_fn(last_rc, attempt))
+    if last_rc != 0:
+        _log_step(log_step, "FAIL", fail_fn(last_rc))
+    return last_rc
+
+
+# endregion FUNC__acme_issue_with_retry
+
+
 # region FUNC__issue_acme_cert
 ## @purpose  Issue Let's Encrypt cert via acme.sh DNS-01 challenge (webnames inject+shred | generic).
 ## @io       ⇥ domain, email, dns_plugin, wildcard, ctx → ⎋ bool
@@ -354,9 +430,7 @@ def _issue_acme_cert(
     ctx: IssueContext,
 ) -> bool:
     """Issue a DNS-01 cert via acme.sh (webnames inject+shred / generic env-creds)."""
-    acme_sh = str(Path(ctx.acme_home) / "acme.sh")
-    if not (ctx.facts.path_isfile(acme_sh) and os.access(acme_sh, os.X_OK)):
-        _log_step("acme", "FAIL", f"acme.sh not found at {acme_sh}")
+    if not _acme_sh_available(ctx, "acme"):
         return False
 
     _log_step("acme", "START", f"Issuing TLS certificate via acme.sh ({dns_plugin}) for {domain} (email: {email})")
@@ -422,36 +496,22 @@ def _issue_acme_webnames(domain: str, email: str, wildcard: bool, ctx: IssueCont
 
     last_rc = 1
     try:
-        for attempt in range(1, ctx.max_attempts + 1):
-            result = ctx.runner.run(
-                [
-                    str(Path(ctx.acme_home) / "acme.sh"),
-                    "--issue",
-                    "--home",
-                    ctx.acme_home,
-                    "--dns",
-                    DNSAPI_PLUGIN_NAME,
-                    "--server",
-                    ACME_SERVER,
-                    "--email",
-                    email,
-                    *[arg for d in domain_args for arg in ("-d", d)],
-                    "--keylength",
-                    KEY_LENGTH,
-                ],
-                timeout=ACME_CMD_TIMEOUT,
-                check=False,
-            )
-            last_rc = result.returncode
-            if last_rc == 0:
-                break
-            _log_step("acme", "WARN", f"acme.sh --issue exited with {last_rc} (attempt {attempt}/{ctx.max_attempts})")
+        # T2.2: retry-цикл — общий _acme_issue_with_retry (3 копии схлопнуты); finally-shred
+        # сохраняет ключевой контракт: ключ уничтожается из tmp + dnsapi/ ПОСЛЕ последней попытки.
+        last_rc = _acme_issue_with_retry(
+            ctx=ctx,
+            email=email,
+            domains=domain_args,
+            extra_args=["--dns", DNSAPI_PLUGIN_NAME],
+            log_step="acme",
+            warn_fn=lambda rc, attempt: f"acme.sh --issue exited with {rc} (attempt {attempt}/{ctx.max_attempts})",
+            fail_fn=lambda rc: f"acme.sh --issue exited with {rc}",
+        )
     finally:
         # Wipe API key from all on-disk locations immediately after acme.sh completes (shred protocol)
         _shred_paths([dnsapi_tmp, dnsapi_dest], ctx.runner)
 
     if last_rc != 0:
-        _log_step("acme", "FAIL", f"acme.sh --issue exited with {last_rc}")
         return False
 
     return _install_cert_files(domain, ctx)
@@ -473,38 +533,20 @@ def _issue_acme_generic(domain: str, email: str, dns_plugin: str, wildcard: bool
     if wildcard:
         domain_args.append(f"*.{domain}")
 
-    last_rc = 1
-    for attempt in range(1, ctx.max_attempts + 1):
-        result = ctx.runner.run(
-            [
-                str(Path(ctx.acme_home) / "acme.sh"),
-                "--issue",
-                "--home",
-                ctx.acme_home,
-                "--dns",
-                f"dns_{dns_plugin}",
-                "--server",
-                ACME_SERVER,
-                "--email",
-                email,
-                *[arg for d in domain_args for arg in ("-d", d)],
-                "--keylength",
-                KEY_LENGTH,
-            ],
-            timeout=ACME_CMD_TIMEOUT,
-            check=False,
-        )
-        last_rc = result.returncode
-        if last_rc == 0:
-            break
-        _log_step(
-            "acme",
-            "WARN",
-            f"acme.sh --issue (generic dns_{dns_plugin}) failed with {last_rc} (attempt {attempt}/{ctx.max_attempts})",
-        )
+    # T2.2: retry-цикл — общий _acme_issue_with_retry (3 копии схлопнуты)
+    last_rc = _acme_issue_with_retry(
+        ctx=ctx,
+        email=email,
+        domains=domain_args,
+        extra_args=["--dns", f"dns_{dns_plugin}"],
+        log_step="acme",
+        warn_fn=lambda rc, attempt: (
+            f"acme.sh --issue (generic dns_{dns_plugin}) failed with {rc} (attempt {attempt}/{ctx.max_attempts})"
+        ),
+        fail_fn=lambda _rc: f"acme.sh --issue (generic dns_{dns_plugin}) failed",
+    )
 
     if last_rc != 0:
-        _log_step("acme", "FAIL", f"acme.sh --issue (generic dns_{dns_plugin}) failed")
         return False
 
     return _install_cert_files(domain, ctx)
@@ -592,9 +634,7 @@ def _port80_in_use(runner: CommandRunner) -> bool:
 ##   - Retry на --issue провал (max_attempts)
 def _issue_http01_cert(domain: str, email: str, ctx: IssueContext) -> bool:
     """Issue a Let's Encrypt cert via acme.sh HTTP-01 standalone (port 80 free, no wildcard)."""
-    acme_sh = str(Path(ctx.acme_home) / "acme.sh")
-    if not (ctx.facts.path_isfile(acme_sh) and os.access(acme_sh, os.X_OK)):
-        _log_step("acme-http", "FAIL", f"acme.sh not found at {acme_sh}")
+    if not _acme_sh_available(ctx, "acme-http"):
         return False
 
     _log_step("acme-http", "START", f"Issuing TLS certificate via HTTP-01 (standalone) for {domain}")
@@ -604,38 +644,20 @@ def _issue_http01_cert(domain: str, email: str, ctx: IssueContext) -> bool:
         _log_step("acme-http", "FAIL", "Port 80 is in use — cannot use HTTP-01 standalone mode. Stop nginx first.")
         return False
 
-    last_rc = 1
-    for attempt in range(1, ctx.max_attempts + 1):
-        result = ctx.runner.run(
-            [
-                str(Path(ctx.acme_home) / "acme.sh"),
-                "--issue",
-                "--home",
-                ctx.acme_home,
-                "--standalone",
-                "--server",
-                ACME_SERVER,
-                "--email",
-                email,
-                "-d",
-                domain,
-                "--keylength",
-                KEY_LENGTH,
-            ],
-            timeout=ACME_CMD_TIMEOUT,
-            check=False,
-        )
-        last_rc = result.returncode
-        if last_rc == 0:
-            break
-        _log_step(
-            "acme-http",
-            "WARN",
-            f"acme.sh --issue --standalone exited with {last_rc} (attempt {attempt}/{ctx.max_attempts})",
-        )
+    # T2.2: retry-цикл — общий _acme_issue_with_retry (3 копии схлопнуты)
+    last_rc = _acme_issue_with_retry(
+        ctx=ctx,
+        email=email,
+        domains=[domain],
+        extra_args=["--standalone"],
+        log_step="acme-http",
+        warn_fn=lambda rc, attempt: (
+            f"acme.sh --issue --standalone exited with {rc} (attempt {attempt}/{ctx.max_attempts})"
+        ),
+        fail_fn=lambda rc: f"acme.sh --issue --standalone exited with {rc}",
+    )
 
     if last_rc != 0:
-        _log_step("acme-http", "FAIL", f"acme.sh --issue --standalone exited with {last_rc}")
         return False
 
     _log_step("acme-http", "DONE", "HTTP-01 certificate issued — installing")

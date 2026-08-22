@@ -15,8 +15,6 @@
 ## @rationale — backup_config.py (140 lines) is the single source of truth for S3 config;
 ##   testing all missing-var paths ensures backup-upload never silently uses defaults.
 ##   W4e: env-дикт (DI) вместо патча окружения — тест проверяет ЛОГИКУ модуля, а не окружение.
-def _module_contract():
-    pass
 
 
 # endregion MODULE_CONTRACT

@@ -703,12 +703,13 @@ def test_mode_dispatch_init_update(caplog) -> None:
 ##           When a sub-step's content-hash is unchanged, the sub-step is SKIPPED (not re-executed).
 ##           This is the idempotency contract state_machine.py checkpoint-resume must preserve.
 ## @io       caplog → ⎋ None (pytest.fail if checkpoint/hash logic absent)
-## @complexity 1 — static grep for state_machine delegation + _step_hash + content-hash source
+## @complexity 1 — static grep for state_machine delegation + _phase_input_hash + content-hash source
 ## @invariants
 ##   - node-lifecycle.sh delegates checkpoint-resume to state_machine.py (does NOT source
 ##     the removed checkpoint lib — DevPlan 091 backward-compat removal)
-##   - node-lifecycle.sh delegates content-hash to shared content_hash.py / state_machine._step_hash()
-##   - _step_hash() (state_machine.py) is used for per-sub-step content-hash invalidation
+##   - node-lifecycle.sh delegates content-hash to phase-level idempotency (_phase_input_hash)
+##   - _phase_input_hash() (state_machine.py) is used for per-phase content-hash invalidation
+##     (_step_hash удалён как мёртвый — аудит 2026-08-22; sub-step hash вне скоупа)
 ##   - RESUME_MODE + FORCE_MODE are parsed by the shell facade before delegation
 
 
@@ -731,10 +732,12 @@ def test_checkpoint_step_uses_content_hash(caplog) -> None:
     assert "_delegate" in content, "FAIL: _delegate function must exist in shell facade"
     logger.info("[IMP:8][test_checkpoint_step_uses_content_hash] Check 1 PASS: delegates to state_machine.py")
 
-    # ── Check 2: state_machine.py has _step_hash for content-based idempotency ──
+    # ── Check 2: state_machine.py has phase-input hash for content-based idempotency ──
     sm_path = LIFECYCLE_SCRIPT.parent / "lifecycle" / "state_machine.py"
     sm_content = sm_path.read_text(encoding="utf-8")
-    assert "_step_hash" in sm_content, "FAIL: state_machine.py must have _step_hash for idempotency"
+    # Аудит 2026-08-22: _step_hash удалён (0 callers); живой механизм — _phase_input_hash
+    assert "_phase_input_hash" in sm_content, "FAIL: state_machine.py must have _phase_input_hash for idempotency"
+    assert "_step_hash" not in sm_content, "FAIL: _step_hash must stay removed (dead API, аудит 2026-08-22)"
     # Волна 117 D5: execute_grouped_phase удалён (мёртвый код, sub-step resume вне скоупа);
     # идемпотентность — через phase-статусы (done / done_with_warnings ≠ done → перевыполнение)
     assert "def execute_grouped_phase" not in sm_content, (

@@ -131,7 +131,8 @@ def test_hermes_agent_env_matches_containers(caplog):
     """hermes-agent/.env.example *_HOST values match container_name."""
     env_path = Path(MODULES_DIR) / "hermes-agent" / ".env.example"
     if not pathlib.Path(env_path).is_file():
-        pytest.skip("hermes-agent/.env.example not found")
+        # T1.7 триаж (аудит 2026-08-22): .env.example — статический repo-файл → FAIL (R4).
+        pytest.fail(f"hermes-agent/.env.example not found (repo file must exist): {env_path}")
 
     hosts = _parse_env_hosts(env_path)
     container_names = _parse_container_names()

@@ -39,8 +39,6 @@
 ##              (2) leaking secrets in compose config → security incident
 ##              AC-T4 from DevPlan §TASK-4.
 ## @changes — CREATED: 2026-07-03 | Wave 2: TASK-4 secrets validation
-def _module_contract():
-    pass
 
 
 # endregion MODULE_CONTRACT

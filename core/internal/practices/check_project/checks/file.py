@@ -44,10 +44,10 @@ from core.internal.practices.check_project.files import (
 )
 from core.internal.practices.check_project.fixer import fix_hygiene
 from core.internal.practices.check_project.models import CheckResult
-from core.internal.practices.check_project.runner import resolve_language
 from core.internal.practices.constants import EXCLUDED_DIRS
 from core.internal.practices.generators import GENERATED_HEADER
 from core.internal.practices.manifest import PracticeCheck
+from core.internal.practices.profile import resolve_language
 from core.internal.shared.env_facts import EnvironmentFacts, default_env_facts
 
 logger = logging.getLogger(__name__)

@@ -32,6 +32,9 @@
 ## @rationale (D5) argparse subcommands (render-all, add, remove) not --mode flag
 ## @changes  2026-08-16 | DevPlan 173 W2.3 — +legacy flag-нормализация (_normalize_mode:
 ##            --add/--remove/--render-all → subcommand; implicit add); add-vhost.sh → exec
+## @changes  2026-08-22 | T2.11 — read_node_yaml_projects свёрнут к канону
+##            NodeYaml.get_project_entries() (единый project-parser, DevPlan 116 B6 D3);
+##            локальный node.get("projects")-парсер удалён
 ## ⚠️ TRAP[DECISION] · 2026-07-26 · — · add-vhost.sh мигрирован в vhost_renderer.py через Strangler-Fig
 ## · Rejected: keeping vhost generation in shell (risk: 926 LOC monolith, grep-based YAML, inline python3)
 ## · Reason: языковая политика (AGENTS.md), тестируемость, дедупликация с vhost_yaml_reader.py
@@ -192,19 +195,23 @@ def load_vhost_config(project_dir: str) -> ProjectConfig | None:
 
 
 def read_node_yaml_projects(node_yaml_path: str) -> list[ProjectEntry]:
-    """Read node.yaml via NodeYaml and extract project entries with domain.
+    """Read node.yaml via canonical NodeYaml.get_project_entries() and filter to domain projects.
 
-    ▶ ┌node_yaml_path → NodeYaml┐ → ◇ get_projects → ◇ filter name + domain
+    ▶ ┌node_yaml_path → NodeYaml┐ → ◇ get_project_entries (canon, D3) → ◇ filter name + domain
     → ⊕ append → ⎋ list[ProjectEntry]
 
-    ## @purpose — Parse node.yaml via NodeYaml for vhost batch generation (render-all mode).
+    ## @purpose — T2.11: локальный парсер node.yaml#projects свёрнут к канону
+    ##            NodeYaml.get_project_entries() (единый project-parser, DevPlan 116 B6 D3,
+    ##            invariant «Single project parser canon»). Формат канона — list[ProjectEntry];
+    ##            адаптация в месте вызова: фильтр name+domain (как и в прежнем парсере).
     ## @io — ⇥ node_yaml_path: str — path to node.yaml
-    ##       → ⎋ list[ProjectEntry] — projects with non-empty domain
+    ##       → ⎋ list[ProjectEntry] — projects with non-empty name and domain
     ## @complexity — O(P) where P = number of projects
     ## @invariants
-    ##   - Only emits projects with non-empty 'domain' field
-    ##   - Returns empty list if node.yaml missing or no projects
-    ##   - Projects without domain field are silently skipped
+    ##   - Only emits projects with non-empty 'domain' field (canon emits ВСЕ записи — фильтр здесь)
+    ##   - Returns empty list if node.yaml missing
+    ##   - Malformed record → ConfigValidationError fail-fast (canon D3; прежний локальный
+    ##     парсер молча пропускал не-dict записи) — отклонение см. T2.11 report
     ##   - Uses NodeYaml facade (not direct yaml.safe_load)
     """
     yaml_path = Path(node_yaml_path)
@@ -216,25 +223,19 @@ def read_node_yaml_projects(node_yaml_path: str) -> list[ProjectEntry]:
 
     try:
         node = NodeYaml(node_yaml_path)
+        # T2.11: канонический typed-парсер node.yaml#projects (DevPlan 116 B6 D3) вместо
+        # локального node.get("projects") + ручной фильтрации dict-записей.
+        entries = node.get_project_entries()
     except (ConfigNotFoundError, ConfigParseError, OSError) as e:
         logger.error("[IMP:8][read_node_yaml_projects] Failed to parse node.yaml: %s", e)
         return []
 
-    # W11: get(key, default) overload widens to list[Any] → cast to object to keep runtime guard meaningful
-    projects_raw = cast(object, node.get("projects", default=[]))
-    if not isinstance(projects_raw, list):
-        return []
-
     result: list[ProjectEntry] = []
-    # W11: list[Unknown] after isinstance → cast to object list for item checks
-    for p in cast(list[object], projects_raw):
-        if not isinstance(p, dict):
-            continue
-        p_typed = cast(dict[str, object], p)
-        name = str(p_typed.get("name", "")).strip()
-        domain = str(p_typed.get("domain", "")).strip()
+    for entry in entries:
+        name = entry.name.strip()
+        domain = entry.domain.strip()
         if name and domain:
-            result.append(ProjectEntry(name=name, domain=domain))
+            result.append(entry)
             logger.debug("[IMP:6][read_node_yaml_projects] Found: %s → %s", name, domain)
 
     logger.info("[IMP:9][read_node_yaml_projects] Found %d project(s) with domain", len(result))

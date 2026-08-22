@@ -39,21 +39,7 @@ logger = logging.getLogger("test_doc_header_validator")
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
-
-def _assert_ldd(caplog) -> None:
-    """Print IMP:7-10 trajectory and assert at least one IMP:9 log (LDD protocol)."""
-    found = False
-    logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-    for record in list(caplog.records):
-        msg = getattr(record, "message", "")
-        if "[IMP:" in str(msg):
-            imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-            if imp_level >= 7:
-                logger.info("%s", msg)
-            if imp_level >= 9:
-                found = True
-    logger.info("--- END LDD TRAJECTORY ---")
-    assert found, "Critical LDD Error: No IMP:9 business logic log found"
+from tests.helpers.gate_helpers import assert_ldd_imp9
 
 
 def test_regions_balanced(tmp_path: Path, caplog) -> None:
@@ -69,7 +55,7 @@ def test_regions_balanced(tmp_path: Path, caplog) -> None:
     ok_errs = check_regions_balanced(ok)
     broken_errs = check_regions_balanced(broken)
 
-    _assert_ldd(caplog)
+    assert_ldd_imp9(caplog)
     assert ok_errs == [], f"balanced regions must pass: {ok_errs}"
     assert len(broken_errs) == 1, f"imbalance must fail: {broken_errs}"
     assert "2" in broken_errs[0] and "1" in broken_errs[0]
@@ -89,7 +75,7 @@ def test_grep_summary_presence_first10(tmp_path: Path, caplog) -> None:
     ok_errs = check_grep_summary_presence(ok)
     missing_errs = check_grep_summary_presence(missing)
 
-    _assert_ldd(caplog)
+    assert_ldd_imp9(caplog)
     assert ok_errs == [], f"presence must pass: {ok_errs}"
     assert len(missing_errs) == 1 and "GREP_SUMMARY" in missing_errs[0]
     logger.critical("[IMP:9][test] grep_summary_presence: ok=%s missing=%s — OK", ok_errs, missing_errs)
@@ -108,7 +94,7 @@ def test_structure_presence(tmp_path: Path, caplog) -> None:
     ok_errs = check_structure(ok)
     missing_errs = check_structure(missing)
 
-    _assert_ldd(caplog)
+    assert_ldd_imp9(caplog)
     assert ok_errs == [], f"structure must pass: {ok_errs}"
     assert len(missing_errs) == 1 and "STRUCTURE" in missing_errs[0]
     logger.critical("[IMP:9][test] structure_presence: ok=%s missing=%s — OK", ok_errs, missing_errs)
@@ -127,7 +113,7 @@ def test_module_contract_presence(tmp_path: Path, caplog) -> None:
     ok_errs = check_module_contract(ok)
     partial_errs = check_module_contract(partial)
 
-    _assert_ldd(caplog)
+    assert_ldd_imp9(caplog)
     assert ok_errs == [], f"full contract must pass: {ok_errs}"
     assert len(partial_errs) == 1 and "endregion" in partial_errs[0]
     logger.critical("[IMP:9][test] module_contract: ok=%s partial=%s — OK", ok_errs, partial_errs)
@@ -149,7 +135,7 @@ def test_yaml_purpose_required(tmp_path: Path, caplog) -> None:
     bad_errs = check_yaml_purpose(bad)
     py_errs = validate_file(py, tmp_path)
 
-    _assert_ldd(caplog)
+    assert_ldd_imp9(caplog)
     assert ok_errs == [], f"yaml purpose must pass: {ok_errs}"
     assert len(bad_errs) == 1 and "@purpose" in bad_errs[0]
     assert not any("purpose" in e for e in py_errs), f"py must not be yaml-checked: {py_errs}"
@@ -182,7 +168,7 @@ def test_md_sh_refs_resolution(tmp_path: Path, caplog) -> None:
     ok_errs = check_md_sh_refs(doc, repo_root=repo)
     broken_errs = check_md_sh_refs(broken, repo_root=repo)
 
-    _assert_ldd(caplog)
+    assert_ldd_imp9(caplog)
     assert ok_errs == [], f"resolvable refs must pass: {ok_errs}"
     assert len(broken_errs) == 1 and "scripts/missing.sh" in broken_errs[0]
     logger.critical("[IMP:9][test] md_sh_refs: ok=%s broken=%s — OK", ok_errs, broken_errs)
@@ -210,7 +196,7 @@ def test_validate_file_ext_filter(tmp_path: Path, caplog) -> None:
     errors0, checked0 = validate_files([], repo_root=repo)
     errors_ok, checked_ok = validate_files([str(ok)], repo_root=repo)
 
-    _assert_ldd(caplog)
+    assert_ldd_imp9(caplog)
     assert errors == [] and checked == 0, f"skipped files must not be checked: {errors}/{checked}"
     assert errors0 == [] and checked0 == 0, "no args must pass"
     assert errors_ok == [] and checked_ok == 1, f"valid file must be checked: {errors_ok}/{checked_ok}"
@@ -257,7 +243,7 @@ def test_namelint_targets(tmp_path: Path, caplog) -> None:
     (clean / "Makefile").write_text(".PHONY: foo deploy restart help venv test-x gate-x pre-commit-x\n")
     clean_errors = validate_make_target_names(clean)
 
-    _assert_ldd(caplog)
+    assert_ldd_imp9(caplog)
     assert any("push-core" in e for e in errors), f"unregistered target not detected: {errors}"
     assert any("unknown" in e for e in errors), f"unknown not detected: {errors}"
     assert not any("foo" in e or "restart" in e or "help" in e or "venv" in e for e in errors), errors
@@ -280,7 +266,7 @@ def test_namelint_help_all_service_target(tmp_path: Path, caplog) -> None:
 
     errors = validate_make_target_names(repo)
 
-    _assert_ldd(caplog)
+    assert_ldd_imp9(caplog)
     assert errors == [], f"help-all должен проходить namelint (служебный таргет): {errors}"
     logger.critical("[IMP:9][test] namelint_help_all: %s — OK", errors)
 
@@ -292,7 +278,7 @@ def test_namelint_missing_manifest(tmp_path: Path, caplog) -> None:
     caplog.set_level(logging.INFO)
     errors = validate_make_target_names(tmp_path)
 
-    _assert_ldd(caplog)
+    assert_ldd_imp9(caplog)
     assert len(errors) == 1 and "Manifest not found" in errors[0], f"unexpected: {errors}"
     logger.critical("[IMP:9][test] namelint_missing_manifest: %s — OK", errors)
 
@@ -333,4 +319,4 @@ def test_namelint_manifest_code_sync(caplog) -> None:
         "[IMP:9][test] manifest_code_sync: namespace_collision_names=%s (gate-consumed), D2-имена отсутствуют — OK",
         collisions,
     )
-    _assert_ldd(caplog)
+    assert_ldd_imp9(caplog)

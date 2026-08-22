@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: ssl-certs, openssl, x509, expiry, issuer, lets-encrypt, parseable, shared, checkend, san, wildcard
-# STRUCTURE: ▶ cert_is_parseable ┌cert┐ → ◇ openssl x509 -noout → ⎋ bool → ▶ cert_check_expiry ┌cert,threshold┐ → ◇ openssl x509 -checkend → ⎋ bool
+# GREP_SUMMARY: ssl-certs, openssl, x509, expiry, issuer, lets-encrypt, parseable, shared, checkend, san, wildcard, run-openssl
+# STRUCTURE: ▶ _run_openssl ┌args,cert,timeout,op┐ → ◇ openssl x509 -in cert … → ⎋ CompletedProcess|None (5 блоков дедуплицированы)
+#            → ▶ cert_is_parseable ┌cert┐ → ◇ openssl x509 -noout → ⎋ bool → ▶ cert_check_expiry ┌cert,threshold┐ → ◇ openssl x509 -checkend → ⎋ bool
 #            → ▶ cert_get_issuer ┌cert┐ → ◇ openssl x509 -issuer → ⎋ str|None → ▶ cert_is_le_issuer ┌cert┐ → ◇ issuer contains "Let's Encrypt" → ⎋ bool
 #            → ▶ cert_get_san_list ┌cert┐ → ◇ openssl x509 -ext subjectAltName → ⊕ DNS-entries → ⎋ list[str]
 #            → ▶ _cert_covers_domain ┌cert,domain┐ → ◇ SAN? (exact|wildcard одноуровневый) : CN-fallback → ⎋ bool
@@ -44,6 +45,9 @@
 ##                      ssh_opts --shell): issue-cert.sh _is_le_cert/_acme_verify_cert удалены (AUDIT-1 F1/F2)
 ##           2026-08-16 | DevPlan 004 W1 — +SAN-aware domain matching (cert_get_san_list,
 ##                      _cert_covers_domain), RFC2253 CN patterns
+##           2026-08-22 | T2.4 дедупликация — +_run_openssl(): 5 повторяющихся subprocess openssl
+##                      блоков (parseable/expiry/issuer/subject/san) → единый приватный хелпер;
+##                      публичные сигнатуры и возвращаемые значения сохранены 1:1
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -77,6 +81,39 @@ DEFAULT_EXPIRY_THRESHOLD: int = 2592000  # 30 days in seconds
 """## @invariant Порог expiry в секундах — cert считается валидным при >30 днях до истечения (канон -checkend 2592000)."""
 
 
+# region FUNC__run_openssl
+## @purpose  Единый openssl x509 subprocess-хелпер (T2.4 дедупликация): 5 повторяющихся блоков
+##           subprocess.run(["openssl", "x509", "-in", <cert>, ...]) в cert_is_parseable/
+##           cert_check_expiry/cert_get_issuer/cert_get_subject/cert_get_san_list сведены
+##           к одному приватному хелперу. Subprocess-ошибки (timeout/FileNotFoundError/OSError)
+##           логируются здесь ОДИН раз (IMP:7) и возвращают None — публичные функции трактуют
+##           None как graceful degradation (False/None/[]), НИКОГДА не raise (канон ssl_certs).
+## @io       ⇥ args: list[str] (флаги после `openssl x509 -in <cert>`), cert_path: str,
+##              timeout: int, op: str (метка операции для лога: parse|expiry|issuer|subject|SAN)
+##           ⎋ subprocess.CompletedProcess[str] | None (None = subprocess error/timeout)
+## @complexity O(1) + 1 openssl subprocess
+## @invariants
+##   - Всегда text=True (stdout нужен issuer/subject/san; parseable/expiry — stdout пуст)
+##   - check=False: returncode проверяет вызывающий (не raise на rc!=0)
+##   - Subprocess error → IMP:7 warning «openssl <op> check failed» + None (никогда не raise)
+def _run_openssl(args: list[str], cert_path: str, timeout: int, *, op: str) -> subprocess.CompletedProcess[str] | None:
+    """Run `openssl x509 -in <cert> <args>` with единым error-handling; None on subprocess error."""
+    try:
+        return subprocess.run(
+            ["openssl", "x509", "-in", cert_path, *args],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+        logger.warning("[IMP:7][ssl_certs] openssl %s check failed for %s: %s", op, cert_path, e)
+        return None
+
+
+# endregion FUNC__run_openssl
+
+
 # region FUNC_cert_is_parseable
 ## @purpose  Verify a PEM cert is parseable by openssl (syntax integrity check).
 ## @io       ⇥ cert_path: str, timeout: int → ⎋ bool (True = parseable)
@@ -86,18 +123,13 @@ DEFAULT_EXPIRY_THRESHOLD: int = 2592000  # 30 days in seconds
 ##   - Returns False on subprocess error/timeout (never raises)
 def cert_is_parseable(cert_path: str, timeout: int = DEFAULT_OPENSSL_TIMEOUT) -> bool:
     """Check that cert_path is a parseable PEM certificate."""
-    try:
-        result = subprocess.run(
-            ["openssl", "x509", "-in", cert_path, "-noout"], capture_output=True, timeout=timeout, check=False
-        )
-        if result.returncode != 0:
-            logger.info("[IMP:8][ssl_certs] Cert not parseable: %s", cert_path)
-            return False
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
-        logger.warning("[IMP:7][ssl_certs] openssl parse check failed for %s: %s", cert_path, e)
+    result = _run_openssl(["-noout"], cert_path, timeout, op="parse")
+    if result is None:
+        return False  # subprocess error уже залогирован в _run_openssl (IMP:7)
+    if result.returncode != 0:
+        logger.info("[IMP:8][ssl_certs] Cert not parseable: %s", cert_path)
         return False
-    else:
-        return True
+    return True
 
 
 # endregion FUNC_cert_is_parseable
@@ -112,33 +144,17 @@ def cert_is_parseable(cert_path: str, timeout: int = DEFAULT_OPENSSL_TIMEOUT) ->
 ##   - Returns False on subprocess error/timeout (never raises)
 def cert_check_expiry(cert_path: str, threshold_seconds: int, timeout: int = DEFAULT_OPENSSL_TIMEOUT) -> bool:
     """Check that cert has more than threshold_seconds until expiry (openssl -checkend)."""
-    try:
-        result = subprocess.run(
-            [
-                "openssl",
-                "x509",
-                "-in",
-                cert_path,
-                "-checkend",
-                str(threshold_seconds),
-                "-noout",
-            ],
-            capture_output=True,
-            timeout=timeout,
-            check=False,
+    result = _run_openssl(["-checkend", str(threshold_seconds), "-noout"], cert_path, timeout, op="expiry")
+    if result is None:
+        return False  # subprocess error уже залогирован в _run_openssl (IMP:7)
+    if result.returncode != 0:
+        logger.info(
+            "[IMP:8][ssl_certs] Cert expires within %ds or is unparseable: %s",
+            threshold_seconds,
+            cert_path,
         )
-        if result.returncode != 0:
-            logger.info(
-                "[IMP:8][ssl_certs] Cert expires within %ds or is unparseable: %s",
-                threshold_seconds,
-                cert_path,
-            )
-            return False
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
-        logger.warning("[IMP:7][ssl_certs] openssl expiry check failed for %s: %s", cert_path, e)
         return False
-    else:
-        return True
+    return True
 
 
 # endregion FUNC_cert_check_expiry
@@ -153,22 +169,11 @@ def cert_check_expiry(cert_path: str, threshold_seconds: int, timeout: int = DEF
 ##   - Returns None on subprocess error/timeout (never raises)
 def cert_get_issuer(cert_path: str, timeout: int = DEFAULT_OPENSSL_TIMEOUT) -> str | None:
     """Extract issuer DN from a cert, or None on failure."""
-    try:
-        result = subprocess.run(
-            ["openssl", "x509", "-in", cert_path, "-issuer", "-noout"],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
-        if result.returncode != 0:
-            return None
-        issuer = result.stdout.strip()
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
-        logger.warning("[IMP:7][ssl_certs] openssl issuer check failed for %s: %s", cert_path, e)
+    result = _run_openssl(["-issuer", "-noout"], cert_path, timeout, op="issuer")
+    if result is None or result.returncode != 0:
         return None
-    else:
-        return issuer or None
+    issuer = result.stdout.strip()
+    return issuer or None
 
 
 # endregion FUNC_cert_get_issuer
@@ -206,22 +211,11 @@ def cert_is_le_issuer(cert_path: str, timeout: int = DEFAULT_OPENSSL_TIMEOUT) ->
 ##   - Returns None on subprocess error/timeout (never raises)
 def cert_get_subject(cert_path: str, timeout: int = DEFAULT_OPENSSL_TIMEOUT) -> str | None:
     """Extract subject DN from a cert, or None on failure."""
-    try:
-        result = subprocess.run(
-            ["openssl", "x509", "-in", cert_path, "-subject", "-noout"],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
-        if result.returncode != 0:
-            return None
-        subject = result.stdout.strip()
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
-        logger.warning("[IMP:7][ssl_certs] openssl subject check failed for %s: %s", cert_path, e)
+    result = _run_openssl(["-subject", "-noout"], cert_path, timeout, op="subject")
+    if result is None or result.returncode != 0:
         return None
-    else:
-        return subject or None
+    subject = result.stdout.strip()
+    return subject or None
 
 
 # endregion FUNC_cert_get_subject
@@ -271,33 +265,22 @@ def cert_subject_matches_domain(subject: str, domain: str) -> bool:
 ##   - Non-fatal: subprocess error/timeout/rc!=0 → [] (никогда не raise)
 def cert_get_san_list(cert_path: str, timeout: int = DEFAULT_OPENSSL_TIMEOUT) -> list[str]:
     """Extract DNS SAN entries from cert, or [] on failure/no SAN (W1)."""
-    try:
-        result = subprocess.run(
-            ["openssl", "x509", "-in", cert_path, "-noout", "-ext", "subjectAltName"],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
-        if result.returncode != 0:
-            return []
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
-        logger.warning("[IMP:7][ssl_certs] openssl SAN check failed for %s: %s", cert_path, e)
+    result = _run_openssl(["-noout", "-ext", "subjectAltName"], cert_path, timeout, op="SAN")
+    if result is None or result.returncode != 0:
         return []
-    else:
-        sans: list[str] = []
-        for raw_line in result.stdout.splitlines():
-            line = raw_line.strip()
-            if not line.upper().startswith("DNS:"):
-                continue  # IP:... и прочие не-DNS записи — игнорируются отдельной веткой
-            for raw_token in line.split(","):
-                token = raw_token.strip()
-                if not token.upper().startswith("DNS:"):
-                    continue
-                entry = token[4:].strip().rstrip(".")
-                if entry:
-                    sans.append(entry)
-        return sans
+    sans: list[str] = []
+    for raw_line in result.stdout.splitlines():
+        line = raw_line.strip()
+        if not line.upper().startswith("DNS:"):
+            continue  # IP:... и прочие не-DNS записи — игнорируются отдельной веткой
+        for raw_token in line.split(","):
+            token = raw_token.strip()
+            if not token.upper().startswith("DNS:"):
+                continue
+            entry = token[4:].strip().rstrip(".")
+            if entry:
+                sans.append(entry)
+    return sans
 
 
 # endregion FUNC_cert_get_san_list

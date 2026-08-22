@@ -21,8 +21,6 @@
 ##   - No Docker or service dependencies — pure file I/O
 ## @rationale AC4-AC5 from DevPlan §TASK-3.5
 # endregion MODULE_CONTRACT
-def _module_contract():
-    pass
 
 
 import logging

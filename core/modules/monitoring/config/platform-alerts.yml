@@ -3,7 +3,7 @@
 # region MODULE_CONTRACT
 ## @purpose  Платформенные native Prometheus rules (170 W12 C5, SLO-минимум): recording rules
 ##           deploy-success/duration + burn-rate alert + image-size budget alert + backup-freshness.
-## @scope    Копируется config-init'ом в ${PROMETHEUS_RULES_DIR} (host /opt/prometheus/rules) —
+## @scope    Копируется config-init'ом в ${PROMETHEUS_RULES_DIR} (host /opt/platform/prometheus-rules) —
 ##           prometheus rule_files glob "/opt/prometheus/rules/*-alerts.yml" подхватывает файл.
 ##           Метрики — status-page /metrics (scrape job status-page, observability-net).
 ## @invariants

@@ -38,6 +38,7 @@ from types import SimpleNamespace
 import pytest
 
 from core.internal.loadtest import runner_remote
+from tests.helpers.gate_helpers import assert_ldd_imp9
 
 logger = logging.getLogger(__name__)
 
@@ -76,25 +77,7 @@ def _make_runner(captured: dict) -> Callable:
 # endregion HELPER__make_runner
 
 
-# region HELPER_assert_ldd_imp9
-def _assert_ldd_imp9(caplog) -> None:
-    """Печать LDD-траектории IMP:7-10 + assert наличия IMP:9 (Anti-Illusion Rule).
-
-    ## @purpose — Единая точка LDD-телеметрии тестов runner_remote.
-    ## @io — ⇥ caplog → ⎋ None (assert found IMP:9)
-    """
-    logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-    found = False
-    for record in list(caplog.records):
-        if "[IMP:" in record.message:
-            logger.info("%s", record.message)
-            if "[IMP:9]" in record.message:
-                found = True
-    logger.info("--- END LDD TRAJECTORY ---")
-    assert found, "Critical LDD Error: No IMP:9 log found"
-
-
-# endregion HELPER_assert_ldd_imp9
+# T2.16a: _assert_ldd_imp9 консолидирован в gate_helpers.assert_ldd_imp9
 
 
 # region TEST_ship_trailing_slash
@@ -111,7 +94,7 @@ def test_ship_src_dir_trailing_slash(caplog) -> None:
     runner_remote.ship("203.0.113.10", "root", "/x/loadtest", "/tmp/loadtest-123", timeout=10, runner=fake)
     rsync_argv = captured["cmds"][0]  # первый вызов — rsync push (второй — ssh chmod, BUG-6)
     logger.info("[IMP:9][test][ship] src нормализован: %s (rsync argv[4])", rsync_argv[4])
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
     assert rsync_argv[0] == "rsync"
     assert rsync_argv[4] == "/x/loadtest/"  # trailing slash обязателен (BUG-5)
     assert rsync_argv[5] == "root@203.0.113.10:/tmp/loadtest-123"
@@ -133,7 +116,7 @@ def test_ship_src_dir_no_double_slash(caplog) -> None:
     runner_remote.ship("203.0.113.10", "root", "/x/loadtest/", "/tmp/loadtest-123", timeout=10, runner=fake)
     rsync_argv = captured["cmds"][0]  # первый вызов — rsync push
     logger.info("[IMP:9][test][ship] src с trailing slash: %s (rsync argv[4])", rsync_argv[4])
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
     assert rsync_argv[4] == "/x/loadtest/"
     assert "//" not in rsync_argv[4]
 
@@ -154,7 +137,7 @@ def test_ship_chmod_after_rsync(caplog) -> None:
     fake = _make_runner(captured)
     runner_remote.ship("203.0.113.10", "root", "/x/loadtest", "/tmp/loadtest-123", timeout=10, runner=fake)
     logger.info("[IMP:9][test][ship] последовательность: rsync → ssh chmod (%d вызовов)", len(captured["cmds"]))
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
     cmds = captured["cmds"]
     assert len(cmds) == 2  # rsync push + ssh chmod
     assert cmds[0][0] == "rsync"
@@ -188,7 +171,7 @@ class TestDockerRunNetwork:
             kwargs["network"] = network
         cmd = runner_remote.build_ssh_docker_run_cmd(**kwargs)
         logger.info("[IMP:9][test][network] docker run %s: %s", network or "default", cmd[:160])
-        _assert_ldd_imp9(caplog)
+        assert_ldd_imp9(caplog)
         assert expected in cmd
         assert not_expected not in cmd
 

@@ -32,6 +32,8 @@ import pytest
 import reconciler_projects
 from _conftest.ldd import _print_ldd_trajectory
 
+from tests.helpers.gate_helpers import assert_ldd_imp9
+
 pytestmark = pytest.mark.static_audit
 
 logger = logging.getLogger(__name__)
@@ -377,7 +379,7 @@ projects: []
         assert summary.is_success() is True
 
         # IMP:9 log for "No projects"
-        _assert_imp9(caplog)
+        assert_ldd_imp9(caplog)
 
         _print_ldd_trajectory(caplog)
 
@@ -435,7 +437,7 @@ projects:
         assert summary.results[0].status == "warn"
         assert "GHCR" in summary.results[0].detail
 
-        _assert_imp9(caplog)
+        assert_ldd_imp9(caplog)
         _print_ldd_trajectory(caplog)
 
     def test_already_deployed(self, tmp_path, caplog):
@@ -467,7 +469,7 @@ projects:
         assert summary.warnings == 0
         assert summary.failures == 0
 
-        _assert_imp9(caplog)
+        assert_ldd_imp9(caplog)
         _print_ldd_trajectory(caplog)
 
     def test_directory_not_found(self, tmp_path, caplog):
@@ -487,7 +489,7 @@ projects:
         assert summary.warnings == 0
         assert summary.failures == 0
 
-        _assert_imp9(caplog)
+        assert_ldd_imp9(caplog)
         _print_ldd_trajectory(caplog)
 
     def test_dry_run_mode(self, tmp_path, caplog):
@@ -521,7 +523,7 @@ projects:
         assert summary.failures == 0
         assert summary.is_success() is True
 
-        _assert_imp9(caplog)
+        assert_ldd_imp9(caplog)
         _print_ldd_trajectory(caplog)
 
     def test_projects_base_env_respected(self, tmp_path, caplog, monkeypatch):
@@ -556,7 +558,7 @@ projects:
             "A3 FAIL: reconciler не нашёл проект под PROJECTS_BASE — используется хардкод /opt/projects"
         )
         assert summary.failures == 0
-        _assert_imp9(caplog)
+        assert_ldd_imp9(caplog)
         _print_ldd_trajectory(caplog)
 
     def test_projects_base_org_subdir(self, tmp_path, caplog, monkeypatch):
@@ -586,7 +588,7 @@ projects:
             "A3 FAIL: org-проект не найден под PROJECTS_BASE/<org>/ — резолвер не учитывает org-префикс"
         )
         assert summary.failures == 0
-        _assert_imp9(caplog)
+        assert_ldd_imp9(caplog)
         _print_ldd_trajectory(caplog)
 
 
@@ -647,9 +649,4 @@ class TestProjectSpec:
 # ═══════════════════════════════════════════════════════════════════
 
 
-def _assert_imp9(caplog, min_count: int = 1):
-    """Assert at least min_count IMP:9+ logs are present."""
-    imp9_count = sum(
-        1 for r in caplog.records if "[IMP:" in r.message and int(r.message.split("[IMP:")[1].split("]")[0]) >= 9
-    )
-    assert imp9_count >= min_count, f"Expected at least {min_count} IMP:9+ log(s), found {imp9_count}"
+# T2.16a: _assert_imp9 консолидирован в gate_helpers.assert_ldd_imp9 (min_count)

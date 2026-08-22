@@ -40,21 +40,7 @@ pytestmark = pytest.mark.static_audit
 
 logger = logging.getLogger("test_dead_code_checker")
 
-
-def _assert_ldd(caplog) -> None:
-    """Print IMP:7-10 trajectory and assert at least one IMP:9 log (LDD protocol)."""
-    found = False
-    logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-    for record in list(caplog.records):
-        msg = getattr(record, "message", "")
-        if "[IMP:" in str(msg):
-            imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-            if imp_level >= 7:
-                logger.info("%s", msg)
-            if imp_level >= 9:
-                found = True
-    logger.info("--- END LDD TRAJECTORY ---")
-    assert found, "Critical LDD Error: No IMP:9 business logic log found"
+from tests.helpers.gate_helpers import assert_ldd_imp9
 
 
 def _touch_marker(path: Path, text: str, mtime_ts: int) -> None:
@@ -75,7 +61,7 @@ def test_find_deprecated_lines_whole_word(tmp_path: Path, caplog) -> None:
     hits = find_deprecated_lines(f)
     logger.critical("[IMP:9][test] find_deprecated_lines: hits=%s — OK", hits)
 
-    _assert_ldd(caplog)
+    assert_ldd_imp9(caplog)
     assert hits == [(2, "# DEPRECATED: old api")], f"whole-word match broken: {hits}"
 
 
@@ -107,7 +93,7 @@ def test_find_marker_files_exclusions(tmp_path: Path, caplog) -> None:
     rels = {os.path.relpath(f, root) for f in files}
     logger.critical("[IMP:9][test] find_marker_files: rels=%s — OK", sorted(rels))
 
-    _assert_ldd(caplog)
+    assert_ldd_imp9(caplog)
     assert rels == {"good.sh", "good.py"}, f"exclusions broken: {rels}"
 
 
@@ -139,7 +125,7 @@ def test_parse_blame_porcelain_committer_time(tmp_path: Path, caplog) -> None:
     ts = get_line_add_timestamp(tmp_path, "f.py", 3, 12345, runner=lambda *_, **__: FakeProc())
     logger.critical("[IMP:9][test] blame_committer_time=%s — OK", ts)
 
-    _assert_ldd(caplog)
+    assert_ldd_imp9(caplog)
     assert ts == 1785519459, f"committer-time extraction broken: {ts}"
 
 
@@ -161,7 +147,7 @@ def test_get_line_add_timestamp_fallback_mtime(tmp_path: Path, caplog) -> None:
     ts = get_line_add_timestamp(tmp_path, "untracked.py", 1, mtime, runner=lambda *_, **__: FakeProc())
     logger.critical("[IMP:9][test] fallback_mtime=%s — OK", ts)
 
-    _assert_ldd(caplog)
+    assert_ldd_imp9(caplog)
     assert ts == mtime, f"mtime fallback broken: {ts} != {mtime}"
 
 
@@ -183,7 +169,7 @@ def test_compute_age_days_boundary(caplog) -> None:
     assert d31 > THRESHOLD_DAYS, "31 days must be a violation"
     assert not (d0 > THRESHOLD_DAYS) and not (dneg > THRESHOLD_DAYS), "0/negative must be OK"
     logger.critical("[IMP:9][test] compute_age_days: 30→%s 31→%s 0→%s neg→%s — OK", d30, d31, d0, dneg)
-    _assert_ldd(caplog)
+    assert_ldd_imp9(caplog)
 
 
 def test_check_dead_code_clean_pass(tmp_path: Path, caplog, capsys) -> None:
@@ -201,7 +187,7 @@ def test_check_dead_code_clean_pass(tmp_path: Path, caplog, capsys) -> None:
     out = capsys.readouterr()
     logger.critical("[IMP:9][test] clean_pass: rc=%s violations=%d — OK", rc, len(violations))
 
-    _assert_ldd(caplog)
+    assert_ldd_imp9(caplog)
     assert violations == [], f"fresh markers must not violate: {violations}"
     assert rc == 0, f"clean run must exit 0, got {rc}"
     assert "[IMP:9][check-dead-code] PASS:" in out.err, f"PASS verdict missing: {out.err!r}"
@@ -223,7 +209,7 @@ def test_check_dead_code_violation_fail(tmp_path: Path, caplog, capsys) -> None:
     out = capsys.readouterr()
     logger.critical("[IMP:9][test] violation_fail: rc=%s violations=%d — OK", rc, len(violations))
 
-    _assert_ldd(caplog)
+    assert_ldd_imp9(caplog)
     assert len(violations) == 1, f"expected 1 violation, got {violations}"
     assert violations[0] == DeadCodeViolation("stale.py", 1, 2, "# DEPRECATED: old marker")
     assert rc == 1, f"violation run must exit 1, got {rc}"
@@ -247,7 +233,7 @@ def test_output_format_byte_identical(tmp_path: Path, caplog, capsys) -> None:
     out = capsys.readouterr()
     logger.critical("[IMP:9][test] byte_identical: rc=%s — OK", rc)
 
-    _assert_ldd(caplog)
+    assert_ldd_imp9(caplog)
     assert rc == 1
     assert "[IMP:10][check-dead-code] STALE: stale.py:1 — marker is 2 days old (threshold: 0)" in out.out, (
         f"STALE format broken: {out.out!r}"

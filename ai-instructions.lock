@@ -107,7 +107,7 @@ files:
   sha256: c1a6372785075e24d92b88fc4b0e9f7794f290892a58adef73d652b01e87469d
   source: canon
 - path: .kilo/skills/doxygen-python/SKILL.md
-  sha256: baeb5ab80726954ee1b225fa1b136affe77a6fd47d65e8a07f7e7905ed02a9ee
+  sha256: d613b0168e634c14edcfc5e6f064ba60e117f5a9c36075f340f6f952473ac1aa
   source: canon
 - path: .kilo/skills/doxygen-typescript/SKILL.md
   sha256: 7fb9ec254a382ffcda2eedb08876405e7860ae34aecd604c5a5536c31a9b8a04
@@ -146,7 +146,7 @@ files:
   sha256: c1a6372785075e24d92b88fc4b0e9f7794f290892a58adef73d652b01e87469d
   source: hermes
 - path: core/modules/hermes-agent/build/templates/profiles/platform/skills/doxygen-python/SKILL.md
-  sha256: baeb5ab80726954ee1b225fa1b136affe77a6fd47d65e8a07f7e7905ed02a9ee
+  sha256: d613b0168e634c14edcfc5e6f064ba60e117f5a9c36075f340f6f952473ac1aa
   source: hermes
 - path: core/modules/hermes-agent/build/templates/profiles/platform/skills/doxygen-typescript/SKILL.md
   sha256: 7fb9ec254a382ffcda2eedb08876405e7860ae34aecd604c5a5536c31a9b8a04

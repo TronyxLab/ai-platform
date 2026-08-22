@@ -31,6 +31,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.helpers.gate_helpers import assert_ldd_imp9
+
 logger = logging.getLogger(__name__)
 
 _DEPLOY_MODULES_SH = (
@@ -82,23 +84,7 @@ def _read_deploy_orchestrator() -> str:
 # endregion HELPER__read_deploy_orchestrator
 
 
-# region HELPER__assert_ldd
-def _assert_ldd_imp9(caplog) -> None:
-    """Assert LDD IMP:9+ logs present in caplog trajectory."""
-    found_imp9 = False
-    logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-    for record in list(caplog.records):
-        if "[IMP:" in record.message:
-            imp_level = int(record.message.split("[IMP:")[1].split("]")[0])
-            if imp_level >= 7:
-                logger.info("%s", record.message)
-            if imp_level >= 9:
-                found_imp9 = True
-    logger.info("--- END LDD TRAJECTORY ---")
-    assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
-
-
-# endregion HELPER__assert_ldd
+# T2.16a: _assert_ldd_imp9 консолидирован в gate_helpers.assert_ldd_imp9
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -143,7 +129,7 @@ def test_shell_has_arg_parsing(caplog) -> None:
     logger.critical("[IMP:9][S1][arg] NODE_YAML validation error present: %s", has_node_yaml_error)
     assert has_node_yaml_error, "deploy-modules.sh must validate NODE_YAML is set"
 
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_shell_has_arg_parsing
@@ -185,7 +171,7 @@ def test_shell_has_provisioner_delegation(caplog) -> None:
     has_old_fallback = "docker network create" in content or "docker network inspect" in content
     logger.critical("[IMP:9][S2][provisioner] fallback present: %s", has_old_fallback)
 
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_shell_has_provisioner_delegation
@@ -252,7 +238,7 @@ def test_shell_has_python_delegation(caplog) -> None:
         logger.critical("[IMP:9][S3][python] python3 deploy/%s in facade: %s", op, has_old)
         assert not has_old, f"deploy-modules.sh must NOT call python3 deploy/{op} directly (moved to orchestrator)"
 
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_shell_has_python_delegation
@@ -314,7 +300,7 @@ def test_shell_has_severity_exit(caplog) -> None:
     assert has_warn_exit0, "WARN must map to exit 0 (non-blocking — 33aaaeb parity)"
     assert has_exit1_reserved, "exit 1 must stay RESERVED — WARN must never map to exit 1"
 
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_shell_has_severity_exit
@@ -358,7 +344,7 @@ def test_shell_has_context_overlay(caplog) -> None:
     logger.critical("[IMP:9][S5][context] _preflight function present: %s", has_preflight)
     assert has_preflight, "deploy_orchestrator.py must define _preflight (PHASE 1)"
 
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_shell_has_context_overlay
@@ -410,7 +396,7 @@ def test_shell_has_sudoers_orphan_post_deploy(caplog) -> None:
     assert has_sudoers_in_post, "deploy_orchestrator.py must call batch_generate_sudoers inside _postflight"
     assert has_orphan_in_post, "deploy_orchestrator.py must call batch_orphan_reconciliation inside _postflight"
 
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_shell_has_sudoers_orphan_post_deploy

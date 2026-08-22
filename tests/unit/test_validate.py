@@ -16,8 +16,6 @@
 ##            calls give precise error messages and faster iteration.
 ## @changes — LAST_CHANGE: 2026-07-03 | Low #16: merged project schema tests → test_project_schema.py,
 ##            removed test_valid_project_yaml, test_project_yml_extension_rejected, project_schema fixture.
-def _module_contract():
-    pass
 
 
 # endregion MODULE_CONTRACT

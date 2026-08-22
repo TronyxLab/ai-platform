@@ -19,6 +19,7 @@
 ##   basedpyright --outputjson, pytest junit tests/report-*.xml) — upload-artifact, if: always,
 ##   НЕ гейты (гейт — шаг make gate MODE=fast). basedpyright exit маскируется (514 errors
 ##   recommended до W-B «pyright-clean»); ruff не маскируется (clean-at-ship M3).
+## @changes 2026-08-22 | T2.15: блок артефактов извлечён в ./.github/actions/static-artifacts (единый SoT)
 # 🧐 TRAP[DECISION] · 2026-08-05 · HI · deploys on fast-gate by design — full-gate PR-only (C-1, DevPlan 136 W11 T11.1)
 # · Rejected: workflow_run-trigger на platform-test (full gate) — downstream ждал бы 20+ мин
 # ·   full-gate + integration + docker-степы (хрупкая цепочка, U-57); это и есть D2 (116 B11 T4).
@@ -106,41 +107,10 @@ jobs:
       # basedpyright exit маскируется shell'ом: до W-B «pyright-clean» recommended даёт 514
       # ошибок (fact-base §1) — сигнал здесь НЕ exit-код, а сам JSON-артефакт (гейт-статус
       # basedpyright в pre-commit stages: [manual]; блокировка — после handoff W-B).
-      - name: Generate ruff SARIF artifact (DevPlan 163 A4)
+      # T2.15: генерация + upload извлечены в composite action (единый SoT обеих копий).
+      - name: Collect static artifacts (ruff SARIF + basedpyright JSON + junit)
         if: always()
-        run: |
-          .venv/bin/pip install --quiet ruff==0.16.2
-          .venv/bin/ruff check . --output-format=sarif --output-file ruff-check.sarif
-
-      - name: Upload ruff SARIF artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ruff-check-sarif
-          path: ruff-check.sarif
-          if-no-files-found: warn
-
-      - name: Generate basedpyright JSON artifact (DevPlan 163 A4)
-        if: always()
-        run: |
-          .venv/bin/pip install --quiet basedpyright==1.39.9
-          .venv/bin/basedpyright --outputjson > basedpyright-report.json || true
-
-      - name: Upload basedpyright JSON artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: basedpyright-report
-          path: basedpyright-report.json
-          if-no-files-found: warn
-
-      - name: Upload pytest JUnit reports
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: pytest-junit-reports
-          path: tests/report-*.xml
-          if-no-files-found: warn
+        uses: ./.github/actions/static-artifacts
 
       # ─── Failure notification (DevPlan 003 A1) ─────────────────────────
       # Единый CI-хук: notify-telegram action → shared/notifications.py notify-ci (прямой HTTPS).

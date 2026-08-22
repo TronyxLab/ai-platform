@@ -312,6 +312,44 @@ def test_check_all_empty_manifest(caplog, tmp_path):
 # endregion TEST_CHECK_ALL_EMPTY_MANIFEST
 
 
+# region TEST_CHECK_ALL_SINGLE_FILE_ENTRIES
+@ldd_trajectory
+def test_check_all_single_file_entries_validated(caplog, tmp_path):
+    """T1.2 pinning: single-file записи манифеста валидируются (dry-run render), не молчат.
+
+    Аудит 2026-08-22: до фикса check_all имел ветку только для type=directory —
+    16/19 записей канонического манифеста проходили без единой проверки.
+    """
+    # 🧪 TRAP[TEST] · 2026-08-22 · PINNING (T1.2) · check_all валидирует single-file записи
+    # · Scenario: манифест с single-file записью → OK-диагностика; missing файл → UNRESOLVED
+    # · Last fail: 2026-08-22 — аудит: single-file записи молча пропускались
+    # · Remove if: check_all переходит на _iter_manifest_entries с иной семантикой
+    caplog.set_level(logging.DEBUG)
+
+    good = tmp_path / "good.template"
+    good.write_text("server {\n  listen {{NGINX_PORT}};\n}\n")
+    manifest = tmp_path / "manifest.yaml"
+    manifest.write_text(
+        "version: 1\n"
+        "templates:\n"
+        "  - template: good.template\n"
+        "    output: null\n"
+        "  - template: missing.template\n"
+        "    output: null\n",
+        encoding="utf-8",
+    )
+
+    ok, diag = check_all(str(manifest))
+
+    assert ok is False, "missing.template должен дать ошибку (T1.2: до фикса ok=True)"
+    assert any("OK: good.template" in d for d in diag), f"single-file запись должна проверяться: {diag}"
+    assert any("UNRESOLVED: missing.template" in d for d in diag), f"missing файл должен детектироваться: {diag}"
+    logger.critical("[IMP:9][test][check] single-file entries validated (T1.2) — OK")
+
+
+# endregion TEST_CHECK_ALL_SINGLE_FILE_ENTRIES
+
+
 # region TEST_DETERMINISTIC_OUTPUT
 @ldd_trajectory
 def test_deterministic_output(caplog, tmp_path):

@@ -64,8 +64,6 @@
 ##              gate-loop/SKILL.md). This test prevents regression.
 ## @changes   CREATED: 2026-07-09 | Wave 1: TASK-7 security credential scanner
 ## @changes   2026-08-13 | DevPlan 160 W3 T3.4 — +.py/.yaml сканеры
-def _module_contract():
-    pass
 
 
 # endregion MODULE_CONTRACT

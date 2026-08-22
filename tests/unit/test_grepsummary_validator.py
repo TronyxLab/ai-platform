@@ -31,21 +31,7 @@ pytestmark = pytest.mark.static_audit
 
 logger = logging.getLogger("test_grepsummary_validator")
 
-
-def _assert_ldd(caplog) -> None:
-    """Print IMP:7-10 trajectory and assert at least one IMP:9 log (LDD protocol)."""
-    found = False
-    logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-    for record in list(caplog.records):
-        msg = getattr(record, "message", "")
-        if "[IMP:" in str(msg):
-            imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-            if imp_level >= 7:
-                logger.info("%s", msg)
-            if imp_level >= 9:
-                found = True
-    logger.info("--- END LDD TRAJECTORY ---")
-    assert found, "Critical LDD Error: No IMP:9 business logic log found"
+from tests.helpers.gate_helpers import assert_ldd_imp9
 
 
 # 🧪 TRAP[TEST] · Regression: scan-режим strip '#'/--> /<!-- + skip flags -x/--x + skip пустых.
@@ -67,7 +53,7 @@ def test_extract_keywords_modes(line, mode, expected, caplog) -> None:
     kws = extract_keywords(line, mode=mode)
     logger.critical("[IMP:9][test] extract_keywords_%s_mode: %s — OK", mode, kws)
 
-    _assert_ldd(caplog)
+    assert_ldd_imp9(caplog)
     assert kws == expected, f"{mode}-режим broken: {kws}"
 
 
@@ -82,7 +68,7 @@ def test_validate_keywords_present(tmp_path: Path, caplog) -> None:
     ok_errs = validate_keywords_present(f, ["alpha", "ALPHA", "alpha and beta"])
     missing_errs = validate_keywords_present(f, ["alpha", "not-present-keyword"])
 
-    _assert_ldd(caplog)
+    assert_ldd_imp9(caplog)
     assert ok_errs == [], f"case-insensitive substring must pass: {ok_errs}"
     assert len(missing_errs) == 1 and "not-present-keyword" in missing_errs[0]
     logger.critical("[IMP:9][test] validate_keywords_present: ok=%s missing=%s — OK", ok_errs, missing_errs)
@@ -101,7 +87,7 @@ def test_extract_sh_refs_plain_backtick(caplog) -> None:
     dupes = extract_sh_refs("`b.sh` `a.sh` `b.sh`", backtick_only=True)
     logger.critical("[IMP:9][test] extract_sh_refs: plain=%s backtick=%s dupes=%s — OK", plain, backtick, dupes)
 
-    _assert_ldd(caplog)
+    assert_ldd_imp9(caplog)
     assert plain == ["scripts/tools.sh"], f"plain lookbehind broken: {plain}"
     assert backtick == ["scripts/deploy.sh"], f"backtick-only broken: {backtick}"
     assert dupes == ["a.sh", "b.sh"], f"backtick dedupe/sort broken: {dupes}"
@@ -121,7 +107,7 @@ def test_sh_ref_scan_exceptions_preserved(tmp_path: Path, caplog) -> None:
 
     errors, count = scan_all(repo)
 
-    _assert_ldd(caplog)
+    assert_ldd_imp9(caplog)
     assert errors == [], f"AC10 exceptions must skip, got: {errors}"
     assert count == 1, f"expected 1 scanned file, got {count}"
     logger.critical("[IMP:9][test] sh_ref_scan_exceptions: errors=%s count=%d — OK", errors, count)
@@ -148,7 +134,7 @@ def test_scan_all_full_pass_and_fail(tmp_path: Path, caplog) -> None:
 
     errs_bad, count_bad = scan_all(bad)
 
-    _assert_ldd(caplog)
+    assert_ldd_imp9(caplog)
     assert errs_ok == [] and count_ok == 1, f"clean repo must pass: {errs_ok}"
     assert count_bad == 2, f"expected 2 scanned files, got {count_bad}"
     assert any("'ab'" in e for e in errs_bad), f"broken keyword not detected: {errs_bad}"

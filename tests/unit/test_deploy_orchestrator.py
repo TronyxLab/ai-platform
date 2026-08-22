@@ -31,6 +31,7 @@ import pytest
 import yaml
 
 from core.internal.bootstrap.deploy import deploy_orchestrator as orch
+from tests.helpers.gate_helpers import assert_ldd_imp9
 
 logger = logging.getLogger(__name__)
 
@@ -61,21 +62,7 @@ def _write_module_yaml(tmp_path: Path, name: str, install_type: str = "docker", 
     return yaml_path
 
 
-def _assert_ldd_imp9(caplog) -> None:
-    """Print LDD trajectory (IMP:7-10) and assert ≥1 IMP:9 log present."""
-    found_imp9 = False
-    logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-    for record in list(caplog.records):
-        if hasattr(record, "message") and "[IMP:" in record.message:
-            imp_level = int(record.message.split("[IMP:")[1].split("]")[0])
-            if imp_level >= 7:
-                logger.info("%s", record.message)
-            if imp_level >= 9:
-                found_imp9 = True
-    logger.info("--- END LDD TRAJECTORY ---")
-    assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found in test trajectory"
-
-
+# T2.16a: _assert_ldd_imp9 консолидирован в gate_helpers.assert_ldd_imp9
 # endregion HELPERS
 
 
@@ -117,7 +104,7 @@ def test_orchestrate_sequential_routing(caplog) -> None:
         "[IMP:9][test_orchestrate_sequential_routing] SEQUENTIAL route dispatched correctly (deployed=%d)", deployed
     )
 
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · Regression: DEPLOY_PARALLEL=false must dispatch to sequential path (best-effort)
@@ -161,7 +148,7 @@ def test_orchestrate_parallel_routing(caplog) -> None:
         "[IMP:9][test_orchestrate_parallel_routing] PARALLEL route dispatched correctly (deployed=%d)", deployed
     )
 
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · Regression: DEPLOY_PARALLEL=true must dispatch to parallel path (DevPlan 050)
@@ -202,7 +189,7 @@ def test_orchestrate_orchestrator_routing(caplog) -> None:
     assert modules_info == {}, "Orchestrator route returns mocked modules_info"
     logger.info("[IMP:9][test_orchestrate_orchestrator_routing] ORCHESTRATOR flag forwarded to _deploy_parallel")
 
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · Regression: DEPLOY_ORCHESTRATOR=true must reach _deploy_parallel (DevPlan 089 T14)
@@ -246,7 +233,7 @@ def test_severity_critical_modules_exit_2(tmp_path, caplog) -> None:
         exit_code,
     )
 
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · Regression: critical module failure must escalate to exit 2 (severity contract)
@@ -285,7 +272,7 @@ def test_severity_warn_modules_exit_0(tmp_path, caplog) -> None:
         exit_code,
     )
 
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · Regression: warn module failure must NOT escalate (exit 0, contract)
@@ -319,7 +306,7 @@ def test_severity_no_failures_exit_0(tmp_path, caplog) -> None:
     assert exit_code == 0, f"Successful deploy must exit 0, got {exit_code}"
     logger.info("[IMP:9][test_severity_no_failures_exit_0] no failures → crit=0 warn=0 exit=%d", exit_code)
 
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · Regression: clean deploy must exit 0 (happy path)
@@ -368,7 +355,7 @@ def test_empty_modules_noop(tmp_path, caplog) -> None:
         "[IMP:9][test_empty_modules_noop] empty modules → deployed=%d exit=%d", result.deployed, result.exit_code
     )
 
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · Regression: no enabled modules must not crash or postflight (`exit 0` parity)
@@ -414,7 +401,7 @@ def test_parse_modules_from_node_yaml(tmp_path, caplog) -> None:
         modules.all_names,
     )
 
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · Regression: parse must filter enabled + apply modules_filter (AGENTS.md --modules contract)
@@ -470,7 +457,7 @@ def test_preflight_calls_all_steps(tmp_path, caplog) -> None:
     )
     logger.info("[IMP:9][test_preflight_calls_all_steps] preflight steps + status-metrics.json file artifact ✓")
 
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · Regression: preflight must keep step order + non-fatal semantics
@@ -521,7 +508,7 @@ def test_postflight_calls_all_steps(tmp_path, caplog) -> None:
     mock_litellm.assert_called_once_with(str(tmp_path / "core"))
     logger.info("[IMP:9][test_postflight_calls_all_steps] all 4 postflight steps wired correctly")
 
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · Regression: postflight must run regardless of deploy outcome (best-effort)
@@ -572,7 +559,7 @@ def test_postflight_selfheal_removes_orphans(tmp_path, caplog) -> None:
         len(detected_orphans),
     )
 
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · DevPlan 140 W5 (W9-T9.15) · self-heal: remove вызывается при orphan>0
@@ -643,7 +630,7 @@ def test_deploy_parallel_calls_topo_sort(tmp_path, caplog) -> None:
         mock_group.call_count,
     )
 
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · Regression: parallel deploy must drive deploy order from topo groups (DevPlan 050)
@@ -711,7 +698,7 @@ def test_deploy_sequential_iterates_modules(tmp_path, caplog) -> None:
         "[IMP:9][test_deploy_sequential_iterates_modules] sequential deploy: deployed=%d failed=%s", deployed, failed
     )
 
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · Regression: sequential for-loop must deploy every enabled module exactly once (best-effort)

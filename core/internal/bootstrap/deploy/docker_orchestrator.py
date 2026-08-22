@@ -41,6 +41,11 @@
 ##   2026-08-02 · DevPlan 118 D1 — pre_pull_images/deploy_docker_group/_drain_* → parallel_runner.py;
 ##             wait_for_readiness/run_healthcheck/_invoke_healthcheck* → healthcheck_runner.py;
 ##             _handle_hermes_agent → hermes_workflow.py (оркестратор: роутинг + CLI)
+##   2026-08-22 · T2.3 — ретайрмент 6 delegation-фасадов «for tests» (_cleanup_observability_containers,
+##             _pull_module_images, _drain_completed_count, _drain_all_count, _invoke_healthcheck,
+##             _invoke_healthcheck_full): 0 прод-потребителей (делегируют в parallel_runner /
+##             observability / healthcheck_runner — реальные модули D1/E1); тесты перенацелены
+##             на реальные модули; lint-suppressions (pyright reportUnusedFunction) удалены вместе
 ##
 ## @modulemap
 ##   _check_image_exists [W:1] — docker manifest inspect via subprocess → bool
@@ -48,8 +53,6 @@
 ##   _build_compose_args [W:2] — build docker compose arg list from env-files, overlay, --profile
 ##   deploy_docker_module [W:5] — deploy single docker module: build (if build:) + compose up -d
 ##   _cleanup_stale_container [W:1] — hermes-agent stale container cleanup
-##   _cleanup_observability_containers [W:2] — observability pre-deploy cleanup
-##   _pull_module_images [W:2] — pull images for one module (delegate → parallel_runner.pre_pull_images)
 ##   main [W:2] — CLI entry point with argparse
 ## @usecases
 ##   - deploy-modules.sh → docker_orchestrator.py --action deploy --module-name postgres ...
@@ -628,43 +631,6 @@ def _cleanup_stale_container(container_name: str) -> None:
 # endregion FUNC__cleanup_stale_container
 
 
-# region FUNC__cleanup_observability_containers
-## @purpose  Clean up pre-existing containers for observability module services
-##           before compose up (prevents name conflict on re-deploy).
-##           DevPlan 119 E1: реализация вынесена в observability.cleanup_observability_containers.
-##           Тонкий фасад сохраняет публичное имя для обратной совместимости (тесты).
-## @io       ⇥ compose_file: Path
-##           ⎋ None (side-effect: docker stop + rm for each service container)
-## @complexity 1 — delegate to observability module
-## @invariants
-##   - Вся логика — в observability.py (E1)
-##   - Фасад не дублирует логику — только делегирование
-def _cleanup_observability_containers(compose_file: Path) -> None:  # pyright: ignore[reportUnusedFunction] — backward-compat фасад D1: публичное имя для тестов/внешних потребителей
-    observability.cleanup_observability_containers(compose_file)
-
-
-# endregion FUNC__cleanup_observability_containers
-
-
-# region FUNC__pull_module_images
-## @purpose  Pull images for a single docker module — DevPlan 118 D1: реализация вынесена в
-##           parallel_runner.pull_module_images (fork-параллелизм). Фасад сохраняет публичное
-##           имя для обратной совместимости (тесты, pre_pull_images re-export).
-## @io       ⇥ mod_name, overlay_dir, secrets_env_file, platform_root, modules_dir → ⎋ bool
-## @complexity 1 — delegate to parallel_runner
-def _pull_module_images(  # pyright: ignore[reportUnusedFunction] — backward-compat фасад D1: публичное имя для тестов/внешних потребителей
-    mod_name: str,
-    overlay_dir: str | None,
-    secrets_env_file: str | None,
-    platform_root: str | None,
-    modules_dir: str,
-) -> bool:
-    return parallel_runner.pull_module_images(mod_name, overlay_dir, secrets_env_file, platform_root, modules_dir)
-
-
-# endregion FUNC__pull_module_images
-
-
 # region FUNC_pre_pull_images
 ## @purpose  Parallel pre-pull of all docker module images — DevPlan 118 D1: реализация вынесена
 ##           в parallel_runner.pre_pull_images (fork-параллелизм). Фасад для обратной совместимости.
@@ -717,34 +683,6 @@ def deploy_docker_group(
 # endregion FUNC_deploy_docker_group
 
 
-# region FUNC__drain_completed_count
-## @purpose  Non-blocking drain — DevPlan 118 D1: реализация в parallel_runner.drain_completed_count.
-## @io       ⇥ pids, pid_to_name → ⎋ tuple[int, int, list[str]]
-## @complexity 1 — delegate
-def _drain_completed_count(  # pyright: ignore[reportUnusedFunction] — backward-compat фасад D1: публичное имя для тестов
-    pids: list[int],
-    pid_to_name: dict[int, str],
-) -> tuple[int, int, list[str]]:
-    return parallel_runner.drain_completed_count(pids, pid_to_name)
-
-
-# endregion FUNC__drain_completed_count
-
-
-# region FUNC__drain_all_count
-## @purpose  Blocking drain — DevPlan 118 D1: реализация в parallel_runner.drain_all_count.
-## @io       ⇥ pids, pid_to_name → ⎋ tuple[int, int, list[str]]
-## @complexity 1 — delegate
-def _drain_all_count(  # pyright: ignore[reportUnusedFunction] — backward-compat фасад D1: публичное имя для тестов
-    pids: list[int],
-    pid_to_name: dict[int, str],
-) -> tuple[int, int, list[str]]:
-    return parallel_runner.drain_all_count(pids, pid_to_name)
-
-
-# endregion FUNC__drain_all_count
-
-
 # region FUNC_wait_for_readiness
 ## @purpose  Poll module readiness — DevPlan 118 D1: реализация вынесена в
 ##           healthcheck_runner.wait_for_readiness. Фасад сохраняет публичное имя.
@@ -776,30 +714,6 @@ def run_healthcheck(
 
 
 # endregion FUNC_run_healthcheck
-
-
-# region FUNC__invoke_healthcheck
-## @purpose  Call invoke_module_interface for healthcheck — DevPlan 118 D1: реализация в
-##           healthcheck_runner.invoke_healthcheck. Фасад сохраняет публичное имя.
-## @io       ⇥ module_name, check_type → ⎋ bool
-## @complexity 1 — delegate
-def _invoke_healthcheck(module_name: str, check_type: str) -> bool:  # pyright: ignore[reportUnusedFunction] — backward-compat фасад D1: публичное имя для тестов
-    return healthcheck_runner.invoke_healthcheck(module_name, check_type)
-
-
-# endregion FUNC__invoke_healthcheck
-
-
-# region FUNC__invoke_healthcheck_full
-## @purpose  Call invoke_module_interface for healthcheck — DevPlan 118 D1: реализация в
-##           healthcheck_runner.invoke_healthcheck_full (делегирует в shared/module_interface, C5).
-## @io       ⇥ module_name, check_type → ⎋ tuple[bool, str]
-## @complexity 1 — delegate
-def _invoke_healthcheck_full(module_name: str, check_type: str) -> tuple[bool, str]:  # pyright: ignore[reportUnusedFunction] — backward-compat фасад D1: публичное имя для тестов
-    return healthcheck_runner.invoke_healthcheck_full(module_name, check_type)
-
-
-# endregion FUNC__invoke_healthcheck_full
 
 
 # region FUNC_main

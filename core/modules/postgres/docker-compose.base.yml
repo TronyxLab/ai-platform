@@ -35,7 +35,10 @@ x-logging: &default-logging
 
 services:
   postgres:
-    image: postgres:18.4@sha256:4cc13dede823cab4e05290c7fb3350fb4e599ecabd9b07e6706b5d5e8f5bc929
+    # T1.5 (аудит 2026-08-22): единый канонический пин с Dockerfile:16 — INDEX-digest
+    # (imagetools inspect postgres:18.4), НЕ platform-specific manifest (прежний 4cc13ded —
+    # linux/amd64 manifest → ломал бы arm64 dev-стек и расходился с FROM).
+    image: postgres:18.4@sha256:a02db8cac496f15b094798a38254f14d6e00741f709360e5e00bb6668ea31636
     container_name: postgres
     profiles: [postgres]
     command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf", "-c", "hba_file=/etc/postgresql/pg_hba.conf"]

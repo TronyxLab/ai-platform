@@ -27,6 +27,7 @@ from pathlib import Path
 import pytest
 
 from core.internal.bootstrap import security_posture
+from tests.helpers.gate_helpers import assert_ldd_imp9
 
 pytestmark = pytest.mark.static_audit
 
@@ -84,21 +85,7 @@ def _dropin_paths(tmp_path) -> tuple[Path, Path]:
     return dropin, superseded
 
 
-def _assert_imp9(caplog, needle: str) -> None:
-    """Anti-Illusion: в успешном сценарии должна быть IMP:9 траектория."""
-    found = False
-    logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-    for record in list(caplog.records):
-        if "[IMP:" in record.message:
-            imp_level = int(record.message.split("[IMP:")[1].split("]")[0])
-            if imp_level >= 7:
-                logger.info("%s", record.message)
-            if imp_level >= 9 and needle in record.message:
-                found = True
-    logger.info("--- END LDD TRAJECTORY ---")
-    assert found, f"Critical LDD Error: No IMP:9 log containing '{needle}' found"
-
-
+# T2.16a: _assert_imp9 консолидирован в gate_helpers.assert_ldd_imp9
 # region Tests: S4 — эффективный MaxStartups (T3.1)
 class TestCheckSshdMaxStartups:
     # 🧪 TRAP[TEST] · Regression · S4 PASS при эффективном MaxStartups = минимуму 30:50:200
@@ -112,7 +99,7 @@ class TestCheckSshdMaxStartups:
             result = security_posture.check_sshd(probe=probe)
         assert result.status == security_posture.STATUS_PASS
         assert "MaxStartups=30:50:200" in result.message
-        _assert_imp9(caplog, "[S4]")
+        assert_ldd_imp9(caplog, needle="[S4]")
 
     # 🧪 TRAP[TEST] · Regression · S4 PASS при эффективном MaxStartups ВЫШЕ минимума / ненаблюдаемом
     # · Scenario: 40:60:250 ≥ 30:50:200 покомпонентно → PASS; отсутствие строки → PASS (graceful)
@@ -241,7 +228,7 @@ class TestApplyDropin:
         assert "PermitRootLogin prohibit-password" in content
         assert "AllowUsers root platform ci-deploy" in content
         assert calls == [["systemctl", "reload", "sshd"]], "reload ровно один раз (fallback не нужен)"
-        _assert_imp9(caplog, "[sshd-hardening]")
+        assert_ldd_imp9(caplog, needle="[sshd-hardening]")
 
     # 🧪 TRAP[TEST] · Regression · no-op при совпадении содержимого — reload НЕ вызывается
     # · Scenario: drop-in уже с каноническим hardening-содержимым → 0 записей, 0 reload

@@ -497,27 +497,61 @@ def main(
 ##   - Runtime использует платформенный python (sys.executable) — тот же интерпретатор
 def _forced_command_smoke() -> bool:
     """Smoke forced-command ping после bootstrap (FL20, DevPlan 125 T3)."""
-    base = str(platform_remote_base())
-    ok = True
+    ok_static = _smoke_check_authorized_keys()
+    ok_ping = _smoke_check_dispatch_ping(str(platform_remote_base()))
 
-    # ── 1. Статика: authorized_keys entry ──
+    if ok_static and ok_ping:
+        print("[IMP:9][smoke] FORCED-COMMAND PING: OK — CI-деплой канал готов", file=sys.stderr)
+    else:
+        # КРУПНО, но не блокирует bootstrap (vps_readiness pre-flight перепроверит при деплое)
+        print(
+            "🚨 [IMP:10][smoke] FORCED-COMMAND PING: FAIL — CI-деплой будет невозможен (см. лог выше)",
+            file=sys.stderr,
+        )
+    return ok_static and ok_ping
+
+
+# region FUNC__smoke_check_authorized_keys
+## @purpose  Статическая половина smoke: ci-deploy authorized_keys содержит
+##           orchestrator_cli dispatch + restrict entry.
+## @io       ⇥ None → ⎋ bool (True = entry OK)
+## @complexity O(len(authorized_keys))
+## ⚠️ TRAP[BUG] · 2026-08-22 · P1 · smoke ВСЕГДА репортил провал на happy-path (T1.1, аудит)
+# · Symptom: post-bootstrap smoke печатал «FORCED-COMMAND PING: FAIL» при полностью рабочем канале.
+# · Root: FAIL-warning и ok=False выполнялись БЕЗУСЛОВНО внутри success-if (без else) —
+# ·   success-лог и fail-лог соседствовали, ok всегда False.
+# · Fix: else-ветки; извлечение в helper'ы (ruff too-many-statements-in-try-clause).
+# · Prevention: пиннинг-тест test_forced_command_smoke_happy_path (test_lifecycle_cli_w5.py).
+def _smoke_check_authorized_keys() -> bool:
+    """Check ci-deploy authorized_keys for the forced-command entry."""
     # ~ci-deploy резолвится через passwd (os.path.expanduser) — без хардкод-литерала
     # (гейт test_gate_no_hardcoded_local_paths: /home/<user> — RED)
     auth_keys = os.path.join(os.path.expanduser("~ci-deploy"), ".ssh", "authorized_keys")
     try:
         content = Path(auth_keys).read_text(encoding="utf-8")
-        if "orchestrator_cli dispatch" in content and "restrict" in content:
-            logger.info("[IMP:9][smoke] forced-command authorized_keys: entry OK (%s)", auth_keys)
-            logger.warning(
-                "[IMP:7][smoke] forced-command authorized_keys: entry MISSING (%s) — CI-деплой канал мёртв",
-                auth_keys,
-            )
-            ok = False
     except OSError as e:
         logger.warning("[IMP:7][smoke] forced-command authorized_keys unreadable: %s — %s", auth_keys, e)
-        ok = False
+        return False
 
-    # ── 2. Runtime: dispatch ping (тот же код-путь, что sshd forced-command) ──
+    if "orchestrator_cli dispatch" in content and "restrict" in content:
+        logger.info("[IMP:9][smoke] forced-command authorized_keys: entry OK (%s)", auth_keys)
+        return True
+
+    logger.warning(
+        "[IMP:7][smoke] forced-command authorized_keys: entry MISSING (%s) — CI-деплой канал мёртв", auth_keys
+    )
+    return False
+
+
+# endregion FUNC__smoke_check_authorized_keys
+
+
+# region FUNC__smoke_check_dispatch_ping
+## @purpose  Runtime-половина smoke: `orchestrator_cli dispatch ping` локально → pong.
+## @io       ⇥ base: str (platform root для cwd) → ⎋ bool (True = pong получен)
+## @complexity O(1) + 1 subprocess
+def _smoke_check_dispatch_ping(base: str) -> bool:
+    """Run dispatch ping locally; True when pong received."""
     try:
         r = subprocess.run(
             [sys.executable, "-m", "core.internal.deploy.orchestrator_cli", "dispatch", "ping"],
@@ -527,26 +561,23 @@ def _forced_command_smoke() -> bool:
             cwd=base,
             check=False,
         )
-        if "pong" in r.stdout:
-            logger.info("[IMP:9][smoke] forced-command ping: OK (dispatch ping → pong)")
-            logger.warning(
-                "[IMP:7][smoke] forced-command ping: FAIL (rc=%s out=%r) — orchestrator_cli dispatch не отвечает",
-                r.returncode,
-                r.stdout[:80],
-            )
-            ok = False
     except (OSError, subprocess.TimeoutExpired) as e:
         logger.warning("[IMP:7][smoke] forced-command ping: ERROR — %s", e)
-        ok = False
+        return False
 
-    if ok:
-        print("[IMP:9][smoke] FORCED-COMMAND PING: OK — CI-деплой канал готов", file=sys.stderr)
-    else:
-        # КРУПНО, но не блокирует bootstrap (vps_readiness pre-flight перепроверит при деплое)
-        print(
-            "🚨 [IMP:10][smoke] FORCED-COMMAND PING: FAIL — CI-деплой будет невозможен (см. лог выше)", file=sys.stderr
-        )
-    return ok
+    if "pong" in r.stdout:
+        logger.info("[IMP:9][smoke] forced-command ping: OK (dispatch ping → pong)")
+        return True
+
+    logger.warning(
+        "[IMP:7][smoke] forced-command ping: FAIL (rc=%s out=%r) — orchestrator_cli dispatch не отвечает",
+        r.returncode,
+        r.stdout[:80],
+    )
+    return False
+
+
+# endregion FUNC__smoke_check_dispatch_ping
 
 
 # endregion FUNC_forced_command_smoke

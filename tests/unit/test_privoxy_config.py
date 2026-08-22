@@ -22,28 +22,14 @@ import logging
 import pytest
 
 from core.internal.bootstrap import privoxy_config
+from tests.helpers.gate_helpers import assert_ldd_imp9
 
 pytestmark = pytest.mark.static_audit
 
 logger = logging.getLogger(__name__)
 
 
-def _assert_imp9(caplog: pytest.LogCaptureFixture, needle: str | None = None) -> None:
-    """Assert at least one IMP:9 log (LDD telemetry standard)."""
-    logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-    found = False
-    for record in list(caplog.records):
-        if "[IMP:" in record.message:
-            logger.info("%s", record.message)
-            if needle and needle in record.message:
-                found = True
-    logger.info("--- END LDD TRAJECTORY ---")
-    if needle:
-        assert found, f"Critical LDD Error: No IMP:9 log containing '{needle}'"
-    else:
-        assert any("[IMP:9]" in r.message for r in caplog.records), "Critical LDD Error: No IMP:9 log found"
-
-
+# T2.16a: _assert_imp9 консолидирован в gate_helpers.assert_ldd_imp9
 # region TEST_mutate_config (чистая функция)
 
 
@@ -141,7 +127,7 @@ def test_write_privoxy_config(caplog: pytest.LogCaptureFixture, tmp_path) -> Non
     assert "listen-address 0.0.0.0:8118" in content
     assert "permit-access 127.0.0.1" in content
     assert "forward-socks5t / 127.0.0.1:9050 ." in content
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · DevPlan 125 T9 (D-6) · privoxy config mode 0644 (сервис user privoxy читает)
@@ -158,7 +144,7 @@ def test_write_privoxy_config_mode_0644(caplog: pytest.LogCaptureFixture, tmp_pa
 
     mode = config_path.stat().st_mode & 0o777
     assert mode == 0o644, f"ожидался mode 0644 (читаемость сервисом privoxy), got {oct(mode)}"
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · NEGATIVE (R5) · test_privoxy_config_idempotent — двойной вызов = no-op (D3)
@@ -227,7 +213,7 @@ def test_cli_config(caplog: pytest.LogCaptureFixture, tmp_path, monkeypatch) -> 
     rc = privoxy_config.main(["--config", str(config_path)])
     assert rc == 0
     assert "listen-address 0.0.0.0:8118" in config_path.read_text()
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · 2026-08-02 · Regression · CLI --config: отсутствует аргумент → usage error (D3)

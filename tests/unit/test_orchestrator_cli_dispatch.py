@@ -28,6 +28,7 @@ import pytest
 from core.internal.deploy.orchestrator import DeployOrchestrator as _RealDeployOrchestrator
 from core.internal.deploy.orchestrator_cli import _dispatch
 from core.internal.shared.exceptions import ConfigValidationError
+from tests.helpers.gate_helpers import assert_ldd_imp9
 
 logger = logging.getLogger(__name__)
 
@@ -46,21 +47,7 @@ def _orchestrator_factory(projects_base: str):
     return _factory
 
 
-def _assert_imp9_logged(caplog: pytest.LogCaptureFixture) -> None:
-    """Print IMP:7-10 trajectory and assert at least one IMP:9 log present."""
-    found_imp9 = False
-    logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-    for record in list(caplog.records):
-        if "[IMP:" in record.message:
-            imp_level = int(record.message.split("[IMP:")[1].split("]")[0])
-            if imp_level >= 7:
-                logger.info("%s", record.message)
-            if imp_level >= 9:
-                found_imp9 = True
-    logger.info("--- END LDD TRAJECTORY ---")
-    assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
-
-
+# T2.16a: _assert_imp9_logged консолидирован в gate_helpers.assert_ldd_imp9
 def _make_payload_tar(tmp_path: pytest.TempPathFactory, project: str = "testproj") -> bytes:
     """Create a tar.gz payload in memory (ai-platform.yaml + docker-compose.yml).
 
@@ -106,7 +93,7 @@ def test_dispatch_ping(capsys, caplog: pytest.LogCaptureFixture) -> None:
     rc = _dispatch(["ping"], env={})
 
     out = capsys.readouterr().out
-    _assert_imp9_logged(caplog)
+    assert_ldd_imp9(caplog)
     assert rc == 0
     assert "pong" in out
 
@@ -139,7 +126,7 @@ def test_dispatch_status_found(capsys, tmp_path, caplog: pytest.LogCaptureFixtur
     )
 
     out = capsys.readouterr().out
-    _assert_imp9_logged(caplog)
+    assert_ldd_imp9(caplog)
     assert rc == 0
     payload = json.loads(out)
     assert payload["project"] == "testproj"
@@ -167,7 +154,7 @@ def test_dispatch_status_not_found(capsys, tmp_path, caplog: pytest.LogCaptureFi
     )
 
     out = capsys.readouterr().out
-    _assert_imp9_logged(caplog)
+    assert_ldd_imp9(caplog)
     assert rc == 1
     payload = json.loads(out)
     assert payload["status"] == "not_found"
@@ -194,7 +181,7 @@ def test_dispatch_unknown_verb(capsys, caplog: pytest.LogCaptureFixture) -> None
     rc = _dispatch([], env={"SSH_ORIGINAL_COMMAND": "deploy proj sha"})
 
     out = capsys.readouterr().out
-    _assert_imp9_logged(caplog)
+    assert_ldd_imp9(caplog)
     assert rc == 4  # ConfigValidationError.exit_code
     payload = json.loads(out)
     assert payload["status"] == "ERROR"
@@ -268,7 +255,7 @@ def test_dispatch_receive_version(capsys, tmp_path, caplog: pytest.LogCaptureFix
     )
 
     out = capsys.readouterr().out
-    _assert_imp9_logged(caplog)
+    assert_ldd_imp9(caplog)
     payload = json.loads(out.strip().splitlines()[-1])
     assert payload["project"] == "testproj"
     assert payload["version"] == "abc123"
@@ -359,7 +346,7 @@ def test_dispatch_verify_splits_node_and_project(capsys, caplog: pytest.LogCaptu
     assert rc == 0
 
     out = capsys.readouterr().out
-    _assert_imp9_logged(caplog)
+    assert_ldd_imp9(caplog)
     logger.critical("[IMP:9][test] D17 — verify split node/project — OK (stdout=%r)", out)
 
 
@@ -393,7 +380,7 @@ def test_dispatch_verify_node_only(capsys, caplog: pytest.LogCaptureFixture) -> 
     assert cmd[cmd.index("--node") + 1] == "tronyx-vps"
     assert "--project" not in cmd, "D17: без project в args --project не добавляется"
     assert rc == 0
-    _assert_imp9_logged(caplog)
+    assert_ldd_imp9(caplog)
     logger.critical("[IMP:9][test] D17 — verify node-only — OK")
 
 
@@ -417,7 +404,7 @@ def test_dispatch_verify_missing_node_negative(capsys, caplog: pytest.LogCapture
     assert rc == 1
     assert payload["status"] == "ERROR"
     assert "verify requires <node>" in payload["error"]
-    _assert_imp9_logged(caplog)
+    assert_ldd_imp9(caplog)
     logger.critical("[IMP:9][test] D17 negative — verify без node → ERROR exit 1 — OK")
 
 

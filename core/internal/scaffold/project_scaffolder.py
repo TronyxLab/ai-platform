@@ -41,6 +41,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import ClassVar, cast
 
+import yaml
+
+from core.internal.scaffold.gen_env_platform import GenEnvPlatformValidationError, generate_env_platform
+from core.internal.scaffold.vhost_configurator import configure_vhost, resolve_node_configs_dir
 from core.internal.shared.app_config import AppConfig
 from core.internal.shared.exceptions import ConfigValidationError
 
@@ -333,34 +337,22 @@ def gen_env_platform(project_dir: str, name: str, domain: str = "", dry_run: boo
     # v1.0.1 (TRAP[BUG] Фаза 3): запуск скрипта ПО ПУТИ (`python core/internal/...`) ломал
     # `import core` (sys.path[0] = каталог скрипта, репо-корень не на path) → .env.platform
     # НИКОГДА не генерировался (non-fatal skip) → в проекте нет PLATFORM_* env → test_health
-    # падал на localhost:80. Фикс: запуск МОДУЛЕМ с PYTHONPATH=platform_root.
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(platform_root) + os.pathsep + env.get("PYTHONPATH", "")
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "core.internal.scaffold.gen_env_platform",
-            "--yaml",
+    # падал на localhost:80. Фикс был: запуск МОДУЛЕМ с PYTHONPATH=platform_root.
+    # T2.13 (аудит 2026-08-22): subprocess+PYTHONPATH хоп удалён — прямой in-process импорт
+    # (тот же пакет core.internal.scaffold; sys.path-химия больше не участвует).
+    try:
+        lines = generate_env_platform(
             str(platform_env_yaml),
-            "--name",
-            name,
-            "--domain",
-            domain or "",
-            "--output",
-            str(env_file),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-        env=env,
-    )
+            domain=domain or "ai-platform.local",  # паритет CLI: пустой domain → дефолт
+            project_name=name,
+        )
+    except (FileNotFoundError, yaml.YAMLError, GenEnvPlatformValidationError) as exc:
+        logger.info("[IMP:8][scaffold][env] gen_env_platform failed: %s — .env.platform might be incomplete", exc)
+        return False
 
-    if result.returncode == 0:
-        logger.info("[IMP:9][scaffold][env] .env.platform generated: %s", env_file)
-        return True
-    logger.info("[IMP:8][scaffold][env] gen_env_platform.py returned non-zero — .env.platform might be incomplete")
-    return False
+    env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    logger.info("[IMP:9][scaffold][env] .env.platform generated: %s (%d lines)", env_file, len(lines))
+    return True
 
 
 # endregion FUNC_gen_env_platform
@@ -652,52 +644,48 @@ def generate_checklist(
 
 # region FUNC_run_add_vhost
 def run_add_vhost(project_dir: str, domain: str = "", dry_run: bool = False) -> bool:
-    """Generate nginx vhost via add-vhost.sh.
+    """Configure nginx vhost for the new project via vhost_configurator (Python-канал).
 
-    ## @purpose  Mirror of run_add_vhost() from add-project.sh:632-662.
+    ## @purpose  T2.13 (аудит 2026-08-22): shell round-trip через add-vhost.sh заменён
+    ##           прямым vhost_configurator.configure_vhost (тот же Python API, что использует
+    ##           adopter; add-vhost.sh остаётся тонким CLI-фасадом для ручного запуска).
     ## @io        ⇥ project_dir, domain, dry_run → ⎋ bool
-    ## @complexity O(1)
+    ## @complexity O(1) — in-process вызовы
     """
     if not domain:
         return True  # no domain, skip
 
-    script_dir = Path(__file__).resolve().parent
-    add_vhost_script = script_dir / "add-vhost.sh"
-
-    if not add_vhost_script.exists() or not os.access(str(add_vhost_script), os.X_OK):
-        logger.info("[IMP:8][scaffold][vhost] add-vhost.sh not found or not executable: %s", add_vhost_script)
-        return True  # non-fatal
-
     if dry_run:
-        logger.info("[IMP:7][scaffold][vhost] [DRY-RUN] Would call: %s --project-dir %s", add_vhost_script, project_dir)
+        logger.info("[IMP:7][scaffold][vhost] [DRY-RUN] Would configure vhost for %s (domain=%s)", project_dir, domain)
         return True
 
-    logger.info("[IMP:7][scaffold][vhost] Generating nginx vhost via add-vhost.sh")
+    logger.info("[IMP:7][scaffold][vhost] Generating nginx vhost via vhost_configurator")
 
-    # Derive node-configs dir: projects/<org>/node-configs/
+    # T2.13: единый резолвер node-configs (4-я локальная копия удалена — канон
+    # vhost_configurator.resolve_node_configs_dir с PROJECTS_BASE fallback).
     project_path = Path(project_dir)
-    org_dir = project_path.parent
-    node_configs_dir = org_dir / "node-configs" if org_dir.is_dir() else None
+    org = project_path.parent.name
+    node_configs_dir = resolve_node_configs_dir(project_path, org)
 
-    if node_configs_dir is None or not node_configs_dir.is_dir():
+    if node_configs_dir is None:
         logger.info("[IMP:8][scaffold][vhost] node-configs dir not found — skipping")
         return True  # non-fatal
 
-    result = subprocess.run(
-        [
-            str(add_vhost_script),
-            "--project-dir",
-            project_dir,
-            "--node-configs-dir",
-            str(node_configs_dir),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        ok = configure_vhost(
+            project_dir=project_path,
+            domain=domain,
+            org=org,
+            yaml_file=project_path / "ai-platform.yaml",
+            node_configs_dir=node_configs_dir,
+            log_prefix="scaffold",
+        )
+    except (OSError, ConfigValidationError) as exc:
+        logger.info("[IMP:8][scaffold][vhost] configure_vhost raised: %s — check manually", exc)
+        return False
 
-    if result.returncode != 0:
-        logger.info("[IMP:8][scaffold][vhost] add-vhost.sh returned non-zero — check manually")
+    if not ok:
+        logger.info("[IMP:8][scaffold][vhost] configure_vhost returned False — check manually")
         return False
     return True
 

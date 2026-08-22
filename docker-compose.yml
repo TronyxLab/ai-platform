@@ -1,5 +1,5 @@
 # GREP_SUMMARY: docker-compose root include profiles networks volumes x-logging
-# STRUCTURE: ▶ include: 13 docker modules → networks: 6 external → volumes: 12 (5 bind driver_opts + 7 docker-managed) → x-logging
+# STRUCTURE: ▶ include: 13 docker modules → networks: 6 external → volumes: 13 (5 bind driver_opts + 8 docker-managed) → x-logging
 # region MODULE_CONTRACT
 ## @purpose  Root docker-compose — include: всех docker-модулей + networks + volumes + x-logging
 ## @scope    Локальный полный стек (инвариант #7) и VPS; сервисы только через include:, без инлайна

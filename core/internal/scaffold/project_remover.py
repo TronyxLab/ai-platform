@@ -15,10 +15,14 @@
 ##   - Prints report of what was NOT deleted (volumes, DB images, GitHub repo, local dir)
 ## @rationale Completes the project lifecycle (CREATE→REGISTER→DEPLOY→REMOVE). Safe-only (O7): no automatic data deletion.
 ## @links    CALLED_BY: remove-project.sh (facade)
-##           CALLS: NodeYaml.remove_project(), lib/ssh.sh::ssh_exec()
+##           CALLS: NodeYaml.remove_project(), vhost_renderer.remove_vhost (T2.10 канон),
+##                  lib/ssh.sh::ssh_exec()
 ##           CONTRACTS: O7/DD10 — remove = disconnect, not destroy
 ##           DP-092 Wave 3
 ## @changes  2026-07-30 · Wave 3 — initial implementation
+## @changes  2026-08-22 · T2.10 — remove_vhost делегирует vhost_renderer.remove_vhost
+##           (GENERATED-заголовочный lookup + аудит vhost:remove); exact-path fallback
+##           <domain>.conf сохраняет disk-поведение 1:1; +project_name параметр
 # endregion MODULE_CONTRACT
 
 # 💼 TRAP[BUSINESS] · 2026-07-17 · HI · remove = disconnect, данные не удаляются автоматически
@@ -206,17 +210,25 @@ def unregister_from_node_yaml(node_yaml_path: str, name: str) -> bool:
 
 # region FUNC_remove_vhost
 ## @purpose  Remove nginx vhost file for the project, if a domain is configured.
-##           The vhost file lives at <node-configs>/<node\>/overlays/nginx/<domain\>.conf
+##           T2.10: делегирует канону vhost_renderer.remove_vhost — lookup по GENERATED-заголовку
+##           (# Source: node.yaml#projects[<name>]) + audit-запись vhost:remove (shared audit_logger).
+##           Legacy-fallback: exact-path удаление <domain>.conf для файлов БЕЗ canon-заголовка
+##           (add-vhost.sh legacy / ручные) — сохраняет disk-поведение прежней реализации 1:1.
 ## @param domain            Domain name (empty = skip)
 ## @param node_configs_dir  Path to node-configs directory
+## @param project_name      Project name — ключ canon-lookup по GENERATED-заголовку (optional;
+##                          без него работают только skip-ветки и exact-path fallback)
 ## @return   True if removed or skipped, False on error
-## @complexity O(1)
-def remove_vhost(domain: str, node_configs_dir: str) -> bool:
+## @complexity O(F) where F = number of .conf files in overlays/nginx (canon-скан)
+def remove_vhost(domain: str, node_configs_dir: str, project_name: str = "") -> bool:
     """Remove nginx vhost configuration file.
 
-    ## @purpose  Mirror of remove_vhost() from remove-project.sh:207-228.
-    ## @io        ⇥ domain, node_configs_dir → ⎋ bool
-    ## @complexity O(1)
+    ## @purpose  T2.10: единый канон удаления vhost — vhost_renderer.remove_vhost
+    ##            (GENERATED-заголовочный lookup + аудит vhost:remove). Файлы без canon-
+    ##            заголовка (legacy add-vhost.sh / ручные) canon не находит → exact-path
+    ##            fallback <domain>.conf сохраняет публичное disk-поведение 1:1.
+    ## @io        ⇥ domain, node_configs_dir, project_name → ⎋ bool
+    ## @complexity O(F)
     """
     if not domain or not domain.strip():
         logger.info("[IMP:6][remove][vhost] No domain configured — skipping vhost removal")
@@ -228,17 +240,35 @@ def remove_vhost(domain: str, node_configs_dir: str) -> bool:
         logger.info("[IMP:9][remove][vhost] Vhost removal skipped (no node-configs dir)")
         return True
 
-    # Derive node name from path: .../node-configs/<node> → node name
-    _node_name = Path(node_configs_dir).name if Path(node_configs_dir).is_dir() else "unknown"
-    vhost_file = Path(node_configs_dir) / "overlays" / "nginx" / f"{domain}.conf"
+    # T2.10: канон vhost_renderer.remove_vhost — GENERATED-заголовочный lookup + аудит.
+    # Возвращает True всегда (идемпотентный контракт), фактическое удаление — по заголовку.
+    from core.internal.scaffold.vhost_renderer import remove_vhost as _canon_remove_vhost
 
-    if not vhost_file.exists():
-        logger.info("[IMP:6][remove][vhost] Vhost file not found: %s — SKIP", vhost_file)
-        return True
+    overlays_dir = Path(node_configs_dir) / "overlays" / "nginx"
+    vhost_file = overlays_dir / f"{domain}.conf"
+    existed_before = vhost_file.exists()
 
-    logger.info("[IMP:7][remove][vhost] Removing nginx vhost: %s", vhost_file)
-    vhost_file.unlink()
-    logger.info("[IMP:9][remove][vhost] Vhost removed: %s", vhost_file)
+    _canon_remove_vhost(project_name=project_name, overlays_dir=str(overlays_dir))
+
+    # Legacy fallback (T2.10): canon матчит только файлы с GENERATED-заголовком
+    # (# Source: node.yaml#projects[<name>]); legacy/ручные vhost'ы удаляются по имени
+    # файла <domain>.conf — как в прежней реализации remove-project.sh:207-228.
+    if existed_before and vhost_file.exists():
+        logger.info("[IMP:7][remove][vhost] Removing nginx vhost: %s", vhost_file)
+        vhost_file.unlink()
+        logger.info("[IMP:9][remove][vhost] Vhost removed: %s", vhost_file)
+        # Аудит legacy-удаления — тот же канон записи (shared/audit_logger, tag=vhost:remove),
+        # чтобы remove-project всегда оставлял audit-след (T2.10; D1 единый writer).
+        if project_name:
+            from core.internal.shared.audit_logger import write_audit_entry
+
+            write_audit_entry(
+                tag="vhost:remove",
+                status="DONE",
+                message=f"removed vhost for project={project_name}",
+                project=project_name,
+                operation="vhost:remove",
+            )
     return True
 
 
@@ -497,7 +527,15 @@ def main(argv: list[str] | None = None) -> int:
     vhost_removed = False
     domain = cast(str, project_info.get("domain", ""))
     if domain and domain != "null":
-        vhost_removed = remove_vhost(domain, cast(str, project_info.get("node_configs_dir", "")))
+        # T2.10: project_name передаётся в remove_vhost для canon-lookup по GENERATED-заголовку
+        # (vhost_renderer.remove_vhost) + аудит; exact-path fallback работает и без него.
+        project_entry = cast(dict[str, object], project_info.get("project_entry", {}))
+        project_name = cast(str, project_entry.get("name", ""))
+        vhost_removed = remove_vhost(
+            domain,
+            cast(str, project_info.get("node_configs_dir", "")),
+            project_name=project_name,
+        )
     else:
         logger.info("[IMP:6][remove][main] No domain configured — skipping vhost removal")
 

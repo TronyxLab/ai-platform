@@ -25,7 +25,9 @@ name: hermes-nightly
 
 on:
   schedule:
-    # Weekly: Sunday 03:00 MSK (Europe/Moscow) = Saturday 20:00 UTC
+    # Weekly: Saturday 20:00 UTC = Saturday 23:00 MSK (Europe/Moscow)
+    # T1.10 (аудит 2026-08-22): комментарий согласован с фактическим cron
+    # (прежний «Sunday 03:00 MSK» — неверная арифметика UTC+3; окно cron НЕ менялось).
     - cron: '0 20 * * 6'
   workflow_dispatch:
     inputs:

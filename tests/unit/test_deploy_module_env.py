@@ -1,6 +1,6 @@
 """
 # GREP_SUMMARY: test module env compose-args platform-env pre-pull local-build skip docker-orchestrator
-# STRUCTURE: ▶ _read_compose_args → ○ test_compose_args_has_platform_env → ◇ check build_compose_args for platform_env → ▶ test_prepull_skips_local_build → ◇ check _pull_module_images for build: skip
+# STRUCTURE: ▶ _read_compose_args → ○ test_compose_args_has_platform_env → ◇ check build_compose_args for platform_env → ▶ test_prepull_skips_local_build → ◇ check pull_module_images for build: skip
 # region MODULE_CONTRACT
 ## @purpose  Tests for docker_orchestrator.py env-file and pre-pull skip logic (migrated from
 ##           deploy-modules.sh after W4-E1 Strangler-Fig decomposition). Replaced shell-grep
@@ -118,18 +118,18 @@ def test_compose_args_has_platform_env(caplog, compose_args_source: str) -> None
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Test 2: _pull_module_images skips modules with build: section
+# Test 2: parallel_runner.pull_module_images skips modules with build: section
 # ══════════════════════════════════════════════════════════════════════════════
 
 
 # region FUNC_test_prepull_skips_local_build
-## @purpose  Verify docker_orchestrator.py _pull_module_images skips modules with `build:`
+## @purpose  Verify parallel_runner.pull_module_images skips modules with `build:`
 ##           section in compose file. After W4-E1, pre-pull skip logic is in Python, not shell.
 ##           Acceptance criterion: modules with local build: section are skipped (no pull).
 ## @io       ⇥ caplog, docker_orchestrator_source → ⎋ None (pytest.fail if build: check missing)
 ## @complexity 1 — static grep on file content
 ## @invariants
-##   - `build:` string check is present in _pull_module_images
+##   - `build:` string check is present in pull_module_images
 ##   - Skip log message mentions "build" or "skip"
 ##   - Build check happens BEFORE docker compose pull call
 
@@ -137,10 +137,10 @@ def test_compose_args_has_platform_env(caplog, compose_args_source: str) -> None
 @pytest.mark.static_audit
 def test_prepull_skips_local_build(caplog) -> None:
     """
-    # ◇ read parallel_runner.py (D1: _pull_module_images переехал) → ⚡ grep pull_module_images → ◇ build: check → ⎋ pass | fail
+    # ◇ read parallel_runner.py (D1: pull_module_images переехал из docker_orchestrator) → ⚡ grep pull_module_images → ◇ build: check → ⎋ pass | fail
     """
     caplog.set_level(logging.DEBUG)
-    # DevPlan 118 D1: _pull_module_images переехал из docker_orchestrator.py в parallel_runner.py.
+    # DevPlan 118 D1: pull_module_images переехал из docker_orchestrator.py в parallel_runner.py.
     parallel_runner_py = (
         Path(__file__).resolve().parent / "../.." / "core" / "internal" / "bootstrap" / "deploy" / "parallel_runner.py"
     ).resolve()

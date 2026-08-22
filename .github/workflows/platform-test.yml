@@ -303,7 +303,7 @@ jobs:
           docker ps -a --filter "name=litellm-test" --format "table {{.Names}}\t{{.Status}}\t{{.Image}}" || echo "(none)"
           echo ""
           echo "--- LiteLLM image existence check ---"
-          LITELLM_IMAGE="ghcr.io/berriai/litellm:v1.91.2"
+          LITELLM_IMAGE="ghcr.io/berriai/litellm:v1.96.2"
           if docker image inspect "${LITELLM_IMAGE}" >/dev/null 2>&1; then
             echo "[IMP:9][litellm-preflight] Image ${LITELLM_IMAGE} present"
           else

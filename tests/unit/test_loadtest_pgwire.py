@@ -34,6 +34,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.helpers.gate_helpers import assert_ldd_imp9
+
 pytestmark = pytest.mark.static_audit
 
 logger = logging.getLogger(__name__)
@@ -54,25 +56,7 @@ def _load_pgwire():
 pgwire = _load_pgwire()
 
 
-# region HELPER_assert_ldd_imp9
-def _assert_ldd_imp9(caplog) -> None:
-    """Печать LDD-траектории IMP:7-10 + assert наличия IMP:9 (Anti-Illusion Rule).
-
-    ## @purpose — Единая точка LDD-телеметрии тестов pgwire (контракт .kilo/rules/testing.md).
-    ## @io — ⇥ caplog → ⎋ None (assert found IMP:9)
-    """
-    logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-    found = False
-    for record in list(caplog.records):
-        if "[IMP:" in record.message:
-            logger.info("%s", record.message)
-            if "[IMP:9]" in record.message:
-                found = True
-    logger.info("--- END LDD TRAJECTORY ---")
-    assert found, "Critical LDD Error: No IMP:9 business logic log found"
-
-
-# endregion HELPER_assert_ldd_imp9
+# T2.16a: _assert_ldd_imp9 консолидирован в gate_helpers.assert_ldd_imp9
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -95,7 +79,7 @@ def test_startup_message_framing(caplog) -> None:
         len(msg),
         int.from_bytes(msg[4:8], "big"),
     )
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
     assert len(msg) == int.from_bytes(msg[:4], "big")  # длина включает себя
     assert int.from_bytes(msg[4:8], "big") == 196608  # protocol 3.0
     # "user\0postgres\0database\0platform\0" + финальный \0
@@ -124,7 +108,7 @@ def test_md5_password_hash_rfc(caplog) -> None:
     caplog.set_level(logging.INFO)
     result = pgwire.md5_password_hash("postgres", "postgres", bytes.fromhex("deadbeef"))
     logger.info("[IMP:9][test][md5] вектор: %s", result)
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
     assert result == "md58ee245854025535aedb7b15709315318"
     assert result.startswith("md5") and len(result) == 35  # md5 + 32 hex
 
@@ -154,7 +138,7 @@ def test_scram_rfc7677_vector(caplog) -> None:
     client_final, server_verify = pgwire.scram_client_final(user, password, bare, server_first)
     logger.info("[IMP:9][test][scram] client-final: %r", client_final)
     logger.info("[IMP:9][test][scram] server-verify: %r", server_verify)
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
     # RFC 7677 §3: proof = dHzbZapWIk4jUhN+Ute9ytag9zjfMHgsqmmiz7AndVQ=
     assert client_final == (
         "c=biws,r=rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0,p=dHzbZapWIk4jUhN+Ute9ytag9zjfMHgsqmmiz7AndVQ="
@@ -199,7 +183,7 @@ def test_parse_backend_messages(caplog) -> None:
     )
     rows, tag = pgwire.parse_query_response(stream)
     logger.info("[IMP:9][test][parse] rows=%r tag=%r", rows, tag)
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
     assert rows == [[b"42"]]  # count(*) → текстовая строка (bytes)
     assert tag == "SELECT 1"
 
@@ -235,7 +219,7 @@ def test_query_error_raises_pgerror(caplog) -> None:
     with pytest.raises(pgwire.PgError) as excinfo:
         pgwire.parse_query_response(_msg(ord("E"), e_payload))
     logger.info("[IMP:9][test][pgerror] PgError: %s", excinfo.value)
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
     assert "syntax error at or near" in str(excinfo.value)
     assert "42601" in str(excinfo.value)
     assert excinfo.value.sqlstate == "42601"

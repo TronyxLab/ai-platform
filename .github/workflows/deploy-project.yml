@@ -39,6 +39,8 @@
 ##                      grep/awk/jq (bash-only, консистентно с шагами Read quality config /
 ##                      Maturity warn); шаг Install PyYAML удалён (pip-пакеты ставятся
 ##                      per-type в quality-шаге; setup-python остаётся для pip).
+##           2026-08-22 | T2.15: SSH-флаги (3 повтора) хойстнуты в job-level env SSH_OPTS —
+##                      флаги без ConnectTimeout (канон ssh_opts.py; гейт ssh_opts_sole_path (d))
 # endregion MODULE_CONTRACT
 
 name: Deploy Project (Reusable)
@@ -71,6 +73,16 @@ name: Deploy Project (Reusable)
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    # T2.15: SSH-флаги хойстнуты в job-level env — повторяющийся набор из 3 SSH-шагов
+    # (preflight / receive / verify) определён ОДИН раз. Флаги — существующий набор
+    # (BatchMode/StrictHostKeyChecking=accept-new/ServerAlive*) БЕЗ ConnectTimeout —
+    # канон флагов проекта core/internal/shared/ssh_opts.py (гейт ssh_opts_sole_path d:
+    # ConnectTimeout в CI → RED). Пути ключа детерминированы шагом Setup SSH key
+    # ($RUNNER_TEMP/deploy_key + $RUNNER_TEMP/known_hosts) — ${{ runner.temp }} == $RUNNER_TEMP
+    # по контракту GitHub Actions; step-output'ы ssh-key-path/ssh-known-hosts-path сохранены
+    # (обратная совместимость интерфейса шага).
+    env:
+      SSH_OPTS: "-i ${{ runner.temp }}/deploy_key -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o UserKnownHostsFile=${{ runner.temp }}/known_hosts"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -339,7 +351,7 @@ jobs:
       - name: SSH pre-flight check
         run: |
           set -euo pipefail
-          PONG=$(ssh -i ${{ steps.setup-ssh.outputs.ssh-key-path }} -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o UserKnownHostsFile=${{ steps.setup-ssh.outputs.ssh-known-hosts-path }} ci-deploy@${{ env.ssh_host }} "ping")
+          PONG=$(ssh ${SSH_OPTS} ci-deploy@${{ env.ssh_host }} "ping")
           echo "[IMP:9][preflight] ping response: ${PONG}"
           if [ "${PONG}" != "pong" ]; then
             echo "[IMP:10][preflight] FATAL: expected 'pong' from forced-command ping, got '${PONG}'"
@@ -359,7 +371,7 @@ jobs:
           # на VPS применяет state без вычисления maturity; отсутствие → legacy-grace).
           [ -f practices.lock ] && FILES="$FILES practices.lock"
           echo "[IMP:9][deliver] Delivering to ${{ env.ssh_host }}: ${FILES}"
-          tar czf - $FILES | ssh -i ${{ steps.setup-ssh.outputs.ssh-key-path }} -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o UserKnownHostsFile=${{ steps.setup-ssh.outputs.ssh-known-hosts-path }} ci-deploy@${{ env.ssh_host }} "receive ${{ inputs.project_name }} ${{ github.sha }}"
+          tar czf - $FILES | ssh ${SSH_OPTS} ci-deploy@${{ env.ssh_host }} "receive ${{ inputs.project_name }} ${{ github.sha }}"
           echo "[IMP:9][deliver] Receive completed (exit=$?)"
 
       # ─── Post-deploy verify ────────────────────────────────────────────
@@ -369,7 +381,7 @@ jobs:
       - name: Post-deploy verify
         run: |
           set -euo pipefail
-          ssh -i ${{ steps.setup-ssh.outputs.ssh-key-path }} -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o UserKnownHostsFile=${{ steps.setup-ssh.outputs.ssh-known-hosts-path }} ci-deploy@${{ env.ssh_host }} "verify ${{ env.target_node }} ${{ inputs.project_name }}"
+          ssh ${SSH_OPTS} ci-deploy@${{ env.ssh_host }} "verify ${{ env.target_node }} ${{ inputs.project_name }}"
 
       # ─── Failure notification (DevPlan 003 A1) ─────────────────────────
       # Caller-контекст (TRAP[BUG] 2026-08-03 + гейт test_gate_workflow_org_agnostic):

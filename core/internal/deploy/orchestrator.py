@@ -64,7 +64,8 @@ from core.internal.shared.app_config import AppConfig
 from core.internal.shared.exceptions import PlatformError
 
 # DevPlan 136 W9 T9.1 (L-1/L-9/L-12): flock deploy lock per project. shared/ — deploy-слой
-# НЕ импортирует bootstrap/ (инвариант core/AGENTS.md); lifecycle/lock.py — bootstrap-фасад.
+# НЕ импортирует bootstrap/ (инвариант core/AGENTS.md); канон — shared/file_lock.py
+# (bootstrap/lifecycle/lock.py re-export удалён как мёртвый — потребители импортируют shared напрямую).
 from core.internal.shared.file_lock import FileLock as _FileLock
 from core.internal.shared.file_lock import FileLockError as _FileLockError
 from core.internal.shared.file_lock import platform_lock_path as _platform_lock_path

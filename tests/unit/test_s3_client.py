@@ -9,8 +9,6 @@
 ##   - At least one IMP:9 log per successful scenario
 ## @rationale — S3Client is the thin wrapper extracted from RetentionPolicy (H7 refactoring);
 ##   isolated testing ensures pagination, timeout, and batch-delete correctness.
-def _module_contract():
-    pass
 
 
 # endregion MODULE_CONTRACT

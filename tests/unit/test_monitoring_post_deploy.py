@@ -30,6 +30,7 @@ from _conftest.ldd import _print_ldd_trajectory
 
 import core.internal.deploy.orchestrator as orch
 import core.internal.monitoring.config_renderer as mcr
+from tests.helpers.gate_helpers import write_yaml
 
 pytestmark = pytest.mark.static_audit
 
@@ -48,16 +49,7 @@ _RENDER_STEPS: tuple[tuple[str, str], ...] = (
 )
 
 
-def _write_yaml(data: dict, path: pathlib.Path) -> pathlib.Path:
-    """Write a YAML dict to a temp file and return the path.
-
-    ## @purpose  Helper to create temporary YAML files for tests (tmp_path zero-hardcode).
-    ## @complexity O(N) where N = YAML tree size
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with pathlib.Path(path).open("w", encoding="utf-8") as f:
-        yaml.dump(data, f)
-    return path
+# T2.16b: _write_yaml консолидирован в gate_helpers.write_yaml(path, data)
 
 
 def _make_project(tmp_path: pathlib.Path, *, monitoring: bool) -> pathlib.Path:
@@ -77,7 +69,7 @@ def _make_project(tmp_path: pathlib.Path, *, monitoring: bool) -> pathlib.Path:
             "alerting": True,
             "logs_retention": "14d",
         }
-    _write_yaml(data, project_dir / "ai-platform.yaml")
+    write_yaml(project_dir / "ai-platform.yaml", data)
     return project_dir
 
 

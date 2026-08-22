@@ -1,12 +1,12 @@
 # GREP_SUMMARY: parallel-runner, unit, drain, rollback, fork, slot-waiter, deploy-group, D1, docker-orchestrator-decomposition
-# STRUCTURE: ▶ mock os.waitpid/fork → ◇ _drain_completed_count [WNOHANG done|fail|ChildProcessError] → ◇ _drain_all_count [blocking done|error] → ◇ deploy_docker_group [rollback on fail] → ⎋ LDD IMP:9
+# STRUCTURE: ▶ mock os.waitpid/fork → ◇ drain_completed_count [WNOHANG done|fail|ChildProcessError] → ◇ drain_all_count [blocking done|error] → ◇ deploy_docker_group [rollback on fail] → ⎋ LDD IMP:9
 # region MODULE_CONTRACT
 ## @purpose  Unit-тесты для core/internal/bootstrap/deploy/parallel_runner.py (DevPlan 118 D1) —
 ##           fork-параллелизм, drain-примитивы, atomic rollback deploy_docker_group.
 ## @scope    Pure unit (mock os.waitpid/os.fork) — никакого реального fork-деплоя в тестах.
 ## @invariants
-##   - _drain_completed_count: WNOHANG-семантика (готовые снимаются, незавершённые остаются)
-##   - _drain_all_count: blocking-семантика (все снимаются, pids.clear())
+##   - drain_completed_count: WNOHANG-семантика (готовые снимаются, незавершённые остаются)
+##   - drain_all_count: blocking-семантика (все снимаются, pids.clear())
 ##   - deploy_docker_group rollback: при fail → docker compose down для всех модулей группы
 ##   - LDD: IMP:9 лог в успешном сценарии
 ## @rationale DevPlan 118 D1 $TEST_SPEC: «существующие test_deploy_orchestrator + новые unit на
@@ -35,9 +35,9 @@ from core.internal.bootstrap.deploy import parallel_runner
 logger = logging.getLogger(__name__)
 
 
-# region TEST_drain_completed_count
+# region TEST_drain_completed
 class TestDrainCompletedCount:
-    # 🧪 TRAP[TEST] · 2026-08-02 · UNIT · _drain_completed_count — WNOHANG-снятие успешных детей
+    # 🧪 TRAP[TEST] · 2026-08-02 · UNIT · drain_completed_count — WNOHANG-снятие успешных детей
     def test_completed_success(self, caplog) -> None:
         """Завершившийся дочерний процесс (exit 0) снимается WNOHANG → deployed=1."""
         caplog.set_level(logging.DEBUG)
@@ -53,7 +53,7 @@ class TestDrainCompletedCount:
         assert names == []
         assert "mod1" not in {111: "mod1"}  # pid_to_name.pop вызван (мутация)
 
-    # 🧪 TRAP[TEST] · 2026-08-02 · UNIT · _drain_completed_count — WNOHANG-снятие failed детей
+    # 🧪 TRAP[TEST] · 2026-08-02 · UNIT · drain_completed_count — WNOHANG-снятие failed детей
     def test_completed_failure(self, caplog) -> None:
         """Завершившийся дочерний процесс (exit 1) снимается → failed=1 + имя в failed_names."""
         caplog.set_level(logging.DEBUG)
@@ -65,7 +65,7 @@ class TestDrainCompletedCount:
         assert failed == 1
         assert names == ["mod2"]
 
-    # 🧪 TRAP[TEST] · 2026-08-02 · UNIT · _drain_completed_count — ChildProcessError → fail
+    # 🧪 TRAP[TEST] · 2026-08-02 · UNIT · drain_completed_count — ChildProcessError → fail
     def test_child_process_error(self, caplog) -> None:
         """ChildProcessError (нет такого ребёнка) → fail=1, имя сохраняется."""
         caplog.set_level(logging.DEBUG)
@@ -77,12 +77,12 @@ class TestDrainCompletedCount:
         assert names == ["mod3"]
 
 
-# endregion TEST_drain_completed_count
+# endregion TEST_drain_completed
 
 
-# region TEST_drain_all_count
+# region TEST_drain_all
 class TestDrainAllCount:
-    # 🧪 TRAP[TEST] · 2026-08-02 · UNIT · _drain_all_count — blocking-снятие всех детей
+    # 🧪 TRAP[TEST] · 2026-08-02 · UNIT · drain_all_count — blocking-снятие всех детей
     def test_drain_all(self, caplog) -> None:
         """Blocking drain: все pids снимаются, pids.clear()."""
         caplog.set_level(logging.DEBUG)
@@ -96,7 +96,7 @@ class TestDrainAllCount:
         assert pids == []  # cleared
         assert names == []
 
-    # 🧪 TRAP[TEST] · 2026-08-02 · UNIT · _drain_all_count — ChildProcessError → fail
+    # 🧪 TRAP[TEST] · 2026-08-02 · UNIT · drain_all_count — ChildProcessError → fail
     def test_drain_all_error(self, caplog) -> None:
         """ChildProcessError → failed=1, имя в failed_names."""
         caplog.set_level(logging.DEBUG)
@@ -109,7 +109,7 @@ class TestDrainAllCount:
         assert names == ["mod7"]
 
 
-# endregion TEST_drain_all_count
+# endregion TEST_drain_all
 
 
 # region TEST_deploy_docker_group_rollback

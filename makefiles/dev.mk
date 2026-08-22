@@ -1,13 +1,13 @@
-# GREP_SUMMARY: dev.mk, dev-hosts, etc-hosts, hosts-manager, dry-run, apply, macos, dev-infra, age-key-backup, DR, fix-pyright, agent-check, basedpyright, static-analysis, L1-signal, DevPlan-163
-# STRUCTURE: ┌dev-hosts target┐ → ◇ APPLY=1? → ⊕ --apply (sudo, атомарно) · → ⊕ --dry-run (default, exit 1 на diff) → ⎋ python3 core/internal/dev_hosts.py ── ┌age-key-backup target┐ → ◇ AGE_RECIPIENT → ⎋ python3 -m core.internal.deploy.age_key_backup ── ┌fix-pyright target┐ → ⎋ .venv/bin/basedpyright --level error (информативный прогон) ── ┌agent-check target┐ → ⎋ $(PYTHON) -m core.internal.agent_check (L1-сигнал <5 s)
+# GREP_SUMMARY: dev.mk, dev-hosts, etc-hosts, hosts-manager, dry-run, apply, macos, dev-infra, age-key-backup, DR, agent-check, basedpyright, static-analysis, L1-signal, DevPlan-163, env_reader, _env_export
+# STRUCTURE: ┌dev-hosts target┐ → ◇ APPLY=1? → ⊕ --apply (sudo, атомарно) · → ⊕ --dry-run (default, exit 1 на diff) → ⎋ python3 core/internal/dev_hosts.py ── ┌age-key-backup target┐ → ◇ AGE_RECIPIENT → ⎋ python3 -m core.internal.deploy.age_key_backup ── ┌agent-check target┐ → ⎋ $(PYTHON) -m core.internal.agent_check (L1-сигнал <5 s)
 # region MODULE_CONTRACT
 ## @purpose  Dev-infrastructure targets for the local machine (macOS) — dev-hosts:
 ##           idempotent /etc/hosts management for the dev FQDN scheme (DevPlan 136 W4, T4.2);
 ##           age-key-backup: off-node encrypted backup of the AGE master key (DevPlan 147 W2,
-##           секция «DR мастер-ключа AGE» core/AGENTS.md — DR-drill W3.1); fix-pyright: информативный локальный
-##           прогон basedpyright (DevPlan 163 W-A A5, recommended-режим --level error);
+##           секция «DR мастер-ключа AGE» core/AGENTS.md — DR-drill W3.1);
 ##           agent-check: L1-статический сигнал агента на изменённых файлах <5 s (DevPlan 163
 ##           W-E E2, T1.3) — ruff + basedpyright + static + bespoke на diff (JSON-режим: JSON=1).
+##           (fix-pyright удалён Планом 175 W2.4 — дубль суита 'pyright' check-suite.yaml.)
 ## @scope    Included from root Makefile; local-dev targets only (no deployment/CI logic).
 ##           The business logic lives in core/internal/dev_hosts.py,
 ##           core/internal/deploy/age_key_backup.py and core/internal/agent_check/ (package,
@@ -23,14 +23,11 @@
 ##   - age-key-backup: реципиент — AGE_RECIPIENT env или --recipient флаг; ключ читается
 ##     локально по env-цепочке node_detect (AGE_SECRET_KEY → … → /etc/age/key.txt);
 ##     --dry-run по умолчанию БЕЗОПАСЕН (0 мутаций) — реальная выгрузка только без --dry-run
-##   - fix-pyright: exit code basedpyright прокидывается как есть (0 чисто / 1+ ошибки);
-##     НЕ auto-fix таргет (информативный — показывает, что фиксить); runs from .venv/bin
 ##   - agent-check: exit code модуля прокидывается (0 чисто / 1 blocking-нарушения);
 ##     JSON=1 → --json (машиночитаемый stdout); $(PYTHON) (.venv/bin/python) — тулы ruff/
 ##     basedpyright резолвятся рядом с sys.executable (ядро agent_check._venv_tool)
-##   - fix-pyright и agent-check регистрируются в entrypoint-manifest.yaml allowed_verbs —
-##     handoff W-G (handoff_wg_verb_fix_pyright.md / handoff_wg_verb_agent_check.md); до
-##     регистрации name-linter/verb-register падает (координационная зависимость фаз 1-2,
+##   - agent-check регистрируется в entrypoint-manifest.yaml allowed_verbs — handoff W-G;
+##     до регистрации name-linter/verb-register падает (координационная зависимость фаз 1-2,
 ##     НЕ обходится правкой манифеста)
 ## @rationale Extracted as makefiles/dev.mk per DevPlan 136 §8 file manifest (makefiles/dev.mk —
 ##            dev-hosts). Separate file keeps helpers.mk (shared dev-utils: venv/templates/
@@ -42,16 +39,18 @@
 ##            generate_entrypoint_manifest.py identically (it globs makefiles/*.mk).
 ##            age-key-backup добавлен в dev.mk (DevPlan 147 W2): операторская DR-операция
 ##            локальной машины, канон dev-* (как dev-hosts/dev-certs).
-##            fix-pyright — в dev.mk (DevPlan 163 W-A A5): локальный dev-инструмент статики,
-##            канон dev-* (аналогично fix-ruff в repair.mk — но fix-pyright информативный,
-##            не repair/auto-fix; repair.mk = только REPAIR_TARGETS, контракт не расширяется).
+##            fix-pyright — был в dev.mk (DevPlan 163 W-A A5 → удалён Планом 175 W2.4:
+##            дубль суита 'pyright' check-suite.yaml; история — @changes ниже).
 ##            agent-check — в dev.mk (DevPlan 163 W-E E2): L1-сигнал agent-loop — dev-цикл
 ##            агента, канон dev-* (L0 редактор → L1 agent-check → L2 pre-commit).
 ## @changes 2026-08-05 | DevPlan 136 W4 (T4.2) — Created
 ## @changes 2026-08-11 | DevPlan 147 W2 — +age-key-backup (DR off-node backup, секция «DR мастер-ключа AGE» core/AGENTS.md)
-## @changes 2026-08-13 | DevPlan 163 W-A A5 — +fix-pyright (информативный basedpyright-прогон)
+## @changes 2026-08-13 | DevPlan 163 W-A A5 — +fix-pyright (информативный basedpyright-прогон; позднее удалён — План 175 W2.4)
 ## @changes 2026-08-13 | DevPlan 163 W-E E2 — +agent-check (L1-статический сигнал агента)
 ## @changes 2026-08-15 | DevPlan 172 W2.3 — dev-hosts: grep/cut → env_reader (0 inline .env-логики)
+## @changes 2026-08-22 | T2.14 — dev-hosts: 4 inline env_reader fallback-строки → единый
+##            define _env_export (helpers.mk)
+## @changes 2026-08-22 | Аудит simplify-refactor-waves T0.4 — упоминания fix-pyright вычищены из активной документации
 # endregion MODULE_CONTRACT
 
 .PHONY: dev-hosts age-key-backup agent-check
@@ -65,11 +64,10 @@
 ##   PLATFORM_DOMAIN/DEV_CERTS_DIR). Default --dry-run блокирует make при diff (exit 1).
 dev-hosts:
 	@echo "[IMP:7][make][dev-hosts] Checking /etc/hosts dev block (APPLY=$${APPLY:-0})..."
-	@_env_file="$(_platform_root)/.env"; \
-	export NODE_NAME="$${NODE_NAME:-$$($(PYTHON) -m core.internal.shared.env_reader get NODE_NAME --file "$$_env_file")}"; \
-	export NODE_CONFIGS_DIR="$${NODE_CONFIGS_DIR:-$$($(PYTHON) -m core.internal.shared.env_reader get NODE_CONFIGS_DIR --file "$$_env_file")}"; \
-	export PLATFORM_DOMAIN="$${PLATFORM_DOMAIN:-$$($(PYTHON) -m core.internal.shared.env_reader get PLATFORM_DOMAIN --file "$$_env_file")}"; \
-	export DEV_DOMAIN_SUFFIX="$${DEV_DOMAIN_SUFFIX:-$$($(PYTHON) -m core.internal.shared.env_reader get DEV_DOMAIN_SUFFIX --file "$$_env_file")}"; \
+	@$(call _env_export,NODE_NAME) \
+	$(call _env_export,NODE_CONFIGS_DIR) \
+	$(call _env_export,PLATFORM_DOMAIN) \
+	$(call _env_export,DEV_DOMAIN_SUFFIX) \
 	export DEV_CERTS_DIR="$${DEV_CERTS_DIR:-$(_platform_root)/core/modules/nginx/dev-certs}"; \
 	ARGS="--dry-run"; \
 	if [ "$${APPLY:-}" = "1" ]; then ARGS="--apply"; fi; \

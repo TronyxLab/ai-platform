@@ -23,6 +23,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.helpers.gate_helpers import assert_ldd_imp9
+
 logger = logging.getLogger(__name__)
 
 # Path to the module under test (DevPlan 099: dev_cert_generator.py replaces the shell facade)
@@ -105,26 +107,6 @@ def _get_cert_sans(cert_file: Path) -> set[str]:
     return sans
 
 
-def _assert_ldd_trajectory(caplog) -> None:
-    """Assert that at least one IMP:9 log is present in caplog records.
-
-    ## @purpose — LDD telemetry verification: prints IMP:7-10 trajectory and asserts IMP:9 presence.
-    ## @io — ⇥ caplog (pytest fixture) → ⎋ None (asserts found_log)
-    ## @complexity — O(N) where N = caplog.records
-    """
-    found_log = False
-    logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-    for record in list(caplog.records):
-        if "[IMP:" in record.message:
-            imp_level = int(record.message.split("[IMP:")[1].split("]")[0])
-            if imp_level >= 7:
-                logger.info("%s", record.message)
-            if imp_level >= 9:
-                found_log = True
-    logger.info("--- END LDD TRAJECTORY ---")
-    assert found_log, "Critical LDD Error: No IMP:9 business logic log found"
-
-
 # endregion HELPER
 
 
@@ -163,7 +145,7 @@ def test_generate_certs_openssl_backend(tmp_path: Path, caplog) -> None:
         assert required in sans, f"Missing required SAN: {required}. Got: {sans}"
 
     logger.info("[IMP:9][test_generate_certs_openssl_backend] ✅ Cert created with all required SAN entries")
-    _assert_ldd_trajectory(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_generate_certs_openssl_backend
@@ -200,7 +182,7 @@ def test_context_domain_in_san(tmp_path: Path, caplog) -> None:
     assert "DNS:*.demo-ctx.local" in sans, f"Missing context domain SAN: DNS:*.demo-ctx.local. Got: {sans}"
 
     logger.info("[IMP:9][test_context_domain_in_san] ✅ SAN includes base + context domain *.demo-ctx.local")
-    _assert_ldd_trajectory(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_context_domain_in_san
@@ -247,7 +229,7 @@ def test_second_run_is_noop(tmp_path: Path, caplog) -> None:
     )
 
     logger.info("[IMP:9][test_second_run_is_noop] ✅ Second run is no-op (mtime unchanged, up-to-date)")
-    _assert_ldd_trajectory(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_second_run_is_noop
@@ -305,7 +287,7 @@ def test_regenerates_on_san_drift(tmp_path: Path, caplog) -> None:
     )
 
     logger.info("[IMP:9][test_regenerates_on_san_drift] ✅ SAN drift detected and cert regenerated")
-    _assert_ldd_trajectory(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_regenerates_on_san_drift

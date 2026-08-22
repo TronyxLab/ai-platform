@@ -23,17 +23,14 @@ import pytest
 
 from core.internal.shared.node_yaml import DomainsMixin, NodeYaml
 from tests._conftest.ldd import ldd_trajectory
+from tests.helpers.gate_helpers import write_yaml
 
 pytestmark = pytest.mark.static_audit
 
 logger = logging.getLogger(__name__)
 
 
-def _write_yaml(tmp_path: Path, content: str) -> Path:
-    """Write a node.yaml fixture to tmp_path (no hardcoded paths)."""
-    path = tmp_path / "node.yaml"
-    path.write_text(content)
-    return path
+# T2.16b: _write_yaml консолидирован в gate_helpers.write_yaml(path, data)
 
 
 # 🧪 TRAP[TEST] · Regression (H1) · get_context через DomainsMixin
@@ -43,7 +40,7 @@ def _write_yaml(tmp_path: Path, content: str) -> Path:
 @ldd_trajectory
 def test_get_context_via_domains_mixin(caplog, tmp_path):
     """get_context() через NodeYaml-агрегатор (DomainsMixin) — contexts[0].name canon."""
-    yaml_path = _write_yaml(tmp_path, "contexts:\n  - name: myorg\nnode:\n  name: n\n  host: 1.2.3.4\n")
+    yaml_path = write_yaml(tmp_path / "node.yaml", "contexts:\n  - name: myorg\nnode:\n  name: n\n  host: 1.2.3.4\n")
     node = NodeYaml(str(yaml_path))
     assert node.get_context() == "myorg"
     logger.critical("[IMP:9][test] get_context via DomainsMixin: context=%s — OK", node.get_context())
@@ -56,7 +53,7 @@ def test_get_context_via_domains_mixin(caplog, tmp_path):
 @ldd_trajectory
 def test_get_context_empty_via_domains_mixin(caplog, tmp_path):
     """get_context() возвращает "" при отсутствии contexts (no-raise, DomainsMixin)."""
-    yaml_path = _write_yaml(tmp_path, "domain: example.com\n")
+    yaml_path = write_yaml(tmp_path / "node.yaml", "domain: example.com\n")
     node = NodeYaml(str(yaml_path))
     assert not node.get_context()
     logger.critical("[IMP:9][test] get_context empty via DomainsMixin: '' — OK")
@@ -69,8 +66,8 @@ def test_get_context_empty_via_domains_mixin(caplog, tmp_path):
 @ldd_trajectory
 def test_get_domain_config_via_domains_mixin(caplog, tmp_path):
     """get_domain_config() через DomainsMixin — flat schema, project_domains агрегированы."""
-    yaml_path = _write_yaml(
-        tmp_path,
+    yaml_path = write_yaml(
+        tmp_path / "node.yaml",
         "domain: example.com\nemail: admin@example.com\nacme_dns_plugin: cf\n"
         "projects:\n  - name: p1\n    repo: org/p1\n    type: backend\n    domain: p1.example.com\n",
     )
@@ -90,7 +87,7 @@ def test_get_domain_config_via_domains_mixin(caplog, tmp_path):
 @ldd_trajectory
 def test_get_domain_config_defaults_via_domains_mixin(caplog, tmp_path):
     """get_domain_config() возвращает дефолты при отсутствии ключей (DomainsMixin)."""
-    yaml_path = _write_yaml(tmp_path, "contexts:\n  - name: c\n")
+    yaml_path = write_yaml(tmp_path / "node.yaml", "contexts:\n  - name: c\n")
     node = NodeYaml(str(yaml_path))
     cfg = node.get_domain_config()
     assert not cfg.platform_domain
@@ -107,7 +104,7 @@ def test_get_domain_config_defaults_via_domains_mixin(caplog, tmp_path):
 @ldd_trajectory
 def test_add_context_via_domains_mixin(caplog, tmp_path):
     """add_context() через DomainsMixin — мутация contexts[] с записью на диск."""
-    yaml_path = _write_yaml(tmp_path, "contexts:\n  - name: c1\n")
+    yaml_path = write_yaml(tmp_path / "node.yaml", "contexts:\n  - name: c1\n")
     node = NodeYaml(str(yaml_path))
     assert node.add_context(name="c2", description="second") is True
     # reload с диска — запись подтверждена
@@ -128,7 +125,7 @@ def test_add_context_duplicate_negative(caplog, tmp_path):
 
     from core.internal.shared.exceptions import ConfigValidationError
 
-    yaml_path = _write_yaml(tmp_path, "contexts:\n  - name: c1\n")
+    yaml_path = write_yaml(tmp_path / "node.yaml", "contexts:\n  - name: c1\n")
     node = NodeYaml(str(yaml_path))
     with pytest.raises(ConfigValidationError):
         node.add_context(name="c1")
@@ -142,7 +139,7 @@ def test_add_context_duplicate_negative(caplog, tmp_path):
 @ldd_trajectory
 def test_domains_mixin_direct_instantiation(caplog, tmp_path):
     """DomainsMixin можно инстанцировать напрямую (mixin-паттерн, не абстрактный)."""
-    yaml_path = _write_yaml(tmp_path, "contexts:\n  - name: direct\n")
+    yaml_path = write_yaml(tmp_path / "node.yaml", "contexts:\n  - name: direct\n")
 
     class _Minimal(DomainsMixin):
         def __init__(self, path):

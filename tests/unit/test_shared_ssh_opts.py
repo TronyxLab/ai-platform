@@ -17,6 +17,7 @@ import pytest
 
 from core.internal.shared.ssh_opts import SSH_OPTS, build_rsync_ssh_opts, main
 from core.internal.shared.timeouts import SSH_CONNECT_TIMEOUT
+from tests.helpers.gate_helpers import assert_ldd_imp9
 
 pytestmark = pytest.mark.static_audit
 
@@ -36,17 +37,7 @@ _CANONICAL_SSH_OPTS = [
 ]
 
 
-def _assert_imp9(caplog: pytest.LogCaptureFixture) -> None:
-    """Assert at least one IMP:9 log in caplog (LDD telemetry standard)."""
-    found = any("[IMP:9]" in r.message for r in caplog.records)
-    logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-    for record in list(caplog.records):
-        if "[IMP:" in record.message:
-            logger.info("%s", record.message)
-    logger.info("--- END LDD TRAJECTORY ---")
-    assert found, "Critical LDD Error: No IMP:9 business logic log found"
-
-
+# T2.16a: _assert_imp9 консолидирован в gate_helpers.assert_ldd_imp9
 # region FUNC_test_ssh_opts_canonical
 ## @purpose — Verify SSH_OPTS равен канону (5 флагов, порядок, значения) — U-15.
 ## @complexity — O(1)
@@ -65,7 +56,7 @@ def test_ssh_opts_canonical(caplog: pytest.LogCaptureFixture) -> None:
     assert "ServerAliveInterval=30" in SSH_OPTS
     assert "ServerAliveCountMax=10" in SSH_OPTS
     logger.info("[IMP:9][test_ssh_opts_canonical] SSH_OPTS == канон: %s", SSH_OPTS)
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion
@@ -85,7 +76,7 @@ def test_connect_timeout_from_timeouts(caplog: pytest.LogCaptureFixture) -> None
     assert SSH_OPTS[ct_idx] == f"ConnectTimeout={SSH_CONNECT_TIMEOUT}"
     assert SSH_CONNECT_TIMEOUT == 30
     logger.info("[IMP:9][test_connect_timeout] ConnectTimeout=%s — из timeouts (U-11)", SSH_CONNECT_TIMEOUT)
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion
@@ -106,7 +97,7 @@ def test_build_rsync_ssh_opts(caplog: pytest.LogCaptureFixture) -> None:
     assert result == expected
     assert result.startswith("ssh -o BatchMode=yes")
     logger.info("[IMP:9][test_build_rsync_ssh_opts] rsync -e: %s", result)
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion
@@ -129,7 +120,7 @@ def test_cli_shell(caplog: pytest.LogCaptureFixture) -> None:
     assert written.strip() == " ".join(SSH_OPTS)
     assert "BatchMode=yes" in written
     logger.info("[IMP:9][test_cli_shell] --shell output: %s", written.strip())
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion
@@ -152,7 +143,7 @@ def test_cli_rsync_e(caplog: pytest.LogCaptureFixture) -> None:
     assert written.strip() == build_rsync_ssh_opts()
     assert written.startswith("ssh -o")
     logger.info("[IMP:9][test_cli_rsync_e] --rsync-e output: %s", written.strip())
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion

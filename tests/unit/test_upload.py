@@ -18,8 +18,6 @@
 ##   DI-контракт (сигнатура) + утверждения на наблюдаемый эффект (не внутреннее состояние).
 ## @changes 2026-07-08 | MagicMock→FakeS3Client (Wave 2.1)
 ## @changes 2026-08-05 | DevPlan 139 W2 — REWRITE: внутренности моков → эффекты (spool/exit/retry/API)
-def _module_contract():
-    pass
 
 
 # endregion MODULE_CONTRACT

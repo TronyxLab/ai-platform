@@ -31,6 +31,7 @@ from core.internal.shared.node_yaml import (
     ProjectEntry,
 )
 from tests._conftest.ldd import ldd_trajectory
+from tests.helpers.gate_helpers import write_yaml
 
 pytestmark = pytest.mark.static_audit
 
@@ -42,16 +43,7 @@ logger = logging.getLogger(__name__)
 # ═══════════════════════════════════════════════════════════════════
 
 
-def _write_yaml(tmp_path: Path, content: str) -> Path:
-    """Write YAML content to a temp file.
-
-    ## @purpose  Helper — creates a temporary YAML file for mutation testing.
-    ## @io — ⇥ tmp_path: Path, content: str → ⎋ Path to written file
-    ## @complexity — O(1)
-    """
-    path = tmp_path / "node.yaml"
-    path.write_text(content, encoding="utf-8")
-    return path
+# T2.16b: _write_yaml консолидирован в gate_helpers.write_yaml(path, data)
 
 
 def _read_yaml(path: Path) -> str:
@@ -92,7 +84,7 @@ def test_add_project_success(caplog, tmp_path):
 
     ## @purpose  Verify add_project appends new project entry and data persists on re-read.
     """
-    yaml_path = _write_yaml(tmp_path, SAMPLE_NODE_YAML)
+    yaml_path = write_yaml(tmp_path / "node.yaml", SAMPLE_NODE_YAML)
     node = NodeYaml(str(yaml_path))
 
     new_project = ProjectEntry(
@@ -133,7 +125,7 @@ def test_add_project_duplicate(caplog, tmp_path):
 
     ## @purpose  Verify duplicate project detection raises typed error.
     """
-    yaml_path = _write_yaml(tmp_path, SAMPLE_NODE_YAML)
+    yaml_path = write_yaml(tmp_path / "node.yaml", SAMPLE_NODE_YAML)
     node = NodeYaml(str(yaml_path))
 
     dup_project = ProjectEntry(
@@ -167,7 +159,7 @@ def test_remove_project_success(caplog, tmp_path):
 
     ## @purpose  Verify remove_project deletes the correct project entry.
     """
-    yaml_path = _write_yaml(tmp_path, SAMPLE_NODE_YAML)
+    yaml_path = write_yaml(tmp_path / "node.yaml", SAMPLE_NODE_YAML)
     node = NodeYaml(str(yaml_path))
 
     result = node.remove_project("existing-app")
@@ -196,7 +188,7 @@ def test_remove_project_not_found(caplog, tmp_path):
 
     ## @purpose  Verify remove_project gracefully handles missing project.
     """
-    yaml_path = _write_yaml(tmp_path, SAMPLE_NODE_YAML)
+    yaml_path = write_yaml(tmp_path / "node.yaml", SAMPLE_NODE_YAML)
     node = NodeYaml(str(yaml_path))
 
     result = node.remove_project("nonexistent-project")
@@ -223,7 +215,7 @@ def test_update_project_success(caplog, tmp_path):
 
     ## @purpose  Verify update_project modifies the correct project entry.
     """
-    yaml_path = _write_yaml(tmp_path, SAMPLE_NODE_YAML)
+    yaml_path = write_yaml(tmp_path / "node.yaml", SAMPLE_NODE_YAML)
     node = NodeYaml(str(yaml_path))
 
     result = node.update_project("existing-app", domain="new-domain.example.com")
@@ -257,7 +249,7 @@ def test_update_project_not_found(caplog, tmp_path):
 
     ## @purpose  Verify update_project gracefully handles missing project.
     """
-    yaml_path = _write_yaml(tmp_path, SAMPLE_NODE_YAML)
+    yaml_path = write_yaml(tmp_path / "node.yaml", SAMPLE_NODE_YAML)
     node = NodeYaml(str(yaml_path))
 
     result = node.update_project("nonexistent-project", domain="ignored.example.com")
@@ -311,7 +303,7 @@ projects:
     repo: myorg/existing-app
     type: backend
 """
-    yaml_path = _write_yaml(tmp_path, yaml_with_comments)
+    yaml_path = write_yaml(tmp_path / "node.yaml", yaml_with_comments)
     node = NodeYaml(str(yaml_path))
 
     new_project = ProjectEntry(
@@ -367,7 +359,7 @@ def test_write_back_pyyaml_fallback(caplog, tmp_path, monkeypatch):
 
     monkeypatch.setattr(builtins, "__import__", mock_import)
 
-    yaml_path = _write_yaml(tmp_path, SAMPLE_NODE_YAML)
+    yaml_path = write_yaml(tmp_path / "node.yaml", SAMPLE_NODE_YAML)
     node = NodeYaml(str(yaml_path))
 
     new_project = ProjectEntry(
@@ -431,7 +423,7 @@ def _node_with_failing_replace(yaml_path: Path) -> NodeYaml:
 @ldd_trajectory
 def test_add_project_disk_error_cache_clean(caplog, tmp_path):
     """add_project on disk write failure → ConfigParseError AND reload() shows no mutation."""
-    yaml_path = _write_yaml(tmp_path, SAMPLE_NODE_YAML)  # fixture written BEFORE failing replace
+    yaml_path = write_yaml(tmp_path / "node.yaml", SAMPLE_NODE_YAML)  # fixture written BEFORE failing replace
     node = _node_with_failing_replace(yaml_path)
 
     with pytest.raises(ConfigParseError):
@@ -453,7 +445,7 @@ def test_add_project_disk_error_cache_clean(caplog, tmp_path):
 @ldd_trajectory
 def test_remove_project_disk_error_cache_clean(caplog, tmp_path):
     """remove_project on disk write failure → ConfigParseError AND reload() shows project intact."""
-    yaml_path = _write_yaml(tmp_path, SAMPLE_NODE_YAML)  # fixture written BEFORE failing replace
+    yaml_path = write_yaml(tmp_path / "node.yaml", SAMPLE_NODE_YAML)  # fixture written BEFORE failing replace
     node = _node_with_failing_replace(yaml_path)
 
     with pytest.raises(ConfigParseError):
@@ -473,7 +465,7 @@ def test_remove_project_disk_error_cache_clean(caplog, tmp_path):
 @ldd_trajectory
 def test_update_project_disk_error_cache_clean(caplog, tmp_path):
     """update_project on disk write failure → ConfigParseError AND reload() shows old value."""
-    yaml_path = _write_yaml(tmp_path, SAMPLE_NODE_YAML)  # fixture written BEFORE failing replace
+    yaml_path = write_yaml(tmp_path / "node.yaml", SAMPLE_NODE_YAML)  # fixture written BEFORE failing replace
     node = _node_with_failing_replace(yaml_path)
 
     with pytest.raises(ConfigParseError):
@@ -504,7 +496,7 @@ def test_update_project_disk_error_cache_clean(caplog, tmp_path):
 @ldd_trajectory
 def test_add_context_success(caplog, tmp_path):
     """NodeYaml.add_context() should append a context entry and persist on disk."""
-    yaml_path = _write_yaml(tmp_path, SAMPLE_NODE_YAML)
+    yaml_path = write_yaml(tmp_path / "node.yaml", SAMPLE_NODE_YAML)
     node = NodeYaml(str(yaml_path))
 
     result = node.add_context(
@@ -531,7 +523,7 @@ def test_add_context_success(caplog, tmp_path):
 @ldd_trajectory
 def test_add_context_duplicate_raises(caplog, tmp_path):
     """NodeYaml.add_context() should raise ConfigValidationError for duplicate context name."""
-    yaml_path = _write_yaml(tmp_path, SAMPLE_NODE_YAML)
+    yaml_path = write_yaml(tmp_path / "node.yaml", SAMPLE_NODE_YAML)
     node = NodeYaml(str(yaml_path))
 
     with pytest.raises(ConfigValidationError) as exc_info:
@@ -548,7 +540,7 @@ def test_add_context_duplicate_raises(caplog, tmp_path):
 @ldd_trajectory
 def test_add_context_creates_section(caplog, tmp_path):
     """NodeYaml.add_context() should create a missing contexts section."""
-    yaml_path = _write_yaml(tmp_path, "node:\n  name: test-node\n  host: 1.2.3.4\nprojects: []\n")
+    yaml_path = write_yaml(tmp_path / "node.yaml", "node:\n  name: test-node\n  host: 1.2.3.4\nprojects: []\n")
     node = NodeYaml(str(yaml_path))
 
     node.add_context(name="first-ctx")

@@ -47,6 +47,7 @@ from types import SimpleNamespace
 import pytest
 
 from core.internal.loadtest.runner_cli import _build_locust_args, _locust_env
+from tests.helpers.gate_helpers import assert_ldd_imp9
 
 pytestmark = pytest.mark.static_audit
 
@@ -89,25 +90,7 @@ def _make_config(target_rps: int = 10, users: int = 20) -> SimpleNamespace:
 # endregion HELPER__make_config
 
 
-# region HELPER_assert_ldd_imp9
-def _assert_ldd_imp9(caplog) -> None:
-    """Печать LDD-траектории IMP:7-10 + assert наличия IMP:9 (Anti-Illusion Rule).
-
-    ## @purpose — Единая точка LDD-телеметрии тестов runner (контракт .kilo/rules/testing.md).
-    ## @io — ⇥ caplog → ⎋ None (assert found IMP:9)
-    """
-    logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-    found = False
-    for record in list(caplog.records):
-        if "[IMP:" in record.message:
-            logger.info("%s", record.message)
-            if "[IMP:9]" in record.message:
-                found = True
-    logger.info("--- END LDD TRAJECTORY ---")
-    assert found, "Critical LDD Error: No IMP:9 business logic log found"
-
-
-# endregion HELPER_assert_ldd_imp9
+# T2.16a: _assert_ldd_imp9 консолидирован в gate_helpers.assert_ldd_imp9
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -126,7 +109,7 @@ def test_build_locust_args_no_max_rps(caplog) -> None:
     caplog.set_level(logging.INFO)
     args = _build_locust_args("scenarios/web.py", 20, 90, "/tmp/lt/run")
     logger.info("[IMP:9][test][build_locust_args] argv собран без rate-limit флага: %d флагов", len(args))
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
     assert "--max-rps" not in args
 
 
@@ -144,7 +127,7 @@ def test_build_locust_args_structure(caplog) -> None:
     caplog.set_level(logging.INFO)
     args = _build_locust_args("scenarios/web.py", 20, 90, "/tmp/lt/run")
     logger.info("[IMP:9][test][build_locust_args] структура argv валидна (headless-contract)")
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
     for flag in ("-f", "--headless", "-u", "-r", "--run-time", "--csv", "--csv-full-history"):
         assert flag in args, f"обязательный флаг {flag} отсутствует в argv"
 
@@ -172,7 +155,7 @@ def test_build_locust_args_parametrized(users: int, duration: int, csv_prefix: s
     logger.info(
         "[IMP:9][test][build_locust_args] parametrized: users=%d duration=%d csv=%s", users, duration, csv_prefix
     )
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
     assert args[args.index("-u") + 1] == str(users)
     assert args[args.index("-r") + 1] == str(users)
     assert args[args.index("--run-time") + 1] == f"{duration}s"
@@ -195,7 +178,7 @@ def test_locust_env_has_target_rps(monkeypatch, caplog) -> None:
         monkeypatch.delenv(key, raising=False)
     env = _locust_env(_make_config(target_rps=10, users=20))
     logger.info("[IMP:9][test][locust_env] LT_TARGET_RPS=%s LT_USERS=%s", env.get("LT_TARGET_RPS"), env.get("LT_USERS"))
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
     assert env["LT_TARGET_RPS"] == "10"
     assert env["LT_USERS"] == "20"
     # capacity: каждый шаг передаёт свой RPS/пул через параметры (per-step override)
@@ -239,7 +222,7 @@ def test_locust_env_passthrough_pg(caplog) -> None:
         "LT_LANGFUSE_SECRET_KEY" in env,
         env.get("LT_CHUNK_TIMEOUT"),
     )
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
     assert env["LT_PG_USER"] == "postgres"
     assert env["LT_PG_PASSWORD"] == "secret-pw"
     assert env["LT_PG_DB"] == "platform"
@@ -278,7 +261,7 @@ def test_rps_wait_time_constant_throughput(monkeypatch, caplog) -> None:
     caplog.set_level(logging.INFO)
     wait = rps_wait_time(10, 20)  # per-user rps = 10/20 = 0.5 → constant_pacing(1/0.5 = 2.0)
     logger.info("[IMP:9][test][rps_wait_time] constant_throughput: per-user=%s wait=%s", 0.5, 2.0)
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
     assert callable(wait)
     # constant_throughput(0.5) = constant_pacing(2.0): единственная свободная переменная — wait_time
     assert wait.__closure__[0].cell_contents == 2.0
@@ -305,7 +288,7 @@ def test_rps_wait_time_fallback(monkeypatch, caplog) -> None:
     wait = rps_wait_time(0, 10)  # target_rps=0 → fallback
     wait_no_users = rps_wait_time(10, 0)  # users=0 → fallback (защита деления на 0)
     logger.info("[IMP:9][test][rps_wait_time] fallback between(0.05, 0.2) при rps<=0 или users<=0")
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
     for w in (wait, wait_no_users):
         assert callable(w)
         cells = sorted(c.cell_contents for c in w.__closure__)

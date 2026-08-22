@@ -66,7 +66,10 @@ services:
     volumes:
       - ./config:/config:ro
       - prometheus-config-gen:/generated:rw
-      - ${PROMETHEUS_RULES_DIR:-/opt/prometheus/rules}:/rules:rw
+      # T1.6 (аудит 2026-08-22): host-fallback = SoT /opt/platform/prometheus-rules
+      # (platform-infra.yaml#PROMETHEUS_RULES_DIR); прежний fallback /opt/prometheus/rules
+      # расходился с SoT — на ноде без env правила писались мимо volume prometheus.
+      - ${PROMETHEUS_RULES_DIR:-/opt/platform/prometheus-rules}:/rules:rw
 
   # ── Prometheus (Metrics TSDB) ─────────────────────────────────────────────
   # region service:prometheus
@@ -110,7 +113,8 @@ services:
       # 170 W12 C5 (drift-фикс): контейнерный путь = rule_files glob
       # "/opt/prometheus/rules/*-alerts.yml" (прежний mount давал /opt/platform/prometheus-rules —
       # правила молча не загружались). Host-сторона — единый SoT PROMETHEUS_RULES_DIR.
-      - ${PROMETHEUS_RULES_DIR:-/opt/prometheus/rules}:/opt/prometheus/rules:ro
+      # T1.6 (аудит 2026-08-22): host-fallback = SoT /opt/platform/prometheus-rules.
+      - ${PROMETHEUS_RULES_DIR:-/opt/platform/prometheus-rules}:/opt/prometheus/rules:ro
 
     networks:
       - observability-net

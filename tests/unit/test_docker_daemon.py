@@ -18,22 +18,11 @@ import logging
 import pytest
 
 from core.internal.bootstrap.docker_daemon import merge_live_restore
+from tests.helpers.gate_helpers import assert_ldd_imp9
 
 pytestmark = pytest.mark.static_audit
 
 logger = logging.getLogger("test_docker_daemon")
-
-
-def _print_trajectory(caplog):
-    """Print IMP:7-10 lines before assertions (LDD protocol)."""
-    logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-    for record in list(caplog.records):
-        msg = getattr(record, "message", "")
-        if "[IMP:" in str(msg):
-            imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-            if imp_level >= 7:
-                logger.info("%s", msg)
-    logger.info("--- END LDD TRAJECTORY ---")
 
 
 def test_merge_live_restore_preserves_existing_keys(tmp_path, caplog) -> None:
@@ -43,7 +32,7 @@ def test_merge_live_restore_preserves_existing_keys(tmp_path, caplog) -> None:
     daemon_json.write_text(json.dumps({"iptables": True, "log-driver": "json-file"}))
 
     ok = merge_live_restore(str(daemon_json))
-    _print_trajectory(caplog)
+    assert_ldd_imp9(caplog, require_imp9=False)
 
     assert ok is True
     config = json.loads(daemon_json.read_text())
@@ -60,7 +49,7 @@ def test_merge_live_restore_invalid_json(tmp_path, caplog) -> None:
     daemon_json.write_text("not json {{{")
 
     ok = merge_live_restore(str(daemon_json))
-    _print_trajectory(caplog)
+    assert_ldd_imp9(caplog, require_imp9=False)
 
     assert ok is False
     assert daemon_json.read_text() == "not json {{{"
@@ -71,7 +60,7 @@ def test_merge_live_restore_missing_file(tmp_path, caplog) -> None:
     """Отсутствующий файл → False (install-docker создаёт файл heredoc'ом отдельно)."""
     caplog.set_level(logging.INFO)
     ok = merge_live_restore(str(tmp_path / "nonexistent.json"))
-    _print_trajectory(caplog)
+    assert_ldd_imp9(caplog, require_imp9=False)
 
     assert ok is False
     logger.critical("[IMP:9][test] merge_missing: ok=%s — OK", ok)
@@ -100,7 +89,7 @@ def test_merge_live_restore_preserves_default_address_pools(tmp_path, caplog) ->
     )
 
     ok = merge_live_restore(str(daemon_json))
-    _print_trajectory(caplog)
+    assert_ldd_imp9(caplog, require_imp9=False)
 
     assert ok is True
     config = json.loads(daemon_json.read_text())

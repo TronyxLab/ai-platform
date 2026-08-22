@@ -31,6 +31,7 @@ from core.internal.bootstrap.overlay_deliverer import (
     resolve_node_yaml,
     sync_core_to_vps,
 )
+from tests.helpers.gate_helpers import assert_ldd_imp9
 
 pytestmark = pytest.mark.static_audit
 
@@ -89,7 +90,7 @@ def test_ssh_e(caplog) -> None:
     # · Scenario: any change to SSH option formatting
     # · Last fail: N/A (new test)
     # · Remove if: SSH option format changes
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_ssh_e
@@ -115,7 +116,7 @@ def test_resolve_node_yaml_found(platform_root: str, caplog) -> None:
     # · Scenario: resolve_node_yaml returns wrong path or raises when path exists
     # · Last fail: N/A (new test)
     # · Remove if: resolve_node_yaml signature or search logic changes fundamentally
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_resolve_node_yaml_found
@@ -138,7 +139,7 @@ def test_resolve_node_yaml_not_found(tmp_path: str, caplog) -> None:
     # · Scenario: non-existent node should raise, not return None or empty
     # · Last fail: N/A (new test)
     # · Remove if: error handling strategy changes
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_resolve_node_yaml_not_found
@@ -176,7 +177,7 @@ def test_extract_node_host(tmp_path: str, caplog, host_value: str | None, expect
     host = extract_node_host(yaml_path)
     assert host == expected, f"Expected {expected!r}, got {host!r}"
     logger.info("[IMP:9][test_extract_node_host][done] Host extracted: %s", host)
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_extract_node_host
@@ -211,7 +212,7 @@ def test_sync_core_dry_run(tmp_path: str, caplog) -> None:
     # · Scenario: dry-run should NOT run rsync/ssh
     # · Last fail: N/A (new test)
     # · Remove if: dry-run mode is removed
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_sync_core_dry_run
@@ -238,7 +239,7 @@ def test_sync_core_rsync_failure(tmp_path: str, caplog) -> None:
     # · Scenario: failed rsync should raise, not return False
     # · Last fail: N/A (new test)
     # · Remove if: error handling strategy changes
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_sync_core_rsync_failure
@@ -264,7 +265,7 @@ def test_deliver_no_overlays(platform_root: str, caplog) -> None:
     # · Scenario: missing overlays dir should not raise an error
     # · Last fail: N/A (new test)
     # · Remove if: overlay delivery strategy changes
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_deliver_no_overlays
@@ -296,7 +297,7 @@ def test_deliver_vhost_overlays_success(overlay_dir: str, caplog, dry_run: bool,
         result = deliver_vhost_overlays("test-node", platform_root=overlay_dir, dry_run=True)
     assert result is True, "Success path should return True"
     logger.info("[IMP:9][test_deliver_vhost_overlays_success][done] dry_run=%s → True", dry_run)
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_deliver_vhost_overlays_success
@@ -322,7 +323,7 @@ def test_deliver_mkdir_failure(overlay_dir: str, caplog) -> None:
     # · Scenario: failed mkdir should raise, not silently skip rsync
     # · Last fail: N/A (new test)
     # · Remove if: error handling strategy changes
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_deliver_mkdir_failure
@@ -333,20 +334,4 @@ def test_deliver_mkdir_failure(overlay_dir: str, caplog) -> None:
 # ═══════════════════════════════════════════════════════════════════
 
 
-def _assert_imp9(caplog) -> None:
-    """LDD trajectory check: verify at least one IMP:9 log exists."""
-    found = False
-    logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-    for record in list(caplog.records):
-        if "[IMP:" in record.message:
-            imp_str = record.message.split("[IMP:")[1].split("]")[0]
-            try:
-                imp_level = int(imp_str)
-            except ValueError:
-                continue
-            if imp_level >= 7:
-                logger.info("%s", record.message)
-            if imp_level >= 9:
-                found = True
-    logger.info("--- END LDD TRAJECTORY ---")
-    assert found, "Critical LDD Error: No IMP:9 business logic log found"
+# T2.16a: _assert_imp9 консолидирован в gate_helpers.assert_ldd_imp9

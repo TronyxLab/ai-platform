@@ -21,6 +21,7 @@ from core.internal.bootstrap.cron_installer import (
     install_acme_cron,
     migrate_acme_cron_if_needed,
 )
+from tests.helpers.gate_helpers import assert_ldd_imp9
 
 pytestmark = pytest.mark.static_audit
 
@@ -37,21 +38,6 @@ def _assert_log_event(caplog, *, levelno: int, imp: int, keyword: str) -> None:
     assert any(r.levelno == levelno and f"[IMP:{imp}]" in r.message and keyword in r.message for r in caplog.records), (
         f"Лог-событие не найдено: levelno={levelno} [IMP:{imp}] keyword={keyword!r}\n---\n{caplog.text}"
     )
-
-
-def _print_trajectory(caplog) -> bool:
-    """LDD-траектория IMP:7-10; возвращает True при наличии IMP:9 (Anti-Illusion, без assert)."""
-    found = False
-    logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-    for record in list(caplog.records):
-        if "[IMP:" in record.message:
-            imp_level = int(record.message.split("[IMP:")[1].split("]")[0])
-            if imp_level >= 7:
-                logger.info("%s", record.message)
-            if imp_level >= 9:
-                found = True
-    logger.info("--- END LDD TRAJECTORY ---")
-    return found
 
 
 def _mk_acme_sh(tmp_path: Path, subdir: str = "") -> Path:
@@ -125,7 +111,7 @@ class TestInstallAcmeCron:
         assert any("--install-cronjob" in c for c in calls)
         assert any("--renew-hook" in c for c in calls)
         _assert_log_event(caplog, levelno=logging.INFO, imp=9, keyword="Cron installed")
-        assert _print_trajectory(caplog), "LDD: нет IMP:9-лога в успешном сценарии"
+        assert assert_ldd_imp9(caplog, require_imp9=False), "LDD: нет IMP:9-лога в успешном сценарии"
 
     # 🧪 TRAP[TEST] · Regression · Scenario: acme.sh missing
     # · Expect: False (no cron without binary)
@@ -163,7 +149,7 @@ class TestInstallAcmeCron:
 
         assert result is False
         _assert_log_event(caplog, levelno=logging.WARNING, imp=7, keyword="Cron install failed")
-        _print_trajectory(caplog)
+        assert_ldd_imp9(caplog, require_imp9=False)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -246,7 +232,7 @@ class TestMigrateCron:
         assert any("--install-cronjob" in c for c in calls)
         assert any("--renew-hook" in c for c in calls)
         _assert_log_event(caplog, levelno=logging.INFO, imp=9, keyword="Cron migration complete")
-        assert _print_trajectory(caplog), "LDD: нет IMP:9-лога в успешном сценарии"
+        assert assert_ldd_imp9(caplog, require_imp9=False), "LDD: нет IMP:9-лога в успешном сценарии"
 
     # 🧪 TRAP[TEST] · Regression · Scenario: no acme.sh cron entry at all
     # · Expect: True (nothing to migrate)

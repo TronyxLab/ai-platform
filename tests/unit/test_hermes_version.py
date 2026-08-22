@@ -14,8 +14,6 @@
 ##     drift-детекторов) — L1 коллапс
 ## @rationale — DevPlan 002 W5 T5.4: L1 label удалён; единый образ. Organisation-agnostic.
 ## @changes  2026-08-16 | DevPlan 002 W5 T5.4 — rewrite под единый образ (build/Dockerfile удалён)
-def _module_contract():
-    pass
 
 
 # endregion MODULE_CONTRACT

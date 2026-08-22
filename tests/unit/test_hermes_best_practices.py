@@ -15,8 +15,6 @@
 ## @rationale — Q: Why validate best practices in tests? A: Enforce Hermes security
 ##              hardening automatically; prevents regression on restart/approval/secret policies
 ## @changes — LAST_CHANGE: 2026-06-12 | Added MODULE_CONTRACT region markers
-def _module_contract():
-    pass
 
 
 # endregion MODULE_CONTRACT

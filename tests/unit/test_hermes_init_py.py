@@ -24,6 +24,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.helpers.gate_helpers import assert_ldd_imp9
+
 logger = logging.getLogger(__name__)
 
 # module-specific path (tests/AGENTS.md §sys.path policy)
@@ -36,22 +38,7 @@ from init import HermesInit
 pytestmark = pytest.mark.static_audit
 
 
-def _assert_imp9(caplog: pytest.LogCaptureFixture, needle: str | None = None) -> None:
-    """Assert at least one IMP:9 log (LDD telemetry standard)."""
-    logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-    found = False
-    for record in list(caplog.records):
-        if "[IMP:" in record.message:
-            logger.info("%s", record.message)
-            if needle and needle in record.message:
-                found = True
-    logger.info("--- END LDD TRAJECTORY ---")
-    if needle:
-        assert found, f"Critical LDD Error: No IMP:9 log containing '{needle}'"
-    else:
-        assert any("[IMP:9]" in r.message for r in caplog.records), "Critical LDD Error: No IMP:9 log found"
-
-
+# T2.16a: _assert_imp9 консолидирован в gate_helpers.assert_ldd_imp9
 def _make_fixture(tmp_path: Path, *, context_profiles: bool = False) -> dict:
     """Создать fixture-дерево: templates/context/data + fake rsync.
 
@@ -129,7 +116,7 @@ def test_setup_dirs_creates_profiles(caplog: pytest.LogCaptureFixture, tmp_path)
     init.setup_dirs()
     assert (fx["data"] / "base-agent" / "config.yaml").is_file()
     assert (fx["data"] / "coder" / "config.yaml").is_file()
-    _assert_imp9(caplog, "Profile created")
+    assert_ldd_imp9(caplog, needle="Profile created")
 
 
 # 🧪 TRAP[TEST] · NEGATIVE (R5) · setup_dirs: существующий профиль НЕ перезаписывается (D5)
@@ -186,7 +173,7 @@ def test_sync_profile_skills_first_start(caplog: pytest.LogCaptureFixture, tmp_p
     dest = fx["data"] / "platform" / "skills" / "superposition" / "SKILL.md"
     assert dest.is_file(), "скилл профиля должен быть доставлен на volume"
     assert "ai-instructions:0.7.0" in dest.read_text(encoding="utf-8")
-    _assert_imp9(caplog, "SKILLS")
+    assert_ldd_imp9(caplog, needle="SKILLS")
 
 
 # 🧪 TRAP[TEST] · 2026-08-16 · Regression · sync_profile_skills: обновлённый шаблон перезаписывает stamped (D3)
@@ -223,7 +210,7 @@ def test_sync_profile_skills_manual_file_untouched(caplog: pytest.LogCaptureFixt
     dest.write_text("---\nname: superposition\n---\n# Operator edit (no stamp)\n", encoding="utf-8")
     init.sync_profile_skills()  # повторный старт с новым шаблоном
     assert "# Operator edit (no stamp)" in dest.read_text(encoding="utf-8"), "ручной файл должен сохраниться"
-    _assert_imp9(caplog, "SKILLS")
+    assert_ldd_imp9(caplog, needle="SKILLS")
 
 
 # endregion TEST_sync_profile_skills
@@ -250,7 +237,7 @@ def test_check_config_overlay(caplog: pytest.LogCaptureFixture, tmp_path) -> Non
     )
     init.check_config()
     assert (fx["hermes_config"] / "telegram.yaml").is_file(), "context config должен быть скопирован"
-    _assert_imp9(caplog, "Context config overlay applied")
+    assert_ldd_imp9(caplog, needle="Context config overlay applied")
 
 
 # endregion TEST_check_config
@@ -338,7 +325,7 @@ def test_init_py_parity_negative(caplog: pytest.LogCaptureFixture, tmp_path) -> 
     assert init.run(context="prod") == 0
     profiles_after_second = sorted(p.name for p in (fx["data"]).iterdir()) if fx["data"].is_dir() else []
     assert profiles_after_first == profiles_after_second, "второй run не должен плодить профили"
-    _assert_imp9(caplog, "COMPLETE")
+    assert_ldd_imp9(caplog, needle="COMPLETE")
 
 
 # 🧪 TRAP[TEST] · 2026-08-02 · Regression · CONTEXT лог: задан → INFO, пуст → WARN (D5)

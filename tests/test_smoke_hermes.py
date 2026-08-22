@@ -22,8 +22,6 @@
 ##   - Dashboard auth via HERMES_DASHBOARD_USERNAME / HERMES_DASHBOARD_PASSWORD
 ##   - LDD trajectory (IMP:7-10) printed for each test
 ## @rationale — Dedicated per-module smoke test per DevPlan wave-hermes-agent reset.
-def _module_contract():
-    pass
 
 
 # endregion MODULE_CONTRACT

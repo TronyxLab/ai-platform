@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: reconciler, converge, r1, r2, r3, r4, r5, r6, r7, r8, r9, reconcile-perms, reconcile-audit-log, reconcile-projects, reconcile-networks, detect-hosts-drift, verify-vhosts, reconcile-volumes, reconcile-sudoers, reconcile-runtime, orchestrator, exit-code, json-report
-# STRUCTURE: ▶ argparse ┌--node-yaml --node-name --core-dir --templates-dir --modules-dir --dry-run --report-only --units┐ → ○ infra.unit_enabled filter → ▶ R1 perms → ▶ R2 audit → ▶ R3 projects → ▶ R4 networks → ▶ R5 hosts-drift → ▶ R6 vhosts → ▶ R7 volumes → ▶ R8 sudoers → ▶ R9 runtime → ⊕ aggregate exit_code {0,1,2} → ⎋ JSON report stdout
+# GREP_SUMMARY: reconciler, converge, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, reconcile-perms, reconcile-audit-log, reconcile-projects, reconcile-networks, detect-hosts-drift, verify-vhosts, reconcile-volumes, reconcile-sudoers, reconcile-runtime, reconcile-prometheus-tsdb, orchestrator, exit-code, json-report, data-driven, unit-actions
+# STRUCTURE: ▶ argparse ┌--node-yaml --node-name --core-dir --templates-dir --modules-dir --dry-run --report-only --units┐ → ▶ data-driven unit dispatch ┌_unit_actions R1→R10: (unit_id, action)┐ → ○ for loop ∋ unit: ◇ infra.unit_enabled? → action() | ⎋ SKIP log → ⊕ aggregate exit_code {0,1,2} → ⎋ JSON report stdout
 # region MODULE_CONTRACT
 ## @purpose  Оркестратор desired-state reconciler (R1-R9) — депеширует доменным модулям
 ##           converge/ пакета (perms/audit/projects/networks/vhosts/volumes/sudoers/runtime).
@@ -14,6 +14,7 @@
 ##           R7 reconcile_volumes — detect-only named volumes O7 (converge/volumes.py)
 ##           R8 reconcile_sudoers — sudoers.d drift + self-heal (converge/sudoers.py)
 ##           R9 reconcile_runtime_state — container state + compose up -d + cooldown (converge/runtime.py)
+##           R10 reconcile_prometheus_tsdb — TSDB self-heal (converge/prometheus_tsdb.py)
 ## @location core/internal/bootstrap/converge/reconciler.py
 ## @invariants
 ##   - R-units независимы — один unit failure НЕ прерывает остальные
@@ -33,11 +34,14 @@
 ##   2026-07-30 · T9b — replaced subprocess call to gen-env-platform.sh with direct import
 ##   2026-08-01 · B9 T2 — SRP-декомпозиция: домены вынесены в converge/{perms,audit,projects,
 ##              networks,vhosts,volumes,sudoers,runtime}.py, инфраструктура — в converge/infra.py
+##   2026-08-22 · T2.17 — data-driven dispatch: 10 однотипных if-блоков (R1-R10) → таблица
+##              _unit_actions (unit_id → action) + единый цикл (предикат/SKIP-лог сохранены 1:1)
 # endregion MODULE_CONTRACT
 
 import argparse
 import logging
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -193,67 +197,58 @@ def main() -> int:
     logger.info("[IMP:9][converge][main] units: %s", units_filter if units_filter else "ALL")
     logger.info("[IMP:9][converge][main] ==============================")
 
-    # ── Dispatch R-units with --units filter ──
-    if infra.unit_enabled(units_filter, "R1"):
-        _ = reconcile_perms(infra.core_dir, dry_run=infra.dry_run, report_only=infra.report_only)
-    else:
-        logger.info("[IMP:7][converge][main] SKIP: R1 filtered out by --units=%s", units_filter)
+    # ── Dispatch R-units with --units filter (data-driven: unit_id → action, T2.17) ──
+    # Предикат (infra.unit_enabled) и SKIP-лог единообразны для всех юнитов; различается
+    # только action (сигнатуры доменных функций). Порядок R1→R10 — канонический.
+    # Действия возвращают разные типы (dict-отчёты/None) — результат игнорируется
+    # (вердикты пишут доменные функции сами); Callable[[], object] — честная верхняя граница.
+    unit_actions: list[tuple[str, Callable[[], object]]] = [
+        ("R1", lambda: reconcile_perms(infra.core_dir, dry_run=infra.dry_run, report_only=infra.report_only)),
+        ("R2", lambda: reconcile_audit_log(infra.core_dir, dry_run=infra.dry_run, report_only=infra.report_only)),
+        ("R3", lambda: reconcile_projects(infra.node_yaml_path, dry_run=infra.dry_run, report_only=infra.report_only)),
+        ("R4", lambda: reconcile_networks(infra.node_yaml_path, dry_run=infra.dry_run, report_only=infra.report_only)),
+        ("R5", lambda: detect_hosts_drift(infra.node_yaml_path)),
+        (
+            "R6",
+            lambda: verify_vhosts(
+                infra.node_yaml_path,
+                infra.node_name,
+                infra.core_dir,
+                dry_run=infra.dry_run,
+                report_only=infra.report_only,
+            ),
+        ),
+        # R7: reconcile_volumes (detect-only, O7)
+        ("R7", lambda: reconcile_volumes(infra.node_yaml_path, dry_run=infra.dry_run, report_only=infra.report_only)),
+        # R8: reconcile_sudoers (drift detection + self-heal)
+        (
+            "R8",
+            lambda: reconcile_sudoers(
+                infra.node_yaml_path, infra.templates_dir, dry_run=infra.dry_run, report_only=infra.report_only
+            ),
+        ),
+        # R9: reconcile_runtime_state (container state + self-heal)
+        (
+            "R9",
+            lambda: reconcile_runtime_state(
+                infra.node_yaml_path, infra.modules_dir, dry_run=infra.dry_run, report_only=infra.report_only
+            ),
+        ),
+        # R10: reconcile_prometheus_tsdb (TSDB self-heal, 142 W3) — двойной guard
+        # (коррапт-маркер в логах И недоступные targets) — здоровый TSDB НЕ чистится.
+        (
+            "R10",
+            lambda: reconcile_prometheus_tsdb(
+                infra.node_yaml_path, dry_run=infra.dry_run, report_only=infra.report_only
+            ),
+        ),
+    ]
 
-    if infra.unit_enabled(units_filter, "R2"):
-        _ = reconcile_audit_log(infra.core_dir, dry_run=infra.dry_run, report_only=infra.report_only)
-    else:
-        logger.info("[IMP:7][converge][main] SKIP: R2 filtered out by --units=%s", units_filter)
-
-    if infra.unit_enabled(units_filter, "R3"):
-        _ = reconcile_projects(infra.node_yaml_path, dry_run=infra.dry_run, report_only=infra.report_only)
-    else:
-        logger.info("[IMP:7][converge][main] SKIP: R3 filtered out by --units=%s", units_filter)
-
-    if infra.unit_enabled(units_filter, "R4"):
-        _ = reconcile_networks(infra.node_yaml_path, dry_run=infra.dry_run, report_only=infra.report_only)
-    else:
-        logger.info("[IMP:7][converge][main] SKIP: R4 filtered out by --units=%s", units_filter)
-
-    if infra.unit_enabled(units_filter, "R5"):
-        _ = detect_hosts_drift(infra.node_yaml_path)
-    else:
-        logger.info("[IMP:7][converge][main] SKIP: R5 filtered out by --units=%s", units_filter)
-
-    if infra.unit_enabled(units_filter, "R6"):
-        _ = verify_vhosts(
-            infra.node_yaml_path, infra.node_name, infra.core_dir, dry_run=infra.dry_run, report_only=infra.report_only
-        )
-    else:
-        logger.info("[IMP:7][converge][main] SKIP: R6 filtered out by --units=%s", units_filter)
-
-    # ── R7: reconcile_volumes (detect-only, O7) ──
-    if infra.unit_enabled(units_filter, "R7"):
-        _ = reconcile_volumes(infra.node_yaml_path, dry_run=infra.dry_run, report_only=infra.report_only)
-    else:
-        logger.info("[IMP:7][converge][main] SKIP: R7 filtered out by --units=%s", units_filter)
-
-    # ── R8: reconcile_sudoers (drift detection + self-heal) ──
-    if infra.unit_enabled(units_filter, "R8"):
-        _ = reconcile_sudoers(
-            infra.node_yaml_path, infra.templates_dir, dry_run=infra.dry_run, report_only=infra.report_only
-        )
-    else:
-        logger.info("[IMP:7][converge][main] SKIP: R8 filtered out by --units=%s", units_filter)
-
-    # ── R9: reconcile_runtime_state (container state + self-heal) ──
-    if infra.unit_enabled(units_filter, "R9"):
-        _ = reconcile_runtime_state(
-            infra.node_yaml_path, infra.modules_dir, dry_run=infra.dry_run, report_only=infra.report_only
-        )
-    else:
-        logger.info("[IMP:7][converge][main] SKIP: R9 filtered out by --units=%s", units_filter)
-
-    # ── R10: reconcile_prometheus_tsdb (TSDB self-heal, 142 W3) ──
-    # Двойной guard (коррапт-маркер в логах И недоступные targets) — здоровый TSDB НЕ чистится.
-    if infra.unit_enabled(units_filter, "R10"):
-        _ = reconcile_prometheus_tsdb(infra.node_yaml_path, dry_run=infra.dry_run, report_only=infra.report_only)
-    else:
-        logger.info("[IMP:7][converge][main] SKIP: R10 filtered out by --units=%s", units_filter)
+    for unit_id, action in unit_actions:
+        if infra.unit_enabled(units_filter, unit_id):
+            action()
+        else:
+            logger.info("[IMP:7][converge][main] SKIP: %s filtered out by --units=%s", unit_id, units_filter)
 
     # ── Final summary ──
     logger.info("[IMP:9][converge][main] ==============================")

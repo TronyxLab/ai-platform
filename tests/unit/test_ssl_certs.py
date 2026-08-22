@@ -42,28 +42,14 @@ from core.internal.shared.ssl_certs import (
 from core.internal.shared.ssl_certs import (
     main as ssl_certs_cli_main,
 )
+from tests.helpers.gate_helpers import assert_ldd_imp9
 
 pytestmark = pytest.mark.static_audit
 
 logger = logging.getLogger(__name__)
 
 
-def _assert_imp9(caplog: pytest.LogCaptureFixture, needle: str | None = None) -> None:
-    """Assert at least one IMP:9 log (LDD telemetry standard)."""
-    logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-    found = False
-    for record in list(caplog.records):
-        if "[IMP:" in record.message:
-            logger.info("%s", record.message)
-            if needle and needle in record.message:
-                found = True
-    logger.info("--- END LDD TRAJECTORY ---")
-    if needle:
-        assert found, f"Critical LDD Error: No IMP:9 log containing '{needle}'"
-    else:
-        assert any("[IMP:9]" in r.message for r in caplog.records), "Critical LDD Error: No IMP:9 log found"
-
-
+# T2.16a: _assert_imp9 консолидирован в gate_helpers.assert_ldd_imp9
 # region TEST_constants
 def test_default_constants(caplog: pytest.LogCaptureFixture) -> None:
     """DEFAULT_OPENSSL_TIMEOUT=10, DEFAULT_EXPIRY_THRESHOLD=2592000 (30 дней)."""
@@ -188,7 +174,7 @@ def test_is_le_issuer_rejects_mkcert(caplog: pytest.LogCaptureFixture) -> None:
     with patch("core.internal.shared.ssl_certs.subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout="issuer=O = mkcert development CA, CN = mkcert\n")
         assert cert_is_le_issuer("/tmp/cert.pem") is False
-        _assert_imp9(caplog, "not Let's Encrypt")
+        assert_ldd_imp9(caplog, needle="not Let's Encrypt")
 
 
 def test_is_le_issuer_openssl_failure(caplog: pytest.LogCaptureFixture) -> None:
@@ -359,7 +345,7 @@ def test_cert_is_valid_san_only_cert(
     cert = _make_cert(tmp_path, subject="/", san="example.com")
     assert cert_get_san_list(str(cert)) == ["example.com"], "SAN extraction must return the DNS entry"
     assert cert_is_valid(str(cert), expected_domains="example.com") is True
-    _assert_imp9(caplog, "cert_is_valid: OK")
+    assert_ldd_imp9(caplog, needle="cert_is_valid: OK")
 
 
 # 🧪 TRAP[TEST] · 2026-08-16 · Regression · Wildcard SAN — одноуровневая семантика (AC2)
@@ -394,7 +380,7 @@ def test_cert_is_valid_san_wildcard(
     result = cert_is_valid(str(cert), expected_domains=domain)
     assert result is expected
     if expected:
-        _assert_imp9(caplog, "cert_is_valid: OK")
+        assert_ldd_imp9(caplog, needle="cert_is_valid: OK")
     else:
         assert any("SAN/CN does not match" in r.message for r in caplog.records), "mismatch must log IMP:8 reason"
 
@@ -431,7 +417,7 @@ def test_cert_is_valid_cn_fallback(
     cert = _make_cert(tmp_path, subject="/CN=example.com", san=None)
     assert cert_get_san_list(str(cert)) == [], "CN-only cert must have empty SAN list"
     assert cert_is_valid(str(cert), expected_domains="example.com") is True
-    _assert_imp9(caplog, "cert_is_valid: OK")
+    assert_ldd_imp9(caplog, needle="cert_is_valid: OK")
 
 
 # 🧪 TRAP[TEST] · 2026-08-16 · Regression · SAN present → CN non-authoritative (TRAP[DECISION] T1.2)
@@ -449,7 +435,7 @@ def test_cert_is_valid_san_present_no_cn_fallback(
     assert any("SAN/CN does not match" in r.message for r in caplog.records)
     # Контр-кейс: тот же серт, expected=other.com → True (SAN матчится)
     assert cert_is_valid(str(cert), expected_domains="other.com") is True
-    _assert_imp9(caplog, "cert_is_valid: OK")
+    assert_ldd_imp9(caplog, needle="cert_is_valid: OK")
 
 
 # 🧪 TRAP[TEST] · NEGATIVE (R5) · SAN-only original bug — исходная форма бага DevPlan 004
@@ -466,7 +452,7 @@ def test_cert_is_valid_san_only_original_bug(
     cert = _make_cert(tmp_path, subject="/", san="botanika.tronyx.ru")
     # Исходный вход бага: валидный LE-серт из S3-кеша, subject пуст, SAN=domain
     assert cert_is_valid(str(cert), expected_domains="botanika.tronyx.ru") is True
-    _assert_imp9(caplog, "cert_is_valid: OK")
+    assert_ldd_imp9(caplog, needle="cert_is_valid: OK")
 
 
 # endregion TEST_SAN_AWARE
@@ -488,7 +474,7 @@ def test_cli_is_le(caplog: pytest.LogCaptureFixture) -> None:
         mock_run.return_value = MagicMock(returncode=0, stdout="issuer=C = US, O = Let's Encrypt, CN = R11\n")
         rc = ssl_certs_cli_main(["--is-le", "/tmp/le-cert.pem"])
     assert rc == 0
-    _assert_imp9(caplog, "--is-le")
+    assert_ldd_imp9(caplog, needle="--is-le")
 
 
 # 🧪 TRAP[TEST] · 2026-08-02 · Regression · CLI --is-le: mkcert → exit 1 (D1)
@@ -518,7 +504,7 @@ def test_cli_check_expiry_ok(caplog: pytest.LogCaptureFixture) -> None:
         args = mock_run.call_args.args[0]
         assert "2592000" in args
     assert rc == 0
-    _assert_imp9(caplog, "--check-expiry")
+    assert_ldd_imp9(caplog, needle="--check-expiry")
 
 
 # 🧪 TRAP[TEST] · 2026-08-02 · Regression · CLI --check-expiry: expires within days → exit 1 (D1)

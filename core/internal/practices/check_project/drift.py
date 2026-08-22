@@ -1,5 +1,5 @@
 # GREP_SUMMARY: check-project-drift, drift-gate, practices-lock, detect-drift, repair-drift, canon-hash, version-stale, GENERATED-diff
-# STRUCTURE: ▶ _detect_drift (lock missing → version < canon → file-level hash vs disk → canon-hash stale) → ⊕ _repair_drift (fixer.repair_practices — sync force) → ▶ check_drift_gate (fix? repair : WARN/FAIL) → ⎋ CheckResult
+# STRUCTURE: ▶ _detect_drift (lock missing → version < canon → file-level hash vs disk → canon-hash stale via project_profile) → ⊕ _repair_drift (fixer.repair_practices — sync force) → ▶ check_drift_gate (fix? repair : WARN/FAIL) → ⎋ CheckResult
 # region MODULE_CONTRACT
 ## @purpose  Drift-gate практик (DevPlan 170 W10-A декомпозиция, L2): детект дрейфа
 ##           GENERATED-практик проекта (practices.lock version < canon; файлы lock.files vs
@@ -18,6 +18,7 @@
 ## @rationale Разделение детекта/repair/решения: детект — pure-функция (тестируемая без
 ##            --fix), repair — единственный канал перегенерации (W10: lazy-дубль ×3 устранён).
 ## @changes  2026-08-15 · DevPlan 170 W10-A — создан (выделен из check_project.py:736-810)
+##           2026-08-22 · T2.12 — canon-hash резолвит name/language/ptype через practices/profile.py
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -27,7 +28,6 @@ from pathlib import Path
 
 from core.internal.practices.check_project.fixer import repair_practices
 from core.internal.practices.check_project.models import CheckResult
-from core.internal.practices.check_project.runner import resolve_language
 from core.internal.practices.generators import (
     GENERATED_HEADER,
     PracticesLock,
@@ -36,8 +36,8 @@ from core.internal.practices.generators import (
     render_project_files,
 )
 from core.internal.practices.manifest import PracticeCheck, PracticesManifest, load_manifest
+from core.internal.practices.profile import project_profile
 from core.internal.shared.env_facts import EnvironmentFacts
-from core.internal.shared.project_yaml import get_name, get_project_type, load_project_yaml
 
 # Причины дрейфа (машиночитаемые для check_drift_gate-решения)
 _CAUSE_MISSING = "missing"
@@ -80,11 +80,9 @@ def _detect_drift(project_dir: Path, manifest: PracticesManifest, lock: Practice
             drifted.append(f"{rel} (modified)")
 
     # ── canon-hash: lock устарел относительно актуального рендера канона ──
-    data = load_project_yaml(project_dir)
-    project_name = get_name(data) or project_dir.name
-    languages = resolve_language(project_dir)
-    language = languages[0] if languages else "python"
-    files = render_project_files(project_name, language, lock.level, manifest.pins, project_type=get_project_type(data))
+    # T2.12: единый project_profile — name/language/ptype одним чтением ai-platform.yaml
+    profile = project_profile(project_dir)
+    files = render_project_files(profile.name, profile.language, lock.level, manifest.pins, project_type=profile.ptype)
     expected_canon = compute_generator_hash(files, manifest.version, lock.level)
     if lock.generator_hash != expected_canon:
         drifted.append("practices.lock (canon stale)")

@@ -10,7 +10,7 @@
 ##           W4-E5: _check_image_exists — short-circuit pull (docker manifest/image inspect).
 ## @invariants
 ##   - Все тесты — static audit (чтение исходников как текст, _extract_python_func)
-##   - LDD: _assert_ldd_trajectory (≥1 IMP:9)
+##   - LDD: assert_ldd_imp9 из gate_helpers (≥1 IMP:9, T2.16a)
 ##   - Контракты W4-E1 extraction (parallel_runner/docker_orchestrator) не нарушены
 ## @rationale  Группировка по бизнес-подобласти (docker-пакеты) — файл легче читать;
 ##             coverage W4-E5 страховок сохранён (AC W3e).
@@ -21,7 +21,8 @@ import logging
 
 import pytest
 
-from tests.helpers.deploy_modules_audit import DEPLOY_PYTHON_DIR, _assert_ldd_trajectory, _extract_python_func
+from tests.helpers.deploy_modules_audit import DEPLOY_PYTHON_DIR, _extract_python_func
+from tests.helpers.gate_helpers import assert_ldd_imp9
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +54,7 @@ def test_parallel_healthcheck(caplog) -> None:
     assert "run_healthcheck" in content, "S4 violation: run_healthcheck not called in deploy_docker_group"
     logger.info("[IMP:9][test_parallel_healthcheck] run_healthcheck invocation in deploy_docker_group OK")
 
-    _assert_ldd_trajectory(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · Regression: S4 parallel healthchecks must replace sequential healthchecks
@@ -90,7 +91,7 @@ def test_parallel_deploy_failure_isolates_modules(caplog) -> None:
     )
     logger.info("[IMP:9][test_parallel_deploy_failure] os.fork() per-module isolation OK")
 
-    _assert_ldd_trajectory(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · Regression: W4-E5 parallel deploy failure isolation (1 of N fails, others succeed)
@@ -132,7 +133,7 @@ def test_image_exists_short_circuit(caplog) -> None:
     )
     logger.info("[IMP:9][test_image_exists_short_circuit] short-circuit return True present")
 
-    _assert_ldd_trajectory(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · Regression: W4-E5 _check_image_exists short-circuits pull on cached image

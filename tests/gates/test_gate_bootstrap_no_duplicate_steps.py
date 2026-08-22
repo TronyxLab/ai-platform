@@ -37,6 +37,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.helpers.gate_helpers import assert_ldd_imp9
+
 logger = logging.getLogger(__name__)
 
 # ── Path resolution ──
@@ -69,30 +71,7 @@ def _assert_grep_target_files() -> None:
 # endregion HELPER__assert_grep_target_files
 
 
-# region HELPER__assert_ldd
-def _assert_ldd_imp9(caplog: pytest.LogCaptureFixture) -> None:
-    """Assert LDD IMP:9+ logs present in caplog trajectory.
-
-    ## @purpose — LDD telemetry: verify that at least one IMP:9 business-logic log
-    ##            was emitted during the test. Prevents silent pass when no actual
-    ##            grep analysis was performed.
-    ## @io — caplog fixture → raises AssertionError if no IMP:9 log found
-    ## @complexity 1 — linear scan of captured log records
-    """
-    found_imp9 = False
-    print("--- LDD TRAJECTORY (IMP:7-10) ---")
-    for record in caplog.records:
-        if "[IMP:" in record.message:
-            imp_level = int(record.message.split("[IMP:")[1].split("]")[0])
-            if imp_level >= 7:
-                print(record.message)
-            if imp_level >= 9:
-                found_imp9 = True
-    print("--- END LDD TRAJECTORY ---")
-    assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
-
-
-# endregion HELPER__assert_ldd
+# T2.16a: локальный _assert_ldd_imp9 (print-вариант) консолидирован в gate_helpers.assert_ldd_imp9
 
 
 # region HELPER__grep_core_excluding_pycache
@@ -185,7 +164,7 @@ def test_no_shell_to_python_step_references(caplog: pytest.LogCaptureFixture) ->
         pytest.fail(f"SHELL_TO_PYTHON_STEP found in {len(matches)} file(s): {matches}")
 
     logger.info("[IMP:9][test_no_shell_to_python_step_references] PASS: No SHELL_TO_PYTHON_STEP in core/")
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_no_shell_to_python_step_references
@@ -279,7 +258,7 @@ def test_no_done_file_references_in_bootstrap(caplog: pytest.LogCaptureFixture) 
         pytest.fail(f"Found {len(violating_lines)} .done reference(s) in bootstrap/:\n" + "\n".join(violating_lines))
 
     logger.info("[IMP:9][test_no_done_file_references_in_bootstrap] PASS: No .done checkpoint files")
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_no_done_file_references_in_bootstrap
@@ -346,7 +325,7 @@ def test_no_step_1_step_18_in_node_lifecycle(caplog: pytest.LogCaptureFixture) -
         )
 
     logger.info("[IMP:9][test_no_step_1_step_18_in_node_lifecycle] PASS: No index-addressed step patterns")
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_no_step_1_step_18_in_node_lifecycle
@@ -396,7 +375,7 @@ def test_node_lifecycle_under_80_loc(caplog: pytest.LogCaptureFixture) -> None:
         "[IMP:9][test_node_lifecycle_under_80_loc] PASS: node-lifecycle.sh is %d lines (<80)",
         total_lines,
     )
-    _assert_ldd_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_node_lifecycle_under_80_loc

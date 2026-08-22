@@ -53,12 +53,9 @@ import pytest
 from core.internal.bootstrap import install_tor_proxy, tor_transport
 from core.internal.shared.contracts import EXIT_GENERIC, EXIT_OK
 from core.internal.shared.exceptions import PlatformFatalError
+from tests.helpers.gate_helpers import assert_ldd_imp9
 
 logger = logging.getLogger(__name__)
-
-
-def _module_contract():
-    pass
 
 
 # ── Test data ───────────────────────────────────────────────────────────────────
@@ -199,29 +196,7 @@ def _make_installer(
 # endregion FUNC__make_installer
 
 
-# region FUNC__assert_imp9
-def _assert_imp9(caplog: pytest.LogCaptureFixture) -> None:
-    """LDD telemetry: печать IMP:7-10 траектории + assert найден IMP:9-лог.
-
-    ## @purpose  Anti-Illusion (RULES.md §TESTING): тест не молчит — печатает траекторию
-    ##            и требует присутствия как минимум одного IMP:9-лога.
-    ## @io — ⇥ caplog → ⎋ None (assert found)
-    ## @complexity — O(R) — R = записи caplog
-    """
-    found = False
-    logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-    for record in list(caplog.records):
-        if "[IMP:" in record.message:
-            imp_level = int(record.message.split("[IMP:")[1].split("]")[0])
-            if imp_level >= 7:
-                logger.info("%s", record.message)
-            if imp_level >= 9:
-                found = True
-    logger.info("--- END LDD TRAJECTORY ---")
-    assert found, "Critical LDD Error: No IMP:9 business logic log found"
-
-
-# endregion FUNC__assert_imp9
+# T2.16a: _assert_imp9 консолидирован в gate_helpers.assert_ldd_imp9
 
 
 # region FUNC__assert_log_event
@@ -363,7 +338,7 @@ def test_main_exit_contract(caplog: pytest.LogCaptureFixture, args, facts, keywo
 
     assert rc == EXIT_GENERIC, f"Expected 1, got {rc}"
     _assert_log_event(caplog, levelno=logging.ERROR, imp=10, keyword=keyword)
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_main_exit_contract
@@ -439,7 +414,7 @@ def test_main_flow_success_and_order(caplog: pytest.LogCaptureFixture) -> None:
         "verify_tor_circuit",
     ], f"Order mismatch: {_StepOrderInstaller.order}"
     _assert_log_event(caplog, levelno=logging.INFO, imp=9, keyword="installation complete")
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_main_flow_success_and_order
@@ -490,7 +465,7 @@ def test_main_flow_circuit_failure(caplog: pytest.LogCaptureFixture) -> None:
     assert rc == EXIT_GENERIC
     _assert_log_event(caplog, levelno=logging.ERROR, imp=10, keyword="circuit failed to establish")
     _assert_log_event(caplog, levelno=logging.ERROR, imp=10, keyword="Telegram notifications will be unavailable")
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_main_flow_circuit_failure
@@ -520,7 +495,7 @@ def test_main_step_failure_exit1(caplog: pytest.LogCaptureFixture) -> None:
 
     assert rc == EXIT_GENERIC
     _assert_log_event(caplog, levelno=logging.ERROR, imp=10, keyword="systemctl restart tor failed")
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_main_step_failure_exit1
@@ -581,7 +556,7 @@ def test_main_twice_idempotent(caplog: pytest.LogCaptureFixture) -> None:
     assert _CountingInstaller.counts == expected, (
         f"Повторный запуск выполнил шаги не 1:1: {first} → {dict(_CountingInstaller.counts)}"
     )
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_main_twice_idempotent
@@ -671,7 +646,7 @@ def test_full_flow_command_sequence(caplog: pytest.LogCaptureFixture) -> None:
         "install_cron_healthcheck",
     ]
     _assert_log_event(caplog, levelno=logging.INFO, imp=9, keyword="installation complete")
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_full_flow_command_sequence
@@ -710,7 +685,7 @@ def test_full_flow_idempotent_firewall_guard(caplog: pytest.LogCaptureFixture) -
     second = runner.calls[len(first) :]
     assert not any(c[1] == "-I" for c in second), "повторный запуск не должен добавлять правило (no-op)"
     assert any(c[1] == "-C" for c in second), "повторный запуск всё же проверяет правило (-C guard)"
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_full_flow_idempotent_firewall_guard
@@ -735,7 +710,7 @@ def test_write_torrc_template_used(tmp_path: Path, caplog: pytest.LogCaptureFixt
 
     assert tor_config.read_text() == "SOCKSPort 127.0.0.1:9050\nDataDirectory /var/lib/tor\n"
     _assert_log_event(caplog, levelno=logging.INFO, imp=8, keyword="No bridges file")
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_write_torrc_template_used
@@ -756,7 +731,7 @@ def test_write_torrc_fallback_inline(tmp_path: Path, caplog: pytest.LogCaptureFi
 
     assert tor_config.read_text() == _FALLBACK_TORRC
     _assert_log_event(caplog, levelno=logging.INFO, imp=8, keyword="Template not found")
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_write_torrc_fallback_inline
@@ -784,7 +759,7 @@ def test_write_torrc_bridges_appended(tmp_path: Path, caplog: pytest.LogCaptureF
     assert "ClientTransportPlugin obfs4 exec /usr/bin/obfs4proxy" in content, content
     assert "Bridge obfs4 1.2.3.4:443 ABC cert=XYZ iat-mode=0" in content, content
     _assert_log_event(caplog, levelno=logging.INFO, imp=8, keyword="Bridges appended")
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_write_torrc_bridges_appended
@@ -807,7 +782,7 @@ def test_write_torrc_unknown_transport_failfast(tmp_path: Path, caplog: pytest.L
     with pytest.raises(tor_transport.TorTransportError):
         installer.write_torrc(tor_config, str(bridges), template)
     _assert_log_event(caplog, levelno=logging.INFO, imp=8, keyword="Unknown transport")
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_write_torrc_unknown_transport_failfast
@@ -832,7 +807,7 @@ def test_write_torrc_idempotent(tmp_path: Path, caplog: pytest.LogCaptureFixture
     installer.write_torrc(tor_config, str(bridges), template)
 
     assert tor_config.read_text() == first, "Повторный запуск изменил torrc (не идемпотентно)"
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_write_torrc_idempotent
@@ -860,7 +835,7 @@ def test_write_privoxy_config_idempotent(tmp_path: Path, caplog: pytest.LogCaptu
 
     assert config.read_text() == first, "Повторный запуск изменил privoxy-конфиг (не идемпотентно)"
     assert not any("FAIL" in r.message for r in caplog.records), caplog.text
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_write_privoxy_config_idempotent
@@ -890,7 +865,7 @@ def test_write_privoxy_config_dpkg_double_space_upgrade(tmp_path: Path, caplog: 
     # Идемпотентность: повторный вызов — no-op
     installer.write_privoxy_config(config)
     assert config.read_text() == first, "повторный запуск изменил конфиг (не идемпотентно)"
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_write_privoxy_config_dpkg_double_space_upgrade
@@ -922,7 +897,7 @@ def test_enable_services_command_sequence(caplog: pytest.LogCaptureFixture) -> N
     ], runner.calls
     assert clock.sleep_calls == 1 and clock.sleep_seconds == [install_tor_proxy.SERVICE_RESTART_SLEEP_SEC]
     _assert_log_event(caplog, levelno=logging.INFO, imp=9, keyword="restarted")
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_enable_services_command_sequence
@@ -944,7 +919,7 @@ def test_enable_services_restart_failure_fatal(caplog: pytest.LogCaptureFixture)
         installer.enable_services()
     # 4 вызова до fail: enable tor, enable privoxy, daemon-reload (W3-3), restart tor
     assert len(runner.calls) == 4, f"Остановка после restart tor fail: {runner.calls}"
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_enable_services_restart_failure_fatal
@@ -964,7 +939,7 @@ def test_configure_privoxy_restart_dropin_creates(tmp_path: Path, caplog: pytest
     content = dropin.read_text()
     assert content == "[Service]\nRestart=on-failure\n", content
     _assert_log_event(caplog, levelno=logging.INFO, imp=8, keyword="drop-in written")
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · 2026-08-13 · REGRESSION · W3-3 privoxy drop-in: идемпотентность (no-op)
@@ -981,7 +956,7 @@ def test_configure_privoxy_restart_dropin_idempotent(tmp_path: Path, caplog: pyt
 
     assert dropin.read_text() == "CUSTOM-UNTOUCHED\n", "существующий drop-in не перезаписывается"
     _assert_log_event(caplog, levelno=logging.INFO, imp=8, keyword="already exists")
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · 2026-08-13 · REGRESSION · W3-3 enable_services пишет drop-in ПЕРЕД restart
@@ -1002,7 +977,7 @@ def test_enable_services_writes_restart_dropin_before_restart(caplog: pytest.Log
     )
     assert sum(1 for c in runner.calls if "daemon-reload" in c) == 1, "daemon-reload обязан вызываться"
     assert runner.calls[-1] == ["systemctl", "restart", "privoxy"], "restart privoxy ПОСЛЕ daemon-reload"
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_configure_privoxy_restart_dropin
@@ -1034,7 +1009,7 @@ def test_verify_services_active(results, expected, log_keyword, caplog: pytest.L
     assert len(runner.calls) == 2
     if log_keyword:
         _assert_log_event(caplog, levelno=logging.INFO, imp=8, keyword=log_keyword)
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_verify_services_active
@@ -1056,7 +1031,7 @@ def test_verify_tor_circuit_success(caplog: pytest.LogCaptureFixture) -> None:
     assert installer.verify_tor_circuit() is True
     assert len(runner.calls) == 1, f"Успех должен быть на 1-й попытке: {runner.calls}"
     _assert_log_event(caplog, levelno=logging.INFO, imp=8, keyword="circuit established")
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_verify_tor_circuit_success
@@ -1077,7 +1052,7 @@ def test_verify_tor_circuit_retries_then_fails(caplog: pytest.LogCaptureFixture)
     assert len(runner.calls) == install_tor_proxy.VERIFY_MAX_ATTEMPTS, f"Ожидалось 12 попыток: {len(runner.calls)}"
     assert clock.sleep_calls == install_tor_proxy.VERIFY_MAX_ATTEMPTS - 1, "sleep между попытками"
     _assert_log_event(caplog, levelno=logging.INFO, imp=8, keyword="failed to establish circuit")
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_verify_tor_circuit_retries_then_fails
@@ -1096,7 +1071,7 @@ def test_verify_tor_circuit_skipped(caplog: pytest.LogCaptureFixture) -> None:
     assert installer.verify_tor_circuit(skip=True) is True
     assert runner.calls == [], f"skip=True не должен вызывать curl: {runner.calls}"
     _assert_log_event(caplog, levelno=logging.INFO, imp=8, keyword="verification skipped")
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_verify_tor_circuit_skipped
@@ -1126,7 +1101,7 @@ def test_install_cron_healthcheck_writes(tmp_path: Path, caplog: pytest.LogCaptu
     assert cron_file.read_text() == expected, cron_file.read_text()
     assert cron_file.stat().st_mode & 0o777 == 0o644, oct(cron_file.stat().st_mode)
     _assert_log_event(caplog, levelno=logging.INFO, imp=8, keyword="Healthcheck cron installed")
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_install_cron_healthcheck_writes
@@ -1153,7 +1128,7 @@ def test_install_cron_healthcheck_idempotent(tmp_path: Path, caplog: pytest.LogC
 
     assert cron.read_text() == "CUSTOM-UNTOUCHED\n", "Существующий cron НЕ должен перезаписываться"
     _assert_log_event(caplog, levelno=logging.INFO, imp=9, keyword="already installed")
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_install_cron_healthcheck_idempotent
@@ -1174,7 +1149,7 @@ def test_install_cron_healthcheck_missing_script(tmp_path: Path, caplog: pytest.
 
     assert not cron_file.exists(), "Без hc-скрипта cron не должен создаваться"
     _assert_log_event(caplog, levelno=logging.INFO, imp=8, keyword="Healthcheck script not found")
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_install_cron_healthcheck_missing_script
@@ -1204,7 +1179,7 @@ def test_configure_firewall_docker_adds_once(caplog: pytest.LogCaptureFixture) -
     assert len(runner2.calls) == 1 and runner2.calls[0][1] == "-C", f"no-op (-C rc=0): {runner2.calls}"
 
     assert len(first_iptables) == 2
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_configure_firewall_docker_adds_once
@@ -1225,7 +1200,7 @@ def test_configure_firewall_docker_rule_exists(caplog: pytest.LogCaptureFixture)
 
     assert len(runner.calls) == 1 and runner.calls[0][1] == "-C", runner.calls
     _assert_log_event(caplog, levelno=logging.INFO, imp=8, keyword="rule already exists")
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_configure_firewall_docker_rule_exists
@@ -1245,7 +1220,7 @@ def test_configure_firewall_docker_add_fatal(caplog: pytest.LogCaptureFixture) -
     with pytest.raises(install_tor_proxy.CommandFailedError):
         installer.configure_firewall_docker()
     assert len(runner.calls) == 2, runner.calls
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_configure_firewall_docker_add_fatal

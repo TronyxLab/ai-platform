@@ -11,7 +11,10 @@ Shared healthcheck poller for DeployOrchestrator. Extracted from context_deploye
 ##           Extracted from context_deployer._shared_healthcheck_poll() + docker_compose.py.healthcheck_poll().
 ## @scope    Used by DeployOrchestrator after deploy to verify health. Single poll, not a lifecycle manager.
 ## @invariants
-##   1. timeout: HEALTHCHECK_POLL_TIMEOUT (60s) per check — канон shared/timeouts (C11)
+##   1. timeout: HEALTHCHECK_POLL_TIMEOUT (60s) per check — канон shared/timeouts (C11);
+##      T2.8: для HTTP-пути timeout — общий бюджет ОДНОЙ проверки на ВСЕ URL (не per-URL) —
+##      per-URL timeout = max(MIN_PER_URL_TIMEOUT, timeout // len(urls)), суммарный HTTP-attempt
+##      укладывается в бюджет (до фикса worst-case 6 URL × 60s = 360s ≫ окно поллинга 60s)
 ##   2. retry interval: HEALTHCHECK_POLL_INTERVAL (3s) between attempts
 ##   3. max retries: HEALTHCHECK_POLL_MAX_RETRIES (20) — окно поллинга 60s
 ##   4. HTTP check: GET /health endpoint, 200 = healthy
@@ -22,6 +25,8 @@ Shared healthcheck poller for DeployOrchestrator. Extracted from context_deploye
 ## @changes 2026-07-30 | DevPlan 089 T5 — Created
 ## @changes 2026-08-02 | DevPlan 118 C11 — DEFAULT_POLL_TIMEOUT/INTERVAL выровнены с каноном
 ##                      timeouts.HEALTHCHECK_POLL_TIMEOUT/INTERVAL (60/3, окно 60s вместо 200s)
+## @changes 2026-08-22 | T2.8 — _try_http: per-URL timeout = max(MIN_PER_URL_TIMEOUT, timeout//len(urls))
+##                      вместо полного timeout на каждый URL (6×60s → ≤ timeout на HTTP-attempt)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -48,6 +53,9 @@ DEFAULT_POLL_TIMEOUT = HEALTHCHECK_POLL_TIMEOUT
 DEFAULT_POLL_INTERVAL = HEALTHCHECK_POLL_INTERVAL
 DEFAULT_MAX_RETRIES = HEALTHCHECK_POLL_MAX_RETRIES
 HTTP_OK: int = 200  # статус успешного HTTP-ответа
+# T2.8: минимальный разумный per-URL timeout при делении бюджета проверки на число URL —
+# sub-second timeout даёт ложные negative на медленном старте контейнера.
+MIN_PER_URL_TIMEOUT: int = 5
 
 
 @dataclass
@@ -155,15 +163,16 @@ class HealthcheckPoller:
             detail=f"Healthcheck timeout after {self.max_retries * self.interval}s",
         )
 
-    def _try_url(self, url: str) -> bool:
+    def _try_url(self, url: str, timeout: int | None = None) -> bool:
         """Try a single healthcheck URL. Returns True if 200 OK.
 
         ## @purpose — Isolate try-except from loop to avoid PERF203. HTTP через shared/http_client.
-        ## @io — ⇥ url: str → ⎋ bool
+        ## @io — ⇥ url: str, timeout: int | None (per-URL timeout; None → self.timeout) → ⎋ bool
         ## @complexity — O(1)
         """
+        per_url_timeout = timeout if timeout is not None else self.timeout
         try:
-            with http_client.request(url, method="GET", timeout=self.timeout) as resp:
+            with http_client.request(url, method="GET", timeout=per_url_timeout) as resp:
                 return resp.status == HTTP_OK
         except (urllib.error.URLError, urllib.error.HTTPError, OSError, TimeoutError):
             return False
@@ -181,7 +190,12 @@ class HealthcheckPoller:
         urls = [f"http://{project_name}:{port}/health" for port in PROJECT_HEALTHCHECK_PORTS]
         urls.append(f"http://{project_name}/health")
 
-        return any(self._try_url(url) for url in urls)
+        # T2.8 (perf): timeout — общий бюджет ОДНОЙ HTTP-проверки на ВСЕ URL (не per-URL).
+        # До фикса worst-case = 6 URL × 60s = 360s на attempt ≫ окно поллинга (max_retries×interval = 60s).
+        # per-URL = max(MIN_PER_URL_TIMEOUT, timeout // len(urls)) — суммарный HTTP-attempt укладывается
+        # в бюджет проверки (семантика «timeout per check» из MODULE_CONTRACT сохранена).
+        per_url_timeout = max(MIN_PER_URL_TIMEOUT, self.timeout // len(urls))
+        return any(self._try_url(url, timeout=per_url_timeout) for url in urls)
 
     def _try_docker(self, project_name: str, _project_dir: str) -> HealthcheckResult:
         """Try Docker health via shared healthcheck_poll (sole path — DevPlan 116 B5 T7.3).

@@ -1,5 +1,5 @@
-## GREP_SUMMARY: backup-cron Dockerfile pgdg cron debian bash pg-client-16 date-parser s3-client retention upload wal-sync healthcheck entrypoint-py
-## STRUCTURE: FROM debian:bookworm-slim → add PGDG repo → install cron+pg-client-16+python → COPY scripts (incl date_parser+s3_client+wal_sync+entrypoint) → COPY crontab → CMD python3 entrypoint
+## GREP_SUMMARY: backup-cron Dockerfile pgdg cron debian bash pg-client-18 date-parser s3-client retention upload wal-sync healthcheck entrypoint-py
+## STRUCTURE: FROM debian:bookworm-slim → add PGDG repo → install cron+pg-client-18+python → COPY scripts (incl date_parser+s3_client+wal_sync+entrypoint) → COPY crontab → CMD python3 entrypoint
 # region MODULE_CONTRACT
 ## @purpose  Build backup-cron image with cron daemon + backup scripts + pg_dump client
 ## @scope    Phase 02: installs cron schedule; S3 upload = stub (phase 06 fills upload-s3.sh)

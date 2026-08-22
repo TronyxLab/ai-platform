@@ -20,27 +20,14 @@ import logging
 import pytest
 
 from core.internal.bootstrap.deploy import deploy_orchestrator as mod
+from tests.helpers.gate_helpers import assert_ldd_imp9
 
 pytestmark = pytest.mark.static_audit
 
 logger = logging.getLogger(__name__)
 
 
-def _assert_imp9_logged(caplog: pytest.LogCaptureFixture) -> None:
-    """Print IMP:7-10 trajectory and assert at least one IMP:9 log present."""
-    found_imp9 = False
-    logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-    for record in list(caplog.records):
-        if "[IMP:" in record.message:
-            imp_level = int(record.message.split("[IMP:")[1].split("]")[0])
-            if imp_level >= 7:
-                logger.info("%s", record.message)
-            if imp_level >= 9:
-                found_imp9 = True
-    logger.info("--- END LDD TRAJECTORY ---")
-    assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
-
-
+# T2.16a: _assert_imp9_logged консолидирован в gate_helpers.assert_ldd_imp9
 def _json_array(*entries: dict) -> str:
     """Serialize JSON-массив DeployResult (stdout deploy-many)."""
     return json.dumps(list(entries))
@@ -80,7 +67,7 @@ def test_deploy_many_parses_json_counts(monkeypatch, caplog: pytest.LogCaptureFi
     # DI (W-H): run_cmd= параметром (0 патчей модульного subprocess)
     deployed, failed = mod._deploy_orchestrator(["mod1", "mod2", "mod3"], run_cmd=fake)
 
-    _assert_imp9_logged(caplog)
+    assert_ldd_imp9(caplog)
     assert deployed == 2
     assert failed == ["mod3"]
 
@@ -134,7 +121,7 @@ def test_deploy_many_returncode_nonzero(monkeypatch, caplog: pytest.LogCaptureFi
 
     deployed, failed = mod._deploy_orchestrator(["mod1", "mod2"], run_cmd=fake)
 
-    _assert_imp9_logged(caplog)
+    assert_ldd_imp9(caplog)
     assert deployed == 1
     assert failed == ["mod2"]  # ROLLED_BACK считается фейлом
     warn_msgs = [

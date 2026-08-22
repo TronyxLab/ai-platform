@@ -165,7 +165,10 @@ class TestModuleProfiles:
                     )
 
         if warnings:
-            logger.info("[IMP:9][gate] SKIP: stale profiles detected — %s", "; ".join(warnings))
-            pytest.skip("Non-critical: " + "; ".join(warnings))
+            # T1.7 триаж (аудит 2026-08-22): skip-on-findings маскировал реальные дрейфы
+            # («Non-critical: …» → гейт молчал). Дерево чистое → advisory превращён в assert;
+            # легитимный multi-profile кейс — добавлять явным исключением, не скипом.
+            logger.error("[IMP:10][gate] FAIL: stale profiles detected — %s", "; ".join(warnings))
+            assert not warnings, "GATE_MODULE_PROFILES: stale/multiple profiles:\n  " + "\n  ".join(warnings)
         else:
             logger.info("[IMP:9][gate] PASS: No stale profiles detected")

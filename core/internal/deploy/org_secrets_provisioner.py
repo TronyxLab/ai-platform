@@ -1,5 +1,5 @@
-# GREP_SUMMARY: org-secrets provisioner gh-cli context-promote VPS_HOST VPS_SSH_KEY AGE TELEGRAM visibility auto-configure
-# STRUCTURE: ▶ resolve_node(context) → ◇ resolve_values (node.yaml + local env/.env + ssh/age-файлы) → ◇ gh secret set ×N (visibility plan) → ⊕ audit → ⎋ bool (best-effort)
+# GREP_SUMMARY: org-secrets provisioner gh-cli context-promote VPS_HOST VPS_SSH_KEY AGE TELEGRAM visibility auto-configure dotenv env-reader
+# STRUCTURE: ▶ resolve_node(context) → ◇ resolve_values (node.yaml + local env/.env через env_reader.get_env_value + ssh/age-файлы) → ◇ gh secret set ×N (visibility plan) → ⊕ audit → ⎋ bool (best-effort)
 # region MODULE_CONTRACT
 ## @purpose  Авто-провижининг org-секретов контекстной GitHub-организации при context-promote
 ##           (DevPlan 003, follow-up 2026-08-16). До этого секреты настраивались руками и
@@ -14,12 +14,17 @@
 ##   3. Единый visibility-план: TELEGRAM_* → all (нужны project-репо org); VPS_HOST/
 ##      VPS_SSH_KEY/AGE_SECRET_KEY → selected с --repos ai-platform
 ##      (gh CLI: --visibility selected, не private).
-##   4. Источники значений (порядок): env → локальный .env платформы → node.yaml →
-##      ~/.ssh/ai-platform/{node}-ci → node_detect.detect_age_key() (AGE).
+##   4. Источники значений (порядок): env → локальный .env платформы (get_env_value —
+##      канон env_reader, last-match) → node.yaml → ~/.ssh/ai-platform/{node}-ci →
+##      node_detect.detect_age_key() (AGE).
 ##   5. DRY_RUN: план без gh-вызовов.
 ## @rationale «Настройка секретов при добавлении контекста» — требование оператора
 ##           (2026-08-16): context-promote должен приводить org в деплоябельное состояние
 ##           без ручных шагов в UI.
+## @changes 2026-08-22 | T2.5 — dotenv-чтение конвергировано на shared/env_reader.get_env_value
+##           (единый канон чтения .env для make/.env; last-match семантика). Локальный
+##           парсер _env_file_lookup (first-match) удалён — фикс согласованности: для
+##           фактического .env платформы (без дублей/export/quotes) поведение эквивалентно.
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -32,6 +37,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
+
+from core.internal.shared.env_reader import get_env_value
 
 logger = logging.getLogger(__name__)
 
@@ -111,25 +118,6 @@ def _env_lookup(name: str, env: Mapping[str, str]) -> str | None:
 # endregion FUNC__env_lookup
 
 
-# region FUNC__env_file_lookup
-def _env_file_lookup(name: str, env_file: Path) -> str | None:
-    """Значение из dotenv-файла (KEY=value, без интерполяции)."""
-    try:
-        for raw in env_file.read_text(encoding="utf-8").splitlines():
-            line = raw.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, _, value = line.partition("=")
-            if key.strip() == name and value.strip():
-                return value.strip()
-    except OSError:
-        return None
-    return None
-
-
-# endregion FUNC__env_file_lookup
-
-
 # region FUNC_resolve_secret_values
 ## @purpose  Разрешение значений орг-секретов из канонических локальных источников.
 ## @io       ⇥ context: str, env: Mapping | None, node: dict | None → ⎋ dict[str, str]
@@ -178,7 +166,9 @@ def resolve_secret_values(
     for name in _ORG_SECRET_PLAN:
         if name in {"VPS_HOST", "VPS_SSH_KEY", "AGE_SECRET_KEY"}:
             continue
-        value = _env_lookup(name, env_map) or _env_file_lookup(name, env_path)
+        # dotenv-чтение — канон env_reader.get_env_value (T2.5, last-match; пустое значение
+        # при отсутствии файла/переменной → falsy → не настраивается, семантика сохранена)
+        value = _env_lookup(name, env_map) or get_env_value(env_path, name)
         if value:
             values[name] = value
 

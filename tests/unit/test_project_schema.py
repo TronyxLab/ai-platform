@@ -16,8 +16,6 @@
 ## @rationale Q: Why test schema in Python instead of shell? A: python-jsonschema gives
 ##            precise error messages and is faster than shell-based validation.
 ## @changes — LAST_CHANGE: 2026-07-03 | Low #16: merged test_project_yml_extension_rejected from test_validate.py
-def _module_contract():
-    pass
 
 
 # endregion MODULE_CONTRACT

@@ -31,6 +31,7 @@ from core.internal.shared import app_config
 from core.internal.shared.app_config import AppConfig
 from core.internal.shared.deploy_paths import DEFAULT_PLATFORM_BASE, DEFAULT_PROJECTS_BASE
 from core.internal.shared.timeouts import DEPLOY_TIMEOUT
+from tests.helpers.gate_helpers import assert_ldd_imp9
 
 pytestmark = pytest.mark.static_audit
 
@@ -51,17 +52,7 @@ _ENV_KEYS = (
 )
 
 
-def _assert_imp9(caplog: pytest.LogCaptureFixture) -> None:
-    """Assert at least one IMP:9 log in caplog (LDD telemetry standard)."""
-    found = any("[IMP:9]" in r.message for r in caplog.records)
-    logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-    for record in list(caplog.records):
-        if "[IMP:" in record.message:
-            logger.info("%s", record.message)
-    logger.info("--- END LDD TRAJECTORY ---")
-    assert found, "Critical LDD Error: No IMP:9 business logic log found"
-
-
+# T2.16a: _assert_imp9 консолидирован в gate_helpers.assert_ldd_imp9
 # 🧪 TRAP[TEST] · Regression · Scenario: from_env({}) → канонические дефолты
 # · Last fail: N/A (new test)
 # · Remove if: AppConfig default semantics change
@@ -79,7 +70,7 @@ def test_from_env_defaults(caplog: pytest.LogCaptureFixture) -> None:
     assert not cfg.platform_domain
     assert not cfg.ci_mode
     logger.info("[IMP:9][test][app_config] from_env({}) → канонические дефолты OK")
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · Regression · Scenario: from_env(mapping) → оверрайд str+int полей
@@ -112,7 +103,7 @@ def test_from_env_mapping_override(caplog: pytest.LogCaptureFixture) -> None:
     assert cfg.projects_root == "/tmp/projects"
     assert cfg.platform_root == "/tmp/root"
     logger.info("[IMP:9][test][app_config] from_env(mapping) → оверрайд OK (int-парсинг включён)")
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · Regression · Scenario: from_env(None) → чтение os.environ (call-time)
@@ -127,7 +118,7 @@ def test_from_env_reads_os_environ(caplog: pytest.LogCaptureFixture, monkeypatch
     assert cfg.platform_org == "env-org"
     assert cfg.deploy_timeout == 999
     logger.info("[IMP:9][test][app_config] from_env(None) → os.environ call-time OK")
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · Negative (R5) · Scenario: нечисловой int-поле → ValueError (fail-fast)
@@ -139,7 +130,7 @@ def test_from_env_int_failfast(caplog: pytest.LogCaptureFixture) -> None:
     with pytest.raises(ValueError):
         AppConfig.from_env({"PLATFORM_DEPLOY_TIMEOUT": "not-a-number"})
     logger.info("[IMP:9][test][app_config] int fail-fast (ValueError) OK")
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · Regression · Scenario: импорт модуля НЕ читает os.environ (W4a инвариант)
@@ -172,4 +163,4 @@ def test_import_time_no_env_read(caplog: pytest.LogCaptureFixture, monkeypatch: 
     assert cfg.projects_base == DEFAULT_PROJECTS_BASE
     assert cfg.deploy_timeout == DEPLOY_TIMEOUT
     logger.info("[IMP:9][test][app_config] import-time no-env инвариант OK (reload с чистым env)")
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)

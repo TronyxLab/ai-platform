@@ -12,7 +12,7 @@
 ##           невозможны по построению; «cleanup stale» сводится к зачистке PID-контента
 ##           мёртвого процесса (диагностика, не функциональность).
 ## @scope    Consumed by deploy/orchestrator.py, deploy/deploy_history.py,
-##           bootstrap/lifecycle/state_store.py (через re-export lifecycle/lock.py),
+##           bootstrap/lifecycle/state_store.py (прямой импорт),
 ##           и любой другой модуль, которому нужна межпроцессная блокировка файла.
 ## @invariants
 ##   - flock LOCK_EX|LOCK_NB (non-blocking), таймаут реализуется poll-loop'ом
@@ -30,10 +30,10 @@
 ##           процесса — исключает класс «завис процесс → вечный lock» (риск §9 meta);
 ##           lockfile+kill -0 требует ручного cleanup и имеет TOCTOU-окно. PID пишется
 ##           ТОЛЬКО для диагностики («locked by PID X») — не как механизм блокировки.
-##           Q: почему не в bootstrap/lifecycle/lock.py? A: deploy/ НЕ может импортировать
+##           Q: почему не в bootstrap/lifecycle/? A: deploy/ НЕ может импортировать
 ##           bootstrap/ (инвариант core/AGENTS.md: направление bootstrap → deploy разрешено,
-##           обратное запрещено). Общий канон живёт в shared/; lifecycle/lock.py — тонкий
-##           re-export для bootstrap-кода (путь из DevPlan 136 File Manifest).
+##           обратное запрещено). Общий канон живёт в shared/ (re-export lifecycle/lock.py
+##           существовал до аудита 2026-08-22, удалён — потребители импортируют напрямую).
 ## @changes  2026-08-05 · DevPlan 136 W9 T9.1/T9.2/T9.10 — создан (W9)
 ## @modulemap
 ##   FileLock [W:2] — reentrant flock context manager (timeout/poll/PID/stale-cleanup)

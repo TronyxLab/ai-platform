@@ -1,6 +1,6 @@
 """
-# GREP_SUMMARY: test docker-ops shared ps inspect exec stop rm tag image network volume stats info manifest pull cli-shell LDD DI fake-runner W4d
-# STRUCTURE: ▶ FakeCommandRunner (scripted, запись вызовов) → ◇ test_docker_ps [default|all|quiet|filters|format] → ◇ test_ps_container_names → ◇ test_docker_inspect/inspect_state_health → ◇ test_docker_exec → ◇ test_docker_stop/rm/tag → ◇ test_docker_image_inspect(_exists/_many) → ◇ test_docker_manifest_inspect(_raw) → ◇ test_docker_pull → ◇ test_docker_network/volume → ◇ test_docker_info/stats → ◇ test_cli_shell → ⎋ LDD trajectory assert
+# GREP_SUMMARY: test docker-ops shared ps inspect exec stop rm tag image network volume stats info manifest cli-shell LDD DI fake-runner W4d
+# STRUCTURE: ▶ FakeCommandRunner (scripted, запись вызовов) → ◇ test_docker_ps [default|all|quiet|filters|format] → ◇ test_ps_container_names → ◇ test_docker_inspect/inspect_state_health → ◇ test_docker_exec → ◇ test_docker_stop/rm/tag → ◇ test_docker_image_inspect(_many) → ◇ test_docker_manifest_inspect(_raw) → ◇ test_docker_network/volume → ◇ test_docker_info/stats → ◇ test_cli_shell → ⎋ LDD trajectory assert
 # region MODULE_CONTRACT
 ## @purpose  Unit tests for core/internal/shared/docker_ops.py (DevPlan 128 W1 $TEST_SPEC) —
 ##           единый слой docker-операций. W4d (160 T4.4): monkeypatch subprocess.run УБРАН —
@@ -8,8 +8,9 @@
 ##           через runner= параметр (DI-канон W4b) — 0 патчей subprocess в файле.
 ## @scope    Все функции docker_ops: docker_ps/ps_container_names/docker_inspect(_many)/
 ##           inspect_state_health/docker_exec/docker_stop/docker_rm/docker_tag/
-##           docker_image_inspect(_exists/_many)/docker_manifest_inspect(_raw)/docker_pull/
+##           docker_image_inspect(_many)/docker_manifest_inspect(_raw)/
 ##           docker_network_inspect(_create)/docker_volume_inspect/docker_info/docker_stats/CLI --shell.
+##           (docker_pull/docker_image_inspect_exists удалены как мёртвый API — аудит 2026-08-22.)
 ## @invariants
 ##   - FakeCommandRunner — scripted: дефолт/последовательность CompletedProcess, запись calls/kwargs
 ##   - Non-fatal контракт: сбой/таймаут → False/failed CompletedProcess/[] (никогда raise);
@@ -22,7 +23,6 @@
 """
 
 import logging
-import subprocess
 
 import pytest
 
@@ -34,64 +34,11 @@ logger = logging.getLogger(__name__)
 # ────────────────────────────────────────────────────────────
 # region FIXTURES / HELPERS
 # ────────────────────────────────────────────────────────────
-
-
-class FakeCommandRunner:
-    """Scripted CommandRunner (DI-канон W4b): результат из последовательности или дефолт.
-
-    ## @purpose — Замена monkeypatch subprocess.run в тестах docker_ops: каждый вызов
-    ##            записывается (calls/kwargs), возвращается scripted CompletedProcess.
-    ## @io — ⇥ results: list[CompletedProcess] (потребительский FIFO), default: CompletedProcess
-    ##       → ⎋ CompletedProcess (каждый run())
-    ## @complexity — O(1) — pop из списка / дефолт
-    ## @invariants
-    ##   - results исчерпаны → default (стабильное поведение для многошаговых сценариев)
-    ##   - run() НЕ raise (канон subprocess_io check=False — graceful)
-    """
-
-    def __init__(self, results=None, default=None):
-        self._results = list(results) if results else []
-        self.default = default if default is not None else subprocess.CompletedProcess([], 0, "", "")
-        self.calls: list[list[str]] = []
-        self.kwargs: list[dict] = []
-
-    @property
-    def last_cmd(self) -> list[str] | None:
-        return self.calls[-1] if self.calls else None
-
-    @property
-    def last_kwargs(self) -> dict:
-        return self.kwargs[-1] if self.kwargs else {}
-
-    def run(self, cmd, *, timeout=30, check=False, non_fatal=False, fatal_rc=()):
-        self.calls.append(list(cmd))
-        self.kwargs.append({"timeout": timeout, "check": check, "non_fatal": non_fatal, "fatal_rc": fatal_rc})
-        if self._results:
-            return self._results.pop(0)
-        return self.default
-
-
-def _proc(rc: int = 0, stdout: str | bytes = "", stderr: str | bytes = "") -> subprocess.CompletedProcess:
-    """Build a CompletedProcess with given rc/stdout/stderr (fake-раннер результат)."""
-    return subprocess.CompletedProcess([], returncode=rc, stdout=stdout, stderr=stderr)
-
-
-def _assert_ldd(caplog, require_imp9: bool = True) -> None:
-    """Print IMP:7-10 trajectory; assert IMP:9 only for success-path tests (LDD protocol)."""
-    found = False
-    logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-    for record in list(caplog.records):
-        msg = getattr(record, "message", "")
-        if "[IMP:" in str(msg):
-            imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-            if imp_level >= 7:
-                logger.info("%s", msg)
-            if imp_level >= 9:
-                found = True
-    logger.info("--- END LDD TRAJECTORY ---")
-    if require_imp9:
-        assert found, "Critical LDD Error: No IMP:9 business logic log found"
-
+# T2.16c: FakeCommandRunner/_proc — общие тест-двойники из tests/helpers/fakes.py
+# T2.16a: _assert_ldd — консолидирован в gate_helpers.assert_ldd_imp9
+from tests.helpers.fakes import FakeCommandRunner
+from tests.helpers.fakes import make_proc as _proc
+from tests.helpers.gate_helpers import assert_ldd_imp9 as _assert_ldd
 
 # endregion FIXTURES / HELPERS
 
@@ -330,17 +277,6 @@ def test_docker_image_inspect_fail_none(caplog) -> None:
     _assert_ldd(caplog, require_imp9=False)
 
 
-# 🧪 TRAP[TEST] · Regression · docker_image_inspect_exists local image · Last fail: N/A · Remove if: image inspect exists interface changes
-def test_docker_image_inspect_exists(caplog) -> None:
-    """docker_image_inspect_exists True when local image present (hermes L1)."""
-    caplog.set_level(logging.INFO)
-    fake = FakeCommandRunner(default=_proc(0))
-
-    assert docker_ops.docker_image_inspect_exists("hermes-base:latest", runner=fake) is True
-    assert fake.last_cmd == ["docker", "image", "inspect", "hermes-base:latest"]
-    _assert_ldd(caplog)
-
-
 # 🧪 TRAP[TEST] · Regression · docker_image_inspect_many batch (--format after ids) · Last fail: N/A · Remove if: batch inspect changes
 def test_docker_image_inspect_many(caplog) -> None:
     """docker_image_inspect_many builds ['docker','image','inspect',*ids,'--format',F]."""
@@ -386,18 +322,7 @@ def test_docker_manifest_inspect_raw_flags(caplog) -> None:
     _assert_ldd(caplog)
 
 
-# 🧪 TRAP[TEST] · Regression · docker_pull success · Last fail: N/A · Remove if: pull interface changes
-def test_docker_pull(caplog) -> None:
-    """docker_pull returns True on rc==0."""
-    caplog.set_level(logging.INFO)
-    fake = FakeCommandRunner(default=_proc(0))
-
-    assert docker_ops.docker_pull("ghcr.io/org/base:latest", runner=fake) is True
-    assert fake.last_cmd == ["docker", "pull", "ghcr.io/org/base:latest"]
-    _assert_ldd(caplog)
-
-
-# endregion TEST_docker_image_inspect / manifest / pull
+# endregion TEST_docker_image_inspect / manifest
 
 
 # ────────────────────────────────────────────────────────────

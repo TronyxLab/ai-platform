@@ -16,7 +16,6 @@
 """
 
 import logging
-import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -34,37 +33,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 import pytest
 
 from core.internal.shared.ssl_certs import cert_is_le_issuer, cert_is_valid  # C9: единая комбинация
+from tests.helpers.fakes import FakeCommandRunner
+from tests.helpers.fakes import make_proc as _proc
 
 pytestmark = pytest.mark.static_audit
-
-
-class FakeCommandRunner:
-    """Scripted CommandRunner (DI-канон W4b): результат из последовательности или дефолт.
-
-    ## @purpose — Замена monkeypatch subprocess.run в тестах cert_orchestrator: каждый вызов
-    ##            записывается (calls), возвращается scripted CompletedProcess.
-    ## @complexity — O(1) — pop из списка / дефолт
-    """
-
-    def __init__(self, results=None, default=None):
-        self._results = list(results) if results else []
-        self.default = default if default is not None else subprocess.CompletedProcess([], 0, "", "")
-        self.calls: list[list[str]] = []
-
-    @property
-    def last_cmd(self) -> list[str] | None:
-        return self.calls[-1] if self.calls else None
-
-    def run(self, cmd, *, timeout=30, check=False, non_fatal=False, fatal_rc=(), env=None):  # ruff: ignore[ARG002]
-        self.calls.append(list(cmd))
-        if self._results:
-            return self._results.pop(0)
-        return self.default
-
-
-def _proc(rc: int = 0, stdout: str = "", stderr: str = "") -> subprocess.CompletedProcess:
-    """Build a CompletedProcess with given rc/stdout/stderr (fake-раннер результат)."""
-    return subprocess.CompletedProcess([], returncode=rc, stdout=stdout, stderr=stderr)
 
 
 def _ok_runner() -> FakeCommandRunner:

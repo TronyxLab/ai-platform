@@ -61,8 +61,6 @@
 ## @usecases
 ##   - Developer: run pytest after modifying node-resolver.sh → all 9 tests pass, no regressions
 ##   - Architect: verify 3-path search order, glob+nullglob handling, host extraction invariants
-def _module_contract():
-    pass
 
 
 # endregion MODULE_CONTRACT

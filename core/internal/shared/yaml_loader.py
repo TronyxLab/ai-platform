@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: yaml_loader, platform-env, secret-definitions, SoT-YAML, typed-reader, PlatformEnv, env_defaults, secrets, dedup
-# STRUCTURE: ▶ load_platform_env → ◇ yaml.safe_load → ⊕ networks/volumes/env_defaults/profiles → ⟦PlatformEnv⟧ → ▶ load_secret_definitions → ◇ missing? → ⎋ [] → ⊕ secrets list → ⟦list[dict]⟧
+# GREP_SUMMARY: yaml_loader, platform-env, secret-definitions, SoT-YAML, typed-reader, PlatformEnv, env_defaults, proxy, no_proxy_internal, secrets, dedup
+# STRUCTURE: ▶ load_platform_env → ◇ yaml.safe_load → ⊕ networks/volumes/env_defaults/profiles/proxy → ⟦PlatformEnv⟧ → ▶ load_secret_definitions → ◇ missing? → ⎋ [] → ⊕ secrets list → ⟦list[dict]⟧
 # region MODULE_CONTRACT
 ## @purpose  Типизированные читатели SoT-YAML (platform-env.yaml, secret-definitions.yaml) —
 ##           единый слой YAML-парсинга вместо 3 локальных дублей (DevPlan 177 W3.5).
 ## @scope    core/internal/shared/ — потребители: provisioner.py (типизированный PlatformEnv),
-##           scripts/sync_env_defaults.py (env_defaults + secret-проекция),
+##           scripts/sync_env_defaults.py (env_defaults + proxy.no_proxy_internal + secret-проекция),
 ##           scripts/generate_secrets_manifest.py (raw secrets-список).
 ##           НЕ затрагивает node.yaml (NodeYaml-фасад) и ai-platform.yaml (project_yaml) —
 ##           отдельные SoT-читатели своих доменов.
@@ -27,12 +27,14 @@
 ## @changes  2026-08-16 | DevPlan 177 W3.5 — создан; типы PlatformEnv/NetworkConfig/VolumeConfig
 ##                      и load_platform_env перенесены из provisioner.py; load_secret_definitions
 ##                      консолидирован из generate_secrets_manifest.py
+##           2026-08-22 | T2.17 — PlatformEnv +proxy: dict (секция proxy.no_proxy_internal —
+##                      SoT для NO_PROXY в .env.example; дедупликация env_defaults.NO_PROXY)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast
 
@@ -84,6 +86,9 @@ class PlatformEnv:
     volumes: list[VolumeConfig]
     env_defaults: dict[str, str]
     profiles: list[str]
+    # T2.17: proxy-секция (no_proxy_internal — SoT для NO_PROXY); default dict — обратная
+    # совместимость с конструкторами тестов/потребителей (test_provisioner и др.).
+    proxy: dict[str, object] = field(default_factory=dict)
 
 
 # endregion DATACLASS_PlatformEnv
@@ -94,7 +99,7 @@ def load_platform_env(yaml_path: Path) -> PlatformEnv:
     """Parse platform-env.yaml into typed PlatformEnv.
 
     ## @purpose  Единый типизированный читатель platform-env.yaml (SoT). Извлекает
-    ##            4 секции: networks, volumes, env_defaults, profiles. Missing-секции
+    ##            5 секций: networks, volumes, env_defaults, profiles, proxy. Missing-секции
     ##            трактуются как пустые (list/dict). env_defaults нормализуются к str
     ##            (None → "") — общая семантика provisioner и sync_env_defaults.
     ## @io        ⇥ yaml_path: Path → ⎋ PlatformEnv
@@ -104,6 +109,7 @@ def load_platform_env(yaml_path: Path) -> PlatformEnv:
     ##   - FileNotFoundError(yaml_path) если файл отсутствует (fail-fast, provisioner.main)
     ##   - env_defaults: str(v) при не-None (int → "9000"), None → "" (без "None"-мусора)
     ##   - networks/volumes: non-dict записи пропускаются (isinstance-фильтр)
+    ##   - proxy: non-dict → {} (T2.17; proxy.no_proxy_internal — SoT для NO_PROXY)
     ##   - LDD block name: [yaml_loader]
     """
     if not yaml_path.is_file():
@@ -150,11 +156,16 @@ def load_platform_env(yaml_path: Path) -> PlatformEnv:
     profiles_raw: object = data.get("profiles") or []
     profiles = cast(list[str], list(cast(list[object], profiles_raw)))
 
+    # T2.17: proxy-секция (no_proxy_internal — SoT для NO_PROXY в .env.example)
+    proxy_raw: object = data.get("proxy") or {}
+    proxy: dict[str, object] = cast(dict[str, object], proxy_raw) if isinstance(proxy_raw, dict) else {}
+
     result = PlatformEnv(
         networks=networks,
         volumes=volumes,
         env_defaults=env_defaults,
         profiles=profiles,
+        proxy=proxy,
     )
 
     logger.info(

@@ -22,6 +22,7 @@
 
 import logging
 import os
+import subprocess
 from pathlib import Path
 
 from core.internal.bootstrap.lifecycle import cli
@@ -207,3 +208,74 @@ def test_run_single_phase_ok(caplog) -> None:
 
 
 # endregion Tests: _run_single_phase
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region Tests: _forced_command_smoke (T1.1, аудит 2026-08-22)
+# ═══════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · 2026-08-22 · PINNING (T1.1) · _forced_command_smoke happy-path → True
+# · Scenario: authorized_keys содержит orchestrator_cli dispatch+restrict, dispatch ping → pong
+# ·   → ok=True; FAIL-warning'ов НЕТ (до фикса ok был False всегда — FAIL-ветки выполнялись
+# ·   безусловно внутри success-if)
+# · Last fail: 2026-08-22 — аудит: smoke ВСЕГДА репортил провал на happy-path
+# · Remove if: smoke-проверки консолидируются в vps_readiness pre-flight
+def test_forced_command_smoke_happy_path(caplog, tmp_path, monkeypatch) -> None:
+    """T1.1 pinning: оба чека зелёные → ok=True, без MISSING/FAIL warning'ов."""
+    caplog.set_level(logging.DEBUG)
+    ssh_dir = tmp_path / ".ssh"
+    ssh_dir.mkdir()
+    keys = ssh_dir / "authorized_keys"
+    keys.write_text('command="... orchestrator_cli dispatch receive",restrict ssh-ed25519 AAA', encoding="utf-8")
+    monkeypatch.setattr(cli.os.path, "expanduser", lambda _: str(tmp_path))
+    monkeypatch.setattr(cli, "platform_remote_base", lambda: str(tmp_path))
+    fake = subprocess.CompletedProcess(args=[], returncode=0, stdout="pong\n", stderr="")
+
+    def _fake_run(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess:
+        return fake
+
+    monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+
+    ok = cli._forced_command_smoke()
+
+    assert ok is True, "happy-path → канал готов (T1.1: до фикса всегда False)"
+    assert "entry OK" in caplog.text and "ping: OK" in caplog.text
+    assert "MISSING" not in caplog.text and "ping: FAIL" not in caplog.text, (
+        "FAIL-warning не должен появляться на success-ветке (T1.1 regression)"
+    )
+    logger.critical("[IMP:9][test] forced-command smoke happy-path → True без FAIL-warning — OK (T1.1)")
+
+
+# 🧪 TRAP[TEST] · 2026-08-22 · Regression · T1.1 — FAIL-ветки → ok=False с диагностикой
+# · Scenario: entry отсутствует + ping без pong → ok=False; ровно по одному warning на чек
+# · Last fail: N/A (new — T1.1)
+# · Remove if: smoke-проверки меняют семантику fail-detection
+def test_forced_command_smoke_fail_branches(caplog, tmp_path, monkeypatch) -> None:
+    """T1.1: оба чека красные → ok=False; warning'и из else-веток (не дублируются с OK)."""
+    caplog.set_level(logging.DEBUG)
+    ssh_dir = tmp_path / ".ssh"
+    ssh_dir.mkdir()
+    keys = ssh_dir / "authorized_keys"
+    keys.write_text("ssh-ed25519 AAA-no-forced-command", encoding="utf-8")
+    monkeypatch.setattr(cli.os.path, "expanduser", lambda _: str(tmp_path))
+    monkeypatch.setattr(cli, "platform_remote_base", lambda: str(tmp_path))
+    fake = subprocess.CompletedProcess(args=[], returncode=1, stdout="dispatch error: unknown verb", stderr="err")
+
+    def _fake_run(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess:
+        return fake
+
+    monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+
+    ok = cli._forced_command_smoke()
+
+    assert ok is False, "оба чека красные → канал мёртв"
+    assert "entry MISSING" in caplog.text, "[IMP:7] MISSING-диагностика обязательна"
+    assert "ping: FAIL" in caplog.text, "[IMP:7] ping FAIL-диагностика обязательна"
+    assert "entry OK" not in caplog.text and "ping: OK" not in caplog.text, (
+        "OK-логи не должны соседствовать с FAIL на тех же чеках"
+    )
+    logger.critical("[IMP:9][test] forced-command smoke fail-branches → False с диагностикой — OK (T1.1)")
+
+
+# endregion Tests: _forced_command_smoke

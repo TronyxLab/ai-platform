@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: phases-system, system-bootstrap, user-accounts, platform-setup, node-configuration, converge-services, node-config-update, converge-update, bootstrap-phase, E3, DI, runner-param, facts-param, W4d
+# GREP_SUMMARY: phases-system, system-bootstrap, user-accounts, platform-setup, node-configuration, converge-services, node-config-update, converge-update, bootstrap-phase, E3, DI, runner-param, facts-param, W4d, T2.1, run-converge
 # STRUCTURE: ▶ system-фазы (φ1 φ2 φ3 φ5 φ8.5 φ10 φ13) → ◇ each: pre-check → execute → post-check → ⊕ LDD logs → ⎋ bool/exception
+#           → ◇ T2.1: близнецы φ8.5/φ13 (converge) и φ5/φ10 (node-config) → общие шаги (_run_converge/_verify_core_files/_ensure_node_yaml/_validate_node_yaml)
 # region MODULE_CONTRACT
 ## @purpose  System-domain bootstrap phases (DevPlan 119 E3) — φ1 system_bootstrap, φ2 user_accounts,
 ##           φ3 platform_setup, φ5 node_configuration, φ8.5 converge_services, φ10 node_config_update,
@@ -33,6 +34,8 @@
 ## @changes  2026-08-13 · DevPlan 162 — φ1 шаг 1.6 timezone (W7-3), шаг 5.7 zram (W4-1),
 ##           шаг 5.8 prune cron (W4-4), шаг 5.9 cruft purge (W10-1); φ8.5/φ13 converge rc-пропагация (W7-2)
 ## @changes  2026-08-14 · DevPlan 167 D5 — φ5 +env: Mapping (NODE_CONFIGS_REMOTE_BASE path-injection)
+## @changes  2026-08-22 · T2.1 — близнецы: φ8.5/φ13 → _run_converge (rc-маппинг W7-2);
+##           φ5/φ10 → _verify_core_files/_ensure_node_yaml/_validate_node_yaml (общие шаги)
 # endregion MODULE_CONTRACT
 from __future__ import annotations
 
@@ -919,11 +922,78 @@ def phase_platform_setup(
 # endregion FUNC_phase_platform_setup
 
 
+# region FUNC__verify_core_files
+## @purpose  FATAL-обёртка verify_core_files (T2.1): общий шаг φ5/φ10 — сбой core-доставки
+##           → PlatformFatalError (fail-fast). Тексты логов per-mode.
+## @io       ⇥ core_dir: str, ok_msg: str, err_log: str (ERROR %s), fatal_prefix: str → ⎋ None
+##              ⚡ PlatformFatalError
+## @complexity O(1) + verify-хелпер
+## @invariants — не глотает PlatformError/TimeoutExpired (core обязателен)
+def _verify_core_files(
+    core_dir: str,
+    *,
+    ok_msg: str,
+    err_log: str,
+    fatal_prefix: str,
+) -> None:
+    """Verify core delivery (FATAL) — shared step φ5/φ10 (T2.1)."""
+    try:
+        helpers_validation.verify_core_files(core_dir)
+        logger.info(ok_msg)
+    except (PlatformError, subprocess.TimeoutExpired) as e:
+        logger.error(err_log, e)
+        msg = f"{fatal_prefix}: {e}"
+        raise PlatformFatalError(msg) from e
+
+
+# endregion FUNC__verify_core_files
+
+
+# region FUNC__ensure_node_yaml
+## @purpose  FATAL-проверка node.yaml (T2.1): общий шаг φ5/φ10 — отсутствие конфига блокирует
+##           все последующие фазы → ConfigNotFoundError (fail-fast).
+## @io       ⇥ node_yaml: str, facts: EnvironmentFacts, tag: str (тег логов),
+##              missing_msg: str (ConfigNotFoundError-сообщение per-mode) → ⎋ None
+##              ⚡ ConfigNotFoundError
+## @complexity O(1) — isfile-проверка
+## @invariants — пустой node_yaml или отсутствующий файл → ConfigNotFoundError
+def _ensure_node_yaml(node_yaml: str, facts: EnvironmentFacts, *, tag: str, missing_msg: str) -> None:
+    """Ensure node.yaml exists (FATAL) — shared step φ5/φ10 (T2.1)."""
+    if not node_yaml or not facts.path_isfile(node_yaml):
+        raise ConfigNotFoundError(missing_msg)
+    logger.info("[IMP:9][phase:%s] node.yaml present: %s", tag, node_yaml)
+
+
+# endregion FUNC__ensure_node_yaml
+
+
+# region FUNC__validate_node_yaml
+## @purpose  Non-fatal schema-валидация node.yaml (T2.1): общий шаг φ5/φ10 — сбой WARN + True
+##           (done_with_warnings), не роняет фазу.
+## @io       ⇥ node_yaml: str, core_dir: str, tag: str → ⎋ bool (True = non-fatal issue)
+## @complexity O(N) — N = размер node.yaml (jsonschema)
+## @invariants — OSError/PlatformError → WARN + True (schema-валидация best-effort)
+def _validate_node_yaml(node_yaml: str, core_dir: str, *, tag: str) -> bool:
+    """Validate node.yaml against schema (non-fatal) — shared step φ5/φ10 (T2.1)."""
+    try:
+        helpers_validation.validate_node_yaml(node_yaml, core_dir)
+        logger.info("[IMP:9][phase:%s] node.yaml validated against schema", tag)
+    except (OSError, PlatformError) as e:  # noqa: EXC — non-fatal: schema validation is best-effort
+        logger.warning("[IMP:7][phase:%s] node.yaml schema validation failed (non-fatal): %s", tag, e)
+        return True
+    else:
+        return False
+
+
+# endregion FUNC__validate_node_yaml
+
+
 # region FUNC_phase_node_configuration
 ## @purpose φ5: Validate node configuration — read/validate node.yaml, verify core delivery,
 ##           verify node configs existence. All configuration must be valid before deploy.
 ##           Corresponds to init steps: verify_core (10), verify_node_configs (11),
-##           read_node_yaml (15).
+##           read_node_yaml (15). T2.1: общие шаги _verify_core_files/_ensure_node_yaml/
+##           _validate_node_yaml (с φ10); φ5-специфичен только node_configs_dir-проверка.
 ## @io      ⇥ core_dir, node_name, node_yaml, facts: EnvironmentFacts | None,
 ##          env: Mapping | None (DI, 167 D5 — NODE_CONFIGS_REMOTE_BASE для node_configs_dir;
 ##              None = os.environ, поведение неизменно) → ⎋ bool
@@ -952,30 +1022,28 @@ def phase_node_configuration(
     facts = facts or default_env_facts()
     non_fatal_issues = False
 
-    # ── 1. Verify core files delivered ──
-    try:
-        helpers_validation.verify_core_files(core_dir)
-        logger.info("[IMP:9][phase:node_configuration] Core files verified")
-    except (PlatformError, subprocess.TimeoutExpired) as e:
-        logger.error("[IMP:10][phase:node_configuration] Core files verification FAILED: %s", e)
-        msg = f"Core files verification failed: {e}"
-        raise PlatformFatalError(msg) from e
+    # ── 1. Verify core files delivered (FATAL) ──
+    _verify_core_files(
+        core_dir,
+        ok_msg="[IMP:9][phase:node_configuration] Core files verified",
+        err_log="[IMP:10][phase:node_configuration] Core files verification FAILED: %s",
+        fatal_prefix="Core files verification failed",
+    )
 
-    # ── 2. Verify node configs (node.yaml exists) ──
-    if not node_yaml or not facts.path_isfile(node_yaml):
-        msg = f"node.yaml not found: {node_yaml}. Ensure node config is delivered to /opt/node-configs/{node_name}/"
-        raise ConfigNotFoundError(msg)
-    logger.info("[IMP:9][phase:node_configuration] node.yaml present: %s", node_yaml)
+    # ── 2. Verify node configs (node.yaml exists, FATAL) ──
+    _ensure_node_yaml(
+        node_yaml,
+        facts,
+        tag="node_configuration",
+        missing_msg=(
+            f"node.yaml not found: {node_yaml}. Ensure node config is delivered to /opt/node-configs/{node_name}/"
+        ),
+    )
 
-    # ── 3. Validate node.yaml against schema ──
-    try:
-        helpers_validation.validate_node_yaml(node_yaml, core_dir)
-        logger.info("[IMP:9][phase:node_configuration] node.yaml validated against schema")
-    except (OSError, PlatformError) as e:  # noqa: EXC — non-fatal: schema validation is best-effort
-        logger.warning("[IMP:7][phase:node_configuration] node.yaml schema validation failed (non-fatal): %s", e)
-        non_fatal_issues = True
+    # ── 3. Validate node.yaml against schema (non-fatal) ──
+    non_fatal_issues = _validate_node_yaml(node_yaml, core_dir, tag="node_configuration")
 
-    # ── 4. Verify node configs directory exists ──
+    # ── 4. Verify node configs directory exists (φ5-only, non-fatal) ──
     # 🧐 TRAP[DI-SEAM] · 2026-08-14 · — · node_configs_dir path-injection через env
     # · Rejected: прямой os.path.isdir(node_configs_remote()) с monkeypatch-патчем в flow-тестах
     # · Reason: seam = тестируемость реального вызова — node_configs_remote(env) уже канон C7
@@ -999,18 +1067,76 @@ def phase_node_configuration(
 # endregion FUNC_phase_node_configuration
 
 
+# region FUNC__run_converge
+## @purpose  Общий converge-шаг (T2.1): близнецы φ8.5/φ13 различались ТОЛЬКО phase-тегом и
+##           2 суффиксами логов — тело консолидировано (одна точка правки rc-маппинга W7-2).
+## @io       ⇥ core_dir, node_name, runner: CommandRunner, facts: EnvironmentFacts,
+##              update_mode: bool (False = φ8.5, True = φ13) → ⎋ bool
+## @complexity O(1) + subprocess (converge.sh, PULL_TIMEOUT)
+## @invariants
+##   - rc-пропагация (DevPlan 162 W7-2): rc=0 → True; rc=1/2+ → False (done_with_warnings)
+##   - AUTO_RECONCILE env → --reconcile; missing converge.sh → non-fatal False
+##   - Логи байт-идентичны прежним per-phase (тесты пинят подстроки, не зависящие от тега)
+def _run_converge(
+    core_dir: str,
+    node_name: str,
+    *,
+    runner: CommandRunner,
+    facts: EnvironmentFacts,
+    update_mode: bool = False,
+) -> bool:
+    """Run converge.sh desired-state reconciler — shared by φ8.5/φ13 (T2.1)."""
+    tag = "converge_update" if update_mode else "converge_services"
+    converge_script = os.path.join(core_dir, "internal", "bootstrap", "converge.sh")
+    if not facts.path_isfile(converge_script):
+        logger.warning("[IMP:7][phase:%s] converge.sh not found at %s — skipping", tag, converge_script)
+        return False
+
+    converge_args = ["bash", converge_script, "--node", node_name]
+    if os.environ.get("AUTO_RECONCILE", "false").lower() == "true":
+        converge_args.append("--reconcile")
+        logger.info("[IMP:8][phase:%s] Auto-reconcile enabled", tag)
+
+    try:
+        # W7-2 (DevPlan 162): rc propagate — 0=clean, 1=warnings, 2=drift. НЕ глотать rc
+        # (раньше run_subprocess с non_fatal=True возвращал CompletedProcess, но rc игнорировался).
+        result = runner.run(converge_args, non_fatal=True, fatal_rc=(127,), timeout=PULL_TIMEOUT)
+        completed_fmt = (
+            "[IMP:9][phase:converge_update] Converge completed (update, rc=%d)"
+            if update_mode
+            else "[IMP:9][phase:converge_services] Converge completed (rc=%d)"
+        )
+        logger.info(completed_fmt, result.returncode)
+    except (PlatformError, subprocess.TimeoutExpired) as e:
+        logger.warning("[IMP:7][phase:%s] Converge failed (non-fatal): %s", tag, e)
+        return False
+
+    if result.returncode == 0:
+        rc0_fmt = (
+            "[IMP:9][phase:converge_update] Converge clean (rc=0) — update mode"
+            if update_mode
+            else "[IMP:9][phase:converge_services] Converge clean (rc=0)"
+        )
+        logger.info(rc0_fmt)
+        return True
+    if result.returncode == 1:
+        logger.warning("[IMP:8][phase:%s] Converge completed with warnings (rc=1)", tag)
+        return False
+    # rc=2 (drift) или любой другой ненулевой rc — FAIL
+    logger.error("[IMP:10][phase:%s] Converge FAILED (rc=%d — drift/errors)", tag, result.returncode)
+    return False
+
+
+# endregion FUNC__run_converge
+
+
 # region FUNC_phase_converge_services
-## @purpose φ8.5: Converge node to desired state — run converge.sh with --node flag.
-##           Corresponds to init step: converge (20).
+## @purpose φ8.5: Converge node to desired state (init: converge step 20) — тонкая обёртка
+##           над общим _run_converge (T2.1; логика/rc-маппинг — там).
 ## @io      ⇥ core_dir, node_name, node_yaml, runner: CommandRunner | None,
 ##          facts: EnvironmentFacts | None → ⎋ bool
 ## @complexity O(1) + subprocess (converge.sh)
-## @invariants
-##   - Converge is non-fatal — failures are collected as warnings (done_with_warnings)
-##   - rc-пропагация (DevPlan 162 W7-2): rc=0 → True (clean); rc=1 → False (warnings);
-##     rc=2/прочие ненулевые → False (drift/errors) — exit 0 ≠ «чисто»
-##   - AUTO_RECONCILE env var enables --reconcile flag for converge.sh
-##   - converge.sh must exist at the expected path; missing script is non-fatal
+## @invariants — см. _run_converge: non-fatal, rc-пропагация W7-2, AUTO_RECONCILE, missing non-fatal
 def phase_converge_services(
     core_dir: str,
     node_name: str,
@@ -1019,42 +1145,10 @@ def phase_converge_services(
     runner: CommandRunner | None = None,
     facts: EnvironmentFacts | None = None,
 ) -> bool:
-    """φ8.5: Converge services — desired-state reconciler.
-
-    Pre-check: converge.sh exists (non-fatal if missing).
-    Execute: converge.sh --node <node_name> [--reconcile].
-    Post-check: converge.sh exit code (0=clean, 1=warnings, 2=errors → done_with_warnings).
-    """
+    """φ8.5: Converge services — desired-state reconciler (T2.1: делегирует _run_converge)."""
     runner = runner if runner is not None else default_command_runner()
     facts = facts or default_env_facts()
-    converge_script = os.path.join(core_dir, "internal", "bootstrap", "converge.sh")
-    if not facts.path_isfile(converge_script):
-        logger.warning("[IMP:7][phase:converge_services] converge.sh not found at %s — skipping", converge_script)
-        return False
-
-    converge_args = ["bash", converge_script, "--node", node_name]
-    if os.environ.get("AUTO_RECONCILE", "false").lower() == "true":
-        converge_args.append("--reconcile")
-        logger.info("[IMP:8][phase:converge_services] Auto-reconcile enabled")
-
-    try:
-        # W7-2 (DevPlan 162): rc propagate — 0=clean, 1=warnings, 2=drift. НЕ глотать rc
-        # (раньше run_subprocess с non_fatal=True возвращал CompletedProcess, но rc игнорировался).
-        result = runner.run(converge_args, non_fatal=True, fatal_rc=(127,), timeout=PULL_TIMEOUT)
-        logger.info("[IMP:9][phase:converge_services] Converge completed (rc=%d)", result.returncode)
-    except (PlatformError, subprocess.TimeoutExpired) as e:
-        logger.warning("[IMP:7][phase:converge_services] Converge failed (non-fatal): %s", e)
-        return False
-
-    if result.returncode == 0:
-        logger.info("[IMP:9][phase:converge_services] Converge clean (rc=0)")
-        return True
-    if result.returncode == 1:
-        logger.warning("[IMP:8][phase:converge_services] Converge completed with warnings (rc=1)")
-        return False
-    # rc=2 (drift) или любой другой ненулевой rc — FAIL
-    logger.error("[IMP:10][phase:converge_services] Converge FAILED (rc=%d — drift/errors)", result.returncode)
-    return False
+    return _run_converge(core_dir, node_name, runner=runner, facts=facts)
 
 
 # endregion FUNC_phase_converge_services
@@ -1063,6 +1157,8 @@ def phase_converge_services(
 # region FUNC_phase_node_config_update
 ## @purpose φ10: Node config update (UPDATE mode) — verify core delivery, read/validate
 ##            node.yaml for fresh configuration. Corresponds to update steps: verify_core (1).
+##            T2.1: близнец φ5 — общие шаги _verify_core_files/_ensure_node_yaml/
+##            _validate_node_yaml; φ10 не имеет node_configs_dir-проверки (φ5-only).
 ## @io      ⇥ core_dir, node_name, node_yaml, facts: EnvironmentFacts | None → ⎋ bool
 ##          ⚡ raises ConfigNotFoundError if core not delivered or node.yaml missing
 ## @complexity O(1) + schema validation
@@ -1086,27 +1182,23 @@ def phase_node_config_update(
     non_fatal_issues = False
 
     # ── 1. Verify core delivery (FATAL) ──
-    try:
-        helpers_validation.verify_core_files(core_dir)
-        logger.info("[IMP:9][phase:node_config_update] Core files verified for update")
-    except (PlatformError, subprocess.TimeoutExpired) as e:
-        logger.error("[IMP:10][phase:node_config_update] Core files verification FAILED: %s", e)
-        msg = f"Core files verification failed during update: {e}"
-        raise PlatformFatalError(msg) from e
+    _verify_core_files(
+        core_dir,
+        ok_msg="[IMP:9][phase:node_config_update] Core files verified for update",
+        err_log="[IMP:10][phase:node_config_update] Core files verification FAILED: %s",
+        fatal_prefix="Core files verification failed during update",
+    )
 
-    # ── 2. Verify node.yaml exists ──
-    if not node_yaml or not facts.path_isfile(node_yaml):
-        msg = f"node.yaml not found: {node_yaml} — cannot update"
-        raise ConfigNotFoundError(msg)
-    logger.info("[IMP:9][phase:node_config_update] node.yaml present: %s", node_yaml)
+    # ── 2. Verify node.yaml exists (FATAL) ──
+    _ensure_node_yaml(
+        node_yaml,
+        facts,
+        tag="node_config_update",
+        missing_msg=f"node.yaml not found: {node_yaml} — cannot update",
+    )
 
-    # ── 3. Validate node.yaml against schema ──
-    try:
-        helpers_validation.validate_node_yaml(node_yaml, core_dir)
-        logger.info("[IMP:9][phase:node_config_update] node.yaml validated against schema")
-    except (OSError, PlatformError) as e:  # noqa: EXC — non-fatal: schema validation is best-effort
-        logger.warning("[IMP:7][phase:node_config_update] node.yaml schema validation failed (non-fatal): %s", e)
-        non_fatal_issues = True
+    # ── 3. Validate node.yaml against schema (non-fatal) ──
+    non_fatal_issues = _validate_node_yaml(node_yaml, core_dir, tag="node_config_update")
 
     if non_fatal_issues:
         logger.info("[IMP:8][phase:node_config_update] Complete with non-fatal issues")
@@ -1120,16 +1212,12 @@ def phase_node_config_update(
 
 
 # region FUNC_phase_converge_update
-## @purpose φ13: Converge update (UPDATE mode) — run converge.sh desired-state reconciler.
-##            Corresponds to update step: converge (8).
+## @purpose φ13: Converge update (UPDATE mode: converge step 8) — тонкая обёртка над общим
+##           _run_converge (T2.1; логика/rc-маппинг — там).
 ## @io      ⇥ core_dir, node_name, node_yaml, runner: CommandRunner | None,
 ##          facts: EnvironmentFacts | None → ⎋ bool
 ## @complexity O(1) + subprocess (converge.sh)
-## @invariants
-##   - Non-fatal: converge failures are warnings (done_with_warnings)
-##   - rc-пропагация (DevPlan 162 W7-2): rc=0 → True; rc=1 (warnings) / rc=2+ (drift) → False
-##   - AUTO_RECONCILE env var enables --reconcile
-##   - converge.sh must exist; missing script is non-fatal warning
+## @invariants — см. _run_converge: non-fatal, rc-пропагация W7-2, AUTO_RECONCILE, missing non-fatal
 def phase_converge_update(
     core_dir: str,
     node_name: str,
@@ -1138,40 +1226,10 @@ def phase_converge_update(
     runner: CommandRunner | None = None,
     facts: EnvironmentFacts | None = None,
 ) -> bool:
-    """φ13: Converge update — desired-state reconciler (UPDATE mode).
-
-    Pre-check: converge.sh exists (non-fatal if missing).
-    Execute: converge.sh --node <node_name> [--reconcile].
-    Post-check: converge.sh exit code (0=clean, 1=warnings, 2=errors → done_with_warnings).
-    """
+    """φ13: Converge update — desired-state reconciler (T2.1: делегирует _run_converge, update_mode)."""
     runner = runner if runner is not None else default_command_runner()
     facts = facts or default_env_facts()
-    converge_script = os.path.join(core_dir, "internal", "bootstrap", "converge.sh")
-    if not facts.path_isfile(converge_script):
-        logger.warning("[IMP:7][phase:converge_update] converge.sh not found at %s — skipping", converge_script)
-        return False
-
-    converge_args = ["bash", converge_script, "--node", node_name]
-    if os.environ.get("AUTO_RECONCILE", "false").lower() == "true":
-        converge_args.append("--reconcile")
-        logger.info("[IMP:8][phase:converge_update] Auto-reconcile enabled")
-
-    try:
-        # W7-2 (DevPlan 162): rc propagate (тот же mapping, что φ8.5) — rc 1/2 → done_with_warnings
-        result = runner.run(converge_args, non_fatal=True, fatal_rc=(127,), timeout=PULL_TIMEOUT)
-        logger.info("[IMP:9][phase:converge_update] Converge completed (update, rc=%d)", result.returncode)
-    except (PlatformError, subprocess.TimeoutExpired) as e:
-        logger.warning("[IMP:7][phase:converge_update] Converge failed (non-fatal): %s", e)
-        return False
-
-    if result.returncode == 0:
-        logger.info("[IMP:9][phase:converge_update] Converge clean (rc=0) — update mode")
-        return True
-    if result.returncode == 1:
-        logger.warning("[IMP:8][phase:converge_update] Converge completed with warnings (rc=1)")
-        return False
-    logger.error("[IMP:10][phase:converge_update] Converge FAILED (rc=%d — drift/errors)", result.returncode)
-    return False
+    return _run_converge(core_dir, node_name, runner=runner, facts=facts, update_mode=True)
 
 
 # endregion FUNC_phase_converge_update

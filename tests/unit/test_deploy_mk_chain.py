@@ -1,9 +1,11 @@
-# GREP_SUMMARY: test-deploy-mk-chain, deploy.mk, deploy-project, deliver, --host, skip-verify, --scp, D3, NODE-resolve
-# STRUCTURE: ▶ 3 scenarios ┌deploy.mk рецепт (deliver+--host, 0 мёртвых флагов) + deliver CLI JSON + negative no-host┐ → ○ caplog LDD IMP:9 → ⊕ TRAP[TEST] → ⎋
+# GREP_SUMMARY: test-deploy-mk-chain, deploy.mk, deploy-project, deploy, LAUNCH, deliver, --host, skip-verify, --scp, D3, NODE-resolve, __deploy_via_deliver, T2.14
+# STRUCTURE: ▶ 4 scenarios ┌deploy.mk (единый define deliver+--host, LAUNCH=1 делегирует, 0 мёртвых флагов) + deliver CLI JSON + negative no-host┐ → ○ caplog LDD IMP:9 → ⊕ TRAP[TEST] → ⎋
 # region MODULE_CONTRACT
 ## @purpose  Unit tests for DevPlan 116 B1 T5 (D3) — make deploy-project цепочка: рецепт deploy.mk
-##           использует `deliver` + `--host` (НЕ --skip-verify/--scp); deliver CLI пробрасывает
-##           JSON-результат VPS в stdout и exit по нему; NODE без host-резолва → fail-fast.
+##           использует единый define `__deploy_via_deliver` (T2.14) с `deliver` + `--host`
+##           (НЕ --skip-verify/--scp); deploy LAUNCH=1 делегирует в deploy-project (без дублирования
+##           тела); deliver CLI пробрасывает JSON-результат VPS в stdout и exit по нему;
+##           NODE без host-резолва → fail-fast.
 ## @scope    Tests: парсинг makefiles/deploy.mk (статический рецепт-анализ) + orchestrator_cli
 ##           deliver (_handle_deliver) с monkeypatched ForcedCommandChannel.
 ## @invariants
@@ -23,6 +25,7 @@ from pathlib import Path
 import pytest
 
 from core.internal.deploy.orchestrator_cli import _handle_deliver, build_parser
+from tests.helpers.gate_helpers import assert_ldd_imp9
 
 pytestmark = pytest.mark.static_audit
 
@@ -54,21 +57,7 @@ def _recipe_from_mk(mk_path: Path, target: str) -> str:
     return "\n".join(lines[start:end])
 
 
-def _assert_imp9_logged(caplog: pytest.LogCaptureFixture) -> None:
-    """Print IMP:7-10 trajectory and assert at least one IMP:9 log present."""
-    found_imp9 = False
-    logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-    for record in list(caplog.records):
-        if "[IMP:" in record.message:
-            imp_level = int(record.message.split("[IMP:")[1].split("]")[0])
-            if imp_level >= 7:
-                logger.info("%s", record.message)
-            if imp_level >= 9:
-                found_imp9 = True
-    logger.info("--- END LDD TRAJECTORY ---")
-    assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
-
-
+# T2.16a: _assert_imp9_logged консолидирован в gate_helpers.assert_ldd_imp9
 def _deploy_project_recipe() -> str:
     """Извлечь рецепт таргета deploy-project из makefiles/deploy.mk.
 
@@ -87,24 +76,60 @@ def _deploy_project_recipe() -> str:
     return "\n".join(lines[start:end])
 
 
-# region FUNC_test_deploy_mk_recipe_uses_deliver
-## @purpose — Рецепт deploy-project использует `deliver` + `--host`; НЕ содержит --skip-verify/--scp (D3).
-# 🧪 TRAP[TEST] · DevPlan 116 B1 T5 · D3 negative: мёртвые флаги удалены
-# · Regression: --skip-verify/--scp возвращаются в deploy.mk (мёртвый код, D3)
-# · Scenario: рецепт содержит 'deliver' и '--host'; не содержит '--skip-verify', '--scp', 'SKIP_VERIFY'
-# · Last fail: — deploy.mk:58,72-78 передавал --skip-verify (аргумента нет в CLI → fail)
-# · Remove if: deploy-project снова получает флаги канала
-def test_deploy_mk_recipe_uses_deliver() -> None:
-    """Рецепт deploy-project: deliver + --host, 0 мёртвых флагов (D3)."""
-    recipe = _deploy_project_recipe()
+def _deliver_define_block() -> str:
+    """Извлечь тело define __deploy_via_deliver из makefiles/deploy.mk (T2.14).
 
-    assert "deliver" in recipe, "Рецепт должен использовать CLI subcommand deliver (T5)"
-    assert "--host" in recipe, "Рецепт должен передавать --host (NODE→host резолв)"
-    assert "--skip-verify" not in recipe, "--skip-verify удалён (D3)"
-    assert "--scp" not in recipe, "--scp удалён (T5 — единый канал ForcedCommandChannel)"
-    assert "SKIP_VERIFY" not in recipe, "SKIP_VERIFY переменная удалена (D3)"
-    assert "extract_node_host" in recipe, "Рецепт должен резолвить host через extract_node_host"
-    logger.info("[IMP:9][test][deploy_mk] Рецепт deploy-project чист: deliver + --host, 0 мёртвых флагов")
+    ## @purpose — Статический парсинг: срез от 'define __deploy_via_deliver' до 'endef'.
+    ##            T2.14: deliver-семантика (resolve + orchestrator_cli deliver) живёт в
+    ##            едином define; рецепт deploy-project делегирует в него через $(call).
+    """
+    content = _DEPLOY_MK.read_text(encoding="utf-8")
+    lines = content.splitlines()
+    start = next(i for i, line in enumerate(lines) if line.strip() == "define __deploy_via_deliver")
+    end = next(
+        (i for i in range(start + 1, len(lines)) if lines[i].strip() == "endef"),
+        len(lines),
+    )
+    return "\n".join(lines[start : end + 1])
+
+
+# region FUNC_test_deploy_mk_recipe_uses_deliver
+## @purpose — deploy.mk (T2.14): рецепт deploy-project делегирует в единый define
+##            __deploy_via_deliver; define использует `deliver` + `--host` + `extract_node_host`;
+##            НЕ содержит --skip-verify/--scp (D3). deploy LAUNCH=1 — тоже делегирование, не
+##            дублирование тела (инвариант дедупликации T2.14).
+# 🧪 TRAP[TEST] · DevPlan 116 B1 T5 · D3 negative: мёртвые флаги удалены
+# · Regression: --skip-verify/--scp возвращаются в deploy.mk (мёртвый код, D3);
+# ·   deploy-project теряет $(call __deploy_via_deliver) (T2.14 — дублирование тела)
+# · Scenario: рецепт содержит '$(call __deploy_via_deliver'; объединённый рецепт+define —
+# ·   'deliver' и '--host' и 'extract_node_host'; не содержит '--skip-verify', '--scp', 'SKIP_VERIFY'
+# · Last fail: — deploy.mk:58,72-78 передавал --skip-verify (аргумента нет в CLI → fail)
+# · Remove if: deploy-project снова получает флаги канала / define-декомпозиция отменяется
+def test_deploy_mk_recipe_uses_deliver() -> None:
+    """deploy-project: единый define __deploy_via_deliver с deliver+--host, 0 мёртвых флагов (T2.14, D3)."""
+    recipe = _deploy_project_recipe()
+    define = _deliver_define_block()
+    deploy_recipe = _recipe_from_mk(_DEPLOY_MK, "deploy")
+
+    assert "$(call __deploy_via_deliver" in recipe, (
+        "Рецепт deploy-project должен делегировать в единый define __deploy_via_deliver (T2.14)"
+    )
+    assert "deliver" in define, "define __deploy_via_deliver должен использовать CLI subcommand deliver (T5)"
+    assert "--host" in define, "define должен передавать --host (NODE→host резолв)"
+    assert "extract_node_host" in define, "define должен резолвить host через extract_node_host"
+    assert "--skip-verify" not in recipe and "--skip-verify" not in define, "--skip-verify удалён (D3)"
+    assert "--scp" not in recipe and "--scp" not in define, "--scp удалён (T5 — единый канал ForcedCommandChannel)"
+    assert "SKIP_VERIFY" not in recipe and "SKIP_VERIFY" not in define, "SKIP_VERIFY переменная удалена (D3)"
+    # T2.14: deploy LAUNCH=1 делегирует в deploy-project, НЕ дублирует resolve+deliver тело
+    assert "$(MAKE) --no-print-directory deploy-project" in deploy_recipe, (
+        "deploy LAUNCH=1 должен делегировать в deploy-project (T2.14, без дублирования тела)"
+    )
+    assert deploy_recipe.count("orchestrator_cli deliver") == 0, (
+        "deploy LAUNCH=1 не должен содержать собственный deliver-вызов (T2.14)"
+    )
+    logger.info(
+        "[IMP:9][test][deploy_mk] deploy.mk чист: единый define deliver + --host, 0 мёртвых флагов, LAUNCH=1 делегирует"
+    )
 
 
 # endregion FUNC_test_deploy_mk_recipe_uses_deliver
@@ -158,7 +183,7 @@ def test_deliver_cli_forwards_vps_json(tmp_path, caplog: pytest.LogCaptureFixtur
     rc = _handle_deliver(args, channel_factory=_FakeChannel)
 
     out = capsys.readouterr().out
-    _assert_imp9_logged(caplog)
+    assert_ldd_imp9(caplog)
     payload = json.loads(out.strip())
     assert rc == 0
     assert payload["status"] == "DEPLOYED"

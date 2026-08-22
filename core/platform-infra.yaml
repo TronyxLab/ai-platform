@@ -20,6 +20,8 @@
 ##            Plan 041 — platform-infra split: created from platform-env.yaml, kept only
 ##            networks, volumes, proxy, provides sections; removed profiles, port_mappings,
 ##            test_ports, env_defaults.
+##            T2.17 — env_defaults.NO_PROXY удалён (дубль proxy.no_proxy_internal; SoT —
+##            единый список; .env.example NO_PROXY выводится из него join'ом запятой).
 # endregion MODULE_CONTRACT
 
 networks:
@@ -259,7 +261,8 @@ env_defaults:
   # ── Proxy ──
   HTTP_PROXY: ""
   HTTPS_PROXY: ""
-  NO_PROXY: "localhost,127.0.0.1,.local,postgres,pgbouncer,redis,clickhouse,litellm,langfuse,minio,grafana,prometheus,loki,nginx,node-exporter,cadvisor,hermes-agent,status-page,backup-cron,nginx-prometheus-exporter,redis-exporter,postgres-exporter"
+  # NO_PROXY — НЕ дублируется: единственный SoT — proxy.no_proxy_internal (T2.17);
+  # .env.example выводит NO_PROXY из этого списка (sync_env_defaults.py _section_proxy).
   # ── Monitoring / Observability ──
   GF_SECURITY_ADMIN_USER: "admin@ai-platform.local"
   GF_SECURITY_ADMIN_PASSWORD: "testpass"

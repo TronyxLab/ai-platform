@@ -1,6 +1,6 @@
 """
 # GREP_SUMMARY: test-docker-orchestrator, deploy-docker, pre-pull, image-check, wait-readiness, healthcheck, compose-up
-# STRUCTURE: ▶ mock subprocess.run → ◇ test_check_image_exists [found|not_found] → ◇ test_resolve_compose_file [found|missing] → ◇ test_deploy_docker_module [basic|hermes|orphan] → ◇ test_wait_for_readiness [pass|timeout] → ◇ test_run_healthcheck [pass|fail] → ◇ test_pull_module_images [skip-build|pull] → ◇ test_pre_pull_images [single] → ◇ test_deploy_docker_group [single] → ⎋ LDD trajectory assert
+# STRUCTURE: ▶ mock subprocess.run → ◇ test_check_image_exists [found|not_found] → ◇ test_resolve_compose_file [found|missing] → ◇ test_deploy_docker_module [basic|hermes|orphan] → ◇ test_wait_for_readiness [pass|timeout] → ◇ test_run_healthcheck [pass|fail] → ◇ test_prunner_pull_images [skip-build|pull] → ◇ test_pre_pull_images [single] → ◇ test_deploy_docker_group [single] → ⎋ LDD trajectory assert
 # region MODULE_CONTRACT
 ## @purpose  Unit tests for docker_orchestrator.py — mock subprocess.run for docker CLI calls
 ## @scope    Tests all public and internal functions except parallel forking paths (which
@@ -34,6 +34,13 @@ sys.path.insert(
 )
 
 import docker_orchestrator as dorch
+
+# T2.3: 6 delegation-фасадов «for tests» удалены из docker_orchestrator — тесты перенацелены
+# на реальные модули D1/E1 (пакетные импорты — тот же module-объект, что видит dorch-фасады
+# pre_pull_images/deploy_docker_group/wait_for_readiness/run_healthcheck через делегирование).
+from core.internal.bootstrap.deploy import healthcheck_runner as hcrunner
+from core.internal.bootstrap.deploy import observability as obs
+from core.internal.bootstrap.deploy import parallel_runner as prunner
 
 logger = logging.getLogger(__name__)
 
@@ -417,14 +424,15 @@ def test_deploy_docker_module_hermes_build_fallback(mock_subprocess, module_dir)
 
 
 # ────────────────────────────────────────────────────────────
-# region TEST__pull_module_images
+# region TEST_prunner_pull_images (T2.3: фасад pull_module_images из docker_orchestrator удалён,
+#   реальный модуль — parallel_runner)
 # ────────────────────────────────────────────────────────────
 
 
-# 🧪 TRAP[TEST] · Regression · Pull images for a module · Last fail: N/A · Remove if: _pull_module_images interface changes
-def test_pull_module_images(mock_subprocess, module_dir):
-    """Test _pull_module_images runs docker compose pull."""
-    result = dorch._pull_module_images(
+# 🧪 TRAP[TEST] · Regression · Pull images for a module · Last fail: N/A · Remove if: parallel_runner.pull_module_images interface changes
+def test_prunner_pull_images(mock_subprocess, module_dir):
+    """Test parallel_runner.pull_module_images runs docker compose pull."""
+    result = prunner.pull_module_images(
         mod_name="test_mod",
         overlay_dir=None,
         secrets_env_file=None,
@@ -438,8 +446,8 @@ def test_pull_module_images(mock_subprocess, module_dir):
 
 
 # 🧪 TRAP[TEST] · Edge-case · Skip pull when module has local build: section · Last fail: N/A · Remove if: build detection logic changes
-def test_pull_module_images_skip_build(tmp_path):
-    """Test _pull_module_images skips pull when compose file has build: section."""
+def test_prunner_pull_images_skip_build(tmp_path):
+    """Test parallel_runner.pull_module_images skips pull when compose file has build: section."""
     mod_dir = tmp_path / "modules" / "build_mod"
     mod_dir.mkdir(parents=True)
     compose = mod_dir / "compose.yaml"
@@ -455,7 +463,7 @@ def test_pull_module_images_skip_build(tmp_path):
     with mock.patch.object(subprocess, "run") as mock_run:
         mock_run.return_value = mock.MagicMock(returncode=0, stdout=b"", stderr=b"", spec=subprocess.CompletedProcess)
 
-        result = dorch._pull_module_images(
+        result = prunner.pull_module_images(
             mod_name="build_mod",
             overlay_dir=None,
             secrets_env_file=None,
@@ -470,14 +478,14 @@ def test_pull_module_images_skip_build(tmp_path):
 
 
 # 🧪 TRAP[TEST] · Edge-case · Skip pull when no compose file exists · Last fail: N/A · Remove if: error handling changes
-def test_pull_module_images_no_compose(tmp_path):
-    """Test _pull_module_images skips when no compose file found."""
+def test_prunner_pull_images_no_compose(tmp_path):
+    """Test parallel_runner.pull_module_images skips when no compose file found."""
     mod_dir = tmp_path / "modules" / "no_compose_mod"
     mod_dir.mkdir(parents=True)
 
     with mock.patch.object(subprocess, "run") as mock_run:
         mock_run.return_value = mock.MagicMock(returncode=0, stdout=b"", stderr=b"", spec=subprocess.CompletedProcess)
-        result = dorch._pull_module_images(
+        result = prunner.pull_module_images(
             mod_name="no_compose_mod",
             overlay_dir=None,
             secrets_env_file=None,
@@ -489,7 +497,7 @@ def test_pull_module_images_no_compose(tmp_path):
     mock_run.assert_not_called()
 
 
-# endregion TEST__pull_module_images
+# endregion TEST_prunner_pull_images
 
 
 # ────────────────────────────────────────────────────────────
@@ -589,10 +597,12 @@ def test_run_healthcheck_fail(mock_subprocess):
 
 # 🧪 TRAP[TEST] · Regression · Pre-pull images for 1 module via fork · Last fail: N/A · Remove if: pre_pull_images interface changes
 def test_pre_pull_images_single(mock_subprocess, module_dir):
-    """Test pre_pull_images with 1 module (fork dispatches to _pull_module_images)."""
-    # Patch the per-module function at module level for child process inheritance
-    original_fn = dorch._pull_module_images
-    dorch._pull_module_images = mock.MagicMock(return_value=True)
+    """Test pre_pull_images with 1 module (fork dispatches to parallel_runner.pull_module_images)."""
+    # T2.3: фасад pull_module_images из docker_orchestrator удалён — патчим реальный модуль
+    # parallel_runner (fork-дети наследуют patch через copy-on-write; dorch.pre_pull_images
+    # делегирует в него).
+    original_fn = prunner.pull_module_images
+    prunner.pull_module_images = mock.MagicMock(return_value=True)
 
     try:
         ok, fail = dorch.pre_pull_images(
@@ -600,7 +610,7 @@ def test_pre_pull_images_single(mock_subprocess, module_dir):
             modules_dir=module_dir,
             parallel_limit=1,
         )
-        # The fork-based child calls the mocked _pull_module_images
+        # The fork-based child calls the mocked prunner.pull_module_images
         # Wait briefly for child to complete
         time.sleep(0.5)
 
@@ -610,7 +620,7 @@ def test_pre_pull_images_single(mock_subprocess, module_dir):
         assert isinstance(ok, int)
         assert isinstance(fail, int)
     finally:
-        dorch._pull_module_images = original_fn
+        prunner.pull_module_images = original_fn
 
 
 # endregion TEST_pre_pull_images
@@ -735,18 +745,19 @@ def test_cleanup_stale_container_not_found(mock_subprocess):
 
 
 # ────────────────────────────────────────────────────────────
-# region TEST__invoke_healthcheck
+# region TEST_hcrunner_healthcheck_invocation (T2.3: фасады invoke_healthcheck из docker_orchestrator
+#   удалены, реальный модуль — healthcheck_runner)
 # ────────────────────────────────────────────────────────────
 
 
-# 🧪 TRAP[TEST] · Regression · _invoke_healthcheck calls bash with invoke_module_interface · Last fail: N/A · Remove if: healthcheck invocation changes
-def test_invoke_healthcheck(mock_subprocess):
-    """Test _invoke_healthcheck constructs the correct bash command."""
+# 🧪 TRAP[TEST] · Regression · healthcheck_runner.invoke_healthcheck calls bash with invoke_module_interface · Last fail: N/A · Remove if: healthcheck invocation changes
+def test_hcrunner_invoke_readiness(mock_subprocess):
+    """Test healthcheck_runner.invoke_healthcheck constructs the correct bash command."""
     mock_subprocess.return_value = mock.MagicMock(
         returncode=0, stdout=b"", stderr=b"", spec=subprocess.CompletedProcess
     )
 
-    result = dorch._invoke_healthcheck("test_mod", "readiness")
+    result = hcrunner.invoke_healthcheck("test_mod", "readiness")
 
     assert result is True
     assert mock_subprocess.call_count >= 1
@@ -758,29 +769,30 @@ def test_invoke_healthcheck(mock_subprocess):
     assert "readiness" in call_args[2]
 
 
-# 🧪 TRAP[TEST] · Edge-case · _invoke_healthcheck returns False on non-zero exit · Last fail: N/A · Remove if: healthcheck invocation changes
-def test_invoke_healthcheck_fail(mock_subprocess):
-    """Test _invoke_healthcheck returns False when bash command fails."""
+# 🧪 TRAP[TEST] · Edge-case · healthcheck_runner.invoke_healthcheck returns False on non-zero exit · Last fail: N/A · Remove if: healthcheck invocation changes
+def test_hcrunner_invoke_liveness_fail(mock_subprocess):
+    """Test healthcheck_runner.invoke_healthcheck returns False when bash command fails."""
     mock_subprocess.return_value = mock.MagicMock(
         returncode=1, stdout=b"", stderr=b"fail", spec=subprocess.CompletedProcess
     )
 
-    result = dorch._invoke_healthcheck("test_mod", "liveness")
+    result = hcrunner.invoke_healthcheck("test_mod", "liveness")
 
     assert result is False
 
 
-# endregion TEST__invoke_healthcheck
+# endregion TEST_hcrunner_healthcheck_invocation
 
 
 # ────────────────────────────────────────────────────────────
-# region TEST__cleanup_observability_containers
+# region TEST_obs_cleanup_observability (T2.3: фасад cleanup_observability_containers из
+#   docker_orchestrator удалён, реальный модуль — observability)
 # ────────────────────────────────────────────────────────────
 
 
 # 🧪 TRAP[TEST] · Regression · Observability container cleanup · Last fail: N/A · Remove if: observability cleanup logic changes
-def test_cleanup_observability_containers(mock_subprocess, tmp_path):
-    """Test _cleanup_observability_containers stops and removes observability services."""
+def test_obs_cleanup_observability(mock_subprocess, tmp_path):
+    """Test observability.cleanup_observability_containers stops and removes observability services."""
     compose_file = tmp_path / "compose.yaml"
     compose_file.write_text("services:\n  prometheus:\n    image: prom/prometheus\n", encoding="utf-8")
 
@@ -800,13 +812,13 @@ def test_cleanup_observability_containers(mock_subprocess, tmp_path):
 
     mock_subprocess.side_effect = _side_effect
 
-    dorch._cleanup_observability_containers(compose_file)
+    obs.cleanup_observability_containers(compose_file)
 
     assert any("stop" in c for c in call_log)
     assert any("rm" in c for c in call_log)
 
 
-# endregion TEST__cleanup_observability_containers
+# endregion TEST_obs_cleanup_observability
 
 
 # ────────────────────────────────────────────────────────────

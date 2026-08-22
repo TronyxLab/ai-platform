@@ -16,7 +16,7 @@
 ##           S9: git pull caching (context_overlay.py).
 ## @invariants
 ##   - Все тесты читают исходники как текст (static audit) или используют native imports
-##   - LDD траектория через caplog IMP:7-10 (_assert_ldd_trajectory из helpers)
+##   - LDD траектория через caplog IMP:7-10 (assert_ldd_imp9 из gate_helpers, T2.16a)
 ##   - Каждый успешный сценарий — ≥1 IMP:9 лог
 ## @rationale  W4-E1 extraction проверил контракты Python-модулей; сплит группирует тесты
 ##             по бизнес-подобластям (фасады/пакеты/env) — файл легче читать, coverage сохранён.
@@ -35,12 +35,11 @@ from tests.helpers.deploy_modules_audit import (
     ORCHESTRATOR_PY,
     PHASES_PY,
     STATE_MACHINE_PY,
-    _assert_ldd_trajectory,
     _enrich_modules_output,
     _extract_python_func,
     _setup_module_yaml,
 )
-from tests.helpers.gate_helpers import repo_root
+from tests.helpers.gate_helpers import assert_ldd_imp9, repo_root
 
 logger = logging.getLogger(__name__)
 
@@ -209,7 +208,7 @@ def test_topo_sort_enriched_output(caplog, tmp_path) -> None:
         assert isinstance(group, list), "S10 violation: each group must be a list of module names"
     logger.info("[IMP:9][test_topo_sort_enriched_output] All group entries are valid lists")
 
-    _assert_ldd_trajectory(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · Regression: S10 enriched output must include all modules (system + docker)
@@ -260,7 +259,7 @@ def test_rsync_consolidation(caplog) -> None:
     assert "Makefile" in content, "S5 violation: Makefile reference not found"
     logger.info("[IMP:9][test_rsync_consolidation] platform-env.yaml + Makefile in rsync OK")
 
-    _assert_ldd_trajectory(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · Regression: S5 rsync consolidation 3 steps → 2 rsync calls
@@ -305,7 +304,7 @@ def test_batch_sudoers(caplog) -> None:
     )
     logger.info("[IMP:9][test_batch_sudoers] sudoers_generator imported in deploy_orchestrator.py OK")
 
-    _assert_ldd_trajectory(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · Regression: S6 batch sudoers must replace per-module calls
@@ -351,7 +350,7 @@ def test_batch_sudoers_determinism(caplog) -> None:
     )
     logger.info("[IMP:9][test_batch_sudoers_determinism] deterministic iteration OK")
 
-    _assert_ldd_trajectory(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · Regression: W4-E5 batch sudoers determinism (same input → identical output)
@@ -394,7 +393,7 @@ def test_batch_orphan(caplog) -> None:
     )
     logger.info("[IMP:9][test_batch_orphan] orphan_reconciler imported in deploy_orchestrator.py OK")
 
-    _assert_ldd_trajectory(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · Regression: S8 batch orphan reconciliation must exist
@@ -440,7 +439,7 @@ def test_orphan_reconciliation_marks_foreign(caplog) -> None:
     )
     logger.info("[IMP:9][test_orphan_reconciliation] orphan_reconciler imported in deploy_orchestrator.py OK")
 
-    _assert_ldd_trajectory(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · Regression: W4-E5 orphan reconciliation marks foreign containers
@@ -483,7 +482,7 @@ def test_git_pull_caching(caplog) -> None:
     assert "_update_timestamp" in content, "S9 violation: _update_timestamp function not found in context_overlay.py"
     logger.info("[IMP:9][test_git_pull_caching] _update_timestamp exists OK")
 
-    _assert_ldd_trajectory(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · Regression: S9 git pull caching must have 300s timestamp-based skip

@@ -37,6 +37,7 @@ from core.internal.bootstrap.deploy.sudoers_generator import (
     generate_module_sudoers,
     render_sudoers_rules,
 )
+from tests.helpers.gate_helpers import assert_ldd_imp9
 
 logger = logging.getLogger(__name__)
 
@@ -135,22 +136,7 @@ monitor make:logs   {{PLATFORM_ROOT}}/core/modules/{{MODULE_NAME}}/Makefile
 
 
 # ── LDD trajectory helper ──────────────────────────────────────────────────
-
-
-def _assert_ldd_trajectory(caplog: pytest.LogCaptureFixture) -> None:
-    """Print IMP:7-10 log trajectory and assert at least one IMP:9 log is present."""
-
-    found_imp9 = False
-    logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-    for record in list(caplog.records):
-        if "[IMP:" in record.message:
-            imp_level = int(record.message.split("[IMP:")[1].split("]")[0])
-            if imp_level >= 7:
-                logger.info("%s", record.message)
-            if imp_level >= 9:
-                found_imp9 = True
-    logger.info("--- END LDD TRAJECTORY ---")
-    assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
+# T2.16a: _assert_ldd_trajectory консолидирован в gate_helpers.assert_ldd_imp9
 
 
 # ── Tests: _map_role_to_username ────────────────────────────────────────────
@@ -176,7 +162,7 @@ def test_map_role_to_username(caplog: pytest.LogCaptureFixture, role: str, expec
     result = _map_role_to_username(role)
     assert result == expected
 
-    _assert_ldd_trajectory(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # ── Tests: _parse_rendered_lines ────────────────────────────────────────────
@@ -197,7 +183,7 @@ def test_parse_rendered_lines_full(
     for expected, actual in zip(sample_rules_expected, rules, strict=False):
         assert actual == expected, f"Mismatch: expected={expected!r}, got={actual!r}"
 
-    _assert_ldd_trajectory(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · Regression: skip comments/blanks/non-make/malformed lines · Scenario: только
@@ -263,7 +249,7 @@ def test_parse_rendered_lines_filters(
     for rule in expected_rules:
         assert rule in rules
 
-    _assert_ldd_trajectory(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # ── Tests: render_sudoers_rules ────────────────────────────────────────────
@@ -314,7 +300,7 @@ def test_render_sudoers_rules(
     assert "ci-deploy ALL=(root)" in rule_text
     assert "platform-monitor ALL=(root)" in rule_text
 
-    _assert_ldd_trajectory(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · Regression: render rules with missing template · Scenario: templates_dir БЕЗ
@@ -341,7 +327,7 @@ def test_render_sudoers_rules_template_failure(
 
     assert rules == []
 
-    _assert_ldd_trajectory(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # ── Tests: _validate_with_visudo ─────────────────────────────────────────────
@@ -366,7 +352,7 @@ def test_validate_with_visudo_ok(caplog: pytest.LogCaptureFixture) -> None:
             check=False,
         )
 
-    _assert_ldd_trajectory(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · Regression: visudo validation fails · Scenario: subprocess.run returns 1 → False · Last fail: N/A · Remove if: validation error handling changes
@@ -385,7 +371,7 @@ def test_validate_with_visudo_fail(caplog: pytest.LogCaptureFixture) -> None:
 
         assert result is False
 
-    _assert_ldd_trajectory(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · Regression: visudo not found · Scenario: FileNotFoundError → True (pass-through) · Last fail: N/A · Remove if: fallback behavior changes
@@ -401,7 +387,7 @@ def test_validate_with_visudo_not_found(caplog: pytest.LogCaptureFixture) -> Non
 
         assert result is True
 
-    _assert_ldd_trajectory(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · Regression: visudo timeout · Scenario: TimeoutExpired → False · Last fail: N/A · Remove if: timeout handling changes
@@ -417,7 +403,7 @@ def test_validate_with_visudo_timeout(caplog: pytest.LogCaptureFixture) -> None:
 
         assert result is False
 
-    _assert_ldd_trajectory(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # ── Tests: _write_sudoers_file ──────────────────────────────────────────────
@@ -453,7 +439,7 @@ def test_write_sudoers_file_ok(
     mode = Path(target).stat().st_mode & 0o777
     assert mode == 0o440, f"Expected 0440, got {oct(mode)}"
 
-    _assert_ldd_trajectory(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · Regression: write fails visudo → no file · Scenario: validator fails → no target file created · Last fail: N/A · Remove if: error handling changes
@@ -473,7 +459,7 @@ def test_write_sudoers_file_visudo_fail(
     assert result is False
     assert not target.exists(), "File should not exist when visudo fails"
 
-    _assert_ldd_trajectory(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · Regression: write with empty rules · Scenario: empty rules list → file still written · Last fail: N/A · Remove if: empty rules guard is added upstream
@@ -494,7 +480,7 @@ def test_write_sudoers_file_empty_rules(
     content = target.read_text()
     assert "# platform module sudoers — empty-module" in content
 
-    _assert_ldd_trajectory(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # ── Tests: generate_module_sudoers ──────────────────────────────────────────
@@ -536,7 +522,7 @@ def test_generate_module_sudoers_ok(
     mode = Path(target).stat().st_mode & 0o777
     assert mode == 0o440, f"Expected 0440, got {oct(mode)}"
 
-    _assert_ldd_trajectory(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · Regression: generate with no rules · Scenario: templates БЕЗ шаблона → render [] → False · Last fail: N/A · Remove if: empty-guard logic changes
@@ -562,7 +548,7 @@ def test_generate_module_sudoers_no_rules(
 
     assert result is False
 
-    _assert_ldd_trajectory(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # ── Tests: batch_generate_sudoers ───────────────────────────────────────────
@@ -599,7 +585,7 @@ def test_batch_generate_sudoers_ok(
     assert f"-C {postgres_dir} start" in content, "правила postgres в batch-файле"
     assert f"-C {nginx_dir} status" in content, "несколько правил модуля в batch-файле"
 
-    _assert_ldd_trajectory(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · Regression: batch with no modules · Scenario: empty module_names → True (no-op) · Last fail: N/A · Remove if: empty-list handling changes
@@ -620,7 +606,7 @@ def test_batch_generate_sudoers_no_modules(
 
     assert result is True
 
-    _assert_ldd_trajectory(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · Regression: batch all modules fail render · Scenario: templates БЕЗ шаблона → all renders [] → False · Last fail: N/A · Remove if: empty-collection guard changes
@@ -646,7 +632,7 @@ def test_batch_generate_sudoers_all_fail(
 
     assert result is False
 
-    _assert_ldd_trajectory(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # ── Tests: integration — real _render_template with native template_engine render ──
@@ -675,7 +661,7 @@ def test_render_template_native_render(
     assert "{{MODULE_NAME}}" not in rendered
     assert "{{PLATFORM_ROOT}}" not in rendered
 
-    _assert_ldd_trajectory(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # ── Tests: CLI entrypoint ────────────────────────────────────────────────────
@@ -721,7 +707,7 @@ def test_cli_generate_action(
     assert sg.main(test_args[1:], handlers=handlers) == 0
     assert called_action["name"] == "test-module"
 
-    _assert_ldd_trajectory(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · Regression: CLI render-rules action · Scenario: --action render-rules → prints rules to stdout · Last fail: N/A · Remove if: CLI interface changes
@@ -758,7 +744,7 @@ def test_cli_render_rules_action(
     handlers = SimpleNamespace(render_sudoers_rules=lambda *_a, **_k: fake_rules)
     assert sg.main(test_args[1:], handlers=handlers) == 0
 
-    _assert_ldd_trajectory(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · Regression: CLI batch-generate action · Scenario: --action batch-generate with --module-names → exit 0 · Last fail: N/A · Remove if: CLI interface changes
@@ -796,7 +782,7 @@ def test_cli_batch_generate_action(
     assert sg.main(test_args[1:], handlers=handlers) == 0
     assert called_names["names"] == ["nginx", "postgres", "redis"]
 
-    _assert_ldd_trajectory(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · Regression: CLI missing required args · Scenario: --action generate without --module-name → exit 1 · Last fail: N/A · Remove if: CLI argument validation changes
@@ -828,7 +814,7 @@ def test_cli_missing_module_name(
 
     assert sg.main(test_args[1:]) == 1
 
-    _assert_ldd_trajectory(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · NEGATIVE (R5) · E5 _safe_cleanup removal — DevPlan 119 E5

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: docker-ops, shared, ps, inspect, exec, stop, rm, tag, image-inspect, manifest-inspect, network, volume, stats, info, pull, sole-path, cli-shell, runner-param, DI, W4d
-# STRUCTURE: ▶ ┌cmd builder┐ → _run_docker (subprocess.run capture+text, non-fatal; W4d runner-параметр) → ◇ docker_ps/ps_container_names → ◇ docker_inspect/inspect_state_health → ◇ docker_exec → ◇ docker_stop/rm/tag → ◇ docker_image_inspect(_exists) → ◇ docker_manifest_inspect/pull → ◇ docker_network_inspect/create → ◇ docker_volume_inspect → ◇ docker_info/stats → ◇ CLI --shell (ps|inspect|exec) → ⎋ exit 0|1
+# GREP_SUMMARY: docker-ops, shared, ps, inspect, exec, stop, rm, tag, image-inspect, manifest-inspect, network, volume, stats, info, sole-path, cli-shell, runner-param, DI, W4d
+# STRUCTURE: ▶ ┌cmd builder┐ → _run_docker (subprocess.run capture+text, non-fatal; W4d runner-параметр) → ◇ docker_ps/ps_container_names → ◇ docker_inspect/inspect_state_health → ◇ docker_exec → ◇ docker_stop/rm/tag → ◇ docker_image_inspect(_many) → ◇ docker_manifest_inspect(_raw) → ◇ docker_network_inspect/create → ◇ docker_volume_inspect → ◇ docker_info/stats → ◇ CLI --shell (ps|inspect|exec) → ⎋ exit 0|1
 # region MODULE_CONTRACT
 ## @purpose  Единый слой низкоуровневых docker-операций (DevPlan 128 W1, P2-5/D6).
 ##           docker ps/inspect/exec/stop/rm/tag/image/network/volume/stats/info/manifest/pull —
@@ -58,7 +58,6 @@ from core.internal.shared.timeouts import (
     DOCKER_CMD_TIMEOUT,
     DOCKER_STOP_TIMEOUT,
     IMAGE_CHECK_TIMEOUT,
-    PULL_TIMEOUT,
 )
 
 logger = logging.getLogger(__name__)
@@ -553,32 +552,7 @@ def docker_image_inspect_many(
 # endregion FUNC_docker_image_inspect_many
 
 
-# region FUNC_docker_image_inspect_exists
-def docker_image_inspect_exists(
-    image_ref: str, timeout: int = IMAGE_CHECK_TIMEOUT, runner: CommandRunner | None = None
-) -> bool:
-    """Check whether an image exists LOCALLY (docker image inspect <ref> rc==0).
-
-    ▶ ┌image_ref, runner┐ → _run_docker(["docker","image","inspect",ref]) → ◇ rc==0? → ⎋ bool
-
-    ## @purpose — Локальная проверка образа (hermes_workflow L1 base existence).
-    ## @io — ⇥ image_ref: str, timeout: int, runner: CommandRunner | None → ⎋ bool (True = local image exists)
-    ## @complexity — O(1) + docker image inspect I/O
-    ## @invariants — Non-fatal: False на сбое/таймауте (hermes fallback → pull/build)
-    """
-    cmd = ["docker", "image", "inspect", image_ref]
-    result = _run_docker(cmd, timeout=timeout, runner=runner)
-    if result is not None and result.returncode == 0:
-        logger.info("[IMP:9][docker_image_inspect_exists] Local image exists: %s", image_ref)
-        return True
-    logger.warning("[IMP:7][docker_image_inspect_exists] Local image NOT found: %s", image_ref)
-    return False
-
-
-# endregion FUNC_docker_image_inspect_exists
-
-
-# ── docker manifest inspect / pull ────────────────────────────────────────────────
+# ── docker manifest inspect ───────────────────────────────────────────────────────
 
 
 # region FUNC_docker_manifest_inspect
@@ -635,30 +609,6 @@ def docker_manifest_inspect(
 
 
 # endregion FUNC_docker_manifest_inspect
-
-
-# region FUNC_docker_pull
-def docker_pull(image_ref: str, timeout: int = PULL_TIMEOUT, runner: CommandRunner | None = None) -> bool:
-    """Pull an image (docker pull <ref>).
-
-    ▶ ┌image_ref, runner┐ → _run_docker(["docker","pull",ref], timeout=PULL_TIMEOUT) → ◇ rc==0? → ⎋ bool
-
-    ## @purpose — Единая точка `docker pull` (hermes_workflow L1 pull fallback). Compose-пуллы
-    ##            идут через docker_compose.docker_compose_pull (compose-домен).
-    ## @io — ⇥ image_ref: str, timeout: int, runner: CommandRunner | None → ⎋ bool (True = pull succeeded)
-    ## @complexity — O(1) + network I/O
-    ## @invariants — Non-fatal: False на сбое/таймауте (hermes fallback → build from source)
-    """
-    cmd = ["docker", "pull", image_ref]
-    result = _run_docker(cmd, timeout=timeout, runner=runner)
-    if result is not None and result.returncode == 0:
-        logger.info("[IMP:9][docker_pull] Pull succeeded: %s", image_ref)
-        return True
-    logger.warning("[IMP:7][docker_pull] Pull failed: %s", image_ref)
-    return False
-
-
-# endregion FUNC_docker_pull
 
 
 # ── docker network / volume / info / stats ────────────────────────────────────────

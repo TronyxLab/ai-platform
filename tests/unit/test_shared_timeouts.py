@@ -35,6 +35,7 @@ from core.internal.shared.docker_compose import (
     healthcheck_poll,
     retry_pull,
 )
+from tests.helpers.gate_helpers import assert_ldd_imp9
 
 pytestmark = pytest.mark.static_audit
 
@@ -50,17 +51,7 @@ def _default_param(func, name: str):
     return inspect.signature(func).parameters[name].default
 
 
-def _assert_imp9(caplog: pytest.LogCaptureFixture) -> None:
-    """Assert at least one IMP:9 log in caplog (LDD telemetry standard)."""
-    found = any("[IMP:9]" in r.message for r in caplog.records)
-    logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-    for record in list(caplog.records):
-        if "[IMP:" in record.message:
-            logger.info("%s", record.message)
-    logger.info("--- END LDD TRAJECTORY ---")
-    assert found, "Critical LDD Error: No IMP:9 business logic log found"
-
-
+# T2.16a: _assert_imp9 консолидирован в gate_helpers.assert_ldd_imp9
 # region FUNC_test_constants_values
 ## @purpose — Verify канонические значения констант timeouts (T1 таблица).
 ## @complexity — O(1)
@@ -99,7 +90,7 @@ def test_constants_values(caplog: pytest.LogCaptureFixture) -> None:
     assert timeouts.SYSTEM_CMD_TIMEOUT == 60
     assert timeouts.LIFECYCLE_CMD_TIMEOUT == 120
     logger.info("[IMP:9][test_constants_values] Все %d констант канонизированы", 26)
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion
@@ -130,7 +121,7 @@ def test_shared_function_defaults(caplog: pytest.LogCaptureFixture) -> None:
     assert _default_param(docker_compose_ps, "timeout") == timeouts.DOCKER_CMD_TIMEOUT
     assert _default_param(docker_compose_images, "timeout") == timeouts.DOCKER_CMD_TIMEOUT
     logger.info("[IMP:9][test_shared_function_defaults] 11 дефолтов == константам timeouts")
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion
@@ -167,7 +158,7 @@ def test_channels_defaults(caplog: pytest.LogCaptureFixture, monkeypatch: pytest
     ch_default = channels.LocalChannel()
     assert ch_default.timeout == timeouts.DEPLOY_TIMEOUT
     logger.info("[IMP:9][test_channels_defaults] Канальные дефолты == timeouts (env-детерминизм, W4a)")
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion

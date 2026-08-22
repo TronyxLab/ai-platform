@@ -706,7 +706,7 @@ def test_apply_xdist_inserts_n_auto(tmp_path, monkeypatch) -> None:
 # · Last fail: N/A
 # · Remove if: memory-guard удалён из apply_xdist
 def test_apply_xdist_memory_guard_reduces_workers(tmp_path, monkeypatch) -> None:
-    """При дефиците памяти apply_xdist вставляет -n \<count\> вместо -n auto (OOM-защита)."""
+    r"""При дефиците памяти apply_xdist вставляет -n \<count\> вместо -n auto (OOM-защита)."""
     monkeypatch.setattr(check_suite, "has_xdist", lambda _python_path: True)
     monkeypatch.delenv("TEST_NO_XDIST", raising=False)
     monkeypatch.delenv("CHECK_XDIST_MAX_WORKERS", raising=False)

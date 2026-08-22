@@ -46,8 +46,6 @@
 ## @rationale — Lightweight pre-deploy gate fails fast in CI before expensive
 ##              docker compose up. AC-T2 from DevPlan §TASK-2.
 ## @changes — CREATED: 2026-07-03 | Wave 2: TASK-2 pre-deploy gate
-def _module_contract():
-    pass
 
 
 # endregion MODULE_CONTRACT

@@ -63,7 +63,7 @@ def _inspect_json(name, health, restart_count=0, restart_policy="unless-stopped"
 
 
 class FakeDocker:
-    """Fake _run_cmd: serves docker ps/inspect/restart + telegram notify from in-memory data."""
+    """Fake _run_cmd: serves docker ps/inspect (batch)/restart + telegram notify from in-memory data."""
 
     def __init__(self, containers: list) -> None:
         self.containers = containers  # list of inspect-JSON lists
@@ -75,8 +75,10 @@ class FakeDocker:
             ids = "\n".join(str(i) for i in range(len(self.containers)))
             return subprocess.CompletedProcess(cmd, 0, ids, "")
         if cmd[:2] == ["docker", "inspect"]:
-            idx = int(cmd[2])
-            return subprocess.CompletedProcess(cmd, 0, json.dumps(self.containers[idx]), "")
+            # T2.7: batch inspect — cmd[2:] = все контейнеры, JSON-массив в порядке аргументов
+            ids = cmd[2:]
+            payload = [self.containers[int(i)][0] for i in ids]
+            return subprocess.CompletedProcess(cmd, 0, json.dumps(payload), "")
         if cmd[:2] == ["docker", "restart"]:
             self.restart_calls.append(cmd[2])
             return subprocess.CompletedProcess(cmd, 0, "", "")

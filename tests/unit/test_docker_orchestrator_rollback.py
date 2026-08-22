@@ -62,8 +62,8 @@ def _call_group_deploy(
         return 12345
 
     # Build controlled drain results
-    # _drain_completed_count is called in the while loop (slot-waiter).
-    # _drain_all_count is called after loop to collect remaining.
+    # parallel_runner.drain_completed_count is called in the while loop (slot-waiter).
+    # parallel_runner.drain_all_count is called after loop to collect remaining.
     # Each call pops entries from the list.
     drain_queue: list[dict] = []
     for entry in entries:

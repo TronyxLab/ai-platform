@@ -1,20 +1,21 @@
 """Shared helpers for deploy-modules audit tests (DevPlan 139 W3 T6 split).
 
-# GREP_SUMMARY: deploy-modules-audit, shared-helpers, extract-python-func, ldd-trajectory, path-constants
-# STRUCTURE: ┌path constants (deploy-modules/state-machine/phases/orchestrator)┐ → ◇ _extract_python_func → ◇ _assert_ldd_trajectory → ◇ _setup_module_yaml → ⎋
+# GREP_SUMMARY: deploy-modules-audit, shared-helpers, extract-python-func, path-constants
+# STRUCTURE: ┌path constants (deploy-modules/state-machine/phases/orchestrator)┐ → ◇ _extract_python_func → ◇ _setup_module_yaml → ⎋
 """
 # region MODULE_CONTRACT
 ## @purpose  Общие хелперы трёх test_deploy_modules_* файлов (DevPlan 139 W3 T6 — сплит
 ##           62KB-монолита по подобластям: фасады / пакеты / env). Устраняет дублирование
-##           путей, _extract_python_func, _assert_ldd_trajectory, _setup_module_yaml.
+##           путей, _extract_python_func, _setup_module_yaml.
 ## @scope    Только для тестов домена deploy-modules. Не содержит тестов (helpers/).
 ## @invariants
 ##   - _extract_python_func бросает ValueError если функция отсутствует (fail-verbose)
-##   - _assert_ldd_trajectory требует ≥1 IMP:9 лог (LDD инвариант 3)
 ##   - Пути — канон repo_root()-relative (Zero Hardcode Rule)
+##   - LDD-ассерты — из tests.helpers.gate_helpers (assert_ldd_imp9, T2.16a консолидация)
 ## @rationale 3 файла-сабдомена используют одни и те же константы/хелперы — вынос в helpers
 ##            предотвращает дрейф (дублирование путей = точки расхождения).
-## @changes  2026-08-05 | DevPlan 139 W3 T6 — создан (сплит test_deploy_modules.py)
+## @changes  2026-08-22 | T2.16a: _assert_ldd_trajectory удалён — LDD-канон в gate_helpers
+##           2026-08-05 | DevPlan 139 W3 T6 — создан (сплит test_deploy_modules.py)
 # endregion MODULE_CONTRACT
 
 import json
@@ -56,26 +57,6 @@ def _extract_python_func(filepath: Path, func_name: str) -> str:
         return content
     msg = f"Function '{func_name}' not found in {filepath}"
     raise ValueError(msg)
-
-
-def _assert_ldd_trajectory(caplog) -> None:
-    """Print LDD trajectory from caplog and assert IMP:9 found.
-
-    ## @purpose  LDD инвариант 3: каждый тест — IMP:9-траектория.
-    ## @io       caplog → None, raises AssertionError if no IMP:9 log
-    ## @complexity 1
-    """
-    found_imp9 = False
-    logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-    for record in list(caplog.records):
-        if hasattr(record, "message") and "[IMP:" in record.message:
-            imp_level = int(record.message.split("[IMP:")[1].split("]")[0])
-            if imp_level >= 7:
-                logger.info("%s", record.message)
-            if imp_level >= 9:
-                found_imp9 = True
-    logger.info("--- END LDD TRAJECTORY ---")
-    assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found in test trajectory"
 
 
 def _setup_module_yaml(

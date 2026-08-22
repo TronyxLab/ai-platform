@@ -1,5 +1,5 @@
-# GREP_SUMMARY: wave-pipeline, wave-readiness, threading-event, ensure-wave-ready, autouse, wave-sorting
-# STRUCTURE: _wave_ready dict[int, Event] → _init_wave_events(N) → signal_wave_ready(wave) → _ensure_wave_ready(autouse ◇ marker wave → event.wait)
+# GREP_SUMMARY: wave-pipeline, wave-readiness, threading-event, ensure-wave-ready, autouse, wave-sorting, compute-module-waves
+# STRUCTURE: _wave_ready dict[int, Event] → _init_wave_events(N) → signal_wave_ready(wave) → _ensure_wave_ready(autouse ◇ marker wave → event.wait) → _compute_module_waves(module.yaml → wave dict)
 # region MODULE_CONTRACT
 ## @purpose  Wave-Pipeline synchronization for parallel test execution.
 ##           Tests are tagged with @pytest.mark.wave(N) by pytest_collection_modifyitems
@@ -8,6 +8,7 @@
 ##           wave's containers are ready (signaled by platform_services after each wave).
 ##           This enables test execution to overlap with container startup:
 ##           Wave 0 tests run while Wave 1 containers start in background.
+##           T2.17a: _compute_module_waves перенесён сюда из conftest.py (thin facade <200 LOC).
 ## @scope    All Docker-dependent tests; autouse fixture is detected via conftest re-export.
 ##           Global state: _wave_ready module-level dict of threading.Event objects.
 ## @invariants
@@ -17,19 +18,61 @@
 ##   - Wave 0 has no blocking (dependencies satisfied during fixture setup)
 ##   - Tests without @pytest.mark.wave pass through immediately (no blocking)
 ##   - event.wait(timeout=600) prevents deadlock — 600s is the safety valve
+##   - _compute_module_waves() — детерминированный обход module.yaml (T12.6): два вызова
+##     на одном дереве → идентичный dict (гейт test_gate_wave_sort_contract)
 ## @rationale — Wave-Pipeline (DevPlan 040 Wave 4) overlaps container startup with test execution.
 ##              Without it, all containers must start before any test runs (~170s).
 ##              With Wave-Pipeline, Wave 0 tests start after ~20s while Wave 1 containers
 ##              start in the background. Pipeline gain: ~100s.
-## @changes — CREATED: 2026-07-22 | DevPlan 040 Wave 4: Wave-Pipeline
+## @changes — T2.17a: _compute_module_waves перенесён из conftest.py (thin facade invariant)
+##            CREATED: 2026-07-22 | DevPlan 040 Wave 4: Wave-Pipeline
 # endregion MODULE_CONTRACT
 
+import pathlib
 import threading
 
 import pytest
+import yaml
 
 # Wave readiness events — set by platform_services when each wave's containers are healthy
 _wave_ready: dict[int, threading.Event] = {}
+
+
+def _compute_module_waves() -> dict[str, int]:
+    """Read core/modules/*/module.yaml, compute wave numbers from depends_on.
+
+    ## @purpose — Derive wave numbers from the module dependency graph.
+    ##            Wave 0: modules with no dependencies.
+    ##            Wave N: modules whose max dependency wave + 1.
+    ##            T2.17a: тело перенесено из conftest.py — единственный канон здесь;
+    ##            conftest re-exportирует (test_gate_wave_sort_contract импортирует
+    ##            _compute_module_waves из tests.conftest).
+    ## @io — ⎋ dict[str, int]: {module_name: wave_number}
+    ## @complexity — O(M * D) where M=modules, D=avg dependencies
+    ## @invariants
+    ##   - Module without depends_on → wave 0
+    ##   - Module with depends_on → wave = max(dep_waves) + 1
+    ##   - Unknown dependencies → wave 0 (safe default)
+    ## @rationale — Dynamic computation eliminates hardcoded wave numbers.
+    ##              Adding a new module with dependencies automatically adjusts
+    ##              downstream wave numbers.
+    """
+    from _conftest.shared import compute_module_waves
+
+    platform_root = pathlib.Path(__file__).resolve().parent.parent.parent  # project root (tests/../)
+    modules_dir = platform_root / "core" / "modules"
+
+    mod_deps: dict[str, list[str]] = {}
+    if modules_dir.is_dir():
+        for entry in sorted(p.name for p in modules_dir.iterdir()):
+            mod_path = modules_dir / entry
+            yaml_path = mod_path / "module.yaml"
+            if mod_path.is_dir() and yaml_path.is_file():
+                with pathlib.Path(str(yaml_path)).open(encoding="utf-8") as f:
+                    data = yaml.safe_load(f)
+                mod_deps[entry] = data.get("depends_on") or []
+
+    return compute_module_waves(mod_deps)
 
 
 def _init_wave_events(num_waves: int) -> None:

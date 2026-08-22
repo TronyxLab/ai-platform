@@ -34,8 +34,6 @@
 ## @usecases
 ##   - Developer runs `make gate` → contract-test-gate → structural check → PASS/FAIL
 ##   - CI pipeline → gate step → contract-test-gate → blocks merge on structural integrity fail
-def _module_contract():
-    pass
 
 
 # endregion MODULE_CONTRACT

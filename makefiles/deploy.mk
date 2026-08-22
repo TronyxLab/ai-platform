@@ -1,16 +1,21 @@
-# GREP_SUMMARY: deploy.mk, deploy, deploy-project, context-promote, hermes-build-context, hermes-push-l2, verify-domains
-# STRUCTURE: ┌variables┐ → ◇ deploy → ◇ deploy-project → ◇ context-promote → ◇ hermes build/push → ◇ verify-domains
+# GREP_SUMMARY: deploy.mk, deploy, deploy-project, context-promote, hermes-build-context, hermes-push-l2, verify-domains, __deploy_via_deliver, node-resolver, deliver
+# STRUCTURE: ┌variables┐ → ◇ deploy → ⚙️ define __deploy_via_deliver (единый NODE→host+deliver) → ◇ deploy-project → ◇ context-promote → ◇ hermes build/push → ◇ verify-domains
 # region MODULE_CONTRACT
 ## @purpose  Deployment targets — deploy, deploy-project, context-promote, hermes builds, verify-domains
 ## @scope    Included from root Makefile; delegates to core/entrypoints/
 ## @invariants
 ##   - deploy uses git push → CI (never direct SSH)
 ##   - deploy-project is emergency fallback (direct SSH tar)
+##   - deploy LAUNCH=1 ДЕЛЕГИРУЕТ в deploy-project (T2.14) — НЕ дублирует тело deliver-блока
+##   - __deploy_via_deliver — единственный источник «NODE→host resolve + orchestrator_cli deliver»
 ##   - context-promote copies to context org
 ##   - verify-domains (бывш. verify) — HTTPS-верификация доменов; VPS-verb verify НЕ трогается (План 175 W4.3)
 ##   - hermes: единый образ hermes-agent-context (L1→L2 коллапс DevPlan 002) — только
 ##     hermes-build-context + hermes-push-l2; hermes-build-platform/hermes-push-l1 удалены
-## @rationale Makefile include-split W4-E4: deployment targets isolated from bootstrap/CI
+## @rationale Makefile include-split W4-E4: deployment targets isolated from bootstrap/CI;
+##            T2.14 — один define вместо двух копий NODE-resolve+deliver (дрейф при правках)
+## @changes 2026-08-22 | T2.14 — NODE-resolve+deliver вынесен в define __deploy_via_deliver;
+##            deploy LAUNCH=1 делегирует в deploy-project (не дублирует тело)
 ## @changes 2026-08-16 | План 175 W4.3 — verify переименован в verify-domains
 ## @changes 2026-08-16 | DevPlan 002 W3 T3.1 — hermes-build-platform/hermes-push-l1/GHCR_OWNER удалены
 ##            (L1 коллапс); hermes-build-context → прямой вызов python3 (без build.sh)
@@ -50,35 +55,51 @@ deploy:
 	@# ── Git push ──
 	@cd "$(PROJECT)" && git push origin main
 	@echo "[IMP:9][make][deploy] Git push complete — CI pipeline triggered"
-	@# ── W6: LAUNCH=1 mode — deliver via orchestrator (NODE→host, DevPlan 116 B1 T5) ──
+	@# ── W6: LAUNCH=1 mode — delegate to deploy-project (T2.14: единый deliver-блок, DevPlan 116 B1 T5) ──
 	@if [ "$(filter 1,$(LAUNCH))" = "1" ]; then \
 		echo "[IMP:7][make][deploy] LAUNCH mode: deploying directly to NODE=$(NODE) via deliver..." >&2; \
-		if [ -z "$(NODE)" ]; then \
-			echo "[IMP:10][make][deploy] FATAL: LAUNCH=1 requires NODE=<node>" >&2; \
-			exit 1; \
-		fi; \
-		source $(_platform_root)/core/lib/node-resolver.sh; \
-		NODE_YAML_PATH="$$(resolve_node_yaml "$(NODE)" "$(_platform_root)" 2>/dev/null)" || { \
-			echo "[IMP:10][make][deploy] FATAL: node.yaml not found for NODE=$(NODE) — cannot resolve host" >&2; \
-			exit 1; \
-		}; \
-		DEPLOY_HOST="$$(extract_node_host "$$NODE_YAML_PATH")"; \
-		if [ -z "$$DEPLOY_HOST" ]; then \
-			echo "[IMP:10][make][deploy] FATAL: no host field in node.yaml for NODE=$(NODE)" >&2; \
-			exit 1; \
-		fi; \
-		PROJECT_NAME="$$(basename "$(PROJECT)")"; \
-		python3 -m core.internal.deploy.orchestrator_cli deliver \
-			--project "$$PROJECT_NAME" \
-			--project-dir "$(PROJECT)" \
-			--host "$$DEPLOY_HOST"; \
+		$(MAKE) --no-print-directory deploy-project \
+			PROJECT="$(PROJECT)" \
+			NODE="$(NODE)" \
+			$(if $(KEY_FILE),KEY_FILE='$(KEY_FILE)') \
+			$(if $(VERSION),VERSION='$(VERSION)'); \
 	fi
+
+## ⚙️ __deploy_via_deliver: единый блок «NODE→host resolve + orchestrator_cli deliver» (T2.14)
+##   Единственный источник deliver-семантики: deploy-project (прямой вызов) и deploy (LAUNCH=1 —
+##   делегирование в deploy-project, без дублирования тела). Использует core/lib/node-resolver.sh
+##   (3-candidate path) + core/internal/deploy/orchestrator_cli.py deliver (ForcedCommandChannel
+##   receive <project> <version>). Параметры — make-переменные на момент раскрытия:
+##   PROJECT, NODE, KEY_FILE, VERSION; $1 — лог-тег таргета-вызывающего.
+define __deploy_via_deliver
+	@_dd_node="$(NODE)"; \
+	_dd_project="$(PROJECT)"; \
+	source $(_platform_root)/core/lib/node-resolver.sh; \
+	NODE_YAML_PATH="$$(resolve_node_yaml "$$_dd_node" "$(_platform_root)" 2>/dev/null)" || { \
+		echo "[IMP:10][make][$1] FATAL: node.yaml not found for NODE=$$_dd_node — cannot resolve host" >&2; \
+		exit 1; \
+	}; \
+	DEPLOY_HOST="$$(extract_node_host "$$NODE_YAML_PATH")"; \
+	if [ -z "$$DEPLOY_HOST" ]; then \
+		echo "[IMP:10][make][$1] FATAL: no host field in node.yaml for NODE=$$_dd_node (check node.host)" >&2; \
+		exit 1; \
+	fi; \
+	echo "[IMP:8][make][$1] Resolved NODE=$$_dd_node → host=$$DEPLOY_HOST"; \
+	PROJECT_NAME="$$(basename "$$_dd_project")"; \
+	python3 -m core.internal.deploy.orchestrator_cli deliver \
+		--project "$$PROJECT_NAME" \
+		--project-dir "$$_dd_project" \
+		--host "$$DEPLOY_HOST" \
+		$(if $(KEY_FILE),--key-file '$(KEY_FILE)') \
+		$(if $(VERSION),--version '$(VERSION)')
+endef
 
 ## deploy-project: Direct project deploy bypassing CI (emergency fallback)
 ##   Usage: make deploy-project PROJECT=<dir> NODE=<node> [VERSION=<sha>] [DRY_RUN=1]
 ##   Validates PROJECT has ai-platform.yaml, resolves NODE→SSH host via extract_node_host
 ##   (core/lib/node-resolver.sh, 3-candidate path), deploys через deliver (ForcedCommandChannel
-##   receive <project> <version>).
+##   receive <project> <version>). Тело — единый define __deploy_via_deliver (T2.14; deploy
+##   LAUNCH=1 делегирует сюда же).
 ##   DevPlan 091 Wave A (AC-A2): delegates to DeployOrchestrator via orchestrator_cli.
 deploy-project:
 	@echo "[IMP:7][make][deploy-project] Direct deploy PROJECT=$(PROJECT) NODE=$(NODE)..."
@@ -88,25 +109,7 @@ deploy-project:
 	@if [[ -z "$(NODE)" ]]; then \
 		echo "[IMP:9][make][deploy-project] ERROR: NODE not set" >&2; exit 1; \
 	fi
-	@PROJECT_BASE="$$(dirname "$(PROJECT)")"; \
-	PROJECT_NAME="$$(basename "$(PROJECT)")"; \
-	source $(_platform_root)/core/lib/node-resolver.sh; \
-	NODE_YAML_PATH="$$(resolve_node_yaml "$(NODE)" "$(_platform_root)" 2>/dev/null)" || { \
-		echo "[IMP:10][make][deploy-project] FATAL: node.yaml not found for NODE=$(NODE) — cannot resolve host" >&2; \
-		exit 1; \
-	}; \
-	DEPLOY_HOST="$$(extract_node_host "$$NODE_YAML_PATH")"; \
-	if [ -z "$$DEPLOY_HOST" ]; then \
-		echo "[IMP:10][make][deploy-project] FATAL: no host field in node.yaml for NODE=$(NODE) (check node.host)" >&2; \
-		exit 1; \
-	fi; \
-	echo "[IMP:8][make][deploy-project] Resolved NODE=$(NODE) → host=$$DEPLOY_HOST"; \
-	python3 -m core.internal.deploy.orchestrator_cli deliver \
-		--project "$$PROJECT_NAME" \
-		--project-dir "$(PROJECT)" \
-		--host "$$DEPLOY_HOST" \
-		$(if $(KEY_FILE),--key-file '$(KEY_FILE)') \
-		$(if $(VERSION),--version '$(VERSION)')
+	$(call __deploy_via_deliver,deploy-project)
 	@echo "[IMP:9][make][deploy-project] Direct deploy complete"
 
 ## context-promote: Promote platform to context org

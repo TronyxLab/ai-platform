@@ -1,6 +1,5 @@
 # GREP_SUMMARY: conftest thin re-export layer, _conftest package, pytest_collection_modifyitems, wave-sorting
-# STRUCTURE: ┌re-export _conftest.*┐ → ┌_compute_module_waves(module.yaml → wave numbers)┐ →
-#            ┌pytest_collection_modifyitems(dynamic wave tagging + sort by wave)┐
+# STRUCTURE: ┌re-export _conftest.*┐ → ┌pytest_collection_modifyitems(dynamic wave tagging + sort by wave)┐
 # region MODULE_CONTRACT
 ## @purpose — Thin re-export layer for pytest conftest + Wave-Pipeline dynamic test sorting.
 ##            All logic lives in tests/_conftest/ package. This file re-exports public names
@@ -8,7 +7,7 @@
 ## @scope — Re-exports public names from _conftest/__init__.py + provides collection hook
 ##          for dynamic wave tagging and test ordering.
 ## @invariants
-##   - This file is <150 lines
+##   - This file is <200 lines (tests/AGENTS.md invariant 1 — thin facade)
 ##   - Public names from _conftest/__init__.py are re-exported via `from _conftest import *`
 ##   - Underscore-prefixed names used by test files are imported explicitly below
 ##   - pytest_collection_modifyitems is a pytest hook, NOT a fixture — auto-discovered
@@ -16,7 +15,9 @@
 ## @rationale — Wave-Pipeline (DevPlan 040 Wave 4) requires test ordering by wave number.
 ##              pytest_collection_modifyitems is the canonical pytest hook for this purpose.
 ##              Wave numbers are derived from module.yaml#depends_on, not hardcoded.
-## @changes — 2026-07-12 | Rewritten as thin re-export from _conftest package (DevPlan 031)
+## @changes — 2026-08-22 | T2.17a: _compute_module_waves перенесён в _conftest/wave_pipeline.py
+##                       (thin facade <200 LOC; re-export для test_gate_wave_sort_contract)
+##            2026-07-12 | Rewritten as thin re-export from _conftest package (DevPlan 031)
 ##            2026-07-16 | T6 cleanup: removed stale underscore re-exports no test file imports
 ##            2026-07-22 | DevPlan 040 Wave 4: added pytest_collection_modifyitems + _compute_module_waves
 ##            2026-08-13 | DevPlan 160 W6 T6.3: подключён Quarantine-протокол
@@ -30,7 +31,6 @@ import pathlib
 import site
 
 import pytest
-import yaml
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # ── Test import paths: canonical roots for all test files ────────────────────
@@ -62,51 +62,18 @@ from _conftest.ldd import (  # ruff: ignore[F401]
 from _conftest.quarantine import pytest_collection_modifyitems as _quarantine_collection
 from _conftest.session import _fixture_schema_integrity  # ruff: ignore[F401] — autouse per-test fail (T12.5 T-8)
 from _conftest.state_reset import _reset_fresh_state  # ruff: ignore[F401]
-from _conftest.wave_pipeline import _ensure_wave_ready  # ruff: ignore[F401]
+from _conftest.wave_pipeline import (
+    _compute_module_waves,
+    _ensure_wave_ready,  # ruff: ignore[F401]
+)
 
 logger = logging.getLogger(__name__)
 
 # ── Wave-Pipeline: dynamic wave computation from module.yaml ────────────────
 # DevPlan 040 Wave 4: Wave numbers derived from core/modules/*/module.yaml#depends_on.
 # DevPlan 170 W8: волновой алгоритм — ЕДИНЫЙ канон в _conftest/shared.py (compute_module_waves).
+# T2.17a: _compute_module_waves перенесён в _conftest/wave_pipeline.py (thin facade <200 LOC).
 # Дубль «must stay in sync» (smoke.py:_build_waves vs conftest.py) УДАЛЁН.
-
-
-def _compute_module_waves() -> dict[str, int]:
-    """Read core/modules/*/module.yaml, compute wave numbers from depends_on.
-
-    ## @purpose — Derive wave numbers from the module dependency graph.
-    ##            Wave 0: modules with no dependencies.
-    ##            Wave N: modules whose max dependency wave + 1.
-    ##            DevPlan 170 W8: тело делегирует ЕДИНОМУ канону _conftest/shared.py
-    ##            (compute_module_waves) — дубль с smoke._build_waves удалён.
-    ## @io — ⎋ dict[str, int]: {module_name: wave_number}
-    ## @complexity — O(M * D) where M=modules, D=avg dependencies
-    ## @invariants
-    ##   - Module without depends_on → wave 0
-    ##   - Module with depends_on → wave = max(dep_waves) + 1
-    ##   - Unknown dependencies → wave 0 (safe default)
-    ## @rationale — Dynamic computation eliminates hardcoded wave numbers.
-    ##              Adding a new module with dependencies automatically adjusts
-    ##              downstream wave numbers. Сигнатура () -> dict[str, int] сохранена
-    ##              (импортируется tests/gates/test_gate_wave_sort_contract.py).
-    """
-    from _conftest.shared import compute_module_waves
-
-    platform_root = pathlib.Path(__file__).resolve().parent.parent  # project root (tests/../)
-    modules_dir = platform_root / "core" / "modules"
-
-    mod_deps: dict[str, list[str]] = {}
-    if modules_dir.is_dir():
-        for entry in sorted(p.name for p in modules_dir.iterdir()):
-            mod_path = modules_dir / entry
-            yaml_path = mod_path / "module.yaml"
-            if mod_path.is_dir() and yaml_path.is_file():
-                with pathlib.Path(str(yaml_path)).open(encoding="utf-8") as f:
-                    data = yaml.safe_load(f)
-                mod_deps[entry] = data.get("depends_on") or []
-
-    return compute_module_waves(mod_deps)
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:

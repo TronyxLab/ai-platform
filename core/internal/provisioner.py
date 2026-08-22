@@ -5,7 +5,7 @@
 ## @purpose  Python provisioner — replaces 13 inline python3 calls in provision-environment.sh.
 ##           Reads platform-env.yaml, creates Docker networks, volume directories, CI env vars.
 ## @scope    Called from provision-environment.sh (shell wrapper) with --scope arg.
-##           Single scope per invocation. Shell wrapper iterates scopes + wraps audit_step.
+##           Single scope per invocation. Audit-диспетч — bootstrap/provision_env.py (164 W3.5-1).
 ## @invariants
 ##   - LDD block name: [provision] (NOT [provisioner]) — backward compat with 30 test assertions
 ##   - Networks: docker inspect → exists → skip, else docker network create

@@ -26,6 +26,7 @@ from core.internal.deploy.deploy_engine import StatusResult
 from core.internal.deploy.orchestrator import DeployOrchestrator, ProjectStatus
 from core.internal.deploy.orchestrator_cli import _dispatch
 from core.internal.scaffold.project_lister import get_status_via_ssh
+from tests.helpers.gate_helpers import assert_ldd_imp9
 
 logger = logging.getLogger(__name__)
 
@@ -33,21 +34,7 @@ logger = logging.getLogger(__name__)
 _CANON_KEYS = frozenset({"project", "status", "containers", "last_deploy"})
 
 
-def _assert_imp9_logged(caplog: pytest.LogCaptureFixture) -> None:
-    """Print IMP:7-10 trajectory and assert at least one IMP:9 log present."""
-    found_imp9 = False
-    logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-    for record in list(caplog.records):
-        if "[IMP:" in record.message:
-            imp_level = int(record.message.split("[IMP:")[1].split("]")[0])
-            if imp_level >= 7:
-                logger.info("%s", record.message)
-            if imp_level >= 9:
-                found_imp9 = True
-    logger.info("--- END LDD TRAJECTORY ---")
-    assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
-
-
+# T2.16a: _assert_imp9_logged консолидирован в gate_helpers.assert_ldd_imp9
 # region FUNC_test_project_status_canon_keys
 ## @purpose — ProjectStatus.to_dict() содержит ровно канон-ключи {project, status, containers, last_deploy}.
 # 🧪 TRAP[TEST] · DevPlan 116 B1 T3 · канон-ключи ProjectStatus
@@ -179,7 +166,7 @@ def test_project_lister_renders_status_json(monkeypatch, capsys, caplog: pytest.
     result = get_status_via_ssh(host="1.2.3.4", project="myproj", ssh_runner=_fake_ssh_runner)
 
     out = capsys.readouterr().out
-    _assert_imp9_logged(caplog)
+    assert_ldd_imp9(caplog)
     assert result is True
     assert "myproj" in out, "Таблица должна содержать имя проекта"
     assert "myproj-web-1" in out, "Таблица должна содержать имя контейнера"

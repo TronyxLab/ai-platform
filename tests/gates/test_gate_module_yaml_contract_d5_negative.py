@@ -19,14 +19,13 @@
 from __future__ import annotations
 
 import logging
-import pathlib
 
 import pytest
 
 from core.internal.scripts.validate_module_yaml import (
     validate_module,
 )
-from tests.helpers.gate_helpers import repo_root
+from tests.helpers.gate_helpers import repo_root, write_yaml
 
 logger = logging.getLogger(__name__)
 VALIDATOR_LOG = "core.internal.scripts.validate_module_yaml"
@@ -45,12 +44,7 @@ def _setup_logger(caplog):
     lg.getLogger(VALIDATOR_LOG).propagate = True
 
 
-def _write_module_yaml(path: pathlib.Path, content: dict) -> pathlib.Path:
-    import yaml
-
-    with pathlib.Path(path).open("w", encoding="utf-8") as f:
-        yaml.dump(content, f)
-    return path
+# T2.16b: _write_module_yaml консолидирован в gate_helpers.write_yaml(path, data)
 
 
 def _has_violations(violations: list[str], substr: str) -> bool:
@@ -72,7 +66,7 @@ class TestD5NegativeValidateModule:
             "description": "neg",
             "env_requires": [{"name": "X", "type": "float"}],  # invalid type
         }
-        path = _write_module_yaml(tmp_path / "module.yaml", data)
+        path = write_yaml(tmp_path / "module.yaml", data)
         # Setup minimal compose
         (tmp_path / "docker-compose.base.yml").write_text("services:\n  neg-test:\n    restart: unless-stopped\n")
         (tmp_path / ".env.example").write_text("X=value\n")
@@ -94,7 +88,7 @@ class TestD5NegativeValidateModule:
             "description": "neg",
             "env_requires": [{"name": "REQUIRED_SECRET", "type": "secret", "required": True}],
         }
-        path = _write_module_yaml(tmp_path / "module.yaml", data)
+        path = write_yaml(tmp_path / "module.yaml", data)
         (tmp_path / "docker-compose.base.yml").write_text("services:\n  neg-test:\n    restart: unless-stopped\n")
         (tmp_path / ".env.example").write_text("OTHER=val\n")  # REQUIRED_SECRET missing
         (tmp_path / "secrets-manifest.yaml").write_text(
@@ -117,7 +111,7 @@ class TestD5NegativeValidateModule:
             "description": "neg",
             "restart": "always",  # declares always
         }
-        path = _write_module_yaml(tmp_path / "module.yaml", data)
+        path = write_yaml(tmp_path / "module.yaml", data)
         (tmp_path / "docker-compose.base.yml").write_text(
             "services:\n  neg-test:\n    restart: unless-stopped\n"  # compose says unless-stopped
         )
@@ -138,7 +132,7 @@ class TestD5NegativeValidateModule:
             "description": "D4 compat",
             "env_requires": ["TEST_VAR"],
         }
-        path = _write_module_yaml(tmp_path / "module.yaml", data)
+        path = write_yaml(tmp_path / "module.yaml", data)
         (tmp_path / "docker-compose.base.yml").write_text("services:\n  d4-valid:\n    restart: unless-stopped\n")
         dotenv = tmp_path / ".env.example"
         dotenv.write_text("TEST_VAR=val\n")

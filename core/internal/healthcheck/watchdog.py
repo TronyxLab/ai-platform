@@ -14,7 +14,7 @@
 ##      литерал + env-override, НИКОГДА импорт core.internal
 ##   2. Фильтры кандидатов: health-статус существует И != healthy/none; RestartPolicy.Name != "no"
 ##      (one-shot: prometheus-config-init, minio-createbuckets); RestartCount <= 5
-##      (канон is_n_loop из modules_healthcheck.py — CrashLoopBackOff рестартом не лечится)
+##      (канон RESTART_LOOP_THRESHOLD — watchdog.py, T2.6: CrashLoopBackOff рестартом не лечится)
 ##   3. Действие: unhealthy >= WATCHDOG_UNHEALTHY_MIN (default 10 мин) И cooldown 30 мин с
 ##      last_restart → docker restart + Telegram notify (severity=critical, context=watchdog)
 ##   4. State /var/lib/platform/run/watchdog-state.json (persistent — НЕ tmpfs, 142 W2; atomic write
@@ -81,7 +81,13 @@ DEFAULT_STATE_FILE: str = os.environ.get(
 )
 DEFAULT_UNHEALTHY_MIN = 10  # WATCHDOG_UNHEALTHY_MIN — сколько минут unhealthy до рестарта
 DEFAULT_COOLDOWN_MIN = 30  # WATCHDOG_COOLDOWN_MIN — пауза между рестартами одного контейнера
-RESTART_COUNT_MAX = 5  # канон is_n_loop (modules_healthcheck.py): RestartCount > 5 = CrashLoopBackOff
+# T2.6: ЕДИНАЯ константа restart-loop (одно имя, одно определение).
+# Канон-место — watchdog.py: watchdog — enforcement-site (RestartCount <= X решает рестарт),
+# И stdlib-only (@invariant 1: 0 импортов core.internal, cron без PYTHONPATH — TRAP[BUG] 142 W2),
+# т.е. watchdog физически НЕ может импортировать modules_healthcheck/shared. Обратный импорт
+# безопасен (module-level watchdog = чистый stdlib). modules_healthcheck.RESTART_LOOP_THRESHOLD
+# импортируется отсюда (DevPlan T2.6). Значение 5 НЕ меняется: RestartCount > 5 = CrashLoopBackOff.
+RESTART_LOOP_THRESHOLD = 5
 DOCKER_TIMEOUT = 30  # таймаут docker-команд (файл вне domain-скоупа timeout-literals гейта)
 
 
@@ -243,18 +249,23 @@ def _core_dir() -> str:
 
 
 # region FUNC_scan_containers
-## @purpose  docker ps -q → docker inspect (JSON) для каждого контейнера; извлекает Name,
-##           State.Health.Status, State.RestartCount, HostConfig.RestartPolicy.Name.
+## @purpose  docker ps -q → ПАКЕТНЫЙ docker inspect c1 c2 ... (JSON-массив) для всех контейнеров;
+##           извлекает Name, State.Health.Status, State.RestartCount, HostConfig.RestartPolicy.Name.
+##           T2.7 (perf): O(C) subprocess-вызовов → O(1) subprocess + O(C) парсинг (host-cron 5 мин).
 ## @io       ⇥ facts: EnvironmentFacts | None, run_cmd: Callable | None (DI-канал, 167 D0)
 ##           → ⎋ list[dict] — записи {id, name, health, restart_count, restart_policy};
 ##           docker CLI недоступен → [] (non-fatal); docker-ошибка → ⚡ DockerError (exit 1)
-## @complexity O(C) — C контейнеров, 1 inspect на контейнер
+## @complexity O(1) subprocess (batch inspect) + O(C) parse — C контейнеров
 ## @invariants
 ##   - docker ps returncode != 0 → IMP:10 + DockerError (внутренняя ошибка, exit 1)
-##   - docker inspect returncode != 0 → IMP:10 + DockerError
+##   - docker inspect (batch) returncode != 0 → IMP:10 + DockerError
+##   - docker inspect возвращает JSON-массив в порядке аргументов (c1 c2 ...) — zip по позиции;
+##     расхождение длины → WARN, парсится min(len) записей
 ##   - Контейнер без Health-блока → health=None (отсеивается фильтром)
 ## @changes 2026-08-13 | DevPlan 160 W4b — +facts: EnvironmentFacts | None (which docker DI)
 ## @changes 2026-08-14 | DevPlan 167 D0 — +run_cmd: Callable | None (docker-канал DI)
+## @changes 2026-08-22 | T2.7 — batch docker inspect (N+1 → O(1)); вердикты идентичны (per-контейнер
+##           DockerError при любом rc!=0 сохраняется — docker inspect падает целиком при отсутствии id)
 def scan_containers(facts: EnvironmentFacts | None = None, run_cmd: RunCmd | None = None) -> list[ContainerRecord]:
     """Scan all running containers and extract health/restart metadata."""
     run_impl = run_cmd if run_cmd is not None else _run_cmd
@@ -273,25 +284,36 @@ def scan_containers(facts: EnvironmentFacts | None = None, run_cmd: RunCmd | Non
         raise DockerError(msg)
 
     container_ids = [line.strip() for line in ps.stdout.splitlines() if line.strip()]
-    containers: list[ContainerRecord] = []
-    for cid in container_ids:
-        inspect = run_impl(["docker", "inspect", cid])
-        if inspect.returncode != 0:
-            logger.error(
-                "[IMP:10][watchdog][scan] docker inspect %s failed rc=%d: %s",
-                cid,
-                inspect.returncode,
-                (inspect.stderr or inspect.stdout).strip(),
-            )
-            msg = f"docker inspect {cid} failed"
-            raise DockerError(msg)
-        try:
-            data: list[object] = cast("list[object]", json.loads(inspect.stdout))  # W11: json → Any → list[object]
-        except json.JSONDecodeError as exc:
-            logger.error("[IMP:10][watchdog][scan] docker inspect %s invalid JSON: %s", cid, exc)
-            msg = f"docker inspect {cid} invalid JSON"
-            raise DockerError(msg) from exc
-        containers.append(_parse_inspect(cid, data))
+    if not container_ids:
+        logger.info("[IMP:7][watchdog][scan] scanned 0 container(s)")
+        return []
+
+    # T2.7: один docker inspect c1 c2 ... вместо C per-контейнер вызовов (N+1).
+    # docker inspect возвращает JSON-массив в порядке переданных аргументов.
+    inspect = run_impl(["docker", "inspect", *container_ids])
+    if inspect.returncode != 0:
+        logger.error(
+            "[IMP:10][watchdog][scan] docker inspect failed for %d container(s) rc=%d: %s",
+            len(container_ids),
+            inspect.returncode,
+            (inspect.stderr or inspect.stdout).strip(),
+        )
+        msg = f"docker inspect failed for {len(container_ids)} container(s)"
+        raise DockerError(msg)
+    try:
+        data: list[object] = cast("list[object]", json.loads(inspect.stdout))  # W11: json → Any → list[object]
+    except json.JSONDecodeError as exc:
+        logger.error("[IMP:10][watchdog][scan] docker inspect invalid JSON: %s", exc)
+        msg = "docker inspect invalid JSON"
+        raise DockerError(msg) from exc
+    if len(data) != len(container_ids):
+        logger.warning(
+            "[IMP:7][watchdog][scan] inspect returned %d record(s) for %d id(s) — parsing by position",
+            len(data),
+            len(container_ids),
+        )
+    # strict=False: при расхождении длин (WARN выше) парсим min(len) записей по позиции
+    containers = [_parse_inspect(cid, [item]) for cid, item in zip(container_ids, data, strict=False)]
 
     logger.info("[IMP:7][watchdog][scan] scanned %d container(s)", len(containers))
     return containers
@@ -345,7 +367,7 @@ def _parse_inspect(cid: str, data: list[object]) -> ContainerRecord:
 ## @complexity O(1)
 ## @invariants
 ##   - restart_policy "no" исключает one-shot (prometheus-config-init, minio-createbuckets)
-##   - RestartCount > 5 = CrashLoopBackOff (is_n_loop канон) — рестартом не лечится
+##   - RestartCount > 5 = CrashLoopBackOff (RESTART_LOOP_THRESHOLD канон, T2.6) — рестартом не лечится
 def _is_eligible(c: ContainerRecord) -> bool:
     """Return True if the container is a restart candidate (unhealthy + restartable + not crash-looping)."""
     health = c.get("health")
@@ -353,7 +375,7 @@ def _is_eligible(c: ContainerRecord) -> bool:
         return False
     if c.get("restart_policy") == "no":
         return False
-    return int(c.get("restart_count", 0)) <= RESTART_COUNT_MAX
+    return int(c.get("restart_count", 0)) <= RESTART_LOOP_THRESHOLD
 
 
 # endregion FUNC__is_eligible

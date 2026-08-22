@@ -1,6 +1,6 @@
 # @purpose  Base compose definition for infra-metrics module — cAdvisor + Node Exporter + Nginx Exporter + Redis Exporter + Postgres Exporter
 # GREP_SUMMARY: infra-metrics docker-compose cadvisor node-exporter nginx-prometheus-exporter redis-exporter postgres-exporter profiles x-logging observability-net shared-cache-net shared-db-net
-# STRUCTURE: ▶ cadvisor:v0.55.1 [profiles:infra-metrics] → ┬─ ▶ node-exporter:v1.12.0 → ┬─ ▶ nginx-exp:1.5.1 → ┬─ ▶ redis-exp:v1.86.0 → ┬─ ▶ postgres-exp:v0.16.0 → observability-net + shared-cache-net + shared-db-net → ┐
+# STRUCTURE: ▶ cadvisor:v0.60.5 (CADVISOR_IMAGE override) [profiles:infra-metrics] → ┬─ ▶ node-exporter:v1.12.0 → ┬─ ▶ nginx-exp:1.5.1 → ┬─ ▶ redis-exp:v1.86.0 → ┬─ ▶ postgres-exp:v0.16.0 → observability-net + shared-cache-net + shared-db-net → ┐
 # region MODULE_CONTRACT
 ## @purpose  Base compose definition for infra-metrics Docker module
 ## @scope    Merged with root docker-compose.yml via include:
@@ -33,10 +33,15 @@ services:
   # ── cAdvisor (Container Metrics) ──────────────────────────────────────────
   # region service:cadvisor
   cadvisor:
-    # 🧐 TRAP[DECISION] · 2026-07-07 · — · cAdvisor upgraded v0.52.0 → v0.55.1 (TASK-2)
-    # · v0.55.1 is latest stable on GCR (scratch-based, no breaking changes expected)
-    # · Rev: on next major upstream release — reevaluate pin
-    image: ghcr.io/google/cadvisor:v0.60.5@sha256:1eb9bde04dab65b919bc51da9e7cf8eceb40d57e61ac9e93e373100369d90cd6
+    # 🧐 TRAP[DECISION] · 2026-08-22 · — · CADVISOR_IMAGE параметризован (T1.4, аудит 2026-08-22)
+    # · Symptom (аудит): test/macos-оверлеи пинили gcr.io v0.55.1 при prod v0.60.5 (ghcr.io) —
+    # ·   CI тестировал не тот образ (другой registry И версия).
+    # · Fix: image = ${CADVISOR_IMAGE:-prod-пин} — оверлеи переопределяют явно.
+    # · macOS-пины v0.55.1 СОХРАНЕНЫ (TRAP 164 W1-5): v0.60.5 падает на macOS-VM
+    # ·   («could not detect clock speed»); выравнивание возможно только после фиксации
+    # ·   upstream-фикса — оверлеи держат последний рабочий на macOS.
+    # · Rev: v0.60.5+ починен на macOS → удалить оверрайды test/macos-оверлеев.
+    image: ${CADVISOR_IMAGE:-ghcr.io/google/cadvisor:v0.60.5@sha256:1eb9bde04dab65b919bc51da9e7cf8eceb40d57e61ac9e93e373100369d90cd6}
     container_name: cadvisor
     profiles: [infra-metrics]
     restart: unless-stopped

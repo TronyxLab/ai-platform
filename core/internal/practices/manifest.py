@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: practices-manifest, load-manifest, PracticeCheck, PracticesManifest, checks_for, l1_checks, schema-validate, fail-fast, Draft7
+# GREP_SUMMARY: practices-manifest, load-manifest, PracticeCheck, PracticesManifest, l1_checks, schema-validate, fail-fast, Draft7
 # STRUCTURE: ▶ load_manifest(path) → ◇ schema_validator.validate_yaml_against_schema (Draft7) → ◇ errors? → ⚡ ConfigValidationError (exit 4) → ⊕ dataclasses (PracticeCheck/PracticesManifest, frozen) → ⎋ канон
 # region MODULE_CONTRACT
 ## @purpose  Чтение + валидация канона практик (DevPlan 137 §2.1A): load_manifest() с fail-fast
@@ -12,7 +12,6 @@
 ## @invariants
 ##   - Структурная ошибка канона → ConfigValidationError (exit 4), НЕ bare ValueError
 ##   - Поля dataclass-ов frozen (неизменяемый канон); `class` YAML-ключ → атрибут `klass` (keyword)
-##   - checks_for(check_id, language, level, channel) — фильтр по всем 4 измерениям
 ##   - l1_checks() — L1-проверки (безопасность платформы, исполняются при ЛЮБОМ уровне)
 ##   - Пороги зрелости читаются из канона (НЕ хардкод): maturity_thresholds()
 ## @rationale Единая точка валидации канона + типизированный доступ вместо сырых dict —
@@ -239,66 +238,6 @@ def _read_manifest(path: Path) -> _ManifestData:
 
 
 # endregion FUNC__read_manifest
-
-
-# region FUNC_checks_for
-## @purpose  Фильтр проверок по id + language + level + channel (DevPlan 137 §2.1A).
-##           Возвращает кортеж (обычно 0..1 элемент — id уникален) проверок, удовлетворяющих
-##           ВСЕМ измерениям. Level: "baseline"|"full"|"any" — "any" = без фильтра по уровню.
-## @io       ⇥ check_id: str, language: str, level: str, channel: str → ⎋ tuple[PracticeCheck, ...]
-## @complexity O(C)
-## @invariants
-##   - language "all"-проверки применяются к любому языку (applies_to)
-##   - level="any" → фильтр уровня пропускается (для L1-селекции независимо от уровня)
-def checks_for(
-    check_id: str,
-    *,
-    language: str,
-    level: str = "any",
-    channel: str = CHANNEL_LOCAL,
-) -> tuple[PracticeCheck, ...]:
-    """Return checks matching id + language + level + channel (empty tuple if none)."""
-    manifest = load_manifest()
-    found = manifest.by_id().get(check_id)
-    if found is None:
-        return ()
-    if not found.applies_to(language) or not found.runs_in(channel):
-        return ()
-    if level not in {"any", found.level}:
-        return ()
-    return (found,)
-
-
-# endregion FUNC_checks_for
-
-
-# region FUNC_applicable_checks
-## @purpose  Все проверки канона, применимые к проекту: language × level × channel.
-##           level: "baseline" — только baseline-проверки; "full" — baseline + full;
-##           "any" — все. channel: локальный канал K1 ("local").
-## @io       ⇥ language: str, level: str, channel: str → ⎋ tuple[PracticeCheck, ...]
-## @complexity O(C)
-def applicable_checks(
-    *,
-    language: str,
-    level: str = "baseline",
-    channel: str = CHANNEL_LOCAL,
-) -> tuple[PracticeCheck, ...]:
-    """Return ALL checks applicable to project (language × level × channel)."""
-    manifest = load_manifest()
-    result: list[PracticeCheck] = []
-    for check in manifest.checks:
-        if not check.applies_to(language) or not check.runs_in(channel):
-            continue
-        if level == "baseline" and check.level != "baseline":
-            continue
-        if level == "full" and check.level not in {"baseline", "full"}:
-            continue
-        result.append(check)
-    return tuple(result)
-
-
-# endregion FUNC_applicable_checks
 
 
 # region FUNC_l1_checks

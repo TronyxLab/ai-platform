@@ -1,10 +1,11 @@
 """
 # GREP_SUMMARY: test-practices-manifest, load-manifest, PracticeCheck, PracticesManifest, schema-valid, unique-ids, thresholds, l1-checks, ConfigValidationError
-# STRUCTURE: ▶ load_manifest valid → ◇ version=1, checks unique → ◇ thresholds 30/50 → ◇ checks_for filter → ◇ l1_checks → ◇ negative: broken manifest → ConfigValidationError (exit 4)
+# STRUCTURE: ▶ load_manifest valid → ◇ version=1, checks unique → ◇ thresholds 30/50 → ◇ l1_checks → ◇ negative: broken manifest → ConfigValidationError (exit 4)
 # region MODULE_CONTRACT
 ## @purpose  Unit-тесты core/internal/practices/manifest.py (DevPlan 137 W1): валидность канона
 ##           через schema_validator (Draft7), уникальность id, пороги из канона (не хардкод),
-##           checks_for/applicable_checks/l1_checks фильтры, R5-negative на сломанный канон.
+##           l1_checks фильтр, R5-negative на сломанный канон.
+##           (checks_for/applicable_checks удалены как мёртвый API — аудит 2026-08-22.)
 ## @scope    $TEST_SPEC 137 W1: test_practices_manifest (schema valid, id уникальны).
 ## @invariants
 ##   - Native imports (no subprocess для бизнес-логики)
@@ -25,7 +26,6 @@ import pytest
 
 from core.internal.practices.manifest import (
     DEFAULT_MANIFEST_PATH,
-    checks_for,
     l1_checks,
     load_manifest,
     maturity_thresholds,
@@ -87,23 +87,6 @@ def test_maturity_thresholds_from_canon() -> None:
     assert thresholds["code_files_propose"] == 50
     # константа автопромоута НЕ существует (решение 2026-08-05)
     assert "K" not in thresholds
-
-
-# 🧪 TRAP[TEST] · 2026-08-05 · unit · checks_for фильтрует по языку/уровню/каналу
-# · Regression: "all"-проверки применяются к любому языку
-# · Last fail: N/A
-# · Remove if: checks_for API меняется
-def test_checks_for_filters() -> None:
-    """checks_for возвращает проверку только при совпадении всех измерений."""
-    python = checks_for("ruff-format", language="python", level="baseline", channel="local")
-    assert len(python) == 1 and python[0].id == "ruff-format"
-    # ruff-format не применяется к typescript
-    assert checks_for("ruff-format", language="typescript", level="baseline", channel="local") == ()
-    # full-проверка не входит в baseline выборку
-    assert checks_for("ruff-check", language="python", level="baseline", channel="local") == ()
-    assert len(checks_for("ruff-check", language="python", level="full", channel="local")) == 1
-    # verify-канал (K3) не исполняется локально
-    assert checks_for("verify-contracts", language="python", level="full", channel="local") == ()
 
 
 # 🧪 TRAP[TEST] · 2026-08-05 · unit · L1-проверки — всегда (безопасность платформы)

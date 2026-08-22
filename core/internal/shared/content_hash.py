@@ -4,9 +4,15 @@
 # region MODULE_CONTRACT
 ## @purpose  Unified content hash computation for bootstrap idempotency.
 ##           Replaces 3 independent implementations: shell content-hash,
-##           state_machine._step_hash(), add-vhost.sh compute_body_hash().
-## @scope    Shared library consumed by state_machine.py, add-vhost.sh (thin wrapper),
-##           and any other module needing content hash.
+##           state_machine._step_hash() (удалён, аудит 2026-08-22), add-vhost.sh compute_body_hash().
+## @scope    Shared library consumed by tests and CLI consumers; state_machine.py перешёл
+##           на phase-level _phase_input_hash (inline SHA256 по релевантным полям node.yaml).
+## 📝 TRAP[DEBT] · 2026-08-22 · LO · shared/content_hash.py остался без production-потребителей
+## · Observed: после удаления мёртвого StateMachine._step_hash (аудит 2026-08-22) модуль
+## ·   вызывается только из собственных тестов и CLI (python3 -m ...content_hash).
+## · Suspected: кандидат на удаление в следующей волне чистки dead-API (вне скоупа T0.2).
+## · Impact: ~140 LOC + тест-файл поддерживаются без потребителя.
+## · When: обнаружено при исполнении плана simplify-refactor-waves (T0.2).
 ## @invariants
 ##   1. Always SHA-256 via hashlib (deterministic, cross-platform)
 ##   2. Files are read in the order specified in the input list

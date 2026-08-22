@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: sync_env_defaults, env-example, generator, check, atomic-write
-# STRUCTURE: ▶ parse_args → ◇ shared.load_platform_env→.env_defaults → ◇ shared.load_secret_definitions→_project_secret_defs → merge → generate → write_atomic
+# GREP_SUMMARY: sync_env_defaults, env-example, generator, check, atomic-write, no_proxy_internal
+# STRUCTURE: ▶ parse_args → ◇ shared.load_platform_env→.env_defaults + .proxy.no_proxy_internal → ◇ shared.load_secret_definitions→_project_secret_defs → merge → generate → write_atomic
 # region MODULE_CONTRACT
 ## @purpose  Generate .env.example from platform-env.yaml + secret-definitions.yaml.
 ##           Consolidates env defaults from BOTH SoT sources into a documented .env template.
@@ -23,6 +23,9 @@
 ##           2026-08-16 | DevPlan 177 W3.5 — локальные load_platform_env/load_secret_defs →
 ##                      shared/yaml_loader (типизированные читатели); локальна только
 ##                      проекция полей secret-defs (_project_secret_defs, правило 5 инвентаря)
+##           2026-08-22 | T2.17 — NO_PROXY выводится из platform-env proxy.no_proxy_internal
+##                      (SoT, join запятой); захардкоженный subset-литерал удалён (дрейф списка);
+##                      env_defaults.NO_PROXY из platform-infra.yaml удалён (дубль SoT)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -688,8 +691,14 @@ def _section_ssl_dns(env_defaults: dict[str, str]) -> list[str]:
 
 
 # region SECTION_proxy
-def _section_proxy(env_defaults: dict[str, str]) -> list[str]:
-    """Proxy (Tor/Privoxy) section."""
+def _section_proxy(env_defaults: dict[str, str], no_proxy_internal: str = "") -> list[str]:
+    """Proxy (Tor/Privoxy) section.
+
+    ## @purpose  NO_PROXY выводится из platform-env proxy.no_proxy_internal (SoT, T2.17) —
+    ##            join запятой выполнен в platform-infra.yaml (строка списка); захардкоженный
+    ##            subset-литерал удалён (дрейф: не содержал loki/nginx/... 10 записей).
+    ##            Явный env_defaults.NO_PROXY (если появится) перекрывает SoT-список.
+    """
     lines: list[str] = []
     lines.append("")
     lines.append("# ── Proxy (Tor/Privoxy, опционально) ─────────────────────────────────────────")
@@ -699,14 +708,8 @@ def _section_proxy(env_defaults: dict[str, str]) -> list[str]:
     lines.append("# ⚠️ Канонический источник: platform-env.yaml proxy.no_proxy_internal.")
     lines.append("#    Этот список должен ⊇ no_proxy_internal — гейт T8.5 валидирует.")
     lines.append("# base: внутренние Docker-сервисы; внешние API-хосты добавляются по контексту.")
-    lines.append(
-        "NO_PROXY="
-        + _get_env_val(
-            env_defaults,
-            "NO_PROXY",
-            "localhost,127.0.0.1,.local,postgres,pgbouncer,redis,clickhouse,litellm,langfuse,minio,grafana,prometheus",
-        )
-    )
+    no_proxy = _get_env_val(env_defaults, "NO_PROXY") or no_proxy_internal
+    lines.append("NO_PROXY=" + no_proxy)
     return lines
 
 
@@ -832,12 +835,18 @@ def _section_github_actions(env_defaults: dict[str, str]) -> list[str]:
 
 
 # region FUNC_generate_env_example
-def generate_env_example(env_defaults: dict[str, str], secret_defs: dict[str, dict[str, str]]) -> str:
+def generate_env_example(
+    env_defaults: dict[str, str],
+    secret_defs: dict[str, dict[str, str]],
+    no_proxy_internal: str = "",
+) -> str:
     """Generate complete .env.example content from SoT data (orchestrator).
 
     ## @purpose  Decomposed (DevPlan 117 G T57): each section is a _section_* builder.
-    ##            Signature unchanged — generate_env_example(env_defaults, secret_defs) -> str.
-    ## @io — ⇥ env_defaults, secret_defs → ⎋ str .env.example content
+    ##            Signature: generate_env_example(env_defaults, secret_defs, no_proxy_internal) -> str.
+    ##            no_proxy_internal — SoT-список из platform-env proxy (T2.17); default "" сохраняет
+    ##            обратную совместимость вызовов с 2 аргументами (env_defaults.NO_PROXY wins).
+    ## @io — ⇥ env_defaults, secret_defs, no_proxy_internal → ⎋ str .env.example content
     ## @complexity — O(S * L) where S = sections, L = lines per section
     ## @invariants
     ##   - Output is byte-identical to the pre-decomposition monolithic generator
@@ -861,7 +870,7 @@ def generate_env_example(env_defaults: dict[str, str], secret_defs: dict[str, di
     lines.extend(_section_telegram(env_defaults, secret_defs))
     lines.extend(_section_nginx(env_defaults))
     lines.extend(_section_ssl_dns(env_defaults))
-    lines.extend(_section_proxy(env_defaults))
+    lines.extend(_section_proxy(env_defaults, no_proxy_internal))
     lines.extend(_section_monitoring(env_defaults))
     lines.extend(_section_compose_profiles(env_defaults))
     lines.extend(_section_misc(env_defaults))
@@ -921,9 +930,13 @@ def main() -> int:
         logger.error("secret-definitions.yaml not found: %s", secret_defs_path)
         return 1
 
-    env_defaults = load_platform_env(platform_env_path).env_defaults
+    # T2.17: NO_PROXY — SoT proxy.no_proxy_internal (env_defaults.NO_PROXY удалён из SoT —
+    # дубль; .env.example выводит NO_PROXY из proxy-списка).
+    platform_env = load_platform_env(platform_env_path)
+    env_defaults = platform_env.env_defaults
+    no_proxy_internal = str(platform_env.proxy.get("no_proxy_internal", ""))
     secret_defs = load_secret_defs(secret_defs_path)
-    generated = generate_env_example(env_defaults, secret_defs)
+    generated = generate_env_example(env_defaults, secret_defs, no_proxy_internal)
 
     if args.check:
         if not output_path.is_file():

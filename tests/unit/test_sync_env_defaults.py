@@ -544,6 +544,44 @@ def test_section_github_actions_comments_only(caplog):
     assert "GHCR_PUSH_TOKEN=" in text
 
 
+# 🧪 TRAP[TEST] · Regression · _section_proxy derives NO_PROXY from proxy.no_proxy_internal (T2.17)
+# · Scenario: env_defaults без NO_PROXY → NO_PROXY = SoT-список (join запятой из platform-infra.yaml)
+# · Last fail: N/A (new test for T2.17 dedup)
+# · Remove if: NO_PROXY derivation changes
+# GUARD-PRESERVE (168): позитивное покрытие T2.17-пары (negative — test_no_proxy_hardcoded_literal_removed)
+def test_section_proxy_derives_from_no_proxy_internal(caplog):
+    """T2.17: _section_proxy выводит NO_PROXY из proxy.no_proxy_internal (SoT, join запятой)."""
+    caplog.set_level(0)
+    canonical = "localhost,127.0.0.1,.local,postgres,pgbouncer,redis,clickhouse,litellm,langfuse,minio,grafana,prometheus,loki,nginx"
+    lines = sed._section_proxy({}, canonical)
+    text = "\n".join(lines)
+    assert f"NO_PROXY={canonical}" in text, "NO_PROXY должен выводиться из no_proxy_internal (SoT)"
+    # Явный env_defaults.NO_PROXY (если появится) перекрывает SoT-список — backward-compat
+    lines_override = sed._section_proxy({"NO_PROXY": "custom"}, canonical)
+    assert "NO_PROXY=custom" in "\n".join(lines_override)
+    logger.critical("[IMP:9][test] T2.17: NO_PROXY derived from no_proxy_internal — OK")
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · T2.17 — захардкоженный NO_PROXY subset-литерал удалён
+# · Scenario: литерал из кода sync_env_defaults.py — исходный вход: захардкоженный subset
+# ·           "localhost,...,grafana,prometheus" (БЕЗ loki/nginx/... — дрейф vs no_proxy_internal)
+# · Last fail: sync_env_defaults.py _section_proxy — fallback-литерал, расходящийся с SoT
+# · Remove if: sync_env_defaults.py перестаёт генерировать NO_PROXY
+def test_no_proxy_hardcoded_literal_removed(caplog):
+    """T2.17 R5: NO_PROXY subset-литерал отсутствует в коде генератора (SoT — proxy.no_proxy_internal)."""
+    caplog.set_level(0)
+    source = Path(sed.__file__).read_text(encoding="utf-8")
+    stale_subset = (
+        "localhost,127.0.0.1,.local,postgres,pgbouncer,redis,clickhouse,litellm,langfuse,minio,grafana,prometheus"
+    )
+    assert stale_subset not in source, (
+        "T2.17 R5 FAIL: NO_PROXY subset-литерал всё ещё в sync_env_defaults.py — "
+        "должен выводиться из proxy.no_proxy_internal (join запятой)"
+    )
+    assert "no_proxy_internal" in source, "T2.17 R5 FAIL: derivation from no_proxy_internal отсутствует"
+    logger.critical("[IMP:9][test] T2.17: NO_PROXY literal removed — derived from no_proxy_internal")
+
+
 # 🧪 TRAP[TEST] · Regression · generate_env_example orchestration order
 # · Scenario: full output contains all section headers in structural order
 # · Last fail: N/A (new test for DevPlan 117 G T57)

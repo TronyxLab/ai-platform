@@ -179,7 +179,9 @@ def test_no_sqlite_in_litellm_config() -> None:
     LiteLLM defaults to SQLite — this test catches default-reliance.
     """
     if not LITELLM_DIR.exists():
-        pytest.skip("LiteLLM module directory not found")
+        # T1.7 триаж (аудит 2026-08-22): core/modules/litellm — статический каталог репо;
+        # отсутствие = сломанное дерево → FAIL (R4), не молчаливый skip.
+        pytest.fail(f"LiteLLM module directory not found (repo dir must exist): {LITELLM_DIR}")
 
     sqlite_refs: list[str] = []
     # Check config.yaml and docker-compose files

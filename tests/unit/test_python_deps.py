@@ -37,33 +37,10 @@ sys.path.insert(0, str(_MODULE_DIR))
 import pytest
 import python_deps
 
+from tests.helpers.fakes import FakeCommandRunner
+from tests.helpers.fakes import make_proc as _proc
+
 pytestmark = pytest.mark.static_audit
-
-
-class FakeCommandRunner:
-    """Scripted CommandRunner (DI-канон W4b): результат из последовательности или дефолт.
-
-    ## @purpose — Замена monkeypatch subprocess.run в тестах python_deps: каждый вызов
-    ##            записывается (calls), возвращается scripted CompletedProcess.
-    ## @io — ⇥ results: list[CompletedProcess] (FIFO), default → ⎋ CompletedProcess
-    ## @complexity — O(1) — pop из списка / дефолт
-    """
-
-    def __init__(self, results=None, default=None):
-        self._results = list(results) if results else []
-        self.default = default if default is not None else subprocess.CompletedProcess([], 0, "", "")
-        self.calls: list[list[str]] = []
-
-    def run(self, cmd, *, timeout=30, check=False, non_fatal=False, fatal_rc=()):  # ruff: ignore[ARG002]
-        self.calls.append(list(cmd))
-        if self._results:
-            return self._results.pop(0)
-        return self.default
-
-
-def _proc(rc: int = 0, stdout: str = "", stderr: str = "") -> subprocess.CompletedProcess:
-    """Build a CompletedProcess with given rc/stdout/stderr (fake-раннер результат)."""
-    return subprocess.CompletedProcess([], returncode=rc, stdout=stdout, stderr=stderr)
 
 
 def _version_proc(version: str) -> subprocess.CompletedProcess:

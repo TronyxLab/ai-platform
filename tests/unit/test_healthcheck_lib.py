@@ -31,6 +31,7 @@ from pathlib import Path
 import pytest
 
 from core.internal.shared.docker_compose import healthcheck_poll
+from tests.helpers.gate_helpers import assert_ldd_imp9
 
 logger = logging.getLogger(__name__)
 
@@ -39,27 +40,7 @@ _HEALTHCHECK_LIB: Path = Path(__file__).resolve().parent.parent.parent / "core" 
 _LOGGING_LIB: Path = Path(__file__).resolve().parent.parent.parent / "core" / "lib" / "logging.sh"
 
 
-def _assert_imp9(caplog: pytest.LogCaptureFixture) -> None:
-    """LDD telemetry: печать IMP:7-10 траектории + assert найден IMP:9-лог (Anti-Illusion).
-
-    ## @purpose — Тест не молчит: печатает реальную траекторию (IMP:7-10) до ассертов,
-    ##            требует как минимум один IMP:9-лог в успешном сценарии.
-    ## @io — ⇥ caplog → ⎋ None (assert found)
-    ## @complexity — O(R) — R = записи caplog
-    """
-    found = False
-    logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-    for record in list(caplog.records):
-        if "[IMP:" in record.message:
-            imp_level = int(record.message.split("[IMP:")[1].split("]")[0])
-            if imp_level >= 7:
-                logger.info("%s", record.message)
-            if imp_level >= 9:
-                found = True
-    logger.info("--- END LDD TRAJECTORY ---")
-    assert found, "Critical LDD Error: No IMP:9 business logic log found"
-
-
+# T2.16a: _assert_imp9 консолидирован в gate_helpers.assert_ldd_imp9
 class _FakeProc:
     """Fake subprocess.CompletedProcess (DI-контракт docker_ops-примитивов)."""
 
@@ -145,7 +126,7 @@ def test_d5_criterion_state_health(
 
     assert result == expected, f"Expected {expected!r} for ({state}, {health!r}), got {result!r}"
     logger.critical("[IMP:9][test_healthcheck_lib][d5] %s", imp9_note)
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_d5_criterion_state_health
@@ -167,7 +148,7 @@ def test_d5_criterion_unhealthy_waits_timeout(caplog: pytest.LogCaptureFixture) 
     # Факт события: поллинг наблюдал не-здоровое состояние (стартовые гонки обрабатываются)
     assert any("not healthy yet" in r.message for r in caplog.records), caplog.text
     logger.critical("[IMP:9][test_healthcheck_lib][d5] unhealthy → ждём → timeout unhealthy")
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_d5_unhealthy_waits_timeout
@@ -188,7 +169,7 @@ def test_d5_criterion_all_containers_must_be_healthy(caplog: pytest.LogCaptureFi
     assert result == "unhealthy", f"Expected 'unhealthy' (второй контейнер не-здоров), got {result!r}"
     assert any("not healthy yet" in r.message for r in caplog.records), caplog.text
     logger.critical("[IMP:9][test_healthcheck_lib][d5] все-контейнеры-обязаны-быть-здоровы → unhealthy")
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_d5_all_containers_must_be_healthy
@@ -209,7 +190,7 @@ def test_d5_criterion_no_containers_waits_timeout(caplog: pytest.LogCaptureFixtu
     assert result == "unhealthy", f"Expected 'unhealthy' (нет контейнеров), got {result!r}"
     assert any("No containers" in r.message for r in caplog.records), caplog.text
     logger.critical("[IMP:9][test_healthcheck_lib][d5] пустой ps → unhealthy")
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_d5_no_containers_waits_timeout
@@ -230,7 +211,7 @@ def test_d5_criterion_timeout_logs_warning(caplog: pytest.LogCaptureFixture) -> 
     assert result == "unhealthy"
     assert any(r.levelno == logging.WARNING and "unhealthy" in r.message for r in caplog.records), caplog.text
     logger.critical("[IMP:9][test_healthcheck_lib][d5] timeout → warning unhealthy (non-fatal)")
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_d5_timeout_logs_warning

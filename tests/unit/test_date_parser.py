@@ -9,8 +9,6 @@
 ##   - All test_* functions print LDD trajectory
 ## @rationale — DateParser extracted from RetentionPolicy (H7 refactoring);
 ##   isolated testing ensures date parsing correctness without S3 mock overhead.
-def _module_contract():
-    pass
 
 
 # endregion MODULE_CONTRACT

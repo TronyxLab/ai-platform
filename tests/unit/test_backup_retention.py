@@ -31,8 +31,6 @@ Tests for retention.py — 7/28/90 S3 retention rotation.
 ##             concern — a single off-by-one in date arithmetic could delete active backups.
 ##             Isolating tests ensures deterministic coverage without real S3.
 ## @changes — LAST_CHANGE: 2026-07-01 | Added MODULE_CONTRACT region for pre-commit compliance
-def _module_contract():
-    pass
 
 
 # endregion MODULE_CONTRACT

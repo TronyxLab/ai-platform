@@ -15,8 +15,6 @@
 ## @rationale Q: Why validate compose config without docker? A: Docker commands are slow
 ##            and require daemon — YAML/script inspection is faster and sufficient.
 ## @changes — LAST_CHANGE: 2026-07-01 | Added MODULE_CONTRACT region for pre-commit compliance
-def _module_contract():
-    pass
 
 
 # endregion MODULE_CONTRACT

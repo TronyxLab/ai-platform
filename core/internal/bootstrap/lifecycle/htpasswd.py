@@ -32,7 +32,7 @@ from pathlib import Path
 
 # ── Canonical module imports (DevPlan 177 W3.6) ──
 # htpasswd.py вызывается ТОЛЬКО как модуль пакета core.internal.bootstrap.lifecycle:
-#   - secrets_manager.py (lazy import в _extract_apr1_salt/_write_htpasswd_file/_ensure_htpasswd)
+#   - secrets_manager.py (lazy import в _write_htpasswd_file/_ensure_htpasswd)
 #   - tests/unit/test_htpasswd.py (канонический пакетный импорт)
 #   - φ4 secrets-provision → helpers/secrets.py → secrets_manager.ensure_secrets (модуль)
 # Standalone `python3 htpasswd.py` НЕ вызывается ни одним фасадом/фазой (проверено 2026-08-16:

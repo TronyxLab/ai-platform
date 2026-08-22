@@ -35,8 +35,6 @@
 ##   - All tests use @ldd_trajectory decorator for IMP:9 verification
 ## @rationale — Catches boot-chain regressions before systemd service installation.
 ##              Follows pattern from test_clickhouse_static.py.
-def _module_contract():
-    pass
 
 
 # endregion MODULE_CONTRACT

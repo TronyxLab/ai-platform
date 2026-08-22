@@ -15,8 +15,8 @@ PLATFORM_ROOT="$(cd "$PATHS_CORE_DIR/.." && pwd)"
 cd "$PLATFORM_ROOT"
 
 # ── Color helpers ──
-red()   { printf "\033[31m%s\033[0m\n" "$*"; }
-green() { printf "\033[32m%s\033[0m\n" "$*"; }
+red() { printf "\033[31m%s\033[0m\n" "$*"; }
+# (green() удалён — аудит 2026-08-22: 0 callers; делегирование через exec не возвращает вывод)
 
 case "${1:-}" in
     --help|-h)

@@ -25,6 +25,7 @@ import pytest
 
 from core.internal import dev_hosts
 from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError
+from tests.helpers.gate_helpers import assert_ldd_imp9
 
 pytestmark = pytest.mark.static_audit
 
@@ -50,21 +51,7 @@ def _write_node_yaml(tmp_path: Path, projects: list[dict]) -> Path:
     return node_yaml
 
 
-def _assert_imp9(caplog, needle: str) -> None:
-    """Anti-Illusion: в успешном сценарии должна быть IMP:9 траектория (паттерн W3)."""
-    found = False
-    logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-    for record in list(caplog.records):
-        if "[IMP:" in record.message:
-            imp_level = int(record.message.split("[IMP:")[1].split("]")[0])
-            if imp_level >= 7:
-                logger.info("%s", record.message)
-            if imp_level >= 9 and needle in record.message:
-                found = True
-    logger.info("--- END LDD TRAJECTORY ---")
-    assert found, f"Critical LDD Error: No IMP:9 log containing '{needle}' found"
-
-
+# T2.16a: _assert_imp9 консолидирован в gate_helpers.assert_ldd_imp9
 # region Tests: collect_hosts (T4.1)
 class TestCollectHosts:
     # 🧪 TRAP[TEST] · Scenario · server_names → dev FQDN <name>.<suffix> (vhost_renderer dev-mode parity)
@@ -87,7 +74,7 @@ class TestCollectHosts:
             dev_certs_dir=str(tmp_path / "certs"),  # cert отсутствует — SAN-вклад пуст
         )
         assert hosts == {"tronyx-site.ai-platform.local", "dance-site.ai-platform.local"}
-        _assert_imp9(caplog, "collect_hosts] Collected")
+        assert_ldd_imp9(caplog, needle="collect_hosts] Collected")
 
     # 🧪 TRAP[TEST] · Scenario · missing node.yaml → graceful empty server_names (не ошибка)
     # · Regression: fresh-клон без node-configs не должен ломать dev-hosts
@@ -102,7 +89,7 @@ class TestCollectHosts:
             dev_certs_dir=str(tmp_path / "certs"),
         )
         assert hosts == set()
-        _assert_imp9(caplog, "collect_hosts] Collected")
+        assert_ldd_imp9(caplog, needle="collect_hosts] Collected")
 
     # 🧪 TRAP[TEST] · Scenario · SAN wildcard → base domain; concrete → itself; localhost/IP skip
     # · Regression: *.ai-platform.local должен давать ai-platform.local (wildcard не валиден в hosts(5))
@@ -123,7 +110,7 @@ class TestCollectHosts:
         # *.ai-platform.local → ai-platform.local · *.test.local → test.local ·
         # localhost (skip) · IP:127.0.0.1 (skip)
         assert hosts == {"ai-platform.local", "test.local"}
-        _assert_imp9(caplog, "collect_hosts] Collected")
+        assert_ldd_imp9(caplog, needle="collect_hosts] Collected")
 
     # 🧪 TRAP[TEST] · Regression · REAL get_cert_sans (без monkeypatch) — str→Path контракт
     # · Scenario: smoke-тест поймал AttributeError 'str' object has no attribute 'is_file' —
@@ -177,7 +164,7 @@ class TestCollectHosts:
             dev_certs_dir=str(tmp_path / "certs"),  # нет fullchain.pem
         )
         assert hosts == {"botanika.ai-platform.local"}
-        _assert_imp9(caplog, "collect_hosts] Collected")
+        assert_ldd_imp9(caplog, needle="collect_hosts] Collected")
 
 
 # endregion Tests: collect_hosts (T4.1)
@@ -288,7 +275,7 @@ class TestApply:
         applied2 = dev_hosts.apply(str(hosts_path), {"a.local"})
         assert applied2 is False
         assert hosts_path.read_text(encoding="utf-8") == content_after_first
-        _assert_imp9(caplog, "apply] Applied")
+        assert_ldd_imp9(caplog, needle="apply] Applied")
 
     # 🧪 TRAP[TEST] · Scenario · apply сохраняет чужие строки /etc/hosts verbatim
     # · Regression: managed-блок не должен поглощать пользовательские записи
@@ -377,7 +364,7 @@ class TestMain:
 
         rc_diff = dev_hosts.main([*self._base_args(tmp_path), "--etc-hosts", str(hosts_path), "--dry-run"])
         assert rc_diff == 1
-        _assert_imp9(caplog, "DIFF detected")
+        assert_ldd_imp9(caplog, needle="DIFF detected")
 
         rc_apply = dev_hosts.main([*self._base_args(tmp_path), "--etc-hosts", str(hosts_path), "--apply"])
         assert rc_apply == 0
@@ -385,7 +372,7 @@ class TestMain:
         rc_sync = dev_hosts.main([*self._base_args(tmp_path), "--etc-hosts", str(hosts_path)])
         assert rc_sync == 0
         assert "tronyx-site.ai-platform.local" in hosts_path.read_text(encoding="utf-8")
-        _assert_imp9(caplog, "no diff")
+        assert_ldd_imp9(caplog, needle="no diff")
 
     # 🧪 TRAP[TEST] · Scenario · --print выводит собранные hostname (sorted), exit 0
     # · Regression: AC W4 «dry-run/print/apply идемпотентен»
@@ -402,7 +389,7 @@ class TestMain:
         assert rc == 0
         lines = [ln for ln in out.splitlines() if ln.strip()]
         assert lines == ["a.ai-platform.local", "b.ai-platform.local"]  # sorted
-        _assert_imp9(caplog, "--print:")
+        assert_ldd_imp9(caplog, needle="--print:")
 
     # 🧪 TRAP[TEST] · Scenario · отсутствующий hosts-файл → main exit 2 (ConfigNotFoundError)
     # · Regression: контракт exit-кодов 2 (core/AGENTS.md)

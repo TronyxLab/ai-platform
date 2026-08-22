@@ -36,6 +36,8 @@ from _conftest.ldd import _print_ldd_trajectory
 
 from core.internal.bootstrap import remote_executor
 from core.internal.bootstrap.overlay_deliverer import NodeYamlNotFoundError, SyncCoreError
+from tests.helpers.fakes import FakeCommandRunner
+from tests.helpers.fakes import make_proc as _proc
 
 pytestmark = pytest.mark.static_audit
 
@@ -43,36 +45,6 @@ pytestmark = pytest.mark.static_audit
 # ═══════════════════════════════════════════════════════════════════
 # Fake-реализации DI-протоколов (W4b/W4d канон, DevPlan 160)
 # ═══════════════════════════════════════════════════════════════════
-
-
-class FakeCommandRunner:
-    """Scripted CommandRunner (DI-канон W4b): результат из последовательности или дефолт.
-
-    ## @purpose — Замена monkeypatch subprocess.run в тестах remote_executor: каждый вызов
-    ##            записывается (calls/kwargs), возвращается scripted CompletedProcess.
-    ## @io — ⇥ results: list[CompletedProcess] (FIFO), default → ⎋ CompletedProcess
-    ## @complexity — O(1) — pop из списка / дефолт
-    ## @invariants
-    ##   - results исчерпаны → default (стабильное поведение для многошаговых сценариев)
-    ##   - run() НЕ raise (канон subprocess_io check=False — graceful)
-    """
-
-    def __init__(self, results=None, default=None):
-        self._results = list(results) if results else []
-        self.default = default if default is not None else subprocess.CompletedProcess([], 0, "", "")
-        self.calls: list[list[str]] = []
-        self.kwargs: list[dict] = []
-
-    @property
-    def last_cmd(self) -> list[str] | None:
-        return self.calls[-1] if self.calls else None
-
-    def run(self, cmd, *, timeout=30, check=False, non_fatal=False, fatal_rc=()):
-        self.calls.append(list(cmd))
-        self.kwargs.append({"timeout": timeout, "check": check, "non_fatal": non_fatal, "fatal_rc": fatal_rc})
-        if self._results:
-            return self._results.pop(0)
-        return self.default
 
 
 class FakeFacts:
@@ -114,11 +86,6 @@ class FakeDeliverer:
         self.resolve_node_yaml = mock.Mock(return_value=node_yaml_path)
         self.extract_node_host = mock.Mock(return_value=host)
         self.sync_core_to_vps = mock.Mock(return_value=True)
-
-
-def _proc(rc: int = 0, stdout: str = "", stderr: str = "") -> subprocess.CompletedProcess:
-    """Build a CompletedProcess with given rc/stdout/stderr (fake-раннер результат)."""
-    return subprocess.CompletedProcess([], returncode=rc, stdout=stdout, stderr=stderr)
 
 
 class _TimeoutRunner:

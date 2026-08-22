@@ -599,17 +599,6 @@ def ensure_secrets(
 # endregion FUNC_ensure_secrets
 
 
-# region FUNC__extract_apr1_salt
-def _extract_apr1_salt(entry: str) -> str:
-    """Lazy facade for htpasswd.extract_apr1_salt (DevPlan 117 G T58.3)."""
-    from core.internal.bootstrap.lifecycle.htpasswd import extract_apr1_salt as _impl
-
-    return _impl(entry)
-
-
-# endregion FUNC__extract_apr1_salt
-
-
 # region FUNC__write_htpasswd_file
 def _write_htpasswd_file(
     email: str,

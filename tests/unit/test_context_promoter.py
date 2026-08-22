@@ -25,6 +25,8 @@ import pytest
 
 from core.internal.deploy import context_promoter
 from core.internal.shared.timeouts import SSH_CONNECT_TIMEOUT
+from tests.helpers.fakes import make_proc as _proc
+from tests.helpers.gate_helpers import assert_ldd_imp9
 
 pytestmark = pytest.mark.static_audit
 
@@ -36,29 +38,7 @@ SOURCE_SHA = "b" * 40  # rev-parse HEAD for mismatch scenarios
 SYNC_SHA = "c" * 40  # shared HEAD for the successful full-promote scenario
 
 
-def _proc(rc: int = 0, stdout: str = "", stderr: str = "") -> subprocess.CompletedProcess:
-    """Build a CompletedProcess stub for mocked subprocess.run."""
-    return subprocess.CompletedProcess(args=[], returncode=rc, stdout=stdout, stderr=stderr)
-
-
-def _print_trajectory(caplog: pytest.LogCaptureFixture) -> bool:
-    """Print IMP:7-10 LDD trajectory; return True if an IMP:9 log was found.
-
-    ## @purpose — LDD telemetry: surfaces the actual execution trajectory before assertions
-    ##            so a failure shows the agent the real path, not just a red assert.
-    ## @io — ⇥ caplog → ⎋ bool — True when at least one IMP:9 record was emitted
-    """
-    found_imp9 = False
-    logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-    for record in list(caplog.records):
-        if "[IMP:" in record.message:
-            imp_level = int(record.message.split("[IMP:")[1].split("]")[0])
-            if imp_level >= 7:
-                logger.info("%s", record.message)
-            if imp_level >= 9:
-                found_imp9 = True
-    logger.info("--- END LDD TRAJECTORY ---")
-    return found_imp9
+# T2.16a: _print_trajectory консолидирован в gate_helpers.assert_ldd_imp9 (require_imp9=False)
 
 
 # ── check_ssh_available (AC4) ─────────────────────────────────────────────
@@ -87,7 +67,7 @@ def test_check_ssh_available_success(caplog: pytest.LogCaptureFixture) -> None:
     # DevPlan 116 B5 T2: ConnectTimeout унифицирован через timeouts.SSH_CONNECT_TIMEOUT (=30, U-15)
     assert "-o" in args and f"ConnectTimeout={SSH_CONNECT_TIMEOUT}" in args and "BatchMode=yes" in args
 
-    _print_trajectory(caplog)
+    assert_ldd_imp9(caplog, require_imp9=False)
     assert "[IMP:8][check_ssh_available] SSH key for github.com available" in caplog.text
 
 
@@ -112,7 +92,7 @@ def test_check_ssh_available_failure(caplog: pytest.LogCaptureFixture) -> None:
     ):
         assert context_promoter.check_ssh_available() is False
 
-    _print_trajectory(caplog)
+    assert_ldd_imp9(caplog, require_imp9=False)
     assert "[IMP:8][check_ssh_available] SSH key not available or timeout" in caplog.text
 
 
@@ -134,7 +114,7 @@ def test_check_ssh_available_not_authenticated(caplog: pytest.LogCaptureFixture)
     ):
         assert context_promoter.check_ssh_available() is False
 
-    _print_trajectory(caplog)
+    assert_ldd_imp9(caplog, require_imp9=False)
     assert "[IMP:8][check_ssh_available] SSH key not available or timeout" in caplog.text
 
 
@@ -166,7 +146,7 @@ def test_promote_via_ssh_success(caplog: pytest.LogCaptureFixture) -> None:
     assert push_call.args[0] == ["git", "push", "--mirror", SSH_TARGET]
     assert ls_call.args[0] == ["git", "ls-remote", SSH_TARGET, "HEAD"]
 
-    found_imp9 = _print_trajectory(caplog)
+    found_imp9 = assert_ldd_imp9(caplog, require_imp9=False)
     assert "[IMP:9][promote_via_ssh] SSH push to myctx/ai-platform successful" in caplog.text
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
 
@@ -208,7 +188,7 @@ def test_verify_mirror_match(caplog: pytest.LogCaptureFixture) -> None:
 
     assert context_promoter.verify_mirror("myctx", MIRROR_SHA, MIRROR_SHA) is True
 
-    found_imp9 = _print_trajectory(caplog)
+    found_imp9 = assert_ldd_imp9(caplog, require_imp9=False)
     assert "[IMP:9][verify_mirror] Mirror sync verified" in caplog.text
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
 
@@ -227,7 +207,7 @@ def test_verify_mirror_mismatch(caplog: pytest.LogCaptureFixture) -> None:
 
     assert context_promoter.verify_mirror("myctx", MIRROR_SHA, SOURCE_SHA) is False
 
-    _print_trajectory(caplog)
+    assert_ldd_imp9(caplog, require_imp9=False)
     assert "[IMP:10][verify_mirror] FAIL: mirror HEAD" in caplog.text
 
 
@@ -261,7 +241,7 @@ def test_no_ssh_fails(
         )
     assert exc_info.value.code == 1, "CLI must exit 1 when SSH unavailable (no fallback)"
 
-    _print_trajectory(caplog)
+    assert_ldd_imp9(caplog, require_imp9=False)
     assert "[IMP:10][promote_context] FATAL: SSH unavailable" in caplog.text
 
 
@@ -295,7 +275,7 @@ def test_audit_step_imp9(
 
     assert rc == 0, "SSH promote with matching HEADs must return exit code 0"
 
-    found_imp9 = _print_trajectory(caplog)
+    found_imp9 = assert_ldd_imp9(caplog, require_imp9=False)
     assert "[IMP:9][promote_context] SUCCESS: platform promoted to myctx/ai-platform" in caplog.text
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
 
@@ -336,7 +316,7 @@ def test_resolve_org_from_overlay_context_yaml(
     assert context_promoter.resolve_org(ctx, env={"PROJECTS_BASE": str(tmp_path)}) == "TronyxLab"
 
     logger.critical("[IMP:9][test] _resolve_org из overlay context.yaml — канонический org")
-    found_imp9 = _print_trajectory(caplog)
+    found_imp9 = assert_ldd_imp9(caplog, require_imp9=False)
     assert "[IMP:8][resolve_org] org=TronyxLab" in caplog.text
     assert found_imp9, "Critical LDD Error: No IMP:9 log found in _resolve_org test"
 
@@ -366,7 +346,7 @@ def test_resolve_org_mixed_case_context_name(
     assert resolved != ctx, "Имя контекста (lowercase) не может быть org'ом (D9 regression)"
 
     logger.critical("[IMP:9][test] mixed-case org разрешён к каноническому TronyxLab (D9)")
-    found_imp9 = _print_trajectory(caplog)
+    found_imp9 = assert_ldd_imp9(caplog, require_imp9=False)
     assert found_imp9, "Critical LDD Error: No IMP:9 log found in mixed-case org test"
 
 
@@ -388,7 +368,7 @@ def test_resolve_org_fallback_context_name(
     assert context_promoter.resolve_org("myctx", env={"PROJECTS_BASE": str(tmp_path)}) == "myctx"
 
     logger.critical("[IMP:9][test] _resolve_org fallback на имя контекста (D9)")
-    found_imp9 = _print_trajectory(caplog)
+    found_imp9 = assert_ldd_imp9(caplog, require_imp9=False)
     assert "using context name" in caplog.text
     assert found_imp9, "Critical LDD Error: No IMP:9 log found in fallback test"
 

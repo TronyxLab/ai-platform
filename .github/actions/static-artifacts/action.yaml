@@ -1,0 +1,69 @@
+# GREP_SUMMARY: static-artifacts composite-action ruff-sarif basedpyright-json junit upload-artifact diagnostics DevPlan-163
+# STRUCTURE: runs:composite → ○ pip install ruff → ○ ruff check --output-format=sarif → ⊕ upload ruff-check-sarif (always) → ○ pip install basedpyright → ○ --outputjson (exit masked) → ⊕ upload basedpyright-report (always) → ⊕ upload pytest-junit-reports (always)
+# region MODULE_CONTRACT
+## @purpose  Composite action: собирает диагностические артефакты статики (ruff SARIF,
+##           basedpyright --outputjson, pytest junit tests/report-*.xml) и загружает их
+##           через actions/upload-artifact. Артефакты для агента/человека
+##           (download-artifact), НЕ гейты — блокирующее решение остаётся
+##           `make gate MODE=fast` (pre-commit ruff-check + gates).
+## @scope    Вызывается из gate-workflows (push-gate.yml, platform-gate-fast.yml) ПОСЛЕ
+##           шага gate. Две байт-идентичные копии блока извлечены сюда (T2.15) — единый SoT.
+## @invariants
+##   - Caller ОБЯЗАН ставить `if: always()` на шаге вызова — шаги генерируют артефакты
+##     ДАЖЕ при падении гейта (внутренние if: always тоже сохраняются: upload работает
+##     и при сбое generate-шага, отсутствующий файл → warn, не error)
+##   - ruff НЕ маскируется (0 violations — жёсткий инвариант clean-at-ship M3, DevPlan 163)
+##   - basedpyright exit маскируется shell'ом (`|| true`): до W-B «pyright-clean» recommended
+##     даёт 514 ошибок (fact-base §1) — сигнал здесь НЕ exit-код, а сам JSON-артефакт
+##   - upload-artifact@v4 с if-no-files-found: warn (отсутствие файла ≠ ошибка шага)
+##   - Копии в push-gate.yml/platform-gate-fast.yml байт-идентичны (включая имена
+##     артефактов) → входы не требуются (T2.15: параметризуется только реальное различие)
+## @rationale DevPlan 163 W-A A4: диагностические артефакты статики для дебага падений
+##            gate. Байт-в-байт дублирование в двух workflows — дрейф-вектор (правка
+##            в одной копии молча терялась); composite action = единый source of truth.
+## @changes 2026-08-22 | T2.15: извлечён из push-gate.yml + platform-gate-fast.yml (идентичные копии)
+# endregion MODULE_CONTRACT
+
+name: 'Collect static artifacts'
+description: 'Generate and upload ruff SARIF + basedpyright JSON + pytest junit diagnostic artifacts (DevPlan 163 A4)'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Generate ruff SARIF artifact (DevPlan 163 A4)
+      if: always()
+      shell: bash
+      run: |
+        .venv/bin/pip install --quiet ruff==0.16.2
+        .venv/bin/ruff check . --output-format=sarif --output-file ruff-check.sarif
+
+    - name: Upload ruff SARIF artifact
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ruff-check-sarif
+        path: ruff-check.sarif
+        if-no-files-found: warn
+
+    - name: Generate basedpyright JSON artifact (DevPlan 163 A4)
+      if: always()
+      shell: bash
+      run: |
+        .venv/bin/pip install --quiet basedpyright==1.39.9
+        .venv/bin/basedpyright --outputjson > basedpyright-report.json || true
+
+    - name: Upload basedpyright JSON artifact
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: basedpyright-report
+        path: basedpyright-report.json
+        if-no-files-found: warn
+
+    - name: Upload pytest JUnit reports
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: pytest-junit-reports
+        path: tests/report-*.xml
+        if-no-files-found: warn

@@ -19,7 +19,7 @@ LABEL maintainer="core" \
       module="postgres" \
       install_type="docker" \
       org.opencontainers.image.source="https://github.com/Tronyx161/ai-platform" \
-      org.opencontainers.image.description="PostgreSQL 16.14 shared database — platform config baked in" \
+      org.opencontainers.image.description="PostgreSQL 18.4 shared database — platform config baked in" \
       org.opencontainers.image.name="ghcr.io/tronyxlab/postgres"
 
 # Copy platform postgresql config

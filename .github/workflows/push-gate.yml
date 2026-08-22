@@ -37,6 +37,7 @@
 ##   basedpyright --outputjson, pytest junit tests/report-*.xml) — upload-artifact, if: always,
 ##   НЕ гейты (гейт — шаг make gate MODE=fast). basedpyright exit маскируется (514 errors
 ##   recommended до W-B «pyright-clean»); ruff не маскируется (clean-at-ship M3).
+## @changes — 2026-08-22 | T2.15: блок артефактов извлечён в ./.github/actions/static-artifacts (единый SoT)
 # endregion MODULE_CONTRACT
 
 name: push-gate
@@ -88,7 +89,10 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cache/pre-commit
-          key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
+          # T1.3 (аудит 2026-08-22): +hashFiles(pyproject.toml) — паритет platform-gate-fast/
+          # platform-test (класс бага P-14: без него смена pyproject не инвалидирует кэш,
+          # pre-commit гоняет протухшие hook-окружения).
+          key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}-${{ hashFiles('pyproject.toml') }}
 
       - name: Run full gate (syntax + JSON + gates + static + predeploy — no Docker)
         run: make gate MODE=fast
@@ -105,41 +109,10 @@ jobs:
       # basedpyright exit маскируется shell'ом: до W-B «pyright-clean» recommended даёт 514
       # ошибок (fact-base §1) — сигнал здесь НЕ exit-код, а сам JSON-артефакт (гейт-статус
       # basedpyright в pre-commit stages: [manual]; блокировка — после handoff W-B).
-      - name: Generate ruff SARIF artifact (DevPlan 163 A4)
+      # T2.15: генерация + upload извлечены в composite action (единый SoT обеих копий).
+      - name: Collect static artifacts (ruff SARIF + basedpyright JSON + junit)
         if: always()
-        run: |
-          .venv/bin/pip install --quiet ruff==0.16.2
-          .venv/bin/ruff check . --output-format=sarif --output-file ruff-check.sarif
-
-      - name: Upload ruff SARIF artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ruff-check-sarif
-          path: ruff-check.sarif
-          if-no-files-found: warn
-
-      - name: Generate basedpyright JSON artifact (DevPlan 163 A4)
-        if: always()
-        run: |
-          .venv/bin/pip install --quiet basedpyright==1.39.9
-          .venv/bin/basedpyright --outputjson > basedpyright-report.json || true
-
-      - name: Upload basedpyright JSON artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: basedpyright-report
-          path: basedpyright-report.json
-          if-no-files-found: warn
-
-      - name: Upload pytest JUnit reports
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: pytest-junit-reports
-          path: tests/report-*.xml
-          if-no-files-found: warn
+        uses: ./.github/actions/static-artifacts
 
       - name: Cleanup Docker networks
         if: always()

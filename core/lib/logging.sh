@@ -11,9 +11,10 @@
 ##           Eliminates 9+ duplicated log_imp() definitions across the
 ##           codebase by offering a single source of truth.
 ## @scope    — log_imp() with configurable prefix and auto block detection
-##           — 3 semantic wrapper functions (log_warn/fail/crit) + log_step
+##           — log_step wrapper
 ##           — zero side-effects on source (pure function definitions only)
-##           — все скрипты используют log_imp напрямую или log_warn/fail/crit
+##           — все скрипты используют log_imp напрямую (log_warn/fail/crit удалены —
+##             аудит 2026-08-22: 0 callers в production-скриптах)
 ## @input    — __LOG_PREFIX (env var, set before source; default: "unknown")
 ##           — FUNCNAME[1] via caller context for auto-block detection
 ## @output   — Structured stderr lines: [IMP:N][<prefix>][<block>] <msg>
@@ -23,25 +24,20 @@
 ## @invariants — log_imp() MUST never write to stdout (only stderr)
 ##             — Library MUST NOT execute any code on source (no side-effects)
 ##             — __LOG_PREFIX MUST be checked at call-time, not source-time
-##             - Every wrapper MUST delegate to log_imp with auto-block ("-")
 ## @rationale Q: Why a shared library instead of source-level dedup via sed?
 ##            A: A shared library provides a single maintenance point, enables
 ##            consistent format evolution (e.g., adding timestamps, JSON mode),
 ##            and allows all scripts to benefit from fixes without individual edits.
 ## @changes   LAST_CHANGE: 2026-07-07 · T1 — Initial implementation
+## @changes   2026-08-22 · аудит simplify-refactor-waves T0.3 — semantic wrappers
+##            log_warn/log_fail/log_crit удалены (0 callers; тесты обёрток сняты)
 ## @modulemap — log_imp     [W:100] Core LDD logger
 ##             — log_step    [W:20]  Step status wrapper (bootstrap scripts)
-##             — log_warn    [W:20]  Semantic wrapper at IMP:8
-##             — log_fail    [W:20]  Semantic wrapper at IMP:9
-##             — log_crit    [W:20]  Semantic wrapper at IMP:10
 ## @usecases  — Developer: source logging.sh; set __LOG_PREFIX="deploy";
 ##              log_imp 7 "phase1" "configuration loaded" → stderr
-##             — Developer: log_warn "disk space low" → auto-block from caller
 # endregion MODULE_CONTRACT
-# GREP_SUMMARY: logging, LDD, log_imp, log_warn, log_fail, log_crit, structured logging, stderr, IMP
+# GREP_SUMMARY: logging, LDD, log_imp, structured logging, stderr, IMP
 # STRUCTURE: ▶ ┌config(__LOG_PREFIX)┐ → ○ log_imp(level,block,msg) → ◇ ┌block=="-"|""?┐ → ⊕ auto(FUNCNAME[1])|explicit → ⊕ [IMP:N][prefix][block] msg → ⎋ stderr
-#            └──────────────── ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─┘
-#            ⚡ wrappers: log_warn→IMP:8, log_fail→IMP:9, log_crit→IMP:10
 
 # ═══════════════════════════════════════════════════════════════════
 # CORE LOGGER
@@ -87,28 +83,3 @@ log_step() {
     echo "[IMP:8][${__LOG_PREFIX:-unknown}][${step}] ${status}: ${msg}" >&2
 }
 # endregion FUNC_log_step
-
-# ═══════════════════════════════════════════════════════════════════
-# region FUNC_log_warn
-## @purpose  Log a warning message at IMP:8
-## @param $1  Message text
-## @io       Delegates to log_imp with auto-block detection
-## @complexity O(1)
-log_warn() { log_imp 8 "-" "$*"; }
-# endregion FUNC_log_warn
-
-# region FUNC_log_fail
-## @purpose  Log a failure/error message at IMP:9
-## @param $1  Message text
-## @io       Delegates to log_imp with auto-block detection
-## @complexity O(1)
-log_fail() { log_imp 9 "-" "$*"; }
-# endregion FUNC_log_fail
-
-# region FUNC_log_crit
-## @purpose  Log a critical/severe message at IMP:10
-## @param $1  Message text
-## @io       Delegates to log_imp with auto-block detection
-## @complexity O(1)
-log_crit() { log_imp 10 "-" "$*"; }
-# endregion FUNC_log_crit

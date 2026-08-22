@@ -21,7 +21,6 @@
 
 import logging
 import pathlib
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -44,6 +43,9 @@ from core.internal.bootstrap.core_deliverer import (
     ensure_remote_dirs,
     resolve_remote_base,
 )
+from tests.helpers.fakes import FakeCommandRunner
+from tests.helpers.fakes import make_proc as _proc
+from tests.helpers.gate_helpers import assert_ldd_imp9
 
 pytestmark = pytest.mark.static_audit
 
@@ -57,45 +59,6 @@ EXPECTED_SSH_E = f"ssh {' '.join(SSH_OPTS)}"
 # ═══════════════════════════════════════════════════════════════════
 
 # region FIXTURES
-
-
-class FakeCommandRunner:
-    """Scripted CommandRunner (DI-канон W4b): результат из последовательности или дефолт.
-
-    ## @purpose — Замена monkeypatch subprocess.run в тестах core_deliverer: каждый вызов
-    ##            записывается (calls/kwargs), возвращается scripted CompletedProcess.
-    ## @io — ⇥ results: list[CompletedProcess] (FIFO), default: CompletedProcess → ⎋ CompletedProcess
-    ## @complexity — O(1) — pop из списка / дефолт
-    ## @invariants
-    ##   - results исчерпаны → default (стабильное поведение для многошаговых сценариев)
-    ##   - run() НЕ raise (канон subprocess_io check=False — graceful)
-    """
-
-    def __init__(self, results=None, default=None):
-        self._results = list(results) if results else []
-        self.default = default if default is not None else subprocess.CompletedProcess([], 0, "", "")
-        self.calls: list[list[str]] = []
-        self.kwargs: list[dict] = []
-
-    @property
-    def last_cmd(self) -> list[str] | None:
-        return self.calls[-1] if self.calls else None
-
-    @property
-    def last_kwargs(self) -> dict:
-        return self.kwargs[-1] if self.kwargs else {}
-
-    def run(self, cmd, *, timeout=30, check=False, non_fatal=False, fatal_rc=()):
-        self.calls.append(list(cmd))
-        self.kwargs.append({"timeout": timeout, "check": check, "non_fatal": non_fatal, "fatal_rc": fatal_rc})
-        if self._results:
-            return self._results.pop(0)
-        return self.default
-
-
-def _proc(rc: int = 0, stdout: str = "", stderr: str = "") -> subprocess.CompletedProcess:
-    """Build a CompletedProcess with given rc/stdout/stderr (fake-раннер результат)."""
-    return subprocess.CompletedProcess([], returncode=rc, stdout=stdout, stderr=stderr)
 
 
 def _ok_runner() -> FakeCommandRunner:
@@ -163,7 +126,7 @@ def test_resolve_remote_base(monkeypatch, caplog, env_updates: dict, expected: s
         monkeypatch.setenv(key, value)
     assert resolve_remote_base() == expected, f"Expected remote base {expected}"
     logger.info("[IMP:9][test_resolve_remote_base][done] base=%s verified", expected)
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_resolve_remote_base
@@ -197,7 +160,7 @@ def test_ensure_remote_dirs_command(caplog) -> None:
     # · Last fail: timeout=30 (MKDIR_TIMEOUT локальный дубль) — W1-A1: MKDIR_TIMEOUT=30 → FILE_OP_TIMEOUT=15
     # ·   (канон файловых мутаций converge, DevPlan 119 B7); прежний 30 = дубль SoT без импорта
     # · Remove if: remote dir hierarchy changes
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_ensure_remote_dirs_command
@@ -218,7 +181,7 @@ def test_ensure_remote_dirs_failure(caplog) -> None:
     # · Scenario: failed ssh mkdir should raise CoreDeliveryError, not continue
     # · Last fail: N/A (new test)
     # · Remove if: error handling strategy changes
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_ensure_remote_dirs_failure
@@ -264,7 +227,7 @@ def test_deliver_core_excludes_exact(tmp_path, caplog) -> None:
     # · Scenario: .git/__pycache__/.pytest_cache/default-user.xml/.env/docker-compose.test.yml not all excluded
     # · Last fail: N/A (new test; docker-compose.test.yml added DevPlan 162 W10-2)
     # · Remove if: exclude list intentionally changes
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_deliver_core_excludes_exact
@@ -286,7 +249,7 @@ def test_deliver_core_failure(tmp_path, caplog) -> None:
     # · Scenario: failed rsync core/ should raise CoreDeliveryError, not return False
     # · Last fail: N/A (new test)
     # · Remove if: error handling strategy changes
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_deliver_core_failure
@@ -314,7 +277,7 @@ def test_deliver_platform_env_missing_skips(tmp_path, caplog) -> None:
     # · Scenario: absent platform-env.yaml should skip with IMP:8, never exec
     # · Last fail: N/A (new test)
     # · Remove if: Phase 1b delivery logic changes
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_deliver_platform_env_missing_skips
@@ -337,7 +300,7 @@ def test_deliver_makefile_missing_skips(tmp_path, caplog) -> None:
     # · Scenario: absent Makefile should skip with IMP:8, never exec
     # · Last fail: N/A (new test)
     # · Remove if: Phase 1c delivery logic changes
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_deliver_makefile_missing_skips
@@ -359,7 +322,7 @@ def test_deliver_scripts_missing_skips(tmp_path, caplog) -> None:
     assert len(fake.calls) == 0, "runner must NOT run when scripts/ missing"
     assert "Phase 1d/4: SKIP — scripts/ not found" in caplog.text, "IMP:8 SKIP log missing"
     logger.critical("[IMP:9][test][deliver_scripts] missing-skip verified (R5 REQ_FIX)")
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_deliver_scripts_missing_skips
@@ -384,7 +347,7 @@ def test_deliver_scripts_rsync_destination(tmp_path, caplog) -> None:
     assert "root@1.2.3.4:/opt/platform/scripts/" in cmd, f"dest /opt/platform/scripts/ missing: {cmd}"
     assert "--delete" not in cmd, "scripts-синк без --delete (старые скрипты безвредны)"
     logger.critical("[IMP:9][test][deliver_scripts] rsync destination verified")
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_deliver_scripts_rsync_destination
@@ -410,7 +373,7 @@ def test_deliver_makefiles_missing_skips(tmp_path, caplog) -> None:
     assert len(fake.calls) == 0
     assert "SKIP" in caplog.text
     logger.critical("[IMP:9][test][deliver_makefiles] missing-skip verified (R5 TRAP[BUG] 2026-08-12)")
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_deliver_makefiles_missing_skips
@@ -443,7 +406,7 @@ def test_deliver_makefiles_rsync_destination(tmp_path, caplog) -> None:
     assert "root@1.2.3.4:/opt/platform/" in cmd, f"dest /opt/platform/ missing: {cmd}"
     assert "--delete" not in cmd, "makefiles-синк без --delete (CI-parity)"
     logger.critical("[IMP:9][test][deliver_makefiles] rsync destination verified")
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_deliver_makefiles_rsync_destination
@@ -484,7 +447,7 @@ def test_deliver_node_configs_excludes(tmp_path, caplog) -> None:
     # · Scenario: .git/__pycache__/.pytest_cache not all excluded in Phase 2
     # · Last fail: N/A (new test)
     # · Remove if: exclude list intentionally changes
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_deliver_node_configs_excludes
@@ -531,7 +494,7 @@ def test_deliver_secrets_excludes_and_skip(tmp_path, caplog) -> None:
     # · Scenario: secrets source must be node-configs/<node>/secrets/, dst /opt/node-configs/secrets/
     # · Last fail: 2026-07-23 (P0 — Phase 3 always SKIP, encrypted secrets not delivered)
     # · Remove if: secrets delivery layout changes
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_deliver_secrets_excludes_and_skip
@@ -571,7 +534,7 @@ def test_deliver_all_success_ldd(delivery_tree, caplog) -> None:
     # · Scenario: mkdir→core→env→Makefile→node-configs→secrets order must hold
     # · Last fail: N/A (new test)
     # · Remove if: deliver_all orchestration changes
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_deliver_all_success_ldd
@@ -598,7 +561,7 @@ def test_deliver_all_fail_fast(delivery_tree, caplog) -> None:
     # · Scenario: failed mkdir must abort deliver_all immediately
     # · Last fail: N/A (new test)
     # · Remove if: fail-fast strategy changes
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_deliver_all_fail_fast
@@ -632,7 +595,7 @@ def test_dry_run_no_execution(delivery_tree, caplog) -> None:
     # · Scenario: dry_run=True must print (IMP:8) and never exec rsync/ssh
     # · Last fail: N/A (new test)
     # · Remove if: dry-run mode is removed
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_dry_run_no_execution
@@ -672,7 +635,7 @@ def test_cli_exit_codes(delivery_tree, caplog) -> None:
     # · Scenario: deliver success → 0, any CoreDeliveryError → 1 (shell || return 1 parity)
     # · Last fail: N/A (new test)
     # · Remove if: CLI exit code strategy changes
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_cli_exit_codes
@@ -713,7 +676,7 @@ def test_fallback_deliver_success(delivery_tree, caplog) -> None:
     # · Scenario: успешный прогон — все фазы, AGE_SECRET_KEY как env в node-update
     # · Last fail: N/A (new test)
     # · Remove if: fallback-deliver subcommand removed
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_fallback_deliver_success
@@ -745,7 +708,7 @@ def test_fallback_deliver_provision_fail(delivery_tree, caplog) -> None:
     # · Scenario: provision exit!=0 → return False → cli()=1, node-update не выполняется
     # · Last fail: N/A (new test)
     # · Remove if: fallback-deliver subcommand removed
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_fallback_deliver_provision_fail
@@ -776,7 +739,7 @@ def test_fallback_deliver_dry_run(delivery_tree, caplog) -> None:
     # · Scenario: --dry-run → печать команд, 0 runner-вызовов, exit 0
     # · Last fail: N/A (new test)
     # · Remove if: dry-run mode is removed
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_fallback_deliver_dry_run
@@ -787,20 +750,4 @@ def test_fallback_deliver_dry_run(delivery_tree, caplog) -> None:
 # ═══════════════════════════════════════════════════════════════════
 
 
-def _assert_imp9(caplog) -> None:
-    """LDD trajectory check: verify at least one IMP:9 log exists (Anti-Illusion, RULES.md §LDD)."""
-    found = False
-    logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-    for record in list(caplog.records):
-        if "[IMP:" in record.message:
-            imp_str = record.message.split("[IMP:")[1].split("]")[0]
-            try:
-                imp_level = int(imp_str)
-            except ValueError:
-                continue
-            if imp_level >= 7:
-                logger.info("%s", record.message)
-            if imp_level >= 9:
-                found = True
-    logger.info("--- END LDD TRAJECTORY ---")
-    assert found, "Critical LDD Error: No IMP:9 business logic log found"
+# T2.16a: _assert_imp9 консолидирован в gate_helpers.assert_ldd_imp9

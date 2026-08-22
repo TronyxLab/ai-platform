@@ -92,6 +92,8 @@ _WORKFLOW_LOCAL_ENV_VARS: dict[str, str] = {
     "SKIP": "pre-commit SKIP filter, workflow-local",
     "PYTHONUNBUFFERED": "CPython runtime flag (стрим pytest-вывода в CI-шаге), workflow-local",
     "PLATFORM_COMPOSE_TIMEOUT": "smoke compose-up health-wait (CI single-shot, 2026-08-17), workflow-local test tuning",
+    "SSH_OPTS": "ssh flags для deploy-project (caller-контекст — платформенный SoT ssh_opts.py недоступен; inline-набор без ConnectTimeout, T2.15 hoist)",
+    "RSYNC_EXCLUDES": "rsync exclude-список для core-deploy (.git/ __pycache__/ *.pyc), workflow-local, T2.15 hoist",
 }
 
 
@@ -141,8 +143,12 @@ def test_ci_env_vars_match_platform_env(caplog):
     platform_env_defaults = _extract_platform_env_defaults()
 
     if not platform_env_defaults:
-        logger.info("[IMP:8][test] Skipping env var matching — no platform-env.yaml defaults")
-        pytest.skip("platform-env.yaml not available")
+        # T1.7 триаж (аудит 2026-08-22): platform-env.yaml — GENERATED, коммитится (инвариант 11);
+        # отсутствие = сломанное дерево → FAIL (R4), не молчаливый skip.
+        pytest.fail(
+            "platform-env.yaml missing/unreadable — generated artifact must be committed "
+            "(repair: make generate-platform-env)"
+        )
 
     violations: list[str] = []
     checked = 0

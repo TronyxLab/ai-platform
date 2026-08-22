@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: phases-secrets, secrets-provision, secrets-update, decrypt, ensure-secrets, bootstrap-phase, E3
+# GREP_SUMMARY: phases-secrets, secrets-provision, secrets-update, decrypt, ensure-secrets, bootstrap-phase, E3, T2.1, run-secrets-step
 # STRUCTURE: ▶ secrets-фазы (φ4 φ9) → ◇ each: pre-check → decrypt → ensure → ⊕ LDD logs → ⎋ bool/raise
+#           → ◇ общий шаг _run_secrets_step (FATAL-обёртка decrypt/ensure, T2.1) → φ4/φ9 тонкие
 # region MODULE_CONTRACT
 ## @purpose  Secrets-domain bootstrap phases (DevPlan 119 E3) — φ4 secrets_provision, φ9
 ##           secrets_update. Интерфейс (core_dir, node_name, node_yaml) -> bool сохранён.
+##           T2.1: близнецы φ4/φ9 схлопнуты — try/except FATAL-обёртки decrypt/ensure вынесены
+##           в общий шаг _run_secrets_step (одна точка правки), phase-функции тонкие.
 ## @scope    Consumed by lifecycle/phases/__init__.py (агрегатор) → state_machine.py execute_phase.
 ##           Извлечено из lifecycle/phases.py (DevPlan 119 E3, AUDIT-2 M3).
 ## @invariants
@@ -11,17 +14,21 @@
 ##   2. Decryption failure is FATAL (PlatformFatalError) — secrets are critical infrastructure.
 ##   3. secrets.env re-sourced into os.environ after decryption.
 ## @rationale E3: phases.py 1080 LOC → доменные модули. secrets-фазы — decrypt/ensure-домен.
+##            T2.1: φ4 (secrets_provision) и φ9 (secrets_update) отличались ТОЛЬКО набором
+##            подшагов (φ4 + autogen-init-лог) и текстами логов — FATAL-обёртки идентичны
+##            (try/except → PlatformFatalError) — общий шаг _run_secrets_step.
 ## @changes  2026-08-02 · DevPlan 119 E3 — экстракция из lifecycle/phases.py
 ## @changes  2026-08-06 · DevPlan 140 W4 — persist /etc/age/key.txt УДАЛЁН (W12-on-node-age-key):
 ##            ключ не пишется на диск ноды; канон env → tmpfs decrypt-only (S-13);
 ##            /etc/age/key.txt — только restore-first fallback (ручной)
+## @changes  2026-08-22 · T2.1 — φ4/φ9 близнецы: общий _run_secrets_step (FATAL-обёртка decrypt/ensure)
 # endregion MODULE_CONTRACT
 from __future__ import annotations
 
 import logging
 import os
 import subprocess
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from types import ModuleType
 
 # DevPlan 118 C6: единый путь litellm-config.yml — shared/llm_paths (литерал удалён).
@@ -37,6 +44,33 @@ logger = logging.getLogger(__name__)
 # ── Import helpers from lifecycle/helpers (public I/O API, односторонняя зависимость) ──
 
 from core.internal.bootstrap.lifecycle.helpers import secrets as helpers_secrets
+
+
+# region FUNC__run_secrets_step
+## @purpose  FATAL-обёртка шага секретов (T2.1): decrypt/ensure φ4/φ9 — сбой →
+##           PlatformFatalError (секреты критичны), успех → INFO. Тексты логов per-mode.
+## @io       ⇥ run: Callable[[], None], ok_msg: str, err_log: str (ERROR %s),
+##              fatal_prefix: str → ⎋ None ⚡ PlatformFatalError
+## @complexity O(1) — один helper-вызов + logging
+## @invariants — НЕ глотает PlatformError/TimeoutExpired (всегда re-raise как PlatformFatalError)
+def _run_secrets_step(
+    *,
+    run: Callable[[], None],
+    ok_msg: str,
+    err_log: str,
+    fatal_prefix: str,
+) -> None:
+    """Run a secrets step (decrypt/ensure) with FATAL semantics — shared by φ4/φ9 (T2.1)."""
+    try:
+        run()
+        logger.info(ok_msg)
+    except (PlatformError, subprocess.TimeoutExpired) as e:
+        logger.error(err_log, e)
+        msg = f"{fatal_prefix}: {e}"
+        raise PlatformFatalError(msg) from e
+
+
+# endregion FUNC__run_secrets_step
 
 
 # region FUNC_phase_secrets_provision
@@ -79,13 +113,12 @@ def phase_secrets_provision(
     active = helpers if helpers is not None else helpers_secrets
 
     # ── 1. Decrypt AGE-encrypted secrets (FATAL on failure) ──
-    try:
-        active.decrypt_secrets(core_dir)
-        logger.info("[IMP:9][phase:secrets_provision] Secrets decrypted successfully")
-    except (PlatformError, subprocess.TimeoutExpired) as e:
-        logger.error("[IMP:10][phase:secrets_provision] Secrets decryption FAILED — aborting: %s", e)
-        msg = f"Secrets decryption failed: {e}"
-        raise PlatformFatalError(msg) from e
+    _run_secrets_step(
+        run=lambda: active.decrypt_secrets(core_dir),
+        ok_msg="[IMP:9][phase:secrets_provision] Secrets decrypted successfully",
+        err_log="[IMP:10][phase:secrets_provision] Secrets decryption FAILED — aborting: %s",
+        fatal_prefix="Secrets decryption failed",
+    )
 
     # ── 1.5 AGE key НЕ персистится на диск (DevPlan 140 W4, W12-on-node-age-key) ──
     # Канон: ключ приходит env (CI node-update: AGE_SECRET_KEY; bootstrap оператора:
@@ -94,13 +127,12 @@ def phase_secrets_provision(
     # (ручной перенос ключа оператором при восстановлении ноды) — φ4 его НЕ создаёт.
 
     # ── 2. Ensure secrets.env exists + source into environ + generate autogen ──
-    try:
-        active.ensure_secrets_exist(core_dir, env=env)
-        logger.info("[IMP:9][phase:secrets_provision] Secrets verified and autogen secrets generated")
-    except (PlatformError, subprocess.TimeoutExpired) as e:
-        logger.error("[IMP:10][phase:secrets_provision] Secrets verification failed — aborting: %s", e)
-        msg = f"Secrets verification failed: {e}"
-        raise PlatformFatalError(msg) from e
+    _run_secrets_step(
+        run=lambda: active.ensure_secrets_exist(core_dir, env=env),
+        ok_msg="[IMP:9][phase:secrets_provision] Secrets verified and autogen secrets generated",
+        err_log="[IMP:10][phase:secrets_provision] Secrets verification failed — aborting: %s",
+        fatal_prefix="Secrets verification failed",
+    )
 
     # ── 3. Secrets init (placeholder — logic migrated to secrets_manager) ──
     logger.info("[IMP:9][phase:secrets_provision] Secrets init complete (managed by secrets_manager)")
@@ -113,7 +145,7 @@ def phase_secrets_provision(
 
 
 # region FUNC_phase_secrets_update
-## @purpose φ9: Secrets update (UPDATE mode) — decrypt AGE-encrypted secrets.
+## @purpose φ9: Secrets update (UPDATE mode) — decrypt AGE-encrypted secrets + re-source.
 ##           Corresponds to update step: decrypt_secrets (inside verify_core + provision chain).
 ## @io      ⇥ core_dir, node_name, node_yaml, env: Mapping | None (DI — SECRETS_ENV_FILE) → ⎋ bool
 ##          ⚡ raises PlatformFatalError if decryption fails
@@ -128,10 +160,10 @@ def phase_secrets_update(
     *,
     env: Mapping[str, str] | None = None,
 ) -> bool:
-    """φ9: Secrets update — decrypt secrets (UPDATE mode).
+    """φ9: Secrets update — decrypt + re-source (UPDATE mode).
 
     Pre-check: core_dir exists.
-    Execute: decrypt AGE-encrypted secrets.
+    Execute: decrypt AGE-encrypted secrets → re-source into environ.
     Post-check: secrets.env present after decryption.
     """
     if not os.path.isdir(core_dir):
@@ -139,22 +171,20 @@ def phase_secrets_update(
         raise ConfigNotFoundError(msg)
 
     # ── Decrypt secrets (FATAL on failure) ──
-    try:
-        helpers_secrets.decrypt_secrets(core_dir)
-        logger.info("[IMP:9][phase:secrets_update] Secrets decrypted successfully (update)")
-    except (PlatformError, subprocess.TimeoutExpired) as e:
-        logger.error("[IMP:10][phase:secrets_update] Secrets decryption FAILED — aborting update: %s", e)
-        msg = f"Secrets decryption failed during update: {e}"
-        raise PlatformFatalError(msg) from e
+    _run_secrets_step(
+        run=lambda: helpers_secrets.decrypt_secrets(core_dir),
+        ok_msg="[IMP:9][phase:secrets_update] Secrets decrypted successfully (update)",
+        err_log="[IMP:10][phase:secrets_update] Secrets decryption FAILED — aborting update: %s",
+        fatal_prefix="Secrets decryption failed during update",
+    )
 
-    # Re-source secrets into environ (same as init)
-    try:
-        helpers_secrets.ensure_secrets_exist(core_dir, env=env)
-        logger.info("[IMP:9][phase:secrets_update] Secrets re-sourced and verified (update)")
-    except (PlatformError, subprocess.TimeoutExpired) as e:
-        logger.error("[IMP:10][phase:secrets_update] Secrets re-source FAILED — aborting update: %s", e)
-        msg = f"Secrets re-source failed during update: {e}"
-        raise PlatformFatalError(msg) from e
+    # ── Re-source secrets into environ (same as init) ──
+    _run_secrets_step(
+        run=lambda: helpers_secrets.ensure_secrets_exist(core_dir, env=env),
+        ok_msg="[IMP:9][phase:secrets_update] Secrets re-sourced and verified (update)",
+        err_log="[IMP:10][phase:secrets_update] Secrets re-source FAILED — aborting update: %s",
+        fatal_prefix="Secrets re-source failed during update",
+    )
 
     logger.info("[IMP:9][phase:secrets_update] φ9 complete — secrets updated")
     return True

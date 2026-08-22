@@ -42,8 +42,6 @@
 ##            compose config, config.d/*.xml merging, healthcheck, and
 ##            Prometheus metrics endpoint.
 ## @changes   2026-07-12 | Initial implementation: ClickHouse component tests
-def _module_contract():
-    pass
 
 
 # endregion MODULE_CONTRACT

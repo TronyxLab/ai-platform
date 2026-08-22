@@ -35,6 +35,11 @@ from typing import cast
 
 import yaml
 
+# T2.6: ЕДИНАЯ константа restart-loop — канон-место watchdog.RESTART_LOOP_THRESHOLD.
+#   watchdog stdlib-only (@invariant 1: cron без PYTHONPATH, TRAP[BUG] 142 W2) — импортировать
+#   modules_healthcheck НЕ может; обратный импорт безопасен (module-level watchdog = чистый stdlib).
+#   Значение 5 (RestartCount > 5 = CrashLoopBackOff) НЕ меняется.
+from core.internal.healthcheck.watchdog import RESTART_LOOP_THRESHOLD
 from core.internal.shared import docker_ops  # W1: docker inspect примитив (гейт docker_sole_path)
 from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError
 from core.internal.shared.module_interface import invoke as invoke_module_interface
@@ -43,8 +48,6 @@ from core.internal.shared.timeouts import DOCKER_CMD_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
-# Restart-loop threshold: RestartCount > 5 → restart loop (канон modules-healthcheck.sh)
-RESTART_LOOP_THRESHOLD = 5
 # Модули, не являющиеся сервисными (skip)
 SKIP_MODULES = {"observability"}
 

@@ -32,35 +32,12 @@ import pytest
 
 from core.internal.shared import node_resolver
 from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError
+from tests.helpers.gate_helpers import assert_ldd_imp9
 
 logger = logging.getLogger(__name__)
 
 
-def _module_contract():
-    pass
-
-
-# region FUNC__assert_imp9
-def _assert_imp9(caplog: pytest.LogCaptureFixture) -> None:
-    """LDD telemetry: печать IMP:7-10 траектории + assert найден IMP:9-лог.
-
-    ## @purpose  Anti-Illusion (RULES.md §TESTING) — тест не молчит.
-    ## @complexity — O(R) — R = записи caplog
-    """
-    found = False
-    logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-    for record in list(caplog.records):
-        if "[IMP:" in record.message:
-            imp_level = int(record.message.split("[IMP:")[1].split("]")[0])
-            if imp_level >= 7:
-                logger.info("%s", record.message)
-            if imp_level >= 9:
-                found = True
-    logger.info("--- END LDD TRAJECTORY ---")
-    assert found, "Critical LDD Error: No IMP:9 business logic log found"
-
-
-# endregion FUNC__assert_imp9
+# T2.16a: _assert_imp9 консолидирован в gate_helpers.assert_ldd_imp9
 
 
 # region FUNC__make_node_yaml
@@ -97,7 +74,7 @@ def test_resolve_by_env_platform_root(
 
     assert resolved == str(node_yaml), resolved
     assert any("Resolved node.yaml:" in r.message for r in caplog.records), caplog.text
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_resolve_by_env_platform_root
@@ -123,7 +100,7 @@ def test_resolve_by_home_projects_glob(
     resolved = node_resolver.resolve_node_yaml("globnode")
 
     assert resolved == str(node_yaml), resolved
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_resolve_by_home_projects_glob
@@ -142,7 +119,7 @@ def test_resolve_by_node_env(tmp_path: Path, caplog: pytest.LogCaptureFixture, m
     resolved = node_resolver.resolve_node_yaml(env={"PLATFORM_ROOT": str(platform_root), "NODE_NAME": "envnode"})
 
     assert resolved == str(node_yaml), resolved
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_resolve_by_node_env
@@ -166,7 +143,7 @@ def test_resolve_explicit_platform_root(
     resolved = node_resolver.resolve_node_yaml("explicitnode", platform_root=str(platform_root))
 
     assert resolved == str(node_yaml), resolved
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_resolve_explicit_platform_root
@@ -192,7 +169,7 @@ def test_resolve_not_found_readable_error(
 
     assert "node.yaml not found for node=nonexistent-127-w2" in str(excinfo.value), str(excinfo.value)
     assert any("node.yaml not found" in r.message for r in caplog.records), caplog.text
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_resolve_not_found_readable_error
@@ -215,7 +192,7 @@ def test_resolve_idempotent_same_path(
     second = node_resolver.resolve_node_yaml("idemnode", platform_root=str(platform_root))
 
     assert first == second == str(node_yaml)
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_resolve_idempotent_same_path
@@ -238,7 +215,7 @@ def test_extract_node_host(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> 
 
     assert host == "1.2.3.4", host
     assert any("Extracted host: 1.2.3.4" in r.message for r in caplog.records), caplog.text
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_extract_node_host
@@ -258,7 +235,7 @@ def test_extract_node_host_missing(tmp_path: Path, caplog: pytest.LogCaptureFixt
 
     assert not host, repr(host)
     assert any("No host field in node.yaml" in r.message for r in caplog.records), caplog.text
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_extract_node_host_missing
@@ -277,7 +254,7 @@ def test_extract_node_host_bool_normalized(tmp_path: Path, caplog: pytest.LogCap
     host = node_resolver.extract_node_host(str(yaml_file))
 
     assert host == "true", repr(host)
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_extract_node_host_bool_normalized
@@ -295,7 +272,7 @@ def test_extract_node_host_file_missing(tmp_path: Path, caplog: pytest.LogCaptur
     with pytest.raises(ConfigNotFoundError):
         node_resolver.extract_node_host(str(missing))
     assert any("node.yaml not found" in r.message for r in caplog.records), caplog.text
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_extract_node_host_file_missing
@@ -313,7 +290,7 @@ def test_extract_node_host_parse_error(tmp_path: Path, caplog: pytest.LogCapture
 
     with pytest.raises(ConfigParseError):
         node_resolver.extract_node_host(str(yaml_file))
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_extract_node_host_parse_error
@@ -339,7 +316,7 @@ def test_cli_resolve_prints_path(
 
     assert rc == 0, rc
     assert capsys.readouterr().out == f"{node_yaml}\n", capsys.readouterr().out
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_cli_resolve_prints_path
@@ -365,7 +342,7 @@ def test_cli_resolve_not_found_exit1(
     assert rc == 1, rc
     err = capsys.readouterr().err
     assert "node.yaml not found for node=missing-127-w2" in err, err
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_cli_resolve_not_found_exit1
@@ -385,7 +362,7 @@ def test_cli_host_extracts(tmp_path: Path, caplog: pytest.LogCaptureFixture, cap
 
     assert rc == 0, rc
     assert capsys.readouterr().out == "1.2.3.4\n"
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_cli_host_extracts
@@ -406,7 +383,7 @@ def test_cli_host_missing_file_exit1(
 
     assert rc == 1, rc
     assert "node.yaml" in capsys.readouterr().err
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_cli_host_missing_file_exit1
@@ -433,7 +410,7 @@ def test_cli_resolve_idempotent(
 
     assert rc1 == rc2 == 0
     assert out1 == out2 == f"{node_yaml}\n"
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # endregion FUNC_test_cli_resolve_idempotent

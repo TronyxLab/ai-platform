@@ -29,6 +29,7 @@ import pytest
 
 from core.internal.shared.module_interface import dispatch
 from core.internal.shared.module_interface import main as cli_main
+from tests.helpers.gate_helpers import assert_ldd_imp9
 
 pytestmark = pytest.mark.static_audit
 
@@ -38,22 +39,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _MODULE_INTERFACE_SH = PROJECT_ROOT / "core" / "lib" / "module-interface.sh"
 
 
-def _assert_imp9(caplog: pytest.LogCaptureFixture, needle: str | None = None) -> None:
-    """Assert at least one IMP:9 log (LDD telemetry standard)."""
-    logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-    found = False
-    for record in list(caplog.records):
-        if "[IMP:" in record.message:
-            logger.info("%s", record.message)
-            if needle and needle in record.message:
-                found = True
-    logger.info("--- END LDD TRAJECTORY ---")
-    if needle:
-        assert found, f"Critical LDD Error: No IMP:9 log containing '{needle}'"
-    else:
-        assert any("[IMP:9]" in r.message for r in caplog.records), "Critical LDD Error: No IMP:9 log found"
-
-
+# T2.16a: _assert_imp9 консолидирован в gate_helpers.assert_ldd_imp9
 def _make_module_fixture(
     tmp_path: Path,
     *,
@@ -175,7 +161,7 @@ def test_dispatch_remove_hook_negative(caplog: pytest.LogCaptureFixture, tmp_pat
     rc, out = dispatch("test-module", "remove-hook", "PROJ_DIR", "myproj", "my-vps", modules_dir=str(tmp_path))
     assert rc == 0
     assert "removed:PROJ_DIR:myproj:my-vps" in out, f"hook args не проброшены: {out}"
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · NEGATIVE (R5) · dispatch deploy-hook — удалённый _invoke_dispatch_hook (D4)

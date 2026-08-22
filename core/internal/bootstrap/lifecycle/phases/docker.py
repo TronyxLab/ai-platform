@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: phases-docker, registry-auth, deploy-services, registry-update, deploy-update, bootstrap-phase, ghcr, deploy-modules, E3
+# GREP_SUMMARY: phases-docker, registry-auth, deploy-services, registry-update, deploy-update, bootstrap-phase, ghcr, deploy-modules, E3, T2.1, ghcr-auth-step, apply-policy-script
 # STRUCTURE: ▶ docker-фазы (φ6 φ8 φ11 φ12) → ◇ each: pre-check → execute → post-check → ⊕ LDD logs → ⎋ bool/exception
+#           → ◇ T2.1: GHCR-блок φ6/φ11 → общий _ghcr_auth_step; policy-блоки φ12 → _apply_policy_script
 # region MODULE_CONTRACT
 ## @purpose  Docker/registry-domain bootstrap phases (DevPlan 119 E3) — φ6 registry_auth, φ8
 ##           deploy_services, φ11 registry_update, φ12 deploy_update. Интерфейс
@@ -17,6 +18,8 @@
 ##           (ghcr-auth, deploy-modules, overlays, llm-keys, healthcheck).
 ## @changes  2026-08-02 · DevPlan 119 E3 — экстракция из lifecycle/phases.py
 ## @changes  2026-08-13 · DevPlan 160 E3 — _registry_step_firewall +runner/+env (DI)
+## @changes  2026-08-22 · T2.1 — GHCR-блок φ6/φ11 → общий _ghcr_auth_step
+##           (_registry_step_ghcr_auth удалён — дубль); policy-блоки φ12 → _apply_policy_script
 # endregion MODULE_CONTRACT
 from __future__ import annotations
 
@@ -54,11 +57,39 @@ from core.internal.shared.subprocess_io import CommandRunner, default_command_ru
 from core.internal.shared.timeouts import APT_TIMEOUT, DEPLOY_TIMEOUT, LIFECYCLE_CMD_TIMEOUT, SYSTEM_CMD_TIMEOUT
 
 
+# region FUNC__ghcr_auth_step
+## @purpose  GHCR auth best-effort (T2.1): близнец φ6/φ11 различался ТОЛЬКО phase-тегом логов —
+##           консолидирован. True = non-fatal issue (φ6 → non_fatal_issues; φ11 → issue-флаг).
+## @io       ⇥ env: Mapping | None (DI, W-H DevPlan 163; None = os.environ),
+##              tag: str ("registry_auth"|"registry_update") → ⎋ bool (True = non-fatal issue)
+## @complexity O(1) — env check + ghcr_auth
+## @invariants — GHCR_PULL_TOKEN отсутствует → skip (не issue); сбой ghcr_auth → WARN + True
+def _ghcr_auth_step(env: Mapping[str, str] | None, *, tag: str) -> bool:
+    """GHCR auth best-effort — shared by φ6/φ11 (T2.1). True = non-fatal issue."""
+    source: Mapping[str, str] = os.environ if env is None else env
+    token = source.get("GHCR_PULL_TOKEN", "")
+    if not token:
+        logger.info("[IMP:7][phase:%s] GHCR_PULL_TOKEN not set — skipping ghcr auth", tag)
+        return False
+    try:
+        helpers_system.ghcr_auth()
+        logger.info("[IMP:9][phase:%s] GHCR auth successful", tag)
+    except (OSError, PlatformError) as e:  # noqa: EXC — non-fatal (best-effort: DEPLOY_BEST_EFFORT policy)
+        logger.warning("[IMP:7][phase:%s] GHCR auth failed (non-fatal): %s", tag, e)
+        return True
+    else:
+        return False
+
+
+# endregion FUNC__ghcr_auth_step
+
+
 # region FUNC_phase_registry_auth
 ## @purpose φ6: Container registry authentication — GHCR (GitHub Container Registry) login
 ##           for image pulls. Docker Hub auth выполняется ТОЛЬКО в φ3 (docker_registry_auth.py,
 ##           ранний этап до pull) — дубль вызова убран (волна 117 D2).
 ##           Corresponds to init steps: ghcr_auth (16).
+##           T2.1: GHCR-блок — общий шаг _ghcr_auth_step (с φ11), фаза тонкая.
 ## @io      ⇥ core_dir, node_name, node_yaml, env: Mapping | None = None (DI, W-H DevPlan 163 —
 ##              GHCR_PULL_TOKEN из дикта вместо os.environ; None = os.environ) → ⎋ bool
 ## @complexity O(1) + subprocess
@@ -73,26 +104,16 @@ def phase_registry_auth(
     *,
     env: Mapping[str, str] | None = None,
 ) -> bool:
-    """φ6: Registry auth — GHCR login.
+    """φ6: Registry auth — GHCR login (T2.1: общий шаг _ghcr_auth_step с φ11).
 
     Pre-check: None (auth is best-effort, no hard precondition).
     Execute: GHCR auth.
     Post-check: registry credentials configured (best-effort).
     """
-    source: Mapping[str, str] = os.environ if env is None else env
     non_fatal_issues = False
 
-    # ── 1. GHCR auth ──
-    token = source.get("GHCR_PULL_TOKEN", "")
-    if not token:
-        logger.info("[IMP:7][phase:registry_auth] GHCR_PULL_TOKEN not set — skipping ghcr auth")
-    else:
-        try:
-            helpers_system.ghcr_auth()
-            logger.info("[IMP:9][phase:registry_auth] GHCR auth successful")
-        except (OSError, PlatformError) as e:  # noqa: EXC — non-fatal: ghcr auth is best-effort
-            logger.warning("[IMP:7][phase:registry_auth] GHCR auth failed (non-fatal): %s", e)
-            non_fatal_issues = True
+    # ── 1. GHCR auth (общий шаг φ6/φ11, T2.1) ──
+    non_fatal_issues |= _ghcr_auth_step(env=env, tag="registry_auth")
 
     # ── 2. Docker Hub auth — ТОЛЬКО в φ3 (волна 117 D2) ──
     # docker_registry_auth.py выполняется единственный раз за init в phase_platform_setup (φ3,
@@ -220,7 +241,8 @@ def phase_registry_update(
 
     non_fatal_issues = False
     # E3: каждый шаг — отдельный хелпер (CC 23 → ≤10). Порядок сохранён (best-effort).
-    non_fatal_issues |= _registry_step_ghcr_auth(env=env)
+    # T2.1: GHCR-блок — общий шаг _ghcr_auth_step (с φ6); _registry_step_ghcr_auth удалён (дубль).
+    non_fatal_issues |= _ghcr_auth_step(env=env, tag="registry_update")
     non_fatal_issues |= _registry_step_provision_env(core_dir)
     non_fatal_issues |= _registry_step_nginx_overlays(node_name)
     # 142 W6 (A2): re-apply конфига privoxy в update-режиме (no-op при корректном конфиге) —
@@ -242,34 +264,6 @@ def phase_registry_update(
 
 
 # endregion FUNC_phase_registry_update
-
-
-# region FUNC__registry_step_ghcr_auth
-## @purpose  E3 sub-step 1 (GHCR auth): best-effort docker login к GHCR при GHCR_PULL_TOKEN.
-## @io       ⇥ env: Mapping | None = None (DI, W-H DevPlan 163; None = os.environ) → ⎋ bool
-##              (True = non-fatal issue occurred)
-## @complexity O(1) — env check + ghcr_auth
-## @invariants
-##   - GHCR_PULL_TOKEN отсутствует → skip (не issue)
-##   - Сбой ghcr_auth → WARN + True (best-effort)
-def _registry_step_ghcr_auth(env: Mapping[str, str] | None = None) -> bool:
-    """GHCR auth sub-step. Returns True if a non-fatal issue occurred."""
-    source: Mapping[str, str] = os.environ if env is None else env
-    token = source.get("GHCR_PULL_TOKEN", "")
-    if not token:
-        logger.info("[IMP:7][phase:registry_update] GHCR_PULL_TOKEN not set — skipping ghcr auth")
-        return False
-    try:
-        helpers_system.ghcr_auth()
-        logger.info("[IMP:9][phase:registry_update] GHCR auth successful")
-    except (OSError, PlatformError) as e:  # noqa: EXC — non-fatal (best-effort: DEPLOY_BEST_EFFORT policy)
-        logger.warning("[IMP:7][phase:registry_update] GHCR auth failed (non-fatal): %s", e)
-        return True
-    else:
-        return False
-
-
-# endregion FUNC__registry_step_ghcr_auth
 
 
 # region FUNC__registry_step_provision_env
@@ -631,6 +625,48 @@ def _registry_step_healthcheck(
 # endregion FUNC__registry_step_healthcheck
 
 
+# region FUNC__apply_policy_script
+## @purpose  Best-effort policy-скрипт (T2.1): security_updates/reboot_policy блоки φ12 были
+##           попарными близнецами — консолидированы. True = non-fatal issue.
+## @io       ⇥ script: str, args: list[str], timeout: int (SoT), ok_msg/warn_msg/missing_msg: str,
+##              missing_non_fatal: bool (missing → issue или WARN-без-issue, канон 5.6) → ⎋ bool
+## @complexity O(1) + 1 subprocess
+## @invariants
+##   - missing → WARN + missing_non_fatal (не raise); сбой → WARN + True (best-effort)
+##   - НЕ переиспользует _run_best_effort_script (system.py): иной I/O-канал
+##     (module-level helpers_subprocess, без runner/facts/IssueCollector DI)
+def _apply_policy_script(
+    script: str,
+    args: list[str],
+    *,
+    timeout: int,
+    ok_msg: str,
+    warn_msg: str,
+    missing_msg: str,
+    missing_non_fatal: bool,
+) -> bool:
+    """Run a best-effort policy script (security_updates/reboot_policy) — shared φ12 steps (T2.1)."""
+    if not os.path.isfile(script):
+        logger.warning(missing_msg)
+        return missing_non_fatal
+    try:
+        helpers_subprocess.run_subprocess(
+            ["python3", script, *args],
+            non_fatal=True,
+            fatal_rc=(127,),
+            timeout=timeout,
+        )
+        logger.info(ok_msg)
+    except (OSError, PlatformError) as e:  # noqa: EXC — non-fatal: policy script is best-effort
+        logger.warning(warn_msg, e)
+        return True
+    else:
+        return False
+
+
+# endregion FUNC__apply_policy_script
+
+
 # region FUNC_phase_deploy_update
 ## @purpose φ12: Deploy update (UPDATE mode) — deploy modules via deploy-modules.sh, provision
 ##            SSL certificates, deploy context projects incrementally.
@@ -700,44 +736,33 @@ def phase_deploy_update(core_dir: str, node_name: str, node_yaml: str) -> bool:
     # 164 W1-3: default auto_reboot=false — Automatic-Reboot "false" (платформенный таймер
     # platform-reboot.timer — единственный ребут-канал, вариант A).
     security_script = os.path.join(core_dir, "internal", "bootstrap", "security_updates.py")
-    if os.path.isfile(security_script):
-        auto_reboot = os.environ.get("SECURITY_AUTO_REBOOT", "false").lower() == "true"
-        try:
-            helpers_subprocess.run_subprocess(
-                ["python3", security_script, "--auto-reboot", "true" if auto_reboot else "false"],
-                non_fatal=True,
-                fatal_rc=(127,),
-                timeout=APT_TIMEOUT,
-            )
-            logger.info("[IMP:9][phase:deploy_update] Unattended-upgrades security policy applied")
-        except (OSError, PlatformError) as e:  # noqa: EXC — non-fatal: security updates are best-effort
-            logger.warning("[IMP:7][phase:deploy_update] Security updates setup failed (non-fatal): %s", e)
-            non_fatal_issues = True
-    else:
-        logger.warning("[IMP:7][phase:deploy_update] security_updates.py not found at %s — skipping", security_script)
-        non_fatal_issues = True
+    auto_reboot = os.environ.get("SECURITY_AUTO_REBOOT", "false").lower() == "true"
+    non_fatal_issues |= _apply_policy_script(
+        security_script,
+        ["--auto-reboot", "true" if auto_reboot else "false"],
+        timeout=APT_TIMEOUT,
+        ok_msg="[IMP:9][phase:deploy_update] Unattended-upgrades security policy applied",
+        warn_msg="[IMP:7][phase:deploy_update] Security updates setup failed (non-fatal): %s",
+        missing_msg=f"[IMP:7][phase:deploy_update] security_updates.py not found at {security_script} — skipping",
+        missing_non_fatal=True,
+    )
 
     # ── 5. Reboot-policy units (DevPlan 164 W1-3) ──
     # Пропагация при node-update: reboot_policy.py install идемпотентен (content-match no-op).
     # Non-fatal (канон security_updates шаг 4).
     reboot_script = os.path.join(core_dir, "internal", "bootstrap", "reboot_policy.py")
-    if os.path.isfile(reboot_script):
-        try:
-            helpers_subprocess.run_subprocess(
-                ["python3", reboot_script, "install"],
-                non_fatal=True,
-                fatal_rc=(127,),
-                timeout=LIFECYCLE_CMD_TIMEOUT,
-            )
-            logger.info("[IMP:9][phase:deploy_update] Reboot-policy units installed (idempotent)")
-        except (OSError, PlatformError) as e:  # noqa: EXC — non-fatal: reboot policy is best-effort
-            logger.warning("[IMP:7][phase:deploy_update] Reboot-policy install failed (non-fatal): %s", e)
-            non_fatal_issues = True
-    else:
+    non_fatal_issues |= _apply_policy_script(
+        reboot_script,
+        ["install"],
+        timeout=LIFECYCLE_CMD_TIMEOUT,
+        ok_msg="[IMP:9][phase:deploy_update] Reboot-policy units installed (idempotent)",
+        warn_msg="[IMP:7][phase:deploy_update] Reboot-policy install failed (non-fatal): %s",
+        missing_msg=f"[IMP:7][phase:deploy_update] reboot_policy.py not found at {reboot_script} — skipping",
         # Отсутствие скрипта (тест-окружения/tmp CORE_DIR) — WARN, НЕ non_fatal (канон
         # security_posture.py φ1 шаг 5.6): на реальной ноде скрипт гарантирован core-доставкой;
         # reboot-policy best-effort, фаза не уходит в done_with_warnings из-за него.
-        logger.warning("[IMP:7][phase:deploy_update] reboot_policy.py not found at %s — skipping", reboot_script)
+        missing_non_fatal=False,
+    )
 
     if non_fatal_issues:
         logger.info("[IMP:8][phase:deploy_update] Complete with non-fatal issues")

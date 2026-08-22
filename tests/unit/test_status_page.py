@@ -58,6 +58,8 @@ from unittest import mock
 
 import pytest
 
+from tests.helpers.gate_helpers import assert_ldd_imp9
+
 # Module-specific path (tests/AGENTS.md §sys.path policy): core/modules/status-page.
 # Абсолютный Path(__file__)-based (xdist-инвариант 4, DevPlan 139 W2).
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "core" / "modules" / "status-page"))
@@ -272,36 +274,7 @@ def mock_status_metrics_json_one_unhealthy(tmp_path: Path) -> Path:
 # ═══════════════════════════════════════════════════════════════════
 
 
-def _print_trajectory(caplog) -> bool:
-    """Print IMP:7-10 LDD trajectory; return True if IMP:9 found.
-
-    ## @purpose — DevPlan 139 W2: консолидация 30+ inline-блоков траектории в один хелпер.
-    ##            Печать ДО ассертов — агент видит реальный путь исполнения при фейле.
-    ## @io — ⇥ caplog → ⎋ bool (True при наличии IMP:9)
-    ## @complexity — O(R) — R = записи caplog
-    """
-    found = False
-    logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-    for record in list(caplog.records):
-        for attr in ["message", "msg"]:
-            msg = getattr(record, attr, "")
-            if "[IMP:" in str(msg):
-                try:
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                except (IndexError, ValueError):
-                    continue
-                if imp_level >= 7:
-                    logger.info("%s", msg)
-                if imp_level >= 9:
-                    found = True
-    logger.info("--- END LDD TRAJECTORY ---")
-    return found
-
-
-def _assert_imp9(caplog) -> None:
-    """LDD telemetry: печать траектории + assert найден IMP:9 (Anti-Illusion, DevPlan 139 W2)."""
-    found = _print_trajectory(caplog)
-    assert found, "Critical LDD Error: No IMP:9 business logic log found"
+# T2.16a: _print_trajectory/_assert_imp9 консолидированы в gate_helpers.assert_ldd_imp9
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -399,7 +372,7 @@ class TestStatusPageHealth:
         mock_subprocess.return_value = mock.Mock(returncode=0, stdout="200", stderr="")
         data = app.get_all_checks()
 
-        _print_trajectory(caplog)
+        assert_ldd_imp9(caplog, require_imp9=False)
 
         assert data["status"] == "PASS", f"Expected PASS, got {data['status']}"
         assert len(data["checks"]) > 0, "Should have at least one check"
@@ -414,7 +387,7 @@ class TestStatusPageHealth:
 
         data = app.get_all_checks()
 
-        _print_trajectory(caplog)
+        assert_ldd_imp9(caplog, require_imp9=False)
 
         assert data["status"] == "FAIL", f"Expected FAIL, got {data['status']}"
         non_pass = [c for c in data["checks"] if c["status"] != "PASS"]
@@ -438,7 +411,7 @@ class TestStatusPageHtml:
         mock_subprocess.return_value = mock.Mock(returncode=0, stdout="200", stderr="")
         data = app.get_all_checks()
 
-        _print_trajectory(caplog)
+        assert_ldd_imp9(caplog, require_imp9=False)
 
         vhosts = [c["target"] for c in data["checks"] if c["type"] == "vhost"]
         assert "test-app.example.com" in vhosts, f"Expected test-app.example.com in vhost checks, got {vhosts}"
@@ -453,7 +426,7 @@ class TestStatusPageHtml:
         data = app.get_all_checks()
         freshness = data.get("metrics_freshness")
 
-        _print_trajectory(caplog)
+        assert_ldd_imp9(caplog, require_imp9=False)
 
         assert "status" in data
         assert "checks" in data
@@ -473,7 +446,7 @@ def logger_imp9(caplog, msg: str) -> None:
     import logging
 
     logging.getLogger(__name__).critical("[IMP:9][test_status_page] %s", msg)
-    _assert_imp9(caplog)
+    assert_ldd_imp9(caplog)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -611,7 +584,7 @@ class TestStatusPageJsonSchema:
         app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass))
         data = app.get_all_checks()
 
-        _print_trajectory(caplog)
+        assert_ldd_imp9(caplog, require_imp9=False)
 
         assert "status" in data, "Missing 'status' field"
         assert "generated_at" in data, "Missing 'generated_at' field"
@@ -641,7 +614,7 @@ class TestStatusPageJsonSchema:
         data = app.get_all_checks()
         metrics = data.get("metrics", {})
 
-        _print_trajectory(caplog)
+        assert_ldd_imp9(caplog, require_imp9=False)
 
         # schema_version should be present in metrics
         assert metrics.get("schema_version") == 2, f"Expected schema_version=2, got {metrics.get('schema_version')}"
@@ -674,7 +647,7 @@ class TestStatusPageJsonSchema:
         app = _setup_app_env(str(node_yaml), str(metrics_file))
         data = app.get_all_checks()
 
-        _print_trajectory(caplog)
+        assert_ldd_imp9(caplog, require_imp9=False)
 
         # Should still work with old schema
         assert "status" in data
@@ -721,7 +694,7 @@ class TestStatusPageTimeout:
         mock_subprocess.side_effect = subprocess.TimeoutExpired(cmd=["curl"], timeout=5)
         data = app.get_all_checks()
 
-        _print_trajectory(caplog)
+        assert_ldd_imp9(caplog, require_imp9=False)
 
         vhost_checks = [c for c in data["checks"] if c["type"] == "vhost"]
         assert len(vhost_checks) > 0, "Should have vhost checks"
@@ -745,7 +718,7 @@ class TestStatusPageXHeaders:
         app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass))
         data = app.get_all_checks()
 
-        _print_trajectory(caplog)
+        assert_ldd_imp9(caplog, require_imp9=False)
 
         # Δ: renamed from docker_health_freshness to metrics_freshness
         assert data.get("metrics_freshness") is not None, (
@@ -780,7 +753,7 @@ class TestStatusPageAuthHandling:
         mock_subprocess.return_value = mock.Mock(returncode=0, stdout="401", stderr="")
         data = app.get_all_checks()
 
-        _print_trajectory(caplog)
+        assert_ldd_imp9(caplog, require_imp9=False)
 
         vhost_checks = [c for c in data["checks"] if c["type"] == "vhost"]
         assert len(vhost_checks) > 0, "Should have vhost checks"
@@ -808,7 +781,7 @@ class TestStatusPageAuthHandling:
         mock_subprocess.return_value = mock.Mock(returncode=0, stdout="403", stderr="")
         data = app.get_all_checks()
 
-        _print_trajectory(caplog)
+        assert_ldd_imp9(caplog, require_imp9=False)
 
         vhost_checks = [c for c in data["checks"] if c["type"] == "vhost"]
         assert len(vhost_checks) > 0, "Should have vhost checks"
@@ -879,7 +852,7 @@ class TestStatusPageAuthHandling:
         mock_subprocess.return_value = mock.Mock(returncode=0, stdout="401", stderr="")
         data = app.get_all_checks()
 
-        _print_trajectory(caplog)
+        assert_ldd_imp9(caplog, require_imp9=False)
 
         platform_checks = [c for c in data["checks"] if c["type"] == "platform_service"]
         assert len(platform_checks) > 0, "Should have platform service checks"
@@ -900,7 +873,7 @@ class TestStatusPageAuthHandling:
         mock_subprocess.return_value = mock.Mock(returncode=0, stdout="403", stderr="")
         data = app.get_all_checks()
 
-        _print_trajectory(caplog)
+        assert_ldd_imp9(caplog, require_imp9=False)
 
         platform_checks = [c for c in data["checks"] if c["type"] == "platform_service"]
         assert len(platform_checks) > 0, "Should have platform service checks"
@@ -945,7 +918,7 @@ class TestStatusPageNewFeatures:
         mock_subprocess.return_value = mock.Mock(returncode=0, stdout="200", stderr="")
         data = app.get_all_checks()
 
-        _print_trajectory(caplog)
+        assert_ldd_imp9(caplog, require_imp9=False)
 
         # Should not crash — returns PASS (empty = healthy)
         assert "status" in data

@@ -355,72 +355,6 @@ def test_save_state(caplog, state_file):
 
 
 # ═══════════════════════════════════════════════════════════════════
-# region Tests: Content hash (_step_hash)
-# ═══════════════════════════════════════════════════════════════════
-
-
-# 🧪 TRAP[TEST] · Regression · _step_hash returns deterministic SHA256 hex digest
-# · Scenario: Hash the same file twice → both hashes match
-# · Last fail: N/A (new test)
-# · Remove if: _step_hash algorithm changes
-@ldd_trajectory
-def test_step_hash_deterministic(caplog, tmp_path):
-    """_step_hash should return consistent hex digests for same input."""
-    # Create a dummy script file
-    test_script = tmp_path / "test-script.sh"
-    test_script.write_text("#!/usr/bin/env bash\necho 'test'")
-    state_file = tmp_path / "state.json"
-    m = sm.StateMachine(state_file_path=str(state_file))
-
-    hash1 = m._step_hash("test-step", str(test_script))
-    hash2 = m._step_hash("test-step", str(test_script))
-
-    assert hash1 == hash2
-    assert isinstance(hash1, str)
-    assert len(hash1) == 64  # SHA256 hexdigest length
-    logger.critical("[IMP:9][test] _step_hash deterministic — OK")
-
-
-# 🧪 TRAP[TEST] · Regression · _step_hash changes when file content changes
-# · Scenario: Modify file between hashes → hashes differ
-# · Last fail: N/A (new test)
-# · Remove if: _step_hash algorithm changes
-@ldd_trajectory
-def test_step_hash_changes_on_content_change(caplog, tmp_path):
-    """_step_hash should produce different hashes for different content."""
-    test_script = tmp_path / "test-script.sh"
-    test_script.write_text("#!/usr/bin/env bash\necho 'v1'")
-    state_file = tmp_path / "state.json"
-    m = sm.StateMachine(state_file_path=str(state_file))
-
-    hash_v1 = m._step_hash("test-step", str(test_script))
-    test_script.write_text("#!/usr/bin/env bash\necho 'v2'")
-    hash_v2 = m._step_hash("test-step", str(test_script))
-
-    assert hash_v1 != hash_v2
-    logger.critical("[IMP:9][test] _step_hash changes on content change — OK")
-
-
-# 🧪 TRAP[TEST] · Regression · _step_hash handles non-existent paths gracefully
-# · Scenario: Pass non-existent file path → hash computed without error, no crash
-# · Last fail: N/A (new test)
-# · Remove if: _step_hash error handling changes
-@ldd_trajectory
-def test_step_hash_handles_missing_file(caplog, tmp_path):
-    """_step_hash should handle missing file paths gracefully."""
-    state_file = tmp_path / "state.json"
-    m = sm.StateMachine(state_file_path=str(state_file))
-    missing = str(tmp_path / "does-not-exist.sh")
-    hash_val = m._step_hash("test-step", missing)
-    assert isinstance(hash_val, str)
-    assert len(hash_val) == 64
-    logger.critical("[IMP:9][test] _step_hash handles missing file — OK")
-
-
-# endregion Tests: Content hash (_step_hash)
-
-
-# ═══════════════════════════════════════════════════════════════════
 # region Tests: Resume logic (REMOVED API — волна 118 B1)
 # ═══════════════════════════════════════════════════════════════════
 # Волна 118 B1: get_current_step УДАЛЁН (0 callers — run_init/run_update проходят фазы
@@ -755,40 +689,11 @@ def test_validate_bootstrap_env(required_vars, env, expected, caplog, machine):
 
 
 # ═══════════════════════════════════════════════════════════════════
-# region Tests: JSON report format
+# region Tests: JSON report format (REMOVED API — аудит 2026-08-22)
 # ═══════════════════════════════════════════════════════════════════
-
-
-# 🧪 TRAP[TEST] · Regression · report() returns valid JSON with all required fields
-# · Scenario: Run partial sequence, call report() → JSON includes mode, node, steps, errors, warnings
-# · Last fail: N/A (new test)
-# · Remove if: report format changes
-@ldd_trajectory
-def test_report_format(caplog, machine):
-    """report() should return valid JSON with required fields."""
-    machine.setup_state(mode="init", node="test-node")
-    cli._mark_phase_success(machine, sm.BootstrapPhase.INIT_PHASE_ORDER[0], current_index=1)
-    cli._mark_phase_success(machine, sm.BootstrapPhase.INIT_PHASE_ORDER[1], current_index=2)
-    machine.state.steps[sm.BootstrapPhase.INIT_PHASE_ORDER[2]].status = "skipped"
-    machine.state.steps[sm.BootstrapPhase.INIT_PHASE_ORDER[2]].reason = "TOR_DISABLED"
-    machine.add_warning("Non-critical warning")
-    machine.add_warning("Another warning")
-
-    report = machine.report()
-    data = json.loads(report)
-    init_phases = sm.BootstrapPhase.INIT_PHASE_ORDER
-
-    assert data["mode"] == "init"
-    assert data["node"] == "test-node"
-    assert "steps" in data
-    assert "errors" in data
-    assert "warnings" in data
-    assert len(data["warnings"]) == 2
-    assert data["steps"][init_phases[0]]["status"] == "done"  # system_bootstrap
-    assert data["steps"][init_phases[2]]["status"] == "skipped"  # platform_setup
-    assert data["steps"][init_phases[2]]["reason"] == "TOR_DISABLED"
-
-    logger.critical("[IMP:9][test] report returns valid JSON — OK")
+# StateMachine.report() удалён (0 callers — dry_run_plan() покрывает human-readable
+# сценарий; JSON-дамп state.json читается напрямую). test_report_format удалён —
+# тест удалённого dead-API (метрика «число тестов не падает» не применяется).
 
 
 # endregion Tests: JSON report format
@@ -1043,20 +948,6 @@ def test_setup_state_update(caplog, machine):
         assert machine.state.steps[phase_val].name == phase_val
         assert machine.state.steps[phase_val].status == "pending"
     logger.critical("[IMP:9][test] setup_state update creates all phases — OK")
-
-
-# 🧪 TRAP[TEST] · Regression · add_warning collects warnings in state
-# · Scenario: Call add_warning twice → warnings list has 2 entries
-# · Last fail: N/A (new test)
-# · Remove if: warning collection logic changes
-@ldd_trajectory
-def test_add_warning(caplog, machine):
-    """add_warning should collect warnings in state."""
-    machine.add_warning("Warning 1")
-    machine.add_warning("Warning 2")
-    assert len(machine.state.warnings) == 2
-    assert machine.state.warnings[0] == "Warning 1"
-    logger.critical("[IMP:9][test] add_warning collects warnings — OK")
 
 
 # 🧪 TRAP[TEST] · Regression · StepState dataclass converts to/from dict correctly

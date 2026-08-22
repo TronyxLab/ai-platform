@@ -38,7 +38,6 @@ import logging
 import pathlib
 
 import pytest
-import yaml
 from _conftest.ldd import _print_ldd_trajectory
 
 from core.internal.monitoring.config_renderer import (
@@ -50,22 +49,14 @@ from core.internal.monitoring.config_renderer import (
     load_l2_overrides,
     load_l3_project_config,
 )
+from tests.helpers.gate_helpers import write_yaml
 
 logger = logging.getLogger(__name__)
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
-def _write_yaml(data: dict, path: pathlib.Path) -> pathlib.Path:
-    """Write a YAML dict to a temp file and return the path.
-
-    ## @purpose  Helper to create temporary YAML files for tests.
-    ## @complexity O(N) where N = YAML tree size
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with pathlib.Path(path).open("w", encoding="utf-8") as f:
-        yaml.dump(data, f)
-    return path
+# T2.16b: _write_yaml консолидирован в gate_helpers.write_yaml(path, data)
 
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -89,7 +80,7 @@ def test_ai_platform_yaml(tmp_path: pathlib.Path) -> pathlib.Path:
         },
         "needs": {"llm": True},
     }
-    return _write_yaml(data, tmp_path / "ai-platform.yaml")
+    return write_yaml(tmp_path / "ai-platform.yaml", data)
 
 
 @pytest.fixture
@@ -118,7 +109,7 @@ def test_defaults_yaml(tmp_path: pathlib.Path) -> pathlib.Path:
             },
         },
     }
-    return _write_yaml(data, tmp_path / "defaults.yaml")
+    return write_yaml(tmp_path / "defaults.yaml", data)
 
 
 @pytest.fixture
@@ -136,7 +127,7 @@ def test_l2_override_yaml(tmp_path: pathlib.Path) -> pathlib.Path:
     }
     # Path structure: node-configs/<node>/projects/<project>.yaml
     path = tmp_path / "node-configs" / "test-node" / "projects" / "test-project.yaml"
-    return _write_yaml(data, path)
+    return write_yaml(path, data)
 
 
 # ── T4.1/T4.2/T4.3: deep_merge (консолидировано, F5-reduction) ──────────────────
@@ -288,12 +279,12 @@ def test_build_merged_config_full_pipeline(
             },
         },
     }
-    _write_yaml(defaults_data, defaults_dir / "defaults.yaml")
+    write_yaml(defaults_dir / "defaults.yaml", defaults_data)
 
     # L2 override at platform_root/node-configs/<node>/projects/<project>.yaml
     l2_dir = platform_root / "node-configs" / node_name / "projects"
     l2_dir.mkdir(parents=True, exist_ok=True)
-    _write_yaml({"monitoring": {"metrics_port": 9090, "alerting": True}}, l2_dir / f"{project_name}.yaml")
+    write_yaml(l2_dir / f"{project_name}.yaml", {"monitoring": {"metrics_port": 9090, "alerting": True}})
 
     config = build_merged_config(project_dir, project_name, node_name, platform_root)
 
@@ -325,7 +316,7 @@ def test_build_merged_config_no_monitoring_section(tmp_path: pathlib.Path, caplo
     caplog.set_level(logging.INFO)
 
     ai_yaml = tmp_path / "ai-platform.yaml"
-    _write_yaml({"type": "backend"}, ai_yaml)
+    write_yaml(ai_yaml, {"type": "backend"})
 
     platform_root = tmp_path / "platform"
     platform_root.mkdir()
@@ -401,7 +392,7 @@ def test_all_components_noop_when_no_monitoring(tmp_path: pathlib.Path, caplog) 
 
     # Write ai-platform.yaml without monitoring section
     ai_yaml = tmp_path / "ai-platform.yaml"
-    _write_yaml({"type": "backend", "needs": {"llm": False}}, ai_yaml)
+    write_yaml(ai_yaml, {"type": "backend", "needs": {"llm": False}})
 
     # Create platform root
     platform_root = tmp_path / "platform"

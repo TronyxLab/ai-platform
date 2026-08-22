@@ -20,8 +20,6 @@
 ##   - HTTP timeout: 10 seconds
 ##   - LDD trajectory (IMP:7-10) printed for each test
 ## @rationale — Dedicated per-module smoke test per DevPlan wave-litellm reset.
-def _module_contract():
-    pass
 
 
 # endregion MODULE_CONTRACT

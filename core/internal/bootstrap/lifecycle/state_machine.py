@@ -122,7 +122,6 @@ from core.internal.bootstrap.lifecycle.state_store import (
     load_state,
     save_state,
 )
-from core.internal.shared.content_hash import compute_content_hash as _shared_compute_content_hash
 
 # Канонический platform base — shared/deploy_paths (литерал /opt/platform не используется)
 from core.internal.shared.deploy_paths import platform_remote_base
@@ -509,23 +508,6 @@ class StateMachine:
 
     # endregion FUNC_save
 
-    # region FUNC__step_hash
-    ## @purpose — Compute SHA256 content hash via shared content_hash module.
-    ##            Delegates to compute_content_hash() from core.internal.shared.content_hash.
-    ## @io — ⇥ step_name: str, extra_paths: list of additional script paths → ⎋ str hexdigest
-    ## @complexity — O(S) where S = total file bytes hashed
-    @staticmethod
-    def _step_hash(step_name: str, *extra_paths: str) -> str:
-        """Compute SHA256 content hash via shared content_hash module."""
-        paths_to_hash = [str(Path(__file__).resolve()), *list(extra_paths)]
-        digest = _shared_compute_content_hash(paths_to_hash)
-        logger.debug(
-            "[IMP:6][StateMachine][_step_hash] Hash for %s: %s (files: %s)", step_name, digest[:12], paths_to_hash
-        )
-        return digest
-
-    # endregion FUNC__step_hash
-
     # region FUNC__phase_input_hash
     ## @purpose — Compute content hash of phase-relevant INPUTS (DevPlan 136 W9 T9.3, L-4/B-1):
     ##            modules + services из node.yaml (релевантные поля, НЕ весь файл — риск §9 meta)
@@ -836,17 +818,6 @@ class StateMachine:
         raw_steps = cast("Mapping[str, object]", state_dict.get("steps", {}))
         return cast("dict[str, object]", raw_steps.get(phase_key, {}))
 
-    # region FUNC_add_warning
-    ## @purpose — Add a non-fatal warning to the state warnings list.
-    ## @io — ⇥ warning: warning description → ⎋ None
-    ## @complexity — O(1)
-    def add_warning(self, warning: str) -> None:
-        """Add warning to state warnings list."""
-        self.state.warnings.append(warning)
-        logger.warning("[IMP:7][StateMachine][add_warning] %s", warning)
-
-    # endregion FUNC_add_warning
-
     # ── Internal helpers ──────────────────────────────────────────────────
 
     # region FUNC__step_list
@@ -918,16 +889,6 @@ class StateMachine:
         logger.info("[IMP:9][StateMachine][reset] State cleared (force mode)")
 
     # endregion FUNC_reset
-
-    # region FUNC_report
-    ## @purpose — Generate a human-readable report/plan of steps.
-    ## @io — ⇥ None → ⎋ str: formatted report
-    ## @complexity — O(N)
-    def report(self) -> str:
-        """Print JSON summary of current state to stdout."""
-        return json.dumps(self.state.to_dict(), indent=2, ensure_ascii=False)
-
-    # endregion FUNC_report
 
     # region FUNC_dry_run_plan
     ## @purpose — Print execution plan for dry-run mode. Does NOT mutate state.

@@ -33,8 +33,6 @@
 ##   - LiteLLM smoke tests moved to test_smoke_litellm.py (wave-litellm reset)
 ##   - Loki smoke tests moved to test_smoke_logging.py (wave-logging reset)
 ## @rationale — User reported errors at these URLs. Tests validate the fix. Docker stack managed by platform_services fixture.
-def _module_contract():
-    pass
 
 
 # endregion MODULE_CONTRACT

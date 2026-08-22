@@ -1,5 +1,5 @@
-# GREP_SUMMARY: helpers.mk, venv, templates-check, templates-render, dev-certs, dev-metrics, provision, help, _get_all_profiles, env_reader
-# STRUCTURE: ┌venv setup┐ → ◇ templates-check → ◇ templates-render → ◇ dev-certs → ◇ dev-metrics → ◇ provision → ◇ help → ◇ _get_all_profiles
+# GREP_SUMMARY: helpers.mk, venv, templates-check, templates-render, dev-certs, dev-metrics, provision, help, _get_all_profiles, env_reader, _env_export
+# STRUCTURE: ┌venv setup┐ → ⚙️ define _env_export (единый env_reader fallback) → ◇ templates-check → ◇ templates-render → ◇ dev-certs → ◇ dev-metrics → ◇ provision → ◇ help → ◇ _get_all_profiles
 # region MODULE_CONTRACT
 ## @purpose  Utility/helper targets — venv, templates, dev-certs, dev-metrics, provision, help
 ## @scope    Included from root Makefile; no deployment or CI logic
@@ -12,9 +12,24 @@
 ##     (secrets_manager htpasswd CLI); пути из .env (STATUS_METRICS_JSON/HTPASSWD_FILE);
 ##     повторный запуск безопасен (fresh metrics + salt-идемпотентный htpasswd)
 ##   - Чтение .env — через core.internal.shared.env_reader (DevPlan 172 W2.3) —
-##     0 inline grep/cut в рецептах (языковая политика: shell — тонкий фасад)
-## @rationale Makefile include-split W4-E4: helpers isolated from business logic targets
+##     0 inline grep/cut в рецептах (языковая политика: shell — тонкий фасад);
+##     единый define _env_export (T2.14) — 12 копий fallback-паттерна схлопнуты в один call
+## @rationale Makefile include-split W4-E4: helpers isolated from business logic targets;
+##            T2.14 — _env_export как единая точка env_reader fallback (дрейф при правках .env)
+## @changes 2026-08-22 | T2.14 — +define _env_export; dev-certs/dev-metrics/provision-llm
+##            переведены на единый env_reader fallback (12 inline-паттернов → 1 define)
 # endregion MODULE_CONTRACT
+
+## ⚙️ _env_export: единый env_reader fallback для make-рецептов (T2.14 дедупликация)
+##   Usage: $(call _env_export,NAME) — export NAME из $(_platform_root)/.env, если env-переменная
+##   не установлена: `export NAME="${NAME:-<env_reader get NAME --file .env>"}`.
+##   Заменяет 12 копий inline-паттерна в dev-certs/dev-metrics/provision-llm (helpers.mk) и
+##   dev-hosts (dev.mk). env_reader CLI без batch-режима (только get VAR --file) — используем
+##   существующий API как есть, без добавления нового (контракт DevPlan 172 W2.3).
+##   Приоритет: env → .env (last-match, пусто при отсутствии → fallback-дефолты потребителя).
+define _env_export
+export $1="$${$1:-$$($(PYTHON) -m core.internal.shared.env_reader get $1 --file "$(_platform_root)/.env")}";
+endef
 
 $(VENV):
 	python3 -m venv $(VENV)
@@ -45,10 +60,10 @@ templates-render:
 ## #   (SoT), приоритет: env → .env → platform-env.yaml.
 dev-certs:
 	@echo "[IMP:7][make][dev-certs] Ensuring dev SSL certificates..."
-	@_env_pd="$$($(PYTHON) -m core.internal.shared.env_reader get PLATFORM_DOMAIN --file "$(_platform_root)/.env")"; \
-	PLATFORM_DOMAIN="$${PLATFORM_DOMAIN:-$${_env_pd:-$$($(PYTHON) -m core.internal.scripts.yaml_query --file "$(_platform_root)/platform-env.yaml" --get env_defaults.PLATFORM_DOMAIN)}}" \
-	DEV_CERTS_DIR="$${DEV_CERTS_DIR:-$(_platform_root)/core/modules/nginx/dev-certs}" \
-	DEV_CERTS_LIVE_ROOT="$${DEV_CERTS_LIVE_ROOT:-$(_platform_root)/core/modules/nginx/dev-certs}" \
+	@$(call _env_export,PLATFORM_DOMAIN) \
+	PLATFORM_DOMAIN="$${PLATFORM_DOMAIN:-$$($(PYTHON) -m core.internal.scripts.yaml_query --file "$(_platform_root)/platform-env.yaml" --get env_defaults.PLATFORM_DOMAIN)}"; \
+	export DEV_CERTS_DIR="$${DEV_CERTS_DIR:-$(_platform_root)/core/modules/nginx/dev-certs}"; \
+	export DEV_CERTS_LIVE_ROOT="$${DEV_CERTS_LIVE_ROOT:-$(_platform_root)/core/modules/nginx/dev-certs}"; \
 	$(PYTHON) -m core.modules.nginx.dev_cert_generator
 	@echo "[IMP:9][make][dev-certs] Dev certificates check complete"
 
@@ -65,13 +80,12 @@ dev-certs:
 ## #   env > .env > fail-fast (STATUS_METRICS_JSON/HTPASSWD_FILE обязательны).
 dev-metrics:
 	@echo "[IMP:7][make][dev-metrics] Generating dev metrics + htpasswd..."
-	@_env_file="$(_platform_root)/.env"; \
-	export STATUS_METRICS_JSON="$${STATUS_METRICS_JSON:-$$($(PYTHON) -m core.internal.shared.env_reader get STATUS_METRICS_JSON --file "$$_env_file")}"; \
-	export HTPASSWD_FILE="$${HTPASSWD_FILE:-$$($(PYTHON) -m core.internal.shared.env_reader get HTPASSWD_FILE --file "$$_env_file")}"; \
-	export NODE_NAME="$${NODE_NAME:-$$($(PYTHON) -m core.internal.shared.env_reader get NODE_NAME --file "$$_env_file")}"; \
-	export NODE_CONFIGS_DIR="$${NODE_CONFIGS_DIR:-$$($(PYTHON) -m core.internal.shared.env_reader get NODE_CONFIGS_DIR --file "$$_env_file")}"; \
-	export PLATFORM_MASTER_EMAIL="$${PLATFORM_MASTER_EMAIL:-$$($(PYTHON) -m core.internal.shared.env_reader get PLATFORM_MASTER_EMAIL --file "$$_env_file")}"; \
-	export PLATFORM_MASTER_PASSWORD="$${PLATFORM_MASTER_PASSWORD:-$$($(PYTHON) -m core.internal.shared.env_reader get PLATFORM_MASTER_PASSWORD --file "$$_env_file")}"; \
+	@$(call _env_export,STATUS_METRICS_JSON) \
+	$(call _env_export,HTPASSWD_FILE) \
+	$(call _env_export,NODE_NAME) \
+	$(call _env_export,NODE_CONFIGS_DIR) \
+	$(call _env_export,PLATFORM_MASTER_EMAIL) \
+	$(call _env_export,PLATFORM_MASTER_PASSWORD) \
 	: "$${STATUS_METRICS_JSON:?STATUS_METRICS_JSON not set — укажи в .env (см. .env.example, RC-сессия 121)}"; \
 	: "$${HTPASSWD_FILE:?HTPASSWD_FILE not set — укажи в .env (см. .env.example, RC-сессия 121)}"; \
 	mkdir -p "$$(dirname "$$STATUS_METRICS_JSON")" "$$(dirname "$$HTPASSWD_FILE")"; \
@@ -94,7 +108,7 @@ dev-metrics:
 ##   Uses 127.0.0.1:4000 when called from host (Docker DNS name litellm not resolvable outside Docker)
 provision-llm:
 	@echo "[IMP:7][make][provision-llm] Provisioning LiteLLM virtual keys..."
-	@export LITELLM_MASTER_KEY="$${LITELLM_MASTER_KEY:-$$($(PYTHON) -m core.internal.shared.env_reader get LITELLM_MASTER_KEY --file "$(_platform_root)/.env")}"; \
+	@$(call _env_export,LITELLM_MASTER_KEY) \
 	$(_platform_root)/core/entrypoints/provision-llm.sh --base-url http://127.0.0.1:4000
 	@echo "[IMP:9][make][provision-llm] Virtual key provisioning complete"
 
