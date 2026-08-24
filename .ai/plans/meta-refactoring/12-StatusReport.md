@@ -45,12 +45,16 @@ R1-ассерты в test_secrets_postcondition.
 
 | Статус | REF | Единица | Заметка |
 |--------|-----|---------|---------|
-| [ ] | REF-0004 | rollback contour | characterization ДО правки (инв. 4) |
-| [ ] | REF-0011 | locks fail-closed/flock-perimeter/CI group | |
-| [ ] | REF-0105 | payload tx (backup вне target) | |
-| [ ] | REF-0007 | ключи вне argv + atomic sweep 0600 | ⛔ без staging node-update на test-VPS не закрывать |
-| [ ] | REF-0014 | R9 build_compose_args + watchdog stamp | |
-| [ ] | REF-0002 | финал: GRANT-checks, psql timeout=60, REVOKE PUBLIC | перетёк из В0 |
+| [x] | REF-0004 | rollback contour | characterization TEST-03 red(11)/green(4)→15/15; ROLLED_BACK сквозной с re-verify; BUG-0100 rider; previous_image additive |
+| [x] | REF-0011 | locks fail-closed/flock-perimeter/CI group | file_lock EACCES→raise, depth instance; flock в ReceiveFlow.run(); rollback/remove лок в orchestrator_cli (шов применён оркестратором); concurrency group + шаблоны; TEST-32 |
+| [x] | REF-0105 | payload tx (backup вне target) | restore-on-crash, replace без pre-remove, stale-compose deletion, orphan sweep, PROJECT_PAYLOAD_FILENAMES triple-sync; crash-injection unit |
+| [~] | REF-0007 | ключи вне argv + atomic sweep 0600 | stdin→bash -s транспорт (init/update/fallback), redact, atomic sweep, umask 077 · ⛔ код готов, ЗАКРЫТИЕ после staging node-update на test-VPS |
+| [x] | REF-0014 | R9 build_compose_args + watchdog stamp | label-детекция вместо substring; stamp-after-success + crash-loop skip-notify (watchdog.crashloop parity); 20/20+7/7 |
+| [x] | REF-0002 | финал: GRANT-checks, psql timeout=60, REVOKE PUBLIC | critical_failures счётчик; REVOKE PUBLIC rider идемпотентен (SEC-0008); TEST-18 seam gate (4 теста) |
+
+Волна 1 closed 2026-08-24: commit `2dca576` · make check чистый (4817+ passed),
+agent-check blocking=0, check-manifests GREEN. node-lifecycle.sh ужат до 79 LOC
+(LOC-gейт <80 после umask-добавки).
 
 ## Волна 2 — «Каналы и DR»
 
