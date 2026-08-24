@@ -46,6 +46,7 @@ PLATFORM_MODULES: set[str] = {
     "infra-metrics",
     "langfuse",
     "litellm",
+    "log-collector",
     "logging",
     "minio",
     "monitoring",

@@ -154,13 +154,14 @@ def test_gate_converge_reconcile_flag(tmp_path):
 ## 🧪 TRAP[TEST] · Gate invariant: library must be sourceable + Python-delegating
 ##   · Last fail: N/A (new gate)
 ##   · Remove if: vps-readiness.sh is removed or renamed
-## 🧐 TRAP[DECISION] · 2026-07-31 · — · Manifest description НЕ изменён (DevPlan 105 TASK-5)
+## 🧐 TRAP[DECISION] · 2026-07-31 · — · Manifest gates-секция компактна (T3.3): {test_file: [ids]}, description удалён
 ## · Rejected: ручная правка description записи vps_readiness_sourceable в entrypoint-manifest.yaml
-## · Reason: gates[] перегенерируются из pytest (G3 cycle break, generate_entrypoint_manifest.py:228
-## ·         всегда эмитит 'Auto-discovered gate: {id}'); make check-manifests делает byte-level --check.
-## ·         Эксперимент 2026-07-31: правка описания → "Manifest is stale — exit 1" → AC10 нарушен.
-## ·         id + test_file записи не меняются (gate-тест остаётся в этом файле) — регистрация корректна.
-## · Rev: если description станет значимой метаданной → генератор должен поддерживать кастомные описания
+## · Reason: gates-секция перегенерируется из pytest (G3 cycle break, generate_entrypoint_manifest.py);
+## ·         T3.3 compaction схлопнул 527 развёрнутых записей {id, test_file, description} в маппинг
+## ·         {test_file: [ids]} — description имел 0 потребителей. Эксперимент 2026-07-31: правка
+## ·         описания → "Manifest is stale — exit 1" → AC10 нарушен. id остаются pytest-функциями
+## ·         (gate-тест остаётся в этом файле) — регистрация корректна.
+## · Rev: если gates-секция снова станет значимой метаданной → генератор должен эмитить расширенные поля
 @pytest.mark.gate
 def test_gate_vps_readiness_sourceable(tmp_path):
     """Gate: vps-readiness.sh must be sourceable, define check_vps_ready, delegate to Python."""

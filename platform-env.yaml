@@ -249,6 +249,7 @@ profiles:
 - infra-metrics
 - langfuse
 - litellm
+- log-collector
 - logging
 - minio
 - monitoring

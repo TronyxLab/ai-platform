@@ -1,9 +1,10 @@
-# GREP_SUMMARY: test-memory-limits cadvisor loki clickhouse memory-limit module-yaml-sync compose-base resources
-# STRUCTURE: ┌parse memory strings┐ → ◇ compose limits detector (cadvisor/loki/clickhouse канон) → ◇ module.yaml sync detector (3 модуля) → ◇ R5 negatives (3 исходных лимита) → ┘
+# GREP_SUMMARY: test-memory-limits cadvisor loki alloy clickhouse memory-limit module-yaml-sync compose-base resources
+# STRUCTURE: ┌parse memory strings┐ → ◇ compose limits detector (cadvisor/loki/alloy/clickhouse канон) → ◇ module.yaml sync detector (4 модуля) → ◇ R5 negatives (3 исходных лимита) → ┘
 # region MODULE_CONTRACT
 ## @purpose  Unit tests for DevPlan 144 W3 (D2) memory limits канона:
-##           docker-compose.base.yml limits (cadvisor ≥256M, loki ≥512M, clickhouse ≥2G) +
+##           docker-compose.base.yml limits (cadvisor ≥512M, loki ≥512M, alloy ≥256M, clickhouse ≥2G) +
 ##           module.yaml resources.limits.memory sync по сумме limits сервисов модуля.
+##           DevPlan 010 T3.1: alloy переехал в log-collector (лимит 256M сохранён).
 ## @scope    No Docker — read-only yaml-парс реальных compose/module.yaml; R5 negative через
 ##           tmp_path-фикстуры (реальные файлы НЕ модифицируются).
 ## @invariants
@@ -34,20 +35,24 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _COMPOSE_FILES = {
     "infra-metrics": _REPO_ROOT / "core" / "modules" / "infra-metrics" / "docker-compose.base.yml",
     "logging": _REPO_ROOT / "core" / "modules" / "logging" / "docker-compose.base.yml",
+    "log-collector": _REPO_ROOT / "core" / "modules" / "log-collector" / "docker-compose.base.yml",
     "clickhouse": _REPO_ROOT / "core" / "modules" / "clickhouse" / "docker-compose.base.yml",
 }
 
 _MODULE_YAMLS = {
     "infra-metrics": _REPO_ROOT / "core" / "modules" / "infra-metrics" / "module.yaml",
     "logging": _REPO_ROOT / "core" / "modules" / "logging" / "module.yaml",
+    "log-collector": _REPO_ROOT / "core" / "modules" / "log-collector" / "module.yaml",
     "clickhouse": _REPO_ROOT / "core" / "modules" / "clickhouse" / "module.yaml",
 }
 
 # Канон DevPlan 144 W3: минимальный лимит каждого ключевого сервиса (bytes)
-# cadvisor 512M (деплой-верификация 2026-08-09: 250MiB при 256M = 98% — поднят до 512M)
+# cadvisor 512M (деплой-верификация 2026-08-09: 250MiB при 256M = 98% — поднят до 512M);
+# alloy 256M (164 W1-5 OOM-фикс; 010 T3.1: alloy переехал в log-collector)
 _CANON_MIN_LIMITS = {
     "cadvisor": 512 * 1024 * 1024,  # 512M
     "loki": 512 * 1024 * 1024,  # 512M
+    "alloy": 256 * 1024 * 1024,  # 256M
     "clickhouse": 2 * 1024 * 1024 * 1024,  # 2G
 }
 
@@ -102,8 +107,8 @@ def _assert_module_yaml_sync(module_yaml_path: Path, compose: dict) -> None:
     )
 
 
-# 🧪 TRAP[TEST] · Regression · Scenario: compose-лимиты ≥ канона (144 W3 D2)
-# · Expect: cadvisor ≥512M, loki ≥512M, clickhouse ≥2G (docker-compose.base.yml)
+# 🧪 TRAP[TEST] · Regression · Scenario: compose-лимиты ≥ канона (144 W3 D2; 010 T3.1: +alloy)
+# · Expect: cadvisor ≥512M, loki ≥512M, alloy ≥256M, clickhouse ≥2G (docker-compose.base.yml)
 # · Last fail: cadvisor 128M (127.3/128MiB = 99.4% — HighMemory firing), loki 256M
 # ·   (216/256MiB = 91.3%), clickhouse 1G (cAdvisor usage 91.5%); cadvisor 256M после
 # ·   деплой-верификации 2026-08-09 (250MiB = 98% — лимит поднят до 512M)
@@ -117,15 +122,18 @@ def test_compose_limits_canon(caplog) -> None:
     service_to_module = {
         "cadvisor": "infra-metrics",
         "loki": "logging",
+        "alloy": "log-collector",
         "clickhouse": "clickhouse",
     }
     for service, min_bytes in _CANON_MIN_LIMITS.items():
         _assert_memory_limit(_compose_data(service_to_module[service]), service, min_bytes)
-    logger.info("[IMP:9][test_memory_limits] compose limits >= canon (cadvisor 512M, loki 512M, clickhouse 2G) PASS")
+    logger.info(
+        "[IMP:9][test_memory_limits] compose limits >= canon (cadvisor 512M, loki 512M, alloy 256M, clickhouse 2G) PASS"
+    )
 
 
-# 🧪 TRAP[TEST] · Regression · Scenario: module.yaml sync по сумме compose-лимитов (144 W3)
-# · Expect: resources.limits.memory ≥ суммы limits всех сервисов модуля (все 3 модуля)
+# 🧪 TRAP[TEST] · Regression · Scenario: module.yaml sync по сумме compose-лимитов (144 W3; 010 T3.1: +log-collector)
+# · Expect: resources.limits.memory ≥ суммы limits всех сервисов модуля (все 4 модуля)
 # · Last fail: clickhouse module.yaml 512M vs compose 1G (рассинхрон);
 # ·   infra-metrics 224M vs сумма 288M (рассинхрон до 144)
 # · Remove if: канон «синхронизировано с base.yml» меняется
@@ -133,11 +141,11 @@ def test_compose_limits_canon(caplog) -> None:
 #   _assert_module_yaml_sync (assert + AssertionError при рассинхроне).
 @r1_delegates
 def test_module_yaml_sync_all(caplog) -> None:
-    """144 W3: module.yaml resources синхронизирован с compose (по каждому из 3 модулей)."""
+    """144 W3: module.yaml resources синхронизирован с compose (по каждому из 4 модулей)."""
     caplog.set_level(logging.INFO)
-    for module in ("infra-metrics", "logging", "clickhouse"):
+    for module in ("infra-metrics", "logging", "log-collector", "clickhouse"):
         _assert_module_yaml_sync(_MODULE_YAMLS[module], _compose_data(module))
-    logger.info("[IMP:9][test_memory_limits] module.yaml resources sync (3 modules) PASS")
+    logger.info("[IMP:9][test_memory_limits] module.yaml resources sync (4 modules) PASS")
 
 
 # 🧪 TRAP[TEST] · NEGATIVE (R5) · cadvisor 128M/256M — DevPlan 144 W3 (D2)
@@ -177,6 +185,21 @@ def test_loki_limit_negative_removed(tmp_path: Path) -> None:
     compose = yaml.safe_load(compose_file.read_text(encoding="utf-8"))
     with pytest.raises(AssertionError):
         _assert_memory_limit(compose, "loki", _CANON_MIN_LIMITS["loki"])
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · alloy 128M — DevPlan 164 W1-5 (перенесён в log-collector, 010 T3.1)
+# · Last fail: исходный лимит 128M — Alloy OOM-kill (rc=137) при холодном WAL
+# · Remove if: канон alloy ≥256M меняется
+def test_alloy_limit_negative_removed(tmp_path: Path) -> None:
+    """R5 negative (164 W1-5): лимит 128M — исходный вход, поймавший баг — детектор обязан упасть."""
+    compose_file = tmp_path / "compose.yml"
+    compose_file.write_text(
+        "services:\n  alloy:\n    deploy:\n      resources:\n        limits:\n          memory: 128M\n",
+        encoding="utf-8",
+    )
+    compose = yaml.safe_load(compose_file.read_text(encoding="utf-8"))
+    with pytest.raises(AssertionError):
+        _assert_memory_limit(compose, "alloy", _CANON_MIN_LIMITS["alloy"])
 
 
 # 🧪 TRAP[TEST] · NEGATIVE (R5) · clickhouse 1G — DevPlan 144 W3 (D2)

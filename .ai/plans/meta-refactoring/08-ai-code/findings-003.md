@@ -1,15 +1,14 @@
 # Findings 003 — Exception swallowing, resilience asymmetry
 # Wave 1 · agent: exception-swallow
 
-## AI-0010 [HIGH] [exception-swallow]
-Files: core/internal/llm/key_provisioner.py:626,657; core/internal/bootstrap/lifecycle/phases/docker.py:558-562
-Symbols: provision_all, _registry_step_llm_provision
-Evidence: `except (OSError, ConnectionError, TimeoutError)` → WARN log → continue; main() exits 0; caller wraps with non_fatal=True.
-Problem: LiteLLM down during φ11 ⇒ all key generations fail silently; report "0 provisioned, N skipped"; projects later get runtime 401s with no breadcrumb to bootstrap failure.
-Why AI-pattern: broad except + warn-and-continue around the *primary side effect* of the phase.
-Minimal cleanup: count failures; nonzero provision failures ⇒ raise/exit≠0 (or explicit --best-effort flag).
-Code churn: ~20 lines. Pre-launch: yes.
-Confidence: high.
+## AI-0010 [MEDIUM·ACTIVE-conditional] [exception-swallow] VERIFIED-CORRECTED
+Files: core/internal/bootstrap/lifecycle/phases/docker.py:558-562; core/internal/llm/key_provisioner.py:626,657,665-672,811; admin_client.py:254,307
+Symbols: _registry_step_llm_provision, provision_all, main
+Evidence (verifier): claimed broad-except→exit-0 mechanism REFUTED — httpx errors are NOT subclasses of the caught tuple, they propagate and main() returns 1. Silent outcome is REAL at a different layer: phase runs `bash provision-llm.sh` with non_fatal=True ⇒ bootstrap continues despite total key-provision failure; summary conflates failures with legitimate "skipped" (no failure count/metric).
+Scenario: LiteLLM down during φ11 ⇒ exit 1 logged as best-effort, bootstrap completes green; projects hit runtime 401s with no breadcrumb.
+Why AI-pattern: best-effort wrapping around primary side effect without surfacing failure counts upward.
+Minimal cleanup: parse provisioner exit/failure-count in phase; WARN→ERROR summary line + bootstrap report entry when provisioned<expected.
+Code churn: ~20 lines. Pre-launch: yes (bootstrap observability). Confidence: high.
 
 ## AI-0011 [HIGH] [exception-swallow]
 Files: core/internal/bootstrap/deploy/deploy_orchestrator.py:688-693

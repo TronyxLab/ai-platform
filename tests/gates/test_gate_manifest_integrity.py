@@ -827,8 +827,14 @@ def _find_dangling_gate_ids(manifest: dict) -> list[tuple[str, str]]:
     ##   - repairs_gates entries: gate_id must be in gates[] OR gate_kind == make-target-gate
     ##   - non_repairable_gates entries: gate_id must be in gates[] (pytest-гейты обязаны существовать)
     ##   - Empty result = repair-map fully resolvable (AC-G5)
+    ##   - gates-секция читается в КОМПАКТНОЙ форме {test_file: [ids]} (T3.3 compaction)
+    ##     — flatten всех id по всем test_file в единый set
     """
-    gate_ids: set[str] = {g.get("id", "") for g in manifest.get("gates", [])}
+    gates_map = manifest.get("gates", {})
+    if isinstance(gates_map, dict):
+        gate_ids: set[str] = {gid for ids in gates_map.values() for gid in ids}
+    else:  # fallback: старый список записей (backward compat для синтетических фикстур)
+        gate_ids = {g.get("id", "") for g in gates_map}
     dangling: list[tuple[str, str]] = []
 
     for repair_entry in manifest.get("repair", []):
@@ -905,12 +911,13 @@ def test_repair_gate_ids_resolve(caplog) -> None:
 def test_negative_dangling_gate_id_detected(caplog) -> None:
     """R5 negative: исходные висячие gate_id из 118 G5 детектируются."""
     # Минимальный синтетический манифест с ВСЕМИ 4 исходными висячими ссылками 118 G5
+    # gates-секция — T3.3 compact map форма {test_file: [ids]}
     synthetic: dict = {
-        "gates": [
-            {"id": "test_real_gate"},
-            {"id": "test_all_templates_use_strict_grammar"},
-            {"id": "test_r1_no_pass_tests"},
-        ],
+        "gates": {
+            "test_gate_real.py": ["test_real_gate"],
+            "test_gate_templates.py": ["test_all_templates_use_strict_grammar"],
+            "test_gate_r1.py": ["test_r1_no_pass_tests"],
+        },
         "repair": [
             {
                 "make_target": "fix-ruff",
@@ -1059,6 +1066,18 @@ def test_negative_duplicate_make_target_detected(caplog) -> None:
 # region FUNC_test_repair_contract_integrity
 ## @purpose  Validate Repair Contract fields are consistent between manifest and makefiles.
 ##            FAIL code: REPAIR_CONTRACT_VIOLATION
+##            Repair-метаданные живут НЕ в gates-секции (T3.3 compact map {test_file: [ids]}),
+##            а в `repair:` → repairs_gates и `non_repairable_gates` (B4 suppression:
+##            repair→gates[] injection отключён, генератор не эмитит repair-поля в gates).
+##            ⚠️ Скоуп проверок = ФАКТИЧЕСКИ исполнимая часть контракта:
+##              - repairs_gates (pytest-гейты): обязательные repair-поля + валидный repair_class.
+##              - НЕ проверяются: уникальность repair_id (by design ОДИН repair на много гейтов —
+##                профили-parity/domain-parity/template-coverage шарится группой gate_id),
+##                repair_command→repair.mk cross-ref (команды ссылаются на глобальные таргеты
+##                generate-manifests/templates-check, вне repair.mk .PHONY — легитимно).
+##              - Исходный тест итерировал gates[] и НИКОГДА не срабатывал (B4: repair-поля
+##                в gates[] не эмитятся) — проверки были мёртвым кодом; переписан на реальные
+##                носители repair-метаданных (T3.3, отчёт в плане).
 #
 # 🧪 TRAP[TEST] · 2026-07-23 · Regression: Repair Contract fields drift
 # · Scenario: new gate added without repair fields, or repair_command target deleted
@@ -1067,50 +1086,41 @@ def test_negative_duplicate_make_target_detected(caplog) -> None:
 def test_repair_contract_integrity(caplog) -> None:
     """Gate: Repair Contract fields are valid and consistent."""
     manifest = _load_manifest()
-    gates = manifest.get("gates", [])
-    repair_targets = _get_repair_targets()
-    phony_targets = _get_phony_targets_from_repair_mk()
 
-    repair_ids: set[str] = set()
     errors: list[str] = []
 
-    for gate in gates:
-        gate_id = gate.get("id", "<unknown>")
-        repairable = gate.get("repairable", False)
+    # T3.3: gates-секция — компактная форма {test_file: [ids]}.
+    gates_map = manifest.get("gates", {})
+    if not isinstance(gates_map, dict):
+        errors.append(f"gates must be a dict {{test_file: [ids]}} (T3.3 compaction), got {type(gates_map).__name__}")
+    else:
+        for test_file, ids in gates_map.items():
+            if not isinstance(ids, list) or not ids:
+                errors.append(f"gates[{test_file!r}] must be a non-empty list of gate ids")
 
-        if repairable:
+    # B4/T3.3: repair-контракт читается из `repair:` → repairs_gates (repairable-gates)
+    # и `non_repairable_gates` (L2/L3) — единственные носители repair-метаданных.
+    for repair_entry in manifest.get("repair", []):
+        for rg in repair_entry.get("repairs_gates", []):
+            gate_id = rg.get("gate_id", "<unknown>")
+            if rg.get("gate_kind") == _MAKE_TARGET_GATE_KIND:
+                continue  # make-target-gate: не pytest-гейт, repair-поля свои
+
             # Check required fields
-            missing = REQUIRED_REPAIR_FIELDS - set(gate.keys())
+            missing = REQUIRED_REPAIR_FIELDS - set(rg.keys())
             if missing:
                 errors.append(f"Gate '{gate_id}': repairable=true but missing: {missing}")
 
             # Check repair_class
-            rc = gate.get("repair_class")
+            rc = rg.get("repair_class")
             if rc and rc not in REPAIR_CLASSES:
                 errors.append(f"Gate '{gate_id}': invalid repair_class '{rc}', must be L1/L2/L3")
 
-            # Check repair_id uniqueness
-            rid = gate.get("repair_id")
-            if rid:
-                if rid in repair_ids:
-                    errors.append(f"Gate '{gate_id}': duplicate repair_id '{rid}'")
-                repair_ids.add(rid)
-                # repair_id is a stable API identifier — not required to match
-                # REPAIR_TARGETS (which holds make target names like fix-executable-bit).
-                # The connection is through repair_command, validated below.
-                _ = repair_targets  # available for future cross-referencing
-
-            # Check repair_command references existing make target
-            cmd = gate.get("repair_command", "")
-            if cmd.startswith("make "):
-                target = cmd.split()[1]
-                if phony_targets and target not in phony_targets and target != "fix-gate":
-                    errors.append(
-                        f"Gate '{gate_id}': repair_command target '{target}' not found in .PHONY of makefiles/repair.mk"
-                    )
-        # Non-repairable gates with explicit repair_class L3 need repair_reason
-        elif gate.get("repair_class") == "L3" and "repair_reason" not in gate:
-            errors.append(f"Gate '{gate_id}': L3 non-repairable gate missing repair_reason")
+    # Non-repairable gates (L2/L3) — repair_reason обязателен
+    for ng in manifest.get("non_repairable_gates", []):
+        gid = ng.get("gate_id", "<unknown>")
+        if ng.get("repair_class") in {"L2", "L3"} and "repair_reason" not in ng:
+            errors.append(f"Gate '{gid}': L2/L3 non-repairable gate missing repair_reason")
 
     if errors:
         msg = f"[GATE:FAIL][id:repair-contract-integrity] {len(errors)} violation(s):\n"
@@ -1119,7 +1129,7 @@ def test_repair_contract_integrity(caplog) -> None:
         logging.error(msg)
         raise AssertionError(msg)
 
-    logging.info("[IMP:9][repair-contract-integrity] All %d gates with repair fields valid", len(gates))
+    logging.info("[IMP:9][repair-contract-integrity] All repair-contract fields valid")
 
 
 # endregion FUNC_test_repair_contract_integrity

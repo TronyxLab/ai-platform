@@ -12,6 +12,9 @@
 ##   - Healthcheck: /health/liveliness (no auth required)
 ##   - Networks declared as external: true — pre-created by deploy-modules.sh
 ##   - All TRAP comments from root compose preserved
+##   - Cross-node DSN (DevPlan 010 T2.7): DATABASE_URL @${POSTGRES_HOST:-pgbouncer}:6432 —
+##     single-node дефолт pgbouncer (Docker DNS, байт-идентично прежнему), multi-node —
+##     provision подставляет host data-ноды
 ## @rationale Profiles enable selective startup via `make up MODULES=litellm`
 # endregion MODULE_CONTRACT
 
@@ -72,7 +75,10 @@ services:
       # · Prisma Wolfi incompatibility that affected v1.55+ is resolved in v1.90+
       # · This enables LiteLLM UI (dashboard), API key management, spend_logs persistence
       # · Rev: if Prisma Wolfi breaks in a future upgrade, remove DATABASE_URL and switch to SQLite
-      DATABASE_URL: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?PG_PASSWORD_REQUIRED}@pgbouncer:6432/litellm?sslmode=disable"
+      # Cross-node DSN (DevPlan 010 T2.7): single-node — Docker DNS pgbouncer (байт-идентично
+      # прежнему); multi-node — provision подставляет host data-ноды.
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?PG_PASSWORD_REQUIRED}@${POSTGRES_HOST:-pgbouncer}:6432/litellm?sslmode=disable"
+      POSTGRES_HOST: "${POSTGRES_HOST:-pgbouncer}"
 
       # Master key — required for LiteLLM proxy admin operations
       # ⚠️ No fallback — must be set in secrets.env or env file

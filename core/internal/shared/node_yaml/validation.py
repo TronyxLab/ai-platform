@@ -1,21 +1,29 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: node-yaml-validation, ValidationMixin, validate, jsonschema, schema-validator, basic-checks, 119-H
-# STRUCTURE: ▶ ValidationMixin → ◇ _load() → ◇ basic checks (node/domain/contexts) → ◇ jsonschema (shared schema_validator) → ⎋ list[str] errors
+# GREP_SUMMARY: node-yaml-validation, ValidationMixin, validate, jsonschema, schema-validator, basic-checks, single-context-gate, 1-noda-1-kontekst, 119-H, 010-T0.3
+# STRUCTURE: ▶ ValidationMixin → ◇ _load() → ◇ basic checks (node/domain/contexts) → ◇ гейт len(contexts)>1 → raise ConfigValidationError → ◇ jsonschema (shared schema_validator) → ⎋ list[str] errors
 # region MODULE_CONTRACT
 ## @purpose  Доменный миксин NodeYaml — структурная валидация node.yaml (DevPlan 119 H1).
 ##           validate() = basic checks (node section, flat domain, contexts[] canon) +
 ##           опциональный jsonschema через shared schema_validator (DevPlan 116 B6 T5).
+##           Гейт «1 нода = 1 контекст» (DevPlan 010 T0.3): len(contexts) > 1 → ConfigValidationError.
 ## @scope    Миксин для NodeYaml-агрегатора (node_yaml/__init__.py). Потребители:
 ##           preflight, scaffold_helpers, lifecycle/helpers/validation, CLI --validate.
 ## @invariants
 ##   1. Basic checks: node section exists, node.host non-empty, domain flat-string (dict → error),
 ##      contexts[] canon (top-level 'context' → error, contexts[0].name non-empty).
-##   2. jsonschema: ЕДИНСТВЕННАЯ точка jsonschema-валидации — shared/schema_validator (T5).
+##   2. Гейт «1 нода = 1 контекст» (DevPlan 010 T0.3, §2.2 п.4): contexts — список И len(contexts) > 1
+##      → ConfigValidationError (exit 4), fail-fast ДО остальных проверок контекста. Schema допускает
+##      массив без maxItems, читается только contexts[0] — закрыто жёстко (schema: maxItems 1).
+##   3. jsonschema: ЕДИНСТВЕННАЯ точка jsonschema-валидации — shared/schema_validator (T5).
 ##      node_yaml/validation.py делегирует validate_dict_against_schema и НЕ содержит
 ##      прямого Draft7-цикла (gate test_gate_single_project_parser (c) — подстрока-скан).
-##   3. Возвращает list[str] ошибок (пустой = валиден). Не бросает исключений.
+##   4. Возвращает list[str] ошибок (пустой = валиден) для накопимых ошибок; ЕДИНСТВЕННОЕ
+##      исключение-raise — гейт «1 нода = 1 контекст» (invariant 2).
 ## @rationale DevPlan 119 H1 (AUDIT-2 M1): валидация выделена из монолита node_yaml.py.
 ##            Делегирование schema_validator сохранено (single validator point, gate T5).
+##            DevPlan 010 T0.3: multi-context был тихим недоспецифицированным состоянием
+##            (schema без maxItems, читается только contexts[0]) — гейт делает его явным fail-fast.
+## @changes 2026-08-22 · DevPlan 010 T0.3 — гейт «1 нода = 1 контекст»: len(contexts) > 1 → ConfigValidationError
 ## @changes 2026-08-03 · DevPlan 119 H1 — извлечено из node_yaml.py (validate) в node_yaml/validation.py
 ##           без изменения логики; путь к node.schema.json скорректирован для глубины пакета
 ##           (dirname ×4 вместо ×3 — файл переехал на 1 уровень глубже)
@@ -28,6 +36,8 @@ import logging
 import os
 import pathlib
 from typing import Protocol, cast
+
+from core.internal.shared.exceptions import ConfigValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -43,21 +53,23 @@ class _Loadable(Protocol):
 class ValidationMixin:
     """Доменный миксин NodeYaml: валидация node.yaml (DevPlan 119 H1).
 
-    GREP_SUMMARY: ValidationMixin, validate, jsonschema, basic-checks
-    STRUCTURE: ▶ ValidationMixin → ◇ validate(schema_path) → ◇ basic → ◇ jsonschema → ⎋ list[str]
+    GREP_SUMMARY: ValidationMixin, validate, jsonschema, basic-checks, single-context-gate
+    STRUCTURE: ▶ ValidationMixin → ◇ validate(schema_path) → ◇ basic → ◇ гейт 1-node-1-context (raise) → ◇ jsonschema → ⎋ list[str]
     """
 
     # region FUNC_validate
     ## @purpose  Validate node.yaml structure — basic checks + optional jsonschema.
-    ## @io — ⇥ schema_path: Optional[str] = None → ⎋ list[str]
+    ## @io — ⇥ schema_path: Optional[str] = None → ⎋ list[str] | raise ConfigValidationError
     ## @complexity — O(N) for YAML parse + O(S) for jsonschema validation
     ## @invariants
     ##   Basic checks: node section exists, node.host non-empty, domain section exists (flat string
     ##   only — dict form is an error), contexts[] canon ('context' field → error,
     ##   contexts must be a list with non-empty contexts[0].name).
+    ##   Гейт «1 нода = 1 контекст» (DevPlan 010 T0.3): len(contexts) > 1 → ConfigValidationError
+    ##   (fail-fast, ДО проверок contexts[0].name).
     ##   If schema_path provided or schema exists at default path → also run Draft7 jsonschema
     ##   via shared schema_validator (DevPlan 116 B6 T5).
-    ##   Returns list of error messages (empty = valid).
+    ##   Returns list of error messages (empty = valid); raises ConfigValidationError on multi-context.
     def validate(self: _Loadable, schema_path: str | None = None) -> list[str]:
         """Validate node.yaml structure — basic checks + optional jsonschema.
 
@@ -104,6 +116,17 @@ class ValidationMixin:
         elif not contexts:
             errors.append("Missing or empty 'contexts[0].name'")
         else:
+            # ── Гейт «1 нода = 1 контекст» (DevPlan 010 T0.3, §2.2 п.4) ──
+            # fail-fast ДО остальных проверок контекста: schema допускает массив без maxItems
+            # (schema: maxItems 1), читается только contexts[0] — закрыто жёстко здесь.
+            # ⚠️ TRAP[DECISION] · 2026-08-22 · — · Single-context гейт: raise ConfigValidationError (exit 4)
+            # вместо аккумуляции в errors-список · Rejected: добавить ошибку в list[str] как прочие basic-ошибки
+            # · Reason: DevPlan 010 T0.3 явно требует ConfigValidationError(4) — машиночитаемый fail-fast,
+            #   silent-skip multi-context был источником тихой потери contexts[1+] · Rev: если multi-context
+            #   вернётся как легитимная фича — убрать гейт и maxItems из schema синхронно
+            if len(contexts) > 1:
+                msg = "1 нода = 1 контекст; сейчас схема допускает массив, читается только contexts[0]"
+                raise ConfigValidationError(msg)
             first = contexts[0]
             if not isinstance(first, dict) or not first.get("name"):
                 errors.append("Missing or empty 'contexts[0].name'")

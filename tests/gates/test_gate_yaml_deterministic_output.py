@@ -269,14 +269,10 @@ def test_entrypoint_manifest_deterministic(tmp_path, caplog) -> None:
 
     # Test merge() determinism with fixed inputs
     allowed_verbs = ["deploy", "build", "test", "lint", "validate"]
-    gates = [
-        {"id": "dag-acyclic", "test_file": "test_gate_manifest_dag_acyclic.py", "description": "DAG acyclicity gate"},
-        {
-            "id": "no-self-read",
-            "test_file": "test_gate_generate_entrypoint_manifest_no_self_read.py",
-            "description": "G3 no-self-read gate",
-        },
-    ]
+    gates = {
+        "test_gate_manifest_dag_acyclic.py": ["dag-acyclic"],
+        "test_gate_generate_entrypoint_manifest_no_self_read.py": ["no-self-read"],
+    }  # T3.3 compact map form {test_file: [ids]}
     existing = {
         "module_lifecycle": ["build", "up", "down", "start", "stop", "restart", "status", "logs", "backup"],
     }

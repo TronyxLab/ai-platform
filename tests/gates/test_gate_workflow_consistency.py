@@ -166,18 +166,26 @@ def _load_entrypoint_manifest_allowed_verbs() -> set[str]:
 
 
 def _load_entrypoint_manifest_gate_make_targets() -> set[str]:
-    """Extract make targets referenced in manifest gates section."""
+    """Extract make targets referenced in manifest gates section (T3.3 compact map form).
+
+    ⚠️ T3.3 compaction: gates-секция = {test_file: [test_ids]}, description удалён
+    (0 потребителей). Осталось как BREADTH-HELPER: make-таргеты больше НЕ выводятся
+    из gates (id — pytest-функции, не make-таргеты); возвращает пустое множество.
+    Источник истины для make-таргетов — allowed_verbs + .PHONY (Makefile).
+    """
+    # Gather make targets from gate descriptions that reference make commands
+    # This is a best-effort extraction — the source of truth is Makefile .PHONY
     manifest_path = repo_root() / "core" / "entrypoint-manifest.yaml"
     with pathlib.Path(manifest_path).open(encoding="utf-8") as f:
         data = yaml.safe_load(f)
     targets: set[str] = set()
-    # Gather make targets from gate descriptions that reference make commands
-    # This is a best-effort extraction — the source of truth is Makefile .PHONY
-    gates = data.get("gates", [])
-    for gate in gates:
-        desc = gate.get("description", "")
-        make_refs = re.findall(r"make\s+(\S+)", desc)
-        targets.update(make_refs)
+    gates = data.get("gates", {})
+    # T3.3: gates = {test_file: [ids]} — id не содержат make-команд (это pytest-функции).
+    if isinstance(gates, dict):
+        for ids in gates.values():
+            for gate_id in ids:
+                make_refs = re.findall(r"make\s+(\S+)", str(gate_id))
+                targets.update(make_refs)
     return targets
 
 

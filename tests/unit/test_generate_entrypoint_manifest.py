@@ -38,6 +38,8 @@ import pytest
 pytestmark = pytest.mark.static_audit
 
 # ═══════════════════════════════════════════════════════════════════
+
+
 # region Tests: merge
 # ═══════════════════════════════════════════════════════════════════
 
@@ -54,14 +56,14 @@ def test_merge_preserves_sections(caplog):
         "bootstrap": [{"make_target": "bootstrap-node", "mechanism": "ssh+rsync"}],
         "deploy": [{"make_target": "deploy", "mechanism": "git-push"}],
         "allowed_verbs": ["old-verb"],
-        "gates": [{"id": "old-gate", "test_file": "old_test.py"}],
+        "gates": {"old_test.py": ["old-gate"]},  # T3.3 compact map form
         "name_linter": {"system_exceptions": ["help"]},
         "module_lifecycle": ["start", "stop"],
         "lib": [{"script": "ssh.sh", "path": "core/lib/ssh.sh"}],
     }
 
     new_allowed_verbs = ["deploy", "bootstrap-node", "test"]
-    new_gates = [{"id": "new-gate", "test_file": "test_new_gate.py"}]
+    new_gates = {"test_new_gate.py": ["new-gate"]}  # T3.3: {test_file: [ids]}
 
     result = gem.merge(new_allowed_verbs, new_gates, existing)
 
@@ -77,7 +79,7 @@ def test_merge_preserves_sections(caplog):
     assert result["lib"] == existing["lib"], "lib should be preserved"
 
     logger.critical(
-        "[IMP:9][test] merge preserves %d sections, replaces verbs (%d) and gates (%d)",
+        "[IMP:9][test] merge preserves %d sections, replaces verbs (%d) and gates (%d files)",
         len(result),
         len(new_allowed_verbs),
         len(new_gates),
@@ -92,13 +94,13 @@ def test_merge_preserves_sections(caplog):
 @pytest.mark.parametrize(
     ("new_verbs", "new_gates", "section"),
     [
-        (["deploy", "test"], [], "allowed_verbs"),
-        ([], [{"id": "new-gate", "test_file": "test_new_gate.py"}], "gates"),
+        (["deploy", "test"], {}, "allowed_verbs"),
+        ([], {"test_new_gate.py": ["new-gate"]}, "gates"),
     ],
 )
 def test_merge_replaces_empty_sections(caplog, new_verbs, new_gates, section):
     """merge should replace empty allowed_verbs/gates sections from collection."""
-    existing = {"bootstrap": [{"make_target": "bootstrap-node"}], "allowed_verbs": [], "gates": []}
+    existing = {"bootstrap": [{"make_target": "bootstrap-node"}], "allowed_verbs": [], "gates": {}}
 
     result = gem.merge(new_verbs, new_gates, existing)
     assert result[section] == (new_verbs if section == "allowed_verbs" else new_gates), f"{section} should be replaced"
@@ -106,10 +108,10 @@ def test_merge_replaces_empty_sections(caplog, new_verbs, new_gates, section):
     logger.critical("[IMP:9][test] merge replaces empty %s — %d items", section, len(result[section]))
 
 
-# endregion
-
-
 # ═══════════════════════════════════════════════════════════════════
+
+# endregion Tests: merge
+
 # region Tests: extract_phony_targets (grep fallback)
 # ═══════════════════════════════════════════════════════════════════
 
@@ -171,10 +173,10 @@ def test_extract_phony_targets_grep_fallback(caplog, tmp_path):
     logger.critical("[IMP:9][test] extract_phony_targets grep fallback found %d targets: %s", len(targets), targets)
 
 
-# endregion
-
-
 # ═══════════════════════════════════════════════════════════════════
+
+# endregion Tests: extract_phony_targets (grep fallback)
+
 # region Tests: load_existing_manifest
 # ═══════════════════════════════════════════════════════════════════
 
@@ -220,10 +222,10 @@ def test_loaders_missing_file_returns_empty(caplog, load_missing):
     logger.critical("[IMP:9][test] missing-file loader returns {}")
 
 
-# endregion
-
-
 # ═══════════════════════════════════════════════════════════════════
+
+# endregion Tests: load_existing_manifest
+
 # region Tests: load_structural_sections (G3 cycle break)
 # ═══════════════════════════════════════════════════════════════════
 
@@ -240,7 +242,7 @@ def test_load_structural_sections_excludes_generated_keys(caplog, tmp_path):
         "metadata": {"version": 1},
         "convention": {"entrypoint_prefix": "core/entrypoints/"},
         "allowed_verbs": ["deploy", "test"],
-        "gates": [{"id": "gate1", "test_file": "test_gate_1.py"}],
+        "gates": {"test_gate_1.py": ["gate1"]},  # T3.3 compact map form
         "name_linter": {"system_exceptions": ["help"]},
         "module_lifecycle": ["start", "stop"],
         "lib": [{"script": "ssh.sh", "path": "core/lib/ssh.sh"}],
@@ -297,7 +299,7 @@ def test_load_structural_sections_preserves_all_structural_keys(caplog, tmp_path
         "deploy": [{"make_target": "deploy-project"}],
         "non_repairable_gates": ["test_gate_env_extra_vars"],
         "allowed_verbs": ["deploy"],  # must be excluded
-        "gates": [{"id": "g1"}],  # must be excluded
+        "gates": {"test_gate_1.py": ["g1"]},  # must be excluded (T3.3 map form)
     }
     with Path(str(manifest_file)).open("w", encoding="utf-8") as f:
         yaml.dump(manifest_data, f)
@@ -327,10 +329,10 @@ def test_load_structural_sections_preserves_all_structural_keys(caplog, tmp_path
     )
 
 
-# endregion
-
-
 # ═══════════════════════════════════════════════════════════════════
+
+# endregion Tests: load_structural_sections (G3 cycle break)
+
 # region Tests: _check_generated_content / _generate_output (--check mode)
 # ═══════════════════════════════════════════════════════════════════
 
@@ -345,7 +347,7 @@ def test_generate_output(caplog):
     merged = {
         "metadata": {"version": 1},
         "allowed_verbs": ["deploy", "test"],
-        "gates": [{"id": "gate1", "test_file": "test_gate_1.py"}],
+        "gates": {"test_gate_1.py": ["gate1"]},  # T3.3 compact map form
     }
     # Существующий файл с MANUAL-частью (header + ручная секция) и старым GENERATED-блоком
     existing = (
@@ -420,10 +422,10 @@ def test_check_missing_file(caplog):
     logger.critical("[IMP:9][test] _check_generated_content missing file returns 1")
 
 
-# endregion
-
-
 # ═══════════════════════════════════════════════════════════════════
+
+# endregion Tests: _check_generated_content / _generate_output (--check mode)
+
 # region Tests: visibility field survives regeneration (План 175 W1.1)
 # ═══════════════════════════════════════════════════════════════════
 
@@ -459,4 +461,4 @@ def test_visibility_field_survives_regeneration(caplog):
     logger.critical("[IMP:9][test] visibility:internal пережил регенерацию (MANUAL verbatim) — OK")
 
 
-# endregion
+# endregion Tests: visibility field survives regeneration (План 175 W1.1)

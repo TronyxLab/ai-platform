@@ -1,17 +1,24 @@
-# GREP_SUMMARY: prometheus scrape_config litellm node-exporter cadvisor redis-exporter postgres-exporter
-# STRUCTURE: ▶ global:30s → rule_files:* -alerts.yml → 8-scrape-configs → file_sd dynamic-targets → ┘
+# GREP_SUMMARY: prometheus scrape_config litellm node-exporter cadvisor redis-exporter postgres-exporter loki file-sd nodes multi-node
+# STRUCTURE: ▶ global:30s → rule_files:* -alerts.yml → 9-scrape-configs → file_sd nodes+projects dynamic-targets → ┘
 # region MODULE_CONTRACT
 ## @purpose  Prometheus scrape configuration for observability stack
 ## @scope    Mounted as /etc/prometheus/prometheus.yml in prometheus container
 ## @invariants
 ##   - scrape_interval: 30s (global, reduced from 15s for memory/CPU efficiency)
 ##   - All targets are on observability-net or host network
-##   - Node Exporter scraped on observability-net (node-exporter:9100) — observability-net
-##   - cAdvisor scraped on observability-net (cadvisor:8080)
+##   - DevPlan 010 T3.3: node-metrics/service-exporters jobs (node-exporter, cadvisor,
+##     postgres-exporter, redis-exporter, nginx-exporter) — file_sd из
+##     /prometheus-targets/nodes/*.json (рендер core/internal/monitoring/prometheus_targets.py
+##     ::generate_node_targets). job_name сохранён 1:1 со static_configs (ЛОВУШКА T3.3 —
+##     дашборды/алерты селекторят по job_name). Single-node: рендерер пишет fallback
+##     Docker-DNS target'ы — поведение байт-идентично прежней статике.
+##   - Node Exporter scraped via file_sd (single-node fallback: node-exporter:9100)
+##   - cAdvisor scraped via file_sd (single-node fallback: cadvisor:8080)
 ##   - LiteLLM scraped on observability-net (litellm:4000)
 ##   - Self-scrape: prometheus:9090
+##   - Loki scraped on observability-net (loki:3100 — /metrics; T3.4 collector-freshness)
 ##   - LiteLLM metrics require bearer_token auth (LITELLM_MASTER_KEY — same as litellm master key)
-##   - Postgres Exporter scraped on observability-net (postgres-exporter:9187) via shared-db-net
+##   - Postgres Exporter scraped via file_sd (single-node fallback: postgres-exporter:9187)
 ## @rationale 30s interval balances metric granularity with storage/CPU cost on 4-core 8GB VPS.
 # endregion MODULE_CONTRACT
 # ⚠️ TRAP[DECISION] · 2026-07-01 · — · file_sd_configs for dynamic targets
@@ -23,6 +30,15 @@
 # ·   prometheus.yml would require container restart. file_sd is zero-downtime.
 # ·   Rejected: consul_sd_configs / dns_sd_configs — overkill for single-node deployment
 # ·   Rejected: static_configs with all projects — requires config regeneration + reload
+# 🧐 TRAP[DECISION] · 2026-08-22 · — · DevPlan 010 T3.3: node jobs static→file_sd —
+# ·   node-exporter/cadvisor/postgres-exporter/redis-exporter/nginx-exporter мигрируют на
+# ·   file_sd /prometheus-targets/nodes/*.json (рендер по placement). job_name 1:1 —
+# ·   ЛОВУШКА: переименование молча ломает дашборды (infrastructure.json) и алерты.
+# ·   Rejected: static_configs + file_sd одновременно (дублирование target'ов в single-node;
+# ·   локальные static target'ы export-портов в multi-node указывали бы на несуществующие
+# ·   контейнеры obs-ноды) · Reason: рендерер — единственный источник нодовых target'ов
+# ·   (single-node fallback = Docker-DNS, multi-node = node.host) · Rev: если file_sd
+# ·   directory станет >50 файлов — рассмотреть директорию на один уровень глубже
 # @rationale 30s interval balances metric granularity with storage/CPU cost on 4-core 8GB VPS.
 #           Slow jobs (cadvisor, node-exporter) at 60s — host metrics change slowly.
 
@@ -65,38 +81,36 @@ scrape_configs:
           component: "llm-gateway"
 
   # ── cAdvisor (container resource metrics) ─────────────────────────────────
+  # DevPlan 010 T3.3: static → file_sd (multi-node remote targets). job_name "cadvisor"
+  # сохранён 1:1 (ЛОВУШКА: дашборды/алерты селекторят по job). Targets рендерит
+  # core/internal/monitoring/prometheus_targets.py::generate_node_targets →
+  # /prometheus-targets/nodes/cadvisor.json (single-node fallback: cadvisor:8080).
   - job_name: "cadvisor"
     scrape_interval: 60s
-    static_configs:
-      - targets:
-          - "cadvisor:8080"
-        labels:
-          service: "cadvisor"
-          component: "container-monitor"
+    file_sd_configs:
+      - files: ["/prometheus-targets/nodes/cadvisor.json"]
+        refresh_interval: 30s
 
   # ── Node Exporter (host OS metrics) ───────────────────────────────────────
-  # node-exporter is on observability-net with container name node-exporter.
+  # DevPlan 010 T3.3: static → file_sd; node-exporter is on observability-net with
+  # container name node-exporter (single-node fallback: node-exporter:9100). job_name 1:1.
   - job_name: "node-exporter"
     scrape_interval: 60s
-    static_configs:
-      - targets:
-          - "node-exporter:9100"
-        labels:
-          service: "node-exporter"
-          component: "host-monitor"
+    file_sd_configs:
+      - files: ["/prometheus-targets/nodes/node-exporter.json"]
+        refresh_interval: 30s
 
   # ── Nginx Exporter (via nginx-prometheus-exporter) (TASK-16) ──────────────
   # Requires nginx-prometheus-exporter container alongside nginx.
   # Container image: nginx/nginx-prometheus-exporter:1.5.1 (upgraded TASK-2)
   # Command: --nginx.scrape-uri=http://host.docker.internal:8081/stub_status
+  # DevPlan 010 T3.3: static → file_sd; job_name 1:1 (single-node fallback:
+  # nginx-prometheus-exporter:9113).
   - job_name: "nginx-exporter"
     scrape_interval: 30s
-    static_configs:
-      - targets:
-          - "nginx-prometheus-exporter:9113"
-        labels:
-          service: "nginx"
-          component: "reverse-proxy"
+    file_sd_configs:
+      - files: ["/prometheus-targets/nodes/nginx-exporter.json"]
+        refresh_interval: 30s
 
   # ── ClickHouse (built-in metrics endpoint, port 9363) ──────────────────
   - job_name: "clickhouse"
@@ -123,27 +137,37 @@ scrape_configs:
   # Added per owner verdict wave-redis 2026-07-15: monitor redis cache hit ratio,
   # memory usage, eviction rate, ops/sec. Targets redis-exporter:9121 on
   # observability-net (scrape) and shared-cache-net (redis access).
+  # DevPlan 010 T3.3: static → file_sd; job_name 1:1 (single-node fallback:
+  # redis-exporter:9121).
   - job_name: "redis-exporter"
     scrape_interval: 30s
-    static_configs:
-      - targets:
-          - "redis-exporter:9121"
-        labels:
-          service: "redis"
-          component: "cache"
+    file_sd_configs:
+      - files: ["/prometheus-targets/nodes/redis-exporter.json"]
+        refresh_interval: 30s
 
   # ── Postgres Exporter (database metrics via postgres-exporter) ─────────────
   # Added per drift-audit ISS-R2: monitor postgres query performance,
   # connection count, replication lag, deadlocks. Targets postgres-exporter:9187
   # on observability-net (scrape) and shared-db-net (postgres access).
+  # DevPlan 010 T3.3: static → file_sd; job_name 1:1 (single-node fallback:
+  # postgres-exporter:9187).
   - job_name: "postgres-exporter"
+    scrape_interval: 30s
+    file_sd_configs:
+      - files: ["/prometheus-targets/nodes/postgres-exporter.json"]
+        refresh_interval: 30s
+
+  # ── Loki (log storage; collector-freshness signal, DevPlan 010 T3.4) ───────
+  # Loki /metrics на том же порту 3100 (observability-net). Источник для
+  # LokiCollectorStale (up{job="loki"}) и loki_distributor_* freshness.
+  - job_name: "loki"
     scrape_interval: 30s
     static_configs:
       - targets:
-          - "postgres-exporter:9187"
+          - "loki:3100"
         labels:
-          service: "postgres"
-          component: "database"
+          service: "loki"
+          component: "log-storage"
 
   # ── Platform Projects (dynamic via file_sd_configs, TASK-12) ─────────────
   - job_name: "platform-projects"

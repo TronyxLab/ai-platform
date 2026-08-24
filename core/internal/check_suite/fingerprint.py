@@ -146,30 +146,21 @@ def compute_fingerprint(root: Path) -> str | None:
 ## @purpose  Путь кэша: $(git rev-parse --git-dir)/check-cache.json (не коммитится).
 ## @io       ⇥ root: Path → ⎋ Path | None (None = git недоступен)
 ## @complexity O(1) — один git subprocess
-# region FUNC__plw_body__cache_path
-## @purpose  Тело try-блока (PLW0717 extraction из cache_path) — семантика except не меняется.
-## @io       ⇥ root → ⎋ результат try-тела
-## @complexity O(1) — извлечение управляющего потока
-def _plw_body__cache_path(root):
-    result = run_subprocess_streaming(
-        ["git", "rev-parse", "--git-dir"], timeout=15, cwd=str(root), stream=False, heartbeat=0
-    )
-    if result.returncode != 0:
-        return None
-    gitdir = result.stdout.strip()
-    gitdir_path = Path(gitdir)
-    if not gitdir_path.is_absolute():
-        gitdir_path = root / gitdir_path
-    return gitdir_path / _CACHE_FILENAME
-
-
-# endregion FUNC__plw_body__cache_path
-
-
 def cache_path(root: Path) -> Path | None:
     """Resolve cache file inside the git dir (not committed)."""
-    try:
-        return _plw_body__cache_path(root)
+    # T3.6: _plw_body__cache_path extraction инлайнена обратно (scaffolding-функция
+    # с 1 call-site не несёт самостоятельной семантики); PLW0717 — осознанное подавление.
+    try:  # ruff: ignore[PLW0717] — try-тело линейное, except-семантика нетривиальна (3 класса)
+        result = run_subprocess_streaming(
+            ["git", "rev-parse", "--git-dir"], timeout=15, cwd=str(root), stream=False, heartbeat=0
+        )
+        if result.returncode != 0:
+            return None
+        gitdir = result.stdout.strip()
+        gitdir_path = Path(gitdir)
+        if not gitdir_path.is_absolute():
+            gitdir_path = root / gitdir_path
+        return gitdir_path / _CACHE_FILENAME
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         return None
 

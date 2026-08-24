@@ -183,6 +183,12 @@ services:
       GF_PROVISIONING_DATASOURCES_PATH: "/etc/grafana/provisioning/datasources"
       GF_PROVISIONING_DASHBOARDS_PATH: "/etc/grafana/provisioning/dashboards"
 
+      # DevPlan 010 T2.0b: Loki tenant (X-Scope-OrgID) для datasource provisioning —
+      # $__env{LOKI_TENANT} в datasources.yml раскрывается из этого env. Дефолт "platform"
+      # единый по стеку (log-collector/loki-config/nginx-vhost). Emission (другой агент)
+      # подставляет имя контекста.
+      LOKI_TENANT: "${LOKI_TENANT:-platform}"
+
       # Server config
       GF_SERVER_HTTP_PORT: "3000"
       # PLATFORM_DOMAIN:-localhost — compose-level fallback (легитимный, DevPlan 117 D33):
@@ -216,8 +222,13 @@ services:
       TELEGRAM_PROXY_URL: "http://host.docker.internal:8118"
       HTTP_PROXY: "${HTTP_PROXY:-http://host.docker.internal:8118}"
       HTTPS_PROXY: "${HTTPS_PROXY:-http://host.docker.internal:8118}"
-      NO_PROXY: "${NO_PROXY:-localhost,127.0.0.1,.local,postgres,pgbouncer,redis,clickhouse,litellm,langfuse,minio,grafana,prometheus,loki,nginx,node-exporter,cadvisor,hermes-agent,status-page,backup-cron,nginx-prometheus-exporter,redis-exporter,postgres-exporter}"
-      no_proxy: "${NO_PROXY:-localhost,127.0.0.1,.local,postgres,pgbouncer,redis,clickhouse,litellm,langfuse,minio,grafana,prometheus,loki,nginx,node-exporter,cadvisor,hermes-agent,status-page,backup-cron,nginx-prometheus-exporter,redis-exporter,postgres-exporter}"
+      # DevPlan 010 T2.5 (monitoring fallback): EXTRA_NO_PROXY — passthrough для multi-node
+      # (адреса нод-пиров подставит emission другого агента). ${VAR:+replacement} —
+      # compose-интерполяция: при пустом EXTRA_NO_PROXY ничего не добавляется (нет
+      # хвостовой запятой), при заданном — ",<value>" в конец списка.
+      NO_PROXY: "${NO_PROXY:-localhost,127.0.0.1,.local,postgres,pgbouncer,redis,clickhouse,litellm,langfuse,minio,grafana,prometheus,loki,nginx,node-exporter,cadvisor,hermes-agent,status-page,backup-cron,nginx-prometheus-exporter,redis-exporter,postgres-exporter}${EXTRA_NO_PROXY:+,${EXTRA_NO_PROXY}}"
+      no_proxy: "${NO_PROXY:-localhost,127.0.0.1,.local,postgres,pgbouncer,redis,clickhouse,litellm,langfuse,minio,grafana,prometheus,loki,nginx,node-exporter,cadvisor,hermes-agent,status-page,backup-cron,nginx-prometheus-exporter,redis-exporter,postgres-exporter}${EXTRA_NO_PROXY:+,${EXTRA_NO_PROXY}}"
+      EXTRA_NO_PROXY: "${EXTRA_NO_PROXY:-}"
 
     volumes:
       # 🧐 TRAP[DECISION] · 2026-07-21 · — · project-template.json НЕ монтируется сюда (template, а не dashboard)

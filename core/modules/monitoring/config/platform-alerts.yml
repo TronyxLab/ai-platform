@@ -1,20 +1,32 @@
-# GREP_SUMMARY: platform-alerts recording-rules deploy-slo burn-rate image-size-budget prometheus native
-# STRUCTURE: ▶ groups → recording (deploy_success/duration rates) → deploy burn-rate alert → image-size budget alert → backup-freshness alert
+# GREP_SUMMARY: platform-alerts recording-rules deploy-slo burn-rate image-size-budget backup-freshness prometheus native multi-node RemoteNodeDown LokiCollectorStale
+# STRUCTURE: ▶ groups → recording (deploy_success/duration rates) → deploy burn-rate alert → image-size budget alert → backup-freshness alert → multinode (RemoteNodeDown / LokiCollectorStale)
 # region MODULE_CONTRACT
 ## @purpose  Платформенные native Prometheus rules (170 W12 C5, SLO-минимум): recording rules
 ##           deploy-success/duration + burn-rate alert + image-size budget alert + backup-freshness.
+##           DevPlan 010 T3.4: multi-node группа — RemoteNodeDown (up{job="node-exporter"}==0,
+##           for:5m) + LokiCollectorStale (Prometheus-based freshness коллектора).
 ## @scope    Копируется config-init'ом в ${PROMETHEUS_RULES_DIR} (host /opt/platform/prometheus-rules) —
 ##           prometheus rule_files glob "/opt/prometheus/rules/*-alerts.yml" подхватывает файл.
-##           Метрики — status-page /metrics (scrape job status-page, observability-net).
+##           Метрики — status-page /metrics (scrape job status-page, observability-net) +
+##           node-exporter (job node-exporter, file_sd T3.3) + loki (job loki, /metrics 3100).
 ## @invariants
 ##   - Имена метрик = канон app.py _handle_metrics (platform_deploy_success,
 ##     platform_deploy_duration_seconds, platform_image_size_bytes,
 ##     platform_backup_last_postgres_age_seconds)
 ##   - Image-size budget: 5 GiB на образ (порог обсуждён 170 W12 C6; alert warning-уровня)
 ##   - Burn-rate: 5-минутное окно на 24h-период (multi-window не вводится — минимальный набор)
+##   - T3.4: RemoteNodeDown использует job "node-exporter" (фактическое имя job'а из T3.3 —
+##     план писал job="nodes" как плейсхолдер; нодовые jobs рендерятся с job_name 1:1)
+##   - T3.4: LokiCollectorStale — Prometheus-based (НЕ Loki-log-based / Grafana chain):
+##     up{job="loki"}==0 (Loki недоступен — коллекторы не могут шипить) OR
+##     нулевой rate приёма байт за 15m при >0 за 6h (коллекторы stale при живом Loki)
 ## @rationale SLO-минимум 170 W12 C5: deploy-путь и backup-freshness — ключевые;
 ##            image-size budget — cost-контроль (C7). Burn-rate считает по метрике успеха.
+##            T3.4: S2 §8 — риск availability при VPN-морганиях → RemoteNodeDown алерт
+##            (restart policy); LokiCollectorStale — метрики-источника для log-based сегодня
+##            нет, freshness коллектора наблюдаем через scrape Loki (distributor-счётчики).
 ## @changes  2026-08-15 | DevPlan 170 W12 C5/C6 — Created
+## @changes  2026-08-22 | DevPlan 010 T3.4 — +RemoteNodeDown/LokiCollectorStale (multi-node)
 # endregion MODULE_CONTRACT
 
 groups:
@@ -85,3 +97,57 @@ groups:
           description: >
             Last successful PostgreSQL backup is older than 25h or never recorded.
             Check backup-cron module logs.
+
+  # ── Multi-node observability (DevPlan 010 T3.4) ───────────────────────────
+  - name: "platform-multinode-alerts"
+    interval: 5m
+    rules:
+      # ── RemoteNodeDown (нода недоступна) ───────────────────────────────────
+      # Нода = её node-exporter (job "node-exporter" — фактическое имя из T3.3;
+      # план T3.4 писал job="nodes" как плейсхолдер — jobs нод рендерятся file_sd
+      # с job_name 1:1). up==0 for 5m — устойчивое падение (не флап scrape).
+      # Каждая нода = отдельный instance (10.8.0.x:9100) → аннотация через instance.
+      - alert: "RemoteNodeDown"
+        expr: 'up{job="node-exporter"} == 0'
+        for: "5m"
+        labels:
+          severity: "critical"
+          service: "platform-nodes"
+        annotations:
+          summary: "Node unreachable: {{ $labels.instance }}"
+          description: >
+            Prometheus cannot scrape node-exporter on {{ $labels.instance }}
+            (job=node-exporter) for over 5 minutes — the node is down or its
+            metrics port is blocked. Check the node itself and the peer-firewall
+            allow rules (T2.4: 9100/8080 only from the monitoring node).
+
+      # ── LokiCollectorStale (коллекторы логов устарели) ─────────────────────
+      # Prometheus-based freshness коллектора (НЕ Loki-log-based / Grafana chain —
+      # метрики-источника для log-based сегодня нет, план T3.4). Два сигнала:
+      #   (1) up{job="loki"} == 0 — Loki недоступен → коллекторы (Alloy) не могут
+      #       шипить логи (WAL буферизует, self-heal после восстановления);
+      #   (2) нулевой rate приёма байт за 15m при >0 за 6h — Loki жив, но данные
+      #       не поступают → коллекторы stale (fallback-защита от ложного firing
+      #       на свежем Loki без истории и на тихих интервалах <1h).
+      # Ограничение v1: baseline 6h «распадается» → алерт сам сбрасывается через ~6h
+      # стагнации (rate[6h] уходит в 0). Rev: первый ложный сброс → коллектор обязан
+      # экспортировать heartbeat-метрику (alloy_wal_* / loki.write last-success).
+      - alert: "LokiCollectorStale"
+        expr: >
+          up{job="loki"} == 0
+          or
+          (
+            sum(rate(loki_distributor_bytes_received_total[15m])) == 0
+            and
+            sum(rate(loki_distributor_bytes_received_total[6h])) > 0
+          )
+        for: "10m"
+        labels:
+          severity: "warning"
+          service: "platform-logging"
+        annotations:
+          summary: "Loki unreachable or log ingestion stalled"
+          description: >
+            Loki is down (collectors cannot ship logs) or no log data was received
+            for 15 minutes after at least 6h of traffic — collectors are stale.
+            Check log-collector (Alloy) on each node and Loki itself.

@@ -1,5 +1,5 @@
 # GREP_SUMMARY: gate-test healthcheck-contract check-http early-exit 127-0-0-1 deep-mode
-# STRUCTURE: ▶ test_deep_mode_has_early_exit → ◇ test_litellm_uses_check_http → ◇ test_langfuge_uses_127_0_0_1 → ◇ test_postgres_deep_includes_pgbouncer → ◇ test_logging_deep_includes_alloy
+# STRUCTURE: ▶ test_deep_mode_has_early_exit → ◇ test_litellm_uses_check_http → ◇ test_langfuge_uses_127_0_0_1 → ◇ test_postgres_deep_includes_pgbouncer → ◇ test_logging_deep_includes_loki → ◇ test_log_collector_deep_includes_alloy
 # region MODULE_CONTRACT
 ## @purpose  Gate tests: validate healthcheck.sh contracts across all modules (DevPlan 04 TASK-G3)
 ## @scope    Проверяет exit 0 после deep, check_http, 127.0.0.1, deep-покрытие
@@ -8,9 +8,11 @@
 ##   - litellm: check_http вместо raw curl
 ##   - langfuse: 127.0.0.1 вместо docker inspect IP
 ##   - postgres: deep включает pgbouncer pg_isready
-##   - logging: deep включает alloy (liveness-контейнер модуля)
+##   - logging: deep включает loki /ready (хранилище; 010 T3.1: alloy → log-collector)
+##   - log-collector: deep включает alloy (коллектор; БЕЗ loki /ready — WAL self-heal)
 ## @rationale Стандартизация healthcheck контракта (DevPlan 04 DD5, DD6)
 ## @changes   2026-08-01 | DevPlan 117 Brief F (T6 #49): добавлены IMP:9-трассы в assert-блоки бизнес-правил
+## @changes   2026-08-22 | DevPlan 010 T3.1 — logging deep: только loki; log-collector deep: alloy
 # endregion MODULE_CONTRACT
 
 
@@ -32,6 +34,7 @@ HEALTHCHECK_FILES = {
     "langfuse": MODULES_DIR / "langfuse" / "healthcheck.sh",
     "postgres": MODULES_DIR / "postgres" / "healthcheck.sh",
     "logging": MODULES_DIR / "logging" / "healthcheck.sh",
+    "log-collector": MODULES_DIR / "log-collector" / "healthcheck.sh",
 }
 
 
@@ -99,13 +102,27 @@ class TestHealthcheckContract:
         logger.info("[IMP:9][healthcheck-contract] postgres: deep-блок проверяет pgbouncer pg_isready")
 
     @pytest.mark.gate
-    def test_logging_deep_includes_alloy(self) -> None:
-        """logging healthcheck.sh deep проверяет alloy (контейнер-коллектор)."""
+    def test_logging_deep_includes_loki(self) -> None:
+        """logging healthcheck.sh deep проверяет loki /ready (хранилище; 010 T3.1: alloy → log-collector)."""
         # 🧪 TRAP[TEST] · 2026-07-15 · gate/healthcheck-contract · Регресс: logging deep-блок
-        # утратил коллектор; 164 W1-5: promtail→Alloy (EOL REPLACE) — deep проверяет alloy
+        # утратил loki /ready; 010 T3.1: Alloy выделен в log-collector — deep проверяет loki
         path = HEALTHCHECK_FILES["logging"]
         content = path.read_text()
 
-        assert "alloy" in content.lower(), "logging/healthcheck.sh: missing alloy container check"
         assert "loki" in content.lower(), "logging/healthcheck.sh: missing loki container check"
-        logger.info("[IMP:9][healthcheck-contract] logging: deep-блок проверяет alloy + loki")
+        assert 'check_http "http://127.0.0.1:${LOKI_PORT}/ready"' in content, (
+            "logging/healthcheck.sh: deep mode must check Loki /ready endpoint (env-порт)"
+        )
+        logger.info("[IMP:9][healthcheck-contract] logging: deep-блок проверяет loki /ready")
+
+    @pytest.mark.gate
+    def test_log_collector_deep_includes_alloy(self) -> None:
+        """log-collector healthcheck.sh deep проверяет alloy (коллектор; БЕЗ loki /ready — WAL self-heal)."""
+        # 🧪 TRAP[TEST] · 2026-08-22 · gate/healthcheck-contract · Регресс: log-collector deep-блок
+        # утратил коллектор; 010 T3.1: alloy выделен из logging; loki /ready НЕ проверяется
+        path = HEALTHCHECK_FILES["log-collector"]
+        content = path.read_text()
+
+        assert "alloy" in content.lower(), "log-collector/healthcheck.sh: missing alloy container check"
+        assert "check_docker_health" in content, "log-collector/healthcheck.sh: missing check_docker_health"
+        logger.info("[IMP:9][healthcheck-contract] log-collector: deep-блок проверяет alloy")

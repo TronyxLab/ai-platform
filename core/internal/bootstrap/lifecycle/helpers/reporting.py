@@ -29,18 +29,16 @@ from __future__ import annotations
 import logging
 import os
 import pathlib
-import shlex
-import subprocess
 import time
 from collections.abc import Callable
 from typing import Protocol, cast
 
-# DevPlan 170 W1-A3: приватный порт Privoxy из SoT firewall.py (литерал 8118 удалён)
 from core.internal.bootstrap.firewall import PRIVOXY_PORT
-
-# B3: канонический platform root — shared/deploy_paths (литерал /opt/platform удалён)
-from core.internal.shared.deploy_paths import platform_remote_base
 from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError, ConfigValidationError
+
+# B3: канонический platform root — shared/deploy_paths; T3.8: platform_remote_base
+# удалён вместе с последним inline bash-вызовом (канон — module_interface.invoke)
+from core.internal.shared.module_interface import invoke as module_interface_invoke
 
 
 class _StateView(Protocol):
@@ -81,6 +79,42 @@ logger = logging.getLogger(__name__)
 ## @invariants
 ##   - invoke_module_interface — bash-функция из module-interface.sh (НЕ executable) —
 ##     вызывается через bash -c с source paths.sh (TRAP[BUG] 2026-07-24 P0)
+# region FUNC__enabled_module_items
+## @purpose  Нормализация node.yaml#modules (dict|list) → [(name, value)] только enabled
+##           (T3.8: извлечён из run_healthchecks для C901 ≤10; единственный потребитель).
+## @io       ⇥ node_yaml: str → ⎋ list[tuple[str, object]]
+## @complexity O(M)
+def _enabled_module_items(node_yaml: str) -> list[tuple[str, object]]:
+    """Parse node.yaml modules section → enabled (name, value) pairs."""
+    from core.internal.shared.node_yaml import NodeYaml
+
+    node = NodeYaml(node_yaml)
+    modules = cast(
+        "object", node.get("modules", default=dict[str, object]())
+    )  # W11-G1 cross-file: NodeYaml.get → Any; default типизирован
+    if isinstance(modules, dict):
+        items = list(cast("dict[str, object]", modules).items())  # W11-G1: каскад от node_yaml.get → Any
+    elif isinstance(modules, list):
+        mod_list = cast("list[dict[str, object]]", modules)  # W11-G1: каскад от node_yaml.get → Any
+        items = [(cast("str", mod.get("name", "")), cast("object", mod)) for mod in mod_list]
+    else:
+        items = []
+    result: list[tuple[str, object]] = []
+    for name, value in items:
+        if not name:
+            continue
+        if isinstance(value, dict):
+            enabled = str(cast("dict[str, object]", value).get("enabled", True)).lower()  # W11-G1 каскад Any
+        else:
+            enabled = str(value).lower()
+        if enabled == "true":
+            result.append((name, value))
+    return result
+
+
+# endregion FUNC__enabled_module_items
+
+
 def run_healthchecks(node_yaml: str) -> None:
     """Run healthchecks on all deployed modules."""
     if not node_yaml or not pathlib.Path(node_yaml).is_file():
@@ -93,70 +127,34 @@ def run_healthchecks(node_yaml: str) -> None:
 
     # ruff: ignore[PLW0717] — тело try присваивает имена, читаемые except/после — извлечение ломает видимость
     try:
-        from core.internal.shared.node_yaml import NodeYaml
+        module_items = _enabled_module_items(node_yaml)
 
-        node = NodeYaml(node_yaml)
-        modules = cast(
-            "object", node.get("modules", default=dict[str, object]())
-        )  # W11-G1 cross-file: NodeYaml.get → Any; default типизирован
-        if isinstance(modules, dict):
-            module_items = list(
-                cast("dict[str, object]", modules).items()
-            )  # W11-G1 cross-file: каскад от node_yaml.get → Any
-        elif isinstance(modules, list):
-            mod_list = cast("list[dict[str, object]]", modules)  # W11-G1 cross-file: каскад от node_yaml.get → Any
-            module_items = [(cast("str", mod.get("name", "")), cast("object", mod)) for mod in mod_list]
-        else:
-            module_items = []
-
-        for mod_name, mod_value in module_items:
-            if not mod_name:
-                continue
-            if isinstance(mod_value, dict):
-                enabled = str(
-                    cast("dict[str, object]", mod_value).get("enabled", True)
-                ).lower()  # W11-G1 cross-file: каскад от node_yaml.get
-            else:
-                enabled = str(mod_value).lower()
-            if enabled != "true":
-                continue
-
+        for mod_name, _mod_value in module_items:
             passed = False
-            # ⚠️ TRAP[BUG] · 2026-07-24 · P0 · invoke_module_interface is a bash function, not an executable
+            # ⚠️ TRAP[BUG] · 2026-07-24 · P0 · invoke_module_interface — bash-функция, не executable
             # · Symptom: subprocess.run(["invoke_module_interface", ...]) → FileNotFoundError
-            # · Root: invoke_module_interface is sourced from module-interface.sh (via paths.sh)
-            # · Fix: wrap in bash -c with proper sourcing
-            platform_root = str(platform_remote_base())
+            # · Root: invoke_module_interface sourced из module-interface.sh (через paths.sh)
+            # · Fix (T3.8): дублирующий bash -c-конструктор удалён → канонический
+            # ·   shared.module_interface.invoke() (централизованный sourcing paths.sh +
+            # ·   module-interface.sh + timeout/OSError-обработка). Retry 10×10s остался здесь —
+            # ·   в invoke/check_module ретраев НЕТ (сверено с планом).
+            # · Prevention: вызовы модулей — ТОЛЬКО через module_interface.invoke.
             for attempt in range(1, hc_max_retries + 1):
-                # ruff: ignore[PLW0717] — try вложен в условный блок внутри функции — после-try чтение локалей неанал...
-                try:
-                    hc_cmd = (
-                        f"source {shlex.quote(platform_root + '/core/lib/paths.sh')} && "
-                        f"invoke_module_interface {shlex.quote(mod_name)} healthcheck liveness"
+                ok, err = module_interface_invoke(mod_name, "healthcheck", "liveness", timeout=30)
+                if ok:
+                    logger.info(
+                        "[IMP:9][healthcheck:%s] Healthcheck PASS (attempt %d/%d)",
+                        mod_name,
+                        attempt,
+                        hc_max_retries,
                     )
-                    hc_result = subprocess.run(
-                        ["bash", "-c", hc_cmd], capture_output=True, text=True, timeout=30, check=False
-                    )
-                    if hc_result.returncode == 0:
-                        logger.info(
-                            "[IMP:9][healthcheck:%s] Healthcheck PASS (attempt %d/%d)",
-                            mod_name,
-                            attempt,
-                            hc_max_retries,
-                        )
-                        passed = True
-                        break
-                    if attempt == 1:
-                        logger.warning(
-                            "[IMP:7][healthcheck:%s] stderr: %s",
-                            mod_name,
-                            hc_result.stderr.strip()[-200:] if hc_result.stderr else "(empty)",
-                        )
-                except subprocess.TimeoutExpired:
-                    logger.warning("[IMP:7][healthcheck:%s] Timeout (attempt %d/%d)", mod_name, attempt, hc_max_retries)
-                except FileNotFoundError:
+                    passed = True
+                    break
+                if attempt == 1:
                     logger.warning(
-                        "[IMP:7][healthcheck:%s] bash not found (attempt %d/%d)", mod_name, attempt, hc_max_retries
+                        "[IMP:7][healthcheck:%s] stderr: %s",
+                        mod_name,
+                        (err or "(empty)").strip()[-200:] if err else "(empty)",
                     )
                 if attempt < hc_max_retries:
                     time.sleep(hc_retry_interval)

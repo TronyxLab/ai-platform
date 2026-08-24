@@ -1,16 +1,15 @@
 # Findings 002 — Races, hidden invariants, security surface
 # Wave 1 · agent: invariant-race
 
-## AI-0006 [HIGH] [invariant-race]
-Files: core/internal/deploy/receive_flow.py:423-462; orchestrator.py:295-297,1100-1113
+## AI-0006 [MEDIUM·ACTIVE-conditional] [invariant-race] VERIFIED
+Files: core/internal/deploy/receive_flow.py:423-462; orchestrator.py:295-297,472,1094-1121
 Symbols: ReceiveFlow.deploy payload replacement vs DeployOrchestrator.deploy Step-0 _FileLock; _restore_payload_files rollback
-Evidence: staging iterdir → os.remove/os.replace into /opt/projects/<p>/ runs BEFORE per-project flock acquire; rollback copies backup over target_dir later.
-Scenario: two concurrent receive for same project (CI retry overlapping newer push): interleaved removal/replacement ⇒ mixed v2/v3 payload composed up; failed-A rollback can also revert files already replaced by B mid-deploy.
+Evidence (verifier): replacement precedes lock (lock at :295-297 inside deploy(), called at receive_flow.py:472 AFTER os.replace loop); deploy-project.yml has NO `concurrency:` block; forced-command has no flock wrapper; rollback does non-atomic os.remove+shutil.copy2 over current target.
+Scenario: concurrent receive of SAME project (CI retry overlapping newer push) ⇒ mixed v2/v3 payload composed up; failed-A rollback clobbers B's fresh payload. Compose ops themselves stay per-project locked.
 Why AI-pattern: lock added at orchestrator layer while file mutation stayed earlier in flow.
-Actual risk: corrupted project state on retry-overlap; silent cross-deploy revert.
-Minimal cleanup: move lock acquisition to start of receive handler (before staging replace).
-Code churn: ~20 lines. Pre-launch: yes.
-Confidence: high.
+Actual risk: payload-file mix / cross-deploy revert on retry-overlap.
+Minimal cleanup: acquire per-project flock at start of receive handler (before staging replace); optionally add workflow concurrency group.
+Code churn: ~20 lines. Pre-launch: yes. Confidence: high.
 
 ## AI-0007 [MEDIUM] [secret-surface]
 Files: core/internal/shared/crypto.py:86

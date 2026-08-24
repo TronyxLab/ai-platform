@@ -218,7 +218,7 @@ def test_sorted_alphabetically(caplog, tmp_path):
 
 # 🧪 TRAP[TEST] · Regression · U-59 (DevPlan 116 T7) · bootstrap adapter uses canonical predicate
 # · Scenario: bootstrap discover_modules() delegates to canonical discover_docker_modules
-# ·   (same 13 modules on real core/modules; adapter maps Path → repo-relative strings)
+# ·   (same 14 modules on real core/modules — 010 T3.1: +log-collector; adapter maps Path → repo-relative strings)
 # · Last fail: N/A (new test)
 # · Remove if: bootstrap adapter changes
 @ldd_trajectory
@@ -239,7 +239,9 @@ def test_bootstrap_uses_canonical_predicate(caplog):
     assert canonical_names == bootstrap_names, (
         f"bootstrap/canonical predicates diverged: {sorted(canonical_names)} vs {sorted(bootstrap_names)}"
     )
-    assert len(canonical_names) == 13, f"Expected 13 docker modules, got {len(canonical_names)}"
+    assert len(canonical_names) == 14, (
+        f"Expected 14 docker modules (010 T3.1: +log-collector), got {len(canonical_names)}"
+    )
     logger.critical("[IMP:9][test] bootstrap == canonical predicate (%d docker modules)", len(canonical_names))
 
 

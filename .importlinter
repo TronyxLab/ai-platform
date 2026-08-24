@@ -115,8 +115,9 @@ forbidden_modules =
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 3. INDEPENDENCE — взаимная изоляция доменов
-#    bootstrap ↔ deploy изолированы, КРОМЕ двух контрактных точек (AGENTS.md G3):
-#    context_deployer.py → deploy.channels.LocalChannel / deploy.orchestrator.
+#    bootstrap ↔ deploy изолированы, КРОМЕ трёх контрактных точек (AGENTS.md G3):
+#    context_deployer.py → deploy.channels.LocalChannel / deploy.orchestrator (транспортные);
+#    domains.py → deploy.context_deployer (T3.5: importlib-обход удалён, ребро стало статическим).
 #    reconciler_projects.py живёт в core/internal/ (не в bootstrap/) — его импорты
 #    в deploy.* не затрагивает этот контракт (покрывает layers: internal→internal).
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -131,6 +132,9 @@ ignore_imports =
     # φ8 (deploy_services); deploy — нижележащий транспортный слой (DevPlan 119 G3).
     core.internal.bootstrap.deploy.context_deployer -> core.internal.deploy.channels
     core.internal.bootstrap.deploy.context_deployer -> core.internal.deploy.orchestrator
+    # T3.5: domains.py — обычный guarded-импорт context_deployer (importlib-обход удалён,
+    # DEP-0018); направление bootstrap→deploy легально (AGENTS.md G3), цикла нет.
+    core.internal.bootstrap.lifecycle.helpers.domains -> core.internal.bootstrap.deploy.context_deployer
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 4. ACYCLIC-SIBLINGS — ацикличность внутренних доменов core.internal

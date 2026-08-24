@@ -13,6 +13,9 @@
 ##   - Networks declared as external: true — pre-created by deploy-modules.sh
 ##   - v4 (164 W1-5): web + worker — отдельные образы (langfuse/langfuse + langfuse-worker);
 ##     общий env-блок через YAML-якорь x-langfuse-env; ENCRYPTION_KEY — required (64 hex)
+##   - Cross-node DSN (DevPlan 010 T2.7): DATABASE_URL @${POSTGRES_HOST:-pgbouncer}:6432,
+##     CLICKHOUSE_MIGRATION_URL @${CLICKHOUSE_HOST:-clickhouse}:${CLICKHOUSE_NATIVE_PORT:-9000};
+##     single-node дефолты = Docker DNS (байт-идентично прежнему), worker наследует якорь
 ## @rationale Profiles enable selective startup via `make up MODULES=langfuse`
 # endregion MODULE_CONTRACT
 
@@ -24,6 +27,10 @@ x-logging: &default-logging
 
 # Общий env-контракт web + worker (v4: оба контейнера требуют идентичный набор переменных;
 # YAML-якорь — единственный compose-нативный механизм дедупликации env-блоков).
+# Cross-node DSN (DevPlan 010 T2.7): single-node — дефолты ниже (Docker DNS) = байт-идентично
+# прежнему поведению; multi-node — provision/emission подставляет host data-ноды и CH native
+# peer 19000 (S3: 10.8.0.11:19000 — сценарий S3 «data/agent/apps+obs», платформа-константа
+# platform_ports.CLICKHOUSE_NATIVE_PEER; локальный CH native остаётся 9000).
 x-langfuse-env: &langfuse-env
   # Node.js heap limit — prevents OOM in Docker with cgroup memory limits
   NODE_OPTIONS: "--max-old-space-size=1024"
@@ -32,7 +39,10 @@ x-langfuse-env: &langfuse-env
   HOSTNAME: "0.0.0.0"
 
   # Database — shared PostgreSQL
-  DATABASE_URL: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?PG_PASSWORD_REQUIRED}@pgbouncer:6432/langfuse?sslmode=disable"
+  # Cross-node: host параметризуется — single-node дефолт pgbouncer (Docker DNS),
+  # multi-node provision подставляет host data-ноды.
+  DATABASE_URL: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?PG_PASSWORD_REQUIRED}@${POSTGRES_HOST:-pgbouncer}:6432/langfuse?sslmode=disable"
+  POSTGRES_HOST: "${POSTGRES_HOST:-pgbouncer}"
 
   # Auth — must be set in .env/SOPS
   NEXTAUTH_SECRET: "${NEXTAUTH_SECRET}"
@@ -53,7 +63,12 @@ x-langfuse-env: &langfuse-env
 
   # ClickHouse
   CLICKHOUSE_URL: "${CLICKHOUSE_URL:-http://clickhouse:8123}"
-  CLICKHOUSE_MIGRATION_URL: "clickhouse://${CLICKHOUSE_USER:-default}:${CLICKHOUSE_PASSWORD:?CH_PASSWORD_REQUIRED}@clickhouse:9000"
+  # Cross-node CH native (DevPlan 010 T2.7 + TRAP §3): single-node — Docker DNS clickhouse:9000;
+  # multi-node — provision подставляет host data-ноды и native peer 19000
+  # (platform_ports.CLICKHOUSE_NATIVE_PEER; локальный native остаётся 9000).
+  CLICKHOUSE_MIGRATION_URL: "clickhouse://${CLICKHOUSE_USER:-default}:${CLICKHOUSE_PASSWORD:?CH_PASSWORD_REQUIRED}@${CLICKHOUSE_HOST:-clickhouse}:${CLICKHOUSE_NATIVE_PORT:-9000}"
+  CLICKHOUSE_HOST: "${CLICKHOUSE_HOST:-clickhouse}"
+  CLICKHOUSE_NATIVE_PORT: "${CLICKHOUSE_NATIVE_PORT:-9000}"
   CLICKHOUSE_USER: "${CLICKHOUSE_USER:-default}"
   CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:?CH_PASSWORD_REQUIRED}"
   CLICKHOUSE_CLUSTER_ENABLED: "false"

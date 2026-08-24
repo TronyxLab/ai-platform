@@ -150,6 +150,7 @@ _AMBER_DOMAIN_FILES: set[str] = {
     "monitoring/langfuse_projects.py",
     # dev-инструменты
     "agent_check/__init__.py",  # 170 W10-C: agent_check.py → пакет (коллизия файл+пакет снята)
+    "agent_check/runners.py",  # T3.2 (1787342045763): subprocess-шаги → runners.py — AMBER-скоуп следует за кодом
     "static/__main__.py",
     "lint/grepsummary_validator.py",
     "scripts/generate_entrypoint_manifest.py",

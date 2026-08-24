@@ -70,6 +70,7 @@ def test_all_base_yml_have_x_logging(caplog):
 _TOOL_NAMED_PRIMARY = {
     "infra-metrics": "cadvisor",
     "logging": "loki",
+    "log-collector": "alloy",
     "monitoring": "prometheus",
 }
 

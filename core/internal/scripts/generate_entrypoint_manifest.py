@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: generate_entrypoint_manifest, extract_phony_targets, collect_gate_tests, merge, load_structural_sections, manifest-generator, CI, g3-cycle-break, static-phony-parsing
-# STRUCTURE: ▶ статический .PHONY-парсинг (Makefile+makefiles/*.mk, детерминированный — P-14) → ▶ pytest --collect-only —▸ gate tests → ◇ load_structural_sections (allowed_verbs/gates EXCLUDED — G3 cycle break) → ⊕ merge (replace allowed_verbs + gates[], preserve rest) → ⎋ write YAML
+# GREP_SUMMARY: generate_entrypoint_manifest, extract_phony_targets, collect_gate_tests, merge, load_structural_sections, manifest-generator, CI, g3-cycle-break, static-phony-parsing, gates-map-compaction
+# STRUCTURE: ▶ статический .PHONY-парсинг (Makefile+makefiles/*.mk, детерминированный — P-14) → ▶ pytest --collect-only —▸ gate tests → ◇ load_structural_sections (allowed_verbs/gates EXCLUDED — G3 cycle break) → ⊕ merge (replace allowed_verbs + gates-маппинг test_file→[ids], preserve rest) → ⎋ write YAML
 # region MODULE_CONTRACT
 ## @purpose  Generator for entrypoint-manifest.yaml — extracts .PHONY targets from Makefile
 ##           via СТАТИЧЕСКИЙ парсинг (DevPlan 123 T2/P-14 — детерминированный, заменил make -np),
 ##           collects gate tests via pytest --collect-only, loads STRUCTURAL sections from existing manifest
-##           (NEVER allowed_verbs or gates — G3 cycle break), merges by replacing allowed_verbs and gates[]
+##           (NEVER allowed_verbs or gates — G3 cycle break), merges by replacing allowed_verbs and gates
 ##           while preserving all other sections.
+##           gates-секция эмитится КОМПАКТНОЙ формой {test_file: [test_ids]} (T3.3 compacton):
+##           527 развёрнутых записей {id, test_file, description} схлопнуты в маппинг файл→список id —
+##           description имел НОЛЬ потребителей (единственный читатель — мёртвый helper
+##           _load_entrypoint_manifest_gate_make_targets в test_gate_workflow_consistency.py, 0 вызовов).
 ## @scope    Used by `make generate-manifests` (Wave 2 of DevPlan 051). Run as CLI.
 ## @invariants
 ##   - G3 CYCLE BREAK (DevPlan 090 T6): allowed_verbs and gates are NEVER loaded from existing manifest.
@@ -17,10 +21,12 @@
 ##     make -np остаётся только fallback при пустом статическом результате.
 ##   - system_exceptions filtered out: help, venv, pre-commit-*, test-*, gate-*,
 ##     _get_all_profiles (технический помощник parity-гейта, DevPlan 138 S3)
+##   - gates-секция: {test_file: [test_ids]} — маппинг, НЕ список развёрнутых записей;
+##     ключи и id сортируются (детерминизм byte-level --check и test_gate_yaml_deterministic_output).
 ##   - All other sections preserved verbatim from existing manifest
-##   - Empty lists are written as [] in YAML (never null)
+##   - Empty lists are written as [] in YAML (never null); пустой gates-маппинг — {}
 ## @rationale DevPlan 051 Wave 2: automated sync eliminates drift between Makefile targets and
-##            entrypoint-manifest.yaml allowed_verbs, and between pytest gate markers and gates[].
+##            entrypoint-manifest.yaml allowed_verbs, and between pytest gate markers and gates.
 ##            DevPlan 090 T6: Breaking the G3 cyclic dependency — the generator must NOT read its own
 ##            output (allowed_verbs/gates) from the manifest, because this creates a self-reinforcing
 ##            drift mask. If a target is deleted from Makefile but remains in YAML, the old value
@@ -28,6 +34,12 @@
 ##            DevPlan 123 T2 (P-14): make -np был главным кандидатом недетерминизма G3 —
 ##            статический парсинг устраняет класс (воспроизведение: make 3.81/4.4.1 локально
 ##            дают одинаковый .PHONY-вывод, но CI-окружение отличалось; статика одинакова везде).
+##            T3.3 gates-map compaction: description генерировался как
+##            'Auto-discovered gate: {id}' — производная от id, 0 живых потребителей
+##            (git grep: единственный читатель — мёртвый helper, не вызывается ни одним тестом);
+##            развёрнутый test_file на каждый id дублировал ключ маппинга. Схлопывание
+##            в {test_file: [ids]} сохраняет весь читаемый контракт (test_file→ids)
+##            и сокращает gates-секцию 85KB → ~25KB (527 записей → 130 ключей + id).
 ## @see      core/entrypoint-manifest.yaml — target manifest file
 ## @changes 2026-07-22 | Created (DevPlan 051 Wave 2)
 ##           2026-07-30 | Added --check mode: byte-level comparison, exit 0/1, stderr diff
@@ -38,6 +50,9 @@
 ##           2026-08-05 | DevPlan 138 S3 (W2): SYSTEM_EXCEPTIONS += _get_all_profiles
 ##                        (технический помощник parity-гейта test_gate_profiles_parity,
 ##                        не каноническая операция; таргет жив в helpers.mk .PHONY)
+##           2026-08-22 | T3.3 gates-map compaction: gates-секция {test_file: [test_ids]}
+##                        вместо списка {id, test_file, description}; description удалён
+##                        (0 потребителей); размер 85KB → ~25KB
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -52,7 +67,7 @@ import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
-from typing import ClassVar, TextIO, TypedDict, cast
+from typing import ClassVar, TextIO, cast
 
 import yaml
 
@@ -61,13 +76,10 @@ import yaml
 # region TYPED_CONTRACTS
 # W11: yaml/generated manifest boundaries — no Any (reportExplicitAny=error).
 
-
-class _GateEntry(TypedDict):
-    """Gate test entry in generated gates[] list."""
-
-    id: str
-    test_file: str
-    description: str
+# T3.3 gates-map compaction: gates-секция = {test_file: [test_ids]} — маппинг файл → список id.
+# Развёрнутая запись {id, test_file, description} упразднена: description имел 0 потребителей,
+# test_file дублировался на каждый id (527 записей → 130 ключей + id-списки).
+_GatesMap = dict[str, list[str]]
 
 
 # Existing manifest: opaque top-level mapping (structural sections preserved verbatim).
@@ -229,22 +241,24 @@ def extract_phony_targets(makefile_dir: str, gmake_path: str) -> list[str]:
     return unique
 
 
-def collect_gate_tests(tests_dir: str) -> list[_GateEntry]:
+def collect_gate_tests(tests_dir: str) -> _GatesMap:
     """Run pytest --collect-only -m gate -q to get gate test definitions (pytest 9.x XML-like output format).
 
     ## @purpose  Collect gate test definitions from pytest markup.
-    ##            Returns list of {id, test_file, description} dicts.
+    ##            Returns {test_file: [test_ids]} — компактный маппинг (T3.3 compaction).
     ## @io       ⇥ tests_dir: path to tests/ directory
-    ##           → ⎋ list[dict]: gate test entries with id, test_file, description
-    ## @complexity O(N) where N = number of gate test items collected
+    ##           → ⎋ dict[str, list[str]]: test_file → sorted list of gate ids
+    ## @complexity O(N log N) where N = number of gate test items collected (сортировка)
     ## @invariants
     ##   - Falls back to filesystem scan if pytest unavailable
     ##   - Gate ID derived from test function name (test_gate_X → X)
     ##   - test_file derived from module path relative to tests/
-    ##   - description extracted from function docstring or test name
+    ##   - description УПРАЗДНЁН (T3.3): имел 0 потребителей, был производной от id
+    ##   - Keys (test_file) и id-списки сортируются — детерминизм byte-level --check
+    ##     и test_gate_yaml_deterministic_output
     """
     print(f"[IMP:7][collect_gate_tests] Collecting gate tests from {tests_dir}", file=sys.stderr)
-    gates: list[_GateEntry] = []
+    gates: dict[str, list[str]] = {}
 
     # ruff: ignore[PLW0717] — тело try присваивает имена, читаемые except/после — извлечение ломает видимость
     try:
@@ -283,14 +297,15 @@ def collect_gate_tests(tests_dir: str) -> list[_GateEntry]:
                     gate_id = (
                         test_name.replace("test_gate_", "", 1) if test_name.startswith("test_gate_") else test_name
                     )
-                    gates.append({
-                        "id": gate_id,
-                        "test_file": os.path.relpath(test_file, tests_dir)
-                        if Path(test_file).is_absolute()
-                        else test_file,
-                        "description": f"Auto-discovered gate: {gate_id}",
-                    })
-            print(f"[IMP:8][collect_gate_tests] pytest collected {len(gates)} gate tests", file=sys.stderr)
+                    test_file_rel = (
+                        os.path.relpath(test_file, tests_dir) if Path(test_file).is_absolute() else test_file
+                    )
+                    gates.setdefault(test_file_rel, []).append(gate_id)
+            total_ids = sum(len(v) for v in gates.values())
+            print(
+                f"[IMP:8][collect_gate_tests] pytest collected {total_ids} gate tests in {len(gates)} files",
+                file=sys.stderr,
+            )
             print(
                 f"[IMP:6][collect_gate_tests] pytest exit code {result.returncode}: {result.stderr[:300]}",
                 file=sys.stderr,
@@ -306,14 +321,20 @@ def collect_gate_tests(tests_dir: str) -> list[_GateEntry]:
         if gates_dir.is_dir():
             for f in sorted(gates_dir.glob("test_gate_*.py")):
                 gate_id = f.stem.replace("test_gate_", "", 1)
-                gates.append({
-                    "id": gate_id,
-                    "test_file": str(f.relative_to(tests_path)),
-                    "description": f"Auto-discovered gate: {gate_id}",
-                })
-        print(f"[IMP:8][collect_gate_tests] filesystem scan found {len(gates)} gate tests", file=sys.stderr)
+                test_file_rel = str(f.relative_to(tests_path))
+                gates.setdefault(test_file_rel, []).append(gate_id)
+        print(
+            f"[IMP:8][collect_gate_tests] filesystem scan found {sum(len(v) for v in gates.values())} gate tests",
+            file=sys.stderr,
+        )
 
-    print(f"[IMP:9][collect_gate_tests] Collected {len(gates)} gate test entries", file=sys.stderr)
+    # Determinism: sort keys (test_file) and id-lists (T3.3 — маппинг {test_file: [ids]}).
+    gates = {k: sorted(v) for k, v in sorted(gates.items())}
+
+    print(
+        f"[IMP:9][collect_gate_tests] Collected {sum(len(v) for v in gates.values())} gate tests across {len(gates)} files",
+        file=sys.stderr,
+    )
     return gates
 
 
@@ -447,39 +468,42 @@ def _collect_repair_mappings(existing: _ManifestData) -> dict[str, dict[str, obj
     return mappings
 
 
-def merge(allowed_verbs: list[str], gates: list[_GateEntry], existing: _ManifestData) -> _ManifestData:
-    """Merge: replace allowed_verbs and gates[], preserve everything else.
+def merge(allowed_verbs: list[str], gates: _GatesMap, existing: _ManifestData) -> _ManifestData:
+    """Merge: replace allowed_verbs and gates, preserve everything else.
 
-    Also injects repair fields from the repair: section into matching gates[]
+    Also injects repair fields from the repair: section into matching gates
     entries (DevPlan 060 — Repair Contract Infrastructure).
     NOTE: repair field injection is currently SUPPRESSED (B4).
 
     ## @purpose  Merge extracted targets and gate tests into structural sections.
-    ##            Replaces allowed_verbs and gates[] ENTIRELY from generated values.
+    ##            Replaces allowed_verbs and gates ENTIRELY from generated values.
     ##            Preserves all other sections verbatim.
     ##            This is the last line of defense for the G3 cycle break:
     ##            even if load_structural_sections() mistakenly returned
     ##            allowed_verbs/gates, merge() overwrites them anyway.
     ## @io       ⇥ allowed_verbs: list[str] — extracted .PHONY targets
-    ##           ⇥ gates: list[dict] — collected gate test entries
+    ##           ⇥ gates: dict[str, list[str]] — {test_file: [test_ids]} маппинг (T3.3)
     ##           ⇥ existing: dict — structural sections from manifest (allowed_verbs/gates SHOULD be absent)
     ##           → ⎋ dict: merged manifest ready for YAML output
-    ## @complexity O(G + R*G) where G=gates, R=repair entries
+    ## @complexity O(G log G) where G=gate ids (сортировка маппинга)
     ## @invariants
     ##   - allowed_verbs in output always from extracted targets, NEVER from existing
-    ##   - gates[] in output always from collected tests, NEVER from existing
+    ##   - gates in output always from collected tests (маппинг test_file→[ids]), NEVER from existing
     ##   - G3 cycle break: merge() overwrites allowed_verbs/gates unconditionally.
     ##     This is a safety net even if load_structural_sections() fails to exclude them.
     ##   - Repair fields injection from repair: section is SUPPRESSED (B4)
     ##   - All other sections from existing preserved unchanged
-    ##   - Result dict maintains YAML-compatible structure (list, not None)
+    ##   - Result dict maintains YAML-compatible structure (dict, not None)
     ## @changes  2026-07-23 | DevPlan 060: repair fields injection from repair: section (suppressed B4)
     ##            2026-07-30 | G3 cycle break defensive: merge() explicitly overwrites allowed_verbs/gates
     ##                         regardless of what `existing` contains. This is a safety net — the real
     ##                         cycle break is in load_structural_sections() excluding these keys at load time.
+    ##            2026-08-22 | T3.3 gates-map compaction: gates = {test_file: [ids]} вместо списка
+    ##                         развёрнутых записей; сортировка ключей/id (детерминизм byte-level)
     """
+    gate_id_total = sum(len(v) for v in gates.values())
     print(
-        f"[IMP:7][merge] Merging {len(allowed_verbs)} verbs + {len(gates)} gates into existing manifest",
+        f"[IMP:7][merge] Merging {len(allowed_verbs)} verbs + {gate_id_total} gate ids ({len(gates)} files) into existing manifest",
         file=sys.stderr,
     )
 
@@ -499,14 +523,14 @@ def merge(allowed_verbs: list[str], gates: list[_GateEntry], existing: _Manifest
     # If repair contract validation from gates[] is needed, update the gate test
     # to read from `repair:` section's repairs_gates instead.
     # injected_count = 0
-    # for gate in gates:
-    #     gate_id = gate.get("id", "")
-    #     if gate_id in repair_mappings:
-    #         gate.update(repair_mappings[gate_id])
-    #         injected_count += 1
+    # for test_file, ids in gates.items():
+    #     for gate_id in ids:
+    #         if gate_id in repair_mappings:
+    #             gate_entry[gate_id].update(repair_mappings[gate_id])
+    #             injected_count += 1
 
-    # Replace gates[] entirely (no repair field injection)
-    result["gates"] = list(gates)
+    # Replace gates entirely (no repair field injection) — T3.3 compact map form.
+    result["gates"] = {k: sorted(v) for k, v in sorted(gates.items())}
 
     # Ensure manual sections are preserved (if present in existing).
     # forbidden-тройка упразднена DevPlan 171 W3.3 — секции больше не существуют.
@@ -522,7 +546,8 @@ def merge(allowed_verbs: list[str], gates: list[_GateEntry], existing: _Manifest
 
     print(
         f"[IMP:9][merge] Merge complete — {len(cast(list[object], result.get('allowed_verbs', [])))} verbs, "
-        f"{len(cast(list[object], result.get('gates', [])))} gates total",
+        f"{sum(len(v) for v in cast(_GatesMap, result.get('gates', {})).values())} gate ids across "
+        f"{len(cast(_GatesMap, result.get('gates', {})))} files",
         file=sys.stderr,
     )
     return result
@@ -735,7 +760,8 @@ def main(
         with open_impl(output_path, "w", encoding="utf-8") as f:
             f.write(output_content)
         print(
-            f"[IMP:9][main] Manifest written to {args.output} — {len(targets)} verbs, {len(gates)} gates",
+            f"[IMP:9][main] Manifest written to {args.output} — {len(targets)} verbs, "
+            f"{sum(len(v) for v in gates.values())} gate ids across {len(gates)} files",
             file=sys.stderr,
         )
 

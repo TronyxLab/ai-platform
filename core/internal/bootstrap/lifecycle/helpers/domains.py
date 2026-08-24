@@ -1,104 +1,84 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: domains-helpers, import-deploy-context, extract-domains, ssl-provision, cert-orchestrator, importlib, context-deployer
-# STRUCTURE: ▶ import_deploy_context ┌importlib context_deployer.deploy_context (non-fatal)┐ → ⚡ extract_domains ┌extract_domains_for_context (public, CS-1)┐ → ⚡ ssl_provision_via_orchestrator ┌cert_orchestrator.orchestrate_certs┐ → ⎋
+# GREP_SUMMARY: domains-helpers, import-deploy-context, extract-domains, ssl-provision, cert-orchestrator, direct-import, context-deployer
+# STRUCTURE: ▶ import_deploy_context ┌direct-import context_deployer.deploy_context (non-fatal)┐ → ⚡ extract_domains ┌extract_domains_for_context (public, CS-1)┐ → ⚡ ssl_provision_via_orchestrator ┌cert_orchestrator.orchestrate_certs┐ → ⎋
 # region MODULE_CONTRACT
 ## @purpose  Domain/deploy-context I/O-хелперы bootstrap-фаз — извлечены из state_machine
 ##           (B9 T1, U-08). Все функции публичные.
 ## @scope    domains.py: import_deploy_context, extract_domains, ssl_provision_via_orchestrator.
 ##           Используются phases.py (φ7 certificates, φ8 deploy_services, φ12 deploy_update).
 ## @invariants
-##   - Динамическая загрузка через importlib (deploy/cert модули могут отсутствовать на ранних
-##     фазах bootstrap) — best-effort, никогда не fatal
+##   - Прямые guarded-импорты deploy/cert модулей (T3.5, A5-прецедент): недоступность →
+##     None + WARN, best-effort (DEPLOY_BEST_EFFORT), никогда не fatal
+##   - importlib by-path (spec_from_file_location + sys.modules-регистрация) — ЗАПРЕЩЁН
+##     (DEP-0018); модули загружаются ТОЛЬКО системой импорта — единая идентичность модуля
 ##   - extract_domains использует ПУБЛИЧНУЮ extract_domains_for_context (T3, CS-1)
 ##   - ssl_provision_via_orchestrator: context="" = все домены (platform + projects)
 ## @rationale Strangler-Fig: извлечение I/O из state_machine-монолита (DevPlan 116 B9 D1).
+##           T3.5: скрытое runtime-ребро lifecycle→deploy через importlib становится
+##           статическим (ARCH-303/DEP-0018); двойная идентичность модуля (dotted + shadow
+##           top-level имя) — источник P1 RC 121 → класс устранён.
 ## @changes  2026-08-01 · Extracted from state_machine (B9 T1); _extract_domains_for_context →
 ##           публичная extract_domains_for_context (CS-1)
+## @changes  2026-08-22 · T3.5 — importlib-обход удалён → обычные guarded-импорты
+##           (spec_from_file_location/sys.modules убраны, −40 LOC; прецедент — A5 в context_deployer)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
-import importlib.util
 import logging
 import os
-import sys
 from pathlib import Path
-from typing import Protocol, cast
 
 # 142 W2: secrets.env → persistent /var/lib/platform/run (резолвер shared/deploy_paths)
 from core.internal.shared import deploy_paths
 
 logger = logging.getLogger(__name__)
 
-
-# region PROTOCOL_DeployContextResult
-class _DeployContextResult(Protocol):
-    """Результат context_deployer.deploy_context (G2 cross-file: deploy/context_deployer.py).
-
-    ## @purpose — Тип importlib-границы (замена Any): структура результата деплоя контекста.
-    ## @complexity — O(1) — декларация
-    """
-
-    deployed: int
-    skipped: int
-    failed: int
-
-
-# endregion PROTOCOL_DeployContextResult
-
-
-# region PROTOCOL_CertResultLike
-class _CertResultLike(Protocol):
-    """Результат cert_orchestrator.orchestrate_certs (importlib-граница, W11-G3).
-
-    ## @complexity — O(1) — декларация
-    """
-
-    def to_dict(self) -> dict[str, object]: ...
-
-
-# endregion PROTOCOL_CertResultLike
+# ── T3.5: importlib-обход удалён → обычные guarded-импорты (A5-прецедент, context_deployer.py:995) ──
+# Направление bootstrap→deploy легально (core/AGENTS.md G3: bootstrap оркестрирует деплой, φ8).
+# Guarded-import сохраняет best-effort семантику (DEPLOY_BEST_EFFORT): недоступность deploy/cert
+# модулей на неполном core-деплое → WARN + skip шага, никогда не fatal.
+# ⚠️ TRAP[BUG] · 2026-08-03 · P1 · sys.modules-регистрация до exec_module (RC 121 прод φ7/φ8) — КЛАСС устранён T3.5
+# · Symptom: "'NoneType' object has no attribute '__dict__'" — dataclasses._is_type читает
+# ·   sys.modules[cls.__module__]; без регистрации модуля ДО exec_module — dataclass-декораторы
+# ·   внутри context_deployer/cert_orchestrator падали.
+# · Root: importlib-обход системы импорта (spec_from_file_location) создавал shadow-идентичность
+# ·   модуля (двойной code object: dotted + top-level имя) — state расщеплялся, isinstance/
+# ·   dataclass-механика ломались на cross-file объектах.
+# · Fix (T3.5): importlib-обход удалён → обычные guarded-импорты; sys.modules-регистрация
+# ·   больше не нужна — класс двойной идентичности устранён.
+# · Prevention: модули загружаются ТОЛЬКО системой импорта; importlib by-path — запрещён (DEP-0018).
+try:
+    from core.internal.bootstrap.cert_orchestrator import orchestrate_certs
+    from core.internal.bootstrap.deploy.context_deployer import (
+        deploy_context,
+        extract_domains_for_context,
+    )
+except ImportError:
+    orchestrate_certs = None  # type: ignore[assignment] — guarded import (best-effort)
+    deploy_context = None  # type: ignore[assignment]
+    extract_domains_for_context = None  # type: ignore[assignment]
+    logger.warning("[IMP:7][domains] deploy/cert modules unavailable — best-effort steps will skip")
 
 
 # region FUNC_import_deploy_context
-## @purpose  Import and run context_deployer.deploy_context() via importlib. Non-fatal.
+## @purpose  Run context_deployer.deploy_context() (нормальный импорт, T3.5). Non-fatal.
 ## @io       ⇥ core_dir: str, node_name: str, node_yaml: str → ⎋ None (non-fatal)
 ## @complexity O(D * P) where D = domains, P = projects
-# region FUNC__plw_body_import_deploy_context
-## @purpose  Тело try-блока (PLW0717 extraction из import_deploy_context) — семантика except не меняется.
-## @io       ⇥ core_dir, node_name, node_yaml → ⎋ результат try-тела
-## @complexity O(1) — извлечение управляющего потока
-def _plw_body_import_deploy_context(core_dir: str, node_name: str, node_yaml: str) -> None:
-    deployer_path = Path(core_dir) / "internal" / "bootstrap" / "deploy" / "context_deployer.py"
-    spec = importlib.util.spec_from_file_location("context_deployer", deployer_path)
-    if spec and spec.loader:
-        deployer_mod = importlib.util.module_from_spec(spec)
-        # ⚠️ TRAP[BUG] · 2026-08-03 · P1 · sys.modules до exec_module (RC 121 прод φ7/φ8)
-        # · Symptom: "'NoneType' object has no attribute '__dict__'" — dataclasses._is_type
-        #   читает sys.modules[cls.__module__]; без регистрации модуля ДО exec_module —
-        #   dataclass-декораторы внутри context_deployer падают.
-        # · Fix: регистрация в sys.modules перед exec (паттерн cert_orchestrator).
-        sys.modules["context_deployer"] = deployer_mod
-        spec.loader.exec_module(deployer_mod)
-        result = cast("_DeployContextResult | None", deployer_mod.deploy_context(core_dir, node_name, node_yaml))  # pyright: ignore[reportAny] — W11-G2 cross-file: importlib-модуль (deploy/) → Any
+def import_deploy_context(core_dir: str, node_name: str, node_yaml: str) -> None:
+    """Run context_deployer.deploy_context() via normal import (T3.5) — best-effort."""
+    if deploy_context is None:
+        logger.warning("[IMP:7][deploy_context] context_deployer not importable — skipping (best-effort)")
+        return
+    try:
+        result = deploy_context(core_dir, node_name, node_yaml)
         logger.info(
             "[IMP:9][deploy_context] Complete: deployed=%d skipped=%d failed=%d",
             result.deployed if result else 0,
             result.skipped if result else 0,
             result.failed if result else 0,
         )
-    else:
-        logger.warning("[IMP:7][deploy_context] Cannot load context_deployer.py")
-
-
-# endregion FUNC__plw_body_import_deploy_context
-
-
-def import_deploy_context(core_dir: str, node_name: str, node_yaml: str) -> None:
-    """Import context_deployer.deploy_context() via importlib and execute."""
-    try:
-        _plw_body_import_deploy_context(core_dir, node_name, node_yaml)
-    # ruff: ignore[BLE001] — importlib exec — импорт-time ошибки произвольного модуля context_deployer
+    # ruff: ignore[BLE001] — deploy_context runtime-ошибки произвольного модуля (best-effort)
     except Exception as e:  # noqa: EXC — non-fatal: deploy_context is best-effort
         logger.warning("[IMP:7][deploy_context] deploy_context failed (non-fatal): %s", e)
 
@@ -112,20 +92,16 @@ def import_deploy_context(core_dir: str, node_name: str, node_yaml: str) -> None
 ## @complexity O(N) YAML parse
 def extract_domains(core_dir: str, node_yaml: str, context: str) -> list[str]:
     """Extract domains via context_deployer.extract_domains_for_context."""
-    # ruff: ignore[PLW0717] — try-тело содержит return-ветки с fall-through (после-try код) — извлечение небезопасно
+    # T3.5: core_dir удержан для стабильности публичного API (CS-1, контракт-тест пиннит сигнатуру) —
+    # при обычном импорте путь к context_deployer.py не строится (загрузка через систему импорта).
+    del core_dir
+    if extract_domains_for_context is None:
+        logger.warning("[IMP:7][ssl_provision] context_deployer not importable — no domains")
+        return []
     try:
-        deployer_path = Path(core_dir) / "internal" / "bootstrap" / "deploy" / "context_deployer.py"
-        spec = importlib.util.spec_from_file_location("context_deployer", deployer_path)
-        if spec and spec.loader:
-            deployer_mod = importlib.util.module_from_spec(spec)
-            # ⚠️ TRAP[BUG] · 2026-08-03 · P1 · sys.modules до exec_module (RC 121 прод φ7)
-            # · Symptom: "'NoneType' object has no attribute '__dict__'" — dataclasses._is_type
-            #   читает sys.modules[cls.__module__] (см. import_deploy_context TRAP).
-            sys.modules["context_deployer"] = deployer_mod
-            spec.loader.exec_module(deployer_mod)
-            return cast("list[str]", deployer_mod.extract_domains_for_context(node_yaml, context))  # pyright: ignore[reportAny] — W11-G2 cross-file: importlib-модуль (deploy/) → Any; CS-1 контракт list[str]
-    # ruff: ignore[BLE001] — importlib exec — импорт-time ошибки произвольного модуля context_deployer
-    except Exception as e:  # noqa: EXC — catch-all for importlib-based calls (best-effort: DEPLOY_BEST_EFFORT policy)
+        return extract_domains_for_context(node_yaml, context)
+    # ruff: ignore[BLE001] — extract никогда не fatal (DEPLOY_BEST_EFFORT policy)
+    except Exception as e:  # noqa: EXC — catch-all for extraction (best-effort: DEPLOY_BEST_EFFORT policy)
         logger.warning("[IMP:7][ssl_provision] Failed to extract domains: %s", e)
     return []
 
@@ -141,11 +117,14 @@ def extract_domains(core_dir: str, node_yaml: str, context: str) -> list[str]:
 ##   - _source_secrets_env() is called inside cert_orchestrator for WEBNAMES_API_KEY
 ##   - S3 credentials are read directly by s3_ssl_cache from os.environ — no subshell
 ##   - context="" means ALL domains (no filtering)
-##   - Dynamic import allows cert_orchestrator to be updated independently
+##   - orchestrate_certs — обычный guarded-импорт (T3.5), единый module-инстанс
 ## @rationale DevPlan 052 §4.1: Replace _ssl_provision() with cert_orchestrator
 ##           to fix subshell credential loss and handle all domains (not just platform).
 def ssl_provision_via_orchestrator(core_dir: str, node_yaml: str) -> None:
     """Provision SSL certs via cert_orchestrator (unified entrypoint)."""
+    if orchestrate_certs is None:
+        logger.warning("[IMP:7][ssl_provision] cert_orchestrator not importable — skipping (best-effort)")
+        return
     bootstrap_dir = Path(core_dir) / "internal" / "bootstrap"
 
     # Extract ALL domains (platform + all projects, no context filter) via context_deployer
@@ -163,22 +142,12 @@ def ssl_provision_via_orchestrator(core_dir: str, node_yaml: str) -> None:
     issue_cert_script = str(Path(bootstrap_dir) / "issue_cert.py")
     secrets_env = os.environ.get("SECRETS_ENV_FILE", str(deploy_paths.secrets_env_file()))
 
-    # Dynamic import of cert_orchestrator
-    spec = importlib.util.spec_from_file_location(
-        "cert_orchestrator",
-        Path(bootstrap_dir) / "cert_orchestrator.py",
-    )
-    if spec and spec.loader:
-        cert_mod = importlib.util.module_from_spec(spec)
-        sys.modules["cert_orchestrator"] = cert_mod
-        spec.loader.exec_module(cert_mod)
-        cert_result = cast(
-            "_CertResultLike",
-            cert_mod.orchestrate_certs(domains, issue_cert_script, secrets_env, migrate_cron=True),  # pyright: ignore[reportAny] — W11-G3 cross-file: importlib-модуль → Any
-        )
+    try:
+        cert_result = orchestrate_certs(domains, issue_cert_script, secrets_env, migrate_cron=True)
         logger.info("[IMP:9][ssl_provision] Cert orchestration complete: %s", cert_result.to_dict())
-    else:
-        logger.warning("[IMP:7][ssl_provision] Cannot load cert_orchestrator.py")
+    # ruff: ignore[BLE001] — orchestration runtime-ошибки произвольного модуля (best-effort)
+    except Exception as e:  # noqa: EXC — non-fatal: SSL is best-effort (S3 cache fallback)
+        logger.warning("[IMP:7][ssl_provision] Cert orchestration failed (non-fatal): %s", e)
 
 
 # endregion FUNC_ssl_provision_via_orchestrator

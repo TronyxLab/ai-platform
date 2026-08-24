@@ -45,6 +45,9 @@ services:
       # Official nginx image's 20-envsubst-on-templates.sh filters env vars:
       # only explicitly passed env vars are substituted; $host / $upstream_* survive.
       PLATFORM_DOMAIN: ${PLATFORM_DOMAIN:-}
+      # DevPlan 010 T2.0b: Loki tenant header (loki-vhost X-Scope-OrgID) —
+      # дефолт "platform" единый по стеку; provision подставит имя контекста в multi-node.
+      LOKI_TENANT: ${LOKI_TENANT:-platform}
 
     ports:
       - "${NGINX_HTTP_PORT:-80}:80"

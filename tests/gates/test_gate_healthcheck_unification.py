@@ -53,6 +53,7 @@ _DOCKER_MODULES: list[str] = [
     "minio",
     "monitoring",
     "logging",
+    "log-collector",
     "langfuse",
     "litellm",
     "status-page",

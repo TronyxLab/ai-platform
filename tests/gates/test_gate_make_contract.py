@@ -5,7 +5,7 @@
 ##           dry-run всех таргетов, матрица backup/restore (D1), restart = soft (stop start),
 ##           restart-консистентность (F7: root Makefile, module.mk restart-hard, manifest,
 ##           platform-secrets systemd-exclusion), nginx dev-config не дублирует config/ (U-46).
-## @scope    Все 13 docker-модулей (platform-secrets — systemd, вне скоупа) + nginx compose dry-run
+## @scope    Все 14 docker-модулей (platform-secrets — systemd, вне скоупа) + nginx compose dry-run
 ## @invariants
 ##   - Каждый таргет из .PHONY имеет рецепт (0 пустых .PHONY — U-25 не возвращается)
 ##   - make -n <target> exit 0 (dry-run без реального docker)
@@ -37,7 +37,7 @@ from tests.helpers.gate_helpers import repo_root
 
 logger = logging.getLogger(__name__)
 
-# 13 docker-модулей (platform-secrets — module-system.mk, вне скоупа)
+# 14 docker-модулей (platform-secrets — module-system.mk, вне скоупа; 010 T3.1: +log-collector)
 _DOCKER_MODULES = [
     "postgres",
     "backup-cron",
@@ -51,6 +51,7 @@ _DOCKER_MODULES = [
     "litellm",
     "langfuse",
     "logging",
+    "log-collector",
     "monitoring",
 ]
 
@@ -135,7 +136,7 @@ def _extract_target_recipe(makefile: Path, target: str) -> str:
 
 
 # 🧪 TRAP[TEST] · make_contract_no_empty_phony · Gate · Regression: пустой .PHONY-таргет (U-25)
-# · Scenario: каждый таргет из .PHONY всех 13 docker-модулей имеет рецепт
+# · Scenario: каждый таргет из .PHONY всех 14 docker-модулей имеет рецепт
 # · Last fail: U-25 (11/13 модулей: .PHONY restore без рецепта = тихий no-op)
 # · Remove if: make-контракт переезжает с .PHONY на другой механизм
 @pytest.mark.gate
@@ -178,7 +179,7 @@ def test_no_empty_phony_targets(caplog, tmp_path) -> None:
 
 
 # 🧪 TRAP[TEST] · make_contract_dry_run · Gate · Regression: make -n падает на модулях
-# · Scenario: make -n <target> для всех .PHONY-таргетов всех 13 docker-модулей → exit 0
+# · Scenario: make -n <target> для всех .PHONY-таргетов всех 14 docker-модулей → exit 0
 # · Last fail: U-25 (restore dry-run был тихим no-op)
 # · Remove if: make-контракт модулей меняется кардинально
 @pytest.mark.gate

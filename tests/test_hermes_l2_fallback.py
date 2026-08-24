@@ -1,10 +1,12 @@
-# GREP_SUMMARY: hermes-agent, L2, fallback, deploy-modules, pull-or-build, docker-compose-build, 404-build
-# STRUCTURE: ▶ static_audit(:grep hermes_workflow.py fallback pattern, D1) → ▶ hermes_pull_success(:docker manifest inspect alpine) → ▶ hermes_404_build(:compose build on non-existent) → ▶ hermes_build_fail(:broken dockerfile) → ▶ hermes_no_images(:profile mismatch compose)
+# GREP_SUMMARY: hermes-agent, L2, fallback, deploy-modules, pull-or-build, docker-compose-build, 404-build, hermes-workflow-package
+# STRUCTURE: ▶ static_audit(:grep hermes_workflow/ пакет fallback pattern, D1) → ▶ hermes_pull_success(:docker manifest inspect alpine) → ▶ hermes_404_build(:compose build on non-existent) → ▶ hermes_build_fail(:broken dockerfile) → ▶ hermes_no_images(:profile mismatch compose)
 # region MODULE_CONTRACT
 ## @purpose  Tests for Wave 4 — Hermes-agent L2 pre-built with fallback (pull-or-build).
-##           Verifies that hermes_workflow.py (handle_hermes_agent, DevPlan 118 D1) replaces FAIL with
-##           fallback build when hermes-agent pre-built images are not found in registry.
-## @scope    Static audit (no Docker): grep hermes_workflow.py for WARN/BUILD/TRAP patterns.
+##           Verifies that the hermes_workflow/ package (handle_hermes_agent, DevPlan 118 D1,
+##           T3.7: hermes_workflow.py → пакет hermes_workflow/{images,verify,deploy,__init__})
+##           replaces FAIL with fallback build when hermes-agent pre-built images are not found
+##           in registry.
+## @scope    Static audit (no Docker): grep hermes_workflow/ package sources for WARN/BUILD/TRAP patterns.
 ##           Integration (Docker required): create temp compose files and test each fallback
 ##           scenario using real Docker CLI: pull success, 404→build, build failure, no images.
 ## @invariants
@@ -19,7 +21,7 @@
 ##             the deploy-blocking manual build step. DevPlan 024 Wave 4.
 ## @changes    2026-07-21 — initial creation for DevPlan 024 Wave 4
 ## @modulemap
-##   test_hermes_fallback_code_present     [W:1] — static: grep hermes_workflow.py (no Docker)
+##   test_hermes_fallback_code_present     [W:1] — static: grep hermes_workflow/ пакет (no Docker)
 ##   test_hermes_pull_success              [W:3] — integration: docker manifest inspect success
 ##   test_hermes_pull_404_build            [W:3] — integration: 404→docker compose build
 ##   test_hermes_build_fallback_fail       [W:3] — integration: broken Dockerfile→fail
@@ -45,23 +47,38 @@ from tests.helpers.gate_helpers import repo_root
 logger = logging.getLogger(__name__)
 
 # DevPlan 100: hermes-agent fallback code lives in docker_orchestrator.py; DevPlan 118 D1 перенёс
-# реализацию в hermes_workflow.py (handle_hermes_agent). deploy-modules.sh is a thin facade (≤50 LOC).
-# docker_orchestrator._handle_hermes_agent — тонкий фасад-делегатор (обратная совместимость).
-_HERMES_WORKFLOW_PY = repo_root() / "core" / "internal" / "bootstrap" / "deploy" / "hermes_workflow.py"
-# Static contract check greps hermes_workflow.py (реализация), NOT the shell facade.
+# реализацию в hermes_workflow.py (handle_hermes_agent); T3.7 simplify: hermes_workflow.py → пакет
+# hermes_workflow/ (images.py resolve/build, verify.py presence-check, deploy.py impl, __init__.py re-export).
+# deploy-modules.sh is a thin facade (≤50 LOC). docker_orchestrator._handle_hermes_agent — тонкий
+# фасад-делегатор (обратная совместимость).
+_HERMES_WORKFLOW_DIR = repo_root() / "core" / "internal" / "bootstrap" / "deploy" / "hermes_workflow"
+# Static contract check greps hermes_workflow/ package sources (реализация), NOT the shell facade.
+
+
+# region FUNC__read_hermes_workflow_sources
+def _read_hermes_workflow_sources() -> str:
+    """Concatenate hermes_workflow/ package .py sources (sorted) for static grep probes.
+
+    ▶ ┌package dir┐ → ○ glob *.py (sorted, exclude __pycache__) → ⊕ read_text → ⎋ str
+    """
+    return "\n".join(src.read_text(encoding="utf-8") for src in sorted(_HERMES_WORKFLOW_DIR.glob("*.py")))
+
+
+# endregion FUNC__read_hermes_workflow_sources
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# W4-STATIC: Static audit — grep hermes_workflow.py for fallback code patterns
+# W4-STATIC: Static audit — grep hermes_workflow/ package for fallback code patterns
 # ══════════════════════════════════════════════════════════════════════════════
 
 # region FUNC_test_hermes_fallback_code_present
 # 🧪 TRAP[TEST] · 2026-07-21 · REGRESSION · Fallback build code must be present · Last fail: N/A · Remove if: wave 4 rolled back
-## @purpose  Static audit: verify hermes_workflow.py contains the hermes-agent fallback
+## @purpose  Static audit: verify the hermes_workflow/ package contains the hermes-agent fallback
 ##           build code (WARN instead of FAIL, docker compose build command, TRAP[BUG]).
-##           DevPlan 118 D1: реализация перенесена из docker_orchestrator.py в hermes_workflow.py.
-##           No Docker required — pure grep on source file.
-## @io       ⇥ caplog, _HERMES_WORKFLOW_PY → ⎋ None (pytest.fail if patterns missing)
+##           DevPlan 118 D1: реализация перенесена из docker_orchestrator.py в hermes_workflow.
+##           T3.7: модуль → пакет hermes_workflow/ (статические grep-пробы идут по всем .py пакета).
+##           No Docker required — pure grep on source files.
+## @io       ⇥ caplog, _read_hermes_workflow_sources() → ⎋ None (pytest.fail if patterns missing)
 ## @complexity  1 — three grep probes on file content
 ## @invariants
 ##   - "WARN" present in the hermes-agent image check (replaces old "FAIL")
@@ -75,11 +92,11 @@ _HERMES_WORKFLOW_PY = repo_root() / "core" / "internal" / "bootstrap" / "deploy"
 @ldd_trajectory
 def test_hermes_fallback_code_present(caplog: pytest.LogCaptureFixture) -> None:
     """
-    # ◇ read hermes_workflow.py → ∋ grep patterns: WARN ✓, BUILD ✓, fallback path ✓ → ⎋ pass | fail
+    # ◇ read hermes_workflow/ пакет → ∋ grep patterns: WARN ✓, BUILD ✓, fallback path ✓ → ⎋ pass | fail
     """
     caplog.set_level(logging.DEBUG)
-    logger.info("[IMP:7][test_hermes_fallback_code_present] Reading hermes_workflow.py ...")
-    content = _HERMES_WORKFLOW_PY.read_text(encoding="utf-8")
+    logger.info("[IMP:7][test_hermes_fallback_code_present] Reading hermes_workflow/ package ...")
+    content = _read_hermes_workflow_sources()
 
     # ── 1. Pre-built image not found → will build locally (WARN/INFO instead of FAIL) ──
     logger.info("[IMP:8][test_hermes_fallback_code_present] Checking WARN fallback pattern ...")
@@ -99,7 +116,9 @@ def test_hermes_fallback_code_present(caplog: pytest.LogCaptureFixture) -> None:
 
     # ── 3. TRAP[BUG] documenting the fallback decision (was TRAP[DECISION] in shell) ──
     logger.info("[IMP:8][test_hermes_fallback_code_present] Checking TRAP documentation ...")
-    assert "TRAP[BUG]" in content, "W4 violation: TRAP[BUG] for hermes image drift fix not found in hermes_workflow.py"
+    assert "TRAP[BUG]" in content, (
+        "W4 violation: TRAP[BUG] for hermes image drift fix not found in hermes_workflow/ package"
+    )
 
     # ── 4. "Local build failed" present (L1-префикс удалён — коллапс DevPlan 002) ──
     logger.info("[IMP:8][test_hermes_fallback_code_present] Checking build failure error path ...")

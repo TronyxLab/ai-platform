@@ -1,4 +1,4 @@
-# GREP_SUMMARY: platform-ports, shared, grafana, prometheus, langfuse, litellm, minio, clickhouse, pgbouncer, redis, status-page, hermes, port-registry, constants, platform-infra-parity
+# GREP_SUMMARY: platform-ports, shared, grafana, prometheus, langfuse, litellm, minio, clickhouse, pgbouncer, redis, status-page, hermes, node-exporter, cadvisor, exporters, loki, clickhouse-native, peer-port, port-registry, constants, platform-infra-parity
 # STRUCTURE: ▶ ┌SoT: core/platform-infra.yaml (provides + env_defaults + docker-compose container ports)┐ → ⊕ реестр int-констант → ◇ parity-гейт test_gate_port_parity (сверка) → ⎋ import targets
 # region MODULE_CONTRACT
 ## @purpose  Единый реестр внутренних (container) портов сервисов платформы (DevPlan 170 W1-A3).
@@ -21,9 +21,15 @@
 ##      НЕ используется во внутренних URL. Parity-гейт сверяет LANGFUSE с container-портом.
 ##   3. NGINX (443) — не включён: единственный публичный ingress, не фигурирует во внутренних
 ##      URL-константах домена (нет замен). Добавлять при появлении потребителя.
-##   4. LOKI (3100) — status-page и monitoring используют loki:3100; константа не создаётся,
-##      т.к. замена LOKI_RELOAD_URL не в скоупе W1-A3 (брифинг ограничил monitoring/constants.py:45,49).
-##   5. Константы immutable (module-level int) — мутация запрещена (ревью-стандарт).
+##   4. LOKI_HTTP (3100) — добавлен DevPlan 010 T2.2 (peer-публикация центрального приёма логов);
+##      при W1-A3 константа не создавалась (замена LOKI_RELOAD_URL вне скоупа), T2.2 — новый скоуп.
+##   5. Константы БЕЗ префикса PLATFORM_PORT_ (NODE_EXPORTER/CADVISOR/*_EXPORTER/LOKI_HTTP/
+##      CLICKHOUSE_NATIVE_PEER, DevPlan 010 T2.2) — host/scrape-порты кросс-нодовой публикации,
+##      ВНЕ parity-скоупа test_gate_port_parity (гейт сверяет только PLATFORM_PORT_* с SoT
+##      provides/env_defaults/compose); compose-публикация и расширение гейта — задачи T2.2
+##      других агентов. CLICKHOUSE_NATIVE_PEER — host-порт (container 9000 остаётся; прецедент
+##      host≠container — langfuse 3001/3000, TRAP §3 DevPlan 010).
+##   6. Константы immutable (module-level int) — мутация запрещена (ревью-стандарт).
 ## @rationale DevPlan 170 W1-A3 (research-D §D1): 7 RED-дублей портов (status-page, monitoring,
 ##            key_provisioner, context_deployer, hermes-agent ×2, prometheus_tsdb) без единого
 ##            реестра → порт-дубли дрейфуют от SoT. Единый реестр + parity-гейт делают значения
@@ -31,6 +37,8 @@
 ##            Семантика: константы = container-порты (docker-DNS), не host-порты provides —
 ##            внутренние URL сервисов строятся по именам контейнеров в docker-сетях.
 ## @changes  2026-08-14 | DevPlan 170 W1-A3 — Created (реестр портов, зеркало platform-infra.yaml)
+## @changes  2026-08-22 | DevPlan 010 T2.2 (prep) — +NODE_EXPORTER/CADVISOR/POSTGRES_EXPORTER/
+##            REDIS_EXPORTER/NGINX_EXPORTER/LOKI_HTTP/CLICKHOUSE_NATIVE_PEER (peer/scrape-порты)
 ## @see      core/platform-infra.yaml (SoT), tests/gates/test_gate_port_parity.py (parity-гейт)
 # endregion MODULE_CONTRACT
 
@@ -70,3 +78,31 @@ PLATFORM_PORT_REDIS: int = 6379
 
 # Status-page (env_defaults.STATUS_PAGE_PORT=8080, внутренний порт контейнера)
 PLATFORM_PORT_STATUS_PAGE: int = 8080
+
+# ── Node metrics / exporters (DevPlan 010 T2.2: peer-публикация scrape-портов) ─
+
+# Node exporter host-metrics scrape (env_defaults.NODE_EXPORTER_PORT=9100, compose container 9100)
+NODE_EXPORTER: int = 9100
+
+# cAdvisor container-metrics scrape (env_defaults.CADVISOR_PORT=8080, compose container 8080;
+# значение совпадает со STATUS_PAGE_PORT намеренно — порт внутренний, см. status-page base.yml:60)
+CADVISOR: int = 8080
+
+# Postgres exporter scrape (9187; сегодня host-порта НЕ имеет — публикация T2.2)
+POSTGRES_EXPORTER: int = 9187
+
+# Redis exporter scrape (9121; сегодня host-порта НЕ имеет — публикация T2.2)
+REDIS_EXPORTER: int = 9121
+
+# Nginx exporter scrape (env_defaults.NGINX_EXPORTER_PORT=9113, compose container 9113)
+NGINX_EXPORTER: int = 9113
+
+# ── Logging / ClickHouse cross-node peer (DevPlan 010 T2.2) ─────────────────
+
+# Loki push endpoint (env_defaults.LOKI_PORT=3100, compose container 3100; peer-публикация T2.2 —
+# центральный приём логов всех нод)
+LOKI_HTTP: int = 3100
+
+# ClickHouse native cross-node peer (HOST-порт 19000: container остаётся 9000 — коллизия с minio API
+# 9000 на общей data-ноде; прецедент host≠container — langfuse 3001/3000, TRAP §3 DevPlan 010)
+CLICKHOUSE_NATIVE_PEER: int = 19000

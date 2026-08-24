@@ -640,6 +640,51 @@ def test_validate_invalid(caplog, tmp_path):
     logger.critical("[IMP:9][test] validate_invalid: errors=%d — OK", len(errors))
 
 
+# 🧪 TRAP[TEST] · Regression (DevPlan 010 T0.3) · validate passes single-context node
+# · Scenario: node.yaml with exactly one context → validate() returns []
+# · Last fail: N/A (new test — positive side of the 1-node-1-context gate)
+# · Remove if: single-context invariant changes
+@ldd_trajectory
+def test_validate_single_context_pass(caplog, tmp_path):
+    """NodeYaml.validate() passes a node with exactly one context.
+
+    ## @purpose  Verify the «1 нода = 1 контекст» gate (DevPlan 010 T0.3) allows single-context nodes.
+    """
+    yaml_path = write_yaml(
+        tmp_path / "node.yaml",
+        "node:\n  name: test-node\n  host: 1.2.3.4\n  owner_key: test-key\ncontexts:\n  - name: test\ndomain: test.example.com\nmodules: []\n",
+    )
+    node = NodeYaml(str(yaml_path))
+    errors = node.validate()
+    assert errors == []
+
+    logger.critical("[IMP:9][test] validate_single_context_pass: errors=0 — OK")
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (DevPlan 010 T0.3) · validate raises ConfigValidationError on 2 contexts
+# · Scenario: node.yaml with two contexts → ConfigValidationError «1 нода = 1 контекст»
+# · Last fail: N/A (new test — was silently accepted, only contexts[0] read)
+# · Remove if: multi-context becomes a legitimate feature (schema maxItems removed synchronously)
+@ldd_trajectory
+def test_validate_multi_context_rejected(caplog, tmp_path):
+    """NodeYaml.validate() raises ConfigValidationError when node declares 2+ contexts.
+
+    ## @purpose  Verify the «1 нода = 1 контекст» gate (DevPlan 010 T0.3, §2.2 п.4):
+    ##           len(contexts) > 1 → ConfigValidationError (exit 4), fail-fast before contexts[0] checks.
+    """
+    yaml_path = write_yaml(
+        tmp_path / "node.yaml",
+        "node:\n  name: test-node\n  host: 1.2.3.4\ncontexts:\n  - name: test\n  - name: other\ndomain: test.example.com\nmodules: []\n",
+    )
+    node = NodeYaml(str(yaml_path))
+    with pytest.raises(ConfigValidationError) as exc_info:
+        node.validate()
+    assert "1 нода = 1 контекст" in str(exc_info.value)
+    assert exc_info.value.exit_code == 4
+
+    logger.critical("[IMP:9][test] validate_multi_context_rejected: ConfigValidationError(exit 4) — OK")
+
+
 # 🧪 TRAP[TEST] · Regression · raw() returns dict
 # · Scenario: raw() returns the full parsed dict
 # · Last fail: N/A (new test)

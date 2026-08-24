@@ -128,28 +128,6 @@ def get_host_disk(path: str = "/opt") -> HostDisk:
 ## @purpose  Collect host system uptime (from /proc/uptime) and load average (from /proc/loadavg)
 ## @io       ⇥ (none, reads /proc filesystem) → ⎋ dict — {uptime_seconds, load_1m, load_5m, load_15m}
 ## @complexity  O(1) — two file reads, no subprocess
-# region FUNC__plw_body_get_host_uptime
-## @purpose  Тело try-блока (PLW0717 extraction из get_host_uptime) — семантика except не меняется.
-## @io       ⇥ logger_, result → ⎋ результат try-тела
-## @complexity O(1) — извлечение управляющего потока
-def _plw_body_get_host_uptime(
-    logger_: logging.Logger, result: HostUptime, open_fn: Callable[..., TextIO] = open
-) -> None:
-    with open_fn("/proc/loadavg", encoding="utf-8") as f:
-        parts = f.read().strip().split()
-        if len(parts) >= _LOADAVG_FIELDS_MIN:
-            result["load_1m"] = float(parts[0])
-            result["load_5m"] = float(parts[1])
-            result["load_15m"] = float(parts[2])
-            logger_.info(
-                "[IMP:9][host_collector][get_host_uptime] Load average: %.2f / %.2f / %.2f",
-                result["load_1m"],
-                result["load_5m"],
-                result["load_15m"],
-            )
-
-
-# endregion FUNC__plw_body_get_host_uptime
 
 
 def get_host_uptime(open_fn: Callable[..., TextIO] = open) -> HostUptime:
@@ -189,8 +167,20 @@ def get_host_uptime(open_fn: Callable[..., TextIO] = open) -> HostUptime:
         logger_.warning("[IMP:8][host_collector][get_host_uptime] /proc/uptime unreadable: %s", exc)
 
     # ── /proc/loadavg: "0.50 0.30 0.10 1/234 56789" ──
-    try:
-        _plw_body_get_host_uptime(logger_, result, open_fn=open_fn)
+    # T3.6: _plw_body_get_host_uptime инлайнена обратно (scaffolding-функция).
+    try:  # ruff: ignore[PLW0717] — тело мутит result, except-семантика нетривиальна
+        with open_fn("/proc/loadavg", encoding="utf-8") as f:
+            parts = f.read().strip().split()
+            if len(parts) >= _LOADAVG_FIELDS_MIN:
+                result["load_1m"] = float(parts[0])
+                result["load_5m"] = float(parts[1])
+                result["load_15m"] = float(parts[2])
+                logger_.info(
+                    "[IMP:9][host_collector][get_host_uptime] Load average: %.2f / %.2f / %.2f",
+                    result["load_1m"],
+                    result["load_5m"],
+                    result["load_15m"],
+                )
     except (FileNotFoundError, PermissionError, ValueError, OSError) as exc:
         logger_.warning("[IMP:8][host_collector][get_host_uptime] /proc/loadavg unreadable: %s", exc)
 
@@ -204,44 +194,6 @@ def get_host_uptime(open_fn: Callable[..., TextIO] = open) -> HostUptime:
 ## @purpose  Collect host RAM + Swap from /proc/meminfo
 ## @io       ⇥ (none, reads /proc/meminfo) → ⎋ dict — {memory_total_gb, memory_available_gb, memory_used_percent, swap_total_gb, swap_free_gb, swap_used_percent}
 ## @complexity  O(1) — single file read
-# region FUNC__plw_body_get_host_memory
-## @purpose  Тело try-блока (PLW0717 extraction из get_host_memory) — семантика except не меняется.
-## @io       ⇥ logger_, result → ⎋ результат try-тела
-## @complexity O(1) — извлечение управляющего потока
-def _plw_body_get_host_memory(logger_: logging.Logger, result: HostMemory) -> None:
-    with open("/proc/meminfo", encoding="utf-8") as f:
-        meminfo: dict[str, int] = {}
-        for line in f:
-            parts = line.split(":")
-            if len(parts) == _MEMINFO_FIELDS:
-                key = parts[0].strip()
-                val_str = parts[1].strip().split()[0]  # "16234500 kB" → "16234500"
-                with contextlib.suppress(ValueError):
-                    meminfo[key] = int(val_str)
-    mem_total = meminfo.get("MemTotal", 0)
-    mem_available = meminfo.get("MemAvailable", 0)
-    swap_total = meminfo.get("SwapTotal", 0)
-    swap_free = meminfo.get("SwapFree", 0)
-    if mem_total > 0:
-        result["memory_total_gb"] = round(mem_total / (1024**2), 1)  # kB → GB
-        result["memory_available_gb"] = round(mem_available / (1024**2), 1)
-        result["memory_used_percent"] = round((1 - mem_available / mem_total) * 100, 1)
-    if swap_total > 0:
-        result["swap_total_gb"] = round(swap_total / (1024**2), 1)
-        result["swap_free_gb"] = round(swap_free / (1024**2), 1)
-        result["swap_used_percent"] = round((1 - swap_free / swap_total) * 100, 1)
-    logger_.info(
-        "[IMP:9][host_collector][get_host_memory] RAM: %.1f/%.1f GB (%.1f%%), Swap: %.1f/%.1f GB (%.1f%%)",
-        result["memory_available_gb"],
-        result["memory_total_gb"],
-        result["memory_used_percent"],
-        result["swap_free_gb"],
-        result["swap_total_gb"],
-        result["swap_used_percent"],
-    )
-
-
-# endregion FUNC__plw_body_get_host_memory
 
 
 def get_host_memory() -> HostMemory:
@@ -264,8 +216,38 @@ def get_host_memory() -> HostMemory:
         "swap_used_percent": 0.0,
     }
 
-    try:
-        _plw_body_get_host_memory(logger_, result)
+    # T3.6: _plw_body_get_host_memory инлайнена обратно (scaffolding-функция).
+    try:  # ruff: ignore[PLW0717] — тело мутит result, except-семантика нетривиальна
+        with open("/proc/meminfo", encoding="utf-8") as f:
+            meminfo: dict[str, int] = {}
+            for line in f:
+                parts = line.split(":")
+                if len(parts) == _MEMINFO_FIELDS:
+                    key = parts[0].strip()
+                    val_str = parts[1].strip().split()[0]  # "16234500 kB" → "16234500"
+                    with contextlib.suppress(ValueError):
+                        meminfo[key] = int(val_str)
+        mem_total = meminfo.get("MemTotal", 0)
+        mem_available = meminfo.get("MemAvailable", 0)
+        swap_total = meminfo.get("SwapTotal", 0)
+        swap_free = meminfo.get("SwapFree", 0)
+        if mem_total > 0:
+            result["memory_total_gb"] = round(mem_total / (1024**2), 1)  # kB → GB
+            result["memory_available_gb"] = round(mem_available / (1024**2), 1)
+            result["memory_used_percent"] = round((1 - mem_available / mem_total) * 100, 1)
+        if swap_total > 0:
+            result["swap_total_gb"] = round(swap_total / (1024**2), 1)
+            result["swap_free_gb"] = round(swap_free / (1024**2), 1)
+            result["swap_used_percent"] = round((1 - swap_free / swap_total) * 100, 1)
+        logger_.info(
+            "[IMP:9][host_collector][get_host_memory] RAM: %.1f/%.1f GB (%.1f%%), Swap: %.1f/%.1f GB (%.1f%%)",
+            result["memory_available_gb"],
+            result["memory_total_gb"],
+            result["memory_used_percent"],
+            result["swap_free_gb"],
+            result["swap_total_gb"],
+            result["swap_used_percent"],
+        )
     except (FileNotFoundError, PermissionError, OSError) as exc:
         logger_.warning("[IMP:8][host_collector][get_host_memory] /proc/meminfo unreadable: %s", exc)
 

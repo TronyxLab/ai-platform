@@ -1,8 +1,8 @@
-# GREP_SUMMARY: logging Makefile start stop restart status logs compose include module-mk
+# GREP_SUMMARY: logging Makefile start stop restart status logs compose include module-mk loki
 # STRUCTURE: ┌logging targets┐ → ◇ module.mk include → ⊕ multi-service compose lifecycle
 # region MODULE_CONTRACT
-## @purpose  Makefile for logging module — Loki + Promtail compose lifecycle
-## @scope    Loki log storage + Promtail log collector
+## @purpose  Makefile for logging module — Loki compose lifecycle (DevPlan 010 T3.1: alloy → log-collector)
+## @scope    Loki log storage (singleton-хранилище)
 ## @invariants
 ##   - MODULE_NAME and CONTAINER defined before include
 ##   - CONTAINER points to loki (primary storage service)

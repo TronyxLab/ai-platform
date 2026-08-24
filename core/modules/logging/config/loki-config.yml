@@ -1,7 +1,7 @@
-# GREP_SUMMARY: loki config retention compactor filesystem storage
-# STRUCTURE: ▶ filesystem-storage → compactor → retention:7d → structured-metadata → runtime-config → ┘
+# GREP_SUMMARY: loki config retention compactor filesystem storage tenant-auth X-Scope-OrgID auth-enabled
+# STRUCTURE: ▶ tenant-auth (auth_enabled:true) → filesystem-storage → compactor → retention:7d → structured-metadata → runtime-config → ┘
 # region MODULE_CONTRACT
-## @purpose  Loki configuration: filesystem storage, 7d retention, compactor-enabled
+## @purpose  Loki configuration: filesystem storage, 7d retention, compactor-enabled, tenant auth
 ## @scope    Mounted as /etc/loki/loki-config.yml in loki container
 ## @invariants
 ##   - storage: filesystem (no S3/GCS — single-node deployment, D3)
@@ -10,14 +10,19 @@
 ##   - structured_metadata enabled for high-cardinality fields (session_id, user_id)
 ##   - Single ingester instance (single-node mode)
 ##   - HTTP server on port 3100 (default)
+##   - ⚠️ DevPlan 010 T2.0b: auth_enabled: true — tenant-изоляция по X-Scope-OrgID (push И read
+##     на одном порту 3100); Loki принимает любого tenant без пре-декларации; tenant = имя
+##     контекста, приходит через LOKI_TENANT от alloy/grafana/vhost; дефолт "platform".
+##     Без этого любой пир читает И пишет логи контекста.
 ##   - Out-of-order toleration (D-8, DevPlan 140 W3): ingester.max_chunk_age: 72h →
 ##     out-of-order window 36h (Loki 3.x: window = max_chunk_age/2, `out_of_order_time_window`
 ##     removed from schema — config error at startup). Clock skew ±24h → 0 rejected.
 ## @rationale D9: Without compactor block, retention settings are silently ignored
 ##           on filesystem storage. Disk grows unbounded despite configured retention.
+##           T2.0b: auth_enabled включён как часть security-префикса Волны 2 (010 §6.0).
 # endregion MODULE_CONTRACT
 
-auth_enabled: false
+auth_enabled: true
 
 server:
   http_listen_port: 3100

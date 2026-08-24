@@ -32,10 +32,10 @@ logger = logging.getLogger(__name__)
 ROOT = repo_root()
 _MODULES_DIR = ROOT / "core" / "modules"
 
-# Классификация healthcheck-интервалов (SoT, DevPlan 116 B5 D4/U-63).
+# Классификация healthcheck-интервалов (SoT, DevPlan 116 B5 D4/U-63; 010 T3.1: +log-collector).
 # Критичные данные — 15s; сервисы — 30s; фоновые — 60s.
 _CRITICAL_15S = {"postgres", "clickhouse", "minio", "langfuse", "litellm", "hermes-agent"}
-_SERVICES_30S = {"redis", "nginx", "status-page", "monitoring", "logging", "infra-metrics"}
+_SERVICES_30S = {"redis", "nginx", "status-page", "monitoring", "logging", "log-collector", "infra-metrics"}
 _BACKGROUND_60S = {"backup-cron"}
 
 _MODULE_CLASS: dict[str, str] = dict.fromkeys(_CRITICAL_15S, "15s")

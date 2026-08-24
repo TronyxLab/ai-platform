@@ -27,10 +27,13 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import re
 import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
+
+import tomllib
 
 logger = logging.getLogger(__name__)
 
@@ -140,12 +143,104 @@ def _run(cmd: list[str], runner: BuildRunner | None = None) -> bool:
 
 
 # region FUNC_main
+# region FUNC_push_l2
+## @purpose  Tag + push hermes-agent-context в ghcr.io/ORG:{latest,v VERSION} (T3.4).
+##           Org/version extraction переехал из makefiles/deploy.mk (Strangler: Python-first,
+##           рецепт make — тонкий вызов). Version — pyproject.toml [project].version (tag-policy U-60).
+## @io       ⇥ context: str (org), runner: BuildRunner | None, env: dict | None → ⎋ bool (True = push OK)
+## @complexity O(1) + network I/O
+## @invariants
+##   - org-нормализация 1:1 с прежним shell: tr -d space → lower → strip [^a-z0-9]
+##   - version пуст/отсутствует → IMP:10 + False (fail-fast, НЕ push :latest без тега версии)
+##   - docker tag failure tolerated (`|| true` семантика) — push всё равно выполняется
+def _read_platform_version() -> str:
+    """Read [project].version from repo pyproject.toml (empty string if absent)."""
+    pyproject = Path(__file__).resolve().parents[3] / "pyproject.toml"
+    try:
+        data: dict[str, object] = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError) as e:
+        logger.warning("[IMP:8][hermes_push_l2] pyproject.toml unreadable: %s", e)
+        return ""
+    project = data.get("project")
+    if not isinstance(project, dict):
+        logger.warning("[IMP:8][hermes_push_l2] pyproject.toml: [project] section missing")
+        return ""
+    version = project.get("version", "")
+    return str(version) if version else ""
+
+
+def push_l2(
+    context: str,
+    runner: BuildRunner | None = None,
+    env: dict[str, str] | None = None,
+) -> bool:
+    """Tag and push L2 image to ghcr.io/<org>:{latest,v<platform_version>}."""
+    run = runner if runner is not None else subprocess.run
+    env = env if env is not None else {}
+
+    # Org-нормализация — байт-в-байт семантика прежнего shell-рецепта (T3.4)
+    org = re.sub(r"[^a-z0-9]", "", context.strip().lower())
+    if not org:
+        logger.error("[IMP:10][hermes_push_l2] ERROR: CONTEXT is required — usage: make hermes-push-l2 CONTEXT=<org>")
+        return False
+
+    platform_version = _read_platform_version()
+    if not platform_version:
+        logger.error("[IMP:10][hermes_push_l2] ERROR: version not found in pyproject.toml (tag-policy U-60)")
+        return False
+
+    logger.info(
+        "[IMP:7][hermes_push_l2] Pushing %s to ghcr.io/%s (tags: latest, v%s)...",
+        IMAGE_NAME,
+        org,
+        platform_version,
+    )
+
+    # GHCR-auth: PUSH_TOKEN приоритетен; PULL_TOKEN — read-only fallback warning (прежний контракт)
+    push_token = env.get("GHCR_PUSH_TOKEN") or os.environ.get("GHCR_PUSH_TOKEN", "")
+    pull_token = env.get("GHCR_PULL_TOKEN") or os.environ.get("GHCR_PULL_TOKEN", "")
+    if push_token:
+        login = run(
+            ["docker", "login", "ghcr.io", "-u", "x-access-token", "--password-stdin"],
+            input=push_token,
+            capture_output=True,
+            text=True,
+        )
+        if login.returncode != 0:
+            logger.warning("[IMP:7][hermes_push_l2] WARNING: GHCR_PUSH_TOKEN login failed")
+    elif pull_token:
+        logger.warning("[IMP:7][hermes_push_l2] GHCR_PUSH_TOKEN not set — trying GHCR_PULL_TOKEN (read-only)")
+        run(
+            ["docker", "login", "ghcr.io", "-u", "x-access-token", "--password-stdin"],
+            input=pull_token,
+            capture_output=True,
+            text=True,
+        )
+
+    for tag in ("latest", f"v{platform_version}"):
+        ref = f"ghcr.io/{org}/{IMAGE_NAME}:{tag}"
+        # docker tag failure tolerated — прежний `|| true` (локальный образ мог не собраться)
+        run(["docker", "tag", f"{IMAGE_NAME}:latest", ref], capture_output=True, text=True)
+        push_result = run(["docker", "push", ref], capture_output=True, text=True)
+        if push_result.returncode != 0:
+            logger.error("[IMP:10][hermes_push_l2] Push failed: %s — %s", ref, push_result.stderr[-200:])
+            return False
+
+    logger.info(
+        "[IMP:9][hermes_push_l2] L2 push complete: ghcr.io/%s/%s:{latest,v%s}", org, IMAGE_NAME, platform_version
+    )
+    return True
+
+
+# endregion FUNC_push_l2
+
+
 def main(
     argv: list[str] | None = None,
     runner: BuildRunner | None = None,
     env: dict[str, str] | None = None,
 ) -> int:
-    """CLI entry: `python3 -m core.internal.build.hermes_images {build-context|L2}`.
+    """CLI entry: `python3 -m core.internal.build.hermes_images {build-context|L2|push-l2}`.
 
     ▶ ┌argv┐ → ◇ action dispatch → ◇ CONTEXT guard → ⎋ exit 0|1
 
@@ -160,13 +255,18 @@ def main(
     parser = argparse.ArgumentParser(description="Build hermes-agent-context Docker image")
     parser.add_argument(
         "action",
-        choices=["build-context", "L2"],
-        help="build-context (L2, requires CONTEXT env) — единственный action после L1 коллапса",
+        choices=["build-context", "L2", "push-l2"],
+        help=(
+            "build-context/L2 (L2 build, requires CONTEXT env); "
+            "push-l2 (tag+push в ghcr.io/<CONTEXT>:{latest,v<pyproject-version>}, T3.4)"
+        ),
     )
-    # W11: типизированный namespace — действия build-context/L2 эквивалентны (L1 удалён DevPlan 002)
-    _ = parser.parse_args(argv, namespace=CliArgs())
+    args = parser.parse_args(argv, namespace=CliArgs())
+    action = args.action  # pyright: ignore[reportAttributeAccessIssue] — argparse fills CliArgs.action
 
     context = env.get("CONTEXT", os.environ.get("CONTEXT", ""))
+    if action == "push-l2":
+        return 0 if push_l2(context, runner=runner, env=env) else 1
     return 0 if build_context(context, runner=runner, env=env) else 1
 
 

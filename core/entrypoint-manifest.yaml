@@ -972,1585 +972,663 @@ allowed_verbs:
 - validate-modules
 - verify-domains
 gates:
-- id: test_negative_invalid_pins_rejected
-  test_file: test_gate_ai_instructions_pins.py
-  description: 'Auto-discovered gate: test_negative_invalid_pins_rejected'
-- id: test_pins_sot_format_and_hermes_config
-  test_file: test_gate_ai_instructions_pins.py
-  description: 'Auto-discovered gate: test_pins_sot_format_and_hermes_config'
-- id: test_templates_instructions_parity
-  test_file: test_gate_ai_instructions_pins.py
-  description: 'Auto-discovered gate: test_templates_instructions_parity'
-- id: test_generator_atomicity_audit
-  test_file: test_gate_atomic_generation_no_partial_writes.py
-  description: 'Auto-discovered gate: test_generator_atomicity_audit'
-- id: test_negative_direct_write_corruption_detected
-  test_file: test_gate_atomic_generation_no_partial_writes.py
-  description: 'Auto-discovered gate: test_negative_direct_write_corruption_detected'
-- id: test_no_partial_writes_on_failure
-  test_file: test_gate_atomic_generation_no_partial_writes.py
-  description: 'Auto-discovered gate: test_no_partial_writes_on_failure'
-- id: test_real_generators_no_partial_writes_on_crash
-  test_file: test_gate_atomic_generation_no_partial_writes.py
-  description: 'Auto-discovered gate: test_real_generators_no_partial_writes_on_crash'
-- id: test_no_done_file_references_in_bootstrap
-  test_file: test_gate_bootstrap_no_duplicate_steps.py
-  description: 'Auto-discovered gate: test_no_done_file_references_in_bootstrap'
-- id: test_no_shell_to_python_step_references
-  test_file: test_gate_bootstrap_no_duplicate_steps.py
-  description: 'Auto-discovered gate: test_no_shell_to_python_step_references'
-- id: test_no_step_1_step_18_in_node_lifecycle
-  test_file: test_gate_bootstrap_no_duplicate_steps.py
-  description: 'Auto-discovered gate: test_no_step_1_step_18_in_node_lifecycle'
-- id: test_node_lifecycle_under_80_loc
-  test_file: test_gate_bootstrap_no_duplicate_steps.py
-  description: 'Auto-discovered gate: test_node_lifecycle_under_80_loc'
-- id: step_parity_golden
-  test_file: test_gate_check_suite_consistency.py
-  description: 'Auto-discovered gate: step_parity_golden'
-- id: test_hole_coverage_present
-  test_file: test_gate_check_suite_consistency.py
-  description: 'Auto-discovered gate: test_hole_coverage_present'
-- id: test_manifest_checks_valid
-  test_file: test_gate_check_suite_consistency.py
-  description: 'Auto-discovered gate: test_manifest_checks_valid'
-- id: test_no_hardcoded_checks_in_makefiles
-  test_file: test_gate_check_suite_consistency.py
-  description: 'Auto-discovered gate: test_no_hardcoded_checks_in_makefiles'
-- id: test_registration_in_entrypoint_manifest
-  test_file: test_gate_check_suite_consistency.py
-  description: 'Auto-discovered gate: test_registration_in_entrypoint_manifest'
-- id: test_check_doc_headers_equivalent
-  test_file: test_gate_ci_coverage.py
-  description: 'Auto-discovered gate: test_check_doc_headers_equivalent'
-- id: test_contract_in_gate_and_diagnostic
-  test_file: test_gate_ci_coverage.py
-  description: 'Auto-discovered gate: test_contract_in_gate_and_diagnostic'
-- id: test_deploy_workflows_use_sha_aware_aggregator
-  test_file: test_gate_ci_coverage.py
-  description: 'Auto-discovered gate: test_deploy_workflows_use_sha_aware_aggregator'
-- id: test_integration_steps_have_structured_logging
-  test_file: test_gate_ci_coverage.py
-  description: 'Auto-discovered gate: test_integration_steps_have_structured_logging'
-- id: test_mode_fast_excludes_requires_docker
-  test_file: test_gate_ci_coverage.py
-  description: 'Auto-discovered gate: test_mode_fast_excludes_requires_docker'
-- id: test_negative_disabled_test_node_workflow_detected
-  test_file: test_gate_ci_coverage.py
-  description: 'Auto-discovered gate: test_negative_disabled_test_node_workflow_detected'
-- id: test_platform_test_has_push_trigger
-  test_file: test_gate_ci_coverage.py
-  description: 'Auto-discovered gate: test_platform_test_has_push_trigger'
-- id: test_test_node_workflow_exists_not_disabled
-  test_file: test_gate_ci_coverage.py
-  description: 'Auto-discovered gate: test_test_node_workflow_exists_not_disabled'
-- id: test_ci_env_vars_match_platform_env
-  test_file: test_gate_ci_env_vars.py
-  description: 'Auto-discovered gate: test_ci_env_vars_match_platform_env'
-- id: test_no_hardcoded_ci_secrets
-  test_file: test_gate_ci_env_vars.py
-  description: 'Auto-discovered gate: test_no_hardcoded_ci_secrets'
-- id: test_ci_trigger_strength_contract
-  test_file: test_gate_ci_trigger_strength.py
-  description: 'Auto-discovered gate: test_ci_trigger_strength_contract'
-- id: test_downgraded_gate_detected_negative
-  test_file: test_gate_ci_trigger_strength.py
-  description: 'Auto-discovered gate: test_downgraded_gate_detected_negative'
-- id: test_full_gate_runs_on_pr
-  test_file: test_gate_ci_trigger_strength.py
-  description: 'Auto-discovered gate: test_full_gate_runs_on_pr'
-- id: strength_scanner_yaml_parseable
-  test_file: test_gate_ci_trigger_strength.py
-  description: 'Auto-discovered gate: strength_scanner_yaml_parseable'
-- id: test_pr_triggered_deploy_detected_negative
-  test_file: test_gate_ci_trigger_strength.py
-  description: 'Auto-discovered gate: test_pr_triggered_deploy_detected_negative'
-- id: test_all_base_yml_have_x_logging
-  test_file: test_gate_compose_base_contract.py
-  description: 'Auto-discovered gate: test_all_base_yml_have_x_logging'
-- id: test_container_name_matches_module_name
-  test_file: test_gate_compose_base_contract.py
-  description: 'Auto-discovered gate: test_container_name_matches_module_name'
-- id: test_healthcheck_present
-  test_file: test_gate_compose_base_contract.py
-  description: 'Auto-discovered gate: test_healthcheck_present'
-- id: test_negative_converge_tuple_detected
-  test_file: test_gate_compose_files_sole_path.py
-  description: 'Auto-discovered gate: test_negative_converge_tuple_detected'
-- id: test_no_second_compose_filenames_tuple
-  test_file: test_gate_compose_files_sole_path.py
-  description: 'Auto-discovered gate: test_no_second_compose_filenames_tuple'
-- id: test_include_matches_discovered_modules
-  test_file: test_gate_compose_include_sync.py
-  description: 'Auto-discovered gate: test_include_matches_discovered_modules'
-- id: test_regeneration_is_noop_on_committed
-  test_file: test_gate_compose_include_sync.py
-  description: 'Auto-discovered gate: test_regeneration_is_noop_on_committed'
-- id: test_root_compose_uses_include
-  test_file: test_gate_compose_include_sync.py
-  description: 'Auto-discovered gate: test_root_compose_uses_include'
-- id: test_no_base_image_anywhere
-  test_file: test_gate_compose_no_base_image.py
-  description: 'Auto-discovered gate: test_no_base_image_anywhere'
-- id: test_root_compose_uses_context_image_var
-  test_file: test_gate_compose_no_base_image.py
-  description: 'Auto-discovered gate: test_root_compose_uses_context_image_var'
-- id: test_ci_workflows_use_compose_profiles_composite
-  test_file: test_gate_compose_profiles_consistency.py
-  description: 'Auto-discovered gate: test_ci_workflows_use_compose_profiles_composite'
-- id: test_no_hardcoded_profiles_at_former_callsites
-  test_file: test_gate_compose_profiles_consistency.py
-  description: 'Auto-discovered gate: test_no_hardcoded_profiles_at_former_callsites'
-- id: test_long_running_have_healthcheck
-  test_file: test_gate_compose_restart_policies.py
-  description: 'Auto-discovered gate: test_long_running_have_healthcheck'
-- id: test_restart_policy_canonical
-  test_file: test_gate_compose_restart_policies.py
-  description: 'Auto-discovered gate: test_restart_policy_canonical'
-- id: test_templates_use_unless_stopped
-  test_file: test_gate_compose_restart_policies.py
-  description: 'Auto-discovered gate: test_templates_use_unless_stopped'
-- id: test_no_extract_context_alias_in_core
-  test_file: test_gate_context_contract.py
-  description: 'Auto-discovered gate: test_no_extract_context_alias_in_core'
-- id: test_no_private_cache_access
-  test_file: test_gate_context_contract.py
-  description: 'Auto-discovered gate: test_no_private_cache_access'
-- id: test_node_yaml_samples_contexts_canon
-  test_file: test_gate_context_contract.py
-  description: 'Auto-discovered gate: test_node_yaml_samples_contexts_canon'
-- id: test_node_yaml_samples_domain_flat_only
-  test_file: test_gate_context_contract.py
-  description: 'Auto-discovered gate: test_node_yaml_samples_domain_flat_only'
-- id: test_validate_rejects_dict_domain
-  test_file: test_gate_context_contract.py
-  description: 'Auto-discovered gate: test_validate_rejects_dict_domain'
-- id: test_validate_rejects_top_level_context
-  test_file: test_gate_context_contract.py
-  description: 'Auto-discovered gate: test_validate_rejects_top_level_context'
-- id: test_core_rsync_excludes_git
-  test_file: test_gate_context_overlay_git.py
-  description: 'Auto-discovered gate: test_core_rsync_excludes_git'
-- id: test_git_only_in_ensure_context_repo
-  test_file: test_gate_context_overlay_git.py
-  description: 'Auto-discovered gate: test_git_only_in_ensure_context_repo'
-- id: test_contract_target_exists
-  test_file: test_gate_contract.py
-  description: 'Auto-discovered gate: test_contract_target_exists'
-- id: test_contract_test_files_exist
-  test_file: test_gate_contract.py
-  description: 'Auto-discovered gate: test_contract_test_files_exist'
-- id: cross_layer
-  test_file: test_gate_cross_layer.py
-  description: 'Auto-discovered gate: cross_layer'
-- id: test_no_deprecated_markers_stale
-  test_file: test_gate_dead_code.py
-  description: 'Auto-discovered gate: test_no_deprecated_markers_stale'
-- id: test_no_ssl_provision_references
-  test_file: test_gate_dead_code.py
-  description: 'Auto-discovered gate: test_no_ssl_provision_references'
-- id: test_canonical_verbs_closed_set
-  test_file: test_gate_deploy_channel.py
-  description: 'Auto-discovered gate: test_canonical_verbs_closed_set'
-- id: test_cli_subcommands_cover_verb_dictionary
-  test_file: test_gate_deploy_channel.py
-  description: 'Auto-discovered gate: test_cli_subcommands_cover_verb_dictionary'
-- id: test_deploy_make_targets_registered
-  test_file: test_gate_deploy_channel.py
-  description: 'Auto-discovered gate: test_deploy_make_targets_registered'
-- id: test_workflow_no_platform_dependencies
-  test_file: test_gate_deploy_channel.py
-  description: 'Auto-discovered gate: test_workflow_no_platform_dependencies'
-- id: test_workflow_platform_dependencies_negative
-  test_file: test_gate_deploy_channel.py
-  description: 'Auto-discovered gate: test_workflow_platform_dependencies_negative'
-- id: test_workflow_uses_only_channel_verbs
-  test_file: test_gate_deploy_channel.py
-  description: 'Auto-discovered gate: test_workflow_uses_only_channel_verbs'
-- id: test_workflow_verb_not_in_dictionary_negative
-  test_file: test_gate_deploy_channel.py
-  description: 'Auto-discovered gate: test_workflow_verb_not_in_dictionary_negative'
-- id: test_canonical_paths_registered
-  test_file: test_gate_deploy_paths.py
-  description: 'Auto-discovered gate: test_canonical_paths_registered'
-- id: test_deprecated_have_removal_plan
-  test_file: test_gate_deploy_paths.py
-  description: 'Auto-discovered gate: test_deprecated_have_removal_plan'
-- id: test_letsencrypt_live_sole_resolver
-  test_file: test_gate_deploy_paths.py
-  description: 'Auto-discovered gate: test_letsencrypt_live_sole_resolver'
-- id: test_litellm_config_path_sole_resolver
-  test_file: test_gate_deploy_paths.py
-  description: 'Auto-discovered gate: test_litellm_config_path_sole_resolver'
-- id: test_no_unregistered_paths
-  test_file: test_gate_deploy_paths.py
-  description: 'Auto-discovered gate: test_no_unregistered_paths'
-- id: test_docs_dir_absent
-  test_file: test_gate_docs_dir_forbidden.py
-  description: 'Auto-discovered gate: test_docs_dir_absent'
-- id: test_docs_dir_detector_negative
-  test_file: test_gate_docs_dir_forbidden.py
-  description: 'Auto-discovered gate: test_docs_dir_detector_negative'
-- id: test_tracked_md_allowlist
-  test_file: test_gate_docs_dir_forbidden.py
-  description: 'Auto-discovered gate: test_tracked_md_allowlist'
-- id: test_env_defaults_generated_has_no_domain
-  test_file: test_gate_domain_parity.py
-  description: 'Auto-discovered gate: test_env_defaults_generated_has_no_domain'
-- id: test_no_test_local_in_production_chain
-  test_file: test_gate_domain_parity.py
-  description: 'Auto-discovered gate: test_no_test_local_in_production_chain'
-- id: test_platform_domain_single_sot
-  test_file: test_gate_domain_parity.py
-  description: 'Auto-discovered gate: test_platform_domain_single_sot'
-- id: test_down_recipe_has_no_volumes_flag
-  test_file: test_gate_down_no_volumes.py
-  description: 'Auto-discovered gate: test_down_recipe_has_no_volumes_flag'
-- id: test_down_volumes_target_exists_with_flag
-  test_file: test_gate_down_no_volumes.py
-  description: 'Auto-discovered gate: test_down_volumes_target_exists_with_flag'
-- id: test_down_with_volumes_negative
-  test_file: test_gate_down_no_volumes.py
-  description: 'Auto-discovered gate: test_down_with_volumes_negative'
-- id: test_env_defaults_consistency
-  test_file: test_gate_env_defaults_consistency.py
-  description: 'Auto-discovered gate: test_env_defaults_consistency'
-- id: test_nextauth_secret_precondition
-  test_file: test_gate_env_defaults_consistency.py
-  description: 'Auto-discovered gate: test_nextauth_secret_precondition'
-- id: test_postgres_password_unified
-  test_file: test_gate_env_defaults_consistency.py
-  description: 'Auto-discovered gate: test_postgres_password_unified'
-- id: test_env_example_fresh
-  test_file: test_gate_env_example_drift.py
-  description: 'Auto-discovered gate: test_env_example_fresh'
-- id: test_env_example_key_order_matches_dotenv
-  test_file: test_gate_env_example_drift.py
-  description: 'Auto-discovered gate: test_env_example_key_order_matches_dotenv'
-- id: test_env_example_matches_platform_env_defaults
-  test_file: test_gate_env_example_drift.py
-  description: 'Auto-discovered gate: test_env_example_matches_platform_env_defaults'
-- id: test_env_example_subset_of_provides
-  test_file: test_gate_env_example_drift.py
-  description: 'Auto-discovered gate: test_env_example_subset_of_provides'
-- id: test_env_example_well_formed
-  test_file: test_gate_env_example_drift.py
-  description: 'Auto-discovered gate: test_env_example_well_formed'
-- id: test_env_mirrors_example_keys
-  test_file: test_gate_env_example_drift.py
-  description: 'Auto-discovered gate: test_env_mirrors_example_keys'
-- id: test_env_noproxy_subset
-  test_file: test_gate_env_example_drift.py
-  description: 'Auto-discovered gate: test_env_noproxy_subset'
-- id: test_hermes_agent_env_example_well_formed
-  test_file: test_gate_env_example_drift.py
-  description: 'Auto-discovered gate: test_hermes_agent_env_example_well_formed'
-- id: test_no_inline_python3_in_scaffold
-  test_file: test_gate_env_example_drift.py
-  description: 'Auto-discovered gate: test_no_inline_python3_in_scaffold'
-- id: test_no_proxy_superset
-  test_file: test_gate_env_example_drift.py
-  description: 'Auto-discovered gate: test_no_proxy_superset'
-- id: test_platform_domain_default
-  test_file: test_gate_env_example_drift.py
-  description: 'Auto-discovered gate: test_platform_domain_default'
-- id: test_prometheus_dirs_canonical
-  test_file: test_gate_env_example_drift.py
-  description: 'Auto-discovered gate: test_prometheus_dirs_canonical'
-- id: test_s3_endpoint_removed
-  test_file: test_gate_env_example_drift.py
-  description: 'Auto-discovered gate: test_s3_endpoint_removed'
-- id: test_env_example_hostnames_match_containers
-  test_file: test_gate_env_hostname_drift.py
-  description: 'Auto-discovered gate: test_env_example_hostnames_match_containers'
-- id: test_hermes_agent_env_matches_containers
-  test_file: test_gate_env_hostname_drift.py
-  description: 'Auto-discovered gate: test_hermes_agent_env_matches_containers'
-- id: test_env_file_is_0600_when_present
-  test_file: test_gate_env_permissions.py
-  description: 'Auto-discovered gate: test_env_file_is_0600_when_present'
-- id: test_env_permissions_negative_0600_ok
-  test_file: test_gate_env_permissions.py
-  description: 'Auto-discovered gate: test_env_permissions_negative_0600_ok'
-- id: test_env_permissions_negative_0644_detected
-  test_file: test_gate_env_permissions.py
-  description: 'Auto-discovered gate: test_env_permissions_negative_0644_detected'
-- id: test_env_noproxy_covers_internal_services
-  test_file: test_gate_env_shared_consistency.py
-  description: 'Auto-discovered gate: test_env_noproxy_covers_internal_services'
-- id: test_env_shared_vars_injected_in_compose
-  test_file: test_gate_env_shared_consistency.py
-  description: 'Auto-discovered gate: test_env_shared_vars_injected_in_compose'
-- id: test_no_hardcoded_noproxy_in_base_yml
-  test_file: test_gate_env_shared_consistency.py
-  description: 'Auto-discovered gate: test_no_hardcoded_noproxy_in_base_yml'
-- id: test_proxy_vars_are_opt_in
-  test_file: test_gate_env_shared_consistency.py
-  description: 'Auto-discovered gate: test_proxy_vars_are_opt_in'
-- id: test_env_shared_divergence_detected
-  test_file: test_gate_env_shared_consistency_negative.py
-  description: 'Auto-discovered gate: test_env_shared_divergence_detected'
-- id: test_executable_bit_outside_lib
-  test_file: test_gate_executable_bit.py
-  description: 'Auto-discovered gate: test_executable_bit_outside_lib'
-- id: test_negative_detects_644_outside_lib
-  test_file: test_gate_executable_bit.py
-  description: 'Auto-discovered gate: test_negative_detects_644_outside_lib'
-- id: test_exit_codes_documented_in_core_agents
-  test_file: test_gate_exit_codes_documented.py
-  description: 'Auto-discovered gate: test_exit_codes_documented_in_core_agents'
-- id: test_fallback_secrets_removed
-  test_file: test_gate_fallback_secrets_sync.py
-  description: 'Auto-discovered gate: test_fallback_secrets_removed'
-- id: test_all_test_fixtures_match_schemas
-  test_file: test_gate_fixture_schema.py
-  description: 'Auto-discovered gate: test_all_test_fixtures_match_schemas'
-- id: test_no_self_read
-  test_file: test_gate_generate_entrypoint_manifest_no_self_read.py
-  description: 'Auto-discovered gate: test_no_self_read'
-- id: test_generated_marker_negative_orphan_detected
-  test_file: test_gate_generated_marker_orphan.py
-  description: 'Auto-discovered gate: test_generated_marker_negative_orphan_detected'
-- id: test_generated_marker_negative_registered_ok
-  test_file: test_gate_generated_marker_orphan.py
-  description: 'Auto-discovered gate: test_generated_marker_negative_registered_ok'
-- id: test_no_orphan_generated_markers
-  test_file: test_gate_generated_marker_orphan.py
-  description: 'Auto-discovered gate: test_no_orphan_generated_markers'
-- id: test_age_secret_key_rule_present
-  test_file: test_gate_gitleaks_config.py
-  description: 'Auto-discovered gate: test_age_secret_key_rule_present'
-- id: test_extend_use_default_guard
-  test_file: test_gate_gitleaks_config.py
-  description: 'Auto-discovered gate: test_extend_use_default_guard'
-- id: test_regex_matches_real_age_key_probe
-  test_file: test_gate_gitleaks_config.py
-  description: 'Auto-discovered gate: test_regex_matches_real_age_key_probe'
-- id: test_regex_rejects_short_and_test_fixtures
-  test_file: test_gate_gitleaks_config.py
-  description: 'Auto-discovered gate: test_regex_rejects_short_and_test_fixtures'
-- id: test_gitleaks_step_present_and_active
-  test_file: test_gate_gitleaks_step_exists.py
-  description: 'Auto-discovered gate: test_gitleaks_step_present_and_active'
-- id: test_negative_gitleaks_step_commented_detected
-  test_file: test_gate_gitleaks_step_exists.py
-  description: 'Auto-discovered gate: test_negative_gitleaks_step_commented_detected'
-- id: test_negative_gitleaks_step_disabled_detected
-  test_file: test_gate_gitleaks_step_exists.py
-  description: 'Auto-discovered gate: test_negative_gitleaks_step_disabled_detected'
-- id: test_negative_gitleaks_step_missing_detected
-  test_file: test_gate_gitleaks_step_exists.py
-  description: 'Auto-discovered gate: test_negative_gitleaks_step_missing_detected'
-- id: test_gitleaks_composite_action_used
-  test_file: test_gate_gitleaks_version.py
-  description: 'Auto-discovered gate: test_gitleaks_composite_action_used'
-- id: test_single_gitleaks_version
-  test_file: test_gate_gitleaks_version.py
-  description: 'Auto-discovered gate: test_single_gitleaks_version'
-- id: test_all_py_files_have_grep_summary
-  test_file: test_gate_grep_summary.py
-  description: 'Auto-discovered gate: test_all_py_files_have_grep_summary'
-- id: test_all_sh_files_have_grep_summary
-  test_file: test_gate_grep_summary.py
-  description: 'Auto-discovered gate: test_all_sh_files_have_grep_summary'
-- id: test_deep_mode_has_early_exit
-  test_file: test_gate_healthcheck_contract.py
-  description: 'Auto-discovered gate: test_deep_mode_has_early_exit'
-- id: test_langfuse_uses_127_0_0_1
-  test_file: test_gate_healthcheck_contract.py
-  description: 'Auto-discovered gate: test_langfuse_uses_127_0_0_1'
-- id: test_litellm_uses_check_http
-  test_file: test_gate_healthcheck_contract.py
-  description: 'Auto-discovered gate: test_litellm_uses_check_http'
-- id: test_logging_deep_includes_alloy
-  test_file: test_gate_healthcheck_contract.py
-  description: 'Auto-discovered gate: test_logging_deep_includes_alloy'
-- id: test_postgres_deep_includes_pgbouncer
-  test_file: test_gate_healthcheck_contract.py
-  description: 'Auto-discovered gate: test_postgres_deep_includes_pgbouncer'
-- id: test_delegates_to_lib_healthcheck_d5_canon
-  test_file: test_gate_healthcheck_drift.py
-  description: 'Auto-discovered gate: test_delegates_to_lib_healthcheck_d5_canon'
-- id: test_env_parametrized_container_names
-  test_file: test_gate_healthcheck_drift.py
-  description: 'Auto-discovered gate: test_env_parametrized_container_names'
-- id: test_healthcheck_intervals_match_classification
-  test_file: test_gate_healthcheck_intervals.py
-  description: 'Auto-discovered gate: test_healthcheck_intervals_match_classification'
-- id: test_all_modules_use_check_docker_health
-  test_file: test_gate_healthcheck_unification.py
-  description: 'Auto-discovered gate: test_all_modules_use_check_docker_health'
-- id: test_exec_check_used_in_docker_exec_modules
-  test_file: test_gate_healthcheck_unification.py
-  description: 'Auto-discovered gate: test_exec_check_used_in_docker_exec_modules'
-- id: test_modules_healthcheck_uses_lib
-  test_file: test_gate_healthcheck_unification.py
-  description: 'Auto-discovered gate: test_modules_healthcheck_uses_lib'
-- id: test_no_raw_docker_inspect_in_modules
-  test_file: test_gate_healthcheck_unification.py
-  description: 'Auto-discovered gate: test_no_raw_docker_inspect_in_modules'
-- id: test_start_period_standardized
-  test_file: test_gate_healthcheck_unification.py
-  description: 'Auto-discovered gate: test_start_period_standardized'
-- id: test_ci_workflows_require_honesty_fail
-  test_file: test_gate_honesty_mode.py
-  description: 'Auto-discovered gate: test_ci_workflows_require_honesty_fail'
-- id: test_honesty_fail_on_missing_docker
-  test_file: test_gate_honesty_mode.py
-  description: 'Auto-discovered gate: test_honesty_fail_on_missing_docker'
-- id: test_honesty_marker_default_skips
-  test_file: test_gate_honesty_mode.py
-  description: 'Auto-discovered gate: test_honesty_marker_default_skips'
-- id: test_http_calls_have_retry
-  test_file: test_gate_http_retry_policy.py
-  description: 'Auto-discovered gate: test_http_calls_have_retry'
-- id: test_bare_latest_rejected_negative
-  test_file: test_gate_image_tag_form.py
-  description: 'Auto-discovered gate: test_bare_latest_rejected_negative'
-- id: test_context_image_default_matches_sot
-  test_file: test_gate_image_tag_form.py
-  description: 'Auto-discovered gate: test_context_image_default_matches_sot'
-- id: test_ghcr_refs_follow_tag_policy
-  test_file: test_gate_image_tag_form.py
-  description: 'Auto-discovered gate: test_ghcr_refs_follow_tag_policy'
-- id: test_latest_digest_fallback_detected_negative
-  test_file: test_gate_image_tag_form.py
-  description: 'Auto-discovered gate: test_latest_digest_fallback_detected_negative'
-- id: test_plain_tag_without_digest_rejected
-  test_file: test_gate_image_tag_form.py
-  description: 'Auto-discovered gate: test_plain_tag_without_digest_rejected'
-- id: test_valid_forms_accepted
-  test_file: test_gate_image_tag_form.py
-  description: 'Auto-discovered gate: test_valid_forms_accepted'
-- id: test_core_imports_covered_by_pyproject
-  test_file: test_gate_imports.py
-  description: 'Auto-discovered gate: test_core_imports_covered_by_pyproject'
-- id: imports_negative_fictitious_import
-  test_file: test_gate_imports.py
-  description: 'Auto-discovered gate: imports_negative_fictitious_import'
-- id: test_linter_parity
-  test_file: test_gate_lint_quality.py
-  description: 'Auto-discovered gate: test_linter_parity'
-- id: test_all_sources_use_liveliness
-  test_file: test_gate_litellm_health_url_parity.py
-  description: 'Auto-discovered gate: test_all_sources_use_liveliness'
-- id: test_bare_health_detected_negative
-  test_file: test_gate_litellm_health_url_parity.py
-  description: 'Auto-discovered gate: test_bare_health_detected_negative'
-- id: test_no_bare_health_url
-  test_file: test_gate_litellm_health_url_parity.py
-  description: 'Auto-discovered gate: test_no_bare_health_url'
-- id: test_no_readiness_in_compose_sources
-  test_file: test_gate_litellm_health_url_parity.py
-  description: 'Auto-discovered gate: test_no_readiness_in_compose_sources'
-- id: test_readiness_detected_negative
-  test_file: test_gate_litellm_health_url_parity.py
-  description: 'Auto-discovered gate: test_readiness_detected_negative'
-- id: test_env_chain_cycle_does_not_hang
-  test_file: test_gate_litellm_pg_enforcement.py
-  description: 'Auto-discovered gate: test_env_chain_cycle_does_not_hang'
-- id: test_litellm_compose_test_database_url_is_postgres
-  test_file: test_gate_litellm_pg_enforcement.py
-  description: 'Auto-discovered gate: test_litellm_compose_test_database_url_is_postgres'
-- id: test_litellm_database_url_env_chain_resolves_to_postgres
-  test_file: test_gate_litellm_pg_enforcement.py
-  description: 'Auto-discovered gate: test_litellm_database_url_env_chain_resolves_to_postgres'
-- id: test_litellm_env_database_url_is_postgres
-  test_file: test_gate_litellm_pg_enforcement.py
-  description: 'Auto-discovered gate: test_litellm_env_database_url_is_postgres'
-- id: test_negative_sqlite_via_env_chain_detected
-  test_file: test_gate_litellm_pg_enforcement.py
-  description: 'Auto-discovered gate: test_negative_sqlite_via_env_chain_detected'
-- id: test_no_sqlite_in_litellm_config
-  test_file: test_gate_litellm_pg_enforcement.py
-  description: 'Auto-discovered gate: test_no_sqlite_in_litellm_config'
-- id: test_litellm_sqlite_config_detected
-  test_file: test_gate_litellm_pg_enforcement_negative.py
-  description: 'Auto-discovered gate: test_litellm_sqlite_config_detected'
-- id: all_active_aliases_have_models
-  test_file: test_gate_llm_aliases.py
-  description: 'Auto-discovered gate: all_active_aliases_have_models'
-- id: all_model_list_have_access_group
-  test_file: test_gate_llm_aliases.py
-  description: 'Auto-discovered gate: all_model_list_have_access_group'
-- id: deepseek_key_in_all_entries
-  test_file: test_gate_llm_aliases.py
-  description: 'Auto-discovered gate: deepseek_key_in_all_entries'
-- id: fallback_chain_complete
-  test_file: test_gate_llm_aliases.py
-  description: 'Auto-discovered gate: fallback_chain_complete'
-- id: no_circular_fallbacks
-  test_file: test_gate_llm_aliases.py
-  description: 'Auto-discovered gate: no_circular_fallbacks'
-- id: provisioner_idempotent
-  test_file: test_gate_llm_provisioner.py
-  description: 'Auto-discovered gate: provisioner_idempotent'
-- id: provisioner_no_orphans
-  test_file: test_gate_llm_provisioner.py
-  description: 'Auto-discovered gate: provisioner_no_orphans'
-- id: loc_allowlist
-  test_file: test_gate_loc_allowlist.py
-  description: 'Auto-discovered gate: loc_allowlist'
-- id: test_all_modules_included
-  test_file: test_gate_local_stack.py
-  description: 'Auto-discovered gate: test_all_modules_included'
-- id: test_compose_config_resolves_full_stack
-  test_file: test_gate_local_stack.py
-  description: 'Auto-discovered gate: test_compose_config_resolves_full_stack'
-- id: test_backup_restore_matrix_d1
-  test_file: test_gate_make_contract.py
-  description: 'Auto-discovered gate: test_backup_restore_matrix_d1'
-- id: test_make_n_dry_run_all_targets
-  test_file: test_gate_make_contract.py
-  description: 'Auto-discovered gate: test_make_n_dry_run_all_targets'
-- id: test_manifest_restart_is_soft
-  test_file: test_gate_make_contract.py
-  description: 'Auto-discovered gate: test_manifest_restart_is_soft'
-- id: test_module_mk_restart_hard_exists
-  test_file: test_gate_make_contract.py
-  description: 'Auto-discovered gate: test_module_mk_restart_hard_exists'
-- id: test_nginx_dev_compose_valid
-  test_file: test_gate_make_contract.py
-  description: 'Auto-discovered gate: test_nginx_dev_compose_valid'
-- id: test_nginx_dev_config_no_duplicates
-  test_file: test_gate_make_contract.py
-  description: 'Auto-discovered gate: test_nginx_dev_config_no_duplicates'
-- id: test_no_empty_phony_targets
-  test_file: test_gate_make_contract.py
-  description: 'Auto-discovered gate: test_no_empty_phony_targets'
-- id: test_no_soft_restart_in_docker_makefiles
-  test_file: test_gate_make_contract.py
-  description: 'Auto-discovered gate: test_no_soft_restart_in_docker_makefiles'
-- id: test_platform_secrets_excluded
-  test_file: test_gate_make_contract.py
-  description: 'Auto-discovered gate: test_platform_secrets_excluded'
-- id: test_restart_soft_semantics
-  test_file: test_gate_make_contract.py
-  description: 'Auto-discovered gate: test_restart_soft_semantics'
-- id: test_root_makefile_restart_is_soft
-  test_file: test_gate_make_contract.py
-  description: 'Auto-discovered gate: test_root_makefile_restart_is_soft'
-- id: test_dot_default_goal_is_help
-  test_file: test_gate_makefile_targets.py
-  description: 'Auto-discovered gate: test_dot_default_goal_is_help'
-- id: test_include_directives_in_root
-  test_file: test_gate_makefile_targets.py
-  description: 'Auto-discovered gate: test_include_directives_in_root'
-- id: test_make_n_for_complex_targets
-  test_file: test_gate_makefile_targets.py
-  description: 'Auto-discovered gate: test_make_n_for_complex_targets'
-- id: test_make_n_for_simple_targets
-  test_file: test_gate_makefile_targets.py
-  description: 'Auto-discovered gate: test_make_n_for_simple_targets'
-- id: test_makefiles_directory_exists
-  test_file: test_gate_makefile_targets.py
-  description: 'Auto-discovered gate: test_makefiles_directory_exists'
-- id: test_recipe_lines_use_tabs
-  test_file: test_gate_makefile_targets.py
-  description: 'Auto-discovered gate: test_recipe_lines_use_tabs'
-- id: test_root_makefile_line_limit
-  test_file: test_gate_makefile_targets.py
-  description: 'Auto-discovered gate: test_root_makefile_line_limit'
-- id: test_generator_dag_acyclic
-  test_file: test_gate_manifest_dag_acyclic.py
-  description: 'Auto-discovered gate: test_generator_dag_acyclic'
-- id: test_agents_md_synced_with_manifest
-  test_file: test_gate_manifest_integrity.py
-  description: 'Auto-discovered gate: test_agents_md_synced_with_manifest'
-- id: test_delegates_to_paths_exist
-  test_file: test_gate_manifest_integrity.py
-  description: 'Auto-discovered gate: test_delegates_to_paths_exist'
-- id: test_entrypoint_names_match_manifest
-  test_file: test_gate_manifest_integrity.py
-  description: 'Auto-discovered gate: test_entrypoint_names_match_manifest'
-- id: test_module_makefiles_no_deprecated_module_deploy
-  test_file: test_gate_manifest_integrity.py
-  description: 'Auto-discovered gate: test_module_makefiles_no_deprecated_module_deploy'
-- id: test_module_targets_in_manifest
-  test_file: test_gate_manifest_integrity.py
-  description: 'Auto-discovered gate: test_module_targets_in_manifest'
-- id: test_module_targets_use_canonical_names
-  test_file: test_gate_manifest_integrity.py
-  description: 'Auto-discovered gate: test_module_targets_use_canonical_names'
-- id: test_negative_dangling_gate_id_detected
-  test_file: test_gate_manifest_integrity.py
-  description: 'Auto-discovered gate: test_negative_dangling_gate_id_detected'
-- id: test_negative_duplicate_make_target_detected
-  test_file: test_gate_manifest_integrity.py
-  description: 'Auto-discovered gate: test_negative_duplicate_make_target_detected'
-- id: test_no_duplicate_make_targets
-  test_file: test_gate_manifest_integrity.py
-  description: 'Auto-discovered gate: test_no_duplicate_make_targets'
-- id: test_no_module_prefix
-  test_file: test_gate_manifest_integrity.py
-  description: 'Auto-discovered gate: test_no_module_prefix'
-- id: test_repair_contract_integrity
-  test_file: test_gate_manifest_integrity.py
-  description: 'Auto-discovered gate: test_repair_contract_integrity'
-- id: test_repair_gate_ids_resolve
-  test_file: test_gate_manifest_integrity.py
-  description: 'Auto-discovered gate: test_repair_gate_ids_resolve'
-- id: test_signatures_match_code
-  test_file: test_gate_manifest_signature_parity.py
-  description: 'Auto-discovered gate: test_signatures_match_code'
-- id: test_stale_signature_detected_negative
-  test_file: test_gate_manifest_signature_parity.py
-  description: 'Auto-discovered gate: test_stale_signature_detected_negative'
-- id: test_manifests_up_to_date
-  test_file: test_gate_manifests_up_to_date.py
-  description: 'Auto-discovered gate: test_manifests_up_to_date'
-- id: marker_outside_detected_negative
-  test_file: test_gate_marker_location.py
-  description: 'Auto-discovered gate: marker_outside_detected_negative'
-- id: test_no_gate_markers_outside_gates_dir
-  test_file: test_gate_marker_location.py
-  description: 'Auto-discovered gate: test_no_gate_markers_outside_gates_dir'
-- id: test_all_hooks_are_specified_as_strings
-  test_file: test_gate_module_hooks.py
-  description: 'Auto-discovered gate: test_all_hooks_are_specified_as_strings'
-- id: test_deleted_hook_files_absent
-  test_file: test_gate_module_hooks.py
-  description: 'Auto-discovered gate: test_deleted_hook_files_absent'
-- id: test_hook_contract_validation[backup-cron]
-  test_file: test_gate_module_hooks.py
-  description: 'Auto-discovered gate: test_hook_contract_validation[backup-cron]'
-- id: test_hook_contract_validation[clickhouse]
-  test_file: test_gate_module_hooks.py
-  description: 'Auto-discovered gate: test_hook_contract_validation[clickhouse]'
-- id: test_hook_contract_validation[hermes-agent]
-  test_file: test_gate_module_hooks.py
-  description: 'Auto-discovered gate: test_hook_contract_validation[hermes-agent]'
-- id: test_hook_contract_validation[infra-metrics]
-  test_file: test_gate_module_hooks.py
-  description: 'Auto-discovered gate: test_hook_contract_validation[infra-metrics]'
-- id: test_hook_contract_validation[langfuse]
-  test_file: test_gate_module_hooks.py
-  description: 'Auto-discovered gate: test_hook_contract_validation[langfuse]'
-- id: test_hook_contract_validation[litellm]
-  test_file: test_gate_module_hooks.py
-  description: 'Auto-discovered gate: test_hook_contract_validation[litellm]'
-- id: test_hook_contract_validation[logging]
-  test_file: test_gate_module_hooks.py
-  description: 'Auto-discovered gate: test_hook_contract_validation[logging]'
-- id: test_hook_contract_validation[minio]
-  test_file: test_gate_module_hooks.py
-  description: 'Auto-discovered gate: test_hook_contract_validation[minio]'
-- id: test_hook_contract_validation[monitoring]
-  test_file: test_gate_module_hooks.py
-  description: 'Auto-discovered gate: test_hook_contract_validation[monitoring]'
-- id: test_hook_contract_validation[nginx]
-  test_file: test_gate_module_hooks.py
-  description: 'Auto-discovered gate: test_hook_contract_validation[nginx]'
-- id: test_hook_contract_validation[platform-secrets]
-  test_file: test_gate_module_hooks.py
-  description: 'Auto-discovered gate: test_hook_contract_validation[platform-secrets]'
-- id: test_hook_contract_validation[postgres]
-  test_file: test_gate_module_hooks.py
-  description: 'Auto-discovered gate: test_hook_contract_validation[postgres]'
-- id: test_hook_contract_validation[redis]
-  test_file: test_gate_module_hooks.py
-  description: 'Auto-discovered gate: test_hook_contract_validation[redis]'
-- id: test_hook_contract_validation[status-page]
-  test_file: test_gate_module_hooks.py
-  description: 'Auto-discovered gate: test_hook_contract_validation[status-page]'
-- id: test_registered_deploy_hooks_have_runtime_trigger
-  test_file: test_gate_module_hooks.py
-  description: 'Auto-discovered gate: test_registered_deploy_hooks_have_runtime_trigger'
-- id: test_all_base_yml_have_profiles
-  test_file: test_gate_module_profiles.py
-  description: 'Auto-discovered gate: test_all_base_yml_have_profiles'
-- id: test_no_stale_profiles
-  test_file: test_gate_module_profiles.py
-  description: 'Auto-discovered gate: test_no_stale_profiles'
-- id: test_profile_matches_module_name
-  test_file: test_gate_module_profiles.py
-  description: 'Auto-discovered gate: test_profile_matches_module_name'
-- id: test_all_modules_valid_against_d4_schema
-  test_file: test_gate_module_schema_d4.py
-  description: 'Auto-discovered gate: test_all_modules_valid_against_d4_schema'
-- id: test_no_version_field_in_schema
-  test_file: test_gate_module_schema_d4.py
-  description: 'Auto-discovered gate: test_no_version_field_in_schema'
-- id: test_schema_allows_additional_properties
-  test_file: test_gate_module_schema_d4.py
-  description: 'Auto-discovered gate: test_schema_allows_additional_properties'
-- id: test_schema_required_fields
-  test_file: test_gate_module_schema_d4.py
-  description: 'Auto-discovered gate: test_schema_required_fields'
-- id: test_version_not_in_required
-  test_file: test_gate_module_schema_d4.py
-  description: 'Auto-discovered gate: test_version_not_in_required'
-- id: test_module_yaml_missing_required_fields
-  test_file: test_gate_module_schema_d4_negative.py
-  description: 'Auto-discovered gate: test_module_yaml_missing_required_fields'
-- id: test_all_modules_have_required_fields
-  test_file: test_gate_module_yaml_contract.py
-  description: 'Auto-discovered gate: test_all_modules_have_required_fields'
-- id: test_d5_schema_version
-  test_file: test_gate_module_yaml_contract.py
-  description: 'Auto-discovered gate: test_d5_schema_version'
-- id: test_d5_validator_exists
-  test_file: test_gate_module_yaml_contract.py
-  description: 'Auto-discovered gate: test_d5_validator_exists'
-- id: test_d5_validator_passes_on_all_modules
-  test_file: test_gate_module_yaml_contract.py
-  description: 'Auto-discovered gate: test_d5_validator_passes_on_all_modules'
-- id: test_env_requires_no_duplicates
-  test_file: test_gate_module_yaml_contract.py
-  description: 'Auto-discovered gate: test_env_requires_no_duplicates'
-- id: test_no_version_field
-  test_file: test_gate_module_yaml_contract.py
-  description: 'Auto-discovered gate: test_no_version_field'
-- id: test_spool_dir_format
-  test_file: test_gate_module_yaml_contract.py
-  description: 'Auto-discovered gate: test_spool_dir_format'
-- id: test_system_module_contract
-  test_file: test_gate_module_yaml_contract.py
-  description: 'Auto-discovered gate: test_system_module_contract'
-- id: test_d4_bare_string_still_valid
-  test_file: test_gate_module_yaml_contract_d5_negative.py
-  description: 'Auto-discovered gate: test_d4_bare_string_still_valid'
-- id: test_missing_required_env_var
-  test_file: test_gate_module_yaml_contract_d5_negative.py
-  description: 'Auto-discovered gate: test_missing_required_env_var'
-- id: test_restart_drift
-  test_file: test_gate_module_yaml_contract_d5_negative.py
-  description: 'Auto-discovered gate: test_restart_drift'
-- id: test_wrong_env_requires_type
-  test_file: test_gate_module_yaml_contract_d5_negative.py
-  description: 'Auto-discovered gate: test_wrong_env_requires_type'
-- id: test_all_network_names_in_canon
-  test_file: test_gate_networks_sot.py
-  description: 'Auto-discovered gate: test_all_network_names_in_canon'
-- id: test_non_canonical_network_detected_negative
-  test_file: test_gate_networks_sot.py
-  description: 'Auto-discovered gate: test_non_canonical_network_detected_negative'
-- id: test_base_yml_mounts_templates
-  test_file: test_gate_nginx_domain_contract.py
-  description: 'Auto-discovered gate: test_base_yml_mounts_templates'
-- id: test_no_host_variable_in_server_name
-  test_file: test_gate_nginx_domain_contract.py
-  description: 'Auto-discovered gate: test_no_host_variable_in_server_name'
-- id: test_platform_domain_placeholder_present
-  test_file: test_gate_nginx_domain_contract.py
-  description: 'Auto-discovered gate: test_platform_domain_placeholder_present'
-- id: test_config_templates_use_envsubst_syntax
-  test_file: test_gate_nginx_template_syntax.py
-  description: 'Auto-discovered gate: test_config_templates_use_envsubst_syntax'
-- id: test_no_mixed_syntax_in_single_file
-  test_file: test_gate_nginx_template_syntax.py
-  description: 'Auto-discovered gate: test_no_mixed_syntax_in_single_file'
-- id: test_template_templates_use_jinja_syntax
-  test_file: test_gate_nginx_template_syntax.py
-  description: 'Auto-discovered gate: test_template_templates_use_jinja_syntax'
-- id: test_no_backward_compat_shims
-  test_file: test_gate_no_backward_compat_shims.py
-  description: 'Auto-discovered gate: test_no_backward_compat_shims'
-- id: test_disabled_files_negative_detected
-  test_file: test_gate_no_disabled_files.py
-  description: 'Auto-discovered gate: test_disabled_files_negative_detected'
-- id: test_disabled_files_negative_normal_ok
-  test_file: test_gate_no_disabled_files.py
-  description: 'Auto-discovered gate: test_disabled_files_negative_normal_ok'
-- id: test_no_disabled_files
-  test_file: test_gate_no_disabled_files.py
-  description: 'Auto-discovered gate: test_no_disabled_files'
-- id: test_empty_dirs_negative_detected
-  test_file: test_gate_no_empty_dirs.py
-  description: 'Auto-discovered gate: test_empty_dirs_negative_detected'
-- id: test_empty_dirs_negative_gitkeep_ok
-  test_file: test_gate_no_empty_dirs.py
-  description: 'Auto-discovered gate: test_empty_dirs_negative_gitkeep_ok'
-- id: test_no_empty_dirs
-  test_file: test_gate_no_empty_dirs.py
-  description: 'Auto-discovered gate: test_no_empty_dirs'
-- id: test_binding_detection_negative_cases
-  test_file: test_gate_no_external_port_binding.py
-  description: 'Auto-discovered gate: test_binding_detection_negative_cases'
-- id: test_env_var_host_side_parsing
-  test_file: test_gate_no_external_port_binding.py
-  description: 'Auto-discovered gate: test_env_var_host_side_parsing'
-- id: test_long_syntax_dict_parsing
-  test_file: test_gate_no_external_port_binding.py
-  description: 'Auto-discovered gate: test_long_syntax_dict_parsing'
-- id: test_no_external_port_binding_outside_80_443
-  test_file: test_gate_no_external_port_binding.py
-  description: 'Auto-discovered gate: test_no_external_port_binding_outside_80_443'
-- id: test_no_simulator_classes_in_test_suite
-  test_file: test_gate_no_simulators.py
-  description: 'Auto-discovered gate: test_no_simulator_classes_in_test_suite'
-- id: test_all_makefile_targets_in_allowed_verbs
-  test_file: test_gate_no_unregistered_entrypoint.py
-  description: 'Auto-discovered gate: test_all_makefile_targets_in_allowed_verbs'
-- id: test_all_shebang_files_in_manifest
-  test_file: test_gate_no_unregistered_entrypoint.py
-  description: 'Auto-discovered gate: test_all_shebang_files_in_manifest'
-- id: test_files_outside_scan_roots_do_not_require_registration
-  test_file: test_gate_no_unregistered_entrypoint.py
-  description: 'Auto-discovered gate: test_files_outside_scan_roots_do_not_require_registration'
-- id: test_unregistered_entrypoint_injection_detected
-  test_file: test_gate_no_unregistered_entrypoint.py
-  description: 'Auto-discovered gate: test_unregistered_entrypoint_injection_detected'
-- id: test_no_yq_operations_on_node
-  test_file: test_gate_no_yq_dependency.py
-  description: 'Auto-discovered gate: test_no_yq_operations_on_node'
-- id: test_no_yaml_safe_load_node
-  test_file: test_gate_node_yaml_single_source.py
-  description: 'Auto-discovered gate: test_no_yaml_safe_load_node'
-- id: test_negative_unregistered_event_detected
-  test_file: test_gate_notification_parity.py
-  description: 'Auto-discovered gate: test_negative_unregistered_event_detected'
-- id: test_notification_catalog_valid
-  test_file: test_gate_notification_parity.py
-  description: 'Auto-discovered gate: test_notification_catalog_valid'
-- id: test_notification_channels_parity
-  test_file: test_gate_notification_parity.py
-  description: 'Auto-discovered gate: test_notification_channels_parity'
-- id: test_notification_events_registered
-  test_file: test_gate_notification_parity.py
-  description: 'Auto-discovered gate: test_notification_events_registered'
-- id: test_hermes_compose_has_no_fallback
-  test_file: test_gate_password_charset.py
-  description: 'Auto-discovered gate: test_hermes_compose_has_no_fallback'
-- id: test_no_db_url_contains_raw_postgres_password_without_encoded
-  test_file: test_gate_password_charset.py
-  description: 'Auto-discovered gate: test_no_db_url_contains_raw_postgres_password_without_encoded'
-- id: test_password_charset_validation[SkyNet!!%)-True]
-  test_file: test_gate_password_charset.py
-  description: 'Auto-discovered gate: test_password_charset_validation[SkyNet!!%)-True]'
-- id: test_password_charset_validation[openssl_rand_hex_32-False]
-  test_file: test_gate_password_charset.py
-  description: 'Auto-discovered gate: test_password_charset_validation[openssl_rand_hex_32-False]'
-- id: test_password_charset_validation[pass#hash-True]
-  test_file: test_gate_password_charset.py
-  description: 'Auto-discovered gate: test_password_charset_validation[pass#hash-True]'
-- id: test_password_charset_validation[pass/with/slash-True]
-  test_file: test_gate_password_charset.py
-  description: 'Auto-discovered gate: test_password_charset_validation[pass/with/slash-True]'
-- id: test_password_charset_validation[simple-False]
-  test_file: test_gate_password_charset.py
-  description: 'Auto-discovered gate: test_password_charset_validation[simple-False]'
-- id: test_password_charset_validation[valid-pass_123.abc-False]
-  test_file: test_gate_password_charset.py
-  description: 'Auto-discovered gate: test_password_charset_validation[valid-pass_123.abc-False]'
-- id: test_secrets_manifest_charset_defined_for_url_passwords
-  test_file: test_gate_password_charset.py
-  description: 'Auto-discovered gate: test_secrets_manifest_charset_defined_for_url_passwords'
-- id: path_consistency_negative_original_form
-  test_file: test_gate_path_consistency.py
-  description: 'Auto-discovered gate: path_consistency_negative_original_form'
-- id: test_no_opt_core_references
-  test_file: test_gate_path_consistency.py
-  description: 'Auto-discovered gate: test_no_opt_core_references'
-- id: test_env_defaults_do_not_contain_dot_env_keys
-  test_file: test_gate_platform_env_schema.py
-  description: 'Auto-discovered gate: test_env_defaults_do_not_contain_dot_env_keys'
-- id: test_env_defaults_keys_format
-  test_file: test_gate_platform_env_schema.py
-  description: 'Auto-discovered gate: test_env_defaults_keys_format'
-- id: test_env_defaults_minimum_count
-  test_file: test_gate_platform_env_schema.py
-  description: 'Auto-discovered gate: test_env_defaults_minimum_count'
-- id: test_env_defaults_section_exists
-  test_file: test_gate_platform_env_schema.py
-  description: 'Auto-discovered gate: test_env_defaults_section_exists'
-- id: test_env_defaults_values_are_strings
-  test_file: test_gate_platform_env_schema.py
-  description: 'Auto-discovered gate: test_env_defaults_values_are_strings'
-- id: test_platform_env_yaml_exists
-  test_file: test_gate_platform_env_schema.py
-  description: 'Auto-discovered gate: test_platform_env_yaml_exists'
-- id: test_platform_env_yaml_is_valid_yaml
-  test_file: test_gate_platform_env_schema.py
-  description: 'Auto-discovered gate: test_platform_env_yaml_is_valid_yaml'
-- id: test_network_names_format
-  test_file: test_gate_platform_env_schema.py
-  description: 'Auto-discovered gate: test_network_names_format'
-- id: test_networks_minimum_count
-  test_file: test_gate_platform_env_schema.py
-  description: 'Auto-discovered gate: test_networks_minimum_count'
-- id: test_networks_name_field_required
-  test_file: test_gate_platform_env_schema.py
-  description: 'Auto-discovered gate: test_networks_name_field_required'
-- id: test_networks_optional_fields
-  test_file: test_gate_platform_env_schema.py
-  description: 'Auto-discovered gate: test_networks_optional_fields'
-- id: test_networks_section_exists
-  test_file: test_gate_platform_env_schema.py
-  description: 'Auto-discovered gate: test_networks_section_exists'
-- id: test_no_duplicate_networks
-  test_file: test_gate_platform_env_schema.py
-  description: 'Auto-discovered gate: test_no_duplicate_networks'
-- id: test_profiles_match_modules_dir
-  test_file: test_gate_platform_env_schema.py
-  description: 'Auto-discovered gate: test_profiles_match_modules_dir'
-- id: test_profiles_minimum_count
-  test_file: test_gate_platform_env_schema.py
-  description: 'Auto-discovered gate: test_profiles_minimum_count'
-- id: test_profiles_section_exists
-  test_file: test_gate_platform_env_schema.py
-  description: 'Auto-discovered gate: test_profiles_section_exists'
-- id: test_no_duplicate_volumes
-  test_file: test_gate_platform_env_schema.py
-  description: 'Auto-discovered gate: test_no_duplicate_volumes'
-- id: test_volumes_minimum_count
-  test_file: test_gate_platform_env_schema.py
-  description: 'Auto-discovered gate: test_volumes_minimum_count'
-- id: test_volumes_path_field_required
-  test_file: test_gate_platform_env_schema.py
-  description: 'Auto-discovered gate: test_volumes_path_field_required'
-- id: test_volumes_section_exists
-  test_file: test_gate_platform_env_schema.py
-  description: 'Auto-discovered gate: test_volumes_section_exists'
-- id: test_provision_coverage_preserved
-  test_file: test_gate_platform_env_schema.py
-  description: 'Auto-discovered gate: test_provision_coverage_preserved'
-- id: test_env_defaults_ports_match_sot
-  test_file: test_gate_port_parity.py
-  description: 'Auto-discovered gate: test_env_defaults_ports_match_sot'
-- id: test_langfuse_container_port_matches_compose
-  test_file: test_gate_port_parity.py
-  description: 'Auto-discovered gate: test_langfuse_container_port_matches_compose'
-- id: test_privoxy_port_literal_detected_negative
-  test_file: test_gate_port_parity.py
-  description: 'Auto-discovered gate: test_privoxy_port_literal_detected_negative'
-- id: test_provides_mismatch_detected_negative
-  test_file: test_gate_port_parity.py
-  description: 'Auto-discovered gate: test_provides_mismatch_detected_negative'
-- id: test_provides_ports_match_sot
-  test_file: test_gate_port_parity.py
-  description: 'Auto-discovered gate: test_provides_ports_match_sot'
-- id: test_no_privoxy_literals_outside_firewall
-  test_file: test_gate_port_parity.py
-  description: 'Auto-discovered gate: test_no_privoxy_literals_outside_firewall'
-- id: practices_generator_hash_deterministic
-  test_file: test_gate_practices_manifest.py
-  description: 'Auto-discovered gate: practices_generator_hash_deterministic'
-- id: practices_generators_deterministic_double_render
-  test_file: test_gate_practices_manifest.py
-  description: 'Auto-discovered gate: practices_generators_deterministic_double_render'
-- id: practices_lock_deterministic_render
-  test_file: test_gate_practices_manifest.py
-  description: 'Auto-discovered gate: practices_lock_deterministic_render'
-- id: practices_manifest_ids_unique_and_kebab
-  test_file: test_gate_practices_manifest.py
-  description: 'Auto-discovered gate: practices_manifest_ids_unique_and_kebab'
-- id: practices_manifest_levels_classes_channels
-  test_file: test_gate_practices_manifest.py
-  description: 'Auto-discovered gate: practices_manifest_levels_classes_channels'
-- id: practices_manifest_maturity_thresholds
-  test_file: test_gate_practices_manifest.py
-  description: 'Auto-discovered gate: practices_manifest_maturity_thresholds'
-- id: practices_manifest_pins_parity_with_root_precommit
-  test_file: test_gate_practices_manifest.py
-  description: 'Auto-discovered gate: practices_manifest_pins_parity_with_root_precommit'
-- id: practices_manifest_version_one
-  test_file: test_gate_practices_manifest.py
-  description: 'Auto-discovered gate: practices_manifest_version_one'
-- id: test_pre_push_gate_fan_out_negative_probe
-  test_file: test_gate_pre_push_config.py
-  description: 'Auto-discovered gate: test_pre_push_gate_fan_out_negative_probe'
-- id: test_pre_push_gate_pass_filenames_false
-  test_file: test_gate_pre_push_config.py
-  description: 'Auto-discovered gate: test_pre_push_gate_pass_filenames_false'
-- id: test_generated_files_match_sot
-  test_file: test_gate_profiles_parity.py
-  description: 'Auto-discovered gate: test_generated_files_match_sot'
-- id: test_make_get_all_profiles_matches_sot
-  test_file: test_gate_profiles_parity.py
-  description: 'Auto-discovered gate: test_make_get_all_profiles_matches_sot'
-- id: test_no_hardcoded_profiles_outside_allowlist
-  test_file: test_gate_profiles_parity.py
-  description: 'Auto-discovered gate: test_no_hardcoded_profiles_outside_allowlist'
-- id: test_sot_matches_discovered_modules
-  test_file: test_gate_profiles_parity.py
-  description: 'Auto-discovered gate: test_sot_matches_discovered_modules'
-- id: test_env_file_platform_present
-  test_file: test_gate_project_compose.py
-  description: 'Auto-discovered gate: test_env_file_platform_present'
-- id: test_negative_compose_without_proxy_net
-  test_file: test_gate_project_compose.py
-  description: 'Auto-discovered gate: test_negative_compose_without_proxy_net'
-- id: test_no_ports_published
-  test_file: test_gate_project_compose.py
-  description: 'Auto-discovered gate: test_no_ports_published'
-- id: test_proxy_net_external_declared
-  test_file: test_gate_project_compose.py
-  description: 'Auto-discovered gate: test_proxy_net_external_declared'
-- id: test_proxy_net_is_external
-  test_file: test_gate_project_compose.py
-  description: 'Auto-discovered gate: test_proxy_net_is_external'
-- id: test_proxy_net_with_alias
-  test_file: test_gate_project_compose.py
-  description: 'Auto-discovered gate: test_proxy_net_with_alias'
-- id: test_templates_declare_proxy_net
-  test_file: test_gate_project_compose.py
-  description: 'Auto-discovered gate: test_templates_declare_proxy_net'
-- id: test_valid_project_passes
-  test_file: test_gate_project_compose.py
-  description: 'Auto-discovered gate: test_valid_project_passes'
-- id: test_project_context_missing_dir_fails
-  test_file: test_gate_project_context.py
-  description: 'Auto-discovered gate: test_project_context_missing_dir_fails'
-- id: test_project_context_valid
-  test_file: test_gate_project_context.py
-  description: 'Auto-discovered gate: test_project_context_valid'
-- id: test_project_env_missing_dir_fails
-  test_file: test_gate_project_env.py
-  description: 'Auto-discovered gate: test_project_env_missing_dir_fails'
-- id: test_project_env_valid
-  test_file: test_gate_project_env.py
-  description: 'Auto-discovered gate: test_project_env_valid'
-- id: test_no_dead_markers
-  test_file: test_gate_pytest_markers.py
-  description: 'Auto-discovered gate: test_no_dead_markers'
-- id: test_pyproject_toml_has_all_markers
-  test_file: test_gate_pytest_markers.py
-  description: 'Auto-discovered gate: test_pyproject_toml_has_all_markers'
-- id: test_pytest_ini_has_no_markers
-  test_file: test_gate_pytest_markers.py
-  description: 'Auto-discovered gate: test_pytest_ini_has_no_markers'
-- id: test_strict_markers_in_pyproject_toml
-  test_file: test_gate_pytest_markers.py
-  description: 'Auto-discovered gate: test_strict_markers_in_pyproject_toml'
-- id: test_r1_negative_bare_pass_except_detected
-  test_file: test_gate_r1_no_pass_tests.py
-  description: 'Auto-discovered gate: test_r1_negative_bare_pass_except_detected'
-- id: test_r1_negative_constant_assert_detected
-  test_file: test_gate_r1_no_pass_tests.py
-  description: 'Auto-discovered gate: test_r1_negative_constant_assert_detected'
-- id: test_r1_negative_function_without_assert_detected
-  test_file: test_gate_r1_no_pass_tests.py
-  description: 'Auto-discovered gate: test_r1_negative_function_without_assert_detected'
-- id: test_r1_negative_no_assert_file_detected
-  test_file: test_gate_r1_no_pass_tests.py
-  description: 'Auto-discovered gate: test_r1_negative_no_assert_file_detected'
-- id: test_r1_negative_r1_delegates_exempt
-  test_file: test_gate_r1_no_pass_tests.py
-  description: 'Auto-discovered gate: test_r1_negative_r1_delegates_exempt'
-- id: test_r1_no_pass_tests
-  test_file: test_gate_r1_no_pass_tests.py
-  description: 'Auto-discovered gate: test_r1_no_pass_tests'
-- id: test_retry_rate_accounting
-  test_file: test_gate_retry_rate.py
-  description: 'Auto-discovered gate: test_retry_rate_accounting'
-- id: test_retry_rate_threshold_constant
-  test_file: test_gate_retry_rate.py
-  description: 'Auto-discovered gate: test_retry_rate_threshold_constant'
-- id: test_retry_rate_within_threshold_computation
-  test_file: test_gate_retry_rate.py
-  description: 'Auto-discovered gate: test_retry_rate_within_threshold_computation'
-- id: test_negative_missing_invariant_detected
-  test_file: test_gate_root_agents_invariants.py
-  description: 'Auto-discovered gate: test_negative_missing_invariant_detected'
-- id: test_negative_trap_without_rev_detected
-  test_file: test_gate_root_agents_invariants.py
-  description: 'Auto-discovered gate: test_negative_trap_without_rev_detected'
-- id: test_root_agents_11_invariants_present
-  test_file: test_gate_root_agents_invariants.py
-  description: 'Auto-discovered gate: test_root_agents_11_invariants_present'
-- id: test_root_agents_traps_have_rev_lines
-  test_file: test_gate_root_agents_invariants.py
-  description: 'Auto-discovered gate: test_root_agents_traps_have_rev_lines'
-- id: test_no_platform_path_literals_in_core_internal
-  test_file: test_gate_run_paths_sole.py
-  description: 'Auto-discovered gate: test_no_platform_path_literals_in_core_internal'
-- id: test_platform_run_literal_detected_negative
-  test_file: test_gate_run_paths_sole.py
-  description: 'Auto-discovered gate: test_platform_run_literal_detected_negative'
-- id: deepseek_required_in_module_yaml
-  test_file: test_gate_secrets_llm_cleanup.py
-  description: 'Auto-discovered gate: deepseek_required_in_module_yaml'
-- id: litellm_project_keys_exists
-  test_file: test_gate_secrets_llm_cleanup.py
-  description: 'Auto-discovered gate: litellm_project_keys_exists'
-- id: no_anthropic_in_compose
-  test_file: test_gate_secrets_llm_cleanup.py
-  description: 'Auto-discovered gate: no_anthropic_in_compose'
-- id: no_glm_in_compose
-  test_file: test_gate_secrets_llm_cleanup.py
-  description: 'Auto-discovered gate: no_glm_in_compose'
-- id: no_openai_as_provider_key
-  test_file: test_gate_secrets_llm_cleanup.py
-  description: 'Auto-discovered gate: no_openai_as_provider_key'
-- id: no_openrouter_in_compose
-  test_file: test_gate_secrets_llm_cleanup.py
-  description: 'Auto-discovered gate: no_openrouter_in_compose'
-- id: removed_keys_in_secret_definitions
-  test_file: test_gate_secrets_llm_cleanup.py
-  description: 'Auto-discovered gate: removed_keys_in_secret_definitions'
-- id: test_all_consumers_import_secrets_env_parser
-  test_file: test_gate_secrets_parser_import.py
-  description: 'Auto-discovered gate: test_all_consumers_import_secrets_env_parser'
-- id: test_manifest_reader_consumers_import_shared
-  test_file: test_gate_secrets_parser_import.py
-  description: 'Auto-discovered gate: test_manifest_reader_consumers_import_shared'
-- id: test_clickhouse_access_management_not_1
-  test_file: test_gate_security_config.py
-  description: 'Auto-discovered gate: test_clickhouse_access_management_not_1'
-- id: test_clickhouse_no_literal_passwords
-  test_file: test_gate_security_config.py
-  description: 'Auto-discovered gate: test_clickhouse_no_literal_passwords'
-- id: test_clickhouse_no_open_networks
-  test_file: test_gate_security_config.py
-  description: 'Auto-discovered gate: test_clickhouse_no_open_networks'
-- id: converge_exit_semantics
-  test_file: test_gate_sequencing.py
-  description: 'Auto-discovered gate: converge_exit_semantics'
-- id: converge_reconcile_flag
-  test_file: test_gate_sequencing.py
-  description: 'Auto-discovered gate: converge_reconcile_flag'
-- id: makefile_deploy_node_flag
-  test_file: test_gate_sequencing.py
-  description: 'Auto-discovered gate: makefile_deploy_node_flag'
-- id: vps_readiness_sourceable
-  test_file: test_gate_sequencing.py
-  description: 'Auto-discovered gate: vps_readiness_sourceable'
-- id: test_layer1_python_docker_compose
-  test_file: test_gate_single_orchestrator.py
-  description: 'Auto-discovered gate: test_layer1_python_docker_compose'
-- id: test_layer2_shell_scp_rsync
-  test_file: test_gate_single_orchestrator.py
-  description: 'Auto-discovered gate: test_layer2_shell_scp_rsync'
-- id: test_layer3_ssh_forced_command
-  test_file: test_gate_single_orchestrator.py
-  description: 'Auto-discovered gate: test_layer3_ssh_forced_command'
-- id: test_callsites_no_node_yaml_safe_load
-  test_file: test_gate_single_project_parser.py
-  description: 'Auto-discovered gate: test_callsites_no_node_yaml_safe_load'
-- id: test_single_draft7_validator_point
-  test_file: test_gate_single_project_parser.py
-  description: 'Auto-discovered gate: test_single_draft7_validator_point'
-- id: test_single_project_entry_definition
-  test_file: test_gate_single_project_parser.py
-  description: 'Auto-discovered gate: test_single_project_entry_definition'
-- id: socket_mounts_only_allowed
-  test_file: test_gate_socket_mounts.py
-  description: 'Auto-discovered gate: socket_mounts_only_allowed'
-- id: test_single_test_file_negative
-  test_file: test_gate_ssh_command_parser_sole.py
-  description: 'Auto-discovered gate: test_single_test_file_negative'
-- id: test_ci_workflows_no_raw_connect_timeout
-  test_file: test_gate_ssh_opts_sole_path.py
-  description: 'Auto-discovered gate: test_ci_workflows_no_raw_connect_timeout'
-- id: test_connect_timeout_literals_sole_path
-  test_file: test_gate_ssh_opts_sole_path.py
-  description: 'Auto-discovered gate: test_connect_timeout_literals_sole_path'
-- id: test_no_mirror_lib_ssh_sh_comments
-  test_file: test_gate_ssh_opts_sole_path.py
-  description: 'Auto-discovered gate: test_no_mirror_lib_ssh_sh_comments'
-- id: test_ssh_opts_list_sole_path
-  test_file: test_gate_ssh_opts_sole_path.py
-  description: 'Auto-discovered gate: test_ssh_opts_list_sole_path'
-- id: test_default_catch_all_no_status_page
-  test_file: test_gate_status_page.py
-  description: 'Auto-discovered gate: test_default_catch_all_no_status_page'
-- id: test_platform_vhost_proxies_to_status_page
-  test_file: test_gate_status_page.py
-  description: 'Auto-discovered gate: test_platform_vhost_proxies_to_status_page'
-- id: test_platform_vhost_requires_auth
-  test_file: test_gate_status_page.py
-  description: 'Auto-discovered gate: test_platform_vhost_requires_auth'
-- id: test_cron_metrics_line_contract
-  test_file: test_gate_status_page.py
-  description: 'Auto-discovered gate: test_cron_metrics_line_contract'
-- id: test_no_metrics_every_minute_cron_in_backup_cron
-  test_file: test_gate_status_page.py
-  description: 'Auto-discovered gate: test_no_metrics_every_minute_cron_in_backup_cron'
-- id: test_no_metrics_export_in_backup_cron_crontab
-  test_file: test_gate_status_page.py
-  description: 'Auto-discovered gate: test_no_metrics_export_in_backup_cron_crontab'
-- id: test_phase_platform_setup_calls_install_cron_metrics
-  test_file: test_gate_status_page.py
-  description: 'Auto-discovered gate: test_phase_platform_setup_calls_install_cron_metrics'
-- id: test_app_excludes_disabled_from_health_failed
-  test_file: test_gate_status_page.py
-  description: 'Auto-discovered gate: test_app_excludes_disabled_from_health_failed'
-- id: test_collectors_excludes_disabled_from_overall
-  test_file: test_gate_status_page.py
-  description: 'Auto-discovered gate: test_collectors_excludes_disabled_from_overall'
-- id: test_collectors_has_dns_probe
-  test_file: test_gate_status_page.py
-  description: 'Auto-discovered gate: test_collectors_has_dns_probe'
-- id: test_collectors_supports_disabled_status
-  test_file: test_gate_status_page.py
-  description: 'Auto-discovered gate: test_collectors_supports_disabled_status'
-- id: test_template_renders_disabled_badge
-  test_file: test_gate_status_page.py
-  description: 'Auto-discovered gate: test_template_renders_disabled_badge'
-- id: test_dockerignore_is_symlink
-  test_file: test_gate_status_page.py
-  description: 'Auto-discovered gate: test_dockerignore_is_symlink'
-- id: test_dockerignore_points_to_template
-  test_file: test_gate_status_page.py
-  description: 'Auto-discovered gate: test_dockerignore_points_to_template'
-- id: test_htpasswd_platform_in_prometheus_loki
-  test_file: test_gate_status_page.py
-  description: 'Auto-discovered gate: test_htpasswd_platform_in_prometheus_loki'
-- id: test_no_htpasswd_monitoring_in_nginx_configs
-  test_file: test_gate_status_page.py
-  description: 'Auto-discovered gate: test_no_htpasswd_monitoring_in_nginx_configs'
-- id: test_compose_base_has_profiles_and_healthcheck
-  test_file: test_gate_status_page.py
-  description: 'Auto-discovered gate: test_compose_base_has_profiles_and_healthcheck'
-- id: test_makefile_exists
-  test_file: test_gate_status_page.py
-  description: 'Auto-discovered gate: test_makefile_exists'
-- id: test_module_yaml_exists
-  test_file: test_gate_status_page.py
-  description: 'Auto-discovered gate: test_module_yaml_exists'
-- id: test_module_yaml_required_fields
-  test_file: test_gate_status_page.py
-  description: 'Auto-discovered gate: test_module_yaml_required_fields'
-- id: test_nginx_htpasswd_mount
-  test_file: test_gate_status_page.py
-  description: 'Auto-discovered gate: test_nginx_htpasswd_mount'
-- id: test_platform_default_catch_all_return_444
-  test_file: test_gate_status_page.py
-  description: 'Auto-discovered gate: test_platform_default_catch_all_return_444'
-- id: test_platform_vhost_exists_and_has_auth
-  test_file: test_gate_status_page.py
-  description: 'Auto-discovered gate: test_platform_vhost_exists_and_has_auth'
-- id: test_platform_vhost_health_location
-  test_file: test_gate_status_page.py
-  description: 'Auto-discovered gate: test_platform_vhost_health_location'
-- id: test_env_example_has_master_creds
-  test_file: test_gate_status_page.py
-  description: 'Auto-discovered gate: test_env_example_has_master_creds'
-- id: test_master_email_registered
-  test_file: test_gate_status_page.py
-  description: 'Auto-discovered gate: test_master_email_registered'
-- id: test_master_password_registered
-  test_file: test_gate_status_page.py
-  description: 'Auto-discovered gate: test_master_password_registered'
-- id: test_compose_default_matches_sot
-  test_file: test_gate_status_page_port_parity.py
-  description: 'Auto-discovered gate: test_compose_default_matches_sot'
-- id: test_compose_env_injects_port
-  test_file: test_gate_status_page_port_parity.py
-  description: 'Auto-discovered gate: test_compose_env_injects_port'
-- id: test_hardcoded_healthcheck_detected_negative
-  test_file: test_gate_status_page_port_parity.py
-  description: 'Auto-discovered gate: test_hardcoded_healthcheck_detected_negative'
-- id: test_healthcheck_references_variable
-  test_file: test_gate_status_page_port_parity.py
-  description: 'Auto-discovered gate: test_healthcheck_references_variable'
-- id: test_base_compose_restart_production
-  test_file: test_gate_structural_consistency.py
-  description: 'Auto-discovered gate: test_base_compose_restart_production'
-- id: test_test_compose_restart_no
-  test_file: test_gate_structural_consistency.py
-  description: 'Auto-discovered gate: test_test_compose_restart_no'
-- id: test_all_container_names_extracted
-  test_file: test_gate_structural_consistency.py
-  description: 'Auto-discovered gate: test_all_container_names_extracted'
-- id: test_depends_on_references_exist
-  test_file: test_gate_structural_consistency.py
-  description: 'Auto-discovered gate: test_depends_on_references_exist'
-- id: test_all_base_container_names_have_test_override
-  test_file: test_gate_structural_consistency.py
-  description: 'Auto-discovered gate: test_all_base_container_names_have_test_override'
-- id: test_all_docker_modules_have_test_overlay
-  test_file: test_gate_structural_consistency.py
-  description: 'Auto-discovered gate: test_all_docker_modules_have_test_overlay'
-- id: test_all_test_containers_have_test_suffix
-  test_file: test_gate_structural_consistency.py
-  description: 'Auto-discovered gate: test_all_test_containers_have_test_suffix'
-- id: test_no_container_name_collision
-  test_file: test_gate_structural_consistency.py
-  description: 'Auto-discovered gate: test_no_container_name_collision'
-- id: test_no_prod_network_in_test_overlay
-  test_file: test_gate_structural_consistency.py
-  description: 'Auto-discovered gate: test_no_prod_network_in_test_overlay'
-- id: test_test_network_consistency
-  test_file: test_gate_structural_consistency.py
-  description: 'Auto-discovered gate: test_test_network_consistency'
-- id: test_all_docker_modules_have_dockerignore_symlink
-  test_file: test_gate_structural_consistency.py
-  description: 'Auto-discovered gate: test_all_docker_modules_have_dockerignore_symlink'
-- id: test_stub_detection_sole_definition
-  test_file: test_gate_stub_detection_sole.py
-  description: 'Auto-discovered gate: test_stub_detection_sole_definition'
-- id: test_stub_detection_sole_import_negative
-  test_file: test_gate_stub_detection_sole.py
-  description: 'Auto-discovered gate: test_stub_detection_sole_import_negative'
-- id: test_single_run_subprocess_canon
-  test_file: test_gate_subprocess_io_sole.py
-  description: 'Auto-discovered gate: test_single_run_subprocess_canon'
-- id: test_single_run_subprocess_canon_negative
-  test_file: test_gate_subprocess_io_sole.py
-  description: 'Auto-discovered gate: test_single_run_subprocess_canon_negative'
-- id: test_audit_path_synced_with_jsonl
-  test_file: test_gate_sudoers_hardening.py
-  description: 'Auto-discovered gate: test_audit_path_synced_with_jsonl'
-- id: test_dangerous_privesc_detected_negative
-  test_file: test_gate_sudoers_hardening.py
-  description: 'Auto-discovered gate: test_dangerous_privesc_detected_negative'
-- id: test_legitimate_ops_entries_present
-  test_file: test_gate_sudoers_hardening.py
-  description: 'Auto-discovered gate: test_legitimate_ops_entries_present'
-- id: test_no_dangerous_privesc_patterns_in_setup_node
-  test_file: test_gate_sudoers_hardening.py
-  description: 'Auto-discovered gate: test_no_dangerous_privesc_patterns_in_setup_node'
-- id: test_sudoers_generator_make_only
-  test_file: test_gate_sudoers_hardening.py
-  description: 'Auto-discovered gate: test_sudoers_generator_make_only'
-- id: test_all_templates_resolvable
-  test_file: test_gate_template_drift.py
-  description: 'Auto-discovered gate: test_all_templates_resolvable'
-- id: test_all_template_files_registered
-  test_file: test_gate_template_manifest_coverage.py
-  description: 'Auto-discovered gate: test_all_template_files_registered'
-- id: test_nginx_template_volume_sources_registered
-  test_file: test_gate_template_manifest_coverage.py
-  description: 'Auto-discovered gate: test_nginx_template_volume_sources_registered'
-- id: test_templates_metrics_endpoint_in_main
-  test_file: test_gate_template_metrics.py
-  description: 'Auto-discovered gate: test_templates_metrics_endpoint_in_main'
-- id: test_templates_metrics_port_consistency
-  test_file: test_gate_template_metrics.py
-  description: 'Auto-discovered gate: test_templates_metrics_port_consistency'
-- id: test_templates_metrics_port_present
-  test_file: test_gate_template_metrics.py
-  description: 'Auto-discovered gate: test_templates_metrics_port_present'
-- id: test_all_templates_use_strict_grammar
-  test_file: test_gate_template_syntax.py
-  description: 'Auto-discovered gate: test_all_templates_use_strict_grammar'
-- id: templates_practices_sync_generates_expected_files
-  test_file: test_gate_templates_practices.py
-  description: 'Auto-discovered gate: templates_practices_sync_generates_expected_files'
-- id: test_negative_language_for_type_drop_detected
-  test_file: test_gate_templates_practices.py
-  description: 'Auto-discovered gate: test_negative_language_for_type_drop_detected'
-- id: test_compose_projects_are_unique
-  test_file: test_gate_test_infra_consistency.py
-  description: 'Auto-discovered gate: test_compose_projects_are_unique'
-- id: test_networks_registered_in_lease_manager
-  test_file: test_gate_test_infra_consistency.py
-  description: 'Auto-discovered gate: test_networks_registered_in_lease_manager'
-- id: test_no_hardcoded_ai_platform_test_own_project
-  test_file: test_gate_test_infra_consistency.py
-  description: 'Auto-discovered gate: test_no_hardcoded_ai_platform_test_own_project'
-- id: test_stale_container_names_equals_compose_container_names
-  test_file: test_gate_test_infra_consistency.py
-  description: 'Auto-discovered gate: test_stale_container_names_equals_compose_container_names'
-- id: test_test_ports_match_compose_ports
-  test_file: test_gate_test_infra_consistency.py
-  description: 'Auto-discovered gate: test_test_ports_match_compose_ports'
-- id: test_naming_detector_negative_dead_name
-  test_file: test_gate_test_naming.py
-  description: 'Auto-discovered gate: test_naming_detector_negative_dead_name'
-- id: test_naming_detector_negative_valid_names
-  test_file: test_gate_test_naming.py
-  description: 'Auto-discovered gate: test_naming_detector_negative_valid_names'
-- id: test_no_dead_test_names
-  test_file: test_gate_test_naming.py
-  description: 'Auto-discovered gate: test_no_dead_test_names'
-- id: test_allowlist_current
-  test_file: test_gate_thin_wrapper.py
-  description: 'Auto-discovered gate: test_allowlist_current'
-- id: test_discovery
-  test_file: test_gate_thin_wrapper.py
-  description: 'Auto-discovered gate: test_discovery'
-- id: test_entrypoint_function_count
-  test_file: test_gate_thin_wrapper.py
-  description: 'Auto-discovered gate: test_entrypoint_function_count'
-- id: test_entrypoint_loc
-  test_file: test_gate_thin_wrapper.py
-  description: 'Auto-discovered gate: test_entrypoint_loc'
-- id: test_entrypoint_no_direct_binary_calls
-  test_file: test_gate_thin_wrapper.py
-  description: 'Auto-discovered gate: test_entrypoint_no_direct_binary_calls'
-- id: test_amber_timeout_literal_detected_negative
-  test_file: test_gate_timeout_literals.py
-  description: 'Auto-discovered gate: test_amber_timeout_literal_detected_negative'
-- id: test_apt_subprocess_without_timeout_detected_negative
-  test_file: test_gate_timeout_literals.py
-  description: 'Auto-discovered gate: test_apt_subprocess_without_timeout_detected_negative'
-- id: test_apt_timeouts_use_canon
-  test_file: test_gate_timeout_literals.py
-  description: 'Auto-discovered gate: test_apt_timeouts_use_canon'
-- id: test_converge_infra_timeouts_from_shared
-  test_file: test_gate_timeout_literals.py
-  description: 'Auto-discovered gate: test_converge_infra_timeouts_from_shared'
-- id: test_no_opt_path_literals_in_core_internal
-  test_file: test_gate_timeout_literals.py
-  description: 'Auto-discovered gate: test_no_opt_path_literals_in_core_internal'
-- id: test_no_raw_down_timeout_30_literals
-  test_file: test_gate_timeout_literals.py
-  description: 'Auto-discovered gate: test_no_raw_down_timeout_30_literals'
-- id: test_no_timeout_literals_in_amber_domains
-  test_file: test_gate_timeout_literals.py
-  description: 'Auto-discovered gate: test_no_timeout_literals_in_amber_domains'
-- id: test_no_timeout_literals_in_ci_workflows
-  test_file: test_gate_timeout_literals.py
-  description: 'Auto-discovered gate: test_no_timeout_literals_in_ci_workflows'
-- id: test_no_timeout_literals_in_docker_ssh_healthcheck
-  test_file: test_gate_timeout_literals.py
-  description: 'Auto-discovered gate: test_no_timeout_literals_in_docker_ssh_healthcheck'
-- id: test_openssl_timeout_uses_canon
-  test_file: test_gate_timeout_literals.py
-  description: 'Auto-discovered gate: test_openssl_timeout_uses_canon'
-- id: test_opt_platform_nodeconfigs_literal_detected_negative
-  test_file: test_gate_timeout_literals.py
-  description: 'Auto-discovered gate: test_opt_platform_nodeconfigs_literal_detected_negative'
-- id: test_opt_projects_literal_detected_negative
-  test_file: test_gate_timeout_literals.py
-  description: 'Auto-discovered gate: test_opt_projects_literal_detected_negative'
-- id: test_r5_negative_module_rule_detects_run_docker_literal
-  test_file: test_gate_timeout_literals.py
-  description: 'Auto-discovered gate: test_r5_negative_module_rule_detects_run_docker_literal'
-- id: test_r5_negative_raw_timeout_30_detected
-  test_file: test_gate_timeout_literals.py
-  description: 'Auto-discovered gate: test_r5_negative_raw_timeout_30_detected'
-- id: test_timeout_in_docker_registry_auth
-  test_file: test_gate_timeout_literals.py
-  description: 'Auto-discovered gate: test_timeout_in_docker_registry_auth'
-- id: test_timeout_in_reconciler_projects
-  test_file: test_gate_timeout_literals.py
-  description: 'Auto-discovered gate: test_timeout_in_reconciler_projects'
-- id: test_timeout_literal_detected_negative
-  test_file: test_gate_timeout_literals.py
-  description: 'Auto-discovered gate: test_timeout_literal_detected_negative'
-- id: test_vps_readiness_ssh_connect_timeout
-  test_file: test_gate_timeout_literals.py
-  description: 'Auto-discovered gate: test_vps_readiness_ssh_connect_timeout'
-- id: test_deploy_order_respects_topology
-  test_file: test_gate_topology.py
-  description: 'Auto-discovered gate: test_deploy_order_respects_topology'
-- id: test_no_cyclic_dependencies
-  test_file: test_gate_topology.py
-  description: 'Auto-discovered gate: test_no_cyclic_dependencies'
-- id: verify_contracts_all_contracts_implemented
-  test_file: test_gate_verify_contracts.py
-  description: 'Auto-discovered gate: verify_contracts_all_contracts_implemented'
-- id: verify_contracts_baseline_green_positive
-  test_file: test_gate_verify_contracts.py
-  description: 'Auto-discovered gate: verify_contracts_baseline_green_positive'
-- id: verify_contracts_external_networks_allowlist_from_canon
-  test_file: test_gate_verify_contracts.py
-  description: 'Auto-discovered gate: verify_contracts_external_networks_allowlist_from_canon'
-- id: verify_contracts_l1_always_blocks
-  test_file: test_gate_verify_contracts.py
-  description: 'Auto-discovered gate: verify_contracts_l1_always_blocks'
-- id: verify_contracts_negative_tests_present
-  test_file: test_gate_verify_contracts.py
-  description: 'Auto-discovered gate: verify_contracts_negative_tests_present'
-- id: verify_contracts_registered_in_canon
-  test_file: test_gate_verify_contracts.py
-  description: 'Auto-discovered gate: verify_contracts_registered_in_canon'
-- id: verify_contracts_unmanaged_negative
-  test_file: test_gate_verify_contracts.py
-  description: 'Auto-discovered gate: verify_contracts_unmanaged_negative'
-- id: vhost_nginx_t
-  test_file: test_gate_vhost_nginx_t.py
-  description: 'Auto-discovered gate: vhost_nginx_t'
-- id: test_context_image_empty_string_forbidden
-  test_file: test_gate_volumes_sot.py
-  description: 'Auto-discovered gate: test_context_image_empty_string_forbidden'
-- id: test_module_top_level_volumes_empty
-  test_file: test_gate_volumes_sot.py
-  description: 'Auto-discovered gate: test_module_top_level_volumes_empty'
-- id: test_module_volume_name_must_not_collide_root
-  test_file: test_gate_volumes_sot.py
-  description: 'Auto-discovered gate: test_module_volume_name_must_not_collide_root'
-- id: test_root_bind_volumes_have_driver_opts
-  test_file: test_gate_volumes_sot.py
-  description: 'Auto-discovered gate: test_root_bind_volumes_have_driver_opts'
-- id: test_root_volumes_match_module_references
-  test_file: test_gate_volumes_sot.py
-  description: 'Auto-discovered gate: test_root_volumes_match_module_references'
-- id: test_watchdog_runs_without_pythonpath
-  test_file: test_gate_watchdog_clean_env.py
-  description: 'Auto-discovered gate: test_watchdog_runs_without_pythonpath'
-- id: test_compute_module_waves_deterministic
-  test_file: test_gate_wave_sort_contract.py
-  description: 'Auto-discovered gate: test_compute_module_waves_deterministic'
-- id: test_sort_contract_documented
-  test_file: test_gate_wave_sort_contract.py
-  description: 'Auto-discovered gate: test_sort_contract_documented'
-- id: test_sort_deterministic_idempotent
-  test_file: test_gate_wave_sort_contract.py
-  description: 'Auto-discovered gate: test_sort_deterministic_idempotent'
-- id: test_sort_stable_equal_keys
-  test_file: test_gate_wave_sort_contract.py
-  description: 'Auto-discovered gate: test_sort_stable_equal_keys'
-- id: test_local_actions_after_checkout
-  test_file: test_gate_workflow_checkout_order.py
-  description: 'Auto-discovered gate: test_local_actions_after_checkout'
-- id: test_all_workflow_files_exist
-  test_file: test_gate_workflow_consistency.py
-  description: 'Auto-discovered gate: test_all_workflow_files_exist'
-- id: test_basedpyright_tests_removed
-  test_file: test_gate_workflow_consistency.py
-  description: 'Auto-discovered gate: test_basedpyright_tests_removed'
-- id: test_build_platform_workflow_deleted
-  test_file: test_gate_workflow_consistency.py
-  description: 'Auto-discovered gate: test_build_platform_workflow_deleted'
-- id: test_core_deploy_auto_detects_node
-  test_file: test_gate_workflow_consistency.py
-  description: 'Auto-discovered gate: test_core_deploy_auto_detects_node'
-- id: test_deploy_has_push_filter
-  test_file: test_gate_workflow_consistency.py
-  description: 'Auto-discovered gate: test_deploy_has_push_filter'
-- id: test_deploy_triggers_on_platform_test
-  test_file: test_gate_workflow_consistency.py
-  description: 'Auto-discovered gate: test_deploy_triggers_on_platform_test'
-- id: test_main_full_gate_deleted
-  test_file: test_gate_workflow_consistency.py
-  description: 'Auto-discovered gate: test_main_full_gate_deleted'
-- id: test_make_targets_exist
-  test_file: test_gate_workflow_consistency.py
-  description: 'Auto-discovered gate: test_make_targets_exist'
-- id: test_no_observability_references
-  test_file: test_gate_workflow_consistency.py
-  description: 'Auto-discovered gate: test_no_observability_references'
-- id: test_no_raw_internal_calls_in_workflows
-  test_file: test_gate_workflow_consistency.py
-  description: 'Auto-discovered gate: test_no_raw_internal_calls_in_workflows'
-- id: test_platform_test_has_single_job
-  test_file: test_gate_workflow_consistency.py
-  description: 'Auto-discovered gate: test_platform_test_has_single_job'
-- id: test_push_gate_uses_provisioner
-  test_file: test_gate_workflow_consistency.py
-  description: 'Auto-discovered gate: test_push_gate_uses_provisioner'
-- id: test_workflow_count_is_correct
-  test_file: test_gate_workflow_consistency.py
-  description: 'Auto-discovered gate: test_workflow_count_is_correct'
-- id: test_workflow_module_lists_match_filesystem
-  test_file: test_gate_workflow_consistency.py
-  description: 'Auto-discovered gate: test_workflow_module_lists_match_filesystem'
-- id: test_gitleaks_pin_parity
-  test_file: test_gate_workflow_org_agnostic.py
-  description: 'Auto-discovered gate: test_gitleaks_pin_parity'
-- id: test_negative_dotted_py_import_detected
-  test_file: test_gate_workflow_org_agnostic.py
-  description: 'Auto-discovered gate: test_negative_dotted_py_import_detected'
-- id: test_negative_python3_m_detected
-  test_file: test_gate_workflow_org_agnostic.py
-  description: 'Auto-discovered gate: test_negative_python3_m_detected'
-- id: test_negative_qualified_and_relative_action_detected
-  test_file: test_gate_workflow_org_agnostic.py
-  description: 'Auto-discovered gate: test_negative_qualified_and_relative_action_detected'
-- id: test_workflow_single_job_org_agnostic
-  test_file: test_gate_workflow_org_agnostic.py
-  description: 'Auto-discovered gate: test_workflow_single_job_org_agnostic'
-- id: test_entrypoint_manifest_deterministic
-  test_file: test_gate_yaml_deterministic_output.py
-  description: 'Auto-discovered gate: test_entrypoint_manifest_deterministic'
-- id: test_platform_env_deterministic
-  test_file: test_gate_yaml_deterministic_output.py
-  description: 'Auto-discovered gate: test_platform_env_deterministic'
-- id: test_secrets_manifest_deterministic
-  test_file: test_gate_yaml_deterministic_output.py
-  description: 'Auto-discovered gate: test_secrets_manifest_deterministic'
-- id: test_env_hostnames_resolvable
-  test_file: test_p20_container_coupling.py
-  description: 'Auto-discovered gate: test_env_hostnames_resolvable'
-- id: test_prometheus_targets_resolvable
-  test_file: test_p20_container_coupling.py
-  description: 'Auto-discovered gate: test_prometheus_targets_resolvable'
-- id: test_referenced_container_names_have_alias
-  test_file: test_p20_container_coupling.py
-  description: 'Auto-discovered gate: test_referenced_container_names_have_alias'
+  test_gate_ai_instructions_pins.py:
+  - test_negative_invalid_pins_rejected
+  - test_pins_sot_format_and_hermes_config
+  - test_templates_instructions_parity
+  test_gate_atomic_generation_no_partial_writes.py:
+  - test_generator_atomicity_audit
+  - test_negative_direct_write_corruption_detected
+  - test_no_partial_writes_on_failure
+  - test_real_generators_no_partial_writes_on_crash
+  test_gate_bootstrap_no_duplicate_steps.py:
+  - test_no_done_file_references_in_bootstrap
+  - test_no_shell_to_python_step_references
+  - test_no_step_1_step_18_in_node_lifecycle
+  - test_node_lifecycle_under_80_loc
+  test_gate_check_suite_consistency.py:
+  - step_parity_golden
+  - test_hole_coverage_present
+  - test_manifest_checks_valid
+  - test_no_hardcoded_checks_in_makefiles
+  - test_registration_in_entrypoint_manifest
+  test_gate_ci_coverage.py:
+  - test_check_doc_headers_equivalent
+  - test_contract_in_gate_and_diagnostic
+  - test_deploy_workflows_use_sha_aware_aggregator
+  - test_integration_steps_have_structured_logging
+  - test_mode_fast_excludes_requires_docker
+  - test_negative_disabled_test_node_workflow_detected
+  - test_platform_test_has_push_trigger
+  - test_test_node_workflow_exists_not_disabled
+  test_gate_ci_env_vars.py:
+  - test_ci_env_vars_match_platform_env
+  - test_no_hardcoded_ci_secrets
+  test_gate_ci_trigger_strength.py:
+  - strength_scanner_yaml_parseable
+  - test_ci_trigger_strength_contract
+  - test_downgraded_gate_detected_negative
+  - test_full_gate_runs_on_pr
+  - test_pr_triggered_deploy_detected_negative
+  test_gate_compose_base_contract.py:
+  - test_all_base_yml_have_x_logging
+  - test_container_name_matches_module_name
+  - test_healthcheck_present
+  test_gate_compose_files_sole_path.py:
+  - test_negative_converge_tuple_detected
+  - test_no_second_compose_filenames_tuple
+  test_gate_compose_include_sync.py:
+  - test_include_matches_discovered_modules
+  - test_regeneration_is_noop_on_committed
+  - test_root_compose_uses_include
+  test_gate_compose_no_base_image.py:
+  - test_no_base_image_anywhere
+  - test_root_compose_uses_context_image_var
+  test_gate_compose_profiles_consistency.py:
+  - test_ci_workflows_use_compose_profiles_composite
+  - test_no_hardcoded_profiles_at_former_callsites
+  test_gate_compose_restart_policies.py:
+  - test_long_running_have_healthcheck
+  - test_restart_policy_canonical
+  - test_templates_use_unless_stopped
+  test_gate_context_contract.py:
+  - test_no_extract_context_alias_in_core
+  - test_no_private_cache_access
+  - test_node_yaml_samples_contexts_canon
+  - test_node_yaml_samples_domain_flat_only
+  - test_validate_rejects_dict_domain
+  - test_validate_rejects_top_level_context
+  test_gate_context_overlay_git.py:
+  - test_core_rsync_excludes_git
+  - test_git_only_in_ensure_context_repo
+  test_gate_contract.py:
+  - test_contract_target_exists
+  - test_contract_test_files_exist
+  test_gate_cross_layer.py:
+  - cross_layer
+  test_gate_dead_code.py:
+  - test_no_deprecated_markers_stale
+  - test_no_ssl_provision_references
+  test_gate_deploy_channel.py:
+  - test_canonical_verbs_closed_set
+  - test_cli_subcommands_cover_verb_dictionary
+  - test_deploy_make_targets_registered
+  - test_workflow_no_platform_dependencies
+  - test_workflow_platform_dependencies_negative
+  - test_workflow_uses_only_channel_verbs
+  - test_workflow_verb_not_in_dictionary_negative
+  test_gate_deploy_paths.py:
+  - test_canonical_paths_registered
+  - test_deprecated_have_removal_plan
+  - test_letsencrypt_live_sole_resolver
+  - test_litellm_config_path_sole_resolver
+  - test_no_unregistered_paths
+  test_gate_docs_dir_forbidden.py:
+  - test_docs_dir_absent
+  - test_docs_dir_detector_negative
+  - test_tracked_md_allowlist
+  test_gate_domain_parity.py:
+  - test_env_defaults_generated_has_no_domain
+  - test_no_test_local_in_production_chain
+  - test_platform_domain_single_sot
+  test_gate_down_no_volumes.py:
+  - test_down_recipe_has_no_volumes_flag
+  - test_down_volumes_target_exists_with_flag
+  - test_down_with_volumes_negative
+  test_gate_env_defaults_consistency.py:
+  - test_env_defaults_consistency
+  - test_nextauth_secret_precondition
+  - test_postgres_password_unified
+  test_gate_env_example_drift.py:
+  - test_env_example_fresh
+  - test_env_example_key_order_matches_dotenv
+  - test_env_example_matches_platform_env_defaults
+  - test_env_example_subset_of_provides
+  - test_env_example_well_formed
+  - test_env_mirrors_example_keys
+  - test_env_noproxy_subset
+  - test_hermes_agent_env_example_well_formed
+  - test_no_inline_python3_in_scaffold
+  - test_no_proxy_superset
+  - test_platform_domain_default
+  - test_prometheus_dirs_canonical
+  - test_s3_endpoint_removed
+  test_gate_env_hostname_drift.py:
+  - test_env_example_hostnames_match_containers
+  - test_hermes_agent_env_matches_containers
+  test_gate_env_permissions.py:
+  - test_env_file_is_0600_when_present
+  - test_env_permissions_negative_0600_ok
+  - test_env_permissions_negative_0644_detected
+  test_gate_env_shared_consistency.py:
+  - test_env_noproxy_covers_internal_services
+  - test_env_shared_vars_injected_in_compose
+  - test_no_hardcoded_noproxy_in_base_yml
+  - test_proxy_vars_are_opt_in
+  test_gate_env_shared_consistency_negative.py:
+  - test_env_shared_divergence_detected
+  test_gate_executable_bit.py:
+  - test_executable_bit_outside_lib
+  - test_negative_detects_644_outside_lib
+  test_gate_exit_codes_documented.py:
+  - test_exit_codes_documented_in_core_agents
+  test_gate_fallback_secrets_sync.py:
+  - test_fallback_secrets_removed
+  test_gate_fixture_schema.py:
+  - test_all_test_fixtures_match_schemas
+  test_gate_generate_entrypoint_manifest_no_self_read.py:
+  - test_no_self_read
+  test_gate_generated_marker_orphan.py:
+  - test_generated_marker_negative_orphan_detected
+  - test_generated_marker_negative_registered_ok
+  - test_no_orphan_generated_markers
+  test_gate_gitleaks_config.py:
+  - test_age_secret_key_rule_present
+  - test_extend_use_default_guard
+  - test_regex_matches_real_age_key_probe
+  - test_regex_rejects_short_and_test_fixtures
+  test_gate_gitleaks_step_exists.py:
+  - test_gitleaks_step_present_and_active
+  - test_negative_gitleaks_step_commented_detected
+  - test_negative_gitleaks_step_disabled_detected
+  - test_negative_gitleaks_step_missing_detected
+  test_gate_gitleaks_version.py:
+  - test_gitleaks_composite_action_used
+  - test_single_gitleaks_version
+  test_gate_grep_summary.py:
+  - test_all_py_files_have_grep_summary
+  - test_all_sh_files_have_grep_summary
+  test_gate_healthcheck_contract.py:
+  - test_deep_mode_has_early_exit
+  - test_langfuse_uses_127_0_0_1
+  - test_litellm_uses_check_http
+  - test_log_collector_deep_includes_alloy
+  - test_logging_deep_includes_loki
+  - test_postgres_deep_includes_pgbouncer
+  test_gate_healthcheck_drift.py:
+  - test_delegates_to_lib_healthcheck_d5_canon
+  - test_env_parametrized_container_names
+  test_gate_healthcheck_intervals.py:
+  - test_healthcheck_intervals_match_classification
+  test_gate_healthcheck_unification.py:
+  - test_all_modules_use_check_docker_health
+  - test_exec_check_used_in_docker_exec_modules
+  - test_modules_healthcheck_uses_lib
+  - test_no_raw_docker_inspect_in_modules
+  - test_start_period_standardized
+  test_gate_honesty_mode.py:
+  - test_ci_workflows_require_honesty_fail
+  - test_honesty_fail_on_missing_docker
+  - test_honesty_marker_default_skips
+  test_gate_http_retry_policy.py:
+  - test_http_calls_have_retry
+  test_gate_image_tag_form.py:
+  - test_bare_latest_rejected_negative
+  - test_context_image_default_matches_sot
+  - test_ghcr_refs_follow_tag_policy
+  - test_latest_digest_fallback_detected_negative
+  - test_plain_tag_without_digest_rejected
+  - test_valid_forms_accepted
+  test_gate_imports.py:
+  - imports_negative_fictitious_import
+  - test_core_imports_covered_by_pyproject
+  test_gate_lint_quality.py:
+  - test_linter_parity
+  test_gate_litellm_health_url_parity.py:
+  - test_all_sources_use_liveliness
+  - test_bare_health_detected_negative
+  - test_no_bare_health_url
+  - test_no_readiness_in_compose_sources
+  - test_readiness_detected_negative
+  test_gate_litellm_pg_enforcement.py:
+  - test_env_chain_cycle_does_not_hang
+  - test_litellm_compose_test_database_url_is_postgres
+  - test_litellm_database_url_env_chain_resolves_to_postgres
+  - test_litellm_env_database_url_is_postgres
+  - test_negative_sqlite_via_env_chain_detected
+  - test_no_sqlite_in_litellm_config
+  test_gate_litellm_pg_enforcement_negative.py:
+  - test_litellm_sqlite_config_detected
+  test_gate_llm_aliases.py:
+  - all_active_aliases_have_models
+  - all_model_list_have_access_group
+  - deepseek_key_in_all_entries
+  - fallback_chain_complete
+  - no_circular_fallbacks
+  test_gate_llm_provisioner.py:
+  - provisioner_idempotent
+  - provisioner_no_orphans
+  test_gate_loc_allowlist.py:
+  - loc_allowlist
+  test_gate_local_stack.py:
+  - test_all_modules_included
+  - test_compose_config_resolves_full_stack
+  test_gate_make_contract.py:
+  - test_backup_restore_matrix_d1
+  - test_make_n_dry_run_all_targets
+  - test_manifest_restart_is_soft
+  - test_module_mk_restart_hard_exists
+  - test_nginx_dev_compose_valid
+  - test_nginx_dev_config_no_duplicates
+  - test_no_empty_phony_targets
+  - test_no_soft_restart_in_docker_makefiles
+  - test_platform_secrets_excluded
+  - test_restart_soft_semantics
+  - test_root_makefile_restart_is_soft
+  test_gate_makefile_targets.py:
+  - test_dot_default_goal_is_help
+  - test_include_directives_in_root
+  - test_make_n_for_complex_targets
+  - test_make_n_for_simple_targets
+  - test_makefiles_directory_exists
+  - test_recipe_lines_use_tabs
+  - test_root_makefile_line_limit
+  test_gate_manifest_dag_acyclic.py:
+  - test_generator_dag_acyclic
+  test_gate_manifest_integrity.py:
+  - test_agents_md_synced_with_manifest
+  - test_delegates_to_paths_exist
+  - test_entrypoint_names_match_manifest
+  - test_module_makefiles_no_deprecated_module_deploy
+  - test_module_targets_in_manifest
+  - test_module_targets_use_canonical_names
+  - test_negative_dangling_gate_id_detected
+  - test_negative_duplicate_make_target_detected
+  - test_no_duplicate_make_targets
+  - test_no_module_prefix
+  - test_repair_contract_integrity
+  - test_repair_gate_ids_resolve
+  test_gate_manifest_signature_parity.py:
+  - test_signatures_match_code
+  - test_stale_signature_detected_negative
+  test_gate_manifests_up_to_date.py:
+  - test_manifests_up_to_date
+  test_gate_marker_location.py:
+  - marker_outside_detected_negative
+  - test_no_gate_markers_outside_gates_dir
+  test_gate_module_hooks.py:
+  - test_all_hooks_are_specified_as_strings
+  - test_deleted_hook_files_absent
+  - test_hook_contract_validation[backup-cron]
+  - test_hook_contract_validation[clickhouse]
+  - test_hook_contract_validation[hermes-agent]
+  - test_hook_contract_validation[infra-metrics]
+  - test_hook_contract_validation[langfuse]
+  - test_hook_contract_validation[litellm]
+  - test_hook_contract_validation[log-collector]
+  - test_hook_contract_validation[logging]
+  - test_hook_contract_validation[minio]
+  - test_hook_contract_validation[monitoring]
+  - test_hook_contract_validation[nginx]
+  - test_hook_contract_validation[platform-secrets]
+  - test_hook_contract_validation[postgres]
+  - test_hook_contract_validation[redis]
+  - test_hook_contract_validation[status-page]
+  - test_registered_deploy_hooks_have_runtime_trigger
+  test_gate_module_profiles.py:
+  - test_all_base_yml_have_profiles
+  - test_no_stale_profiles
+  - test_profile_matches_module_name
+  test_gate_module_schema_d4.py:
+  - test_all_modules_valid_against_d4_schema
+  - test_no_version_field_in_schema
+  - test_schema_allows_additional_properties
+  - test_schema_required_fields
+  - test_version_not_in_required
+  test_gate_module_schema_d4_negative.py:
+  - test_module_yaml_missing_required_fields
+  test_gate_module_yaml_contract.py:
+  - test_all_modules_have_required_fields
+  - test_d5_schema_version
+  - test_d5_validator_exists
+  - test_d5_validator_passes_on_all_modules
+  - test_env_requires_no_duplicates
+  - test_no_version_field
+  - test_spool_dir_format
+  - test_system_module_contract
+  test_gate_module_yaml_contract_d5_negative.py:
+  - test_d4_bare_string_still_valid
+  - test_missing_required_env_var
+  - test_restart_drift
+  - test_wrong_env_requires_type
+  test_gate_networks_sot.py:
+  - test_all_network_names_in_canon
+  - test_non_canonical_network_detected_negative
+  test_gate_nginx_domain_contract.py:
+  - test_base_yml_mounts_templates
+  - test_no_host_variable_in_server_name
+  - test_platform_domain_placeholder_present
+  test_gate_nginx_template_syntax.py:
+  - test_config_templates_use_envsubst_syntax
+  - test_no_mixed_syntax_in_single_file
+  - test_template_templates_use_jinja_syntax
+  test_gate_no_backward_compat_shims.py:
+  - test_no_backward_compat_shims
+  test_gate_no_disabled_files.py:
+  - test_disabled_files_negative_detected
+  - test_disabled_files_negative_normal_ok
+  - test_no_disabled_files
+  test_gate_no_empty_dirs.py:
+  - test_empty_dirs_negative_detected
+  - test_empty_dirs_negative_gitkeep_ok
+  - test_no_empty_dirs
+  test_gate_no_external_port_binding.py:
+  - test_binding_detection_negative_cases
+  - test_env_var_host_side_parsing
+  - test_long_syntax_dict_parsing
+  - test_no_external_port_binding_outside_80_443
+  test_gate_no_simulators.py:
+  - test_no_simulator_classes_in_test_suite
+  test_gate_no_unregistered_entrypoint.py:
+  - test_all_makefile_targets_in_allowed_verbs
+  - test_all_shebang_files_in_manifest
+  - test_files_outside_scan_roots_do_not_require_registration
+  - test_unregistered_entrypoint_injection_detected
+  test_gate_no_yq_dependency.py:
+  - test_no_yq_operations_on_node
+  test_gate_node_yaml_single_source.py:
+  - test_no_yaml_safe_load_node
+  test_gate_notification_parity.py:
+  - test_negative_unregistered_event_detected
+  - test_notification_catalog_valid
+  - test_notification_channels_parity
+  - test_notification_events_registered
+  test_gate_password_charset.py:
+  - test_hermes_compose_has_no_fallback
+  - test_no_db_url_contains_raw_postgres_password_without_encoded
+  - test_password_charset_validation[SkyNet!!%)-True]
+  - test_password_charset_validation[openssl_rand_hex_32-False]
+  - test_password_charset_validation[pass#hash-True]
+  - test_password_charset_validation[pass/with/slash-True]
+  - test_password_charset_validation[simple-False]
+  - test_password_charset_validation[valid-pass_123.abc-False]
+  - test_secrets_manifest_charset_defined_for_url_passwords
+  test_gate_path_consistency.py:
+  - path_consistency_negative_original_form
+  - test_no_opt_core_references
+  test_gate_platform_env_schema.py:
+  - test_env_defaults_do_not_contain_dot_env_keys
+  - test_env_defaults_keys_format
+  - test_env_defaults_minimum_count
+  - test_env_defaults_section_exists
+  - test_env_defaults_values_are_strings
+  - test_network_names_format
+  - test_networks_minimum_count
+  - test_networks_name_field_required
+  - test_networks_optional_fields
+  - test_networks_section_exists
+  - test_no_duplicate_networks
+  - test_no_duplicate_volumes
+  - test_platform_env_yaml_exists
+  - test_platform_env_yaml_is_valid_yaml
+  - test_profiles_match_modules_dir
+  - test_profiles_minimum_count
+  - test_profiles_section_exists
+  - test_provision_coverage_preserved
+  - test_volumes_minimum_count
+  - test_volumes_path_field_required
+  - test_volumes_section_exists
+  test_gate_port_parity.py:
+  - test_env_defaults_ports_match_sot
+  - test_langfuse_container_port_matches_compose
+  - test_no_privoxy_literals_outside_firewall
+  - test_privoxy_port_literal_detected_negative
+  - test_provides_mismatch_detected_negative
+  - test_provides_ports_match_sot
+  test_gate_practices_manifest.py:
+  - practices_generator_hash_deterministic
+  - practices_generators_deterministic_double_render
+  - practices_lock_deterministic_render
+  - practices_manifest_ids_unique_and_kebab
+  - practices_manifest_levels_classes_channels
+  - practices_manifest_maturity_thresholds
+  - practices_manifest_pins_parity_with_root_precommit
+  - practices_manifest_version_one
+  test_gate_pre_push_config.py:
+  - test_pre_push_gate_fan_out_negative_probe
+  - test_pre_push_gate_pass_filenames_false
+  test_gate_profiles_parity.py:
+  - test_generated_files_match_sot
+  - test_make_get_all_profiles_matches_sot
+  - test_no_hardcoded_profiles_outside_allowlist
+  - test_sot_matches_discovered_modules
+  test_gate_project_compose.py:
+  - test_env_file_platform_present
+  - test_negative_compose_without_proxy_net
+  - test_no_ports_published
+  - test_proxy_net_external_declared
+  - test_proxy_net_is_external
+  - test_proxy_net_with_alias
+  - test_templates_declare_proxy_net
+  - test_valid_project_passes
+  test_gate_project_context.py:
+  - test_project_context_missing_dir_fails
+  - test_project_context_valid
+  test_gate_project_env.py:
+  - test_project_env_missing_dir_fails
+  - test_project_env_valid
+  test_gate_pytest_markers.py:
+  - test_no_dead_markers
+  - test_pyproject_toml_has_all_markers
+  - test_pytest_ini_has_no_markers
+  - test_strict_markers_in_pyproject_toml
+  test_gate_r1_no_pass_tests.py:
+  - test_r1_negative_bare_pass_except_detected
+  - test_r1_negative_constant_assert_detected
+  - test_r1_negative_function_without_assert_detected
+  - test_r1_negative_no_assert_file_detected
+  - test_r1_negative_r1_delegates_exempt
+  - test_r1_no_pass_tests
+  test_gate_retry_rate.py:
+  - test_retry_rate_accounting
+  - test_retry_rate_threshold_constant
+  - test_retry_rate_within_threshold_computation
+  test_gate_root_agents_invariants.py:
+  - test_negative_missing_invariant_detected
+  - test_negative_trap_without_rev_detected
+  - test_root_agents_11_invariants_present
+  - test_root_agents_traps_have_rev_lines
+  test_gate_run_paths_sole.py:
+  - test_no_platform_path_literals_in_core_internal
+  - test_platform_run_literal_detected_negative
+  test_gate_secrets_llm_cleanup.py:
+  - deepseek_required_in_module_yaml
+  - litellm_project_keys_exists
+  - no_anthropic_in_compose
+  - no_glm_in_compose
+  - no_openai_as_provider_key
+  - no_openrouter_in_compose
+  - removed_keys_in_secret_definitions
+  test_gate_secrets_parser_import.py:
+  - test_all_consumers_import_secrets_env_parser
+  - test_manifest_reader_consumers_import_shared
+  test_gate_security_config.py:
+  - test_clickhouse_access_management_not_1
+  - test_clickhouse_no_literal_passwords
+  - test_clickhouse_no_open_networks
+  test_gate_sequencing.py:
+  - converge_exit_semantics
+  - converge_reconcile_flag
+  - makefile_deploy_node_flag
+  - vps_readiness_sourceable
+  test_gate_single_orchestrator.py:
+  - test_layer1_python_docker_compose
+  - test_layer2_shell_scp_rsync
+  - test_layer3_ssh_forced_command
+  test_gate_single_project_parser.py:
+  - test_callsites_no_node_yaml_safe_load
+  - test_single_draft7_validator_point
+  - test_single_project_entry_definition
+  test_gate_socket_mounts.py:
+  - socket_mounts_only_allowed
+  test_gate_ssh_command_parser_sole.py:
+  - test_single_test_file_negative
+  test_gate_ssh_opts_sole_path.py:
+  - test_ci_workflows_no_raw_connect_timeout
+  - test_connect_timeout_literals_sole_path
+  - test_no_mirror_lib_ssh_sh_comments
+  - test_ssh_opts_list_sole_path
+  test_gate_status_page.py:
+  - test_app_excludes_disabled_from_health_failed
+  - test_collectors_excludes_disabled_from_overall
+  - test_collectors_has_dns_probe
+  - test_collectors_supports_disabled_status
+  - test_compose_base_has_profiles_and_healthcheck
+  - test_cron_metrics_line_contract
+  - test_default_catch_all_no_status_page
+  - test_dockerignore_is_symlink
+  - test_dockerignore_points_to_template
+  - test_env_example_has_master_creds
+  - test_htpasswd_platform_in_prometheus_loki
+  - test_makefile_exists
+  - test_master_email_registered
+  - test_master_password_registered
+  - test_module_yaml_exists
+  - test_module_yaml_required_fields
+  - test_nginx_htpasswd_mount
+  - test_no_htpasswd_monitoring_in_nginx_configs
+  - test_no_metrics_every_minute_cron_in_backup_cron
+  - test_no_metrics_export_in_backup_cron_crontab
+  - test_phase_platform_setup_calls_install_cron_metrics
+  - test_platform_default_catch_all_return_444
+  - test_platform_vhost_exists_and_has_auth
+  - test_platform_vhost_health_location
+  - test_platform_vhost_proxies_to_status_page
+  - test_platform_vhost_requires_auth
+  - test_template_renders_disabled_badge
+  test_gate_status_page_port_parity.py:
+  - test_compose_default_matches_sot
+  - test_compose_env_injects_port
+  - test_hardcoded_healthcheck_detected_negative
+  - test_healthcheck_references_variable
+  test_gate_structural_consistency.py:
+  - test_all_base_container_names_have_test_override
+  - test_all_container_names_extracted
+  - test_all_docker_modules_have_dockerignore_symlink
+  - test_all_docker_modules_have_test_overlay
+  - test_all_test_containers_have_test_suffix
+  - test_base_compose_restart_production
+  - test_depends_on_references_exist
+  - test_no_container_name_collision
+  - test_no_prod_network_in_test_overlay
+  - test_test_compose_restart_no
+  - test_test_network_consistency
+  test_gate_stub_detection_sole.py:
+  - test_stub_detection_sole_definition
+  - test_stub_detection_sole_import_negative
+  test_gate_subprocess_io_sole.py:
+  - test_single_run_subprocess_canon
+  - test_single_run_subprocess_canon_negative
+  test_gate_sudoers_hardening.py:
+  - test_audit_path_synced_with_jsonl
+  - test_dangerous_privesc_detected_negative
+  - test_legitimate_ops_entries_present
+  - test_no_dangerous_privesc_patterns_in_setup_node
+  - test_sudoers_generator_make_only
+  test_gate_template_drift.py:
+  - test_all_templates_resolvable
+  test_gate_template_manifest_coverage.py:
+  - test_all_template_files_registered
+  - test_nginx_template_volume_sources_registered
+  test_gate_template_metrics.py:
+  - test_templates_metrics_endpoint_in_main
+  - test_templates_metrics_port_consistency
+  - test_templates_metrics_port_present
+  test_gate_template_syntax.py:
+  - test_all_templates_use_strict_grammar
+  test_gate_templates_practices.py:
+  - templates_practices_sync_generates_expected_files
+  - test_negative_language_for_type_drop_detected
+  test_gate_test_infra_consistency.py:
+  - test_compose_projects_are_unique
+  - test_networks_registered_in_lease_manager
+  - test_no_hardcoded_ai_platform_test_own_project
+  - test_stale_container_names_equals_compose_container_names
+  - test_test_ports_match_compose_ports
+  test_gate_test_naming.py:
+  - test_naming_detector_negative_dead_name
+  - test_naming_detector_negative_valid_names
+  - test_no_dead_test_names
+  test_gate_thin_wrapper.py:
+  - test_allowlist_current
+  - test_discovery
+  - test_entrypoint_function_count
+  - test_entrypoint_loc
+  - test_entrypoint_no_direct_binary_calls
+  test_gate_timeout_literals.py:
+  - test_amber_timeout_literal_detected_negative
+  - test_apt_subprocess_without_timeout_detected_negative
+  - test_apt_timeouts_use_canon
+  - test_converge_infra_timeouts_from_shared
+  - test_no_opt_path_literals_in_core_internal
+  - test_no_raw_down_timeout_30_literals
+  - test_no_timeout_literals_in_amber_domains
+  - test_no_timeout_literals_in_ci_workflows
+  - test_no_timeout_literals_in_docker_ssh_healthcheck
+  - test_openssl_timeout_uses_canon
+  - test_opt_platform_nodeconfigs_literal_detected_negative
+  - test_opt_projects_literal_detected_negative
+  - test_r5_negative_module_rule_detects_run_docker_literal
+  - test_r5_negative_raw_timeout_30_detected
+  - test_timeout_in_docker_registry_auth
+  - test_timeout_in_reconciler_projects
+  - test_timeout_literal_detected_negative
+  - test_vps_readiness_ssh_connect_timeout
+  test_gate_topology.py:
+  - test_deploy_order_respects_topology
+  - test_no_cyclic_dependencies
+  test_gate_verify_contracts.py:
+  - verify_contracts_all_contracts_implemented
+  - verify_contracts_baseline_green_positive
+  - verify_contracts_external_networks_allowlist_from_canon
+  - verify_contracts_l1_always_blocks
+  - verify_contracts_negative_tests_present
+  - verify_contracts_registered_in_canon
+  - verify_contracts_unmanaged_negative
+  test_gate_vhost_nginx_t.py:
+  - vhost_nginx_t
+  test_gate_volumes_sot.py:
+  - test_context_image_empty_string_forbidden
+  - test_module_top_level_volumes_empty
+  - test_module_volume_name_must_not_collide_root
+  - test_root_bind_volumes_have_driver_opts
+  - test_root_volumes_match_module_references
+  test_gate_watchdog_clean_env.py:
+  - test_watchdog_runs_without_pythonpath
+  test_gate_wave_sort_contract.py:
+  - test_compute_module_waves_deterministic
+  - test_sort_contract_documented
+  - test_sort_deterministic_idempotent
+  - test_sort_stable_equal_keys
+  test_gate_workflow_checkout_order.py:
+  - test_local_actions_after_checkout
+  test_gate_workflow_consistency.py:
+  - test_all_workflow_files_exist
+  - test_basedpyright_tests_removed
+  - test_build_platform_workflow_deleted
+  - test_core_deploy_auto_detects_node
+  - test_deploy_has_push_filter
+  - test_deploy_triggers_on_platform_test
+  - test_main_full_gate_deleted
+  - test_make_targets_exist
+  - test_no_observability_references
+  - test_no_raw_internal_calls_in_workflows
+  - test_platform_test_has_single_job
+  - test_push_gate_uses_provisioner
+  - test_workflow_count_is_correct
+  - test_workflow_module_lists_match_filesystem
+  test_gate_workflow_org_agnostic.py:
+  - test_gitleaks_pin_parity
+  - test_negative_dotted_py_import_detected
+  - test_negative_python3_m_detected
+  - test_negative_qualified_and_relative_action_detected
+  - test_workflow_single_job_org_agnostic
+  test_gate_yaml_deterministic_output.py:
+  - test_entrypoint_manifest_deterministic
+  - test_platform_env_deterministic
+  - test_secrets_manifest_deterministic
+  test_p20_container_coupling.py:
+  - test_env_hostnames_resolvable
+  - test_prometheus_targets_resolvable
+  - test_referenced_container_names_have_alias
 # ═══ GENERATED SECTION END ═══

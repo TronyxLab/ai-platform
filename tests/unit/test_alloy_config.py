@@ -1,18 +1,24 @@
-# GREP_SUMMARY: test-alloy-config journald-scrape docker-source backup-logs file-scrape labels-contract compose-volumes grep-summary hcl-parse DevPlan-164
-# STRUCTURE: ┌HCL-парс config.alloy┐ → ◇ journal source (path/max_age/relabel/drop) → ┌compose base volumes (journal+machine-id+backup-logs+alloy-data)┐ → ◇ backup-logs (file_match/labels) → ◇ labels-контракт (compose_service/compose_project/container) → ◇ GREP_SUMMARY headers → ⎋
+# GREP_SUMMARY: test-alloy-config journald-scrape docker-source backup-logs file-scrape labels-contract compose-volumes grep-summary hcl-parse DevPlan-164 loki-url tenant-header
+# STRUCTURE: ┌HCL-парс config.alloy┐ → ◇ loki.write endpoint ${LOKI_URL} + X-Scope-OrgID ${LOKI_TENANT} → ◇ journal source (path/max_age/relabel/drop) → ┌compose base volumes (journal+machine-id+backup-logs+alloy-data)┐ → ◇ backup-logs (file_match/labels) → ◇ labels-контракт (compose_service/compose_project/container) → ◇ GREP_SUMMARY headers → ⎋
 # region MODULE_CONTRACT
 ## @purpose  Unit tests для config.alloy (DevPlan 164 W1-5: promtail→Alloy EOL REPLACE) —
 ##           port promtail-config.yml тестов на HCL: 3 источника + labels-контракт 1:1.
-## @scope    Читает core/modules/logging/config/config.alloy + logging compose. Без Docker.
+##           DevPlan 010 T3.1: alloy перенесён из logging в модуль log-collector; endpoint
+##           параметризован ${LOKI_URL} + tenant header X-Scope-OrgID (T2.0b).
+## @scope    Читает core/modules/log-collector/config/config.alloy + log-collector compose. Без Docker.
 ## @invariants
 ##   - journal source: path /var/log/journal, max_age 24h, host-relabel (__journal__hostname)
 ##   - docker source: discovery.docker + discovery.relabel (container/compose_service/compose_project)
 ##   - backup-logs: local.file_match glob + labels compose_service=backup-cron + log_file relabel
 ##   - compose volumes: docker.sock/journal/machine-id :ro + backup-logs:ro + alloy-data rw
 ##   - labels-контракт (alert-rules): compose_service/compose_project/container/host/log_file
+##   - loki.write: url = "${LOKI_URL}/loki/api/v1/push" + headers X-Scope-OrgID ${LOKI_TENANT} (T2.0b)
 ## @rationale Labels-паритет критичен: alert-rules (BackupFreshness/5xx) и per-project retention
 ##            молча ломаются при потере лейбла при REPLACE promtail→Alloy.
+##            Endpoint-параметризация (010 T3.1): захардкоженный http://loki:3100 ломал
+##            кросс-нодовый push (collector на другой ноде ≠ Docker DNS alias loki).
 ## @changes  2026-08-13 | DevPlan 164 W1-5 — Created (rename из test_promtail_config.py)
+## @changes  2026-08-22 | DevPlan 010 T3.1 — paths → log-collector; LOKI_URL/X-Scope-OrgID assertions
 # endregion MODULE_CONTRACT
 
 import logging
@@ -23,12 +29,29 @@ from tests._conftest.ldd import ldd_trajectory
 logger = logging.getLogger(__name__)
 
 _ROOT = Path(__file__).resolve().parent.parent.parent
-_ALLOY_CONFIG = _ROOT / "core" / "modules" / "logging" / "config" / "config.alloy"
-_COMPOSE_BASE = _ROOT / "core" / "modules" / "logging" / "docker-compose.base.yml"
+_ALLOY_CONFIG = _ROOT / "core" / "modules" / "log-collector" / "config" / "config.alloy"
+_COMPOSE_BASE = _ROOT / "core" / "modules" / "log-collector" / "docker-compose.base.yml"
 
 
 def _read() -> str:
     return _ALLOY_CONFIG.read_text(encoding="utf-8")
+
+
+@ldd_trajectory
+def test_alloy_loki_write_parameterized_endpoint(caplog) -> None:
+    """loki.write: ${LOKI_URL} endpoint + X-Scope-OrgID tenant header (010 T3.1 / T2.0b)."""
+    caplog.set_level(logging.INFO)
+    text = _read()
+    assert 'loki.write "default"' in text, "config.alloy missing loki.write (обязательный sink)"
+    assert "${LOKI_URL}/loki/api/v1/push" in text, (
+        "endpoint должен быть параметризован ${LOKI_URL} (010 T3.1) — захардкоженный http://loki:3100 ломает кросс-нодовый push"
+    )
+    assert "http://loki:3100/loki/api/v1/push" not in text, (
+        "endpoint ЗАХАРКОЖЕН (010 T3.1): url обязан идти через ${LOKI_URL}"
+    )
+    assert "X-Scope-OrgID" in text, "tenant header X-Scope-OrgID обязателен (T2.0b)"
+    assert "${LOKI_TENANT}" in text, "header X-Scope-OrgID обязан брать tenant из ${LOKI_TENANT} (T2.0b)"
+    logger.critical("[IMP:9][test_alloy_config] loki.write: ${LOKI_URL} + X-Scope-OrgID ${LOKI_TENANT} — OK")
 
 
 @ldd_trajectory
@@ -88,7 +111,7 @@ def test_alloy_nginx_labels_and_metadata(caplog) -> None:
 
 @ldd_trajectory
 def test_alloy_compose_volumes_contract(caplog) -> None:
-    """compose volumes: docker.sock/journal/machine-id :ro + backup-logs:ro + alloy-data rw."""
+    """compose volumes: docker.sock/journal/machine-id :ro + backup-logs:ro + alloy-data rw + expand-env."""
     caplog.set_level(logging.INFO)
     text = _COMPOSE_BASE.read_text(encoding="utf-8")
     assert "/var/run/docker.sock:/var/run/docker.sock:ro" in text
@@ -97,7 +120,23 @@ def test_alloy_compose_volumes_contract(caplog) -> None:
     assert "backup-logs:/var/log/platform/backup:ro" in text
     assert "alloy-data:/var/lib/alloy/data" in text, "WAL storage обязателен (Alloy не стартует без storage.path)"
     assert "--storage.path=/var/lib/alloy/data" in text
-    logger.critical("[IMP:9][test_alloy_config] compose volumes contract — OK")
+    assert "--config.expand-env" in text, "run-flag --config.expand-env обязателен (010 T3.1 env-подстановка)"
+    assert 'LOKI_URL: "${LOKI_URL:-http://loki:3100}"' in text, (
+        "compose должен пробрасывать LOKI_URL в env контейнера с дефолтом http://loki:3100 (010 T3.1)"
+    )
+    assert 'LOKI_TENANT: "${LOKI_TENANT:-platform}"' in text, (
+        "compose должен пробрасывать LOKI_TENANT в env контейнера с дефолтом platform (T2.0b)"
+    )
+    # depends_on отсутствует на сервисе (010 T3.1: WAL self-heal) — проверка по YAML-структуре,
+    # не по тексту (комментарии легитимно упоминают удалённый depends_on).
+    import yaml
+
+    data = yaml.safe_load(text)
+    alloy_svc = data["services"]["alloy"]
+    assert "depends_on" not in alloy_svc, (
+        "depends_on loki УДАЛЁН (010 T3.1): WAL буферизует, self-heal — alloy здоров БЕЗ loki"
+    )
+    logger.critical("[IMP:9][test_alloy_config] compose volumes + expand-env + LOKI_URL/LOKI_TENANT env — OK")
 
 
 @ldd_trajectory

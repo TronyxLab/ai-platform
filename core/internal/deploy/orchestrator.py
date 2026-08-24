@@ -3,6 +3,8 @@
 DeployOrchestrator — единый typed фасад для всех deploy-операций.
 Инкапсулирует DeployEngine, PayloadDeliverer, DeliveryChannel, AuditLogger, DeployHistory, HealthcheckPoller.
 170 W4-B3: DeployAuditLogger → deploy/audit/, post-deploy chain → deploy/hooks/ (фасад сохраняет API).
+T3.1: rollback-кластер (DeployStatus/OrchestratorDeployResult/RollbackMixin) → deploy/rollback.py
+(re-export сохраняет API: старые имена живут, DeployOrchestrator(RollbackMixin)).
 """
 # GREP_SUMMARY: deploy-orchestrator, facade, deploy, rollback, status, remove, deploy-many, audit, delivery-channel
 # STRUCTURE: ▶ DeployOrchestrator(deploy|deploy_many|rollback|status|remove) → ┌DeliveryChannel deliver┐ → ┌DeployEngine deploy_compose┐ → ┌DeployHistory create_snapshot┐ → ┌AuditLogger log┐ → ┌hooks post_deploy_chain┐ → ⎋ OrchestratorDeployResult
@@ -33,6 +35,8 @@ DeployOrchestrator — единый typed фасад для всех deploy-оп
 ##           2026-08-15 | 170 W4-B3 — DeployAuditLogger → deploy/audit/logger.py; deploy_history →
 ##           deploy/audit/history.py; _run_post_deploy_chain (4 подшага) → deploy/hooks/
 ##           post_deploy_chain.py (run_post_deploy_chain); lazy DeployEngine → module-level
+##           2026-08-22 | T3.1 — rollback-кластер (DeployStatus, OrchestratorDeployResult,
+##           RollbackMixin) → deploy/rollback.py; re-export + наследование сохраняют API
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -40,12 +44,10 @@ from __future__ import annotations
 import json
 import logging
 import os
-import shutil
 import subprocess
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from enum import Enum
 from pathlib import Path
 from typing import BinaryIO, cast
 
@@ -54,7 +56,10 @@ from core.internal.deploy.channels import DeliveryChannel, Payload
 from core.internal.deploy.deploy_engine import DeployEngine
 from core.internal.deploy.healthcheck_poller import HealthcheckPoller
 from core.internal.deploy.hooks import run_post_deploy_chain
-from core.internal.shared import docker_ops  # W1: docker tag примитив (гейт docker_sole_path)
+
+# T3.1: rollback-кластер вынесен в deploy/rollback.py — re-export старых имён (старые имена живут):
+# DeployStatus/OrchestratorDeployResult остаются доступными из core.internal.deploy.orchestrator.
+from core.internal.deploy.rollback import DeployStatus, OrchestratorDeployResult, RollbackMixin
 
 # W4a (DevPlan 160 T4.1): AppConfig — ленивый резолв PROJECTS_BASE (import-time env убран).
 from core.internal.shared.app_config import AppConfig
@@ -83,6 +88,11 @@ logger = logging.getLogger(__name__)
 # DeployOrchestrator → shared write_audit_entry). Импортируется module-level (строка 47).
 
 
+# 📝 TRAP[DEBT] · 2026-08-22 · LO · _try_json_loads — мёртвый код (0 вызовов/импортов в core/+tests/)
+# · Observed: grep _try_json_loads по всему репо даёт только определение + внутренний cast
+# · Suspected: хелпер пережил рефакторинги (PERF203-изоляция), потребитель удалён/не перенесён
+# · Impact: мусорный API на модульном уровне; попадает в Doxygen-индекс как живой символ
+# · When: T3.1 (сплит rollback-кластера) — волна 0 (dead-код sweep) этот символ пропустила
 def _try_json_loads(s: str) -> dict[str, object] | None:
     """Parse a JSON string, returning None on failure.
 
@@ -97,60 +107,9 @@ def _try_json_loads(s: str) -> dict[str, object] | None:
         return None
 
 
-# region ENUMS & DATACLASSES
-
-
-class DeployStatus(str, Enum):
-    """Deploy result status."""
-
-    DEPLOYED = "DEPLOYED"
-    FAILED = "FAILED"
-    PARTIAL = "PARTIAL"
-    SKIPPED = "SKIPPED"
-    ROLLED_BACK = "ROLLED_BACK"
-
-
-@dataclass
-class OrchestratorDeployResult:
-    """Result of a deploy/rollback/remove operation.
-
-    ## @purpose — Standardized result for all DeployOrchestrator operations.
-    ## @io — ⇥ constructor params → ⎋ OrchestratorDeployResult with status and timing
-    ## @complexity — O(1)
-    """
-
-    status: DeployStatus
-    project: str
-    channel: str = ""
-    error_info: str | None = None
-    duration_s: float = 0.0
-    healthcheck_status: str = ""
-    snapshot_id: str | None = None
-    deploy_time: str = ""
-    stdout: str = ""
-    stderr: str = ""
-    # Version pinning: sha из аргументов SSH-команды (receive \<project\> \<sha\>);
-    # version = sha из CI (без чтения ai-platform.yaml).
-    version: str = ""
-
-    def to_dict(self) -> dict[str, object]:
-        """Serialize to JSON-compatible dict."""
-        return {
-            "status": self.status.value,
-            "project": self.project,
-            "channel": self.channel,
-            "error_info": self.error_info,
-            "duration_s": round(self.duration_s, 3),
-            "healthcheck_status": self.healthcheck_status,
-            "snapshot_id": self.snapshot_id or "",
-            "deploy_time": self.deploy_time,
-            # AC2 (DevPlan 116 B1): JSON receive-результата содержит project, version, sha, status
-            "version": self.version,
-        }
-
-    def is_success(self) -> bool:
-        """Returns True if operation was successful or partial."""
-        return self.status in {DeployStatus.DEPLOYED, DeployStatus.PARTIAL, DeployStatus.SKIPPED}
+# region DATACLASSES
+# T3.1: DeployStatus/OrchestratorDeployResult вынесены в deploy/rollback.py (владелец —
+# rollback-кластер); re-export наверху модуля сохраняет старые имена для потребителей.
 
 
 @dataclass
@@ -183,11 +142,13 @@ class ProjectStatus:
 # region CLASS_DeployOrchestrator
 
 
-class DeployOrchestrator:
+class DeployOrchestrator(RollbackMixin):
     """Unified deploy orchestrator — single facade for all deploy operations.
 
     ## @purpose — Provide deploy()/deploy_many()/rollback()/status()/remove() as
     ##            typed methods. Internal components injected via constructor for testability.
+    ##            T3.1: rollback-кластер унаследован из RollbackMixin (deploy/rollback.py) —
+    ##            rollback()/_rollback_deploy()/_restore_payload_files()/_rollback_compose() живут.
     ## @io — ⇥ project_name, channel → ⎋ OrchestratorDeployResult
     ## @complexity — O(N) where N = deploy steps (assemble → deliver → compose → healthcheck → audit)
     ## @invariants
@@ -582,54 +543,6 @@ class DeployOrchestrator:
 
     # endregion FUNC__verify_deploy
 
-    # region FUNC__rollback_deploy
-    ## @purpose  E2 deploy step 4 (ROLLBACK): restore payload files (T9.8) + compose from
-    ##           snapshot after failed apply.
-    ## @io       ⇥ (project, channel, service, project_dir, snapshot, start, payload_backup_dir) → ⎋ OrchestratorDeployResult
-    ## @complexity — O(F + 1) — F payload-файлов + rollback compose + audit
-    ## @invariants
-    ##   - payload_backup_dir (предыдущие payload-файлы, снят до overwrite) → restore ДО compose
-    ##   - Rollback успешен → ROLLED_BACK, иначе FAILED
-    def _rollback_deploy(
-        self,
-        project_name: str,
-        channel: DeliveryChannel,
-        service: str,
-        project_dir: str,
-        snapshot: dict[str, object],
-        start: float,
-        payload_backup_dir: str | None = None,
-    ) -> OrchestratorDeployResult:
-        """Rollback payload + compose after failed deploy (E2 step ROLLBACK)."""
-        # T9.8 (L-6): rollback восстанавливает payload-файлы из бэкапа (не только compose).
-        # Бэкап снят ДО overwrite в receive_flow — содержит предыдущие (рабочие) файлы.
-        if payload_backup_dir:
-            restored = self._restore_payload_files(payload_backup_dir, project_dir)
-            if restored:
-                logger.info(
-                    "[IMP:9][DeployOrchestrator][rollback] Payload files restored from backup %s (T9.8)",
-                    payload_backup_dir,
-                )
-        rollback_fn = self._compose_rollback if self._compose_rollback is not None else self._rollback_compose
-        rollback_ok = rollback_fn(project_dir, service, snapshot)
-        rollback_status = "ROLLED_BACK" if rollback_ok else "FAILED"
-        self.audit_logger.log(
-            operation="deploy",
-            project=project_name,
-            channel=channel.__class__.__name__,
-            result=rollback_status,
-            duration_s=time.monotonic() - start,
-        )
-        return self._result(
-            DeployStatus.ROLLED_BACK if rollback_ok else DeployStatus.FAILED,
-            project_name,
-            channel.__class__.__name__,
-            error_info=f"Compose deploy failed, rollback {'performed' if rollback_ok else 'failed'}",
-            duration_s=time.monotonic() - start,
-        )
-
-    # endregion FUNC__rollback_deploy
-
     # region FUNC_deploy_many
     ## @purpose  Deploy multiple projects sequentially. Each project uses the same channel.
     ##           Failure of one project does NOT block subsequent projects.
@@ -699,77 +612,6 @@ class DeployOrchestrator:
         return results
 
     # endregion FUNC_deploy_many
-
-    # region FUNC_rollback
-    ## @purpose  Rollback a project to a previous snapshot.
-    ## @io       ⇥ project_name: str, snapshot_id: str | None → ⎋ OrchestratorDeployResult
-    ## @complexity — O(M) where M = rollback lifecycle
-    ## @invariants
-    ##   - If snapshot_id is None, uses latest snapshot
-    ##   - Rollback restores compose_state from snapshot
-    ##   - No rollback possible if no snapshots exist
-    def rollback(self, project_name: str, snapshot_id: str | None = None) -> OrchestratorDeployResult:
-        """Rollback a project to a previous snapshot.
-
-        Args:
-            project_name: Project name.
-            snapshot_id: Specific snapshot ID, or None for latest.
-
-        Returns:
-            OrchestratorDeployResult with rollback status.
-        """
-        start = time.monotonic()
-        logger.info(
-            "[IMP:9][DeployOrchestrator][rollback] START: %s (snapshot=%s)",
-            project_name,
-            snapshot_id or "latest",
-        )
-
-        snapshot = self.deploy_history.rollback(project_name, snapshot_id)
-        if not snapshot:
-            return self._result(
-                DeployStatus.FAILED,
-                project_name,
-                error_info=f"No snapshot found for rollback of {project_name}",
-                duration_s=time.monotonic() - start,
-            )
-
-        project_dir = os.path.join(self.projects_base, project_name)
-        service = project_name
-
-        # T9.8 (L-6): payload-файлы из snapshot (payload_dir — пред-деплойный бэкап) восстанавливаются
-        # ДО compose-rollback: сломанный payload (compose/ai-platform.yaml) заменяется рабочим.
-        snapshot_payload_dir = cast(str | None, snapshot.get("payload_dir"))
-        if snapshot_payload_dir and os.path.isdir(snapshot_payload_dir):
-            restored = self._restore_payload_files(snapshot_payload_dir, project_dir)
-            if restored:
-                logger.info(
-                    "[IMP:9][DeployOrchestrator][rollback] Payload files restored from snapshot %s (T9.8)",
-                    snapshot.get("snapshot_id"),
-                )
-
-        rollback_fn = self._compose_rollback if self._compose_rollback is not None else self._rollback_compose
-        rollback_ok = rollback_fn(project_dir, service, snapshot)
-
-        # Audit
-        result_status = DeployStatus.DEPLOYED if rollback_ok else DeployStatus.FAILED
-        self.audit_logger.log(
-            operation="rollback",
-            project=project_name,
-            result=result_status.value,
-            duration_s=time.monotonic() - start,
-            snapshot_id=cast(str | None, snapshot.get("snapshot_id", snapshot_id)),
-        )
-
-        return self._result(
-            result_status,
-            project_name,
-            error_info="" if rollback_ok else f"Rollback failed for {project_name}",
-            duration_s=time.monotonic() - start,
-            snapshot_id=cast(str | None, snapshot.get("snapshot_id", snapshot_id)),
-        )
-
-    # endregion FUNC_rollback
 
     # region FUNC_status
     ## @purpose  Get project status (found/not_found/stub + containers + last_deploy).
@@ -1079,96 +921,6 @@ class DeployOrchestrator:
             return False
         else:
             return result.success
-
-    # region FUNC__restore_payload_files
-    ## @purpose  Restore payload files from a backup dir into the project dir (T9.8, L-6).
-    ##           Используется при rollback: (а) deploy-failure — из metadata payload_backup_dir
-    ##           (бэкап снят ДО overwrite в receive_flow), (б) manual rollback — из snapshot payload_dir.
-    ## @io       ⇥ backup_dir: str (директория с сохранёнными payload-файлами), target_dir: str → ⎋ bool
-    ## @complexity O(F) где F = файлов в backup
-    ## @invariants
-    ##   - Копирует ВСЕ файлы backup (compose/ai-platform.yaml/.env.platform) поверх target
-    ##   - Файл не читается (OSError) → WARN, restore считается неуспешным (False)
-    ##   - Не-fatal для общего rollback-флоу: сбой restore НЕ блокирует compose-rollback
-    @staticmethod
-    def _restore_payload_files(backup_dir: str, target_dir: str) -> bool:
-        """Copy payload files from a backup dir into the project dir (T9.8)."""
-        # ruff: ignore[PLW0717] — внутри try есть break/continue/await/yield — извлечение ломает управляющий поток
-        try:
-            os.makedirs(target_dir, exist_ok=True)
-            restored = 0
-            for item in os.listdir(backup_dir):
-                src = os.path.join(backup_dir, item)
-                if not os.path.isfile(src):
-                    continue
-                dest = os.path.join(target_dir, item)
-                if os.path.lexists(dest):
-                    try:
-                        os.remove(dest)
-                    except OSError as e:
-                        logger.warning(
-                            "[IMP:7][DeployOrchestrator][restore_payload] Cannot remove %s (non-fatal): %s", dest, e
-                        )
-                shutil.copy2(src, dest)
-                restored += 1
-            logger.info(
-                "[IMP:9][DeployOrchestrator][restore_payload] Restored %d payload file(s) → %s", restored, target_dir
-            )
-        except OSError as e:
-            logger.error("[IMP:10][DeployOrchestrator][restore_payload] Payload restore failed: %s", e)
-            return False
-        else:
-            return True
-
-    # endregion FUNC__restore_payload_files
-
-    # region FUNC__rollback_compose
-    ## @purpose  Rollback compose to a previous snapshot state.
-    ## @io       ⇥ project_dir: str, service: str, snapshot: dict[str, object] → ⎋ bool
-    ## @complexity — O(1) — single docker compose deploy of previous image
-    ## @invariants
-    ##   - previous_image из compose_state re-tag → docker compose deploy
-    ##   - PlatformError/OSError/SubprocessError → False (audit пишет FAILED в _rollback_deploy)
-    def _rollback_compose(self, project_dir: str, service: str, snapshot: dict[str, object]) -> bool:
-        """Rollback compose to a previous snapshot state.
-
-        Args:
-            project_dir: Project directory.
-            service: Docker Compose service name.
-            snapshot: Snapshot data with compose_state.
-
-        Returns:
-            True if rollback succeeded.
-        """
-        # ruff: ignore[PLW0717] — try содержит каст snapshot + docker_tag + deploy (6 операторов);
-        # извлечение engine/compose_state в хелпер разорвало бы консистентность except-обработки
-        try:
-            engine = DeployEngine(projects_base=self.projects_base)
-            compose_state = snapshot.get("compose_state")
-            # compose_state — dict-секция snapshot (object-граница, W11)
-            prev_image_id: object = compose_state.get("previous_image") if isinstance(compose_state, dict) else None
-
-            # Re-tag and restart (W1: docker tag — shared/docker_ops, non-fatal)
-            if prev_image_id:
-                docker_ops.docker_tag(str(prev_image_id), f"{service}:previous-rollback")
-
-            result = engine.deploy(
-                project=Path(project_dir).name,
-                ref="previous-rollback",
-                service=service,
-                project_dir=project_dir,
-            )
-        except PlatformError as e:
-            # T3.1 (DevPlan 116 B4): _handle_first_deploy → PlatformFatalError вместо SystemExit
-            logger.error("[IMP:10][DeployOrchestrator][rollback_compose] Engine error (exit=%d): %s", e.exit_code, e)
-            return False
-        except (OSError, subprocess.SubprocessError) as e:
-            logger.error("[IMP:10][DeployOrchestrator][rollback_compose] Failed: %s", e)
-            return False
-        else:
-            return result.success
-
-    # endregion FUNC__rollback_compose
 
     @staticmethod
     def _result(

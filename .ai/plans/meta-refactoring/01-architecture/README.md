@@ -1,36 +1,48 @@
-# 01-architecture · Архитектурный forensic audit (pre-launch)
-
-Дата: 2026-08-22 · Режим: READ-ONLY аудит, код не исправляется. Commit: 4425ce0.
+# 01-architecture — Forensic Architecture Audit
 
 ## Scope
-- Объект: репозиторий ai-platform (`core/internal/*` ~30 доменов, `core/modules/*` 15 модулей, `core/entrypoints`, `core/lib/*.sh`, Makefiles). Тесты (`tests/`) — вне первичного фокуса.
-- Принцип: **maximum production risk reduction / minimum code churn**. Неделя до production launch — больших переписываний не предлагать.
 
-## Метод
-10 параллельных субагентов-форензиков, каждый по одному направлению; часть агентов делегировала вложенные параллельные проходы — их сырые отчёты сохранены в `attic/` (22 файла) и консолидированы в канонические `findings-001..010.md`. Только доказательные находки (evidence = конкретный файл/символ/строка/цитата). Неподтверждённые наблюдения помечены `HYPOTHESIS` и не считаются фактами.
+Pre-launch forensic audit of `ai-platform` (~953 py files / ~290k LOC incl. tests; 77 shell scripts; 15 docker modules).
+Read-only: no code changed. Method: 10 parallel forensic subagents per run, one per direction, each returning provable
+findings with file:line evidence; curator deduplicated, assigned IDs, ranked.
 
-## Направления → канонические файлы
-1. module/package boundaries → [findings-001.md](findings-001.md)
-2. dependency direction → [findings-002.md](findings-002.md)
-3. circular dependencies → [findings-003.md](findings-003.md)
-4. God modules/classes → [findings-004.md](findings-004.md)
-5. hidden global state → [findings-005.md](findings-005.md)
-6. infra/app/domain coupling → [findings-006.md](findings-006.md)
-7. duplicated business logic → [findings-007.md](findings-007.md)
-8. initialization/lifecycle architecture → [findings-008.md](findings-008.md)
-9. abstractions/overengineering → [findings-009.md](findings-009.md)
-10. architectural hotspots → [findings-010.md](findings-010.md)
+## ⚠️ Provenance — three runs wrote here
 
-## Легенда
-- Severity: CRITICAL / HIGH / MEDIUM / LOW (по production-риску)
-- Confidence: %; `HYPOTHESIS` = только предположение
-- Churn: S <50 строк / M 50–300 / L >300
-- WHEN: pre-launch / post-launch
+Parallel sessions used this folder concurrently. Current content groups:
 
-## Идентификаторы
-`ARCH-XXXX` сквозные, блок на направление: направление N → ARCH-N\*00–N\*99 (ARCH-0100–0199, …, ARCH-0900–0999, ARCH-1000–1099). Сырые проходы в `attic/` используют собственную нумерацию (ARCH-0NN, ARCH-N00 и пр.) — при цитировании сверяться с каноническим файлом направления.
+| Group | Files | What |
+|-------|-------|------|
+| **run-a** (2026-08-22, consolidated by its sweep) | `findings-001…010.md`, `summary.md` (merged run-a+run-b, 103 findings), `attic/` (displaced originals incl. `attic/run-b/`) | First consolidated set; its summary documents the run-a/run-b collision itself |
+| **run-c** (2026-08-24 re-run, this session) | `findings-01-boundaries.md` … `findings-10-hotspots.md`, `summary-run-c.md` | Independent re-run on current tree: 48 findings `ARCH-0001…0048`. Two files (01, 10) lost in the run-a sweep were rewritten verbatim from session record |
 
-## Индекс файлов
-- `findings-001.md` … `findings-010.md` — канонические находки по направлениям (консолидированные, перекрёстные ссылки проставлены)
-- `attic/` — сырые параллельные проходы вложенных субагентов (исходный материал, вне индекса находок)
-- [summary.md](summary.md) — TOP-10 архитектурных рисков
+ID namespaces do NOT overlap: run-a uses `ARCH-01xx/02xx/40xx/80xx…`, run-c uses `ARCH-0001…0048`.
+Cross-run agreement on key risks (PRIVOXY_PORT reach-in, shared-leaf breach, state-machine hash gaps,
+deploy god-cluster) is corroborating evidence, not duplication.
+
+## Directions → run-c files
+
+| # | Direction | File |
+|---|-----------|------|
+| 1 | Module/package boundaries | `findings-01-boundaries.md` |
+| 2 | Dependency direction | `findings-02-dep-direction.md` |
+| 3 | Circular dependencies | `findings-03-cycles.md` |
+| 4 | God modules/classes | `findings-04-god-modules.md` |
+| 5 | Hidden global state | `findings-05-global-state.md` |
+| 6 | Infra/application/domain coupling | `findings-06-coupling.md` |
+| 7 | Duplicated business logic | `findings-07-duplication.md` |
+| 8 | Initialization/lifecycle architecture | `findings-08-lifecycle.md` |
+| 9 | Abstractions & overengineering | `findings-09-abstractions.md` |
+| 10 | Architectural hotspots | `findings-10-hotspots.md` |
+
+## Finding format
+
+`ARCH-XXXX`: Severity (P0–P3) · Confidence (0–1) · Files · Symbols · Evidence · Failure/maintenance scenario ·
+Impact · Minimal fix · Code churn (S/M/L) · Phase (pre-launch / post-launch).
+
+## Exclusions
+
+Documented decisions (TRAP[DECISION] in AGENTS.md/code: 3 template mechanisms, dual delivery, thin-shell policy,
+L1→L2 collapse, etc.) are context, not findings. Issues already enforced by `tests/gates/` are marked "already enforced".
+
+TOP-10: run-c → `summary-run-c.md`; merged runs a+b → `summary.md`.
+Companion security audit: `.ai/plans/meta-refactoring/03-security/` (49 findings `SEC-0001…0049`, verdict in `BLOCKERS.md`).

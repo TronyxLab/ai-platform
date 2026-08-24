@@ -50,11 +50,12 @@ Gate-тесты делятся на категории по предмету п�
 - Исключения: только `skip_enforcement` и `e2e` (env-dependent, не gate-тесты)
 
 ### 3. Зарегистрировать в `core/entrypoint-manifest.yaml`
-- Добавить запись в секцию `gates`: id, description, test_file
-- `id` — краткий kebab-case идентификатор
-- `test_file` — имя файла в `tests/gates/` (без пути)
+- Секция `gates` — КОМПАКТНАЯ форма (T3.3): `{test_file: [test_ids]}` — маппинг файл → список id
+- `test_file` — имя файла в `tests/gates/` (без пути, ключ маппинга)
+- `test_ids` — pytest-идентификаторы (id = имя функции с префиксом `test_gate_` без префикса)
+- `description` УДАЛЁН (T3.3 compaction): имел 0 потребителей, был производной от id
 - CI gate `test_all_shebang_files_in_manifest` валидирует соответствие
-- `make generate-entrypoint-manifest` пересобирает gates[] автоматически из pytest markers (G3 cycle break)
+- `make generate-entrypoint-manifest` пересобирает gates автоматически из pytest markers (G3 cycle break)
 
 ### Удаление gate
 1. Удалить файл из `tests/gates/`

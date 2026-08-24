@@ -821,7 +821,8 @@ class TestRenderVhostDevMode:
         caplog.set_level(0)
         mock_harness.return_value = True
 
-        import core.internal.scaffold.vhost_renderer as vmod
+        # T3.7: CLI живёт в vhost_cli (vhost_renderer — только render-ядро)
+        import core.internal.scaffold.vhost_cli as vmod
 
         node_yaml_path = tmp_path / "node-configs" / "test-node" / "node.yaml"
         node_yaml_path.parent.mkdir(parents=True)

@@ -37,12 +37,12 @@ import os
 import shutil
 import subprocess
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import ClassVar, cast
 
 import yaml
 
+from core.internal.scaffold.checklist import generate_checklist
 from core.internal.scaffold.gen_env_platform import GenEnvPlatformValidationError, generate_env_platform
 from core.internal.scaffold.vhost_configurator import configure_vhost, resolve_node_configs_dir
 from core.internal.shared.app_config import AppConfig
@@ -154,6 +154,35 @@ def confirm(*, dry_run: bool = False, ci_mode: str | None = None) -> bool:
 ## @param dry_run  If True, print plan only
 ## @io        stdout: progress; side-effect: rsync —exclude
 ## @complexity O(f) where f = files in template
+# v1.0.1: локальный мусор шаблонной папки НЕ копируется (untracked-кеши на dev-машине)
+# T3.7: поднят на уровень модуля — используется _build_rsync_cmd и shutil-fallback copy_template
+TEMPLATE_EXCLUDES = (
+    ".github/workflows/platform-deploy.yml",  # T9
+    ".ruff_cache",
+    "__pycache__",
+    ".pytest_cache",
+    "node_modules",
+    ".DS_Store",
+)
+
+
+# region FUNC__build_rsync_cmd
+## @purpose  Собрать rsync-команду с excludes шаблона (T3.7: извлечён из copy_template
+##           для C901 ≤10; единственный потребитель — copy_template).
+## @io       ⇥ src_path: Path, dst_path: Path → ⎋ list[str]
+## @complexity O(E) где E = число excludes
+def _build_rsync_cmd(src_path: Path, dst_path: Path) -> list[str]:
+    """Build rsync command with template excludes (v1.0.1 мусор-фильтр)."""
+    rsync_cmd = ["rsync", "-a"]
+    for exc in TEMPLATE_EXCLUDES:
+        rsync_cmd.extend(["--exclude", exc])
+    rsync_cmd.extend([f"{str(src_path).rstrip('/')}/", str(dst_path) + "/"])
+    return rsync_cmd
+
+
+# endregion FUNC__build_rsync_cmd
+
+
 def copy_template(src: str, dst: str, dry_run: bool = False) -> bool:
     """Copy template to project directory, excluding platform-deploy.yml.
 
@@ -187,28 +216,9 @@ def copy_template(src: str, dst: str, dry_run: bool = False) -> bool:
 
     dst_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # v1.0.1: локальный мусор шаблонной папки НЕ копируется (untracked-кеши на dev-машине)
-    TEMPLATE_EXCLUDES = (
-        ".github/workflows/platform-deploy.yml",  # T9
-        ".ruff_cache",
-        "__pycache__",
-        ".pytest_cache",
-        "node_modules",
-        ".DS_Store",
-    )
-    # Use rsync with --exclude (platform-deploy.yml — T9)
+    # Use rsync with --exclude (platform-deploy.yml — T9; v1.0.1 excludes в TEMPLATE_EXCLUDES)
     try:
-        rsync_cmd = [
-            "rsync",
-            "-a",
-        ]
-        for exc in TEMPLATE_EXCLUDES:
-            rsync_cmd.extend(["--exclude", exc])
-        rsync_cmd.extend([
-            f"{str(src_path).rstrip('/')}/",
-            str(dst_path) + "/",
-        ])
-        subprocess.run(rsync_cmd, check=True)
+        subprocess.run(_build_rsync_cmd(src_path, dst_path), check=True)
     except subprocess.CalledProcessError as exc:
         logger.info("[IMP:10][scaffold][copy] rsync failed: %s", exc)
         print(f"ERROR: rsync failed: {exc}")
@@ -549,97 +559,7 @@ def create_github_repo(org: str, name: str, project_dir: str, dry_run: bool = Fa
 # endregion FUNC_create_github_repo
 
 
-# region FUNC_generate_checklist
-def generate_checklist(
-    project_dir: str,
-    name: str,
-    org: str,
-    template: str,  # ruff: ignore[ARG001]
-    domain: str = "",
-    database: str = "",
-    dry_run: bool = False,
-) -> bool:
-    """Generate _SETUP_CHECKLIST.md with exact GitHub commands.
-
-    ## @purpose  Mirror of generate_checklist() from add-project.sh:511-587.
-    ## @io        ⇥ project_dir, name, org, ... → ⎋ bool
-    """
-    if dry_run:
-        logger.info("[IMP:7][scaffold][cl] [DRY-RUN] Would generate: %s/_SETUP_CHECKLIST.md", project_dir)
-        return True
-
-    logger.info("[IMP:7][scaffold][cl] Generating setup checklist")
-
-    checklist_path = Path(project_dir) / "_SETUP_CHECKLIST.md"
-
-    lines: list[str] = [
-        f"# Setup Checklist: {name}",
-        "",
-        "> ⚠️ Выполните шаги по порядку. Команды можно копировать и вставлять.",
-        "",
-        "## 1. Создать репозиторий на GitHub",
-        "",
-        "```bash",
-        f'gh repo create {org}/{name} --private --description "{name} project"',
-        "```",
-        "",
-        "## 2. Добавить remote и запушить",
-        "",
-        "```bash",
-        f"cd {project_dir}",
-        f"git remote add origin git@github.com:{org}/{name}.git",
-        "git push -u origin main",
-        "```",
-        "",
-        "## 3. CI/CD secrets (org-level — NODE_HOST_MAP, CI_DEPLOY_KEY)",
-        "",
-        "| Secret | Назначение |",
-        "|--------|-----------|",
-        "| `CI_DEPLOY_KEY` | SSH private key для ci-deploy forced-command deploy |",
-        "| `MIRROR_SSH_KEY` | SSH private key для mirror push (Tronyx161 → TronyxLab; 177 W2.1 — GIT_MIRROR_TOKEN удалён) |",
-        "",
-        "Org variable `NODE_HOST_MAP` (JSON) — разрешение нод в SSH-хосты.",
-        "",
-        "## 4. Настроить Docker Registry",
-        "",
-        "Registry `ghcr.io` уже прописан в `docker-compose.yml`.",
-        "GitHub Actions использует `GITHUB_TOKEN` (доступен автоматически).",
-    ]
-
-    if domain:
-        lines.extend([
-            "",
-            "## 5. TLS-сертификат выпускается автоматически",
-            "",
-            "## 6. Применить nginx overlay на сервере",
-            "",
-            "```bash",
-            "sudo nginx -t && sudo nginx -s reload",
-            "```",
-        ])
-
-    if database:
-        lines.extend([
-            "",
-            "## 7. Создать базу данных",
-            "",
-            "```bash",
-            f'sudo -u postgres psql -c "CREATE DATABASE {database};"',
-            "```",
-        ])
-
-    lines.extend([
-        "",
-        "---",
-        f"> Сгенерировано `add-project.sh` ({datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')})",
-    ])
-
-    checklist_path.write_text("\n".join(lines) + "\n")
-    logger.info("[IMP:7][scaffold][cl] Setup checklist generated: %s", checklist_path)
-    return True
-
-
-# endregion FUNC_generate_checklist
+# (generate_checklist переехал в checklist.py — T3.7 god-file trim; импорт в шапке)
 
 
 # region FUNC_run_add_vhost

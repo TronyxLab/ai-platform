@@ -1,5 +1,5 @@
-# GREP_SUMMARY: test-module-yaml-contract-static module-yaml contract infra-metrics logging monitoring parametrized D4
-# STRUCTURE: ▶ _MODULE_YAML_EXPECTATIONS (3 домена) → ◇ parametrize по domain → ◇ yaml.safe_load module.yaml → ◇ assert name/install_type/domain-fields → ⎋ IMP:9 PASS
+# GREP_SUMMARY: test-module-yaml-contract-static module-yaml contract infra-metrics logging log-collector monitoring parametrized D4
+# STRUCTURE: ▶ _MODULE_YAML_EXPECTATIONS (4 домена) → ◇ parametrize по domain → ◇ yaml.safe_load module.yaml → ◇ assert name/install_type/domain-fields → ⎋ IMP:9 PASS
 # region MODULE_CONTRACT
 ## @purpose  Параметризованный static-контракт module.yaml для observability-модулей.
 ##           Консолидировано (DevPlan 139 W3 T2, 7→3): test_module_yaml_contract из
@@ -54,6 +54,16 @@ _MODULE_YAML_EXPECTATIONS: list[dict] = [
             "install_type": "docker",
             "spool_dir": "/var/lib/platform/loki-data",
             "spool_volume": "loki-data",
+        },
+    },
+    {
+        "id": "log-collector",
+        "module_dir": "log-collector",
+        "expected": {
+            "name": "log-collector",
+            "install_type": "docker",
+            "spool_dir": "/var/lib/platform/alloy-data",
+            "spool_volume": "alloy-data",
         },
     },
     {

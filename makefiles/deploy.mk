@@ -140,30 +140,11 @@ context-promote:
 ##   Требует GHCR_PUSH_TOKEN (classic PAT с write:packages).
 ##   Tag-policy U-60: пушатся :latest И :v<pyproject-version> (versioned-тег релизов).
 hermes-push-l2:
-	@L2_RAW="$(CONTEXT)"; \
-	if [[ -z "$$L2_RAW" ]]; then \
-		echo "[IMP:10][make][hermes-push-l2] ERROR: CONTEXT is required — usage: make hermes-push-l2 CONTEXT=<org>" >&2; \
-		exit 1; \
-	fi; \
-	L2_ORG="$$(echo "$$L2_RAW" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]//g')"; \
-	PLATFORM_VERSION="$$(sed -n 's/^version = "\(.*\)"$$/\1/p' pyproject.toml | head -1)"; \
-	if [[ -z "$$PLATFORM_VERSION" ]]; then \
-		echo "[IMP:10][make][hermes-push-l2] ERROR: version not found in pyproject.toml (tag-policy U-60)" >&2; \
-		exit 1; \
-	fi; \
-	echo "[IMP:7][make][hermes-push-l2] Pushing hermes-agent-context to ghcr.io/$${L2_ORG} (tags: latest, v$${PLATFORM_VERSION})..."; \
-	if [ -n "$(GHCR_PUSH_TOKEN)" ]; then \
-		echo "$(GHCR_PUSH_TOKEN)" | docker login ghcr.io -u x-access-token --password-stdin 2>/dev/null || \
-		echo "[IMP:7][make][hermes-push-l2] WARNING: GHCR_PUSH_TOKEN login failed" >&2; \
-	elif [ -n "$(GHCR_PULL_TOKEN)" ]; then \
-		echo "[IMP:7][make][hermes-push-l2] GHCR_PUSH_TOKEN not set — trying GHCR_PULL_TOKEN (read-only)" >&2; \
-		echo "$(GHCR_PULL_TOKEN)" | docker login ghcr.io -u x-access-token --password-stdin 2>/dev/null || true; \
-	fi; \
-	docker tag hermes-agent-context:latest "ghcr.io/$${L2_ORG}/hermes-agent-context:latest" 2>/dev/null || true; \
-	docker push "ghcr.io/$${L2_ORG}/hermes-agent-context:latest"; \
-	docker tag hermes-agent-context:latest "ghcr.io/$${L2_ORG}/hermes-agent-context:v$${PLATFORM_VERSION}" 2>/dev/null || true; \
-	docker push "ghcr.io/$${L2_ORG}/hermes-agent-context:v$${PLATFORM_VERSION}"; \
-	echo "[IMP:9][make][hermes-push-l2] L2 push complete: ghcr.io/$${L2_ORG}/hermes-agent-context:{latest,v$${PLATFORM_VERSION}}"
+	@## T3.4 (Strangler): org/version extraction + tag/push — Python-ядро hermes_images.py;
+	@## рецепт — тонкий фасад. Семантика прежнего shell-рецепта 1:1 (org-нормализация,
+	@## pyproject-version U-60, GHCR_PUSH_TOKEN → PULL_TOKEN fallback, tag||true).
+	@CONTEXT="$(CONTEXT)" GHCR_PUSH_TOKEN="$(GHCR_PUSH_TOKEN)" GHCR_PULL_TOKEN="$(GHCR_PULL_TOKEN)" \
+		$(PYTHON) -m core.internal.build.hermes_images push-l2
 
 ## hermes-build-context: Build единый hermes-agent-context образ (L1→L2 коллапс DevPlan 002)
 ##   Usage: make hermes-build-context CONTEXT=<name>

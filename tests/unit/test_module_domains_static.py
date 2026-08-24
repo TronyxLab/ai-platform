@@ -10,8 +10,9 @@
 ##           (1) contract-level — параметризованные по домену: compose profiles на всех
 ##               сервисах, healthcheck.sh существует/executable/sources lib;
 ##           (2) implementation-level — доменные проверки конфигов (XML валидность,
-##               loki/alloy/prometheus/grafana YAML, dashboards JSON, alert-rules,
+##               loki/prometheus/grafana YAML, dashboards JSON, alert-rules,
 ##               redis cache-only, pgbouncer DATABASE_URLS, litellm model_list, образы).
+##               config.alloy-проверки — в tests/unit/test_log_collector_module.py (010 T3.1).
 ##           module.yaml контракт (name/install_type/доменные поля) — в
 ##           tests/test_module_yaml_contract_static.py (T2, параметризованный).
 ## @invariants
@@ -76,13 +77,14 @@ def _module_dir(module: str) -> str:
 # ═══════════════════════════════════════════════════════════════════════════
 # CONTRACT LEVEL (параметризовано по домену, DevPlan 139 W3 T3)
 # ═══════════════════════════════════════════════════════════════════════════
-# 7 static/unit-пар: clickhouse, infra-metrics, litellm, logging, monitoring,
-# postgres (pgbouncer), redis. Общий контракт: compose profiles + healthcheck.sh.
+# 8 static/unit-пар: clickhouse, infra-metrics, litellm, log-collector, logging,
+# monitoring, postgres (pgbouncer), redis. Общий контракт: compose profiles + healthcheck.sh.
 
 _MODULE_DOMAINS: list[dict] = [
     {"id": "clickhouse", "module_dir": "clickhouse", "profile": "clickhouse"},
     {"id": "infra-metrics", "module_dir": "infra-metrics", "profile": "infra-metrics"},
     {"id": "litellm", "module_dir": "litellm", "profile": "litellm"},
+    {"id": "log-collector", "module_dir": "log-collector", "profile": "log-collector"},
     {"id": "logging", "module_dir": "logging", "profile": "logging"},
     {"id": "monitoring", "module_dir": "monitoring", "profile": "monitoring"},
     {"id": "pgbouncer", "module_dir": "postgres", "profile": "postgres"},
@@ -580,28 +582,27 @@ def test_litellm_module_yaml_has_required_fields(caplog) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# LOGGING (implementation-level, из test_logging_static.py)
+# LOGGING (implementation-level, из test_logging_static.py; 010 T3.1: alloy → log-collector)
 # ═══════════════════════════════════════════════════════════════════════════
 
 LOGGING_DIR = _module_dir("logging")
 LOGGING_COMPOSE = Path(LOGGING_DIR) / "docker-compose.base.yml"
 LOGGING_COMPOSE_TEST = Path(LOGGING_DIR) / "docker-compose.test.yml"
 LOGGING_LOKI_CONFIG = Path(LOGGING_DIR) / "config" / "loki-config.yml"
-LOGGING_ALLOY_CONFIG = Path(LOGGING_DIR) / "config" / "config.alloy"
 LOGGING_EXPECTED_REQUIRED_FILES = [
     "docker-compose.base.yml",
     "docker-compose.test.yml",
     "module.yaml",
     "healthcheck.sh",
     Path("config") / "loki-config.yml",
-    Path("config") / "config.alloy",
+    Path("config") / "loki-runtime-config.yml",
 ]
 
 
 @pytest.mark.static_audit
 @ldd_trajectory
 def test_logging_compose_contract(caplog) -> None:
-    """logging compose: loki healthcheck (/usr/bin/loki -version), alloy depends_on service_healthy, networks."""
+    """logging compose: loki healthcheck (/usr/bin/loki -version), networks; alloy НЕ входит (010 T3.1)."""
     assert Path(LOGGING_COMPOSE).exists(), f"compose base not found: {LOGGING_COMPOSE}"
 
     with Path(LOGGING_COMPOSE).open(encoding="utf-8") as fh:
@@ -609,7 +610,7 @@ def test_logging_compose_contract(caplog) -> None:
 
     services = data.get("services", {})
     assert "loki" in services, "Missing loki service"
-    assert "alloy" in services, "Missing alloy service"
+    assert "alloy" not in services, "Alloy must be removed from logging (010 T3.1 → log-collector)"
 
     loki_hc = services["loki"].get("healthcheck")
     assert loki_hc is not None, "loki service missing healthcheck"
@@ -617,18 +618,11 @@ def test_logging_compose_contract(caplog) -> None:
     assert "/usr/bin/loki" in hc_test, f"loki healthcheck test missing '/usr/bin/loki', got: {hc_test}"
     assert "-version" in hc_test, f"loki healthcheck test missing '-version', got: {hc_test}"
 
-    alloy_depends = services["alloy"].get("depends_on", {})
-    assert "loki" in alloy_depends, "alloy missing depends_on loki"
-    assert alloy_depends["loki"].get("condition") == "service_healthy", (
-        f"alloy depends_on loki condition={alloy_depends['loki'].get('condition')}, expected service_healthy"
-    )
-
-    for svc_name in ("loki", "alloy"):
-        networks = services[svc_name].get("networks", [])
-        assert "observability-net" in networks, f"Service {svc_name} missing observability-net, got: {networks}"
+    networks = services["loki"].get("networks", [])
+    assert "observability-net" in networks, f"Service loki missing observability-net, got: {networks}"
 
     logger.critical(
-        "[IMP:9][test_compose_profiles] ✅ All services have profiles: [logging], correct healthcheck + depends_on"
+        "[IMP:9][test_compose_profiles] ✅ loki healthcheck + observability-net; alloy отсутствует (010 T3.1)"
     )
 
 
@@ -642,7 +636,7 @@ def test_logging_healthcheck_deep(caplog) -> None:
     with Path(healthcheck_sh).open(encoding="utf-8") as fh:
         content = fh.read()
 
-    assert "loki" in content and "alloy" in content, "healthcheck.sh must check loki and alloy containers"
+    assert "loki" in content, "healthcheck.sh must check loki container"
     assert 'check_http "http://127.0.0.1:${LOKI_PORT}/ready"' in content, (
         "healthcheck.sh deep mode must check Loki /ready endpoint (env-параметризованный порт, W10 T10.12)"
     )
@@ -654,43 +648,27 @@ def test_logging_healthcheck_deep(caplog) -> None:
 @pytest.mark.static_audit
 @ldd_trajectory
 def test_loki_config_valid(caplog) -> None:
-    """loki-config.yml: valid YAML с auth_enabled: false + server/storage_config/compactor."""
+    """loki-config.yml: valid YAML с auth_enabled: true (T2.0b tenant-изоляция) + server/storage/compactor."""
     assert Path(LOGGING_LOKI_CONFIG).exists(), f"loki-config.yml not found: {LOGGING_LOKI_CONFIG}"
 
     with Path(LOGGING_LOKI_CONFIG).open(encoding="utf-8") as fh:
         data = yaml.safe_load(fh)
 
     assert "auth_enabled" in data, "loki-config.yml missing 'auth_enabled'"
-    assert data["auth_enabled"] is False, f"loki-config.yml auth_enabled={data['auth_enabled']}, expected False"
+    assert data["auth_enabled"] is True, (
+        f"loki-config.yml auth_enabled={data['auth_enabled']}, expected True (DevPlan 010 T2.0b tenant-изоляция)"
+    )
     assert "server" in data, "loki-config.yml missing 'server' section"
     assert "storage_config" in data, "loki-config.yml missing 'storage_config' section"
     assert "compactor" in data, "loki-config.yml missing 'compactor' section"
 
-    logger.critical("[IMP:9][test_loki_config] ✅ loki-config.yml valid: auth_enabled=false")
-
-
-@pytest.mark.static_audit
-@ldd_trajectory
-def test_alloy_config_valid(caplog) -> None:
-    """config.alloy (promtail EOL REPLACE, 164 W1-5): 3 источника + loki.write обязательны."""
-    assert Path(LOGGING_ALLOY_CONFIG).exists(), f"config.alloy not found: {LOGGING_ALLOY_CONFIG}"
-
-    content = Path(LOGGING_ALLOY_CONFIG).read_text(encoding="utf-8")
-
-    assert 'loki.write "default"' in content, "config.alloy missing loki.write (обязательный sink)"
-    assert "http://loki:3100/loki/api/v1/push" in content, "config.alloy missing loki push endpoint"
-    assert 'loki.source.docker "containers"' in content, "config.alloy missing docker source"
-    assert 'loki.source.journal "journal"' in content, "config.alloy missing journal source"
-    assert 'local.file_match "backup_logs"' in content, "config.alloy missing backup-logs file_match"
-    assert 'compose_service = "backup-cron"' in content, "config.alloy missing compose_service=backup-cron label"
-
-    logger.critical("[IMP:9][test_alloy_config] ✅ config.alloy valid: 3 источника + loki.write OK")
+    logger.critical("[IMP:9][test_loki_config] ✅ loki-config.yml valid: auth_enabled=true (T2.0b)")
 
 
 @pytest.mark.static_audit
 @ldd_trajectory
 def test_logging_module_files_present(caplog) -> None:
-    """Все обязательные файлы logging-модуля на диске."""
+    """Все обязательные файлы logging-модуля на диске (config.alloy перенесён в log-collector)."""
     missing = []
     for rel_path in LOGGING_EXPECTED_REQUIRED_FILES:
         full_path = Path(LOGGING_DIR) / rel_path
@@ -708,7 +686,7 @@ def test_logging_module_files_present(caplog) -> None:
 @pytest.mark.static_audit
 @ldd_trajectory
 def test_logging_docker_compose_test_overlay(caplog) -> None:
-    """docker-compose.test.yml: container_name -test, shifted Loki port 13100, restart: no."""
+    """docker-compose.test.yml: container_name -test, shifted Loki port 13100, restart: no; alloy-test → log-collector."""
     assert Path(LOGGING_COMPOSE_TEST).exists(), f"compose test overlay not found: {LOGGING_COMPOSE_TEST}"
 
     with Path(LOGGING_COMPOSE_TEST).open(encoding="utf-8") as fh:
@@ -725,14 +703,9 @@ def test_logging_docker_compose_test_overlay(caplog) -> None:
     ports = loki_svc.get("ports", [])
     assert "127.0.0.1:13100:3100" in ports, f"loki ports={ports}, expected to contain 127.0.0.1:13100:3100"
 
-    assert "alloy" in services, "Missing alloy service in test overlay"
-    alloy_svc = services["alloy"]
-    assert alloy_svc.get("container_name") == "alloy-test", (
-        f"alloy container_name={alloy_svc.get('container_name')}, expected alloy-test"
-    )
-    assert alloy_svc.get("restart") == "no", f"alloy restart={alloy_svc.get('restart')}, expected 'no'"
+    assert "alloy" not in services, "alloy-test перенесён в log-collector (010 T3.1)"
 
-    logger.critical("[IMP:9][test_test_overlay] ✅ docker-compose.test.yml overlay contract OK")
+    logger.critical("[IMP:9][test_test_overlay] ✅ docker-compose.test.yml overlay contract OK (loki only)")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1549,7 +1522,13 @@ def test_redis_module_yaml_contract(check: str, redis_module_yaml_path, caplog) 
 @pytest.mark.static_audit
 @ldd_trajectory
 def test_prometheus_redis_exporter_job(redis_prometheus_yml_path, caplog) -> None:
-    """prometheus.yml.tmpl: scrape job 'redis-exporter' targeting redis-exporter:9121."""
+    """prometheus.yml.tmpl: job 'redis-exporter' — file_sd (DevPlan 010 T3.3, static→file_sd).
+
+    ⚠️ DevPlan 010 T3.3: миграция static→file_sd — job_name 'redis-exporter' сохранён 1:1
+    (ЛОВУШКА: дашборды/алерты селекторят по job_name); static target redis-exporter:9121
+    переехал в рендерер (generate_node_targets single-node fallback,
+    core/internal/monitoring/prometheus_targets.py).
+    """
     data = load_yaml(redis_prometheus_yml_path)
 
     scrape_configs = data.get("scrape_configs", [])
@@ -1562,12 +1541,13 @@ def test_prometheus_redis_exporter_job(redis_prometheus_yml_path, caplog) -> Non
     logger.critical("[IMP:9][test_redis][prometheus] ASSERT: redis-exporter job found=%s", redis_job is not None)
     assert redis_job is not None, "prometheus.yml must have a scrape job named 'redis-exporter'"
 
-    targets = []
-    for sg in redis_job.get("static_configs", []):
-        targets.extend(sg.get("targets", []))
-    logger.critical("[IMP:9][test_redis][prometheus] ASSERT: targets=%s", targets)
-    assert "redis-exporter:9121" in targets, (
-        f"redis-exporter scrape job must target 'redis-exporter:9121', got targets: {targets}"
+    # T3.3: job обязан быть file_sd (nodes/redis-exporter.json), не static_configs
+    file_sd = redis_job.get("file_sd_configs", [])
+    logger.critical("[IMP:9][test_redis][prometheus] ASSERT: redis-exporter file_sd=%s", file_sd)
+    assert file_sd, "redis-exporter job must use file_sd_configs (DevPlan 010 T3.3 static→file_sd migration)"
+    files = file_sd[0].get("files", [])
+    assert "/prometheus-targets/nodes/redis-exporter.json" in files, (
+        f"redis-exporter file_sd must reference /prometheus-targets/nodes/redis-exporter.json, got: {files}"
     )
 
 

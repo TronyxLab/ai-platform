@@ -686,14 +686,16 @@ def _resolve_platform_domain() -> str:
 ##   - Password: СЛУЧАЙНЫЙ secrets.token_urlsafe(32) — алфавит ⊂ charset ^[A-Za-z0-9._-]+$
 ##   - Persist: merge + atomic write (tmp + replace, chmod 0o600 — паттерн Step 3.5) — генерация ОДНОКРАТНАЯ
 ##   - Существующие значения НЕ перезаписываются (инвариант 2 модуля)
-# region FUNC__plw_body_persist_new_vars
-## @purpose  Тело try-блока (PLW0717 extraction) — merge + atomic write (tmp + replace, chmod 0o600).
+# region FUNC_persist_new_vars
+## @purpose  Общий персист autogen-наборов — merge + atomic write (tmp + replace, chmod 0o600).
+##           (T3.6: имя _plw_body_* снято — у функции ДВА call-site, это легитимный хелпер,
+##           не scaffolding-экстракция.)
 ##           Общий персист для autogen-функций (master creds, derived passwords) — дублирование
 ##           merge-логики было бы debt (паттерн Step 3.5 дублируется здесь умышленно — Step 3.5
 ##           оперирует manifest-generated набором, этот — autogen-наборами).
 ## @io       ⇥ log_label, new_vars, parse_secrets_env, secrets_env → ⎋ None (persist или raise OSError/ValueError)
 ## @complexity O(N) — merge + файловый I/O
-def _plw_body_persist_new_vars(
+def _persist_new_vars(
     log_label: str,
     new_vars: dict[str, str],
     parse_secrets_env: Callable[[str], dict[str, str]],
@@ -720,7 +722,7 @@ def _plw_body_persist_new_vars(
     )
 
 
-# endregion FUNC__plw_body_persist_new_vars
+# endregion FUNC_persist_new_vars
 
 
 def _ensure_master_credentials(secrets_env: str) -> None:
@@ -749,7 +751,7 @@ def _ensure_master_credentials(secrets_env: str) -> None:
 
     # Persist в secrets.env: merge + atomic write (тот же паттерн, что Step 3.5)
     try:
-        _plw_body_persist_new_vars("Master credentials", new_vars, parse_secrets_env, secrets_env)
+        _persist_new_vars("Master credentials", new_vars, parse_secrets_env, secrets_env)
     except (OSError, ValueError) as e:
         logger.warning(
             "[IMP:7][secrets_manager] Cannot persist master credentials to %s: %s — "
@@ -837,7 +839,7 @@ def _ensure_derived_passwords(secrets_env: str) -> None:
 
     # Persist в secrets.env: merge + atomic write (тот же паттерн, что master creds)
     try:
-        _plw_body_persist_new_vars("Derived service passwords", new_vars, parse_secrets_env, secrets_env)
+        _persist_new_vars("Derived service passwords", new_vars, parse_secrets_env, secrets_env)
     except (OSError, ValueError) as e:
         logger.warning(
             "[IMP:7][secrets_manager] Cannot persist derived passwords to %s: %s — "

@@ -188,7 +188,7 @@ ignore = [
 "core/internal/bootstrap/lifecycle/phases/docker.py" = ['os-makedirs', 'os-unlink', 'os-path-isdir', 'os-path-isfile', 'os-path-dirname', 'os-path-join', 'os-listdir']
 "core/internal/bootstrap/lifecycle/phases/secrets.py" = ['os-path-isdir']
 "core/internal/bootstrap/lifecycle/phases/system.py" = ['os-path-isdir', 'os-path-isfile', 'os-path-join']
-"core/internal/bootstrap/lifecycle/secrets_manager.py" = ['os-path-isfile', 'os-path-join', 'print']
+"core/internal/bootstrap/lifecycle/secrets_manager.py" = ['os-path-isfile', 'os-path-join', 'print', 'boolean-type-hint-positional-argument', 'boolean-default-value-positional-argument', 'too-many-statements']
 "core/internal/bootstrap/lifecycle/state_machine.py" = ['os-path-isfile', 'print']
 "core/internal/bootstrap/preflight.py" = ['os-path-isfile', 'print']
 "core/internal/bootstrap/python_deps.py" = ['os-makedirs', 'os-path-dirname', 'os-path-join']
@@ -214,9 +214,19 @@ ignore = [
 "core/internal/deploy/deploy_history.py" = ['non-empty-init-module']  # flat re-export __all__ (backward-compat)
 "core/internal/deploy/audit/__init__.py" = ['non-empty-init-module']  # flat re-export __all__ (backward-compat)
 "core/internal/deploy/hooks/__init__.py" = ['non-empty-init-module']  # flat re-export __all__ (backward-compat)
+# T3.7: scaffold-CLI bool-флаги (dry_run/force/git_init...) — публичный CLI-контракт
+# project_scaffolder; keyword-only миграция ломает вызовы main-flow и тестов.
+"core/internal/scaffold/project_scaffolder.py" = ['boolean-type-hint-positional-argument', 'boolean-default-value-positional-argument']
+"core/internal/scaffold/checklist.py" = ['boolean-type-hint-positional-argument', 'boolean-default-value-positional-argument']
 # 170 W4-B3: post_deploy_chain вынесен из orchestrator.py — os.path.join/isdir/glob следуют за кодом
 "core/internal/deploy/hooks/post_deploy_chain.py" = ['os-path-isdir', 'os-path-join', 'glob']
-"core/internal/deploy/orchestrator.py" = ['os-makedirs', 'os-remove', 'os-path-isdir', 'os-path-isfile', 'os-path-join', 'os-listdir']
+# T3.1: rollback-кластер вынесен из orchestrator.py — os-игноры следуют за кодом (тот же набор,
+# что у orchestrator.py: seam-моки os.path/isfile/isdir/join + os.makedirs/listdir/remove в тестах)
+"core/internal/deploy/rollback.py" = ['os-makedirs', 'os-remove', 'os-path-isdir', 'os-path-isfile', 'os-path-join', 'os-listdir']
+# T3.1 (agent-check surfacing): bool-позиционные флаги — легаси публичный API оркестратора
+# (deliver/receive signature); keyword-only миграция = ломающее изменение вызывающих
+# (deploy.mk/workflows/lifecycle) — вне скоупа рефакторинга волн 0-3.
+"core/internal/deploy/orchestrator.py" = ['os-makedirs', 'os-remove', 'os-path-isdir', 'os-path-isfile', 'os-path-join', 'os-listdir', 'boolean-type-hint-positional-argument', 'boolean-default-value-positional-argument']
 # 170 W4-B3: _VERIFY_DOMAINS_SH (os.path.abspath/dirname) удалён — мёртвый код; остались isdir/join
 "core/internal/deploy/orchestrator_cli.py" = ['os-path-isdir', 'os-path-join']
 "core/internal/deploy/receive_flow.py" = ['os-makedirs', 'os-remove', 'os-path-isdir', 'os-path-isfile', 'os-path-join', 'print']
@@ -241,6 +251,7 @@ ignore = [
 "core/internal/config/platform_config.py" = ['global-statement']  # lazy-кэш _defaults/_loaded (canonical lazy-init)
 "core/internal/scaffold/__init__.py" = ['non-empty-init-module']  # flat re-export __all__ (backward-compat)
 "core/internal/shared/node_yaml/__init__.py" = ['non-empty-init-module']  # flat re-export __all__ (backward-compat)
+"core/internal/bootstrap/deploy/hermes_workflow/__init__.py" = ['non-empty-init-module']  # T3.7: re-export __all__ + DI-fallback wrapper (паритет node_yaml/__init__, scaffold/__init__)
 "core/loadtest/scenarios/__init__.py" = ['non-empty-init-module']  # flat re-export __all__ (backward-compat)
 "core/internal/llm/config_renderer.py" = ['jinja2-autoescape-false', 'print']
 "core/internal/scripts/port_scanner.py" = ['unsafe-yaml-load']  # OverrideLoader — compose !override-семантика (vetted внутренние файлы)

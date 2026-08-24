@@ -1,5 +1,5 @@
-# GREP_SUMMARY: grafana datasources prometheus loki provisioning
-# STRUCTURE: ▶ 2-datasources ┌ Prometheus:http://prometheus:9090(isDefault) ┐ ┌ Loki:http://loki:3100 ┐ → provisioning → ┘
+# GREP_SUMMARY: grafana datasources prometheus loki provisioning tenant-header X-Scope-OrgID LOKI_TENANT
+# STRUCTURE: ▶ 2-datasources ┌ Prometheus:http://prometheus:9090(isDefault) ┐ ┌ Loki:http://loki:3100(+tenant header) ┐ → provisioning → ┘
 # region MODULE_CONTRACT
 ## @purpose  Grafana datasource provisioning: Prometheus (metrics) + Loki (logs)
 ## @scope    Provisioned at container start; datasources are read-only managed
@@ -7,9 +7,17 @@
 ##   - Prometheus: URL = http://prometheus:9090 (on observability-net)
 ##   - Loki: URL = http://loki:3100 (on observability-net)
 ##   - Both datasources are provisioned with isDefault flag (Prometheus = default)
-##   - No authentication needed (internal network)
+##   - ⚠️ DevPlan 010 T2.0b: Loki auth_enabled:true — каждый запрос обязан нести
+##     header X-Scope-OrgID = tenant (имя контекста). Значение — из env LOKI_TENANT
+##     (Grafana provisioning $__env{} подстановка; контейнер получает
+##     LOKI_TENANT: ${LOKI_TENANT:-platform} из compose — дефолт "platform" единый
+##     по стеку: log-collector/loki-config/nginx-vhost). httpHeaderValue1 в
+##     secureJsonData (Grafana: header-значения только в secure-секции).
 ## @rationale Provisioned datasources survive container recreation and are ready
 ##           at first Grafana startup — no manual setup needed (AC-6).
+##           T2.0b: без header Loki (auth_enabled:true) отвергает read-запросы
+##           Grafana → дашборды логов умирают молча (401).
+## @changes 2026-08-22 | DevPlan 010 T2.0b — +X-Scope-OrgID tenant header (LOKI_TENANT)
 # endregion MODULE_CONTRACT
 
 apiVersion: 1
@@ -29,3 +37,11 @@ datasources:
     url: http://loki:3100
     jsonData:
       maxLines: 1000
+      # DevPlan 010 T2.0b: tenant-изоляция — header X-Scope-OrgID на каждый запрос.
+      # $__env{LOKI_TENANT} — Grafana provisioning env-подстановка (контейнер получает
+      # LOKI_TENANT от compose с дефолтом "platform").
+      httpHeaderName1: 'X-Scope-OrgID'
+    secureJsonData:
+      # httpHeaderValue* живут ТОЛЬКО в secureJsonData (Grafana требование для
+      # заголовков с 7.4+); $__env{} раскрывается в runtime-значение LOKI_TENANT.
+      httpHeaderValue1: '$__env{LOKI_TENANT}'
