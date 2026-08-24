@@ -123,6 +123,14 @@ from core.internal.shared.module_interface import invoke as module_interface_inv
 # DEPLOY_BEST_EFFORT=True: failing step → WARN, деплой продолжается; WARN→exit 0; HC_DONE_MARKER всегда.
 from core.internal.shared.node_yaml import NodeYaml
 
+# DevPlan 010 T1.1: placement-авторитетный резолв модулей ноды (multi-node)
+from core.internal.shared.placement import (
+    Placement,
+    lint_drift,
+    load_placement,
+    resolve_node_modules,
+)
+
 # DevPlan 116 B5 T1: таймауты — единый реестр shared/timeouts.py (U-11, гейт timeout_literals)
 from core.internal.shared.timeouts import COMPOSE_UP_TIMEOUT, DEPLOY_TIMEOUT
 
@@ -301,6 +309,49 @@ def _preflight(core_dir: str, node_yaml: str, modules_dir: str) -> None:
 # endregion FUNC__preflight
 
 
+# region FUNC__placement_for_node
+## @purpose  DevPlan 010 T1.1: locate + load placement.yaml для ноды (single-node → None, no-op)
+## @io       ⇥ node_yaml: str (путь) → ⎋ tuple[Placement | None, str] (placement, node_name)
+## @complexity 1 — path derivation + load_placement
+## @invariants
+##   - placement.yaml живёт в node-configs-репозитории рядом с директориями нод:
+##     ROOT/CONTEXT/placement.yaml, где root = parent директории ноды (§2 плана)
+##   - невалидный placement → ConfigValidationError ПРОПАГИРУЕТСЯ (fail-fast до деплоя,
+##     инвариант 3 плана) — никаких best-effort заглушек
+##   - отсутствие файла = легаси single-node путь (инвариант 1 плана)
+## @rationale Q: почему резолв здесь, а не в secrets_validator? A: _parse_modules — единственная
+##            точка формирования enabled/all списков деплоя; валидатор секретов остаётся
+##            node.yaml-ориентированным (drift-проверки — его lint-слой).
+def _placement_for_node(node_yaml: str) -> tuple[Placement | None, str]:
+    """Resolve context-scoped placement.yaml for this node; None when absent (legacy)."""
+    node = NodeYaml(node_yaml)
+    context = node.get_context()
+    node_name = str(node.get("node.name", default="") or "")
+    if not context or not node_name:
+        logger.info(
+            "[IMP:7][_placement_for_node][skip] no context/node name in %s — legacy resolve",
+            node_yaml,
+        )
+        return None, ""
+    placement_path = Path(node_yaml).parent.parent / context / "placement.yaml"
+    placement = load_placement(placement_path)
+    if placement is None:
+        # [IMP:8] single-node no-op: файла нет → легаси-путь байт-идентичен (инвариант 1)
+        logger.info("[IMP:8][_placement_for_node][noop] no placement.yaml at %s", placement_path)
+    else:
+        logger.info(
+            "[IMP:9][_placement_for_node][loaded] context=%s nodes=%d modules=%d node=%s",
+            placement.context,
+            len(placement.nodes),
+            len(placement.modules),
+            node_name,
+        )
+    return placement, node_name
+
+
+# endregion FUNC__placement_for_node
+
+
 # region FUNC__parse_modules
 ## @purpose  PHASE 2: parse node.yaml modules section, filter enabled + modules_filter, resolve overlays
 ## @io       ⇥ node_yaml: str, modules_dir: str, modules_filter: str
@@ -311,6 +362,9 @@ def _preflight(core_dir: str, node_yaml: str, modules_dir: str) -> None:
 ##   - modules_filter (comma/space-separated) intersects enabled set — applied BEFORE topo-sort
 ##   - Overlays resolved via node.yaml context + /opt/\<ctx\>/platform/modules/\<name\> filesystem check
 ##     (shell pattern — config_overlay field from node.yaml is NOT used for deploy)
+##   - DevPlan 010 T1.1: при наличии placement.yaml enabled/all берутся из resolve_node_modules
+##     (placement авторитетен); оверлеи остаются из node.yaml; drift node.yaml↔placement —
+##     WARNING с repair-подсказкой, НЕ ошибка. Без placement.yaml путь байт-идентичен легаси.
 def _parse_modules(node_yaml: str, _modules_dir: str, modules_filter: str) -> ModuleLists:
     """Parse node.yaml modules and apply enabled/filter/overlay resolution."""
     raw = secrets_validator.parse_modules_from_node_yaml(node_yaml)
@@ -340,6 +394,24 @@ def _parse_modules(node_yaml: str, _modules_dir: str, modules_filter: str) -> Mo
     filter_set = {m.strip() for m in modules_filter.replace(",", " ").split() if m.strip()}
     if filter_set:
         enabled_names = [n for n in enabled_names if n in filter_set]
+
+    # ── DevPlan 010 T1.1: placement-authoritative resolve (multi-node) ──
+    # placement.yaml есть → enabled/all из resolve_node_modules (placement авторитетен,
+    # node.yaml#modules для деплоя не читается); drift → WARNING (T1.2), не RED.
+    placement, placement_node = _placement_for_node(node_yaml)
+    if placement is not None and placement_node:
+        # [IMP:9] drift-сигнал: node.yaml объявляет модули, которые placement не размещает
+        # на этой ноде — repair-подсказка в каждой строке (удали из node.yaml или перенеси)
+        for warning in lint_drift(enabled_names, placement, placement_node):
+            logger.warning("[IMP:8][_parse_modules][drift] %s", warning)
+        resolved = resolve_node_modules(placement, placement_node)
+        all_names = list(dict.fromkeys(resolved))
+        enabled_names = [n for n in resolved if n in filter_set] if filter_set else list(resolved)
+        logger.info(
+            "[IMP:9][_parse_modules][placement] authoritative resolve: enabled=%d all=%d",
+            len(enabled_names),
+            len(all_names),
+        )
 
     overlays = _resolve_overlay_dirs(node_yaml, enabled_names, raw_overlays)
     logger.info("[IMP:9][_parse_modules][result] enabled=%d all=%d", len(enabled_names), len(all_names))
