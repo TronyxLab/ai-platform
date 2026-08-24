@@ -11,7 +11,7 @@
 ##   - _load_test_infra() cached via _TEST_INFRA_CACHE — one subprocess call per pytest session
 ##   - STALE_CONTAINER_NAMES always contains ALL container_name values from docker-compose.test.yml
 ##   - get_container_name() returns the first container_name for a module (single-container modules)
-##   - get_container_names() returns ALL container_names for multi-service modules (e.g. infra-metrics → 5)
+##   - get_container_names() returns ALL container_names for multi-service modules (e.g. service-exporters → 3)
 ##   - _TestInfra singleton wraps cached data and provides all accessor methods
 ##   - Any KeyError indicates a module name mismatch — fail fast with clear message
 ## @rationale Eliminates FRAGILITY COLLAPSE where _STALE_CONTAINER_NAMES and container_name hardcodes
@@ -149,17 +149,17 @@ class _TestInfra:
             raise KeyError(msg)
         return names[0]
 
-    # endregion
+    # endregion FUNC_get_container_name
 
     # region FUNC_get_container_names
-    ## @purpose  Return ALL container_names for a module (e.g., infra-metrics → 5 names)
+    ## @purpose  Return ALL container_names for a module (e.g., service-exporters → 3 names)
     ## @io       ⇥ module_name: str → ⎋ list[str]
     ## @complexity — O(1)
     def get_container_names(self, module_name: str) -> list[str]:
         """Return all container_names for a module (multi-service modules)."""
         return list(self._get(module_name).get("container_names", []))
 
-    # endregion
+    # endregion FUNC_get_container_names
 
     # region FUNC_get_test_port
     ## @purpose  Return external test port(s) for a module.
@@ -211,7 +211,7 @@ class _TestInfra:
             for svc, plist in ports.items()
         }
 
-    # endregion
+    # endregion FUNC_get_test_port
 
     # region FUNC_get_compose_file
     ## @purpose  Return (base_compose_path, test_compose_path) for a module.
@@ -222,7 +222,7 @@ class _TestInfra:
         data = self._get(module_name)
         return Path(data["compose_base"]), Path(data["compose_test"])
 
-    # endregion
+    # endregion FUNC_get_compose_file
 
     # region FUNC_get_networks_for_module
     ## @purpose  Return list of network names a module's test container connects to.
@@ -232,7 +232,7 @@ class _TestInfra:
         """Return list of test networks for a module."""
         return list(self._get(module_name).get("networks", []))
 
-    # endregion
+    # endregion FUNC_get_networks_for_module
 
     # region PROPERTY_stale_container_names
     ## @purpose  All container names across ALL test modules — always in sync with compose files.
@@ -246,7 +246,7 @@ class _TestInfra:
             names.extend(mod.get("container_names", []))
         return sorted(names)
 
-    # endregion
+    # endregion PROPERTY_stale_container_names
 
     # region PROPERTY_all_test_networks
     ## @purpose  All unique test network names across all modules.
@@ -260,7 +260,7 @@ class _TestInfra:
             networks.update(mod.get("networks", []))
         return networks
 
-    # endregion
+    # endregion PROPERTY_all_test_networks
 
     # region PROPERTY_all_modules
     ## @purpose  List of all module names with test infrastructure data.
@@ -271,7 +271,7 @@ class _TestInfra:
         """Sorted list of all module names with docker-compose.test.yml."""
         return sorted(self._index.keys())
 
-    # endregion
+    # endregion PROPERTY_all_modules
 
 
 # endregion CLASS_TestInfra
@@ -335,7 +335,7 @@ class _InfraActiveFlag:
     def __bool__(self) -> bool:
         return self._active
 
-    def set(self, value: bool) -> None:
+    def set(self, *, value: bool) -> None:
         self._active = value
 
 

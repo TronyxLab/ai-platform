@@ -1,0 +1,51 @@
+# GREP_SUMMARY: service-exporters module nginx-exporter redis-exporter postgres-exporter metrics singleton placement
+# STRUCTURE: ▶ module:service-exporters → nginx-exp:1.5.1 + redis-exp:v1.88.0 + postgres-exp:v0.20.1 → observability-net + shared-cache-net + shared-db-net → ┐
+# region MODULE_CONTRACT
+## @purpose  Service metrics bridges: Nginx Prometheus Exporter, Redis Exporter (credentialed T2.0a),
+##           Postgres Exporter — DevPlan 010 T3.2: выделен из infra-metrics
+## @scope    nginx stub_status bridge, redis cache metrics (auth), postgres db metrics;
+##           размещение singleton на ноде своих сервисов (exporter'ы ходят Docker DNS)
+## @invariants
+##   - install_type: docker — managed by compose
+##   - Nginx Exporter: scrape URI → http://nginx:8081/stub_status (Docker DNS)
+##   - Redis Exporter: credentialed env REDIS_ADDR/REDIS_PASSWORD (T2.0a requirepass)
+##   - Postgres Exporter: DATA_SOURCE_NAME → postgres:5432 (via shared-db-net)
+##   - redis-exporter on both observability-net (Prometheus) and shared-cache-net (Redis access)
+##   - postgres-exporter on both observability-net (Prometheus) and shared-db-net (Postgres access)
+##   - depends_on [nginx, redis, postgres] — ИНФРА-тип (co-location семантика, НЕ data-plane:
+##     off-зависимости placement проверяет только по DATA_PLANE_DEPS)
+## @rationale DevPlan 010 §3 TRAP[DECISION]: физический split, один модуль = одно решение размещения.
+## @changes — 2026-08-22 | DevPlan 010 T3.2 — создан из infra-metrics; redis-exporter credentialed (T2.0a);
+##           host-порты 9113/9121/9187 добавлены для кросс-нодового скрейпа (T2.2)
+# endregion MODULE_CONTRACT
+
+name: service-exporters
+install_type: docker
+description: "Service exporters: Nginx Prometheus Exporter, Redis Exporter (credentialed), Postgres Exporter"
+
+depends_on:
+  - nginx
+  - redis
+  - postgres
+
+# D5 (118 G4): severity/restart — метрики, non-critical; restart согласован с base.yml (все 3 сервиса unless-stopped)
+severity: normal
+restart: unless-stopped
+
+interfaces:
+  - healthcheck
+
+spool_dir: /var/lib/platform/service-exporters-data
+
+resources:
+  # Синхронизировано с docker-compose.base.yml: nginx-exp 32M + redis-exporter 128M
+  # + postgres-exporter 128M = 288M (лимиты перенесены из infra-metrics без изменений).
+  limits:
+    memory: 288M
+  reservations:
+    memory: 64M
+
+env_requires:
+  - POSTGRES_USER
+  - POSTGRES_PASSWORD
+  - REDIS_PASSWORD

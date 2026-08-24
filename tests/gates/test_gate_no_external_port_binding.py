@@ -119,6 +119,17 @@ def _check_binding(host_ip: str, host_port: int | None) -> list[str]:
     """Вернуть violation-сообщения для одного bindings (пусто = допустим)."""
     if host_ip in LOOPBACK_HOSTS:
         return []  # loopback — всегда разрешено (127.0.0.1 control)
+    # 🧐 TRAP[DECISION] · 2026-08-22 · DevPlan 010 T2.2 · ${SERVICE_BIND_HOST:-<loopback>} —
+    # · каноническая multi-node форма bind'а: single-node дефолт 127.0.0.1 (байт-идентично),
+    # · multi-node — provision подставляет host ноды; peer-доступ режет ufw (T2.3), не bind.
+    # · Rejected: запрет любой env-формы · Reason: ломает канон размещения без выгоды
+    # ·   (безопасность обеспечивает peer-scoped ufw + аутентификация T2.0.*)
+    # · Rev: если default в форме перестанет быть loopback-литералом — снова запретить.
+    if host_ip.startswith("${SERVICE_BIND_HOST:-"):
+        default_bind = host_ip[len("${SERVICE_BIND_HOST:-") : -1].strip()
+        if default_bind in LOOPBACK_HOSTS:
+            return []
+        return [f"external binding {host_ip}:{host_port} — default не loopback ({default_bind})"]
     if host_port in PUBLIC_ALLOW_PORTS:
         return []  # allowlist nginx 80/443 — public by design
     # External: 0.0.0.0 / empty / env-var / non-loopback IP с портом вне {80,443}

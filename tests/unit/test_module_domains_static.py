@@ -77,12 +77,13 @@ def _module_dir(module: str) -> str:
 # ═══════════════════════════════════════════════════════════════════════════
 # CONTRACT LEVEL (параметризовано по домену, DevPlan 139 W3 T3)
 # ═══════════════════════════════════════════════════════════════════════════
-# 8 static/unit-пар: clickhouse, infra-metrics, litellm, log-collector, logging,
-# monitoring, postgres (pgbouncer), redis. Общий контракт: compose profiles + healthcheck.sh.
+# 9 static/unit-пар: clickhouse, node-metrics, service-exporters, litellm, log-collector,
+# logging, monitoring, postgres (pgbouncer), redis. Контракт: compose profiles + healthcheck.sh.
 
 _MODULE_DOMAINS: list[dict] = [
     {"id": "clickhouse", "module_dir": "clickhouse", "profile": "clickhouse"},
-    {"id": "infra-metrics", "module_dir": "infra-metrics", "profile": "infra-metrics"},
+    {"id": "node-metrics", "module_dir": "node-metrics", "profile": "node-metrics"},
+    {"id": "service-exporters", "module_dir": "service-exporters", "profile": "service-exporters"},
     {"id": "litellm", "module_dir": "litellm", "profile": "litellm"},
     {"id": "log-collector", "module_dir": "log-collector", "profile": "log-collector"},
     {"id": "logging", "module_dir": "logging", "profile": "logging"},
@@ -287,6 +288,14 @@ def test_clickhouse_makefile_template(caplog) -> None:
     logger.info("[IMP:9][clickhouse-makefile] PASS: Makefile follows module template contract")
 
 
+def _xml_has_hardcoded_password(content: str) -> bool:
+    """True если users.d XML содержит empty/literal password (C901-extraction, security guard)."""
+    xml_stripped = re.sub(r"<!--.*?-->", "", content, flags=re.DOTALL)
+    has_empty = "<password></password>" in xml_stripped or "<password/>" in xml_stripped
+    has_literal = bool(re.search(r"<\s*password[^>]*>\s*(?:(?!<\s*/\s*password\s*>).)+", xml_stripped, re.DOTALL))
+    return has_empty or has_literal
+
+
 @pytest.mark.static_audit
 @ldd_trajectory
 def test_clickhouse_users_xml_no_hardcoded_password(caplog) -> None:
@@ -313,29 +322,13 @@ def test_clickhouse_users_xml_no_hardcoded_password(caplog) -> None:
     for xml_path in xml_files:
         with Path(xml_path).open(encoding="utf-8") as fh:
             content = fh.read()
-
-        xml_stripped = re.sub(r"<!--.*?-->", "", content, flags=re.DOTALL)
-
-        has_empty = "<password></password>" in xml_stripped or "<password/>" in xml_stripped
-        if has_empty:
+        if _xml_has_hardcoded_password(content):
             any_violation = True
             logger.error(
-                "[IMP:9][clickhouse-password] FAIL: %s contains empty <password> tag — "
+                "[IMP:9][clickhouse-password] FAIL: %s contains hardcoded/empty password — "
                 "this overrides CLICKHOUSE_PASSWORD env var.",
                 Path(xml_path).name,
             )
-
-        has_literal = bool(re.search(r"<\s*password[^>]*>\s*(?:(?!<\s*/\s*password\s*>).)+", xml_stripped, re.DOTALL))
-        if has_literal:
-            any_violation = True
-            for lineno, line in enumerate(content.splitlines(), 1):
-                if re.search(r"<\s*password[^>]*>", line) and not re.search(r"<\s*password\s*/>", line):
-                    logger.error(
-                        "[IMP:9][clickhouse-password] FAIL: %s line %d — literal password content: %s",
-                        Path(xml_path).name,
-                        lineno,
-                        line.strip(),
-                    )
 
     sole_xml = Path(CLICKHOUSE_USERS_D) / "10-users.xml"
     if Path(sole_xml).is_file():
@@ -361,20 +354,21 @@ def test_clickhouse_users_xml_no_hardcoded_password(caplog) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# INFRA-METRICS (implementation-level, из test_infra_metrics_static.py)
+# NODE-METRICS + SERVICE-EXPORTERS (implementation-level; преемник test_infra_metrics_static.py,
+# DevPlan 010 T3.2 split infra-metrics → node-metrics/service-exporters)
 # ═══════════════════════════════════════════════════════════════════════════
 
-INFRA_METRICS_DIR = _module_dir("infra-metrics")
-INFRA_METRICS_COMPOSE = Path(INFRA_METRICS_DIR) / "docker-compose.base.yml"
+NODE_METRICS_COMPOSE = Path(_module_dir("node-metrics")) / "docker-compose.base.yml"
+SERVICE_EXPORTERS_COMPOSE = Path(_module_dir("service-exporters")) / "docker-compose.base.yml"
 
-INFRA_EXPECTED_IMAGES = {
+NODE_METRICS_EXPECTED_IMAGES = {
     "cadvisor": "ghcr.io/google/cadvisor:v0.60.5@sha256:1eb9bde04dab65b919bc51da9e7cf8eceb40d57e61ac9e93e373100369d90cd6",
     "node-exporter": "prom/node-exporter:v1.12.1@sha256:da83fae85603c4e47e6c68369a7d746e2dda683dc35ea2e234b4f171e0d92798",
+}
+SERVICE_EXPORTERS_EXPECTED_IMAGES = {
     "nginx-prometheus-exporter": "nginx/nginx-prometheus-exporter:1.5.1@sha256:9f6d963bb2b19d706d401cc3e2c3ea8de2f1c471b96a2156ca45e76f650b1625",
     "redis-exporter": "oliver006/redis_exporter:v1.88.0@sha256:ead15fa913b45314068b9237bb5eff1e97bcb41d63fbe6267befe34667b5f856",
 }
-INFRA_EXPECTED_SERVICES = ["cadvisor", "node-exporter", "nginx-prometheus-exporter", "redis-exporter"]
-INFRA_EXPECTED_NETWORKS = ["observability-net", "shared-cache-net"]
 
 
 def _load_compose(path: str) -> dict:
@@ -383,98 +377,104 @@ def _load_compose(path: str) -> dict:
         return yaml.safe_load(fh)
 
 
-# GUARD-PRESERVE (168): static-replaceable — класс дефекта «healthcheck отсутствует в infra-metrics» покрыт статическим слоем
-@pytest.mark.static_audit
-@ldd_trajectory
-def test_infra_compose_healthcheck(caplog) -> None:
-    """Каждый инфра-metrics сервис имеет healthcheck блок."""
-    data = _load_compose(INFRA_METRICS_COMPOSE)
-    services = data.get("services", {})
-
-    for svc_name in INFRA_EXPECTED_SERVICES:
-        svc = services[svc_name]
-        assert "healthcheck" in svc, f"Service '{svc_name}' missing healthcheck block"
-        logger.info(
-            "[IMP:8][infra-metrics][static] Service '%s' has healthcheck: %s", svc_name, svc["healthcheck"].get("test")
-        )
-
-    logger.info("[IMP:9][infra-metrics][static] ✅ All services have healthcheck")
+def _strip_cadvisor_default(image: str) -> str:
+    """T1.4 (аудит 2026-08-22): cadvisor параметризован ${CADVISOR_IMAGE:-default} — гейт пинит DEFAULT."""
+    if image.startswith("${CADVISOR_IMAGE:-") and image.endswith("}"):
+        return image[len("${CADVISOR_IMAGE:-") : -1]
+    return image
 
 
+# GUARD-PRESERVE (168): static-replaceable — класс дефекта «healthcheck отсутствует» покрыт статическим слоем
 @pytest.mark.static_audit
 @ldd_trajectory
 @pytest.mark.parametrize(
-    "service,port",
+    "compose_path,expected",
     [
-        ("cadvisor", "8080"),
-        ("node-exporter", "9100"),
+        ("node", NODE_METRICS_EXPECTED_IMAGES),
+        ("service", SERVICE_EXPORTERS_EXPECTED_IMAGES),
     ],
-    ids=["cadvisor", "node-exporter"],
+    ids=["node-metrics", "service-exporters"],
 )
-def test_infra_exporter_image(service: str, port: str, caplog) -> None:
-    """Образы cAdvisor/Node Exporter с digest-pin и port-маппингом."""
-    data = _load_compose(INFRA_METRICS_COMPOSE)
-    svc = data["services"][service]
+def test_split_metrics_compose_healthcheck(compose_path: str, expected: dict, caplog) -> None:
+    """Каждый сервис node-metrics/service-exporters имеет healthcheck блок."""
+    path = NODE_METRICS_COMPOSE if compose_path == "node" else SERVICE_EXPORTERS_COMPOSE
+    services = _load_compose(path).get("services", {})
 
-    image = svc["image"]
-    # T1.4 (аудит 2026-08-22): cadvisor параметризован ${CADVISOR_IMAGE:-default} — гейт
-    # пинит DEFAULT (prod-пин); явный оверрайд разрешён (macOS TRAP 164 W1-5), молчаливый — нет.
-    if service == "cadvisor" and image.startswith("${CADVISOR_IMAGE:-") and image.endswith("}"):
-        image = image[len("${CADVISOR_IMAGE:-") : -1]
-    assert image == INFRA_EXPECTED_IMAGES[service], (
-        f"{service} image={image}, expected {INFRA_EXPECTED_IMAGES[service]}"
-    )
-    logger.info("[IMP:8][infra-metrics][static] %s image: %s", service, image)
+    for svc_name in expected:
+        svc = services[svc_name]
+        assert "healthcheck" in svc, f"Service '{svc_name}' missing healthcheck block"
+        logger.info(
+            "[IMP:8][split-metrics][static] Service '%s' has healthcheck: %s", svc_name, svc["healthcheck"].get("test")
+        )
 
-    ports = svc.get("ports", [])
-    assert any(port in p for p in ports), f"{service} missing port {port} mapping. Ports: {ports}"
-    logger.info("[IMP:8][infra-metrics][static] %s ports: %s", service, ports)
-
-    logger.info("[IMP:9][infra-metrics][static] ✅ %s image and ports OK", service)
+    logger.info("[IMP:9][split-metrics][static] ✅ All services have healthcheck")
 
 
 # GUARD-PRESERVE (168): static-replaceable — класс дефекта «exporter без digest-pin / c ports» покрыт статическим слоем
 @pytest.mark.static_audit
 @ldd_trajectory
 @pytest.mark.parametrize(
-    "service",
-    ["nginx-prometheus-exporter", "redis-exporter"],
-    ids=["nginx-exporter", "redis-exporter"],
+    "compose_key,service,port",
+    [
+        ("node", "cadvisor", "8080"),
+        ("node", "node-exporter", "9100"),
+        ("service", "nginx-prometheus-exporter", "9113"),
+        ("service", "redis-exporter", "9121"),
+        ("service", "postgres-exporter", "9187"),
+    ],
+    ids=["cadvisor", "node-exporter", "nginx-exporter", "redis-exporter", "postgres-exporter"],
 )
-def test_infra_exporter_image_no_ports(service: str, caplog) -> None:
-    """Образы nginx/redis exporter с digest-pin (scratch image, no shell)."""
-    data = _load_compose(INFRA_METRICS_COMPOSE)
-    svc = data["services"][service]
-
-    image = svc["image"]
-    assert image == INFRA_EXPECTED_IMAGES[service], (
-        f"{service} image={image}, expected {INFRA_EXPECTED_IMAGES[service]}"
+def test_split_metrics_image_and_port(compose_key: str, service: str, port: str, caplog) -> None:
+    """Образы с digest-pin и host-port маппингом (SERVICE_BIND_HOST — T2.2)."""
+    expected = (
+        NODE_METRICS_EXPECTED_IMAGES
+        if compose_key == "node"
+        else dict(
+            SERVICE_EXPORTERS_EXPECTED_IMAGES,
+            **{
+                "postgres-exporter": "quay.io/prometheuscommunity/postgres-exporter:v0.20.1@sha256:4f3d82803c1f99ea5e767890de3557d2479ebbc711f63f2e04c663daa840057a"
+            },
+        )
     )
-    logger.info("[IMP:8][infra-metrics][static] %s image: %s", service, image)
+    path = NODE_METRICS_COMPOSE if compose_key == "node" else SERVICE_EXPORTERS_COMPOSE
+    svc = _load_compose(path)["services"][service]
 
-    logger.info("[IMP:9][infra-metrics][static] ✅ %s image OK", service)
+    image = _strip_cadvisor_default(svc["image"])
+    assert image == expected[service], f"{service} image={image}, expected {expected[service]}"
+    logger.info("[IMP:8][split-metrics][static] %s image: %s", service, image)
+
+    ports = svc.get("ports", [])
+    assert any(port in p for p in ports), f"{service} missing port {port} mapping. Ports: {ports}"
+    assert any("SERVICE_BIND_HOST" in p for p in ports), (
+        f"{service} ports must bind via ${{SERVICE_BIND_HOST:-127.0.0.1}} (DevPlan 010 T2.2). Ports: {ports}"
+    )
+    logger.info("[IMP:9][split-metrics][static] ✅ %s image and ports OK", service)
 
 
 @pytest.mark.static_audit
 @ldd_trajectory
-def test_infra_networks_external(caplog) -> None:
-    """Networks объявлены external: true; redis-exporter на обоих сетях."""
-    data = _load_compose(INFRA_METRICS_COMPOSE)
-    networks = data.get("networks", {})
+def test_split_metrics_networks_external(caplog) -> None:
+    """Networks объявлены external: true; redis-exporter на обеих сетях (scrape+cache)."""
+    nm = _load_compose(NODE_METRICS_COMPOSE)
+    se = _load_compose(SERVICE_EXPORTERS_COMPOSE)
 
-    for net_name in INFRA_EXPECTED_NETWORKS:
-        assert net_name in networks, f"Network '{net_name}' not found in compose"
-        net_config = networks[net_name]
-        assert net_config.get("external") is True, f"Network '{net_name}' is not external: {net_config}"
-        logger.info("[IMP:8][infra-metrics][static] Network '%s' is external: True", net_name)
+    for data, net_name, src in (
+        (nm, "observability-net", "node-metrics"),
+        (se, "observability-net", "service-exporters"),
+        (se, "shared-cache-net", "service-exporters"),
+        (se, "shared-db-net", "service-exporters"),
+    ):
+        networks = data.get("networks", {})
+        assert net_name in networks, f"[{src}] Network '{net_name}' not found in compose"
+        assert networks[net_name].get("external") is True, f"[{src}] Network '{net_name}' is not external"
+        logger.info("[IMP:8][split-metrics][static] [%s] Network '%s' is external: True", src, net_name)
 
-    redis_exp = data["services"]["redis-exporter"]
-    redis_nets = redis_exp.get("networks", {})
+    redis_nets = se["services"]["redis-exporter"].get("networks", {})
     assert "observability-net" in redis_nets, "redis-exporter missing observability-net"
     assert "shared-cache-net" in redis_nets, "redis-exporter missing shared-cache-net"
-    logger.info("[IMP:8][infra-metrics][static] redis-exporter on networks: %s", list(redis_nets.keys()))
+    logger.info("[IMP:8][split-metrics][static] redis-exporter on networks: %s", list(redis_nets.keys()))
 
-    logger.info("[IMP:9][infra-metrics][static] ✅ Networks external OK")
+    logger.info("[IMP:9][split-metrics][static] ✅ Networks external OK")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1334,7 +1334,7 @@ def test_pgbouncer_password_charset_constraint(postgres_fixtures, caplog) -> Non
 # ═══════════════════════════════════════════════════════════════════════════
 
 REDIS_MODULE_DIR = _module_dir("redis")
-REDIS_INFRA_METRICS_DIR = _module_dir("infra-metrics")
+REDIS_INFRA_METRICS_DIR = _module_dir("service-exporters")
 REDIS_MONITORING_DIR = _module_dir("monitoring")
 REDIS_PROMETHEUS_YML = Path(REDIS_MONITORING_DIR) / "config" / "prometheus.yml.tmpl"
 REDIS_DASHBOARDS_DIR = Path(REDIS_MONITORING_DIR) / "config" / "dashboards"
@@ -1372,7 +1372,7 @@ def redis_healthcheck_path(tmp_path_factory):
 
 @pytest.fixture(scope="module")
 def redis_infra_metrics_compose_path(tmp_path_factory):
-    """Copy infra-metrics docker-compose.base.yml to temp dir."""
+    """Copy service-exporters docker-compose.base.yml to temp dir (redis-exporter — T3.2)."""
     src = Path(REDIS_INFRA_METRICS_DIR) / "docker-compose.base.yml"
     dst_dir = tmp_path_factory.mktemp("redis_static_infra")
     dst = dst_dir / "docker-compose.base.yml"

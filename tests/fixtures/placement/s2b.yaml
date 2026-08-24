@@ -1,0 +1,48 @@
+# GREP_SUMMARY: placement context vpn_enforced nodes modules node all-nodes off nodes-list s2b canary critical
+# STRUCTURE: ▶ S2b fixture → data-1(services) + apps-critical(nginx,obs) + apps-canary(nginx) → vpn_enforced → ┐
+# region MODULE_CONTRACT
+## @purpose  Фикстура сценария S2b «критичные проекты / канарейки» (DevPlan 010 §8):
+##           data-1 — сервисы данных; nginx {nodes:[apps-critical, apps-canary]} — multi-ingress;
+##           exposed-проекты обязаны иметь target_node из nodes[] nginx (DNS-steering prerequisite)
+## @scope    tests/gates/test_gate_placement.py + tests/unit/test_shared_placement.py входы
+## @invariants  bare `off` в YAML запрещён (boolean-false ловушка) — только кавыченный "off"
+# endregion MODULE_CONTRACT
+# S2b — «критичные проекты / канарейки» (data + 2 apps-ноды, multi-ingress) DevPlan 010 §8.
+# 💼 TRAP[BUSINESS] · 2026-08-22 · HI · Критически важные проекты изолируются на выделенной
+# ноде для максимального аптайма; остальные — «канарейки» · Source: owner · Risk: деплой канарейки
+# не должен влиять на критичные сервисы; изоляция blast-radius важнее плотности упаковки.
+# nginx в форме {nodes: [apps-critical, apps-canary]} — multi-ingress; каждая apps-нода публикует
+# свои домены, FQDN-уникальность кросс-нодовая (статический скан).
+# PREREQUISITE оператора — DNS-steering: каждый FQDN получает A-запись на IP своей ноды.
+# data-1 — как S2. Agent-модули (hermes-agent/litellm/langfuse) не входят в топологию
+# критичных/канареек — mode: "off" (полнота записей обязательна, включая off).
+# ⚠️ YAML 1.1 footgun: `mode: off` без кавычек PyYAML парсит как boolean False → схема
+# отвергает (enum ["off"]). Строковые литералы mode ("all-nodes"/"off") — ВСЕГДА в кавычках.
+context: tronyx-lab
+vpn_enforced: true
+
+nodes:
+  - name: data-1
+    host: 10.8.0.21
+  - name: apps-critical
+    host: 10.8.0.23
+  - name: apps-canary
+    host: 10.8.0.24
+
+modules:
+  postgres:      { node: data-1 }
+  redis:         { node: data-1 }
+  minio:         { node: data-1 }
+  clickhouse:    { node: data-1 }
+  backup-cron:   { node: data-1 }
+  service-exporters: { node: data-1 }
+  platform-secrets:  { node: data-1 }
+  hermes-agent:  { mode: "off" }
+  litellm:       { mode: "off" }
+  langfuse:      { mode: "off" }
+  nginx:         { nodes: [apps-critical, apps-canary] }
+  monitoring:    { node: apps-critical }
+  logging:       { node: apps-critical }
+  status-page:   { node: apps-critical }
+  log-collector: { mode: all-nodes }
+  node-metrics:  { mode: all-nodes }

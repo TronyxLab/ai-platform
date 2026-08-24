@@ -1,0 +1,113 @@
+# GREP_SUMMARY: log-collector module alloy loki logs observability-net promtail-eol all-nodes
+# STRUCTURE: ▶ module:log-collector → alloy:1.18.1 → ${LOKI_URL} push (X-Scope-OrgID ${LOKI_TENANT}) → observability-net → ┐
+# region MODULE_CONTRACT
+## @purpose  Grafana Alloy log collector module — per-node log collection shipping to central Loki (DevPlan 010 T3.1)
+## @scope    Log collection on EVERY node (placement form all-nodes): Docker container logs (docker.sock
+##           discovery.docker) + host journald + backup-logs file-scrape → central Loki по ${LOKI_URL}
+## @invariants
+##   - install_type: docker — managed by compose
+##   - Alloy v1.18.1 (promtail EOL 2026-03-02 → REPLACE, 164 W1-5): digest-pin в docker-compose.base.yml
+##   - Placement: all-nodes (DevPlan 010 §3) — коллектор на каждой ноде контекста, шипит в центральный Loki
+##   - LOKI_URL параметризован: ${LOKI_URL:-http://loki:3100}; Alloy запускается с --config.expand-env
+##     (env-подстановка в config.alloy); URL + tenant header приходят из env контейнера
+##   - Tenant-изоляция (T2.0b): loki.write несёт header X-Scope-OrgID: ${LOKI_TENANT:-platform} —
+##     tenant = имя контекста (emission LOKI_TENANT — zона другого агента, модуль декларирует дефолт)
+##   - ⚠️ НЕТ depends_on loki (DevPlan 010 T3.1): WAL буферизует, self-heal — alloy здоров БЕЗ loki
+##   - healthcheck БЕЗ локального loki /ready: проверяется собственная готовность alloy (liveness
+##     /bin/alloy -version; readiness внешний — freshness через Prometheus up{job} + alert-rules)
+##   - Labels-контракт сохранён 1:1 из logging (compose_service/compose_project/container/host/log_file)
+##   - No host port (внутренний коллектор); Docker socket только :ro (keep-list 162 W2-5)
+##   - Networks declared as external: true — pre-created by deploy-modules.sh
+## @rationale Выделен из logging (DevPlan 010 T3.1): logging остаётся singleton-хранилищем Loki,
+##            коллектор физически отделён — all-nodes размещение несовместимо с singleton-модулем.
+##            Endpoint был ЗАХАРКОЖЕН (config.alloy:31 → http://loki:3100) → параметризован LOKI_URL
+##            для кросс-нодового push'а (S2: collector на data-1 шлёт в apps-ноду по host-адресу).
+## @changes 2026-08-22 | DevPlan 010 T3.1 — Created (split из core/modules/logging/)
+# endregion MODULE_CONTRACT
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
+services:
+
+  # ── Grafana Alloy (Log Collector; promtail EOL 2026-03-02 → REPLACE) ──────
+  # region service:alloy
+  alloy:
+    # ✅ TRAP[DECISION] · 2026-08-13 · — · Promtail → Grafana Alloy v1.18.1 (164 W1-5)
+    # · Promtail EOL 2026-03-02; разработка — в Alloy. Конфиг promtail-config.yml → config.alloy
+    # · (портированы ВСЕ 3 источника: docker_sd, journal, backup-logs file-scrape; labels-контракт
+    # · сохранён). DevPlan 010 T3.1: alloy перенесён из logging в отдельный модуль log-collector.
+    # · Digest: sha256:754409730f1a4ed9781f8a2ea3b6a8c55750ee125a267ecf8fb449f9a25c109a
+    # · Rev: при EOL Alloy — пересмотреть канал логов (канон: Alloy → Loki)
+    image: grafana/alloy:v1.18.1@sha256:754409730f1a4ed9781f8a2ea3b6a8c55750ee125a267ecf8fb449f9a25c109a
+    container_name: alloy
+    profiles: [log-collector]
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          # 164 W1-5: 128M→256M — Alloy перечитывает docker-history при холодном WAL
+          # и OOM-kill (rc=137) под 128M; steady-state ниже лимита
+          memory: 256M
+          cpus: "0.5"
+          pids: 256
+    logging: *default-logging
+
+    command:
+      - "run"
+      - "/etc/alloy/config.alloy"
+      # DevPlan 010 T3.1: --config.expand-env — env-подстановка ${LOKI_URL}/${LOKI_TENANT}
+      # в config.alloy (переменные приходят из environment контейнера, НЕ из файла)
+      - "--config.expand-env"
+      # WAL/positions — обязателен writable volume (иначе Alloy не стартует)
+      - "--storage.path=/var/lib/alloy/data"
+
+    environment:
+      # DevPlan 010 T3.1: endpoint параметризован (был захардкожен http://loki:3100);
+      # кросс-нодово provision подставит host-адрес Loki-ноды (S2: data-1 → apps-нода)
+      LOKI_URL: "${LOKI_URL:-http://loki:3100}"
+      # Tenant-изоляция (T2.0b): tenant = имя контекста; дефолт "platform" единый по стеку
+      # (grafana datasource и nginx vhost получают тот же header через LOKI_TENANT)
+      LOKI_TENANT: "${LOKI_TENANT:-platform}"
+
+    volumes:
+      - ./config/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # DevPlan 132 W3 (126 D-1): journal-скрейп хоста — /var/log/journal (journald logs,
+      # Storage=persistent) + /etc/machine-id (journald requires machine-id для корректного
+      # чтения journal). Host-литералы допустимы как системные (precedent: docker.sock).
+      - /var/log/journal:/var/log/journal:ro
+      - /etc/machine-id:/etc/machine-id:ro
+      # DevPlan 143 W1A: backup-logs file-scrape — glob /var/log/platform/backup/*.log
+      # в config.alloy (local.file_match). Named-volume (SoT root docker-compose.yml, U-49).
+      - backup-logs:/var/log/platform/backup:ro
+      # WAL/positions storage (write required)
+      - alloy-data:/var/lib/alloy/data
+
+    networks:
+      - observability-net
+
+    tmpfs:
+      - /tmp:size=64M,noexec,nosuid
+
+    # ⚠️ DevPlan 010 T3.1: depends_on loki УДАЛЁН (был condition: service_healthy).
+    # WAL буферизует несостоявшиеся пуш-батчи и self-heal'ится при появлении loki —
+    # alloy здоров БЕЗ loki; ordering-зависимость была ложной ready-гейтом для коллектора.
+    # Liveness: /bin/alloy -version (Alloy-образ содержит единственный бинарник — тот же
+    # scratch-паттерн, что Loki). Readiness внешний: логи доходят до Loki — индикатор
+    # через alert-rules (BackupFreshness/5xx) + deep-диагностика healthcheck.sh.
+    healthcheck:
+      test: ["CMD", "/bin/alloy", "--version"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+  # endregion service:alloy
+
+networks:
+  observability-net:
+    external: true
+    name: observability-net

@@ -1,0 +1,57 @@
+# GREP_SUMMARY: log-collector docker-compose test override container_name-test alloy backup-logs-test alloy-data-test
+# STRUCTURE: base.yml + test.yml → alloy with -test suffix, shifted volumes, isolated test network
+# region MODULE_CONTRACT
+## @purpose  Test override for log-collector — -test container_name for alloy (DevPlan 010 T3.1)
+## @scope    Only used in test fixtures. Never used in production.
+## @invariants
+##   - container_name: alloy-test
+##   - restart: "no" для всех контейнеров (тестовые контейнеры не auto-рестартуются)
+##   - No ports exposed (внутренний коллектор — как base.yml)
+##   - alloy-test rebind backup-logs → backup-logs-test + alloy-data → alloy-data-test
+##     (канон volume-rename U-62): compose deep-merge не умеет удалять bind-тома → НОВЫЙ volume
+##     с суффиксом -test (docker-managed, cross-platform macOS/CI) и сервис перепривязывается к нему
+##   - Test-оверрайд лимита: 256M→512M (164 W1-5 тест-паттерн: alloy-test стабильно OOM под 256M
+##     при холодном WAL + ARM-эмуляция + dev-стек параллельно)
+## @rationale Стандартный test-overlay контракт (DevPlan 04 DD2); перенесён из logging (010 T3.1)
+## @changes 2026-08-22 | DevPlan 010 T3.1 — Created (split из core/modules/logging/)
+# endregion MODULE_CONTRACT
+
+services:
+  alloy:
+    container_name: alloy-test
+    networks: !override  # DevPlan 017 W2.5 — test network isolation
+      - test-observability-net
+    # 2026-08-16: 256M→512M — alloy-test стабильно OOM-killed (exit 137) под 256M при
+    # холодном WAL (docker-history перечитывание) + ARM-эмуляция + dev-стек параллельно;
+    # base-лимит 256M — прод-контракт (не трогаем), test-оверрайд получает свой бюджет.
+    deploy:
+      resources:
+        limits: !override
+          memory: 512M
+    # Volumes перечислены полностью (!override семантика compose для list-values: список
+    # заменяется целиком). config.alloy mount оставлен (нужен для работы), docker.sock/
+    # journal/machine-id — host-литералы (системные, как в base.yml), backup-logs-test/
+    # alloy-data-test — docker-managed volumes (cross-platform, без bind-mount на macOS).
+    volumes: !override
+      # Проектная директория compose = репо-root (первый -f — root compose): ./ от корня
+      # (короткий синтаксис без ./-префикса трактуется как named-volume)
+      - ./core/modules/log-collector/config/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/log/journal:/var/log/journal:ro
+      - /etc/machine-id:/etc/machine-id:ro
+      - backup-logs-test:/var/log/platform/backup:ro
+      - alloy-data-test:/var/lib/alloy/data
+    restart: "no"
+
+networks:
+  test-observability-net:
+    external: true
+
+volumes:
+  # Канон volume-rename U-62: docker-managed volumes для alloy-test (WAL + backup-logs file-scrape).
+  # Если backup-cron test-overlay уже объявил backup-logs-test в этом compose-стеке —
+  # deep-merge идемпотентен (driver: local совпадёт).
+  backup-logs-test:
+    driver: local
+  alloy-data-test:
+    driver: local

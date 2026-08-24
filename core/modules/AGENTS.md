@@ -167,7 +167,7 @@ include ../../templates/module.mk
 | `backup-cron` | `custom` | `docker exec` `/usr/local/bin/backup-postgres.sh` / делегация в postgres restore |
 | `hermes-agent` | `file` | `docker cp` — BACKUP_SOURCE_FILE=`/app/state.json` (generic-контракт module.mk) |
 
-Остальные модули (nginx, status-page, infra-metrics, litellm, langfuse, logging, monitoring, redis, minio, clickhouse) **НЕ объявляют** backup/restore. `make restore` на stateless-модуле = «No rule to make target» — это ожидаемое поведение, не тихий no-op.
+Остальные модули (nginx, status-page, node-metrics, service-exporters, litellm, langfuse, logging, monitoring, redis, minio, clickhouse) **НЕ объявляют** backup/restore. `make restore` на stateless-модуле = «No rule to make target» — это ожидаемое поведение, не тихий no-op.
 
 **Канон volume-rename (test-оверрайды):** test-оверрайды (`docker-compose.test.yml`) НЕ переопределяют volume in-place — compose deep-merge не умеет удалять ключи (driver_opts/bind-mount сохраняются). Вместо этого объявляется НОВЫЙ volume с суффиксом `-test` и сервис перепривязывается к нему. Примеры канона: `postgres-data-test` (postgres), `backup-spool-test`/`backup-logs-test` (backup-cron), `clickhouse-data-test` (clickhouse), `hermes-data-test` (hermes-agent).
 

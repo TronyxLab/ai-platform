@@ -1,0 +1,126 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://core/schemas/placement.schema.json",
+  "$comment": "GREP_SUMMARY: placement, placement.yaml, schema, context, vpn_enforced, nodes, modules, node, all-nodes, off, nodes-list, multi-node | STRUCTURE: ▶ placement.yaml → ┌context + vpn_enforced + nodes[] + modules{}┐ → ◇ Draft7Validator → ⎋ | MODULE_CONTRACT: @purpose Schema of node-configs/<context>/placement.yaml — module placement across nodes of one context (DevPlan 010 T0.1); @scope Multi-node topology declaration — context, vpn_enforced attestation, nodes (private hosts), modules placement forms; @invariants context pattern kebab-case, nodes minItems 1, modules forms are strict oneOf {node}/{mode:all-nodes}/{mode:off}/{nodes[]} each with additionalProperties false, top-level additionalProperties false, r2-removed reserved forms and public-host field absent from this schema (0 consumers); @rationale Single placement file is the only topology source; vpn_enforced/host privacy semantics live in the loader (T0.1: semantics in loader, not regex)",
+  "title": "PlacementDeclaration",
+  "description": "Schema for node-configs/<context>/placement.yaml — declares where each platform module runs within one deployment context (multi-node module placement, DevPlan 010). Absence of the file = single-node legacy resolve (no-op)",
+  "type": "object",
+  "required": [
+    "context",
+    "nodes",
+    "modules"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "context": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$",
+      "description": "Context name — must equal contexts[0].name of every node in this placement (drift gate, DevPlan 010 §2.2 п.3)"
+    },
+    "vpn_enforced": {
+      "type": "boolean",
+      "description": "Operator attestation: cross-node traffic flows over an encrypted channel (RFC1918 ≠ crypto). Mandatory true in multi-node — enforced by the loader (DevPlan 010 invariant 7), not by the schema"
+    },
+    "nodes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "host"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Node name — must have node-configs/<name>/node.yaml (reverse gate)"
+          },
+          "host": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Private/VPN address for cross-node traffic (RFC1918 10/8, 172.16/12, 192.168/16 or CGNAT 100.64/10) — enforced by the loader via ipaddress, not regex (T0.1)"
+          }
+        }
+      },
+      "description": "Members of the context (>=1); host is the address for cross-node traffic"
+    },
+    "modules": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[a-z0-9][a-z0-9-]*$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "oneOf": [
+          {
+            "title": "singleton",
+            "description": "Exactly one instance in the context, on the specified node",
+            "required": [
+              "node"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "node": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          {
+            "title": "all-nodes",
+            "description": "One instance on EVERY node of the context (collectors, node metrics)",
+            "required": [
+              "mode"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "all-nodes"
+                ]
+              }
+            }
+          },
+          {
+            "title": "off",
+            "description": "Module is not deployed on any node of the context (explicit disable; completeness still requires the record)",
+            "required": [
+              "mode"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "off"
+                ]
+              }
+            }
+          },
+          {
+            "title": "nodes-list",
+            "description": "One instance on EACH listed node; v1 — nginx only (multi-ingress, S2b)",
+            "required": [
+              "nodes"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "nodes": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        ]
+      },
+      "description": "Module placement: key = module name from core/modules/<name>/, value = strict placement form (oneOf node / mode:all-nodes / mode:off / nodes[]). Reserved forms and the public-host field were REMOVED in revision 2 — they are not part of this schema (0 consumers, DevPlan 010 §2.1)"
+    }
+  }
+}

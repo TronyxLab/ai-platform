@@ -1,0 +1,41 @@
+# GREP_SUMMARY: placement context vpn_enforced nodes modules node all-nodes off nodes-list s3
+# STRUCTURE: ▶ S3 fixture → placement.yaml → resolve_node_modules → ⎋ наборы модулей нод
+# region MODULE_CONTRACT
+## @purpose  Фикстура референсного сценария S3 «data / agent / apps+obs» (DevPlan 010 §2/§8)
+## @scope    tests/gates/test_gate_placement.py + tests/unit/test_shared_placement.py входы
+## @invariants  bare `off` в YAML запрещён (boolean-false ловушка) — только кавыченный "off"
+# endregion MODULE_CONTRACT
+# S3 — «data / agent / apps+obs» (3 ноды, референсный пример DevPlan 010 §2/§8).
+# data-1: БД + exporter'ы; agent-1: hermes + LLM-фасад; apps-1: ingress + наблюдаемость.
+# Плюс node-metrics+log-collector на всех трёх (all-nodes).
+# Открытия (Волна 2): data-1 → 6432 (agent-1, apps-1), 6379/9000/8123/19000 (apps-1);
+# agent-1 → 4000/3001 для IP apps-1; все ноды → 9100/8080 только для apps-1;
+# data-1 → 9187/9121 для IP apps-1; 3100 только для IP agent-1+data-1.
+context: tronyx-lab
+vpn_enforced: true
+
+nodes:
+  - name: data-1
+    host: 10.8.0.11
+  - name: agent-1
+    host: 10.8.0.12
+  - name: apps-1
+    host: 10.8.0.13
+
+modules:
+  postgres:      { node: data-1 }
+  redis:         { node: data-1 }
+  minio:         { node: data-1 }
+  clickhouse:    { node: data-1 }
+  backup-cron:   { node: data-1 }
+  service-exporters: { node: data-1 }          # postgres/redis/nginx-exporter'ы
+  platform-secrets:  { node: data-1 }          # system-модуль — на ноде данных
+  hermes-agent:  { node: agent-1 }
+  litellm:       { node: agent-1 }
+  langfuse:      { node: agent-1 }
+  nginx:         { node: apps-1 }              # или { nodes: [apps-a, apps-b] } — multi-ingress (S2b)
+  status-page:   { node: apps-1 }
+  monitoring:    { node: apps-1 }
+  logging:       { node: apps-1 }              # Loki-хранилище (singleton)
+  log-collector: { mode: all-nodes }           # Alloy — на КАЖДОЙ ноде
+  node-metrics:  { mode: all-nodes }           # node-exporter + cadvisor — на КАЖДОЙ ноде

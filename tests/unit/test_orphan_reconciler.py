@@ -495,19 +495,19 @@ def test_root_compose_platform_project_not_orphan(modules_dir: Path, caplog) -> 
 ## @complexity 3 — foreign project label vs deploy project name
 # 🧪 TRAP[TEST] · NEGATIVE (R5) · batch_orphan_reconciliation — B18a (141 r2)
 # · Last fail: "Container redis-exporter Creating" — конфликт имени с контейнером от
-# ·   чужого проекта (миксовый деплой модульный/root) при повторном deploy infra-metrics.
+# ·   чужого проекта (миксовый деплой модульный/root) при повторном deploy service-exporters.
 # · Remove if: name-conflict cleanup переедет из orphan_reconciler в другой механизм.
 @ldd_trajectory
 def test_foreign_project_container_is_orphan(modules_dir: Path, caplog) -> None:
     """Container with the same name from a FOREIGN project is detected as orphan.
 
     Setup:
-    - modules/infra-metrics/ compose config returns name="platform" (root compose deployed)
+    - modules/service-exporters/ compose config returns name="platform" (root compose deployed)
     - docker ps -a returns "redis-exporter" (existing container from module project)
-    - docker inspect returns project="infra-metrics" (module project — foreign now)
+    - docker inspect returns project="service-exporters" (module project — foreign now)
     - Expected: "redis-exporter" is an orphan → removed before up (no name conflict)
     """
-    im_dir = modules_dir / "infra-metrics"
+    im_dir = modules_dir / "service-exporters"
     im_dir.mkdir(parents=True)
     (im_dir / "docker-compose.base.yml").write_text(
         "services:\n  redis-exporter:\n    image: redis_exporter:1\n", encoding="utf-8"
@@ -527,17 +527,17 @@ def test_foreign_project_container_is_orphan(modules_dir: Path, caplog) -> None:
             },
         },
         inspect_responses={
-            "redis-exporter": "infra-metrics",  # module project — foreign vs "platform"
+            "redis-exporter": "service-exporters",  # module project — foreign vs "platform"
         },
     )
 
     with patch("orphan_reconciler.subprocess.run", side_effect=mock_run):
-        orphans = batch_orphan_reconciliation(["infra-metrics"], str(modules_dir))
+        orphans = batch_orphan_reconciliation(["service-exporters"], str(modules_dir))
 
     logger.info("[IMP:9][unit][orphan] Foreign project container → orphans=%s", orphans)
     assert len(orphans) == 1, f"Expected 1 orphan (foreign project), got {len(orphans)}: {orphans}"
     assert orphans[0]["container_name"] == "redis-exporter"
-    assert orphans[0]["project"] == "infra-metrics"
+    assert orphans[0]["project"] == "service-exporters"
     logger.info("[IMP:9][unit][orphan] Foreign project container detected as orphan ✓")
 
 

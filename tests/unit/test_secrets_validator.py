@@ -52,7 +52,7 @@ secrets:
     charset: "^[A-Za-z0-9._-]+$"
   - name: POSTGRES_USER
     tier: required
-    consumers: [postgres, infra-metrics]
+    consumers: [postgres, service-exporters]
   - name: MINIO_ROOT_USER
     tier: required
     consumers: [minio]

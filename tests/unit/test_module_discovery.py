@@ -239,8 +239,9 @@ def test_bootstrap_uses_canonical_predicate(caplog):
     assert canonical_names == bootstrap_names, (
         f"bootstrap/canonical predicates diverged: {sorted(canonical_names)} vs {sorted(bootstrap_names)}"
     )
-    assert len(canonical_names) == 14, (
-        f"Expected 14 docker modules (010 T3.1: +log-collector), got {len(canonical_names)}"
+    assert len(canonical_names) == 15, (
+        f"Expected 15 docker modules (010 T3.1: +log-collector; T3.2: split infra-metrics "
+        f"into node-metrics + service-exporters), got {len(canonical_names)}"
     )
     logger.critical("[IMP:9][test] bootstrap == canonical predicate (%d docker modules)", len(canonical_names))
 

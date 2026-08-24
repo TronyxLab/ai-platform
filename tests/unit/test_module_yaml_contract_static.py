@@ -38,12 +38,21 @@ _MODULES_DIR = Path(_PROJECT_ROOT) / "core" / "modules"
 # test_monitoring_static.py (env_requires) — значения идентичны исходным.
 _MODULE_YAML_EXPECTATIONS: list[dict] = [
     {
-        "id": "infra-metrics",
-        "module_dir": "infra-metrics",
+        "id": "node-metrics",
+        "module_dir": "node-metrics",
         "expected": {
-            "name": "infra-metrics",
+            "name": "node-metrics",
             "install_type": "docker",
-            "env_requires": ["POSTGRES_USER", "POSTGRES_PASSWORD"],
+            "env_requires": [],
+        },
+    },
+    {
+        "id": "service-exporters",
+        "module_dir": "service-exporters",
+        "expected": {
+            "name": "service-exporters",
+            "install_type": "docker",
+            "env_requires": ["POSTGRES_USER", "POSTGRES_PASSWORD", "REDIS_PASSWORD"],
         },
     },
     {

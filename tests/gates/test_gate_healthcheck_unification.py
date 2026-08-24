@@ -57,7 +57,8 @@ _DOCKER_MODULES: list[str] = [
     "langfuse",
     "litellm",
     "status-page",
-    "infra-metrics",
+    "node-metrics",
+    "service-exporters",
 ]
 
 # Modules with exec_check copy-paste pattern (DRIFT-H4): should use exec_check() or check_http()
@@ -342,6 +343,17 @@ def test_start_period_standardized(caplog: pytest.LogCaptureFixture) -> None:
 # ═══════════════════════════════════════════════════════════════════
 
 
+def _has_raw_docker_exec(content: str) -> bool:
+    """True если вне комментариев остался raw `docker exec` (C901-extraction)."""
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(("#", "# \u26a0\ufe0f", "# \U0001f9d0")):
+            continue
+        if "docker exec" in stripped:
+            return True
+    return False
+
+
 @pytest.mark.gate
 def test_exec_check_used_in_docker_exec_modules(caplog: pytest.LogCaptureFixture) -> None:
     """AC2: clickhouse/redis/nginx/backup-cron deep mode uses exec_check() or check_http().
@@ -365,13 +377,7 @@ def test_exec_check_used_in_docker_exec_modules(caplog: pytest.LogCaptureFixture
         # Check deep mode for the expected function
         has_expected_func = expected_func in content
         # Check NO raw docker exec in deep mode (except for context-specific docker exec in comments)
-        has_raw_docker_exec = False
-        for line in content.splitlines():
-            stripped = line.strip()
-            if stripped.startswith(("#", "# ⚠️", "# 🧐")):
-                continue
-            if "docker exec" in stripped:
-                has_raw_docker_exec = True
+        has_raw_docker_exec = _has_raw_docker_exec(content)
 
         if not has_expected_func:
             violations[module] = f"missing {expected_func}()"

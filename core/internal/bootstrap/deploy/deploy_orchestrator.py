@@ -518,21 +518,20 @@ def _route_deploy(
 ##     REPLACES group-based deploy (DevPlan §3 either/or — see TRAP[DECISION])
 ##   - Group deploy failures ARE aggregated into failed (see TRAP[DECISION])
 ##   - HC_DONE_MARKER always set at the end of the parallel path (best-effort)
-def _deploy_parallel(
-    enabled_names: list[str],
-    overlays: dict[str, str],
-    modules_dir: str,
-    core_dir: str,
-    deploy_orchestrator: bool,
-) -> tuple[int, list[str], dict[str, dict[str, str]]]:
-    """Parallel deploy: topo-sort groups + pre-pull + batch env check + group/orchestrator deploy."""
-    secrets_manifest = os.path.join(core_dir, "secrets-manifest.yaml")
-    logger.info("[IMP:9][_deploy_parallel][start] DEPLOY_PARALLEL=true — topo_sort + pre-pull + batch deploy")
 
-    # ── 1. topo_sort → deploy groups + enriched modules dict (S10) ──
+
+# region FUNC__topo_sort_groups
+def _topo_sort_groups(
+    enabled_names: list[str],
+    modules_dir: str,
+) -> tuple[list[list[str]], dict[str, dict[str, str]]] | None:
+    """Topo-sort → deploy groups + enriched modules dict (C901-extraction).
+
+    ⎋ None — topo_sort упал: вызывающий уходит в sequential fallback (best-effort).
+    """
     modules_info: dict[str, dict[str, str]] = {}
     groups: list[list[str]] = []
-    # ruff: ignore[PLW0717] — тело try присваивает имена, читаемые except/после — извлечение ломает видимость
+    # ruff: ignore[PLW0717] — тело try присваивает имена, читаемые except/после
     try:
         all_modules = topo_sort.load_module_yamls(modules_dir)
         docker_modules = topo_sort.filter_docker_modules(all_modules)
@@ -546,15 +545,75 @@ def _deploy_parallel(
                     "install_type": m.get("install_type", "unknown"),
                     "severity": m.get("severity", "warn"),
                 }
-        logger.info("[IMP:9][_deploy_parallel][topo_sort] Topo-sorted into %d deploy groups", len(groups))
+        logger.info("[IMP:9][_topo_sort_groups][ok] Topo-sorted into %d deploy groups", len(groups))
     # ruff: ignore[BLE001] — DEPLOY_BEST_EFFORT: широкий спектр helper-API (git/yaml/jinja/subprocess/docker)
     except Exception as exc:  # noqa: EXC — topo failure falls back to sequential (best-effort)
         logger.warning(
-            "[IMP:5][_deploy_parallel][topo_sort] topo_sort failed (%s) — falling back to sequential deploy",
+            "[IMP:5][_topo_sort_groups][fallback] topo_sort failed (%s) — sequential deploy",
             exc,
         )
+        return None
+    return groups, modules_info
+
+
+# endregion FUNC__topo_sort_groups
+
+
+# region FUNC__deploy_docker_groups
+def _deploy_docker_groups(
+    groups: list[list[str]],
+    overlays: dict[str, str],
+    modules_dir: str,
+) -> tuple[int, list[str]]:
+    """Последовательный деплой topo-групп с агрегацией failures (C901-extraction).
+
+    🧐 TRAP[DECISION] · 2026-07-31 · — · Group failures aggregated into severity
+    · Rejected: shell dropped deploy_docker_group failures (WARN only → exit 0 always)
+    · Reason: DevPlan 100 §2.3 contract returns (deployed, failed); dropping failed_names
+      made severity aggregation inert in parallel mode.
+    · Rev: if deploy_docker_group semantics change (rollback makes failures non-actionable).
+    """
+    deployed = 0
+    failed: list[str] = []
+    logger.info("[IMP:7][_deploy_parallel][groups] Deploying %d docker group(s) sequentially", len(groups))
+    for g_idx, group in enumerate(groups):
+        group_entries = _build_entries(group, overlays)
+        logger.info(
+            "[IMP:8][_deploy_parallel][group] Deploying group %d/%d: %s",
+            g_idx,
+            len(groups) - 1,
+            group_entries,
+        )
+        try:
+            d, _f, fnames, _rolled = docker_orchestrator.deploy_docker_group(group_entries, modules_dir)
+            deployed += d
+            failed.extend(fnames)
+        # ruff: ignore[BLE001] — DEPLOY_BEST_EFFORT: group failure continues to next group
+        except Exception as exc:  # noqa: EXC — best-effort policy
+            logger.warning("[IMP:5][_deploy_parallel][group] Group %d deploy error (non-fatal): %s", g_idx, exc)
+    return deployed, failed
+
+
+# endregion FUNC__deploy_docker_groups
+
+
+def _deploy_parallel(
+    enabled_names: list[str],
+    overlays: dict[str, str],
+    modules_dir: str,
+    core_dir: str,
+    *,
+    deploy_orchestrator: bool,
+) -> tuple[int, list[str], dict[str, dict[str, str]]]:
+    """Parallel deploy: topo-sort groups + pre-pull + batch env check + group/orchestrator deploy."""
+    secrets_manifest = os.path.join(core_dir, "secrets-manifest.yaml")
+    logger.info("[IMP:9][_deploy_parallel][start] DEPLOY_PARALLEL=true — topo_sort + pre-pull + batch deploy")
+
+    prepared = _topo_sort_groups(enabled_names, modules_dir)
+    if prepared is None:
         deployed, failed = _deploy_sequential(enabled_names, modules_dir, core_dir, overlays)
         return deployed, failed, {}
+    groups, modules_info = prepared
 
     # ── 2. pre-pull docker images (best-effort — compose up retries pull) ──
     try:
@@ -590,28 +649,9 @@ def _deploy_parallel(
         deployed += orch_deployed
         failed.extend(orch_failed)
     elif groups:
-        logger.info("[IMP:7][_deploy_parallel][groups] Deploying %d docker group(s) sequentially", len(groups))
-        for g_idx, group in enumerate(groups):
-            group_entries = _build_entries(group, overlays)
-            logger.info(
-                "[IMP:8][_deploy_parallel][group] Deploying group %d/%d: %s",
-                g_idx,
-                len(groups) - 1,
-                group_entries,
-            )
-            try:
-                d, _f, fnames, _rolled = docker_orchestrator.deploy_docker_group(group_entries, modules_dir)
-                deployed += d
-                # 🧐 TRAP[DECISION] · 2026-07-31 · — · Group failures aggregated into severity
-                # · Rejected: shell dropped deploy_docker_group failures (WARN only → exit 0 always)
-                # · Reason: DevPlan 100 §2.3 _deploy_parallel returns (deployed, failed); §3 Phase 5
-                #   aggregates severity for "each failed module". deploy_docker_group returns failed_names
-                #   precisely for this purpose — dropping them made severity aggregation inert in parallel mode.
-                # · Rev: if deploy_docker_group semantics change (rollback makes failures non-actionable).
-                failed.extend(fnames)
-            # ruff: ignore[BLE001] — DEPLOY_BEST_EFFORT: широкий спектр helper-API (git/yaml/jinja/subprocess/docker)
-            except Exception as exc:  # noqa: EXC — group failure continues to next group (best-effort)
-                logger.warning("[IMP:5][_deploy_parallel][group] Group %d deploy error (non-fatal): %s", g_idx, exc)
+        g_deployed, g_failed = _deploy_docker_groups(groups, overlays, modules_dir)
+        deployed += g_deployed
+        failed.extend(g_failed)
     else:
         logger.info("[IMP:5][_deploy_parallel][groups] No docker groups from topo_sort — skipping group-based deploy")
 

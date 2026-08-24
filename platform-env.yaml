@@ -52,7 +52,8 @@ volumes:
 - path: /var/lib/platform/clickhouse-data
 - path: /var/lib/platform/grafana-data
 - path: /var/lib/platform/hermes-agent/data
-- path: /var/lib/platform/infra-metrics-data
+- path: /var/lib/platform/node-metrics-data
+- path: /var/lib/platform/service-exporters-data
 - path: /var/lib/platform/litellm-data
 - path: /var/lib/platform/loki-data
 - path: /var/lib/platform/postgres-data
@@ -112,9 +113,6 @@ provides:
 port_mappings:
   HERMES_AGENT_PORT: 9119
   HERMES_AGENT_HERMES_AGENT_PORT: 8642
-  INFRA_METRICS_PORT: 8080
-  INFRA_METRICS_NODE_EXPORTER_PORT: 9100
-  INFRA_METRICS_NGINX_PROMETHEUS_EXPORTER_PORT: 9113
   LANGFUSE_PORT: 3001
   LITELLM_PORT: 4000
   LOGGING_PORT: 3100
@@ -206,7 +204,7 @@ env_defaults:
   LOKI_PORT: '3100'
   CADVISOR_PORT: '8080'
   NODE_EXPORTER_PORT: '9100'
-  COMPOSE_PROFILES: postgres,redis,nginx,clickhouse,backup-cron,hermes-agent,monitoring,logging,litellm,langfuse,infra-metrics,minio,status-page
+  COMPOSE_PROFILES: postgres,redis,nginx,clickhouse,backup-cron,hermes-agent,monitoring,logging,log-collector,litellm,langfuse,node-metrics,service-exporters,minio,status-page
   DEPENDENCY_CHECK_TIMEOUT: '2.0'
   GHCR_PULL_TOKEN: ghp_test-token-for-ci-only
   GHCR_PUSH_TOKEN: ci-ghcr-push-token
@@ -217,6 +215,7 @@ env_defaults:
   AGE_SECRET_KEY: AGE-SECRET-KEY-TEST1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ
   PLATFORM_MASTER_EMAIL: admin@ai-platform.local
   PLATFORM_MASTER_PASSWORD: test-master-password
+  REDIS_PASSWORD: ci-test-redis-password
 test_ports:
   clickhouse:
     port_18123: 18123
@@ -224,10 +223,6 @@ test_ports:
   hermes-agent:
     port_19119: 19119
     port_18642: 18642
-  infra-metrics:
-    port_18081: 18081
-    port_19100: 19100
-    port_19113: 19113
   langfuse:
     port_13000: 13000
   litellm:
@@ -240,13 +235,17 @@ test_ports:
   nginx:
     port_18080: 18080
     port_18443: 18443
+  node-metrics:
+    port_18081: 18081
+    port_19100: 19100
+  service-exporters:
+    port_19113: 19113
   status-page:
     port_18082: 18082
 profiles:
 - backup-cron
 - clickhouse
 - hermes-agent
-- infra-metrics
 - langfuse
 - litellm
 - log-collector
@@ -254,6 +253,8 @@ profiles:
 - minio
 - monitoring
 - nginx
+- node-metrics
 - postgres
 - redis
+- service-exporters
 - status-page

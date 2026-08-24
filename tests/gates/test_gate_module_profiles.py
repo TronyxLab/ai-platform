@@ -151,7 +151,7 @@ class TestModuleProfiles:
                     continue
                 profiles = svc_config.get("profiles", [])
                 # Profiles should be just [module-name], maybe with additional shared profiles
-                # Like infra-metrics has multiple services all with [infra-metrics]
+                # Like node-metrics has multiple services all with [node-metrics]
                 if len(profiles) > 1:
                     warnings.append(
                         f"{mod_name}/{svc_name}: multiple profiles {profiles!r} "

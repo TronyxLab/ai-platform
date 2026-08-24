@@ -33,14 +33,16 @@ logger = logging.getLogger(__name__)
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 _COMPOSE_FILES = {
-    "infra-metrics": _REPO_ROOT / "core" / "modules" / "infra-metrics" / "docker-compose.base.yml",
+    "node-metrics": _REPO_ROOT / "core" / "modules" / "node-metrics" / "docker-compose.base.yml",
+    "service-exporters": _REPO_ROOT / "core" / "modules" / "service-exporters" / "docker-compose.base.yml",
     "logging": _REPO_ROOT / "core" / "modules" / "logging" / "docker-compose.base.yml",
     "log-collector": _REPO_ROOT / "core" / "modules" / "log-collector" / "docker-compose.base.yml",
     "clickhouse": _REPO_ROOT / "core" / "modules" / "clickhouse" / "docker-compose.base.yml",
 }
 
 _MODULE_YAMLS = {
-    "infra-metrics": _REPO_ROOT / "core" / "modules" / "infra-metrics" / "module.yaml",
+    "node-metrics": _REPO_ROOT / "core" / "modules" / "node-metrics" / "module.yaml",
+    "service-exporters": _REPO_ROOT / "core" / "modules" / "service-exporters" / "module.yaml",
     "logging": _REPO_ROOT / "core" / "modules" / "logging" / "module.yaml",
     "log-collector": _REPO_ROOT / "core" / "modules" / "log-collector" / "module.yaml",
     "clickhouse": _REPO_ROOT / "core" / "modules" / "clickhouse" / "module.yaml",
@@ -120,7 +122,7 @@ def test_compose_limits_canon(caplog) -> None:
     """144 W3: лимиты ключевых сервисов ≥ канона."""
     caplog.set_level(logging.INFO)
     service_to_module = {
-        "cadvisor": "infra-metrics",
+        "cadvisor": "node-metrics",
         "loki": "logging",
         "alloy": "log-collector",
         "clickhouse": "clickhouse",
@@ -143,7 +145,7 @@ def test_compose_limits_canon(caplog) -> None:
 def test_module_yaml_sync_all(caplog) -> None:
     """144 W3: module.yaml resources синхронизирован с compose (по каждому из 4 модулей)."""
     caplog.set_level(logging.INFO)
-    for module in ("infra-metrics", "logging", "log-collector", "clickhouse"):
+    for module in ("node-metrics", "service-exporters", "logging", "log-collector", "clickhouse"):
         _assert_module_yaml_sync(_MODULE_YAMLS[module], _compose_data(module))
     logger.info("[IMP:9][test_memory_limits] module.yaml resources sync (4 modules) PASS")
 

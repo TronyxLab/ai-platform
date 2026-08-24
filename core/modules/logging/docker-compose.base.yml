@@ -63,7 +63,9 @@ services:
       - loki-data:/loki
 
     networks:
-      - observability-net
+      observability-net:
+        aliases:
+          - loki  # P20: log-collector/alloy и grafana резолвят hostname loki (T2.0b/T3.1)
 
     tmpfs:
       - /tmp:size=64M,noexec,nosuid

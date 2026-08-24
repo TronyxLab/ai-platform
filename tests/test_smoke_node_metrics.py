@@ -1,8 +1,8 @@
-# GREP_SUMMARY: test-smoke-infra-metrics smoke requires_docker cadvisor node-exporter compose-up healthcheck
-# STRUCTURE: ⚡ [requires_docker + smoke] → ▶ [infra_metrics_compose fixture] → ┬─ test_cadvisor_healthz(◇ HTTP GET /healthz → 200) → ┬─ test_node_exporter_metrics(◇ HTTP GET /metrics → 200) → ┬─ test_infra_metrics_healthcheck(◇ bash healthcheck.sh deep → exit 0) → ⎋ teardown down
+# GREP_SUMMARY: test-smoke-node-metrics smoke requires_docker cadvisor node-exporter compose-up healthcheck
+# STRUCTURE: ⚡ [requires_docker + smoke] → ▶ [node_metrics_compose fixture] → ┬─ test_cadvisor_healthz(◇ HTTP GET /healthz → 200) → ┬─ test_node_exporter_metrics(◇ HTTP GET /metrics → 200) → ┬─ test_infra_metrics_healthcheck(◇ bash healthcheck.sh deep → exit 0) → ⎋ teardown down
 # region MODULE_CONTRACT
-## @purpose  Smoke tests for infra-metrics module — validates cAdvisor, Node Exporter HTTP endpoints.
-##           Created as part of wave-infra-metrics reset (DevPlan 008 T5.10).
+## @purpose  Smoke tests for node-metrics module — validates cAdvisor, Node Exporter HTTP endpoints.
+##           Преемник smoke infra-metrics (DevPlan 008 T5.10); перенаправлен при T3.2 split (DevPlan 010).
 ## @scope    Docker-dependent tests (pytest.mark.smoke + pytest.mark.requires_docker).
 ##           Requires Docker daemon. Module-scoped fixture manages compose lifecycle.
 ## @invariants
@@ -10,11 +10,11 @@
 ##   - Stops any existing ai-platform-test project before starting smoke project
 ##   - Ensures observability-net and shared-cache-net exist (external networks)
 ##   - Uses test.yml overlay for isolated container names (-test suffix)
-##   - Compose project: wave-infra-metrics-smoke (isolated from other tests)
+##   - Compose project: wave-node-metrics-smoke (isolated from other tests)
 ##   - At least one IMP:9 log per test per §TESTING LDD requirement
 ## @rationale Smoke tests validate the actual Docker container behavior — HTTP endpoint
 ##            connectivity for cAdvisor and Node Exporter.
-## @usecases — Wave T5.10 (infra-metrics) acceptance: HTTP endpoints verified at runtime
+## @usecases — Wave T5.10 (node-metrics) acceptance: HTTP endpoints verified at runtime
 # endregion MODULE_CONTRACT
 
 import logging
@@ -32,21 +32,21 @@ from tests.helpers.gate_helpers import repo_root
 logger = logging.getLogger(__name__)
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-_INFRA_METRICS_MODULE = repo_root() / "core" / "modules" / "infra-metrics"
-_COMPOSE_BASE = _INFRA_METRICS_MODULE / "docker-compose.base.yml"
-_COMPOSE_TEST = _INFRA_METRICS_MODULE / "docker-compose.test.yml"
-_HEALTHCHECK_SH = _INFRA_METRICS_MODULE / "healthcheck.sh"
+_NODE_METRICS_MODULE = repo_root() / "core" / "modules" / "node-metrics"
+_COMPOSE_BASE = _NODE_METRICS_MODULE / "docker-compose.base.yml"
+_COMPOSE_TEST = _NODE_METRICS_MODULE / "docker-compose.test.yml"
+_HEALTHCHECK_SH = _NODE_METRICS_MODULE / "healthcheck.sh"
 
 # Compose project names
 _EXISTING_PROJECT = "ai-platform-existing"  # existing production/live-verification project — NOT "ai-platform-test" to avoid destroying the platform_services session stack
-_SMOKE_PROJECT = "wave-infra-metrics-smoke"  # isolated smoke test project
+_SMOKE_PROJECT = "wave-node-metrics-smoke"  # isolated smoke test project
 
 # Default test container names (from test.yml override)
 _CADVISOR_CONTAINER = "cadvisor-test"
 _NODE_EXPORTER_CONTAINER = "node-exporter-test"
 
 # External Docker networks (must match all networks in docker-compose.test.yml)
-_EXTERNAL_NETWORKS = {"test-observability-net", "test-shared-cache-net", "test-shared-db-net"}
+_EXTERNAL_NETWORKS = {"test-observability-net"}  # node-metrics: только observability-net (T3.2)
 
 # Timeouts
 _COMPOSE_UP_TIMEOUT = 90
@@ -56,22 +56,23 @@ _CURL_TIMEOUT = 10
 
 # Test ports (from docker-compose.test.yml overlay: 1XXXX:YYYY)
 # ⚠️ TRAP[BUG] · 2026-07-16 · HI · _CADVISOR_PORT 18080 collided with nginx-test
-# · Symptom: smoke ERRORS — infra_metrics_compose failed, port 18080 already allocated
+# · Symptom: smoke ERRORS — node_metrics_compose failed, port 18080 already allocated
 # · Root: nginx-test uses 18080:80, cadvisor-test used 18080:8080 → same host port
 # · Fix: changed to 18081 (verified free — grep found zero collisions)
-# · Prevention: see infra-metrics docker-compose.test.yml TRAP[BUG]
+# · Prevention: see node-metrics docker-compose.test.yml TRAP[BUG]
 _CADVISOR_PORT = 18081
 _NODE_EXPORTER_PORT = 19100
 
 
 # region FIXTURES
-## @purpose — Module-scoped compose lifecycle fixture for infra-metrics smoke tests.
+## @purpose — Module-scoped compose lifecycle fixture for node-metrics smoke tests.
 
 
 def _run_docker(
     args: list[str],
     env_override: dict[str, str] | None = None,
     timeout: int = 30,
+    *,
     check: bool = True,
 ) -> subprocess.CompletedProcess:
     """Run a docker subprocess with optional env overrides.
@@ -96,10 +97,10 @@ def _run_docker(
 
 
 @pytest.fixture(scope="module")
-def infra_metrics_compose():
-    """Module-scoped fixture: manage docker compose lifecycle for infra-metrics smoke tests.
+def node_metrics_compose():
+    """Module-scoped fixture: manage docker compose lifecycle for node-metrics smoke tests.
 
-    ## @purpose — Start infra-metrics containers (cadvisor, node-exporter, nginx-exporter, redis-exporter),
+    ## @purpose — Start node-metrics containers (cadvisor, node-exporter, nginx-exporter, redis-exporter),
     ##            yield config info for tests, tear down after all tests in module.
     ## @io — ⇥ None → ⎋ dict (compose project, container names, ports)
     ## @complexity — O(1) — startup/teardown with network creation
@@ -111,10 +112,10 @@ def infra_metrics_compose():
     ##   - Only removes Docker networks if fixture created them (flag created_nets)
     """
     logger = logging.getLogger(__name__)
-    logger.info("[IMP:7][infra_metrics_compose][setup] Starting infra-metrics smoke fixture")
+    logger.info("[IMP:7][node_metrics_compose][setup] Starting node-metrics smoke fixture")
 
     # ── Step 1: Stop any running existing project ─────────────────────────────
-    logger.info("[IMP:7][infra_metrics_compose][setup] Stopping existing %s project", _EXISTING_PROJECT)
+    logger.info("[IMP:7][node_metrics_compose][setup] Stopping existing %s project", _EXISTING_PROJECT)
     down_args = [
         "docker",
         "compose",
@@ -123,7 +124,7 @@ def infra_metrics_compose():
         "-f",
         str(_COMPOSE_TEST),
         "--profile",
-        "infra-metrics",
+        "node-metrics",
         "-p",
         _EXISTING_PROJECT,
         "down",
@@ -134,7 +135,7 @@ def infra_metrics_compose():
     _run_docker(down_args, timeout=20, check=False)
 
     # ── Step 2: Pre-clean any previous smoke project ──────────────────────────
-    logger.info("[IMP:7][infra_metrics_compose][setup] Cleaning previous %s project", _SMOKE_PROJECT)
+    logger.info("[IMP:7][node_metrics_compose][setup] Cleaning previous %s project", _SMOKE_PROJECT)
     clean_args = [
         "docker",
         "compose",
@@ -143,7 +144,7 @@ def infra_metrics_compose():
         "-f",
         str(_COMPOSE_TEST),
         "--profile",
-        "infra-metrics",
+        "node-metrics",
         "-p",
         _SMOKE_PROJECT,
         "down",
@@ -161,7 +162,7 @@ def infra_metrics_compose():
     for net_name in sorted(_EXTERNAL_NETWORKS):
         nm.acquire(net_name)
     logger.info(
-        "[IMP:9][infra_metrics_compose][setup] External networks acquired via NetworkLeaseManager: %s",
+        "[IMP:9][node_metrics_compose][setup] External networks acquired via NetworkLeaseManager: %s",
         sorted(_EXTERNAL_NETWORKS),
     )
 
@@ -183,7 +184,7 @@ def infra_metrics_compose():
             check=False,
         )
 
-    # ── Step 5: Start infra-metrics compose ───────────────────────────────────
+    # ── Step 5: Start node-metrics compose ───────────────────────────────────
     up_args = [
         "docker",
         "compose",
@@ -192,7 +193,7 @@ def infra_metrics_compose():
         "-f",
         str(_COMPOSE_TEST),
         "--profile",
-        "infra-metrics",
+        "node-metrics",
         "-p",
         _SMOKE_PROJECT,
         "up",
@@ -202,7 +203,7 @@ def infra_metrics_compose():
         "60",
     ]
 
-    logger.info("[IMP:7][infra_metrics_compose][setup] Starting infra-metrics stack")
+    logger.info("[IMP:7][node_metrics_compose][setup] Starting node-metrics stack")
     # Set env vars for postgres-exporter (needs POSTGRES_PASSWORD for DATA_SOURCE_NAME)
     up_result = _run_docker(
         up_args,
@@ -216,14 +217,14 @@ def infra_metrics_compose():
 
     if up_result.returncode != 0:
         logger.error(
-            "[IMP:9][infra_metrics_compose][setup] docker compose up failed: %s",
+            "[IMP:9][node_metrics_compose][setup] docker compose up failed: %s",
             up_result.stderr.strip()[-500:],
         )
         # Attempt cleanup
         _run_docker(clean_args, timeout=20, check=False)
         pytest.fail(f"docker compose up failed: {up_result.stderr.strip()[-300:]}")
 
-    logger.info("[IMP:9][infra_metrics_compose][setup] infra-metrics stack started")
+    logger.info("[IMP:9][node_metrics_compose][setup] node-metrics stack started")
 
     # ── Yield config ──────────────────────────────────────────────────────────
     yield {
@@ -239,14 +240,14 @@ def infra_metrics_compose():
     }
 
     # ── Teardown ──────────────────────────────────────────────────────────────
-    logger.info("[IMP:7][infra_metrics_compose][teardown] Stopping infra-metrics stack")
+    logger.info("[IMP:7][node_metrics_compose][teardown] Stopping node-metrics stack")
     _run_docker(clean_args, timeout=_COMPOSE_DOWN_TIMEOUT, check=False)
 
     # Release networks via canonical NetworkLeaseManager
     for net_name in sorted(_EXTERNAL_NETWORKS, reverse=True):
         nm.release(net_name)
 
-    logger.info("[IMP:9][infra_metrics_compose][teardown] infra-metrics stack stopped")
+    logger.info("[IMP:9][node_metrics_compose][teardown] node-metrics stack stopped")
 
 
 # endregion FIXTURES
@@ -261,14 +262,14 @@ def infra_metrics_compose():
 
 @pytest.mark.requires_docker
 @pytest.mark.smoke
-def test_cadvisor_healthz(caplog, infra_metrics_compose) -> None:
+def test_cadvisor_healthz(caplog, node_metrics_compose) -> None:
     """Verify cAdvisor /healthz returns HTTP 200 with 'ok' body.
 
     ## @purpose — cAdvisor health endpoint. Primary liveness check.
     ## @io — ⇥ caplog → ⚡ HTTP GET http://127.0.0.1:18081/healthz → ⎋ None (asserts 200)
     ## @complexity — O(1)
     """
-    port = infra_metrics_compose["cadvisor"]["port"]
+    port = node_metrics_compose["cadvisor"]["port"]
     url = f"http://127.0.0.1:{port}/healthz"
     logger.info("[IMP:7][smoke][cadvisor] Checking %s", url)
 
@@ -350,14 +351,14 @@ def _assert_cadvisor_healthz(url: str, attempt: int) -> None:
 
 @pytest.mark.requires_docker
 @pytest.mark.smoke
-def test_node_exporter_metrics(caplog, infra_metrics_compose) -> None:
+def test_node_exporter_metrics(caplog, node_metrics_compose) -> None:
     """Verify Node Exporter /metrics returns HTTP 200 with Prometheus metrics.
 
     ## @purpose — Node Exporter metrics endpoint. Returns Prometheus-format metrics.
     ## @io — ⇥ caplog → ⚡ HTTP GET http://127.0.0.1:19100/metrics → ⎋ None (asserts 200 + metrics)
     ## @complexity — O(1)
     """
-    port = infra_metrics_compose["node_exporter"]["port"]
+    port = node_metrics_compose["node_exporter"]["port"]
     url = f"http://127.0.0.1:{port}/metrics"
     logger.info("[IMP:7][smoke][node-exporter] Checking %s", url)
 
@@ -447,7 +448,7 @@ def _assert_node_exporter_metrics(url: str, attempt: int) -> None:
 
 @pytest.mark.requires_docker
 @pytest.mark.smoke
-def test_infra_metrics_healthcheck(caplog, infra_metrics_compose) -> None:
+def test_node_metrics_healthcheck(caplog, node_metrics_compose) -> None:
     """Verify healthcheck.sh deep mode passes (exit 0).
 
     ## @purpose — The module healthcheck.sh script validates all containers
@@ -500,7 +501,7 @@ def test_infra_metrics_healthcheck(caplog, infra_metrics_compose) -> None:
     )
 
     # healthcheck.sh logs go to stderr (via log_imp in lib/healthcheck.sh)
-    assert "All infra-metrics deep checks passed" in result.stderr, (
+    assert "All node-metrics deep checks passed" in result.stderr, (
         "healthcheck.sh deep did not report all deep checks passed. "
         f"Stdout: {result.stdout.strip()[:300]}, Stderr: {result.stderr.strip()[:300]}"
     )

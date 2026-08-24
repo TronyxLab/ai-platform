@@ -111,7 +111,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         "postgres_up": "postgres",
         "pgbouncer_up": "postgres",
         "logging_compose": "logging",
-        "infra_metrics_compose": "infra-metrics",
+        "infra_metrics_compose": "node-metrics",
+        "service_exporters_compose": "service-exporters",
         "minio_compose": "minio",
         "litellm_up": "litellm",
         "langfuse_up": "langfuse",
@@ -150,7 +151,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         )
     else:
         requires_docker = any(item.get_closest_marker("requires_docker") for item in items)
-        _infra_flag.set(requires_docker)
+        _infra_flag.set(value=requires_docker)
 
     # ── Sort contract (T12.6 T-9) ──────────────────────────────────────────────
     # КОНТРАКТ (документирован, гейт tests/gates/test_gate_wave_sort_contract.py):

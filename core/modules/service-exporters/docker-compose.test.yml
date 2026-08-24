@@ -1,0 +1,53 @@
+# GREP_SUMMARY: service-exporters docker-compose test override container_name-test nginx-exporter redis-exporter postgres-exporter
+# STRUCTURE: base.yml + test.yml → service-exporters containers with -test suffix
+# region MODULE_CONTRACT
+## @purpose  Test override for service-exporters — -test container_name for all 3 containers
+## @scope    Only used in test fixtures. Never used in production.
+## @invariants
+##   - container_name: nginx-prometheus-exporter-test, redis-exporter-test, postgres-exporter-test
+##   - Port mappings: смещённые (1XXXX:YYYY): 19113:9113, 19121:9121, 19187:9187
+##   - redis-exporter-test: REDIS_PASSWORD обязателен (T2.0a env-контракт base.yml) —
+##     тестовое окружение подставляет ci_default через SMOKE_ENV
+## @rationale Стандартный test-overlay контракт (DevPlan 04 DD2); перенесён из infra-metrics
+##            при split (DevPlan 010 T3.2).
+## @changes — 2026-08-22 | DevPlan 010 T3.2 — создан из infra-metrics test.yml (exporters часть)
+# endregion MODULE_CONTRACT
+
+services:
+  nginx-prometheus-exporter:
+    container_name: nginx-prometheus-exporter-test
+    networks: !override  # DevPlan 017 W2.6 — test network isolation
+      - test-observability-net
+    ports: !override  # ⚠️ TRAP[BUG] · 2026-07-18 · HIGH · compose merge склеивает ports base+test → F-7 · Fix: !override
+      - "127.0.0.1:19113:9113"
+    restart: "no"
+
+  redis-exporter:
+    container_name: redis-exporter-test
+    networks: !override  # DevPlan 017 W2.6 — test network isolation (dual: cache for collect, observability for metrics exposure)
+      - test-shared-cache-net
+      - test-observability-net
+    restart: "no"
+
+  postgres-exporter:
+    container_name: postgres-exporter-test
+    networks: !override  # DevPlan 017 W2.6 — test network isolation (dual: db for collect, observability for metrics exposure)
+      - test-shared-db-net
+      - test-observability-net
+    restart: "no"
+    # Override healthcheck to always pass — no postgres dependency in smoke tests
+    # ⚠️ Binary at /bin/postgres_exporter (not /postgres_exporter)
+    healthcheck:
+      test: ["CMD", "/bin/postgres_exporter", "--version"]
+      interval: 5s
+      timeout: 3s
+      retries: 1
+      start_period: 2s
+
+networks:
+  test-observability-net:
+    external: true
+  test-shared-cache-net:
+    external: true
+  test-shared-db-net:
+    external: true

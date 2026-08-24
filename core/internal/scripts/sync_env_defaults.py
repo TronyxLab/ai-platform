@@ -378,13 +378,17 @@ def _section_pgbouncer(env_defaults: dict[str, str]) -> list[str]:
 
 
 # region SECTION_redis
-def _section_redis(env_defaults: dict[str, str]) -> list[str]:
+def _section_redis(env_defaults: dict[str, str], secret_defs: dict[str, dict[str, str]]) -> list[str]:
     """Redis section."""
     lines: list[str] = []
     lines.append("")
     lines.append("# ── Redis (cache) ──────────────────────────────────────────────────────────")
     lines.append("REDIS_PORT=" + _get_val_required(env_defaults, "REDIS_PORT"))
     lines.append("REDIS_HOST=" + _get_env_val(env_defaults, "REDIS_HOST", "redis"))
+    # DevPlan 010 T2.0a: requirepass — security-префикс multi-node (autogen ci_default)
+    # ⚠️ CONSTRAINT: REDIS_PASSWORD must match ^[A-Za-z0-9._-]+$
+    redis_ci_default = _get_secret_def_field(secret_defs, "REDIS_PASSWORD", "ci_default") or "ci-test-redis-password"
+    lines.append(f"REDIS_PASSWORD={redis_ci_default}")
     return lines
 
 
@@ -858,7 +862,7 @@ def generate_env_example(
     lines.extend(_section_platform_secrets(env_defaults, secret_defs))
     lines.extend(_section_postgres(env_defaults, secret_defs))
     lines.extend(_section_pgbouncer(env_defaults))
-    lines.extend(_section_redis(env_defaults))
+    lines.extend(_section_redis(env_defaults, secret_defs))
     lines.extend(_section_clickhouse(env_defaults, secret_defs))
     lines.extend(_section_minio(env_defaults, secret_defs))
     lines.extend(_section_s3_backup(env_defaults))

@@ -34,7 +34,7 @@ import pytest
 pytestmark = pytest.mark.static_audit
 
 # ═══════════════════════════════════════════════════════════════════
-# region Tests: discover_profiles
+# region REGION_tests_discover_profiles
 # ═══════════════════════════════════════════════════════════════════
 
 
@@ -101,11 +101,11 @@ def test_discover_profiles_excludes_system(caplog, tmp_path):
     logger.critical("[IMP:9][test] discover_profiles system modules excluded — %d profiles", len(result))
 
 
-# endregion
+# endregion REGION_tests_discover_profiles
 
 
 # ═══════════════════════════════════════════════════════════════════
-# region Tests: scan_compose_ports
+# region REGION_tests_scan_compose_ports
 # ═══════════════════════════════════════════════════════════════════
 
 
@@ -147,14 +147,14 @@ def test_scan_compose_ports_service_equals_module_two_ports(caplog, tmp_path):
 
 
 # 🧪 TRAP[TEST] · Regression · U-01 (DevPlan 116 T1) · multi-service module naming preserved
-# · Scenario: module "infra-metrics" with services cadvisor(8080), node-exporter(9100)
-# ·   → INFRA_METRICS_PORT=8080 (first port of first service), INFRA_METRICS_NODE_EXPORTER_PORT=9100
+# · Scenario: module "node-metrics" with services cadvisor(8080), node-exporter(9100)
+# ·   → NODE_METRICS_PORT=8080 (first port of first service), NODE_METRICS_NODE_EXPORTER_PORT=9100
 # · Last fail: 2026-07-31 — verified consistent with committed platform-env.yaml
 # · Remove if: scan_compose_ports naming scheme changes
 @ldd_trajectory
 def test_scan_compose_ports_multi_service_regression(caplog, tmp_path):
     """Multi-service module: first port → MODULE_PORT, per-service ports preserved (U-01)."""
-    mod_dir = tmp_path / "infra-metrics"
+    mod_dir = tmp_path / "node-metrics"
     mod_dir.mkdir()
     compose = (
         "services:\n"
@@ -171,25 +171,25 @@ def test_scan_compose_ports_multi_service_regression(caplog, tmp_path):
 
     result = gpe.scan_compose_ports(tmp_path)
 
-    assert result.get("INFRA_METRICS_PORT") == 8080, (
-        f"First port (8080) must map to INFRA_METRICS_PORT — got {result.get('INFRA_METRICS_PORT')}"
+    assert result.get("NODE_METRICS_PORT") == 8080, (
+        f"First port (8080) must map to NODE_METRICS_PORT — got {result.get('NODE_METRICS_PORT')}"
     )
-    assert result.get("INFRA_METRICS_NODE_EXPORTER_PORT") == 9100, (
-        f"node-exporter port must map to INFRA_METRICS_NODE_EXPORTER_PORT — "
-        f"got {result.get('INFRA_METRICS_NODE_EXPORTER_PORT')}"
+    assert result.get("NODE_METRICS_NODE_EXPORTER_PORT") == 9100, (
+        f"node-exporter port must map to NODE_METRICS_NODE_EXPORTER_PORT — "
+        f"got {result.get('NODE_METRICS_NODE_EXPORTER_PORT')}"
     )
     logger.critical(
-        "[IMP:9][test] scan_compose_ports multi-service: INFRA_METRICS_PORT=%s NODE_EXPORTER=%s",
-        result.get("INFRA_METRICS_PORT"),
-        result.get("INFRA_METRICS_NODE_EXPORTER_PORT"),
+        "[IMP:9][test] scan_compose_ports multi-service: NODE_METRICS_PORT=%s NODE_EXPORTER=%s",
+        result.get("NODE_METRICS_PORT"),
+        result.get("NODE_METRICS_NODE_EXPORTER_PORT"),
     )
 
 
-# endregion
+# endregion REGION_tests_scan_compose_ports
 
 
 # ═══════════════════════════════════════════════════════════════════
-# region Tests: load_ci_defaults
+# region REGION_tests_load_ci_defaults
 # ═══════════════════════════════════════════════════════════════════
 
 
@@ -229,11 +229,11 @@ def test_load_ci_defaults(secret_data, expected, caplog, tmp_path):
     logger.critical("[IMP:9][test] load_ci_defaults loaded %d defaults", len(result))
 
 
-# endregion
+# endregion REGION_tests_load_ci_defaults
 
 
 # ═══════════════════════════════════════════════════════════════════
-# region Tests: generate_smoke_env_py
+# region REGION_tests_generate_smoke_env_py
 # ═══════════════════════════════════════════════════════════════════
 
 
@@ -261,11 +261,11 @@ def test_generate_smoke_env_py(caplog):
     logger.critical("[IMP:9][test] generate_smoke_env_py produced valid Python source (%d chars)", len(result))
 
 
-# endregion
+# endregion REGION_tests_generate_smoke_env_py
 
 
 # ═══════════════════════════════════════════════════════════════════
-# region Tests: generate_helpers_py (re-export shim, DevPlan 171 W1.3)
+# region REGION_tests_generate_helpers_py
 # ═══════════════════════════════════════════════════════════════════
 
 
@@ -305,11 +305,11 @@ def test_generate_helpers_py_re_export_shim(caplog):
     logger.critical("[IMP:9][test] generate_helpers_py re-export shim produced valid source (%d chars)", len(result))
 
 
-# endregion
+# endregion REGION_tests_generate_helpers_py
 
 
 # ═══════════════════════════════════════════════════════════════════
-# region Tests: _check_generated_content (--check mode)
+# region REGION_tests_check_generated_content
 # ═══════════════════════════════════════════════════════════════════
 
 
@@ -346,4 +346,4 @@ def test_check_generated_content(file_content, generated, expected_code, caplog,
     logger.critical("[IMP:9][test] _check_generated_content(%r) → %s", file_content, result)
 
 
-# endregion
+# endregion REGION_tests_check_generated_content

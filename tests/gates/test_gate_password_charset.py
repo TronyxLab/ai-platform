@@ -45,7 +45,9 @@ MANIFEST_PATH: pathlib.Path = repo_root() / "core" / "secrets-manifest.yaml"
 POSTGRES_COMPOSE: pathlib.Path = repo_root() / "core" / "modules" / "postgres" / "docker-compose.base.yml"
 LANGFUSE_COMPOSE: pathlib.Path = repo_root() / "core" / "modules" / "langfuse" / "docker-compose.base.yml"
 LITELLM_COMPOSE: pathlib.Path = repo_root() / "core" / "modules" / "litellm" / "docker-compose.base.yml"
-INFRA_METRICS_COMPOSE: pathlib.Path = repo_root() / "core" / "modules" / "infra-metrics" / "docker-compose.base.yml"
+SERVICE_EXPORTERS_COMPOSE: pathlib.Path = (
+    repo_root() / "core" / "modules" / "service-exporters" / "docker-compose.base.yml"
+)
 HERMES_COMPOSE: pathlib.Path = repo_root() / "core" / "modules" / "hermes-agent" / "docker-compose.base.yml"
 
 # ── Constants ─────────────────────────────────────────────────────────────────
@@ -182,7 +184,7 @@ def test_secrets_manifest_charset_defined_for_url_passwords(caplog) -> None:
 #     characters (!#%) and accept safe characters (alphanumeric, dot, underscore, hyphen)
 # · Last fail: "SkyNet!!%)" was the original production-bug password that broke pgbouncer
 # · Remove if: charset constraint is removed or regex is fundamentally changed
-def test_password_charset_validation(caplog, special_password: str, should_fail: bool) -> None:
+def test_password_charset_validation(caplog, special_password: str, *, should_fail: bool) -> None:
     """Validate that charset regex correctly accepts/rejects passwords.
 
     ## @purpose  Parametrized test: 7 cases from DevPlan Wave 014 Tx3.
@@ -247,7 +249,7 @@ def test_no_db_url_contains_raw_postgres_password_without_encoded(caplog) -> Non
     """Verify that POSTGRES_PASSWORD_ENCODED does not appear in any compose file.
 
     ## @purpose  Gate: ensure POSTGRES_PASSWORD_ENCODED (Option B artifact) is absent
-    ##            from 4 compose files: postgres, langfuse, litellm, infra-metrics.
+    ##            from 4 compose files: postgres, langfuse, litellm, service-exporters.
     ##            These modules embed POSTGRES_PASSWORD in DATABASE_URLs.
     ##            FAIL code: POSTGRES_PASSWORD_ENCODED_FOUND.
     ## @io        ⎋ None — assert side-effect (pytest.fail on violations)
@@ -259,7 +261,7 @@ def test_no_db_url_contains_raw_postgres_password_without_encoded(caplog) -> Non
         ("postgres", POSTGRES_COMPOSE),
         ("langfuse", LANGFUSE_COMPOSE),
         ("litellm", LITELLM_COMPOSE),
-        ("infra-metrics", INFRA_METRICS_COMPOSE),
+        ("service-exporters", SERVICE_EXPORTERS_COMPOSE),
     ]
 
     found_violations: list[str] = []

@@ -20,7 +20,7 @@
 ##            Gate фиксирует env-параметризацию как инвариант — будущие rename не ломают healthcheck.
 ## @changes 2026-08-05 · DevPlan 136 W10 T10.14 — Created
 ## @links   core/lib/healthcheck.sh (канон D5), core/internal/deploy/healthcheck_poller.py,
-##          core/modules/infra-metrics/healthcheck.sh (эталон паттерна env-параметризации)
+##          core/modules/node-metrics/healthcheck.sh (эталон паттерна env-параметризации; преемник infra-metrics — DevPlan 010 T3.2)
 # endregion MODULE_CONTRACT
 
 import logging
@@ -35,9 +35,10 @@ logger = logging.getLogger(__name__)
 
 _MODULES_DIR: Path = repo_root() / "core" / "modules"
 
-# Модули, охваченные W10 T10.12 (M-2..M-6) + эталон infra-metrics — обязательная env-параметризация
+# Модули, охваченные W10 T10.12 (M-2..M-6) + эталон node-metrics — обязательная env-параметризация
 _ENV_PARAM_MODULES: tuple[str, ...] = (
-    "infra-metrics",
+    "node-metrics",
+    "service-exporters",
     "monitoring",
     "logging",
     "log-collector",
@@ -61,7 +62,8 @@ _DOCKER_MODULES: tuple[str, ...] = (
     "langfuse",
     "litellm",
     "status-page",
-    "infra-metrics",
+    "node-metrics",
+    "service-exporters",
 )
 
 # ${VAR:-default} присваивание — с опциональными кавычками (CONTAINER="${VAR:-x}" / _PORT="${VAR:-x}")
@@ -86,6 +88,28 @@ def _non_comment_lines(content: str) -> list[str]:
     return [ln.strip() for ln in content.splitlines() if ln.strip() and not ln.strip().startswith("#")]
 
 
+def _scan_env_param_module(module: str) -> list[str]:
+    """Скан одного healthcheck.sh на env-параметризацию (C901-extraction, T10.12)."""
+    content = _read(module)
+    if not content:
+        return [f"{module}: healthcheck.sh not found"]
+    violations: list[str] = []
+    code_lines = _non_comment_lines(content)
+    # 1. Голые литералы в присваиваниях CONTAINER/CONTAINERS/..._PORT/AGENT_URL — RED
+    for line in code_lines:
+        if _BARE_LITERAL_RE.search(line) and "${" not in line:
+            violations.append(f"{module}: bare literal assignment: {line}")
+        if _BARE_ARRAY_RE.search(line):
+            violations.append(f"{module}: bare literal array: {line}")
+        # F-7 (M-2..M-6): http://127.0.0.1:<порт-литерал> — shifted-порт ломал deep-проверку
+        if _BARE_URL_PORT_RE.search(line) and "${" not in line:
+            violations.append(f"{module}: hardcoded port in URL literal (F-7 drift): {line}")
+    # 2. Контракт: имя контейнера присваивается через env (${VAR:-...})
+    if not any(_ENV_ASSIGN_RE.search(ln) for ln in code_lines):
+        violations.append(f"{module}: no env-parametrized container/port assignment found")
+    return violations
+
+
 @pytest.mark.gate
 def test_env_parametrized_container_names(caplog: pytest.LogCaptureFixture) -> None:
     """T10.12: имена контейнеров/порты в healthcheck.sh env-параметризованы (${VAR:-default})."""
@@ -97,23 +121,7 @@ def test_env_parametrized_container_names(caplog: pytest.LogCaptureFixture) -> N
 
     violations: list[str] = []
     for module in _ENV_PARAM_MODULES:
-        content = _read(module)
-        if not content:
-            violations.append(f"{module}: healthcheck.sh not found")
-            continue
-        code_lines = _non_comment_lines(content)
-        # 1. Голые литералы в присваиваниях CONTAINER/CONTAINERS/..._PORT/AGENT_URL — RED
-        for line in code_lines:
-            if _BARE_LITERAL_RE.search(line) and "${" not in line:
-                violations.append(f"{module}: bare literal assignment: {line}")
-            if _BARE_ARRAY_RE.search(line):
-                violations.append(f"{module}: bare literal array: {line}")
-            # F-7 (M-2..M-6): http://127.0.0.1:<порт-литерал> — shifted-порт ломал deep-проверку
-            if _BARE_URL_PORT_RE.search(line) and "${" not in line:
-                violations.append(f"{module}: hardcoded port in URL literal (F-7 drift): {line}")
-        # 2. Контракт: имя контейнера присваивается через env (${VAR:-...})
-        if not any(_ENV_ASSIGN_RE.search(ln) for ln in code_lines):
-            violations.append(f"{module}: no env-parametrized container/port assignment found")
+        violations.extend(_scan_env_param_module(module))
 
     logger.info("[IMP:9][hc-drift] env-параметризация нарушений: %d", len(violations))
 
@@ -133,6 +141,27 @@ def test_env_parametrized_container_names(caplog: pytest.LogCaptureFixture) -> N
     logger.info("[IMP:9][hc-drift] PASS: имена/порты healthcheck.sh env-параметризованы")
 
 
+def _scan_d5_canon_module(module: str) -> list[str]:
+    """Скан одного healthcheck.sh на делегирование канону lib/healthcheck.sh (C901-extraction)."""
+    content = _read(module)
+    if not content:
+        return []  # нет файла — вне гейта (логируется в тесте)
+    violations: list[str] = []
+    if "lib/healthcheck.sh" not in content:
+        violations.append(f"{module}: не source-ит ../../lib/healthcheck.sh")
+        return violations
+    if "check_docker_health" not in content:
+        violations.append(f"{module}: не вызывает check_docker_health (канон D5)")
+    code_lines = _non_comment_lines(content)
+    raw = [ln for ln in code_lines if "docker inspect" in ln or "State.Health" in ln]
+    if raw:
+        violations.append(f"{module}: raw docker inspect в коде: {raw[:2]}")
+    raw_curl = [ln for ln in code_lines if "curl -sf" in ln or (re.search(r"\bcurl\b", ln) and "check_http" not in ln)]
+    if raw_curl:
+        violations.append(f"{module}: raw curl в коде (должен быть check_http): {raw_curl[:2]}")
+    return violations
+
+
 @pytest.mark.gate
 def test_delegates_to_lib_healthcheck_d5_canon(caplog: pytest.LogCaptureFixture) -> None:
     """T10.14: каждый Docker healthcheck.sh source-ит lib/healthcheck.sh и зовёт check_docker_health."""
@@ -144,24 +173,10 @@ def test_delegates_to_lib_healthcheck_d5_canon(caplog: pytest.LogCaptureFixture)
 
     violations: list[str] = []
     for module in _DOCKER_MODULES:
-        content = _read(module)
-        if not content:
+        if not _read(module):
             logger.info("[IMP:8][hc-drift] %s: нет healthcheck.sh (skip)", module)
             continue
-        if "lib/healthcheck.sh" not in content:
-            violations.append(f"{module}: не source-ит ../../lib/healthcheck.sh")
-            continue
-        if "check_docker_health" not in content:
-            violations.append(f"{module}: не вызывает check_docker_health (канон D5)")
-        code_lines = _non_comment_lines(content)
-        raw = [ln for ln in code_lines if "docker inspect" in ln or "State.Health" in ln]
-        if raw:
-            violations.append(f"{module}: raw docker inspect в коде: {raw[:2]}")
-        raw_curl = [
-            ln for ln in code_lines if "curl -sf" in ln or (re.search(r"\bcurl\b", ln) and "check_http" not in ln)
-        ]
-        if raw_curl:
-            violations.append(f"{module}: raw curl в коде (должен быть check_http): {raw_curl[:2]}")
+        violations.extend(_scan_d5_canon_module(module))
 
     logger.info("[IMP:9][hc-drift] D5-канон нарушений: %d", len(violations))
 

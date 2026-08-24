@@ -1,0 +1,180 @@
+# @purpose  Base compose definition for service-exporters module — Nginx + Redis + Postgres exporters (co-located with services)
+# GREP_SUMMARY: service-exporters docker-compose nginx-prometheus-exporter redis-exporter postgres-exporter profiles x-logging observability-net shared-cache-net shared-db-net SERVICE_BIND_HOST
+# STRUCTURE: ▶ nginx-exp:1.5.1 → ┬─ ▶ redis-exp:v1.88.0 (credentialed REDIS_ADDR/REDIS_PASSWORD) → ┬─ ▶ postgres-exp:v0.20.1 → observability-net + shared-cache-net + shared-db-net → ┐
+# region MODULE_CONTRACT
+## @purpose  Base compose definition for service-exporters Docker module (DevPlan 010 T3.2 — выделен из infra-metrics)
+## @scope    Service metrics bridges: nginx stub_status, redis cache, postgres db.
+##           Exporter'ы ходят Docker DNS к своим сервисам — размещаются singleton на ноде
+##           своих сервисов (placement.yaml); скрейп центральным Prometheus — кросс-нодовый
+##           (peer-firewall 9113/9121/9187, file_sd targets).
+## @invariants
+##   - profiles: [service-exporters] — pluggability: only included when COMPOSE_PROFILES contains service-exporters
+##   - Nginx Exporter: scrape URI → http://nginx:8081/stub_status (Docker DNS, NOT host.docker.internal)
+##   - Redis Exporter: credentialed T2.0a — env REDIS_ADDR + REDIS_PASSWORD (флаг --redis.addr удалён:
+##     exporter читает env нативно; пароль не светится в argv)
+##   - Postgres Exporter: DATA_SOURCE_NAME DSN → postgres:5432, healthcheck via --version (busybox shell есть, liveness-only канон сохранён)
+##   - Host-ports bind через ${SERVICE_BIND_HOST:-127.0.0.1} (T2.2): single-node — loopback;
+##     multi-node — host ноды сервисов (peer ufw только monitoring-ноде, T2.4)
+##   - Networks declared as external: true — pre-created by deploy-modules.sh
+##   - redis-exporter on BOTH observability-net (Prometheus scrape) and shared-cache-net (Redis access)
+##   - postgres-exporter on BOTH observability-net (Prometheus scrape) and shared-db-net (postgres access)
+##   - All TRAP comments preserved from infra-metrics split
+##   - Все три exporter'а: healthcheck via --help/--version (scratch/busybox image)
+## @rationale DevPlan 010 §3: exporter'ы живут со своими сервисами (Docker DNS локален),
+##            один модуль = одно решение размещения (singleton у сервисов).
+# endregion MODULE_CONTRACT
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
+services:
+
+  # ── Nginx Prometheus Exporter (Metrics Bridge) ──────────────────────────
+  # 🧐 TASK-R3 · 2026-07-03 · Added nginx-prometheus-exporter to expose stub_status as Prometheus metrics
+  # region service:nginx-prometheus-exporter
+  nginx-prometheus-exporter:
+    # 🧐 TRAP[DECISION] · 2026-07-07 · — · Nginx Exporter upgraded 1.4.0 → 1.5.1 (TASK-2)
+    # · 1.5.1 is latest stable; scratch-based Go binary (no shell/wget/curl)
+    # · Rev: on next major upstream release — reevaluate pin
+    image: nginx/nginx-prometheus-exporter:1.5.1@sha256:9f6d963bb2b19d706d401cc3e2c3ea8de2f1c471b96a2156ca45e76f650b1625
+    container_name: nginx-prometheus-exporter
+    profiles: [service-exporters]
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 32M
+          pids: 256
+        reservations:
+          memory: 16M
+    logging: *default-logging
+
+    # ⚠️ DD2: nginx is now a Docker container — use Docker DNS instead of host.docker.internal
+    command:
+      - "-nginx.scrape-uri=http://nginx:8081/stub_status"
+
+    ports:
+      # [IMP:8][service-exporters] T2.2/T2.4: scrape-порт открыт только monitoring-ноде (peer ufw)
+      - "${SERVICE_BIND_HOST:-127.0.0.1}:${NGINX_EXPORTER_PORT:-9113}:9113"
+
+    networks:
+      observability-net:
+        aliases:
+          - nginx-prometheus-exporter
+
+    # ⚠️ TRAP[BUG] · 2026-07-03 · P1 · Healthcheck disabled: scratch image has no shell/wget/curl.
+    # · Healthcheck is REQUIRED for docker compose up -d --wait (exit code 1 without it).
+    healthcheck:
+      # ✅ TRAP[DECISION] · 2026-07-12 · — · Verified binary path /usr/bin/nginx-prometheus-exporter
+      test: ["CMD", "/usr/bin/nginx-prometheus-exporter", "--help"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+  # endregion service:nginx-prometheus-exporter
+
+  # ── Redis Exporter (Metrics Bridge) ────────────────────────────────────────
+  # region service:redis-exporter
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.88.0@sha256:ead15fa913b45314068b9237bb5eff1e97bcb41d63fbe6267befe34667b5f856
+    container_name: redis-exporter
+    profiles: [service-exporters]
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          # 164 W1-5: 32M→128M — v1.88.0 + healthcheck-форк (--version = полный Go-процесс
+          # ~40M RSS) превышают 64M в пике (43M main + 40M probe → OOM rc=137)
+          memory: 128M
+          pids: 256
+        reservations:
+          memory: 64M
+    logging: *default-logging
+
+    # 🧐 TRAP[DECISION] · 2026-08-22 · DevPlan 010 T2.0a · credentialed DSN через env
+    # · Rejected: флаг --redis.addr=redis://:${REDIS_PASSWORD}@... (пароль в argv/ps)
+    # · Reason: oliver006/redis_exporter читает env REDIS_ADDR/REDIS_PASSWORD нативно —
+    #   секрет живёт в environment контейнера, не в process cmdline
+    # · Network: shared-cache-net (reach redis) + observability-net (Prometheus scrape)
+    # · Rev: если exporter потеряет env-поддержку — вернуть флаг с shell-обёрткой
+    environment:
+      REDIS_ADDR: "redis://redis:6379"
+      REDIS_PASSWORD: "${REDIS_PASSWORD:?REDIS_PASSWORD_REQUIRED}"
+
+    ports:
+      # [IMP:8][service-exporters] T2.2: ранее порта не было вовсе — добавлен для peer-scrape
+      - "${SERVICE_BIND_HOST:-127.0.0.1}:${REDIS_EXPORTER_PORT:-9121}:9121"
+
+    networks:
+      observability-net:
+        aliases:
+          - redis-exporter
+      shared-cache-net:
+        aliases:
+          - redis-exporter
+
+    # Healthcheck: scratch image has no shell/wget/curl — use --version (returns 0)
+    healthcheck:
+      test: ["CMD", "/redis_exporter", "--version"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+  # endregion service:redis-exporter
+
+  # ── Postgres Exporter (Metrics Bridge) ──────────────────────────────────────
+  # region service:postgres-exporter
+  postgres-exporter:
+    # ✅ TRAP[DECISION] · 2026-07-18 · — · postgres-exporter digest pinned
+    # · 164 W1-5: v0.16.0→v0.20.1 (базовый образ busybox, не distroless; DATA_SOURCE_NAME env поддерживается)
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.20.1@sha256:4f3d82803c1f99ea5e767890de3557d2479ebbc711f63f2e04c663daa840057a
+    container_name: postgres-exporter
+    profiles: [service-exporters]
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          # 164 W1-5: 32M→128M — v0.20.1 + healthcheck-форк (--version = полный Go-процесс)
+          memory: 128M
+          pids: 256
+        reservations:
+          memory: 64M
+    logging: *default-logging
+
+    environment:
+      DATA_SOURCE_NAME: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?PG_PASSWORD_REQUIRED}@postgres:5432/${POSTGRES_DB:-platform}?sslmode=disable"
+
+    ports:
+      # [IMP:8][service-exporters] T2.2: ранее host-порта не было — добавлен для peer-scrape
+      - "${SERVICE_BIND_HOST:-127.0.0.1}:${POSTGRES_EXPORTER_PORT:-9187}:9187"
+
+    networks:
+      observability-net:
+        aliases:
+          - postgres-exporter
+      shared-db-net:
+        aliases:
+          - postgres-exporter
+
+    # ⚠️ TRAP[DECISION] · 2026-07-18 · — · healthcheck via --version (liveness-only канон)
+    healthcheck:
+      test: ["CMD", "/bin/postgres_exporter", "--version"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+  # endregion service:postgres-exporter
+
+networks:
+  observability-net:
+    external: true
+    name: observability-net
+  shared-cache-net:
+    external: true
+    name: shared-cache-net
+  shared-db-net:
+    external: true
+    name: shared-db-net

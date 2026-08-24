@@ -1,0 +1,143 @@
+# @purpose  Base compose definition for node-metrics module — cAdvisor + Node Exporter (per-node host metrics)
+# GREP_SUMMARY: node-metrics docker-compose cadvisor node-exporter profiles x-logging observability-net SERVICE_BIND_HOST
+# STRUCTURE: ▶ cadvisor:v0.60.5 (CADVISOR_IMAGE override) [profiles:node-metrics] → ┬─ ▶ node-exporter:v1.12.1 → observability-net → ┐
+# region MODULE_CONTRACT
+## @purpose  Base compose definition for node-metrics Docker module (DevPlan 010 T3.2 — выделен из infra-metrics)
+## @scope    Per-node host/container metrics: cAdvisor (containers) + Node Exporter (host).
+##           Размещение по природе all-nodes (placement.yaml {mode: all-nodes}) — метрики ХОСТА
+##           существуют на каждой ноде контекста.
+## @invariants
+##   - profiles: [node-metrics] — pluggability: only included when COMPOSE_PROFILES contains node-metrics
+##   - cAdvisor: granular caps (SYS_ADMIN + DAC_READ_SEARCH), no privileged mode
+##   - Node Exporter: bind mount /host:ro (no rslave — macOS compatible)
+##   - Host-ports bind через ${SERVICE_BIND_HOST:-127.0.0.1} (DevPlan 010 T2.2): single-node —
+##     loopback без изменений; multi-node — provision подставляет host ноды для peer-scrape
+##   - Networks declared as external: true — pre-created by deploy-modules.sh
+##   - All TRAP comments preserved from infra-metrics split
+## @rationale DevPlan 010 §3: метрики ХОСТА по природе per-node → отдельный модуль = одно решение
+##            размещения; exporter'ы СЕРВИСОВ (nginx/redis/postgres) вынесены в service-exporters.
+# endregion MODULE_CONTRACT
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
+services:
+
+  # ── cAdvisor (Container Metrics) ──────────────────────────────────────────
+  # region service:cadvisor
+  cadvisor:
+    # 🧐 TRAP[DECISION] · 2026-08-22 · — · CADVISOR_IMAGE параметризован (T1.4, аудит 2026-08-22)
+    # · Symptom (аудит): test/macos-оверлеи пинили gcr.io v0.55.1 при prod v0.60.5 (ghcr.io) —
+    # ·   CI тестировал не тот образ (другой registry И версия).
+    # · Fix: image = ${CADVISOR_IMAGE:-prod-пин} — оверлеи переопределяют явно.
+    # · macOS-пины v0.55.1 СОХРАНЕНЫ (TRAP 164 W1-5): v0.60.5 падает на macOS-VM
+    # ·   («could not detect clock speed»); выравнивание возможно только после фиксации
+    # ·   upstream-фикса — оверлеи держат последний рабочий на macOS.
+    # · Rev: v0.60.5+ починен на macOS → удалить оверрайды test/macos-оверлеев.
+    image: ${CADVISOR_IMAGE:-ghcr.io/google/cadvisor:v0.60.5@sha256:1eb9bde04dab65b919bc51da9e7cf8eceb40d57e61ac9e93e373100369d90cd6}
+    container_name: cadvisor
+    profiles: [node-metrics]
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          # DevPlan 144 W3 (D2): 128M → 256M → 512M — факт. потребление ~250MiB при 256M
+          # (98% — деплой-верификация 2026-08-09: cadvisor оставался firing); 512M даёт
+          # ~51% запас (алерт HighMemory при >90%).
+          memory: 512M
+          cpus: "0.5"
+          pids: 256
+    logging: *default-logging
+
+    ports:
+      # [IMP:8][node-metrics] T2.2: bind параметризован (single-node 127.0.0.1, multi-node host ноды)
+      - "${SERVICE_BIND_HOST:-127.0.0.1}:${CADVISOR_PORT:-8080}:8080"
+
+    command:
+      # DevPlan 162 W8-1: 30s съедал ~2.5% ядра; 60s — компромисс (замер до/после на ноде при bootstrap)
+      - "--housekeeping_interval=60s"
+      - "--docker_only=true"
+      - "--storage_duration=2m"
+
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+
+    cap_add:
+      - SYS_ADMIN
+      - DAC_READ_SEARCH
+    security_opt:
+      - no-new-privileges:true
+
+    networks:
+      - observability-net
+
+    # ⚠️ TRAP[BUG] · 2026-07-27 · HI · wget missing in scratch-based v0.55.1 → HEALTHCHECK always fails
+    # · Root: v0.52.0 (Alpine, has wget) → v0.55.1 (scratch, no wget). TRAP comment said
+    # ·   "no breaking changes expected" — incorrect: base image change = breaking for HEALTHCHECK.
+    # · Fix: use binary-based check like other scratch exporters
+    # · Rev: on next cadvisor upgrade — verify HEALTHCHECK command works in new base image.
+    healthcheck:
+      test: ["CMD", "/usr/bin/cadvisor", "--version"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+  # endregion service:cadvisor
+
+  # ── Node Exporter (Host Metrics) ─────────────────────────────────────────
+  # observability-net (not host): node-exporter reads /proc via /host:ro bind mounts.
+  # Port 9100 exposed only on localhost in single-node (peer-scoped в multi-node, T2.4).
+  # region service:node-exporter
+  node-exporter:
+    # 🧐 TRAP[DECISION] · 2026-07-12 · — · Node Exporter upgraded v1.10.2 → v1.12.0 (BulkV0)
+    # · v1.12.0 is +2 minor versions — API is stable, no breaking changes expected
+    # · Rev: on next major upstream release — reevaluate pin
+    image: prom/node-exporter:v1.12.1@sha256:da83fae85603c4e47e6c68369a7d746e2dda683dc35ea2e234b4f171e0d92798
+    container_name: node-exporter
+    profiles: [node-metrics]
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+          cpus: "0.25"
+          pids: 256
+    logging: *default-logging
+
+    ports:
+      # [IMP:8][node-metrics] T2.2/T2.4: scrape-порт открыт только monitoring-ноде (peer ufw)
+      - "${SERVICE_BIND_HOST:-127.0.0.1}:${NODE_EXPORTER_PORT:-9100}:9100"
+
+    command:
+      - "--path.rootfs=/host"
+
+    volumes:
+      # 🧐 TRAP[DECISION] · 2026-07-11 · — · rslave removed for macOS Docker Desktop compatibility
+      # · rslave (rbind+rslave mount propagation) — Linux kernel feature not supported
+      # · by Docker Desktop on macOS (virtiofs/grpcfuse). Node-exporter reads /host/proc
+      # · and /host/sys — static filesystems that don't need mount propagation.
+      # · ro (read-only bind) is sufficient for host metrics collection on all platforms.
+      # · Rev: if Docker Desktop adds Linux mount propagation support for macOS, restore rslave
+      - /:/host:ro
+
+    networks:
+      - observability-net
+
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:9100/metrics"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+  # endregion service:node-exporter
+
+networks:
+  observability-net:
+    external: true
+    name: observability-net

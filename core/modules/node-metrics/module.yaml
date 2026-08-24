@@ -1,0 +1,42 @@
+# GREP_SUMMARY: node-metrics module cadvisor node-exporter host metrics all-nodes placement
+# STRUCTURE: ▶ module:node-metrics → cadvisor:v0.60.5 + node-exp:v1.12.1 → observability-net → ┐
+# region MODULE_CONTRACT
+## @purpose  Per-node infrastructure metrics: cAdvisor (containers) + Node Exporter (host)
+##           — DevPlan 010 T3.2: выделен из infra-metrics (метрики ХОСТА по природе per-node)
+## @scope    Container metrics (cAdvisor), host metrics (Node Exporter); размещение all-nodes
+## @invariants
+##   - install_type: docker — managed by compose
+##   - cAdvisor: granular caps (SYS_ADMIN + DAC_READ_SEARCH), no privileged mode
+##   - Node Exporter: bind mount /host:ro (no rslave — macOS compatible)
+##   - Все сервисы на observability-net для скрейпа центральным Prometheus (кросс-нодовый
+##     scrape через peer-firewall 9100/8080 — только IP monitoring-ноды, T2.4)
+##   - depends_on пуст: метрики хоста не зависят от сервисов платформы (data-plane нет)
+## @rationale DevPlan 010 §3 TRAP[DECISION]: составные модули делятся ФИЗИЧЕСКИ (новые директории),
+##            не service-фильтром compose — один модуль = одно решение размещения.
+## @changes — 2026-08-22 | DevPlan 010 T3.2 — создан из infra-metrics (split node-metrics/service-exporters)
+# endregion MODULE_CONTRACT
+
+name: node-metrics
+install_type: docker
+description: "Node metrics: cAdvisor (container) + Node Exporter (host) — per-node, placement all-nodes"
+
+depends_on: []
+
+# D5 (118 G4): severity/restart — метрики, non-critical; restart согласован с base.yml (оба сервиса unless-stopped)
+severity: normal
+restart: unless-stopped
+
+interfaces:
+  - healthcheck
+
+spool_dir: /var/lib/platform/node-metrics-data
+
+resources:
+  # Синхронизировано с docker-compose.base.yml: cadvisor 512M + node-exporter 64M = 576M
+  # (лимиты перенесены из infra-metrics без изменений; sync-гейт test_memory_limits).
+  limits:
+    memory: 576M
+  reservations:
+    memory: 64M
+
+env_requires: []

@@ -1,0 +1,38 @@
+# GREP_SUMMARY: placement context vpn_enforced nodes modules node all-nodes off nodes-list s2
+# STRUCTURE: ▶ S2 fixture → placement.yaml → resolve_node_modules → ⎋ наборы модулей нод
+# region MODULE_CONTRACT
+## @purpose  Фикстура сценария S2 «данные отдельно» (DevPlan 010 §8): data-1 — сервисы данных (первичный сценарий владельца); main-1 — ingress/agent/obs
+## @scope    tests/gates/test_gate_placement.py + tests/unit/test_shared_placement.py входы
+## @invariants  bare `off` в YAML запрещён (boolean-false ловушка) — только кавыченный "off"
+# endregion MODULE_CONTRACT
+# S2 — «данные отдельно» (2 ноды) — ПЕРВИЧНЫЙ СЦЕНАРИЙ DevPlan 010 §8.
+# data-1: БД + exporter'ы + platform-secrets; main-1: ingress + agent + наблюдаемость.
+# Открытия (кросс-нодовые, Волна 2): data-1 → 6432/6379/9000/8123/19000 для IP main-1;
+# 9100/8080/9187/9121 для IP main-1; main-1 → 3100 для IP data-1 (collector push).
+# Прямой 5432 НЕ открывается (все потребители едут на data-ноду вместе с postgres).
+context: tronyx-lab
+vpn_enforced: true
+
+nodes:
+  - name: data-1
+    host: 10.8.0.21
+  - name: main-1
+    host: 10.8.0.22
+
+modules:
+  postgres:      { node: data-1 }
+  redis:         { node: data-1 }
+  minio:         { node: data-1 }
+  clickhouse:    { node: data-1 }
+  backup-cron:   { node: data-1 }
+  service-exporters: { node: data-1 }
+  platform-secrets:  { node: data-1 }          # system-модуль — на ноде данных
+  nginx:         { node: main-1 }
+  hermes-agent:  { node: main-1 }
+  litellm:       { node: main-1 }
+  langfuse:      { node: main-1 }
+  monitoring:    { node: main-1 }
+  logging:       { node: main-1 }              # Loki-хранилище (singleton)
+  status-page:   { node: main-1 }
+  log-collector: { mode: all-nodes }           # Alloy — на КАЖДОЙ ноде
+  node-metrics:  { mode: all-nodes }           # node-exporter + cadvisor — на КАЖДОЙ ноде

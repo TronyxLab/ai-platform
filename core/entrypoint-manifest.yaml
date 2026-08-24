@@ -1252,7 +1252,6 @@ gates:
   - test_hook_contract_validation[backup-cron]
   - test_hook_contract_validation[clickhouse]
   - test_hook_contract_validation[hermes-agent]
-  - test_hook_contract_validation[infra-metrics]
   - test_hook_contract_validation[langfuse]
   - test_hook_contract_validation[litellm]
   - test_hook_contract_validation[log-collector]
@@ -1260,9 +1259,11 @@ gates:
   - test_hook_contract_validation[minio]
   - test_hook_contract_validation[monitoring]
   - test_hook_contract_validation[nginx]
+  - test_hook_contract_validation[node-metrics]
   - test_hook_contract_validation[platform-secrets]
   - test_hook_contract_validation[postgres]
   - test_hook_contract_validation[redis]
+  - test_hook_contract_validation[service-exporters]
   - test_hook_contract_validation[status-page]
   - test_registered_deploy_hooks_have_runtime_trigger
   test_gate_module_profiles.py:
@@ -1346,6 +1347,20 @@ gates:
   test_gate_path_consistency.py:
   - path_consistency_negative_original_form
   - test_no_opt_core_references
+  test_gate_placement.py:
+  - test_drift_is_warning_not_error
+  - test_exposed_project_requires_nginx_node
+  - test_module_inventory_completeness
+  - test_multi_context_rejected
+  - test_off_module_with_data_plane_dependent_red
+  - test_peer_firewall_matrix_canonical
+  - test_public_host_rejected
+  - test_schema_loader_parity
+  - test_single_node_noop_gate
+  - test_stale_reconcile_delete_carries_source
+  - test_unknown_module_or_node_red
+  - test_verify_firewall_accepts_peer_allow
+  - test_vpn_enforced_required
   test_gate_platform_env_schema.py:
   - test_env_defaults_do_not_contain_dot_env_keys
   - test_env_defaults_keys_format

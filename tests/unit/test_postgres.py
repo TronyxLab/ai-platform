@@ -464,6 +464,7 @@ def test_pg_hba_covers_docker_bridge_range(postgres_fixtures, caplog) -> None:
     allocates a different /16 subnet. Must use 172.16.0.0/12.
 
     Additionally asserts invariant: no public access (0.0.0.0/0 or 'all' with md5/trust).
+    DevPlan 010 T2.0c: метод для RFC1918 — scram-sha-256 (md5 запрещён как replayable).
     """
     hba_path = Path(postgres_fixtures["MODULE_DIR"]) / "config" / "pg_hba.conf"
 
@@ -476,8 +477,11 @@ def test_pg_hba_covers_docker_bridge_range(postgres_fixtures, caplog) -> None:
         # Filter to host entries with an address field
         host_entries = [e for e in entries if "address" in e]
 
-        # Assert 1: must have 172.16.0.0/12 with md5 (full Docker bridge range)
-        has_full_range = any(e.get("address") == "172.16.0.0/12" and e.get("method") == "md5" for e in host_entries)
+        # Assert 1: must have 172.16.0.0/12 with scram-sha-256 (T2.0c: md5→scram —
+        # security-префикс до публикации порта пирам); инвариант /12 сохранён
+        has_full_range = any(
+            e.get("address") == "172.16.0.0/12" and e.get("method") == "scram-sha-256" for e in host_entries
+        )
         logger.critical(
             "[IMP:9][test_postgres][pg_hba] ASSERT: has 172.16.0.0/12 md5=%s",
             has_full_range,

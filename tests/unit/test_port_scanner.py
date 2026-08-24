@@ -106,17 +106,17 @@ class TestScanComposePorts:
         assert result["MINIO_CONSOLE_PORT"] == 9001
         assert "MINIO_MINIO_PORT" not in result, "177 W2.5: мусорное имя MINIO_MINIO_PORT не генерируется"
 
-    # 🧪 TRAP[TEST] · Regression · Scenario: multi-service module (infra-metrics style)
-    # · Expect: INFRA_METRICS_PORT + INFRA_METRICS_NODE_EXPORTER_PORT
+    # 🧪 TRAP[TEST] · Regression · Scenario: multi-service module (node-metrics style)
+    # · Expect: NODE_METRICS_PORT + NODE_METRICS_NODE_EXPORTER_PORT
     # · Last fail: None (new test for DevPlan 117 G T56)
     # · Remove if: naming scheme changes
     def test_scan_compose_ports_multi_service(self, tmp_path: Path) -> None:
         """Two services in one module → MODULE_PORT + MODULE_SERVICE_PORT."""
-        module_dir = tmp_path / "infra-metrics"
+        module_dir = tmp_path / "node-metrics"
         module_dir.mkdir()
         (module_dir / "docker-compose.base.yml").write_text(
             "services:\n"
-            "  infra-metrics:\n"
+            "  node-metrics:\n"
             "    ports:\n"
             '      - "9090:9090"\n'
             "  node-exporter:\n"
@@ -127,8 +127,8 @@ class TestScanComposePorts:
 
         result = scan_compose_ports(tmp_path)
 
-        assert result["INFRA_METRICS_PORT"] == 9090
-        assert result["INFRA_METRICS_NODE_EXPORTER_PORT"] == 9100
+        assert result["NODE_METRICS_PORT"] == 9090
+        assert result["NODE_METRICS_NODE_EXPORTER_PORT"] == 9100
 
     # 🧪 TRAP[TEST] · Regression · Scenario: malformed compose file skipped
     # · Expect: no crash, warning logged, missing module absent from result

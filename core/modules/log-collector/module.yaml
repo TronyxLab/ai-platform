@@ -1,0 +1,50 @@
+# GREP_SUMMARY: log-collector module alloy loki logs observability-net promtail-eol all-nodes wal-self-heal
+# STRUCTURE: ▶ module:log-collector → alloy:1.18.1 (all-nodes) → ${LOKI_URL} push + X-Scope-OrgID → observability-net → ┐
+# region MODULE_CONTRACT
+## @purpose  Grafana Alloy log collector module — per-node collection shipping to central Loki (DevPlan 010 T3.1)
+## @scope    Log collection on EVERY node (placement form all-nodes): Docker container logs (docker.sock
+##           discovery.docker) + host journald + backup-logs file-scrape → central Loki по ${LOKI_URL}
+## @invariants
+##   - install_type: docker — managed by compose
+##   - Alloy v1.18.1 (promtail EOL 2026-03-02 → REPLACE, 164 W1-5)
+##   - Placement: all-nodes (DevPlan 010 §3) — коллектор на каждой ноде контекста
+##   - depends_on: [logging] — data-plane зависимость (DevPlan 010 §2.2 правило 8: off у log-collector
+##     при off у logging — иначе оба off); НЕ ordering-зависимость compose (depends_on loki удалён)
+##   - НЕТ compose depends_on loki (T3.1): WAL буферизует, self-heal — alloy здоров БЕЗ loki
+##   - healthcheck БЕЗ локального loki /ready: собственная готовность alloy (liveness /bin/alloy -version)
+##   - LOKI_URL/LOKI_TENANT — string env с compose-дефолтами (${LOKI_URL:-http://loki:3100},
+##     ${LOKI_TENANT:-platform}) — НЕ required (env_requires пуст)
+##   - No host port (внутренний коллектор)
+## @rationale Выделен из logging (DevPlan 010 T3.1): logging остаётся singleton-хранилищем Loki,
+##            коллектор физически отделён — all-nodes размещение несовместимо с singleton-модулем.
+##            Endpoint был ЗАХАРКОЖЕН (config.alloy:31 → http://loki:3100) → параметризован LOKI_URL;
+##            tenant-изоляция (T2.0b) — header X-Scope-OrgID через LOKI_TENANT.
+## @changes 2026-08-22 | DevPlan 010 T3.1 — Created (split из core/modules/logging/)
+# endregion MODULE_CONTRACT
+
+name: log-collector
+install_type: docker
+description: "Grafana Alloy log collector — ships container/journal/backup logs to central Loki (all-nodes, promtail EOL)"
+
+depends_on:
+  - logging
+
+# D5 (118 G4): severity/restart — логи, non-critical; restart согласован с base.yml (alloy unless-stopped)
+severity: normal
+restart: unless-stopped
+
+interfaces:
+  - healthcheck
+
+spool_dir: /var/lib/platform/alloy-data
+spool_volume: alloy-data
+
+resources:
+  # Синхронизировано с docker-compose.base.yml: единственный сервис модуля — alloy 256M
+  # (164 W1-5: 128M→256M OOM-фикс — Alloy перечитывает docker-history при холодном WAL).
+  limits:
+    memory: 256M
+  reservations:
+    memory: 64M
+
+env_requires: []

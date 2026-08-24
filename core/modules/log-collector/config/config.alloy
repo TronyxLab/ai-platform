@@ -1,0 +1,215 @@
+// GREP_SUMMARY: alloy config discovery.docker loki.source.docker loki.source.journal local.file_match loki.process structured_metadata nginx-match host-label backup-logs compose_service log_file loki-url tenant-header X-Scope-OrgID
+// STRUCTURE: ▶ discovery.docker → discovery.relabel → loki.source.docker → loki.process (json→match drop→nginx json→labels→structured_metadata) → loki.write │ ▶ loki.source.journal → loki.process (drop debug) → loki.write │ ▶ local.file_match backup-logs → discovery.relabel (log_file) → loki.source.file → loki.write → ┘
+// region MODULE_CONTRACT
+//# @purpose  Grafana Alloy configuration (promtail EOL 2026-03-02 → REPLACE, DevPlan 164 W1-5):
+//#           Docker container log scraping (discovery.docker) + host journald
+//#           (loki.source.journal) + backup-logs file scrape (local.file_match) —
+//#           полный порт promtail-config.yml (3 источника, labels-контракт 1:1).
+//#           DevPlan 010 T3.1: выделен из logging в модуль log-collector (all-nodes).
+//# @scope    Mounted as /etc/alloy/config.alloy in alloy container (ro);
+//#           ${LOKI_URL}/${LOKI_TENANT} подставляются флагом --config.expand-env из env контейнера
+//# @invariants
+//#   - Labels-контракт (обязателен для alert-rules): compose_service, compose_project,
+//#     container, host, log_file, status/request_method/host (nginx)
+//#   - Docker scrape: discovery.docker auto-discovers all local containers
+//#   - Journal scrape (DevPlan 132 W3, 126 D-1): path /var/log/journal, max_age 24h;
+//#     host-лейбл из __journal__hostname; drop debug level
+//#   - Backup-logs file scrape (DevPlan 143 W1A): glob /var/log/platform/backup/*.log →
+//#     labels {compose_service="backup-cron"} → BackupFreshness alert-expr работает БЕЗ изменений
+//#   - Nginx logs captured via Docker stdout; json-поля (status/request_method/host) →
+//#     stream labels; request_time/upstream_* → structured data (не promoted)
+//#   - session_id/user_id → structured_metadata (NOT labels — high cardinality, D7)
+//#   - Drop debug/trace litellm+langfuse (TASK-7, анти-объём)
+//#   - Все потоки → loki.write default → ${LOKI_URL}/loki/api/v1/push с tenant header
+//#     X-Scope-OrgID: ${LOKI_TENANT} (T2.0b: tenant = имя контекста, дефолт "platform")
+//# @rationale Promtail EOL (Grafana: «No future support or updates will be provided»,
+//#           2026-03-02). Alloy — преемник: тот же discovery-механизм, HCL-конфиг.
+//#           Labels-паритет критичен: alert-rules (BackupFreshness/5xx) и per-project
+//#           retention молча ломаются при потере лейбла.
+//#           DevPlan 010 T3.1: endpoint параметризован (был захардкожен http://loki:3100)
+//#           — кросс-нодовый push (collector на каждой ноде шлёт в центральный Loki).
+//# @changes 2026-08-13 | DevPlan 164 W1-5 — Created (REPLACE promtail-config.yml)
+//# @changes 2026-08-22 | DevPlan 010 T3.1 — перенесён в log-collector; LOKI_URL параметризован;
+//#           X-Scope-OrgID tenant header (T2.0b)
+// endregion MODULE_CONTRACT
+
+loki.write "default" {
+  endpoint {
+    url = "${LOKI_URL}/loki/api/v1/push"
+    // DevPlan 010 T2.0b: tenant-изоляция — header X-Scope-OrgID; tenant = имя контекста,
+    // приходит через LOKI_TENANT (emission — другой агент); дефолт "platform" единый по стеку.
+    // Loki принимает любого tenant без пре-декларации (auth_enabled: true, multi-tenant ingest).
+    headers = {
+      "X-Scope-OrgID" = "${LOKI_TENANT}",
+    }
+  }
+}
+
+// ── Docker Container Logs (auto-discovery via Docker socket) ────────────────
+discovery.docker "containers" {
+  host             = "unix:///var/run/docker.sock"
+  refresh_interval = "15s"
+}
+
+// Container labels → Loki labels (контракт promtail relabel_configs 1:1)
+discovery.relabel "docker_logs" {
+  targets = discovery.docker.containers.targets
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    regex         = "(.+)"
+    target_label  = "compose_service"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    regex         = "(.+)"
+    target_label  = "compose_project"
+  }
+}
+
+loki.source.docker "containers" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.docker_logs.output
+  forward_to = [loki.process.docker.receiver]
+}
+
+// Пайплайн (порт promtail pipeline_stages 1:1; relaxed JSON — non-JSON строки проходят
+// без лейблов/metadata, остаются plain text — TRAP 2026-06-28 сохранён семантически)
+loki.process "docker" {
+  forward_to = [loki.write.default.receiver]
+
+// # Stage 1: Parse JSON (non-JSON lines silently pass through)
+  stage.json {
+    expressions = {
+      level      = "level",
+      session_id = "session_id",
+      user_id    = "user_id",
+      event      = "event",
+      service    = "service",
+      agent      = "agent",
+      project    = "project",
+    }
+  }
+
+// # Drop debug/trace logs from litellm container (TASK-7)
+  stage.match {
+    selector = "{compose_service=\"litellm\"}"
+    stage.drop {
+      source     = "level"
+      expression = "(?i)debug|trace"
+    }
+  }
+
+// # Drop debug/trace logs from langfuse container (TASK-7)
+  stage.match {
+    selector = "{compose_service=\"langfuse\"}"
+    stage.drop {
+      source     = "level"
+      expression = "(?i)debug|trace"
+    }
+  }
+
+// # Extract nginx access log fields from json_combined format (Docker stdout)
+  stage.match {
+    selector = "{compose_service=\"nginx\"}"
+    stage.json {
+      expressions = {
+        status          = "status",
+        request_method  = "request_method",
+        host            = "host",
+        request_time    = "request_time",
+        upstream_addr   = "upstream_addr",
+        upstream_status = "upstream_status",
+      }
+    }
+    stage.labels {
+      values = {
+        status         = "",
+        request_method = "",
+        host           = "",
+      }
+    }
+  }
+
+// # Stage 2: Extract low-cardinality fields as stream labels
+  stage.labels {
+    values = {
+      level   = "",
+      service = "",
+      agent   = "",
+      project = "",
+    }
+  }
+
+// # Stage 3: Extract high-cardinality fields as structured metadata (D7)
+  stage.structured_metadata {
+    values = {
+      session_id = "",
+      user_id    = "",
+    }
+  }
+}
+
+// ── Host journald (docker daemon, OOM, systemd) — 126 D-1 / DevPlan 132 W3 ────
+// discovery.relabel для journal: targets не используются (relabel_rules применяются
+// к journal-discovery внутри loki.source.journal) — пустой список обязателен.
+discovery.relabel "journal" {
+  targets = []
+
+  rule {
+    source_labels = ["__journal__hostname"]
+    target_label  = "host"
+  }
+}
+
+loki.source.journal "journal" {
+  path          = "/var/log/journal"
+  max_age       = "24h"
+  relabel_rules = discovery.relabel.journal.rules
+  forward_to    = [loki.process.journal.receiver]
+}
+
+loki.process "journal" {
+  forward_to = [loki.write.default.receiver]
+
+  stage.match {
+    selector = "{job=\"journal\"}"
+    stage.drop {
+      source     = "level"
+      expression = "(?i)debug"
+    }
+  }
+}
+
+// ── Backup logs file-scrape (DevPlan 143 W1A) ───────────────────────────────
+// cron пишет маркеры [IMP:9] BACKUP COMPLETE в /var/log/platform/backup/*.log →
+// labels {compose_service="backup-cron"} → BackupFreshness alert-expr работает без изменений.
+// Статические лейблы — в path_targets (loki.source.file не имеет labels-атрибута;
+// лейблы приходят из target-меток).
+local.file_match "backup_logs" {
+  path_targets = [{
+    __path__        = "/var/log/platform/backup/*.log",
+    job             = "backup-logs",
+    compose_service = "backup-cron",
+  }]
+}
+
+discovery.relabel "backup_paths" {
+  targets = local.file_match.backup_logs.targets
+
+  rule {
+    source_labels = ["__path__"]
+    regex         = ".*/(.*)"
+    target_label  = "log_file"
+  }
+}
+
+loki.source.file "backup_logs" {
+  targets    = discovery.relabel.backup_paths.output
+  forward_to = [loki.write.default.receiver]
+}

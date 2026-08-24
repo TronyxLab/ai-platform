@@ -5,11 +5,15 @@
 ## @purpose  Base compose definition for redis — pure cache instance. NO persistence (no AOF, no RDB).
 ## @scope    Shared cache: no host ports, network shared-cache-net, allkeys-lfu eviction at 256mb
 ## @invariants
-##   - Image: redis:7.4-alpine (pinned minor version for stability, upgraded TASK-2: 7-alpine → 7.4-alpine)
-##   - NO ports: directive — no host port mapping (internal network only) (00 §9)
+##   - Image: redis:8.8.1-alpine (digest-pinned; ранее 7.4-alpine TASK-2)
+##   - NO host ports в single-node (internal network only, D4); кросс-нодовая публикация 6379 —
+##     только peer-scoped ufw после T2.0a auth (DevPlan 010)
+##   - requirepass ОБЯЗАТЕЛЕН (T2.0a security-префикс multi-node): пароль из env REDIS_PASSWORD,
+##     раскрывается ВНУТРИ контейнера shell'ом — не светится в compose-argv/ps
 ##   - restart: always — Docker policy (not manual lifecycle management)
 ##   - stop_grace_period: 10s (no persistence flush needed)
-##   - Command: --save "" --appendonly no --maxmemory 256mb --maxmemory-policy allkeys-lfu
+##   - Command: --save "" --appendonly no --maxmemory 256mb --maxmemory-policy allkeys-lfu --requirepass
+##   - Healthcheck аутентифицирован через REDISCLI_AUTH (без ps-экспозиции пароля)
 ##   - Network: shared-cache-net (external:true, pre-created by deploy-modules.sh)
 ##   - NO volumes — cache-only, no persistence data to store (owner verdict wave-redis 2026-07-15)
 ##   - Resource limits: memory 256M — intentional (AR3 cancelled: limits protect host from OOM)
@@ -17,6 +21,8 @@
 ## @rationale Owner verdict wave-redis 2026-07-15: redis is pure cache (no AOF, no RDB, no volume).
 ##   Eviction policy: allkeys-lfu (frequency-based, эффективнее recency-based). stop_grace_period 10s —
 ##   AOF flush на shutdown не требуется. no host ports — internal network only (D4).
+##   DevPlan 010 T2.0a (2026-08-22): redis без аутентификации вообще → requirepass обязателен ДО
+##   публикации порта пирам (порядок «сначала auth, потом порт»).
 # endregion MODULE_CONTRACT
 
 x-logging: &default-logging
@@ -57,12 +63,25 @@ services:
     # · Rejected: AOF persistence
     # · Reason: owner verdict wave-redis — redis is pure cache, queues get noeviction Redis elsewhere
     # · Rev: if queue/critical state moves to this redis
-    command: >
-      redis-server
-      --save ""
-      --appendonly no
-      --maxmemory 256mb
-      --maxmemory-policy allkeys-lfu
+    # 🧐 TRAP[DECISION] · 2026-08-22 · DevPlan 010 T2.0a · requirepass через shell-расширение env
+    # · Rejected: --requirepass ${REDIS_PASSWORD} в argv (пароль виден в docker inspect/ps)
+    # · Reason: shell-обёртка с exec раскрывает $REDIS_PASSWORD внутри контейнера из environment;
+    #   argv остаётся без секрета; exec сохраняет PID-1 семантику
+    # · Rev: если redis-server научится читать пароль из env нативно — убрать shell-обёртку
+    command:
+      - sh
+      - -c
+      - |
+        exec redis-server \
+          --save "" \
+          --appendonly no \
+          --maxmemory 256mb \
+          --maxmemory-policy allkeys-lfu \
+          --requirepass "$REDIS_PASSWORD"
+
+    # [IMP:8][redis-compose] T2.0a: fail-fast при отсутствии пароля (канон ${VAR:?}, DD3 reversed)
+    environment:
+      REDIS_PASSWORD: "${REDIS_PASSWORD:?REDIS_PASSWORD_REQUIRED}"
 
     # [IMP:9][redis-compose] NO ports: — network isolation enforced, shared-cache-net only
     # ports: deliberately absent (D4, AC-3)
@@ -76,8 +95,10 @@ services:
           - redis
 
     # LIVENESS healthcheck — triggers Docker restart on failure
+    # [IMP:8][redis-compose] T2.0a: аутентифицированный ping — REDISCLI_AUTH env (без ps-экспозиции);
+    # $$ экранирует compose-интерполяцию, переменную раскрывает shell ВНУТРИ контейнера
     healthcheck:
-      test: ["CMD", "redis-cli", "-h", "127.0.0.1", "ping"]
+      test: ["CMD-SHELL", "REDISCLI_AUTH=$$REDIS_PASSWORD redis-cli -h 127.0.0.1 ping"]
       interval: 30s
       timeout: 10s
       retries: 3

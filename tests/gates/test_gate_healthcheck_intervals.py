@@ -11,7 +11,7 @@
 ## @invariants
 ##   - Классификация — константа _MODULE_CLASS (SoT в гейте)
 ##   - Критичные (15s): postgres, clickhouse, minio, langfuse, litellm, hermes-agent
-##   - Сервисы (30s): redis, nginx, status-page, monitoring, logging, infra-metrics
+##   - Сервисы (30s): redis, nginx, status-page, monitoring, logging, node-metrics
 ##   - Фоновые (60s): backup-cron
 ##   - postgres 10s → RED (самопротиворечие со start_period 15s — DevPlan 116 B5 T10.1)
 ## @rationale U-63: интервалы 10/15/30/60 без гейта; postgres сам себе противоречил
@@ -20,6 +20,7 @@
 # endregion MODULE_CONTRACT
 
 import logging
+import pathlib
 
 import pytest
 import yaml
@@ -35,12 +36,53 @@ _MODULES_DIR = ROOT / "core" / "modules"
 # Классификация healthcheck-интервалов (SoT, DevPlan 116 B5 D4/U-63; 010 T3.1: +log-collector).
 # Критичные данные — 15s; сервисы — 30s; фоновые — 60s.
 _CRITICAL_15S = {"postgres", "clickhouse", "minio", "langfuse", "litellm", "hermes-agent"}
-_SERVICES_30S = {"redis", "nginx", "status-page", "monitoring", "logging", "log-collector", "infra-metrics"}
+_SERVICES_30S = {
+    "redis",
+    "nginx",
+    "status-page",
+    "monitoring",
+    "logging",
+    "log-collector",
+    "node-metrics",
+    "service-exporters",
+}
 _BACKGROUND_60S = {"backup-cron"}
 
 _MODULE_CLASS: dict[str, str] = dict.fromkeys(_CRITICAL_15S, "15s")
 _MODULE_CLASS.update(dict.fromkeys(_SERVICES_30S, "30s"))
 _MODULE_CLASS.update(dict.fromkeys(_BACKGROUND_60S, "60s"))
+
+
+def _scan_intervals_file(
+    compose: pathlib.Path,
+) -> tuple[list[tuple[str, str, str]], list[tuple[str, str, str, str]], int]:
+    """Скан одного base.yml → (unknown, violations, checked_count). C901-extraction."""
+    mod = compose.parent.name
+    try:
+        data = yaml.safe_load(compose.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as e:
+        logger.error("[IMP:10][intervals] %s YAML error: %s", compose, e)
+        pytest.fail(f"Failed to parse {compose}: {e}")
+    unknown: list[tuple[str, str, str]] = []
+    violations: list[tuple[str, str, str, str]] = []
+    checked = 0
+    services = (data or {}).get("services", {}) or {}
+    for svc_name, svc in services.items():
+        if not isinstance(svc, dict):
+            continue
+        hc = svc.get("healthcheck")
+        if not isinstance(hc, dict):
+            continue  # сервис без healthcheck — вне политики
+        interval = hc.get("interval")
+        if not interval:
+            continue
+        checked += 1
+        expected = _MODULE_CLASS.get(mod)
+        if expected is None:
+            unknown.append((mod, svc_name, str(interval)))
+        elif str(interval) != expected:
+            violations.append((mod, svc_name, str(interval), expected))
+    return unknown, violations, checked
 
 
 @pytest.mark.gate
@@ -52,29 +94,10 @@ def test_healthcheck_intervals_match_classification(caplog) -> None:
     checked = 0
 
     for compose in sorted(_MODULES_DIR.glob("*/docker-compose.base.yml")):
-        mod = compose.parent.name
-        try:
-            data = yaml.safe_load(compose.read_text())
-        except (OSError, yaml.YAMLError) as e:
-            logger.error("[IMP:10][intervals] %s YAML error: %s", compose, e)
-            pytest.fail(f"Failed to parse {compose}: {e}")
-            continue
-        services = (data or {}).get("services", {}) or {}
-        for svc_name, svc in services.items():
-            if not isinstance(svc, dict):
-                continue
-            hc = svc.get("healthcheck")
-            if not isinstance(hc, dict):
-                continue  # сервис без healthcheck — вне политики
-            interval = hc.get("interval")
-            if not interval:
-                continue
-            checked += 1
-            expected = _MODULE_CLASS.get(mod)
-            if expected is None:
-                unknown.append((mod, svc_name, str(interval)))
-            elif str(interval) != expected:
-                violations.append((mod, svc_name, str(interval), expected))
+        file_unknown, file_violations, n = _scan_intervals_file(compose)
+        checked += n
+        unknown.extend(file_unknown)
+        violations.extend(file_violations)
 
     if unknown:
         for mod, svc, actual in unknown:

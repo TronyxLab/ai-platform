@@ -36,6 +36,7 @@ SMOKE_ENV_GENERATED: dict[str, str] = {
     "PLATFORM_MASTER_PASSWORD": "test-master-password",
     "POSTGRES_PASSWORD": "test-pg-pwd",
     "POSTGRES_USER": "postgres",
+    "REDIS_PASSWORD": "ci-test-redis-password",
     "S3_ACCESS_KEY": "test-access-key",
     "S3_BUCKET": "test-bucket",
     "S3_SECRET_KEY": "test-secret-key",

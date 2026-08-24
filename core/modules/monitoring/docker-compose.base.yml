@@ -223,11 +223,11 @@ services:
       HTTP_PROXY: "${HTTP_PROXY:-http://host.docker.internal:8118}"
       HTTPS_PROXY: "${HTTPS_PROXY:-http://host.docker.internal:8118}"
       # DevPlan 010 T2.5 (monitoring fallback): EXTRA_NO_PROXY — passthrough для multi-node
-      # (адреса нод-пиров подставит emission другого агента). ${VAR:+replacement} —
-      # compose-интерполяция: при пустом EXTRA_NO_PROXY ничего не добавляется (нет
-      # хвостовой запятой), при заданном — ",<value>" в конец списка.
-      NO_PROXY: "${NO_PROXY:-localhost,127.0.0.1,.local,postgres,pgbouncer,redis,clickhouse,litellm,langfuse,minio,grafana,prometheus,loki,nginx,node-exporter,cadvisor,hermes-agent,status-page,backup-cron,nginx-prometheus-exporter,redis-exporter,postgres-exporter}${EXTRA_NO_PROXY:+,${EXTRA_NO_PROXY}}"
-      no_proxy: "${NO_PROXY:-localhost,127.0.0.1,.local,postgres,pgbouncer,redis,clickhouse,litellm,langfuse,minio,grafana,prometheus,loki,nginx,node-exporter,cadvisor,hermes-agent,status-page,backup-cron,nginx-prometheus-exporter,redis-exporter,postgres-exporter}${EXTRA_NO_PROXY:+,${EXTRA_NO_PROXY}}"
+      # (адреса нод-пиров подставит emission). КОНТРАКТ значения: непустое значение ОБЯЗАНО
+      # начинаться с запятой (",10.8.0.11") — интерполяция плоская, без ${VAR:+,...}
+      # (nested-скобки ломают env-сканеры predeploy-гейта и неоднозначны в compose).
+      NO_PROXY: "${NO_PROXY:-localhost,127.0.0.1,.local,postgres,pgbouncer,redis,clickhouse,litellm,langfuse,minio,grafana,prometheus,loki,nginx,node-exporter,cadvisor,hermes-agent,status-page,backup-cron,nginx-prometheus-exporter,redis-exporter,postgres-exporter}${EXTRA_NO_PROXY:-}"
+      no_proxy: "${NO_PROXY:-localhost,127.0.0.1,.local,postgres,pgbouncer,redis,clickhouse,litellm,langfuse,minio,grafana,prometheus,loki,nginx,node-exporter,cadvisor,hermes-agent,status-page,backup-cron,nginx-prometheus-exporter,redis-exporter,postgres-exporter}${EXTRA_NO_PROXY:-}"
       EXTRA_NO_PROXY: "${EXTRA_NO_PROXY:-}"
 
     volumes:

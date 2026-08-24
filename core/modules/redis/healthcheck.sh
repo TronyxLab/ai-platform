@@ -5,7 +5,8 @@
 ## @purpose  Docker healthcheck for redis — uses check_docker_health for liveness, exec_check redis-cli PING for deep check
 ## @scope    Called by modules-healthcheck.sh (host-side)
 ## @invariants
-##   - MODE=deep: check_docker_health + exec_check redis-cli -h 127.0.0.1 -p 6379 ping
+##   - MODE=deep: check_docker_health + exec_check redis-cli ping с auth ($REDIS_PASSWORD из
+##     container env — DevPlan 010 T2.0a requirepass)
 ##   - Default: delegates to check_docker_health for liveness via docker inspect
 ##   - Container name: redis
 ##   - exit 0 = healthy; exit 1 = unhealthy
@@ -26,7 +27,10 @@ if [ "$MODE" = "deep" ]; then
     # Step 1: Check Docker health status (same as liveness)
     check_docker_health "$CONTAINER" || exit 1
     # Step 2: Service-specific diagnostics via exec_check
-    exec_check "$CONTAINER" "redis-cli -h 127.0.0.1 -p 6379 ping" || exit 1
+    # [IMP:8] DevPlan 010 T2.0a: аутентифицированный ping — $REDIS_PASSWORD раскрывается
+    # ВНУТРИ контейнера из его environment (одинарные кавычки сохраняют раскрытие для exec);
+    # --no-auth-warning — без warning-шума в логах healthcheck
+    exec_check "$CONTAINER" 'redis-cli -h 127.0.0.1 -p 6379 --no-auth-warning -a "$REDIS_PASSWORD" ping' || exit 1
     log_imp 9 "deep" "redis deep check PASSED"
     exit 0  # ранний выход
 fi

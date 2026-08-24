@@ -68,7 +68,8 @@ def test_all_base_yml_have_x_logging(caplog):
 # directory name. F1 (DevPlan 118): the primary container_name invariant is now a hard assert —
 # any OTHER module without a matching container_name is a violation (drift).
 _TOOL_NAMED_PRIMARY = {
-    "infra-metrics": "cadvisor",
+    "node-metrics": "cadvisor",
+    "service-exporters": "postgres-exporter",
     "logging": "loki",
     "log-collector": "alloy",
     "monitoring": "prometheus",

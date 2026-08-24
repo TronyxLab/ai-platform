@@ -287,6 +287,51 @@ K3 не имеет носителя state для L2/L3-блокировки. Н�
 
 ---
 
+## Multi-node размещение модулей (DevPlan 010)
+
+Топология контекста описывается **только** в `node-configs/<context>/placement.yaml`.
+Placement авторитетен: при наличии файла `node.yaml#modules` для деплоя не читается;
+дрейф node.yaml ↔ placement — lint-WARNING с repair-подсказкой (не RED). Отсутствие
+placement.yaml = single-node канон, поведение байт-идентично легаси.
+
+**Закрытый словарь форм размещения:** singleton `{node: <name>}` · all-nodes
+`{mode: all-nodes}` · nodes-list `{nodes: [a, b]}` (v1 — только nginx, multi-ingress) ·
+off `{mode: "off"}` (⚠️ YAML-ловушка: bare `off` парсится как boolean false — кавычки
+обязательны). Полнота записей обязательна: каждый модуль инвентаря имеет запись (включая off).
+
+**Словарь терминов (Brief-009 T8):** «размещение/placement», «шаримый модуль (singleton)»,
+«per-node модуль (all-nodes)», «нода-пир», «критичная нода / канарейка».
+
+**Порядок бутстрапа контекста:** data → agent → apps/obs (данные раньше потребителей).
+Повторный bootstrap идемпотентен; проверка готовности — per-node `make status NODE=<n>`
+(глагол context-status отложен до >4 нод). Распределённый оркестратор не строится (v1).
+
+**VPN-prerequisite + аттестация:** `nodes[].host` — только приватные адреса (RFC1918,
+100.64/10); публичный IP → ConfigValidationError. Multi-node контекст обязан нести
+`vpn_enforced: true` — оператор подтверждает шифрованный канал (RFC1918 ≠ крипто; платформа
+VPN не строит: sslmode=disable, redis/minio без TLS — шифрует VPN-канал).
+
+**Security-префикс:** ни один кросс-нодовый порт (6432 pgbouncer, 6379 redis, 9000 minio,
+8123 clickhouse HTTP, 19000 CH native peer, 3100 loki push, 9100+8080 node-metrics,
+9187/9121/9113 service-exporters) не публикуется без выполненного префикса (redis requirepass,
+Loki tenant X-Scope-OrgID, pg_hba scram-sha-256 — реализовано, T2.0.*). ufw peer-ALLOW — только
+для IP нод-пиров (`allow from <peer>`, вставка ДО module-deny); Anywhere на этих портах = FAIL;
+прямой 5432 НЕ публикуется (потребители переезжают на data-ноду вместе с postgres).
+
+**Multi-ingress + DNS-steering prerequisite:** nginx `{nodes:[...]}` — экземпляр на каждой
+ноде; exposed-проект обязан иметь `target_node` из списка; каждому FQDN — своя A-запись на IP
+своей ноды (платформа DNS не управляет — шаг оператора перед первым exposed-проектом на
+второй ноде). TLS wildcard DNS-01 выдаётся на любой ноде независимо (S3-cache restore).
+
+**Граница бэкапа честная:** backup-cron покрывает ТОЛЬКО postgres (pg_dumpall+WAL → внешний
+S3); project/minio/clickhouse/loki volumes не бэкапятся и в single-node. Multi-node экспозицию
+не ухудшает — фиксирует существующую (Rev: первый stateful-проект → phase-07 app-data).
+
+Полный план: `.ai/plans/010-multi-node-module-placement/01-DevPlan.md`; сценарии S2 «данные
+отдельно» / S2b «критичные-канарейки» / S3 «data-agent-apps» — §8 плана.
+
+---
+
 ## Корневой контракт ~/projects/
 
 Общий контракт платформы для агентов, работающих в `~/projects/`: агент находит контракт

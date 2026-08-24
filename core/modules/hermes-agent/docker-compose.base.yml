@@ -159,6 +159,9 @@ services:
       POSTGRES_PORT: "${POSTGRES_PORT:-6432}"
       REDIS_HOST: "${REDIS_HOST:-redis}"
       REDIS_PORT: "${REDIS_PORT:-6379}"
+      # DevPlan 010 T2.0a: redis requirepass — /ready dependency-check аутентифицируется;
+      # значение приходит из provisioned secrets.env (autogen), дефолт пуст для test-оверлеев
+      REDIS_PASSWORD: "${REDIS_PASSWORD:-}"
       LITELLM_HEALTH_URL: "${LITELLM_HEALTH_URL:-http://litellm:4000/health/liveliness}"
       DEPENDENCY_CHECK_TIMEOUT: "${DEPENDENCY_CHECK_TIMEOUT:-2.0}"
 
