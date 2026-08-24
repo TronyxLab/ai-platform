@@ -7,7 +7,8 @@
 ## @scope    Все проекты платформы используют этот файл для определения LLM-доступа.
 ##           Ни один проект не имеет своего policy.yaml — только ссылается на профили.
 ## @invariants
-##   - providers: только DeepSeek (единственный провайдер на 2026-07-24)
+##   - providers: deepseek (базовый) + zai (z.ai/Zhipu, добавлен 2026-08-24 сессией T9
+##     живого прогона W3 по санкции владельца — баланс DeepSeek исчерпан)
 ##   - aliases с пустыми deployments ([]) — зарезервированы, но не активны
 ##   - profiles определяют budgets в USD/day
 ##   - auto_provision.default_profile применяется, если проект не указал profile
@@ -16,12 +17,15 @@
 ##            При появлении разных провайдеров на разных контекстах — добавляется
 ##            секция contexts: с per-context overrides.
 ## @changes — 2026-07-24 | Created (DevPlan 049 Phase 1)
+## @changes — 2026-08-24 | +provider zai, +alias chat-zai (T9 живой прогон W3; DeepSeek Insufficient Balance)
 # endregion MODULE_CONTRACT
 
 # ── Providers ──────────────────────────────────────────────────────────────
 providers:
   deepseek:
     key_env: DEEPSEEK_API_KEY
+  zai:
+    key_env: ZAI_API_KEY
 
 # ── Semantic Aliases ──────────────────────────────────────────────────────
 aliases:
@@ -45,6 +49,17 @@ aliases:
       primary:
         provider: deepseek
         model: deepseek-v4-flash
+
+  # z.ai (Zhipu GLM) chat group — added by the W3 live-run session (T9) on owner's sanction:
+  # the DeepSeek account hit Insufficient Balance mid-run; the pilot's faq profile points here.
+  chat-zai:
+    label: "Fast chat (z.ai GLM)"
+    context_window: 128000
+    features: [chat]
+    deployments:
+      primary:
+        provider: zai
+        model: glm-4.6
 
   # Hermes-upstream model aliases — the upstream Hermes agent resolves
   # deepseek provider models as 'deepseek-chat' and 'deepseek-reasoner'.

@@ -11,7 +11,6 @@
 
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
-  database_url: os.environ/DATABASE_URL
   disable_master_key_returned: true
 
 model_list:
@@ -48,6 +47,17 @@ model_list:
         - development
       access_groups:
         - chat
+  - model_name: chat-zai
+    litellm_params:
+      model: zai/glm-4.6
+      api_key: os.environ/ZAI_API_KEY
+      mode: chat
+    model_info:
+      supported_environments:
+        - production
+        - development
+      access_groups:
+        - chat-zai
   - model_name: deepseek-chat
     litellm_params:
       model: deepseek/deepseek-v4-flash

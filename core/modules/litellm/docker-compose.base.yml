@@ -98,8 +98,11 @@ services:
       CONFIG_FILE: "/app/config/litellm-config.yml"
 
       # LLM API Keys (passthrough from secrets.env)
-      # DEEPSEEK_API_KEY — единственный реальный AI-провайдер ключ
+      # DEEPSEEK_API_KEY — базовый AI-провайдер ключ
       DEEPSEEK_API_KEY: "${DEEPSEEK_API_KEY:?required}"
+      # ZAI_API_KEY — z.ai (Zhipu GLM), добавлен сессией T9 живого прогона W3 2026-08-24
+      # (санкция владельца: «заходи через z.ai для теста»); группа chat-zai в policy.yaml
+      ZAI_API_KEY: "${ZAI_API_KEY:?required}"
 
       # ⚠️ TRAP[DECISION] · 2026-07-24 · — · LITELLM_ENVIRONMENT required for supported_environments
       # · Without this, models with supported_environments are filtered out at startup
