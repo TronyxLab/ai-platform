@@ -11,9 +11,12 @@
 ##   - proxy-net + observability-net — nginx needs both for proxying to backend services
 ##   - Config files are mounted as /etc/nginx/templates/*.conf.template (9 files) —
 ##     official nginx entrypoint runs envsubst on templates with PLATFORM_DOMAIN,
-##     outputs rendered configs to /etc/nginx/conf.d/. Shared snippets (security-headers.conf,
+##     LOKI_TENANT (T2.0b) и UPSTREAM_* (T2.8), outputs rendered configs to
+##     /etc/nginx/conf.d/. Shared snippets (security-headers.conf,
 ##     ssl-params.conf.template) are mounted to /etc/nginx/includes/ and
 ##     /etc/nginx/templates/ respectively. nginx.conf mounted directly (no vars).
+##   - UPSTREAM_* дефолты резолвит compose-интерполяция (nginx envsubst НЕ понимает
+##     ${VAR:-default}); multi-node значения выставляет deploy_orchestrator из placement.
 ##   - PLATFORM_DOMAIN env var required for production render; passed via environment
 ##   - Overlay vhosts: ${NGINX_OVERLAY_DIR:-./overlays} mounted ro into /etc/nginx/conf.d/overlay/
 ##     Overlay files are plain *.conf (NOT .conf.template), no envsubst applied.
@@ -48,6 +51,18 @@ services:
       # DevPlan 010 T2.0b: Loki tenant header (loki-vhost X-Scope-OrgID) —
       # дефолт "platform" единый по стеку; provision подставит имя контекста в multi-node.
       LOKI_TENANT: ${LOKI_TENANT:-platform}
+      # DevPlan 010 T2.8: vhost upstream'ы платформенных сервисов через bare ${UPSTREAM_*}.
+      # ⚠️ nginx envsubst НЕ понимает ${VAR:-default} — дефолты резолвит compose-интерполяция
+      # ЗДЕСЬ (single-node → Docker DNS алиасы, байт-идентично легаси); multi-node deploy
+      # выставляет UPSTREAM_<SVC>=<node.host>:<port> из placement
+      # (deploy_orchestrator.multinode_runtime_env). $upstream_* (lowercase) — nginx runtime
+      # переменные, envsubst их не трогает (case-sensitive матч).
+      UPSTREAM_GRAFANA: ${UPSTREAM_GRAFANA:-grafana:3000}
+      UPSTREAM_PROMETHEUS: ${UPSTREAM_PROMETHEUS:-prometheus:9090}
+      UPSTREAM_LOKI: ${UPSTREAM_LOKI:-loki:3100}
+      UPSTREAM_LANGFUSE: ${UPSTREAM_LANGFUSE:-langfuse:3000}
+      UPSTREAM_HERMES: ${UPSTREAM_HERMES:-hermes-agent:9119}
+      UPSTREAM_STATUS_PAGE: ${UPSTREAM_STATUS_PAGE:-status-page:8080}
 
     ports:
       - "${NGINX_HTTP_PORT:-80}:80"

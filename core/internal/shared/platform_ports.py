@@ -53,8 +53,14 @@ PLATFORM_PORT_PROMETHEUS: int = 9090
 # ── Hermes-agent / LLM ─────────────────────────────────────────────────────
 
 # Langfuse tracing (container-порт 3000: compose "127.0.0.1:${LANGFUSE_PORT:-3001}:3000",
-# NEXTAUTH_URL "http://langfuse:3000"; provides.langfuse.port=3001 — host-порт, см. инвариант 2)
+# NEXTAUTH_URL "http://langfuse:3000"; provides.langfuse.port=3001 — host-порт (внешний доступ
+# с хоста), НЕ используется во внутренних URL. Parity-гейт сверяет LANGFUSE с container-портом.
 PLATFORM_PORT_LANGFUSE: int = 3000
+
+# Langfuse HOST-порт (env_defaults.LANGFUSE_PORT=3001, compose host-side публикации;
+# DevPlan 010 completion T2.2/T2.3 — peer-публикация фасада tracing'а кросс-нодово).
+# Вне parity-скоупа (host-порт, инвариант 5 — как CLICKHOUSE_NATIVE_PEER).
+LANGFUSE_HOST: int = 3001
 
 # LiteLLM proxy (provides.litellm.port=4000, compose container 4000)
 PLATFORM_PORT_LITELLM: int = 4000

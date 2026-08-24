@@ -55,8 +55,17 @@ _PORT_NAME_MAP: dict[int, str] = {
 # Generic-схема (первый порт → MODULE_PORT, последующие → MODULE_SERVICE_PORT) порождает
 # мусорный дубль MINIO_MINIO_PORT: 9001, хотя канон platform-infra.yaml — MINIO_CONSOLE_PORT.
 # Оверрайд возвращает имя из SoT; при изменении compose-портов minio — править оба места.
+# DevPlan 010 T2.2 completion: clickhouse native-peer (host 19000→container 9000) — второй порт;
+# канон имени — compose-переменная CLICKHOUSE_NATIVE_PEER_PORT (TRAP §3 плана, platform_ports).
 _PORT_CANON_NAMES: dict[str, dict[str, dict[int, str]]] = {
     "minio": {"minio": {1: "MINIO_CONSOLE_PORT"}},
+    # DevPlan 010 T2.2 completion: native-peer host-порт (19000→container 9000) получает
+    # каноническое имя compose-переменной CLICKHOUSE_NATIVE_PEER_PORT вместо мусорного
+    # CLICKHOUSE_CLICKHOUSE_PORT (TRAP §3 плана; parity с shared/platform_ports).
+    # ⚠️ node-metrics/service-exporters НЕ оверрайдятся — U-01 регрессионный тест
+    # (test_scan_compose_ports_multi_service_regression) пиннит generic-схему
+    # NODE_METRICS_NODE_EXPORTER_PORT / SERVICE_EXPORTERS_*.
+    "clickhouse": {"clickhouse": {1: "CLICKHOUSE_NATIVE_PEER_PORT"}},
 }
 
 
@@ -65,7 +74,8 @@ def extract_host_port(port_mapping: str) -> int | None:
     """Extract host port from a Docker Compose port mapping string.
 
     ## @purpose  Parse port mapping formats: "XXXX:YYYY", "127.0.0.1:XXXX:YYYY",
-    ##            "127.0.0.1:${VAR:-XXXX}:YYYY", "${VAR:-XXXX}:YYYY".
+    ##            "127.0.0.1:${VAR:-XXXX}:YYYY", "${VAR:-XXXX}:YYYY",
+    ##            "${SERVICE_BIND_HOST:-127.0.0.1}:${VAR:-XXXX}:YYYY" (DevPlan 010 T2.2).
     ##            Returns the resolved host port number.
     ## @io        ⇥ port_mapping: str → ⎋ int | None: host port or None
     ## @complexity O(1) — multi-pattern regex
@@ -75,6 +85,14 @@ def extract_host_port(port_mapping: str) -> int | None:
     # Pattern 1: "127.0.0.1:${VAR:-XXXX}:YYYY" with env var default
     ip_var_pattern = re.compile(r"^\d+\.\d+\.\d+\.\d+:\$\{[^:}]+:-(\d+)\}:\d+$")
     m = ip_var_pattern.match(mapping)
+    if m:
+        return int(m.group(1))
+
+    # Pattern 1b (DevPlan 010 T2.2): "${SERVICE_BIND_HOST:-127.0.0.1}:${VAR:-XXXX}:YYYY" —
+    # параметризованный bind host-публикации (single-node default loopback, multi-node host ноды).
+    # Host-сторона — IP-default env var; порт — env var default (группа 1).
+    bind_var_pattern = re.compile(r"^\$\{[^:{}]+:-(?:\d+\.\d+\.\d+\.\d+)\}:\$\{[^:{}]+:-(\d+)\}:\d+$")
+    m = bind_var_pattern.match(mapping)
     if m:
         return int(m.group(1))
 

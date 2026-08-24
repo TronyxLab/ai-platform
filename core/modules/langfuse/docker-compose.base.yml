@@ -115,7 +115,9 @@ services:
     logging: *default-logging
 
     ports:
-      - "127.0.0.1:${LANGFUSE_PORT:-3001}:3000"
+      # DevPlan 010 T2.2 (фасадные порты, §8 S3 «agent-1 → 3001 для IP apps-1»):
+      # host ${LANGFUSE_PORT:-3001} → container 3000; peer-доступ режет ufw T2.3.
+      - "${SERVICE_BIND_HOST:-127.0.0.1}:${LANGFUSE_PORT:-3001}:3000"
 
     environment: *langfuse-env
 

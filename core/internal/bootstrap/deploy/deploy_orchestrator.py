@@ -129,6 +129,18 @@ from core.internal.shared.placement import (
     lint_drift,
     load_placement,
     resolve_node_modules,
+    service_host,
+)
+
+# DevPlan 010 T2.2/T2.8: host-порты peer-публикации и vhost-upstream'ов — только из SoT
+from core.internal.shared.platform_ports import (
+    CLICKHOUSE_NATIVE_PEER,
+    LANGFUSE_HOST,
+    LOKI_HTTP,
+    PLATFORM_PORT_GRAFANA,
+    PLATFORM_PORT_HERMES,
+    PLATFORM_PORT_PROMETHEUS,
+    PLATFORM_PORT_STATUS_PAGE,
 )
 
 # DevPlan 116 B5 T1: таймауты — единый реестр shared/timeouts.py (U-11, гейт timeout_literals)
@@ -222,6 +234,13 @@ def orchestrate(
         logger.info("[IMP:9][orchestrate][skip] No enabled modules declared in %s — SKIP deploy", node_yaml)
         return ModuleDeployResult(deployed=0, failed=[], crit_count=0, warn_count=0, exit_code=0)
     logger.info("[IMP:8][orchestrate][parse] enabled=%d all=%d", len(modules.enabled_names), len(modules.all_names))
+
+    # PHASE 2.5: MULTI-NODE RUNTIME ENV (DevPlan 010 T2.2/T2.5/T2.8) — placement-авторитетные
+    # SERVICE_BIND_HOST / LOKI_TENANT / EXTRA_NO_PROXY / UPSTREAM_* ДО деплоя модулей;
+    # single-node (placement None) → no-op, os.environ не трогается (байт-совместимость §1.1).
+    mn_placement, mn_node = _placement_for_node(node_yaml)
+    if mn_placement is not None:
+        _apply_multinode_runtime_env(mn_placement, mn_node)
 
     # PHASE 3: ROUTE & DEPLOY
     deployed, failed, modules_info = _route_deploy(
@@ -350,6 +369,98 @@ def _placement_for_node(node_yaml: str) -> tuple[Placement | None, str]:
 
 
 # endregion FUNC__placement_for_node
+
+
+# region FUNC_multinode_runtime_env
+## @purpose  DevPlan 010 T2.2/T2.5/T2.8: runtime-env ноды из placement (pure, без мутации os.environ).
+##           SERVICE_BIND_HOST — host-бинды публикуемых портов (peer-доступ режет ufw T2.3);
+##           LOKI_TENANT — tenant контекста (T2.0b: alloy push + grafana datasource + loki-vhost);
+##           EXTRA_NO_PROXY — адреса всех нод контекста (T2.5: прокси не трогает cross-node трафик);
+##           UPSTREAM_* — vhost upstream'ы сервисов, размещённых на ДРУГОЙ ноде (T2.8).
+## @io       ⇥ placement: Placement, node_name: str → ⎋ dict[str, str] (env-переменные)
+## @complexity O(S×K) — S = upstream-сервисы, K = размер nodes[]-списков
+## @invariants
+##   - Pure-функция (DI-seam для тестов); мутацию os.environ делает _apply_multinode_runtime_env
+##   - UPSTREAM_* выставляются ТОЛЬКО для remote-сервисов (локальные — compose-дефолты Docker DNS)
+##   - Порты только из shared/platform_ports.py (0 литералов)
+##   - node_name вне placement → ConfigValidationError (из resolve/service_host)
+_UPSTREAM_VARS: dict[str, tuple[tuple[str, int], ...]] = {
+    "logging": (("UPSTREAM_LOKI", LOKI_HTTP),),
+    "langfuse": (("UPSTREAM_LANGFUSE", LANGFUSE_HOST),),
+    "hermes-agent": (("UPSTREAM_HERMES", PLATFORM_PORT_HERMES),),
+    "status-page": (("UPSTREAM_STATUS_PAGE", PLATFORM_PORT_STATUS_PAGE),),
+    "monitoring": (
+        ("UPSTREAM_GRAFANA", PLATFORM_PORT_GRAFANA),
+        ("UPSTREAM_PROMETHEUS", PLATFORM_PORT_PROMETHEUS),
+    ),
+}
+
+# DevPlan 010 T2.7 (Acceptance W2): dependency-hosts модулей при кросс-нодовом размещении.
+# Модуль M размещён на этой ноде, его data-plane зависимость D — на ДРУГОЙ → deploy подставляет
+# env-хост D (compose-дефолт Docker DNS указывал бы на несуществующий локальный сервис).
+# Инфра-зависимости НЕ включены (канон §2.2 п.8); exporter'ы co-located с сервисами (§3) —
+# им кросс-нодовые хосты не нужны.
+_MODULE_DEP_ENV: dict[str, tuple[tuple[str, str], ...]] = {
+    "litellm": (("POSTGRES_HOST", "postgres"),),
+    "langfuse": (("POSTGRES_HOST", "postgres"), ("CLICKHOUSE_HOST", "clickhouse")),
+    "hermes-agent": (("POSTGRES_HOST", "postgres"), ("REDIS_HOST", "redis")),
+}
+
+
+def multinode_runtime_env(placement: Placement, node_name: str) -> dict[str, str]:
+    """Compute multi-node runtime env for a node from placement (pure)."""
+    env = {
+        "SERVICE_BIND_HOST": placement.nodes[node_name],
+        # T2.0b: tenant = имя контекста — ЕДИНЫЙ по всем нодам (alloy data-ноды пушит
+        # в центральный Loki; расхождение tenant'ов = невидимые логи в Grafana)
+        "LOKI_TENANT": placement.context,
+        # T2.5: все адреса нод — прокси-канал не должен перехватывать cross-node вызовы.
+        # КОНТРАКТ значения: ведущая запятая (",10.8.0.11,...") — интерполяция плоская
+        # (см. monitoring base.yml T2.5-комментарий).
+        "EXTRA_NO_PROXY": "," + ",".join(sorted(placement.nodes.values())),
+    }
+    # T2.8: UPSTREAM_* осмысленны ТОЛЬКО на нодах с nginx (vhost-потребители); на остальных
+    # нодах переменные не выставляются — compose-дефолты никуда не применяются.
+    placed_modules = resolve_node_modules(placement, node_name)
+    if "nginx" in placed_modules:
+        for module, upstream_vars in _UPSTREAM_VARS.items():
+            remote_host = service_host(placement, module, node_name)
+            if remote_host is None:
+                continue  # co-located / off / не в placement — Docker DNS дефолт из compose
+            for var_name, port in upstream_vars:
+                env[var_name] = f"{remote_host}:{port}"
+    # T2.7: dependency-hosts размещённых модулей (langfuse на agent-1 → POSTGRES_HOST=10.8.0.11;
+    # CH native peer 19000 — CLICKHOUSE_NATIVE_PORT для мигратора, TRAP §3 host≠container).
+    for module in placed_modules:
+        for env_key, dep_module in _MODULE_DEP_ENV.get(module, ()):
+            remote_dep = service_host(placement, dep_module, node_name)
+            if remote_dep is not None:
+                env[env_key] = remote_dep
+        if module == "langfuse" and service_host(placement, "clickhouse", node_name) is not None:
+            env["CLICKHOUSE_NATIVE_PORT"] = str(CLICKHOUSE_NATIVE_PEER)
+    logger.info(
+        "[IMP:8][orchestrate][multinode-env] node=%s vars=%d (upstream=%s)",
+        node_name,
+        len(env),
+        sorted(k for k in env if k.startswith("UPSTREAM_")),
+    )
+    return env
+
+
+# endregion FUNC_multinode_runtime_env
+
+
+# region FUNC__apply_multinode_runtime_env
+## @purpose  Императивная обёртка multinode_runtime_env(): выставляет os.environ перед деплоем
+##           модулей (docker_orchestrator читает os.environ при deploy_docker_module).
+## @io       ⇥ placement, node_name → ⎋ None (side-effect: os.environ)
+def _apply_multinode_runtime_env(placement: Placement, node_name: str) -> None:
+    """Apply multi-node runtime env to os.environ (placement-authoritative set, not setdefault)."""
+    for key, value in multinode_runtime_env(placement, node_name).items():
+        os.environ[key] = value
+
+
+# endregion FUNC__apply_multinode_runtime_env
 
 
 # region FUNC__parse_modules

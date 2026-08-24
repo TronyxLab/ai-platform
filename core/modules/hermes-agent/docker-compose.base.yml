@@ -113,7 +113,9 @@ services:
     # [IMP:9][hermes-agent-compose] Dashboard bound to localhost only. Host:9119→container:9119 (dashboard port).
     # nginx on host proxies to localhost:9119; 8642 reserved for Hermes Desktop remote connectivity.
     ports:
-      - "127.0.0.1:${HERMES_DASHBOARD_PORT:-9119}:9119"
+      # DevPlan 010 T2.2/T2.8: dashboard 9119 — upstream nginx-ноды (hermes-dashboard vhost);
+      # bind SERVICE_BIND_HOST (peer-доступ ufw T2.3). Desktop 8642 — только loopback.
+      - "${SERVICE_BIND_HOST:-127.0.0.1}:${HERMES_DASHBOARD_PORT:-9119}:9119"
       - "127.0.0.1:${HERMES_DESKTOP_PORT:-8642}:8642"
 
     environment:
@@ -148,7 +150,10 @@ services:
       # · Rev: if another module needs proxy — add to env_shared AND platform-env.yaml proxy.consumers
       HTTP_PROXY: "${HTTP_PROXY:-}"
       HTTPS_PROXY: "${HTTPS_PROXY:-}"
-      NO_PROXY: "${NO_PROXY:-localhost,127.0.0.1,.local,postgres,pgbouncer,redis,clickhouse,litellm,langfuse,minio,grafana,prometheus,loki,nginx,node-exporter,cadvisor,hermes-agent,status-page,backup-cron,nginx-prometheus-exporter,redis-exporter,postgres-exporter}"
+      # DevPlan 010 T2.5: EXTRA_NO_PROXY passthrough — multi-node deploy добавляет адреса
+      # нод контекста (deploy_orchestrator.multinode_runtime_env); single-node — пусто (no-op).
+      # Паттерн паритетен monitoring base.yml:225 (EXTRA_NO_PROXY).
+      NO_PROXY: "${NO_PROXY:-localhost,127.0.0.1,.local,postgres,pgbouncer,redis,clickhouse,litellm,langfuse,minio,grafana,prometheus,loki,nginx,node-exporter,cadvisor,hermes-agent,status-page,backup-cron,nginx-prometheus-exporter,redis-exporter,postgres-exporter}${EXTRA_NO_PROXY:-}"
 
       # Agent identity
       NODE_NAME: "${NODE_NAME:-unknown}"

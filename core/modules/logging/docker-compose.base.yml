@@ -52,7 +52,10 @@ services:
     logging: *default-logging
 
     ports:
-      - "127.0.0.1:${LOKI_PORT:-3100}:3100"
+      # DevPlan 010 T2.2: 3100 loki-push — центральный приём логов ВСЕХ нод контекста
+      # (log-collector push кросс-нодово, peer-доступ режет ufw T2.3; tenant X-Scope-OrgID T2.0b).
+      # Single-node — loopback без изменений.
+      - "${SERVICE_BIND_HOST:-127.0.0.1}:${LOKI_PORT:-3100}:3100"
 
     command:
       - "-config.file=/etc/loki/loki-config.yml"

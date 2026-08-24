@@ -83,8 +83,11 @@ services:
     environment:
       REDIS_PASSWORD: "${REDIS_PASSWORD:?REDIS_PASSWORD_REQUIRED}"
 
-    # [IMP:9][redis-compose] NO ports: — network isolation enforced, shared-cache-net only
-    # ports: deliberately absent (D4, AC-3)
+    # [IMP:8][redis-compose] DevPlan 010 T2.2: 6379 публикуется кросс-нодово ТОЛЬКО пирам —
+    # bind ${SERVICE_BIND_HOST:-127.0.0.1} (single-node — loopback, байт-идентично легаси);
+    # peer-доступ режет ufw (T2.3), аутентификация requirepass ОБЯЗАТЕЛЬНА до публикации (T2.0a)
+    ports:
+      - "${SERVICE_BIND_HOST:-127.0.0.1}:${REDIS_PORT:-6379}:6379"
 
     # [IMP:9][redis-compose] NO volumes: — cache-only, no persistence data to store
     # volumes: deliberately absent by owner verdict wave-redis 2026-07-15

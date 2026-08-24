@@ -33,12 +33,18 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import ClassVar, TypedDict, cast
+from typing import TYPE_CHECKING, ClassVar, TypedDict, cast
 
 import yaml
+
+if TYPE_CHECKING:
+    # Только типизация (W11: no-Any) — рантайм-импорт ленивый внутри функций
+    # (standalone CLI bootstrap: core.* резолвится ПОСЛЕ sys.path-insert, TRAP[BUG] ниже).
+    from core.internal.shared.placement import Placement
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +73,7 @@ __all__ = [
     "load_credentials",
     "load_yaml",
     "main",
+    "resolve_placement_for_project",
     "validate_provides",
 ]
 
@@ -271,6 +278,129 @@ def load_credentials(project_dir: str | None = None, credentials_file: str | Non
 
 
 # ═══════════════════════════════════════════════════════════════════
+# region FUNC__resolve_effective_host
+## @purpose  DevPlan 010 T2.1: эффективный host provides-сервиса для consumer-ноды.
+##           placement+consumer_node заданы и сервис размещён на ДРУГОЙ ноде → host той ноды;
+##           иначе (no placement / co-located / модуль вне placement) → Docker DNS alias из SoT.
+## @io       ⇥ svc_name, default_host, placement|None, consumer_node → ⎋ tuple[str, str | None]
+##           (effective_host, remote_host) — remote_host None = локальный путь (0 подстановок)
+## @complexity O(1) — делегирует shared.placement.service_host
+## @invariants
+##   - placement=None или пустой consumer_node → legacy no-op (байт-совместимость §1.1)
+##   - service_host() = None (co-located/off/неизвестный модуль) → Docker DNS alias
+##   - Ошибки ConfigValidationError ПРОПАГИРУЮТСЯ (fail-fast, инвариант 3 плана)
+def _resolve_effective_host(
+    svc_name: str,
+    default_host: str,
+    placement: Placement | None,
+    consumer_node: str,
+) -> tuple[str, str | None]:
+    """Resolve effective provides-host for the consumer node (cross-node aware)."""
+    if placement is None or not consumer_node:
+        return default_host, None
+    # Ленивый импорт: scaffold не тянет shared.placement в legacy-путь (single-node стеки).
+    from core.internal.shared.placement import service_host
+
+    remote = service_host(placement, svc_name, consumer_node)
+    if remote is None:
+        return default_host, None
+    return remote, remote
+
+
+# endregion FUNC__resolve_effective_host
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region FUNC__substitute_template_host
+## @purpose  Подстановка cross-node host в dsn/url шаблон platform-env.yaml (DevPlan 010 T2.1).
+##           Шаблоны встраивают Docker-DNS host литералом ("@pgbouncer:6432", "//redis:6379/");
+##           при кросс-нодовом потребителе токен host'а заменяется на host ноды-пира.
+## @io       ⇥ template, old_host, new_host → ⎋ template с заменённым host-токеном
+## @complexity O(len(template))
+## @invariants
+##   - Замена ТОЛЬКО host-токена после якоря "//" (URL scheme-separator) или "@" (DSN userinfo);
+##     scheme-токен ("redis://...") НЕ трогается — иначе подстановка ломает URL (TRAP[BUG] ниже)
+##   - https://${DOMAIN} URL без host-токена остаются неизменными
+def _substitute_template_host(template: str, old_host: str, new_host: str) -> str:
+    """Replace the standalone Docker-DNS host token in a DSN/URL template with the node host."""
+    if not old_host or old_host == new_host:
+        return template
+    # ⚠️ TRAP[BUG] · 2026-08-24 · P2 · regex с голым lookbehind заменял И scheme, И host
+    # · Symptom: redis://redis:6379/0 → 10.8.0.11://10.8.0.11:6379/0 (двойная подстановка)
+    # · Root: токен "redis" встречается дважды — как scheme перед ":" и как host после "//";
+    #   lookbehind (?<![A-Za-z0-9_.-]) не отсекает scheme (перед ним начало строки)
+    # · Fix: замена ТОЛЬКО по якорям "//" (URL) и "@" (DSN userinfo) — scheme недостижим
+    # · Prevention: тест test_remote_postgres_host_emitted фиксирует REDIS_URL форму
+    pattern = re.compile(r"(//|@)" + re.escape(old_host) + r"(?=[:/])")
+    substituted, n_subs = pattern.subn(lambda m: f"{m.group(1)}{new_host}", template)
+    if n_subs:
+        logger.info(
+            "[IMP:8][gen_env_platform][template-host] %r -> %r (%d substitution(s))",
+            old_host,
+            new_host,
+            n_subs,
+        )
+    return substituted
+
+
+# endregion FUNC__substitute_template_host
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region FUNC_resolve_placement_for_project
+## @purpose  Best-effort резолв (placement, consumer_node) для проекта (DevPlan 010 T2.1):
+##           target_node ← ai-platform.yaml; placement.yaml ← NODE_YAML env (канон деплой-
+##           контекста): ROOT/CONTEXT/placement.yaml (рядом с директорией ноды). Любое звено отсутствует →
+##           (None, "") — legacy-путь. Валидационные ошибки ПРОПАГИРУЮТСЯ (fail-fast).
+## @io       ⇥ project_dir: str → ⎋ tuple[Placement | None, str]
+## @complexity O(1) — 2 чтения файлов максимум
+## @invariants
+##   - Единая логика для main(--project-dir), scaffolder и converge (0 дублирования)
+##   - Отсутствие NODE_YAML / target_node / файла — НОРМА (single-node канон, IMP:7 лог)
+def resolve_placement_for_project(project_dir: str) -> tuple[Placement | None, str]:
+    """Resolve (placement, target_node) for a project dir; legacy no-op when unresolvable."""
+    from core.internal.shared.project_yaml import get_target_node, load_project_yaml
+
+    proj_path = Path(project_dir)
+    try:
+        ai_data = load_project_yaml(proj_path)
+    except (OSError, PlatformError) as exc:
+        logger.info("[IMP:7][resolve_placement][skip] ai-platform.yaml unreadable in %s: %s", proj_path, exc)
+        return None, ""
+    target_node = get_target_node(ai_data, required=False)
+    if not target_node:
+        logger.info("[IMP:7][resolve_placement][noop] no target_node — single-node emission")
+        return None, ""
+    node_yaml = os.environ.get("NODE_YAML", "")
+    if not node_yaml:
+        logger.info("[IMP:7][resolve_placement][noop] NODE_YAML not set — cannot derive placement path")
+        return None, target_node
+    # Канон деривации — deploy_orchestrator._placement_for_node: контекст из node.yaml
+    # (contexts[0].name), путь ROOT/<context>/placement.yaml (root = parent директории ноды).
+    from core.internal.shared.node_yaml import NodeYaml
+    from core.internal.shared.placement import load_placement
+
+    context = NodeYaml(node_yaml).get_context()
+    if not context:
+        logger.info("[IMP:7][resolve_placement][noop] no context in %s — legacy emission", node_yaml)
+        return None, target_node
+    placement_path = Path(node_yaml).parent.parent / str(context) / "placement.yaml"
+    placement = load_placement(placement_path)
+    if placement is None:
+        return None, target_node
+    logger.info(
+        "[IMP:8][resolve_placement][loaded] context=%s target_node=%s modules=%d",
+        placement.context,
+        target_node,
+        len(placement.modules),
+    )
+    return placement, target_node
+
+
+# endregion FUNC_resolve_placement_for_project
+
+
+# ═══════════════════════════════════════════════════════════════════
 # region FUNC_generate
 ## @purpose  Generate .env.platform lines from parsed platform-env.yaml data dict.
 ##           Called by generate_env_platform() after load+validate.
@@ -278,10 +408,19 @@ def load_credentials(project_dir: str | None = None, credentials_file: str | Non
 ## @param domain        Platform domain (e.g. "ai-platform.local")
 ## @param project_name  Optional project name for ${NAME} substitution in DSN/URL templates
 ## @param credentials   Optional DB credentials dict (from .platform-db.env) — password-injection
+## @param placement     Optional Placement (DevPlan 010 T2.1): multi-node топология контекста;
+##                      None → legacy-путь (Docker DNS алиасы из provides, байт-идентично)
+## @param consumer_node Optional имя ноды-потребителя (поле %target_node в ai-platform.yaml);
+##                      учитывается только вместе с placement
 ## @return  List of .env.platform lines (newline-terminated)
 ## @raises GenEnvPlatformValidationError  If provides validation fails
 def generate(
-    data: _PlatformEnvYaml, domain: str, project_name: str = "", credentials: dict[str, str] | None = None
+    data: _PlatformEnvYaml,
+    domain: str,
+    project_name: str = "",
+    credentials: dict[str, str] | None = None,
+    placement: Placement | None = None,
+    consumer_node: str = "",
 ) -> list[str]:
     """Generate .env.platform lines from platform-env.yaml data.
 
@@ -290,9 +429,11 @@ def generate(
         domain: Platform domain.
         project_name: Optional project name for DSN {NAME} substitution.
         credentials: Optional DB credentials (password-injection, DevPlan 133 W2).
+        placement: Optional shared.placement.Placement (DevPlan 010 T2.1) — cross-node hosts.
+        consumer_node: Optional consumer node name (поле %target_node в ai-platform.yaml).
 
     Returns:
-        List of .env.platform lines.
+        List of .env.platform lines (newline-terminated).
     """
     profiles = data.get("profiles", [])
     provides = validate_provides(data, profiles)
@@ -319,18 +460,26 @@ def generate(
         dsn_tmpl = svc_data.get("dsn_template", "")
         url_tmpl = svc_data.get("url_template", "")
 
-        if host:
-            lines.append(f"PLATFORM_{svc_upper}_HOST={host}")
+        # DevPlan 010 T2.1: cross-node адресация — сервис на чужой ноде → HOST = <node>.host;
+        # своя нода / no placement → Docker DNS alias как сейчас (байт-идентично легаси).
+        effective_host, remote_host = _resolve_effective_host(svc_name, str(host), placement, consumer_node)
+
+        if effective_host:
+            lines.append(f"PLATFORM_{svc_upper}_HOST={effective_host}")
         if port:
             lines.append(f"PLATFORM_{svc_upper}_PORT={port}")
 
         # Substitute {NAME} in DSN template (credentials — password-injection, DevPlan 133 W2)
         if dsn_tmpl:
             dsn_val = _apply_credentials_to_dsn(dsn_tmpl, project_name, credentials)
+            if remote_host:
+                dsn_val = _substitute_template_host(dsn_val, str(host), remote_host)
             lines.append(f"PLATFORM_{svc_upper}_DSN={dsn_val}")
         if url_tmpl:
             url_val = url_tmpl.replace("${NAME}", project_name) if project_name else url_tmpl
             url_val = url_val.replace("${DOMAIN}", domain)
+            if remote_host:
+                url_val = _substitute_template_host(url_val, str(host), remote_host)
             lines.append(f"PLATFORM_{svc_upper}_URL={url_val}")
 
     # Networks from provides — unique networks
@@ -368,6 +517,8 @@ def generate(
 ## @param domain        Platform domain (e.g. "ai-platform.local")
 ## @param project_name  Optional project name for ${NAME} substitution
 ## @param credentials   Optional DB credentials dict — password-injection (DevPlan 133 W2)
+## @param placement     Optional Placement — cross-node hosts (DevPlan 010 T2.1)
+## @param consumer_node Optional consumer node name (target_node)
 ## @return  List of .env.platform lines (newline-terminated)
 ## @raises FileNotFoundError               If yaml_path does not exist
 ## @raises yaml.YAMLError                   If YAML content is malformed
@@ -378,6 +529,8 @@ def generate_env_platform(
     domain: str,
     project_name: str = "",
     credentials: dict[str, str] | None = None,
+    placement: Placement | None = None,
+    consumer_node: str = "",
 ) -> list[str]:
     """Generate .env.platform lines from platform-env.yaml — convenience wrapper.
 
@@ -386,9 +539,11 @@ def generate_env_platform(
 
     Args:
         yaml_path: Path to platform-env.yaml on disk.
-        domain: Platform domain (e.g. \"ai-platform.local\").
+        domain: Platform domain.
         project_name: Optional project name for DSN {NAME} substitution.
         credentials: Optional DB credentials (password-injection, DevPlan 133 W2).
+        placement: Optional Placement (DevPlan 010 T2.1) — cross-node host emission.
+        consumer_node: Optional consumer node name (поле %target_node в ai-platform.yaml).
 
     Returns:
         List of .env.platform lines (newline-terminated).
@@ -399,7 +554,14 @@ def generate_env_platform(
         GenEnvPlatformValidationError: If provides validation fails.
     """
     data = load_yaml(yaml_path)
-    lines = generate(data, domain=domain, project_name=project_name, credentials=credentials)
+    lines = generate(
+        data,
+        domain=domain,
+        project_name=project_name,
+        credentials=credentials,
+        placement=placement,
+        consumer_node=consumer_node,
+    )
     logger.info("[IMP:9][gen_env_platform][generate_env_platform] Generated %d lines from %s", len(lines), yaml_path)
     return lines
 
@@ -421,6 +583,8 @@ class _GenEnvArgs(argparse.Namespace):
     output: ClassVar[str | None]
     project_dir: ClassVar[str | None]
     credentials_file: ClassVar[str | None]
+    placement: ClassVar[str]
+    target_node: ClassVar[str]
 
 
 ## @purpose  CLI entry point. Parses args, calls generate_env_platform(), writes output.
@@ -463,6 +627,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--credentials-file", type=str, default=None, help="Explicit DB credentials file (.platform-db.env format)"
     )
+    parser.add_argument(
+        "--placement",
+        type=str,
+        default="",
+        help="Path to placement.yaml (DevPlan 010 T2.1; empty = auto via NODE_YAML or legacy no-op)",
+    )
+    parser.add_argument(
+        "--target-node",
+        type=str,
+        default="",
+        help="Consumer node name for cross-node hosts (default: ai-platform.yaml#target_node)",
+    )
     args = parser.parse_args(argv, namespace=_GenEnvArgs())
 
     # yaml_path инициализируется ДО try — except-ветка (yaml.YAMLError) читает его (reportPossiblyUnboundVariable)
@@ -474,6 +650,8 @@ def main(argv: list[str] | None = None) -> int:
         output_path = args.output
         project_name = args.name
         domain = args.domain
+        placement: Placement | None = None
+        consumer_node = ""
         if args.project_dir:
             from core.internal.shared.project_yaml import get_domain, get_name, load_project_yaml
 
@@ -489,12 +667,32 @@ def main(argv: list[str] | None = None) -> int:
                 output_path = str(proj_path / ".env.platform")
             credentials = load_credentials(project_dir=args.project_dir, credentials_file=args.credentials_file)
 
+        # DevPlan 010 T2.1: cross-node адресация .env.platform — placement + consumer_node.
+        # Явные флаги приоритетны; иначе auto-resolve (target_node ← ai-platform.yaml,
+        # placement ← NODE_YAML-деривация); не резолвится → legacy no-op (single-node канон).
+        if args.placement:
+            from core.internal.shared.placement import load_placement
+
+            placement = load_placement(args.placement)
+            consumer_node = args.target_node
+        elif args.project_dir:
+            placement, consumer_node = resolve_placement_for_project(args.project_dir)
+            if args.target_node:
+                consumer_node = args.target_node
+
         if not yaml_path:
             parser.error("--yaml is required (or use --project-dir)")
         if not domain:
             domain = "ai-platform.local"
 
-        lines = generate_env_platform(yaml_path, domain=domain, project_name=project_name, credentials=credentials)
+        lines = generate_env_platform(
+            yaml_path,
+            domain=domain,
+            project_name=project_name,
+            credentials=credentials,
+            placement=placement,
+            consumer_node=consumer_node,
+        )
         if output_path:
             output_file = Path(output_path)
             output_file.parent.mkdir(parents=True, exist_ok=True)

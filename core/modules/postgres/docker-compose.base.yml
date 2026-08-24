@@ -6,7 +6,12 @@
 ## @scope    Merged with root docker-compose.yml via include:
 ## @invariants
 ##   - profiles: [postgres] — pluggability: only included when COMPOSE_PROFILES contains postgres
-##   - NO ports: directive — no host port mapping (internal network only)
+##   - postgres: NO ports: directive — no host port mapping (internal network only).
+##     Прямой 5432 НЕ публикуется даже в multi-node (DevPlan 010 §8/T2.2: потребители
+##     backup-cron/postgres-exporter/pgbouncer переезжают на data-ноду вместе с postgres).
+##   - pgbouncer: ports через ${SERVICE_BIND_HOST:-127.0.0.1} (DevPlan 010 T2.2) — единственный
+##     кросс-нодовый PG-фасад 6432; single-node — loopback (байт-идентично), multi-node — host ноды,
+##     peer-доступ режет ufw (T2.3 platform-peer). Auth — scram-sha-256 (T2.0c security-префикс).
 ##   - restart: unless-stopped — Docker policy (not manual lifecycle management)
 ##   - stop_grace_period: 60s — WAL flush time
 ##   - shared-db-net: external: true + name: shared-db-net — фиксированное имя сети
@@ -96,6 +101,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    ports:
+      # DevPlan 010 T2.2: pgbouncer 6432 — единственный кросс-нодовый PG-фасад.
+      # ${SERVICE_BIND_HOST:-127.0.0.1}: single-node — loopback (байт-идентично легаси),
+      # multi-node — provision/deploy подставляет host ноды; peer-доступ режет ufw
+      # (firewall.py build_peer_rules, T2.3), аутентификация — scram-sha-256 (T2.0c).
+      - "${SERVICE_BIND_HOST:-127.0.0.1}:${POSTGRES_PORT:-6432}:6432"
     environment:
       # DevPlan 133 D5: DATABASE_URLS = одна URL БЕЗ имени БД → entrypoint генерирует
       # wildcard '* = host=postgres port=5432 auth_user=postgres' (нативная возможность

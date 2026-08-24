@@ -294,9 +294,18 @@ def reconcile_env_platform(
     # ruff: ignore[PLW0717] — нужно >5 свободных локальных переменных — извлечение неразумно
     try:
         # Lazy import to match codebase pattern (same as core.internal.shared imports)
-        from core.internal.scaffold.gen_env_platform import generate_env_platform
+        from core.internal.scaffold.gen_env_platform import generate_env_platform, resolve_placement_for_project
 
-        lines = generate_env_platform(platform_env_path, domain=domain, project_name=proj_name)
+        # DevPlan 010 T2.1: cross-node адресация .env.platform — best-effort резолв
+        # (placement, target_node); не резолвится → legacy Docker DNS emission.
+        placement, consumer_node = resolve_placement_for_project(proj_dir)
+        lines = generate_env_platform(
+            platform_env_path,
+            domain=domain,
+            project_name=proj_name,
+            placement=placement,
+            consumer_node=consumer_node,
+        )
         _ = env_file.write_text("\n".join(lines) + "\n")
         _ = run_subprocess(["chmod", "0640", str(env_file)], timeout=FILE_OP_TIMEOUT)
         _ = run_subprocess(["chown", "ci-deploy:ci-deploy", str(env_file)], timeout=FILE_OP_TIMEOUT)

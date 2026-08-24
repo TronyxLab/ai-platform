@@ -603,10 +603,10 @@ def test_hermes_vhost_conditionally_deployed(
 ) -> None:
     """
     # ▶ hermes-dashboard.conf → ⚡ read → ◇ HTTP(80→redirect) → ◇ HTTPS(443+proxy_pass)
-    # → ◇ set $upstream_hermes hermes-agent:9119 → ◇ proxy_pass $upstream_hermes → ⎋ pass | fail
+    # → ◇ set $upstream_hermes ${UPSTREAM_HERMES} → ◇ proxy_pass $upstream_hermes → ⎋ pass | fail
     """
 
-    # 🧪 TRAP[TEST] · Regression: TASK-3 DevPlan 001 loopback→Docker-DNS · Scenario: read hermes-dashboard.conf → assert HTTP redirect + set $upstream_hermes hermes-agent:9119 + proxy_pass http://$upstream_hermes + cert template · Last fail: Never · Remove if: Hermes Dashboard deployed via different mechanism
+    # 🧪 TRAP[TEST] · Regression: TASK-3 DevPlan 001 loopback→Docker-DNS · Scenario: read hermes-dashboard.conf → assert HTTP redirect + set $upstream_hermes (envsubst var, DevPlan 010 T2.8; compose-дефолт = прежний Docker-DNS hermes-agent:9119) + proxy_pass http://$upstream_hermes + cert template · Last fail: 2026-08-24 — T2.8 заменил литерал на bare ${UPSTREAM_HERMES} · Remove if: Hermes Dashboard deployed via different mechanism
     # region BLOCK_Setup
     filename = "hermes-dashboard.conf"
     logger.info("[IMP:7][test_hermes_vhost_conditionally_deployed] Checking %s structure ...", filename)
@@ -623,7 +623,9 @@ def test_hermes_vhost_conditionally_deployed(
 
     # region BLOCK_CheckHttpsProxy
     has_ssl_block = "listen 443 ssl" in content
-    has_set_upstream = "set $upstream_hermes hermes-agent:9119;" in content
+    # DevPlan 010 T2.8: upstream через bare ${UPSTREAM_HERMES} (nginx envsubst; compose-дефолт
+    # hermes-agent:9119 — single-node байт-паритет, multi-node deploy подставляет node.host:9119)
+    has_set_upstream = "set $upstream_hermes ${UPSTREAM_HERMES};" in content
     has_var_proxy_pass = "proxy_pass http://$upstream_hermes" in content
     logger.info(
         "[IMP:8][test_hermes_vhost_conditionally_deployed] HTTPS block: %s, set $upstream_hermes: %s, var proxy_pass: %s",

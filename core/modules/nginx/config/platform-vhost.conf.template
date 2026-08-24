@@ -84,7 +84,7 @@ server {
         auth_basic "Platform";
         auth_basic_user_file /etc/nginx/conf.d/.htpasswd-platform;
 
-        set $upstream_platform status-page:8080;
+        set $upstream_platform ${UPSTREAM_STATUS_PAGE};
         proxy_pass http://$upstream_platform;
     }
 
@@ -94,7 +94,7 @@ server {
         auth_basic "Platform";
         auth_basic_user_file /etc/nginx/conf.d/.htpasswd-platform;
 
-        set $upstream_platform status-page:8080;
+        set $upstream_platform ${UPSTREAM_STATUS_PAGE};
         proxy_pass http://$upstream_platform;
     }
 }

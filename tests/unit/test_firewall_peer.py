@@ -394,3 +394,31 @@ def test_build_peer_rules_s2_plan_openings(caplog: pytest.LogCaptureFixture) -> 
 
 
 # endregion TEST_07_s2_plan_openings
+
+
+# region TEST_08_facade_ports_s3 (TRAP[DECISION] completion 2026-08-24)
+# 🧪 TRAP[TEST] · 2026-08-24 · REGRESSION · фасадные порты LLM-стека в S3 (§8 «4000/3001 для IP apps-1»)
+# · Regression: если PEER_PUBLISH_PORTS потеряет litellm/langfuse/hermes-agent, проекты на
+# ·   ingress-ноде теряют LLM/tracing (PLATFORM_LITELLM_URL), а nginx — hermes-dashboard upstream;
+# ·   Acceptance W2 «hermes-dashboard.conf на apps-1 резолвит upstream agent-1» становится невыполнимым
+# · Scenario: s3.yaml → allow from 10.8.0.13 to {4000,3001,9119} на agent-1; peer-scoped (from есть)
+# · Last fail: N/A — фасады добавлены completion-фазой (TRAP[DECISION] в firewall.py)
+# · Remove if: фасадные открытия признаны ложными и удалены из матрицы синхронно с этим тестом
+def test_build_peer_rules_s3_facade_ports(caplog: pytest.LogCaptureFixture) -> None:
+    """build_peer_rules(s3): litellm 4000 / langfuse 3001 / hermes 9119 открыты apps-1 (peer-scoped)."""
+    caplog.set_level(logging.DEBUG)
+
+    rules = firewall.build_peer_rules(_load_fixture("s3"))
+    cmds = _rules_cmds(rules)
+
+    for port in (4000, 3001, 9119):
+        assert f"ufw allow from 10.8.0.13 to any port {port}/tcp comment platform-peer-{port}-apps-1" in cmds, (
+            f"S3 обязан открывать фасад {port} для ingress-ноды (§8 S3): {cmds}"
+        )
+    assert all("from" in c for c in cmds), "фасадные правила тоже peer-scoped (инвариант 4)"
+
+    logger.info("[IMP:9][test_build_peer_rules_s3_facade][assert] фасады 4000/3001/9119 → apps-1")
+    assert_ldd_imp9(caplog)
+
+
+# endregion TEST_08_facade_ports_s3

@@ -33,7 +33,9 @@ services:
     profiles: [minio]
     restart: unless-stopped
     ports:
-      - "127.0.0.1:${MINIO_PORT:-9000}:9000"
+      # DevPlan 010 T2.2: API 9000 — кросс-нодово пирам (SERVICE_BIND_HOST); console 9001 —
+      # только loopback (админ-UI не публикуется даже в multi-node)
+      - "${SERVICE_BIND_HOST:-127.0.0.1}:${MINIO_PORT:-9000}:9000"
       - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"
     networks:
       backup-net:

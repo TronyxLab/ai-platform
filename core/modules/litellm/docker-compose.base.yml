@@ -60,7 +60,9 @@ services:
     logging: *default-logging
 
     ports:
-      - "127.0.0.1:${LITELLM_PORT:-4000}:4000"
+      # DevPlan 010 T2.2 (фасадные порты, §8 S3 «agent-1 → 4000 для IP apps-1»):
+      # LLM-фасад проектов; bind SERVICE_BIND_HOST — peer-доступ режет ufw T2.3.
+      - "${SERVICE_BIND_HOST:-127.0.0.1}:${LITELLM_PORT:-4000}:4000"
 
     # --config flag required to load model list from mounted config file
     command:

@@ -90,10 +90,13 @@ from core.internal.shared.placement import Placement, load_placement, resolve_no
 from core.internal.shared.platform_ports import (
     CADVISOR,
     CLICKHOUSE_NATIVE_PEER,
+    LANGFUSE_HOST,
     LOKI_HTTP,
     NGINX_EXPORTER,
     NODE_EXPORTER,
     PLATFORM_PORT_CLICKHOUSE,
+    PLATFORM_PORT_HERMES,
+    PLATFORM_PORT_LITELLM,
     PLATFORM_PORT_MINIO,
     PLATFORM_PORT_PGBOUNCER,
     PLATFORM_PORT_REDIS,
@@ -160,13 +163,23 @@ ZABBIX_PORT: int = 10050
 # ── Peer-scoped firewall (DevPlan 010 T2.3/T2.4) ────────────────────────────────
 # Кросс-нодовые порты публикуются ТОЛЬКО для IP нод-пиров из placement.yaml (инвариант 4):
 # `ufw allow from <peer_host> to any port <p>/tcp comment platform-peer-<p>-<peer>`.
-# Матрица КАНОНИЧНА (DevPlan 010 §6.1 T2.2, TRAP §3): 6432 (pgbouncer), 6379 (redis),
+# Матрица (DevPlan 010 §6.1 T2.2, TRAP §3): 6432 (pgbouncer), 6379 (redis),
 # 9000 (minio API), 8123 (CH HTTP) + 19000 (CH native peer), 3100 (loki push),
 # 9100+8080 (node-metrics), 9187/9121/9113 (service-exporters). Прямой 5432 НЕ публикуется
 # (все потребители едут на data-ноду вместе с postgres — DevPlan 010 §8). Значения — ТОЛЬКО
 # из shared/platform_ports.py (порт-литералы запрещены гейтом test_gate_port_parity).
 # Ключи = имена placement-модулей (core/modules/<name>): pgbouncer-фасад 6432 живёт в модуле
 # postgres, loki-push 3100 — в модуле logging.
+#
+# 🧐 TRAP[DECISION] · 2026-08-24 · DevPlan 010 completion · Фасадные порты LLM-стека
+#   (+litellm 4000, +langfuse host 3001, +hermes dashboard 9119) добавлены в матрицу ·
+#   Rejected: строгие «ТОЛЬКО [11 портов]» из §6.1 T2.2 без фасадов ·
+#   Reason: противоречие внутри r2-плана — §6.1 матрица НЕ содержит 4000/3001, но §8 S3
+#   «Открытия: agent-1 → 4000/3001 для IP apps-1» и Acceptance W2 «hermes-dashboard.conf
+#   на apps-1 резолвит upstream agent-1» требуют их кросс-нодовой достижимости (проекты на
+#   ingress-ноде ходят в LLM/langfuse напрямую, PLATFORM_LITELLM_URL/PLATFORM_LANGFUSE_URL).
+#   Публикация peer-scoped (не Anywhere) сохраняет инвариант-дух «наружу только пирам» ·
+#   Rev: если фасадные открытия окажутся ложными в реальном контексте — сузить CONSUMER_OF.
 PEER_PUBLISH_PORTS: dict[str, tuple[int, ...]] = {
     "postgres": (PLATFORM_PORT_PGBOUNCER,),  # pgbouncer 6432 — единственный кросс-нодовый PG-фасад
     "redis": (PLATFORM_PORT_REDIS,),  # 6379
@@ -175,6 +188,10 @@ PEER_PUBLISH_PORTS: dict[str, tuple[int, ...]] = {
     "logging": (LOKI_HTTP,),  # 3100 loki-push (центральный приём логов)
     "node-metrics": (NODE_EXPORTER, CADVISOR),  # 9100 + 8080 (scrape monitoring)
     "service-exporters": (POSTGRES_EXPORTER, REDIS_EXPORTER, NGINX_EXPORTER),  # 9187, 9121, 9113
+    # Фасадные порты LLM-стека (TRAP[DECISION] выше): потребители — nginx-ноды (проекты/vhost'ы)
+    "litellm": (PLATFORM_PORT_LITELLM,),  # 4000 — LLM-фасад проектов (§8 S3)
+    "langfuse": (LANGFUSE_HOST,),  # host 3001 → container 3000 (tracing UI/API проектов)
+    "hermes-agent": (PLATFORM_PORT_HERMES,),  # 9119 dashboard — upstream nginx vhost (T2.8)
 }
 
 # Эвристика потребитель→поставщик (DevPlan 010 T2.3 «упрощение v1»): нода B размещает хотя бы
@@ -191,9 +208,14 @@ CONSUMER_OF: dict[str, frozenset[str]] = {
     "redis": frozenset({"hermes-agent", "langfuse"}),
     "minio": frozenset({"langfuse"}),
     "clickhouse": frozenset({"langfuse"}),
-    "logging": frozenset({"log-collector"}),  # loki-push с чужих нод
+    "logging": frozenset({"log-collector", "nginx"}),  # loki-push с чужих нод + loki-vhost (T2.8)
     "node-metrics": frozenset({"monitoring"}),  # scrape 9100/8080
     "service-exporters": frozenset({"monitoring"}),  # scrape 9187/9121/9113
+    # Фасадные порты (TRAP[DECISION] выше): nginx-нода = потребители-проекты/vhost'ы;
+    # litellm/langfuse получают nginx через PROJECT_HOST_SERVICES-маркер (пустые set'ы здесь)
+    "litellm": frozenset(),  # LLM-фасад проектов на ingress-ноде
+    "langfuse": frozenset(),  # tracing-фасад проектов на ingress-ноде
+    "hermes-agent": frozenset({"nginx"}),  # hermes-dashboard vhost upstream (T2.8)
 }
 
 # Нода-хост проектов: nginx (ingress) ⇒ на ноде живут user-проекты ⇒ потребитель data-plane
@@ -205,8 +227,10 @@ CONSUMER_OF: dict[str, frozenset[str]] = {
 # проекты (вне placement.yaml, привязаны ai-platform.yaml#target_node) потребляют pgbouncer/
 # redis/minio/clickhouse с ingress-ноды; без маркера acceptance-критерий S3 не выполняется ·
 # Rev: первый кейс ложного открытия (ingress-нода без проектов, потребляющих data-сервисы) →
-# перенести привязку проектов в placement (project-секция) и строить потребителей оттуда
-PROJECT_HOST_SERVICES: frozenset[str] = frozenset({"postgres", "redis", "minio", "clickhouse"})
+# перенести привязку проектов в placement (project-секция) и строить потребителей оттуда.
+# DevPlan 010 completion 2026-08-24: +litellm/langfuse — LLM-фасад проектов на ingress-ноде
+# (PLATFORM_LITELLM_URL/PLATFORM_LANGFUSE_URL, §8 S3 «4000/3001 для IP apps-1»).
+PROJECT_HOST_SERVICES: frozenset[str] = frozenset({"postgres", "redis", "minio", "clickhouse", "litellm", "langfuse"})
 
 # ── DOCKER-USER defence-in-depth → docker_user_policy.py (DevPlan 170 W6-D2) ──
 # iptables-домен (DOCKER-USER FORWARD + privoxy INPUT) консолидирован в docker_user_policy.py;

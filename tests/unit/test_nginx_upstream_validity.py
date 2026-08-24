@@ -111,10 +111,43 @@ def _get_set_upstream_targets(content: str) -> list[tuple[str, str]]:
     """Extract targets from `set $upstream_<name> <target>:<port>;` directives.
 
     ## @purpose — Parse Docker-DNS variable proxy pattern
-    ## @io — ⇥ content → ⎋ list[(target, port)]
+    ## @io — ⇥ content, upstream_defaults → ⎋ list[(target, port)]
     ## @complexity — O(L)
     """
-    return re.findall(r"set\s+\$upstream_\w+\s+([^:]+):(\d+)\s*;", content)
+    # DevPlan 010 T2.8: upstream может быть bare envsubst-переменной (${UPSTREAM_HERMES}) —
+    # резолвим её в Docker-DNS дефолт из nginx docker-compose.base.yml environment
+    # (single-node дефолт = прежний литерал; multi-node значение выставляет deploy).
+    targets: list[tuple[str, str]] = re.findall(r"set\s+\$upstream_\w+\s+([^:$\s]+):(\d+)\s*;", content)
+    defaults = _get_nginx_compose_upstream_defaults()
+    for var_name in re.findall(r"set\s+\$upstream_\w+\s+\$\{(UPSTREAM_\w+)\}\s*;", content):
+        default = defaults.get(var_name, "")
+        host, _, port = default.rpartition(":")
+        if host and port.isdigit():
+            targets.append((host, port))
+    return targets
+
+
+def _get_nginx_compose_upstream_defaults() -> dict[str, str]:
+    """UPSTREAM_* compose-дефолты nginx base.yml: {'UPSTREAM_HERMES': 'hermes-agent:9119'} (T2.8).
+
+    ## @purpose — Резолв bare envsubst-upstream'ов vhost'ов в их single-node Docker-DNS дефолты
+    ## @io — ⇥ → ⎋ dict[var_name, 'host:port']
+    ## @complexity — O(1) — один yaml.safe_load
+    """
+    compose_path = Path(__file__).resolve().parents[2] / "core" / "modules" / "nginx" / "docker-compose.base.yml"
+    try:
+        data = yaml.safe_load(compose_path.read_text(encoding="utf-8"))
+        environment = data["services"]["nginx"]["environment"] or {}
+    except (OSError, yaml.YAMLError, KeyError, TypeError):
+        return {}
+    defaults: dict[str, str] = {}
+    for key, raw_value in environment.items():
+        if not str(key).startswith("UPSTREAM_"):
+            continue
+        m = re.match(r"\$\{" + str(key) + r":-([^}]+)\}", str(raw_value))
+        if m:
+            defaults[str(key)] = m.group(1)
+    return defaults
 
 
 def _get_vhost_files(platform_root: str) -> list[str]:

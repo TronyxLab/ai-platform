@@ -1230,8 +1230,11 @@ def test_pgbouncer_no_proxy_includes(hermes_agent_compose_path, caplog) -> None:
 
         for key, value in env_definitions.items():
             if key.upper() == "NO_PROXY" and "${NO_PROXY:-" in str(value):
-                fb_match = str(value).split("${NO_PROXY:-", 1)[1].rstrip("}").strip()
-                fallback_value = fb_match
+                # DevPlan 010 T2.5: fallback может продолжаться passthrough ${EXTRA_NO_PROXY:-}
+                # (адреса нод multi-node) — извлекаем ТОЛЬКО первый brace-блок NO_PROXY
+                # (regex до первой '}' — вложенные ${...} не переполняют захват).
+                fb_match = re.search(r"\$\{NO_PROXY:-([^}]*)\}", str(value))
+                fallback_value = fb_match.group(1).strip() if fb_match else ""
                 logger.info("[IMP:7][test_pgbouncer][no_proxy] Found NO_PROXY with fallback: '%s'", fallback_value)
                 break
         if fallback_value:
@@ -1459,16 +1462,27 @@ def test_redis_no_volumes(level: str, redis_compose_base_path, caplog) -> None:
         )
 
 
+# 🧪 TRAP[TEST] · 2026-08-24 · CONTRACT CHANGE (DevPlan 010 T2.2 supersedes D4 AC-3) · redis ports
+# · Regression: D4 AC-3 запрещал host-порты redis вовсе; T2.2 публикует 6379 кросс-нодово
+# ·   peer-scoped — bind ОБЯЗАН быть ${SERVICE_BIND_HOST:-127.0.0.1} (single-node loopback,
+# ·   байт-идентично), 0.0.0.0/empty-host запрещены (gate no_external_port_binding)
+# · Last fail: 2026-08-24 — старый тест test_redis_no_ports упал на легитимной публикации T2.2
+# · Remove if: redis перестанет быть кросс-нодовым сервисом матрицы T2.3
 @pytest.mark.static_audit
 @ldd_trajectory
-def test_redis_no_ports(redis_compose_base_path, caplog) -> None:
-    """Redis service НЕ имеет ports к host."""
+def test_redis_ports_peer_scoped(redis_compose_base_path, caplog) -> None:
+    """Redis 6379 — bind только через ${SERVICE_BIND_HOST:-127.0.0.1} (T2.2), без Anywhere."""
     data = load_yaml(redis_compose_base_path)
     redis_svc = data.get("services", {}).get("redis", {})
+    ports = redis_svc.get("ports") or []
 
-    has_ports = "ports" in redis_svc
-    logger.critical("[IMP:9][test_redis][no_ports] ASSERT: ports present=%s", has_ports)
-    assert not has_ports, f"Redis service must NOT expose ports to host. Found: {redis_svc.get('ports', [])}"
+    logger.critical("[IMP:8][test_redis][ports] ASSERT: ports=%s", ports)
+    assert ports, "T2.2: redis обязан публиковать 6379 (bind-параметризованно)"
+    for entry in ports:
+        assert str(entry).startswith("${SERVICE_BIND_HOST:-127.0.0.1}:"), (
+            f"redis bind обязан быть peer-scoped form (SERVICE_BIND_HOST): {entry}"
+        )
+    logger.critical("[IMP:9][test_redis][ports] PASS: %d port(s), все через SERVICE_BIND_HOST", len(ports))
 
 
 # GUARD-PRESERVE (168): static-replaceable — класс дефекта «redis не изолирован на shared-cache-net» покрыт статическим слоем

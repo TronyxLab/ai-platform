@@ -6,7 +6,12 @@
 ## @scope    Part of observability stack: no separate network, no host ports in base, config.d overrides
 ## @invariants
 ##   - Image: clickhouse/clickhouse-server:24.12 (pinned LTS version — no :latest policy)
-##   - NO ports: directive — host ports defined in root docker-compose.yml only (127.0.0.1 bindings)
+##   - ports через ${SERVICE_BIND_HOST:-127.0.0.1} (DevPlan 010 T2.2): HTTP 8123 (scrape/UI)
+##     + native peer HOST ${CLICKHOUSE_NATIVE_PEER_PORT:-19000} → container 9000. Host-порт
+##     native = 19000, НЕ 9000: коллизия с minio API 9000 на общей data-ноде (TRAP §3 плана;
+##     прецедент host≠container — langfuse 3001/3000). Потребители (langfuse) кросс-нодово
+##     получают CLICKHOUSE_NATIVE_PORT=19000 из provision; локально ходят по Docker DNS :9000.
+##     Peer-доступ режет ufw (T2.3); loopback-bind — дефолт single-node (байт-идентично).
 ##   - restart: unless-stopped — Docker policy
 ##   - stop_grace_period: 60s — allows merge queue flush and clean shutdown
 ##   - deploy.resources: limits memory 3G, cpus 1.0; reservations memory 256M (DevPlan 144 W3: 1G → 2G; v1.0.1: 2G → 3G — merge MEMORY_LIMIT_EXCEEDED restart-петля)
@@ -79,8 +84,11 @@ services:
           memory: 256M
     logging: *default-logging
 
-    # [IMP:9][clickhouse-compose] NO ports: in base.yml — host ports defined in root docker-compose.yml
-    # ports: deliberately absent (DevPlan §3.7 — 127.0.0.1 only in root compose)
+    # [IMP:8][clickhouse-compose] DevPlan 010 T2.2: HTTP 8123 + native peer host 19000→9000
+    # (см. инвариант MODULE_CONTRACT выше — коллизия с minio:9000, TRAP §3)
+    ports:
+      - "${SERVICE_BIND_HOST:-127.0.0.1}:${CLICKHOUSE_HTTP_PORT:-8123}:8123"
+      - "${SERVICE_BIND_HOST:-127.0.0.1}:${CLICKHOUSE_NATIVE_PEER_PORT:-19000}:9000"
 
     environment:
       CLICKHOUSE_USER: "${CLICKHOUSE_USER:-default}"

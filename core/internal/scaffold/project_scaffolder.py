@@ -43,7 +43,11 @@ from typing import ClassVar, cast
 import yaml
 
 from core.internal.scaffold.checklist import generate_checklist
-from core.internal.scaffold.gen_env_platform import GenEnvPlatformValidationError, generate_env_platform
+from core.internal.scaffold.gen_env_platform import (
+    GenEnvPlatformValidationError,
+    generate_env_platform,
+    resolve_placement_for_project,
+)
 from core.internal.scaffold.vhost_configurator import configure_vhost, resolve_node_configs_dir
 from core.internal.shared.app_config import AppConfig
 from core.internal.shared.exceptions import ConfigValidationError
@@ -351,10 +355,15 @@ def gen_env_platform(project_dir: str, name: str, domain: str = "", dry_run: boo
     # T2.13 (аудит 2026-08-22): subprocess+PYTHONPATH хоп удалён — прямой in-process импорт
     # (тот же пакет core.internal.scaffold; sys.path-химия больше не участвует).
     try:
+        # DevPlan 010 T2.1: cross-node адресация — best-effort резолв (placement, target_node);
+        # не резолвится (single-node / нет NODE_YAML) → legacy Docker DNS emission.
+        placement, consumer_node = resolve_placement_for_project(project_dir)
         lines = generate_env_platform(
             str(platform_env_yaml),
             domain=domain or "ai-platform.local",  # паритет CLI: пустой domain → дефолт
             project_name=name,
+            placement=placement,
+            consumer_node=consumer_node,
         )
     except (FileNotFoundError, yaml.YAMLError, GenEnvPlatformValidationError) as exc:
         logger.info("[IMP:8][scaffold][env] gen_env_platform failed: %s — .env.platform might be incomplete", exc)
