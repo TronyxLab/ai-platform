@@ -24,14 +24,22 @@
 
 | Статус | REF | Единица | Заметка |
 |--------|-----|---------|---------|
-| [ ] | REF-0003 | PARTIAL→FAILED, exit≠0 | must-set |
-| [ ] | REF-0005 | drain/marker/all_names | must-set |
-| [ ] | REF-0013 | secrets fail-fast | must-set |
-| [ ] | REF-0012 | pins платформенных workflows + gitleaks checksum | включает SHA-pin шаблонных workflows (TRAP[DECISION] §5/В0) |
-| [ ] | REF-0010 | конфиг-ядро noeviction/maxmemory/noDataState | из В0 не двигается |
-| [ ] | REF-0010 | exporters/rules/render-dir | скользящая единица (инв. 2b) — может уйти в В1 |
-| [ ] | REF-0016 | XS access hardening | |
-| [ ] | REF-0002 | postgres hook register (старт) | завершение в В1 |
+| [x] | REF-0003 | PARTIAL→FAILED, exit≠0 | must-set · is_success={DEPLOYED,SKIPPED}; critical-notify; start_period=60s (TRAP[DECISION] у poller, вход REF-0103); DI-тесты rc≠0 + severity-mapping |
+| [x] | REF-0005 | drain/marker/all_names | must-set · drain_all_count зеркалит exit-status; run-scoped hc_done+unlink-on-init; тесты с реальным drain (red→green) |
+| [x] | REF-0013 | secrets fail-fast | must-set · empty-parse→fatal, merge-guard 3.5, narrow excepts, postcondition DATA-1006, NODE-dispatch, file-wins, signal/atexit в main(); TEST-07/08 зелёные |
+| [x] | REF-0012 | pins платформенных workflows + gitleaks checksum | включая SHA-pin шаблонных workflows (TRAP[DECISION] §5/В0); gate test_gate_workflow_sha_pins 8/8; 11 SHA резолвлены gh api; SSH_OPTS inline-набор (TRAP[DECISION] deferred — org-agnostic) |
+| [x] | REF-0010 | конфиг-ядро noeviction/maxmemory/noDataState | langfuse-redis noeviction@96mb; main redis 192mb; DiskSpace/HighMemory→Alerting; warning-push on; repeat 2h; tsdb retention.size |
+| [x] | REF-0010 | exporters/rules/render-dir | закрыто в В0 — сползания НЕТ: pgbouncer-exporter+job+rule, второй redis_exporter+evicted_keys, minio job, alloy scrape+up-rules, render-dir AI-0004 (additive в deploy_paths) |
+| [x] | REF-0016 | XS access hardening | kbd-interactive/challenge no + MaxAuthTries 3 (drop-in+S4); *cloud* glob-нейтрализация; φ1 5.6 blocking; sudoers --mode pin ×2 |
+| [x] | REF-0002 | postgres hook register (старт) | wrapper.sh + interfaces:deploy-hook + hooks.on_project_deploy; hook-gate red→green; ensure-convergence orphan-role ветка (5 unit) |
+
+Волна 0 closed 2026-08-24: commits `d331e01` (T9 ops trio) + `aaa209d` (волна) · `make check`
+чистый (4756+ passed), `make agent-check` blocking=0, `make check MARKER=check-manifests` GREEN.
+Хвосты интеграции волны: test-оверлеи langfuse/service-exporters/minio, service-exporters
+module.yaml 288M→448M, healthcheck interval exporter 15s, ZAI_API_KEY в secret-definitions +
+.env.example (след T9-zai), LLM-гейты deepseek-only → мультипровайдер (SoT policy#providers),
+фикстуры state-machine получили secrets-manifest.yaml (след REF-0013 fail-fast),
+R1-ассерты в test_secrets_postcondition.
 
 ## Волна 1 — «Аварийные пути»
 
@@ -90,3 +98,4 @@
 | Дата | Волны/REF в работе | Статус | Заметки (блокеры, сползания инв. 2b) |
 |------|--------------------|--------|--------------------------------------|
 | 2026-08-24 | — | планирование | DevPlan 11 создан; леджер инициализирован |
+| 2026-08-24 | Волна 0 (все 7 единиц) | closed | 7 параллельных Agent Manager-сессий на Ox Alpha; commits d331e01+aaa209d; make check/agent-check/check-manifests чистые; drills В4 ждут test-VPS; REF-0007 staging node-update — перед продом |
