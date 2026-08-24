@@ -61,10 +61,10 @@ agent-check blocking=0, check-manifests GREEN. node-lifecycle.sh ужат до 7
 | Статус | REF | Единица | Заметка |
 |--------|-----|---------|---------|
 | [x] | REF-0006 | L1 deny-set + gate в DeployOrchestrator.deploy | dangerous-volumes (socket-deny-set, abs-binds вне allowlist, named-volumes) + host-mode-keys (network_mode/pid/userns/cgroup:host, cgroup_parent/sysctls); l1_only parse-fail → БЛОК; pre-apply gate в deploy() перед _apply_deploy (DI pre_apply_gate, fail-closed); SEC-0013 residual TRAP у контракта; R5-негативы C1-входов + TEST-05 traversal receive/remove ×8; 44+20 тестов зелёные |
-| [ ] | REF-0001 | build&push job в шаблоны + fix adopter image_tag | блок наследует SHA-pins REF-0012 |
-| [ ] | REF-0008 | TLS-бандл (6 независимых подпунктов) | отмечать подпункты здесь по мере закрытия |
-| [ ] | REF-0009 | backup truth (sentinel/stamp/encrypt/restore) | precondition restore-drill В4 |
-| [ ] | REF-0015 | ingress/receive resource guards | |
+| [x] | REF-0001 | build&push job в шаблоны + fix adopter image_tag | SHA-pinned actions, ghcr :sha+:latest, packages:write; adopter без image_tag; e2e scaffold→push→deploy готов к прогону на test-VPS |
+| [x] | REF-0008 | TLS-бандл (6 независимых подпунктов) | privkey+pubkey-match; pair-valid; expiry-scan live/+fullchain; self_signed alert+no-overwrite LE; ACME backoff; FQDN fail-fast+shlex.quote+tmp-rename — все 6 закрыты |
+| [x] | REF-0009 | backup truth (sentinel/stamp/encrypt/restore) | .uploaded sentinel-gated cleanup, gzip-t stamp, age-encrypt+decrypt-runbook, restore ON_ERROR_STOP+pre-dumpall ⛔ полный цикл бэкапа = precondition restore-drill В4 |
+| [x] | REF-0015 | ingress/receive resource guards | nginx limit_conn perip+таймауты; receive stream-extract uncompressed ceiling+entry-count cap+statvfs guard; payload cap 64MiB |
 
 ## Волна 3 — «Бюджеты, хранилища, гигиена»
 
@@ -104,3 +104,4 @@ agent-check blocking=0, check-manifests GREEN. node-lifecycle.sh ужат до 7
 | 2026-08-24 | — | планирование | DevPlan 11 создан; леджер инициализирован |
 | 2026-08-24 | Волна 0 (все 7 единиц) | closed | 7 параллельных Agent Manager-сессий на Ox Alpha; commits d331e01+aaa209d; make check/agent-check/check-manifests чистые; drills В4 ждут test-VPS; REF-0007 staging node-update — перед продом |
 | 2026-08-25 | Волна 2: REF-0006 | done (в общем дереве с REF-0008/0009-сессиями) | L1 deny-set + gate в deploy(); тесты: test_verify_contracts 38, test_verify_contracts_orchestrator_gate 6 (новый), dispatch TEST-05 ×8; make check TEST_FILE ×5 зелёные; agent-check/check-diff по СВОИМ файлам чистые — 2 остаточных фейла diff'а принадлежат незакоммиченному REF-0008 (cert_orchestrator.py:995 invalid noqa) / REF-0009 (doc-headers их новых файлов); pre-existing FBT/SLF-строки в изменённых файлах (receive_flow:174/737, orchestrator:563, rollback_contour:334) не тронуты (freeze/signature/advisory-прецедент) |
+| 2026-08-25 | Волна 2: REF-0001/0008/0009/0015 | done | commits 63ce627+063734e; make check GREEN 20/20 после хвостов интеграции (cert.self_signed каталог, e2e L1-шов, template LOC-cap 40→120 supersession TRAP[TEST], doxygen zero); agent-check blocking=0; check-manifests GREEN; drills/e2e/full-backup-cycle ждут test-VPS |
