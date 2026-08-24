@@ -20,6 +20,8 @@
 ## @changes 2026-07-31 | DevPlan 101 TASK-2 — Initial implementation (Wave 5d Strangler-Fig завершение)
 ## @changes 2026-08-13 | DevPlan 160 E1 — +runner: CommandRunner / facts: EnvironmentFacts (DI);
 ##            subprocess.run + os.path.isfile (VPS detect) → DI-канал, поведение без изменений
+## @changes 2026-08-24 | REF-0007 (11-DevPlan В1) — _ssh_exec/execute_update: +stdin_payload
+##            (secret-prelude → `bash -s`), AGE-ключ вне argv node-update
 # ⚠️ TRAP[BUG] · 2026-07-23 · P0 · VPS self-SSH loop: detect /opt/platform/ → local exec
 # · Symptom: `make node-update` на самом VPS зацикливался — execute_remote_update видел SSH host
 # ·   из node.yaml, подключался сам к себе и гонял remote-фазы повторно.
@@ -35,7 +37,8 @@ import os
 import pathlib
 import subprocess
 import sys
-from typing import Protocol
+from collections.abc import Callable
+from typing import Protocol, cast
 
 from core.internal.bootstrap.overlay_deliverer import (
     NodeYamlNotFoundError,
@@ -208,22 +211,48 @@ class RemoteExecutor:
 
     # region FUNC__ssh_exec
     ## @purpose  SSH exec mirror lib/ssh.sh ssh_exec: subprocess.run + timeout, exit 124 на таймаут.
-    ## @io  input: host (str), remote_cmd (str), output: exit code (0/124/rc)
+    ##           REF-0007: stdin_payload непуст → remote-команда = `bash -s`, скрипт (secret-prelude
+    ##           + тело) уходит в stdin — секреты не попадают в argv локального ssh и remote shell.
+    ## @io  input: host (str), remote_cmd (str), stdin_payload (str, "" = legacy argv-режим),
+    ##      output: exit code (0/124/rc)
     ## @complexity  O(1) — один SSH-вызов с timeout wrapper
     ## @invariants  stream-вывод (наследует stdio как shell-версия — оператор видит remote-логи);
-    ##              runner задан (тесты) → runner.run (fake scripted; stream-семантика не нужна)
+    ##              runner задан (тесты) → runner.run (fake scripted; stream-семантика не нужна);
+    ##              stdin_payload НЕ логируется (содержит значения ключей)
     ## @changes 2026-08-13 | E1 (160): +DI-канал self._runner — W4d-канон условного шва:
     ##            runner=None → subprocess.run (default, stdio-наследование сохранено);
     ##            runner задан → runner.run(cmd, timeout=...)
-    def _ssh_exec(self, host: str, remote_cmd: str) -> int:
-        """Run ssh root@host remote_cmd with 600s timeout. Returns 0/124/propagated rc."""
-        cmd = ["ssh", *SSH_OPTS, f"root@{host}", remote_cmd]
+    ## @changes 2026-08-24 | REF-0007: +stdin_payload — транспорт ключей вне argv (`bash -s`)
+    def _ssh_exec(self, host: str, remote_cmd: str, stdin_payload: str = "") -> int:
+        """Run ssh root@host with 600s timeout. Returns 0/124/propagated rc."""
+        if stdin_payload:
+            # REF-0007: скрипт (prelude+тело) в stdin; в argv только `bash -s`
+            cmd = ["ssh", *SSH_OPTS, f"root@{host}", "bash -s"]
+            script = f"{stdin_payload}\n{remote_cmd}\n"
+        else:
+            cmd = ["ssh", *SSH_OPTS, f"root@{host}", remote_cmd]
+            script = ""
         logger.info("[IMP:7][ssh_exec][exec] Starting: timeout %ss ssh root@%s (mode=deploy)", SSH_EXEC_TIMEOUT, host)
-        try:
+
+        # DI-шов: замыкание читает cmd/script/self — извлечение наружу ломает инкапсуляцию
+        def _invoke() -> subprocess.CompletedProcess[bytes] | subprocess.CompletedProcess[str]:
+            """Single ssh invocation (default subprocess vs DI-runner; ±stdin payload)."""
             if self._runner is None:
-                r = subprocess.run(cmd, timeout=SSH_EXEC_TIMEOUT, check=False)
-            else:
-                r = self._runner.run(cmd, timeout=SSH_EXEC_TIMEOUT)
+                if script:
+                    return subprocess.run(cmd, input=script, text=True, timeout=SSH_EXEC_TIMEOUT, check=False)
+                return subprocess.run(cmd, timeout=SSH_EXEC_TIMEOUT, check=False)
+            if script:
+                # DI-канон W4d: фейки принимают superset kwargs (tests/helpers/fakes.py)
+                runner_run = cast("Callable[..., object]", self._runner.run)
+                result = runner_run(cmd, timeout=SSH_EXEC_TIMEOUT, input=script)
+                return cast("subprocess.CompletedProcess[str]", result)
+            # Протокол CommandRunner аннотирован bare CompletedProcess (bytes-default) —
+            # фактический контент стримится в stdio, типизация канала не меняется.
+            result = self._runner.run(cmd, timeout=SSH_EXEC_TIMEOUT)
+            return cast("subprocess.CompletedProcess[str]", result)
+
+        try:
+            r = _invoke()
         except subprocess.TimeoutExpired:
             logger.info("[IMP:10][ssh_exec][timeout] TIMEOUT: root@%s — %ss exceeded", host, SSH_EXEC_TIMEOUT)
             return 124
@@ -237,12 +266,16 @@ class RemoteExecutor:
 
     # region FUNC_execute_update
     ## @purpose  Полный цикл node-update: resolve → VPS detect → prepare opts → sync-core → ssh exec.
-    ## @io  input: node_name, remote_cmd (build_update_ssh_cmd output), passthrough_args (info);
+    ## @io  input: node_name, remote_cmd (build_update_ssh_cmd output), passthrough_args (info),
+    ##      secret_prelude (REF-0007: export-скрипт для ssh-stdin; "" = нет секретов);
     ##      output: exit code 0=success, 1=fatal, 2=local fallback, 124=timeout
     ## @complexity  O(f + m) — f=файлы rsync (sync-core), m=metadata; ssh exec O(1)
     ## @invariants  sync-core обязателен ДО ssh exec (TRAP[BUG] P0 ported 2026-07-24)
     ##              DRY_RUN: sync-core --dry-run + печать ssh-команды, exit 0
-    def execute_update(self, node_name: str, remote_cmd: str, passthrough_args: str = "") -> int:
+    ##              REF-0007: secret_prelude НЕ логируется и НЕ попадает в argv (`bash -s`)
+    def execute_update(
+        self, node_name: str, remote_cmd: str, passthrough_args: str = "", *, secret_prelude: str = ""
+    ) -> int:
         """Execute remote node update (resolve → VPS detect → sync-core → ssh)."""
         try:
             yaml_path, host = self._resolve_host(node_name)
@@ -284,7 +317,7 @@ class RemoteExecutor:
             logger.info("[IMP:8][execute_update][dry-run] DRY-RUN: ssh ... root@%s", host)
             return 0
         logger.info("[IMP:9][execute_update][ssh] Executing node-lifecycle.sh --mode update on root@%s", host)
-        return self._ssh_exec(host, remote_cmd)
+        return self._ssh_exec(host, remote_cmd, secret_prelude)
 
     # endregion FUNC_execute_update
 

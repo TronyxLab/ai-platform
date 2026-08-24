@@ -29,6 +29,9 @@ class ServiceDeployResult:
     service: str
     previous_image: str | None = None
     rollback_performed: bool = False
+    # REF-0004 (DevPlan 11 В1, additive): результат ЕДИНСТВЕННОГО wait_health re-verify после
+    # perform_rollback. True ⇔ rollback_performed AND healthcheck прошёл после отката.
+    rollback_verified: bool = False
     first_deploy_failed: bool = False
     error_message: str | None = None
 

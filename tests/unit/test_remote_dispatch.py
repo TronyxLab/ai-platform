@@ -53,15 +53,22 @@ class FakeExecutor:
         self._rc = rc
         self.calls: list[dict] = []
 
-    def _record(self, verb: str, node: str, remote_cmd: str, passthrough: str) -> int:
-        self.calls.append({"verb": verb, "node": node, "remote_cmd": remote_cmd, "passthrough": passthrough})
+    def _record(self, verb: str, node: str, remote_cmd: str, passthrough: str, secret_prelude: str = "") -> int:
+        self.calls.append({
+            "verb": verb,
+            "node": node,
+            "remote_cmd": remote_cmd,
+            "passthrough": passthrough,
+            "secret_prelude": secret_prelude,
+        })
         return self._rc
 
     def execute_converge(self, node: str, remote_cmd: str, passthrough: str) -> int:
         return self._record("converge", node, remote_cmd, passthrough)
 
-    def execute_update(self, node: str, remote_cmd: str, passthrough: str) -> int:
-        return self._record("update", node, remote_cmd, passthrough)
+    def execute_update(self, node: str, remote_cmd: str, passthrough: str, *, secret_prelude: str = "") -> int:
+        # REF-0007: secret_prelude — ssh-stdin канал (AGE-ключ вне argv)
+        return self._record("update", node, remote_cmd, passthrough, secret_prelude=secret_prelude)
 
 
 def _args(**overrides) -> remote_dispatch.Args:

@@ -8,6 +8,8 @@
 ## @rationale Все step-логика — в Python (cli.py → state_machine.py); единственный канал запуска
 # endregion MODULE_CONTRACT
 set -euo pipefail; MODE=""; RESUME_MODE=false; FORCE_MODE=""; DRY_RUN_MODE=false
+# REF-0007 (11-DevPlan W1): umask 077 — артефакты lifecycle-фаз (secrets.env) создаются 0600
+umask 077
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; SM_SCRIPT="${SCRIPT_DIR}/lifecycle/cli.py"
 # ⚠️ TRAP[BUG] · 2026-07-31 · P1 · PYTHONPATH отсутствовал → ModuleNotFoundError: core (script-path не добавляет CWD в sys.path); Fix: корень + lifecycle/ (паттерн converge.sh:64)
 export PYTHONPATH="${SCRIPT_DIR}/../../..:${SCRIPT_DIR}/lifecycle:${PYTHONPATH:-}"
@@ -58,9 +60,7 @@ main() {
     if [[ "$MODE" == "init" ]]; then
         for var in NODE_NAME NODE_YAML PLATFORM_OWNER_KEY; do [[ -z "${!var:-}" ]] && { echo "[IMP:10][bootstrap] FAIL: Missing ${var}" >&2; exit 1; }; done
         detect_tor_enabled; export TOR_ENABLED
-        # Волна 117 D6: preflight перенесён в lifecycle/cli.py (_maybe_run_preflight) —
-        # решение «все фазы done → skip preflight» принимает state_machine. Этот фасад
-        # остаётся тонким: только делегирование. SKIP_PREFLIGHT env по-прежнему уважается.
+        # 117 D6: preflight в lifecycle/cli.py (_maybe_run_preflight); SKIP_PREFLIGHT уважается
         _delegate --mode init --node-name "${NODE_NAME}" --node-yaml "${NODE_YAML}" \
             ${PLATFORM_OWNER_KEY:+--owner-key "$PLATFORM_OWNER_KEY"} ${PLATFORM_CI_DEPLOY_KEY:+--ci-deploy-key "$PLATFORM_CI_DEPLOY_KEY"} ${PLATFORM_CI_ROOT_KEY:+--ci-root-key "$PLATFORM_CI_ROOT_KEY"} \
             ${CONTEXT:+--context "$CONTEXT"} ${FORCE_MODE:+--force}

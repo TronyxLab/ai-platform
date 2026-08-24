@@ -26,6 +26,8 @@
 ## @changes  2026-07-30 · T9a — library refactor: load_yaml/validate_provides raise exceptions;
 ##           added generate_env_platform() convenience wrapper; __all__ export
 ## @changes  2026-08-03 · DevPlan 133 W2 — +credentials (password-injection), --project-dir/--credentials-file
+## @changes  2026-08-24 · REF-0007 — --output: atomic_write_text(mode=0640) от создания +
+##           best-effort chown ci-deploy (было write_text() → 0644 с паролем БД в DSN)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -63,6 +65,7 @@ _PROJECT_ROOT = str(Path(__file__).resolve().parents[3])
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
+from core.internal.shared.atomic_writer import atomic_write_text  # REF-0007: 0640 от создания
 from core.internal.shared.exceptions import PlatformError  # намеренно ПОСЛЕ bootstrap (TRAP[BUG] выше)
 
 __all__ = [
@@ -588,6 +591,8 @@ class _GenEnvArgs(argparse.Namespace):
 
 
 ## @purpose  CLI entry point. Parses args, calls generate_env_platform(), writes output.
+##           REF-0007: --output пишет .env.platform через atomic_write_text(mode=0640)
+##           + best-effort chown ci-deploy (DSN содержит пароль БД — не 0644 root).
 ##           Catches library exceptions and exits with code 1 + error message.
 ##           DI (DevPlan 167 D4): argv: list[str] | None = None — тесты вызывают main([...])
 ##           вместо monkeypatch-патча sys.argv (AF-4 main(argv) паттерн; None = sys.argv).
@@ -596,6 +601,59 @@ class _GenEnvArgs(argparse.Namespace):
 ##           stderr: LDD logs + error messages
 ## @exitcode 0  Success
 ## @exitcode 1  File not found, YAML parse error, or validation error
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region FUNC__apply_env_platform_ownership
+# REF-0007 (11-DevPlan Волна 1): режим .env.platform — 0640 (owner читает, группа ci-deploy
+# читает, world — ничего). Канон atomic_write_text применяет mode от создания.
+_ENV_PLATFORM_MODE = 0o640
+
+
+## @purpose  Best-effort chown ci-deploy:ci-deploy для .env.platform (нода: receive/compose
+##           читают файл от пользователя ci-deploy; SEC-0017). Dev-машина без ci-deploy →
+##           IMP:8 skip (не fail — генерация не должна ломаться вне ноды).
+## @io       ⇥ path: Path → ⎋ None (side-effect: ownership)
+## @complexity O(1) — pwd/grp lookup + os.chown
+def _ci_deploy_ids() -> tuple[int, int]:
+    """Resolve ci-deploy uid/gid (KeyError if the user/group does not exist)."""
+    import grp
+    import pwd
+
+    return pwd.getpwnam("ci-deploy").pw_uid, grp.getgrnam("ci-deploy").gr_gid
+
+
+def _apply_env_platform_ownership(path: Path) -> None:
+    """chown ci-deploy:ci-deploy (best-effort: no ci-deploy user / not root → skip с логом)."""
+    try:
+        uid, gid = _ci_deploy_ids()
+        os.chown(path, uid, gid)
+        logger.info("[IMP:9][gen_env_platform][ownership] %s → ci-deploy:ci-deploy", path)
+    except KeyError:
+        logger.info("[IMP:8][gen_env_platform][ownership] user/group ci-deploy отсутствует — chown skipped (%s)", path)
+    except OSError as e:
+        logger.info("[IMP:8][gen_env_platform][ownership] chown failed for %s: %s (не root — норма на dev)", path, e)
+
+
+# endregion FUNC__apply_env_platform_ownership
+
+
+# region FUNC__write_output_file
+## @purpose  REF-0007: запись .env.platform — atomic_write_text(mode=0640) от создания
+##            (было write_text() → umask-режим 0644 root с паролем БД в DSN)
+##            + best-effort chown ci-deploy (receive/compose на ноде читают от ci-deploy).
+## @io       ⇥ output_path: str, lines: list[str] → ⎋ None (side-effect: file)
+## @complexity O(N) where N = len(lines) — делегирует atomic_write_text
+def _write_output_file(output_path: str, lines: list[str]) -> None:
+    """Write .env.platform atomically with mode=0640 + best-effort ci-deploy ownership."""
+    output_file = Path(output_path)
+    atomic_write_text(output_file, "\n".join(lines) + "\n", mode=_ENV_PLATFORM_MODE)
+    _apply_env_platform_ownership(output_file)
+
+
+# endregion FUNC__write_output_file
+
+
 ## 🧐 TRAP[DI-SEAM] · 2026-08-14 · — · CLI arg-flow тестируется реальным main(argv) + --output
 ## · Rejected: прямой вызов generate без проброса аргументов (тест патчил sys.argv +
 ## ·   gep.generate лямбдой — 3 monkeypatch.setattr на 2 сценария)
@@ -694,9 +752,9 @@ def main(argv: list[str] | None = None) -> int:
             consumer_node=consumer_node,
         )
         if output_path:
-            output_file = Path(output_path)
-            output_file.parent.mkdir(parents=True, exist_ok=True)
-            output_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            # REF-0007 (11-DevPlan Волна 1): .env.platform содержит DSN с паролем БД проекта —
+            # atomic_write_text(mode=0640) ОТ СОЗДАНИЯ + best-effort chown ci-deploy.
+            _write_output_file(output_path, lines)
         else:
             for line in lines:
                 print(line)

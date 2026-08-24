@@ -75,6 +75,14 @@ name: Deploy Project (Reusable)
         description: "SSH private key for CI deploy user on target node"
         required: true
 
+# REF-0011: concurrency-group per project — два быстрых push НЕ дают параллельных receive
+# на одну ноду (cancel-in-progress:false → очередь, не отмена активного деплоя; node-side
+# страховка — per-project flock в ReceiveFlow.run). Группа по inputs.project_name:
+# один репозиторий проекта = один канонический ключ.
+concurrency:
+  group: deploy-${{ inputs.project_name }}
+  cancel-in-progress: false
+
 # REF-0012 (SEC-0010): reusable workflow исполняется в контексте проекта-caller'а —
 # дефолтные token-permissions репозитория могут быть write-all. Минимум: только чтение
 # кода (checkout); publish/пакетных прав нет (образы собирает отдельный build-job, REF-0001).

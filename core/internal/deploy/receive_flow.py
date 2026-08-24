@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: receive-flow, receive, tar, stdin, unpack, validate, deploy, pre-deploy-gate, L1, PRACTICES-BLOCK, forced-command, sha-pinning, JSON, E2, orchestrator-decomposition
-# STRUCTURE: ▶ ReceiveFlow.run ┌stdin tar + project_name + version┐ → unpack (tar → staging) → validate (ai-platform.yaml + name) → pre-deploy L1 gate (verify_contracts l1_only, 176 A.2) → copy → deploy (LocalChannel) → post-deploy chain → ⎋ JSON + exit code
+# GREP_SUMMARY: receive-flow, receive, tar, stdin, unpack, validate, deploy, pre-deploy-gate, L1, PRACTICES-BLOCK, forced-command, sha-pinning, JSON, E2, orchestrator-decomposition, flock, payload-tx, backup-restore, stale-compose, orphan-sweep, concurrency
+# STRUCTURE: ▶ ReceiveFlow.run ┌stdin tar + project_name + version┐ → unpack (tar → staging) → validate (ai-platform.yaml + name) → ◆ flock per-project (fail-closed, REF-0011) → payload-tx ┌backup ВНЕ target → staging-copy → os.replace (без pre-remove) → stale-compose delete┐ → deploy (LocalChannel) → post-deploy chain → ⎋ JSON + exit code
 # region MODULE_CONTRACT
 ## @purpose  VPS-side forced-command receive flow (DevPlan 119 E2) — экстракция receive() из
 ##           deploy/orchestrator.py (127 LOC, CC=15). Класс ReceiveFlow: unpack → validate →
@@ -30,6 +30,15 @@
 ##   - Атомарная замена payload (T9.8): staging-copy → per-file os.replace — сбой не оставляет
 ##     частично перезаписанных файлов; существующие payload-файлы бэкапятся в payload_backup_dir
 ##     (metadata) → rollback восстанавливает payload, не только compose (L-6)
+##   - Payload-транзакция (REF-0105): backup_dir ВНЕ target_dir (system tmp, prefix
+##     payload-backup-); исключение в фазе replace → restore-from-backup ДО rmtree backup;
+##     replace БЕЗ pre-remove (нет ENOENT-окна для читателей); канонические compose-имена
+##     (PROJECT_COMPOSE_FILENAMES), отсутствующие в staging, удаляются из target (stale-
+##     compose переживал переименование и ПОБЕЖДАЛ по резолюции); orphan tmpdir от crashed
+##     receives выметаются prefix-sweep'ом (возраст > 1h — защита активного параллельного receive)
+##   - Конкурентность (REF-0011): run() держит reentrant per-project flock
+##     (platform_lock_path) НА ВЕСЬ периметр мутации target_dir (flock-before-copy);
+##     контеншн/таймаут → JSON FAILED + exit 1; EOFError в except-кортеже stdin-пути
 ##   - Пост-деплой цепочка best-effort (сбой → WARN, деплой НЕ фейлится)
 ##   - DeployOrchestrator НЕ импортируется (ни module-level, ни lazy) — DI через конструктор
 ##     (170 W10-B); orchestrator_factory=None → RuntimeError в _make_orchestrator (fail-fast)
@@ -53,11 +62,22 @@
 ## @changes  2026-08-24 · REF-0003 (DevPlan 11 W0) — unhealthy/timeout healthcheck → FAILED
 ##           (∉success): exit≠0, critical-notify на unhealthy-ветке, полная chain — только
 ##           на success; failure_notifier DI (additive, W-H)
+## @changes  2026-08-24 · REF-0011 (DevPlan 11 В1) — flock per-project в начале run()
+##           (reentrant; rollback/remove — та же точка лока через orchestrator_cli dispatch,
+##           интеграционный шов описан в отчёте волны); FileLockError → JSON FAILED + rc 1;
+##           EOFError в except-кортеже
+## @changes  2026-08-24 · REF-0105 (DevPlan 11 В1) — payload-транзакция: backup_dir вне
+##           target_dir, restore-from-backup при сбое replace (ДО rmtree), replace без
+##           pre-remove, удаление stale canonical compose, prefix-sweep orphan tmpdir,
+##           restore_payload_from_backup() — отдельный шов для REF-0004
 ## @modulemap
 ##   ReceiveFlow.unpack [W:2] — tar.gz → staging (filter="data", tarfile)
 ##   ReceiveFlow.validate [W:3] — ai-platform.yaml parse + project name resolve/validate
-##   ReceiveFlow.deploy [W:2] — pre-deploy L1 gate → copy payload → LocalChannel deploy → result
-##   ReceiveFlow.run [W:4] — оркестрация unpack→validate→gate→deploy→chain→JSON→exit
+##   ReceiveFlow.deploy [W:3] — pre-deploy L1 gate → payload-tx (backup/replace/stale-delete)
+##                              → LocalChannel deploy → result
+##   ReceiveFlow.run [W:4] — оркестрация unpack→validate→flock→gate→tx→deploy→chain→JSON→exit
+##   restore_payload_from_backup [W:1] — восстановление payload из backup (шов REF-0004)
+##   sweep_orphan_payload_tmpdirs [W:1] — prefix-sweep crashed-receive tmpdir (age > 1h)
 ## @usecases
 ##   - orchestrator_cli dispatch receive <project> <sha> (prod forced-command)
 ##   - DeployOrchestrator.receive() → ReceiveFlow().run()
@@ -74,6 +94,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import BinaryIO, Protocol
@@ -90,9 +111,12 @@ from core.internal.deploy.hooks.post_deploy_chain import notify_deploy_failure
 from core.internal.deploy.verify_contracts import SEVERITY_BLOCK, VerifyReport, verify_project_contracts
 from core.internal.shared import project_yaml
 from core.internal.shared.app_config import AppConfig
+from core.internal.shared.compose_files import PROJECT_COMPOSE_FILENAMES
 from core.internal.shared.deploy_paths import projects_base
 from core.internal.shared.exceptions import ConfigValidationError
+from core.internal.shared.file_lock import FileLock, FileLockError, platform_lock_path
 from core.internal.shared.project_registry import validate_project_name
+from core.internal.shared.timeouts import DEPLOY_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +126,19 @@ logger = logging.getLogger(__name__)
 # лениво (AppConfig.from_env) в ReceiveFlow.run()/конструкторе.
 _DEFAULT_MAX_PAYLOAD_BYTES = 1024**3  # 1 GiB
 _READ_CHUNK_BYTES = 1024 * 1024  # 1 MiB per chunk
+
+# ── REF-0011: per-project flock периметр receive. Таймаут = полный деплой-бюджет:
+# конкурентный receive ЖДЁТ окончания активного (CI concurrency-group сериализует пуш'ы,
+# cancel-in-progress:false), а не падает; poll_interval 0.5s — минуты, не busy-loop.
+_RECEIVE_LOCK_TIMEOUT = float(DEPLOY_TIMEOUT)
+_RECEIVE_LOCK_POLL_INTERVAL = 0.5
+
+# ── REF-0105: payload-транзакция. backup/staging tmpdir живут ВНЕ target_dir (system tmp)
+# под каноническими префиксами; crashed receives оставляют orphan tmpdir, которые выметаются
+# prefix-sweep'ом. Возрастной порог защищает tmpdir АКТИВНОГО параллельного receive (>1h —
+# за пределами DEPLOY_TIMEOUT-бюджета любого легитимного прогона).
+_ORPHAN_TMP_PREFIXES = ("payload-backup-", "payload-stage-")
+_ORPHAN_MAX_AGE_S = 3600.0
 
 
 # region PROTOCOLS_Orchestrator (DI, 170 W10-B)
@@ -228,6 +265,173 @@ def _default_pre_deploy_gate(project_dir: str, project: str | None = None) -> Ve
 
 
 # endregion FUNC__default_pre_deploy_gate
+
+
+# region FUNC_restore_payload_from_backup
+## @purpose  Восстановить ПРЕДЫДУЩИЙ payload из backup (REF-0105, transactional revert):
+##           для каждого файла staging-набора — вернуть копию из backup, а если файла в
+##           backup НЕТ (файл был новым в упавшей транзакции) — удалить его из target.
+##           Отдельная callable-точка: шов для REF-0004 (rollback-контур вызывает restore
+##           ПОСЛЕ успешного compose-rollback — порядок на стороне orchestrator).
+## @io       ⇥ backup_dir: str | Path, target_dir: str | Path,
+##              staged_names: Iterable[str] → ⎋ None (best-effort; сбои — IMP:10 WARN)
+## @complexity O(F) where F = |staged_names|
+## @invariants
+##   - Никогда не raise (вызывается из except/rollback-путей — не маскирует исходную ошибку)
+##   - Файл без backup-копии и отсутствующий в target — no-op (идемпотентно)
+def restore_payload_from_backup(
+    backup_dir: str | Path,
+    target_dir: str | Path,
+    staged_names: list[str] | tuple[str, ...],
+) -> None:
+    """Restore previous payload files from backup (or drop new files of a failed tx)."""
+    restored = 0
+    for name in staged_names:
+        bsrc = Path(backup_dir) / name
+        dest = Path(target_dir) / name
+        try:
+            if bsrc.is_file():
+                shutil.copy2(str(bsrc), str(dest))
+                restored += 1
+            elif dest.exists():
+                dest.unlink()
+        except OSError as e:
+            logger.error("[IMP:10][ReceiveFlow][restore] Cannot restore %s from %s: %s", dest, bsrc, e)
+    logger.info(
+        "[IMP:9][ReceiveFlow][restore] Payload restored from backup %s (%d/%d files)",
+        backup_dir,
+        restored,
+        len(staged_names),
+    )
+
+
+# endregion FUNC_restore_payload_from_backup
+
+
+# region FUNC_delete_stale_compose_names
+## @purpose  Удалить канонические compose-имена (PROJECT_COMPOSE_FILENAMES), отсутствующие
+##           в staging (REF-0105/DATA-703): переименованный compose.yaml переживал доставку,
+##           ПОБЕЖДАЛ по резолюции COMPOSE_FILENAMES → нода тихо гоняла старый конфиг.
+## @io       ⇥ target_dir: str | Path, staged_names: Iterable[str] → ⎋ int (удалено файлов)
+## @complexity O(C) where C = |PROJECT_COMPOSE_FILENAMES|
+## @invariants
+##   - Только канонические PROJECT_COMPOSE_FILENAMES (не произвольные файлы payload'а)
+##   - Best-effort: OSError удаления → IMP:7 WARN, деплой НЕ блокируется (R5-negative тест)
+def _delete_stale_compose_names(target_dir: str | Path, staged_names: list[str] | tuple[str, ...]) -> int:
+    """Remove canonical compose names absent from staging. Returns removed count."""
+    removed = 0
+    for fname in PROJECT_COMPOSE_FILENAMES:
+        if fname in staged_names:
+            continue
+        stale_path = os.path.join(str(target_dir), fname)
+        if not os.path.lexists(stale_path):
+            continue
+        try:
+            os.remove(stale_path)
+            removed += 1
+            logger.info(
+                "[IMP:9][ReceiveFlow][deploy] Removed stale compose %s (absent in staging)",
+                stale_path,
+            )
+        except OSError as e:
+            logger.warning(
+                "[IMP:7][ReceiveFlow][deploy] Cannot remove stale %s (non-fatal): %s",
+                stale_path,
+                e,
+            )
+    return removed
+
+
+# endregion FUNC_delete_stale_compose_names
+
+
+# region FUNC_sweep_orphan_payload_tmpdirs
+## @purpose  Prefix-sweep orphan tmpdir crashed receives (REF-0105): payload-backup-* /
+##           payload-stage-* в system tmp старше _ORPHAN_MAX_AGE_S. Возрастной порог
+##           защищает tmpdir АКТИВНОГО параллельного receive (крэш = никто не приберёт).
+## @io       ⇥ now: float | None (DI для тестов; None = time.time()) → ⎋ int (удалено каталогов)
+## @complexity O(D) where D = число payload-*-каталогов в tmp
+## @invariants
+##   - Только каталоги с каноническими префиксами (_ORPHAN_TMP_PREFIXES) в tempfile.gettempdir()
+##   - Best-effort: OSError на stat/rmtree — skip (sweep не должен ломать receive)
+def sweep_orphan_payload_tmpdirs(now: float | None = None) -> int:
+    """Remove orphaned payload-tx tmpdirs older than the age threshold. Returns removed count."""
+    tmp_root = Path(tempfile.gettempdir())
+    cutoff = (now if now is not None else time.time()) - _ORPHAN_MAX_AGE_S
+    removed = 0
+    try:
+        candidates = sorted(tmp_root.glob("payload-*"))
+    except OSError:
+        return 0
+    for d in candidates:
+        if not d.name.startswith(_ORPHAN_TMP_PREFIXES) or not d.is_dir():
+            continue
+        try:
+            if d.stat().st_mtime > cutoff:
+                continue
+            shutil.rmtree(d, ignore_errors=True)
+            removed += 1
+        except OSError as e:
+            logger.warning("[IMP:7][ReceiveFlow][sweep] Cannot sweep orphan %s: %s", d, e)
+            continue
+    if removed:
+        logger.info("[IMP:8][ReceiveFlow][sweep] Swept %d orphan payload tmpdir(s) in %s", removed, tmp_root)
+    return removed
+
+
+# endregion FUNC_sweep_orphan_payload_tmpdirs
+
+
+# region FUNC_commit_payload_tx
+## @purpose  Commit-фаза payload-транзакции (REF-0105/T9.8): staging-copy → os.replace
+##           БЕЗ pre-remove → удаление stale canonical compose. При ЛЮБОМ исключении до
+##           commit-точки — restore_payload_from_backup из backup (вне target_dir).
+## @io       ⇥ staging_files: list[Path], target_dir: str, backup_dir: str,
+##              staged_names: list[str], project: str → ⎋ None ⚡ (re-raise исходное)
+## @complexity O(F) where F = |staging_files|
+## @invariants
+##   - tx_committed=True строго ПОСЛЕ успешного replace+stale-sweep (точка commit)
+##   - Исключение транзакции пробрасывается ДАЛЬШЕ после restore (не глотается)
+def _commit_payload_tx(
+    staging_files: list[Path],
+    target_dir: str,
+    backup_dir: str,
+    staged_names: list[str],
+    project: str,
+) -> None:
+    """Atomic payload transaction: copy→replace→stale-sweep with restore-on-crash."""
+    tx_committed = False
+    try:
+        staging_copy = tempfile.mkdtemp(prefix="payload-stage-")
+        try:
+            for item in staging_files:
+                shutil.copy2(str(item), os.path.join(staging_copy, item.name))
+            for item in sorted(Path(staging_copy).iterdir()):
+                if not item.is_file():
+                    continue
+                # 🧐 TRAP[DECISION] · 2026-08-24 · — · replace без pre-remove (REF-0105/FAIL-0704)
+                # · Rejected: сохранить os.remove(dest) перед rename («root-owned стуб»)
+                # · Reason: rename(2) требует прав записи только на КАТАЛОГ (ci-deploy-writable),
+                # ·   не на сам файл — D11-комментарий подтверждает; pre-remove создавал
+                # ·   ENOENT-окно для читателей (converge resolve/compose config) и терял файл
+                # ·   при падении между remove и replace.
+                # · Rev: если появится ФС без POSIX-rename поверх чужих файлов — вернуть guard.
+                Path(str(item)).replace(os.path.join(target_dir, item.name))
+            _delete_stale_compose_names(target_dir, staged_names)
+        finally:
+            shutil.rmtree(staging_copy, ignore_errors=True)
+        tx_committed = True
+    finally:
+        if not tx_committed:
+            logger.error(
+                "[IMP:10][ReceiveFlow][tx] Payload tx FAILED mid-replace for %s — restoring from %s",
+                project,
+                backup_dir,
+            )
+            restore_payload_from_backup(backup_dir, target_dir, staged_names)
+
+
+# endregion FUNC_commit_payload_tx
 
 
 # region CLASS_ReceiveFlow
@@ -406,6 +610,12 @@ class ReceiveFlow:
         существующих payload-файлов (payload_backup_dir в metadata) — rollback восстанавливает
         их, а не только compose (см. DeployOrchestrator._rollback_deploy).
 
+        REF-0105: payload-транзакция — backup_dir ВНЕ target_dir; исключение в фазе replace →
+        restore_payload_from_backup ДО rmtree backup (half-applied payload невозможен);
+        replace без pre-remove; канонические compose-имена вне staging удаляются.
+        После входа в orchestrator.deploy restore не вызывается — порядок отката
+        (compose-rollback → payload-restore) принадлежит контуру REF-0004.
+
         DI (W-H DevPlan 163 / 170 W10-B): оркестратор создаётся фабрикой из конструктора
         (orchestrator_factory); тесты инжектят субкласс-фабрику (0 патчей _deploy_compose/healthcheck).
 
@@ -430,9 +640,13 @@ class ReceiveFlow:
 
         os.makedirs(target_dir, exist_ok=True)
         staging_files = [p for p in Path(staging).iterdir() if p.is_file()]
+        staged_names = [item.name for item in staging_files]
 
-        # ── T9.8: бэкап существующих payload-файлов ДО overwrite (для rollback) ──
-        backup_dir = tempfile.mkdtemp(prefix="payload-backup-", dir=target_dir)
+        # ── REF-0105: бэкап существующих payload-файлов ВНЕ target_dir (system tmp).
+        # Раньше backup_dir создавался ВНУТРИ target_dir под target'ом и уничтожался
+        # в finally даже при исключении ДО orchestrator-rollback — единственная
+        # rollback-копия гибла ровно тогда, когда была нужна (см. TRAP[BUG] ниже).
+        backup_dir = tempfile.mkdtemp(prefix="payload-backup-")
         for item in staging_files:
             dest = os.path.join(target_dir, item.name)
             if os.path.isfile(dest):
@@ -441,33 +655,24 @@ class ReceiveFlow:
                 except OSError as e:
                     logger.warning("[IMP:7][ReceiveFlow][deploy] Cannot backup existing %s (non-fatal): %s", dest, e)
 
+        # ⚠️ TRAP[BUG] · 2026-08-24 · P1 · finally-rmtree уничтожал backup при любом сбое (REF-0105/DATA-101)
+        # · Symptom: исключение между replace'ами (или в L1-гейте/копировании) выходило из
+        # ·   deploy(), finally делал rmtree(backup_dir) → half-applied payload на ноде без
+        # ·   средств отката до следующего receive; git↔node divergence молча.
+        # · Root: rmtree стоял в общем finally без различения «tx упала» vs «tx прошла»;
+        # ·   restore существовал только внутри orchestrator._rollback_deploy (недостижим
+        # ·   при исключении ДО orchestrator.deploy).
+        # · Fix: restore_payload_from_backup() в failure-ветке tx-фазы (ДО rmtree backup);
+        # ·   после orchestrator.deploy restore НЕ вызывается — порядок
+        # ·   «compose-rollback → payload-restore» принадлежит контуру REF-0004.
+        # · Prevention: транзакционные мутации обязаны иметь явную commit-точку и
+        # ·   restore-ветку до освобождения backup-ресурсов.
         try:
-            # ── T9.8: атомарная замена — staging-copy → per-file os.replace (rename) ──
-            # Раньше файлы копировались из staging напрямую в target: сбой на середине
-            # оставлял частично перезаписанные файлы. os.replace атомарен на POSIX
-            # (читатель видит старый ИЛИ новый файл, не обрезанный).
-            staging_copy = tempfile.mkdtemp(prefix="payload-stage-", dir=target_dir)
-            try:
-                for item in staging_files:
-                    shutil.copy2(str(item), os.path.join(staging_copy, item.name))
-                for item in Path(staging_copy).iterdir():
-                    if not item.is_file():
-                        continue
-                    dest = os.path.join(target_dir, item.name)
-                    # Bootstrap-стуб (context_deployer φ8, GENERATED-STUB) может быть root-owned —
-                    # os.replace (rename) работает по правам ДИРЕКТОРИИ (ci-deploy-writable):
-                    # удаляем существующий файл как старый путь (D11) + WARN при неудаче.
-                    if os.path.lexists(dest):
-                        try:
-                            os.remove(dest)
-                        except OSError:
-                            logger.warning(
-                                "[IMP:7][ReceiveFlow][deploy] Cannot remove existing %s — os.replace will surface the error",
-                                dest,
-                            )
-                    Path(str(item)).replace(dest)
-            finally:
-                shutil.rmtree(staging_copy, ignore_errors=True)
+            _commit_payload_tx(staging_files, target_dir, backup_dir, staged_names, project)
+
+            # Bootstrap-стуб (context_deployer φ8, GENERATED-STUB): os.replace (rename)
+            # работает по правам ДИРЕКТОРИИ (ci-deploy-writable), root-owned файл заменяется
+            # напрямую (D11) — отдельный remove больше не нужен (см. TRAP[DECISION] выше).
 
             # 🧐 TRAP[DECISION] · 2026-07-31 · HI · receive() local delivery channel
             # · Rejected: SCPChannel() with empty metadata (bug — deliver() always FAILED:
@@ -483,7 +688,9 @@ class ReceiveFlow:
                 version=version,
                 service=service,
                 project_dir=target_dir,
-                # T9.8: бэкап предыдущих payload-файлов — rollback восстановит их из snapshot
+                # T9.8/REF-0105: бэкап предыдущих payload-файлов (вне target_dir) —
+                # create_snapshot персистит его в snapshot; rollback восстанавливает
+                # payload из снапшота (контур REF-0004), а не из этого tmpdir.
                 metadata={"payload_backup_dir": backup_dir},
             )
             # D5: version (sha) попадает в OrchestratorDeployResult JSON
@@ -494,6 +701,47 @@ class ReceiveFlow:
             shutil.rmtree(backup_dir, ignore_errors=True)
 
     # endregion FUNC_deploy
+
+    # region FUNC_handle_deploy_outcome
+    ## @purpose  Пост-деплой ветвление (D4/U-24 + REF-0003): success → полная post-deploy
+    ##           chain; unhealthy/timeout (FAILED ∉ success) → critical-notify БЕЗ
+    ##           catalog/reconfig/hooks поверх больного деплоя. Вынесен из run() (REF-0011:
+    ##           flock-периметр увеличил CC run — ветвление результата живёт здесь).
+    ## @io       ⇥ result: _DeployResultProtocol, project/version/base/target_dir
+    ##           → ⎋ None (best-effort, сбой chain → WARN внутри chain)
+    ## @complexity O(1) + стоимость chain/notify
+    ## @invariants
+    ##   - Полная chain — ТОЛЬКО на result.is_success(); иначе только critical-notify
+    def _handle_deploy_outcome(
+        self,
+        result: _DeployResultProtocol,
+        project: str,
+        version: str,
+        base: str,
+        target_dir: str,
+    ) -> None:
+        """Run post-deploy chain on success / critical notify on unhealthy outcome."""
+        result_status = str(result.to_dict().get("status", ""))
+        healthcheck_status = str(result.to_dict().get("healthcheck_status", ""))
+        if result.is_success():
+            node_name = os.environ.get("NODE_NAME", os.environ.get("NODE", ""))
+            chain_orch = self._make_orchestrator(base)
+            # DI-хук пост-деплой цепочки: _run_post_deploy_chain объявлен в
+            # _OrchestratorProtocol выше (170 W10-B); публичного алиаса нет
+            # (wire-freeze P3.2 — имена orchestrator заморожены), тесты переопределяют
+            # хук в субклассе фабрики. SLF001 — advisory-сигнал agent-check по контракту.
+            run_post_deploy_chain = chain_orch._run_post_deploy_chain
+            run_post_deploy_chain(project, version, result_status, target_dir, node_name)
+        elif healthcheck_status and healthcheck_status != "healthy":
+            logger.error(
+                "[IMP:10][ReceiveFlow][outcome] Healthcheck FAILED for %s: status=%s — critical notify, rc!=0 (REF-0003)",
+                project,
+                healthcheck_status,
+            )
+            notifier = self.failure_notifier if self.failure_notifier is not None else notify_deploy_failure
+            notifier(project, version, result_status or "FAILED")
+
+    # endregion FUNC_handle_deploy_outcome
 
     # region FUNC_run
     ## @purpose  Оркестрация receive-флоу: unpack → validate → pre-deploy L1 gate → copy+deploy →
@@ -512,6 +760,11 @@ class ReceiveFlow:
     ##     stream=None → sys.stdin.buffer (канонический канал)
     ##   - 176 A.2: _PreDeployBlocked (L1-гейт) → [PRACTICES:BLOCK]-отчёт в stderr + JSON FAILED
     ##     в stdout + exit 1 (контракт forced-command и deliver-JSON-парсинг сохранены)
+    ##   - REF-0011: после validate run() держит per-project reentrant flock
+    ##     (platform_lock_path) на ВЕСЬ периметр мутации target_dir (flock-before-copy:
+    ##     два быстрых push не дают интерливинга os.replace = mixed payload); контеншн/
+    ##     таймаут → JSON FAILED + exit 1; вложенные acquire (orchestrator.deploy →
+    ##     history snapshot) реентрантны через общий holder-реестр file_lock
     def run(
         self,
         project_name: str | None = None,
@@ -554,39 +807,44 @@ class ReceiveFlow:
             # вызова (receive() семантика: env PROJECTS_BASE приоритетнее дефолта).
             resolved_base = self.projects_base or str(projects_base())
             target_dir = os.path.join(resolved_base, resolved_project)
-            result = self.deploy(
-                resolved_project,
-                service,
-                version,
-                staging,
-                target_dir,
-                base=resolved_base,
+
+            # ── REF-0011: flock-before-copy — периметр лока покрывает ВСЕ мутации target_dir.
+            # ⚠️ TRAP[BUG] · 2026-08-24 · P1 · payload копировался ДО взятия per-project flock
+            # · Symptom: два быстрых push → интерливинг per-file os.replace в target_dir =
+            # ·   mixed payload (compose от v2, .env.platform от v1) с ЗЕЛЁНЫМ CI обоих прогонов
+            # ·   (DATA-302≡DATA-806); orchestrator.deploy внутри брал лок слишком поздно.
+            # · Root: lock-периметр уже mutation-периметра — копирование шло вне T9.1-лока.
+            # · Fix: reentrant flock сразу после resolve имени проекта (fail-closed file_lock,
+            # ·   таймаут = DEPLOY_TIMEOUT — конкурентный receive ждёт очереди, не падает);
+            # ·   rollback()/remove() берут тот же лок на входе dispatch (шов orchestrator_cli).
+            # · Prevention: периметр блокировки обязан накрывать первый байт мутации ресурса.
+            deploy_lock = FileLock(
+                platform_lock_path(resolved_project),
+                timeout=_RECEIVE_LOCK_TIMEOUT,
+                poll_interval=_RECEIVE_LOCK_POLL_INTERVAL,
             )
-
-            # ── Пост-деплой цепочка (D4, U-24): best-effort, сбой → WARN, НЕ фейлит деплой ──
-            # 170 W10-B: цепочка исполняется оркестратором из конструкторной фабрики (та же,
-            # что и deploy) — тесты переопределяют _run_post_deploy_chain в субклассе.
-            # REF-0003 (DevPlan 11 W0): полная chain — ТОЛЬКО на success. unhealthy/timeout
-            # → FAILED (∉success) → критичный notify БЕЗ catalog/reconfig/hooks поверх
-            # больного деплоя; exit≠0 ниже по is_success().
-            result_status = str(result.to_dict().get("status", ""))
-            healthcheck_status = str(result.to_dict().get("healthcheck_status", ""))
-            if result.is_success():
-                node_name = os.environ.get("NODE_NAME", os.environ.get("NODE", ""))
-                chain_orch = self._make_orchestrator(resolved_base)
-                chain_orch._run_post_deploy_chain(resolved_project, version, result_status, target_dir, node_name)
-            elif healthcheck_status and healthcheck_status != "healthy":
-                logger.error(
-                    "[IMP:10][ReceiveFlow][run] Healthcheck FAILED for %s: status=%s — critical notify, rc!=0 (REF-0003)",
+            try:
+                deploy_lock.acquire()
+            except FileLockError as e:
+                logger.error("[IMP:10][ReceiveFlow][run] Concurrent receive blocked for %s: %s", resolved_project, e)
+                print(json.dumps({"status": "FAILED", "error": f"Concurrent deploy blocked: {e}"}))
+                return 1
+            try:
+                result = self.deploy(
                     resolved_project,
-                    healthcheck_status,
+                    service,
+                    version,
+                    staging,
+                    target_dir,
+                    base=resolved_base,
                 )
-                notifier = self.failure_notifier if self.failure_notifier is not None else notify_deploy_failure
-                notifier(resolved_project, version, result_status or "FAILED")
+                self._handle_deploy_outcome(result, resolved_project, version, resolved_base, target_dir)
 
-            output = json.dumps(result.to_dict())
-            print(output)
-            return 0 if result.is_success() else 1
+                output = json.dumps(result.to_dict())
+                print(output)
+                return 0 if result.is_success() else 1
+            finally:
+                deploy_lock.release()
 
         except _PreDeployBlocked as exc:
             # A.2 (DevPlan 176, C1): L1-гейт заблокировал деплой ДО orchestrator.deploy.
@@ -610,13 +868,23 @@ class ReceiveFlow:
                 })
             )
             return 1
-        except (tarfile.TarError, OSError) as e:
+        except (tarfile.TarError, OSError, EOFError, FileLockError) as e:
+            # EOFError (REF-0105/FAIL-0711): обрыв stdin/JSON-канала — тот же JSON-контракт
+            # FAILED, а не traceback диспетчеру forced-command.
+            # FileLockError (REF-0011): контеншн на вложенных локах (history snapshot и т.п.)
+            # — JSON FAILED + rc 1 вместо traceback в forced-command канал.
             logger.error("[IMP:10][ReceiveFlow][run] Error: %s", e)
             print(json.dumps({"status": "FAILED", "error": str(e)}))
             return 1
         finally:
             if os.path.isdir(staging):
                 shutil.rmtree(staging, ignore_errors=True)
+            # REF-0105: prefix-sweep orphan tmpdir от crashed receives (best-effort; возрастной
+            # порог защищает tmpdir активного параллельного receive).
+            try:
+                sweep_orphan_payload_tmpdirs()
+            except OSError as e:  # защитная ветка — sweep никогда не ломает receive
+                logger.warning("[IMP:7][ReceiveFlow][run] Orphan tmpdir sweep skipped: %s", e)
 
     # endregion FUNC_run
 

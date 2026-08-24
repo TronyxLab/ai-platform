@@ -31,14 +31,19 @@
 ##           2026-08-01 | DevPlan 116 B5 T2 — SSH_OPTS → импорт из shared/ssh_opts.py (D1);
 ##                      _ssh_e → build_rsync_ssh_opts() (единственная реализация)
 ##           2026-08-13 | DevPlan 160 W4d — +runner: CommandRunner | None (DI), cli(argv, runner)
+##           2026-08-24 | REF-0007 — deliver_fallback: AGE-ключ через ssh-stdin (`bash -s`),
+##                      redact_secrets() для error-логов; +_run_cmd_stdin
 # endregion MODULE_CONTRACT
 
 import argparse
 import logging
 import os
 import pathlib
+import shlex
 import subprocess
 import sys
+from collections.abc import Callable
+from typing import cast
 
 # DevPlan 118 C7: remote-пути (/opt/platform, /opt/node-configs) — единые резолверы
 # shared/deploy_paths (литералы удалены из канона путей доставки).
@@ -124,6 +129,48 @@ def _run_cmd(
 
 
 # endregion FUNC__run_cmd
+
+
+# region FUNC__run_cmd_stdin
+## @purpose  REF-0007: исполнение команды с stdin-скриптом (`bash -s` транспорт секретов).
+##           Дефолт (runner=None) → subprocess.run(input=...) — capture_output как _run_cmd;
+##           runner задан (тесты) → runner.run(cmd, timeout, input=...) (фейки принимают
+##           superset kwargs — tests/helpers/fakes.py).
+## @io  input: cmd: list[str], stdin_text: str (НЕ логируется), timeout: int,
+##      runner: CommandRunner | None → subprocess.CompletedProcess[str]
+## @complexity  O(1) — delegation
+## @invariants  - stdin_text НИКОГДА не попадает в логи (значения ключей)
+def _run_cmd_stdin(
+    cmd: list[str],
+    stdin_text: str,
+    timeout: int,
+    runner: CommandRunner | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run a command feeding stdin_text (secret prelude transport, REF-0007)."""
+    if runner is None:
+        return subprocess.run(cmd, input=stdin_text, capture_output=True, text=True, timeout=timeout, check=False)
+    runner_run = cast("Callable[..., subprocess.CompletedProcess[str]]", runner.run)
+    return runner_run(cmd, timeout=timeout, input=stdin_text)
+
+
+# endregion FUNC__run_cmd_stdin
+
+
+# region FUNC_redact_secrets
+## @purpose  REF-0007 (TEST-07-стиль): redact значений секретов в текстах, попадающих в
+##           логи/stderr. Заменяет каждое непустое значение на ***REDACTED***.
+## @io       ⇥ text: str, secrets: str (varargs) → ⎋ str (safe для логов)
+## @complexity  O(n × m) — str.replace по каждому секрету
+## @invariants  Пустые значения игнорируются; порядок varargs не влияет (непересекающиеся ключи)
+def redact_secrets(text: str, *secrets: str) -> str:
+    """Redact secret values from log-bound text (REF-0007)."""
+    for secret in secrets:
+        if secret:
+            text = text.replace(secret, "***REDACTED***")
+    return text
+
+
+# endregion FUNC_redact_secrets
 
 
 # region EXC_CoreDeliveryError
@@ -594,9 +641,9 @@ def deliver_all(
 ## @invariants
 ##   - rsync-фазы делегируют в deliver_core/deliver_platform_env/deliver_makefile/
 ##     deliver_scripts/deliver_root_compose (guard'ы источников — TRAP[BUG] 125 T4)
-##   - AGE_SECRET_KEY уходит в remote ТОЛЬКО как env в команде node-update
-##     (канон W4 DevPlan 140; путь к файлу на remote НЕ передаётся)
-##   - dry_run: печатает ssh-команды без мутаций (R5 142 W5)
+##   - REF-0007: AGE_SECRET_KEY уходит в remote ТОЛЬКО через ssh-stdin prelude
+##     (`bash -s`) — вне argv и вне логов; stderr error-путей redact'ится (redact_secrets)
+##   - dry_run: печатает ssh-команды без мутаций (R5 142 W5); stdin-скрипт — только размер
 ##   - ssh-команды через SSH_OPTS (shared/ssh_opts.py — единый SoT, DevPlan 116 B5 T2)
 def deliver_fallback(
     host: str,
@@ -633,24 +680,37 @@ def deliver_fallback(
             )
             return False
 
-    # ── 3. Node update (канон core-deploy.yml step 6: AGE_SECRET_KEY env + DEPLOY_PARALLEL) ──
-    age_env = f"AGE_SECRET_KEY='{age_secret_key}' " if age_secret_key else ""
-    update_cmd = [
-        "ssh",
-        *SSH_OPTS,
-        f"{remote_user}@{host}",
-        f"cd {base} && {age_env}DEPLOY_PARALLEL=true make node-update NODE={node}",
-    ]
-    logger.info("[IMP:9][deliver_fallback][node-update] Running node-update NODE=%s on %s", node, host)
+    # ── 3. Node update (канон core-deploy.yml step 6: DEPLOY_PARALLEL) ──
+    # REF-0007 (11-DevPlan Волна 1): AGE_SECRET_KEY ВНЕ argv и ВНЕ логов — remote-скрипт
+    # (export + make node-update) уходит в ssh-stdin (`bash -s`); в argv только `bash -s`.
+    # 🧐 TRAP[DECISION] · 2026-08-24 · — · stdin→bash -s вместо env-префикса в ssh-команде
+    # · Rejected: `AGE_SECRET_KEY='...' make node-update` внутри ssh argv (статус-кво)
+    # · Reason: ключ светился в /proc/<pid>/cmdline локального ssh И remote shell весь прогон
+    # ·   (~30 мин, любой локальный аккаунт включая ci-deploy) и в dry-run логах
+    # · Rev: если появится не-bash remote shell — экранирование через shlex.quote пересмотреть
+    update_cmd = ["ssh", *SSH_OPTS, f"{remote_user}@{host}", "bash -s"]
+    remote_script = ""
+    if age_secret_key:
+        remote_script += f"export AGE_SECRET_KEY={shlex.quote(age_secret_key)}\n"
+    remote_script += f"cd {base} && exec env DEPLOY_PARALLEL=true make node-update NODE={shlex.quote(node)}\n"
+    logger.info(
+        "[IMP:9][deliver_fallback][node-update] Running node-update NODE=%s on %s (AGE key via stdin prelude)",
+        node,
+        host,
+    )
     if dry_run:
-        logger.info("[IMP:8][deliver_fallback][dry-run] WOULD run: %s", " ".join(update_cmd))
+        logger.info(
+            "[IMP:8][deliver_fallback][dry-run] WOULD run: %s <<< stdin(script=%dB [redacted])",
+            " ".join(update_cmd),
+            len(remote_script),
+        )
         return True
-    r = _run_cmd(update_cmd, SSH_CMD_TIMEOUT, runner)
+    r = _run_cmd_stdin(update_cmd, remote_script, SSH_CMD_TIMEOUT, runner)
     if r.returncode != 0:
         logger.error(
             "[IMP:10][deliver_fallback][node-update] FATAL: node-update failed (exit=%d): %s",
             r.returncode,
-            r.stderr.strip()[-500:],
+            redact_secrets(r.stderr.strip()[-500:], age_secret_key),
         )
         return False
     logger.info("[IMP:9][deliver_fallback][done] core-deliver COMPLETE (NODE=%s)", node)
@@ -730,7 +790,9 @@ def cli(argv: list[str] | None = None, runner: CommandRunner | None = None) -> i
     fp.add_argument("--host", required=True)
     fp.add_argument("--node", required=True)
     fp.add_argument("--core-dir", required=True)
-    fp.add_argument("--age-secret-key", default="", help="AGE secret key (LOCAL value; env-only to remote)")
+    fp.add_argument(
+        "--age-secret-key", default="", help="AGE secret key (LOCAL value; delivered to remote via ssh-stdin only)"
+    )
     fp.add_argument("--remote-user", default="root")
     fp.add_argument("--dry-run", action="store_true")
 

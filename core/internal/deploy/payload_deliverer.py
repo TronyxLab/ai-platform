@@ -48,7 +48,7 @@ from pathlib import Path
 from typing import BinaryIO
 
 from core.internal.deploy.channels import Payload
-from core.internal.shared.compose_files import PROJECT_COMPOSE_FILENAMES
+from core.internal.shared.compose_files import PROJECT_COMPOSE_FILENAMES, PROJECT_PAYLOAD_FILENAMES
 
 # B2: канонический дефолт PROJECTS_BASE — shared/deploy_paths (литерал /opt/projects удалён)
 from core.internal.shared.deploy_paths import DEFAULT_PROJECTS_BASE
@@ -60,28 +60,20 @@ logger = logging.getLogger(__name__)
 
 MAX_PAYLOAD_SIZE = 1 * 1024 * 1024  # 1 MiB
 
-# DevPlan 118 A2: compose-подмножество whitelist'а — из единого канона shared/compose_files
-# (PROJECT_COMPOSE_FILENAMES: docker-compose.yml, compose.yaml). docker-compose.base.yml —
-# модульный паттерн, в проектные payload'ы не входит. Состав членства НЕ изменился.
+# REF-0105 (triple-sync): WHITELIST_FILES и _PAYLOAD_FILE_NAMES — проекции ЕДИНОЙ константы
+# shared/compose_files.PROJECT_PAYLOAD_FILENAMES (compose-подмножество + ai-platform.yaml +
+# .env.platform + practices.lock). CI-сторона (deploy-project.yml FILES) синхронизируется
+# structural-тестом tests/unit/test_payload_whitelist_triple_sync.py.
 # ⚠️ TRAP[BUG] · 2026-08-06 · HI · B20a (141 r2): practices.lock не доставлялся payload'ом
 # · Symptom: после deploy-project на ноде /opt/projects/<p>/practices.lock ОТСУТСТВОВАЛ →
 # ·   K3 verify state=unmanaged вечно. Противоречит AGENTS.md §Наследование практик (DevPlan 137):
 # ·   «practices.lock ... доставляется на VPS payload'ом receive».
-# · Fix: practices.lock добавлен в WHITELIST_FILES и _PAYLOAD_FILE_NAMES.
-# · Rev: при расширении практик новыми GENERATED-файлами — синхронизировать оба кортежа.
-WHITELIST_FILES: frozenset[str] = frozenset(PROJECT_COMPOSE_FILENAMES) | {
-    "ai-platform.yaml",
-    ".env.platform",
-    "practices.lock",
-}
+# · Fix: practices.lock добавлен в whitelist (ныне — в канон PROJECT_PAYLOAD_FILENAMES).
+# · Rev: при расширении payload новыми GENERATED-файлами — правка ТОЛЬКО канона + CI-шага.
+WHITELIST_FILES: frozenset[str] = frozenset(PROJECT_PAYLOAD_FILENAMES)
 
-# Порядок файлов payload'а для assemble_payload: compose-подмножество канона + platform-файлы
-_PAYLOAD_FILE_NAMES: tuple[str, ...] = (
-    *PROJECT_COMPOSE_FILENAMES,
-    "ai-platform.yaml",
-    ".env.platform",
-    "practices.lock",
-)
+# Порядок файлов payload'а для assemble_payload: канонический file-list (REF-0105)
+_PAYLOAD_FILE_NAMES: tuple[str, ...] = PROJECT_PAYLOAD_FILENAMES
 
 
 # ── Custom exceptions ───────────────────────────────────────────────────────

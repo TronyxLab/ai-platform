@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: watchdog, unhealthy-restart, docker-restart, cooldown, dry-run, stdlib-only, host-cron, is-n-loop, state-json
-# STRUCTURE: ▶ scan_containers ┌docker ps -q + inspect┐ → ◇ filters (health?+restart!=no+RestartCount<=5) → ○ unhealthy_since/last_restart state → ◇ unhealthy>=10min ∧ cooldown 30min? → ⚡ docker restart + Telegram notify → ⎋ exit 0|1
+# GREP_SUMMARY: watchdog, unhealthy-restart, docker-restart, cooldown, dry-run, stdlib-only, host-cron, is-n-loop, state-json, crashloop-notify, stamp-after-success
+# STRUCTURE: ▶ scan_containers ┌docker ps -q + inspect┐ → ◇ filters (health?+restart!=no+RestartCount<=5) → ○ unhealthy_since state → ◇ unhealthy>=10min ∧ cooldown 30min? → ⚡ docker restart → ⊕ stamp last_restart ПОСЛЕ успеха + re-save per-action → ⚡ TG notify │ ◇ RestartCount>5? → ⚡ TG «crash-loop detected, не рестарчу» → ⎋ exit 0|1
 # region MODULE_CONTRACT
 ## @purpose  Host-side watchdog (DevPlan 132 W1): auto-restart of unhealthy containers that
 ##           survive their restart policy — «живой, но unhealthy» висит вечно без рестарта.
@@ -16,22 +16,30 @@
 ##      (one-shot: prometheus-config-init, minio-createbuckets); RestartCount <= 5
 ##      (канон RESTART_LOOP_THRESHOLD — watchdog.py, T2.6: CrashLoopBackOff рестартом не лечится)
 ##   3. Действие: unhealthy >= WATCHDOG_UNHEALTHY_MIN (default 10 мин) И cooldown 30 мин с
-##      last_restart → docker restart + Telegram notify (severity=critical, context=watchdog)
+##      last_restart → docker restart + Telegram notify (severity=critical, context=watchdog);
+##      штамп last_restart наносится ТОЛЬКО ПОСЛЕ успешного restart + re-save per-action
+##      (REF-0014 stamp-after-success: failure → NO stamp + skip-notify — cooldown не сгорает)
 ##   4. State /var/lib/platform/run/watchdog-state.json (persistent — НЕ tmpfs, 142 W2; atomic write
-##      tempfile+os.replace): unhealthy_since {container: ts}, last_restart {container: ts}; мусорные
-##      записи чистятся
+##      tempfile+os.replace): unhealthy_since {container: ts}, last_restart {container: ts},
+##      crashloop_notified {container: ts} (REF-0014 suppress TG crash-loop); мусорные записи чистятся
 ##   5. docker CLI недоступен → IMP:7 + exit 0 (non-fatal); docker-команда упала → IMP:10 + exit 1
 ##   6. --dry-run: печатает план действий, без restart/notify/state-mutation
-##   7. exit 0 при отсутствии действий; exit 1 при внутренней ошибке (docker fail)
+##   7. exit 0 при отсутствии действий; exit 1 при внутренней ошибке (docker fail / рестарт не удался)
+##   8. Skip-path crash-loop (RestartCount > RESTART_LOOP_THRESHOLD) НЕ молчит: TG
+##      watchdog.crashloop «crash-loop detected, не рестарчу» (REF-0014; suppress 60 мин/container)
 ## @rationale D1: host-cron по канону install_cron_metrics (/etc/cron.d, flock -n + timeout) —
 ##           точечное расширение без новой архитектуры; stdlib-only исключает PYTHONPATH-зависимость.
-## @changes  2026-08-04 | DevPlan 132 W1 — создан
+## @changes 2026-08-04 | DevPlan 132 W1 — создан
+## @changes 2026-08-24 | REF-0014 (DevPlan meta-refactoring В1) — stamp-after-success + re-save
+##           per-action (state-commit транзакционен с действием); failed restart не блокирует
+##           остальные действия (exit 1 в конце прохода); crash-loop skip-path → TG-нотификация
 ## @modulemap
 ##   scan_containers [W:1] — docker ps -q → docker inspect (Name/Health/RestartCount/RestartPolicy)
-##   decide_actions [W:1] — фильтры + unhealthy_since/last_restart + решение restart/wait
+##   decide_actions [W:1] — фильтры + unhealthy_since/last_restart + решение restart/wait (без штампов)
 ##   load_state/save_state [W:1] — atomic JSON state (persistent /var/lib/platform/run)
 ##   restart_container [W:1] — docker restart + IMP:9 RESTART
 ##   notify_telegram [W:1] — subprocess telegram_notifier notify (best-effort)
+##   notify_crashloop [W:1] — subprocess notifications notify watchdog.crashloop (skip-path, REF-0014)
 ##   run_watchdog [W:1] — оркестрация → exit 0|1
 ## @usecases
 ##   - cron: */5 * * * * root flock -n /run/lock/platform-watchdog.lock timeout 50 watchdog.py
@@ -89,6 +97,10 @@ DEFAULT_COOLDOWN_MIN = 30  # WATCHDOG_COOLDOWN_MIN — пауза между р�
 # импортируется отсюда (DevPlan T2.6). Значение 5 НЕ меняется: RestartCount > 5 = CrashLoopBackOff.
 RESTART_LOOP_THRESHOLD = 5
 DOCKER_TIMEOUT = 30  # таймаут docker-команд (файл вне domain-скоупа timeout-literals гейта)
+# REF-0014: suppress-окно TG «crash-loop detected, не рестарчу» per-container. CLI-throttle
+# notifications.py процесс-локален (cron = новый процесс каждые 5 мин — реестр пуст), поэтому
+# окно держит сам watchdog в persistent state (ключ crashloop_notified, 142 W2).
+CRASHLOOP_NOTIFY_COOLDOWN_MIN = 60
 
 
 class DockerError(Exception):
@@ -118,10 +130,12 @@ class WatchdogState(TypedDict):
     """Состояние watchdog (state-файл, граница JSON): unhealthy_since + last_restart.
 
     ## @purpose  Персистентное состояние между cron-прогонами: {container: unix-ts}.
+    ##            crashloop_notified — ts последней TG «не рестарчу» (REF-0014 suppress-окно).
     """
 
     unhealthy_since: dict[str, float]
     last_restart: dict[str, float]
+    crashloop_notified: dict[str, float]
 
 
 # endregion DATA_WatchdogState
@@ -381,6 +395,26 @@ def _is_eligible(c: ContainerRecord) -> bool:
 # endregion FUNC__is_eligible
 
 
+# region FUNC__is_crash_looping
+## @purpose  Crash-loop детекция skip-path (REF-0014): нездоровый контейнер с рестарт-политикой
+##           и RestartCount > RESTART_LOOP_THRESHOLD — docker restart не лечит (T2.6 канон),
+##            только TG-нотификация оператору («crash-loop detected, не рестарчу»).
+## @io       ⇥ c: ContainerRecord → ⎋ bool
+## @complexity O(1)
+## @invariants — зеркальна _is_eligible по порогу: eligible = ...<= T, crash-loop = ...> T
+def _is_crash_looping(c: ContainerRecord) -> bool:
+    """Return True for an unhealthy restartable container over RESTART_LOOP_THRESHOLD (T2.6)."""
+    health = c.get("health")
+    if health is None or health in {"healthy", "none"}:
+        return False
+    if c.get("restart_policy") == "no":
+        return False
+    return int(c.get("restart_count", 0)) > RESTART_LOOP_THRESHOLD
+
+
+# endregion FUNC__is_crash_looping
+
+
 # region FUNC_load_state
 ## @purpose  Чтение state-файла; отсутствующий/битый файл → пустой state (IMP:7 warning).
 ## @io       ⇥ path: str → ⎋ dict {"unhealthy_since": {}, "last_restart": {}}
@@ -391,16 +425,22 @@ def load_state(path: str) -> WatchdogState:
         with pathlib.Path(path).open(encoding="utf-8") as f:
             data: object = cast("object", json.load(f))  # W11: json → Any → object
     except FileNotFoundError:
-        return {"unhealthy_since": {}, "last_restart": {}}
+        return {"unhealthy_since": {}, "last_restart": {}, "crashloop_notified": {}}
     except (OSError, json.JSONDecodeError) as exc:
         logger.warning("[IMP:7][watchdog][state] Cannot read %s (%s) — starting empty", path, exc)
-        return {"unhealthy_since": {}, "last_restart": {}}
+        return {"unhealthy_since": {}, "last_restart": {}, "crashloop_notified": {}}
     data_dict = cast("dict[str, object]", data) if isinstance(data, dict) else cast("dict[str, object]", {})
     unhealthy_raw = data_dict.get("unhealthy_since")
     last_restart_raw = data_dict.get("last_restart")
+    crashloop_raw = data_dict.get("crashloop_notified")  # старые state-файлы без ключа → {}
     unhealthy_since = cast("dict[str, float]", unhealthy_raw) if isinstance(unhealthy_raw, dict) else {}
     last_restart = cast("dict[str, float]", last_restart_raw) if isinstance(last_restart_raw, dict) else {}
-    return {"unhealthy_since": unhealthy_since, "last_restart": last_restart}
+    crashloop_notified = cast("dict[str, float]", crashloop_raw) if isinstance(crashloop_raw, dict) else {}
+    return {
+        "unhealthy_since": unhealthy_since,
+        "last_restart": last_restart,
+        "crashloop_notified": crashloop_notified,
+    }
 
 
 # endregion FUNC_load_state
@@ -456,9 +496,11 @@ def save_state(path: str, state: WatchdogState) -> None:
 ## @invariants
 ##   - Первый unhealthy-run только фиксирует unhealthy_since (wait, без рестарта)
 ##   - Рестарт: now - since >= unhealthy_min_sec AND (нет last_restart OR now - last_restart >= cooldown_sec)
-##   - После рестарта: last_restart[name] = now, unhealthy_since[name] = now (новая эпопея)
+##   - РЕШЕНИЕ БЕЗ ШТАМПОВ (REF-0014 stamp-after-success): last_restart/unhealthy_since reset
+##     наносит run_watchdog ТОЛЬКО после успешного docker restart (+ re-save) — failed restart
+##     не вооружает cooldown и не сбрасывает окно наблюдения (retry на следующем проходе)
 ##   - Garbage: unhealthy_since для healthy/исчезнувших — удаляется; last_restart для
-##     исчезнувших контейнеров — удаляется
+##     исчезнувших контейнеров — удаляется; crashloop_notified для не-crash-loop'ящихся — удаляется
 def decide_actions(
     containers: list[ContainerRecord],
     state: WatchdogState,
@@ -469,10 +511,12 @@ def decide_actions(
     """Decide restart actions based on state and current health. Returns (actions, new_state)."""
     eligible = {c["name"]: c for c in containers if _is_eligible(c)}
     current_names = {c["name"] for c in containers}
+    crashloop_now = {c["name"] for c in containers if _is_crash_looping(c)}
 
     new_state: WatchdogState = {
         "unhealthy_since": dict(state.get("unhealthy_since", {})),
         "last_restart": dict(state.get("last_restart", {})),
+        "crashloop_notified": dict(state.get("crashloop_notified", {})),
     }
     actions: list[Action] = []
 
@@ -494,9 +538,9 @@ def decide_actions(
                 name,
                 since,
             )
+            # REF-0014: решение фиксируется action'ом; штампы — ТОЛЬКО после успешного restart
+            # в run_watchdog (state-commit транзакционен с действием).
             actions.append({"name": name, "id": c["id"], "since": since, "now": now})
-            new_state["last_restart"][name] = now
-            new_state["unhealthy_since"][name] = now
         else:
             logger.info(
                 "[IMP:7][watchdog][decide] %s unhealthy since %.0f — wait (age=%.0fs/%s cooldown=%.0fs/%s)",
@@ -515,6 +559,9 @@ def decide_actions(
     for name in list(new_state["last_restart"]):
         if name not in current_names:
             del new_state["last_restart"][name]
+    for name in list(new_state["crashloop_notified"]):
+        if name not in crashloop_now:
+            del new_state["crashloop_notified"][name]
 
     return actions, new_state
 
@@ -605,8 +652,153 @@ def notify_telegram(name: str, since: float, dry_run: bool = False, run_cmd: Run
 # endregion FUNC_notify_telegram
 
 
+# region FUNC_notify_crashloop
+## @purpose  TG «crash-loop detected, не рестарчу» в skip-path (REF-0014): контейнер с
+##           RestartCount > RESTART_LOOP_THRESHOLD пропускается молча → оператор без сигнала.
+##           Единый notifier-контракт: python3 -m core.internal.shared.notifications notify
+##           --event watchdog.crashloop (зарегистрирован в core/notification-catalog.yaml —
+##           parity-гейт B4); best-effort, non-blocking; suppress-окно держит run_watchdog
+##           через state.crashloop_notified (CLI-throttle процесс-локален — cron = новый процесс).
+## @io       ⇥ name: str, dry_run: bool (keyword-only — FBT-чистый контракт), run_cmd: Callable | None
+##              (DI, 167 D0) → ⎋ bool
+## @complexity O(1) — один subprocess
+## @invariants
+##   - PYTHONPATH={core_dir} передаётся в env дочернего процесса (cron сам без PYTHONPATH)
+##   - Failure (rc != 0 / exception) → IMP:7 warning, False — НЕ блокирует проход
+##   - dry-run: печатает план, без вызова
+def notify_crashloop(name: str, *, dry_run: bool = False, run_cmd: RunCmd | None = None) -> bool:
+    """Send a non-blocking Telegram notification about a crash-looped container (skip-path)."""
+    if dry_run:
+        logger.info("[IMP:8][watchdog][dry-run] WOULD notify Telegram: crash-loop %s (не рестарчу)", name)
+        return True
+    env = os.environ.copy()
+    core_dir = _core_dir()
+    env["PYTHONPATH"] = core_dir + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    cmd = [
+        "python3",
+        "-m",
+        "core.internal.shared.notifications",
+        "notify",
+        "--severity",
+        "critical",
+        "--context",
+        "watchdog",
+        "--event",
+        "watchdog.crashloop",
+        "--corr-id",
+        f"watchdog-crashloop-{name}",
+        "⛔",
+        f"crash-loop detected, не рестарчу: {name} (RestartCount > {RESTART_LOOP_THRESHOLD})",
+    ]
+    run_impl = run_cmd if run_cmd is not None else _run_cmd
+    try:
+        result = run_impl(cmd, timeout=DOCKER_TIMEOUT, env=env)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        logger.warning("[IMP:7][watchdog][notify] crash-loop notify failed (non-fatal): %s", exc)
+        return False
+    if result.returncode != 0:
+        logger.warning(
+            "[IMP:7][watchdog][notify] crash-loop notify rc=%d (non-fatal): %s",
+            result.returncode,
+            (result.stderr or result.stdout).strip()[:200],
+        )
+        return False
+    logger.info("[IMP:9][watchdog][crashloop] CRASHLOOP NOTIFY %s (не рестарчу)", name)
+    return True
+
+
+# endregion FUNC_notify_crashloop
+
+
+# region FUNC__notify_crashloops_with_suppress
+## @purpose  Crash-loop TG-нотификации с per-container suppress через state (REF-0014):
+##           окно CRASHLOOP_NOTIFY_COOLDOWN_MIN; штамп ТОЛЬКО после успешной отправки
+##           (провал доставки → ретрай следующим проходом) + немедленный re-save.
+## @io       ⇥ crashloop_names: list[str], new_state: WatchdogState, ts: float, path: str,
+##              run_cmd: RunCmd | None → ⎋ int (0 = ok, 1 = state write failure)
+## @complexity O(K) — K crash-looped контейнеров
+def _notify_crashloops_with_suppress(
+    crashloop_names: list[str],
+    new_state: WatchdogState,
+    ts: float,
+    path: str,
+    run_cmd: RunCmd | None = None,
+) -> int:
+    """Send suppressed crash-loop notifications; stamp + re-save on success. Returns exit code."""
+    for cl_name in crashloop_names:
+        last_sent = new_state["crashloop_notified"].get(cl_name)
+        if last_sent is not None and ts - last_sent < CRASHLOOP_NOTIFY_COOLDOWN_MIN * 60.0:
+            logger.info(
+                "[IMP:7][watchdog][crashloop] %s notified %.0fs ago (< %d min) — suppressed",
+                cl_name,
+                ts - last_sent,
+                CRASHLOOP_NOTIFY_COOLDOWN_MIN,
+            )
+            continue
+        if notify_crashloop(cl_name, dry_run=False, run_cmd=run_cmd):
+            new_state["crashloop_notified"][cl_name] = ts
+            try:
+                save_state(path, new_state)
+            except OSError as exc:
+                logger.error("[IMP:10][watchdog][state] State re-save failed: %s", exc)
+                return 1
+    return 0
+
+
+# endregion FUNC__notify_crashloops_with_suppress
+
+
+# region FUNC__execute_restarts_stamp_after_success
+## @purpose  Исполнение restart-действий с транзакционным state-commit (REF-0014 stamp-after-success).
+## @io       ⇥ actions: list[Action], new_state: WatchdogState, path: str, run_cmd: RunCmd | None
+##           → ⎋ int — число failed restart'ов (0 = все ok); exit-решение за вызывающим
+## @complexity O(R) — R рестартов
+## ⚠️ TRAP[BUG] · 2026-08-24 · P1 · REF-0014: last_restart штампился ДО restart (stamp-before-success)
+# · Symptom: state сохранялся с уже проставленными last_restart всех действий; первый failed
+# ·   restart возвращал exit 1 — cooldown остальных действий «сгорел» впустую (латентность
+# ·   самолечения 10→40+ мин), host-cron timeout 50s убивал проход посреди цикла.
+# · Root: state-commit не транзакционен с действием — decide_actions писал штампы в new_state,
+# ·   run_watchdog сохранял state единым блоком ДО выполнения restart'ов.
+# · Fix: решение без штампов (decide_actions); здесь — restart ok → штамп last_restart +
+# ·   unhealthy_since reset + НЕМЕДЛЕННЫЙ re-save per-action; fail → NO stamp + skip-notify,
+# ·   остальные действия продолжаются (exit 1 в конце прохода).
+# · Prevention: test_watchdog.py::test_stamp_written_only_after_successful_restart /
+# ·   ::test_failed_restart_no_stamp_no_notify (sequence-тесты ordering).
+def _execute_restarts_stamp_after_success(
+    actions: list[Action],
+    new_state: WatchdogState,
+    path: str,
+    run_cmd: RunCmd | None = None,
+) -> int:
+    """Execute restart actions; stamp state only after each successful restart. Returns failure count."""
+    restart_failures = 0
+    for action in actions:
+        ok = restart_container(action["name"], action["id"], action["since"], dry_run=False, run_cmd=run_cmd)
+        if not ok:
+            logger.error(
+                "[IMP:9][watchdog] Restart FAILED %s — NO cooldown stamp, NO notify (retry next pass)",
+                action["name"],
+            )
+            restart_failures += 1
+            continue
+        new_state["last_restart"][action["name"]] = action["now"]
+        new_state["unhealthy_since"][action["name"]] = action["now"]
+        try:
+            save_state(path, new_state)
+        except OSError as exc:
+            logger.error("[IMP:10][watchdog][state] State re-save failed: %s", exc)
+            # Штамп уже в памяти new_state, но не персистирован — сигнал внутренней ошибкой
+            return restart_failures + 1
+        notify_telegram(action["name"], action["since"], dry_run=False, run_cmd=run_cmd)
+    return restart_failures
+
+
+# endregion FUNC__execute_restarts_stamp_after_success
+
+
 # region FUNC_run_watchdog
-## @purpose  Оркестрация одного прогона: scan → decide → (dry-run: план | save state + restart + notify).
+## @purpose  Оркестрация одного прогона: scan → decide → (dry-run: план | save state + crash-loop
+##           notify + restart + stamp-after-success re-save + notify).
 ## @io       ⇥ dry_run: bool, state_file: str | None, now: float | None,
 ##              facts: EnvironmentFacts | None (W4b DI: which docker),
 ##              run_cmd: Callable | None (167 D0 DI: docker/notify-канал) → ⎋ int (0 = ok, 1 = internal error)
@@ -615,9 +807,15 @@ def notify_telegram(name: str, since: float, dry_run: bool = False, run_cmd: Run
 ##   - docker CLI недоступен → scan возвращает [] → exit 0 (non-fatal)
 ##   - DockerError при скане → IMP:10 уже залогирован → exit 1
 ##   - dry-run: 0 мутаций (state не сохраняется, рестарты/notify не вызываются)
-##   - Рестарт/state-write failure → exit 1
+##   - REF-0014 stamp-after-success: last_restart/unhealthy_since штампуются ТОЛЬКО после
+##     успешного docker restart + немедленный re-save (state-commit транзакционен с действием);
+##     failed restart → NO stamp + skip-notify, ОСТАЛЬНЫЕ действия продолжаются, exit 1 в конце
+##   - Crash-loop skip-path: TG watchdog.crashloop с suppress-окном CRASHLOOP_NOTIFY_COOLDOWN_MIN
+##     (штамп только после успешной отправки — провал доставки ретраится следующим проходом)
 ## @changes 2026-08-13 | DevPlan 160 W4b — +facts: EnvironmentFacts | None (DI)
 ## @changes 2026-08-14 | DevPlan 167 D0 — +run_cmd: Callable | None (DI-канал, thread в 3 функции)
+## @changes 2026-08-24 | REF-0014 — stamp-after-success + re-save per-action; continue-on-failure;
+##           crash-loop TG-нотификация в skip-path (watchdog.crashloop)
 def run_watchdog(
     dry_run: bool = False,
     state_file: str | None = None,
@@ -656,6 +854,9 @@ def run_watchdog(
         cooldown_min * 60.0,
     )
 
+    # ── REF-0014: crash-loop skip-path (>RESTART_LOOP_THRESHOLD) — TG «не рестарчу» ──
+    crashloop_names = sorted({c["name"] for c in containers if _is_crash_looping(c)})
+
     if dry_run:
         for action in actions:
             logger.info(
@@ -663,25 +864,32 @@ def run_watchdog(
                 action["name"],
                 action["since"],
             )
+        for cl_name in crashloop_names:
+            logger.info("[IMP:8][watchdog][dry-run] WOULD notify Telegram: crash-loop %s (не рестарчу)", cl_name)
         logger.info("[IMP:7][watchdog][dry-run] %d action(s) planned — no mutation", len(actions))
         return 0
 
-    # ── Persist state (unhealthy_since updates + garbage cleanup) ──
+    # ── Persist observational state (unhealthy_since records/wait + garbage cleanup) ──
     try:
         save_state(path, new_state)
     except OSError as exc:
         logger.error("[IMP:10][watchdog][state] State write failed: %s", exc)
         return 1
 
-    # ── Execute restarts + notifications ──
-    for action in actions:
-        ok = restart_container(action["name"], action["id"], action["since"], dry_run=False, run_cmd=run_cmd)
-        if not ok:
-            return 1
-        notify_telegram(action["name"], action["since"], dry_run=False, run_cmd=run_cmd)
+    # ── Crash-loop TG-notify (suppress per-container через state; штамп после успешной отправки) ──
+    if _notify_crashloops_with_suppress(crashloop_names, new_state, ts, path, run_cmd) != 0:
+        return 1
 
-    logger.info("[IMP:9][watchdog] Pass complete: %d restart(s), state=%s", len(actions), path)
-    return 0
+    # ── Execute restarts + notifications (REF-0014: штамп ТОЛЬКО после успеха) ──
+    restart_failures = _execute_restarts_stamp_after_success(actions, new_state, path, run_cmd)
+
+    logger.info(
+        "[IMP:9][watchdog] Pass complete: %d/%d restart(s) ok, state=%s",
+        len(actions) - restart_failures,
+        len(actions),
+        path,
+    )
+    return 1 if restart_failures else 0
 
 
 # endregion FUNC_run_watchdog

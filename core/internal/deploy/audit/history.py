@@ -15,7 +15,9 @@ DeployHistory — snapshot-based deploy history storage for rollback support.
 ## @invariants
 ##   1. Storage path: /opt/projects/<name>/.deploy-snapshots/<snapshot_id>.json
 ##   2. Snapshot format: { project, version, timestamp, compose_state, health_status, payload_hash,
-##      payload_dir } — payload_dir (T9.8): пред-деплойные payload-файлы для rollback
+##      payload_dir } — payload_dir (T9.8): пред-деплойные payload-файлы для rollback;
+##      compose_state.previous_image (REF-0004, additive): docker image ID предыдущего релиза —
+##      якорь compose-rollback (re-tag → deploy без doomed-pull из registry)
 ##   3. Retention: keep last 10 snapshots (prune on create, под deploy lock — T9.10)
 ##   4. File lock: platform_lock_path (shared/file_lock, T9.1): PLATFORM_LOCK_DIR env → иначе
 ##      /var/lock/platform-deploy-{project}.lock; reentrant (deploy() уже держит тот же замок)
@@ -330,11 +332,16 @@ class DeployHistory:
         else:
             return snapshots
 
-    def latest_snapshot(self, project: str) -> dict[str, object] | None:
+    def latest_snapshot(self, project: str, *, require_healthy: bool = False) -> dict[str, object] | None:
         """Get the latest snapshot for a project.
+
+        REF-0004 (DevPlan 11 В1): авто-откат не должен целиться в заведомо нездоровый релиз —
+        ``require_healthy=True`` выбирает последний снапшот с health_status="healthy";
+        если здоровых нет — WARN-fallback на newest (caller решает, годится ли цель).
 
         Args:
             project: Project name.
+            require_healthy: Prefer the newest HEALTHY snapshot (WARN-fallback to newest).
 
         Returns:
             Latest snapshot dict or None.
@@ -342,6 +349,15 @@ class DeployHistory:
         snapshots = self.list_snapshots(project)
         if not snapshots:
             return None
+        if require_healthy:
+            for snap in snapshots:
+                if snap.get("health_status") == "healthy":
+                    return snap
+            logger.warning(
+                "[IMP:8][DeployHistory][latest] No healthy snapshot for %s — falling back to newest "
+                "(may be unhealthy; REF-0004)",
+                project,
+            )
         return snapshots[0]
 
     def rollback(self, project: str, snapshot_id: str | None = None) -> dict[str, object] | None:

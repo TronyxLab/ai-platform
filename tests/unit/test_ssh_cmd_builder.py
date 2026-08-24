@@ -1,20 +1,22 @@
-# GREP_SUMMARY: test ssh_cmd_builder printf_q printf-%q parity D3 build_ssh_cmd init update converge check-security deploy-context env-fallback R5 LDD
-# STRUCTURE: ┌parity-батарея printf_q (D3, bash-verified)┐ → ◇ init build (exports+flags+passthrough) → ◇ update → ◇ converge → ◇ check-security → ◇ deploy-context → ◇ env fallback chain → ◇ CLI → ⎋ LDD IMP:9
+# GREP_SUMMARY: test ssh_cmd_builder printf_q printf-%q parity D3 build_ssh_cmd init update converge check-security deploy-context secret-prelude stdin-transport no-secrets-in-argv env-fallback R5 LDD REF-0007
+# STRUCTURE: ┌parity-батарея printf_q (D3, bash-verified)┐ → ◇ init build (БЕЗ секретов) → ◇ secret-prelude (AGE/ci → ssh-stdin) → ◇ argv-negative → ◇ update → ◇ converge → ◇ check-security → ◇ deploy-context → ◇ CLI → ⎋ LDD IMP:9
 # region MODULE_CONTRACT
-## @purpose  Unit tests for core/internal/shared/ssh_cmd_builder.py (DevPlan 164 W3.5-1): bash printf %q
-##           byte-parity (D3 invariant — НЕПРИКОСНОВЕННО), 5 build-функций (env exports, flags,
-##           passthrough quoting), env fallback chain (PLATFORM_CI_DEPLOY_KEY/PLATFORM_CI_ROOT_KEY),
-##           CLI контракт. R5-негативы: --age-secret-key НИКОГДА в remote-команде (env-only hardening);
-##           env-ключ не эмитит CLI-флаг; printf_q ≠ shlex.quote (backslash, не single-quote).
+## @purpose  Unit tests for core/internal/shared/ssh_cmd_builder.py (DevPlan 164 W3.5-1 +
+##           REF-0007 11-DevPlan Волна 1): bash printf %q byte-parity (D3), build-функции,
+##           SECRET-PRELUDE транспорт — ключи AGE/CI ВНЕ remote-команды (argv-тест:
+##           значения ключей НЕ встречаются в теле; prelude содержит ТОЛЬКО export-строки
+##           и доставляется через ssh-stdin `bash -s`). R5-негативы: --age-secret-key НИКОГДА
+##           в remote-команде; env-ключ не эмитит CLI-флаг; printf_q ≠ shlex.quote.
 ## @scope    Native imports; tmp_path не нужен (чистые функции); caplog LDD (IMP:9 assert).
 ## @invariants
 ##   - printf_q() byte-parity с bash 5.x printf %q (C locale) — verified 2026-08-14 (bash 5.3.9)
-##   - Вывод build-функций совпадает с shell build-ssh-cmd.sh посимвольно (прямое замещение)
-##   - --age-secret-key отсутствует в remote-команде (AGE key — env export ONLY, ps aux hardening)
-##   - CLI печатает в stdout ТОЛЬКО команду; usage-error → exit 2 + stderr
-## @rationale D3 TRAP[DECISION] 2026-07-26: shlex.quote() ≠ printf '%q' — parity-тест фиксирует
-##            backslash-формат и защищает от регрессии на single-quote-wrapping.
+##   - REF-0007: тело build_ssh_cmd/build_update_ssh_cmd НЕ содержит значений AGE/CI-ключей
+##     (--ci-deploy-key/--ci-root-key флаги тоже удалены — lifecycle читает env из prelude)
+##   - build_*_secret_prelude: export-строки с %q-quoted значениями; "" при пустых ключах
+## @rationale D3 TRAP[DECISION] 2026-07-26 + REF-0007 TRAP[DECISION] 2026-08-24 (stdin→bash -s):
+##            argv-тесты фиксируют отсутствие значений ключей в /proc-видимом канале.
 ## @changes 2026-08-14 | DevPlan 164 W3.5-1 — Created
+## @changes 2026-08-24 | REF-0007 — секреты вне argv: тело без ключей, +prelude-тесты
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -28,7 +30,9 @@ from core.internal.shared.ssh_cmd_builder import (
     build_check_security_ssh_cmd,
     build_converge_ssh_cmd,
     build_deploy_context_ssh_cmd,
+    build_init_secret_prelude,
     build_ssh_cmd,
+    build_update_secret_prelude,
     build_update_ssh_cmd,
     cli,
     printf_q,
@@ -130,14 +134,14 @@ def test_printf_q_not_shlex_quote(caplog: pytest.LogCaptureFixture) -> None:
 
 
 # region FUNC_test_build_ssh_cmd_init_structure
-# 🧪 TRAP[TEST] · Regression · init build: exports + флаги + порядок (parity с shell)
-# · Scenario: build_ssh_cmd(node, owner, ci_deploy, age) → set -euo pipefail + AGE/PLATFORM_ROOT/
-# ·   CI_DEPLOY_KEY exports + node-lifecycle.sh --mode init ... --owner-key ... --resume
-# · Last fail: N/A (порт build-ssh-cmd.sh; 2026-08-14 byte-parity check)
+# 🧪 TRAP[TEST] · Regression · init build: exports (БЕЗ секретов, REF-0007) + флаги + порядок
+# · Scenario: build_ssh_cmd(node, owner, ci_deploy, age) → set -euo pipefail + PLATFORM_ROOT
+# ·   export + node-lifecycle.sh --mode init ... --owner-key ... --resume; ключей НЕТ в теле
+# · Last fail: REF-0007 red→green — тело больше не содержит AGE/ci-ключей (stdin-transport)
 # · Remove if: build_ssh_cmd сигнатура/формат меняется
 @ldd_trajectory
 def test_build_ssh_cmd_init_structure(caplog: pytest.LogCaptureFixture) -> None:
-    """build_ssh_cmd() init: env exports + флаги + --resume (parity с shell)."""
+    """build_ssh_cmd() init: env exports (без секретов) + флаги + --resume."""
     caplog.set_level(logging.DEBUG)
     cmd = build_ssh_cmd(
         "test-node",
@@ -147,35 +151,90 @@ def test_build_ssh_cmd_init_structure(caplog: pytest.LogCaptureFixture) -> None:
     )
     logger.info("[IMP:9][test][init] cmd=%s", cmd)
     assert cmd.startswith("set -euo pipefail")
-    assert "export AGE_SECRET_KEY=AGE-SECRET-KEY-12345" in cmd
     assert "export PLATFORM_ROOT=/opt/platform" in cmd
-    assert "export PLATFORM_CI_DEPLOY_KEY=ssh-ed25519\\ AAAACiKey\\ ci-deploy@test" in cmd
     assert "/opt/platform/core/internal/bootstrap/node-lifecycle.sh" in cmd
     assert "--mode init" in cmd
     assert "--node-name test-node" in cmd
     assert "--node-yaml /opt/node-configs/test-node/node.yaml" in cmd
     assert "--owner-key ssh-ed25519\\ AAAATestKey\\ test@example.com" in cmd
-    assert "--ci-deploy-key ssh-ed25519\\ AAAACiKey\\ ci-deploy@test" in cmd
-    assert "--resume" in cmd
+    # REF-0007: секретов в теле нет — ни экспортов, ни CLI-флагов
+    assert "AGE_SECRET_KEY" not in cmd
+    assert "PLATFORM_CI_DEPLOY_KEY" not in cmd
+    assert "PLATFORM_CI_ROOT_KEY" not in cmd
+    assert "--ci-deploy-key" not in cmd
     assert "--ci-root-key" not in cmd
+    assert "--resume" in cmd
 
 
 # endregion FUNC_test_build_ssh_cmd_init_structure
 
 
+# region FUNC_test_build_ssh_cmd_no_secrets_in_argv
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · REF-0007 argv-тест: значения ключей НЕ в remote-команде
+# · Scenario: init с age+ci+root ключами → НИ ОДНО значение не встречается в выводе body;
+# ·   значения присутствуют ТОЛЬКО в secret-prelude (ssh-stdin канал)
+# · Last fail: 2026-08-24 (REF-0007) — AGE_SECRET_KEY/PLATFORM_CI_* export'ы светились в
+# ·   /proc/<pid>/cmdline локального ssh и remote shell ~30 мин
+# · Remove if: транспорт ключей изменён (но значения в argv возвращать нельзя)
+@ldd_trajectory
+def test_build_ssh_cmd_no_secrets_in_argv(caplog: pytest.LogCaptureFixture) -> None:
+    """REF-0007: build_ssh_cmd НЕ содержит значений AGE/CI ключей (argv-test)."""
+    caplog.set_level(logging.DEBUG)
+    age = "AGE-SECRET-KEY-supersecret42"
+    ci_deploy = "ssh-ed25519 CIKEYVALUE ci@test"
+    ci_root = "ssh-ed25519 ROOTKEYVALUE root@ci"
+    cmd = build_ssh_cmd("n1", "owner", ci_deploy, age, ci_root)
+    prelude = build_init_secret_prelude(ci_deploy, age, ci_root)
+    logger.info("[IMP:9][test][argv] body has secrets: %s; prelude lines: %d", age in cmd, len(prelude.splitlines()))
+    for secret in (age, ci_deploy, ci_root):
+        assert secret not in cmd, f"secret value leaked into remote command argv: {secret[:16]}..."
+    assert "export AGE_SECRET_KEY=AGE-SECRET-KEY-supersecret42" in prelude
+    assert f"export PLATFORM_CI_DEPLOY_KEY={printf_q(ci_deploy)}" in prelude
+    assert f"export PLATFORM_CI_ROOT_KEY={printf_q(ci_root)}" in prelude
+
+
+# endregion FUNC_test_build_ssh_cmd_no_secrets_in_argv
+
+
+# region FUNC_test_secret_prelude_contract
+# 🧪 TRAP[TEST] · Regression · REF-0007: prelude контракт — пустые ключи → "", fallback chain
+# · Scenario: пустые ключи → ""; частичные → только непустые export'ы; env fallback для ci-ключей
+# · Last fail: N/A (new test)
+# · Remove if: prelude формат/канал меняется
+@ldd_trajectory
+def test_secret_prelude_contract(caplog: pytest.LogCaptureFixture) -> None:
+    """build_*_secret_prelude: пусто → ''; fallback chain env → param сохранён."""
+    caplog.set_level(logging.DEBUG)
+    assert not build_init_secret_prelude("", "", ""), "пустые ключи → пустой prelude"
+    assert not build_update_secret_prelude("")
+    assert build_update_secret_prelude("age-1") == "export AGE_SECRET_KEY=age-1"
+    # Частичный набор: только age
+    prelude = build_init_secret_prelude("", "age-only", "")
+    assert prelude == "export AGE_SECRET_KEY=age-only"
+    # Fallback chain (TRAP P2): env PLATFORM_CI_DEPLOY_KEY → prelude
+    prelude_env = build_init_secret_prelude("", "", "", environ={"PLATFORM_CI_DEPLOY_KEY": "env-ci"})
+    assert "export PLATFORM_CI_DEPLOY_KEY=env-ci" in prelude_env
+    logger.info("[IMP:9][test][prelude] contract OK (empty/partial/fallback)")
+
+
+# endregion FUNC_test_secret_prelude_contract
+
+
 # region FUNC_test_build_ssh_cmd_age_key_env_only
-# 🧪 TRAP[TEST] · NEGATIVE (R5) · AGE key env-only: --age-secret-key НИКОГДА в remote-команде
-# · Scenario: DevPlan 003 TASK-2 — ключ уходит env export'ом, НЕ CLI-флагом (ps aux visibility)
-# · Last fail: N/A (guard; shell build-ssh-cmd.sh тоже env-only)
-# · Remove if: решение env-only снято (ключ разрешён в argv remote-команды)
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · AGE key вне remote-команды: --age-secret-key НИКОГДА в теле
+# · Scenario: DevPlan 003 TASK-2 + REF-0007 — ключ не в CLI-флаге И не в export'е тела
+# ·   (единственный канал — secret-prelude через ssh-stdin `bash -s`)
+# · Last fail: REF-0007 red→green — export AGE_SECRET_KEY удалён из тела
+# · Remove if: решение stdin-only снято (ключ разрешён в argv remote-команды)
 @ldd_trajectory
 def test_build_ssh_cmd_age_key_env_only(caplog: pytest.LogCaptureFixture) -> None:
-    """R5 negative: --age-secret-key отсутствует в init-команде (AGE key — env export ONLY)."""
+    """R5 negative: AGE key отсутствует в init-команде (только stdin prelude)."""
     caplog.set_level(logging.DEBUG)
     cmd = build_ssh_cmd("n1", "owner-key", "", "AGE-SECRET-KEY-12345")
     logger.info("[IMP:9][test][age-key] cmd=%s", cmd)
     assert "--age-secret-key" not in cmd, "AGE key must not appear as CLI arg (ps aux hardening)"
-    assert "export AGE_SECRET_KEY=AGE-SECRET-KEY-12345" in cmd
+    assert "AGE-SECRET-KEY-12345" not in cmd, "REF-0007: значение ключа НЕ в теле команды"
+    assert "AGE_SECRET_KEY" not in cmd
 
 
 # endregion FUNC_test_build_ssh_cmd_age_key_env_only
@@ -196,6 +255,7 @@ def test_build_ssh_cmd_empty_ci_keys_omitted(caplog: pytest.LogCaptureFixture) -
     assert "--ci-root-key" not in cmd
     assert "export PLATFORM_CI_DEPLOY_KEY=" not in cmd
     assert "export PLATFORM_CI_ROOT_KEY=" not in cmd
+    assert "AGE_SECRET_KEY" not in cmd
     assert "--owner-key" in cmd
     assert "--resume" in cmd
 
@@ -204,21 +264,24 @@ def test_build_ssh_cmd_empty_ci_keys_omitted(caplog: pytest.LogCaptureFixture) -
 
 
 # region FUNC_test_build_ssh_cmd_env_fallback_ci_deploy_key
-# 🧪 TRAP[TEST] · NEGATIVE (R5) · env PLATFORM_CI_DEPLOY_KEY → export, НО НЕ CLI-флаг
-# · Scenario: TRAP[BUG] P2 2026-07-17 fallback chain — env-ключ экспортируется; флаг --ci-deploy-key
-# ·   эмитится ТОЛЬКО от параметра (env-ключ не должен светиться в argv remote-команды)
-# · Last fail: N/A (guard на поведение shell: flag от param, export от effective)
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · env PLATFORM_CI_DEPLOY_KEY → prelude, НЕ тело и НЕ CLI-флаг
+# · Scenario: TRAP[BUG] P2 2026-07-17 fallback chain — env-ключ уходит в secret-prelude
+# ·   (ssh-stdin); в теле команды его нет (REF-0007)
+# · Last fail: REF-0007 red→green — export из тела перенесён в prelude
 # · Remove if: fallback chain env→param меняется
 @ldd_trajectory
 def test_build_ssh_cmd_env_fallback_ci_deploy_key(caplog: pytest.LogCaptureFixture) -> None:
-    """R5 negative: env PLATFORM_CI_DEPLOY_KEY → export присутствует, CLI-флаг — НЕТ."""
+    """R5 negative: env PLATFORM_CI_DEPLOY_KEY → prelude присутствует, в теле — НЕТ."""
     caplog.set_level(logging.DEBUG)
     env = {"PLATFORM_CI_DEPLOY_KEY": "ssh-ed25519 ENVKEY env@test"}
     cmd = build_ssh_cmd("n1", "owner-key", "", "age-key", environ=env)
-    logger.info("[IMP:9][test][env-fallback] cmd=%s", cmd)
-    assert "export PLATFORM_CI_DEPLOY_KEY=ssh-ed25519\\ ENVKEY\\ env@test" in cmd
-    assert "--ci-deploy-key" not in cmd, "env-ключ не должен эмитить CLI-флаг (argv visibility)"
-    # параметр НЕ задан → флаг отсутствует даже при non-empty env
+    prelude = build_init_secret_prelude("", "", "", environ=env)
+    logger.info(
+        "[IMP:9][test][env-fallback] body has key: %s; prelude: %d lines", "ENVKEY" in cmd, len(prelude.splitlines())
+    )
+    assert "ENVKEY" not in cmd, "env-ключ не должен светиться в argv remote-команды"
+    assert "--ci-deploy-key" not in cmd
+    assert "export PLATFORM_CI_DEPLOY_KEY=ssh-ed25519\\ ENVKEY\\ env@test" in prelude
 
 
 # endregion FUNC_test_build_ssh_cmd_env_fallback_ci_deploy_key
@@ -249,11 +312,13 @@ def test_build_ssh_cmd_remote_base_override(caplog: pytest.LogCaptureFixture) ->
 # · Remove if: update build сигнатура меняется
 @ldd_trajectory
 def test_build_update_ssh_cmd_structure(caplog: pytest.LogCaptureFixture) -> None:
-    """build_update_ssh_cmd(): update-команда без owner-key/resume/ci-флагов."""
+    """build_update_ssh_cmd(): update-команда без owner-key/resume/ci-флагов и БЕЗ AGE (REF-0007)."""
     caplog.set_level(logging.DEBUG)
     cmd = build_update_ssh_cmd("n1", "age-key-1", ["--force"])
-    logger.info("[IMP:9][test][update] cmd=%s", cmd)
-    assert "export AGE_SECRET_KEY=age-key-1" in cmd
+    prelude = build_update_secret_prelude("age-key-1")
+    logger.info("[IMP:9][test][update] cmd has age: %s; prelude=%r", "age-key-1" in cmd, prelude)
+    assert "age-key-1" not in cmd, "REF-0007: значение ключа НЕ в теле update-команды"
+    assert "AGE_SECRET_KEY" not in cmd
     assert "export PLATFORM_ROOT=/opt/platform" in cmd
     assert "--mode update" in cmd
     assert "--node-name n1" in cmd
@@ -261,6 +326,7 @@ def test_build_update_ssh_cmd_structure(caplog: pytest.LogCaptureFixture) -> Non
     assert "--owner-key" not in cmd
     assert "--resume" not in cmd
     assert "--force" in cmd  # passthrough
+    assert prelude == "export AGE_SECRET_KEY=age-key-1", "ключ доставляется stdin-prelude"
 
 
 # endregion FUNC_test_build_update_ssh_cmd_structure
@@ -347,6 +413,40 @@ def test_cli_init_prints_command(caplog: pytest.LogCaptureFixture, capsys: pytes
 
 
 # endregion FUNC_test_cli_init_prints_command
+
+
+# region FUNC_test_cli_secrets_modes
+# 🧪 TRAP[TEST] · Regression · REF-0007: *-secrets CLI modes печатают ТОЛЬКО prelude в stdout
+# · Scenario: cli(["update-secrets", node, age]) → stdout = export-строка, exit 0;
+# ·   cli(["init-secrets", ...]) → export-строки ключей
+# · Last fail: N/A (new modes)
+# · Remove if: CLI контракт меняется
+@ldd_trajectory
+def test_cli_secrets_modes(
+    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """CLI init-secrets/update-secrets: stdout = secret-prelude для ssh-stdin."""
+    caplog.set_level(logging.DEBUG)
+    rc_update = cli(["update-secrets", "n1", "age-777"])
+    out_update, _ = capsys.readouterr()
+    logger.info("[IMP:9][test][cli-update-secrets] rc=%s stdout=%r", rc_update, out_update.strip())
+    assert rc_update == 0
+    assert out_update == "export AGE_SECRET_KEY=age-777\n"
+
+    rc_init = cli(["init-secrets", "n1", "owner", "ci-key val", "age-888", "root-key"])
+    out_init, _ = capsys.readouterr()
+    lines = out_init.strip().splitlines()
+    logger.info("[IMP:9][test][cli-init-secrets] rc=%s %d export lines", rc_init, len(lines))
+    assert rc_init == 0
+    assert "export AGE_SECRET_KEY=age-888" in lines
+    assert any(line.startswith("export PLATFORM_CI_DEPLOY_KEY=") for line in lines)
+    assert any(line.startswith("export PLATFORM_CI_ROOT_KEY=") for line in lines)
+    # Тело команды НЕ печатается secrets-mode'ом
+    assert "node-lifecycle" not in out_init
+
+
+# endregion FUNC_test_cli_secrets_modes
 
 
 # region FUNC_test_cli_unknown_mode_usage_error

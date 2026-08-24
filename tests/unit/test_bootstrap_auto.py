@@ -345,7 +345,7 @@ fi
 
 
 def test_ssh_command_construction(caplog) -> None:
-    """Verify build_ssh_cmd() constructs correctly quoted SSH command (new 4-param signature)."""
+    """Verify build_ssh_cmd() body is correctly quoted and secret-free (REF-0007)."""
     caplog.set_level(logging.DEBUG)
 
     test_call = """build_ssh_cmd "test-node" "ssh-ed25519 AAAATestKey test@example.com" "ssh-ed25519 AAAACiKey ci-deploy@test" "AGE-SECRET-KEY-12345"
@@ -363,21 +363,23 @@ echo "[IMP:9][build_ssh_cmd] SSH command constructed"
     cmd = stdout.split("\n")[0]
 
     assert "set -euo pipefail" in cmd
-    assert "export AGE_SECRET_KEY=" in cmd
+    # REF-0007: тело команды БЕЗ значений ключей (они уходят в stdin-prelude)
+    assert "AGE_SECRET_KEY=" not in cmd
+    assert "PLATFORM_CI_DEPLOY_KEY=" not in cmd
+    assert "--ci-deploy-key" not in cmd
     assert "/opt/platform/core/internal/bootstrap/node-lifecycle.sh" in cmd
     assert "--node-name" in cmd
     assert "test-node" in cmd
     assert "--node-yaml" in cmd
     assert "/opt/node-configs/test-node/node.yaml" in cmd
     assert "--owner-key" in cmd
-    assert "--ci-deploy-key" in cmd, f"Expected --ci-deploy-key in command: {cmd}"
     assert "--age-secret-key" not in cmd
     assert "--resume" in cmd
     # printf percentq uses backslash-escaping for spaces
     assert (
         "ssh-ed25519\\ AAAATestKey\\ test@example.com" in cmd or "'ssh-ed25519 AAAATestKey test@example.com'" in cmd
     ), f"Expected printf percentq quoting: {cmd}"
-    logger.info("[IMP:9][test_ssh_command_construction][assert] SSH command validated with ci_deploy_key")
+    logger.info("[IMP:9][test_ssh_command_construction][assert] SSH command validated (secret-free body)")
 
     # Test without age key (but with ci_deploy_key)
     stdout3, _stderr3, rc3 = _test_func(
@@ -389,15 +391,51 @@ echo "[IMP:9][build_ssh_cmd] SSH command constructed"
     assert rc3 == 0
     cmd3 = stdout3.split("\n")[0]
     assert "--age-secret-key" not in cmd3
-    assert "--ci-deploy-key" in cmd3, f"Expected --ci-deploy-key without age key: {cmd3}"
-    logger.info(
-        "[IMP:9][test_ssh_command_construction][assert] Without age key: ci-deploy-key present, age flag omitted"
-    )
+    assert "--ci-deploy-key" not in cmd3, "REF-0007: ci-ключи не эмитят CLI-флаги (env из prelude)"
+    logger.info("[IMP:9][test_ssh_command_construction][assert] Without age key: secret-free body confirmed")
 
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
 
 
 # endregion TEST_test_ssh_command_construction
+
+
+# region TEST_test_secret_prelude_facade
+# 🧪 TRAP[TEST] · REF-0007 (11-DevPlan Волна 1) · shell-фасад prelude-билдеров
+# · Scenario: build_init_secret_prelude/build_update_secret_prelude печатают export-строки;
+# ·   пустые ключи → пустой вывод (rc 0)
+# · Last fail: N/A (new transport)
+# · Remove if: prelude фасад удаляется
+def test_secret_prelude_facade(caplog) -> None:
+    """Shell facade: *secret_prelude builders emit export lines for ssh-stdin."""
+    caplog.set_level(logging.DEBUG)
+
+    stdout_p, stderr_p, rc_p = _test_func(
+        BUILD_SSH_CMD_SH,
+        ["build_update_secret_prelude"],
+        'build_update_secret_prelude "test-node" "AGE-SECRET-KEY-PRELUDE1"\necho "[IMP:9][prelude] Exit=$?"',
+        env={"__LOG_PREFIX": "test"},
+    )
+    assert rc_p == 0, f"build_update_secret_prelude failed: {stderr_p}"
+    prelude = stdout_p.split("\n")[0]
+    logger.info("[IMP:9][test_secret_prelude_facade][assert] update prelude=%r", prelude[:40] + "...")
+    assert prelude == "export AGE_SECRET_KEY=AGE-SECRET-KEY-PRELUDE1"
+
+    stdout_i, stderr_i, rc_i = _test_func(
+        BUILD_SSH_CMD_SH,
+        ["build_init_secret_prelude"],
+        'build_init_secret_prelude "test-node" "owner" "" "" ""\necho "[IMP:9][prelude-init] Exit=$?"',
+        env={"__LOG_PREFIX": "test"},
+    )
+    assert rc_i == 0, f"build_init_secret_prelude failed: {stderr_i}"
+    # LDD echo-маркеры тест-сниппета не считаются выводом prelude
+    prelude_lines = [line for line in stdout_i.splitlines() if "[IMP:" not in line]
+    assert prelude_lines == [], f"пустые ключи → пустой prelude, got: {prelude_lines}"
+
+    logger.info("[IMP:9][test_secret_prelude_facade][assert] prelude facade contract OK")
+
+
+# endregion TEST_test_secret_prelude_facade
 
 
 # region TEST_test_rsync_command_generation
@@ -850,15 +888,16 @@ echo "[IMP:9][ci_deploy_key] VALUE=[${{CI_DEPLOY_KEY}}]"
 
 
 # region TEST_test_build_ssh_cmd_includes_ci_deploy_key
-# 🧪 TRAP[TEST] · 2026-07-17 · build_ssh_cmd includes --ci-deploy-key flag
-# · Regression: after build_ssh_cmd signature change (3→4 params), ci_deploy_key must appear
-# · Scenario: non-empty ci_deploy_key → `--ci-deploy-key` with %q-quoted value in SSH command
-# · Last fail: N/A (new test)
-# · Remove if: build_ssh_cmd ci_deploy_key handling changes
+# 🧪 TRAP[TEST] · 2026-07-17 · ci_deploy_key доставка (REF-0007: stdin-prelude, не argv)
+# · Regression: after build_ssh_cmd signature change (3→4 params), ci_deploy_key must be
+# ·   delivered; REF-0007 (2026-08-24): канал = build_init_secret_prelude → ssh-stdin,
+# ·   тело команды НЕ содержит флага/значения
+# · Scenario: non-empty ci_deploy_key → prelude содержит %q-quoted export; тело — нет
+# · Remove if: transport ключей меняется
 
 
 def test_build_ssh_cmd_includes_ci_deploy_key(caplog) -> None:
-    """Verify build_ssh_cmd() includes --ci-deploy-key with printf %q quoting when key is non-empty."""
+    """REF-0007: ci_deploy_key в stdin-prelude (%q), тело команды чистое."""
     caplog.set_level(logging.DEBUG)
 
     ci_key = "ssh-ed25519 AAAACiDeployKey ci-deploy@example.com"
@@ -876,14 +915,27 @@ echo "[IMP:9][build_ssh_cmd_ci] Exit=$?"
     assert rc == 0, f"build_ssh_cmd failed: {stderr}"
     cmd = stdout.split("\n")[0]
 
-    assert "--ci-deploy-key" in cmd, f"Expected --ci-deploy-key flag: {cmd}"
-    # Verify the key value is %q-quoted (spaces escaped with backslash)
+    assert "--ci-deploy-key" not in cmd, f"REF-0007: тело БЕЗ --ci-deploy-key: {cmd}"
+    assert "PLATFORM_CI_DEPLOY_KEY=" not in cmd, f"REF-0007: тело БЕЗ экспорта ключа: {cmd}"
+    logger.info("[IMP:9][test_build_ssh_cmd_ci][assert] body secret-free")
+
+    # Ключ доставляется prelude'ом (ssh-stdin канал) с %q-quoting
+    stdout_p, stderr_p, rc_p = _test_func(
+        BUILD_SSH_CMD_SH,
+        ["build_init_secret_prelude"],
+        f"""build_init_secret_prelude "test-node" "owner" "{ci_key}" "" ""
+echo "[IMP:9][prelude_ci] Exit=$?"
+""",
+        env={"__LOG_PREFIX": "test"},
+    )
+    assert rc_p == 0, f"build_init_secret_prelude failed: {stderr_p}"
+    prelude = stdout_p.strip()
+    assert "export PLATFORM_CI_DEPLOY_KEY=" in prelude
     assert (
-        "ssh-ed25519\\\\\\ AAAACiDeployKey\\\\\\ ci-deploy@example.com" in cmd
-        or "ssh-ed25519\\ AAAACiDeployKey\\ ci-deploy@example.com" in cmd
-        or "'ssh-ed25519 AAAACiDeployKey ci-deploy@example.com'" in cmd
-    ), f"Expected %q-quoted ci_deploy_key value: {cmd}"
-    logger.info("[IMP:9][test_build_ssh_cmd_ci][assert] --ci-deploy-key present with %q quoting")
+        "ssh-ed25519\\ AAAACiDeployKey\\ ci-deploy@example.com" in prelude
+        or "'ssh-ed25519 AAAACiDeployKey ci-deploy@example.com'" in prelude
+    ), f"Expected %q-quoted ci_deploy_key value in prelude: {prelude}"
+    logger.info("[IMP:9][test_build_ssh_cmd_ci][assert] prelude carries %q-quoted PLATFORM_CI_DEPLOY_KEY")
 
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
 
@@ -915,9 +967,7 @@ def test_build_ssh_cmd_empty_ci_deploy_key_omits_flag(caplog) -> None:
     assert rc == 0, f"build_ssh_cmd with empty ci_deploy_key failed: {stderr}"
     cmd = stdout.split("\n")[0]
 
-    # When ci_deploy_key is empty, the age_key becomes $3 (shifted from $4 due to $3 being empty)
-    # Actually no — the signature is now: node, owner_key, ci_deploy_key, age_key, passthrough...
-    # So $3="" and $4="AGE-SECRET-KEY-12345"
+    # REF-0007: сигнатура (node, owner, ci, age) сохранена; тело без флагов/экспортов ключей
     assert "--ci-deploy-key" not in cmd, f"Expected NO --ci-deploy-key flag when key is empty: {cmd}"
     # Verify other expected flags are still present (backward compat)
     assert "--owner-key" in cmd
@@ -936,7 +986,7 @@ def test_build_ssh_cmd_empty_ci_deploy_key_omits_flag(caplog) -> None:
     assert rc2 == 0, f"build_ssh_cmd both empty failed: {stderr2}"
     cmd2 = stdout2.split("\n")[0]
     assert "--ci-deploy-key" not in cmd2
-    assert "export AGE_SECRET_KEY=" not in cmd2
+    assert "AGE_SECRET_KEY=" not in cmd2
     logger.info("[IMP:9][test_build_ssh_cmd_empty][assert] Both keys empty: all optional flags omitted")
 
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
@@ -953,15 +1003,15 @@ def test_build_ssh_cmd_empty_ci_deploy_key_omits_flag(caplog) -> None:
 
 
 # region TEST_test_build_ssh_cmd_includes_ci_root_key
-# 🧪 TRAP[TEST] · 2026-08-06 · 142 W1 (A1) · build_ssh_cmd 5-й ключ ci_root_key
-# · Regression: CI-root ключ (ПУБЛИЧНАЯ часть VPS_SSH_KEY) не доставлялся в remote-команду →
+# 🧪 TRAP[TEST] · 2026-08-06 · 142 W1 (A1) · ci_root_key доставка (REF-0007: stdin-prelude)
+# · Regression: CI-root ключ (ПУБЛИЧНАЯ часть VPS_SSH_KEY) не доставлялся в remote-цепочку →
 # ·   φ2 не получал PLATFORM_CI_ROOT_KEY → root authorized_keys без ключа → core-deploy
 # ·   root-канал падал на свежей ноде (ручное добавление ключа, циклы 1/2 141).
-# · Scenario: build_ssh_cmd с 5 аргументами (node, owner, ci-deploy, age, ci-root) →
-# ·   вывод содержит `--ci-root-key` (printf %q) И `export PLATFORM_CI_ROOT_KEY=`.
-# · Remove if: build_ssh_cmd сигнатура меняется (ci_root_key уходит из remote-цепочки)
+# · Scenario (REF-0007 2026-08-24): build_init_secret_prelude с 5 аргументами → prelude
+# ·   содержит `export PLATFORM_CI_ROOT_KEY=` (%q); тело команды — НЕТ
+# · Remove if: ci_root_key уходит из remote-цепочки
 def test_build_ssh_cmd_includes_ci_root_key(caplog) -> None:
-    """142 W1: build_ssh_cmd 5-й ключ — --ci-root-key + PLATFORM_CI_ROOT_KEY export."""
+    """142 W1 + REF-0007: ci_root_key — %q-export в prelude, тело команды чистое."""
     caplog.set_level(logging.DEBUG)
 
     ci_root_key = "ssh-ed25519 AAAACiRootKey ci-root@example.com"
@@ -980,17 +1030,27 @@ echo "[IMP:9][build_ssh_cmd_ci_root] Exit=$?"
     assert rc == 0, f"build_ssh_cmd failed: {stderr}"
     cmd = stdout.split("\n")[0]
 
-    assert "--ci-root-key" in cmd, f"Expected --ci-root-key flag: {cmd}"
-    assert "export PLATFORM_CI_ROOT_KEY=" in cmd, f"Expected PLATFORM_CI_ROOT_KEY export: {cmd}"
-    # %q-quoting: ключ с пробелами экранируется
+    assert "--ci-root-key" not in cmd, f"REF-0007: тело БЕЗ --ci-root-key: {cmd}"
+    assert "PLATFORM_CI_ROOT_KEY=" not in cmd, f"REF-0007: тело БЕЗ экспорта: {cmd}"
+    logger.info("[IMP:9][test_build_ssh_cmd_ci_root][assert] body secret-free (ci_root)")
+
+    # Ключ в prelude (ssh-stdin канал), %q-quoting сохранён
+    stdout_p, stderr_p, rc_p = _test_func(
+        BUILD_SSH_CMD_SH,
+        ["build_init_secret_prelude"],
+        f"""build_init_secret_prelude "test-node" "owner" "" "" "{ci_root_key}"
+echo "[IMP:9][prelude_ci_root] Exit=$?"
+""",
+        env={"__LOG_PREFIX": "test"},
+    )
+    assert rc_p == 0, f"build_init_secret_prelude failed: {stderr_p}"
+    prelude = stdout_p.strip()
+    assert "export PLATFORM_CI_ROOT_KEY=" in prelude
     assert (
-        "ssh-ed25519\\\\\\ AAAACiRootKey\\\\\\ ci-root@example.com" in cmd
-        or "ssh-ed25519\\ AAAACiRootKey\\ ci-root@example.com" in cmd
-        or "'ssh-ed25519 AAAACiRootKey ci-root@example.com'" in cmd
-    ), f"Expected %q-quoted ci_root_key value: {cmd}"
-    # Совместимость: 4-й ключ (ci-deploy) на месте
-    assert "--ci-deploy-key" in cmd
-    logger.info("[IMP:9][test_build_ssh_cmd_ci_root][assert] --ci-root-key + PLATFORM_CI_ROOT_KEY present (142 W1)")
+        "ssh-ed25519\\ AAAACiRootKey\\ ci-root@example.com" in prelude
+        or "'ssh-ed25519 AAAACiRootKey ci-root@example.com'" in prelude
+    ), f"Expected %q-quoted ci_root_key value in prelude: {prelude}"
+    logger.info("[IMP:9][test_build_ssh_cmd_ci_root][assert] prelude carries PLATFORM_CI_ROOT_KEY (142 W1 + REF-0007)")
 
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
 

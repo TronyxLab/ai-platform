@@ -99,6 +99,8 @@ class NodeDetectionError(Exception):
 ##   - W5 T5.3 (DevPlan 160): env/home_dir/etc_key_file — keyword-only DI-параметры с ленивыми
 ##     дефолтами (os.environ/Path.home()/_ETC_AGE_KEY_FILE) — ТОЛЬКО для тестируемости, поведение
 ##     не меняется. EnvironmentFacts не подходит: detect_age_key не использует is_root/which/path_isfile.
+##   - REF-0007 (FAIL-0601): env-значение, ПЕРЕКРЫВАЮЩЕЕ другой (файловый) источник с ДРУГИМ
+##     значением → WARN оператору (`unset AGE_SECRET_KEY` — канон core/AGENTS.md §Hook-окружение)
 _KEY_MASK_LEN: int = 8  # сколько символов ключа показывать в маске
 
 
@@ -118,12 +120,14 @@ def detect_age_key(
     # Returns key in canonical AGE-SECRET-KEY-xxxxxxxx… format (with prefix)
     key = source.get("AGE_SECRET_KEY", "")
     if key:
+        _warn_env_over_file(key, source, home_dir=home_dir, etc_key_file=etc_key_file)
         _log_masked("AGE_SECRET_KEY", key, "environment")
         return key
 
     # ── Check 2: SOPS_AGE_KEY env (deprecated fallback, same canonical format) ──
     key = source.get("SOPS_AGE_KEY", "")
     if key:
+        _warn_env_over_file(key, source, home_dir=home_dir, etc_key_file=etc_key_file)
         _log_masked("AGE_SECRET_KEY", key, "SOPS_AGE_KEY env fallback")
         return key
 
@@ -208,6 +212,59 @@ def _log_masked(key_name: str, key_value: str, source: str) -> None:
 
 
 # endregion FUNC__log_masked
+
+
+# region FUNC__first_age_key_line
+## @purpose — Первая строка с каноническим префиксом AGE-SECRET-KEY- из файла ("" = нет/ошибка).
+##            Единый comment-scan канон (TRAP[BUG] 2026-08-12: readline() возвращал комментарий).
+## @io — ⇥ path: Path → ⎋ str
+## @complexity — O(n) построчно до первого совпадения
+def _first_age_key_line(path: Path) -> str:
+    """Return first AGE-SECRET-KEY- line from file (empty string = none/read error)."""
+    try:
+        with path.open(encoding="utf-8") as f:
+            return next((line.strip() for line in f if line.strip().startswith("AGE-SECRET-KEY-")), "")
+    except OSError:
+        return ""
+
+
+# endregion FUNC__first_age_key_line
+
+
+# region FUNC__warn_env_over_file
+## @purpose — REF-0007 (FAIL-0601): WARN при env-over-file — AGE env перекрывает файловый
+##            источник с ДРУГИМ значением (stale session env оператора = деплой чужих секретов).
+##            Совпадающие значения / отсутствие файлового источника → тихо (без спама).
+## @io — ⇥ env_key: str, source: Mapping, home_dir, etc_key_file → ⎋ None (side-effect: WARN log)
+## @complexity — O(1) + ≤3 file probes
+## @invariants  Значения ключей в логе НЕ печатаются (только источники)
+def _warn_env_over_file(
+    env_key: str,
+    source: Mapping[str, str],
+    *,
+    home_dir: str | None = None,
+    etc_key_file: str | None = None,
+) -> None:
+    """Warn when an AGE env value shadows a file source carrying a DIFFERENT key."""
+    candidates: list[Path] = []
+    file_path = source.get("AGE_SECRET_KEY_FILE", "")
+    if file_path:
+        candidates.append(Path(file_path))
+    home = Path(home_dir) if home_dir is not None else Path.home()
+    candidates.append(home / ".config" / "age" / "keys.txt")
+    candidates.append(Path(etc_key_file if etc_key_file is not None else _ETC_AGE_KEY_FILE))
+    for candidate in candidates:
+        file_key = _first_age_key_line(candidate)
+        if file_key and file_key != env_key:
+            logger.warning(
+                "[IMP:7][node_detect] AGE_SECRET_KEY env OVERIDES file source %s with a DIFFERENT key — "
+                "env wins (канон). Если это не ожидается: unset AGE_SECRET_KEY (см. core/AGENTS.md §Hook-окружение)",
+                candidate,
+            )
+            return
+
+
+# endregion FUNC__warn_env_over_file
 
 
 # region FUNC_auto_detect_node_name

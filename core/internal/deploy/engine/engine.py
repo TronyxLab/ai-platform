@@ -16,14 +16,18 @@
 ##   2. Previous image saved BEFORE pull — enables rollback (T1)
 ##   3. Healthcheck poll ≤ max_wait — shared healthcheck_poll (inspect-критерий)
 ##   4. DEPLOY_STATUS="success" установка сразу после health-gate — ДО non-fatal housekeeping (B1/T3)
-##   5. Rollback: re-tag previous image → docker compose up -d --force-recreate (T1)
-##   6. First deploy с health fail → handle_first_deploy → PlatformFatalError (exit 10, no rollback)
+##   5. Rollback: re-tag previous image → docker compose up -d --force-recreate (T1);
+##      после отката — ОДИН wait_health re-verify → rollback_verified (REF-0004)
+##   6. First deploy с health fail → handle_first_deploy → PlatformFatalError (exit 10, no rollback);
+##      pull-fail при СУЩЕСТВУЮЩЕМ деплое — честный FAILED без FATAL (BUG-0100, REF-0004 rider)
 ##   7. Remove: docker compose down --timeout <DOCKER_STOP_TIMEOUT> БЕЗ -v по умолчанию (O7/DD10, C4); purge=True → -v
 ##   8. Status: JSON stdout — docker compose ps + DeployHistory last snapshot; stub-aware flag
 ##   9. Все методы логируют IMP:7-10 (LDD telemetry)
 ##   10. No secrets/tokens в выводе — audit-логи в stderr
 ##   11. Единый snapshot-механизм — DeployHistory; rollback — через perform_rollback (docker tag + up --force-recreate)
 ##   12. deploy() — contextlib.chdir (восстановление cwd при ЛЮБОМ exit path), без дубля валидации
+##   13. skip_pull=True пропускает pull-шаг (rollback локально перетегированного образа —
+##       doomed GHCR-pull устранён, REF-0004)
 ## @rationale DevPlan 089 T7: DeployEngine вызывается из DeployOrchestrator, не standalone.
 ##           API deploy_compose() — публичный интерфейс; CLI argparse сохранён (backward compat).
 ## @changes 170 W4-B2 — extracted from deploy_engine.py
@@ -160,6 +164,8 @@ class DeployEngine:
         node: str = "",  # ruff: ignore[ARG002]
         max_wait: int = 60,
         keep_images: int = 3,  # ruff: ignore[ARG002]
+        *,
+        skip_pull: bool = False,
     ) -> ServiceDeployResult:
         """Execute atomic deploy with rollback capability.
 
@@ -171,6 +177,9 @@ class DeployEngine:
             node: Node name (hostname).
             max_wait: Max seconds to wait for healthcheck.
             keep_images: Number of old images to keep during prune.
+            skip_pull: Skip the pull step (REF-0004): rollback re-tags previous image
+                locally (`<service>:previous-rollback`) — registry pull локального тега
+                обречён (~135s ретраев ×5) и не нужен, образ уже на ноде.
 
         Returns:
             ServiceDeployResult with status and rollback metadata.
@@ -215,9 +224,34 @@ class DeployEngine:
 
             # ── Pull image with retry (flow.pull_images: shared retry_pull — backoff [5,10,20,40,60]) ──
             # (TRAP[BUG] ночной сессии 141 — в engine/flow.py у pull_images)
-            if not pull_images(project_dir, service, ref):
-                handle_first_deploy(project, service, ref, "Pull failed after 5 attempts")
-                # unreachable — handle_first_deploy raises PlatformFatalError
+            if not skip_pull and not pull_images(project_dir, service, ref):
+                # ⚠️ TRAP[BUG] · 2026-08-24 · P1 · BUG-0100 (REF-0004 rider) · Pull-failure при
+                # существующем деплое уходил в first-deploy FATAL (exit 10)
+                # · Symptom: транзиентный сбой GHCR-pull на живом сервисе поднимал
+                # ·   PlatformFatalError «First deploy failed» — хотя previous_image существует
+                # ·   и работающий контейнер можно было просто оставить.
+                # · Root: безусловный handle_first_deploy на pull-fail (branch by is_first_deploy
+                # ·   отсутствовал).
+                # · Fix: FATAL — ТОЛЬКО first deploy; при существующем деплое — честный
+                # ·   ServiceDeployResult(success=False), старый контейнер НЕ трогается.
+                # · Prevention: test_rollback_contour::test_engine_pull_failure_existing_deploy_not_fatal
+                if is_first_deploy:
+                    handle_first_deploy(project, service, ref, "Pull failed after 5 attempts")
+                    # unreachable — handle_first_deploy raises PlatformFatalError
+                logger.error(
+                    "[IMP:10][deploy][pull] Pull failed for %s/%s after retries — "
+                    "existing deployment preserved (no rollback needed, BUG-0100)",
+                    project,
+                    service,
+                )
+                return ServiceDeployResult(
+                    success=False,
+                    project=project,
+                    ref=ref,
+                    service=service,
+                    previous_image=previous_image.id if previous_image else None,
+                    error_message="Pull failed after 5 attempts — existing deployment preserved",
+                )
 
             # ── Atomic up ──
             if not up_atomic(project_dir, service, ref):
@@ -226,6 +260,13 @@ class DeployEngine:
                 else:
                     logger.warning("[IMP:9][deploy][up-fail] atomic_up failed — attempting rollback")
                     rollback_ok = perform_rollback(project_dir, service, previous_image)
+                    # REF-0004: ОДИН wait_health re-verify после отката (не дублируется наверху)
+                    rollback_verified = bool(rollback_ok and wait_health(service, max_wait))
+                    if rollback_ok and not rollback_verified:
+                        logger.error(
+                            "[IMP:10][rollback][re-verify] Rollback performed but healthcheck still failing for %s",
+                            service,
+                        )
                     return ServiceDeployResult(
                         success=False,
                         project=project,
@@ -233,6 +274,7 @@ class DeployEngine:
                         service=service,
                         previous_image=previous_image.id if previous_image else None,
                         rollback_performed=rollback_ok,
+                        rollback_verified=rollback_verified,
                         error_message="docker compose up failed, rollback "
                         + ("performed" if rollback_ok else "failed"),
                     )
@@ -254,6 +296,13 @@ class DeployEngine:
                 # unreachable — handle_first_deploy raises PlatformFatalError
 
             rollback_ok = perform_rollback(project_dir, service, previous_image)
+            # REF-0004: ОДИН wait_health re-verify после отката — единственный арбитр
+            # «сервис реально восстановлен»; ROLLED_BACK наверху ставится только при verified.
+            rollback_verified = bool(rollback_ok and wait_health(service, max_wait))
+            if rollback_ok and not rollback_verified:
+                logger.error(
+                    "[IMP:10][rollback][re-verify] Rollback performed but healthcheck still failing for %s", service
+                )
             return ServiceDeployResult(
                 success=False,
                 project=project,
@@ -261,6 +310,7 @@ class DeployEngine:
                 service=service,
                 previous_image=previous_image.id if previous_image else None,
                 rollback_performed=rollback_ok,
+                rollback_verified=rollback_verified,
                 error_message="Healthcheck failed, rollback " + ("performed" if rollback_ok else "failed"),
             )
 

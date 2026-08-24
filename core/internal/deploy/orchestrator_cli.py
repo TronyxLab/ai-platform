@@ -64,6 +64,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import logging
 import os
@@ -337,7 +338,22 @@ def _handle_status(args: str, ctx: _DispatchContext) -> int:
 def _handle_remove(args: str, ctx: _DispatchContext) -> int:
     """DeployOrchestrator.remove() JSON (exit 0/1)."""
     project = args or ""
-    result = ctx.orchestrator.remove(project_name=project, purge=ctx.purge)
+    # REF-0011 (11-DevPlan W1): rollback/remove под тем же per-project локом, что и receive —
+    # гонка «remove vs параллельный receive» ломала payload/state. Reentrant: вложенный
+    # orchestrator-путь возьмёт тот же лок без дедлока.
+    from core.internal.shared.file_lock import FileLock, FileLockError, platform_lock_path
+
+    try:
+        lock = FileLock(platform_lock_path(project), timeout=float(DEPLOY_TIMEOUT), poll_interval=0.5)
+        lock.acquire()
+    except FileLockError as e:
+        print(json.dumps({"status": "FAILED", "error": f"Concurrent deploy blocked: {e}"}))
+        return 1
+    try:
+        result = ctx.orchestrator.remove(project_name=project, purge=ctx.purge)
+    finally:
+        with contextlib.suppress(Exception):
+            lock.release()
     print(json.dumps(result.to_dict()))
     return 0 if result.is_success() else 1
 
@@ -755,10 +771,24 @@ def _handle_deploy_many(args: _CliArgs, orchestrator: DeployOrchestrator) -> int
 ##   - snapshot_id="" → latest snapshot (rollback(project, None))
 def _handle_rollback(args: _CliArgs, orchestrator: DeployOrchestrator) -> int:
     """Rollback a project (main-команда, JSON результат)."""
-    result = orchestrator.rollback(
-        project_name=args.project,
-        snapshot_id=args.snapshot_id or None,
-    )
+    # REF-0011 (11-DevPlan W1): rollback под тем же per-project локом, что и receive/remove —
+    # гонка «rollback vs параллельный receive» ломала payload/state. Reentrant per-project.
+    from core.internal.shared.file_lock import FileLock, FileLockError, platform_lock_path
+
+    try:
+        lock = FileLock(platform_lock_path(args.project), timeout=float(DEPLOY_TIMEOUT), poll_interval=0.5)
+        lock.acquire()
+    except FileLockError as e:
+        print(json.dumps({"status": "FAILED", "error": f"Concurrent deploy blocked: {e}"}))
+        return 1
+    try:
+        result = orchestrator.rollback(
+            project_name=args.project,
+            snapshot_id=args.snapshot_id or None,
+        )
+    finally:
+        with contextlib.suppress(Exception):
+            lock.release()
     print(json.dumps(result.to_dict()))
     return 0 if result.is_success() else 1
 

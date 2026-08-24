@@ -12,8 +12,9 @@
 ##   - make_proc: args=[] (модули под тестом не читают args), stdout/stderr могут быть str|bytes
 ##   - FakeCommandRunner.run() НЕ raise (канон subprocess_io check=False — graceful)
 ##   - results исчерпаны → default (стабильное поведение для многошаговых сценариев)
-##   - run() принимает ВСЕ kwargs канона CommandRunner-протокола (timeout/check/non_fatal/
-##     fatal_rc/env) — superset покрывает cert_orchestrator env-канал (TRAP[DI-SEAM] 154 W1)
+##   - run() принимает ВСЕ kwargs канона CommandRunner-протокола + superset: timeout/check/
+##     non_fatal/fatal_rc/env/input — input покрывает stdin-транспорт секретов (REF-0007:
+##     core_deliverer._run_cmd_stdin / remote_executor._ssh_exec), записывается в kwargs
 ##   - last_cmd / last_kwargs — observability для эффект-ассертов (timeout-контракты)
 ## @rationale DRY: 11 файлов дублировали идентичные классы. Специализированные фейки с
 ##            per-module exception-translation (PlatformFatalError/RuntimeError/CommandFailedError,
@@ -62,8 +63,9 @@ class FakeCommandRunner:
     ##   - run() НЕ raise (канон subprocess_io check=False — graceful)
     ##   - run() принимает timeout/check/non_fatal/fatal_rc/env — superset CommandRunner-протокола
     ##     (env-канал cert_orchestrator 154 W1: TRAP[DI-SEAM] — протокол без env, фейки принимают)
-    ##   - kwargs записываются {"timeout","check","non_fatal","fatal_rc","env"} — эффект-ассерты
-    ##     читают last_kwargs["timeout"] (FILE_OP_TIMEOUT/deploy-default контракты)
+    ##   - kwargs записываются {"timeout","check","non_fatal","fatal_rc","env", **extra} —
+    ##     superset-kwargs (в т.ч. input= для stdin-транспорта REF-0007) попадают в запись;
+    ##     эффект-ассерты читают last_kwargs["timeout"] / last_kwargs["input"]
     """
 
     def __init__(self, results: list | None = None, default: subprocess.CompletedProcess | None = None) -> None:
@@ -82,7 +84,7 @@ class FakeCommandRunner:
     def last_kwargs(self) -> dict:
         return self.kwargs[-1] if self.kwargs else {}
 
-    def run(self, cmd, *, timeout=30, check=False, non_fatal=False, fatal_rc=(), env=None):
+    def run(self, cmd, *, timeout=30, check=False, non_fatal=False, fatal_rc=(), env=None, **extra):
         self.calls.append(list(cmd))
         self.kwargs.append({
             "timeout": timeout,
@@ -90,6 +92,7 @@ class FakeCommandRunner:
             "non_fatal": non_fatal,
             "fatal_rc": fatal_rc,
             "env": env,
+            **extra,
         })
         if self._results:
             return self._results.pop(0)

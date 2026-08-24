@@ -669,12 +669,20 @@ def test_fallback_deliver_success(delivery_tree, caplog) -> None:
     ssh_calls = [c for c in fake.calls if c and c[0] == "ssh"]
     assert len(ssh_calls) == 2, f"Expected 2 ssh calls (provision + node-update), got {len(ssh_calls)}"
     assert "provision" in ssh_calls[0][-1], "First ssh call must run make provision"
-    assert "node-update" in ssh_calls[1][-1], "Second ssh call must run make node-update"
-    assert "AGE-KEY-123" in ssh_calls[1][-1], "AGE_SECRET_KEY must be passed as env in node-update cmd"
+    # REF-0007: node-update = `ssh ... 'bash -s'` — ключ в argv ОТСУТСТВУЕТ
+    assert ssh_calls[1] == ["ssh", *SSH_OPTS, "root@1.2.3.4", "bash -s"], (
+        f"REF-0007: node-update must be bash -s without key in argv, got {ssh_calls[1]}"
+    )
+    # REF-0007: ключ доставляется stdin-скриптом (export + make node-update)
+    update_input = fake.kwargs[-1].get("input") or ""
+    assert "AGE-KEY-123" not in ssh_calls[1][-1], "REF-0007: AGE key must NOT be in argv"
+    assert "export AGE_SECRET_KEY=AGE-KEY-123" in update_input, "stdin script must carry the AGE export"
+    assert "DEPLOY_PARALLEL=true make node-update NODE=test-node" in update_input
     logger.info("[IMP:9][test_fallback_deliver_success][done] Success path: 5 rsync + 2 ssh verified")
     # 🧪 TRAP[TEST] · 2026-08-07 · 142 W5 — fallback-деплой: ssh-вызовы provision/node-update
-    # · Scenario: успешный прогон — все фазы, AGE_SECRET_KEY как env в node-update
-    # · Last fail: N/A (new test)
+    # · Scenario: успешный прогон — все фазы; REF-0007: AGE_SECRET_KEY через stdin prelude,
+    # ·   НЕ в argv (`bash -s`)
+    # · Last fail: REF-0007 red→green — env-префикс в argv заменён stdin-транспортом
     # · Remove if: fallback-deliver subcommand removed
     assert_ldd_imp9(caplog)
 
@@ -743,6 +751,90 @@ def test_fallback_deliver_dry_run(delivery_tree, caplog) -> None:
 
 
 # endregion FUNC_test_fallback_deliver_dry_run
+
+
+# ═══════════════════════════════════════════════════════════════════
+# REF-0007: secret-transport + redaction (TEST-07 стиль)
+# ═══════════════════════════════════════════════════════════════════
+
+
+# region FUNC_test_fallback_deliver_redacts_key_from_stderr_logs
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · TEST-07-стиль (REF-0007): ключ не попадает в stderr/логи
+# · Scenario: node-update падает; remote stderr СОДЕРЖИТ значение ключа (echo $AGE_SECRET_KEY)
+# ·   → error-лог deliver_fallback обязан содержать ***REDACTED*** и НИКОГДА само значение;
+# ·   argv ssh-вызова тоже без ключа (`bash -s` stdin-транспорт)
+# · Last fail: 2026-08-24 — AGE_SECRET_KEY светился в argv И в dry-run логах deliver_fallback
+# · Remove if: redact_secrets() удалён/переименован или транспорт вернул key-in-argv
+def test_fallback_deliver_redacts_key_from_stderr_logs(delivery_tree, caplog) -> None:
+    """REF-0007 (TEST-07): fallback node-update failure — ключ redact'ится в логах."""
+    caplog.set_level(logging.DEBUG)
+    logger.info("[IMP:7][test_fallback_deliver_redacts][start] BEGIN")
+    args = [
+        "fallback-deliver",
+        "--host",
+        "1.2.3.4",
+        "--node",
+        delivery_tree["node"],
+        "--core-dir",
+        delivery_tree["core_dir"],
+        "--age-secret-key",
+        "AGE-SUPERSECRET-VALUE-42",
+    ]
+    # core + platform-env + Makefile (scripts/makefiles/root-compose skip; mkdir не входит
+    # в fallback-канал) + provision ok, затем node-update FAIL с ключом в remote stderr
+    fake = FakeCommandRunner(
+        results=[
+            _proc(0),  # rsync core/
+            _proc(0),  # rsync platform-env.yaml
+            _proc(0),  # rsync Makefile
+            _proc(0),  # provision
+            _proc(1, stderr="fatal: cannot decrypt, key was AGE-SUPERSECRET-VALUE-42"),
+        ]
+    )
+    assert cli(argv=args, runner=fake) == 1, "node-update failure must return 1"
+    # argv ssh-вызова node-update БЕЗ ключа
+    update_call = fake.calls[-1]
+    assert update_call == ["ssh", *SSH_OPTS, "root@1.2.3.4", "bash -s"], f"unexpected cmd: {update_call}"
+    assert "AGE-SUPERSECRET-VALUE-42" not in " ".join(update_call)
+    # Ключ НИГДЕ в логах; redacted-маркер присутствует
+    assert "AGE-SUPERSECRET-VALUE-42" not in caplog.text, f"TEST-07 FAIL: key leaked into logs:\n{caplog.text[-2000:]}"
+    assert "***REDACTED***" in caplog.text, "redaction marker missing in failure log"
+    logger.info("[IMP:9][test_fallback_deliver_redacts][done] Key redacted from stderr logs (TEST-07)")
+
+
+# endregion FUNC_test_fallback_deliver_redacts_key_from_stderr_logs
+
+
+# region FUNC_test_fallback_deliver_dry_run_no_key_in_output
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · REF-0007: dry-run НЕ печатает значение prelude
+# · Scenario: --dry-run с --age-secret-key → WOULD-лог содержит размер скрипта, не значение
+# · Last fail: 2026-08-24 — " ".join(update_cmd) печатал ключ в dry-run лог
+# · Remove if: dry-run контракт меняется
+def test_fallback_deliver_dry_run_no_key_in_output(delivery_tree, caplog) -> None:
+    """REF-0007: fallback --dry-run с ключом — значение отсутствует в выводе."""
+    caplog.set_level(logging.DEBUG)
+    logger.info("[IMP:7][test_fallback_dryrun_nokey][start] BEGIN")
+    args = [
+        "fallback-deliver",
+        "--host",
+        "1.2.3.4",
+        "--node",
+        delivery_tree["node"],
+        "--core-dir",
+        delivery_tree["core_dir"],
+        "--age-secret-key",
+        "AGE-DRYRUN-SECRET-99",
+        "--dry-run",
+    ]
+    fake = _ok_runner()
+    assert cli(argv=args, runner=fake) == 0
+    assert len(fake.calls) == 0, "dry-run must issue ZERO runner calls"
+    assert "AGE-DRYRUN-SECRET-99" not in caplog.text, "TEST-07 FAIL: key leaked into dry-run output"
+    assert "[redacted]" in caplog.text, "dry-run должен помечать stdin-скрипт как [redacted]"
+    logger.info("[IMP:9][test_fallback_dryrun_nokey][done] Dry-run output is key-free")
+
+
+# endregion FUNC_test_fallback_deliver_dry_run_no_key_in_output
 
 
 # ═══════════════════════════════════════════════════════════════════

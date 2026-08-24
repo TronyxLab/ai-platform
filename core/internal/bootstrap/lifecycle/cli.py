@@ -410,6 +410,9 @@ def main(
     audit_fn: Callable[..., object] | None = None,
 ) -> int:
     """CLI entry point. Parses args, creates StateMachine, dispatches to mode."""
+    # REF-0007 (11-DevPlan Волна 1): umask 077 — файлы, созданные фазами lifecycle
+    # (secrets.env и пр.), получают 0600 по умолчанию (страховка поверх atomic_writer).
+    os.umask(0o077)
     parser = build_parser()
     args = parser.parse_args(argv, namespace=_CliArgs())
     # DI (W-H DevPlan 163): env-дикт override (тесты без monkeypatch.setenv); None = os.environ

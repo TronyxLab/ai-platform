@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # GREP_SUMMARY: entrypoint bootstrap node orchestrator node-resolver resolve ssh scp age-key detect-age-key dry-run batch-get-many
-# STRUCTURE: ▶ init → ◇ --help? → ◇ --resolve? → ○ resolve+fields (bootstrap_resolver) → ◇ host? → ⚡ SCP core+node-configs → ⚡ SSH orchestrator | ⎋ exec orchestrator --resume
+# STRUCTURE: ▶ init → ◇ --help? → ◇ --resolve? → ○ resolve+fields (bootstrap_resolver) → ◇ host? → ⚡ SCP core+node-configs → ⚡ SSH 'bash -s' (stdin: secret-prelude REF-0007 + remote-cmd) | ⎋ exec orchestrator --resume
 # region MODULE_CONTRACT
 ## @purpose  Entry-point for `make bootstrap-node`: resolve node.yaml + fields → detect SSH host → SCP
 ##           core+node-configs → SSH-exec orchestrator (or local). Thin-wrapper per language policy.
@@ -11,7 +11,7 @@
 ##   - Резолв полей + owner_key-валидация + host — bootstrap_resolver (exit 0/1/2, single source)
 ## @rationale Thin-wrapper per DevPlan 020 T4+T15; secrets/passthrough решения — DevPlan 118 B6 (закрыты).
 ## ⚠️ TRAP[KEEP] · 173 W2.5 · bootstrap.sh НЕ переписывается: SCP/SSH exec + age-chain — легитимная shell-оркестрация; бизнес-логика уже в bootstrap_resolver.py/node_detect.py/build-ssh-cmd · Rev: при остаточном парсинге вне resolver — извлечь.
-## @changes 2026-08-15 170 W9-F1 — tab-парсинг → bootstrap_resolver.py (<100 LOC); 2026-08-03 RC 121; 2026-08-01 B3 T5/T6; 2026-07-31 DevPlan 104; 2026-07-21 W4
+## @changes 2026-08-15 170 W9-F1 — tab-парсинг → bootstrap_resolver.py (<100 LOC); 2026-08-03 RC 121; 2026-08-01 B3 T5/T6; 2026-07-31 DevPlan 104; 2026-07-21 W4; 2026-08-24 REF-0007 — ключи вне argv: ssh 'bash -s' + stdin prelude (masking-код dry-run удалён)
 # endregion MODULE_CONTRACT
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -89,12 +89,12 @@ main() {
         scp_to_server "${SSH_HOST}" "${NODE_NAME}" "${NODE_CONFIGS_DIR}" "${CORE_DIR}" || { echo "[IMP:10][bootstrap][entrypoint] FATAL: SCP phase failed" >&2; exit 1; }
         echo "[IMP:9][bootstrap][scp] SCP phase complete"
     fi
-    REMOTE_CMD="$(build_ssh_cmd "${NODE_NAME}" "${OWNER_KEY}" "${CI_DEPLOY_KEY}" "${DETECTED_AGE_KEY}" "${CI_ROOT_KEY}" "${PASSTHROUGH_ARGS[@]}")"
-    local masked_remote_cmd="${REMOTE_CMD}"
-    $DRY_RUN && [[ -n "${DETECTED_AGE_KEY}" ]] && masked_remote_cmd="${REMOTE_CMD//${DETECTED_AGE_KEY}/$(python3 -m core.internal.bootstrap.bootstrap_resolver mask --key "${DETECTED_AGE_KEY}")}"
-    $DRY_RUN && { echo "[IMP:8][bootstrap][dry-run] DRY-RUN: ssh ${SSH_OPTS_COMMON[*]} root@${SSH_HOST} ${masked_remote_cmd}" >&2; echo "[IMP:9][bootstrap][dry-run] DRY-RUN complete" >&2; exit 0; }
-    echo "[IMP:9][bootstrap][entrypoint] SSH node-lifecycle.sh --mode init on root@${SSH_HOST}"
-    # Волна 117 D7: exec ssh → SSH_OPTS_COMMON (lib/ssh.sh, Python SoT ssh_opts.py); exec + DRY_RUN семантика сохранены
-    exec ssh "${SSH_OPTS_COMMON[@]}" "root@${SSH_HOST}" "${REMOTE_CMD}"
+    # REF-0007 (11-DevPlan В1): AGE/ci-ключи ВНЕ argv — secret-prelude через ssh-stdin (`bash -s`).
+    # 🧐 TRAP[DECISION] · 2026-08-24 · stdin→bash -s вместо SCP 0600 root-file+unset · Rejected: prelude-файл на ноде · Reason: crash между scp и rm оставляет plaintext-ключ на диске (SEC-0015 класс), stdin не оставляет артефактов · Rev: потоковый канал >1MB prelude (не ожидается) — пересмотреть
+    REMOTE_CMD="$(build_ssh_cmd "${NODE_NAME}" "${OWNER_KEY}" "${CI_DEPLOY_KEY}" "${DETECTED_AGE_KEY}" "${CI_ROOT_KEY}" "${PASSTHROUGH_ARGS[@]}")"; SECRET_PRELUDE="$(build_init_secret_prelude "${CI_DEPLOY_KEY}" "${DETECTED_AGE_KEY}" "${CI_ROOT_KEY}")"
+    # DRY-RUN печатает ТОЛЬКО тело (значения prelude НЕ логируются — размер в байтах)
+    $DRY_RUN && { echo "[IMP:8][bootstrap][dry-run] DRY-RUN: ssh ${SSH_OPTS_COMMON[*]} root@${SSH_HOST} 'bash -s' <<< stdin(prelude=${#SECRET_PRELUDE}B [redacted] + remote-cmd)" >&2; echo "[IMP:8][bootstrap][dry-run] DRY-RUN remote cmd: ${REMOTE_CMD}" >&2; echo "[IMP:9][bootstrap][dry-run] DRY-RUN complete" >&2; exit 0; }
+    echo "[IMP:9][bootstrap][entrypoint] SSH node-lifecycle.sh --mode init on root@${SSH_HOST} (keys via stdin prelude)"
+    ssh_exec_stdin "${SSH_HOST}" "${SECRET_PRELUDE}" "${REMOTE_CMD}"
 }
 main "$@"

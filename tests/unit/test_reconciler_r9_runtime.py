@@ -297,3 +297,202 @@ def test_reconcile_runtime_cooldown(tmp_path, caplog, node_yaml_with_modules, mo
 
 
 # endregion FUNC_test_reconcile_runtime_cooldown
+
+
+# ═══════════════════════════════════════════════════════════════════
+# REF-0014 — label-детекция проекта + канонический compose-argv (build_compose_args)
+# ═══════════════════════════════════════════════════════════════════
+
+
+# region REF0014_R9_LABEL_AND_ARGV
+
+
+def _single_module_env(tmp_path, mod: str = "postgres"):
+    """node.yaml с одним docker-модулем + modules dir с его compose-файлом (точный argv-ассерт)."""
+    yaml_path = tmp_path / "node.yaml"
+    yaml_path.write_text(
+        f"context: test-context\nmodules:\n  - name: {mod}\n    enabled: true\nprojects: []\n",
+        encoding="utf-8",
+    )
+    mod_dir = tmp_path / "modules" / mod
+    mod_dir.mkdir(parents=True)
+    compose = mod_dir / "docker-compose.yml"
+    compose.write_text(f"version: '3'\nservices:\n  {mod}:\n    image: {mod}:latest\n", encoding="utf-8")
+    return str(yaml_path), str(tmp_path / "modules"), compose
+
+
+def _make_mock_run(compose_up_calls: list | None = None, ps_cmds: list | None = None):
+    """mock subprocess.run: info ok; ps → контейнер проекта; inspect → exited/unless-stopped; up captured."""
+
+    def mock_run(cmd, *args, **kwargs):
+        cmd_str = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
+        if "docker info" in cmd_str:
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+        if "docker ps" in cmd_str:
+            if ps_cmds is not None:
+                ps_cmds.append(list(cmd))
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="pg-main\n", stderr="")
+        if "docker inspect" in cmd_str and "RestartPolicy.Name" in cmd_str:
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="unless-stopped", stderr="")
+        if "docker inspect" in cmd_str and "State.Status" in cmd_str:
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="exited", stderr="")
+        if "compose" in cmd_str and "up" in cmd_str and "-d" in cmd_str:
+            if compose_up_calls is not None:
+                compose_up_calls.append(list(cmd))
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    return mock_run
+
+
+# 🧪 TRAP[TEST] · REF-0014 · Regression · Scenario: детекция контейнеров модуля по
+# ·   label=com.docker.compose.project=<module>, substring-фильтров name= НЕТ
+# · Last fail: 2026-08-24 (BUG-0701) — name=monitoring → 0 рядов; name=redis матчил langfuse-redis
+# · Remove if: механизм детекции проекта изменится
+@pytest.mark.usefixtures("reset_state")
+@ldd_trajectory
+def test_r9_detects_module_by_compose_project_label(tmp_path, caplog, node_yaml_with_modules, mock_modules_dir):
+    """REF-0014: docker ps --filter label=com.docker.compose.project=<module> для каждого модуля."""
+    caplog.set_level(logging.INFO)
+    logger.info("[IMP:9][test] R9 label-detection — compose project label вместо substring name=")
+
+    cooldown_file = tmp_path / ".converge_cooldown.json"
+    ps_cmds: list[list[str]] = []
+    compose_up_calls: list[list[str]] = []
+
+    with patch.object(subprocess, "run", side_effect=_make_mock_run(compose_up_calls, ps_cmds)):
+        entry = reconciler.reconcile_runtime_state(
+            node_yaml_path=node_yaml_with_modules,
+            modules_dir=mock_modules_dir,
+            dry_run=False,
+            report_only=False,
+            cooldown_file=str(cooldown_file),
+        )
+
+    assert entry["unit"] == "R9"
+    assert entry["status"] == "mutated", "exited-контейнеры должны быть детектированы и вылечены"
+    assert ps_cmds, "docker ps обязан вызываться для каждого docker-модуля"
+    queried: set[str] = set()
+    for cmd in ps_cmds:
+        filters = [cmd[i + 1] for i, f in enumerate(cmd) if f == "--filter"]
+        assert filters, f"docker ps без --filter: {cmd}"
+        for flt in filters:
+            assert flt.startswith("label=com.docker.compose.project="), (
+                f"REF-0014 FAIL: substring/name-детекция вернулась: {flt}"
+            )
+            queried.add(flt.removeprefix("label=com.docker.compose.project="))
+    assert {"nginx", "postgres", "redis"} <= queried, f"не все модули опрошены по label: {queried}"
+    assert compose_up_calls, "детекция должна работать end-to-end (heal выполнен)"
+    logger.info("[IMP:9][test] R9 label-detection verified: %d ps-вызовов, heal выполнен", len(ps_cmds))
+
+
+# 🧪 TRAP[TEST] · REF-0014 · Regression · Scenario: R9 argv через канонический build_compose_args —
+# ·   root-compose ПЕРВЫМ и ЕДИНСТВЕННЫМ -f, затем secrets env-file, platform .env, --profile
+# · Last fail: 2026-08-24 (BUG-0701) — ручной argv ['-f', base.yml] без env/profile ломал каждый
+# ·   docker-модуль (undefined volume / missing ${VAR:?}, 3 режима отказа живьём)
+# · Remove if: R9 перестанет строить argv через bootstrap/deploy/compose_args.build_compose_args
+@pytest.mark.usefixtures("reset_state")
+@ldd_trajectory
+def test_r9_compose_argv_root_first_env_profile(tmp_path, caplog, monkeypatch):
+    """REF-0014: точный порядок argv — [-f root, --env-file secrets, --env-file platform.env, --profile]."""
+    caplog.set_level(logging.INFO)
+    logger.info("[IMP:9][test] R9 canonical argv — root-first/env-file/profile")
+
+    node_yaml, modules_dir, _compose = _single_module_env(tmp_path)
+    cooldown_file = tmp_path / ".converge_cooldown.json"
+
+    platform_root = tmp_path / "platform"
+    platform_root.mkdir()
+    (platform_root / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
+    (platform_root / ".env").write_text("PLATFORM_VAR=1\n", encoding="utf-8")
+    secrets_env = tmp_path / "secrets.env"
+    secrets_env.write_text("SECRET=1\n", encoding="utf-8")
+    monkeypatch.setenv("PLATFORM_REMOTE_BASE", str(platform_root))
+    monkeypatch.setenv("SECRETS_ENV_FILE", str(secrets_env))
+
+    compose_up_calls: list[list[str]] = []
+    with patch.object(subprocess, "run", side_effect=_make_mock_run(compose_up_calls)):
+        entry = reconciler.reconcile_runtime_state(
+            node_yaml_path=node_yaml,
+            modules_dir=modules_dir,
+            dry_run=False,
+            report_only=False,
+            cooldown_file=str(cooldown_file),
+        )
+
+    assert entry["unit"] == "R9"
+    assert entry["status"] == "mutated", "exited → self-heal"
+    assert len(compose_up_calls) == 1, f"ровно один compose up: {compose_up_calls}"
+    expected = [
+        "docker",
+        "compose",
+        "-f",
+        str(platform_root / "docker-compose.yml"),
+        "--env-file",
+        str(secrets_env),
+        "--env-file",
+        str(platform_root / ".env"),
+        "--profile",
+        "postgres",
+        "up",
+        "-d",
+    ]
+    assert compose_up_calls[0] == expected, (
+        f"REF-0014 FAIL: argv не канонический (root-first/env/profile порядок):\n{compose_up_calls[0]}"
+    )
+    logger.info("[IMP:9][test] R9 canonical argv verified: root-first + env-files + profile")
+
+
+# 🧪 TRAP[TEST] · REF-0014 · Edge-case · Scenario: root compose отсутствует → fallback на модульный
+# ·   файл (U-49 ветка else build_compose_args), env-files и --profile сохраняются
+# · Last fail: N/A (fallback-ветка канона U-49; раньше была единственной — и сломанной — веткой R9)
+# · Remove if: fallback-семантика build_compose_args изменится
+@pytest.mark.usefixtures("reset_state")
+@ldd_trajectory
+def test_r9_compose_argv_module_fallback_without_root(tmp_path, caplog, monkeypatch):
+    """Без root compose: единственный -f = модульный файл; env/profile на месте."""
+    caplog.set_level(logging.INFO)
+    logger.info("[IMP:9][test] R9 fallback argv — module compose without root")
+
+    node_yaml, modules_dir, compose = _single_module_env(tmp_path)
+    cooldown_file = tmp_path / ".converge_cooldown.json"
+
+    empty_root = tmp_path / "empty-root"
+    empty_root.mkdir()
+    (empty_root / ".env").write_text("PLATFORM_VAR=1\n", encoding="utf-8")
+    secrets_env = tmp_path / "secrets.env"
+    secrets_env.write_text("SECRET=1\n", encoding="utf-8")
+    monkeypatch.setenv("PLATFORM_REMOTE_BASE", str(empty_root))
+    monkeypatch.setenv("SECRETS_ENV_FILE", str(secrets_env))
+
+    compose_up_calls: list[list[str]] = []
+    with patch.object(subprocess, "run", side_effect=_make_mock_run(compose_up_calls)):
+        entry = reconciler.reconcile_runtime_state(
+            node_yaml_path=node_yaml,
+            modules_dir=modules_dir,
+            dry_run=False,
+            report_only=False,
+            cooldown_file=str(cooldown_file),
+        )
+
+    assert entry["unit"] == "R9"
+    assert entry["status"] == "mutated"
+    expected = [
+        "docker",
+        "compose",
+        "-f",
+        str(compose),
+        "--env-file",
+        str(secrets_env),
+        "--env-file",
+        str(empty_root / ".env"),
+        "--profile",
+        "postgres",
+        "up",
+        "-d",
+    ]
+    assert compose_up_calls == [expected], f"REF-0014 FAIL: fallback argv не канонический: {compose_up_calls}"
+    logger.info("[IMP:9][test] R9 fallback argv verified: module -f + env + profile")
+
+
+# endregion REF0014_R9_LABEL_AND_ARGV

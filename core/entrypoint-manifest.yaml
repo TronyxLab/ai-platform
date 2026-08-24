@@ -1466,6 +1466,11 @@ gates:
   - converge_reconcile_flag
   - makefile_deploy_node_flag
   - vps_readiness_sourceable
+  test_gate_shared_db_seam.py:
+  - test_hook_entry_missing_args_returns_zero
+  - test_hook_wrapper_delegates_to_python_impl
+  - test_post_deploy_chain_invokes_deploy_hooks_via_module_interface
+  - test_postgres_registers_deploy_hook_pair
   test_gate_single_orchestrator.py:
   - test_layer1_python_docker_compose
   - test_layer2_shell_scp_rsync

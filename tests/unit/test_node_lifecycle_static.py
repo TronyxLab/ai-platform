@@ -560,11 +560,19 @@ def test_remote_cmd_has_update_mode(caplog) -> None:
     )
     logger.info("[IMP:8][test_remote_cmd_has_update_mode] Check 5 PASS: printf_q quoting in Python builder")
 
-    # ── Check 6: AGE_SECRET_KEY export handled in Python builder (env-only, DevPlan 003 TASK-2) ──
-    assert "AGE_SECRET_KEY" in update_py_body, (
-        "[IMP:9][test] FAIL: build_update_ssh_cmd (Python) must handle AGE_SECRET_KEY export"
+    # ── Check 6: AGE_SECRET_KEY handled in Python builder — REF-0007: в secret-prelude,
+    # НЕ в теле команды (stdin→bash -s транспорт; прежний env-export-in-body удалён) ──
+    prelude_py_start = py_content.find("def build_update_secret_prelude(")
+    assert prelude_py_start >= 0, "[IMP:9][test] FAIL: build_update_secret_prelude() not found in ssh_cmd_builder.py"
+    prelude_py_end = py_content.find("# endregion FUNC_build_update_secret_prelude")
+    prelude_body = py_content[prelude_py_start : prelude_py_end if prelude_py_end > 0 else len(py_content)]
+    assert "export AGE_SECRET_KEY=" in prelude_body, (
+        "[IMP:9][test] FAIL: build_update_secret_prelude (Python) must emit export AGE_SECRET_KEY="
     )
-    logger.info("[IMP:8][test_remote_cmd_has_update_mode] Check 6 PASS: AGE_SECRET_KEY handling in Python builder")
+    assert "AGE_SECRET_KEY" not in update_py_body, (
+        "[IMP:9][test] FAIL: build_update_ssh_cmd (Python) must NOT embed AGE_SECRET_KEY (REF-0007 stdin-prelude)"
+    )
+    logger.info("[IMP:8][test_remote_cmd_has_update_mode] Check 6 PASS: AGE_SECRET_KEY in stdin-prelude builder only")
 
     logger.info("[IMP:9][test_remote_cmd_has_update_mode] ALL CHECKS PASS")
 

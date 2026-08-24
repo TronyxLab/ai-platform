@@ -63,6 +63,7 @@ from core.internal.shared.node_detect import (
 )
 from core.internal.shared.ssh_cmd_builder import (
     build_converge_ssh_cmd,
+    build_update_secret_prelude,
     build_update_ssh_cmd,
 )
 
@@ -301,7 +302,8 @@ def run_converge(args: Args, *, executor: RemoteExecutor | None = None) -> int:
 
 # region FUNC_run_update
 ## @purpose  Полный update-цикл: --node валидация → AGE_SECRET_KEY_FILE export → detect_age_key
-##           (rc=3 non-fatal) → deliver_vhost_overlays (S2, skip на dry-run) → build_update_ssh_cmd →
+##           (rc=3 non-fatal) → deliver_vhost_overlays (S2, skip на dry-run) → build_update_ssh_cmd
+##           (тело БЕЗ ключей, REF-0007) + secret-prelude (ssh-stdin) →
 ##           RemoteExecutor.execute_update → rc=2 → локальный fallback node-lifecycle.sh.
 ## @io       ⇥ args: Args, executor: RemoteExecutor | None (DI-шов) → ⎋ int exit code
 ## @complexity  O(f + m + ssh) — deliver overlays + ssh
@@ -337,9 +339,14 @@ def run_update(args: Args, *, executor: RemoteExecutor | None = None) -> int:
             logger.error("[IMP:10][remote_dispatch][update] FATAL: Vhost overlay delivery failed: %s", exc)
             return 1
 
-    remote_cmd = build_update_ssh_cmd(node, age_key or "", args.passthrough)
+    # REF-0007 (11-DevPlan Волна 1): AGE-ключ ВНЕ argv — тело команды без секретов,
+    # ключ уходит в ssh-stdin prelude (RemoteExecutor исполняет `bash -s` с stdin-скриптом)
+    remote_cmd = build_update_ssh_cmd(node, "", args.passthrough)
+    secret_prelude = build_update_secret_prelude(age_key or "")
     exec_instance = executor if executor is not None else RemoteExecutor(dry_run=args.dry_run)
-    remote_rc = exec_instance.execute_update(node, remote_cmd, " ".join(args.passthrough))
+    remote_rc = exec_instance.execute_update(
+        node, remote_cmd, " ".join(args.passthrough), secret_prelude=secret_prelude
+    )
     logger.info("[IMP:8][remote_dispatch][update] remote_executor rc=%s", remote_rc)
 
     if remote_rc == RC_LOCAL_FALLBACK:

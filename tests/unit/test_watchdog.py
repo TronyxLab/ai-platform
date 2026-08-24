@@ -63,12 +63,18 @@ def _inspect_json(name, health, restart_count=0, restart_policy="unless-stopped"
 
 
 class FakeDocker:
-    """Fake _run_cmd: serves docker ps/inspect (batch)/restart + telegram notify from in-memory data."""
+    """Fake _run_cmd: serves docker ps/inspect (batch)/restart + telegram notify from in-memory data.
 
-    def __init__(self, containers: list) -> None:
+    REF-0014: restart_rc — глобальный rc docker restart; failing_restarts — set container-id'ов,
+    рестарт которых возвращает rc=1 (per-action partial-failure сценарии).
+    """
+
+    def __init__(self, containers: list, restart_rc: int = 0, failing_restarts: set[str] | None = None) -> None:
         self.containers = containers  # list of inspect-JSON lists
         self.restart_calls: list[str] = []
         self.notify_calls: list[list[str]] = []
+        self._restart_rc = restart_rc
+        self._failing_restarts = failing_restarts or set()
 
     def __call__(self, cmd, timeout: int = 30, env=None) -> subprocess.CompletedProcess:  # ruff: ignore[ARG002]
         if cmd[:2] == ["docker", "ps"]:
@@ -80,13 +86,35 @@ class FakeDocker:
             payload = [self.containers[int(i)][0] for i in ids]
             return subprocess.CompletedProcess(cmd, 0, json.dumps(payload), "")
         if cmd[:2] == ["docker", "restart"]:
-            self.restart_calls.append(cmd[2])
+            cid = cmd[2]
+            self.restart_calls.append(cid)
+            if self._restart_rc != 0 or cid in self._failing_restarts:
+                return subprocess.CompletedProcess(cmd, 1, "", "simulated restart failure")
             return subprocess.CompletedProcess(cmd, 0, "", "")
         if cmd[:3] == ["python3", "-m", "core.internal.shared.notifications"]:
             self.notify_calls.append(cmd)
             return subprocess.CompletedProcess(cmd, 0, "", "")
         msg = f"unexpected cmd: {cmd}"
         raise AssertionError(msg)
+
+
+class StateSnapshotRunner:
+    """run_cmd-wrapper (REF-0014 ordering-pin): фиксирует содержимое state-файла В МОМЕНТ
+    docker restart — доказывает «штамп пишется после рестарта», а не до."""
+
+    def __init__(self, inner: FakeDocker, state_path: Path) -> None:
+        self._inner = inner
+        self._state_path = state_path
+        self.state_at_restart: dict | None = None
+
+    def __call__(self, cmd, timeout: int = 30, env=None) -> subprocess.CompletedProcess:
+        if cmd[:2] == ["docker", "restart"] and not self.state_at_restart:
+            path = Path(self._state_path)
+            self.state_at_restart = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        return self._inner(cmd, timeout=timeout, env=env)
+
+    def __getattr__(self, name: str):
+        return getattr(self._inner, name)
 
 
 @pytest.fixture
@@ -304,6 +332,182 @@ def test_live_unhealthy_container_detected_negative(state_file: Path, caplog) ->
 
 
 # endregion W1_WATCHDOG_SCENARIOS
+
+
+# region REF0014_STAMP_AFTER_SUCCESS
+
+
+def _read_state(state_path: Path) -> dict:
+    """Read watchdog state JSON from tmp_path (helper для sequence-ассертов)."""
+    return json.loads(state_path.read_text(encoding="utf-8"))
+
+
+# 🧪 TRAP[TEST] · REF-0014 · Regression · Scenario: штамп last_restart пишется ТОЛЬКО ПОСЛЕ успешного
+# ·   docker restart + немедленный re-save (stamp-before-success сжигал cooldown при failure)
+# · Last fail: 2026-08-24 — decide_actions ставил штамп в new_state, run_watchdog сохранял state ДО
+# ·   restart'ов; первый failed restart возвращал exit 1 с уже вооружённым cooldown (10→40+ мин)
+# · Remove if: state-commit перестанет быть транзакционен с действием
+def test_stamp_written_only_after_successful_restart(state_file: Path, caplog) -> None:
+    """REF-0014 sequence: на момент docker restart штампа ещё нет; после успеха — штамп + re-save."""
+    caplog.set_level(logging.INFO)
+    ts = 100.0 + 10 * 60 + 1
+    state_file.write_text(json.dumps({"unhealthy_since": {"redis": 100.0}, "last_restart": {}}), encoding="utf-8")
+    containers = [_inspect_json("redis", "unhealthy", restart_count=1)]
+
+    fake = FakeDocker(containers)
+    snapshot = StateSnapshotRunner(fake, state_file)
+    exit_code = watchdog.run_watchdog(
+        dry_run=False,
+        state_file=str(state_file),
+        now=ts,
+        facts=FakeFacts(docker_path="/usr/bin/docker"),
+        run_cmd=snapshot,
+    )
+
+    assert exit_code == 0, "успешный restart → exit 0"
+    assert fake.restart_calls == ["0"], "restart должен быть выполнен"
+    # Ordering-pin: В МОМЕНТ docker restart штампа last_restart ещё НЕТ (state до рестарта)
+    assert snapshot.state_at_restart is not None, "snapshot во время docker restart обязан существовать"
+    assert snapshot.state_at_restart.get("last_restart") == {}, (
+        f"REF-0014 FAIL: штамп появился ДО рестарта: {snapshot.state_at_restart}"
+    )
+    # После успеха — штамп записан и персистирован
+    saved = _read_state(state_file)
+    assert saved["last_restart"] == {"redis": ts}, "last_restart штампуется после успешного restart"
+    assert saved["unhealthy_since"]["redis"] == ts, "unhealthy_since reset — новая эпопея наблюдения"
+    assert fake.notify_calls, "после успеха — TG-notify"
+    found_imp9 = any("[IMP:9][watchdog] RESTART redis" in r.message for r in caplog.records)
+    assert found_imp9, "Critical LDD Error: no IMP:9 RESTART log"
+    logger.info("[IMP:9][test_watchdog][REF-0014] stamp-after-success sequence PASS")
+
+
+# 🧪 TRAP[TEST] · REF-0014 · NEGATIVE (R5) · Scenario: failed docker restart → NO штамп cooldown,
+# ·   NO TG-notify (skip-notify), unhealthy_since СОХРАНЁН (retry на следующем проходе без ожидания)
+# · Last fail: 2026-08-24 — оригинальная форма бага: state с last_restart сохранялся до restart'ов
+# · Remove if: failed restart перестанет оставлять state без штампа
+def test_failed_restart_no_stamp_no_notify(state_file: Path, caplog) -> None:
+    """R5 negative (оригинальный вход REF-0014): failed restart не вооружает cooldown."""
+    caplog.set_level(logging.INFO)
+    ts = 100.0 + 10 * 60 + 1
+    state_file.write_text(json.dumps({"unhealthy_since": {"redis": 100.0}, "last_restart": {}}), encoding="utf-8")
+    containers = [_inspect_json("redis", "unhealthy", restart_count=1)]
+
+    fake = FakeDocker(containers, restart_rc=1)
+    exit_code = watchdog.run_watchdog(
+        dry_run=False,
+        state_file=str(state_file),
+        now=ts,
+        facts=FakeFacts(docker_path="/usr/bin/docker"),
+        run_cmd=fake,
+    )
+
+    assert exit_code == 1, "failed restart → internal error (exit 1)"
+    saved = _read_state(state_file)
+    assert saved["last_restart"] == {}, "REF-0014 FAIL: cooldown вооружён при failed restart"
+    assert saved["unhealthy_since"] == {"redis": 100.0}, "окно наблюдения должно сохраниться (быстрый retry)"
+    assert fake.notify_calls == [], "skip-notify: failed restart НЕ нотифицируется как успешный"
+    assert any("Restart FAILED redis" in r.message for r in caplog.records), "IMP:9 fail-log expected"
+    logger.info("[IMP:9][test_watchdog][REF-0014] failed-restart NO-stamp/skip-notify PASS")
+
+
+# 🧪 TRAP[TEST] · REF-0014 · Regression · Scenario: failed restart ОДНОГО контейнера не блокирует
+# ·   остальные действия (continue-on-failure); штамп только у успешных; exit 1 в конце прохода
+# · Last fail: N/A (новое поведение REF-0014: раньше первый failure прерывал цикл с exit 1,
+# ·   а cooldown остальных уже был вооружён сохранённым заранее state)
+# · Remove if: политика continue-on-failure изменится
+def test_failed_restart_does_not_block_other_actions(state_file: Path, caplog) -> None:
+    """Частичный отказ: nginx fail, postgres ok → postgres штампуется/нотифицируется, exit 1."""
+    caplog.set_level(logging.INFO)
+    ts = 200.0 + 10 * 60 + 1
+    state_file.write_text(
+        json.dumps({"unhealthy_since": {"nginx": 200.0, "postgres": 200.0}, "last_restart": {}}),
+        encoding="utf-8",
+    )
+    containers = [
+        _inspect_json("nginx", "unhealthy", restart_count=0),
+        _inspect_json("postgres", "unhealthy", restart_count=0),
+    ]
+
+    # eligible sorted по имени: nginx (id "0") падает, postgres (id "1") успешен
+    fake = FakeDocker(containers, failing_restarts={"0"})
+    exit_code = watchdog.run_watchdog(
+        dry_run=False,
+        state_file=str(state_file),
+        now=ts,
+        facts=FakeFacts(docker_path="/usr/bin/docker"),
+        run_cmd=fake,
+    )
+
+    assert exit_code == 1, "есть failed restart → exit 1 (в конце прохода)"
+    assert fake.restart_calls == ["0", "1"], "оба действия должны быть попытаны (continue-on-failure)"
+    saved = _read_state(state_file)
+    assert "nginx" not in saved["last_restart"], "failed контейнер — БЕЗ штампа"
+    assert saved["last_restart"]["postgres"] == ts, "успешный контейнер — со штампом"
+    restarted_notifies = [c for c in fake.notify_calls if "watchdog.restart" in c]
+    assert len(restarted_notifies) == 1 and any("postgres" in " ".join(c) for c in restarted_notifies), (
+        "notify только для успешного рестарта"
+    )
+    logger.info("[IMP:9][test_watchdog][REF-0014] partial-failure continue PASS")
+
+
+# 🧪 TRAP[TEST] · REF-0014 · Regression · Scenario: crash-loop skip-path (RestartCount>5) шлёт TG
+# ·   «crash-loop detected, не рестарчу»; повторный проход подавлен (60-min suppress через state);
+# ·   выздоровление чистит crashloop_notified (garbage cleanup)
+# · Last fail: 2026-08-24 — skip-path молчал (оператор без сигнала, P0-карточка REF-0014)
+# · Remove if: crash-loop skip-path перестанет нотифицироваться
+def test_crashloop_skip_notifies_suppresses_and_cleans(state_file: Path, caplog) -> None:
+    """Crash-loop: notify → suppress → cleanup (полный жизненный цикл skip-path)."""
+    caplog.set_level(logging.INFO)
+    containers = [_inspect_json("litellm", "unhealthy", restart_count=6)]
+
+    # ── Pass 1: детекция + первая нотификация ──
+    fake1 = FakeDocker(containers)
+    exit_code = watchdog.run_watchdog(
+        dry_run=False,
+        state_file=str(state_file),
+        now=1000.0,
+        facts=FakeFacts(docker_path="/usr/bin/docker"),
+        run_cmd=fake1,
+    )
+    assert exit_code == 0, "crash-loop skip-path — не ошибка прохода"
+    assert fake1.restart_calls == [], "RestartCount>5 не рестартится (T2.6 канон)"
+    assert len(fake1.notify_calls) == 1, "первый проход — ровно одна TG"
+    assert any("watchdog.crashloop" in part for part in fake1.notify_calls[0]), "event watchdog.crashloop обязателен"
+    saved = _read_state(state_file)
+    assert saved["crashloop_notified"] == {"litellm": 1000.0}, "suppress-штамп после успешной отправки"
+
+    # ── Pass 2 (+5 мин): suppress — повторной TG нет ──
+    fake2 = FakeDocker(containers)
+    exit_code = watchdog.run_watchdog(
+        dry_run=False,
+        state_file=str(state_file),
+        now=1000.0 + 5 * 60,
+        facts=FakeFacts(docker_path="/usr/bin/docker"),
+        run_cmd=fake2,
+    )
+    assert exit_code == 0
+    assert fake2.notify_calls == [], "внутри suppress-окна повторная TG запрещена (anti-spam)"
+
+    # ── Pass 3: контейнер здоров → garbage cleanup ключа crashloop_notified ──
+    healthy = [_inspect_json("litellm", "healthy", restart_count=6)]
+    fake3 = FakeDocker(healthy)
+    exit_code = watchdog.run_watchdog(
+        dry_run=False,
+        state_file=str(state_file),
+        now=3000.0,
+        facts=FakeFacts(docker_path="/usr/bin/docker"),
+        run_cmd=fake3,
+    )
+    assert exit_code == 0
+    saved = _read_state(state_file)
+    assert saved["crashloop_notified"] == {}, "выздоровевший контейнер чистится из crashloop_notified"
+
+    found_imp9 = any("CRASHLOOP NOTIFY litellm" in r.message for r in caplog.records)
+    assert found_imp9, "Critical LDD Error: no IMP:9 CRASHLOOP NOTIFY log"
+    logger.info("[IMP:9][test_watchdog][REF-0014] crash-loop notify/suppress/cleanup PASS")
+
+
+# endregion REF0014_STAMP_AFTER_SUCCESS
 
 
 # region W1_STDLIB_INVARIANT_162

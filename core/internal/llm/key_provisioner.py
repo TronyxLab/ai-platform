@@ -27,6 +27,8 @@
 ##           2026-08-01 | DevPlan 117 D24 — discover_projects shim → shared/project_registry.discover_llm_projects
 ##                      (реальная детекция ai-platform.yaml llm.enabled: true; TRAP[DECISION] снят)
 ##           2026-08-14 | DevPlan 170 W1-A3 — _DEFAULT_BASE_URL порт из shared/platform_ports
+##           2026-08-24 | REF-0007 — persist_project_key: atomic_write_json(mode=0600) от создания
+##                      (plain open("w")+chmod-после удалён — нет world-readable окна)
 # endregion MODULE_CONTRACT
 
 import argparse
@@ -54,6 +56,10 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from core.internal.llm.admin_client import KeyInfo, LiteLLMAdminClient
 from core.internal.llm.policy_schema import LLMPolicy
+
+# REF-0007 (11-DevPlan Волна 1): канонический atomic writer — plaintext JSON-хранилище
+# LLM-ключей пишется mode=0600 ОТ СОЗДАНИЯ (нет окна world-readable в tmpdir)
+from core.internal.shared.atomic_writer import atomic_write_json
 from core.internal.shared.exceptions import PlatformError
 
 # DevPlan 170 W1-A3: порт из единого реестра shared/platform_ports (литерал 4000 удалён)
@@ -387,13 +393,10 @@ def persist_project_key(
         persist_path,
     )
 
-    # Write store
-    persist_path.parent.mkdir(parents=True, exist_ok=True)
-    with pathlib.Path(persist_path).open("w", encoding="utf-8") as f:
-        json.dump(store, f, indent=2)
-    # H4a (security hardening): проектные LLM-ключи — 0600 (не world-readable).
-    # plain-JSON в PLATFORM_STATE_DIR/tmp — закрытие по /var/lib/platform + age-encrypt = Wave B.
-    persist_path.chmod(0o600)
+    # REF-0007 (11-DevPlan Волна 1): канонический atomic_write_json(mode=0600) вместо
+    # plain open("w") + chmod-после — temp создаётся 0600 (mkstemp-семантика), chmod до
+    # replace: нет окна с world-readable plaintext-ключами в tmpdir; crash → cleanup temp.
+    atomic_write_json(persist_path, cast("dict[str, object]", store), mode=0o600)
 
     logger.log(
         logging.INFO,

@@ -9,14 +9,24 @@
 ##   - Reusable workflow запинен на full commit SHA платформы (REF-0012,
 ##     meta-refactoring W0): обновление пина — сознательный bump в проекте;
 ##     mirror/context-promote сохраняют commit SHA, пин резолвится во всех org
+##   - concurrency-group (REF-0011): push-деплои проекта сериализуются
+##     (cancel-in-progress:false — очередь); node-side страховка — flock в receive
 ##   - ≤40 строк, ≤15 non-comment
 ## @changes 2026-08-24 | REF-0012: deploy-project.yml@main → @<full-sha>
+## @changes 2026-08-24 | REF-0011: +concurrency group (сериализация деплоев проекта)
 # endregion MODULE_CONTRACT
 name: Deploy
 
 on:
   push:
     branches: [main]
+
+# REF-0011: сериализация деплоев проекта. Ключ github.workflow (а не inputs.project_name —
+# контекст inputs недоступен в push-workflow): один репозиторий = один проект, константный
+# ключ внутри репо даёт ровно нужную семантику очереди.
+concurrency:
+  group: deploy-${{ github.workflow }}
+  cancel-in-progress: false
 
 jobs:
   deploy:

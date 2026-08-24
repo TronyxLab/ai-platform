@@ -153,27 +153,44 @@ def test_build_ssh_cmd_no_cli_age_key(caplog) -> None:
 
 
 # region TEST_test_build_ssh_cmd_has_env_export
-# 🧪 TRAP[TEST] · 2026-07-15 · AGE key hardening — env export must be present
-# · Prevents: regression where export AGE_SECRET_KEY= is removed from build_ssh_cmd(),
-#   causing orchestrator to run without decryption key (silent secrets failure)
+# 🧪 TRAP[TEST] · 2026-07-15 · AGE key hardening — export присутствует В PRELUDE (REF-0007)
+# · Prevents: regression where the AGE key is dropped from transport entirely (silent secrets
+#   failure) OR re-embedded into remote command argv (ps aux visibility)
+# · REF-0007 (2026-08-24): канал перенесён из тела команды в build_init_secret_prelude
+#   (ssh-stdin `bash -s`); тело НЕ содержит export AGE_SECRET_KEY=
 def test_build_ssh_cmd_has_env_export(caplog) -> None:
-    """build_ssh_cmd() output contains export AGE_SECRET_KEY= when key is provided."""
+    """AGE key доставляется stdin-prelude'ом; тело build_ssh_cmd БЕЗ ключа."""
     caplog.set_level(logging.DEBUG)
 
     stdout, stderr, rc = _run_build_ssh_cmd(age_key="AGE-SECRET-KEY-12345")
 
-    _ = _print_ldd(stderr, stdout)
+    found_imp9 = _print_ldd(stderr, stdout)
     assert rc == 0, f"build_ssh_cmd failed: rc={rc}, stderr={stderr}"
 
     cmd = stdout.split("\n")[0]
 
-    # Core assertion: env export must be present
-    assert "export AGE_SECRET_KEY=" in cmd, (
-        f"build_ssh_cmd missing export AGE_SECRET_KEY=: {cmd[:200]}...\n"
-        "DevPlan 003 TASK-2: AGE key must be passed via env export for remote SSH"
+    # Core assertion (REF-0007): значение ключа НЕ в теле команды
+    assert "export AGE_SECRET_KEY=" not in cmd and "AGE-SECRET-KEY-12345" not in cmd, (
+        f"build_ssh_cmd embeds AGE key in remote command: {cmd[:200]}...\n"
+        "REF-0007: ключ доставляется ТОЛЬКО через build_init_secret_prelude (ssh-stdin)"
     )
 
-    logger.info("[IMP:9][test][age_key] build_ssh_cmd confirmed: export AGE_SECRET_KEY= present in remote command")
+    # Ключ присутствует в secret-prelude (export-строка для ssh-stdin)
+    script = textwrap.dedent(f"""\
+        set -euo pipefail
+        source "{BUILD_SSH_CMD_SH}"
+        prelude=$(build_init_secret_prelude "test-node" "owner" "" "AGE-SECRET-KEY-12345" "")
+        echo "$prelude"
+        echo "[IMP:9][test][prelude] Prelude constructed"
+    """)
+    proc = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30, check=False)
+    assert proc.returncode == 0, f"build_init_secret_prelude failed: {proc.stderr}"
+    # LDD echo-маркер тест-сниппета не входит в prelude
+    prelude_lines = [line for line in proc.stdout.splitlines() if "[IMP:" not in line]
+    assert prelude_lines == ["export AGE_SECRET_KEY=AGE-SECRET-KEY-12345"], f"unexpected prelude: {prelude_lines!r}"
+
+    assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
+    logger.info("[IMP:9][test][age_key] AGE key confirmed in stdin-prelude; remote command is key-free")
 
 
 # endregion TEST_test_build_ssh_cmd_has_env_export

@@ -149,6 +149,7 @@ def auto_create_db(
             ],
             capture_output=True,
             text=True,
+            timeout=60,  # REF-0002 W1: единый psql-timeout канон во ВСЕХ ветках вызова
             check=False,
         )
     else:
@@ -214,11 +215,16 @@ def auto_create_db(
 ##   - Ensure-convergence: role_exists+no-creds → ALTER ROLE PASSWORD → продолжение вниз
 ##     (GRANT/creds/реген) — НЕ ранний return (BUG-0605/DATA-201 закрыт, REF-0002 В0)
 ##   - Роль существует И credentials валидны → CREATE/ALTER не вызываются, пароль не меняется
-##   - GRANT-ы идемпотентны (повторный GRANT — no-op); проверка результата каждого GRANT —
-##     завершение REF-0002 в Волне 1 (структура через _psql-возврат уже позволяет)
+##   - GRANT-ы идемпотентны (повторный GRANT — no-op); REF-0002 W1: результат КАЖДОЙ
+##     GRANT/REVOKE операции проверяется, сбои агрегируются в critical_failures
+##     (IMP:10-лог; non-fatal для деплоя — счётчик в логе, не raise)
+##   - REVOKE CONNECT ... FROM PUBLIC (SEC-0008 residual): выполняется идемпотентно после
+##     GRANT'ов; отказ → critical_failures, не фатал
 ##   - Password: secrets.token_urlsafe(24) — URL-safe charset (без экранирования в DSN/SQL)
 ##   - .platform-db.env пишется атомарно (tempfile+fsync+os.replace), mode 0600
 ## @changes 2026-08-24 | REF-0002 (11-DevPlan В0) — orphan-role early-return → ensure-convergence
+## @changes 2026-08-24 | REF-0002 W1 — GRANT/REVOKE result-checks + critical_failures,
+##            timeout=60 во всех psql-ветках, REVOKE PUBLIC rider (SEC-0008)
 def ensure_project_db_access(
     project_dir: str,
     project: str,
@@ -291,10 +297,31 @@ def ensure_project_db_access(
         created = True
         logger.info("[IMP:9][db] Role '%s' created", role)
 
-    # ── 2. GRANT-ы (идемпотентны; проверка результата — завершение REF-0002 в Волне 1) ──
-    _psql("-c", f'GRANT CONNECT ON DATABASE "{db_name}" TO "{role}"', runner=runner)
-    _psql("-c", f'GRANT CREATE, USAGE ON SCHEMA public TO "{role}"', runner=runner)
-    logger.info("[IMP:9][db] GRANTs ensured: CONNECT ON %s + CREATE,USAGE ON SCHEMA public → %s", db_name, role)
+    # ── 2. GRANT-ы (идемпотентны) + REVOKE PUBLIC rider — REF-0002 W1: проверка результата
+    #    КАЖДОЙ операции, сбои АГРЕГИРУЮТСЯ в critical_failures (IMP:10), не тихий continue.
+    #    Non-fatal семантика сохранена: счётчик не блокирует деплой, но честно рапортуется. ──
+    critical_failures = 0
+    ddl_statements: list[tuple[str, str]] = [
+        (f"GRANT CONNECT ON {db_name} → {role}", f'GRANT CONNECT ON DATABASE "{db_name}" TO "{role}"'),
+        (f"GRANT CREATE,USAGE ON public → {role}", f'GRANT CREATE, USAGE ON SCHEMA public TO "{role}"'),
+        # SEC-0008 residual: PUBLIC не должен иметь CONNECT на проектную БД.
+        # Идемпотентно: повторный REVOKE — no-op; отказ → счётчик, не фатал деплоя.
+        (f"REVOKE CONNECT ON {db_name} FROM PUBLIC", f'REVOKE CONNECT ON DATABASE "{db_name}" FROM PUBLIC'),
+    ]
+    for desc, sql in ddl_statements:
+        out = _psql("-c", sql, runner=runner)
+        if out is None:
+            critical_failures += 1
+            logger.error("[IMP:10][db] CRITICAL: %s — psql exec failed", desc)
+        elif re.search(r"ERROR", out, re.IGNORECASE):
+            critical_failures += 1
+            logger.error("[IMP:10][db] CRITICAL: %s error: %s", desc, out.strip())
+    logger.info(
+        "[IMP:9][db] GRANTs ensured: CONNECT ON %s + CREATE,USAGE ON SCHEMA public → %s; REVOKE PUBLIC done (critical_failures=%d)",
+        db_name,
+        role,
+        critical_failures,
+    )
 
     # ── 3. Credentials-файл (0600, атомарно) ──
     if not _write_credentials(project_dir, db_name, role, password):

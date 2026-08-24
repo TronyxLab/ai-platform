@@ -1,5 +1,5 @@
-# GREP_SUMMARY: test ensure-convergence orphan-role ALTER ROLE PASSWORD postgres hook REF-0002 role_exists no-creds idempotent regen non-fatal FakeCommandRunner
-# STRUCTURE: ▶ 5 сценариев converge → orphan(no-creds)→ALTER+creds+GRANT+regen · идемпотентность(2й прогон без ALTER) · ALTER fail(rc≠0) non-fatal · ALTER ERROR-output non-fatal · ALTER TimeoutExpired non-fatal → ⎋ LDD trajectory
+# GREP_SUMMARY: test ensure-convergence orphan-role ALTER ROLE PASSWORD postgres hook REF-0002 role_exists no-creds idempotent regen non-fatal FakeCommandRunner grant-failure critical-counter revoke-public timeout-canon
+# STRUCTURE: ▶ 5 сценариев converge → orphan(no-creds)→ALTER+creds+GRANT+regen · идемпотентность · ALTER fail ×3 non-fatal → ⊕ W1: GRANT-failure→critical_failures · exec-failure→счётчик · REVOKE PUBLIC rider идемпотентен · timeout=60 канон (structural) → ⎋ LDD trajectory
 # region MODULE_CONTRACT
 ## @purpose  Unit tests for the ensure-convergence branch of core/modules/postgres/hooks/
 ##           on_project_deploy.py::ensure_project_db_access (REF-0002, 11-DevPlan Волна 0):
@@ -235,3 +235,94 @@ def test_alter_role_timeout_non_fatal(caplog, tmp_path):
 
 
 # endregion Tests: ensure-convergence
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region Tests: REF-0002 W1 — GRANT/REVOKE result-checks + critical_failures
+# ═══════════════════════════════════════════════════════════════════
+
+
+@ldd_trajectory
+def test_grant_failure_aggregates_critical_counter_non_fatal(caplog, tmp_path):
+    """GRANT вернул ERROR → critical_failures агрегируется (IMP-лог), деплой не фейлится (rc=0)."""
+    _write_yaml(tmp_path, "name: myproj\nneeds:\n  database: myproj_db\n")
+    caplog.set_level(logging.INFO)
+
+    def _grant_error_router(cmd):
+        joined = " ".join(str(x) for x in cmd)
+        if "GRANT CONNECT" in joined:
+            return subprocess.CompletedProcess([], 0, "ERROR: permission denied for database", "")
+        if "gen_env_platform.py" in joined:
+            return subprocess.CompletedProcess([], 0, "", "")
+        return _make_psql_router(role_exists=True)(cmd)
+
+    runner = FakeCommandRunner(router=_grant_error_router)
+
+    assert _invoke(tmp_path, runner) == 0, "non-fatal контракт: сбой GRANT не блокирует деплой"
+
+    imp_logs = [r.message for r in caplog.records]
+    assert any("CRITICAL" in m and "GRANT CONNECT" in m for m in imp_logs), (
+        "сбой GRANT обязан дать CRITICAL-лог (не тихий continue)"
+    )
+    assert any("critical_failures=1" in m for m in imp_logs), "итоговый лог обязан содержать счётчик critical_failures"
+
+    logger.critical("[IMP:9][test] GRANT failure aggregated into critical_failures, deploy not blocked")
+
+
+@ldd_trajectory
+def test_psql_exec_failure_counts_critical(caplog, tmp_path):
+    """psql exec failure (TimeoutExpired → None) на GRANT → critical_failures, rc=0."""
+    _write_yaml(tmp_path, "name: myproj\nneeds:\n  database: myproj_db\n")
+    caplog.set_level(logging.INFO)
+
+    def _timeout_on_grant(cmd):
+        joined = " ".join(str(x) for x in cmd)
+        if "GRANT CONNECT" in joined:
+            raise subprocess.TimeoutExpired(cmd, timeout=60)
+        if "gen_env_platform.py" in joined:
+            return subprocess.CompletedProcess([], 0, "", "")
+        return _make_psql_router(role_exists=True)(cmd)
+
+    runner = FakeCommandRunner(router=_timeout_on_grant)
+
+    assert _invoke(tmp_path, runner) == 0
+    assert any("critical_failures=1" in r.message for r in caplog.records), (
+        "exec-failure GRANT обязан попасть в critical_failures"
+    )
+
+    logger.critical("[IMP:9][test] psql exec failure on GRANT counted as critical, non-fatal")
+
+
+@ldd_trajectory
+def test_revoke_public_rider_idempotent(caplog, tmp_path):
+    """REVOKE CONNECT ... FROM PUBLIC выполняется в каждом прогоне (SEC-0008 rider), идемпотентно."""
+    _write_yaml(tmp_path, "name: myproj\nneeds:\n  database: myproj_db\n")
+
+    runner1 = FakeCommandRunner(router=_make_psql_router(role_exists=True))
+    assert _invoke(tmp_path, runner1) == 0
+    sql1 = " ".join(" ".join(c) for c in runner1.calls)
+    assert 'REVOKE CONNECT ON DATABASE "myproj_db" FROM PUBLIC' in sql1, "REVOKE PUBLIC rider обязан выполняться"
+
+    runner2 = FakeCommandRunner(router=_make_psql_router(role_exists=True))
+    assert _invoke(tmp_path, runner2) == 0
+    sql2 = " ".join(" ".join(c) for c in runner2.calls)
+    assert 'REVOKE CONNECT ON DATABASE "myproj_db" FROM PUBLIC' in sql2, "повторный REVOKE — идемпотентный no-op"
+
+    logger.critical("[IMP:9][test] REVOKE PUBLIC executed on every run (idempotent rider)")
+
+
+def test_timeout_60_canon_all_psql_call_sites():
+    """Structural: timeout=60 присутствует во ВСЕХ ветках psql/subprocess вызовов хука."""
+    import inspect
+
+    source = inspect.getsource(on_project_deploy)
+    # Оба вызова CREATE DATABASE (subprocess.run и runner.run) и обе ветки _psql
+    # обязаны передавать timeout=60 (REF-0002 W1 канон).
+    assert source.count("timeout=60") >= 4, (
+        f"ожидается ≥4 вхождений timeout=60 (CREATE DATABASE ×2 ветки, _psql ×2 ветки), найдено {source.count('timeout=60')}"
+    )
+
+    logger.critical("[IMP:9][test] timeout=60 canon verified across all psql call sites")
+
+
+# endregion Tests: REF-0002 W1

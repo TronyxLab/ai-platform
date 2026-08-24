@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: converge-runtime, reconcile-runtime-state, r9, container-state, compose-up, self-heal, cooldown
-# STRUCTURE: ▶ docker info → ◇ global cooldown (last_healed < 3 runs)? → ○ for each docker module: ⚡ resolve_container_name → ⚡ get_container_state → ◇ in BAD_DOCKER_STATES? → ⚡ compose up -d (shared, COMPOSE_UP_TIMEOUT) → ⊕ cooldown record → ⎋ drift entry {R9}
+# GREP_SUMMARY: converge-runtime, reconcile-runtime-state, r9, container-state, compose-up, self-heal, cooldown, compose-project-label, build-compose-args
+# STRUCTURE: ▶ docker info → ◇ global cooldown (last_healed < 3 runs)? → ○ for each docker module: ⚡ resolve_container_name [label=com.docker.compose.project=<module>] → ⚡ get_container_state → ◇ in BAD_DOCKER_STATES? → ⚡ build_compose_args (root-first/env-file/profile) + compose up -d (shared, COMPOSE_UP_TIMEOUT) → ⊕ cooldown record → ⎋ drift entry {R9}
 # region MODULE_CONTRACT
 ## @purpose  R9 reconcile_runtime_state — Docker container state check + compose up -d self-heal +
 ##           cooldown tracking (flapping-защита). Извлечён из reconciler.py (B9 T2, U-31).
@@ -8,10 +8,20 @@
 ##           load_cooldown, save_cooldown. Вызывается оркестратором reconciler.py.
 ## @invariants
 ##   - Self-heal ТОЛЬКО через docker compose up -d (shared/docker_compose, B5 T6/D8) — НЕ docker restart
+##   - R9 argv — канонический build_compose_args (bootstrap/deploy/compose_args): root-compose-first,
+##     --env-file secrets/platform .env, --profile module. REF-0014/BUG-0701: голый `-f base.yml`
+##     ломал каждый docker-модуль (undefined volume / missing ${VAR:?} — 3 режима отказа живьём)
+##   - Детекция контейнеров модуля — по label=com.docker.compose.project=<module> (REF-0014:
+##     substring name=monitoring давал 0 рядов; name=redis матчил langfuse-redis/redis-exporter)
 ##   - Cooldown: контейнер, вылеченный в течение 3 последних run'ов → global cooldown (skip healing)
 ##   - BAD_DOCKER_STATES: exited/restarting/dead/unhealthy/paused
+##   - Runbook scheduled converge: автоматического таймера НЕТ (FAIL-0900; systemd timer —
+##     отдельное решение) — самолечение по расписанию = ручной `make converge NODE=<node>`
+##     (host-cron оператора); watchdog (*/5 cron) лечит только unhealthy-рестарты в этом окне
 ## @rationale DevPlan 116 B9 D3: 8 доменов reconciler по модулям.
 ## @changes  2026-08-01 · Extracted from reconciler.py (B9 T2)
+##           2026-08-24 · REF-0014 (DevPlan meta-refactoring В1) — label-детекция проекта вместо
+##           substring name=; argv через канонический build_compose_args (паритет с deploy/R7)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -28,6 +38,10 @@ from core.internal.bootstrap.converge.infra import (
     set_exit,
 )
 from core.internal.bootstrap.converge.volumes import parse_node_modules_yaml
+
+# REF-0014 (BUG-0701): канон compose-argv — leaf bootstrap/deploy/compose_args (bootstrap → deploy
+# направление легально: bootstrap оркестрирует деплой; leaf импортирует только shared — без циклов)
+from core.internal.bootstrap.deploy.compose_args import build_compose_args
 from core.internal.shared import docker_ops  # W1: docker ps/inspect/info примитивы (гейт docker_sole_path)
 from core.internal.shared.compose_files import resolve_compose_file
 from core.internal.shared.docker_compose import docker_compose_up as _shared_docker_compose_up
@@ -43,23 +57,27 @@ logger = logging.getLogger(__name__)
 
 
 # region FUNC_resolve_container_name
-## @purpose  Get container name(s) for a module via docker ps -a --filter.
+## @purpose  Get container name(s) of a module's compose project via docker ps -a --filter label.
 ## ⚠️ TRAP[BUG] · 2026-08-06 · HI · B22 (141 r2): docker ps (без -a) не видел Exited/Created →
 ## ·   R9 self-heal мёртв (BAD-состояния не детектировались, converge «FULLY CONVERGED» при мёртвых nginx).
 ## · Fix: all=True — docker ps -a (Exited/dead/created видимы) → get_container_state → compose up -d.
-## @param module_name  Module name (used as name filter)
-## @return  List of container names matching the module (включая не-running)
+## ⚠️ TRAP[BUG] · 2026-08-24 · HI · REF-0014 (BUG-0701): substring-фильтр name=<module> слеп и лжив:
+## · Symptom: name=monitoring → 0 рядов (контейнеры называются иначе); name=redis → матчит
+## ·   langfuse-redis/redis-exporter (чужие контейнеры) — R9 не детектировал и не лечил целевой проект.
+## · Fix: точная детекция проекта — label=com.docker.compose.project=<module> (compose ставит label
+## ·   каждому контейнеру проекта; module name == compose project name).
+## · Prevention: test_reconciler_r9_runtime.py::test_r9_detects_module_by_compose_project_label
+## @param module_name  Module name (= compose project name)
+## @return  List of container names of the module's compose project (включая не-running)
 _COOLDOWN_RUNS: int = 3  # глобальный cooldown: heal в последних 3 прогонах
 
 
 def resolve_container_name(module_name: str) -> list[str]:
-    """Resolve container names for a module via docker ps -a --filter name.
-
-    Returns list of container names. Empty list if no matching containers.
-    """
-    # W1: docker ps -a — shared/docker_ops (non-fatal); all=True: Exited/Created/restarting видимы (B22)
+    """Resolve container names for a module via docker ps -a --filter label (compose project)."""
+    # W1: docker ps -a — shared/docker_ops (non-fatal); all=True: Exited/Created/restarting видимы (B22);
+    # REF-0014: label=com.docker.compose.project=<module> — точная детекция проекта вместо substring
     ps_r = docker_ops.docker_ps(
-        filters=[f"name={module_name}"],
+        filters=[f"label=com.docker.compose.project={module_name}"],
         format="{{.Names}}",
         timeout=DOCKER_TIMEOUT,
         all=True,
@@ -314,12 +332,17 @@ def reconcile_runtime_state(
 
         logger.info("[IMP:8][converge][%s] Self-healing module %s via docker compose up -d", unit, mod_name)
         # T6 (DevPlan 116 B5, D8): shared docker_compose_up — sole path; timeout COMPOSE_UP_TIMEOUT=180
-        # (DOCKER_TIMEOUT=30 был занижен для up с пуллом образов — стандартизация на канон)
-        if _shared_docker_compose_up(
-            str(compose_file.parent),
-            timeout=COMPOSE_UP_TIMEOUT,
-            compose_args=["-f", str(compose_file)],
-        ):
+        # (DOCKER_TIMEOUT=30 был занижен для up с пуллом образов — стандартизация на канон).
+        # REF-0014 (BUG-0701): argv через канонический build_compose_args — root-compose-first +
+        # --env-file secrets/platform + --profile module (голый `-f base.yml` = 3 режима отказа).
+        compose_args = build_compose_args(
+            compose_file=compose_file,
+            secrets_env_file=None,  # канон deploy_paths.secrets_env_file() внутри (env-override SECRETS_ENV_FILE)
+            platform_root=None,  # канон platform_remote_base() (/opt/platform) внутри (env-override PLATFORM_REMOTE_BASE)
+            overlay_dir=None,
+            module_name=mod_name,
+        )
+        if _shared_docker_compose_up(str(compose_file.parent), timeout=COMPOSE_UP_TIMEOUT, compose_args=compose_args):
             logger.info("[IMP:9][converge][%s] Module %s healed successfully", unit, mod_name)
             report_add(unit, "mutated", f"{mod_name}: restarted via compose up -d")
             healed += 1

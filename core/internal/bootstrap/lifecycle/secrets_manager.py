@@ -49,6 +49,9 @@
 ##             секреты GHCR_PULL_TOKEN/TELEGRAM_*/PLATFORM_MASTER_* не уничтожаются);
 ##             +apply_env_file_to_osenv — file-wins после decrypt с protected-allowlist
 ##             жизненного цикла (свежий decrypt больше не проигрывает stale os.environ)
+## @changes  2026-08-24 | REF-0007 (Волна 1) — Step 3.5: secrets.env через канонический
+##             atomic_write(mode=0o600) от создания (plain open("w")+chmod-после удалён,
+##             SEC-0015/SEC-0029); sops --set residual задокументирован (TRAP[DECISION])
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -115,6 +118,7 @@ if _PLATFORM_ROOT not in sys.path:
 # ruff: ignore[PLW0717] — извлечение небезопасно (no-enclosing-def)
 try:
     # Канонический node-configs base — shared/deploy_paths (литерал /opt/node-configs не используется)
+    from core.internal.shared.atomic_writer import atomic_write
     from core.internal.shared.deploy_paths import htpasswd_file as _resolve_htpasswd
     from core.internal.shared.deploy_paths import node_configs_remote
     from core.internal.shared.deploy_paths import secrets_env_file as _resolve_secrets_env
@@ -136,6 +140,9 @@ except ModuleNotFoundError:
     # 🧐 TRAP[DECISION] · 2026-08-14 · — · importlib вместо `from exceptions import ...` (script-mode fallback) · Rejected: явный `from exceptions import X` · Reason: появление lifecycle/exceptions.py (170 W5-core) сделало неявно-относительный импорт неоднозначным для pyright (resolves к lifecycle.exceptions, где классов нет); importlib резолвит против sys.path (script-mode: _SHARED_DIR) — runtime-семантика 1:1 · Rev: отказ от standalone-режима secrets_manager → вернуть явный импорт
     import importlib
 
+    from atomic_writer import (  # pyright: ignore[reportMissingImports] — W11-G1 cross-file: script-mode fallback import
+        atomic_write as _impl_atomic_write,  # pyright: ignore[reportUnknownVariableType] — W11-G1 cross-file: script-mode fallback import
+    )
     from deploy_paths import (  # pyright: ignore[reportMissingImports] — W11-G1 cross-file: script-mode fallback import
         htpasswd_file as _impl_htpasswd,  # pyright: ignore[reportUnknownVariableType] — W11-G1 cross-file: script-mode fallback import
     )
@@ -145,6 +152,9 @@ except ModuleNotFoundError:
     from deploy_paths import (  # pyright: ignore[reportMissingImports] — W11-G1 cross-file: script-mode fallback import
         secrets_env_file as _impl_secrets_env,  # pyright: ignore[reportUnknownVariableType] — W11-G1 cross-file: script-mode fallback import
     )
+
+    _atomic_write = cast(Callable[..., Path], _impl_atomic_write)
+    atomic_write = _atomic_write  # pyright: ignore[reportConstantRedefinition] — W11-G3: script-mode fallback rebinding (try-ветка — канонический импорт)
 
     _resolve_htpasswd = cast(Callable[[], Path], _impl_htpasswd)
     node_configs_remote = cast(Callable[[], Path], _impl_node_configs)
@@ -477,6 +487,14 @@ def _generate_secret(var_name: str, gen_command: str) -> str | None:
 ## @invariants
 ##   - Returns False on any failure (never raises)
 ##   - Requires enc_file to exist and sops binary to be available
+##   - Значение секрета НИКОГДА не логируется (только имя переменной + sanitized stderr)
+# 🧐 TRAP[DECISION] · 2026-08-24 · — · sops --set значение остаётся в argv (residual, REF-0007)
+# · Rejected: доставка значения через stdin · Reason: CLI sops НЕ поддерживает stdin для --set
+# ·   (значение — часть одного argv-аргумента '["key"] "value"'); альтернативы (decrypt→merge→
+# ·   re-encrypt вручную) вне скоупа карточки («не строим vault/SOPS-интеграцию»).
+# · Residual: короткое окно /proc у root-процесса НА САМОЙ ноде во время φ4 (не транспорт
+# ·   оператор→нода); значение не попадает в логи. Rev: миграция на sops Python-lib или
+# ·   exec-env паттерн — пост-launch.
 def _persist_to_sops(var_name: str, var_value: str, enc_file: str) -> bool:
     """Persist a secret to SOPS via sops --set. Returns True on success."""
     if not var_value:
@@ -638,20 +656,19 @@ def ensure_secrets(
             merged: dict[str, str] = dict(env_vars)  # copy existing (non-generated + previously generated)
             merged.update(generated_vars)  # add/overwrite newly generated
 
-            # Atomic write: write to tmp, then rename
-            tmp_path = secrets_path.with_suffix(".env.tmp")
-            with Path(tmp_path).open("w", encoding="utf-8") as f:
-                for key, val in merged.items():
-                    f.write(f"{key}={val}\n")
-
-            # Preserve file permissions if file exists
-            if secrets_path.exists():
-                existing_mode = secrets_path.stat().st_mode
-                tmp_path.chmod(existing_mode)
-            else:
-                tmp_path.chmod(0o600)
-
-            tmp_path.replace(secrets_path)
+            # REF-0007 (11-DevPlan Волна 1): канонический atomic_writer (tempfile mkstemp-семантика
+            # 0600 + fsync + chmod ДО replace + cleanup при ошибке) вместо plain open("w")+chmod-после.
+            # ⚠️ TRAP[BUG] · 2026-08-24 · HI · SEC-0015/SEC-0029 · plain open("w") на .env.tmp
+            # · Symptom: crash между open("w") и chmod(0600) оставлял world-readable копию ВСЕХ
+            # ·   секретов ноды; фиксированное имя secrets.env.tmp — symlink-target риск.
+            # · Root: канон atomic_writer обойдён локальной копией tmp+rename.
+            # · Fix: shared.atomic_write(mode=0o600) — temp создаётся 0600, chmod до replace,
+            # ·   cleanup при любом сбое, уникальное имя temp (не предсказуемый .env.tmp).
+            # · Prevention: mode=0600-от-создания тест (tests/unit/test_secret_writers_mode.py).
+            # Ранее perms существующего файла сохранялись; канон — secrets.env ВСЕГДА 0600
+            # (decrypt_secrets пишет 0600) — legacy-файлы ЗАТЯГИВАЮТСЯ до 0600 (tightening).
+            content = "".join(f"{key}={val}\n" for key, val in merged.items())
+            atomic_write(secrets_path, content, mode=0o600)
             logger.info(
                 "[IMP:9][secrets_manager] Atomic write: %d entries → %s (%d new)",
                 len(merged),

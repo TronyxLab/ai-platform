@@ -37,6 +37,9 @@ T3.1: rollback-кластер (DeployStatus/OrchestratorDeployResult/RollbackMix
 ##           post_deploy_chain.py (run_post_deploy_chain); lazy DeployEngine → module-level
 ##           2026-08-22 | T3.1 — rollback-кластер (DeployStatus, OrchestratorDeployResult,
 ##           RollbackMixin) → deploy/rollback.py; re-export + наследование сохраняют API
+##           2026-08-24 | REF-0004 (DevPlan 11 В1) — rollback-контур: якорь previous_image
+##           в снапшоте; skip double-rollback при engine rollback_performed; unhealthy →
+##           ROLLED_BACK c одним re-verify (rollback_verified); require_healthy-цель отката
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -168,6 +171,7 @@ class DeployOrchestrator(RollbackMixin):
         *,
         compose_deployer: Callable[[str, str, str], bool] | None = None,
         compose_rollback: Callable[[str, str, dict[str, object]], bool] | None = None,
+        previous_image_resolver: Callable[[str, str], str] | None = None,
     ):
         # W4a: ленивый env-фолбэк (None → AppConfig.from_env().projects_base) — тот же канон
         # PROJECTS_BASE → /opt/projects, но на момент конструирования, не импорта.
@@ -182,6 +186,20 @@ class DeployOrchestrator(RollbackMixin):
         # · Rev: если compose-операции станут отдельным сервисом — параметры заменятся инстансом
         self._compose_deployer = compose_deployer
         self._compose_rollback = compose_rollback
+        # REF-0004: DI-резолвер якоря previous_image (тесты); None → значение берётся из
+        # результата реального engine.deploy (ServiceDeployResult.previous_image, stash ниже).
+        self._previous_image_resolver = previous_image_resolver
+        # 🧐 TRAP[DECISION] · 2026-08-24 · — · Сигнал-канал от последнего engine.deploy (REF-0004)
+        # · Rejected: менять сигнатуру compose-DI-шва на ServiceDeployResult (ломает существующие
+        # ·   тесты-фейки Callable[..., bool]) / второй DI-параметр-engine
+        # · Reason: _deploy_compose (реальный путь) пишут rollback_performed/rollback_verified/
+        # ·   previous_image сюда; DI-швы (тесты) их не пишут → False/"" = «engine не участвовал»,
+        # ·   двойной откат исключён. Инстанс живёт под per-project flock — гонок нет.
+        # · Rev: если появится конкурентное использование одного инстанса без лока — заменить
+        # ·   на явный result-object между шагами deploy().
+        self._last_engine_rollback_performed = False
+        self._last_engine_rollback_verified = False
+        self._last_engine_previous_image = ""
 
     # ── Public API ──────────────────────────────────────────────────────────
 
@@ -288,7 +306,7 @@ class DeployOrchestrator(RollbackMixin):
             if apply_result is not None:
                 return apply_result
 
-            # ── Step 3: _verify (healthcheck + snapshot + audit) ──
+            # ── Step 3: _verify (healthcheck + snapshot + audit + rollback contour) ──
             # T9.6 (L-11): исключение в verify (snapshot OSError и т.п.) — audit FAILED + результат,
             # не молчаливый проброс без audit-следа.
             try:
@@ -299,6 +317,7 @@ class DeployOrchestrator(RollbackMixin):
                     project_dir,
                     start,
                     payload_backup_dir=cast(str | None, metadata.get("payload_backup_dir")),
+                    service=service,  # REF-0004 (additive): имя сервиса для rollback-контурa
                 )
             except (OSError, subprocess.SubprocessError) as e:
                 logger.error(
@@ -413,6 +432,9 @@ class DeployOrchestrator(RollbackMixin):
     ## @invariants
     ##   - Delivery failure → FAILED (with delivery stdout/stderr)
     ##   - Compose failure → rollback if snapshot exists (else FAILED)
+    ##   - REF-0004: rollback-target = latest ЗДОРОВЫЙ snapshot (require_healthy=True,
+    ##     WARN-fallback); engine уже откатил (rollback_performed=True) → второй откат
+    ##     ЗАПРЕЩЁН (double rollback) → финализация ROLLED_BACK/FAILED по verified
     def _apply_deploy(
         self,
         project_name: str,
@@ -444,6 +466,19 @@ class DeployOrchestrator(RollbackMixin):
                 duration_s=delivery_result.duration_s,
             )
 
+        # ── REF-0004: якорь предыдущего образа ДО compose-up (для снапшота) ──
+        # DI-resolver (тесты) приоритетен; без него значение придёт из engine-результата
+        # (ServiceDeployResult.previous_image — engine сохраняет образ ДО pull, инвариант T1).
+        self._last_engine_rollback_performed = False
+        self._last_engine_rollback_verified = False
+        self._last_engine_previous_image = ""  # свежесть: перезаписывается resolver'ом/engine ниже
+        if self._previous_image_resolver is not None:
+            try:
+                self._last_engine_previous_image = self._previous_image_resolver(project_dir, service) or ""
+            except (OSError, subprocess.SubprocessError) as e:
+                logger.warning("[IMP:8][DeployOrchestrator][snapshot] previous-image resolve failed (non-fatal): %s", e)
+                self._last_engine_previous_image = ""
+
         # 🧐 TRAP[DI-SEAM] · 2026-08-14 · — · compose-deploy через DI-шов (167 D3)
         # · Rejected: прямой вызов self._deploy_compose (docker compose up в unit-тестах — 76-152s)
         # · Reason: seam = тестируемость реального compose-вызова (тест передаёт compose_deployer=
@@ -452,8 +487,24 @@ class DeployOrchestrator(RollbackMixin):
         compose_fn = self._compose_deployer if self._compose_deployer is not None else self._deploy_compose
         compose_ok = compose_fn(project_dir, service, version)
         if not compose_ok:
-            # Rollback if previous deployment exists
-            snapshot = self.deploy_history.latest_snapshot(project_name)
+            payload_backup_dir = cast(str | None, payload.metadata.get("payload_backup_dir"))
+
+            # ── REF-0004: engine уже выполнил compose-rollback при health-fail (внутренний
+            #    perform_rollback + единственный re-verify). Второй откат запрещён — не
+            #    дёргаем контейнеры повторно и не зависаем на doomed-pull (~135s ×5).
+            if self._last_engine_rollback_performed:
+                logger.info(
+                    "[IMP:9][DeployOrchestrator][deploy] Engine already rolled back %s (verified=%s) — "
+                    "skipping second rollback (REF-0004)",
+                    project_name,
+                    self._last_engine_rollback_verified,
+                )
+                return self._finalize_engine_rollback(
+                    project_name, channel, version, service, project_dir, start, payload_backup_dir
+                )
+
+            # Rollback if previous deployment exists (цель — последний ЗДОРОВЫЙ релиз)
+            snapshot = self.deploy_history.latest_snapshot(project_name, require_healthy=True)
             if snapshot:
                 logger.info(
                     "[IMP:9][DeployOrchestrator][deploy] Compose failed — attempting rollback for %s",
@@ -461,7 +512,6 @@ class DeployOrchestrator(RollbackMixin):
                 )
                 # T9.8 (L-6): payload-бэкап (предыдущие payload-файлы, снят ДО overwrite в
                 # receive_flow) передаётся в rollback — восстанавливаются НЕ только compose/image.
-                payload_backup_dir = cast(str | None, payload.metadata.get("payload_backup_dir"))
                 return self._rollback_deploy(
                     project_name, channel, service, project_dir, snapshot, start, payload_backup_dir=payload_backup_dir
                 )
@@ -484,15 +534,85 @@ class DeployOrchestrator(RollbackMixin):
 
     # endregion FUNC__apply_deploy
 
+    # region FUNC__finalize_engine_rollback
+    ## @purpose  REF-0004: финализация деплоя, когда engine УЖЕ сам откатил контейнер
+    ##           (ServiceDeployResult.rollback_performed). Честная запись в историю +
+    ##           audit + результат; НИКАКОГО второго отката и повторного poll'а
+    ##           (единственный re-verify уже сделал engine — rollback_verified).
+    ## @io       ⇥ (project_name, channel, version, service, project_dir, start,
+    ##              payload_backup_dir) → ⎋ OrchestratorDeployResult
+    ## @complexity — O(F) — snapshot write + optional payload restore
+    ## @invariants
+    ##   - Snapshot создаётся с health_status="unhealthy" (честная история неудачного деплоя)
+    ##   - Payload restore ТОЛЬКО при успешном engine-откате (rollback_verified=True)
+    ##   - ROLLED_BACK ⇔ verified; иначе FAILED (∉ success — CI красный в обоих случаях)
+    def _finalize_engine_rollback(
+        self,
+        project_name: str,
+        channel: DeliveryChannel,
+        version: str,
+        service: str,
+        project_dir: str,
+        start: float,
+        payload_backup_dir: str | None,
+    ) -> OrchestratorDeployResult:
+        """Finalize a deploy that the engine already rolled back internally (REF-0004)."""
+        del service  # симметрия сигнатуры с _verify_deploy; re-check делал engine (rollback_verified)
+        verified = bool(self._last_engine_rollback_verified)
+        prev_id = self._last_engine_previous_image
+        snapshot_id = self.deploy_history.create_snapshot(
+            project=project_name,
+            version=version,
+            compose_state={"previous_image": prev_id} if prev_id else None,
+            health_status="unhealthy",
+            payload_backup_dir=payload_backup_dir,
+        )
+        # REF-0004: payload восстанавливается ТОЛЬКО после успешного compose-rollback —
+        # engine-откат подтверждён verified (compose up --force-recreate + health OK).
+        if verified and payload_backup_dir:
+            self._restore_payload_files(payload_backup_dir, project_dir)
+        status = DeployStatus.ROLLED_BACK if verified else DeployStatus.FAILED
+        self.audit_logger.log(
+            operation="deploy",
+            project=project_name,
+            channel=channel.__class__.__name__,
+            result=status.value,
+            duration_s=time.monotonic() - start,
+            snapshot_id=snapshot_id,
+            rollback_verified=verified,
+        )
+        error_info = "Healthcheck failed after deploy: rollback performed by engine" + (
+            " and re-verified healthy" if verified else " but health re-verification failed"
+        )
+        logger.info(
+            "[IMP:9][DeployOrchestrator][deploy] Engine-rollback finalized: %s → %s", project_name, status.value
+        )
+        return self._result(
+            status,
+            project_name,
+            channel.__class__.__name__,
+            error_info=error_info,
+            duration_s=time.monotonic() - start,
+            healthcheck_status="unhealthy",
+            snapshot_id=snapshot_id,
+            rollback_verified=verified,
+        )
+
+    # endregion FUNC__finalize_engine_rollback
+
     # region FUNC__verify_deploy
     ## @purpose  E2 deploy step 3 (VERIFY): healthcheck → snapshot → audit → final result.
+    ##           REF-0004: при unhealthy/timeout — rollback-контур: snapshot-rollback на
+    ##           последний ЗДОРОВЫЙ релиз (require_healthy) → payload после успеха compose →
+    ##           ОДИН re-verify → ROLLED_BACK | FAILED.
     ## @io       ⇥ (deploy args + start) → ⎋ OrchestratorDeployResult
-    ## @complexity — O(1) — poll + snapshot + audit
+    ## @complexity — O(1) — poll + snapshot + audit (+ rollback contour на unhealthy)
     ## @invariants
-    ##   - Healthcheck status "healthy" → DEPLOYED; unhealthy/timeout → FAILED
-    ##     (REF-0003, DevPlan 11 W0: PARTIAL больше не эмитится на healthcheck-ветке —
-    ##     неуспешный healthcheck = зелёный CI был главным ложно-зелёным сигналом платформы)
-    ##   - Snapshot создаётся после healthcheck (содержит post-deploy health)
+    ##   - Healthcheck status "healthy" → DEPLOYED; unhealthy/timeout → FAILED или ROLLED_BACK
+    ##     (REF-0003, DevPlan 11 W0: PARTIAL больше не эмитится на healthcheck-ветке;
+    ##     REF-0004, DevPlan 11 В1: unhealthy ветка откатывает и верифицирует откат)
+    ##   - Snapshot создаётся после healthcheck (содержит post-deploy health + якорь
+    ##     compose_state.previous_image ДО compose-up — REF-0004)
     ##   - payload_backup_dir (T9.8) персистится в snapshot (rollback восстанавливает payload)
     def _verify_deploy(
         self,
@@ -502,16 +622,25 @@ class DeployOrchestrator(RollbackMixin):
         project_dir: str,
         start: float,
         payload_backup_dir: str | None = None,
+        service: str = "",
     ) -> OrchestratorDeployResult:
-        """Healthcheck + snapshot + audit (E2 step VERIFY)."""
+        """Healthcheck + snapshot + audit + rollback contour on unhealthy (E2 step VERIFY).
+
+        ``service`` — additive kwarg (REF-0004): имя compose-сервиса для rollback-контурa;
+        пустое значение → фолбэк на project_name (канон D5).
+        """
         health = self.healthcheck_poller.poll_until_healthy(project_name, project_dir)
         healthcheck_status = health.status
 
         total_duration = time.monotonic() - start
 
+        # REF-0004: якорь предыдущего образа в снапшоте — без него compose-rollback обречён
+        # пуллить локальный тег "previous-rollback" из GHCR (~135s ретраев ×5) и падать.
+        prev_image_id = self._last_engine_previous_image
         snapshot_id = self.deploy_history.create_snapshot(
             project=project_name,
             version=version,
+            compose_state={"previous_image": prev_image_id} if prev_image_id else None,
             health_status=healthcheck_status,
             payload_backup_dir=payload_backup_dir,
         )
@@ -523,16 +652,28 @@ class DeployOrchestrator(RollbackMixin):
         # · Fix: unhealthy/timeout → DeployStatus.FAILED (+error_info с фактом healthcheck); PARTIAL исключён из is_success()
         # ·   (rollback.py); deliver-rc по {DEPLOYED, SKIPPED}; critical-notify на unhealthy-ветке receive (REF-0003)
         # · Prevention: DI-тест poller=unhealthy → rc≠0 (test_healthcheck_failed_rc.py) + severity-mapping тест (TEST-04);
-        # ·   rollback-контур unhealthy-ветки — REF-0004 (сейчас FAILED+alert без отката)
+        # ⚠️ TRAP[BUG] · 2026-08-24 · P1 · REF-0004 (DevPlan 11 В1) · Rollback-контур структурно сломан — ROLLED_BACK unreachable
+        # · Symptom: unhealthy → FAILED+alert БЕЗ отката; снапшоты без previous_image → doomed GHCR-pull (~135s ×5);
+        # ·   engine сам откатывал контейнер, оркестратор запускал второй откат поверх (double rollback)
+        # · Root: create_snapshot никогда не заполнял compose_state; ответственность rollback разорвана между engine/orchestrator
+        # · Fix: якорь previous_image в снапшоте; skip повторного отката при rollback_performed;
+        # ·   latest_snapshot(require_healthy)+WARN; один wait_health re-verify → rollback_verified; ROLLED_BACK достижим
+        # · Prevention: tests/unit/test_rollback_contour.py (TEST-03, characterization до правки)
         result_status = DeployStatus.DEPLOYED if healthcheck_status == "healthy" else DeployStatus.FAILED
-        error_info = (
-            ""
-            if result_status == DeployStatus.DEPLOYED
-            else (
-                f"Healthcheck failed after deploy: status={healthcheck_status} "
-                f"(detail={health.detail or 'n/a'}); rollback contour — REF-0004"
+        rollback_verified = False
+        if result_status == DeployStatus.FAILED:
+            # ── REF-0004 rollback contour ──
+            result_status, error_info, rollback_verified = self._attempt_post_failure_rollback(
+                project_name=project_name,
+                channel=channel,
+                service=service or project_name,
+                project_dir=project_dir,
+                current_snapshot_id=snapshot_id,
+                payload_backup_dir=payload_backup_dir,
+                healthcheck_status=healthcheck_status,
             )
-        )
+        else:
+            error_info = ""
         self.audit_logger.log(
             operation="deploy",
             project=project_name,
@@ -540,6 +681,7 @@ class DeployOrchestrator(RollbackMixin):
             result=result_status.value,
             duration_s=total_duration,
             snapshot_id=snapshot_id,
+            rollback_verified=rollback_verified,
         )
 
         logger.info(
@@ -548,7 +690,7 @@ class DeployOrchestrator(RollbackMixin):
             result_status.value,
             total_duration,
         )
-        if result_status == DeployStatus.FAILED:
+        if result_status in {DeployStatus.FAILED, DeployStatus.ROLLED_BACK}:
             logger.error(
                 "[IMP:10][DeployOrchestrator][deploy] Healthcheck FAILED for %s: status=%s detail=%s",
                 project_name,
@@ -564,10 +706,101 @@ class DeployOrchestrator(RollbackMixin):
             duration_s=total_duration,
             healthcheck_status=healthcheck_status,
             snapshot_id=snapshot_id,
+            rollback_verified=rollback_verified,
             version=version,
         )
 
     # endregion FUNC__verify_deploy
+
+    # region FUNC__attempt_post_failure_rollback
+    ## @purpose  REF-0004: rollback-контур на unhealthy-ветке verify. Цель — последний
+    ##           ЗДОРОВЫЙ снапшот (require_healthy=True, WARN-fallback; свежий больной
+    ##           снапшот текущего деплоя исключается). compose-rollback → payload только
+    ##           после успеха → ОДИН re-verify через poller.
+    ## @io       ⇥ (project_name, channel, service, project_dir, current_snapshot_id,
+    ##              payload_backup_dir, healthcheck_status) → ⎋ tuple[DeployStatus, str, bool]
+    ## @complexity — O(F) + rollback lifecycle + один poll
+    ## @invariants
+    ##   - Свежесозданный снапшот текущего деплоя не может быть целью отката
+    ##   - Payload restore ТОЛЬКО после успешного compose-rollback
+    ##   - РОВНО ОДИН re-verify (никаких повторных poll'ов по контуру)
+    ##   - ROLLED_BACK ⇔ compose-rollback выполнен И re-verify healthy; иначе FAILED
+    def _attempt_post_failure_rollback(
+        self,
+        project_name: str,
+        channel: DeliveryChannel,
+        service: str,
+        project_dir: str,
+        *,
+        current_snapshot_id: str,
+        payload_backup_dir: str | None,
+        healthcheck_status: str,
+    ) -> tuple[DeployStatus, str, bool]:
+        """Attempt snapshot rollback after unhealthy healthcheck; returns (status, error_info, verified)."""
+        del channel
+        target = self.deploy_history.latest_snapshot(project_name, require_healthy=True)
+        if not target or target.get("snapshot_id") == current_snapshot_id:
+            logger.warning(
+                "[IMP:8][DeployOrchestrator][rollback] No prior healthy snapshot for %s — rollback unavailable",
+                project_name,
+            )
+            return (
+                DeployStatus.FAILED,
+                f"Healthcheck failed after deploy: status={healthcheck_status}; no healthy snapshot to roll back to",
+                False,
+            )
+
+        logger.info(
+            "[IMP:9][DeployOrchestrator][rollback] Healthcheck failed for %s — rolling back to snapshot %s (REF-0004)",
+            project_name,
+            target.get("snapshot_id"),
+        )
+        rollback_fn = self._compose_rollback if self._compose_rollback is not None else self._rollback_compose
+        rollback_ok = rollback_fn(project_dir, service, target)
+        if not rollback_ok:
+            return (
+                DeployStatus.FAILED,
+                f"Healthcheck failed after deploy: status={healthcheck_status}; Rollback failed",
+                False,
+            )
+
+        # Payload restore ТОЛЬКО после успешного compose-rollback (консистентность disk ↔ containers)
+        if payload_backup_dir:
+            restored = self._restore_payload_files(payload_backup_dir, project_dir)
+            if restored:
+                logger.info(
+                    "[IMP:9][DeployOrchestrator][rollback] Payload files restored after successful rollback "
+                    "(T9.8/REF-0004)"
+                )
+
+        # ── РОВНО ОДИН re-verify после отката ──
+        recheck = self.healthcheck_poller.poll_until_healthy(project_name, project_dir)
+        if recheck.status == "healthy":
+            logger.info("[IMP:9][DeployOrchestrator][rollback] Re-verified HEALTHY after rollback for %s", project_name)
+            return (
+                DeployStatus.ROLLED_BACK,
+                (
+                    f"Healthcheck failed ({healthcheck_status}); rolled back to snapshot "
+                    f"{target.get('snapshot_id')} and re-verified healthy"
+                ),
+                True,
+            )
+        logger.error(
+            "[IMP:10][DeployOrchestrator][rollback] Rollback performed but healthcheck still failing for %s "
+            "(re-check=%s)",
+            project_name,
+            recheck.status,
+        )
+        return (
+            DeployStatus.FAILED,
+            (
+                f"Healthcheck failed ({healthcheck_status}); Rollback performed but re-verification "
+                f"unhealthy ({recheck.status})"
+            ),
+            False,
+        )
+
+    # endregion FUNC__attempt_post_failure_rollback
 
     # region FUNC_deploy_many
     ## @purpose  Deploy multiple projects sequentially. Each project uses the same channel.
@@ -920,6 +1153,10 @@ class DeployOrchestrator(RollbackMixin):
     def _deploy_compose(self, project_dir: str, service: str, version: str) -> bool:
         """Execute docker compose deploy.
 
+        REF-0004: реальный путь пишет сигнал-канал (rollback_performed/rollback_verified/
+        previous_image из ServiceDeployResult) — читается _apply_deploy/_verify_deploy.
+        DI-шов (тесты) этот метод не вызывает — сигналы остаются False/"".
+
         Args:
             project_dir: Project directory.
             service: Docker Compose service name.
@@ -938,14 +1175,23 @@ class DeployOrchestrator(RollbackMixin):
             )
         except PlatformError as e:
             # T3.1 (DevPlan 116 B4): _handle_first_deploy → PlatformFatalError вместо SystemExit
+            self._last_engine_rollback_performed = False
+            self._last_engine_rollback_verified = False
+            self._last_engine_previous_image = ""
             logger.error(
                 "[IMP:10][DeployOrchestrator][deploy_compose] Deploy engine error (exit=%d): %s", e.exit_code, e
             )
             return False
         except (OSError, subprocess.SubprocessError) as e:
+            self._last_engine_rollback_performed = False
+            self._last_engine_rollback_verified = False
+            self._last_engine_previous_image = ""
             logger.error("[IMP:10][DeployOrchestrator][deploy_compose] Failed: %s", e)
             return False
         else:
+            self._last_engine_previous_image = result.previous_image or ""
+            self._last_engine_rollback_performed = bool(getattr(result, "rollback_performed", False))
+            self._last_engine_rollback_verified = bool(getattr(result, "rollback_verified", False))
             return result.success
 
     @staticmethod
@@ -960,6 +1206,7 @@ class DeployOrchestrator(RollbackMixin):
         stdout: str = "",
         stderr: str = "",
         version: str = "",
+        rollback_verified: bool = False,
     ) -> OrchestratorDeployResult:
         """Build a OrchestratorDeployResult with common fields.
 
@@ -974,6 +1221,7 @@ class DeployOrchestrator(RollbackMixin):
             stdout: Command stdout.
             stderr: Command stderr.
             version: Version/sha (D5 — из аргументов receive).
+            rollback_verified: REF-0004 — факт единственного re-verify после отката.
 
         Returns:
             OrchestratorDeployResult instance.
@@ -992,6 +1240,7 @@ class DeployOrchestrator(RollbackMixin):
             stdout=stdout,
             stderr=stderr,
             version=version,
+            rollback_verified=rollback_verified,
         )
 
 

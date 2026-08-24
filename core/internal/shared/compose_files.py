@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: compose-files, COMPOSE_FILENAMES, resolve-compose-file, requires-compose-project, SoT, shared, docker-compose-base
+# GREP_SUMMARY: compose-files, COMPOSE_FILENAMES, PROJECT_COMPOSE_FILENAMES, PROJECT_PAYLOAD_FILENAMES, resolve-compose-file, requires-compose-project, SoT, shared, docker-compose-base
 # STRUCTURE: ▶ COMPOSE_FILENAMES (canonical order) → PROJECT_COMPOSE_FILENAMES (payload subset) →
+#            PROJECT_PAYLOAD_FILENAMES (единый file-list tar-payload: compose + platform-файлы) →
 #            ◇ resolve_compose_file ┌module_dir┐ → ⚡ scan canon order → ⎋ Path|None →
 #            ◇ requires_compose_project ┌module_dir┐ → ⎋ bool
 # region MODULE_CONTRACT
@@ -28,6 +29,10 @@
 ##            ФС-проверка core/modules/* показала: все 14 docker-модулей — только docker-compose.base.yml;
 ##            git-история не содержит ни одного модуля с compose.yml (не-каноническое имя подтверждено).
 ## @changes  2026-08-02 | DevPlan 118 A2 — Created (SoT compose-списков)
+## @changes  2026-08-24 | REF-0105 (meta-refactoring В1) — +PROJECT_PAYLOAD_FILENAMES:
+##           единый payload file-list (compose-подмножество + ai-platform.yaml +
+##           .env.platform + practices.lock); payload_deliverer и CI-workflow потребляют
+##           одну константу (triple-sync, structural test)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -52,6 +57,21 @@ PROJECT_COMPOSE_FILENAMES: tuple[str, ...] = (
 )
 """## @invariant Подмножество compose-имён, допустимых в tar-payload (receive-канал whitelist).
 ##            docker-compose.base.yml — модульный паттерн, в проектные payload'ы не входит."""
+
+# ── Единый payload file-list (REF-0105 triple-sync) ──────────────────────────
+
+PROJECT_PAYLOAD_FILENAMES: tuple[str, ...] = (
+    *PROJECT_COMPOSE_FILENAMES,
+    "ai-platform.yaml",
+    ".env.platform",
+    "practices.lock",
+)
+"""## @invariant ЕДИНСТВЕННАЯ константа file-list tar-payload'а (REF-0105, triple-sync):
+##            (1) Python-сторона — payload_deliverer.WHITELIST_FILES/_PAYLOAD_FILE_NAMES
+##            выводятся отсюда; receive_flow удаляет stale compose по PROJECT_COMPOSE_FILENAMES;
+##            (2) CI-сторона — deploy-project.yml (+templates deploy.yml) собирает FILES из
+##            ровно этих имён (structural test: tests/unit/test_payload_whitelist_triple_sync.py).
+##            Расширение списка = правка ТОЛЬКО здесь + CI-шаг синхронно (гейт ловит дрейф)."""
 
 
 # region FUNC_resolve_compose_file

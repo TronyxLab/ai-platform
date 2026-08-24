@@ -198,7 +198,7 @@ def test_receive_deploy_overwrites_root_owned_stub(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """D11: receive перезаписывает root-owned readonly стуб docker-compose.yml (os.remove + copy2)."""
+    """D11: receive перезаписывает root-owned readonly стуб docker-compose.yml (rename по правам каталога)."""
     caplog.set_level(logging.INFO)
     from unittest.mock import MagicMock
 
@@ -262,25 +262,28 @@ def test_receive_deploy_overwrites_root_owned_stub(
                 found_log = True
     logger.info("--- END LDD TRAJECTORY ---")
     assert found_log, "Critical LDD Error: No IMP:9 business logic log found"
-    logger.critical("[IMP:9][test] D11 PASS: root-owned стуб перезаписан через os.remove + copy2")
+    logger.critical("[IMP:9][test] D11 PASS: root-owned стуб перезаписан rename'ом (REF-0105, без pre-remove)")
 
 
-# 🧪 TRAP[TEST] · 2026-08-05 · NEGATIVE (R5) · D11 — os.remove падает → WARN, copy продолжается
-# · Scenario: os.remove(dest) кидает OSError → «Cannot remove existing» WARN (ошибка всплывёт на copy2)
-# · Last fail: 2026-08-04 — без os.remove copy2 в root-файл давал Permission denied (receive FAIL)
-# · Remove if: receive copy-логика меняется
-def test_receive_deploy_remove_failure_logs_warning(
+# 🧪 TRAP[TEST] · 2026-08-24 · NEGATIVE (R5) · REF-0105 — неудачное удаление stale-compose → WARN, деплой идёт
+# · Scenario: канонический compose-имя вне staging (stale) не удаляется (OSError) →
+# ·   «Cannot remove stale» WARN, деплой НЕ блокируется молча.
+# · История: заменяет D11-negative (pre-remove os.remove) — REF-0105 убрал pre-replace-remove
+# ·   (rename(2) работает по правам КАТАЛОГА); WARN-поверхность переехала на stale-deletion.
+# · Remove if: stale-file policy меняется
+def test_receive_deploy_stale_remove_failure_logs_warning(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """R5 negative (D11): os.remove падает → WARN-лог, copy не блокируется молча (никаких pass-tests)."""
+    """R5 negative (REF-0105): os.remove stale-compose падает → WARN-лог, деплой продолжается."""
     caplog.set_level(logging.INFO)
     from unittest.mock import MagicMock
 
     target_dir = tmp_path / "projects" / "testproj"
     target_dir.mkdir(parents=True)
-    (target_dir / "docker-compose.yml").write_text("old-stub\n", encoding="utf-8")
+    # Stale compose.yaml отсутствует в staging → подлежит удалению по канону PROJECT_COMPOSE_FILENAMES
+    (target_dir / "compose.yaml").write_text("STALE\n", encoding="utf-8")
 
     staging = tmp_path / "staging"
     staging.mkdir()
@@ -290,32 +293,32 @@ def test_receive_deploy_remove_failure_logs_warning(
     fake_orch = MagicMock()
     fake_orch.deploy.return_value = MagicMock(is_success=lambda: True, status=type("S", (), {"value": "DEPLOYED"})())
 
-    # DI (W-H): os.remove-failure канал — WARN-путь D11 (0 патчей DeployOrchestrator-класса)
+    # DI (W-H): os.remove-failure канал — WARN-путь stale-deletion (0 патчей DeployOrchestrator)
     real_remove = os.remove
 
     def _remove_fail(path):
-        raise OSError(13, "Permission denied")
+        if str(path).endswith("compose.yaml"):
+            raise OSError(13, "Permission denied")
+        return real_remove(path)
 
-    os.remove = _remove_fail  # type: ignore[assignment]
-    try:
-        # 170 W10-B: orchestrator_factory — конструкторный DI
-        flow = ReceiveFlow(
-            projects_base=str(tmp_path / "projects"),
-            orchestrator_factory=lambda *_, **__: fake_orch,
-        )
-        flow.deploy(
-            "testproj",
-            "testproj",
-            "abc123",
-            str(staging),
-            str(target_dir),
-            base=str(tmp_path / "projects"),
-        )
-    finally:
-        os.remove = real_remove
+    monkeypatch.setattr(os, "remove", _remove_fail)
 
-    assert "Cannot remove existing" in caplog.text, "D11: WARN о неудачном os.remove ожидался"
-    logger.critical("[IMP:9][test] D11 negative PASS: os.remove-fail логируется WARN (не молча)")
+    flow = ReceiveFlow(
+        projects_base=str(tmp_path / "projects"),
+        orchestrator_factory=lambda *_, **__: fake_orch,
+    )
+    result = flow.deploy(
+        "testproj",
+        "testproj",
+        "abc123",
+        str(staging),
+        str(target_dir),
+        base=str(tmp_path / "projects"),
+    )
+
+    assert result.is_success(), "неудача удаления stale-compose НЕ блокирует деплой"
+    assert "Cannot remove stale" in caplog.text, "REF-0105: WARN о неудачном удалении stale ожидался"
+    logger.critical("[IMP:9][test] REF-0105 negative PASS: stale remove-fail логируется WARN (не молча)")
 
 
 # endregion Tests: root-owned bootstrap-стуб overwrite (D11 — DevPlan 136 W1 T1.11)

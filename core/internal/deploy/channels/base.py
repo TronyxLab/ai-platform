@@ -23,6 +23,8 @@ Shared delivery-channel primitives: Payload, DeliveryResult, DeliveryChannel ABC
 ## @changes 2026-08-15 | план 170 W4-B1 — вынесен в channels/base.py (декомпозиция монолита)
 ## @changes 2026-08-16 | DevPlan 177 W3.1 — _retry_deliver → делегат shared/retry.py
 ##           (retry-loop/backoff/sleep консолидированы; +sleep_fn DI-шов в __init__)
+## @changes 2026-08-24 | REF-0011 (meta-refactoring В1) — retryable = not success AND
+##           exit_code != 124: timeout (124) не ретраится (POST-like мутация на VPS)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -55,6 +57,10 @@ DEFAULT_RETRY_COUNT = RETRY_COUNT
 # Канал использует RETRY_BACKOFF_SECONDS[0] (5s) с factor 2 (экспоненциальный backoff [5, 10]);
 # retry-цикл — shared/retry.py (DevPlan 177 W3.1, см. _retry_deliver)
 DEFAULT_RETRY_BACKOFF = RETRY_BACKOFF_SECONDS[0]
+
+# Канонический exit-code таймаута (timeout(1)); ForcedCommandChannel возвращает его
+# при subprocess.TimeoutExpired. Единственный exit-code, НЕ подлежащий ретраю (REF-0011).
+TIMEOUT_EXIT_CODE = 124
 
 
 # region DATACLASSES
@@ -187,11 +193,15 @@ class DeliveryChannel(abc.ABC):
 
         # Экспоненциальный backoff канала: [5, 10] — RETRY_BACKOFF_SECONDS[0] (5s) с factor 2
         # (DevPlan 116 B5 T7 — источник значений — shared/timeouts.py; 177 W3.1 — цикл в shared.retry)
+        # REF-0011 (FAIL-0700): retryable = not success AND exit_code != 124. Timeout-прерывание
+        # (ForcedCommandChannel → exit_code=124 при TimeoutExpired) НЕ ретраится: deliver —
+        # POST-like операция, receive на VPS мог УЖО применить payload; повтор = двойные
+        # compose-циклы/снапшоты либо ложный CI-red «Concurrent deploy blocked».
         return _shared_retry(
             _attempt,
             attempts=1 + DEFAULT_RETRY_COUNT,  # 2 ретрая + первая попытка = 3
             backoff_seconds=[DEFAULT_RETRY_BACKOFF * (2**i) for i in range(DEFAULT_RETRY_COUNT)],
-            retryable=lambda result: not result.success,
+            retryable=lambda result: not result.success and result.exit_code != TIMEOUT_EXIT_CODE,
             sleep_fn=self._sleep_fn,
         )
 

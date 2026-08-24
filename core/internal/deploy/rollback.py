@@ -19,16 +19,19 @@ LDD-логи и region-маркеры сохранены; DeployStatus/Orchestra
 ##           deploy_history, audit_logger, _compose_rollback (DI-шов), _result (статический билдер).
 ## @invariants
 ##   1. rollback() — восстанавливает compose_state из snapshot (latest или по snapshot_id)
-##   2. payload-файлы восстанавливаются ДО compose-rollback: (а) deploy-failure — из
-##      payload_backup_dir (бэкап снят ДО overwrite в receive_flow), (б) manual rollback —
-##      из snapshot payload_dir (T9.8, L-6)
-##   3. _rollback_compose — previous_image re-tag → docker compose deploy (W1: docker tag
-##      через shared/docker_ops); PlatformError/OSError/SubprocessError → False
+##   2. payload-файлы восстанавливаются ТОЛЬКО после успешного compose-rollback (REF-0004):
+##      (а) deploy-failure — из payload_backup_dir (бэкап снят ДО overwrite в receive_flow),
+##      (б) manual rollback — из snapshot payload_dir (T9.8, L-6)
+##   3. _rollback_compose — previous_image re-tag → docker compose deploy c skip_pull
+##      (doomed GHCR-pull устранён — REF-0004; W1: docker tag через shared/docker_ops);
+##      PlatformError/OSError/SubprocessError → False
 ##   4. _restore_payload_files — не-fatal: сбой restore НЕ блокирует compose-rollback
 ##   5. DeployStatus/OrchestratorDeployResult — единые типы статусов всех deploy-операций;
 ##      импортируются из rollback.py другими модулями напрямую или через re-export
 ##      orchestrator (backward-compat: from core.internal.deploy.orchestrator import DeployStatus)
-##   6. Rollback успешен → ROLLED_BACK (deploy-failure) / DEPLOYED (manual), иначе FAILED
+##   6. Rollback успешен → ROLLED_BACK (deploy-failure, при rollback_verified) / DEPLOYED
+##      (manual), иначе FAILED; OrchestratorDeployResult.rollback_verified (additive) несёт
+##      факт единственного wait_health re-verify после отката
 ## @rationale DevPlan 089 — единый typed фасад (устраняет 6+ параллельных deploy-путей);
 ##            170 W4-B3 — декомпозиция orchestrator (audit/hooks вынесены ранее);
 ##            T3.1 — rollback-кластер (~230 LOC) извлекается как отделимый: самодостаточен
@@ -36,6 +39,8 @@ LDD-логи и region-маркеры сохранены; DeployStatus/Orchestra
 ##            поведение — тела методов перенесены 1:1, направление импорта orchestrator → rollback
 ##            (без цикла: rollback НЕ импортирует orchestrator в runtime).
 ## @changes 2026-08-22 | T3.1 — extracted from deploy/orchestrator.py (1:1, механический перенос)
+## @changes 2026-08-24 | REF-0004 (DevPlan 11 В1) — skip_pull при previous-rollback; payload
+##             restore только после успешного compose-rollback; поле rollback_verified (additive)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -100,6 +105,9 @@ class OrchestratorDeployResult:
     # Version pinning: sha из аргументов SSH-команды (receive \<project\> \<sha\>);
     # version = sha из CI (без чтения ai-platform.yaml).
     version: str = ""
+    # REF-0004 (DevPlan 11 В1, additive — wire-freeze п.2 соблюдён): результат единственного
+    # wait_health re-verify после отката. True ⇔ compose-rollback выполнен И health восстановлен.
+    rollback_verified: bool = False
 
     def to_dict(self) -> dict[str, object]:
         """Serialize to JSON-compatible dict."""
@@ -114,6 +122,8 @@ class OrchestratorDeployResult:
             "deploy_time": self.deploy_time,
             # AC2 (DevPlan 116 B1): JSON receive-результата содержит project, version, sha, status
             "version": self.version,
+            # REF-0004: additive ключ — потребители с фикс. схемой игнорируют неизвестные поля
+            "rollback_verified": self.rollback_verified,
         }
 
     def is_success(self) -> bool:
@@ -157,12 +167,14 @@ class RollbackMixin:
     _result: Callable[..., OrchestratorDeployResult]  # pyright: ignore[reportUninitializedInstanceVariable]
 
     # region FUNC__rollback_deploy
-    ## @purpose  E2 deploy step 4 (ROLLBACK): restore payload files (T9.8) + compose from
-    ##           snapshot after failed apply.
+    ## @purpose  E2 deploy step 4 (ROLLBACK): compose from snapshot + restore payload files (T9.8)
+    ##           after failed apply.
     ## @io       ⇥ (project, channel, service, project_dir, snapshot, start, payload_backup_dir) → ⎋ OrchestratorDeployResult
     ## @complexity — O(F + 1) — F payload-файлов + rollback compose + audit
     ## @invariants
-    ##   - payload_backup_dir (предыдущие payload-файлы, снят до overwrite) → restore ДО compose
+    ##   - REF-0004: compose-rollback СНАЧАЛА; payload-файлы восстанавливаются ТОЛЬКО после
+    ##     успешного compose-rollback — иначе disk (старый payload) разошёлся бы с контейнерами
+    ##     (новый образ), если compose-rollback упал
     ##   - Rollback успешен → ROLLED_BACK, иначе FAILED
     def _rollback_deploy(
         self,
@@ -175,17 +187,24 @@ class RollbackMixin:
         payload_backup_dir: str | None = None,
     ) -> OrchestratorDeployResult:
         """Rollback payload + compose after failed deploy (E2 step ROLLBACK)."""
-        # T9.8 (L-6): rollback восстанавливает payload-файлы из бэкапа (не только compose).
-        # Бэкап снят ДО overwrite в receive_flow — содержит предыдущие (рабочие) файлы.
-        if payload_backup_dir:
+        rollback_fn = self._compose_rollback if self._compose_rollback is not None else self._rollback_compose
+        rollback_ok = rollback_fn(project_dir, service, snapshot)
+        # T9.8 (L-6) + REF-0004: payload-бэкап (предыдущие payload-файлы, снят ДО overwrite в
+        # receive_flow) восстанавливается ТОЛЬКО после успешного compose-rollback — контейнеры
+        # и disk остаются консистентными (старый образ ↔ старый payload).
+        if rollback_ok and payload_backup_dir:
             restored = self._restore_payload_files(payload_backup_dir, project_dir)
             if restored:
                 logger.info(
-                    "[IMP:9][DeployOrchestrator][rollback] Payload files restored from backup %s (T9.8)",
+                    "[IMP:9][DeployOrchestrator][rollback] Payload files restored from backup %s after "
+                    "successful compose-rollback (T9.8/REF-0004)",
                     payload_backup_dir,
                 )
-        rollback_fn = self._compose_rollback if self._compose_rollback is not None else self._rollback_compose
-        rollback_ok = rollback_fn(project_dir, service, snapshot)
+        elif payload_backup_dir and not rollback_ok:
+            logger.warning(
+                "[IMP:8][DeployOrchestrator][rollback] Compose rollback FAILED — payload files NOT restored "
+                "(kept consistent with running containers; REF-0004)",
+            )
         rollback_status = "ROLLED_BACK" if rollback_ok else "FAILED"
         self.audit_logger.log(
             operation="deploy",
@@ -241,19 +260,21 @@ class RollbackMixin:
         project_dir = os.path.join(self.projects_base, project_name)
         service = project_name
 
-        # T9.8 (L-6): payload-файлы из snapshot (payload_dir — пред-деплойный бэкап) восстанавливаются
-        # ДО compose-rollback: сломанный payload (compose/ai-platform.yaml) заменяется рабочим.
+        rollback_fn = self._compose_rollback if self._compose_rollback is not None else self._rollback_compose
+        rollback_ok = rollback_fn(project_dir, service, snapshot)
+
+        # T9.8 (L-6) + REF-0004: payload-файлы из snapshot (payload_dir — пред-деплойный бэкап)
+        # восстанавливаются ТОЛЬКО после успешного compose-rollback — disk не должен опережать
+        # контейнеры (сломанный payload заменяется рабочим при живом старом образе).
         snapshot_payload_dir = cast(str | None, snapshot.get("payload_dir"))
-        if snapshot_payload_dir and os.path.isdir(snapshot_payload_dir):
+        if rollback_ok and snapshot_payload_dir and os.path.isdir(snapshot_payload_dir):
             restored = self._restore_payload_files(snapshot_payload_dir, project_dir)
             if restored:
                 logger.info(
-                    "[IMP:9][DeployOrchestrator][rollback] Payload files restored from snapshot %s (T9.8)",
+                    "[IMP:9][DeployOrchestrator][rollback] Payload files restored from snapshot %s "
+                    "(T9.8, post-compose)",
                     snapshot.get("snapshot_id"),
                 )
-
-        rollback_fn = self._compose_rollback if self._compose_rollback is not None else self._rollback_compose
-        rollback_ok = rollback_fn(project_dir, service, snapshot)
 
         # Audit
         result_status = DeployStatus.DEPLOYED if rollback_ok else DeployStatus.FAILED
@@ -322,7 +343,8 @@ class RollbackMixin:
     ## @io       ⇥ project_dir: str, service: str, snapshot: dict[str, object] → ⎋ bool
     ## @complexity — O(1) — single docker compose deploy of previous image
     ## @invariants
-    ##   - previous_image из compose_state re-tag → docker compose deploy
+    ##   - previous_image из compose_state re-tag → docker compose deploy (skip_pull — REF-0004:
+    ##     образ уже локально перетегирован; registry-pull локального тега обречён ~135s ×5)
     ##   - PlatformError/OSError/SubprocessError → False (audit пишет FAILED в _rollback_deploy)
     def _rollback_compose(self, project_dir: str, service: str, snapshot: dict[str, object]) -> bool:
         """Rollback compose to a previous snapshot state.
@@ -346,12 +368,29 @@ class RollbackMixin:
             # Re-tag and restart (W1: docker tag — shared/docker_ops, non-fatal)
             if prev_image_id:
                 docker_ops.docker_tag(str(prev_image_id), f"{service}:previous-rollback")
+            else:
+                logger.warning(
+                    "[IMP:8][DeployOrchestrator][rollback_compose] Snapshot %s has no compose_state.previous_image "
+                    "(pre-REF-0004 schema?) — rollback will fail fast without doomed pull",
+                    snapshot.get("snapshot_id", "<unknown>"),
+                )
 
+            # ⚠️ TRAP[BUG] · 2026-08-24 · P1 · REF-0004 · Doomed GHCR-pull при rollback (~135s ×5)
+            # · Symptom: health-fail → rollback висел ~2.5 мин (retry_pull 5 попыток) и падал
+            # ·   PlatformFatalError → FAILED, хотя контейнер уже откачен engine'ом (double rollback)
+            # · Root: снапшоты создавались без compose_state.previous_image → docker_tag
+            # ·   пропускался → engine.deploy(ref="previous-rollback") пытался ПУЛЛИТЬ локальный
+            # ·   тег из registry (тег не существует там по определению).
+            # · Fix: (1) якорь previous_image персистится в снапшот ДО compose-up;
+            # ·   (2) skip_pull=True — локально перетегированный образ пуллить не нужно.
+            # · Prevention: test_rollback_contour::test_previous_rollback_ref_skips_pull +
+            # ·   test_deploy_persists_previous_image_anchor_in_snapshot
             result = engine.deploy(
                 project=Path(project_dir).name,
                 ref="previous-rollback",
                 service=service,
                 project_dir=project_dir,
+                skip_pull=True,
             )
         except PlatformError as e:
             # T3.1 (DevPlan 116 B4): _handle_first_deploy → PlatformFatalError вместо SystemExit

@@ -19,6 +19,8 @@
 ##            Python (secrets_manager.py) and shell (secrets.sh). Centralizing in
 ##            shared/crypto.py eliminates drift and enables unit tests.
 ## @changes  2026-07-25 | DevPlan 078 Phase B T3 — Created shared crypto module
+##           2026-08-24 | REF-0007 (11-DevPlan Волна 1) — hash_apr1: пароль через stdin
+##                      (openssl -stdin), значение больше НЕ в argv
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -71,23 +73,33 @@ class _CliArgs:
 ##   - Returns None on openssl failure (never raises)
 ##   - Fixed salt → deterministic output (idempotent)
 ##   - Auto salt → random output each call
+##   - REF-0007: password delivered via stdin (-stdin) — НИКОГДА в argv (/proc visibility)
 def hash_apr1(password: str, salt: str | None = None) -> str | None:
     """Generate APR1 password hash. Returns None on failure.
 
-    ▶ ┌password+optional_salt┐ → ⊕ openssl passwd -apr1 → ⎋ str | None
+    ▶ ┌password(stdin)+optional_salt┐ → ⊕ openssl passwd -apr1 -stdin → ⎋ str | None
     """
     if not password:
         logger.warning("[IMP:7][crypto] hash_apr1: empty password")
         return None
 
+    # REF-0007 (11-DevPlan Волна 1): пароль больше НЕ в argv (`openssl passwd -apr1 <password>`
+    # светился в /proc/<pid>/cmdline локальным аккаунтам) — `-stdin` + subprocess input.
     cmd = ["openssl", "passwd", "-apr1"]
     if salt:
         cmd.extend(["-salt", salt])
-    cmd.append(password)
+    cmd.append("-stdin")
 
     # ruff: ignore[PLW0717] — тело try присваивает имена, читаемые except/после — извлечение ломает видимость
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=DEFAULT_OPENSSL_TIMEOUT, check=False)
+        result = subprocess.run(
+            cmd,
+            input=password,
+            capture_output=True,
+            text=True,
+            timeout=DEFAULT_OPENSSL_TIMEOUT,
+            check=False,
+        )
         if result.returncode != 0:
             logger.warning(
                 "[IMP:7][crypto] openssl passwd -apr1 failed (exit=%d): %s",

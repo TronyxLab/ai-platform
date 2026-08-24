@@ -60,6 +60,11 @@ events:
     context: watchdog
     throttle_min: 30
     action: "Check container logs after restart"
+  - id: watchdog.crashloop
+    severity: critical
+    context: watchdog
+    throttle_min: 60
+    action: "Investigate crash loop (docker logs) — watchdog не рестарчит при RestartCount>5"
 
   # ── Maintenance (platform-reboot.service, нода) ──────────────────────
   - id: cert.expiry
