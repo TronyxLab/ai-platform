@@ -409,7 +409,7 @@ def test_c4_port_fallback_removed_raises(caplog):
     env = dict(_full_env_defaults())
     env.pop("REDIS_PORT")
     with pytest.raises(KeyError) as exc_info:
-        sed._section_redis(env)
+        sed._section_redis(env, {})
     assert "REDIS_PORT" in str(exc_info.value)
     logger.critical("[IMP:9][test] C4: отсутствующий REDIS_PORT → KeyError (fallback удалён)")
 
