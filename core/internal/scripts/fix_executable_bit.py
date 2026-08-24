@@ -119,7 +119,8 @@ def _is_msys_windows(runner: GitRunner | None = None) -> bool:
 def _file_mode_is_false(repo_root: Path, runner: GitRunner | None = None) -> bool:
     """git config --get core.fileMode == "false" (Windows checkout warning-условие)."""
     res = _run_git(["git", "config", "--get", "core.fileMode"], repo_root, runner)
-    return res.stdout.strip() == "false"
+    # bool_string_literals-канон: сравнение строкового булевого — через .lower() нормализацию
+    return res.stdout.strip().lower() == "false"
 
 
 # endregion FUNC_file_mode_is_false
