@@ -11,6 +11,7 @@
 
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL
   disable_master_key_returned: true
 
 model_list:
@@ -49,7 +50,7 @@ model_list:
         - chat
   - model_name: chat-zai
     litellm_params:
-      model: zai/glm-4.6
+      model: zai/glm-4.5-flash
       api_key: os.environ/ZAI_API_KEY
       mode: chat
     model_info:

@@ -51,15 +51,17 @@ aliases:
         model: deepseek-v4-flash
 
   # z.ai (Zhipu GLM) chat group — added by the W3 live-run session (T9) on owner's sanction:
-  # the DeepSeek account hit Insufficient Balance mid-run; the pilot's faq profile points here.
+  # DeepSeek hit Insufficient Balance mid-run; owner supplied a z.ai key whose account has no
+  # paid balance (code 1113 on glm-4.6/4.5-air), so the FREE-TIER glm-4.5-flash serves the run.
+  # Rev: switch to glm-4.6 after the z.ai wallet top-up.
   chat-zai:
-    label: "Fast chat (z.ai GLM)"
+    label: "Fast chat (z.ai GLM, free tier)"
     context_window: 128000
     features: [chat]
     deployments:
       primary:
         provider: zai
-        model: glm-4.6
+        model: glm-4.5-flash
 
   # Hermes-upstream model aliases — the upstream Hermes agent resolves
   # deepseek provider models as 'deepseek-chat' and 'deepseek-reasoner'.
