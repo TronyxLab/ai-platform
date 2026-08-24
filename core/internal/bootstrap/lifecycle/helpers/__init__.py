@@ -28,7 +28,7 @@ I/O-хелперы bootstrap lifecycle (public API, односторонняя �
 Modules:
   - system.py        — is_pkg_installed/install_apt_packages/ensure_sops/ghcr_auth
   - users.py         — create_user/add_ssh_key/ensure_projects_base
-  - secrets.py       — decrypt_secrets/ensure_secrets_exist
+   - secrets.py       — decrypt_secrets/ensure_secrets_exist/verify_required_sops_secrets
   - validation.py    — verify_core_files/validate_node_yaml/validate_sudoers
   - domains.py       — import_deploy_context/extract_domains/ssl_provision_via_orchestrator
   - reporting.py     — run_healthchecks/write_audit_log/send_telegram

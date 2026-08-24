@@ -1,5 +1,5 @@
-# GREP_SUMMARY: grafana contact-points telegram alerting active severity critical warning routing
-# STRUCTURE: ▶ 2-contact-points ┌ telegram-critical → immediate ┐ ┌ telegram-warning → grouped ┐ → notification-policies → severity-routing → ┘
+# GREP_SUMMARY: grafana contact-points telegram alerting active severity critical warning routing warning-push critical-repeat
+# STRUCTURE: ▶ 2-contact-points ┌ telegram-critical → immediate, repeat 2h ┐ ┌ telegram-warning → grouped, push enabled ┐ → notification-policies → severity-routing → ┘
 # region MODULE_CONTRACT
 ## @purpose  Grafana contact points for Telegram alerts routed by severity — АКТИВНЫЙ канал (DevPlan 140 W2 D-3)
 ## @scope    Provisioned alongside alert-rules.yml in GF_PROVISIONING_ALERTING_PATH (config/alerting монтируется целиком)
@@ -12,6 +12,8 @@
 ##   - Значения bottoken/chatid — placeholder-ссылки на env: docker-compose.base.yml
 ##     параметризует ${TELEGRAM_BOT_TOKEN:-} / ${TELEGRAM_CHAT_ID_CRITICAL:-} /
 ##     ${TELEGRAM_CHAT_ID_WARNING:-} (реальные токены НЕ хранятся в исходниках)
+##   - REF-0010 (2026-08-24): warning-push enable (disable_notifications=false — иначе
+##     предупреждения «доставлялись в никуда»); critical repeat_interval 2h (было 24h)
 ## @rationale Grafana 11.6.16 has built-in Telegram Bot API support; avoids the complexity
 ##           of maintaining a separate notify-hook-web service and uses the same bot token
 ##           as the existing notify-hook.sh CLI script.
@@ -63,7 +65,10 @@ contactPoints:
           chatid: "${TELEGRAM_CHAT_ID_WARNING} "
           parse_mode: "Markdown"
           message: '⚠️ {{ range .Alerts }}{{ .Labels.alertname }} [{{ .Labels.severity }}] {{ if .Annotations.summary }}{{ .Annotations.summary | reReplaceAll "<" "&lt;" | reReplaceAll ">" "&gt;" | reReplaceAll "&" "&amp;" }}{{ end }}{{ end }}'
-          disable_notifications: true
+          # [IMP:9][grafana-alerting] REF-0010: warning-push enable. disable_notifications
+          # = true доставлял warning'и «в никуда» (contact point срабатывал, сообщение
+          # не отправлялось) — предупреждения терялись молча.
+          disable_notifications: false
           uploadImage: false
         disableResolveMessage: false
 
@@ -87,7 +92,10 @@ policies:
         group_interval: "1s"
         # DevPlan 161 W1: repeat_interval 5m→24h — уведомление о for-пробросе critical
         # не чаще раза в сутки (до этого спам каждые 5 мин, пока алерт висит firing).
-        repeat_interval: "24h"
+        # REF-0010 (2026-08-24): 24h→2h — re-notify раз в сутки означал, что
+        # незакрытый P0-инцидент напоминал о себе раз в день; 2h — компромисс
+        # «не забыть» vs «не спамить» (group_interval 1s остаётся на первый пуш).
+        repeat_interval: "2h"
         sendReminder: false
       - receiver: "Telegram Warning"
         matchers:

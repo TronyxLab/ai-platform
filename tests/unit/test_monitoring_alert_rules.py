@@ -33,7 +33,7 @@
 ## @changes  2026-08-09 · DevPlan 144 W1/W2 — +loki expr no-binop (детектор + R5 negative),
 ##           +high_memory labels.name (детектор + R5 negative, оба файла правил)
 ## @changes  2026-08-13 · DevPlan 161 W1 — +backup_freshness time-gate 07:00 МСК (детектор + R5
-##           negative) + critical repeat_interval=24h (contact-points.yml, анти-спам)
+##           negative) + critical repeat_interval=2h (contact-points.yml; 161 W1 24h → REF-0010 2h)
 ## @changes  2026-08-13 · DevPlan 162 W4-1/W6-3 — +psi_memory_pressure (PSI memory some >5%),
 ##           +nginx_5xx_errors (loki JSON 5xx, threshold gt 2)
 # endregion MODULE_CONTRACT
@@ -543,7 +543,7 @@ def test_high_memory_container_label_negative_removed() -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# DevPlan 161 W1: time-gate 07:00 МСК + repeat_interval 24h (анти-спам)
+# DevPlan 161 W1: time-gate 07:00 МСК + repeat_interval (анти-спам; 24h → 2h REF-0010)
 # ═══════════════════════════════════════════════════════════════════════
 
 _CONTACT_POINTS = (
@@ -599,12 +599,14 @@ def test_backup_freshness_time_gate(caplog) -> None:
     logger.info("[IMP:9][test_monitoring_alert_rules] backup_freshness time-gate 07:00 МСК PASS")
 
 
-# 🧪 TRAP[TEST] · Regression · Scenario: critical-маршрут repeat_interval=24h (161 W1)
-# · Expect: route receiver="Telegram Critical" имеет repeat_interval="24h"
+# 🧪 TRAP[TEST] · Regression · Scenario: critical-маршрут repeat_interval (161 W1 → REF-0010)
+# · Expect: route receiver="Telegram Critical" имеет repeat_interval="2h"
 # · Last fail: repeat_interval="5m" — Telegram-спам каждые 5 мин пока алерт firing
+# ·   (161 W1 поднял 5m→24h; REF-0010 2026-08-24 снизил 24h→2h: незакрытый P0
+# ·   напоминал о себе раз в сутки — re-notify раз в день = «тихий» P0)
 # · Remove if: contact-points.yml меняет политику повторных уведомлений
-def test_contact_points_critical_repeat_interval_24h(caplog) -> None:
-    """161 W1: critical-маршрут repeat_interval=24h — спам каждые 5 мин устранён."""
+def test_contact_points_critical_repeat_interval_2h(caplog) -> None:
+    """161 W1 + REF-0010: critical-маршрут repeat_interval=2h (спам устранён, но не замолчан)."""
     caplog.set_level(logging.INFO)
     data = yaml.safe_load(_CONTACT_POINTS.read_text(encoding="utf-8"))
     critical_route = None
@@ -613,10 +615,10 @@ def test_contact_points_critical_repeat_interval_24h(caplog) -> None:
             if route.get("receiver") == "Telegram Critical":
                 critical_route = route
     assert critical_route is not None, "161 W1 FAIL: critical-маршрут не найден в contact-points.yml"
-    assert critical_route.get("repeat_interval") == "24h", (
-        f"161 W1 FAIL: critical repeat_interval != 24h: {critical_route.get('repeat_interval')}"
+    assert critical_route.get("repeat_interval") == "2h", (
+        f"REF-0010 FAIL: critical repeat_interval != 2h: {critical_route.get('repeat_interval')}"
     )
-    logger.info("[IMP:9][test_monitoring_alert_rules] critical repeat_interval=24h PASS")
+    logger.info("[IMP:9][test_monitoring_alert_rules] critical repeat_interval=2h PASS")
 
 
 # 🧪 TRAP[TEST] · NEGATIVE (R5) · backup_freshness без time-gate — DevPlan 161 W1

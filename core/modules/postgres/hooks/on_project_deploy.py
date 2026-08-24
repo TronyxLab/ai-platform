@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: postgres hook on-project-deploy auto-create-db database project needs.database role GRANT credentials platform-db.env idempotent DI runner env
-# STRUCTURE: ▶ main(args) → ◇ auto_create_db(project_dir, project) → ◇ NodeYaml needs.database → ◇ validate db_name → ◇ docker exec psql CREATE DATABASE → ◇ ensure_project_db_access (role+GRANT+credentials+.env.platform regen) → ⎋ log done
+# GREP_SUMMARY: postgres hook on-project-deploy auto-create-db database project needs.database role GRANT credentials platform-db.env idempotent ensure-convergence ALTER ROLE orphan DI runner env
+# STRUCTURE: ▶ main(args) → ◇ auto_create_db(project_dir, project) → ◇ NodeYaml needs.database → ◇ validate db_name → ◇ docker exec psql CREATE DATABASE → ◇ ensure_project_db_access (role ∨ ALTER-ROLE-converge + GRANT + credentials + .env.platform regen) → ⎋ log done
 # region MODULE_CONTRACT
 ## @purpose  Post-deploy hook for postgres module: auto-create project database if declared in
 ##           ai-platform.yaml needs.database, and provision shared-DB access (DevPlan 133 W2):
@@ -11,11 +11,13 @@
 ## @invariants
 ##   - Non-fatal: роль/GRANT/credentials ошибки log'ятся, НЕ блокируют деплой
 ##   - invalid db_name (не ^[a-zA-Z0-9_]+$) → FATAL (return 1), как раньше
-##   - Idempotent: существующая БД → skip CREATE; существующая роль → skip CREATE ROLE,
-##     пароль НЕ меняется (иначе ломается уже выданный credentials)
+##   - Idempotent: существующая БД → skip CREATE; существующая роль с валидными creds →
+##     skip CREATE/ALTER (пароль НЕ меняется, иначе ломается уже выданный credentials);
+##     существующая роль БЕЗ creds (orphan) → ensure-convergence: ALTER ROLE PASSWORD +
+##     creds + GRANT + реген (REF-0002 В0; ранний return удалён — BUG-0605/DATA-201)
 ##   - Роль: ${project}_user; GRANT CONNECT ON DATABASE + GRANT CREATE, USAGE ON SCHEMA public (D6)
 ##   - .platform-db.env (0600): PLATFORM_POSTGRES_DB/USER/PASSWORD — атомарная запись
-##   - .env.platform перегенерируется ТОЛЬКО при первом создании роли (password-injection)
+##   - .env.platform перегенерируется при создании ИЛИ конвергенции роли (password-injection)
 ##   - POSTGRES_PASSWORD должен быть доступен (env) для psql-gate
 ##   - Business functions never call sys.exit — return int status; sys.exit only in main()
 ##   - Cross-layer (модули→internal) — только allowlisted shared.node_yaml импорт (D1);
@@ -26,9 +28,13 @@
 ##            parsing — business logic → Python. DevPlan 133 W2: шаред-доступ к БД был сломан
 ##            в 2 точках (pgbouncer жёсткий список; роль не создавалась) — хук теперь создаёт
 ##            роль/гранты/credentials и прокидывает пароль в DSN через password-injection.
+##            REF-0002 В0: хук зарегистрирован в post-deploy chain (hooks.on_project_deploy),
+##            идемпотентность = ensure-convergence, а не early-return.
 ## @changes  Ported from on-project-deploy.sh (2026-08-02, DevPlan 117 H D65)
 ## @changes  2026-08-03 · DevPlan 133 W2 — +role/GRANT/credentials/.env.platform regen (D4/D6)
 ## @changes  2026-08-13 · DevPlan 160 E1 — +runner DI + env через параметры (main/env)
+## @changes  2026-08-24 · REF-0002 (11-DevPlan В0) — регистрация hooks.on_project_deploy +
+##            ensure-convergence orphan-role ветки (ALTER ROLE PASSWORD вместо early-return)
 # endregion MODULE_CONTRACT
 
 # 🧐 TRAP[DECISION] · 2026-08-03 · — · .env.platform regen через subprocess CLI, не library-import
@@ -189,11 +195,13 @@ def auto_create_db(
 
 # ═══════════════════════════════════════════════════════════════════
 # region FUNC_ensure_project_db_access
-## @purpose  Idempotent role+GRANT+credentials provisioning (DevPlan 133 W2, D4/D6):
-##           1) роль ${project}_user (CREATE только если отсутствует — пароль НЕ меняется);
+## @purpose  Idempotent ensure-convergence role+GRANT+credentials provisioning
+##           (DevPlan 133 W2 D4/D6 + REF-0002 В0):
+##           1) роль ${project}_user (CREATE при отсутствии; ALTER ROLE PASSWORD при
+##              orphan-role: роль есть, credentials потеряны — сходимость вместо early-return);
 ##           2) GRANT CONNECT ON DATABASE + GRANT CREATE, USAGE ON SCHEMA public;
 ##           3) .platform-db.env (0600, атомарно): PLATFORM_POSTGRES_DB/USER/PASSWORD;
-##           4) при ПЕРВОМ создании роли — перегенерация .env.platform (password-injection).
+##           4) регенерация .env.platform при СОЗДАНИИ или КОНВЕРГЕНЦИИ роли (password-injection).
 ##           Non-fatal: любая ошибка → log, return 0 (деплой не блокируется).
 ## @param project_dir  Project directory (target: .platform-db.env, .env.platform)
 ## @param project      Project name (роль ${project}_user)
@@ -201,12 +209,16 @@ def auto_create_db(
 ## @param env          Environment dict override (defaults to os.environ)
 ## @param runner       CommandRunner DI (None = subprocess.run default) — for testability
 ## @return  int status: всегда 0 (non-fatal семантика сохранена)
-## @complexity O(1) — 2-4 psql вызова + файловая запись
+## @complexity O(1) — 3-5 psql вызова + файловая запись
 ## @invariants
-##   - Роль существует → CREATE ROLE ПРОПУСКАЕТСЯ, пароль НЕ перегенерируется (идемпотентность)
-##   - GRANT-ы идемпотентны (повторный GRANT — no-op)
+##   - Ensure-convergence: role_exists+no-creds → ALTER ROLE PASSWORD → продолжение вниз
+##     (GRANT/creds/реген) — НЕ ранний return (BUG-0605/DATA-201 закрыт, REF-0002 В0)
+##   - Роль существует И credentials валидны → CREATE/ALTER не вызываются, пароль не меняется
+##   - GRANT-ы идемпотентны (повторный GRANT — no-op); проверка результата каждого GRANT —
+##     завершение REF-0002 в Волне 1 (структура через _psql-возврат уже позволяет)
 ##   - Password: secrets.token_urlsafe(24) — URL-safe charset (без экранирования в DSN/SQL)
 ##   - .platform-db.env пишется атомарно (tempfile+fsync+os.replace), mode 0600
+## @changes 2026-08-24 | REF-0002 (11-DevPlan В0) — orphan-role early-return → ensure-convergence
 def ensure_project_db_access(
     project_dir: str,
     project: str,
@@ -233,19 +245,38 @@ def ensure_project_db_access(
     role_exists = bool(exists_out and exists_out.strip())
 
     created = False
+    converged = False  # REF-0002: orphan-role repaired via ALTER ROLE PASSWORD
     password = ""
     if role_exists:
-        logger.info("[IMP:8][db] Role '%s' already exists — SKIP creation (password unchanged)", role)
         # Пароль известен только из credentials-файла (если он есть)
         creds = _read_credentials(project_dir)
         password = creds.get("PLATFORM_POSTGRES_PASSWORD", "")
         if not password:
+            # 🧐 TRAP[DECISION] · 2026-08-24 · — · Orphan-role repair = ротация пароля (ALTER ROLE PASSWORD),
+            # ·   не восстановление старого · Rejected: прежний early-return «skip + ручной DROP ROLE»
+            # ·   (BUG-0605/DATA-201: retry навсегда пропускал GRANT/реген) и попытка вытащить пароль
+            # ·   из pg_authid · Reason: пароль необратим (scram/md5-хэш); ротация + запись кредов +
+            # ·   GRANT + реген .env.platform (password-injection) — единственный идемпотентный путь
+            # ·   привести систему в согласованное состояние · Rev: если появится side-channel
+            # ·   с plaintext-паролями (secrets-manager для ролей БД) — заменить ротацию на re-inject
             logger.warning(
-                "[IMP:7][db] Role '%s' exists but password unknown (no %s) — credentials NOT refreshed",
+                "[IMP:8][db] Role '%s' exists but credentials missing (%s) — converging: ALTER ROLE PASSWORD",
                 role,
                 os.path.join(project_dir, ".platform-db.env"),
             )
-            return 0
+            password = secrets.token_urlsafe(24)
+            alter_out = _psql("-c", f"ALTER ROLE \"{role}\" WITH LOGIN PASSWORD '{password}'", runner=runner)
+            if alter_out is None:
+                # psql failure — non-fatal (деплой не блокируем), credentials не пишем
+                logger.error("[IMP:9][db] CRITICAL: ALTER ROLE %s failed (non-fatal)", role)
+                return 0
+            if re.search(r"ERROR", alter_out, re.IGNORECASE):
+                logger.error("[IMP:9][db] ALTER ROLE %s error: %s (non-fatal)", role, alter_out.strip())
+                return 0
+            converged = True
+            logger.info("[IMP:9][db] Orphan-role '%s' converged: password rotated, provisioning continues", role)
+        else:
+            logger.info("[IMP:8][db] Role '%s' already exists — SKIP creation (password unchanged)", role)
     else:
         password = secrets.token_urlsafe(24)
         logger.info("[IMP:8][db] Creating role '%s' with generated password...", role)
@@ -260,7 +291,7 @@ def ensure_project_db_access(
         created = True
         logger.info("[IMP:9][db] Role '%s' created", role)
 
-    # ── 2. GRANT-ы (идемпотентны) ──
+    # ── 2. GRANT-ы (идемпотентны; проверка результата — завершение REF-0002 в Волне 1) ──
     _psql("-c", f'GRANT CONNECT ON DATABASE "{db_name}" TO "{role}"', runner=runner)
     _psql("-c", f'GRANT CREATE, USAGE ON SCHEMA public TO "{role}"', runner=runner)
     logger.info("[IMP:9][db] GRANTs ensured: CONNECT ON %s + CREATE,USAGE ON SCHEMA public → %s", db_name, role)
@@ -271,8 +302,9 @@ def ensure_project_db_access(
         return 0
     logger.info("[IMP:9][db] .platform-db.env written: %s", os.path.join(project_dir, ".platform-db.env"))
 
-    # ── 4. .env.platform перегенерация — ТОЛЬКО при первом создании роли (password-injection) ──
-    if created:
+    # ── 4. .env.platform перегенерация — при создании роли ИЛИ её конвергенции (password-injection):
+    #    в обоих случаях DSN в .env.platform мог остаться со старым/отсутствующим паролем ──
+    if created or converged:
         _regenerate_env_platform(project_dir, project, runner=runner)
 
     logger.info("[IMP:9][db] Shared-DB access ensured: db=%s role=%s project=%s", db_name, role, project)

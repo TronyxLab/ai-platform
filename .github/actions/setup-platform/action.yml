@@ -19,6 +19,8 @@
 ##             eliminates DRIFT-risk from duplicated setup logic, preserves cache-key continuity.
 ## @changes    2026-07-21 | Created per DevPlan 029 W2-E2
 ## @changes    2026-07-22 | Removed checkout step — must be called separately before this action (local composite actions need repo checked out first)
+## @changes    2026-08-24 | REF-0012: +input gitleaks-cache (pass-through в setup-gitleaks;
+##             'false' на pull_request_target — cache-poisoning усилитель, REF-0012)
 # endregion MODULE_CONTRACT
 
 name: 'Setup Platform'
@@ -35,6 +37,10 @@ inputs:
     default: 'false'
   install-gitleaks:
     description: 'Install gitleaks binary (true/false)'
+    required: false
+    default: 'true'
+  gitleaks-cache:
+    description: 'Cache gitleaks binary (true/false; false on pull_request_target — REF-0012)'
     required: false
     default: 'true'
   run-provisioner:
@@ -61,6 +67,8 @@ runs:
     - name: Setup gitleaks
       if: ${{ inputs.install-gitleaks == 'true' }}
       uses: ./.github/actions/setup-gitleaks
+      with:
+        cache: ${{ inputs.gitleaks-cache }}
 
     # ─── Step 3: Provisioner (optional) ──────────────────────────────────
     - name: Provision environment

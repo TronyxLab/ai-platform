@@ -45,7 +45,7 @@
 ##   _postflight [W:3] — sudoers batch + orphans detect + litellm config render
 ##   _aggregate_severity [W:2] — enriched modules dict lookup, fallback per-module metadata call
 ##   _compute_exit_code [W:1] — CRIT>0 → 2, WARN>0 → 0, else → 0
-##   _set_hc_marker [W:1] — touch /var/lib/platform/.bootstrap/.hc_done_in_deploy
+##   _set_hc_marker [W:1] — failed==[] ? touch run-scoped .hc_done_in_deploy[.<ctx>].<run-id> : skip (REF-0005)
 ##   _create_status_metrics_json [W:1] — pre-create /var/lib/platform/run/status-metrics.json (P1 fix)
 ##   _invoke_module_interface [W:2] — bash subprocess wrapper for system module dispatch (D4)
 ## @usecases
@@ -59,6 +59,7 @@ import logging
 import os
 import subprocess
 import sys
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -774,7 +775,8 @@ def _deploy_parallel(
         failed.extend(sys_failed)
 
     # ── 6. HC_DONE_MARKER — signals state_machine.py to skip standalone healthcheck ──
-    _set_hc_marker()
+    # REF-0005: только при failed==[] — упавший деплой не имеет права гасить φ11 healthcheck.
+    _set_hc_marker(failed)
 
     logger.info("[IMP:9][_deploy_parallel][done] deployed=%d failed=%s", deployed, failed)
     return deployed, failed, modules_info
@@ -1141,20 +1143,32 @@ def _compute_exit_code(crit: int, warn: int, deployed: int) -> int:
 
 
 # region FUNC__set_hc_marker
-## @purpose  Touch the healthcheck-done marker — signals state_machine.py to skip
+## @purpose  Touch the run-scoped healthcheck-done marker — signals state_machine.py to skip
 ##           the standalone healthcheck (healthcheck already ran inside deploy_docker_group).
-##           HC_DONE_MARKER always set (DEPLOY_BEST_EFFORT policy — healthcheck был выполнен
-##           внутри деплоя даже при частичных сбоях). Путь маркера — orchestrator_metrics (E6);
-##           T9.19 (B-11): per-context (CONTEXT env) — см. hc_marker_path(context).
-## @io       ⇥ None → ⎋ None (side-effect: marker file)
-## @complexity 1 — mkdir + touch with graceful failure
-def _set_hc_marker() -> None:
-    """Create the healthcheck-done marker file (non-fatal on failure).
-
-    Поведение определяется политикой DEPLOY_BEST_EFFORT (shared/contracts.py, U-39):
-    маркер ставится всегда — healthcheck уже выполнен внутри deploy_docker_group.
-    """
-    marker_path = _metrics_hc_marker_path(os.environ.get("CONTEXT"))
+##           REF-0005: маркер пишется ТОЛЬКО при failed==[] (success-marker после доказательства)
+##           и содержит run-id (YYYYMMDDTHHMMSS-<pid>) — чужой запуск не гасит наш healthcheck;
+##           stale-варианты снимаются свипом на старте φ8/φ12 (phases/docker._sweep_stale_hc_markers).
+## @io       ⇥ failed: list[str] | None — имена упавших модулей параллельного пути
+##           ⎋ None (side-effect: marker file при failed==[])
+## @complexity 1 — guard + mkdir + touch with graceful failure
+## @invariants
+##   - failed непустой → маркер НЕ пишется (φ11 выполнит standalone healthcheck)
+##   - Путь = orchestrator_metrics.hc_marker_path(context) + "." + run-id (единый SoT базы;
+##     читатель docker.py резолвит тот же префикс — формат суффикса \d{8}T\d{6}-\d+)
+##   - DEPLOY_BEST_EFFORT: сбой записи — WARN, не raise
+def _set_hc_marker(failed: list[str] | None = None) -> None:
+    """Create the run-scoped healthcheck-done marker ONLY on zero failures (REF-0005 honesty)."""
+    if failed:
+        logger.warning(
+            "[IMP:8][_set_hc_marker][skip] %d failed module(s) %s — marker NOT written; "
+            "standalone healthcheck will run in registry-update",
+            len(failed),
+            failed,
+        )
+        return
+    base_path = _metrics_hc_marker_path(os.environ.get("CONTEXT"))
+    # Run-id: время+PID деплой-процесса — уникален в пределах прогона, self-describing в логах.
+    marker_path = f"{base_path}.{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}"
     try:
         Path(Path(marker_path).parent).mkdir(exist_ok=True, parents=True)
         Path(marker_path).touch(exist_ok=True)

@@ -27,6 +27,8 @@
 ##            утечка секрета проходила CI, если pre-commit был пропущен (--no-verify).
 ## @changes 2026-08-11 | DevPlan 145 W4 D-134-L3 — Created (trivy fs + pip-audit)
 ## @changes 2026-08-12 | DevPlan 160 W3 T3.4 — + gitleaks setup + detect (composite SoT, exit 1)
+## @changes 2026-08-24 | REF-0012 (meta-refactoring W0): external actions → full commit SHA
+##           (checkout/setup-python/trivy-action/upload-sarif) с версией в комментарии.
 # endregion MODULE_CONTRACT
 
 name: security-scan
@@ -51,7 +53,7 @@ jobs:
     steps:
       # ─── Step 1: Checkout ─────────────────────────────────────────────
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # ─── Step 2: Setup gitleaks (composite SoT, v8.30.1) ───────────────
       # Тот же механизм, что push-gate/platform-test/deploy-project L1:
@@ -74,7 +76,7 @@ jobs:
 
       # ─── Step 4: Setup Python (for pip-audit) ─────────────────────────
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.14'
 
@@ -85,7 +87,7 @@ jobs:
       # version»; v0.36.0 — версия из dependabot-ветки, удалённой в Фазе 0.5; ВАЖЕН v-префикс:
       # все теги trivy-action имеют v-префикс, @0.36.0 без v → «unable to find version»).
       - name: Trivy filesystem scan (severity gate HIGH+)
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: fs
           scan-ref: .
@@ -105,7 +107,7 @@ jobs:
       - name: Upload Trivy SARIF results
         if: always()
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4
         with:
           sarif_file: trivy-results.sarif
 

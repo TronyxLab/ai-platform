@@ -1,12 +1,16 @@
 # GREP_SUMMARY: GitHub Actions CI/CD deploy reusable workflow frontend
-# STRUCTURE: on(push:main) → deploy(uses {{ORG_NAME}}/ai-platform/deploy-project.yml)
+# STRUCTURE: on(push:main) → deploy(uses {{ORG_NAME}}/ai-platform/deploy-project.yml@sha-pin)
 # region MODULE_CONTRACT
 ## @purpose  Simplified CI/CD: build+delegation to reusable platform workflow (T13)
 ## @invariants
 ##   - Единственный job делегирует в reusable workflow платформы
 ##   - secrets: inherit — CI_DEPLOY_KEY, GITHUB_TOKEN наследуются
 ##   - org-agnostic ({{ORG_NAME}} заменяется при scaffold)
+##   - Reusable workflow запинен на full commit SHA платформы (REF-0012,
+##     meta-refactoring W0): обновление пина — сознательный bump в проекте;
+##     mirror/context-promote сохраняют commit SHA, пин резолвится во всех org
 ##   - ≤40 строк, ≤15 non-comment
+## @changes 2026-08-24 | REF-0012: deploy-project.yml@main → @<full-sha>
 # endregion MODULE_CONTRACT
 name: Deploy
 
@@ -16,7 +20,7 @@ on:
 
 jobs:
   deploy:
-    uses: {{ORG_NAME}}/ai-platform/.github/workflows/deploy-project.yml@main
+    uses: {{ORG_NAME}}/ai-platform/.github/workflows/deploy-project.yml@4425ce0835665b1d0a9ef3f1e2cbf702663645ed # main snapshot 2026-08-24 (REF-0012)
     with:
       project_name: {{PROJECT_NAME}}
     secrets: inherit

@@ -28,6 +28,9 @@
 ##            2026-08-01 · DevPlan 116 B5 T8 — 4 fallback-константы удалены (D2, fail-visible);
 ##                       cwd-эвристика удалена; accessors без fallback-аргумента
 ##            2026-08-01 · DevPlan 117 D23 — чтение platform-env.yaml → platform-infra.yaml (SoT)
+##            2026-08-24 · REF-0013 (Волна 0) — _loaded-latch ставится ТОЛЬКО после успешного
+##                       load (раньше `_loaded=True` до чтения файла навсегда фиксировал пустые
+##                       defaults при transient-сбое); +reset_cache() (тесты/смена PLATFORM_ROOT)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -52,12 +55,30 @@ _defaults: dict[str, str] = {}
 _loaded = False
 
 
+# region FUNC_reset_cache
+## @purpose  Сбросить module-level кэш (REF-0013): тесты и смена PLATFORM_ROOT между вызовами.
+## @io       None → None (mutates _defaults/_loaded)
+## @complexity O(1)
+def reset_cache() -> None:
+    """Reset the module-level defaults cache (next get_default() re-reads SoT)."""
+    global _defaults, _loaded
+    _defaults = {}
+    _loaded = False
+    logger.info("[IMP:8][platform_config] Defaults cache reset")
+
+
+# endregion FUNC_reset_cache
+
+
 # region FUNC__load_defaults
 ## @purpose  Load env_defaults from platform-infra.yaml (SoT, DevPlan 117 D23), cache in module-level dict
 ## @io       None (reads file) → None (populates _defaults)
 ## @complexity  O(N) where N = number of env_defaults entries
 ## @invariants
-##   - Idempotent: second call is no-op (guarded by _loaded flag)
+##   - Idempotent on SUCCESS: second call is no-op (guarded by _loaded flag)
+##   - REF-0013: _loaded ставится ТОЛЬКО после успешной загрузки — при missing/parse-сбое
+##     latch остаётся открытым и следующий вызов повторит попытку (транзиентный сбой
+##     платформы больше не «навсегда» фиксирует пустые defaults)
 ##   - Читает platform-infra.yaml (SoT), НЕ generated platform-env.yaml:
 ##     генерированная копия может расходиться с SoT; единый loader устраняет источник дрейфа
 ##   - Path-резолвинг: (1) PLATFORM_ROOT env → Path(PLATFORM_ROOT)/core/platform-infra.yaml;
@@ -70,12 +91,11 @@ def _load_defaults() -> None:
     (1) env PLATFORM_ROOT → Path(PLATFORM_ROOT)/core/platform-infra.yaml (VPS layout:
     /opt/platform/core/platform-infra.yaml);
     (2) script-relative корень репо (core/internal/config/ → 4 уровня вверх → repo_root/core/).
-    При отсутствии файла — "" (fail-visible).
+    При отсутствии файла — "" (fail-visible); latch НЕ закрывается (REF-0013) — retry разрешён.
     """
     global _defaults, _loaded
     if _loaded:
         return
-    _loaded = True
 
     yaml_path: Path | None = None
 
@@ -96,7 +116,7 @@ def _load_defaults() -> None:
     if yaml_path is None:
         logger.warning(
             "[IMP:7][platform_config] platform-infra.yaml not found (PLATFORM_ROOT=%s, script-relative) — "
-            "defaults = '' (fail-visible, D2)",
+            "defaults = '' (fail-visible, D2; latch stays open — next call retries)",
             platform_root or "<unset>",
         )
         return
@@ -115,6 +135,8 @@ def _load_defaults() -> None:
             return
         # W11: isinstance-narrowed dict is dict[Unknown, Unknown] → cast typed boundary
         _defaults = {str(k): str(v) for k, v in cast(dict[str, object], env_defaults).items()}
+        # REF-0013: latch ТОЛЬКО после успешного populate
+        _loaded = True
         logger.info(
             "[IMP:8][platform_config] Loaded %d defaults from %s",
             len(_defaults),
@@ -122,7 +144,7 @@ def _load_defaults() -> None:
         )
     except (FileNotFoundError, yaml.YAMLError, OSError) as e:
         logger.warning(
-            "[IMP:7][platform_config] Failed to load %s: %s — defaults = '' (fail-visible, D2)",
+            "[IMP:7][platform_config] Failed to load %s: %s — defaults = '' (fail-visible, D2; latch stays open)",
             yaml_path,
             e,
         )

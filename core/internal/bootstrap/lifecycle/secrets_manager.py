@@ -43,6 +43,12 @@
 ##             +_ensure_derived_passwords — HERMES_DASHBOARD_PASSWORD/GF_SECURITY_ADMIN_PASSWORD/
 ##             LANGFUSE_INIT_USER_PASSWORD получают СОБСТВЕННЫЕ случайные значения при первом
 ##             bootstrap (M7/B.8 — разрыв unified-auth конвенции, единый пароль = blast radius)
+## @changes  2026-08-24 | REF-0013 (Волна 0) — merge-guard Step 3.5/_persist_new_vars: непустой
+##             secrets.env, распарсившийся в 0 записей, БОЛЬШЕ НЕ перезаписывается набором
+##             `{} + generated` (ConfigValidationError/ValueError ДО atomic write — операторские
+##             секреты GHCR_PULL_TOKEN/TELEGRAM_*/PLATFORM_MASTER_* не уничтожаются);
+##             +apply_env_file_to_osenv — file-wins после decrypt с protected-allowlist
+##             жизненного цикла (свежий decrypt больше не проигрывает stale os.environ)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -52,7 +58,7 @@ import os
 import secrets
 import subprocess
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, TypedDict, cast
 
@@ -173,6 +179,89 @@ except ModuleNotFoundError:
     CONVERGE_DOCKER_TIMEOUT = cast(int, _impl_timeout)  # pyright: ignore[reportConstantRedefinition] — W11-G3: script-mode fallback rebinding той же константы (try-ветка — канонический импорт)
 
 logger = logging.getLogger(__name__)
+
+
+# ── REF-0013: protected allowlist для file-wins применения secrets.env ──
+# Эти переменные управляются оркестрацией жизненного цикла (bootstrap/CI/dev-машина) и
+# НЕ перезаписываются значениями из secrets.env: AGE-ключ, использованный для расшифровки,
+# пути артефактов и идентификатор ноды. Операторские секреты (GHCR_PULL_TOKEN, TELEGRAM_*,
+# PLATFORM_MASTER_*, пароли сервисов) — file-wins: свежий decrypt ПЕРЕЗАПИСЫВАЕТ stale
+# os.environ (инверсия прежнего `if k not in os.environ`).
+_LIFECYCLE_PROTECTED_ENV_VARS: frozenset[str] = frozenset({
+    "AGE_SECRET_KEY",
+    "AGE_SECRET_KEY_FILE",
+    "SOPS_AGE_KEY",
+    "SECRETS_FILE",
+    "SECRETS_ENV_FILE",
+    "NODE_NAME",
+    "NODE_CONFIGS_DIR",
+    "NODE_YAML",
+    "CORE_DIR",
+    "PLATFORM_ROOT",
+    "TOR_ENABLED",
+})
+
+
+# region FUNC_apply_env_file_to_osenv
+## @purpose — Применить распарсенный secrets.env к os.environ в режиме file-wins (REF-0013):
+##            значение файла ПЕРЕЗАПИСЫВАЕТ os.environ (свежий decrypt выигрывает у stale env),
+##            КРОМЕ _LIFECYCLE_PROTECTED_ENV_VARS — там os.environ сохраняется.
+## @io — ⇥ env_vars: Mapping[str, str], label: str (для логов) → ⎋ int (число применённых override)
+## @complexity — O(N) where N = vars in env_vars
+## @invariants
+##   - file-wins: secrets.env значение сильнее существующего os.environ (кроме protected)
+##   - Protected-переменные никогда не перезаписываются из файла (AGE_SECRET_KEY и др.)
+##   - Значение применяется только если отличается (безшумный no-op при совпадении)
+def apply_env_file_to_osenv(env_vars: Mapping[str, str], *, label: str = "secrets.env") -> int:
+    """Apply parsed secrets to os.environ with file-wins semantics + protected allowlist."""
+    overridden = 0
+    protected_kept = 0
+    for key, value in env_vars.items():
+        if key in _LIFECYCLE_PROTECTED_ENV_VARS:
+            if os.environ.get(key, "") != value:
+                protected_kept += 1
+                logger.info(
+                    "[IMP:7][secrets_manager] %s is lifecycle-controlled — keeping os.environ value (not overridden by %s)",
+                    key,
+                    label,
+                )
+            continue
+        if os.environ.get(key, "") != value:
+            os.environ[key] = value
+            overridden += 1
+    logger.info(
+        "[IMP:9][secrets_manager] %s → os.environ: %d applied (file-wins), %d protected kept (%d total)",
+        label,
+        overridden,
+        protected_kept,
+        len(env_vars),
+    )
+    return overridden
+
+
+# endregion FUNC_apply_env_file_to_osenv
+
+
+# region FUNC_has_unparsed_content
+## @purpose — Проверка «в файле есть значимый нераспарсенный контент» для merge-guard'ов
+##            (REF-0013): строки вне комментариев и пустых строк. Comment-only/whitespace
+##            файл семантически ПУСТ (парсер даёт {}, терять нечего) — guard НЕ триггерит;
+##            мусорные/непарсабельные строки — данные под риском потери → guard триггерит.
+## @io — ⇥ path: Path → ⎋ bool
+## @complexity — O(N) where N = lines in file
+def _has_unparsed_content(path: Path) -> bool:
+    """True if file contains non-blank, non-comment lines (meaningful content at risk)."""
+    try:
+        for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            stripped = raw_line.strip()
+            if stripped and not stripped.startswith("#"):
+                return True
+    except OSError:
+        return False
+    return False
+
+
+# endregion FUNC_has_unparsed_content
 
 
 # region FUNC_source_secrets_env
@@ -438,7 +527,9 @@ def _persist_to_sops(var_name: str, var_value: str, enc_file: str) -> bool:
 ## @io — ⇥ manifest_path: str, secrets_env: str, persist_to_sops: bool → ⎋ list[str] (generated var names)
 ## @complexity — O(N * M) where N = secrets to check, M = subprocess per generation
 ## @invariants
-##   - Never raises — returns partial list on failure
+##   - Never raises — returns partial list on failure; ЕДИНСТВЕННОЕ исключение (REF-0013):
+##     merge-guard Step 3.5 → ConfigValidationError, если secrets.env непуст на диске,
+##     но распарсился в 0 записей (перезапись операторских секретов запрещена)
 ##   - Existing secrets (already in os.environ or secrets.env) are NOT overwritten
 ##   - Appends generated VAR=VALUE pairs to secrets_env file
 ##   - sops persistence is optional (persist_to_sops param)
@@ -453,11 +544,15 @@ def ensure_secrets(
         secrets_env = str(_resolve_secrets_env())
     generated: list[str] = []
 
-    # ── Step 1: Source existing secrets.env into os.environ ──
+    # ── Step 1: Source existing secrets.env into os.environ (file-wins — REF-0013) ──
+    # ⚠️ TRAP[BUG] · 2026-08-24 · P1 · REF-0013 · stale os.environ обыгрывал свежий decrypt
+    # · Symptom: после повторной расшифровки secrets.env содержал НОВЫЕ значения, но
+    # ·   `if key not in os.environ: os.environ[key] = value` оставлял в env СТАРЫЕ —
+    # ·   downstream-фазы читали протухшие секреты, расходящиеся с файлом на диске.
+    # · Root: inverted precedence — env-win вместо file-win.
+    # · Fix: apply_env_file_to_osenv — файл выигрывает, кроме protected lifecycle-переменных.
     env_vars = source_secrets_env(secrets_env)
-    for key, value in env_vars.items():
-        if key not in os.environ:
-            os.environ[key] = value
+    apply_env_file_to_osenv(env_vars, label=secrets_env)
 
     # ── Step 2: Read manifest for tier=generated secrets (STRICT — raises if missing) ──
     # Hardcoded fallback list не используется: manifest всегда доставляется с core/ —
@@ -511,9 +606,31 @@ def ensure_secrets(
 
     # ── Step 3.5: Atomic overwrite — merge existing + generated → write once ──
     if generated_vars:
+        # ── Merge-guard (REF-0013): непустой файл, распарсившийся в 0 записей ──
+        # ⚠️ TRAP[BUG] · 2026-08-24 · P0 · REF-0013 · merge-from-parsed-copy уничтожал операторские секреты
+        # · Symptom: decrypt/source вернул {} при непустом secrets.env на диске (сбой парсинга,
+        # ·   пустой результат расшифровки) → Step 3.5 атомарно записывал `{} + generated` —
+        # ·   GHCR_PULL_TOKEN/TELEGRAM_*/PLATFORM_MASTER_* необратимо терялись.
+        # · Root: merge строился от parsed-копии без сверкой с фактом файла на диске.
+        # · Fix: guard ДО записи — не-empty файл + 0 распарсенных записей → abort (ConfigValidationError);
+        # ·   файл остаётся нетронутым, φ4 получает FATAL через phase-обёртку.
+        # · Prevention: tests/unit/test_secrets_merge_guard.py.
+        secrets_path = Path(secrets_env)
+        file_has_content = secrets_path.is_file() and _has_unparsed_content(secrets_path)
+        if not env_vars and file_has_content:
+            logger.error(
+                "[IMP:10][secrets_manager] MERGE-GUARD: %s has unparsed non-comment content but parsed to 0 entries — "
+                "aborting BEFORE atomic overwrite (existing secrets preserved)",
+                secrets_env,
+            )
+            msg = (
+                f"Merge-guard: {secrets_env} is non-empty but parsed to 0 entries — "
+                "refusing to overwrite operator secrets with generated-only set"
+            )
+            raise ConfigValidationError(msg)
+
         # ruff: ignore[PLW0717] — try вложен в условный блок внутри функции — после-try чтение локалей неанализируемо
         try:
-            secrets_path = Path(secrets_env)
             secrets_path.parent.mkdir(parents=True, exist_ok=True)
 
             # Build the complete env file content: existing + newly generated
@@ -704,6 +821,19 @@ def _persist_new_vars(
     secrets_path = Path(secrets_env)
     secrets_path.parent.mkdir(parents=True, exist_ok=True)
     env_vars = parse_secrets_env(secrets_env)
+    # ── Merge-guard (REF-0013): тот же инвариант, что Step 3.5 — файл со значимым
+    # нераспарсенным контентом (вне комментариев) не даёт себя перезаписать autogen-набором.
+    # Comment-only/blank файл семантически пуст (парсер-контракт: only-comments → {}) —
+    # перезапись легитимна (DevPlan 176 flow). ConfigValidationError (typed hierarchy,
+    # static-detector contract): вызывающие ловят (OSError, ConfigValidationError)
+    # и остаются non-fatal по дизайну autogen — файл НЕ тронут, значения живут в os.environ,
+    # проблема видна громким warning вместо тихой потери содержимого.
+    if not env_vars and secrets_path.is_file() and _has_unparsed_content(secrets_path):
+        msg = (
+            f"Merge-guard: {secrets_env} has unparsed non-comment content but parsed to 0 entries — "
+            f"refusing to persist {log_label} over unparsed content"
+        )
+        raise ConfigValidationError(msg)
     merged: dict[str, str] = dict(env_vars)
     merged.update(new_vars)
     tmp_path = secrets_path.with_suffix(".env.tmp")
@@ -752,7 +882,7 @@ def _ensure_master_credentials(secrets_env: str) -> None:
     # Persist в secrets.env: merge + atomic write (тот же паттерн, что Step 3.5)
     try:
         _persist_new_vars("Master credentials", new_vars, parse_secrets_env, secrets_env)
-    except (OSError, ValueError) as e:
+    except (OSError, ConfigValidationError, ValueError) as e:
         logger.warning(
             "[IMP:7][secrets_manager] Cannot persist master credentials to %s: %s — "
             "values are in os.environ but NOT in secrets.env",
@@ -840,7 +970,7 @@ def _ensure_derived_passwords(secrets_env: str) -> None:
     # Persist в secrets.env: merge + atomic write (тот же паттерн, что master creds)
     try:
         _persist_new_vars("Derived service passwords", new_vars, parse_secrets_env, secrets_env)
-    except (OSError, ValueError) as e:
+    except (OSError, ConfigValidationError, ValueError) as e:
         logger.warning(
             "[IMP:7][secrets_manager] Cannot persist derived passwords to %s: %s — "
             "values are in os.environ but NOT in secrets.env",

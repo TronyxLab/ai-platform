@@ -13,8 +13,9 @@ services:
   minio:
     container_name: minio-test
     restart: "no"
-    networks: !override  # DevPlan 017 W2.3 — test-shared-db-net only (no backup-net in tests)
+    networks: !override  # DevPlan 017 W2.3 + REF-0010 — test-shared-db-net (backup path) + test-observability-net (metrics scrape)
       - test-shared-db-net
+      - test-observability-net
     ports: !override []  # ⚠️ TRAP[BUG] · 2026-07-18 · HIGH · compose merge склеивает ports base+test → тестовый minio биндит 9000/9001 (F-7) · Fix: !override — minio internal-only в тестах
 
   minio-createbuckets:
@@ -24,4 +25,6 @@ services:
 
 networks:
   test-shared-db-net:
+    external: true
+  test-observability-net:
     external: true

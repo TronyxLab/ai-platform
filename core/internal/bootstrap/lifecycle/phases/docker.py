@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: phases-docker, registry-auth, deploy-services, registry-update, deploy-update, bootstrap-phase, ghcr, deploy-modules, E3, T2.1, ghcr-auth-step, apply-policy-script
-# STRUCTURE: ▶ docker-фазы (φ6 φ8 φ11 φ12) → ◇ each: pre-check → execute → post-check → ⊕ LDD logs → ⎋ bool/exception
+# GREP_SUMMARY: phases-docker, registry-auth, deploy-services, registry-update, deploy-update, bootstrap-phase, ghcr, deploy-modules, E3, T2.1, ghcr-auth-step, apply-policy-script, hc-done-marker, run-scope, REF-0005, stale-sweep
+# STRUCTURE: ▶ docker-фазы (φ6 φ8 φ11 φ12) → ◇ each: pre-check → [φ8/φ12: _sweep_stale_hc_markers] → execute → post-check → ⊕ LDD logs → ⎋ bool/exception
 #           → ◇ T2.1: GHCR-блок φ6/φ11 → общий _ghcr_auth_step; policy-блоки φ12 → _apply_policy_script
 # region MODULE_CONTRACT
 ## @purpose  Docker/registry-domain bootstrap phases (DevPlan 119 E3) — φ6 registry_auth, φ8
@@ -20,11 +20,15 @@
 ## @changes  2026-08-13 · DevPlan 160 E3 — _registry_step_firewall +runner/+env (DI)
 ## @changes  2026-08-22 · T2.1 — GHCR-блок φ6/φ11 → общий _ghcr_auth_step
 ##           (_registry_step_ghcr_auth удалён — дубль); policy-блоки φ12 → _apply_policy_script
+## @changes  2026-08-24 · REF-0005 (DevPlan 11 W0) — run-scoped hc_done: читатель находит
+##           <base>[.<ctx>].<run-id> формы; свип stale-маркеров на старте φ8/φ12 (unlink-on-init)
 # endregion MODULE_CONTRACT
 from __future__ import annotations
 
+import glob
 import logging
 import os
+import re
 import subprocess
 from collections.abc import Callable, Mapping
 
@@ -159,6 +163,10 @@ def phase_deploy_services(core_dir: str, node_name: str, node_yaml: str) -> bool
         raise ConfigNotFoundError(msg)
 
     non_fatal_issues = False
+
+    # ── REF-0005: unlink-on-init — stale hc-done маркеры прошлых прогонов снимаются ДО деплоя,
+    # иначе маркер чужого запуска гасит глубокий healthcheck (success-marker до доказательства).
+    _ = _sweep_stale_hc_markers()
 
     # ── 1. Deploy modules (docker + system) via deploy-modules.sh ──
     deploy_script = os.path.join(core_dir, "internal", "bootstrap", "deploy-modules.sh")
@@ -571,12 +579,98 @@ def _registry_step_llm_provision(core_dir: str) -> bool:
 # endregion FUNC__registry_step_llm_provision
 
 
+# region FUNC__find_run_scoped_hc_markers
+## @purpose  REF-0005: найти run-scoped hc-done маркеры данного scope — `<stem>.<run-id>`,
+##           run-id = YYYYMMDDTHHMMSS-<pid> (писатель: deploy_orchestrator._set_hc_marker).
+##           stem — ПОЛНАЯ база маркера БЕЗ run-id (уже с суффиксом контекста при наличии):
+##           orchestrator_metrics.hc_marker_path(context); единый SoT читателя и писателя.
+## @io       ⇥ stem: str (полный путь-база), glob_fn DI → ⎋ list[str] (отсортированные пути)
+## @complexity O(M) где M = число маркеров в state-dir
+## @invariants
+##   - Формат run-id однозначен: контекстные имена (kebab/org) не матчатся \d{8}T\d{6}-\d+
+##   - Scope задаётся stem'ом: чужие контексты не попадают в результат (T9.19)
+_HC_RUN_ID_RE = re.compile(r"\d{8}T\d{6}-\d+$")
+
+
+def _find_run_scoped_hc_markers(
+    stem: str,
+    glob_fn: Callable[[str], list[str]] | None = None,
+) -> list[str]:
+    """Return sorted run-scoped hc-done marker paths under the full marker-base ``stem``."""
+    prefix = f"{stem}."
+    finder = glob.glob if glob_fn is None else glob_fn
+    found: list[str] = []
+    for path in sorted(finder(glob.escape(prefix) + "*")):
+        suffix = path[len(prefix) :]
+        if suffix and _HC_RUN_ID_RE.fullmatch(suffix):
+            found.append(path)
+    return found
+
+
+# endregion FUNC__find_run_scoped_hc_markers
+
+
+# region FUNC__sweep_stale_hc_markers
+## @purpose  REF-0005 unlink-on-init/update: снять stale hc-done маркеры СВОЕГО scope до старта
+##           деплоя (φ8/φ12) — legacy точные формы (bare / per-context, писатели до REF-0005)
+##           и run-scoped маркеры прошлых прогонов. Без свипа маркер чужого запуска гасит
+##           единственный глубокий healthcheck φ11 (unlink→rewrite цикл, BUG-0501≡0703).
+## @io       ⇥ context: str | None (None → CONTEXT env; "" → single-node canon),
+##              glob_fn/unlink_fn DI (W-H) → ⎋ int — число удалённых маркеров
+## @complexity O(M) где M = число маркеров в state-dir
+## @invariants
+##   - Scope строго свой: context="" → bare + bare-run-scoped; context=X → X-legacy + X-run-scoped;
+##     чужие контексты НЕ затрагиваются (паритет с читателем _registry_step_healthcheck)
+##   - Best-effort: OSError → WARN, не raise (DEPLOY_BEST_EFFORT); FileNotFoundError — гонка снятия
+def _sweep_stale_hc_markers(
+    context: str | None = None,
+    *,
+    glob_fn: Callable[[str], list[str]] | None = None,
+    unlink_fn: Callable[[str], None] | None = None,
+) -> int:
+    """Remove stale hc-done markers of this scope at init/update start (REF-0005)."""
+    from core.internal.bootstrap.deploy.orchestrator_metrics import hc_marker_path as _hc_marker_path
+
+    resolved_context = os.environ.get("CONTEXT") if context is None else context
+    base = _hc_marker_path(resolved_context)
+    remover = os.unlink if unlink_fn is None else unlink_fn
+
+    candidates: list[str] = []
+    # Legacy точная форма этого scope (до REF-0005): hc_marker_path(context) — bare при
+    # пустом контексте, per-context иначе.
+    if os.path.isfile(base):
+        candidates.append(base)
+    candidates.extend(_find_run_scoped_hc_markers(base, glob_fn=glob_fn))
+
+    removed = 0
+    for path in candidates:
+        try:
+            remover(path)
+            removed += 1
+            logger.info("[IMP:8][phase:docker][hc_sweep] Removed stale hc-done marker: %s", path)
+        except FileNotFoundError:  # ruff: ignore[PERF203] — unlink per stale-marker; гонка снятия не фатальна
+            continue
+        except OSError as exc:
+            logger.warning("[IMP:7][phase:docker][hc_sweep] Cannot remove %s: %s", path, exc)
+    logger.info(
+        "[IMP:9][phase:docker][hc_sweep] Sweep done (context=%r): removed=%d",
+        resolved_context or "",
+        removed,
+    )
+    return removed
+
+
+# endregion FUNC__sweep_stale_hc_markers
+
+
 # region FUNC__registry_step_healthcheck
 ## @purpose  E3 sub-step 5 (healthcheck): standalone healthcheck, skip если маркер уже стоит.
 ## @io       ⇥ node_yaml: str → ⎋ bool (True = non-fatal issue occurred)
 ## @complexity O(M * R) where M = modules, R = retries
 ## @invariants
 ##   - `.hc_done_in_deploy` + суффикс контекста (per-context, T9.19) → skip + unlink (не issue)
+##   - REF-0005: run-scoped маркеры текущего прогона (<base>[.<ctx>].<run-id>) → skip + unlink;
+##     свип на старте φ8/φ12 гарантирует, что найденный маркер — этого прогона
 ##   - node.yaml отсутствует → WARN + True
 ##   - Сбой healthchecks → WARN + True (best-effort)
 def _registry_step_healthcheck(
@@ -585,6 +679,7 @@ def _registry_step_healthcheck(
     context: str | None = None,
     run_healthchecks_fn: Callable[..., object] | None = None,
     isfile_fn: Callable[[str], bool] | None = None,
+    glob_fn: Callable[[str], list[str]] | None = None,
 ) -> bool:
     """Standalone healthcheck sub-step (skip if already done in deploy)."""
     # T9.19 (B-11): маркер per-context (не node-global) — единый источник пути с писателем
@@ -597,16 +692,30 @@ def _registry_step_healthcheck(
     resolved_context = os.environ.get("CONTEXT") if context is None else context
     isfile_impl = os.path.isfile if isfile_fn is None else isfile_fn
     hc_done_marker = _hc_marker_path(resolved_context)
-    if isfile_impl(hc_done_marker):
+    # ⚠️ TRAP[BUG] · 2026-08-24 · P0 · вечный hc_done-маркер гасил последний healthcheck (REF-0005)
+    # · Symptom: φ11 пропускал единственный глубокий healthcheck по маркеру чужого/прошлого
+    #   запуска; параллельный путь писал маркер даже при failed-группах.
+    # · Root: success-marker до доказательства + маркер без run-scoping.
+    # · Fix: писатель пишет только при failed==[] и с run-id; читатель находит run-scoped формы;
+    #   свип на старте φ8/φ12 снимает stale-маркеры прошлого прогона.
+    # · Prevention: tests/unit/test_hc_marker_run_scope.py (honesty + run-scope + sweep).
+    run_scoped_markers = _find_run_scoped_hc_markers(hc_done_marker, glob_fn=glob_fn)
+    legacy_present = isfile_impl(hc_done_marker)
+    if legacy_present or run_scoped_markers:
         logger.info(
             "[IMP:9][phase:registry_update] Healthcheck already done during deploy "
-            "(DEPLOY_PARALLEL, marker %s) — skipping standalone healthcheck",
+            "(DEPLOY_PARALLEL, marker %s%s) — skipping standalone healthcheck",
             hc_done_marker,
+            f" + {len(run_scoped_markers)} run-scoped" if run_scoped_markers else "",
         )
         import contextlib
 
         with contextlib.suppress(OSError):
-            os.unlink(hc_done_marker)
+            if legacy_present:
+                os.unlink(hc_done_marker)
+        for stale in run_scoped_markers:
+            with contextlib.suppress(OSError):
+                os.unlink(stale)
         return False
     if not node_yaml or not isfile_impl(node_yaml):
         logger.warning("[IMP:7][phase:registry_update] node.yaml not found — skipping healthchecks")
@@ -693,6 +802,10 @@ def phase_deploy_update(core_dir: str, node_name: str, node_yaml: str) -> bool:
         raise ConfigNotFoundError(msg)
 
     non_fatal_issues = False
+
+    # ── REF-0005: unlink-on-update — stale hc-done маркеры прошлых прогонов снимаются ДО деплоя,
+    # иначе φ11 пропустит глубокий healthcheck по чужому success-marker'у.
+    _ = _sweep_stale_hc_markers()
 
     # ── 1. Deploy modules via deploy-modules.sh ──
     deploy_script = os.path.join(core_dir, "internal", "bootstrap", "deploy-modules.sh")

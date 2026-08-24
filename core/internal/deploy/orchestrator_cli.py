@@ -594,6 +594,7 @@ def _dispatch(
 ##   - НЕ вызывает orchestrator.deploy() (обход двойного канала: deploy() шаг 4 — локальный compose)
 ##   - host обязателен; NODE→host резолв — в makefiles/deploy.mk (extract_node_host)
 ##   - JSON stdout VPS парсится и пробрасывается в stdout; exit по status результата
+##     (REF-0003: rc=0 только DEPLOYED/SKIPPED — PARTIAL не успех, FAILED-healthcheck → exit 1)
 ##   🧐 TRAP[DECISION] · 2026-08-01 · — · deliver НЕ выполняет локальный compose
 ##   · Rejected: orchestrator.deploy() c ForcedCommandChannel (шаг 4 _deploy_compose — ЛОКАЛЬНЫЙ
 ##   ·   docker compose up; для remote-деплоя неприменим — compose на VPS выполняет receive)
@@ -674,8 +675,9 @@ def _handle_deliver(args: _CliArgs, *, channel_factory: Callable[[], DeliveryCha
 
     # Пробрасываем полный JSON с VPS (содержит project/version/sha/status — AC2)
     print(vps_json if vps_json else json.dumps(result))
+    # REF-0003: PARTIAL исключён из rc=0 — неуспешный healthcheck = честный exit 1
     status = result.get("status", "")
-    rc = 0 if status in {"DEPLOYED", "PARTIAL", "SKIPPED"} else 1
+    rc = 0 if status in {"DEPLOYED", "SKIPPED"} else 1
     # 170 W12 C7: IMP:9 на завершении deliver (LDD-пробел)
     logger.info("[IMP:9][deliver][done] project=%s version=%s status=%s rc=%d", args.project, args.version, status, rc)
     return rc

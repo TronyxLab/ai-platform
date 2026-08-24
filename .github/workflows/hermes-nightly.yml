@@ -19,6 +19,9 @@
 ##            node-update остаётся ручным (SSH + state.json + converge — операционное окно).
 ## @changes 2026-08-11 | DevPlan 145 W4 D-134-L4 — Created (weekly cron rebuild + push)
 ## @changes 2026-08-16 | DevPlan 002 W4 T4.5 — комментарии L1→L2 → «единый L2-образ» (таргеты не меняются)
+## @changes 2026-08-24 | REF-0012 (meta-refactoring W0): external actions → full commit SHA;
+##           CONTEXT в run:-шагах переведён на quoted-интерполяцию / ${CONTEXT} (workflow_dispatch
+##           input не попадает в шелл сырой интерполяцией).
 # endregion MODULE_CONTRACT
 
 name: hermes-nightly
@@ -51,15 +54,15 @@ jobs:
     steps:
       # ─── Step 1: Checkout ─────────────────────────────────────────────
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # ─── Step 2: Setup Docker (Buildx for multi-stage) ────────────────
       - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
 
       # ─── Step 3: Login to ghcr.io (L1 pull + L2 push) ─────────────────
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -69,11 +72,11 @@ jobs:
       # hermes-build-context: единый образ (base-стадия cached из BuildKit, final = context overlay).
       # CONTEXT определяет overlay (context_deployer.py ensure_context_repo).
       - name: Build L2 context image (CONTEXT=${{ env.CONTEXT }})
-        run: make hermes-build-context CONTEXT=${{ env.CONTEXT }}
+        run: make hermes-build-context CONTEXT="${{ env.CONTEXT }}"
 
       # ─── Step 5: Push L2 to ghcr.io ───────────────────────────────────
       - name: Push L2 to ghcr.io
-        run: make hermes-push-l2 CONTEXT=${{ env.CONTEXT }}
+        run: make hermes-push-l2 CONTEXT="${{ env.CONTEXT }}"
 
       # ─── Step 6: Summary (manual node-update reminder) ────────────────
       # node-update НЕ запускается автоматически — требует SSH + state.json + converge.
@@ -83,7 +86,7 @@ jobs:
         run: |
           echo "## Hermes Nightly Rebuild Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- Context: \`${{ env.CONTEXT }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Context: \`${CONTEXT}\`" >> $GITHUB_STEP_SUMMARY
           echo "- L2 image: pushed to ghcr.io" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### ⚠️ Manual action required" >> $GITHUB_STEP_SUMMARY

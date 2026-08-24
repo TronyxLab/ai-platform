@@ -495,27 +495,28 @@ def phase_system_bootstrap(
         issues=issues,
     )
 
-    # ── 5.6 sshd MaxStartups drop-in (DevPlan 136 W3, non-fatal) ──
+    # ── 5.6 sshd hardening drop-in (DevPlan 136 W3; REF-0016: apply-failure = BLOCKING) ──
     # ⚠️ TRAP[DECISION] · 2026-08-05 · MED · missing security_posture.py → WARN (не non_fatal)
     # · Rejected: non_fatal (паттерн security_updates.py шаг 5.5) — ломает committed-фикстуры
     # ·   test_state_machine.py (happy path «все True» без security_posture.py)
     # · Reason: best-effort hardening; реальная нода всегда имеет скрипт (core-доставка)
     # · Rev: если security_posture.py станет обязательным прекондишеном φ1 — перейти на non_fatal
+    # ⚠️ TRAP[DECISION] · 2026-08-24 · HI · apply-FAILURE → BLOCKING, не WARN (REF-0016/SEC-0002)
+    # · Rejected: прежний best-effort (non_fatal=True + безусловный ok_msg — rc!=0 проходил молча):
+    # ·   тихий провал apply = «root только по ключу» может быть ложью без единого сигнала
+    # · Reason: sshd-политика — сильнейший security-invariant ноды; провал apply обязан валить φ1
+    # ·   (check=True → rc!=0/not-found/timeout → PlatformFatalError), missing-скрипт остаётся WARN
+    # ·   (TRAP выше — обратная совместимость фикстур; реальная нода всегда доставляет скрипт)
+    # · Rev: если появится окружение без systemd/sshd (контейнер) — guard через facts/env-флаг
     posture_script = os.path.join(core_dir, "internal", "bootstrap", "security_posture.py")
-    _run_best_effort_script(
-        runner=runner,
-        facts=facts,
-        script=posture_script,
-        args=["--apply-sshd"],
-        timeout=LIFECYCLE_CMD_TIMEOUT,
-        ok_msg="[IMP:9][phase:system_bootstrap] sshd MaxStartups drop-in applied",
-        warn_msg="[IMP:7][phase:system_bootstrap] sshd MaxStartups drop-in failed (non-fatal): %s",
-        missing_msg=(
-            f"[IMP:7][phase:system_bootstrap] security_posture.py not found at {posture_script} — skipping MaxStartups"
-        ),
-        missing_non_fatal=False,
-        issues=issues,
-    )
+    if facts.path_isfile(posture_script):
+        runner.run(["python3", posture_script, "--apply-sshd"], check=True, timeout=LIFECYCLE_CMD_TIMEOUT)
+        logger.info("[IMP:9][phase:system_bootstrap] sshd hardening drop-in applied")
+    else:
+        logger.warning(
+            "[IMP:7][phase:system_bootstrap] security_posture.py not found at %s — skipping sshd hardening",
+            posture_script,
+        )
 
     # ── 5.7 zram swap (DevPlan 162 W4-1, non-fatal) ──
     _best_effort(

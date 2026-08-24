@@ -138,8 +138,15 @@ scripts-audit:
 
 ## secrets-unlock: Decrypt SOPS/age secrets
 ##   Usage: make secrets-unlock [NODE=<name>]
+##   NODE=<name> — bare имя ноды: расшифровывает <node-configs-secrets-dir>/<NODE>.enc.yaml
+##   (dispatch в decrypt_secrets.py::resolve_enc_path, REF-0013 — без glob-подмены чужой нодой).
+##   Без NODE — SECRETS_FILE env или glob *.enc.yaml (single-node канон).
 ##   Delegates to core/entrypoints/secrets.sh
 secrets-unlock:
 	@echo "[IMP:7][make][secrets-unlock] Decrypting secrets..."
+	@if [ -n "$(NODE)" ] && ! printf '%s' "$(NODE)" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]*$$'; then \
+		echo "[IMP:10][make][secrets-unlock] ERROR: NODE='$(NODE)' не похоже на имя ноды (разделители путей/пробелы запрещены) — путь к enc-файлу задавайте через SECRETS_FILE" >&2; \
+		exit 1; \
+	fi
 	@$(_platform_root)/core/entrypoints/secrets.sh $(NODE)
 	@echo "[IMP:9][make][secrets-unlock] Secrets decrypted"

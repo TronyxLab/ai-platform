@@ -1,5 +1,5 @@
-# GREP_SUMMARY: platform-alerts recording-rules deploy-slo burn-rate image-size-budget backup-freshness prometheus native multi-node RemoteNodeDown LokiCollectorStale
-# STRUCTURE: ▶ groups → recording (deploy_success/duration rates) → deploy burn-rate alert → image-size budget alert → backup-freshness alert → multinode (RemoteNodeDown / LokiCollectorStale)
+# GREP_SUMMARY: platform-alerts recording-rules deploy-slo burn-rate image-size-budget backup-freshness prometheus native multi-node RemoteNodeDown LokiCollectorStale infra-up PgbouncerFacadeDown RedisCacheDown LangfuseQueue MinioScrapeDown AlloyCollectorDown
+# STRUCTURE: ▶ groups → recording (deploy_success/duration rates) → deploy burn-rate alert → image-size budget alert → backup-freshness alert → multinode (RemoteNodeDown / LokiCollectorStale) → infra-up (REF-0010: pgbouncer/redis/langfuse-queue/minio/alloy)
 # region MODULE_CONTRACT
 ## @purpose  Платформенные native Prometheus rules (170 W12 C5, SLO-минимум): recording rules
 ##           deploy-success/duration + burn-rate alert + image-size budget alert + backup-freshness.
@@ -27,6 +27,10 @@
 ##            нет, freshness коллектора наблюдаем через scrape Loki (distributor-счётчики).
 ## @changes  2026-08-15 | DevPlan 170 W12 C5/C6 — Created
 ## @changes  2026-08-22 | DevPlan 010 T3.4 — +RemoteNodeDown/LokiCollectorStale (multi-node)
+## @changes  2026-08-24 | REF-0010 — +группа platform-infra-up: PgBouncerFacadeDown /
+##           RedisCacheDown / LangfuseQueue{RedisDown,Eviction,MemoryPressure} /
+##           MinioScrapeDown / AlloyCollectorDown (экспортёр жив ≠ демон жив;
+##           noeviction-дрейф детектится через evicted_keys)
 # endregion MODULE_CONTRACT
 
 groups:
@@ -151,3 +155,125 @@ groups:
             Loki is down (collectors cannot ship logs) or no log data was received
             for 15 minutes after at least 6h of traffic — collectors are stale.
             Check log-collector (Alloy) on each node and Loki itself.
+
+  # ── Infra honesty up/rules (REF-0010, 2026-08-24) ──────────────────────────
+  # Класс FAIL-0100/1001: «exporter жив ≠ демон жив» — scrape-порт экспортёра отвечал,
+  # пока демон под ним умирал. Каждый алерт бьёт в ДЕМОН, а не в экспортер:
+  #   - pgbouncer: up{job="pgbouncer-exporter"}==0 — фасад БД недостижим (критично:
+  #     единственный путь проектов к postgres);
+  #   - redis main/langfuse queue: redis_up==0 — exporter не может подключиться к демону
+  #     (метрика redis_exporter'а, 1=подключение ок);
+  #   - langfuse evicted_keys>0 — регрессия noeviction-политики (очередь снова тихо
+  #     выбрасывает backlog при allkeys-lru — детектор дрейфа конфига);
+  #   - minio/alloy: file_sd/static target down.
+  # required_module-gating рендера (prometheus_targets.py): модуль выключен → targets=[]
+  # → серия отсутствует → алерт НЕ firing. for-окна анти-флаппинг (scrape 30s).
+  - name: "platform-infra-up"
+    interval: 30s
+    rules:
+      # ── PgBouncerFacadeDown (единственный фасад БД; critical) ────────────────
+      - alert: "PgBouncerFacadeDown"
+        expr: 'up{job="pgbouncer-exporter"} == 0'
+        for: "2m"
+        labels:
+          severity: "critical"
+          service: "platform-db-pool"
+        annotations:
+          summary: "PgBouncer unreachable: {{ $labels.instance }}"
+          description: >
+            Prometheus cannot scrape the PgBouncer exporter (job=pgbouncer-exporter)
+            on {{ $labels.instance }} for over 2 minutes — the connection pool is down
+            or unreachable. All project DB traffic goes through this facade; expect
+            project-wide database failures. Check pgbouncer container and shared-db-net.
+
+      # ── RedisCacheDown (демон кэша мёртв при живом экспортёре) ───────────────
+      - alert: "RedisCacheDown"
+        expr: 'redis_up{job="redis-exporter"} == 0'
+        for: "2m"
+        labels:
+          severity: "critical"
+          service: "platform-cache"
+        annotations:
+          summary: "Redis daemon unreachable (cache)"
+          description: >
+            redis_exporter cannot connect to the redis daemon (redis_up == 0) for over
+            2 minutes — the cache is down. Cache-only instance (no persistence): clients
+            will see connection errors until it recovers. Check redis container health.
+
+      # ── LangfuseQueueRedisDown (очередь ingestion мертва) ────────────────────
+      - alert: "LangfuseQueueRedisDown"
+        expr: 'redis_up{job="langfuse-redis-exporter"} == 0'
+        for: "2m"
+        labels:
+          severity: "critical"
+          service: "langfuse-queue"
+        annotations:
+          summary: "Langfuse ingestion queue Redis unreachable"
+          description: >
+            redis_exporter cannot connect to langfuse-redis (redis_up == 0) for over
+            2 minutes — LLM tracing ingestion is degraded (web accepts but workers
+            cannot dequeue). Check langfuse-redis container and its AOF volume.
+
+      # ── LangfuseQueueEviction (детектор дрейфа noeviction) ───────────────────
+      # REF-0010: политика очереди = noeviction (переполнение = громкая ошибка записи).
+      # Любой рост evicted_keys означает, что кто-то вернул allkeys-lru/allkeys-lfu —
+      # молчаливая потеря трейсов возвращается. Алерт ловит это немедленно.
+      - alert: "LangfuseQueueEviction"
+        expr: 'increase(redis_evicted_keys_total{job="langfuse-redis-exporter"}[15m]) > 0'
+        labels:
+          severity: "warning"
+          service: "langfuse-queue"
+        annotations:
+          summary: "Langfuse queue redis evicted keys (policy drift?)"
+          description: >
+            langfuse-redis evicted {{ $value }} keys in 15m. The queue must run with
+            --maxmemory-policy noeviction: evictions mean silent trace loss. Check that
+            the compose command was not reverted to an lru/lfu policy.
+
+      # ── LangfuseQueueMemoryPressure (приближение к maxmemory) ────────────────
+      # noeviction: при used==max записи начинают падать с OOM-ошибкой — предупреждаем
+      # заранее (>90% ёмкости), чтобы расширить лимит ДО громких ошибок worker'ов.
+      - alert: "LangfuseQueueMemoryPressure"
+        expr: >
+          redis_memory_used_bytes{job="langfuse-redis-exporter"}
+          / redis_memory_max_bytes{job="langfuse-redis-exporter"} > 0.9
+        for: "10m"
+        labels:
+          severity: "warning"
+          service: "langfuse-queue"
+        annotations:
+          summary: "Langfuse queue redis memory >90% of maxmemory"
+          description: >
+            langfuse-redis holds more than 90% of its maxmemory budget for over 10m.
+            With noeviction, writes will start failing loudly at 100%. Raise the queue
+            maxmemory/container limit if the backlog is legitimate (worker lag).
+
+      # ── MinioScrapeDown (опциональный модуль: firing только когда включён) ───
+      # file_sd required_module="minio": модуль выключен → targets=[] → серия
+      # отсутствует → алерт НЕ firing. Включён и упал → warning.
+      - alert: "MinioScrapeDown"
+        expr: 'up{job="minio"} == 0'
+        for: "10m"
+        labels:
+          severity: "warning"
+          service: "platform-s3"
+        annotations:
+          summary: "MinIO metrics endpoint unreachable: {{ $labels.instance }}"
+          description: >
+            Prometheus cannot scrape MinIO cluster metrics (/minio/v2/metrics/cluster)
+            on {{ $labels.instance }} for over 10 minutes. Backup-cron S3 uploads and
+            langfuse event upload depend on this endpoint. Check minio container.
+
+      # ── AlloyCollectorDown (коллектор логов мёртв на obs-ноде) ───────────────
+      - alert: "AlloyCollectorDown"
+        expr: 'up{job="alloy"} == 0'
+        for: "5m"
+        labels:
+          severity: "warning"
+          service: "platform-logging"
+        annotations:
+          summary: "Alloy log collector unreachable: {{ $labels.instance }}"
+          description: >
+            Prometheus cannot scrape the Alloy HTTP server (job=alloy :12345) for over
+            5 minutes — the log collector is dead and container/journald logs are not
+            being shipped to Loki. Check log-collector module on the node.

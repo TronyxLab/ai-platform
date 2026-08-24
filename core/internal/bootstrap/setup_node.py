@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: setup-node sudoers visudo atomic node node-lifecycle platform PRIVESC hardening S-9 T10.7 python-facade W3.5-1
-# STRUCTURE: ▶ ┌NODE_NAME|hostname┐ → ◇ validate ^[a-zA-Z0-9_-]+$ (S-9, T10.7) → ⚡ render_sudoers (NOPASSWD-платформенные, 1:1 heredoc) → ⚡ temp 0440 (tmp_dir) → ◇ visudo -c -f (runner) → ⚡ os.replace atomic (lockout-safe) → ⎋ exit 0|1
+# GREP_SUMMARY: setup-node sudoers visudo atomic node node-lifecycle platform PRIVESC hardening S-9 T10.7 python-facade W3.5-1 arg-spec mode-pin REF-0016
+# STRUCTURE: ▶ ┌NODE_NAME|hostname┐ → ◇ validate ^[a-zA-Z0-9_-]+$ (S-9, T10.7) → ⚡ render_sudoers (NOPASSWD-платформенные, arg-spec pin REF-0016) → ⚡ temp 0440 (tmp_dir) → ◇ visudo -c -f (runner) → ⚡ os.replace atomic (lockout-safe) → ⎋ exit 0|1
 # region MODULE_CONTRACT
 ## @purpose  Генерация sudoers для платформенной ноды безопасно (DevPlan 164 W3.5-1, SH→Python) —
 ##           прямое замещение shell core/internal/bootstrap/setup-node.sh (135 LOC). Бизнес-логика
@@ -10,6 +10,9 @@
 ##           SSH-ключи создаются Python-фазой φ2 (lifecycle/helpers/users.py) — НЕ дублируются.
 ##           Содержимое sudoers НЕ МЕНЯЕТСЯ (1:1): сужение docker/rsync NOPASSWD (PRIVESC S-1/S-2/S-3),
 ##           nginx systemctl НЕТ (все ноды Docker), audit-путь /var/log/platform/audit.jsonl.
+##           Исключение REF-0016 (2026-08-24, SEC-0014 must-fix): node-lifecycle.sh правило получает
+##           arg-spec pin `--mode init` / `--mode update` — bare NOPASSWD допускал произвольные
+##           аргументы (--ci-root-key → root-backdoor в authorized_keys, --state-file → root-write).
 ## @scope    Вызывается из lifecycle/phases/system.py φ3 (phase_platform_setup) через setup-node.sh
 ##           (фасад, `bash setup-node.sh` — аргументы игнорируются, NODE_NAME env | hostname).
 ##           Чистые функции: validate_node_name / render_sudoers / utc_timestamp (без I/O).
@@ -19,10 +22,12 @@
 ##   - On visudo -c failure: оригинальный sudoers НЕ тронут, temp удалён, bootstrap abort (exit 1)
 ##   - NODE_NAME валидируется `^[a-zA-Z0-9_-]+$` ДО рендера sudoers-фрагмента (S-9, T10.7) —
 ##     /etc/sudoers.d/platform-${NODE_NAME} не принимает инъекцию пути
-##   - Содержимое генерируемого sudoers БАЙТ-ЭКВИВАЛЕНТНО прежнему heredoc (T10.1 сужение):
-##     platform NOPASSWD: node-lifecycle.sh + диагностика (ufw status verbose / cat audit.jsonl /
-##     ss -tlnp / iptables -t nat -L -n); НИКАКИХ docker compose/exec/ps/logs/restart/stats и
-##     rsync NOPASSWD (S-1/S-2/S-3 PRIVESC); НИКАКИХ sudo systemctl nginx (Docker-ноды)
+##   - Содержимое генерируемого sudoers БАЙТ-ЭКВИВАЛЕНТНО прежнему heredoc (T10.1 сужение),
+##     КРОМЕ arg-spec pin node-lifecycle.sh (REF-0016, единственное плановое изменение):
+##     platform NOPASSWD: node-lifecycle.sh --mode init|update + диагностика (ufw status verbose /
+##     cat audit.jsonl / ss -tlnp / iptables -t nat -L -n); НИКАКИХ docker compose/exec/ps/logs/
+##     restart/stats и rsync NOPASSWD (S-1/S-2/S-3 PRIVESC); НИКАКИХ sudo systemctl nginx
+##     (Docker-ноды)
 ##   - ci-deploy role SEPARATE от ci role (06 §4.2) — в этом sudoers только platform-записи
 ##   - audit-путь — /var/log/platform/audit.jsonl (ЕДИНЫЙ файл audit_logger.py; audit.log не используется)
 ##   - temp-файл создаётся в tmp_dir (default /tmp, shell mktemp /tmp/platform-sudoers-XXXXXX),
@@ -44,6 +49,16 @@
 ##            записи, а при тестах (non-root) запись в 0440 до записи невозможна. Безопасность
 ##            не меняется — файл НЕ является валидным sudoers до visudo -c (SC5).
 ## @changes 2026-08-14 | DevPlan 164 W3.5-1 — Created (SH→Python setup-node.sh 135 LOC → фасад <100)
+## @changes 2026-08-24 | REF-0016 (Волна 0, SEC-0014) — arg-spec pin node-lifecycle.sh (--mode init|update)
+## ⚠️ TRAP[DECISION] · 2026-08-24 · HI · sudoers arg-spec pin: --mode init/update (REF-0016/SEC-0014)
+## · Rejected: root-owned launcher-whitelist (обёртка, игнорирующая --*-key/--state-file) —
+## ·   полный запрет trailing-args; требует правки node-lifecycle.sh (вне файлового скоупа REF-0016)
+## · Reason: sudoers НЕ умеет негативных arg-паттернов (запретить конкретный флаг нельзя) — pin
+## ·   префикса --mode закрывает bare-вызов и канонизирует оба легитимных режима (init/update —
+## ·   единственные формы во всех вызовах платформы); остаточный риск (trailing args ПОСЛЕ pinned
+## ·   префикса, напр. `--mode init --ci-root-key …`) закрывается launcher-whitelist'ом пост-launch
+## · Rev: первый PR в node-lifecycle.sh после launch — добавить whitelist-флаги --ci-root-key/
+## ·   --owner-key/--state-file/--run-phase только для root-канала (не через sudo platform)
 ## ⚠️ TRAP[DECISION] · 2026-08-14 · HI · sudoers сужение platform: docker/rsync NOPASSWD удалены (T10.1)
 ## · (мигрирован из шапки прежнего setup-node.sh, TRAP[DECISION] 2026-08-05)
 ## · Rejected: оставить docker compose */exec */rsync * (риск: root-escape / root-запись — S-1/S-2/S-3)
@@ -142,7 +157,7 @@ def utc_timestamp(now: datetime | None = None) -> str:
 
 # region FUNC_render_sudoers
 def render_sudoers(node_name: str, platform_root: str, timestamp: str) -> str:
-    """Рендер sudoers-контента — БАЙТ-ЭКВИВАЛЕНТ прежнего heredoc setup-node.sh (1:1).
+    """Рендер sudoers-контента — heredoc-parity + arg-spec pin node-lifecycle (REF-0016).
 
     ▶ ┌node_name, platform_root, timestamp┐ → ⊕ f-string шаблон → ⎋ str (контент + trailing \n)
 
@@ -158,7 +173,9 @@ def render_sudoers(node_name: str, platform_root: str, timestamp: str) -> str:
     ##   - PRIVESC-паттерны (docker compose/exec/run, rsync *) — ТОЛЬКО в комментариях-объяснениях
     ##     (гейт сканирует некомментарные строки — allowlist пуст)
     ##   - audit-путь /var/log/platform/audit.jsonl (D1/T10.9 — ЕДИНЫЙ audit-файл)
-    ##   - Гейт-инвариант: platform ALL=(root) NOPASSWD: {platform_root}/core/internal/bootstrap/node-lifecycle.sh
+    ##   - Гейт-инвариант (REF-0016): platform ALL=(root) NOPASSWD:
+    ##     {platform_root}/core/internal/bootstrap/node-lifecycle.sh --mode init|update
+    ##     (arg-spec pin — bare-правило без аргументов запрещено, SEC-0014)
     """
     return (
         f"# core sudoers — {node_name}\n"
@@ -173,7 +190,10 @@ def render_sudoers(node_name: str, platform_root: str, timestamp: str) -> str:
         "# Rev: вернуть при появлении non-Docker ноды.\n"
         "\n"
         "# platform user: platform operations (контролируемый операционный скрипт, /opt/platform root-owned)\n"
-        f"platform ALL=(root) NOPASSWD: {platform_root}/core/internal/bootstrap/node-lifecycle.sh\n"
+        "# Arg-spec pin (REF-0016/SEC-0014): ТОЛЬКО --mode init|--mode update — вызов без pinned argv\n"
+        "# (в т.ч. --ci-root-key/--owner-key/--state-file/--run-phase) sudo ОТКЛОНИТ.\n"
+        f"platform ALL=(root) NOPASSWD: {platform_root}/core/internal/bootstrap/node-lifecycle.sh --mode init\n"
+        f"platform ALL=(root) NOPASSWD: {platform_root}/core/internal/bootstrap/node-lifecycle.sh --mode update\n"
         "\n"
         "# platform user: diagnostic commands\n"
         "platform ALL=(root) NOPASSWD: /usr/sbin/ufw status verbose\n"

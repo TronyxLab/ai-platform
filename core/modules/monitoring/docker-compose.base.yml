@@ -6,7 +6,7 @@
 ## @scope    Merged with root docker-compose.yml via include:
 ## @invariants
 ##   - profiles: [monitoring] — pluggability: only included when COMPOSE_PROFILES contains monitoring
-##   - Prometheus: 15d retention, file_sd_config, 512M memory limit
+##   - Prometheus: 15d retention.time + 5GB retention.size (REF-0010 ENOSPC-guard), file_sd_config, 512M memory limit
 ##   - Grafana: Alpine-based, provisioning datasources+dashboards+alerting, 256M limit
 ##   - Networks declared as external: true — pre-created by deploy-modules.sh
 ##   - All TRAP comments from root compose preserved
@@ -103,6 +103,11 @@ services:
       - "--config.file=/etc/prometheus/generated/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
       - "--storage.tsdb.retention.time=15d"
+      # [IMP:8][monitoring-compose] REF-0010 (FAIL-0402): retention.size — ENOSPC-guard.
+      # Disk-full гасил собственную сигнализацию (Prometheus перестаёт писать TSDB);
+      # size-потолок 5GB (<10% диска типовой ноды) останавливает приём раньше исчерпания,
+      # time-retention 15d остаётся первичным ограничителем.
+      - "--storage.tsdb.retention.size=5GB"
       - "--web.console.libraries=/usr/share/prometheus/console_libraries"
       - "--web.console.templates=/usr/share/prometheus/consoles"
 

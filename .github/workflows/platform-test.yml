@@ -21,6 +21,10 @@
 ## @changes — 2026-07-15 | D1 fix: observability→monitoring+logging paths
 ## @changes — 2026-07-15 | Removed basedpyright-tests (informational only, never blocked)
 ## @changes — 2026-07-15 | gitleaks inline install→composite action setup-gitleaks
+## @changes — 2026-08-24 | REF-0012 (meta-refactoring W0): external actions → full commit SHA;
+##           cache save/restore ОТКЛЮЧЁН на pull_request_target (pre-commit venv + gitleaks
+##           binary + docker gha-cache-write — poisoning-усилитель); secrets-bearing шаги
+##           (Docker Hub login, live-integration) не исполняются на pull_request_target.
 # endregion MODULE_CONTRACT
 
 name: platform-test
@@ -102,7 +106,7 @@ jobs:
     steps:
       # ─── Stage 1: Setup (fast gate — no Docker needed) ──────────────
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
 
@@ -112,6 +116,9 @@ jobs:
           python-version: '3.14'
           install-pre-commit: 'true'
           install-gitleaks: 'true'
+          # REF-0012: кэш /usr/local/bin/gitleaks НЕ используется на pull_request_target
+          # (poisoning-усилитель: trojaned binary персистентен между PR и main).
+          gitleaks-cache: ${{ github.event_name != 'pull_request_target' }}
           run-provisioner: 'false'
 
       # C-4 (DevPlan 136 W11 T11.6): слепой `|| true` УБРАН — fetch-провал не маскируется.
@@ -129,8 +136,11 @@ jobs:
 
       # DevPlan 123 T2 (P-14): ключ включает pyproject.toml hash (ruff-версия) —
       # прежний ключ только по .pre-commit-config.yaml давал cache-hit со старым venv.
+      # REF-0012: cache save/restore ОТКЛЮЧЁН на pull_request_target — PR-head код не пишет
+      # и не читает shared venv-кэш (poisoning между PR и main; никогда не кэшировать PR-path).
       - name: Cache pre-commit venv
-        uses: actions/cache@v6
+        if: github.event_name != 'pull_request_target'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ~/.cache/pre-commit
           key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}-${{ hashFiles('pyproject.toml') }}
@@ -163,16 +173,19 @@ jobs:
 
       # ─── Stage 2: Docker setup + provisioning ───────────────────────
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
 
       # C-11 (DevPlan 136 W11 T11.10): секрет передаётся ТОЛЬКО через docker/login-action
       # (action inputs, НЕ env:-ключи). env:-ключи обязаны регистрироваться в platform-env.yaml
       # env_defaults (test_gate_ci_env_vars.py — T7 SoT); DOCKER_HUB_TOKEN — CI-секрет, не platform
       # env-переменная. inline-интерполяция в run: запрещена (C-11: попадает в логи/шелл-историю).
       # ⚠️ TRAP[BUG] 141: secrets в steps.if ломал парсер workflow (0s fail) — условия через env.DOCKER_HUB_AUTH
+      # REF-0012: Docker Hub credentials НЕ доступны шагам PR-head кода на
+      # pull_request_target (hostile PR не может эксфильтровать DOCKER_HUB_TOKEN;
+      # anonymous pulls остаются рабочим fallback). Live-integration аналогично ниже.
       - name: Authenticate Docker Hub (rate limit mitigation)
-        if: env.DOCKER_HUB_AUTH == 'true'
-        uses: docker/login-action@v4
+        if: env.DOCKER_HUB_AUTH == 'true' && github.event_name != 'pull_request_target'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           username: ${{ secrets.DOCKER_HUB_USERNAME }}
           password: ${{ secrets.DOCKER_HUB_TOKEN }}
@@ -182,7 +195,7 @@ jobs:
         run: echo "[IMP:7][docker] DOCKER_HUB_TOKEN not set — using anonymous pulls (100/6h)"
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
@@ -275,6 +288,8 @@ jobs:
           tags: backup-cron:latest
           cache-scope: backup-cron
           cache-backend: gha
+          # REF-0012: на pull_request_target общий gha-кэш НЕ читается и НЕ сеется PR-head кодом
+          cache-write: ${{ github.event_name != 'pull_request_target' }}
 
       # DevPlan 002 W4 T4.4: единый образ hermes-agent-context (L1→L2 коллапс) — context = repo root,
       # file = единый Dockerfile; gha-cache переиспользует base-слои (multi-stage).
@@ -286,6 +301,7 @@ jobs:
           tags: hermes-agent-context:latest
           cache-scope: hermes-agent-context
           cache-backend: gha
+          cache-write: ${{ github.event_name != 'pull_request_target' }}
 
       - name: Diagnostic — verify built images
         run: |
@@ -428,7 +444,12 @@ jobs:
 
       # C-2 (DevPlan 136 W11 T11.2): continue-on-error УБРАН (см. integration_error_path).
       # live-mode сам выходит 0 при отсутствии API-ключей (fork PR path) — строгий режим безопасен.
+      # REF-0012: PR-head код НЕ получает API-секреты на privileged trigger
+      # (pull_request_target предоставляет секреты даже форк-PR → hostile PR мог бы
+      # эксфильтровать DEEPSEEK/LITELLM ключи через PR-код). live-integration — только
+      # push/workflow_dispatch (main); error-path выше покрывает PR-валидацию.
       - name: Integration test — live mode (requires API keys)
+        if: github.event_name != 'pull_request_target'
         id: integration_live
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
@@ -470,7 +491,7 @@ jobs:
             echo "- Integration: error-path (no tokens) + live (real API call)"
             echo ""
             echo "### Links"
-            echo "- [Workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+            echo "- [Workflow run](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Cleanup Docker resources

@@ -489,7 +489,9 @@ class DeployOrchestrator(RollbackMixin):
     ## @io       ⇥ (deploy args + start) → ⎋ OrchestratorDeployResult
     ## @complexity — O(1) — poll + snapshot + audit
     ## @invariants
-    ##   - Healthcheck status "healthy" → DEPLOYED, иначе PARTIAL
+    ##   - Healthcheck status "healthy" → DEPLOYED; unhealthy/timeout → FAILED
+    ##     (REF-0003, DevPlan 11 W0: PARTIAL больше не эмитится на healthcheck-ветке —
+    ##     неуспешный healthcheck = зелёный CI был главным ложно-зелёным сигналом платформы)
     ##   - Snapshot создаётся после healthcheck (содержит post-deploy health)
     ##   - payload_backup_dir (T9.8) персистится в snapshot (rollback восстанавливает payload)
     def _verify_deploy(
@@ -514,7 +516,23 @@ class DeployOrchestrator(RollbackMixin):
             payload_backup_dir=payload_backup_dir,
         )
 
-        result_status = DeployStatus.DEPLOYED if healthcheck_status == "healthy" else DeployStatus.PARTIAL
+        # ⚠️ TRAP[BUG] · 2026-08-24 · P0 · Unhealthy/timeout healthcheck давал PARTIAL=success → зелёный CI без алерта
+        # · Symptom: сломанный образ обслуживается при зелёном CI/Telegram «deployed»; post-deploy chain поверх больного деплоя
+        # · Root: fail-open swallowing — success-предикат шире health-факта (_verify_deploy мапил unhealthy/timeout → PARTIAL;
+        # ·   is_success() включал PARTIAL → receive exit 0)
+        # · Fix: unhealthy/timeout → DeployStatus.FAILED (+error_info с фактом healthcheck); PARTIAL исключён из is_success()
+        # ·   (rollback.py); deliver-rc по {DEPLOYED, SKIPPED}; critical-notify на unhealthy-ветке receive (REF-0003)
+        # · Prevention: DI-тест poller=unhealthy → rc≠0 (test_healthcheck_failed_rc.py) + severity-mapping тест (TEST-04);
+        # ·   rollback-контур unhealthy-ветки — REF-0004 (сейчас FAILED+alert без отката)
+        result_status = DeployStatus.DEPLOYED if healthcheck_status == "healthy" else DeployStatus.FAILED
+        error_info = (
+            ""
+            if result_status == DeployStatus.DEPLOYED
+            else (
+                f"Healthcheck failed after deploy: status={healthcheck_status} "
+                f"(detail={health.detail or 'n/a'}); rollback contour — REF-0004"
+            )
+        )
         self.audit_logger.log(
             operation="deploy",
             project=project_name,
@@ -530,11 +548,19 @@ class DeployOrchestrator(RollbackMixin):
             result_status.value,
             total_duration,
         )
+        if result_status == DeployStatus.FAILED:
+            logger.error(
+                "[IMP:10][DeployOrchestrator][deploy] Healthcheck FAILED for %s: status=%s detail=%s",
+                project_name,
+                healthcheck_status,
+                health.detail or "n/a",
+            )
 
         return self._result(
             result_status,
             project_name,
             channel.__class__.__name__,
+            error_info=error_info or None,
             duration_s=total_duration,
             healthcheck_status=healthcheck_status,
             snapshot_id=snapshot_id,

@@ -117,8 +117,14 @@ class OrchestratorDeployResult:
         }
 
     def is_success(self) -> bool:
-        """Returns True if operation was successful or partial."""
-        return self.status in {DeployStatus.DEPLOYED, DeployStatus.PARTIAL, DeployStatus.SKIPPED}
+        """Returns True only for genuinely successful outcomes.
+
+        REF-0003 (DevPlan 11 W0): PARTIAL исключён из success-предиката — внутренний
+        статус, никогда не success (root cause «best-effort swallowing»: success-предикат
+        был шире health-факта → зелёный CI при больном деплое). SKIPPED остаётся
+        success (dry-run plan контракт, DevPlan 089 AC10).
+        """
+        return self.status in {DeployStatus.DEPLOYED, DeployStatus.SKIPPED}
 
 
 # endregion ENUMS & DATACLASSES

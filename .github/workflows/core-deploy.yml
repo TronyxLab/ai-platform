@@ -27,6 +27,10 @@
 ## @changes — 2026-07-15 | NODE auto-detected (Option A, replacing P11 secrets-based fix)
 ## @changes — 2026-08-01 | DevPlan 116 B11 T4 (D2): trigger → platform-gate-fast
 ## @changes — 2026-08-22 | T2.15: rsync-excludes (.git/ __pycache__/ *.pyc) хойстнуты в job-level env RSYNC_EXCLUDES
+## @changes — 2026-08-24 | REF-0012 (meta-refactoring W0): actions/checkout → full commit SHA;
+##           raw ${{ }} в run:-блоках переведены на quoted/env-indirect форму (ssh-opts — через
+##           step-level env SSH_OPTS, unquoted var = осознанный word-splitting флагов);
+##           AGE_SECRET_KEY экспортируется из quoted-литерала, а не inline-интерполяцией.
 # endregion MODULE_CONTRACT
 
 name: core-deploy
@@ -90,7 +94,7 @@ jobs:
 
       # ─── Step 1: Checkout repository ───────────────────────────────────
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # ─── Step 2: Resolve SHA + verify platform-gate-fast (composite) ────
       # StatusReport 046 T7 (CICD-03): inline SHA verification → sha-resolve composite action.
@@ -137,12 +141,16 @@ jobs:
 
       # ═══════════════════════════════════════════════════════════════════
       # DevPlan 065 P2: SSH pre-flight check — fail-fast before deploy
+      # REF-0012: ${{ }} только в quoted-форме; SSH_OPTS — step-level env
+      # (unquoted ${SSH_OPTS} = осознанный word-splitting флагов из SoT).
       # ═══════════════════════════════════════════════════════════════════
       - name: SSH pre-flight check
         if: steps.sha.outputs.skip != 'true'
+        env:
+          SSH_OPTS: ${{ steps.ssh_opts.outputs.opts }}
         run: |
-          if ssh ${{ steps.ssh_opts.outputs.opts }} \
-            ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }} "echo OK" 2>&1; then
+          if ssh ${SSH_OPTS} \
+            "${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}" "echo OK" 2>&1; then
             echo "[IMP:9][preflight] SSH connectivity to ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }} verified"
           else
             echo "::error::[IMP:10][preflight] SSH pre-flight FAILED — check key format, host, and connectivity"
@@ -159,10 +167,12 @@ jobs:
       # · 2026-07-24: inline SSH setup moved to setup-ssh composite action (DevPlan 065)
       - name: Rsync core + config to VPS
         if: steps.sha.outputs.skip != 'true'
+        env:
+          SSH_OPTS: ${{ steps.ssh_opts.outputs.opts }}
         run: |
           SHA="${{ steps.sha.outputs.sha }}"
-          ssh ${{ steps.ssh_opts.outputs.opts }} \
-            ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }} "mkdir -p /opt/platform/core"
+          ssh ${SSH_OPTS} \
+            "${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}" "mkdir -p /opt/platform/core"
           # ⚠️ TRAP[BUG] 2026-08-03 · rsync --delete без guard'а — молчаливый унос файлов (DevPlan 125 T4)
           # · Symptom: при отсутствии/пустом источнике rsync --delete удалил бы /opt/platform/core/*
           #   (symmetрия с node-configs guard ниже отсутствовала — guard был только у node-configs)
@@ -174,7 +184,7 @@ jobs:
               $RSYNC_EXCLUDES \
               --exclude 'default-user.xml' \
               --exclude '.env' \
-              ./core/ ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/platform/core/
+              ./core/ "${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/platform/core/"
           else
             echo "[IMP:8][deploy][rsync] core/ отсутствует/пуст на раннере — rsync --delete ПРОПУЩЕН (предотвращение уноса /opt/platform/core)"
           fi
@@ -190,7 +200,7 @@ jobs:
           if [ -f ./platform-env.yaml ] && [ -f ./Makefile ] && [ -d ./makefiles ]; then
             rsync -avz \
               ./platform-env.yaml ./Makefile ./makefiles \
-              ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/platform/
+              "${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/platform/"
           else
             echo "[IMP:8][deploy][rsync] platform-env.yaml/Makefile/makefiles отсутствуют на раннере — пропуск"
           fi
@@ -198,10 +208,10 @@ jobs:
           # · Symptom: /opt/platform/scripts/make-log-shell.sh отсутствовал → Makefile:80 SHELL →
           # ·   make на ноде Error 127 (provision). Синк с guard'ом по образцу makefiles-шага.
           if [ -d ./scripts ]; then
-            ssh ${{ steps.ssh_opts.outputs.opts }} \
-              ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }} "mkdir -p /opt/platform/scripts"
+            ssh ${SSH_OPTS} \
+              "${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}" "mkdir -p /opt/platform/scripts"
             rsync -avz \
-              ./scripts/ ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/platform/scripts/
+              ./scripts/ "${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/platform/scripts/"
           else
             echo "[IMP:8][deploy][rsync] scripts/ отсутствует на раннере — пропуск"
           fi
@@ -216,7 +226,7 @@ jobs:
           if [ -d ./node-configs ]; then
             rsync -avz \
               $RSYNC_EXCLUDES \
-              ./node-configs/ ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/node-configs/
+              ./node-configs/ "${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/node-configs/"
           else
             echo "[IMP:8][deploy][rsync] node-configs/ отсутствует (gitignored, орг-репозиторий) — пропуск (доставлен bootstrap'ом)"
           fi
@@ -225,9 +235,11 @@ jobs:
       # ─── Step 5: Provision networks + volumes on VPS via make provision (Invariant 1) ───
       - name: Provision environment on VPS (networks + volumes)
         if: steps.sha.outputs.skip != 'true'
+        env:
+          SSH_OPTS: ${{ steps.ssh_opts.outputs.opts }}
         run: |
-          ssh ${{ steps.ssh_opts.outputs.opts }} \
-            ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }} \
+          ssh ${SSH_OPTS} \
+            "${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}" \
             "cd /opt/platform && make provision SCOPE=networks,volumes"
 
       # ─── Step 6: Node update on VPS (5m) ──────────────────────────────
@@ -238,14 +250,16 @@ jobs:
       # обеспечены setup-ssh composite action (DevPlan 065).
       - name: Node update on VPS
         if: steps.sha.outputs.skip != 'true'
+        env:
+          SSH_OPTS: ${{ steps.ssh_opts.outputs.opts }}
         run: |
           SHA="${{ steps.sha.outputs.sha }}"
           # Auto-detect NODE name via canonical node_detect on the VPS
           # (DevPlan 116 B3 T2, U-38 — single detector, excludes scripts/secrets).
           # python3 = 3.14 after φ1; core lives in /opt/platform.
           # Same logic as converge.sh / platform-export-metrics.sh wrapper.
-          NODE=$(ssh ${{ steps.ssh_opts.outputs.opts }} \
-            ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }} \
+          NODE=$(ssh ${SSH_OPTS} \
+            "${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}" \
             'cd /opt/platform && python3 -m core.internal.shared.node_detect --detect-node-name' 2>/dev/null) || NODE=""
           if [ -z "$NODE" ]; then
             echo "::error::[IMP:10][deploy] Cannot auto-detect NODE — no node directories in /opt/node-configs/"
@@ -258,9 +272,12 @@ jobs:
           # decrypt — tmpfs decrypt-only, S-13). Секрет настраивается оператором в GitHub
           # Secrets org (AGE_SECRET_KEY). Если секрет НЕ настроен → Actions подставит пустую
           # строку → detect_age_key деградирует мягко на restore-first fallback /etc/age/key.txt.
-          ssh ${{ steps.ssh_opts.outputs.opts }} \
-            ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }} \
-            "cd /opt/platform && AGE_SECRET_KEY=\"${{ secrets.AGE_SECRET_KEY }}\" DEPLOY_PARALLEL=true GITHUB_SHA=$SHA make node-update NODE=$NODE"
+          # REF-0012: секрет экспортируется из quoted-литерала (не inline-интерполяцией в
+          # remote-строку) — GitHub-расширение до bash-парсинга исключает word-splitting.
+          export AGE_SECRET_KEY="${{ secrets.AGE_SECRET_KEY }}"
+          ssh ${SSH_OPTS} \
+            "${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}" \
+            "cd /opt/platform && AGE_SECRET_KEY=\"$AGE_SECRET_KEY\" DEPLOY_PARALLEL=true GITHUB_SHA=$SHA make node-update NODE=$NODE"
 
       # ─── Step 6: Audit trail ──────────────────────────────────────────
       - name: Log deployment audit trail

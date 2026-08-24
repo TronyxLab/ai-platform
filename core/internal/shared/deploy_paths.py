@@ -294,8 +294,11 @@ def secrets_env_file(env: Mapping[str, str] | None = None) -> Path:
 
 # region FUNC_prometheus_rules_dir
 ## @purpose — Резолвер PROMETHEUS_RULES_DIR (170 W12 C5, drift-фикс): env → /opt/prometheus/rules.
-##            3-way рассинхрон закрыт: ALERT_RULES_DIR (monitoring/constants), env-дефолт
-##            sync_env_defaults, compose-mount — всё на единый резолвер (канон W1).
+##            ⚠️ REF-0010 (2026-08-24): fallback /opt/prometheus/rules — СТАРЫЙ дефолт,
+##            расходится с SoT platform-infra.yaml (/opt/platform/prometheus-rules).
+##            Функция НЕ трогается (frozen leaf P3 п.1: fan-in, characterization) —
+##            канонический резолвер ниже: prometheus_rules_dir_sot(). Потребители
+##            рендера alert-rules переведены на sot-версию (AI-0004).
 ## @io — ⇥ env: dict | None → ⎋ Path
 ## @complexity — O(1)
 def prometheus_rules_dir(env: Mapping[str, str] | None = None) -> Path:
@@ -305,6 +308,33 @@ def prometheus_rules_dir(env: Mapping[str, str] | None = None) -> Path:
 
 
 # endregion FUNC_prometheus_rules_dir
+
+
+# region FUNC_prometheus_rules_dir_sot
+## @purpose — КАНОНИЧЕСКИЙ резолвер PROMETHEUS_RULES_DIR (REF-0010, AI-0004 fix):
+##            env → /opt/platform/prometheus-rules. Дефолт = SoT platform-infra.yaml:
+##            env_defaults.PROMETHEUS_RULES_DIR = compose-mount fallback
+##            (${PROMETHEUS_RULES_DIR:-/opt/platform/prometheus-rules}) = render output.
+##            Прежний prometheus_rules_dir() оставлен рядом (frozen leaf P3 п.1 —
+##            «только новое имя рядом»); рендер alert-rules обязан использовать ЭТУ
+##            версию, иначе правила пишутся мимо смонтированного каталога и Prometheus
+##            их молча не загружает (silent alert loss).
+## @io — ⇥ env: dict | None → ⎋ Path
+## @complexity — O(1)
+DEFAULT_PROMETHEUS_RULES_DIR: str = f"{DEFAULT_PLATFORM_BASE}/prometheus-rules"
+"""## @invariant Канонический rules-dir (= /opt/platform/prometheus-rules): байт-равен
+compose-mount fallback в core/modules/monitoring/docker-compose.base.yml и
+platform-infra.yaml env_defaults (path-parity тест tests/unit/test_ref0010_monitoring_honesty.py).
+Собран из DEFAULT_PLATFORM_BASE (без сырого литерала — гейт hardcoded-paths)."""
+
+
+def prometheus_rules_dir_sot(env: Mapping[str, str] | None = None) -> Path:
+    """Resolve Prometheus rules dir canonically (PROMETHEUS_RULES_DIR → /opt/platform/prometheus-rules, REF-0010)."""
+    source = os.environ if env is None else env
+    return Path(str(source.get("PROMETHEUS_RULES_DIR") or DEFAULT_PROMETHEUS_RULES_DIR))
+
+
+# endregion FUNC_prometheus_rules_dir_sot
 
 
 # region FUNC_htpasswd_file

@@ -21,6 +21,8 @@
 ## @changes — 2026-07-15 | Trigger: main-full-gate→platform-test + push event filter
 ## @changes — 2026-07-20 | Deployment flow documented (Plan 018)
 ## @changes — 2026-08-01 | DevPlan 116 B11 T4 (D2): trigger → platform-gate-fast
+## @changes — 2026-08-24 | REF-0012 (meta-refactoring W0): actions/checkout → full commit SHA;
+##           git-checkout resolved SHA переведён на quoted-интерполяцию.
 ##
 ## ☆ DEPLOYMENT FLOW (canonical — see also context-promote.sh)
 ##
@@ -110,7 +112,7 @@ jobs:
 
       # ─── Step 1: Checkout (full history for mirror) ───────────────────
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
 
@@ -128,7 +130,7 @@ jobs:
 
       # ─── Step 3: Checkout resolved SHA ────────────────────────────────
       - name: Checkout resolved SHA
-        run: git checkout ${{ steps.sha.outputs.sha }}
+        run: git checkout "${{ steps.sha.outputs.sha }}"
 
       # ═══════════════════════════════════════════════════════════════════
       # DevPlan 065 P1+P3+P5: setup-ssh composite action — единый source of truth

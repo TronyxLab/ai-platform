@@ -12,8 +12,11 @@
 ##           _module_deploy_hooks). Вызывается DeployOrchestrator._run_post_deploy_chain (делегат)
 ##           и ReceiveFlow (через orchestrator-фабрику, receive_flow.py:385).
 ## @invariants
-##   - Вызывается после деплоя; статусы DEPLOYED/PARTIAL → notify info (success),
-##     FAILED/ROLLBACK → notify critical (DevPlan 003 A4 — AC-5: deploy FAILED/ROLLBACK уведомляется)
+##   - Вызывается после деплоя; статусы DEPLOYED → notify info (success),
+##     FAILED/ROLLBACK → notify critical (DevPlan 003 A4 — AC-5: deploy FAILED/ROLLBACK уведомляется);
+##     PARTIAL — внутренний статус (REF-0003), в prod-notify не попадает; legacy-mapping info
+##   - Полная chain исполняется ТОЛЬКО на success (receive_flow); для failed-healthcheck
+##     ветки существует notify_deploy_failure() — единственный шаг chain на больном деплое
 ##   - notify-hook timeout 30s (CONVERGE_DOCKER_TIMEOUT), generate-catalog timeout 60s
 ##     (SYSTEM_CMD_TIMEOUT), module deploy-hook COMPOSE_UP_TIMEOUT
 ##   - Сбой цепочки → logger.warning (IMP:8), не raise
@@ -24,6 +27,8 @@
 ##   - DI (W-H DevPlan 163): run_cmd=None → subprocess.run; platform_root_override=None →
 ##     platform_remote_base(); reconfig_fn=None → lazy run_monitoring_reconfig (канон)
 ## @changes 2026-08-16 | DevPlan 003 A4 — _notify_hook: FAILED/ROLLBACK → severity=critical
+## @changes 2026-08-24 | REF-0003 (DevPlan 11 W0) — notify_deploy_failure(): critical-пуш
+##           failed-healthcheck деплоя БЕЗ catalog/reconfig/deploy-hooks поверх больного деплоя
 ## @rationale research-A §3 B3: единственный прямой subprocess-вызов deploy-кластера
 ##            изолируется в hooks-модуль — orchestrator.py остаётся фасадом, subprocess-
 ##            граница перестаёт смешиваться с оркестрацией.
@@ -66,7 +71,8 @@ _HOOKS_BLOCK = "deploy_hooks"
 ##   - timeout=CONVERGE_DOCKER_TIMEOUT (30s), check=False, capture_output=True
 ##   - OSError/TimeoutExpired/SubprocessError → WARN (IMP:8), не raise
 ##   - status ∈ {FAILED, ROLLBACK} → --severity critical + 💥-сообщение (AC-5 DevPlan 003)
-##   - прочие статусы (DEPLOYED/PARTIAL/...) → --severity info (существующий контракт)
+##   - прочие статусы → --severity info; PARTIAL — внутренний статус (REF-0003),
+##     в prod-notify не попадает (legacy-mapping сохранён)
 def _notify_hook(
     runner: Callable[..., subprocess.CompletedProcess[str]],
     notify_hook: str,
@@ -104,6 +110,48 @@ def _notify_hook(
 
 
 # endregion FUNC__notify_hook
+
+
+# region FUNC_notify_deploy_failure
+## @purpose  REF-0003 (DevPlan 11 W0): одиночный critical-пуш (Telegram) для failed-healthcheck
+##           деплоя. Единственный шаг post-deploy chain, исполняемый на больном деплое —
+##           generate-catalog / monitoring-reconfig / module-hooks НЕ запускаются (их место
+##           на failed-ветке — после REF-0004 rollback-контура). Вызывается из ReceiveFlow.run
+##           на unhealthy/timeout-ветке; severity-mapping делегирован _notify_hook
+##           (FAILED → --severity critical + 💥).
+## @io       ⇥ project: str, version: str, status: str, *, run_cmd: Callable | None = None
+##              (DI subprocess-канал), platform_root_override: str | None = None (DI)
+##           → ⎋ None
+## @complexity — O(1) — single subprocess call with timeout
+## @invariants
+##   - Best-effort (D4): сбой уведомления → WARN, не raise (наследуется от _notify_hook)
+##   - status ≠ success-строка ожидаемо ("FAILED"); маппинг через _notify_hook единый
+def notify_deploy_failure(
+    project: str,
+    version: str,
+    status: str,
+    *,
+    run_cmd: Callable[..., subprocess.CompletedProcess[str]] | None = None,
+    platform_root_override: str | None = None,
+) -> None:
+    """Send a single critical Telegram push for a failed-healthcheck deploy (REF-0003, best-effort).
+
+    ▶ ┌project/version/status┐ → ◇ platform_root → ⎋ _notify_hook(--severity critical)
+    """
+    runner = subprocess.run if run_cmd is None else run_cmd
+    platform_root = str(platform_remote_base()) if platform_root_override is None else platform_root_override
+    notify_hook = os.path.join(platform_root, "core", "internal", "notify", "notify-hook.sh")
+    logger.info(
+        "[IMP:9][DeployOrchestrator][%s] notify_deploy_failure: %s (%s) status=%s",
+        _BLOCK,
+        project,
+        version,
+        status,
+    )
+    _notify_hook(runner, notify_hook, project, version, status)
+
+
+# endregion FUNC_notify_deploy_failure
 
 
 # region FUNC__generate_catalog

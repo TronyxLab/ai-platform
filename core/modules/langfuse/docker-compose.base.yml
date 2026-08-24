@@ -1,6 +1,6 @@
 # @purpose  Base compose definition for langfuse module — LLM Tracing
-# GREP_SUMMARY: langfuse docker-compose langfuse-worker llm-tracing profiles x-logging observability-net shared-db-net postgres clickhouse v4 encryption-key
-# STRUCTURE: ▶ langfuse:4.10.0 [profiles:langfuse] + langfuse-worker (v4: очереди) → observability-net + shared-db-net → ┐
+# GREP_SUMMARY: langfuse docker-compose langfuse-worker llm-tracing profiles x-logging observability-net shared-db-net postgres clickhouse v4 encryption-key langfuse-redis noeviction redis-exporter queue
+# STRUCTURE: ▶ langfuse:4.10.0 [profiles:langfuse] + langfuse-worker (v4: очереди) + langfuse-redis (noeviction) + langfuse-redis-exporter → observability-net + shared-db-net → ┐
 # region MODULE_CONTRACT
 ## @purpose  Base compose definition for langfuse Docker module
 ## @scope    Merged with root docker-compose.yml via include:
@@ -16,6 +16,12 @@
 ##   - Cross-node DSN (DevPlan 010 T2.7): DATABASE_URL @${POSTGRES_HOST:-pgbouncer}:6432,
 ##     CLICKHOUSE_MIGRATION_URL @${CLICKHOUSE_HOST:-clickhouse}:${CLICKHOUSE_NATIVE_PORT:-9000};
 ##     single-node дефолты = Docker DNS (байт-идентично прежнему), worker наследует якорь
+##   - REF-0010 (2026-08-24): langfuse-redis — ЕДИНСТВЕННАЯ реальная очередь платформы
+##     (web→redis→worker) → noeviction (backlog НЕ выбрасывается молча; переполнение =
+##     громкая ошибка записи, не тихая потеря трейсов); maxmemory 96mb при лимите 128M
+##     (headroom ~25% на overhead/AOF-буфер, FAIL-0202: maxmemory != cgroup-лимит)
+##   - REF-0010: langfuse-redis-exporter (второй redis_exporter instance) — очередь видима
+##     Prometheus'у (redis_up/evicted_keys/memory), alert-rules в platform-alerts.yml
 ## @rationale Profiles enable selective startup via `make up MODULES=langfuse`
 # endregion MODULE_CONTRACT
 
@@ -191,12 +197,17 @@ services:
         reservations:
           memory: 64M
     logging: *default-logging
+    # [IMP:9][langfuse-compose] REF-0010 (FAIL-0200, 3-way eviction): единственная реальная
+    # очередь платформы (web→redis→worker). allkeys-lru молча выбрасывал backlog при
+    # 200-OK ingestion → потеря трейсов без сигнала. noeviction: переполнение = ОШИБКА
+    # записи (громкий сигнал в worker-логах + алерт LangfuseQueueMemoryPressure),
+    # НЕ тихая потеря данных. maxmemory 96mb при cgroup 128M — headroom на overhead.
     command: >
       redis-server
       --appendonly yes
       --appendfsync everysec
-      --maxmemory 64mb
-      --maxmemory-policy allkeys-lru
+      --maxmemory 96mb
+      --maxmemory-policy noeviction
     healthcheck:
       test: ["CMD", "redis-cli", "-h", "127.0.0.1", "ping"]
       interval: 15s
@@ -210,6 +221,55 @@ services:
     volumes:
       - langfuse-redis-data:/data
   # endregion service:langfuse-redis
+
+  # ── Langfuse Redis Exporter (REF-0010: очередь видима Prometheus'у) ────────
+  # region service:langfuse-redis-exporter
+  langfuse-redis-exporter:
+    # Второй instance redis_exporter (первый — core/modules/service-exporters, cache).
+    # Co-location с langfuse-redis (DevPlan 010 §3: exporter живёт со своим сервисом,
+    # Docker DNS локален; multi-node S3: agent-1 с langfuse получает exporter автоматически).
+    image: oliver006/redis_exporter:v1.88.0@sha256:ead15fa913b45314068b9237bb5eff1e97bcb41d63fbe6267befe34667b5f856
+    container_name: langfuse-redis-exporter
+    profiles: [langfuse]
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          # Паритет с redis-exporter в service-exporters (164 W1-5): --version healthcheck-форк
+          # = полный Go-процесс ~40M RSS → 64M мало в пике
+          memory: 128M
+          pids: 256
+        reservations:
+          memory: 64M
+    logging: *default-logging
+
+    # [IMP:8][langfuse-compose] REF-0010: langfuse-redis БЕЗ requirepass (внутренняя сеть
+    # shared-db-net, flat-trust модель) — credentialed-env не требуется
+    environment:
+      REDIS_ADDR: "redis://langfuse-redis:6379"
+
+    ports:
+      # Host 9122 → container 9121 (9121 занят основным redis-exporter на общей ноде;
+      # peer-scrape центральным Prometheus — T2.2/T2.4)
+      - "${SERVICE_BIND_HOST:-127.0.0.1}:${LANGFUSE_REDIS_EXPORTER_PORT:-9122}:9121"
+
+    networks:
+      observability-net:
+        aliases:
+          - langfuse-redis-exporter
+      shared-db-net:
+        aliases:
+          - langfuse-redis-exporter
+
+    # Liveness-only канон (--version; readiness внешний через up{} + alert-rules)
+    # interval 15s — классификация гейта test_gate_healthcheck_intervals (redis-exporter класс)
+    healthcheck:
+      test: ["CMD", "/redis_exporter", "--version"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+  # endregion service:langfuse-redis-exporter
 
 networks:
   observability-net:

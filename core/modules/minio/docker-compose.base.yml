@@ -1,18 +1,24 @@
 # @purpose  Base compose definition for minio — official minio/minio image, loopback-only ports
-# GREP_SUMMARY: minio docker-compose local-s3 backup-net shared-db-net loopback-127001 one-shot-createbuckets
-# STRUCTURE: ▶ minio:RELEASE → backup-net + shared-db-net → healthcheck /dev/tcp:9000 → one-shot mc createbuckets → ┐
+# GREP_SUMMARY: minio docker-compose local-s3 backup-net shared-db-net observability-net loopback-127001 one-shot-createbuckets prometheus-anonymous-metrics
+# STRUCTURE: ▶ minio:RELEASE → backup-net + shared-db-net + observability-net (metrics) → healthcheck /dev/tcp:9000 → one-shot mc createbuckets → ┐
 # region MODULE_CONTRACT
 ## @purpose  Base compose definition for minio — official minio/minio RELEASE image, loopback-only ports
 ## @scope    Local S3 for backup-cron (backup-net) and langfuse (shared-db-net); two services: minio + minio-createbuckets
 ## @invariants
 ##   - Ports: 127.0.0.1:${MINIO_PORT:-9000}:9000 (S3 API) + 127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001 — loopback ONLY
-##   - Networks: backup-net + shared-db-net (both external:true)
+##   - Networks: backup-net + shared-db-net + observability-net (REF-0010: scrape-доступ
+##     центрального Prometheus к /minio/v2/metrics/cluster; аддитивный attach — external:true)
+##   - MINIO_PROMETHEUS_ANONYMOUS_ACCESS=on (REF-0010): метрики без bearer-токена — плоская
+##     внутренняя сеть, flat-trust модель (P3 п.16); секрет в prometheus.yml.tmpl потребовал бы
+##     расширения envsubst-канала config-init (вне скоупа REF-0010)
 ##   - restart: unless-stopped (minio), restart: "no" (minio-createbuckets — one-shot)
 ##   - Healthcheck (minio): bash /dev/tcp to port 9000
 ##   - Healthcheck (minio-createbuckets): disable: true — one-shot exits after work
 ##   - Container name: minio
 ##   - Profiles: [minio] on both services
 ## @rationale MinIO serves as local S3 for backup-cron and langfuse event upload.
+##   REF-0010: observability-net членство делает minio job в prometheus.yml.tmpl
+##   резолвимым (иначе static/file_sd target молча down).
 # endregion MODULE_CONTRACT
 
 x-logging: &default-logging
@@ -44,10 +50,20 @@ services:
       shared-db-net:
         aliases:
           - minio
+      # [IMP:8][minio-compose] REF-0010: scrape-доступ центрального Prometheus (job "minio",
+      # file_sd nodes/minio.json); аддитивный attach — external:true, ничего не убираем
+      observability-net:
+        aliases:
+          - minio
     environment:
       MINIO_ROOT_USER: "${MINIO_ROOT_USER}"
       MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required}"
       MINIO_BROWSER: "on"
+      # [IMP:9][minio-compose] REF-0010 (FAIL-1002): метрики кластера анонимно — иначе
+      # scrape требует bearer-токен (mc admin prometheus generate), которого в
+      # prometheus-config-init envsubst-канале нет → job молча down. Внутренние сети,
+      # flat-trust (P3 п.16); порт 9000 наружу не публикуется сверх T2.2-биндинга.
+      MINIO_PROMETHEUS_ANONYMOUS_ACCESS: "on"
     command: server /data --console-address ":9001"
     healthcheck:
       test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/9000' || exit 1"]
@@ -110,3 +126,7 @@ networks:
   shared-db-net:
     external: true
     name: shared-db-net
+  # REF-0010: аддитивное членство (scrape-доступ Prometheus); сеть pre-created deploy-modules.sh
+  observability-net:
+    external: true
+    name: observability-net

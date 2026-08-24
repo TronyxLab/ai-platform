@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: parallel-runner, fork, slot-waiter, drain, deploy-docker-group, pre-pull, atomic-rollback, D1, docker-orchestrator-decomposition
+# GREP_SUMMARY: parallel-runner, fork, slot-waiter, drain, deploy-docker-group, pre-pull, atomic-rollback, D1, docker-orchestrator-decomposition, REF-0005, exit-status, all-names
 # STRUCTURE: ▶ pre_pull_images ┌entries┐ → fork-per-module (slot=parallel_limit) → drain → ⎋ (ok, fail) │ ▶ deploy_docker_group ┌entries┐ → fork-per-module → drain → ◇ rollback? → docker compose down → fork-HC → ⎋ (deployed, failed, names, rolled_back) │ ▶ drain_completed_count/drain_all_count — WNOHANG/blocking drain
 # region MODULE_CONTRACT
 ## @purpose  Fork-based параллельное выполнение docker-деплоев и pre-pull'ов — экстракция из
@@ -255,6 +255,8 @@ def pre_pull_images(
 ##   - Healthchecks run AFTER all deploys in the group complete
 ##   - Healthcheck failures are logged but do NOT affect deploy return count
 ##   - Failed module names are tracked for severity-based exit code aggregation
+##   - all_names собирается на fork'е ДО drain (REF-0005): drain очищает pid_to_name,
+##     групповой healthcheck обязан идти по ВСЕМ модулям группы, а не по 0
 ## @rationale Q: Why fork() instead of threading? A: Bash uses subshell (& + wait).
 ##   Fork-based parallelism preserves the exact same semantics: each deploy has its
 ##   own process context, environment isolation, and independent failure handling.
@@ -295,6 +297,10 @@ def deploy_docker_group(
     )
     pids: list[int] = []
     pid_to_name: dict[int, str] = {}
+    # REF-0005 (BUG-0501≡0703): имена группы собираются на fork'е — ДО drain; финальный
+    # drain_all_count очищает pid_to_name → пост-дрейновое чтение давало all_names=[]
+    # и групповой healthcheck по 0 модулям.
+    all_names: list[str] = []
     group_deployed = 0
     group_failed = 0
     failed_names: list[str] = []
@@ -333,6 +339,7 @@ def deploy_docker_group(
         else:
             pids.append(pid)
             pid_to_name[pid] = mod_name
+            all_names.append(mod_name)
 
     # ── Drain remaining PIDs ──
     drain = drain_all_fn if drain_all_fn is not None else drain_all_count
@@ -341,7 +348,6 @@ def deploy_docker_group(
     group_failed += f
     failed_names.extend(fn)
 
-    all_names = list(pid_to_name.values())
     logger.info(
         "[IMP:8][deploy_docker_group][deploy] Deploy phase done: deployed=%d failed=%d total=%d",
         group_deployed,
@@ -488,6 +494,9 @@ def drain_completed_count(
 ## @purpose  Blocking drain of all remaining child processes with result tracking.
 ## @io       ⇥ pids: list[int] (cleared), pid_to_name: dict[int, str] (cleared)
 ##           ⎋ tuple[int, int, list[str]] — (success_count, fail_count, fail_names)
+## @invariants
+##   - Exit-status классификация зеркалит drain_completed_count (REF-0005): waitpid без ошибки
+##     ≠ успех — child мог завершиться с ненулевым кодом
 def drain_all_count(
     pids: list[int],
     pid_to_name: dict[int, str],
@@ -496,11 +505,26 @@ def drain_all_count(
     failed = 0
     failed_names: list[str] = []
     for i in range(len(pids) - 1, -1, -1):
+        # ruff: ignore[PLW0717] — try вложен в условный блок внутри функции — после-try чтение локалей неанализируемо
         try:
-            _ = os.waitpid(pids[i], 0)
+            _wpid, status = os.waitpid(pids[i], 0)
             mod_name = pid_to_name.pop(pids[i], "?")
-            # Success — waitpid returned without error means process exited
-            deployed += 1
+            # ⚠️ TRAP[BUG] · 2026-08-24 · P0 · drain_all_count считал упавших детей успешными
+            # · Symptom: DEPLOY_PARALLEL=true — group_failed=0 при упавшем модуле → атомарный
+            #   откат группы не срабатывал, verdict success на поломанном стеке (BUG-0301≡0801).
+            # · Root: success-marker до доказательства — unconditional deployed+=1 при любом
+            #   успешном waitpid, без классификации exit-status (асимметрия с sibling-drain).
+            # · Fix: зеркалирование WIFEXITED/WEXITSTATUS из drain_completed_count (:467-475).
+            # · Prevention: тесты с РЕАЛЬНЫМ drain_all_count + mocked waitpid (test_parallel_runner).
+            if os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0:
+                logger.info("[IMP:9][drain_all_count][ok] Child deployed: %s", mod_name)
+                deployed += 1
+            else:
+                logger.warning(
+                    "[IMP:9][drain_all_count][fail] Child FAILED (status=%d): %s", os.WEXITSTATUS(status), mod_name
+                )
+                failed += 1
+                failed_names.append(mod_name)
         except ChildProcessError:  # ruff: ignore[PERF203]
             mod_name = pid_to_name.pop(pids[i], "?")
             failed += 1

@@ -8,8 +8,10 @@
 ##           Org-agnostic (DD9) — НЕ использует платформенные actions/core: reusable workflow
 ##           исполняется в КОНТЕКСТЕ CALLER'а (проекта), где платформы нет (TRAP[BUG] 2026-08-03:
 ##           relative actions + python3 -m core... + make gate ломались в caller'е).
-## @scope    Called via `uses: <org>/ai-platform/.github/workflows/deploy-project.yml@main`
-##           from project-level .github/workflows/deploy.yml
+## @scope    Called via `uses: <org>/ai-platform/.github/workflows/deploy-project.yml@<full-sha>`
+##           from project-level .github/workflows/deploy.yml (REF-0012: шаблонный пин —
+##           full commit SHA с комментарием-снапшотом; bump сознательный, см. gate
+##           test_gate_workflow_sha_pins.py TRAP[DECISION])
 ## @invariants
 ##   - `on.workflow_call` with required input: project_name, optional: node, host
 ##   - Node resolution: inputs.node → ai-platform.yaml target_node → default tronyx-vps
@@ -41,6 +43,9 @@
 ##                      per-type в quality-шаге; setup-python остаётся для pip).
 ##           2026-08-22 | T2.15: SSH-флаги (3 повтора) хойстнуты в job-level env SSH_OPTS —
 ##                      флаги без ConnectTimeout (канон ssh_opts.py; гейт ssh_opts_sole_path (d))
+##           2026-08-24 | REF-0012 (meta-refactoring W0): +permissions contents:read; external
+##                      actions → full commit SHA; raw ${{ }} в run:-блоках → quoted; inline
+##                      gitleaks L1 скачивается с sha256-верификацией checksums.txt
 # endregion MODULE_CONTRACT
 
 name: Deploy Project (Reusable)
@@ -70,9 +75,24 @@ name: Deploy Project (Reusable)
         description: "SSH private key for CI deploy user on target node"
         required: true
 
+# REF-0012 (SEC-0010): reusable workflow исполняется в контексте проекта-caller'а —
+# дефолтные token-permissions репозитория могут быть write-all. Минимум: только чтение
+# кода (checkout); publish/пакетных прав нет (образы собирает отдельный build-job, REF-0001).
+permissions:
+  contents: read
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    # 🧐 TRAP[DECISION] · 2026-08-24 · — · SSH_OPTS в caller-контексте — inline-набор без --shell (REF-0012)
+    # · Rejected: `python3 -m core.internal.shared.ssh_opts --shell` как в core-deploy.yml
+    # · Reason: reusable workflow исполняется в КОНТЕКСТЕ ПРОЕКТА-CALLER'А, где платформенного
+    # ·   core/ НЕТ (TRAP[BUG] 2026-08-03, DD9 org-agnostic; гейт test_gate_workflow_org_agnostic
+    # ·   RED'ит python3 -m core.*). Inline-набор ниже = канон ssh_opts.py МИТУС ConnectTimeout
+    # ·   (гейт ssh_opts_sole_path (d): CI-литерал ConnectTimeout= → RED) — максимальный достижимый
+    # ·   паритет; единственное осознанное отклонение карточки REF-0012.
+    # · Rev: появление не-Python канала дистрибуции флагов (practices.lock#pins.ssh_flags или
+    # ·   org-variable NODE_HOST_MAP-стиля) → заменить inline-набор на него.
     # T2.15: SSH-флаги хойстнуты в job-level env — повторяющийся набор из 3 SSH-шагов
     # (preflight / receive / verify) определён ОДИН раз. Флаги — существующий набор
     # (BatchMode/StrictHostKeyChecking=accept-new/ServerAlive*) БЕЗ ConnectTimeout —
@@ -85,7 +105,7 @@ jobs:
       SSH_OPTS: "-i ${{ runner.temp }}/deploy_key -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o UserKnownHostsFile=${{ runner.temp }}/known_hosts"
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # ─── Python (stdlib-action, org-agnostic) ─────────────────────────
       # TRAP[BUG] 2026-08-03: платформенный setup-platform недоступен из caller'а
@@ -94,7 +114,7 @@ jobs:
       # pip-пакеты ставятся в quality-шаге по language/type — отдельный
       # preinstall PyYAML удалён (v1.0.1: inline-python3-шаги заменены bash-only).
       - name: Setup Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: '3.12'
 
@@ -148,7 +168,7 @@ jobs:
         run: |
           set -euo pipefail
           PROJECT_YAML_NAME=$(grep -E '^name:' ai-platform.yaml 2>/dev/null | head -1 | awk '{print $2}' | tr -d '[:space:]"' || true)
-          EXPECTED_NAME='${{ inputs.project_name }}'
+          EXPECTED_NAME="${{ inputs.project_name }}"
           if [ -z "${PROJECT_YAML_NAME}" ] || [ "${PROJECT_YAML_NAME}" != "${EXPECTED_NAME}" ]; then
             echo "[IMP:10][validate] FATAL: ai-platform.yaml name='${PROJECT_YAML_NAME:-<missing>}' != inputs.project_name='${EXPECTED_NAME}'"
             exit 1
@@ -174,7 +194,7 @@ jobs:
       # ─── Node.js (только frontend) — stdlib-экшен, org-agnostic ─────────
       - name: Setup Node.js (frontend)
         if: ${{ env.PROJECT_TYPE == 'frontend' || env.PROJECT_TYPE == 'typescript' || env.PROJECT_TYPE == 'react' }}
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: '20'
 
@@ -259,9 +279,26 @@ jobs:
         run: |
           set -uo pipefail
           VERSION="8.30.1"   # pin канона practices_manifest.yaml#pins.gitleaks (паритет setup-gitleaks)
-          curl -sL -o /tmp/gitleaks.tar.gz "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz"
-          tar -xzf /tmp/gitleaks.tar.gz -C /usr/local/bin gitleaks
+          ASSET="gitleaks_${VERSION}_linux_x64.tar.gz"
+          BASE_URL="https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}"
+          curl -sL -o "/tmp/${ASSET}" "${BASE_URL}/${ASSET}"
+          # REF-0012 (SEC-0039): sha256-верификация скачанного бинарника по checksums.txt
+          # релиза ДО распаковки — trojaned scanner отключил бы leak-детект деплоя.
+          curl -sL -o /tmp/gitleaks-checksums.txt "${BASE_URL}/checksums.txt"
+          EXPECTED=$(grep " ${ASSET}$" /tmp/gitleaks-checksums.txt | awk '{print $1}')
+          ACTUAL=$(sha256sum "/tmp/${ASSET}" | awk '{print $1}')
+          if [ -z "${EXPECTED}" ]; then
+            echo "::error::[IMP:10][gitleaks-l1] checksums.txt: asset '${ASSET}' not found for v${VERSION}"
+            exit 1
+          fi
+          if [ "${EXPECTED}" != "${ACTUAL}" ]; then
+            echo "::error::[IMP:10][gitleaks-l1] sha256 MISMATCH — binary tampered/corrupt (expected=${EXPECTED}, actual=${ACTUAL})"
+            exit 1
+          fi
+          echo "[IMP:9][gitleaks-l1] sha256 verified: ${ACTUAL}"
+          tar -xzf "/tmp/${ASSET}" -C /usr/local/bin gitleaks
           chmod +x /usr/local/bin/gitleaks
+          rm -f "/tmp/${ASSET}" /tmp/gitleaks-checksums.txt
           if ! gitleaks git --no-banner -v; then
             echo "::error::[PRACTICES:GITLEAKS] L1: secret leak detected — deploy blocked (receive NOT called)"
             exit 1
@@ -351,7 +388,7 @@ jobs:
       - name: SSH pre-flight check
         run: |
           set -euo pipefail
-          PONG=$(ssh ${SSH_OPTS} ci-deploy@${{ env.ssh_host }} "ping")
+          PONG=$(ssh ${SSH_OPTS} ci-deploy@"${{ env.ssh_host }}" "ping")
           echo "[IMP:9][preflight] ping response: ${PONG}"
           if [ "${PONG}" != "pong" ]; then
             echo "[IMP:10][preflight] FATAL: expected 'pong' from forced-command ping, got '${PONG}'"
@@ -370,8 +407,8 @@ jobs:
           # DevPlan 137 §2.1B/§5 W2: practices.lock — носитель state эскалатора для K3 (verify
           # на VPS применяет state без вычисления maturity; отсутствие → legacy-grace).
           [ -f practices.lock ] && FILES="$FILES practices.lock"
-          echo "[IMP:9][deliver] Delivering to ${{ env.ssh_host }}: ${FILES}"
-          tar czf - $FILES | ssh ${SSH_OPTS} ci-deploy@${{ env.ssh_host }} "receive ${{ inputs.project_name }} ${{ github.sha }}"
+          echo "[IMP:9][deliver] Delivering to" "${{ env.ssh_host }}": "${FILES}"
+          tar czf - $FILES | ssh ${SSH_OPTS} ci-deploy@"${{ env.ssh_host }}" "receive ${{ inputs.project_name }} ${{ github.sha }}"
           echo "[IMP:9][deliver] Receive completed (exit=$?)"
 
       # ─── Post-deploy verify ────────────────────────────────────────────
@@ -381,7 +418,7 @@ jobs:
       - name: Post-deploy verify
         run: |
           set -euo pipefail
-          ssh ${SSH_OPTS} ci-deploy@${{ env.ssh_host }} "verify ${{ env.target_node }} ${{ inputs.project_name }}"
+          ssh ${SSH_OPTS} ci-deploy@"${{ env.ssh_host }}" "verify ${{ env.target_node }} ${{ inputs.project_name }}"
 
       # ─── Failure notification (DevPlan 003 A1) ─────────────────────────
       # Caller-контекст (TRAP[BUG] 2026-08-03 + гейт test_gate_workflow_org_agnostic):

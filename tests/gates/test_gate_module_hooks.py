@@ -9,8 +9,11 @@
 ##   - Если hook указан → проверяются все 5 контрактных пунктов
 ##   - Файл хука проверяется: существование, executable, GREP_SUMMARY, MODULE_CONTRACT, source ../../lib/
 ##   - Не редактирует production-код
-## @rationale Gate-тест для T5 (DevPlan 020). Предотвращает деплой хуков с нарушенным контрактом. Работает до T14 (когда hooks будут созданы) — сейчас все модули SKIP.
+## @rationale Gate-тест для T5 (DevPlan 020). Предотвращает деплой хуков с нарушенным контрактом.
+##           REF-0002 (meta-refactoring В0): гейт более НЕ закрепляет отсутствие postgres-хука —
+##             требует его регистрацию (BUG-0604: gate закреплял баг — системный паттерн синтеза).
 ## @changes 2026-07-17 | Initial implementation (T5 Hook-gate test)
+## @changes 2026-08-24 | REF-0002 (11-DevPlan В0) — postgres deploy-hook: «not in registered» → обязательная регистрация
 ## @usecases
 ##   - test_hook_contract_validation — parametrized по модулям: проверяет все hook-поля
 ##   - test_all_modules_have_no_hooks (опциональный) — пока все SKIP, этот тест green
@@ -292,20 +295,25 @@ def test_all_hooks_are_specified_as_strings():
 
 
 # region FUNC_test_registered_deploy_hooks_have_runtime_trigger
-## @purpose  B8 gate (волна 118): каждый module.yaml hooks.on_project_deploy имеет runtime-вызов
-##           в деплой-пайплайне (registry-driven invoke через shared/module_interface).
-##           Закрывает «зарегистрировано, но не вызывается» (K5): после B8 зарегистрирован
-##           только nginx; мониторинг/postgres хуки удалены (Python-эквиваленты есть).
+## @purpose  B8 gate (волна 118) + REF-0002 (meta-refactoring В0): каждый module.yaml
+##           hooks.on_project_deploy имеет runtime-вызов в деплой-пайплайне
+##           (registry-driven invoke через shared/module_interface); postgres ОБЯЗАН быть
+##           зарегистрирован — контракт «роль/БД/GRANT создаются хук-ом при деплое»
+##           (root AGENTS.md), BUG-0604: незарегистрированный хук = все needs.database
+##           проекты мертвы с первого дня.
 ## @io       — → ⎋ None (asserts)
 ## @complexity — O(M + P) где M = module.yaml, P = строки deploy-пайплайна
 ## @invariants
 ##   - Для каждого module.yaml с hooks.on_project_deploy: DeployOrchestrator post-deploy chain
 ##     содержит registry-driven invoke (module_interface.invoke(module, "deploy-hook", ...))
 ##   - Оркестратор НЕ хардкодит имена модулей — читает core/modules/*/module.yaml
-##   - R5: monitoring/postgres hooks удалены (волна 118 B8)
+##   - REF-0002: postgres deploy-hook зарегистрирован; wrapper (hooks/on_project_deploy.sh)
+##     делегирует канонической Python-реализации on_project_deploy.py (language policy:
+##     dispatch запускает хук через `bash <script>` → регистрировать .py напрямую нельзя)
+##   - R5: monitoring hooks удалены (волна 118 B8); postgres ВОЗВРАЩЁН (REF-0002, В0)
 @pytest.mark.gate
 def test_registered_deploy_hooks_have_runtime_trigger(caplog):
-    """B8: каждый зарегистрированный deploy-hook имеет runtime-вызов в пайплайне."""
+    """B8 + REF-0002: runtime-вызов хуков + обязательная регистрация postgres deploy-hook."""
     caplog.set_level(logging.DEBUG)
 
     # 1. Собрать все зарегистрированные hooks.on_project_deploy
@@ -332,19 +340,33 @@ def test_registered_deploy_hooks_have_runtime_trigger(caplog):
         "B8 FAIL: deploy-пайплайн не читает hooks.on_project_deploy из module.yaml (registry-driven)"
     )
 
-    # 3. R5: после B8 зарегистрирован ТОЛЬКО nginx (monitoring/postgres хуки удалены)
-    # Волна 118 B8: monitoring/postgres hooks удалены (Python-эквиваленты: monitoring/config_renderer.py (172 W5.1),
-    # on_project_deploy.py). nginx — реальная логика (reload-guard) — восстановлен триггер.
+    # 3. REF-0002: postgres deploy-hook ОБЯЗАН быть зарегистрирован (BUG-0604:
+    #    незарегистрированный хук = роль/БД/GRANT не создаются при деплое, DSN проектов
+    #    указывает на несуществующую роль). Регистрация — через тонкий bash-wrapper,
+    #    делегирующий Python-реализации (module_interface.dispatch запускает hook-скрипт
+    #    через `bash <script>` — .py напрямую зарегистрировать нельзя).
+    assert "postgres" in registered, (
+        "REF-0002 FAIL: postgres deploy-hook обязан быть зарегистрирован в module.yaml "
+        "(hooks.on_project_deploy) — иначе role/DB/GRANT не создаются при деплое проекта"
+    )
+    postgres_hook_rel = registered["postgres"]
+    postgres_hook_abs = MODULES_DIR / "postgres" / postgres_hook_rel
+    assert postgres_hook_abs.is_file(), f"REF-0002 FAIL: postgres hook file missing: {postgres_hook_abs}"
+    wrapper_text = postgres_hook_abs.read_text(encoding="utf-8")
+    assert "on_project_deploy.py" in wrapper_text, (
+        f"REF-0002 FAIL: postgres hook {postgres_hook_rel} не делегирует канонической "
+        "Python-реализации on_project_deploy.py (тонкий фасад обязателен)"
+    )
+
+    # 4. R5 (волна 118 B8): monitoring deploy-hook остаётся удалённым
+    #    (Python-эквивалент: monitoring/config_renderer.py, вызывается из post_deploy_chain напрямую).
     assert "nginx" in registered, "B8 FAIL: nginx deploy-hook должен быть зарегистрирован (reload-guard)"
     assert "monitoring" not in registered, (
         "B8 FAIL: monitoring deploy-hook должен быть удалён (Python-эквивалент monitoring/config_renderer.py)"
     )
-    assert "postgres" not in registered, (
-        "B8 FAIL: postgres deploy-hook должен быть удалён (Python-эквивалент on_project_deploy.py)"
-    )
 
     logger.info(
-        "[IMP:9][test_registered_deploy_hooks_have_runtime_trigger] PASS: %d registered hook(s) — runtime trigger подтверждён (B8)",
+        "[IMP:9][test_registered_deploy_hooks_have_runtime_trigger] PASS: %d registered hook(s) — runtime trigger подтверждён (B8) + postgres зарегистрирован (REF-0002)",
         len(registered),
     )
 

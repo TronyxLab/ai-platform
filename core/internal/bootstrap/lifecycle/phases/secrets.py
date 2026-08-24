@@ -22,6 +22,10 @@
 ##            ключ не пишется на диск ноды; канон env → tmpfs decrypt-only (S-13);
 ##            /etc/age/key.txt — только restore-first fallback (ручной)
 ## @changes  2026-08-22 · T2.1 — φ4/φ9 близнецы: общий _run_secrets_step (FATAL-обёртка decrypt/ensure)
+## @changes  2026-08-24 · REF-0013 (Волна 0) — φ4 больше НЕ глотает ошибки source/autogen как
+##            WARN→done: helpers.ensure_secrets_exist прокидывает manifest/merge-guard/
+##            postcondition-ошибки, _run_secrets_step конвертирует их в PlatformFatalError;
+##            postcondition verify_required_sops_secrets (parsed ⊇ {required ∧ source=sops})
 # endregion MODULE_CONTRACT
 from __future__ import annotations
 

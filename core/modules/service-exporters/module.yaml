@@ -39,9 +39,9 @@ spool_dir: /var/lib/platform/service-exporters-data
 
 resources:
   # Синхронизировано с docker-compose.base.yml: nginx-exp 32M + redis-exporter 128M
-  # + postgres-exporter 128M = 288M (лимиты перенесены из infra-metrics без изменений).
+  # + postgres-exporter 128M + pgbouncer-exporter 128M = 416M (REF-0010, 2026-08-24).
   limits:
-    memory: 288M
+    memory: 448M
   reservations:
     memory: 64M
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: monitoring prometheus-targets file-sd target-json metrics-enabled labels node-targets node-exporter cadvisor exporters multi-node placement di-seam
 # STRUCTURE: ▶ generate_prometheus_target(config) → ◇ metrics_enabled? → ⊕ {targets,labels} JSON → ⎋ RenderResult
-#           ▶ generate_node_targets(nodes, output_dir) → ◇ placement data? → ⊕ nodes/*.json (5 file_sd jobs, job_name 1:1) → ⎋ RenderResult
+#           ▶ generate_node_targets(nodes, output_dir) → ◇ placement data? → ⊕ nodes/*.json (8 file_sd jobs, job_name 1:1) → ⎋ RenderResult
 # region MODULE_CONTRACT
 ## @purpose  Prometheus file-based service discovery target generator — extracted from
 ##           monitoring_config_renderer.py (DevPlan 117 G T54). + DevPlan 010 T3.3:
@@ -69,8 +69,11 @@ logger = logging.getLogger(__name__)
 # Порт-литералы — ТОЛЬКО из shared/platform_ports.py (инвариант: порт-SoT, DevPlan 010 T2.2).
 from core.internal.shared.platform_ports import (
     CADVISOR,
+    LANGFUSE_REDIS_EXPORTER,
     NGINX_EXPORTER,
     NODE_EXPORTER,
+    PGBOUNCER_EXPORTER,
+    PLATFORM_PORT_MINIO,
     POSTGRES_EXPORTER,
     REDIS_EXPORTER,
 )
@@ -104,9 +107,9 @@ class NodeInfo:
 class _NodeTargetJob:
     """Один file_sd job рендера нод (внутренний контракт, не экспортируется).
 
-    ## @purpose  Таблица 5-и мигрируемых jobs: имя файла (= job_name 1:1), scrape-порт,
-    ##            labels (байт-паритет прежним static_configs), условие размещения,
-    ##            single-node fallback target (Docker-DNS).
+    ## @purpose  Таблица file_sd jobs рендера нод (5 базовых T3.3 + 3 honesty REF-0010):
+    ##            имя файла (= job_name 1:1), scrape-порт, labels (байт-паритет прежним
+    ##            static_configs), условие размещения, single-node fallback target (Docker-DNS).
     """
 
     file_name: str  # "node-exporter.json" — job_name 1:1 (ЛОВУШКА T3.3)
@@ -119,6 +122,8 @@ class _NodeTargetJob:
 # job_name 1:1 с прежними static_configs (node-exporter, cadvisor, postgres-exporter,
 # redis-exporter, nginx-exporter) — ЛОВУШКА T3.3: переименование молча ломает
 # дашборды (infrastructure.json) и алерты, селекторящие по job.
+# REF-0010 добавил pgbouncer-exporter/langfuse-redis-exporter/minio (новые jobs,
+# ретроспективно 1:1 со static-дефолтами prometheus.yml.tmpl и alert-rules селекторами).
 _NODE_TARGET_JOBS: tuple[_NodeTargetJob, ...] = (
     _NodeTargetJob(
         file_name="node-exporter.json",
@@ -154,6 +159,30 @@ _NODE_TARGET_JOBS: tuple[_NodeTargetJob, ...] = (
         labels={"service": "nginx", "component": "reverse-proxy"},
         required_module="nginx",
         local_target="nginx-prometheus-exporter:9113",
+    ),
+    # ── REF-0010 (2026-08-24): honesty-jobs — фасад БД, очередь langfuse, S3 ──
+    # required_module-gated: модуль выключен → targets=[] → up-серия отсутствует →
+    # алерт НЕ firing (нет ложной сирены на нодах без модуля).
+    _NodeTargetJob(
+        file_name="pgbouncer-exporter.json",
+        port=PGBOUNCER_EXPORTER,
+        labels={"service": "pgbouncer", "component": "connection-pool"},
+        required_module="postgres",  # service-exporters singleton у postgres (§3 плана)
+        local_target="pgbouncer-exporter:9127",
+    ),
+    _NodeTargetJob(
+        file_name="langfuse-redis-exporter.json",
+        port=LANGFUSE_REDIS_EXPORTER,
+        labels={"service": "langfuse-redis", "component": "ingestion-queue"},
+        required_module="langfuse",  # exporter co-located с langfuse (langfuse compose)
+        local_target="langfuse-redis-exporter:9121",
+    ),
+    _NodeTargetJob(
+        file_name="minio.json",
+        port=PLATFORM_PORT_MINIO,
+        labels={"service": "minio", "component": "object-storage"},
+        required_module="minio",  # опциональный модуль: выключен → targets=[] → тишина
+        local_target="minio:9000",
     ),
 )
 # endregion CONSTANTS_NODE_TARGET_JOBS
@@ -263,7 +292,7 @@ def generate_node_targets(
     ##           = ${PROMETHEUS_TARGETS_DIR} (platform_root/prometheus-targets), mount :112
     ##           ⎋ RenderResult — "created" (≥1 файл записан) / "noop" (все байт-идентичны) /
     ##           "failed" (OSError)
-    ## @complexity O(J × N) где J = 5 jobs, N = число нод
+    ## @complexity O(J × N) где J = 8 jobs, N = число нод
     ## @invariants
     ##   - Файлы: <output_dir>/nodes/<job_name>.json; поддиректория nodes/ ОБЯЗАТЕЛЬНА —
     ##     иначе job platform-projects (glob /prometheus-targets/*.json) подхватит нодовые

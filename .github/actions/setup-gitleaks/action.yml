@@ -1,45 +1,75 @@
-# GREP_SUMMARY: composite-action setup-gitleaks cache-install gitleaks-v8.30.1 reusable
-# STRUCTURE: ▶ actions/cache@v6 → ◇ key:gitleaks-version-runner_os → ◇ conditional download → ⎋ /usr/local/bin/gitleaks
+# GREP_SUMMARY: composite-action setup-gitleaks cache-install gitleaks-v8.30.1 sha256-verify checksums reusable
+# STRUCTURE: ▶ [cache?] actions/cache@sha → ◇ key:gitleaks-version-runner_os → ◇ conditional download + sha256-verify(checksums.txt) → ⎋ /usr/local/bin/gitleaks
 # region MODULE_CONTRACT
 ## @purpose  Reusable composite action: install and cache gitleaks binary (v8.30.1).
 ##           Eliminates 3× duplicate gitleaks install sequences across CI workflows.
+##           REF-0012 (SEC-0039): скачиваемый бинарник верифицируется по sha256
+##           (checksums.txt релиза) ДО распаковки — trojaned scanner отключил бы
+##           leak-детект во всех job'ах.
 ## @scope    All .github/workflows/*.yml that need gitleaks secret scanning
 ## @invariants
 ##   - Version: 8.30.1 (default, overridable via input)
-##   - Cache: /usr/local/bin/gitleaks, keyed by version + runner.os
-##   - Download: conditional on cache miss
+##   - Cache: /usr/local/bin/gitleaks, keyed by version + runner.os; input cache='false'
+##     отключает кэш ПОЛНОСТЬЮ (обязателен на pull_request_target — poisoning-усилитель:
+##     trojaned binary персистентен между PR и main, REF-0012)
+##   - Download: conditional on cache miss; sha256 MISMATCH или отсутствие asset в
+##     checksums.txt → exit 1 (fail-closed, никогда не «просто продолжить»)
 ##   - Architecture: linux_x64 only (GitHub Actions ubuntu-latest)
 ## @rationale  DevPlan 002 — TASK-1: Composite action standardizes gitleaks setup across
 ##             2 workflow consumers (push-gate, platform-test).
 ##             Single source of truth for gitleaks version eliminates version drift (P5).
+## @changes    2026-08-24 | REF-0012 (meta-refactoring W0): +sha256-верификация
+##             (checksums.txt), +input cache для disable на pull_request_target,
+##             actions/cache → full commit SHA
 # endregion MODULE_CONTRACT
 
 name: 'Setup Gitleaks'
-description: 'Install and cache gitleaks binary (v8.30.1)'
+description: 'Install and cache gitleaks binary (v8.30.1) with release-checksums.txt sha256 verification'
 
 inputs:
   version:
     description: 'Gitleaks version'
     required: false
     default: '8.30.1'
+  cache:
+    description: 'Cache the binary via actions/cache (set false on pull_request_target — cache poisoning amplifier, REF-0012)'
+    required: false
+    default: 'true'
 
 runs:
   using: 'composite'
   steps:
     - name: Cache gitleaks binary
-      uses: actions/cache@v6
+      if: inputs.cache == 'true'
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: /usr/local/bin/gitleaks
         key: gitleaks-${{ inputs.version }}-${{ runner.os }}
 
-    - name: Install gitleaks (skip if cache hit)
+    - name: Install gitleaks (skip if cache hit; sha256-verify on download)
       shell: bash
       run: |
         if [ ! -f /usr/local/bin/gitleaks ]; then
           VERSION="${{ inputs.version }}"
-          curl -L -o /tmp/gitleaks.tar.gz \
-            "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz"
+          ASSET="gitleaks_${VERSION}_linux_x64.tar.gz"
+          BASE_URL="https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}"
+          curl -sL -o /tmp/gitleaks.tar.gz "${BASE_URL}/${ASSET}"
+          # REF-0012 (SEC-0039): сверка sha256 с checksums.txt релиза ДО распаковки
+          curl -sL -o /tmp/gitleaks.checksums.txt "${BASE_URL}/checksums.txt"
+          EXPECTED=$(grep "${ASSET}" /tmp/gitleaks.checksums.txt | awk '{print $1}')
+          ACTUAL=$(sha256sum /tmp/gitleaks.tar.gz | awk '{print $1}')
+          if [ -z "${EXPECTED}" ]; then
+            echo "::error::[IMP:10][setup-gitleaks] checksums.txt: asset '${ASSET}' not found for v${VERSION} — refusing install"
+            exit 1
+          fi
+          if [ "${EXPECTED}" != "${ACTUAL}" ]; then
+            echo "::error::[IMP:10][setup-gitleaks] sha256 MISMATCH — binary tampered/corrupt (expected=${EXPECTED}, actual=${ACTUAL}) — refusing install"
+            exit 1
+          fi
+          echo "[IMP:9][setup-gitleaks] sha256 verified (${ACTUAL})"
           tar -xzf /tmp/gitleaks.tar.gz -C /usr/local/bin/ gitleaks
           chmod +x /usr/local/bin/gitleaks
-          rm /tmp/gitleaks.tar.gz
+          rm -f /tmp/gitleaks.tar.gz /tmp/gitleaks.checksums.txt
+        else
+          echo "[IMP:7][setup-gitleaks] cached binary present (v${{ inputs.version }})"
         fi

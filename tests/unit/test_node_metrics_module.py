@@ -21,12 +21,17 @@ _MODULES_DIR = Path(__file__).resolve().parent.parent.parent / "core" / "modules
 _NEW_MODULES: tuple[str, ...] = ("log-collector", "node-metrics", "service-exporters")
 
 # Канонические job_name (прежние static_configs): переименование = silent break дашбордов/алертов
+# REF-0010 (Волна 0, 2026-08-24): +pgbouncer-exporter, +langfuse-redis-exporter, +minio —
+# легитимное расширение канона (новые scrape-цели); rename существующих по-прежнему запрещён.
 _CANONICAL_JOB_NAMES: frozenset[str] = frozenset({
     "node-exporter",
     "cadvisor",
     "postgres-exporter",
     "redis-exporter",
     "nginx-exporter",
+    "pgbouncer-exporter",
+    "langfuse-redis-exporter",
+    "minio",
 })
 
 

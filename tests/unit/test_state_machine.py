@@ -385,11 +385,13 @@ def test_init_flow_all_phases(caplog, state_file, mock_subprocess):
     NODE_YAML/SECRETS_ENV_FILE/TOR_ENABLED — env-дикт через StateMachine(env=_flow_env(...)) (W4e).
     E3 (160): root-факты через StateMachine(facts=FakeFacts(is_root=True)) — 0 monkeypatch os.geteuid.
     167 D5 (DI-zero): FS-guard патчи (os.makedirs/os.path.isdir) УДАЛЕНЫ — helpers зафейканы
-    (0 реальных os.makedirs в flow, probe 2026-08-14) + φ5 node_configs_dir через
+    (0 реальных os.makedirs в flow, probe 2026-08-14) + φ5     node_configs_dir через
     node_configs_remote(env): реальная tmp-папка вместо os.path.isdir-патча (/opt/node-configs).
     """
     secrets_env = Path(state_file).parent / "secrets.env"
     secrets_env.write_text("PLATFORM_MASTER_PASSWORD=test-password\nPLATFORM_MASTER_EMAIL=admin@test.local\n")
+    # REF-0013 fail-fast: манифест доставляется с core/ всегда — фикстура зеркалит реальную ноду
+    (Path(state_file).parent / "secrets-manifest.yaml").write_text("secrets: []\n")
     # phase_deploy_services precondition requires deploy-modules.sh and Docker running
     core_bootstrap_dir = Path(state_file).parent / "internal" / "bootstrap"
     core_bootstrap_dir.mkdir(parents=True, exist_ok=True)
@@ -520,6 +522,8 @@ def test_update_flow_all_phases(caplog, state_file, mock_subprocess, monkeypatch
     # phase_secrets_update reads secrets.env
     secrets_env = Path(state_file).parent / "secrets.env"
     secrets_env.write_text("PLATFORM_MASTER_PASSWORD=test-password\n")
+    # REF-0013 fail-fast: манифест доставляется с core/ всегда — фикстура зеркалит реальную ноду
+    (Path(state_file).parent / "secrets-manifest.yaml").write_text("secrets: []\n")
     # phase_deploy_update precondition requires deploy-modules.sh and Docker running
     core_bootstrap_dir = Path(state_file).parent / "internal" / "bootstrap"
     core_bootstrap_dir.mkdir(parents=True, exist_ok=True)
@@ -735,6 +739,8 @@ def test_tor_conditional_runs(caplog, state_file, mock_subprocess):
     """
     secrets_env = Path(state_file).parent / "secrets.env"
     secrets_env.write_text("PLATFORM_MASTER_PASSWORD=test-password\nPLATFORM_MASTER_EMAIL=admin@test.local\n")
+    # REF-0013 fail-fast: манифест доставляется с core/ всегда — фикстура зеркалит реальную ноду
+    (Path(state_file).parent / "secrets-manifest.yaml").write_text("secrets: []\n")
     # phase_deploy_services precondition requires deploy-modules.sh and Docker running
     core_bootstrap_dir = Path(state_file).parent / "internal" / "bootstrap"
     core_bootstrap_dir.mkdir(parents=True, exist_ok=True)

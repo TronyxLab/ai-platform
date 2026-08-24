@@ -116,6 +116,7 @@ port_mappings:
   HERMES_AGENT_PORT: 9119
   HERMES_AGENT_HERMES_AGENT_PORT: 8642
   LANGFUSE_PORT: 3001
+  LANGFUSE_LANGFUSE_REDIS_EXPORTER_PORT: 9122
   LITELLM_PORT: 4000
   LOGGING_PORT: 3100
   MINIO_PORT: 9000
@@ -131,6 +132,7 @@ port_mappings:
   SERVICE_EXPORTERS_PORT: 9113
   SERVICE_EXPORTERS_REDIS_EXPORTER_PORT: 9121
   SERVICE_EXPORTERS_POSTGRES_EXPORTER_PORT: 9187
+  SERVICE_EXPORTERS_PGBOUNCER_EXPORTER_PORT: 9127
 env_defaults:
   CONTEXT: test
   NODE_NAME: test-node
@@ -225,6 +227,7 @@ env_defaults:
   PLATFORM_MASTER_EMAIL: admin@ai-platform.local
   PLATFORM_MASTER_PASSWORD: test-master-password
   REDIS_PASSWORD: ci-test-redis-password
+  ZAI_API_KEY: sk-placeholder-key-for-ci
 test_ports:
   clickhouse:
     port_18123: 18123
@@ -249,6 +252,7 @@ test_ports:
     port_19100: 19100
   service-exporters:
     port_19113: 19113
+    port_19127: 19127
   status-page:
     port_18082: 18082
 profiles:

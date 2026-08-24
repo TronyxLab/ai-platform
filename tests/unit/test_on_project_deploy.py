@@ -21,6 +21,8 @@
 ## @changes 2026-08-02 | Created (Brief H D65)
 ## @changes 2026-08-03 | DevPlan 133 W2 — role/GRANT/credentials tests (command-routing mocks)
 ## @changes 2026-08-13 | E1 (160) — DI-конвертация (setattr 9 → 0, setenv 12 → 0, −100%)
+## @changes 2026-08-24 | REF-0002 В0 — orphan-role ветка: skip → ensure-convergence
+##           (детальное покрытие — tests/unit/test_postgres_ensure_convergence.py)
 # endregion MODULE_CONTRACT
 """
 
@@ -272,13 +274,18 @@ def test_role_exists_idempotent_password_unchanged(caplog, tmp_path):
 
 
 @ldd_trajectory
-def test_role_exists_without_credentials_skips_refresh(caplog, tmp_path):
-    """W2: роль есть, credentials-файла нет → пароль неизвестен → skip (non-fatal, return 0)."""
+def test_role_exists_without_credentials_converges(caplog, tmp_path):
+    """REF-0002 В0: роль есть, credentials-файла нет → ensure-convergence: ALTER ROLE PASSWORD +
+    creds записываются (ранний return удалён — BUG-0605/DATA-201). Полное покрытие ветки —
+    tests/unit/test_postgres_ensure_convergence.py."""
     _write_yaml(tmp_path, "name: myproj\nneeds:\n  database: myproj_db\n")
     runner = FakeCommandRunner(router=_make_psql_router(role_exists=True))
 
     assert _invoke_hook(str(tmp_path), "myproj", runner) == 0
-    assert not (tmp_path / ".platform-db.env").exists()
+
+    sql = " ".join(" ".join(c) for c in runner.calls)
+    assert 'ALTER ROLE "myproj_user" WITH LOGIN PASSWORD' in sql, "orphan-role → ALTER ROLE PASSWORD (converge)"
+    assert (tmp_path / ".platform-db.env").exists(), "credentials пишутся после конвергенции"
 
 
 @ldd_trajectory

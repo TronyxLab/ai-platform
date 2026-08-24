@@ -125,7 +125,14 @@ def test_full_cycle_from_real_policy(real_policy_path, template_path, tmp_path, 
             )
             assert len(access_groups) >= 1, f"model_name '{entry['model_name']}' must have at least 1 access_group"
 
-        # ── Verify api_key references DEEPSEEK_API_KEY ───────────────────────
+        # ── Verify api_key references a configured provider key (SoT-driven) ──
+        policy_doc = yaml.safe_load(pathlib.Path(real_policy_path).read_text(encoding="utf-8")) or {}
+        allowed_refs = {
+            f"os.environ/{cfg.get('key_env')}"
+            for cfg in (policy_doc.get("providers") or {}).values()
+            if cfg.get("key_env")
+        }
+        assert allowed_refs, "policy.yaml#providers пуст — конфигурация провайдеров сломана"
         for entry in model_list:
             litellm_params = entry.get("litellm_params", {})
             api_key = litellm_params.get("api_key", "")
@@ -134,9 +141,10 @@ def test_full_cycle_from_real_policy(real_policy_path, template_path, tmp_path, 
                 entry["model_name"],
                 api_key,
             )
-            # All providers in the real policy use DEEPSEEK_API_KEY
-            assert "DEEPSEEK_API_KEY" in api_key, (
-                f"api_key for '{entry['model_name']}' must reference DEEPSEEK_API_KEY, got '{api_key}'"
+            # Мультипровайдер (2026-08-24: deepseek + zai) — валидны ссылки только на
+            # key_env из policy.yaml#providers (сторонние env-имена = violation)
+            assert api_key in allowed_refs, (
+                f"api_key for '{entry['model_name']}' must reference one of {sorted(allowed_refs)}, got '{api_key}'"
             )
 
         # ── Verify litellm_settings ──────────────────────────────────────────

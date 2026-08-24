@@ -71,7 +71,8 @@ def generate_alert_rules(
     ## @io
     ##   ⇥ config: ProjectMonitoringConfig — resolved monitoring config
     ##   ⇥ template_path: Path — alert rules template (default: platform-relative)
-    ##   ⇥ output_dir: Path — output directory (default: /opt/prometheus/rules)
+    ##   ⇥ output_dir: Path — output directory (default: ALERT_RULES_DIR = SoT
+    ##     /opt/platform/prometheus-rules, REF-0010/AI-0004 — parity с compose-mount)
     ##   ⎋ RenderResult — outcome with status
     ## @complexity O(T + V) where T = template size, V = variables
     ## @invariants

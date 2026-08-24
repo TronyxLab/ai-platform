@@ -56,6 +56,10 @@ if __name__ == "__main__" or not __package__:
 # DevPlan 119 E5: атомарная запись — единый канон shared/atomic_writer (tempfile+fsync+replace).
 from core.internal.shared.atomic_writer import atomic_write_text as _atomic_write_text
 
+# REF-0010 (AI-0004): канонический rules-dir дефолт (SoT platform-infra.yaml) —
+# fallback PROMETHEUS_RULES_DIR в _section_monitoring больше не дублирует литерал.
+from core.internal.shared.deploy_paths import DEFAULT_PROMETHEUS_RULES_DIR
+
 # DevPlan 177 W3.5: типизированные SoT-YAML читатели — единый shared/yaml_loader.py
 # (load_platform_env → PlatformEnv; load_secret_definitions → raw secrets list).
 from core.internal.shared.yaml_loader import load_platform_env
@@ -472,6 +476,9 @@ def _section_llm_provider(env_defaults: dict[str, str]) -> list[str]:
     lines.append("")
     lines.append("# ── LLM Provider API Key ───────────────────────────────────────────────────")
     lines.append("DEEPSEEK_API_KEY=" + _get_env_val(env_defaults, "DEEPSEEK_API_KEY", "sk-placeholder-key-for-ci"))
+    # zai (Zhipu GLM) — провайдер с 2026-08-24 (T9 W3, санкция владельца); SoT ci_default —
+    # secret-definitions.yaml (ZAI_API_KEY), литерал ниже — только fail-safe дефолт.
+    lines.append("ZAI_API_KEY=" + _get_env_val(env_defaults, "ZAI_API_KEY", "sk-placeholder-key-for-ci"))
     return lines
 
 
@@ -740,8 +747,10 @@ def _section_monitoring(env_defaults: dict[str, str]) -> list[str]:
     )
     lines.append(
         "PROMETHEUS_RULES_DIR="
-        # 170 W12 C5: единый дефолт с deploy_paths.prometheus_rules_dir (3-way drift-фикс)
-        + _get_env_val(env_defaults, "PROMETHEUS_RULES_DIR", "/opt/prometheus/rules")
+        # REF-0010 (AI-0004): fallback = канон DEFAULT_PROMETHEUS_RULES_DIR из
+        # shared/deploy_paths (= SoT platform-infra.yaml env_defaults); прежний
+        # литерал /opt/prometheus/rules расходился с compose-mount.
+        + _get_env_val(env_defaults, "PROMETHEUS_RULES_DIR", DEFAULT_PROMETHEUS_RULES_DIR)
     )
     lines.append("PROMETHEUS_PORT=" + _get_val_required(env_defaults, "PROMETHEUS_PORT"))
     lines.append("# Loki (logging backend)")

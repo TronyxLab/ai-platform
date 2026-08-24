@@ -22,6 +22,7 @@
 ##            gate. Байт-в-байт дублирование в двух workflows — дрейф-вектор (правка
 ##            в одной копии молча терялась); composite action = единый source of truth.
 ## @changes 2026-08-22 | T2.15: извлечён из push-gate.yml + platform-gate-fast.yml (идентичные копии)
+## @changes 2026-08-24 | REF-0012: actions/upload-artifact → full commit SHA (×3)
 # endregion MODULE_CONTRACT
 
 name: 'Collect static artifacts'
@@ -39,7 +40,7 @@ runs:
 
     - name: Upload ruff SARIF artifact
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: ruff-check-sarif
         path: ruff-check.sarif
@@ -54,7 +55,7 @@ runs:
 
     - name: Upload basedpyright JSON artifact
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: basedpyright-report
         path: basedpyright-report.json
@@ -62,7 +63,7 @@ runs:
 
     - name: Upload pytest JUnit reports
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: pytest-junit-reports
         path: tests/report-*.xml

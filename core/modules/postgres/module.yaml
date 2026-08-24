@@ -1,5 +1,5 @@
-# GREP_SUMMARY: postgres module docker shared-db-net pgbouncer liveness pg_isready restart-always severity critical
-# STRUCTURE: ▶ module:postgres → shared-db-net → no-ports → pg_isready → pgbouncer → ┐
+# GREP_SUMMARY: postgres module docker shared-db-net pgbouncer liveness pg_isready restart-always severity critical deploy-hook on_project_deploy ensure-convergence
+# STRUCTURE: ▶ module:postgres → shared-db-net → no-ports → pg_isready → pgbouncer → deploy-hook(on_project_deploy) → ┐
 # region MODULE_CONTRACT
 ## @purpose  Shared PostgreSQL 16 instance for all platform projects via shared-db-net
 ## @scope    Single node; all projects use the same DB instance; connection by name/user/password
@@ -11,8 +11,11 @@
 ##   - Resource limits: memory 1G (синхронизировано с compose)
 ##   - Version pinned here, not in docker-compose (AR6 — no per-module VERSION file)
 ##   - severity: critical — deploy failure causes exit 2 (fatal), blocking node-update
+##   - deploy-hook зарегистрирован (REF-0002): hooks.on_project_deploy + interfaces.deploy-hook —
+##     пара обязательна (dispatch skip-ает при отсутствии любого из двух)
 ## @rationale postgres needs graceful shutdown time for WAL and connection drain;
-##           severity=critical because all platform projects depend on the shared PG instance
+##           severity=critical because all platform projects depend on the shared PG instance;
+##           deploy-hook реализует контракт «роль/БД/GRANT создаются хук-ом при деплое»
 # endregion MODULE_CONTRACT
 
 name: postgres
@@ -28,13 +31,22 @@ restart: always
 
 interfaces:
   - healthcheck
+  - deploy-hook
 
 spool_dir: /var/lib/platform/postgres-data/
 spool_volume: postgres-data
 
-# hooks.on_project_deploy: runtime-вызов — только через зарегистрированные hooks
-# в DeployOrchestrator post-deploy chain (зарегистрирован только nginx).
-# on_project_deploy.py — каноническая Python-реализация (unit-тесты, operator-инвокация).
+# region HOOKS
+## @purpose  Module hooks invoked by the project deploy lifecycle (REF-0002, BUG-0604).
+##           Each key = lifecycle event, value = script path relative to module directory.
+##           on_project_deploy.sh — тонкий bash-фасад: module_interface.dispatch запускает
+##           hook-скрипт через `bash <script>`, поэтому регистрируется wrapper, делегирующий
+##           канонической Python-реализации on_project_deploy.py (auto-create DB +
+##           role/GRANT/credentials + ensure-convergence). Без регистрации интерфейса
+##           deploy-hook dispatch делает тихий skip — оба поля обязательны вместе.
+hooks:
+  on_project_deploy: hooks/on_project_deploy.sh
+# endregion HOOKS
 
 resources:
   limits:

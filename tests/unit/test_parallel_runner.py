@@ -1,5 +1,5 @@
-# GREP_SUMMARY: parallel-runner, unit, drain, rollback, fork, slot-waiter, deploy-group, D1, docker-orchestrator-decomposition
-# STRUCTURE: ▶ mock os.waitpid/fork → ◇ drain_completed_count [WNOHANG done|fail|ChildProcessError] → ◇ drain_all_count [blocking done|error] → ◇ deploy_docker_group [rollback on fail] → ⎋ LDD IMP:9
+# GREP_SUMMARY: parallel-runner, unit, drain, rollback, fork, slot-waiter, deploy-group, D1, docker-orchestrator-decomposition, REF-0005, WIFEXITED, all-names
+# STRUCTURE: ▶ mock os.waitpid/fork → ◇ drain_completed_count [WNOHANG done|fail|ChildProcessError] → ◇ drain_all_count [blocking done|error|status-accounting REF-0005] → ◇ deploy_docker_group [real-drain failed+all_names+rollback] → ⎋ LDD IMP:9
 # region MODULE_CONTRACT
 ## @purpose  Unit-тесты для core/internal/bootstrap/deploy/parallel_runner.py (DevPlan 118 D1) —
 ##           fork-параллелизм, drain-примитивы, atomic rollback deploy_docker_group.
@@ -110,6 +110,135 @@ class TestDrainAllCount:
 
 
 # endregion TEST_drain_all
+
+
+# region TEST_drain_all_status_accounting
+class TestDrainAllStatusAccounting:
+    """REF-0005 (DevPlan 11 W0): drain_all_count зеркалирует WIFEXITED/WEXITSTATUS.
+
+    ## @purpose — BUG-0301≡BUG-0801: blocking drain считал ЛЮБОГО дождавшегося ребёнка успешным
+    ##            (unconditional deployed+=1) → group_failed=0 → атомарный откат группы не
+    ##            срабатывал, verdict success на поломанном стеке. Реальный drain_all_count +
+    ##            mocked waitpid (карточка REF-0005 «Tests required», TDD-red 2026-08-24).
+    """
+
+    # 🧪 TRAP[TEST] · 2026-08-24 · REGRESSION · REF-0005/BUG-0301 — drain_all_count failed-учёт
+    # · Scenario: ребёнок завершился с exit=3 (status=3<<8) → failed=1 + имя в failed_names.
+    # · Last fail: 2026-08-24 — unconditional deployed+=1 при любом успешном waitpid:
+    # ·   deployed=1/failed=0 на упавшем ребёнке (красный до фикса).
+    # · Remove if: drain_all_count теряет статусную семантику (не допускается — REF-0005).
+    def test_failed_child_counted_as_failed(self, caplog) -> None:
+        """Ребёнок с ненулевым exit-кодом → failed=1 + имя из pid_to_name (НЕ deployed)."""
+        caplog.set_level(logging.DEBUG)
+        print("--- LDD TRAJECTORY (IMP:7-10) ---")
+        with mock.patch.object(parallel_runner.os, "waitpid", return_value=(42, 3 << 8)):
+            pids = [42]
+            deployed, failed, names = parallel_runner.drain_all_count(pids, {42: "mod-fail"})
+        for record in caplog.records:
+            if "[IMP:" in record.message and int(record.message.split("[IMP:")[1].split("]")[0]) >= 7:
+                print(record.message)
+        print("--- END LDD TRAJECTORY ---")
+        logger.info("[IMP:9][test] drain_all status: deployed=%d failed=%d names=%s", deployed, failed, names)
+        assert pids == [], "blocking drain очищает pids"
+        assert deployed == 0, f"exit=3 НЕ может быть deployed (REF-0005): deployed={deployed}"
+        assert failed == 1, f"failed-ребёнок обязан считаться (REF-0005): failed={failed}"
+        assert names == ["mod-fail"], f"имя из pid_to_name обязано вернуться: {names}"
+
+    # 🧪 TRAP[TEST] · 2026-08-24 · SCENARIO · REF-0005 — смешанный исход (ok + fail)
+    # · Last fail: 2026-08-24 — оба ребёнка считались deployed (failed=0).
+    # · Remove if: drain_all_count перестаёт быть единой точкой финального drain группы.
+    def test_mixed_children_split_by_status(self, caplog) -> None:
+        """Двое детей: exit=0 и exit=1 → deployed=1, failed=1, failed_names=['modB']."""
+        caplog.set_level(logging.DEBUG)
+        statuses = {101: 0, 102: 1}
+        with mock.patch.object(
+            parallel_runner.os, "waitpid", side_effect=lambda pid, *_, **__: (pid, statuses.get(pid, 0))
+        ):
+            pids = [101, 102]
+            deployed, failed, names = parallel_runner.drain_all_count(pids, {101: "modA", 102: "modB"})
+        logger.info(
+            "[IMP:9][test] drain_all mixed: deployed=%d failed=%d names=%s",
+            deployed,
+            failed,
+            names,
+        )
+        assert deployed == 1
+        assert failed == 1
+        assert names == ["modB"]
+
+    # 🧪 TRAP[TEST] · 2026-08-24 · REGRESSION · REF-0005/BUG-0501≡BUG-0703 — all_names ДО drain
+    # · Scenario: deploy_docker_group с РЕАЛЬНЫМ drain_all_count (DI drain_all_fn=None):
+    # ·   drain очищает pid_to_name → all_names пуст → групповой healthcheck по 0 модулям;
+    # ·   failed-учёт честный → group_failed>0 → атомарный rollback группы (сигнал REF-W1).
+    # · Last fail: 2026-08-24 — живой баг маскировался fake-drain в тестах: all_names=[],
+    # ·   HC не форкался, failed=0, rollback не срабатывал.
+    # · Remove if: healthcheck-per-group переезжает в другой механизм учёта имён.
+    def test_group_real_drain_failed_and_healthchecks(self, tmp_path, caplog, monkeypatch) -> None:
+        """Реальный drain: failed_names из pid_to_name; all_names non-empty (HC fork per module)."""
+        caplog.set_level(logging.DEBUG)
+        modules_dir = tmp_path / "modules"
+        mod_a = modules_dir / "modA"
+        mod_b = modules_dir / "modB"
+        mod_a.mkdir(parents=True)
+        mod_b.mkdir(parents=True)
+        for mod in (mod_a, mod_b):
+            (mod / "docker-compose.yml").write_text(f"services:\n  {mod.name}:\n    image: x\n", encoding="utf-8")
+
+        # ── os-примитивы (fork-семантика keep — TRAP[DI-KEEP]): уникальные pid по счётчику ──
+        fork_calls: list[int] = []
+
+        def fake_fork() -> int:
+            fork_calls.append(len(fork_calls))
+            return 101 + len(fork_calls) - 1  # deploy: 101,102 → HC: 103,104
+
+        statuses = {101: 0, 102: 1}  # modA ok, modB fail; HC-дети (103+) → default 0 (pass)
+        monkeypatch.setattr(parallel_runner.os, "fork", fake_fork)
+        monkeypatch.setattr(parallel_runner.os, "waitpid", lambda pid, *_, **__: (pid, statuses.get(pid, 0)))
+        monkeypatch.setattr(parallel_runner.os, "WIFEXITED", lambda _: True)
+        monkeypatch.setattr(parallel_runner.os, "WEXITSTATUS", lambda s: s)
+
+        down_calls: list[str] = []
+
+        def fake_down(compose_dir: str, **_: object) -> bool:
+            down_calls.append(compose_dir)
+            return True
+
+        deployed, failed, failed_names, rolled_back = parallel_runner.deploy_docker_group(
+            ["modA:", "modB:"],
+            str(modules_dir),
+            resolve_compose_fn=lambda _p: mod_a / "docker-compose.yml",
+            compose_down_fn=fake_down,
+            deploy_module_fn=lambda *_a, **_k: True,  # fork замокан → child-тело не исполняется
+        )
+
+        print("--- LDD TRAJECTORY (IMP:7-10) ---")
+        for record in caplog.records:
+            if "[IMP:" in record.message and int(record.message.split("[IMP:")[1].split("]")[0]) >= 7:
+                print(record.message)
+        print("--- END LDD TRAJECTORY ---")
+        logger.info(
+            "[IMP:9][test] group real-drain: deployed=%d failed=%d names=%s rolled_back=%s forks=%d downs=%d",
+            deployed,
+            failed,
+            failed_names,
+            rolled_back,
+            len(fork_calls),
+            len(down_calls),
+        )
+        # ── честный failed-учёт (drain_all_count зеркалит WEXITSTATUS) ──
+        assert deployed == 1, f"только modA успешен: deployed={deployed}"
+        assert failed == 1, f"group_failed обязан быть >0 при failed-ребёнке (REF-0005): failed={failed}"
+        assert failed_names == ["modB"], f"имена из pid_to_name: {failed_names}"
+        # ── all_names собран ДО drain → групповой healthcheck идёт по ВСЕМ модулям ──
+        assert len(fork_calls) == 4, (
+            f"2 deploy-fork + 2 HC-fork (all_names non-empty, REF-0005); forks={len(fork_calls)}"
+        )
+        # ── failed>0 ⇒ вердикт группы ≠ success: атомарный откат группы (сигнал; сам rollback — W1) ──
+        assert sorted(rolled_back) == ["modA", "modB"], f"atomic rollback группы: {rolled_back}"
+        assert len(down_calls) == 2, f"compose down для всех модулей группы: {down_calls}"
+
+
+# endregion TEST_drain_all_status_accounting
 
 
 # region TEST_deploy_docker_group_rollback

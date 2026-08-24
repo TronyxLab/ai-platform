@@ -41,8 +41,8 @@
 ## RULES:
 ##   1. ServiceDown:          up == 0                    for 1m   → CRITICAL
 ##   2. ServiceDownShort:     up == 0                    for 15s  → WARNING
-##   3. HighMemory:           mem_usage > 90% AND limit>0 for 5m  → WARNING
-##   4. DiskSpace:            avail < 20% (mountpoint=/) for 0s   → CRITICAL
+##   3. HighMemory:           mem_usage > 90% AND limit>0 for 5m  → WARNING (noDataState Alerting, REF-0010)
+##   4. DiskSpace:            avail < 20% (mountpoint=/) for 0s   → CRITICAL (noDataState Alerting, REF-0010)
 ##   5. LLMAPIErrors:         error_rate>0.1/s           for 0s   → WARNING
 ##   6. BackupFreshness:      count(BACKUP COMPLETE 26h) for 30m → CRITICAL (loki, threshold lt 1, time-gate 07:00 МСК)
 ##   7. BackupUploadFailure:  count(off-site NOT confirmed 24h) for 5m → WARNING (loki, threshold gt 0)
@@ -61,6 +61,10 @@
 ##           в утреннем окне, а не непрерывно (совместно с repeat_interval 24h в contact-points.yml).
 ## @changes 2026-08-13 · DevPlan 162 W4-1/W6-3 — +PsiMemoryPressure (PSI memory some >5%),
 ##           +Nginx5xxErrors (nginx access JSON 5xx, loki, threshold gt 2)
+## @changes 2026-08-24 · REF-0010 — HighMemory/DiskSpace noDataState OK→Alerting
+##           (FAIL-0402: disk-full гасил собственную сигнализацию; нет данных = аларм.
+##           PsiMemoryPressure сохраняет noDataState OK — отсутствие stalled-серий
+##           = отсутствие давления, легитимный no-data)
 # endregion MODULE_CONTRACT
 
 apiVersion: 1
@@ -220,7 +224,10 @@ groups:
             relativeTimeRange:
               from: 0
               to: 0
-        noDataState: "OK"
+        # [IMP:9][grafana-alerts] REF-0010 (FAIL-0402): noDataState OK→Alerting.
+        # Нет данных HighMemory = cadvisor/node-exporter мёртв (или ENOSPC погасил
+        # TSDB) — это само по себе инцидент, а не «всё хорошо».
+        noDataState: "Alerting"
         execErrState: "Error"
         for: "5m"
         annotations:
@@ -272,7 +279,11 @@ groups:
             relativeTimeRange:
               from: 0
               to: 0
-        noDataState: "OK"
+        # [IMP:9][grafana-alerts] REF-0010 (FAIL-0402): noDataState OK→Alerting.
+        # Disk-full гасил собственную сигнализацию: при ENOSPC Prometheus перестаёт
+        # писать TSDB → серия исчезает → noDataState OK = тишина ровно в момент
+        # инцидента. Alerting: нет данных о диске = аларм (fail-loud).
+        noDataState: "Alerting"
         execErrState: "Error"
         for: "0s"
         annotations:

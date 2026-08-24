@@ -1,9 +1,9 @@
-# @purpose  Base compose definition for redis — cache-only redis:7.4-alpine, no persistence, allkeys-lfu
-# GREP_SUMMARY: redis docker-compose redis-7.4-alpine shared-cache-net cache-only allkeys-lfu healthcheck
-# STRUCTURE: ▶ redis:7.4-alpine → shared-cache-net → cache-only → allkeys-lfu → redis-cli ping → ┐
+# @purpose  Base compose definition for redis — cache-only redis:8.8.1-alpine, no persistence, allkeys-lfu
+# GREP_SUMMARY: redis docker-compose redis-8.8.1-alpine shared-cache-net cache-only allkeys-lfu maxmemory-192mb healthcheck
+# STRUCTURE: ▶ redis:8.8.1-alpine → shared-cache-net → cache-only → allkeys-lfu @192mb (headroom 64M) → redis-cli ping → ┐
 # region MODULE_CONTRACT
 ## @purpose  Base compose definition for redis — pure cache instance. NO persistence (no AOF, no RDB).
-## @scope    Shared cache: no host ports, network shared-cache-net, allkeys-lfu eviction at 256mb
+## @scope    Shared cache: no host ports, network shared-cache-net, allkeys-lfu eviction at 192mb (REF-0010: headroom под cgroup 256M)
 ## @invariants
 ##   - Image: redis:8.8.1-alpine (digest-pinned; ранее 7.4-alpine TASK-2)
 ##   - NO host ports в single-node (internal network only, D4); кросс-нодовая публикация 6379 —
@@ -12,7 +12,10 @@
 ##     раскрывается ВНУТРИ контейнера shell'ом — не светится в compose-argv/ps
 ##   - restart: always — Docker policy (not manual lifecycle management)
 ##   - stop_grace_period: 10s (no persistence flush needed)
-##   - Command: --save "" --appendonly no --maxmemory 256mb --maxmemory-policy allkeys-lfu --requirepass
+##   - Command: --save "" --appendonly no --maxmemory 192mb --maxmemory-policy allkeys-lfu --requirepass
+##     REF-0010 (2026-08-24): maxmemory 256mb→192mb — headroom 64M под cgroup-лимитом 256M
+##     (FAIL-0202: maxmemory==cgroup → OOM-kill до срабатывания eviction; 25% запас на
+##     fragmentation/copy-on-write). Политика остаётся allkeys-lfu (cache-only owner verdict)
 ##   - Healthcheck аутентифицирован через REDISCLI_AUTH (без ps-экспозиции пароля)
 ##   - Network: shared-cache-net (external:true, pre-created by deploy-modules.sh)
 ##   - NO volumes — cache-only, no persistence data to store (owner verdict wave-redis 2026-07-15)
@@ -59,6 +62,9 @@ services:
 
     # [IMP:9][redis-compose] Cache-only: NO persistence (no AOF, no RDB), allkeys-lfu eviction
     # Owner verdict wave-redis 2026-07-15: redis is pure cache — no volume, no dump
+    # [IMP:9][redis-compose] REF-0010 (FAIL-0202): maxmemory 256mb→192mb — headroom 64M под
+    # cgroup 256M (maxmemory==cgroup → OOM-kill раньше eviction); политика НЕ меняется
+    # (cache-only, owner verdict; noeviction — только для langfuse-redis очереди)
     # 🧐 TRAP[DECISION] · 2026-07-15 · — · Cache-only: без persistence (AOF+RDB+volume)
     # · Rejected: AOF persistence
     # · Reason: owner verdict wave-redis — redis is pure cache, queues get noeviction Redis elsewhere
@@ -75,7 +81,7 @@ services:
         exec redis-server \
           --save "" \
           --appendonly no \
-          --maxmemory 256mb \
+          --maxmemory 192mb \
           --maxmemory-policy allkeys-lfu \
           --requirepass "$REDIS_PASSWORD"
 

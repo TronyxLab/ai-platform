@@ -26,6 +26,7 @@
 ##             2026-08-15 | v1.0.1 round 7: ПРЯМОЕ ЗАМЕЩЕНИЕ симлинк-схемы → реальный venv
 ##                        (симлинк-схема ломала gate .venv/bin/*; .venv-cache удалён —
 ##                        pyvenv.cfg-стальность была первопричиной хаков)
+##             2026-08-24 | REF-0012: actions/setup-python → full commit SHA
 # endregion MODULE_CONTRACT
 
 name: 'Setup Python venv'
@@ -45,7 +46,7 @@ runs:
   using: 'composite'
   steps:
     - name: Set up Python
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
       with:
         python-version: ${{ inputs.python-version }}
         cache: 'pip'

@@ -1,5 +1,5 @@
-# GREP_SUMMARY: prometheus scrape_config litellm node-exporter cadvisor redis-exporter postgres-exporter loki file-sd nodes multi-node
-# STRUCTURE: ▶ global:30s → rule_files:* -alerts.yml → 9-scrape-configs → file_sd nodes+projects dynamic-targets → ┘
+# GREP_SUMMARY: prometheus scrape_config litellm node-exporter cadvisor redis-exporter postgres-exporter pgbouncer-exporter langfuse-redis-exporter minio alloy loki file-sd nodes multi-node
+# STRUCTURE: ▶ global:30s → rule_files:*-alerts.yml → 13-scrape-configs → file_sd nodes+projects dynamic-targets → ┘
 # region MODULE_CONTRACT
 ## @purpose  Prometheus scrape configuration for observability stack
 ## @scope    Mounted as /etc/prometheus/prometheus.yml in prometheus container
@@ -19,6 +19,10 @@
 ##   - Loki scraped on observability-net (loki:3100 — /metrics; T3.4 collector-freshness)
 ##   - LiteLLM metrics require bearer_token auth (LITELLM_MASTER_KEY — same as litellm master key)
 ##   - Postgres Exporter scraped via file_sd (single-node fallback: postgres-exporter:9187)
+##   - REF-0010 (2026-08-24): honesty-jobs — pgbouncer-exporter + langfuse-redis-exporter +
+##     minio (file_sd, required_module-gated: модуль выключен → targets=[] → up-серия
+##     отсутствует → алерт НЕ firing; модуль включён и упал → up==0 → алерт), alloy
+##     (static, all-nodes). job_name 1:1 с файлами nodes/*.json и alert-rules селекторами.
 ## @rationale 30s interval balances metric granularity with storage/CPU cost on 4-core 8GB VPS.
 # endregion MODULE_CONTRACT
 # ⚠️ TRAP[DECISION] · 2026-07-01 · — · file_sd_configs for dynamic targets
@@ -156,6 +160,54 @@ scrape_configs:
     file_sd_configs:
       - files: ["/prometheus-targets/nodes/postgres-exporter.json"]
         refresh_interval: 30s
+
+  # ── PgBouncer Exporter (connection-pool metrics; REF-0010 FAIL-0100) ───────
+  # pgbouncer — единственный фасад БД — был невидим Prometheus'у. Экспортер ходит
+  # в admin-db pgbouncer:6432/pgbouncer (cl_waiting/cl_active/max_client_conn).
+  # file_sd required_module="postgres" (singleton у сервисов, §3 плана);
+  # single-node fallback: pgbouncer-exporter:9127.
+  - job_name: "pgbouncer-exporter"
+    scrape_interval: 30s
+    file_sd_configs:
+      - files: ["/prometheus-targets/nodes/pgbouncer-exporter.json"]
+        refresh_interval: 30s
+
+  # ── Langfuse Redis Exporter (ingestion-queue metrics; REF-0010 FAIL-0200) ──
+  # Второй redis_exporter instance — langfuse-redis (очередь web→redis→worker).
+  # Источник для LangfuseQueueRedisDown / LangfuseQueueEviction / MemoryPressure
+  # (platform-alerts.yml). file_sd required_module="langfuse"; single-node
+  # fallback: langfuse-redis-exporter:9121.
+  - job_name: "langfuse-redis-exporter"
+    scrape_interval: 30s
+    file_sd_configs:
+      - files: ["/prometheus-targets/nodes/langfuse-redis-exporter.json"]
+        refresh_interval: 30s
+
+  # ── MinIO (built-in cluster metrics; REF-0010 FAIL-1002) ───────────────────
+  # /minio/v2/metrics/cluster анонимно (MINIO_PROMETHEUS_ANONYMOUS_ACCESS=on в
+  # minio compose). file_sd required_module="minio": модуль выключен → targets=[]
+  # → up-серия отсутствует → MinioScrapeDown НЕ firing (нет ложной сирены на
+  # нодах с внешним S3); включён и упал → up==0 → алерт.
+  - job_name: "minio"
+    scrape_interval: 30s
+    metrics_path: "/minio/v2/metrics/cluster"
+    file_sd_configs:
+      - files: ["/prometheus-targets/nodes/minio.json"]
+        refresh_interval: 30s
+
+  # ── Grafana Alloy (log-collector built-in HTTP server; REF-0010) ───────────
+  # Alloy слушает :12345 внутри observability-net (порт НЕ публикуется наружу —
+  # внутренний коллектор). up{job="alloy"} — источник AlloyCollectorDown
+  # (коллектор мёртв = логи не шипятся, WAL растёт). Static target: alloy all-nodes,
+  # scrape корректен на obs-ноде (Docker DNS локален).
+  - job_name: "alloy"
+    scrape_interval: 30s
+    static_configs:
+      - targets:
+          - "alloy:12345"
+        labels:
+          service: "alloy"
+          component: "log-collector"
 
   # ── Loki (log storage; collector-freshness signal, DevPlan 010 T3.4) ───────
   # Loki /metrics на том же порту 3100 (observability-net). Источник для

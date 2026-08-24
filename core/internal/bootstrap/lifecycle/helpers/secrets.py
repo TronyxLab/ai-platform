@@ -1,18 +1,29 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: secrets-helpers, decrypt-secrets, ensure-secrets-exist, age, sops, secrets-env, autogen-secrets
-# STRUCTURE: ▶ decrypt_secrets ┌lib/secrets.sh step_10_decrypt_secrets (FATAL)┐ → ⚡ ensure_secrets_exist ┌secrets.env check → source → autogen┐ → ⎋
+# GREP_SUMMARY: secrets-helpers, decrypt-secrets, ensure-secrets-exist, age, sops, secrets-env, autogen-secrets, postcondition-required-sops
+# STRUCTURE: ▶ decrypt_secrets ┌lib/secrets.sh step_10_decrypt_secrets (FATAL)┐ → ⚡ ensure_secrets_exist ┌secrets.env check → source (file-wins) → autogen → postcondition required∧sops ⚡┐ → ⎋
 # region MODULE_CONTRACT
 ## @purpose  Secrets-provisioning I/O-хелперы bootstrap-фаз (decrypt + ensure/autogen) —
 ##           извлечены из state_machine (B9 T1, U-08). Все функции публичные.
-## @scope    secrets.py: decrypt_secrets, ensure_secrets_exist.
+## @scope    secrets.py: decrypt_secrets, ensure_secrets_exist, verify_required_sops_secrets.
 ##           Используются phases.py (φ4 secrets_provision, φ9 secrets_update).
 ## @invariants
 ##   - decrypt_secrets FATAL при сбое расшифровки (TRAP[BUG] 2026-07-23 P0 — non_fatal снят)
 ##   - ensure_secrets_exist: отсутствие secrets.env + НЕТ enc-файла → SKIP до autogen
 ##     (нода без операторских секретов — валидное состояние); enc ЕСТЬ + env нет → FATAL
+##   - REF-0013 fail-fast: ошибки autogen/manifest БОЛЬШЕ НЕ глотаются как WARN → done;
+##     manifest missing/malformed и merge-guard прокидываются наверх → φ4 PlatformFatalError.
+##     Narrow excepts — только ImportError ленивых импортов (wide/bare except удалены)
+##   - Postcondition (DATA-1006): parsed ⊇ {required ∧ source=sops} после decrypt+autogen,
+##     enforced ТОЛЬКО когда enc-файл существует (autogen-only ноды не блокируются — TRAP[BUG] 2026-07-31)
+##   - File-wins после decrypt (REF-0013): значения secrets.env перезаписывают stale os.environ,
+##     кроме protected lifecycle-переменных (allowlist в secrets_manager)
 ##   - Autogen через lifecycle/secrets_manager (source_secrets_env / ensure_secrets)
 ## @rationale Strangler-Fig: извлечение I/O из state_machine-монолита (DevPlan 116 B9 D1).
+##            REF-0013: φ4 рапортовала успех с пустым результатом («WARN → фаза done → skip
+##            навсегда») — системный паттерн «success-marker до доказательства» устранён.
 ## @changes  2026-08-01 · Extracted from state_machine (B9 T1)
+## @changes  2026-08-24 · REF-0013 (Волна 0) — narrow excepts (wide Exception снят), file-wins
+##             sourcing через apply_env_file_to_osenv, postcondition verify_required_sops_secrets
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -28,7 +39,9 @@ from core.internal.shared.deploy_paths import node_configs_remote
 
 # 142 W2: secrets.env → persistent /var/lib/platform/run (резолвер shared/deploy_paths)
 from core.internal.shared.deploy_paths import secrets_env_file as _secrets_env_file
-from core.internal.shared.exceptions import ConfigNotFoundError
+from core.internal.shared.exceptions import ConfigNotFoundError, ConfigValidationError
+from core.internal.shared.secrets_manifest_reader import iter_secrets
+from core.internal.shared.secrets_manifest_reader import tier as manifest_tier
 from core.internal.shared.subprocess_io import run_subprocess
 
 logger = logging.getLogger(__name__)
@@ -80,59 +93,138 @@ def decrypt_secrets(core_dir: str) -> None:
 
 # region FUNC_ensure_secrets_exist
 ## @purpose  Ensure secrets.env exists AND all autogen secrets are generated.
+##           REF-0013: после decrypt — file-wins sourcing; в конце — postcondition
+##           verify_required_sops_secrets (parsed ⊇ {required ∧ source=sops}).
 ## @io       ⇥ core_dir: str, env: Mapping | None (DI — SECRETS_ENV_FILE/NODE_NAME/NODE_CONFIGS_DIR,
-##           DevPlan 160 E2) → ⎋ None (raises RuntimeError if secrets.env missing with enc present)
+##           DevPlan 160 E2) → ⎋ None (raises ConfigNotFoundError/ConfigValidationError/
+##           FileNotFoundError on fail-fast conditions)
 ## @complexity O(N) where N = secrets in manifest
 ## @invariants
 ##   - Чистая нода без enc-файла: env отсутствует + НЕТ enc → SKIP до autogen
 ##   - env отсутствует + enc ЕСТЬ → decrypt FAILED → FATAL (ConfigNotFoundError)
+##   - REF-0013: source/autogen ошибки НЕ глотаются (wide except снят) — manifest
+##     missing/malformed → исключение → φ4 PlatformFatalError через phase-обёртку
 ##   ⚠️ TRAP[BUG] · 2026-07-31 · P1 · Чистая нода без secrets не могла забутстрапиться
 ##   · Symptom: φ4 secrets_provision FATAL на ноде без AGE-секретов: "secrets.env not found:
 ##   ·   /var/lib/platform/run/secrets.env" — decrypt SKIP (нет enc-файла) → env не создан →
 ##   ·   ensure падал ConfigNotFoundError. E2E DevPlan 095 T6.
 ##   · Fix: env отсутствует + НЕТ enc-файла → нода без операторских секретов → SKIP до autogen.
 ##   · Prevention: no-secrets нода (modules=[], без secrets/) — валидное состояние; FATAL только
-##   ·   при реальном сбое расшифровки.
+##   ·   при реальном сбое расшифровки. Postcondition (REF-0013) уважает этот кейс: gated на enc.
 def ensure_secrets_exist(core_dir: str, *, env: Mapping[str, str] | None = None) -> None:
     """Ensure secrets.env exists AND all autogen secrets are generated."""
     source: Mapping[str, str] = os.environ if env is None else env
     secrets_env = source.get("SECRETS_ENV_FILE", str(_secrets_env_file()))
+    node_name = source.get("NODE_NAME", "")
+    configs_dir = source.get("NODE_CONFIGS_DIR", str(node_configs_remote()))
+    enc_file = pathlib.Path(configs_dir) / "secrets" / f"{node_name}.enc.yaml"
 
     # Step 1: Check file exists (after decrypt)
     if not pathlib.Path(secrets_env).is_file():
-        node_name = source.get("NODE_NAME", "")
-        configs_dir = source.get("NODE_CONFIGS_DIR", str(node_configs_remote()))
-        enc_file = pathlib.Path(configs_dir) / "secrets" / f"{node_name}.enc.yaml"
         if pathlib.Path(enc_file).is_file():
             logger.error("[IMP:9][ensure_secrets] %s not found after decrypt — cannot generate secrets", secrets_env)
             msg = f"secrets.env not found: {secrets_env}"
             raise ConfigNotFoundError(msg)
         logger.info("[IMP:8][ensure_secrets] No encrypted secrets for node='%s' — autogen-only secrets.env", node_name)
 
-    # Step 2: Source secrets.env into os.environ
-    try:
-        from core.internal.bootstrap.lifecycle.secrets_manager import source_secrets_env
+    # Step 2: Source secrets.env into os.environ (file-wins — REF-0013)
+    # Narrow except (REF-0013): только ImportError ленивого импорта. Ошибки парсинга
+    # НЕ глотаются здесь: source_secrets_env возвращает {} при I/O-сбое, а отсутствие
+    # required∧sops переменных ловит postcondition-verifier (Step 4).
+    from core.internal.bootstrap.lifecycle.secrets_manager import apply_env_file_to_osenv, source_secrets_env
 
-        env_vars = source_secrets_env(secrets_env)
-        for k, v in env_vars.items():
-            if k not in os.environ:
-                os.environ[k] = v
-        logger.info("[IMP:9][ensure_secrets] Sourced %d vars from %s", len(env_vars), secrets_env)
-    # ruff: ignore[BLE001] — lazy-import + secrets-парсинг — recoverable, широкий спектр (DEPLOY_BEST_EFFORT)
-    except Exception as e:  # noqa: EXC — non-fatal: secrets source failure is recoverable (best-effort: DEPLOY_BEST_EFFORT policy)
-        logger.warning("[IMP:7][ensure_secrets] Failed to source secrets.env: %s", e)
+    env_vars = source_secrets_env(secrets_env)
+    applied = apply_env_file_to_osenv(env_vars, label=secrets_env)
+    logger.info(
+        "[IMP:9][ensure_secrets] Sourced %d vars from %s (%d file-wins overrides applied)",
+        len(env_vars),
+        secrets_env,
+        applied,
+    )
 
-    # Step 3: Generate missing autogen secrets
+    # Step 3: Generate missing autogen secrets (REF-0013: ошибки БОЛЬШЕ НЕ глотаются как WARN;
+    # manifest missing/malformed → исключение → φ4 PlatformFatalError через phase-обёртку).
     manifest_path = pathlib.Path(core_dir) / "secrets-manifest.yaml"
-    try:
-        from core.internal.bootstrap.lifecycle.secrets_manager import ensure_secrets as do_ensure
+    from core.internal.bootstrap.lifecycle.secrets_manager import ensure_secrets as do_ensure
 
-        generated = do_ensure(str(manifest_path), secrets_env)
-        if generated:
-            logger.info("[IMP:9][ensure_secrets] Generated %d secrets: %s", len(generated), generated)
-    # ruff: ignore[BLE001] — lazy-import + autogen — recoverable, широкий спектр (DEPLOY_BEST_EFFORT)
-    except Exception as e:  # noqa: EXC — non-fatal: autogen failure is recoverable (best-effort: DEPLOY_BEST_EFFORT policy)
-        logger.warning("[IMP:7][ensure_secrets] Autogen failed: %s", e)
+    generated = do_ensure(str(manifest_path), secrets_env)
+    if generated:
+        logger.info("[IMP:9][ensure_secrets] Generated %d secrets", len(generated))
+
+    # Step 4: Postcondition (DATA-1006): parsed ⊇ {required ∧ source=sops} — REF-0013.
+    verify_required_sops_secrets(manifest_path=str(manifest_path), secrets_env=secrets_env, enc_file=str(enc_file))
 
 
 # endregion FUNC_ensure_secrets_exist
+
+
+# region FUNC_verify_required_sops_secrets
+## @purpose  Postcondition-verifier (REF-0013 / DATA-1006): после decrypt+autogen каждый
+##           манифестный секрет tier=required ∧ source=sops обязан присутствовать с непустым
+##           значением в secrets.env ИЛИ os.environ. Отсутствие → ConfigValidationError →
+##           φ4 PlatformFatalError (fail-fast вместо отложенного взрыва на первом использовании).
+## @io       ⇥ manifest_path: str, secrets_env: str, enc_file: str → ⎋ None ⚡ ConfigValidationError
+## @complexity O(N) where N = entries in secrets-manifest.yaml
+## @invariants
+##   - Gated на существование enc-файла: нет enc → autogen-only нода → verifier no-op
+##     (TRAP[BUG] 2026-07-31: чистая нода без операторских секретов остаётся валидной)
+##   - Проверка по объединению parsed(secrets.env) ∪ os.environ — autogen-значения,
+##     попавшие только в os.environ, тоже засчитываются
+##   - Манифест читается строгим ридером shared.secrets_manifest_reader (STRICT)
+def verify_required_sops_secrets(*, manifest_path: str, secrets_env: str, enc_file: str) -> None:
+    """Postcondition: every required∧sops manifest secret has a non-empty value."""
+    if not pathlib.Path(enc_file).is_file():
+        logger.info(
+            "[IMP:8][ensure_secrets] No encrypted secrets file (%s) — required∧sops postcondition skipped (autogen-only node)",
+            enc_file,
+        )
+        return
+
+    entries = iter_secrets(manifest_path)
+    required = [
+        str(entry["name"])
+        for entry in entries
+        if entry.get("name") and manifest_tier(entry) == "required" and str(entry.get("source", "")) == "sops"
+    ]
+    if not required:
+        logger.info("[IMP:8][ensure_secrets] Manifest has no required∧sops secrets — postcondition trivially satisfied")
+        return
+
+    parsed: dict[str, str] = {}
+    if pathlib.Path(secrets_env).is_file():
+        try:
+            from core.internal.shared.secrets_env_parser import parse as parse_secrets_env
+
+            parsed = parse_secrets_env(secrets_env)
+        except (OSError, ValueError) as e:
+            # Парсинг упал — все required∧sops считаются отсутствующими: fail-fast ниже
+            # даст читаемое сообщение со списком имён вместо тихого continue.
+            logger.warning("[IMP:7][ensure_secrets] Cannot parse %s for postcondition: %s", secrets_env, e)
+
+    def _has_value(name: str) -> bool:
+        return bool((parsed.get(name, "") or "").strip()) or bool((os.environ.get(name, "") or "").strip())
+
+    missing = [name for name in required if not _has_value(name)]
+    if missing:
+        logger.error(
+            "[IMP:10][ensure_secrets] POSTCONDITION FAILED: required∧sops secrets missing after "
+            "decrypt+autogen (%d/%d present): %s",
+            len(required) - len(missing),
+            len(required),
+            ", ".join(missing),
+        )
+        msg = (
+            f"Required SOPS secrets missing from {secrets_env} after decrypt+autogen: {', '.join(missing)} — "
+            "check enc-file contents and secrets-manifest drift"
+        )
+        raise ConfigValidationError(msg)
+
+    logger.info(
+        "[IMP:9][ensure_secrets] Postcondition OK: %d/%d required∧sops secrets present in %s/os.environ",
+        len(required),
+        len(required),
+        secrets_env,
+    )
+
+
+# endregion FUNC_verify_required_sops_secrets

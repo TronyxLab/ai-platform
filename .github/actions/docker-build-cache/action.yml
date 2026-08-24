@@ -20,6 +20,9 @@
 ## @changes — 2026-07-16 | Extracted from 3× identical blocks per DevPlan 017 T12
 ## @changes — 2026-07-17 | Added cache-backend input (gha|registry, default registry) per DevPlan 006 T2
 ## @changes — 2026-08-16 | DevPlan 002 W4 T4.6 — hermes-agent-base → hermes-agent-context (единый образ)
+## @changes — 2026-08-24 | REF-0012: docker/build-push-action → full commit SHA; +input
+##             cache-write ('false' на pull_request_target → БЕЗ cache-from/to — cold build,
+##             gha/registry cache не отравляется PR-head кодом); raw ${{ }} → quoted.
 # endregion MODULE_CONTRACT
 
 name: 'Docker Build with Registry/GHA Cache'
@@ -47,6 +50,10 @@ inputs:
     description: 'Release-mode build: provenance:true + sbom:true (SBOM/provenance for release pipeline, 170 W12 C2). Default: false — normal builds unchanged'
     required: false
     default: 'false'
+  cache-write:
+    description: 'Use cache-from/to (set false on pull_request_target — never seed shared caches from PR-head code, REF-0012). False = cold build.'
+    required: false
+    default: 'true'
 
 runs:
   using: 'composite'
@@ -67,18 +74,27 @@ runs:
       shell: bash
       run: |
         if [ "${{ inputs.cache-backend }}" = "registry" ]; then
-          OWNER_LOWER=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
-          echo "cache-from=type=registry,ref=ghcr.io/${OWNER_LOWER}/ai-platform-build-cache:${{ inputs.cache-scope }}" >> "$GITHUB_OUTPUT"
-          echo "cache-to=type=registry,mode=max,ref=ghcr.io/${OWNER_LOWER}/ai-platform-build-cache:${{ inputs.cache-scope }}" >> "$GITHUB_OUTPUT"
+          OWNER_LOWER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          CACHE_FROM="type=registry,ref=ghcr.io/${OWNER_LOWER}/ai-platform-build-cache:${{ inputs.cache-scope }}"
+          CACHE_TO="type=registry,mode=max,ref=ghcr.io/${OWNER_LOWER}/ai-platform-build-cache:${{ inputs.cache-scope }}"
           echo "[IMP:8][docker] cache-backend=registry — ref=ghcr.io/${OWNER_LOWER}/ai-platform-build-cache:${{ inputs.cache-scope }}"
         else
-          echo "cache-from=type=gha,scope=${{ inputs.cache-scope }}" >> "$GITHUB_OUTPUT"
-          echo "cache-to=type=gha,mode=max,scope=${{ inputs.cache-scope }}" >> "$GITHUB_OUTPUT"
+          CACHE_FROM="type=gha,scope=${{ inputs.cache-scope }}"
+          CACHE_TO="type=gha,mode=max,scope=${{ inputs.cache-scope }}"
           echo "[IMP:7][docker] cache-backend=gha — scope=${{ inputs.cache-scope }}"
         fi
+        # REF-0012: cache-write='false' (pull_request_target) — НЕ читать и НЕ сеять общий
+        # кэш из PR-head кода; build-push-action с пустым cache-from/to = cold build.
+        if [ "${{ inputs.cache-write }}" = "false" ]; then
+          CACHE_FROM=""
+          CACHE_TO=""
+          echo "[IMP:8][docker] cache-write=false (pull_request_target) — cold build без общего кэша"
+        fi
+        echo "cache-from=${CACHE_FROM}" >> "$GITHUB_OUTPUT"
+        echo "cache-to=${CACHE_TO}" >> "$GITHUB_OUTPUT"
 
     - name: Build Docker image (${{ inputs.cache-scope }})
-      uses: docker/build-push-action@v7
+      uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
       with:
         context: ${{ inputs.context }}
         file: ${{ inputs.file }}

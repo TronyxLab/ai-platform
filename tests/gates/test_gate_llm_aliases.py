@@ -34,6 +34,19 @@ ROOT = repo_root()
 POLICY_PATH = ROOT / "core" / "internal" / "llm" / "policy.yaml"
 
 
+def _provider_key_refs(policy_path: pathlib.Path) -> frozenset[str]:
+    """os.environ/<KEY_ENV>-ссылки всех провайдеров, объявленных в policy.yaml (SoT).
+
+    ## @purpose  Мультипровайдерный канон api_key (REF-0013-смежное, zai 2026-08-24):
+    ##           валидны только ссылки на key_env из секции providers — сторонние/опечатанные
+    ##           env-имена по-прежнему violation.
+    """
+    with pathlib.Path(policy_path).open(encoding="utf-8") as f:
+        policy = yaml.safe_load(f) or {}
+    providers = policy.get("providers") or {}
+    return frozenset(f"os.environ/{cfg.get('key_env')}" for cfg in providers.values() if cfg.get("key_env"))
+
+
 # ── LDD Helper ───────────────────────────────────────────────────────────────
 
 
@@ -242,21 +255,25 @@ def test_gate_fallback_chain_complete(caplog, rendered_config) -> None:
     assert found_imp9, "LDD Error: No IMP:9 log"
 
 
-# 🧪 TRAP[TEST] · Gate: all model_list entries reference DEEPSEEK_API_KEY
+# 🧪 TRAP[TEST] · Gate: all model_list entries reference a configured provider key
 # · Regression: new provider added to policy but api_key env var not configured
-# · Scenario: check every model_list entry's api_key starts with os.environ/DEEPSEEK_API_KEY
-# · Last fail: N/A · Remove if: multi-provider routing with different API keys is implemented
+# · Scenario: every model_list entry's api_key ∈ {os.environ/<key_env>} по секции
+# ·   providers из policy.yaml (мультипровайдер с 2026-08-24: deepseek + zai)
+# · Last fail: N/A · Remove if: provider key routing уходит из env-референсов
 @pytest.mark.gate
 def test_gate_deepseek_key_in_all_entries(caplog, model_list) -> None:
-    """All model_list entries reference os.environ/DEEPSEEK_API_KEY as their api_key.
+    """All model_list entries reference os.environ/<key_env> of a declared provider.
 
-    ## @purpose  Gate: after provider key cleanup (Wave 4), DEEPSEEK_API_KEY is the
-    ##           only provider key. Every model_list entry must reference it.
+    ## @purpose  Gate: каждый model_list entry ссылается на key_env одного из
+    ##           провайдеров, объявленных в policy.yaml#providers (deepseek/zai/…).
     ## @scenario  Check every rendered model_list entry's api_key field matches
-    ##            the expected env var reference.
+    ##            the configured provider key refs (SoT-driven, не хардкод DEEPSEEK).
     """
     caplog.set_level(logging.DEBUG)
     logger.info("[IMP:7][gate][START] test_gate_deepseek_key_in_all_entries")
+
+    allowed_refs = _provider_key_refs(POLICY_PATH)
+    assert allowed_refs, "policy.yaml#providers не содержит ни одного key_env — конфигурация сломана"
 
     violations: list[str] = []
     for entry in model_list:
@@ -264,9 +281,8 @@ def test_gate_deepseek_key_in_all_entries(caplog, model_list) -> None:
         litellm_params = entry.get("litellm_params", {})
         api_key = litellm_params.get("api_key", "") if isinstance(litellm_params, dict) else ""
 
-        expected_ref = "os.environ/DEEPSEEK_API_KEY"
-        if api_key != expected_ref:
-            violations.append(f"Entry '{model_name}' has api_key='{api_key}', expected '{expected_ref}'")
+        if api_key not in allowed_refs:
+            violations.append(f"Entry '{model_name}' has api_key='{api_key}', expected one of {sorted(allowed_refs)}")
             logger.warning("[IMP:7][gate] WRONG API KEY: %s → '%s'", model_name, api_key)
         else:
             logger.info("[IMP:8][gate] Entry '%s' api_key: %s ✓", model_name, api_key)

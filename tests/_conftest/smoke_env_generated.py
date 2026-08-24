@@ -43,4 +43,5 @@ SMOKE_ENV_GENERATED: dict[str, str] = {
     "SALT": "ci-test-salt-value",
     "TELEGRAM_BOT_TOKEN": "1234567890:test-telegram-bot-token-for-ci",
     "WEBNAMES_API_KEY": "*test-webnames-api-key",
+    "ZAI_API_KEY": "sk-placeholder-key-for-ci",
 }

@@ -5,11 +5,12 @@
 ##           shifted port (13000:3000), REDIS_CONNECTION_STRING переопределён на -test контейнер
 ## @scope    Only used in test fixtures. Never used in production.
 ## @invariants
-##   - container_name: langfuse-test, langfuse-redis-test
+##   - container_name: langfuse-test, langfuse-redis-test, langfuse-redis-exporter-test
 ##   - restart: unless-stopped для всех контейнеров (--wait совместимость)
 ##   - Port: 127.0.0.1:13000:3000 — избежать production конфликтов
 ##   - langfuse-redis: networks: !override — test-shared-db-net БЕЗ aliases (предотвращает DNS-загрязнение, DevPlan 017 W3.1)
 ##   - REDIS_CONNECTION_STRING указывает на langfuse-redis-test, а не на langfuse-redis (прода)
+##   - langfuse-redis-exporter: REF-0010 overlay — ports !override [] (9122 не биндится в тестах)
 ## @rationale Стандартный test-overlay контракт (DevPlan 04 DD2). langfuse-redis добавлен
 ##            post-factum (F-7 class): фикс изоляции второго контейнера в модуле.
 # endregion MODULE_CONTRACT
@@ -37,6 +38,22 @@ services:
       - test-shared-db-net
       - test-observability-net
     restart: "no"
+
+  # REF-0010 — второй redis_exporter для langfuse-redis; в тестах без ports и с быстрым
+  # healthcheck (--version liveness, зависимости не нужны)
+  langfuse-redis-exporter:
+    container_name: langfuse-redis-exporter-test
+    networks: !override
+      - test-shared-db-net
+      - test-observability-net
+    ports: !override []
+    restart: "no"
+    healthcheck:
+      test: ["CMD", "/redis_exporter", "--version"]
+      interval: 5s
+      timeout: 3s
+      retries: 1
+      start_period: 2s
 
 networks:
   test-shared-db-net:

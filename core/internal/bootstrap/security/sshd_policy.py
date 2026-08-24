@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: security-posture S4 sshd sshd-T maxstartups hardening drop-in apply-sshd parse_sshd_effective_config classify-directive MACs KexAlgorithms AllowUsers
-# STRUCTURE: ▶ parse_sshd_effective_config(sshd -T) → dict[key]=value ┌базовые 3 директивы + maxstartups + 9 расширенных┐ → ○ _classify_directive (5 форм) → ○ problems → ⎋ CheckResult ┤
-#            ○ apply_sshd_dropin: content-match no-op → ⚡ atomic write + remove superseded → ○ systemctl reload → fallback service → ⎋ bool
+# GREP_SUMMARY: security-posture S4 sshd sshd-T maxstartups hardening drop-in apply-sshd parse_sshd_effective_config classify-directive MACs KexAlgorithms AllowUsers kbd-interactive challenge-response MaxAuthTries cloud-init neutralize REF-0016
+# STRUCTURE: ▶ parse_sshd_effective_config(sshd -T) → dict[key]=value ┌базовые 3 директивы + maxstartups + 12 расширенных┐ → ○ _classify_directive (5 форм) → ○ problems → ⎋ CheckResult ┤
+#            ○ apply_sshd_dropin: content-match no-op → ⚡ atomic write + remove superseded + neutralize *cloud* vendor drop-ins → ○ systemctl reload → fallback service → ⎋ bool
 # region MODULE_CONTRACT
-## @purpose  S4: SSH-поверхность ноды (DevPlan 134 L2, W3/W10/162 W2-1). Проверка эффективного
+## @purpose  S4: SSH-поверхность ноды (DevPlan 134 L2, W3/W10/162 W2-1, REF-0016). Проверка эффективного
 ##           конфига через sshd -T (PermitRootLogin/PasswordAuthentication/PubkeyAuthentication +
-##           MaxStartups ≥ 30:50:200 + 9 расширенных директив W10 T10.4) и идемпотентный apply
+##           MaxStartups ≥ 30:50:200 + 12 расширенных директив W10 T10.4 + REF-0016) и идемпотентный apply
 ##           hardening drop-in (99-platform-ssh-hardening.conf, вызов из φ1 --apply-sshd).
 ##           Извлечено из монолита security_posture.py (план 170 W6-D1): god check_sshd
 ##           (73 LOC/CC29) → parse_sshd_effective_config (PURE) + _classify_directive (PURE,
@@ -27,6 +27,9 @@
 ##            Максимум-инвариант (134 D4): MaxStartups drop-in переживает apt-обновления sshd_config.
 ## @changes 2026-08-15 | план 170 W6-D1 — извлечено из security_posture.py (S4 + apply, 1:1 тела);
 ##            check_sshd CC29 → parse_sshd_effective_config + _classify_directive + _check_maxstartups
+## @changes 2026-08-24 | REF-0016 (Волна 0) — +KbdInteractiveAuthentication no +ChallengeResponseAuthentication no
+##            (+MaxAuthTries 3) в drop-in и _SSHD_EXTRA_DIRECTIVES; нейтрализация *cloud* sshd_config.d
+##            (glob вместо точечного 50-cloud-init.conf); rename-fail vendor drop-in → apply False (не WARN)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -70,6 +73,25 @@ SSHD_ALLOW_USERS: tuple[str, ...] = ("root", "platform", "ci-deploy")
 # как команду в коде; желаемый drop-in использует её через f-string.
 SSHD_HARDENING_MACS = "hmac-sha2-256-etm@openssh.com,hmac-sha2-512-etm@openssh.com"
 
+# ── REF-0016 (SEC-0002/SEC-0005/SEC-0014): kbd-interactive/challenge-response pin + MaxAuthTries ──
+# KbdInteractiveAuthentication/ChallengeResponseAuthentication = yes обходит «PasswordAuthentication no»:
+# PAM-стек может разрешить пароль/токен через keyboard-interactive → «root только по ключу» становится
+# ложью. Оба пинятся в no И в drop-in, И в _SSHD_EXTRA_DIRECTIVES (S4 ловит drift из vendor drop-in'ов).
+# ChallengeResponseAuthentication — legacy-алиас kbd-interactive (OpenSSH <8.7 печатает его в sshd -T;
+# новые версии убрали строку → graceful-skip по контракту расширенных директив).
+# MaxAuthTries ≤ 3 (SEC-0005 rider) — сужение brute-force окна на соединение (дефолт OpenSSH 6).
+SSHD_MAXAUTHTRIES_MAX = 3
+# Vendor/cloud drop-ins (50-cloud-init.conf, 60-cloudimg-settings.conf, …) сортируются раньше
+# 99-platform-* → их ослабляющие директивы ПОБЕЖДАЮТ (sshd Include: первое значение выигрывает).
+# Нейтрализация: rename <file> → <file>.disabled (Include *.conf не матчит .disabled — обратимо).
+_CLOUD_DROPIN_GLOB = "*cloud*"
+_CLOUD_DISABLED_SUFFIX = ".disabled"
+# Ослабляющие значения key-only политики в vendor drop-in (yes / without-password).
+_CLOUD_WEAKEN_RE = re.compile(
+    r"(?m)^(PasswordAuthentication|PermitRootLogin|KbdInteractiveAuthentication"
+    r"|ChallengeResponseAuthentication)\s+(yes|without-password)\b"
+)
+
 # ── S4 (W10 T10.4): расширенные sshd-директивы (проверяемы через sshd -T) ──
 # Каждая директива: (ключ sshd -T, ожидание, fail-сообщение). Проверяется ТОЛЬКО если директива
 # присутствует в выводе sshd -T (ненаблюдаемые → skip, graceful — фикстуры без строки не падают).
@@ -102,8 +124,21 @@ _SSHD_EXTRA_DIRECTIVES: list[tuple[str, tuple[object, ...], str]] = [
         ("lte", SSHD_LOGIN_GRACE_TIME_MAX),
         f"LoginGraceTime > {SSHD_LOGIN_GRACE_TIME_MAX}s (slow-brute window)",
     ),
+    # REF-0016: keyboard-interactive/challenge-response — обход key-only политики (SEC-0002);
+    # MaxAuthTries ≤ 3 — brute-force окно на соединение (SEC-0005 rider).
+    (
+        "kbdinteractiveauthentication",
+        ("eq", "no"),
+        "KbdInteractiveAuthentication=yes (keyboard-interactive bypasses key-only login policy)",
+    ),
+    (
+        "challengeresponseauthentication",
+        ("eq", "no"),
+        "ChallengeResponseAuthentication=yes (challenge auth bypasses key-only login policy)",
+    ),
+    ("maxauthtries", ("lte", SSHD_MAXAUTHTRIES_MAX), f"MaxAuthTries > {SSHD_MAXAUTHTRIES_MAX} (brute-force window)"),
 ]
-# UsePAM сознательно НЕ проверяется (9 директив ≥ 8 по T10.4): самостоятельной security-ценности
+# UsePAM сознательно НЕ проверяется (12 директив ≥ 8 по T10.4): самостоятельной security-ценности
 # не имеет — связка «PasswordAuthentication=no + PubkeyAuthentication=yes» уже закрывает парольный
 # вход; ожидание UsePAM зависит от PAM-стека (ложно-позитивный риск, документировано W10 T10.4).
 
@@ -220,9 +255,10 @@ def _check_maxstartups(settings: Mapping[str, str]) -> list[str]:
 # region FUNC_check_sshd
 ## @purpose  S4: SSH-поверхность через sshd -T (эффективный конфиг): PermitRootLogin
 ##           prohibit-password|no, PasswordAuthentication no, PubkeyAuthentication yes,
-##           MaxStartups ≥ 30:50:200 (покомпонентно; DevPlan 136 W3) + 9 расширенных директив
+##           MaxStartups ≥ 30:50:200 (покомпонентно; DevPlan 136 W3) + 12 расширенных директив
 ##           (AllowUsers, ClientAliveInterval, PermitUserEnvironment, X11Forwarding,
-##           AllowTcpForwarding, KexAlgorithms, Ciphers, MACs, LoginGraceTime — DevPlan 136 W10 T10.4).
+##           AllowTcpForwarding, KexAlgorithms, Ciphers, MACs, LoginGraceTime — DevPlan 136 W10 T10.4;
+##           KbdInteractiveAuthentication, ChallengeResponseAuthentication, MaxAuthTries — REF-0016).
 ##           Data-driven: parse отдельно (pure) + таблица _SSHD_EXTRA_DIRECTIVES через
 ##           _classify_directive (pure) + _check_maxstartups.
 ## @io       ⇥ probe: Callable | None (lazy default _probe) → ⎋ CheckResult
@@ -236,7 +272,7 @@ def _check_maxstartups(settings: Mapping[str, str]) -> list[str]:
 ##              allowusers задан пустым (директива есть без списка) → FAIL; отсутствует строка → skip
 def check_sshd(*, probe: Callable[..., subprocess.CompletedProcess[str]] | None = None) -> CheckResult:
     """S4: sshd effective config — root login restricted, password auth off, pubkey on,
-    MaxStartups >= 30:50:200, +9 hardening-директив (W10 T10.4)."""
+    MaxStartups >= 30:50:200, +12 hardening-директив (W10 T10.4 + REF-0016)."""
     probe = probe or _probe
     result = probe(["sshd", "-T"], timeout=CONVERGE_DOCKER_TIMEOUT)
     if result.returncode != 0:
@@ -297,12 +333,13 @@ def desired_maxstartups_dropin() -> str:
 
 
 # region FUNC_desired_ssh_hardening_dropin
-## @purpose  Желаемое содержимое /etc/ssh/sshd_config.d/99-platform-ssh-hardening.conf (DevPlan 162 W2-1).
-##           Полный харденинг-набор, закрывающий SSH-drift против канона платформы: root-login
+## @purpose  Желаемое содержимое /etc/ssh/sshd_config.d/99-platform-ssh-hardening.conf (DevPlan 162 W2-1,
+##           REF-0016). Полный харденинг-набор, закрывающий SSH-drift против канона платформы: root-login
 ##           prohibit-password, password-auth off, allowlist пользователей, X11/TCP-forwarding off,
 ##           ClientAliveInterval 300, MACs ТОЛЬКО *-etm (без hmac-sha1/umac-64),
-##           MaxStartups 30:50:200 (superset старого 99-platform-maxstartups.conf).
-## @io       ⇥ — → ⎋ str — drop-in (комментарий + 8 директив)
+##           MaxStartups 30:50:200 (superset старого 99-platform-maxstartups.conf),
+##           KbdInteractive/ChallengeResponse no + MaxAuthTries 3 (REF-0016 — key-only без обходных путей).
+## @io       ⇥ — → ⎋ str — drop-in (комментарий + 11 директив)
 ## @complexity O(1)
 ## @invariants  Файл помечен «Generated — DO NOT EDIT MANUALLY» (политика управления —
 ##              файлы перезаписываются платформой, канон security_updates.py)
@@ -312,7 +349,7 @@ def desired_maxstartups_dropin() -> str:
 ##              AllowUsers — статический список (root/platform/ci-deploy): sshd валидирует
 ##              allowlist при подключении, НЕ при парсинге конфига — φ1-apply до φ2 безопасен
 def desired_ssh_hardening_dropin() -> str:
-    """99-platform-ssh-hardening.conf — полный sshd-харденинг (DevPlan 162 W2-1)."""
+    """99-platform-ssh-hardening.conf — полный sshd-харденинг (DevPlan 162 W2-1 + REF-0016)."""
     return (
         "# Generated by ai-platform security_posture.py (DevPlan 162 W2-1) — DO NOT EDIT MANUALLY\n"
         "# SSH hardening drop-in — закрывает SSH-drift (PermitRootLogin yes / PasswordAuthentication yes\n"
@@ -320,6 +357,11 @@ def desired_ssh_hardening_dropin() -> str:
         "# sshd -T (S4) читает эффективное значение ВКЛЮЧАЯ этот drop-in.\n"
         "PermitRootLogin prohibit-password\n"
         "PasswordAuthentication no\n"
+        # REF-0016: keyboard-interactive/challenge-response = обход key-only входа через PAM;
+        # vendor drop-ins сортируются раньше 99-* → пиним здесь И нейтрализуем их в apply.
+        "KbdInteractiveAuthentication no\n"
+        "ChallengeResponseAuthentication no\n"
+        f"MaxAuthTries {SSHD_MAXAUTHTRIES_MAX}\n"
         f"AllowUsers {' '.join(SSHD_ALLOW_USERS)}\n"
         "X11Forwarding no\n"
         "AllowTcpForwarding no\n"
@@ -403,6 +445,58 @@ def _reload_sshd(
 # endregion FUNC__reload_sshd
 
 
+# region FUNC__neutralize_cloud_dropins
+## @purpose  Нейтрализация vendor/cloud drop-in'ов в sshd_config.d (REF-0016): любой файл,
+##           матчащий *cloud* glob, с ослабляющей директивой (_CLOUD_WEAKEN_RE) переименовывается
+##           в *.disabled — Include *.conf его больше не читает. Обратимо, cloud-init повторно
+##           не пишет. v1.0.1 TRAP[BUG]: Ubuntu 50-cloud-init.conf с «PasswordAuthentication yes»
+##           побеждал hardening drop-in по порядку Include.
+## @io       ⇥ config_dir: Path (каталог sshd_config.d), active_dropin: Path (сам hardening —
+##              self-delete guard) → ⎋ tuple[bool, bool] (neutralized_any, failed_any)
+## @complexity O(F) — F файлов в каталоге
+## @invariants  Уже-.disabled файлы пропускаются (идемпотентность)
+##              Файлы без ослабляющих директив НЕ трогаются (доброкачественный vendor-контент)
+##              rename-fail → failed_any=True (вызывающий обязан вернуть False — fail-fast:
+##              активный ослабляющий drop-in делает key-only политику недостоверной)
+def _neutralize_cloud_dropins(config_dir: Path, active_dropin: Path) -> tuple[bool, bool]:
+    """Rename weakening *cloud* vendor drop-ins to .disabled; returns (neutralized_any, failed_any)."""
+    neutralized_any = False
+    failed_any = False
+    try:
+        candidates = sorted(config_dir.glob(_CLOUD_DROPIN_GLOB))
+    except OSError:
+        return False, False
+    for cloud_dropin in candidates:
+        if not cloud_dropin.is_file():
+            continue
+        if cloud_dropin.name.endswith(_CLOUD_DISABLED_SUFFIX) or cloud_dropin.resolve() == active_dropin.resolve():
+            continue  # уже нейтрализован / сам hardening drop-in
+        try:
+            cloud_text = cloud_dropin.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if not _CLOUD_WEAKEN_RE.search(cloud_text):
+            continue  # вендорский drop-in без ослабления key-only политики — не трогаем
+        disabled_path = Path(str(cloud_dropin) + _CLOUD_DISABLED_SUFFIX)
+        try:
+            cloud_dropin.rename(disabled_path)
+        except OSError as e:
+            logger.error(
+                "[IMP:10][posture][sshd-hardening] Cannot neutralize vendor drop-in %s: %s "
+                "(ослабляющая политика остаётся АКТИВНОЙ — apply = FAIL)",
+                cloud_dropin.name,
+                e,
+            )
+            failed_any = True
+            continue
+        neutralized_any = True
+        logger.info("[IMP:9][posture][sshd-hardening] vendor cloud drop-in neutralized → %s", disabled_path.name)
+    return neutralized_any, failed_any
+
+
+# endregion FUNC__neutralize_cloud_dropins
+
+
 # region FUNC_apply_sshd_dropin
 ## @purpose  Применить sshd hardening drop-in идемпотентно (DevPlan 136 W3 MaxStartups +
 ##           DevPlan 162 W2-1 полный харденинг): content-match no-op; при изменении — атомарная
@@ -417,22 +511,29 @@ def _reload_sshd(
 ##              (systemctl → service fallback)
 ##              Запись удалась, но reload не удался → False (конфиг не активен — честный отказ)
 ##              superseded.resolve() != path.resolve() — защита от self-delete при коллизии путей
+##              REF-0016: *cloud* vendor drop-in с ослабляющей директивой нейтрализуется
+##              (rename → .disabled); rename-fail → False (fail-fast, не WARN — активный
+##              vendor drop-in делает key-only политику недостоверной)
 ## @rationale  apply в sshd_policy (не в phases/system.py): sshd-политика живёт в одном
 ##             модуле с S4-проверкой (единый SoT эффективного значения); фаза вызывает CLI.
 ##             W2-1: сигнатура сохранена — существующий вызов φ1 (`--apply-sshd`) автоматически
 ##             получает полный харденинг без правки lifecycle (system.py вне скоупа W2-1).
+##             REF-0016: сигнатура расширена аддитивно (sshd_config_dir) — обратная совместимость.
 def apply_sshd_dropin(
     *,
     hardening_dropin: str | None = None,
     superseded_dropin: str | None = None,
+    sshd_config_dir: str | None = None,
     probe_fn: Callable[..., subprocess.CompletedProcess[str]] | None = None,
     write_fn: Callable[..., object] | None = None,
 ) -> bool:
     """Apply sshd hardening drop-in idempotently (content-match no-op; reload on change).
 
-    DI (W-H DevPlan 163): hardening_dropin/superseded_dropin/probe_fn/write_fn — None → канонические
-    SSHD_HARDENING_DROPIN/SSHD_MAXSTARTUPS_DROPIN/_probe/atomic_write_text; тесты передают
-    tmp_path/fake-каналы (0 патчей модульных констант/функций).
+    DI (W-H DevPlan 163): hardening_dropin/superseded_dropin/sshd_config_dir/probe_fn/write_fn —
+    None → канонические SSHD_HARDENING_DROPIN/SSHD_MAXSTARTUPS_DROPIN/<drop-in parent>/_probe/
+    atomic_write_text; тесты передают tmp_path/fake-каналы (0 патчей модульных констант/функций).
+    REF-0016: sshd_config_dir — каталог нейтрализации *cloud* vendor drop-ins (default: каталог
+    самого hardening drop-in — на ноде это /etc/ssh/sshd_config.d).
     """
     dropin_path = SSHD_HARDENING_DROPIN if hardening_dropin is None else hardening_dropin
     superseded_path = SSHD_MAXSTARTUPS_DROPIN if superseded_dropin is None else superseded_dropin
@@ -457,35 +558,19 @@ def apply_sshd_dropin(
             )
         except OSError as e:
             logger.warning("[IMP:8][posture][sshd-hardening] Cannot remove superseded %s: %s", superseded, e)
-    # v1.0.1 TRAP[BUG] (Фаза 6, tronyx-vps): Ubuntu cloud-init пишет 50-cloud-init.conf
-    # с «PasswordAuthentication yes». sshd Include *.conf читает файлы в алфавитном порядке,
-    # первое значение побеждает → 50-й перекрывает 99-platform hardening → sshd -T давал
-    # passwordauthentication yes при запрете в drop-in. Нейтрализация: переименование в
-    # .disabled (Include *.conf не матчит) — обратимо, cloud-init повторно не пишет.
-    cloudinit = Path("/etc/ssh/sshd_config.d/50-cloud-init.conf")
-    cloudinit_neutralized = False
-    if cloudinit.is_file():
-        needs_neutralize = False
-        try:
-            cloudinit_text = cloudinit.read_text(encoding="utf-8")
-        except OSError:
-            cloudinit_text = ""
-        if re.search(
-            r"(?m)^(PasswordAuthentication|PermitRootLogin|KbdInteractiveAuthentication)\s+(yes|without-password)",
-            cloudinit_text,
-        ):
-            needs_neutralize = True
-        if needs_neutralize:
-            try:
-                disabled_path = Path(str(cloudinit) + ".disabled")
-                cloudinit.rename(disabled_path)
-                cloudinit_neutralized = True
-                logger.info(
-                    "[IMP:9][posture][sshd-hardening] cloud-init ssh drop-in neutralized → %s", disabled_path.name
-                )
-            except OSError as e:
-                logger.warning("[IMP:8][posture][sshd-hardening] Cannot neutralize cloud-init drop-in: %s", e)
-    if changed or superseded_removed or cloudinit_neutralized:
+    # v1.0.1 TRAP[BUG] (Фаза 6, tronyx-vps) + REF-0016: нейтрализация ЛЮБОГО *cloud* vendor
+    # drop-in с ослабляющей директивой (механика — _neutralize_cloud_dropins). rename-fail
+    # БОЛЬШЕ НЕ тихий WARN → apply False (blocking через φ1 check=True): активный vendor
+    # drop-in с PasswordAuthentication yes = «root только по ключу» — ложь без сигнала.
+    config_dir_path = Path(sshd_config_dir) if sshd_config_dir is not None else path.parent
+    cloud_neutralized, neutralize_failed = _neutralize_cloud_dropins(config_dir_path, path)
+    if neutralize_failed:
+        logger.error(
+            "[IMP:10][posture][sshd-hardening] Vendor *cloud* drop-in left ACTIVE with weakening directive — "
+            "key-only policy NOT guaranteed; fail-fast (REF-0016)"
+        )
+        return False
+    if changed or superseded_removed or cloud_neutralized:
         if not _reload_sshd(probe_fn=probe_impl):
             logger.error(
                 "[IMP:10][posture][sshd-hardening] Drop-in written but sshd reload FAILED — "

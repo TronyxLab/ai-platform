@@ -1,6 +1,6 @@
-# @purpose  Base compose definition for service-exporters module — Nginx + Redis + Postgres exporters (co-located with services)
-# GREP_SUMMARY: service-exporters docker-compose nginx-prometheus-exporter redis-exporter postgres-exporter profiles x-logging observability-net shared-cache-net shared-db-net SERVICE_BIND_HOST
-# STRUCTURE: ▶ nginx-exp:1.5.1 → ┬─ ▶ redis-exp:v1.88.0 (credentialed REDIS_ADDR/REDIS_PASSWORD) → ┬─ ▶ postgres-exp:v0.20.1 → observability-net + shared-cache-net + shared-db-net → ┐
+# @purpose  Base compose definition for service-exporters module — Nginx + Redis + Postgres + PgBouncer exporters (co-located with services)
+# GREP_SUMMARY: service-exporters docker-compose nginx-prometheus-exporter redis-exporter postgres-exporter pgbouncer-exporter profiles x-logging observability-net shared-cache-net shared-db-net SERVICE_BIND_HOST
+# STRUCTURE: ▶ nginx-exp:1.5.1 → ┬─ ▶ redis-exp:v1.88.0 (credentialed REDIS_ADDR/REDIS_PASSWORD) → ┬─ ▶ postgres-exp:v0.20.1 → ┬─ ▶ pgbouncer-exp:v0.12.1 (DSN @pgbouncer:6432/pgbouncer) → observability-net + shared-cache-net + shared-db-net → ┐
 # region MODULE_CONTRACT
 ## @purpose  Base compose definition for service-exporters Docker module (DevPlan 010 T3.2 — выделен из infra-metrics)
 ## @scope    Service metrics bridges: nginx stub_status, redis cache, postgres db.
@@ -13,13 +13,17 @@
 ##   - Redis Exporter: credentialed T2.0a — env REDIS_ADDR + REDIS_PASSWORD (флаг --redis.addr удалён:
 ##     exporter читает env нативно; пароль не светится в argv)
 ##   - Postgres Exporter: DATA_SOURCE_NAME DSN → postgres:5432, healthcheck via --version (busybox shell есть, liveness-only канон сохранён)
+##   - PgBouncer Exporter (REF-0010, 2026-08-24): DSN → pgbouncer:6432/pgbouncer (admin-db
+##     пула) — фасад БД виден Prometheus'у; postgres-exporter остаётся на postgres:5432
+##     напрямую (метрики самой БД независимы от здоровья пула — разделение сигналов)
 ##   - Host-ports bind через ${SERVICE_BIND_HOST:-127.0.0.1} (T2.2): single-node — loopback;
 ##     multi-node — host ноды сервисов (peer ufw только monitoring-ноде, T2.4)
 ##   - Networks declared as external: true — pre-created by deploy-modules.sh
 ##   - redis-exporter on BOTH observability-net (Prometheus scrape) and shared-cache-net (Redis access)
 ##   - postgres-exporter on BOTH observability-net (Prometheus scrape) and shared-db-net (postgres access)
+##   - pgbouncer-exporter on BOTH observability-net (scrape) and shared-db-net (pool access)
 ##   - All TRAP comments preserved from infra-metrics split
-##   - Все три exporter'а: healthcheck via --help/--version (scratch/busybox image)
+##   - Все exporter'ы: healthcheck via --help/--version (scratch/busybox image)
 ## @rationale DevPlan 010 §3: exporter'ы живут со своими сервисами (Docker DNS локален),
 ##            один модуль = одно решение размещения (singleton у сервисов).
 # endregion MODULE_CONTRACT
@@ -167,6 +171,54 @@ services:
       retries: 3
       start_period: 15s
   # endregion service:postgres-exporter
+
+  # ── PgBouncer Exporter (connection-pool metrics; REF-0010) ──────────────────
+  # region service:pgbouncer-exporter
+  pgbouncer-exporter:
+    # [IMP:9][service-exporters] REF-0010 (FAIL-0100): pgbouncer — единственный фасад БД —
+    # был невидим Prometheus'у (postgres-exporter ходил мимо на postgres:5432). Скрейп
+    # admin-db pgbouncer:6432/pgbouncer даёт pool-метрики (cl_waiting/cl_active/max_client_conn).
+    # Digest verified via `docker buildx imagetools inspect` (manifest-list) 2026-08-24;
+    # binary path /bin/pgbouncer_exporter --verified (scratch image, rc=0)
+    image: quay.io/prometheuscommunity/pgbouncer-exporter:v0.12.1@sha256:30f31b6c2efdad3647f8182cc7c1a3a19e42bae5d17387694989f969371c230d
+    container_name: pgbouncer-exporter
+    profiles: [service-exporters]
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          # Паритет с postgres/redis exporter'ами (164 W1-5): --version healthcheck-форк
+          memory: 128M
+          pids: 256
+        reservations:
+          memory: 64M
+    logging: *default-logging
+
+    environment:
+      DATA_SOURCE_NAME: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?PG_PASSWORD_REQUIRED}@pgbouncer:6432/pgbouncer?sslmode=disable"
+
+    ports:
+      # [IMP:8][service-exporters] T2.2: peer-scrape центральным Prometheus (9127 — дефолт
+      # порта pgbouncer_exporter; host=container, коллизий нет)
+      - "${SERVICE_BIND_HOST:-127.0.0.1}:${PGBOUNCER_EXPORTER_PORT:-9127}:9127"
+
+    networks:
+      observability-net:
+        aliases:
+          - pgbouncer-exporter
+      shared-db-net:
+        aliases:
+          - pgbouncer-exporter
+
+    # Liveness-only канон (--version; scratch image без shell/wget/curl;
+    # readiness внешний через up{job="pgbouncer-exporter"} + alert-rules)
+    healthcheck:
+      test: ["CMD", "/bin/pgbouncer_exporter", "--version"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+  # endregion service:pgbouncer-exporter
 
 networks:
   observability-net:

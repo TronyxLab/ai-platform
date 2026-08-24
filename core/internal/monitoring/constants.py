@@ -21,7 +21,11 @@ from pathlib import Path
 
 # DevPlan 170 W1-A3: порты из единого реестра shared/platform_ports (зеркало SoT
 # platform-infra.yaml) — литералы {9090, 3000} удалены (ранее дублировали SoT).
-from core.internal.shared.deploy_paths import prometheus_rules_dir
+# REF-0010 (2026-08-24): prometheus_rules_dir_sot — канонический резолвер (SoT-дефолт
+# /opt/platform/prometheus-rules); прежний prometheus_rules_dir() имел fallback
+# /opt/prometheus/rules, расходящийся с compose-mount → рендер мимо монтированного
+# каталога = silent alert loss (AI-0004).
+from core.internal.shared.deploy_paths import prometheus_rules_dir_sot
 from core.internal.shared.platform_ports import (
     PLATFORM_PORT_LANGFUSE,
     PLATFORM_PORT_PROMETHEUS,
@@ -30,8 +34,10 @@ from core.internal.shared.platform_ports import (
 # ── module-level constants ──────────────────────────────────────────────────
 
 # Alert rules output dir on VPS (matching original lines 371, 379)
-# 170 W12 C5: единый SoT — shared/deploy_paths.prometheus_rules_dir (drift-фикс 3-way)
-ALERT_RULES_DIR = prometheus_rules_dir()
+# REF-0010/AI-0004: единый SoT с compose-mount (${PROMETHEUS_RULES_DIR:-/opt/platform/
+# prometheus-rules}:/opt/prometheus/rules в monitoring/docker-compose.base.yml) и
+# platform-infra.yaml env_defaults. Path-parity гейт: tests/unit/test_ref0010_monitoring_honesty.py
+ALERT_RULES_DIR = prometheus_rules_dir_sot()
 
 # Default Loki runtime config path relative to platform root
 DEFAULT_LOKI_RUNTIME_CONFIG = "core/modules/logging/config/loki-runtime-config.yml"

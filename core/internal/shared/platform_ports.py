@@ -39,6 +39,8 @@
 ## @changes  2026-08-14 | DevPlan 170 W1-A3 — Created (реестр портов, зеркало platform-infra.yaml)
 ## @changes  2026-08-22 | DevPlan 010 T2.2 (prep) — +NODE_EXPORTER/CADVISOR/POSTGRES_EXPORTER/
 ##            REDIS_EXPORTER/NGINX_EXPORTER/LOKI_HTTP/CLICKHOUSE_NATIVE_PEER (peer/scrape-порты)
+##            2026-08-24 | REF-0010 — +PGBOUNCER_EXPORTER/LANGFUSE_REDIS_EXPORTER/ALLOY_HTTP
+##            (аддитивно, frozen leaf P3 п.1: существующие имена не тронуты)
 ## @see      core/platform-infra.yaml (SoT), tests/gates/test_gate_port_parity.py (parity-гейт)
 # endregion MODULE_CONTRACT
 
@@ -102,6 +104,21 @@ REDIS_EXPORTER: int = 9121
 
 # Nginx exporter scrape (env_defaults.NGINX_EXPORTER_PORT=9113, compose container 9113)
 NGINX_EXPORTER: int = 9113
+
+# ── REF-0010 (2026-08-24): monitoring-honesty exporters ─────────────────────
+
+# PgBouncer exporter scrape (host=container 9127 — дефолт порта pgbouncer_exporter;
+# вне parity-скоупа test_gate_port_parity, инвариант 5 — как POSTGRES_EXPORTER)
+PGBOUNCER_EXPORTER: int = 9127
+
+# Langfuse-redis exporter HOST-порт публикации (compose "${...:-9122}:9121"; container
+# 9121 занят основным redis-exporter на общей ноде; host≠container — прецедент LANGFUSE
+# 3001/3000, TRAP §3 DevPlan 010). Вне parity-скоупа (инвариант 5).
+LANGFUSE_REDIS_EXPORTER: int = 9122
+
+# Grafana Alloy metrics HTTP-server (дефолт --server.http.listen-address=:12345,
+# log-collector compose порт не публикует — scrape по Docker DNS observability-net).
+ALLOY_HTTP: int = 12345
 
 # ── Logging / ClickHouse cross-node peer (DevPlan 010 T2.2) ─────────────────
 

@@ -20,6 +20,8 @@
 ##   НЕ гейты (гейт — шаг make gate MODE=fast). basedpyright exit маскируется (514 errors
 ##   recommended до W-B «pyright-clean»); ruff не маскируется (clean-at-ship M3).
 ## @changes 2026-08-22 | T2.15: блок артефактов извлечён в ./.github/actions/static-artifacts (единый SoT)
+## @changes 2026-08-24 | REF-0012 (meta-refactoring W0): external actions → full commit SHA
+##           (checkout, cache).
 # 🧐 TRAP[DECISION] · 2026-08-05 · HI · deploys on fast-gate by design — full-gate PR-only (C-1, DevPlan 136 W11 T11.1)
 # · Rejected: workflow_run-trigger на platform-test (full gate) — downstream ждал бы 20+ мин
 # ·   full-gate + integration + docker-степы (хрупкая цепочка, U-57); это и есть D2 (116 B11 T4).
@@ -65,7 +67,7 @@ jobs:
     steps:
       # ─── Step 1: Checkout ─────────────────────────────────────────────
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # ─── Step 2: Setup platform + gitleaks (composite SoT) ────────────
       - name: Setup platform (composite — python + gitleaks)
@@ -82,7 +84,7 @@ jobs:
       # DevPlan 123 T2 (P-14): ключ включает pyproject.toml hash (ruff-версия) —
       # прежний ключ только по .pre-commit-config.yaml давал cache-hit со старым venv.
       - name: Cache pre-commit venv
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ~/.cache/pre-commit
           key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}-${{ hashFiles('pyproject.toml') }}

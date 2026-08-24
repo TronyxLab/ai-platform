@@ -50,6 +50,9 @@
 ## @changes  2026-08-16 · DevPlan 176 A.2 — pre-deploy L1-гейт в deploy() (C1 root-эскалация):
 ##           verify_contracts l1_only на staging ДО копирования/orchestrator.deploy;
 ##           _PreDeployBlocked → [PRACTICES:BLOCK] в stderr + JSON FAILED + exit 1
+## @changes  2026-08-24 · REF-0003 (DevPlan 11 W0) — unhealthy/timeout healthcheck → FAILED
+##           (∉success): exit≠0, critical-notify на unhealthy-ветке, полная chain — только
+##           на success; failure_notifier DI (additive, W-H)
 ## @modulemap
 ##   ReceiveFlow.unpack [W:2] — tar.gz → staging (filter="data", tarfile)
 ##   ReceiveFlow.validate [W:3] — ai-platform.yaml parse + project name resolve/validate
@@ -80,6 +83,7 @@ from typing import BinaryIO, Protocol
 # deploy_paths — чистые leaf; цикл receive_flow↔orchestrator держался ТОЛЬКО на DeployOrchestrator,
 # который теперь инжектится конструктором (DI) — см. TRAP[DECISION] в __init__).
 from core.internal.deploy.channels import DeliveryChannel, LocalChannel
+from core.internal.deploy.hooks.post_deploy_chain import notify_deploy_failure
 
 # 176 A.2 (C1): pre-deploy L1-гейт — переиспользует verify_contracts (тот же K3-канон,
 # l1_only режим: ТОЛЬКО L1-статика, без docker-L2 латентности). НЕ дублирование гейта.
@@ -278,11 +282,15 @@ class ReceiveFlow:
         *,
         orchestrator_factory: Callable[[str], _OrchestratorProtocol] | None = None,
         pre_deploy_gate: Callable[[str, str | None], VerifyReport] | None = None,
+        failure_notifier: Callable[[str, str, str], None] | None = None,
     ):
         self.projects_base = projects_base
         self.max_payload_bytes = max_payload_bytes
         self.orchestrator_factory = orchestrator_factory
         self.pre_deploy_gate = pre_deploy_gate
+        # REF-0003 (DevPlan 11 W0): critical-пуш на unhealthy/timeout-ветке; None → канонический
+        # notify_deploy_failure (hooks/post_deploy_chain). DI — для тестов (W-H DevPlan 163).
+        self.failure_notifier = failure_notifier
 
     # region FUNC__make_orchestrator
     ## @purpose  DI-фабрика оркестратора (170 W10-B): единственная точка создания
@@ -496,7 +504,9 @@ class ReceiveFlow:
     ## @complexity O(N + M) where N = tar entries, M = deploy lifecycle
     ## @invariants
     ##   - staging temp dir удаляется в finally (не мусорит)
-    ##   - Post-deploy chain только при result.is_success() (best-effort)
+    ##   - Post-deploy chain только при result.is_success() (best-effort);
+    ##     unhealthy/timeout → FAILED (∉success, REF-0003) → critical-notify (failure_notifier
+    ##     DI / notify_deploy_failure) БЕЗ catalog/reconfig/hooks + exit 1
     ##   - JSON OrchestratorDeployResult содержит version (AC2: project, version, sha, status)
     ##   - DI (170 W10-B): оркестратор (deploy + post-chain) — через конструкторную фабрику;
     ##     stream=None → sys.stdin.buffer (канонический канал)
@@ -556,12 +566,23 @@ class ReceiveFlow:
             # ── Пост-деплой цепочка (D4, U-24): best-effort, сбой → WARN, НЕ фейлит деплой ──
             # 170 W10-B: цепочка исполняется оркестратором из конструкторной фабрики (та же,
             # что и deploy) — тесты переопределяют _run_post_deploy_chain в субклассе.
+            # REF-0003 (DevPlan 11 W0): полная chain — ТОЛЬКО на success. unhealthy/timeout
+            # → FAILED (∉success) → критичный notify БЕЗ catalog/reconfig/hooks поверх
+            # больного деплоя; exit≠0 ниже по is_success().
+            result_status = str(result.to_dict().get("status", ""))
+            healthcheck_status = str(result.to_dict().get("healthcheck_status", ""))
             if result.is_success():
                 node_name = os.environ.get("NODE_NAME", os.environ.get("NODE", ""))
                 chain_orch = self._make_orchestrator(resolved_base)
-                chain_orch._run_post_deploy_chain(
-                    resolved_project, version, str(result.to_dict().get("status", "")), target_dir, node_name
+                chain_orch._run_post_deploy_chain(resolved_project, version, result_status, target_dir, node_name)
+            elif healthcheck_status and healthcheck_status != "healthy":
+                logger.error(
+                    "[IMP:10][ReceiveFlow][run] Healthcheck FAILED for %s: status=%s — critical notify, rc!=0 (REF-0003)",
+                    resolved_project,
+                    healthcheck_status,
                 )
+                notifier = self.failure_notifier if self.failure_notifier is not None else notify_deploy_failure
+                notifier(resolved_project, version, result_status or "FAILED")
 
             output = json.dumps(result.to_dict())
             print(output)

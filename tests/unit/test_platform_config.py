@@ -241,3 +241,65 @@ def test_get_default(isolated_config_with_yaml, caplog: pytest.LogCaptureFixture
 
 
 # endregion TEST_get_default
+
+
+# 🧪 TRAP[TEST] · REF-0013 · Regression · platform_config _loaded-latch
+# · Last fail: `_loaded=True` ставился ДО чтения файла → первый же неудачный load навсегда
+#   фиксировал пустые defaults (повторный вызов = no-op на latch, retry невозможен).
+# · Remove if: платформа сознательно выбирает «один load-попытка навсегда» (неожиданно).
+# region TEST_failed_load_retries_until_success
+## @purpose  REF-0013: неудачный load НЕ закрывает latch — после появления SoT-файла
+##           следующий get_default() успешно загружает defaults (retry работает).
+## @scenario Пустой PLATFORM_ROOT → "" → записать core/platform-infra.yaml → снова get_default
+## @complexity 1
+def test_failed_load_retries_until_success(isolated_config, caplog: pytest.LogCaptureFixture) -> None:
+    """Failed load keeps the latch open; next call retries and succeeds."""
+    import yaml as yaml_mod
+
+    caplog.set_level(logging.INFO)
+    pc = isolated_config
+
+    # Шаг 1: файл отсутствует → "" (fail-visible), latch остаётся открытым
+    assert not pc.default_context()
+    assert not pc._loaded, "Failed load must NOT set the success latch (REF-0013)"
+
+    # Шаг 2: SoT-файл появляется → следующий вызов обязан подхватить (retry).
+    # Script-relative корень перенаправлен fixture в <platform_root>/fake (parents[3] от __file__).
+    infra_dir = Path(pc.__file__).parents[3] / "core"
+    infra_dir.mkdir(parents=True, exist_ok=True)
+    with Path(infra_dir / "platform-infra.yaml").open("w", encoding="utf-8") as f:
+        yaml_mod.dump({"env_defaults": {"CONTEXT": "retried-context", "S3_REGION": "ru-2"}}, f)
+
+    assert pc.default_context() == "retried-context", (
+        "Latch was closed after failed load — retry impossible (REF-0013 regression)"
+    )
+    assert pc.default_s3_region() == "ru-2"
+    assert pc._loaded, "Successful load must set the latch"
+
+    logger.info("[IMP:9][test_failed_load_retries_until_success] PASS: failed→retry→success sequence")
+
+
+# endregion TEST_failed_load_retries_until_success
+
+
+# region TEST_reset_cache_clears_loaded_state
+## @purpose  reset_cache() (REF-0013): сбрасывает и словарь, и latch; следующий get_default
+##           перечитывает SoT.
+## @scenario Загрузить YAML → reset_cache() → убедиться в очистке → перезагрузить
+## @complexity 1
+def test_reset_cache_clears_loaded_state(isolated_config_with_yaml) -> None:
+    """reset_cache clears _defaults/_loaded; subsequent access re-reads the SoT file."""
+    pc = isolated_config_with_yaml
+
+    assert pc.get_default("CONTEXT") == "test"  # первичная загрузка
+    assert pc._loaded
+
+    pc.reset_cache()
+
+    assert not pc._loaded, "reset_cache must clear the latch"
+    assert pc._defaults == {}, "reset_cache must clear cached defaults"
+    assert pc.get_default("S3_REGION") == "ru-1", "Post-reset access must re-load from SoT"
+    logger.info("[IMP:9][test_reset_cache_clears_loaded_state] PASS: cache reset + re-load")
+
+
+# endregion TEST_reset_cache_clears_loaded_state

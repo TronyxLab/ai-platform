@@ -27,6 +27,9 @@ Shared healthcheck poller for DeployOrchestrator. Extracted from context_deploye
 ##                      timeouts.HEALTHCHECK_POLL_TIMEOUT/INTERVAL (60/3, окно 60s вместо 200s)
 ## @changes 2026-08-22 | T2.8 — _try_http: per-URL timeout = max(MIN_PER_URL_TIMEOUT, timeout//len(urls))
 ##                      вместо полного timeout на каждый URL (6×60s → ≤ timeout на HTTP-attempt)
+## @changes 2026-08-24 | REF-0003 — поведение поллера НЕ менялось; success-предикат сужен выше
+##                      по стеку (_verify_deploy unhealthy/timeout → FAILED). start_period-окно
+##                      задокументировано TRAP[DECISION] у DEFAULT_* (вход REF-0103)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -52,6 +55,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_POLL_TIMEOUT = HEALTHCHECK_POLL_TIMEOUT
 DEFAULT_POLL_INTERVAL = HEALTHCHECK_POLL_INTERVAL
 DEFAULT_MAX_RETRIES = HEALTHCHECK_POLL_MAX_RETRIES
+# 🧐 TRAP[DECISION] · 2026-08-24 · — · Poll-окно 60s (20×3s) — де-факто start_period-бюджет деплоя (REF-0003) · Rejected: расширение окна до 180-300s под slow-start приложения до запуска · Reason: deferred — единый deadline и per-project стартовые окна (compose start_period) — скоуп REF-0103; launch-week churn минимален, легитимные slow-start деплои после REF-0003 падают честно (карточка: Regression risk «смягчается start_period/окном из REF-0103») · Rev: REF-0103 (таймауты/единый deadline) — пересмотреть окно вместе со start_period проектов
 HTTP_OK: int = 200  # статус успешного HTTP-ответа
 # T2.8: минимальный разумный per-URL timeout при делении бюджета проверки на число URL —
 # sub-second timeout даёт ложные negative на медленном старте контейнера.
