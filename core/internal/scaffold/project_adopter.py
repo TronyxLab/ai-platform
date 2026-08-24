@@ -25,6 +25,11 @@
 ## @changes  2026-07-26 · Wave 5c — Full Strangler-Fig from adopt-project.sh (906 LOC)
 ##           2026-08-01 · B9 T5 — compose_validator/vhost_configurator/scaffold_helpers split (U-32)
 ##           2026-08-02 · DevPlan 118 E11 — auto-detect → shared/project_yaml.py
+##           2026-08-24 · REF-0001 (meta-refactoring W2) — строка image_tag удалена из
+##                        генерации: input не существует в deploy-project.yml (FAIL-0802,
+##                        детерминированно красный CI adopted-проекта); образ доставляется
+##                        push-каналом job'а build-and-push из шаблонов, receive получает
+##                        тег из github.sha
 # endregion MODULE_CONTRACT
 
 # ⚠️ TRAP[BUG] · 2026-07-17 · P1 · Silent default "personal" org + missing casing normalization — config drift
@@ -227,7 +232,6 @@ jobs:
     uses: {workflow_org}/ai-platform/.github/workflows/deploy-project.yml@main
     with:
       project_name: {self.name}
-      image_tag: ${{{{ github.sha }}}}
     secrets: inherit
 
   deploy-staging:
@@ -236,7 +240,6 @@ jobs:
     uses: {workflow_org}/ai-platform/.github/workflows/deploy-project.yml@main
     with:
       project_name: {self.name}
-      image_tag: ${{{{ github.sha }}}}
     secrets: inherit
 """
 

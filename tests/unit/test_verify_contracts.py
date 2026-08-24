@@ -113,6 +113,7 @@ def _make_project(
     compose: str = _VALID_COMPOSE,
     lock_state: str | None = "baseline",
     lock_version: int = 1,
+    *,
     write_env_platform: bool = True,
 ) -> Path:
     """Create mock project dir (ai-platform.yaml + compose + optional practices.lock)."""
@@ -634,3 +635,242 @@ def test_verify_contracts_privileged_false_ok(
     entries = read_audit_log(str(audit))
     assert entries[-1]["status"] == "OK"
     assert _print_ldd_trajectory(caplog), "LDD: нет IMP:9 лога privileged-false"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# REF-0006 (DevPlan 11 В2): L1 dangerous-volumes / host-mode-keys +
+# l1_only compose-config-valid parse-fail → БЛОК
+# ═══════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · 2026-08-25 · NEGATIVE (R5) · dangerous-volumes — C1-вход «socket-mount»
+# · Last fail: REF-0006 — L1 не смотрел volumes; коммит volumes:
+#   ["/var/run/docker.sock:/sock"] = root ноды (ci-deploy в docker-группе) + все секреты
+# · Remove if: dangerous-volumes контракт меняется (socket deny-set)
+def test_verify_contracts_docker_socket_mount_blocked(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Точный C1-вход: - /var/run/docker.sock:/var/run/docker.sock → L1 блок (dangerous-volumes)."""
+    compose = _baseline_compose_with(
+        "    volumes:",
+        '      - "/var/run/docker.sock:/var/run/docker.sock"',
+    )
+    project = _make_project(tmp_path, compose=compose)
+    audit = tmp_path / "audit.jsonl"
+
+    with caplog.at_level(logging.INFO):
+        report = verify_project_contracts(project, audit_log_file=str(audit), facts=_FACTS_NO_DOCKER)
+
+    _assert_blocking(report, "dangerous-volumes", caplog)
+    blocked = next(f for f in report.findings if f.contract_id == "dangerous-volumes" and f.severity == "block")
+    assert "docker.sock" in blocked.message, f"сообщение обязано называть socket-маунт: {blocked.message}"
+    entries = read_audit_log(str(audit))
+    finding_ids = [f["id"] for f in entries[-1].get("findings", [])]
+    assert "dangerous-volumes" in finding_ids, f"аудит не содержит dangerous-volumes: {finding_ids}"
+
+
+# 🧪 TRAP[TEST] · 2026-08-25 · NEGATIVE (R5) · dangerous-volumes — C1-вход «/»-bind
+# · Last fail: REF-0006 — privileged:true + /:/host был точным вектором C1; bind "/:/host"
+# ·   без privileged оставался незамеченным (volumes вне L1)
+# · Remove if: dangerous-volumes контракт меняется (абсолютные binds вне allowlist)
+def test_verify_contracts_root_bind_blocked(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Точный C1-вход: - /:/host → L1 блок (абсолютный host-bind вне allowlist)."""
+    compose = _baseline_compose_with("    volumes:", '      - "/:/host"')
+    project = _make_project(tmp_path, compose=compose)
+    audit = tmp_path / "audit.jsonl"
+
+    with caplog.at_level(logging.INFO):
+        report = verify_project_contracts(project, audit_log_file=str(audit), facts=_FACTS_NO_DOCKER)
+
+    _assert_blocking(report, "dangerous-volumes", caplog)
+    # R1: явный ассерт поверх хелпера — «/»-bind обязан называться в сообщении находки
+    blocked = next(f for f in report.findings if f.contract_id == "dangerous-volumes" and f.severity == "block")
+    assert "/:/host" in blocked.message or "/host" in blocked.message, (
+        f"сообщение обязано называть root-bind: {blocked.message}"
+    )
+
+
+# 🧪 TRAP[TEST] · 2026-08-25 · NEGATIVE (R5) · dangerous-volumes — матрица запрещённых источников
+# · Scenario: параметризованные входы REF-0006 (short/long syntax): абсолютный bind вне
+#   allowlist, относительный traversal (../ и ./), ${VAR}-источник (fail-closed),
+#   long-syntax bind docker.sock, каталог-префикс /var/run/docker
+# · Remove if: классификация volume-источников меняется
+@pytest.mark.parametrize(
+    ("volume_yaml", "expect_substring"),
+    [
+        ('      - "/srv/data:/data"', "allowlist"),
+        ('      - "../escape:/data"', "traversal"),
+        ('      - "./local:/data"', "traversal"),
+        ('      - "${DATA_DIR}:/data"', "named volume"),
+        ('      - "/var/run/docker:/var/run/docker"', "docker"),
+        ("      - { type: bind, source: /var/run/docker.sock, target: /sock }", "docker"),
+        ("      - { type: bind, source: ../outside, target: /x }", "traversal"),
+    ],
+)
+def test_verify_contracts_dangerous_volume_matrix_blocked(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    volume_yaml: str,
+    expect_substring: str,
+) -> None:
+    """Каждый запрещённый источник маунта → L1 блок с релевантным сообщением."""
+    compose = _baseline_compose_with("    volumes:", volume_yaml)
+    project = _make_project(tmp_path, compose=compose)
+
+    with caplog.at_level(logging.INFO):
+        report = verify_project_contracts(project, facts=_FACTS_NO_DOCKER)
+
+    _assert_blocking(report, "dangerous-volumes", caplog)
+    vol_finding = next(f for f in report.findings if f.contract_id == "dangerous-volumes")
+    assert expect_substring in vol_finding.message, (
+        f"сообщение должно содержать {expect_substring!r}: {vol_finding.message}"
+    )
+
+
+# 🧪 TRAP[TEST] · 2026-08-25 · unit · dangerous-volumes — легитимные источники НЕ блокируются
+# · Regression: named volumes (канон персистентности), anonymous container-only volumes,
+#   long-syntax type: volume, mode-суффиксы (ro) — деплоятся без ложного блока
+# · Last fail: N/A
+# · Remove if: named-volume семантика меняется
+@pytest.mark.parametrize(
+    "volume_yaml",
+    [
+        '      - "appdata:/var/lib/app"',
+        '      - "appdata:/var/lib/app:ro"',
+        '      - "/var/cache/app"',
+        "      - { type: volume, source: appdata, target: /var/lib/app }",
+        "      - { type: tmpfs, target: /tmp }",
+    ],
+)
+def test_verify_contracts_named_volumes_ok(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    volume_yaml: str,
+) -> None:
+    """Named/anonymous/tmpfs volume-записи → 0 findings от dangerous-volumes."""
+    compose = _baseline_compose_with("    volumes:", volume_yaml)
+    project = _make_project(tmp_path, compose=compose)
+
+    with caplog.at_level(logging.INFO):
+        report = verify_project_contracts(project, facts=_FACTS_NO_DOCKER)
+
+    vol_findings = [f for f in report.findings if f.contract_id == "dangerous-volumes"]
+    assert not report.has_blocking_violation(), f"легитимный volume заблокирован: {report.format_for_ssh()}"
+    assert vol_findings == [], f"dangerous-volumes не должен находить нарушений: {vol_findings}"
+
+
+# 🧪 TRAP[TEST] · 2026-08-25 · NEGATIVE (R5) · host-mode-keys — матрица namespace-ключей
+# · Last fail: TRAP[BUG] 2026-08-16 обещал pid/sysctls в R5-наборе; network_mode:host/
+#   pid:host/userns_mode/cgroup давали host-namespace без проверки (REF-0006)
+# · Remove if: host-mode-keys контракт меняется
+@pytest.mark.parametrize(
+    ("mode_yaml", "expect_key"),
+    [
+        ('    network_mode: "host"', "network_mode"),
+        ('    pid: "host"', "pid"),
+        ('    userns_mode: "host"', "userns_mode"),
+        ('    cgroup: "host"', "cgroup"),
+        ('    cgroup_parent: "platform.slice"', "cgroup_parent"),
+        ("    sysctls:\n      net.core.somaxconn: 1024", "sysctls"),
+    ],
+)
+def test_verify_contracts_host_mode_keys_blocked(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    mode_yaml: str,
+    expect_key: str,
+) -> None:
+    """network_mode/pid/userns_mode/cgroup==host и cgroup_parent/sysctls → L1 блок."""
+    compose = _baseline_compose_with(*mode_yaml.splitlines())
+    project = _make_project(tmp_path, compose=compose)
+
+    with caplog.at_level(logging.INFO):
+        report = verify_project_contracts(project, facts=_FACTS_NO_DOCKER)
+
+    _assert_blocking(report, "host-mode-keys", caplog)
+    mode_finding = next(f for f in report.findings if f.contract_id == "host-mode-keys")
+    assert expect_key in mode_finding.message, f"сообщение должно называть {expect_key}: {mode_finding.message}"
+
+
+# 🧪 TRAP[TEST] · 2026-08-25 · unit · host-mode-keys — bridge/none НЕ блокируются
+# · Regression: только значение "host" шарит namespace ноды; bridge/none — изоляция по умолчанию
+# · Last fail: N/A
+# · Remove if: host-value семантика меняется
+def test_verify_contracts_network_mode_bridge_ok(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """network_mode: bridge → НЕ violation (namespace ноды не шарится)."""
+    compose = _baseline_compose_with('    network_mode: "bridge"')
+    project = _make_project(tmp_path, compose=compose)
+
+    with caplog.at_level(logging.INFO):
+        report = verify_project_contracts(project, facts=_FACTS_NO_DOCKER)
+
+    mode_findings = [f for f in report.findings if f.contract_id == "host-mode-keys"]
+    assert mode_findings == [], f"network_mode: bridge не должен блокироваться: {mode_findings}"
+
+
+# 🧪 TRAP[TEST] · 2026-08-25 · NEGATIVE (R5) · l1_only — сломанный YAML теперь БЛОК
+# · Last fail: REF-0006 evidence — «сломанный YAML проходит L1 (parse filed as L2-warning)»:
+#   pre-deploy гейт receive пропускал непарсящийся compose (severity warning при state≠active-full)
+# · Scenario: один и тот же битый compose: l1_only=True → blocking; l1_only=False → warning
+# · Remove if: l1_only severity-политика меняется
+def test_verify_contracts_l1_only_broken_yaml_blocked(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """l1_only=True: compose-config-valid parse-fail → БЛОК; полный режим (False) → warning."""
+    broken_compose = "services:\n  app:\n    image: busybox\n   broken_indent: [\n"
+    project = _make_project(tmp_path, compose=broken_compose)
+
+    with caplog.at_level(logging.INFO):
+        report_l1 = verify_project_contracts(project, l1_only=True, facts=_FACTS_NO_DOCKER)
+
+    parse_l1 = [f for f in report_l1.findings if f.contract_id == "compose-config-valid"]
+    assert parse_l1, "битый compose обязан дать finding compose-config-valid"
+    assert parse_l1[0].severity == "block", (
+        f"l1_only: parse-fail обязан блокировать (REF-0006): {report_l1.format_for_ssh()}"
+    )
+    assert report_l1.has_blocking_violation() and report_l1.exit_code == 1
+
+    with caplog.at_level(logging.INFO):
+        report_full = verify_project_contracts(project, l1_only=False, facts=_FACTS_NO_DOCKER)
+
+    parse_full = [f for f in report_full.findings if f.contract_id == "compose-config-valid"]
+    assert parse_full and parse_full[0].severity == "warning", (
+        "полный K3-режим сохраняет L2-warn семантику для parse-fail"
+    )
+    assert not any(f.severity == "block" for f in parse_full), (
+        "в полном режиме parse-fail не должен быть blocking (state=baseline)"
+    )
+    logger.info("--- l1_only vs full on broken yaml ---")
+    logger.info("%s", report_l1.format_for_ssh())
+    logger.info("%s", report_full.format_for_ssh())
+    assert _print_ldd_trajectory(caplog), "LDD: нет IMP:9 лога l1_only parse-fail"
+
+
+# 🧪 TRAP[TEST] · 2026-08-25 · unit · l1_only — docker-L2 subprocess не исполняется
+# · Regression: pre-up гейт остаётся без docker-латентности (176 A.2 инвариант сохранён);
+#   расширение REF-0006 не должно тянуть compose-config/build-check в l1_only
+# · Last fail: N/A
+# · Remove if: l1_only scope меняется
+def test_verify_contracts_l1_only_skips_docker_checks(monkeypatch, tmp_path: Path) -> None:
+    """l1_only=True: валидный проект без lock → 0 findings (drift/docker-L2 пропущены)."""
+    project = _make_project(tmp_path, lock_state=None)  # unmanaged: drift-finding был бы в full-режиме
+    report = verify_project_contracts(project, l1_only=True, facts=_FACTS_NO_DOCKER)
+    contract_ids = {f.contract_id for f in report.findings}
+    assert "drift-practices" not in contract_ids, "l1_only не должен исполнять drift"
+    assert "build-check" not in contract_ids, "l1_only не должен исполнять build-check"
+    assert not report.has_blocking_violation()

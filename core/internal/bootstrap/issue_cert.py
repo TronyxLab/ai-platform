@@ -22,7 +22,9 @@
 ##   - HTTP-01 standalone требует свободный порт 80 (вызывается ДО docker compose up); без wildcard
 ##   - webnames: инъекция API-ключа в dnsapi-скрипт + shred из ВСЕХ on-disk-локаций сразу после acme.sh
 ##     (tmpfs /tmp + ${ACME_HOME}/dnsapi/dns_webnames.sh); ключ НИКОГДА не попадает в логи/вывод
-##   - Retry: acme.sh --issue провал → повторная попытка (max_attempts=2, re-inject для webnames)
+##   - Retry: acme.sh --issue провал → повторная попытка с backoff (max_attempts=2, re-inject для
+##     webnames; пауза между попытками — shared/retry канон [5,10,20] clamp, REF-0008: без
+##     backoff retry жжёт Let's Encrypt rate-limit)
 ##   - generic DNS-01: креды env-переменными acme.sh (CF_Token, DP_Id, REGRU_API_Username...);
 ##     regru — env-passthrough + account.conf (TRAP 2026-08-12, renewal через cron)
 ##   - NODE_YAML резолв через NodeYaml фасад (E12/D18): node.yaml приоритетнее env (прежний канон)
@@ -42,6 +44,9 @@
 ## @changes  2026-08-22 | T2.2 — 3 retry-цикла acme.sh --issue (_issue_acme_webnames/_issue_acme_generic/
 ##                      _issue_http01_cert) → общий _acme_issue_with_retry; acme.sh-guard →
 ##                      _acme_sh_available (дубль _issue_acme_cert/_issue_http01_cert)
+## @changes  2026-08-24 | REF-0008 В2 — _acme_issue_with_retry → shared/retry.retry (backoff
+##                      между attempts, sleep_fn DI в IssueContext); --install-cert через
+##                      tmp+rename (reloadcmd mv-цепочка, shlex.quote) + post-install pair-match
 ## ⚠️ TRAP[DECISION] · 2026-07-23 · D1 — DNS-01 primary, HTTP-01 graceful degradation
 ## · Rejected: HTTP-01 only (no wildcard certs)
 ## · Reason: DNS-01 preferred (wildcard), HTTP-01 fallback when DNS-01 unavailable
@@ -58,6 +63,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shlex
 import shutil
 import sys
 import tempfile
@@ -81,7 +87,11 @@ from core.internal.bootstrap.webnames_protocol import (
 from core.internal.shared.contracts import EXIT_GENERIC, EXIT_OK
 from core.internal.shared.env_facts import EnvironmentFacts, default_env_facts
 from core.internal.shared.node_yaml import NodeYaml
-from core.internal.shared.ssl_certs import cert_check_expiry, cert_is_le_issuer
+
+# REF-0008: backoff между ACME-attempt — единый retry-канон shared/retry (политики timeouts.py)
+from core.internal.shared.retry import DEFAULT_BACKOFF_SECONDS
+from core.internal.shared.retry import retry as _shared_retry
+from core.internal.shared.ssl_certs import cert_check_expiry, cert_is_le_issuer, cert_key_pair_matches
 from core.internal.shared.subprocess_io import CommandRunner, default_command_runner
 
 logger = logging.getLogger(__name__)
@@ -143,6 +153,7 @@ class IssueContext:
     letsencrypt_dir: str = DEFAULT_LETSENCRYPT_DIR
     tmp_dir: str = ""
     max_attempts: int = ISSUE_MAX_ATTEMPTS
+    sleep_fn: Callable[[float], None] | None = None  # REF-0008: DI sleep для backoff (None → time.sleep)
 
 
 # endregion DATACLASSES
@@ -354,16 +365,21 @@ def _acme_sh_available(ctx: IssueContext, log_step: str) -> bool:
 ## @purpose  Единый retry-цикл acme.sh --issue (T2.2): 3 копии (_issue_acme_webnames/
 ##           _issue_acme_generic/_issue_http01_cert) различались только CLI-аргументами
 ##           (--dns PLUGIN | --standalone), log_step и текстами WARN/FAIL — консолидированы.
-##           Возвращает last_rc (0 = успех) — вызывающий решает про install-cert/False.
+##           REF-0008: цикл делегирует в shared/retry.retry (ЕДИНСТВЕННАЯ реализация retry-цикла,
+##           инвариант 2 retry.py) — sleep/backoff между attempts (DEFAULT_BACKOFF_SECONDS [5,10,20]
+##           clamp; без backoff retry жжёт Let's Encrypt rate-limit). Возвращает last_rc.
 ## @io       ⇥ ctx: IssueContext, email: str, domains: list[str] (сырые имена — флаги -d здесь),
 ##              extra_args: list[str] (различающаяся CLI-часть), log_step: str,
 ##              warn_fn: Callable[[int, int], str], fail_fn: Callable[[int], str] → ⎋ int (last_rc)
 ## @complexity — O(A) — A = ctx.max_attempts, каждая попытка — 1 acme.sh subprocess
 ## @invariants
-##   - check=False (rc управляется циклом); rc=0 → break; иначе WARN per attempt + FAIL
+##   - result_mode retry: retryable=rc!=0; exhaustion → последний rc (caller решает install/False)
+##   - Пауза перед retry N: DEFAULT_BACKOFF_SECONDS[N-1] с clamp на последний элемент;
+##     sleep_fn из ctx (DI — тесты инжектят мгновенный fake, 0 реального sleep)
 ##   - timeout=ACME_CMD_TIMEOUT; CLI-порядок прежний (--issue --home HOME EXTRA --server
 ##     --email EMAIL (-d DOMAIN)* --keylength) — AcmeFakeRunner различает ветки по --standalone/--dns
-##   - Тексты WARN/FAIL — callables (байт-идентичны прежним per-ветка)
+##   - Тексты WARN/FAIL — callables (байт-идентичны прежним per-ветка); WARN per attempt,
+##     FAIL после исчерпания
 def _acme_issue_with_retry(
     *,
     ctx: IssueContext,
@@ -374,7 +390,7 @@ def _acme_issue_with_retry(
     warn_fn: Callable[[int, int], str],
     fail_fn: Callable[[int], str],
 ) -> int:
-    """Run acme.sh --issue with retry (max_attempts). Returns last returncode (0 = success)."""
+    """Run acme.sh --issue with retry+backoff (shared/retry канон). Returns last returncode (0 = success)."""
     acme_args = [
         str(Path(ctx.acme_home) / "acme.sh"),
         "--issue",
@@ -389,13 +405,22 @@ def _acme_issue_with_retry(
         "--keylength",
         KEY_LENGTH,
     ]
-    last_rc = 1
-    for attempt in range(1, ctx.max_attempts + 1):
+    attempt_counter = [0]
+
+    def _run_once() -> int:
+        attempt_counter[0] += 1
         result = ctx.runner.run(acme_args, timeout=ACME_CMD_TIMEOUT, check=False)
-        last_rc = result.returncode
-        if last_rc == 0:
-            break
-        _log_step(log_step, "WARN", warn_fn(last_rc, attempt))
+        if result.returncode != 0:
+            _log_step(log_step, "WARN", warn_fn(result.returncode, attempt_counter[0]))
+        return result.returncode
+
+    last_rc = _shared_retry(
+        _run_once,
+        attempts=ctx.max_attempts,
+        backoff_seconds=DEFAULT_BACKOFF_SECONDS,
+        retryable=lambda rc: rc != 0,
+        sleep_fn=ctx.sleep_fn,
+    )
     if last_rc != 0:
         _log_step(log_step, "FAIL", fail_fn(last_rc))
     return last_rc
@@ -556,21 +581,55 @@ def _issue_acme_generic(domain: str, email: str, dns_plugin: str, wildcard: bool
 
 
 # region FUNC__install_cert_files
-## @purpose  Установить сертификат в LETSENCRYPT_DIR/live/$domain/ (--install-cert) + reloadcmd S3-upload.
+## @purpose  Установить сертификат в LETSENCRYPT_DIR/live/$domain/ (--install-cert) + reloadcmd.
+##           REF-0008: acme.sh пишет в TMP-файлы (стабильные имена final.tmp в том же каталоге),
+##           а атомарный commit (mv = rename(2)) делает reloadcmd-цепочка ПОСЛЕ успешной записи:
+##           crash acme.sh между записями больше не оставляет несогласованную пару «valid on disk»
+##           (nginx падал при здоровой системе). reloadcmd персистится acme.sh → будущие cron-renewals
+##           проходят ту же tmp+rename цепочку. Пути/домен — shlex.quote (без string-interpolation).
 ## @io       ⇥ domain, ctx → ⎋ bool
-## @complexity — O(1) + install-cert subprocess
+## @complexity — O(1) + install-cert subprocess (+ pair-match openssl)
 ## @invariants
-##   - --key-file/--fullchain-file в канонный cert_dir (mkdir -p канон)
-##   - --reloadcmd: nginx reload + s3_ssl_cache.py sync (S3 backup после каждого renew, 052 §4.5)
-##   - Провал install-cert → FAIL False (сертификат выпущен, но не установлен — nginx сломается)
+##   - --key-file/--fullchain-file → final.tmp (same-dir rename, детерминированные имена для renewals)
+##   - reloadcmd: mv privkey.tmp → mv fullchain.tmp → chmod 600 key → systemctl reload nginx;
+##     затем s3_ssl_cache upload (guarded if — отсутствие скрипта не валит reloadcmd)
+##   - Провал install-cert или mv-цепочки → FAIL False; старая пара на диске НЕ тронута
+##     (reloadcmd падает ДО nginx reload — stale-but-consistent certs, не broken state)
+##   - Post-install pair-match финальных файлов (best-effort: файлы отсутствуют у тест-fake'ов,
+##     не исполняющих reloadcmd — пропуск с IMP:8; в prod acme.sh rc=0 гарантирует запись)
+# ⚠️ TRAP[BUG] · 2026-08-24 · P1 · REF-0008/BUG-0700 · crash между двумя записями = несогласованная пара
+# · Symptom: acme.sh --install-cert писал fullchain.pem и privkey.pem НАПРЯМУЮ в live/DOMAIN/ —
+# ·   crash/kill между двумя записями оставлял пару из разных выпусков; cert_is_valid по fullchain
+# ·   говорил «valid», nginx падал на SSL_CTX_use_PrivateKey_file mismatch.
+# · Root: нет атомарности пары — два отдельных файла пишутся последовательно в final-локацию.
+# · Fix: --key-file/--fullchain-file → *.tmp + reloadcmd «mv && mv && chmod && systemctl reload»
+# ·   (rename(2) per-file; окно несогласованности сжимается с «между выпусками» до микросекунд
+# ·   между двумя mv; провал mv оставляет прежнюю консистентную пару).
+# · Prevention: новые installers обязаны писать во временные имена + commit после полной записи.
 def _install_cert_files(domain: str, ctx: IssueContext) -> bool:
-    """Install issued cert into LETSENCRYPT_DIR/live/DOMAIN (--install-cert + reloadcmd S3 sync)."""
+    """Install issued cert into LETSENCRYPT_DIR/live/DOMAIN via tmp+rename (--install-cert + mv-chain reloadcmd)."""
     cert_dir = Path(ctx.letsencrypt_dir) / "live" / domain
     cert_dir.mkdir(parents=True, exist_ok=True)
 
+    key_final = str(cert_dir / "privkey.pem")
+    chain_final = str(cert_dir / "fullchain.pem")
+    # Стабильные tmp-имена (НЕ mkstemp): acme.sh персистит reloadcmd для будущих renewals —
+    # имена должны быть детерминированы между запусками.
+    key_tmp = f"{key_final}.tmp"
+    chain_tmp = f"{chain_final}.tmp"
+
     core_dir = Path(__file__).resolve().parent
-    # S3 sync: acme.sh runs reloadcmd right after cert install — cert saved locally FIRST
-    # (nginx reload + best-effort s3_ssl_cache upload, WARN on fail, 052 §4.5)
+    s3_cache_py = core_dir / "s3_ssl_cache.py"
+    q = shlex.quote  # REF-0008: без string-interpolation — quote всех интерполируемых значений
+    # S3 sync в той же reloadcmd-цепочке (052 §4.5); guarded if — отсутствие скрипта не валит reloadcmd
+    s3_upload_cmd = f"if [ -f {q(str(s3_cache_py))} ]; then python3 {q(str(s3_cache_py))} upload {q(domain)}; fi"
+    # acme.sh runs reloadcmd right after writing the TMP files — reloadcmd commits them
+    # (tmp+rename) FIRST, then reloads nginx, then best-effort s3 upload
+    reload_cmd = (
+        f"mv -f {q(key_tmp)} {q(key_final)} && mv -f {q(chain_tmp)} {q(chain_final)} "
+        f"&& chmod 600 {q(key_final)} && chmod 644 {q(chain_final)} "
+        f"&& systemctl reload nginx; {s3_upload_cmd}"
+    )
     result = ctx.runner.run(
         [
             str(Path(ctx.acme_home) / "acme.sh"),
@@ -580,14 +639,11 @@ def _install_cert_files(domain: str, ctx: IssueContext) -> bool:
             "--home",
             ctx.acme_home,
             "--key-file",
-            str(cert_dir / "privkey.pem"),
+            key_tmp,
             "--fullchain-file",
-            str(cert_dir / "fullchain.pem"),
+            chain_tmp,
             "--reloadcmd",
-            (
-                f"systemctl reload nginx && if [ -f '{core_dir}/s3_ssl_cache.py' ]; "
-                f"then python3 '{core_dir}/s3_ssl_cache.py' upload '{domain}'; fi"
-            ),
+            reload_cmd,
         ],
         timeout=INSTALL_CERT_TIMEOUT,
         check=False,
@@ -595,9 +651,24 @@ def _install_cert_files(domain: str, ctx: IssueContext) -> bool:
     if result.returncode != 0:
         _log_step("acme", "FAIL", f"acme.sh cert installation exited with {result.returncode}")
         return False
-    _log_step("acme", "DONE", f"TLS certificate installed via acme.sh: {cert_dir / 'fullchain.pem'}")
+
+    # Post-install pair verification of FINAL files (REF-0008 defense-in-depth):
+    # prod — acme.sh rc=0 гарантирует исполнение reloadcmd (файлы закоммичены);
+    # тест-fake'и reloadcmd не исполняют — файлов нет, проверка пропускается (IMP:8).
+    if Path(chain_final).is_file() and Path(key_final).is_file():
+        if not cert_key_pair_matches(chain_final, key_final):
+            logger.error(
+                "[IMP:10][issue-cert][acme] Installed pair MISMATCHED for %s — refusing success verdict",
+                domain,
+            )
+            return False
+    else:
+        logger.info("[IMP:8][issue-cert][acme] Final cert files absent (mock runner?) — pair check skipped")
+
+    _log_step("acme", "DONE", f"TLS certificate installed via acme.sh: {chain_final}")
     logger.info(
-        "[IMP:9][issue-cert][acme] Certificate installed: %s (reloadcmd: nginx + s3_ssl_cache upload)", cert_dir
+        "[IMP:9][issue-cert][acme] Certificate installed: %s (tmp+rename reloadcmd: mv+chmod+nginx reload+s3 upload)",
+        cert_dir,
     )
     return True
 

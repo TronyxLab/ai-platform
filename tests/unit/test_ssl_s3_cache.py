@@ -379,11 +379,16 @@ def test_issue_cert_saves_to_s3_after_success():
 
     # Post-issue S3 upload is wired through acme.sh --reloadcmd (runs right after the
     # cert is installed). Invokes `python3 s3_ssl_cache.py upload <domain>`.
+    # REF-0008: reloadcmd собирается из переменных (shlex.quote канон) — окно ±2 строки.
     lines = content.split("\n")
-    reloadcmd_uploads = [line for line in lines if "s3_ssl_cache.py" in line and "upload" in line]
+    reloadcmd_uploads = [
+        i
+        for i, line in enumerate(lines)
+        if "upload" in line and any("s3_ssl_cache.py" in lines[j] for j in range(max(0, i - 4), min(len(lines), i + 5)))
+    ]
     assert reloadcmd_uploads, "issue_cert.py must wire s3_ssl_cache.py upload into reloadcmd"
-    for line in reloadcmd_uploads:
-        logger.info("[IMP:8][test_issue_cert_s3] reloadcmd upload: %s", line.strip())
+    for idx in reloadcmd_uploads:
+        logger.info("[IMP:8][test_issue_cert_s3] reloadcmd upload at line %d: %s", idx + 1, lines[idx].strip())
 
     logger.critical(
         "[IMP:9][test_issue_cert_s3] ASSERT: issue_cert.py wires s3_ssl_cache.py upload "

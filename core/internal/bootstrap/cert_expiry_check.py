@@ -1,19 +1,23 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: cert-expiry acme openssl-enddate days-left threshold telegram-notify state-file hash idempotent DevPlan-164
-# STRUCTURE: ▶ main check ┌--cert-dir --threshold-days┐ → ◇ scan <domain>/fullchain.cer → ◇ openssl x509 -enddate → ◇ days<14? → TG-notify (при смене списка) → ⊕ bool → ⎋
+# GREP_SUMMARY: cert-expiry acme openssl-enddate days-left threshold telegram-notify state-file hash idempotent letsencrypt-live fullchain-pem scan-coverage DevPlan-164 REF-0008
+# STRUCTURE: ▶ main check ┌--cert-dir --threshold-days┐ → ○ scan roots {acme.sh <domain>[_ecc]/fullchain.cer, /etc/letsencrypt/live/<domain>/fullchain.pem} → ◇ openssl x509 -enddate → ◇ days<14? → ⊕ merge(min per domain) → TG-notify (при смене списка) → ⎋
 # region MODULE_CONTRACT
 ## @purpose  Проверка истечения TLS-сертификатов (закрытие deferred-TRAP 162 W6-2):
-##           ежедневная проверка acme.sh-каталога — домены, чьи сертификаты истекают
+##           ежедневная проверка cert-каталогов — домены, чьи сертификаты истекают
 ##           раньше порога (14 дней), уведомляются в Telegram. stdlib-only (паттерн watchdog),
 ##           вызывается platform-reboot.service (первый ExecStart, до reboot_policy).
+##           REF-0008: скан покрывает ОБА cert-store — acme.sh (/root/.acme.sh, fullchain.cer)
+##           И S3-restored LE (/etc/letsencrypt/live, fullchain.pem); прежде restored-сертификаты
+##           были вне renewal И вне скана → гарантированный протухший TLS ≤90 дней без алертов.
 ## @scope    CLI: check [--cert-dir <d>] [--threshold-days 14] [--state-file <p>].
 ##           Запускается systemd от root. Без импортов core.internal.
 ## @invariants
-##   1. Read-only: НИЧЕГО не пишет в cert-каталог (только читает .cer и state-file)
-##   2. Скан: подкаталоги <cert-dir>/<domain>*/ с fullchain.cer (acme.sh layout: <domain>[_ecc]);
-##      имя домена — имя подкаталога без _ecc-суффикса
+##   1. Read-only: НИЧЕГО не пишет в cert-каталоги (только читает .cer/.pem и state-file)
+##   2. Скан корней: <cert-dir>/<domain>*/ с CERT_FILENAMES + LETSENCRYPT_LIVE_DIR;
+##      acme.sh layout: <domain>[_ecc]; LE layout: live/<domain>/fullchain.pem
 ##   3. `openssl x509 -enddate -noout` → notAfter → days_left = ceil((enddate - now)/86400)
-##   4. days_left < threshold → в отчёт; отчёт пуст → no-op exit 0
+##   4. days_left < threshold → в отчёт; отчёт пуст → no-op exit 0; один домен в обоих
+##      корнях → merge с min(days_left) (самый пессимистичный вердикт побеждает)
 ##   5. Анти-спам: state-file хеш отчёта (sha256) — уведомление только при смене списка/порога
 ##   6. openssl недоступен/ошибка парсинга — WARN, сертификат пропускается (не блокирует стек)
 ##   7. TG — тот же subprocess-канал, что reboot_policy (telegram_notifier send)
@@ -22,6 +26,8 @@
 ##            при сбое renewal (webnames API, rate-limit). Порог 14 дней = неделя на реакцию
 ##            + неделя на retry.
 ## @changes  2026-08-13 | DevPlan 164 W1-2 — Created (закрытие deferred-TRAP security_updates.py:23)
+## @changes  2026-08-24 | REF-0008 В2 — +fullchain.pem в CERT_FILENAMES; +скан
+##                      /etc/letsencrypt/live (S3-restored сертификаты вне скана, FAIL-0301/0302)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -34,7 +40,7 @@ import os
 import re
 import subprocess
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TypedDict, cast
@@ -46,6 +52,14 @@ from core.internal.shared.timeouts import CONVERGE_DOCKER_TIMEOUT, SYSTEM_CMD_TI
 logger = logging.getLogger(__name__)
 
 ACME_CERT_DIR = "/root/.acme.sh"
+# REF-0008: второй cert-store — S3-restored LE-сертификаты (download_cert пишет сюда).
+# 🧐 TRAP[DECISION] · 2026-08-24 · — · Литерал /etc/letsencrypt/live сохранён (не deploy_paths)
+# · Rejected: импорт core.internal.shared.deploy_paths.letsencrypt_live (резолвер существует — C7)
+# · Reason: stdlib-only канон модуля (MODULE_CONTRACT: «Без импортов core.internal») —
+# ·   platform-reboot.service вызывает скрипт БЕЗ PYTHONPATH; импорт упал бы ModuleNotFoundError
+# ·   (тот же класс, что STATE_FILE TRAP 2026-08-14 ниже).
+# · Rev: systemd-юнит начнёт задавать PYTHONPATH — заменить на letsencrypt_live()
+LETSENCRYPT_LIVE_DIR = "/etc/letsencrypt/live"
 # 🧐 TRAP[DECISION] · 2026-08-14 · — · Литерал state-файла сохранён (не deploy_paths.cert_expiry_state_file)
 # · Rejected: импорт core.internal.shared.deploy_paths (резолвер существует — 170 W1-A2)
 # · Reason: stdlib-only канон модуля (MODULE_CONTRACT: «Без импортов core.internal») —
@@ -56,8 +70,9 @@ ACME_CERT_DIR = "/root/.acme.sh"
 STATE_FILE = "/var/lib/platform/run/cert-expiry-state.json"
 DEFAULT_THRESHOLD_DAYS = 14
 
-# acme.sh layout: <dir>/<domain>/<domain>.cer и <dir>/<domain>_ecc/fullchain.cer (ECC)
-CERT_FILENAMES: tuple[str, ...] = ("fullchain.cer",)
+# acme.sh layout: <dir>/<domain>/<domain>.cer и <dir>/<domain>_ecc/fullchain.cer (ECC);
+# REF-0008: LE layout — <dir>/<domain>/fullchain.pem (S3-restored сертификаты)
+CERT_FILENAMES: tuple[str, ...] = ("fullchain.cer", "fullchain.pem")
 _ENDDATE_RE = re.compile(r"notAfter=([A-Za-z]{3}\s+\d+\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+GMT")
 
 
@@ -176,6 +191,25 @@ def scan_expiring(
 
 
 # endregion FUNC_scan_expiring
+
+
+# region FUNC__merge_expiring
+## @purpose  Слить отчёты нескольких cert-корней (REF-0008: acme.sh + letsencrypt live):
+##           домен в обоих корнях → min(days_left) — самый пессимистичный вердикт побеждает
+##           (истекающая копия должна алертиться, даже если вторая копия свежая).
+## @io       ⇥ reports: list[dict[str, int]] → ⎋ dict[str, int] (отсортирован по домену)
+## @complexity O(D * R)
+def _merge_expiring(reports: list[dict[str, int]]) -> dict[str, int]:
+    """Merge per-root expiring reports; min(days_left) wins for duplicate domains."""
+    merged: dict[str, int] = {}
+    for report in reports:
+        for domain, left in report.items():
+            if domain not in merged or left < merged[domain]:
+                merged[domain] = left
+    return dict(sorted(merged.items()))
+
+
+# endregion FUNC__merge_expiring
 
 
 # region FUNC_report_hash
@@ -309,10 +343,17 @@ def notify_telegram(text: str, notify_fn: Callable[[str], bool] | None = None) -
 
 
 # region FUNC_check
-## @purpose  Оркестрация: скан → пустой отчёт = no-op; иначе TG при новом хеше → exit 0;
+## @purpose  Оркестрация: скан ОБЕИХ cert-директорий (acme.sh + letsencrypt live, REF-0008) →
+##           merge(min per domain); пустой отчёт = no-op; иначе TG при новом хеше → exit 0;
 ##           ошибки скана не блокируют (exit 0 — best-effort ежедневная проверка).
-## @io       ⇥ cert_dir, threshold_days, state_file, now, run_fn, notify_fn → ⎋ int
-## @complexity O(D) + 1 subprocess per cert
+## @io       ⇥ cert_dir, threshold_days, state_file, now, run_fn, notify_fn,
+##              scan_dirs: Sequence[str] | None (DI; None → {cert_dir, LETSENCRYPT_LIVE_DIR})
+##           → ⎋ int
+## @complexity O(D * R) + 1 subprocess per cert
+## @invariants
+##   - scan_dirs=None → union {cert_dir, LETSENCRYPT_LIVE_DIR} (REF-0008: restored-серты
+##     вне acme.sh-каталога обязаны попадать в expiry-скан)
+##   - Отсутствующий корень → {} (OSError пойман в scan_expiring, non-fatal)
 def check(
     cert_dir: str = ACME_CERT_DIR,
     threshold_days: int = DEFAULT_THRESHOLD_DAYS,
@@ -320,9 +361,12 @@ def check(
     now: datetime | None = None,
     run_fn: Callable[[list[str]], object] | None = None,
     notify_fn: Callable[[str], bool] | None = None,
+    scan_dirs: Sequence[str] | None = None,
 ) -> int:
-    """Run cert-expiry check. Returns exit code (0 = ok/notified, 1 = report failed)."""
-    expiring = scan_expiring(cert_dir, threshold_days, now=now, run_fn=run_fn)
+    """Run cert-expiry check over both cert stores. Returns exit code (0 = ok/notified, 1 = report failed)."""
+    roots = [cert_dir, LETSENCRYPT_LIVE_DIR] if scan_dirs is None else list(scan_dirs)
+    reports = [scan_expiring(root, threshold_days, now=now, run_fn=run_fn) for root in roots]
+    expiring = _merge_expiring(reports)
     if not expiring:
         logger.info("[IMP:8][cert_expiry][check] No expiring certs (threshold=%dd) — no-op", threshold_days)
         return 0

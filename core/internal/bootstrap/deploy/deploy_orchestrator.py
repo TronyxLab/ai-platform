@@ -45,7 +45,7 @@
 ##   _postflight [W:3] — sudoers batch + orphans detect + litellm config render
 ##   _aggregate_severity [W:2] — enriched modules dict lookup, fallback per-module metadata call
 ##   _compute_exit_code [W:1] — CRIT>0 → 2, WARN>0 → 0, else → 0
-##   _set_hc_marker [W:1] — failed==[] ? touch run-scoped .hc_done_in_deploy[.<ctx>].<run-id> : skip (REF-0005)
+##   _set_hc_marker [W:1] — failed==[] ? touch run-scoped .hc_done_in_deploy[.`ctx`].`run-id` : skip (REF-0005)
 ##   _create_status_metrics_json [W:1] — pre-create /var/lib/platform/run/status-metrics.json (P1 fix)
 ##   _invoke_module_interface [W:2] — bash subprocess wrapper for system module dispatch (D4)
 ## @usecases
@@ -1146,7 +1146,7 @@ def _compute_exit_code(crit: int, warn: int, deployed: int) -> int:
 ## @purpose  Touch the run-scoped healthcheck-done marker — signals state_machine.py to skip
 ##           the standalone healthcheck (healthcheck already ran inside deploy_docker_group).
 ##           REF-0005: маркер пишется ТОЛЬКО при failed==[] (success-marker после доказательства)
-##           и содержит run-id (YYYYMMDDTHHMMSS-<pid>) — чужой запуск не гасит наш healthcheck;
+##           и содержит run-id (YYYYMMDDTHHMMSS-pid) — чужой запуск не гасит наш healthcheck;
 ##           stale-варианты снимаются свипом на старте φ8/φ12 (phases/docker._sweep_stale_hc_markers).
 ## @io       ⇥ failed: list[str] | None — имена упавших модулей параллельного пути
 ##           ⎋ None (side-effect: marker file при failed==[])
@@ -1154,7 +1154,7 @@ def _compute_exit_code(crit: int, warn: int, deployed: int) -> int:
 ## @invariants
 ##   - failed непустой → маркер НЕ пишется (φ11 выполнит standalone healthcheck)
 ##   - Путь = orchestrator_metrics.hc_marker_path(context) + "." + run-id (единый SoT базы;
-##     читатель docker.py резолвит тот же префикс — формат суффикса \d{8}T\d{6}-\d+)
+##     читатель docker.py резолвит тот же префикс — формат суффикса 8digits-T-6digits-digits)
 ##   - DEPLOY_BEST_EFFORT: сбой записи — WARN, не raise
 def _set_hc_marker(failed: list[str] | None = None) -> None:
     """Create the run-scoped healthcheck-done marker ONLY on zero failures (REF-0005 honesty)."""

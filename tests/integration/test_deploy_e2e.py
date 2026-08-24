@@ -180,6 +180,12 @@ class TestDeployE2E:
             deploy_history=history,
             healthcheck_poller=healthcheck,
             compose_deployer=lambda *_a, **_k: True,
+            # REF-0006 W2: L1 pre-apply гейт блокирует fixture-compose (bind-mounts вне
+            # контрактов) — e2e проверяет ОРКЕСТРАЦИЮ, не L1 (она покрыта unit-гейтом);
+            # пермиссивный шов: пустой VerifyReport, тот же паттерн что в test_rollback_contour
+            pre_apply_gate=lambda d, _p: __import__(
+                "core.internal.deploy.verify_contracts", fromlist=["VerifyReport"]
+            ).VerifyReport(project_dir=pathlib.Path(d), state="baseline", findings=()),
         )
 
         # T6.1 (DevPlan 160 W6): оркестрация (deliver → compose-шаг → healthcheck → snapshot →

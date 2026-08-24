@@ -74,7 +74,7 @@ def test_should_notify_postpone_anti_spam(caplog) -> None:
     logger.critical("[IMP:9][test] postpone anti-spam logic — OK")
 
 
-# endregion
+# endregion Tests: pure functions
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -199,7 +199,7 @@ def test_check_postpone_notify_once_per_day(caplog, tmp_path: Path) -> None:
     logger.critical("[IMP:9][test] postpone anti-spam once-per-day — OK")
 
 
-# endregion
+# endregion Tests: check() orchestration
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -221,7 +221,9 @@ def test_install_writes_units_and_enables(caplog, tmp_path: Path) -> None:
     assert ["daemon-reload"] in systemctl_calls
     assert ["enable", "--now", rp.TIMER_UNIT_NAME] in systemctl_calls
     timer_text = (unit_dir / rp.TIMER_UNIT_NAME).read_text(encoding="utf-8")
-    assert "OnCalendar=*-*-* 04:30:00" in timer_text
+    # REF-0009: 05:45 — ребут вне окна nightly backup (03:00 дамп + upload + retry 01:30)
+    assert "OnCalendar=*-*-* 05:45:00" in timer_text
+    assert "04:30" not in timer_text, "старое окно 04:30 пересекало backup-цикл"
     assert "Persistent=true" in timer_text
     service_text = (unit_dir / rp.SERVICE_UNIT_NAME).read_text(encoding="utf-8")
     assert "cert_expiry_check.py check" in service_text
@@ -245,4 +247,4 @@ def test_install_idempotent_no_systemctl(caplog, tmp_path: Path) -> None:
     logger.critical("[IMP:9][test] install idempotent — 0 systemctl on second call (R5 negative) — OK")
 
 
-# endregion
+# endregion Tests: install()

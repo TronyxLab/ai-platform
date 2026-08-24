@@ -60,7 +60,11 @@ _DEFAULT_PROJECTS_ROOT: str = str(Path(__file__).resolve().parents[4])
 _DEFAULT_PLATFORM_ROOT: str = str(Path(__file__).resolve().parents[3])
 _DEFAULT_ORG: str = "personal"
 _DEFAULT_NODE: str = "tronyx-vps"
-_DEFAULT_MAX_PAYLOAD_BYTES: int = 1024**3  # 1 GiB (receive_flow T9.9)
+# REF-0015 (DevPlan 11 В2): ↓ с 1 GiB — легитимные payload'ы канала receive — файлы
+# конфигурации проекта (compose/yaml/env/lock, KB-масштаб); 64 MiB = ×1000 запас.
+# Compressed-кап — только ПЕРВЫЙ рубеж: развёртывание ограничивает uncompressed ceiling
+# в receive_flow.unpack (tar-бомба ~1000:1 на нулях).
+_DEFAULT_MAX_PAYLOAD_BYTES: int = 64 * 1024 * 1024  # 64 MiB (receive_flow T9.9 + REF-0015)
 _DEFAULT_SSH_USER: str = "root"
 
 

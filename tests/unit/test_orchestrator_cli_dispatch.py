@@ -442,3 +442,83 @@ def test_dispatch_verify_invalid_project_negative(capsys, caplog: pytest.LogCapt
 
 
 # endregion FUNC_test_dispatch_verify_invalid_project_negative
+
+
+# ── TEST-05 (REF-0006, DevPlan 11 В2): параметризованные traversal-негативы receive/remove ──
+
+
+# region FUNC_test_dispatch_traversal_negatives_receive_remove
+## @purpose — TEST-05 (карточка REF-0006): негативы receive/remove через _dispatch с
+##            path-traversal/невалидными project-name. T9.7-валидация отсекает инъекцию
+##            ДО handler'а: orchestrator НЕ вызывается (никаких remove/deploy мутаций),
+##            JSON ERROR + rc 1.
+# 🧪 TRAP[TEST] · 2026-08-25 · NEGATIVE (R5) · TEST-05 — receive/remove traversal через dispatch
+# · Last fail: карточка REF-0006 — «TEST-05 (нет негативов receive/remove)»; T9.7 покрывал
+#   только status-семантику косвенно, явных параметризованных негативов канал не имел
+# · Scenario: SSH_ORIGINAL_COMMAND="receive ../../etc sha" / "remove ../evil" → rc 1,
+#   JSON {"status":"ERROR","error":"Invalid or reserved project name: ..."}, recorder пуст
+# · Remove if: dispatch перестаёт валидировать project-name для receive/remove
+@pytest.mark.parametrize(
+    ("verb", "bad_project"),
+    [
+        ("receive", "../../etc"),
+        ("receive", "a/../b"),
+        ("receive", "/abs/path"),
+        ("receive", ".."),
+        ("remove", "../evil"),
+        ("remove", "proj/../../victim"),
+        ("remove", "/opt/projects/victim"),
+        ("remove", "-rf"),
+    ],
+    ids=[
+        "receive-dotdot-abs",
+        "receive-inner-traversal",
+        "receive-absolute",
+        "receive-bare-dotdot",
+        "remove-dotdot",
+        "remove-nested-traversal",
+        "remove-absolute-path",
+        "remove-flag-injection",
+    ],
+)
+def test_dispatch_traversal_negatives_receive_remove(
+    verb: str,
+    bad_project: str,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """receive/remove с traversal-проектом → rc 1, JSON ERROR, orchestrator НЕ вызывается."""
+    caplog.set_level(logging.INFO)
+    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    class _RecordingOrch:
+        """Recorder: любое обращение к remove/receive = нарушение валидации (тест RED)."""
+
+        _MSG_REMOVE = "remove не должен вызываться для невалидного project-name"
+        _MSG_RECEIVE = "receive не должен вызываться для невалидного project-name"
+
+        def remove(self, *args, **kwargs):
+            calls.append((args, kwargs))
+            raise AssertionError(self._MSG_REMOVE)
+
+        def receive(self, *args, **kwargs):
+            calls.append((args, kwargs))
+            raise AssertionError(self._MSG_RECEIVE)
+
+    def _factory(*args, **kwargs):
+        return _RecordingOrch()
+
+    argv = [verb, bad_project] + (["deadbeefsha"] if verb == "receive" else [])
+    rc = _dispatch(argv, env={}, stdin_stream=io.BytesIO(b""), orchestrator_factory=_factory)
+
+    out = capsys.readouterr().out
+    payload = json.loads(out)
+    assert rc == 1, f"{verb} {bad_project!r}: ожидается rc 1"
+    assert payload["status"] == "ERROR"
+    assert "Invalid or reserved project name" in payload["error"]
+    assert calls == [], f"{verb}: handler не должен вызываться для {bad_project!r}"
+    assert_ldd_imp9(caplog)
+    logger.critical("[IMP:9][test] TEST-05: %s %r blocked before handler (rc=1)", verb, bad_project)
+
+
+# endregion FUNC_test_dispatch_traversal_negatives_receive_remove

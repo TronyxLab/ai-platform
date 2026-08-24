@@ -1,7 +1,7 @@
 # GREP_SUMMARY: postgres module docker shared-db-net pgbouncer liveness pg_isready restart-always severity critical deploy-hook on_project_deploy ensure-convergence
 # STRUCTURE: ▶ module:postgres → shared-db-net → no-ports → pg_isready → pgbouncer → deploy-hook(on_project_deploy) → ┐
 # region MODULE_CONTRACT
-## @purpose  Shared PostgreSQL 16 instance for all platform projects via shared-db-net
+## @purpose  Shared PostgreSQL 18.4 instance for all platform projects via shared-db-net
 ## @scope    Single node; all projects use the same DB instance; connection by name/user/password
 ## @invariants
 ##   - install_type: docker — managed by compose, NOT systemd
@@ -20,7 +20,9 @@
 
 name: postgres
 install_type: docker
-description: "Shared PostgreSQL 16 with PgBouncer connection pooler"
+# AI-0069 doc-fix (REF-0009): фактическая версия образа — 18.4 (postgres Dockerfile),
+# docs ранее говорили «16»
+description: "Shared PostgreSQL 18.4 with PgBouncer connection pooler"
 
 depends_on: []
 

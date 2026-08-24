@@ -1,22 +1,28 @@
-# GREP_SUMMARY: test-backup-collector backup-status get-backup-status mtime postgres-log app-data-log stale unknown read-error env-override
-# STRUCTURE: fixtures(tmp log factory) → ◇ get_backup_status (ok both fresh, stale ≥25h, unknown no logs, one-missing-one-fresh) → ◇ read-error (OSError → None + WARN) → ◇ env-override paths → ⎋ LDD IMP:9
+# GREP_SUMMARY: test-backup-collector backup-status last-verified-stamp freshness postgres app-data-log stale unknown read-error env-override REF-0009
+# STRUCTURE: fixtures(tmp log factory) → ◇ get_backup_status (ok both fresh, stale ≥25h, unknown no sources, one-missing-one-fresh) → ◇ read-error (OSError → None + WARN) → ◇ env-override paths → ⎋ LDD IMP:9
 # region MODULE_CONTRACT
-## @purpose  Unit tests for healthcheck/metrics/backup_collector.py (DevPlan 139 W4.6 — закрытие
-##            blind spot backup_collector, 116 LOC, НОВЫЙ). Сборка backup-метрик (mtime-свежесть),
-##            отсутствие бэкапов, ошибки чтения (graceful degradation).
-## @scope    get_backup_status: оба лога свежие → "ok"; любой ≥25h → "stale"; ни одного → "unknown";
-##           один отсутствует + один свежий → "ok"; OSError чтения → None + WARN; ISO-формат timestamps;
-##           env-оверрайд путей (BACKUP_POSTGRES_LOG/BACKUP_APP_DATA_LOG).
+## @purpose  Unit tests for healthcheck/metrics/backup_collector.py (DevPlan 139 W4.6;
+##           REF-0009: postgres freshness из .last_verified stamp, не mtime лога).
+## @scope    get_backup_status: оба источника свежие → "ok"; любой ≥25h → "stale";
+##           ни одного → "unknown"; один отсутствует + один свежий → "ok";
+##           OSError чтения → None + WARN; ISO-формат timestamps;
+##           env-оверрайд путей (BACKUP_POSTGRES_STAMP/BACKUP_APP_DATA_LOG).
 ## @invariants
-##   - Threshold: <25h = "ok", ≥25h = "stale", лог отсутствует = "unknown" (нет логов вообще)
+##   - Postgres freshness: mtime {spool}/postgres/.last_verified (пишется ТОЛЬКО после
+##     gzip -t OK + structure validation в backup_postgres.py — REF-0009 BUG-0803);
+##     упавшая ночью задача с refresh'нутым логом больше НЕ выглядит свежей
+##   - App-data freshness: mtime лога job'а
+##   - Threshold: <25h = "ok", ≥25h = "stale", источник отсутствует = "unknown"
 ##   - Graceful degradation: ошибки чтения → None + WARN, никогда не raise
 ##   - Все пути конфигурируемы через env с сенсибл-дефолтами (не хардкод в тестах)
 ##   - tmp_path-изоляция (xdist); mtime задаётся через os.utime (детерминизм, без сна)
-##   - Test Honesty R1-R5: negative-тесты (нет логов, stale, read-error) — 0 pass-тестов
+##   - Test Honesty R1-R5: negative-тесты (нет источников, stale, read-error) — 0 pass-тестов
 ##   - LDD: каждый тест — IMP:9-траектория (ldd_trajectory; модуль логирует IMP:9 всегда)
-## @rationale W4 (139): 116 LOC production без тестов — backup-cron пишет логи, но collector
-##            не читался → silent failure risk. Инварианты MODULE_CONTRACT — в исполняемые проверки.
+## @rationale W4 (139): collector не читался никем → silent failure risk.
+##            REF-0009: сигнал «cron запустился» заменён на «бэкап удался».
+##            Инварианты MODULE_CONTRACT — в исполняемые проверки.
 ## @changes  2026-08-05 | Created (DevPlan 139 W4.6)
+##           2026-08-25 | REF-0009 — postgres source: BACKUP_POSTGRES_LOG → BACKUP_POSTGRES_STAMP
 # endregion MODULE_CONTRACT
 
 import logging
@@ -39,7 +45,7 @@ _ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
 
 # region FUNC__touch_log
-## @purpose  Создать log-файл с заданным mtime (age_seconds назад от now).
+## @purpose  Создать log/stamp-файл с заданным mtime (age_seconds назад от now).
 ## @io       ⇥ path: Path, age_seconds: float | None → ⎋ Path
 ## @complexity O(1)
 def _touch_log(path: Path, age_seconds: float | None = None) -> Path:
@@ -56,17 +62,19 @@ def _touch_log(path: Path, age_seconds: float | None = None) -> Path:
 
 
 # region FUNC__point_env
-## @purpose  Направить BACKUP_*_LOG env на tmp-файлы (изоляция от /var/log).
-## @io       ⇥ monkeypatch, postgres: Path | None, app_data: Path | None → ⎋ None
+## @purpose  Направить BACKUP_* env на tmp-файлы (изоляция от /var/log и spool).
+## @io       ⇥ monkeypatch, postgres_stamp: Path | None, app_data_log: Path | None → ⎋ None
 ## @complexity O(1)
-def _point_env(monkeypatch, postgres: Path | None, app_data: Path | None) -> None:
-    """Set BACKUP_POSTGRES_LOG/BACKUP_APP_DATA_LOG env to tmp paths (or absent)."""
-    monkeypatch.setenv("BACKUP_POSTGRES_LOG", str(postgres)) if postgres is not None else monkeypatch.delenv(
-        "BACKUP_POSTGRES_LOG", raising=False
-    )
-    monkeypatch.setenv("BACKUP_APP_DATA_LOG", str(app_data)) if app_data is not None else monkeypatch.delenv(
-        "BACKUP_APP_DATA_LOG", raising=False
-    )
+def _point_env(monkeypatch, postgres_stamp: Path | None, app_data_log: Path | None) -> None:
+    """Set BACKUP_POSTGRES_STAMP/BACKUP_APP_DATA_LOG env to tmp paths (or absent)."""
+    if postgres_stamp is not None:
+        monkeypatch.setenv("BACKUP_POSTGRES_STAMP", str(postgres_stamp))
+    else:
+        monkeypatch.delenv("BACKUP_POSTGRES_STAMP", raising=False)
+    if app_data_log is not None:
+        monkeypatch.setenv("BACKUP_APP_DATA_LOG", str(app_data_log))
+    else:
+        monkeypatch.delenv("BACKUP_APP_DATA_LOG", raising=False)
 
 
 # endregion FUNC__point_env
@@ -78,16 +86,16 @@ def _point_env(monkeypatch, postgres: Path | None, app_data: Path | None) -> Non
 
 
 # region FUNC_test_status_ok_both_fresh
-## @purpose  Оба лога свежие (<25h) → status "ok", оба timestamp ISO (не None).
+## @purpose  Оба источника свежие (<25h) → status "ok", оба timestamp ISO (не None).
 # 🧪 TRAP[TEST] · get_backup_status_ok_both_fresh · Contract · Regression: свежие бэкапы не "ok"
-# · Scenario: postgres+app-data свежие (age 1h) → status "ok"; last_postgres_at/last_app_data_at
+# · Scenario: stamp+app-data свежие (age 1h) → status "ok"; last_postgres_at/last_app_data_at
 # ·   в ISO-формате; IMP:9 «Backup status: ok»
 # · Last fail: N/A (новый тест W4.6)
 # · Remove if: критерий свежести (<25h) меняется
 @ldd_trajectory
 def test_status_ok_both_fresh(tmp_path, monkeypatch, caplog) -> None:
-    """Оба лога свежие → "ok", ISO-формат timestamps."""
-    postgres = _touch_log(tmp_path / "backup" / "postgres.log", age_seconds=3600)
+    """Оба источника свежие → "ok", ISO-формат timestamps."""
+    postgres = _touch_log(tmp_path / "backup-spool" / "postgres" / ".last_verified", age_seconds=3600)
     app_data = _touch_log(tmp_path / "backup" / "app-data.log", age_seconds=1800)
     _point_env(monkeypatch, postgres, app_data)
 
@@ -106,6 +114,34 @@ def test_status_ok_both_fresh(tmp_path, monkeypatch, caplog) -> None:
 # endregion FUNC_test_status_ok_both_fresh
 
 
+# region FUNC_test_stamp_honesty_not_log_mtime
+## @purpose  REF-0009 honesty (BUG-0803 ≡ FAIL-0903): свежий ЛОГ postgres при отсутствующем
+##           .last_verified НЕ даёт "ok" — сигнал «бэкап удался», а не «cron запустился».
+# 🧪 TRAP[TEST] · stamp_honesty · NEGATIVE (R5) · Regression: mtime refresh'нутого лога маскировал упавший nightly
+# · Scenario: postgres.log свежий (cron дописал строку при старте упавшей задачи), но
+# ·   stamp-источникcollector'а указывает на отсутствующий .last_verified и других
+# ·   источников нет → status "unknown" (прежний детектор дал бы false-green "ok")
+# · Last fail: до REF-0009 collector читал BACKUP_POSTGRES_LOG → false-green dashboards
+# · Remove if: postgres freshness перестанет читаться из .last_verified
+@ldd_trajectory
+def test_stamp_honesty_not_log_mtime(tmp_path, monkeypatch, caplog) -> None:
+    """Свежий лог без stamp → НЕ ok (честная freshness-метрика)."""
+    _touch_log(tmp_path / "backup" / "postgres.log", age_seconds=60)  # cron-refreshed log
+    # Оба источника collector'а отсутствуют (stamp не записан — nightly упал)
+    _point_env(
+        monkeypatch, tmp_path / "backup-spool" / "postgres" / ".last_verified", tmp_path / "missing" / "app-data.log"
+    )
+
+    result = get_backup_status()
+
+    assert result["last_postgres_at"] is None, "Без .last_verified факт верифицированного дампа неизвестен"
+    assert result["status"] == "unknown", f"Свежий лог без stamp ≠ ok, got {result['status']}"
+    logger.info("[IMP:9][test] get_backup_status: stamp honesty — свежий лог не маскирует пропуск ✓")
+
+
+# endregion FUNC_test_stamp_honesty_not_log_mtime
+
+
 # region FUNC_test_status_stale_when_any_old
 ## @purpose  Любой лог ≥25h → "stale" (postgres свежий, app-data 30h назад).
 # 🧪 TRAP[TEST] · get_backup_status_stale · NEGATIVE (R5) · Regression: устаревший бэкап не "stale"
@@ -115,7 +151,7 @@ def test_status_ok_both_fresh(tmp_path, monkeypatch, caplog) -> None:
 @ldd_trajectory
 def test_status_stale_when_any_old(tmp_path, monkeypatch, caplog) -> None:
     """app-data ≥25h → status "stale"."""
-    postgres = _touch_log(tmp_path / "backup" / "postgres.log", age_seconds=3600)
+    postgres = _touch_log(tmp_path / "backup-spool" / "postgres" / ".last_verified", age_seconds=3600)
     app_data = _touch_log(tmp_path / "backup" / "app-data.log", age_seconds=_STALE_THRESHOLD_SECONDS + 3600)
     _point_env(monkeypatch, postgres, app_data)
 
@@ -182,7 +218,7 @@ def test_status_ok_one_missing_one_fresh(tmp_path, monkeypatch, caplog) -> None:
 @ldd_trajectory
 def test_status_read_error_graceful(tmp_path, monkeypatch, caplog) -> None:
     """OSError на чтении → None + WARN (graceful), оба → unknown, не raise."""
-    postgres = _touch_log(tmp_path / "backup" / "postgres.log")
+    postgres = _touch_log(tmp_path / "backup-spool" / "postgres" / ".last_verified")
     app_data = _touch_log(tmp_path / "backup" / "app-data.log")
     _point_env(monkeypatch, postgres, app_data)
 
@@ -204,17 +240,17 @@ def test_status_read_error_graceful(tmp_path, monkeypatch, caplog) -> None:
 
 
 # region FUNC_test_env_override_paths_used
-## @purpose  Env-оверрайд путей используется (не дефолтный /var/log/platform/backup/): файл вне
-##            дефолтной локации читается, status "ok".
+## @purpose  Env-оверрайд путей используется (не дефолтные /var/log и /var/lib/platform):
+##            файлы вне дефолтных локаций читаются, status "ok".
 # 🧪 TRAP[TEST] · get_backup_status_env_override · Contract (env paths) · Regression: env-пути игнорируются
-# · Scenario: BACKUP_*_LOG указывают на tmp-файлы (вне /var/log) → читаются → "ok";
-# ·   дефолтный /var/log/platform/backup/postgres.log НЕ существует (не влияет)
+# · Scenario: BACKUP_POSTGRES_STAMP/BACKUP_APP_DATA_LOG указывают на tmp-файлы → читаются → "ok";
+# ·   дефолтные пути хоста не задействованы (их нет на dev-машине)
 # · Last fail: N/A (новый тест W4.6)
 # · Remove if: env-конфигурируемость путей меняется
 @ldd_trajectory
 def test_env_override_paths_used(tmp_path, monkeypatch, caplog) -> None:
-    """Env-пути читаются (tmp), дефолтный /var/log путь не задействован."""
-    postgres = _touch_log(tmp_path / "custom-logs" / "pg.log", age_seconds=60)
+    """Env-пути читаются (tmp), дефолтные пути не задействованы."""
+    postgres = _touch_log(tmp_path / "custom" / ".last_verified", age_seconds=60)
     app_data = _touch_log(tmp_path / "custom-logs" / "app.log", age_seconds=120)
     _point_env(monkeypatch, postgres, app_data)
 
@@ -223,7 +259,7 @@ def test_env_override_paths_used(tmp_path, monkeypatch, caplog) -> None:
     assert result["status"] == "ok", "Env-указанные файлы читаются"
     read_logs = [r.message for r in caplog.records if str(postgres) in r.message]
     assert read_logs, "Ожидался лог чтения env-указанного пути"
-    logger.info("[IMP:9][test] get_backup_status: env-оверрайд путей работает (tmp-логи) ✓")
+    logger.info("[IMP:9][test] get_backup_status: env-оверрайд путей работает (tmp-источники) ✓")
 
 
 # endregion FUNC_test_env_override_paths_used

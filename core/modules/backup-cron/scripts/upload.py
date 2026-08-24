@@ -15,6 +15,8 @@ S3 upload script for backup-cron — uploads local spool files to Timeweb S3 buc
   - 3 retry attempts with ~30 min sleep between (03 §7)
   - botocore built-in retries (max_attempts=3) for transient network errors
   - File NEVER deleted from spool until confirmed S3 upload
+  - Confirmed upload writes durable ``<file>.uploaded`` sentinel BEFORE spool rm
+    (REF-0009: cleanup deletes only sentinel-confirmed files, BUG-0802)
   - IMP:9 logs for success and failure
   - All S3 credentials from env, never hardcoded
   - --config-source backup (default): uses BackupConfig (includes prefix)
@@ -866,6 +868,31 @@ def validate_cli_inputs(
 # endregion FUNC_validate_cli_inputs
 
 
+# region FUNC_write_uploaded_sentinel
+## @purpose  Durable confirmation marker ``<file>.uploaded`` после верифицированной
+##           загрузки (REF-0009, BUG-0802 ≡ DATA-502): cleanup удаляет spool-файлы
+##           ТОЛЬКО при наличии sentinel; spool_retry.py пропускает подтверждённое.
+## @io       ⇥ local_file: str → ⎋ str | None — путь sentinel'а или None при ошибке
+## @complexity 1
+def write_uploaded_sentinel(local_file: str) -> str | None:
+    """Create ``<local_file>.uploaded`` marker (best-effort; failure logged, not fatal).
+
+    Written BEFORE the spool-file removal so a crash between S3-confirm and rm
+    still leaves durable proof of upload (orphan sentinels are swept by cleanup).
+    """
+    sentinel = f"{local_file}.uploaded"
+    try:
+        pathlib.Path(sentinel).touch()
+    except OSError as exc:
+        logger.warning("[IMP:8][upload][sentinel] Cannot write sentinel %s: %s", sentinel, exc)
+        return None
+    logger.info("[IMP:8][upload][sentinel] Confirmation marker written: %s", sentinel)
+    return sentinel
+
+
+# endregion FUNC_write_uploaded_sentinel
+
+
 # region FUNC_remove_spool_file
 # @purpose  Remove local spool file after successful upload (DevPlan 118 E9 — merged from upload-s3.sh).
 # @io       (local_file) → None (best-effort; failure logged, not fatal — spool cleanup is post-success)
@@ -963,8 +990,20 @@ def main(
     )
 
     if success:
+        # REF-0009: durable .uploaded confirmation marker BEFORE spool rm —
+        # cleanup deletes only sentinel-confirmed files (BUG-0802 fix)
+        sentinel = write_uploaded_sentinel(args.local_file)
         # DevPlan 118 E9: spool rm после успеха (upload-s3.sh contract) — merged in Python
         remove_spool_file(args.local_file)
+        if sentinel is not None:
+            # Данные удалены — маркер-сирота подлежит sweep'у cleanup'ом; чистим сразу
+            try:
+                pathlib.Path(sentinel).unlink()
+                logger.info("[IMP:8][upload][sentinel] Sentinel removed with spool file: %s", sentinel)
+            except OSError as exc:
+                logger.warning(
+                    "[IMP:8][upload][sentinel] Orphan sentinel left for cleanup sweep: %s (%s)", sentinel, exc
+                )
 
     _generate_report(success, args.local_file, config["bucket"], full_key)
 

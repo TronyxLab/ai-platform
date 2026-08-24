@@ -44,3 +44,8 @@ resources:
 env_requires:
   - POSTGRES_PASSWORD
   - S3_BUCKET
+  # REF-0009 (SEC-0018): публичный age-ключ реципиента дампов; опционально —
+  # пусто → upload fail-closed SKIP (дамп остаётся в spool до починки конфигурации)
+  - name: AGE_RECIPIENT
+    type: string
+    required: false

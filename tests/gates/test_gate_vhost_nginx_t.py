@@ -9,12 +9,16 @@
 ## @scope    tests/gates/test_gate_vhost_nginx_t.py — gate test (pytest.mark.gate)
 ## @invariants
 ##   - Requires Docker CLI (skip test if not available — not fail)
-##   - nginx.conf must define limit_req_zone and resolver referenced by generated vhosts
+##   - nginx.conf must define limit_req_zone, resolver AND REF-0015 guards (limit_conn_zone/
+##     perip 20 + client timeouts) referenced by/inheritable to generated vhosts
 ##   - SSL cert paths in generated vhosts are patched to dev-certs for Docker validation
 ##   - Vhosts are validated BEFORE the script's own nginx_t_harness runs (belt-and-suspenders)
 ## @rationale  DevPlan 020 AC-D1-VHOST: generated vhosts must pass `nginx -t`. This gate
 ##             tests the full pipeline: node.yaml → add-vhost.sh → vhost files → Docker nginx -t.
 ## @changes  2026-07-20 | Created per DevPlan 020 Wave 3
+## @changes  2026-08-25 | REF-0015 — stub conf дополнен директивами resource guards:
+##             limit_conn_zone/perip 20 + client_header/body_timeout — nginx -t валидирует
+##             их синтаксис тем же прогоном (parity с production config/nginx.conf)
 ## @usecases  AC-D1-VHOST (nginx -t in Docker), AC-D1-HYPHEN (hyphenated project names)
 # endregion MODULE_CONTRACT
 
@@ -48,6 +52,8 @@ projects:
 """
 
 # ─── Minimal nginx.conf for Docker validation ────────────────────────
+# REF-0015: stub несёт те же guard-директивы, что production config/nginx.conf —
+# nginx -t валидирует их синтаксис тем же прогоном (parity production ↔ harness).
 NGINX_CONF = """\
 events {
     worker_connections 64;
@@ -57,6 +63,14 @@ http {
     default_type application/octet-stream;
 
     limit_req_zone $binary_remote_addr zone=dynamic:10m rate=10r/s;
+
+    # REF-0015 resource guards (parity config/nginx.conf)
+    limit_conn_zone $binary_remote_addr zone=perip:10m;
+    limit_conn perip 20;
+    client_header_timeout 10s;
+    client_body_timeout 10s;
+    send_timeout 30s;
+    keepalive_timeout 15s;
 
     resolver 127.0.0.11 valid=30s ipv6=off;
 

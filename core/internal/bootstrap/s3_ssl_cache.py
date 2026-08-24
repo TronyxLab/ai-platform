@@ -20,6 +20,8 @@
 ##   - S3 key pattern: s3://<bucket>/<prefix>/<domain>/{fullchain,privkey,chain,account,cert}.pem|tar.gz
 ##   - check cert uses openssl x509 -checkend 2592000 (>30 days), issuer validation, domain match
 ##   - download validates openssl parseability, LE issuer, domain match before restoring
+##   - REF-0008: privkey ОБЯЗАТЕЛЕН в download (partial restore без ключа = TLS outage при DR)
+##     + pubkey-match пары cert↔key ДО commit на диск (несогласованная пара не пишется никогда)
 ##   - account.tar.gz is the tar of acme.sh domain dir for domain persistence
 ## @rationale Eliminates root cause of DevPlan 052 bug (subshell credential propagation).
 ##            Eliminates two Tier-1 Strangler triggers (inline python3 heredoc in
@@ -76,6 +78,7 @@ from core.internal.shared.ssl_certs import (
     DEFAULT_EXPIRY_THRESHOLD,
     DEFAULT_OPENSSL_TIMEOUT,
     cert_is_valid,  # C9: единая комбинация «cert валиден» (DevPlan 118 C9)
+    cert_key_pair_matches,  # REF-0008: pubkey-match пары cert↔key до commit на диск
 )
 
 logger = logging.getLogger(__name__)
@@ -135,28 +138,31 @@ def _get_s3_client() -> object:
 
 # region FUNC_validate_cert
 ## @purpose  Validate a downloaded PEM cert — ДЕЛЕГИРУЕТ в shared/ssl_certs.cert_is_valid
-##           (DevPlan 118 C9, единая комбинация parseable+LE+domain match+expiry).
-##           Тонкий совместимый wrapper (S3-кеш семантика: expected_domains + check_expiry);
-##           РЕАЛИЗАЦИЯ живёт в shared — 0 дублей логики (AC-C9).
-## @io — ⇥ cert_path: str, domain: str, check_expiry: bool → ⎋ bool
+##           (DevPlan 118 C9, единая комбинация parseable+LE+pair-match+domain match+expiry).
+##           Тонкий совместимый wrapper (S3-кеш семантика: expected_domains + check_expiry +
+##           key_path); РЕАЛИЗАЦИЯ живёт в shared — 0 дублей логики (AC-C9).
+## @io — ⇥ cert_path: str, domain: str, check_expiry: bool, key_path: str | None → ⎋ bool
 ## @complexity — O(1) + openssl subprocess (в shared)
 ## @invariants
 ##   - Returns False on any validation failure (corrupt cert, wrong issuer, mismatch)
+##   - key_path задан → pair-match обязателен (REF-0008: несогласованная пара = invalid)
 ##   - Non-fatal: on openssl failure, returns False (never raises)
-def _validate_cert(cert_path: str, domain: str, check_expiry: bool = True) -> bool:
-    """Validate PEM cert at cert_path — delegating to shared cert_is_valid (DevPlan 118 C9)."""
+def _validate_cert(cert_path: str, domain: str, check_expiry: bool = True, *, key_path: str | None = None) -> bool:
+    """Validate PEM cert at cert_path — delegating to shared cert_is_valid (DevPlan 118 C9 + REF-0008)."""
     valid = cert_is_valid(
         cert_path,
         threshold=DEFAULT_EXPIRY_THRESHOLD,
         expected_domains=domain,
         check_expiry=check_expiry,
         timeout=DEFAULT_OPENSSL_TIMEOUT,
+        key_path=key_path,
     )
     if valid:
         logger.info(
-            "[IMP:9][s3_ssl_cache] Cert validated OK for %s (LE, domain match%s)",
+            "[IMP:9][s3_ssl_cache] Cert validated OK for %s (LE, domain match%s%s)",
             domain,
             ", expiry OK" if check_expiry else "",
+            ", pair match OK" if key_path else "",
         )
     return valid
 
@@ -446,7 +452,7 @@ def upload_cert(
 
 # region FUNC_download_cert
 ## @purpose  Download and validate cert from S3. Validates issuer (LE only), domain match,
-##           openssl integrity. Returns True if restored successfully.
+##           openssl integrity AND cert↔key pair match (REF-0008). Returns True if restored.
 ##           Port of the shell s3-ssl-cache _s3_download() + _s3_download_file().
 ## @io — ⇥ domain: str, cert_dir: str, acme_home: str, s3_bucket: str,
 ##       s3_prefix: str → ⎋ bool
@@ -455,8 +461,12 @@ def upload_cert(
 ##   - Validates with openssl before placing files on disk
 ##   - LE issuer check rejects mkcert/self-signed certs
 ##   - Domain match prevents serving wrong domain's cert
+##   - REF-0008 (1): privkey.pem ОБЯЗАТЕЛЕН — отсутствие в S3 = restore failed (partial restore
+##     без ключа давал «valid on disk» fullchain и TLS outage при DR-рестарте nginx)
+##   - REF-0008 (2): pubkey-match пары cert↔key ДО атомарного commit — несогласованная пара
+##     никогда не попадает на диск (crash между записями больше не создаёт broken state)
 ##   - Non-fatal: returns False on failure, never raises
-##   - Partial restore: privkey/chain download failure doesn't block full restore
+##   - chain/account — optional, best-effort (не блокируют restore пары)
 # region FUNC__plw_body_download_cert_2
 ## @purpose  Тело try-блока (PLW0717 extraction из download_cert) — семантика except не меняется.
 ## @io       ⇥ acme_home, domain, s3_base, tmp_account_path → ⎋ результат try-тела
@@ -474,6 +484,7 @@ def _plw_body_download_cert_2(
             # nosec B202 — extracted from trusted S3 bucket (platform-owned)
             tar.extractall(path=acme_home, filter="data")  # nosec B202 — extracted from trusted S3 bucket (platform-owned)
         logger.info("[IMP:9][s3_ssl_cache] acme.sh account data restored for %s", domain)
+    else:
         logger.info("[IMP:8][s3_ssl_cache] No account data in S3 for %s — skipping", domain)
 
 
@@ -490,10 +501,71 @@ def _plw_body_download_cert(domain: str, live_dir: str, s3_base: str, tmp_chain_
         with Path(tmp_chain_path).open("rb") as tf:
             _atomic_write(dest_chain, tf.read(), mode=0o644)
         logger.info("[IMP:9][s3_ssl_cache] chain.pem restored for %s", domain)
+    else:
         logger.info("[IMP:8][s3_ssl_cache] chain.pem not in S3 for %s — optional, skipping", domain)
 
 
 # endregion FUNC__plw_body_download_cert
+
+
+# region FUNC__restore_pair_body
+## @purpose  Тело try-блока download_cert (C901-экстракция, REF-0008): скачать+валидировать
+##           fullchain → privkey (обязателен) → pubkey-match → атомарный commit пары.
+## @io       ⇥ domain, live_dir, s3_base, tmp_fullchain_path, tmp_privkey_path → ⎋ bool (True = пара закоммичена)
+## @complexity O(1) + 2 S3 download + 3 openssl subprocess
+def _restore_pair_body(
+    domain: str,
+    live_dir: str,
+    s3_base: str,
+    tmp_fullchain_path: str,
+    tmp_privkey_path: str,
+) -> bool:
+    """Скачать и провалидировать пару cert+key; закоммитить только согласованную (REF-0008)."""
+    if not _download_s3_file(f"{s3_base}/fullchain.pem", tmp_fullchain_path):
+        logger.info("[IMP:8][s3_ssl_cache] No fullchain.pem in S3 for %s — cache miss", domain)
+        return False
+
+    # Validate with openssl (parseable + LE issuer + domain match; expiry off — restore-first)
+    if not _validate_cert(tmp_fullchain_path, domain, check_expiry=False):
+        logger.warning(
+            "[IMP:8][s3_ssl_cache] Downloaded fullchain.pem for %s failed validation",
+            domain,
+        )
+        return False
+
+    # REF-0008 (1): privkey обязателен — без него пара невосстановима (DR = TLS outage)
+    if not _download_s3_file(f"{s3_base}/privkey.pem", tmp_privkey_path):
+        logger.warning(
+            "[IMP:7][s3_ssl_cache] privkey.pem missing in S3 for %s — refusing partial restore "
+            "(cert without key cannot serve TLS)",
+            domain,
+        )
+        return False
+
+    # REF-0008 (2): pubkey-match ДО commit — несогласованная пара не пишется на диск
+    if not cert_key_pair_matches(tmp_fullchain_path, tmp_privkey_path):
+        logger.warning(
+            "[IMP:7][s3_ssl_cache] privkey does not match certificate for %s — refusing to restore mismatched pair",
+            domain,
+        )
+        return False
+
+    # All validations passed — atomic commit of the consistent pair
+    os.makedirs(live_dir, exist_ok=True)
+    dest_fullchain = os.path.join(live_dir, "fullchain.pem")
+    dest_privkey = os.path.join(live_dir, "privkey.pem")
+    with Path(tmp_fullchain_path).open("rb") as tf:
+        _atomic_write(dest_fullchain, tf.read(), mode=0o644)
+    with Path(tmp_privkey_path).open("rb") as tf:
+        _atomic_write(dest_privkey, tf.read(), mode=0o600)
+    logger.info(
+        "[IMP:9][s3_ssl_cache] Cert pair restored for %s (fullchain+privkey, pair matched)",
+        domain,
+    )
+    return True
+
+
+# endregion FUNC__restore_pair_body
 
 
 def download_cert(
@@ -504,13 +576,14 @@ def download_cert(
     s3_prefix: str = DEFAULT_SSL_CACHE_PREFIX,
 ) -> bool:
     """Download and validate cert from S3. Validates issuer (LE only), domain match,
-    openssl integrity. Returns True if restored successfully.
+    openssl integrity, and cert/key pair match. Returns True if restored successfully.
 
     ## @purpose — Port of the shell s3-ssl-cache _s3_download(). Downloads files to temp,
-    ##            validates with openssl, then moves to destination.
+    ##            validates with openssl (+pair-match, REF-0008), then commits atomically.
     ## @invariants
     ##   - fullchain.pem validated: openssl parseable, LE issuer, domain match
-    ##   - privkey.pem: downloaded but not validated (private key)
+    ##   - privkey.pem REQUIRED (REF-0008): missing in S3 → False (no partial restore)
+    ##   - pair pubkey-match required (REF-0008): mismatched pair never committed to disk
     ##   - chain.pem: optional, best-effort download
     ##   - account.tar.gz: extracted to acme_home/, non-fatal on failure
     """
@@ -525,54 +598,23 @@ def download_cert(
 
     logger.info("[IMP:8][s3_ssl_cache] Downloading cert for %s from S3", domain)
 
-    # ── Download fullchain.pem (required) ──
+    # ── Download + validate fullchain & privkey (REQUIRED pair, REF-0008) ──
     with tempfile.NamedTemporaryFile(suffix=".pem", delete=False) as tmp_fullchain:
         tmp_fullchain_path = tmp_fullchain.name
-
-    # ruff: ignore[PLW0717] — тело try присваивает имена, читаемые except/после — извлечение ломает видимость
-    try:
-        if not _download_s3_file(f"{s3_base}/fullchain.pem", tmp_fullchain_path):
-            logger.info("[IMP:8][s3_ssl_cache] No fullchain.pem in S3 for %s — cache miss", domain)
-            os.unlink(tmp_fullchain_path)
-            return False
-
-        # Validate with openssl
-        if not _validate_cert(tmp_fullchain_path, domain, check_expiry=False):
-            logger.warning(
-                "[IMP:8][s3_ssl_cache] Downloaded fullchain.pem for %s failed validation",
-                domain,
-            )
-            Path(tmp_fullchain_path).unlink()
-            return False
-
-        # Create live dir and restore fullchain.pem (atomic commit via shared canon — E5)
-        os.makedirs(live_dir, exist_ok=True)
-        dest_fullchain = os.path.join(live_dir, "fullchain.pem")
-        with Path(tmp_fullchain_path).open("rb") as tf:
-            _atomic_write(dest_fullchain, tf.read(), mode=0o644)
-        logger.info("[IMP:9][s3_ssl_cache] fullchain.pem restored for %s", domain)
-    except (OSError, FileNotFoundError, PermissionError) as e:
-        logger.warning("[IMP:7][s3_ssl_cache] Failed to restore fullchain.pem for %s: %s", domain, e)
-        if Path(tmp_fullchain_path).exists():
-            Path(tmp_fullchain_path).unlink()
-        return False
-
-    # ── Download privkey.pem ──
     with tempfile.NamedTemporaryFile(suffix=".pem", delete=False) as tmp_privkey:
         tmp_privkey_path = tmp_privkey.name
-    # ruff: ignore[PLW0717] — тело try присваивает имена, читаемые except/после — извлечение ломает видимость
+
+    restored = False
     try:
-        if _download_s3_file(f"{s3_base}/privkey.pem", tmp_privkey_path):
-            dest_privkey = os.path.join(live_dir, "privkey.pem")
-            with Path(tmp_privkey_path).open("rb") as tf:
-                _atomic_write(dest_privkey, tf.read(), mode=0o600)
-            logger.info("[IMP:9][s3_ssl_cache] privkey.pem restored for %s", domain)
-            logger.warning("[IMP:8][s3_ssl_cache] privkey.pem not in S3 for %s — proceeding without it", domain)
+        restored = _restore_pair_body(domain, live_dir, s3_base, tmp_fullchain_path, tmp_privkey_path)
     except (OSError, FileNotFoundError, PermissionError) as e:
-        logger.warning("[IMP:7][s3_ssl_cache] Failed to restore privkey.pem for %s: %s", domain, e)
+        logger.warning("[IMP:7][s3_ssl_cache] Failed to restore cert pair for %s: %s", domain, e)
     finally:
-        if Path(tmp_privkey_path).exists():
-            os.unlink(tmp_privkey_path)
+        for tmp_path in (tmp_fullchain_path, tmp_privkey_path):
+            if Path(tmp_path).exists():
+                Path(tmp_path).unlink()
+    if not restored:
+        return False
 
     # ── Download chain.pem (optional) ──
     with tempfile.NamedTemporaryFile(suffix=".pem", delete=False) as tmp_chain:
@@ -607,26 +649,68 @@ def download_cert(
 
 # endregion FUNC_download_cert
 
-
 # region FUNC_check_cert
-## @purpose  Check if valid cert exists in S3 (>30 days expiry, correct domain, LE issuer).
-##           Downloads fullchain.pem to temp, validates with openssl.
+## @purpose  Check if valid cert PAIR exists in S3 (>30 days expiry, correct domain, LE issuer,
+##           privkey present + pubkey-match — REF-0008). False при отсутствии/несогласованности
+##           privkey: download_cert всё равно отказал бы в restore (mandatory pair),
+##           pointless issue-attempt исключается.
 ## @io — ⇥ domain: str, s3_bucket: str, s3_prefix: str → ⎋ bool
-## @complexity — O(1) + S3 download + openssl validation
-## @returns True if valid LE cert >30 days exists in S3 for domain
+## @complexity — O(1) + 2 S3 downloads + openssl validation
 ## @invariants
-##   - Downloads fullchain.pem to temp file, deletes after validation
+##   - Downloads fullchain.pem + privkey.pem to temp files, deletes after validation
+##   - REF-0008: privkey missing/mismatching → False (cache считается невалидным)
 ##   - Non-fatal: returns False on any failure (S3 unavailable, cert expired, etc.)
+
+
+# region FUNC__check_pair_body
+## @purpose  Тело try-блока check_cert (C901-экстракция, REF-0008): валидация fullchain +
+##           обязательный privkey + pubkey-match кэша.
+## @io       ⇥ domain, s3_prefix, tmp_cert_path, tmp_key_path → ⎋ bool (True = валидная пара в S3)
+## @complexity O(1) + 2 S3 download + 4 openssl subprocess
+def _check_pair_body(domain: str, s3_prefix: str, tmp_cert_path: str, tmp_key_path: str) -> bool:
+    """Валидировать закэшированную пару: cert-валидность + privkey presence + pair-match."""
+    if not _download_s3_file(f"{s3_prefix}/{domain}/fullchain.pem", tmp_cert_path):
+        logger.info("[IMP:8][s3_ssl_cache] No cert in S3 for %s — cache miss", domain)
+        return False
+
+    # Validate cert: LE issuer, domain match, >30 days expiry
+    if not _validate_cert(tmp_cert_path, domain, check_expiry=True):
+        logger.info("[IMP:8][s3_ssl_cache] Cached cert for %s failed validation", domain)
+        return False
+
+    # REF-0008: privkey обязателен и должен соответствовать сертификату
+    if not _download_s3_file(f"{s3_prefix}/{domain}/privkey.pem", tmp_key_path):
+        logger.warning(
+            "[IMP:7][s3_ssl_cache] Cached privkey.pem missing for %s — cache invalid "
+            "(restore would fail on mandatory pair)",
+            domain,
+        )
+        return False
+    if not cert_key_pair_matches(tmp_cert_path, tmp_key_path):
+        logger.warning(
+            "[IMP:7][s3_ssl_cache] Cached pair mismatched for %s — cache invalid (REF-0008)",
+            domain,
+        )
+        return False
+
+    logger.info("[IMP:9][s3_ssl_cache] Valid cert pair in S3 for %s", domain)
+    return True
+
+
+# endregion FUNC__check_pair_body
+
+
 def check_cert(
     domain: str,
     s3_bucket: str = "",
     s3_prefix: str = DEFAULT_SSL_CACHE_PREFIX,
 ) -> bool:
-    """Check if valid cert exists in S3 (>30 days expiry, correct domain, LE issuer).
+    """Check if valid cert pair exists in S3 (>30 days, correct domain, LE issuer, key match).
 
-    ## @purpose — Port of the shell s3-ssl-cache _s3_check(). Downloads fullchain.pem to temp,
-    ##            validates with openssl (checkend 2592000s, issuer, domain match).
-    ## @returns True if valid LE cert >30 days exists in S3
+    ## @purpose — Port of the shell s3-ssl-cache _s3_check(). Downloads fullchain+privkey to
+    ##            temp, validates with openssl (checkend 2592000s, issuer, domain match,
+    ##            pubkey-match — REF-0008).
+    ## @returns True if valid LE cert pair >30 days exists in S3
     """
     if not s3_bucket:
         s3_bucket = os.environ.get("S3_BUCKET", platform_config.default_s3_bucket_sentinel())
@@ -636,26 +720,18 @@ def check_cert(
 
     logger.info("[IMP:8][s3_ssl_cache] Checking S3 cache for %s", domain)
 
-    # Download fullchain.pem to temp
+    # Download fullchain.pem + privkey.pem to temp
     with tempfile.NamedTemporaryFile(suffix=".pem", delete=False) as tmp_cert:
         tmp_cert_path = tmp_cert.name
+    with tempfile.NamedTemporaryFile(suffix=".pem", delete=False) as tmp_key:
+        tmp_key_path = tmp_key.name
 
     try:
-        s3_key = f"{s3_prefix}/{domain}/fullchain.pem"
-        if not _download_s3_file(s3_key, tmp_cert_path):
-            logger.info("[IMP:8][s3_ssl_cache] No cert in S3 for %s — cache miss", domain)
-            return False
-
-        # Validate cert: LE issuer, domain match, >30 days expiry
-        if _validate_cert(tmp_cert_path, domain, check_expiry=True):
-            logger.info("[IMP:9][s3_ssl_cache] Valid cert in S3 for %s", domain)
-            return True
-
-        logger.info("[IMP:8][s3_ssl_cache] Cached cert for %s failed validation", domain)
-        return False
+        return _check_pair_body(domain, s3_prefix, tmp_cert_path, tmp_key_path)
     finally:
-        if Path(tmp_cert_path).exists():
-            os.unlink(tmp_cert_path)
+        for tmp_path in (tmp_cert_path, tmp_key_path):
+            if Path(tmp_path).exists():
+                os.unlink(tmp_path)
 
 
 # endregion FUNC_check_cert

@@ -16,6 +16,7 @@
 ## @rationale  DevPlan 117 G T58.4 — extracted verbatim (_install_cron + migrate_cron_if_needed,
 ##            ~136 LOC) with all LDD logs and docstrings preserved — no behavior change (AC-G7).
 ## @changes  2026-08-01 · DevPlan 117 G T58.4 — extracted from cert_orchestrator.py
+##           2026-08-24 | REF-0008 В2 — s3_ssl_cache-путь renew-hook через shlex.quote (без ручных кавычек)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from __future__ import annotations
 import logging
 import os
 import pathlib
+import shlex
 import subprocess
 
 logger = logging.getLogger(__name__)
@@ -81,7 +83,8 @@ def install_acme_cron(acme_home: str = "/opt/acme.sh") -> bool:
         s3_cache_py = os.path.join(pathlib.Path(__file__).parent, "s3_ssl_cache.py")
         if os.path.isfile(s3_cache_py):
             subprocess.run(
-                [acme_sh, "--renew-hook", f"python3 '{s3_cache_py}' upload \"$Le_Domain\""],
+                # REF-0008: путь — shlex.quote (без ручной интерполяции кавычек)
+                [acme_sh, "--renew-hook", f'python3 {shlex.quote(s3_cache_py)} upload "$Le_Domain"'],
                 capture_output=True,
                 text=True,
                 timeout=CONVERGE_DOCKER_TIMEOUT,
@@ -152,7 +155,8 @@ def migrate_acme_cron_if_needed(acme_home: str = "/opt/acme.sh") -> bool:
         s3_cache_py = os.path.join(pathlib.Path(__file__).parent, "s3_ssl_cache.py")
         if os.path.isfile(s3_cache_py):
             subprocess.run(
-                [acme_sh, "--renew-hook", f"python3 '{s3_cache_py}' upload \"$Le_Domain\""],
+                # REF-0008: путь — shlex.quote (без ручной интерполяции кавычек)
+                [acme_sh, "--renew-hook", f'python3 {shlex.quote(s3_cache_py)} upload "$Le_Domain"'],
                 capture_output=True,
                 text=True,
                 timeout=CONVERGE_DOCKER_TIMEOUT,

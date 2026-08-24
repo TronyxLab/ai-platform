@@ -21,7 +21,7 @@
 ## @changes  2026-08-22 · T2.1 — GHCR-блок φ6/φ11 → общий _ghcr_auth_step
 ##           (_registry_step_ghcr_auth удалён — дубль); policy-блоки φ12 → _apply_policy_script
 ## @changes  2026-08-24 · REF-0005 (DevPlan 11 W0) — run-scoped hc_done: читатель находит
-##           <base>[.<ctx>].<run-id> формы; свип stale-маркеров на старте φ8/φ12 (unlink-on-init)
+##           `base`[.`ctx`].`run-id` формы; свип stale-маркеров на старте φ8/φ12 (unlink-on-init)
 # endregion MODULE_CONTRACT
 from __future__ import annotations
 
@@ -580,14 +580,14 @@ def _registry_step_llm_provision(core_dir: str) -> bool:
 
 
 # region FUNC__find_run_scoped_hc_markers
-## @purpose  REF-0005: найти run-scoped hc-done маркеры данного scope — `<stem>.<run-id>`,
-##           run-id = YYYYMMDDTHHMMSS-<pid> (писатель: deploy_orchestrator._set_hc_marker).
+## @purpose  REF-0005: найти run-scoped hc-done маркеры данного scope — `stem`.`run-id`,
+##           run-id = YYYYMMDDTHHMMSS-`pid` (писатель: deploy_orchestrator._set_hc_marker).
 ##           stem — ПОЛНАЯ база маркера БЕЗ run-id (уже с суффиксом контекста при наличии):
 ##           orchestrator_metrics.hc_marker_path(context); единый SoT читателя и писателя.
 ## @io       ⇥ stem: str (полный путь-база), glob_fn DI → ⎋ list[str] (отсортированные пути)
 ## @complexity O(M) где M = число маркеров в state-dir
 ## @invariants
-##   - Формат run-id однозначен: контекстные имена (kebab/org) не матчатся \d{8}T\d{6}-\d+
+##   - Формат run-id однозначен: контекстные имена (kebab/org) не матчатся шаблону 8digits-T-6digits-digits
 ##   - Scope задаётся stem'ом: чужие контексты не попадают в результат (T9.19)
 _HC_RUN_ID_RE = re.compile(r"\d{8}T\d{6}-\d+$")
 
@@ -669,7 +669,7 @@ def _sweep_stale_hc_markers(
 ## @complexity O(M * R) where M = modules, R = retries
 ## @invariants
 ##   - `.hc_done_in_deploy` + суффикс контекста (per-context, T9.19) → skip + unlink (не issue)
-##   - REF-0005: run-scoped маркеры текущего прогона (<base>[.<ctx>].<run-id>) → skip + unlink;
+##   - REF-0005: run-scoped маркеры текущего прогона (`base`[.`ctx`].`run-id`) → skip + unlink;
 ##     свип на старте φ8/φ12 гарантирует, что найденный маркер — этого прогона
 ##   - node.yaml отсутствует → WARN + True
 ##   - Сбой healthchecks → WARN + True (best-effort)

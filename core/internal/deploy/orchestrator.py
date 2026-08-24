@@ -6,8 +6,8 @@ DeployOrchestrator — единый typed фасад для всех deploy-оп
 T3.1: rollback-кластер (DeployStatus/OrchestratorDeployResult/RollbackMixin) → deploy/rollback.py
 (re-export сохраняет API: старые имена живут, DeployOrchestrator(RollbackMixin)).
 """
-# GREP_SUMMARY: deploy-orchestrator, facade, deploy, rollback, status, remove, deploy-many, audit, delivery-channel
-# STRUCTURE: ▶ DeployOrchestrator(deploy|deploy_many|rollback|status|remove) → ┌DeliveryChannel deliver┐ → ┌DeployEngine deploy_compose┐ → ┌DeployHistory create_snapshot┐ → ┌AuditLogger log┐ → ┌hooks post_deploy_chain┐ → ⎋ OrchestratorDeployResult
+# GREP_SUMMARY: deploy-orchestrator, facade, deploy, rollback, status, remove, deploy-many, audit, delivery-channel, l1-pre-apply-gate
+# STRUCTURE: ▶ DeployOrchestrator(deploy|deploy_many|rollback|status|remove) → ◇ L1 pre-apply gate (verify_contracts l1_only, REF-0006) → ┌DeliveryChannel deliver┐ → ┌DeployEngine deploy_compose┐ → ┌DeployHistory create_snapshot┐ → ┌AuditLogger log┐ → ┌hooks post_deploy_chain┐ → ⎋ OrchestratorDeployResult
 # region MODULE_CONTRACT
 ## @purpose  Unified deploy orchestrator — single typed facade for all deploy operations.
 ##           Eliminates 6+ parallel deploy paths by providing deploy()/deploy_many()/rollback()/status()/remove().
@@ -27,6 +27,9 @@ T3.1: rollback-кластер (DeployStatus/OrchestratorDeployResult/RollbackMix
 ##   7. OrchestratorDeployResult: Union[[DEPLOYED, FAILED, PARTIAL, SKIPPED], error_info, duration_s]
 ##   8. Healthcheck после deploy через HealthcheckPoller (один раз, не дублируется)
 ##   9. Аудит через AuditLogger (единый формат, shared/audit_logger)
+##  10. L1 pre-apply gate (REF-0006, DevPlan 11 В2): verify_contracts(l1_only=True) на
+##      project_dir ДО доставки/compose-up — violation → FAILED, контейнеры не запускаются
+##      (TOCTOU-закрытие: гейт исполняется в том же процессе, что и compose)
 ## @rationale DevPlan 089 — устраняет дублирование бизнес-логики в 6+ путях деплоя.
 ##            Багфикс в одном пути применяется ко всем через единый DeployOrchestrator.
 ## @changes 2026-07-30 | DevPlan 089 T6 — Created
@@ -40,6 +43,9 @@ T3.1: rollback-кластер (DeployStatus/OrchestratorDeployResult/RollbackMix
 ##           2026-08-24 | REF-0004 (DevPlan 11 В1) — rollback-контур: якорь previous_image
 ##           в снапшоте; skip double-rollback при engine rollback_performed; unhealthy →
 ##           ROLLED_BACK c одним re-verify (rollback_verified); require_healthy-цель отката
+##           2026-08-25 | REF-0006 (DevPlan 11 В2) — L1 pre-apply gate: verify_project_contracts
+##           (l1_only=True) внутри deploy() ПЕРЕД _apply_deploy; DI-шов pre_apply_gate
+##           (None → реальный verify; fail-closed при ошибке гейта)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -63,6 +69,11 @@ from core.internal.deploy.hooks import run_post_deploy_chain
 # T3.1: rollback-кластер вынесен в deploy/rollback.py — re-export старых имён (старые имена живут):
 # DeployStatus/OrchestratorDeployResult остаются доступными из core.internal.deploy.orchestrator.
 from core.internal.deploy.rollback import DeployStatus, OrchestratorDeployResult, RollbackMixin
+
+# REF-0006 (DevPlan 11 В2): L1 pre-apply gate — тот же K3-канон verify_contracts, l1_only режим
+# (ТОЛЬКО L1-статика, без docker-L2 латентности). НЕ дублирование receive-гейта (176 A.2):
+# receive гейтит staging ДО копирования, этот — target_dir в момент compose (TOCTOU-закрытие).
+from core.internal.deploy.verify_contracts import VerifyReport, verify_project_contracts
 
 # W4a (DevPlan 160 T4.1): AppConfig — ленивый резолв PROJECTS_BASE (import-time env убран).
 from core.internal.shared.app_config import AppConfig
@@ -89,6 +100,20 @@ logger = logging.getLogger(__name__)
 
 # 170 W4-B3: DeployAuditLogger вынесен в deploy/audit/logger.py (тонкий адаптер
 # DeployOrchestrator → shared write_audit_entry). Импортируется module-level (строка 47).
+
+
+# region FUNC__default_pre_apply_gate
+## @purpose  Дефолтный L1 pre-apply gate (REF-0006, DevPlan 11 В2): verify_contracts l1_only
+##           на каталоге проекта ДО доставки/compose-up. audit_project_name — реальное имя
+##           проекта (block-события в аудит-трейле).
+## @io       ⇥ project_dir: str, project_name: str → ⎋ VerifyReport
+## @complexity O(S) где S = размер compose (чистая статика, 0 docker-subprocess)
+def _default_pre_apply_gate(project_dir: str, project_name: str) -> VerifyReport:
+    """L1-only pre-apply gate on the target project dir (REF-0006)."""
+    return verify_project_contracts(Path(project_dir), l1_only=True, audit_project_name=project_name)
+
+
+# endregion FUNC__default_pre_apply_gate
 
 
 # 📝 TRAP[DEBT] · 2026-08-22 · LO · _try_json_loads — мёртвый код (0 вызовов/импортов в core/+tests/)
@@ -172,6 +197,7 @@ class DeployOrchestrator(RollbackMixin):
         compose_deployer: Callable[[str, str, str], bool] | None = None,
         compose_rollback: Callable[[str, str, dict[str, object]], bool] | None = None,
         previous_image_resolver: Callable[[str, str], str] | None = None,
+        pre_apply_gate: Callable[[str, str], VerifyReport] | None = None,
     ):
         # W4a: ленивый env-фолбэк (None → AppConfig.from_env().projects_base) — тот же канон
         # PROJECTS_BASE → /opt/projects, но на момент конструирования, не импорта.
@@ -189,6 +215,10 @@ class DeployOrchestrator(RollbackMixin):
         # REF-0004: DI-резолвер якоря previous_image (тесты); None → значение берётся из
         # результата реального engine.deploy (ServiceDeployResult.previous_image, stash ниже).
         self._previous_image_resolver = previous_image_resolver
+        # REF-0006 (DevPlan 11 В2): DI-шов L1 pre-apply gate (прецедент TRAP[DI-SEAM] 167 D3);
+        # None → _default_pre_apply_gate (реальный verify_contracts l1_only). Production-caller'ы
+        # (ReceiveFlow/context_deployer/CLI) шов НЕ передают → гейт активен всегда.
+        self._pre_apply_gate = pre_apply_gate
         # 🧐 TRAP[DECISION] · 2026-08-24 · — · Сигнал-канал от последнего engine.deploy (REF-0004)
         # · Rejected: менять сигнатуру compose-DI-шва на ServiceDeployResult (ломает существующие
         # ·   тесты-фейки Callable[..., bool]) / второй DI-параметр-engine
@@ -301,6 +331,11 @@ class DeployOrchestrator(RollbackMixin):
                 return failure
             assert payload is not None  # контракт _prepare_deploy: failure=None ⇒ payload собран
 
+            # ── Step 1.5 (REF-0006): L1 pre-apply gate — ДО доставки/compose-up ──
+            gate_failure = self._run_l1_pre_apply_gate(project_name, channel, project_dir, start)
+            if gate_failure is not None:
+                return gate_failure
+
             # ── Step 2: _apply (deliver + compose up) ──
             apply_result = self._apply_deploy(project_name, channel, version, service, project_dir, payload, start)
             if apply_result is not None:
@@ -342,6 +377,85 @@ class DeployOrchestrator(RollbackMixin):
             lock.release()
 
     # endregion FUNC_deploy
+
+    # region FUNC__run_l1_pre_apply_gate
+    ## @purpose  REF-0006 (DevPlan 11 В2): L1 pre-apply gate перед _apply_deploy — единственная
+    ##           точка между maintainer'ом проекта и compose от root в deploy-пути (receive-гейт
+    ##           176 A.2 гейтит staging; здесь — target_dir в момент compose, TOCTOU-закрытие).
+    ##           Violation → FAILED + audit; ошибка самого гейта → fail-CLOSED (блок, не пропуск:
+    ##           security-гейт, падающий в open = дыра). dry_run до гейта не доходит (SKIPPED в prepare).
+    ## @io       ⇥ project_name: str, channel: DeliveryChannel, project_dir: str, start: float
+    ##           → ⎋ OrchestratorDeployResult | None (None = gate PASS → продолжаем)
+    ## @complexity O(S) где S = размер compose (статика)
+    ## @invariants
+    ##   - Blocking violation → контейнеры НЕ запускаются, delivery НЕ выполняется
+    ##   - Любое исключение гейта трактуется как блок (fail-closed) с честным error_info
+    def _run_l1_pre_apply_gate(
+        self,
+        project_name: str,
+        channel: DeliveryChannel,
+        project_dir: str,
+        start: float,
+    ) -> OrchestratorDeployResult | None:
+        """Run the L1 pre-apply gate (REF-0006); return FAILED result on block, None on pass."""
+        gate_fn = self._pre_apply_gate if self._pre_apply_gate is not None else _default_pre_apply_gate
+        try:
+            report = gate_fn(project_dir, project_name)
+        except Exception as e:  # ruff: ignore[BLE001] · ## noqa: EXC — except-тело best-effort (audit/log non-raising), вердикт гейта — fail-closed блок
+            logger.error(
+                "[IMP:10][DeployOrchestrator][l1-gate] Gate ERROR for %s (fail-closed): %s",
+                project_name,
+                e,
+            )
+            self.audit_logger.log(
+                operation="deploy",
+                project=project_name,
+                channel=channel.__class__.__name__,
+                result="FAILED",
+                duration_s=time.monotonic() - start,
+                error=f"L1 pre-apply gate error (fail-closed): {e}",
+            )
+            return self._result(
+                DeployStatus.FAILED,
+                project_name,
+                channel.__class__.__name__,
+                error_info=f"L1 pre-apply gate failed closed (REF-0006): {e}",
+                duration_s=time.monotonic() - start,
+            )
+        if report.has_blocking_violation():
+            n_block = sum(1 for f in report.findings if f.severity == "block")
+            blocked_ids = sorted({f.contract_id for f in report.findings if f.severity == "block"})
+            logger.error(
+                "[IMP:10][DeployOrchestrator][l1-gate] BLOCKED %s (%d violations: %s) — "
+                "delivery/compose NOT executed (REF-0006):\n%s",
+                project_name,
+                n_block,
+                ",".join(blocked_ids),
+                report.format_for_ssh(),
+            )
+            self.audit_logger.log(
+                operation="deploy",
+                project=project_name,
+                channel=channel.__class__.__name__,
+                result="FAILED",
+                duration_s=time.monotonic() - start,
+                error=f"L1 pre-apply gate blocked ({n_block} violations: {','.join(blocked_ids)})",
+            )
+            return self._result(
+                DeployStatus.FAILED,
+                project_name,
+                channel.__class__.__name__,
+                error_info=(
+                    f"[PRACTICES:BLOCK] L1 pre-apply gate blocked '{project_name}' "
+                    f"({n_block} violations: {','.join(blocked_ids)}) — containers NOT started "
+                    f"(REF-0006/C1)"
+                ),
+                duration_s=time.monotonic() - start,
+            )
+        logger.info("[IMP:9][DeployOrchestrator][l1-gate] PASS project=%s (l1_only)", project_name)
+        return None
+
+    # endregion FUNC__run_l1_pre_apply_gate
 
     # region FUNC__prepare_deploy
     ## @purpose  E2 deploy step 1 (PREPARE): validate project_name → dry-run short-circuit →

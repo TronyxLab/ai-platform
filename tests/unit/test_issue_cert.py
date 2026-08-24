@@ -83,7 +83,11 @@ class AcmeFakeRunner:
 
 
 def _make_ctx(tmp_path: Path, runner: AcmeFakeRunner, env: dict | None = None, **kw) -> issue_cert.IssueContext:
-    """Собрать IssueContext с tmp-путями (acme home, letsencrypt dir, tmp_dir) + mock acme.sh."""
+    """Собрать IssueContext с tmp-путями (acme home, letsencrypt dir, tmp_dir) + mock acme.sh.
+
+    REF-0008: sleep_fn по умолчанию — мгновенный no-op (backoff между retry-attempts
+    не тормозит unit-прогон; реальный time.sleep только в prod, sleep_fn=None).
+    """
     acme_home = tmp_path / "acme"
     acme_home.mkdir(parents=True, exist_ok=True)
     acme_sh = acme_home / "acme.sh"
@@ -96,6 +100,7 @@ def _make_ctx(tmp_path: Path, runner: AcmeFakeRunner, env: dict | None = None, *
         acme_home=str(acme_home),
         letsencrypt_dir=str(tmp_path / "le"),
         tmp_dir=str(tmp_path),
+        sleep_fn=lambda _seconds: None,
         **kw,
     )
 
@@ -189,7 +194,7 @@ def test_auto_mode_falls_back_to_http01(caplog, tmp_path) -> None:
     logger.critical("[IMP:9][test] AUTO fallback: DNS-01 fail → HTTP-01 standalone")
 
 
-# endregion
+# endregion DNS-01 vs HTTP-01 selection
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -245,7 +250,7 @@ def test_webnames_key_shredded_and_not_leaked(caplog, tmp_path) -> None:
     logger.critical("[IMP:9][test] webnames shred — ключ уничтожен, 0 утечек (лог/вывод/диск)")
 
 
-# endregion
+# endregion webnames shred protocol + inject
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -299,7 +304,7 @@ def test_dns01_succeeds_after_retry(caplog, tmp_path) -> None:
     logger.critical("[IMP:9][test] retry recovery: 1-я fail, 2-я success → True")
 
 
-# endregion
+# endregion Retry on acme.sh failure
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -392,7 +397,7 @@ def test_non_le_cert_triggers_reissue(caplog, tmp_path) -> None:
     logger.critical("[IMP:9][test] R5: non-LE cert → re-issue (mkcert P0 guard)")
 
 
-# endregion
+# endregion R5 negatives
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -458,4 +463,4 @@ def test_run_missing_domain_fails(caplog, tmp_path) -> None:
     logger.critical("[IMP:9][test] run(): missing PLATFORM_DOMAIN → exit 1")
 
 
-# endregion
+# endregion run() executor (env-контракт, project certs)

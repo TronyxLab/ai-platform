@@ -60,7 +60,7 @@ agent-check blocking=0, check-manifests GREEN. node-lifecycle.sh ужат до 7
 
 | Статус | REF | Единица | Заметка |
 |--------|-----|---------|---------|
-| [ ] | REF-0006 | L1 deny-set + gate в DeployOrchestrator.deploy | negative-тесты TEST-05 |
+| [x] | REF-0006 | L1 deny-set + gate в DeployOrchestrator.deploy | dangerous-volumes (socket-deny-set, abs-binds вне allowlist, named-volumes) + host-mode-keys (network_mode/pid/userns/cgroup:host, cgroup_parent/sysctls); l1_only parse-fail → БЛОК; pre-apply gate в deploy() перед _apply_deploy (DI pre_apply_gate, fail-closed); SEC-0013 residual TRAP у контракта; R5-негативы C1-входов + TEST-05 traversal receive/remove ×8; 44+20 тестов зелёные |
 | [ ] | REF-0001 | build&push job в шаблоны + fix adopter image_tag | блок наследует SHA-pins REF-0012 |
 | [ ] | REF-0008 | TLS-бандл (6 независимых подпунктов) | отмечать подпункты здесь по мере закрытия |
 | [ ] | REF-0009 | backup truth (sentinel/stamp/encrypt/restore) | precondition restore-drill В4 |
@@ -103,3 +103,4 @@ agent-check blocking=0, check-manifests GREEN. node-lifecycle.sh ужат до 7
 |------|--------------------|--------|--------------------------------------|
 | 2026-08-24 | — | планирование | DevPlan 11 создан; леджер инициализирован |
 | 2026-08-24 | Волна 0 (все 7 единиц) | closed | 7 параллельных Agent Manager-сессий на Ox Alpha; commits d331e01+aaa209d; make check/agent-check/check-manifests чистые; drills В4 ждут test-VPS; REF-0007 staging node-update — перед продом |
+| 2026-08-25 | Волна 2: REF-0006 | done (в общем дереве с REF-0008/0009-сессиями) | L1 deny-set + gate в deploy(); тесты: test_verify_contracts 38, test_verify_contracts_orchestrator_gate 6 (новый), dispatch TEST-05 ×8; make check TEST_FILE ×5 зелёные; agent-check/check-diff по СВОИМ файлам чистые — 2 остаточных фейла diff'а принадлежат незакоммиченному REF-0008 (cert_orchestrator.py:995 invalid noqa) / REF-0009 (doc-headers их новых файлов); pre-existing FBT/SLF-строки в изменённых файлах (receive_flow:174/737, orchestrator:563, rollback_contour:334) не тронуты (freeze/signature/advisory-прецедент) |

@@ -101,10 +101,21 @@ def _make_orch(
         "healthcheck_poller": poller,
         "compose_deployer": compose_deployer,
         "compose_rollback": compose_rollback,
+        # REF-0006: L1 pre-apply gate здесь НЕ тестируется (см.
+        # test_verify_contracts_orchestrator_gate.py); characterization rollback-контура
+        # использует минимальные non-contractual compose — гейт инжектится пермиссивным.
+        "pre_apply_gate": _permissive_gate,
     }
     if previous_image_resolver is not None:
         kwargs["previous_image_resolver"] = previous_image_resolver
     return DeployOrchestrator(**kwargs)  # type: ignore[arg-type]
+
+
+def _permissive_gate(project_dir: str, project_name: str):
+    """Пермиссивный L1-гейт (DI REF-0006): 0 findings — compose тестов вне контрактов L1."""
+    from core.internal.deploy.verify_contracts import VerifyReport
+
+    return VerifyReport(project_dir=Path(project_dir), state="baseline", findings=())
 
 
 def _audit_rows(path: Path) -> list[dict[str, object]]:

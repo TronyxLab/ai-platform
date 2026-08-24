@@ -60,9 +60,13 @@ def _count_non_comment_lines(content: str) -> int:
 
 @ldd_trajectory
 def test_deploy_yml_calls_reusable_workflow(caplog) -> None:
-    """Template deploy.yml must be ≤40 lines, ≤15 non-comment, and use __ORG_NAME__/ai-platform/....
+    """Template deploy.yml must be ≤120 lines, ≤85 non-comment, and use __ORG_NAME__/ai-platform/....
 
     ── Scenario: Each template deploy.yml checked for size and reusable workflow reference ──
+    ── 🧐 TRAP[TEST] · 2026-08-25 · SUPERSEDED CAP · прежний лимит 40/15 строк защищал
+    · «тонкий delegating workflow»; REF-0001 (11-DevPlan W2) легитимно добавил job
+    · build-and-push (SHA-pinned actions, packages:write) — канал сборки проектов.
+    · Remove if: build&push уходит из шаблона в отдельный workflow — вернуть 40/15.
     """
     deploy_ymls = _get_template_deploy_ymls()
     assert deploy_ymls, f"No deploy.yml files found under {_TEMPLATES_DIR / 'template-*/.github/workflows/'}"
@@ -80,8 +84,10 @@ def test_deploy_yml_calls_reusable_workflow(caplog) -> None:
             non_comment,
         )
 
-        assert len(lines) <= 40, f"{template_name}: {len(lines)} lines (max 40)"
-        assert non_comment <= 15, f"{template_name}: {non_comment} non-comment lines (max 15)"
+        assert len(lines) <= 120, f"{template_name}: {len(lines)} lines (max 120, REF-0001 build&push job)"
+        assert non_comment <= 85, f"{template_name}: {non_comment} non-comment lines (max 85)"
+        # REF-0001: канал сборки обязателен в шаблоне (проект не может задеплоиться без образа)
+        assert "build-and-push" in content, f"{template_name}: missing build-and-push job (REF-0001 канал)"
         assert "{{ORG_NAME}}/ai-platform/.github/workflows/deploy-project.yml" in content, (
             f"{template_name}: missing {{{{ORG_NAME}}}}/ai-platform/.github/workflows/deploy-project.yml reference"
         )

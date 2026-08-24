@@ -186,3 +186,171 @@ def test_vhost_template_health_location_safe() -> None:
         "D20 regression: set $upstream отсутствует в location /health"
     )
     logger.info("[IMP:9][test_templates] vhost /health template safe (D19/D20) — OK")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# REF-0001 (meta-refactoring W2): build&push канал в шаблонных workflows
+# ═══════════════════════════════════════════════════════════════════════
+
+# Полный SHA (40 hex) — форма пина внешних actions (гейт test_gate_workflow_sha_pins)
+_SHA40_RE = re.compile(r"[0-9a-f]{40}")
+
+
+def _template_deploy_wf_path(ptype: str) -> pathlib.Path:
+    """Path к шаблонному workflow проекта для заданного типа шаблона."""
+    return repo_root() / "templates" / f"template-{ptype}" / ".github" / "workflows" / "deploy.yml"
+
+
+def _job_block(text: str, job_name: str) -> str:
+    """Extract top-level job block ('  <name>:' до следующего ключа той же глубины).
+
+    ## @purpose — Текстовый экстрактор job-блока: сырой шаблон НЕ валидный YAML
+    ##            ({{ORG_NAME}} парсится как flow mapping), поэтому сканируем текст.
+    ## @io — ⇥ text workflow, job_name → ⎋ текст блока или ''
+    """
+    m = re.search(rf"(?ms)^  {re.escape(job_name)}:[^\S\n]*\n.*?(?=^  \S|\Z)", text)
+    return m.group(0) if m else ""
+
+
+# region FUNC__build_job_violations
+def _build_job_violations(job: str) -> list[str]:
+    """Контракт содержимого job'а build-and-push (шаги/auth/tags/permissions).
+
+    ## @io — ⇥ job: str текст блока → ⎋ violations
+    """
+    violations: list[str] = []
+    for marker, what in (
+        ("actions/checkout@", "checkout step"),
+        ("docker/setup-buildx-action@", "setup-buildx step"),
+        ("docker/login-action@", "registry-login step"),
+        ("docker/build-push-action@", "build-push step"),
+    ):
+        if marker not in job:
+            violations.append(f"build-and-push: нет {what} ({marker})")
+    if "ghcr.io" not in job or "secrets.GITHUB_TOKEN" not in job:
+        violations.append("build-and-push: registry-auth неполон (ghcr.io + secrets.GITHUB_TOKEN)")
+    if "${{ github.sha }}" not in job or ":latest" not in job:
+        violations.append("build-and-push: tags без '${{ github.sha }}' и/или ':latest' — receive тянет строго :<sha>")
+    if "packages: write" not in job:
+        violations.append("build-and-push: нет permissions packages:write")
+    return violations
+
+
+# endregion FUNC__build_job_violations
+
+
+# region FUNC__scan_uses_sha_lines
+def _scan_uses_sha_lines(text: str) -> list[str]:
+    """SHA-form всех внешних uses — построчно (version-комментарий теряется при YAML-парсе;
+    полная проверка формы с комментариями — scan_uses_sha_pins из гейта REF-0012).
+
+    ## @io — ⇥ text workflow → ⎋ violations
+    """
+    violations: list[str] = []
+    for lineno, line in enumerate(text.splitlines(), 1):
+        stripped = line.strip()
+        if not stripped.startswith("uses:"):
+            continue
+        ref = stripped[len("uses:") :].strip().split("#", 1)[0].strip()
+        if ref.startswith("./"):
+            continue
+        _, _, tag = ref.rpartition("@")
+        if tag and not _SHA40_RE.fullmatch(tag) and "{{ORG_NAME}}" not in ref:
+            violations.append(f"uses не SHA-pinned (строка {lineno}): {ref}")
+    return violations
+
+
+# endregion FUNC__scan_uses_sha_lines
+
+
+# region FUNC__scan_build_channel
+def _scan_build_channel(text: str) -> list[str]:
+    """Detector REF-0001: контракт build&push-канала шаблонного deploy.yml.
+
+    ▶ ┌text┐ → ◇ job build-and-push ∋ checkout/buildx/login/build-push steps →
+    ◇ registry-auth (ghcr.io + GITHUB_TOKEN) → ◇ tags ∋ <sha>+latest →
+    ◇ packages:write → ◇ deploy.needs ∋ build-and-push → ⎋ list[str] violations
+
+    ## @purpose — Детектор канала сборки образов проектов: engine на ноде тянет строго
+    ##            ghcr.io/<org>/<proj>:<sha>; без этого job первый деплой умирает
+    ##            (5 неудачных pull → PlatformFatalError, карточка REF-0001).
+    ## @io — ⇥ text workflow → ⎋ violations (пустой = PASS)
+    ## @complexity — O(L) строк; декомпозирован на _build_job_violations +
+    ##              _scan_uses_sha_lines (C901 ≤10, agent-check)
+    ## @invariants
+    ##   - Все 4 шага канала обязательны (checkout/buildx/login/build-push)
+    ##   - Тег ${{ github.sha }} обязателен: receive передаёт github.sha, compose читает IMAGE_TAG
+    ##   - packages:write только в build-job (минимум прав, REF-0012 hygiene)
+    """
+    job = _job_block(text, "build-and-push")
+    if not job:
+        return ["нет job 'build-and-push' — канал сборки образов отсутствует (REF-0001)"]
+    violations = _build_job_violations(job)
+    deploy_job = _job_block(text, "deploy")
+    if not deploy_job:
+        violations.append("нет job 'deploy' — делегация в reusable workflow потеряна")
+    elif "build-and-push" not in deploy_job.split("uses:", 1)[0]:
+        violations.append("deploy: needs не содержит build-and-push (деплой до пуша образа)")
+    violations.extend(_scan_uses_sha_lines(text))
+    return violations
+
+
+# endregion FUNC__scan_build_channel
+
+
+# 🧪 TRAP[TEST] · 2026-08-24 · Regression · build&push channel (REF-0001, FAIL-0801)
+# · Scenario: scaffolded проект без build-job — первый деплой гарантированно умирает
+#   (engine тянет несуществующий ghcr.io/<org>/<proj>:<sha>)
+# · Last fail: N/A (канал создаётся этим REF; до него шаблон содержал только delegating job)
+# · Remove if: модель доставки образов проектов меняется (не push-в-GHCR)
+@pytest.mark.parametrize("ptype", TEMPLATE_TYPES, ids=["template-backend", "template-frontend"])
+def test_template_deploy_wf_build_and_push_channel(ptype: str, caplog: pytest.LogCaptureFixture) -> None:
+    """Оба шаблона: build&push job полный, все actions SHA-pinned, deploy needs build."""
+    caplog.set_level(logging.INFO)
+    wf = _template_deploy_wf_path(ptype)
+    assert wf.exists(), f"{wf} отсутствует"
+    text = wf.read_text(encoding="utf-8")
+    logger.info("[IMP:7][test_templates][REF-0001] scanning %s", wf)
+
+    # Форма SHA-pins с version-комментариями — переиспользуем детектор гейта REF-0012
+    from tests.gates.test_gate_workflow_sha_pins import scan_uses_sha_pins
+
+    sha_violations = scan_uses_sha_pins(wf)
+    channel_violations = _scan_build_channel(text)
+
+    logger.info(
+        "[IMP:8][test_templates][REF-0001] %s: sha_violations=%d channel_violations=%d",
+        ptype,
+        len(sha_violations),
+        len(channel_violations),
+    )
+    assert not sha_violations, f"SHA-pin violations в {wf}: {sha_violations}"
+    assert not channel_violations, f"REF-0001 violations в {wf}:\n" + "\n".join(channel_violations)
+    logger.info("[IMP:9][test_templates][REF-0001] %s: build&push канал полный (4 шага, SHA-pins, needs)", ptype)
+
+
+# 🧪 TRAP[TEST] · 2026-08-24 · NEGATIVE (R5) · build-channel detector — исходное состояние до REF-0001
+# · Last fail: templates/*/deploy.yml до REF-0001 — только delegating job, build-and-push отсутствовал
+# · Remove if: детектор _scan_build_channel удалён вместе с позитивным тестом
+@pytest.mark.parametrize("ptype", TEMPLATE_TYPES, ids=["template-backend", "template-frontend"])
+def test_template_deploy_wf_build_channel_negative(ptype: str, caplog: pytest.LogCaptureFixture) -> None:
+    """R5 negative: детектор ловит отсутствие build-job и обрыв needs-цепочки."""
+    caplog.set_level(logging.INFO)
+    text = _template_deploy_wf_path(ptype).read_text(encoding="utf-8")
+
+    # (a) Исходное состояние до REF-0001: build-and-push вырезан → детектируется
+    stripped_text = text.replace(_job_block(text, "build-and-push"), "")
+    violations = _scan_build_channel(stripped_text)
+    logger.info("[IMP:8][test_templates][REF-0001][negative] no-build-job violations=%d", len(violations))
+    assert any("нет job 'build-and-push'" in v for v in violations), (
+        f"R5 FAIL: удаление build-job не детектировано: {violations!r}"
+    )
+
+    # (b) Обрыв цепочки: build есть, но deploy не ждёт его (деплой до пуша образа)
+    broken_needs = text.replace("needs: [build-and-push]", "needs: []")
+    violations_b = _scan_build_channel(broken_needs)
+    logger.info("[IMP:8][test_templates][REF-0001][negative] broken-needs violations=%d", len(violations_b))
+    assert any("needs не содержит build-and-push" in v for v in violations_b), (
+        f"R5 FAIL: обрыв needs-цепочки не детектирован: {violations_b!r}"
+    )
+    logger.info("[IMP:9][test_templates][REF-0001][negative] PASS: оба регресса детектируются")

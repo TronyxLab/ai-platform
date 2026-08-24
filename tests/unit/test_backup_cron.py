@@ -410,6 +410,61 @@ def test_crontab_scripts_exist(caplog) -> None:
         assert not missing, f"Scripts referenced in crontab but not found in scripts/: {missing}"
 
 
+@ldd_trajectory
+def test_crontab_flock_guard_on_all_jobs(caplog) -> None:
+    """REF-0009 (SEC-0049 flock part / FAIL-0905): каждая cron-строка под `flock -n`."""
+    with caplog.at_level(logging.DEBUG):
+        logger.info("[IMP:7][test_backup_cron][crontab_flock] START")
+
+        content = pathlib.Path(CRONTAB_FILE).read_text(encoding="utf-8")
+        schedule_lines = [
+            line
+            for line in content.splitlines()
+            if line
+            and not line.startswith("#")
+            and not line.startswith(("SHELL", "PATH"))
+            and re.match(r"^\d+\s+\d+", line)
+        ]
+
+        logger.critical(
+            "[IMP:9][test_backup_cron][crontab_flock] ASSERT: schedule_count=%d",
+            len(schedule_lines),
+        )
+
+        assert schedule_lines, "crontab schedule lines not found"
+        unlocked = [ln for ln in schedule_lines if "flock -n /run/lock/" not in ln]
+        assert not unlocked, f"REF-0009: строки без flock -n: {unlocked}"
+
+        # Lock-файлы уникальны (разные локи на разные job'ы — нет ложных пропусков)
+        locks = re.findall(r"flock -n (/run/lock/\S+)", content)
+        assert len(locks) == len(set(locks)), f"дубли lock-путей: {locks}"
+
+
+@ldd_trajectory
+def test_crontab_has_daily_spool_rescan_retry(caplog) -> None:
+    """REF-0009 (BUG-0802): ежедневный spool-rescan retry присутствует в 01:30 UTC."""
+    with caplog.at_level(logging.DEBUG):
+        logger.info("[IMP:7][test_backup_cron][spool_retry] START")
+
+        content = pathlib.Path(CRONTAB_FILE).read_text(encoding="utf-8")
+        retry_lines = [
+            line for line in content.splitlines() if "spool-retry-upload.sh" in line and not line.startswith("#")
+        ]
+
+        logger.critical(
+            "[IMP:9][test_backup_cron][spool_retry] ASSERT: retry_lines=%s",
+            retry_lines,
+        )
+
+        assert len(retry_lines) == 1, f"ожидается ровно одна retry-строка, найдено {len(retry_lines)}"
+        parts = retry_lines[0].split()
+        # 01:30 UTC — до ночного окна дампов (03:00), после полуночи
+        assert (parts[0], parts[1]) == ("30", "1"), (
+            f"retry должен идти в 01:30 UTC (до 03:00 дампа), got {parts[0]}:{parts[1]}"
+        )
+        assert "flock -n" in retry_lines[0], "retry-строка тоже под flock"
+
+
 # endregion CRON_SCHEDULE_TESTS
 
 

@@ -61,10 +61,10 @@ logger = logging.getLogger(__name__)
 ## ⚠️ TRAP[BUG] · 2026-08-06 · HI · B22 (141 r2): docker ps (без -a) не видел Exited/Created →
 ## ·   R9 self-heal мёртв (BAD-состояния не детектировались, converge «FULLY CONVERGED» при мёртвых nginx).
 ## · Fix: all=True — docker ps -a (Exited/dead/created видимы) → get_container_state → compose up -d.
-## ⚠️ TRAP[BUG] · 2026-08-24 · HI · REF-0014 (BUG-0701): substring-фильтр name=<module> слеп и лжив:
+## ⚠️ TRAP[BUG] · 2026-08-24 · HI · REF-0014 (BUG-0701): substring-фильтр name=`module` слеп и лжив:
 ## · Symptom: name=monitoring → 0 рядов (контейнеры называются иначе); name=redis → матчит
 ## ·   langfuse-redis/redis-exporter (чужие контейнеры) — R9 не детектировал и не лечил целевой проект.
-## · Fix: точная детекция проекта — label=com.docker.compose.project=<module> (compose ставит label
+## · Fix: точная детекция проекта — label=com.docker.compose.project=`module` (compose ставит label
 ## ·   каждому контейнеру проекта; module name == compose project name).
 ## · Prevention: test_reconciler_r9_runtime.py::test_r9_detects_module_by_compose_project_label
 ## @param module_name  Module name (= compose project name)

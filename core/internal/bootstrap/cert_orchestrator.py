@@ -16,6 +16,9 @@
 ##   6. All subprocess calls have 120s timeout (s3) / 300s timeout (issue)
 ##   7. E1 (160): runner/facts/validity_path/cert_validity_fn/s3_cache/environ DI-параметры
 ##      (None = реальные вызовы/пути; поведение/exit-коды/идемпотентность НЕ изменены)
+##   8. REF-0008 (SEC-0026): orchestrate_certs entry — fail-fast fqdn-валидация каждого домена
+##      ДО side-effects; REF-0008 (BUG-0606): self-signed НЕ перезаписывает существующий
+##      LE-сертификат; генерация self-signed алертится в Telegram (event=cert.self_signed)
 ## @rationale StatusReport 045: acme.sh DNS-01 issue is slow (60-120s per domain) and
 ##           can fail if DNS propagation is incomplete. S3 cache (bulk-restore) allows
 ##           instant cert restoration for previously-bootstrapped nodes, reducing
@@ -28,6 +31,9 @@
 ##            (_collect_required_certs/_issue_or_reuse/_finalize_orchestration); _source_secrets_env →
 ##            secrets_env_apply.apply_secrets_env (изоляция мутации env, allowlist-контракт);
 ##            ручной yaml.safe_load node.yaml → NodeYaml-фасад (119 H1); _plw_body__source_secrets_env удалён
+## @changes  2026-08-24 | REF-0008 (meta-refactoring В2) — fail-fast fqdn-gate на entry
+##            orchestrate_certs (SEC-0026); _generate_self_signed: LE-preserve guard (BUG-0606)
+##            + TG-alert cert.self_signed (FAIL-0300: fallback молчал ~76 дней)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -51,11 +57,16 @@ from core.internal.shared.exceptions import (
     PlatformFatalError,
 )
 from core.internal.shared.node_yaml import NodeYaml  # 119 H1: фасад чтения node.yaml (замена yaml.safe_load)
+
+# REF-0008: TG-alert source=self_signed (fallback молчал ~76 дней — FAIL-0300 leg)
+from core.internal.shared.notifications import Notification, notify_event
 from core.internal.shared.ssl_certs import (
     DEFAULT_OPENSSL_TIMEOUT,  # B5: канон openssl-таймаута (литерал 30 удалён)
     cert_get_subject,  # FL15 (DevPlan 125 T5): SAN/subject-разбор для wildcard-покрытия
+    cert_is_le_issuer,  # REF-0008 (BUG-0606): self-signed не перезаписывает LE-сертификат
     cert_is_valid,  # C9: единая комбинация «cert валиден» (DevPlan 118 C9); _is_cert_valid удалён
     cert_subject_matches_domain,  # FL15 (DevPlan 125 T5): CN-матчинг direct/wildcard
+    validate_cert_domain_fqdn,  # REF-0008 (SEC-0026): fail-fast fqdn на entry orchestrate_certs
 )
 from core.internal.shared.subprocess_io import CommandRunner
 
@@ -242,6 +253,9 @@ class CertResult:
 ##   - All subprocess calls have timeout
 ## @changes 2026-08-13 | E1 (160): +runner/facts/validity_path/cert_validity_fn/s3_cache/environ
 ##            (тесты без monkeypatch os/subprocess/CERT_VALIDITY_PATH/cert_is_valid/s3_ssl_cache)
+## @changes 2026-08-24 | REF-0008 (SEC-0026): fail-fast validate_cert_domain_fqdn на entry —
+##            невалидный needs.domain (`../`-traversal/RCE) отклоняется ДО любых S3/issue
+##            side-effects (ConfigValidationError, exit 4)
 def orchestrate_certs(
     domains: list[str],
     issue_cert_script: str,
@@ -261,6 +275,13 @@ def orchestrate_certs(
     domains = _collect_required_certs(domains, env)
     if not domains:
         return CertResult()
+
+    # ── REF-0008 fail-fast entry gate (SEC-0026): fqdn каждого домена ДО любых side-effects ──
+    # Домен попадает в пути live/<domain>/, S3-keys и shell-строки reloadcmd под root —
+    # `../`-домен = path traversal/RCE. Валидация на входе (sink'и дальше по конвейеру).
+    for domain in domains:
+        validate_cert_domain_fqdn(domain)
+    logger.info("[IMP:9][cert_orchestrator] All %d domain(s) passed FQDN validation", len(domains))
 
     logger.info("[IMP:8][cert_orchestrator] Orchestrating certs for %d domains", len(domains))
     # ── Provider registry (154 W1): грузится один раз; per-domain резолв — в _issue_or_reuse ──
@@ -792,14 +813,22 @@ def _issue_cert(
 ##            Called when BOTH S3 restore and acme.sh issue fail (e.g., DNS API down,
 ##            no credentials). Self-signed cert allows nginx to start (avoids crash-loop),
 ##            but browsers will show security warning. Valid 90 days.
-## @io — ⇥ domain: str, validity_path: str | None, runner: CommandRunner | None → ⎋ DomainCertResult
+##            REF-0008: (a) существующий LE-сертификат НЕ перезаписывается (BUG-0606 —
+##            self-signed fallback затирал валидный LE-серт при ложном «invalid»);
+##            (b) генерация алертится в Telegram event=cert.self_signed (ранее ~76 дней тишины).
+## @io — ⇥ domain: str, validity_path: str | None, runner: CommandRunner | None,
+##       environ: Mapping | None (TG-alert env), send_fn (DI транспорта),
+##       cert_is_le_fn: Callable[[str], bool] | None (DI issuer-guard; None → канон)
+##       → ⎋ DomainCertResult
 ## @complexity — O(1) + openssl subprocess
 ## @invariants
 ##   - Generates 2048-bit RSA key + self-signed x509 cert valid 90 days
+##   - LE cert на диске → generation ОТКЛОНЯЕТСЯ (failed/self_signed, файл не тронут)
 ##   - Non-fatal: returns failed result on error
-##   - Logs WARN on success (must be replaced with real cert)
+##   - Logs WARN on success (must be replaced with real cert) + TG alert (non-blocking)
 ##   - Sets proper file permissions (key=0600, cert=0644)
 ## @changes 2026-08-13 | E1 (160): +validity_path/runner DI
+## @changes 2026-08-24 | REF-0008: +LE-preserve guard (BUG-0606) + TG-alert + environ/send_fn DI
 # region FUNC__plw_body__generate_self_signed
 ## @purpose  Тело try-блока (PLW0717 extraction из _generate_self_signed) — семантика except не меняется.
 ## @io       ⇥ cert_path, domain, key_path, runner → ⎋ результат try-тела
@@ -880,8 +909,11 @@ def _generate_self_signed(
     *,
     validity_path: str | None = None,
     runner: CommandRunner | None = None,
+    environ: Mapping[str, str] | None = None,
+    send_fn: Callable[..., bool] | None = None,
+    cert_is_le_fn: Callable[[str], bool] | None = None,
 ) -> DomainCertResult:
-    """Generate self-signed certificate as last-resort fallback.
+    """Generate self-signed certificate as last-resort fallback (LE-preserve + TG-alert, REF-0008).
 
     ## @purpose — Disaster recovery: keep nginx running when cert issuance fails.
     ## @rationale F6: self-signed cert allows nginx to start (avoids crash-loop),
@@ -894,15 +926,78 @@ def _generate_self_signed(
     key_path = os.path.join(cert_dir, "privkey.pem")
     cert_path = os.path.join(cert_dir, "fullchain.pem")
 
+    # ── REF-0008 / BUG-0606: self-signed НЕ перезаписывает существующий LE-сертификат ──
+    # Ложный «invalid» вердикт (например, transient openssl failure upstream) не должен
+    # затирать валидный LE-серт self-signed'ом — восстановление LE-состояния дороже.
+    le_issuer_fn = cert_is_le_fn if cert_is_le_fn is not None else cert_is_le_issuer
+    if pathlib.Path(cert_path).is_file() and le_issuer_fn(cert_path):
+        logger.warning(
+            "[IMP:7][cert_orchestrator] %s — REFUSING self-signed overwrite: valid LE certificate exists "
+            "(BUG-0606 guard); fix issuance instead",
+            domain,
+        )
+        return DomainCertResult(
+            domain=domain,
+            status="failed",
+            source="self_signed",
+            error="existing LE certificate preserved — refusing self-signed overwrite",
+        )
+
     try:
         # Generate RSA private key (B5: канон DEFAULT_OPENSSL_TIMEOUT — литерал 30 удалён)
-        return _plw_body__generate_self_signed(cert_path, domain, key_path, runner)
+        result = _plw_body__generate_self_signed(cert_path, domain, key_path, runner)
     except (OSError, FileNotFoundError, subprocess.CalledProcessError) as e:
         logger.warning("[IMP:7][cert_orchestrator] %s — self-signed generation failed: %s", domain, e)
         return DomainCertResult(domain=domain, status="failed", source="none", error=f"{type(e).__name__}: {e}")
+    else:
+        if result.status == "issued" and result.source == "self_signed":
+            _notify_self_signed(domain, environ=environ, send_fn=send_fn)
+        return result
 
 
 # endregion FUNC_generate_self_signed
+
+
+# region FUNC_notify_self_signed
+## @purpose  TG-alert при генерации self-signed fallback (REF-0008, FAIL-0300 leg): единственный
+##           сигнал «все методы выпуска провалились» — ранее fallback был полностью беззвучен
+##           (~76 дней тишины). Non-blocking: alert никогда не ломает bootstrap φ7.
+## @io       ⇥ domain: str, environ: Mapping | None (env для resolve_chat_id),
+##              send_fn: Callable | None (DI транспорта; None → канон telegram_notifier) → ⎋ None
+## @complexity O(1) + 1 HTTP POST (30s timeout, в notify_event)
+## @invariants
+##   - severity=warning (не critical: сервис UP на self-signed, но требует замены)
+##   - event=cert.self_signed — throttle/dedup ключ notify_event (fingerprint=message)
+##   - Никогда не raise: исключение → IMP:7 WARN (bootstrap продолжается)
+def _notify_self_signed(
+    domain: str,
+    *,
+    environ: Mapping[str, str] | None = None,
+    send_fn: Callable[..., bool] | None = None,
+) -> None:
+    """Send Telegram alert for self-signed fallback generation (non-blocking, REF-0008)."""
+    try:
+        notify_event(
+            Notification(
+                severity="warning",
+                context="cert",
+                event="cert.self_signed",
+                message=f"Self-signed certificate generated for {domain} — browsers will warn until real cert issued",
+                details=["S3 restore and acme.sh issue both failed for this domain"],
+                action=(
+                    "Fix DNS-provider credentials in secrets.env or ACME failure, then re-run make converge NODE=<node>"
+                ),
+            ),
+            env=environ,
+            send_fn=send_fn,
+        )
+        logger.info("[IMP:8][cert_orchestrator] %s — self_signed TG alert dispatched", domain)
+    # ruff: ignore[blind-except] — alert non-blocking: bootstrap φ7 важнее доставки уведомления
+    except Exception as e:  # noqa: EXC — DEPLOY_BEST_EFFORT: доставка алерта никогда не блокирует bootstrap
+        logger.warning("[IMP:7][cert_orchestrator] %s — self_signed TG alert failed (non-fatal): %s", domain, e)
+
+
+# endregion FUNC_notify_self_signed
 
 
 # region FUNC_install_cron

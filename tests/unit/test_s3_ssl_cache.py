@@ -118,9 +118,11 @@ def test_download_cert_success(caplog, tmp_path):
     mock_client = MagicMock()
 
     # Mock _validate_cert to return True (skip openssl)
+    # REF-0008: privkey теперь ОБЯЗАТЕЛЕН — pair-match патчится отдельно (mock-файлы не пара)
     with (
         patch.object(s3_ssl_cache, "_get_s3_client", return_value=mock_client),
         patch.object(s3_ssl_cache, "_validate_cert", return_value=True),
+        patch.object(s3_ssl_cache, "cert_key_pair_matches", return_value=True),
     ):
         result = s3_ssl_cache.download_cert(
             domain,
@@ -159,9 +161,11 @@ def test_check_cert_hit(caplog, tmp_path):
             f.write("fake pem content")
         return True
 
+    # REF-0008: check_cert валидирует пару — privkey скачивается mock_download'ом, pair-match патчится
     with (
         patch.object(s3_ssl_cache, "_download_s3_file", side_effect=mock_download),
         patch.object(s3_ssl_cache, "_validate_cert", return_value=True),
+        patch.object(s3_ssl_cache, "cert_key_pair_matches", return_value=True),
     ):
         result = s3_ssl_cache.check_cert(domain, s3_bucket="test-bucket")
 
@@ -493,6 +497,7 @@ def test_download_cert_restores_all_artifacts(caplog, tmp_path):
     with (
         patch.object(s3_ssl_cache, "_get_s3_client", return_value=MagicMock()),
         patch.object(s3_ssl_cache, "_validate_cert", return_value=True),
+        patch.object(s3_ssl_cache, "cert_key_pair_matches", return_value=True),
         patch.object(s3_ssl_cache, "_download_s3_file", side_effect=_fake_download),
     ):
         result = s3_ssl_cache.download_cert(

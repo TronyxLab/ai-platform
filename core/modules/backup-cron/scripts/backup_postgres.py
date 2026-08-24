@@ -1,27 +1,37 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: backup-postgres pg_dumpall spool-volume timestamp retention phase-02
-# STRUCTURE: validate_env → mkdir spool → pg_dumpall+gzip(Popen) → gzip -t verify → pg_restore --list validate → retention cleanup → upload-s3
+# GREP_SUMMARY: backup-postgres pg_dumpall spool-volume timestamp last_verified age-encrypt sentinel REF-0009
+# STRUCTURE: validate_env → mkdir spool → pg_dumpall+gzip(Popen) → gzip -t verify → pg_restore --list validate → touch .last_verified → retention cleanup → age-encrypt → upload-s3
 # region MODULE_CONTRACT
 """
 @ purpose  Full PostgreSQL backup via pg_dumpall to local spool (03 §4).
 @ scope    Run at 03:00 UTC by cron (crontab: /usr/local/bin/backup-postgres.sh →
            exec python3 backup_postgres.py). Uploads via upload-s3.sh wrapper.
 @ invariants
-  - Dumps ALL databases as postgres superuser
-  - Output: /var/lib/platform/backup-spool/postgres/pgdumpall_TIMESTAMP.sql.gz
-  - Exits non-zero on pg_dumpall failure (loud failure, 00 §4 error visibility)
-  - gzip integrity check via gzip -t before declaring dump valid
-  - pg_restore --list structural validation before declaring dump valid
-  - backup-cleanup.sh called after validation (non-fatal if it fails)
-  - S3 upload delegated to upload-s3.sh (via /usr/local/bin/upload-s3.sh)
-  - All subprocess failures detected via explicit returncode checks
-    (shell PIPESTATUS → Popen returncode parity, DevPlan 117 H D64)
+   - Dumps ALL databases as postgres superuser
+   - Output: /var/lib/platform/backup-spool/postgres/pgdumpall_TIMESTAMP.sql.gz
+   - Exits non-zero on pg_dumpall failure (loud failure, 00 §4 error visibility)
+   - gzip integrity check via gzip -t before declaring dump valid
+   - pg_restore --list structural validation before declaring dump valid
+   - Freshness stamp {spool}/postgres/.last_verified touched ONLY after gzip -t
+     OK + structure validation (REF-0009: honest freshness metric — collector
+     reads this marker, not the cron-refreshed log mtime)
+   - age-encrypt BEFORE upload (REF-0009, SEC-0018): dumps leave the node only
+     encrypted to AGE_RECIPIENT (public key); missing recipient → upload
+     SKIPPED fail-closed, dump retained in spool for daily rescan retry
+   - Plaintext dump removed from spool right after successful encryption
+   - backup-cleanup.sh called after validation (non-fatal if it fails);
+     cleanup deletes ONLY sentinel-confirmed files (.uploaded)
+   - S3 upload delegated to upload-s3.sh (via /usr/local/bin/upload-s3.sh)
+   - All subprocess failures detected via explicit returncode checks
+     (shell PIPESTATUS → Popen returncode parity, DevPlan 117 H D64)
 @ rationale Single pg_dumpall covers all project DBs; per-DB dumps added in
             phase 06 if needed.
 @ changes  Python port of core/modules/backup-cron/scripts/backup-postgres.sh
            (2026-08-02, DevPlan 117 Brief H D64). Shell → thin wrapper.
            2026-08-14 | DevPlan 167 D2 — CommandRunner-seam: run_backup(runner=) —
            fake-subprocess-объект DI (0 monkeypatch в тестах).
+           2026-08-25 | REF-0009 (meta-refactoring W2) — .last_verified stamp +
+           age-encrypt дампов перед upload (fail-closed без AGE_RECIPIENT).
 
 @ PITR RESTORE PROCEDURE (TASK-1: B1 — WAL archiving)
   Point-In-Time Recovery (PITR) — PostgreSQL WAL-based restore.
@@ -87,7 +97,10 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Protocol, TextIO
+from typing import Protocol, TextIO, cast
+
+# REF-0009: client-side encryption helper (same directory — container script dir on sys.path)
+import age_cipher  # pyright: ignore[reportImplicitRelativeImport]
 
 
 # region DATA_SubprocessLike
@@ -127,6 +140,7 @@ _CLEANUP_SCRIPT = "/usr/local/bin/backup-cleanup.sh"
 _UPLOAD_SCRIPT = "/usr/local/bin/upload-s3.sh"
 _HEADER_SCAN_MAX: int = 5  # заголовок pg_dump в первых 5 строках (валидация)
 _DUMP_SCAN_BOUND: int = 2000  # верхняя граница сканирования дампа
+_LAST_VERIFIED_NAME = ".last_verified"  # freshness stamp (REF-0009)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -272,6 +286,25 @@ def run_backup(
             return 1
         logger.info("[IMP:8][verify] Dump structure validation OK (header + %d statements)", stmt_count)
 
+        # ── [stamp] Freshness marker (REF-0009, BUG-0803 ≡ FAIL-0903) ──
+        # ⚠️ TRAP[BUG] · 2026-08-25 · P1 · BackupFreshness мерял mtime ЛОГА → упавшая ночью
+        # ·   задача выглядела свежей (cron refresh'ит лог на старте; dashboards зелёные).
+        # · Symptom: freshness = «cron запустился», не «бэкап удался».
+        # · Root: collector читал postgres.log mtime вместо факта верифицированного дампа.
+        # · Fix: .last_verified пишется ТОЛЬКО после gzip -t OK + structure-validation;
+        # ·   backup_collector.py читает mtime маркера. cleanup_spool.py никогда его не удаляет.
+        # · Prevention: unit-тесты test_last_verified_stamp_* (gzip-t fail → stamp отсутствует);
+        # ·   restore-drill В4 сверяет dashboards с фактом полного цикла.
+        last_verified = Path(spool_dir) / _LAST_VERIFIED_NAME
+        try:
+            last_verified.touch()
+            logger.info(
+                "[IMP:9][stamp] Freshness stamp written: %s (dump verified)",
+                last_verified,
+            )
+        except OSError as exc:
+            logger.warning("[IMP:8][stamp] Cannot touch %s (non-fatal): %s", last_verified, exc)
+
         # ── [cleanup] Retention rotation (non-fatal) ──
         logger.info("[IMP:7][cleanup] Running retention cleanup")
         try:
@@ -299,24 +332,59 @@ def run_backup(
         #    Семантика «не блокировать при ошибке upload»: exit code ПРОВЕРЯЕТСЯ и
         #    логируется (IMP:9/IMP:10), но НЕ проваливает бэкап — локальный дамп
         #    верифицирован и безопасен в spool; upload.py сам ретраит 3×90 мин и
-        #    сохраняет файл в spool при неудаче (no data loss).
+        #    сохраняет файл в spool при неудаче (no data loss). REF-0009: ежедневный
+        #    spool-rescan (spool_retry.py, cron 01:30) повторяет попытку на следующий день.
         # 🧐 TRAP[DECISION] · 2026-08-02 · — · Upload failure НЕ проваливает бэкап (C1)
         # · Rejected: 117 H D64 set -e parity (upload rc → backup rc) — ложно-критичная
         #   алертинг-семантика для ретраябельной проблемы; дамп уже верифицирован локально
         # · Reason: DevPlan 119 C1 «с проверкой exit code, не блокировать при ошибке upload»;
         #   upload.py сохраняет файл в spool при неудаче → retry без потери данных
         # · Rev: если off-site подтверждение станет жёстким требованием — вернуть propagation
-        s3_key = f"postgres/pgdumpall_{ts}.sql.gz"
-        upload_rc = runner_mod.run([_UPLOAD_SCRIPT, dump_file, s3_key], check=False).returncode
-        if upload_rc != 0:
+        #
+        # ── [encrypt] age-encrypt перед upload (REF-0009, SEC-0018 ≡ DATA-503) ──
+        # 🧐 TRAP[DECISION] · 2026-08-25 · — · Fail-closed без AGE_RECIPIENT: upload SKIP
+        # · Rejected: plaintext fallback (доступность RPO важнее конфиденциальности)
+        # · Reason: SEC-0018 — все БД всех проектов в открытом виде за одним bucket-ключом;
+        #   клиентские данные не покидают ноду в plaintext ни при каких настройках.
+        #   Локальный дамп верифицирован; rescan retry зашифрует и загрузит после
+        #   починки конфигурации. Cleanup никогда не удалит неподтверждённый файл.
+        # · Recipient = ПУБЛИЧНЫЙ ключ (env безопасен); приватный AGE_SECRET_KEY не входит
+        #   в backup-cron контейнер. Имя AGE_RECIPIENT — конвенция age-key-backup.
+        recipient = effective_env.get("AGE_RECIPIENT", "")
+        if not recipient:
             logger.critical(
-                "[IMP:9][upload] WARNING: upload-s3.sh exit=%d — off-site backup NOT confirmed; "
-                "dump retained in spool (%s) for manual retry",
-                upload_rc,
+                "[IMP:9][encrypt] AGE_RECIPIENT not set — upload SKIPPED (fail-closed): %s retained in spool",
                 dump_file,
             )
+            return 0
+
+        encrypted_file = f"{dump_file}.age"
+        # W11: subprocess-модуль → RunnerLike через cast (typeshed-оверлоады run()
+        # не выражаются протоколом; fake-объекты тестов удовлетворяют ему структурно)
+        encrypt_runner = cast("age_cipher.RunnerLike", runner_mod)
+        if not age_cipher.age_encrypt(dump_file, encrypted_file, recipient, runner=encrypt_runner):
+            logger.critical(
+                "[IMP:9][encrypt] age encryption FAILED — plaintext retained, no upload: %s",
+                dump_file,
+            )
+            return 0
+        # Plaintext больше не нужен локально: off-site копия будет только зашифрованной
+        try:
+            os.unlink(dump_file)
+            logger.info("[IMP:8][encrypt] Plaintext dump removed after encryption: %s", dump_file)
+        except OSError as exc:
+            logger.warning("[IMP:8][encrypt] Cannot remove plaintext dump %s: %s", dump_file, exc)
+
+        s3_key = f"postgres/pgdumpall_{ts}.sql.gz.age"
+        upload_rc = runner_mod.run([_UPLOAD_SCRIPT, encrypted_file, s3_key], check=False).returncode
+        if upload_rc != 0:
+            logger.critical(
+                "[IMP:9][upload] WARNING: upload-s3.sh exit=%d — off-site NOT confirmed, retry scheduled: %s",
+                upload_rc,
+                encrypted_file,
+            )
         else:
-            logger.critical("[IMP:9][upload] UPLOAD OK: %s → s3://postgres/%s", dump_file, s3_key)
+            logger.critical("[IMP:9][upload] UPLOAD OK: %s → s3://postgres/%s", encrypted_file, s3_key)
         return 0
     finally:
         # Shell trap cleanup_partial EXIT parity: remove partial dump on any

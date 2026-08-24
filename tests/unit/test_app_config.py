@@ -63,7 +63,7 @@ def test_from_env_defaults(caplog: pytest.LogCaptureFixture) -> None:
     assert cfg.projects_base == DEFAULT_PROJECTS_BASE, "projects_base дефолт — /opt/projects (deploy_paths канон)"
     assert cfg.platform_remote_base == DEFAULT_PLATFORM_BASE, "platform_remote_base дефолт — /opt/platform"
     assert cfg.deploy_timeout == DEPLOY_TIMEOUT, "deploy_timeout дефолт — timeouts.DEPLOY_TIMEOUT"
-    assert cfg.max_payload_bytes == 1024**3, "max_payload_bytes дефолт — 1 GiB (receive_flow T9.9)"
+    assert cfg.max_payload_bytes == 64 * 1024 * 1024, "max_payload_bytes дефолт — 64 MiB (receive_flow T9.9 + REF-0015)"
     assert cfg.platform_org == "personal"
     assert cfg.platform_default_node == "tronyx-vps"
     assert cfg.ssh_user == "root"
@@ -147,7 +147,7 @@ def test_import_time_no_env_read(caplog: pytest.LogCaptureFixture, monkeypatch: 
     assert reloaded._DEFAULT_ORG == "personal"
     assert reloaded._DEFAULT_NODE == "tronyx-vps"
     assert reloaded._DEFAULT_SSH_USER == "root"
-    assert reloaded._DEFAULT_MAX_PAYLOAD_BYTES == 1024**3
+    assert reloaded._DEFAULT_MAX_PAYLOAD_BYTES == 64 * 1024 * 1024  # REF-0015: ↓ с 1 GiB
     assert reloaded._DEFAULT_PROJECTS_ROOT == app_config._DEFAULT_PROJECTS_ROOT
     assert reloaded._DEFAULT_PLATFORM_ROOT == app_config._DEFAULT_PLATFORM_ROOT
     # Env НЕ влияет на module-level константы (раньше PROJECTS_BASE/PLATFORM_* читались на import)

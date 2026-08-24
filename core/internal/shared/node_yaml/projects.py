@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from typing import cast
 
 from core.internal.shared.exceptions import ConfigValidationError
+from core.internal.shared.ssl_certs import validate_cert_domain_fqdn  # REF-0008: fail-fast fqdn
 
 logger = logging.getLogger(__name__)
 
@@ -190,6 +191,9 @@ class ProjectsMixin:
     ## @complexity — O(P) for duplicate check + O(N) for YAML dump
     ## @invariants
     ##   Raises ConfigValidationError if project with same name already exists.
+    ##   Raises ConfigValidationError if project.domain is set and fails FQDN validation
+    ##   (REF-0008/SEC-0026: needs.domain попадает в cert-pipeline пути/reloadcmd под root —
+    ##   `../`-домен = path traversal/RCE; fail-fast на mutation-входе, до _write_back).
     ##   Writes back via _write_back() preserving comments (ruamel.yaml) if available.
     ##   Mutates a DEEPCOPY of _load() — cache is never poisoned by a failed write
     ##   (DevPlan 116 B6 T6.1; TRAP 2026-07-30 fixed).
@@ -209,7 +213,12 @@ class ProjectsMixin:
 
         Raises:
             ConfigValidationError: if project with same name already exists
+            ConfigValidationError: if project.domain is set but not a valid FQDN (REF-0008)
         """
+        # ── REF-0008 fail-fast: FQDN-валидация домена ДО любых мутаций/write-back ──
+        if project.domain:
+            validate_cert_domain_fqdn(project.domain)
+
         data = copy.deepcopy(self._load())
         projects = data.get("projects", [])
         if not isinstance(projects, list):

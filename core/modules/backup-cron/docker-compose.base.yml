@@ -83,6 +83,11 @@ services:
       S3_PREFIX: "${S3_PREFIX:-platform/backups}"
       PLATFORM_CONTEXT: "${PLATFORM_CONTEXT:-personal}"
       NODE_NAME: "${NODE_NAME:-unknown}"
+      # ── REF-0009 (SEC-0018): age-шифрование дампов ПЕРЕД upload ──
+      # AGE_RECIPIENT — ПУБЛИЧНЫЙ ключ (env безопасен; приватный AGE_SECRET_KEY в
+      # контейнер НЕ входит). Пусто → upload fail-closed SKIP (дамп остаётся в spool,
+      # ежедневный rescan retry повторит после починки конфигурации).
+      AGE_RECIPIENT: "${AGE_RECIPIENT:-}"
       # ── WAL sync (DevPlan 132 W2): каталог WAL-архива + retention-пороги + rate-limit ──
       # Не env_requires (без секретов) — дефолты в wal_sync.py
       WAL_ARCHIVE_DIR: "/var/lib/platform/wal-archive"

@@ -231,10 +231,16 @@ def test_receive_deploy_passes_payload_backup_metadata(
 
     fake_orch.deploy.side_effect = _capture_deploy
 
-    # 170 W10-B: orchestrator_factory — конструкторный DI
+    # 170 W10-B: orchestrator_factory — конструкторный DI.
+    # REF-0006: staging "NEW-v2\n" не парсится как compose — l1_only-гейт теперь БЛОКИРУЕТ
+    # parse-fail; цель теста — payload-tx metadata, поэтому receive-гейт инжектится
+    # пермиссивным (DI 176 A.2; сам гейт покрыт test_verify_contracts*.py).
+    from core.internal.deploy.verify_contracts import VerifyReport
+
     flow = ReceiveFlow(
         projects_base=str(tmp_path / "projects"),
         orchestrator_factory=lambda *_, **__: fake_orch,
+        pre_deploy_gate=lambda d, _project: VerifyReport(project_dir=Path(d), state="baseline", findings=()),
     )
     flow.deploy(
         "testproj",

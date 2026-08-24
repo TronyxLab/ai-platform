@@ -1,13 +1,14 @@
-## GREP_SUMMARY: backup-cron Dockerfile pgdg cron debian bash pg-client-18 date-parser s3-client retention upload wal-sync healthcheck entrypoint-py
-## STRUCTURE: FROM debian:bookworm-slim → add PGDG repo → install cron+pg-client-18+python → COPY scripts (incl date_parser+s3_client+wal_sync+entrypoint) → COPY crontab → CMD python3 entrypoint
+## GREP_SUMMARY: backup-cron Dockerfile pgdg cron debian bash pg-client-18 age date-parser s3-client retention upload wal-sync healthcheck entrypoint-py REF-0009
+## STRUCTURE: FROM debian:bookworm-slim → add PGDG repo → install cron+pg-client-18+age+python → COPY scripts (incl cleanup_spool+age_cipher+spool_retry) → COPY crontab (cron.d ONLY) → CMD python3 entrypoint
 # region MODULE_CONTRACT
 ## @purpose  Build backup-cron image with cron daemon + backup scripts + pg_dump client
 ## @scope    Phase 02: installs cron schedule; S3 upload = stub (phase 06 fills upload-s3.sh)
 ## @invariants
 ##   - Base: debian:bookworm-slim (stable, minimal, has apt)
-##   - Packages: cron, postgresql-client-18 (pg_dump, via PGDG repo), curl (S3 stub), ca-certificates
+##   - Packages: cron, postgresql-client-18 (pg_dump, via PGDG repo), age (dump encryption,
+##     REF-0009), curl (S3 stub), ca-certificates
 ##   - PGDG APT repo added before installing postgresql-client-18 (not in Debian bookworm default repos)
-##   - Crontab installed to /etc/cron.d/platform-backup
+##   - Crontab installed to /etc/cron.d/platform-backup ONLY (no `crontab` spool copy — AI-0070)
 ##   - Scripts mounted/copied to /usr/local/bin/
 ##   - No EXPOSE — backup-net internal only
 ##   - Resource limits NOT in image (AR3)
@@ -47,6 +48,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         cron \
         postgresql-client-18 \
         procps \
+        age \
         python3 \
         python3-pip \
         awscli \
@@ -56,6 +58,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
             cron \
             postgresql-client-18 \
             procps \
+            age \
             python3 \
             python3-pip \
             awscli)) \
@@ -74,6 +77,12 @@ COPY scripts/backup-postgres.sh  /usr/local/bin/backup-postgres.sh
 COPY scripts/backup_postgres.py  /usr/local/bin/backup_postgres.py
 COPY scripts/backup-app-data.sh  /usr/local/bin/backup-app-data.sh
 COPY scripts/backup-cleanup.sh   /usr/local/bin/backup-cleanup.sh
+# REF-0009: sentinel-gated cleanup logic (Python port) + age encryption helper +
+# daily spool rescan retry (thin facade spool-retry-upload.sh)
+COPY scripts/cleanup_spool.py    /usr/local/bin/cleanup_spool.py
+COPY scripts/age_cipher.py       /usr/local/bin/age_cipher.py
+COPY scripts/spool_retry.py      /usr/local/bin/spool_retry.py
+COPY scripts/spool-retry-upload.sh /usr/local/bin/spool-retry-upload.sh
 COPY scripts/upload-s3.sh        /usr/local/bin/upload-s3.sh
 COPY scripts/upload.py           /usr/local/bin/upload.py
 COPY scripts/backup_config.py    /usr/local/bin/backup_config.py
@@ -97,13 +106,16 @@ COPY scripts/entrypoint.py /usr/local/bin/entrypoint.py
 COPY scripts/crontab /etc/cron.d/platform-backup
 
 # Combined chmod: crontab permissions + script executability
+# REF-0009 (AI-0070): двойная установка crontab УДАЛЕНА — /etc/cron.d/platform-backup
+# достаточно (Debian cron читает cron.d напрямую); `crontab <file>` дублировал расписание
+# в spool root'а (риск двойного запуска + рассинхронизации при правках).
 RUN chmod 0644 /etc/cron.d/platform-backup && \
-    crontab /etc/cron.d/platform-backup && \
     chmod +x \
       /usr/local/bin/backup-postgres.sh \
       /usr/local/bin/backup_postgres.py \
       /usr/local/bin/backup-app-data.sh \
       /usr/local/bin/backup-cleanup.sh \
+      /usr/local/bin/spool-retry-upload.sh \
       /usr/local/bin/upload-s3.sh \
       /usr/local/bin/healthcheck.sh \
       /usr/local/bin/entrypoint.py

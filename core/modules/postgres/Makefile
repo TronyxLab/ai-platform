@@ -10,6 +10,9 @@
 ##   - STOP_TIMEOUT := 60 — WAL flush grace для compose stop (D2); наследуется restart/down
 ##   - backup target uses pg_dumpall via docker exec
 ##   - restore is allowed only for owner role (sudo-whitelist.conf enforces at OS level)
+##   - restore contract (REF-0009, DATA-504 ≡ FAIL-0803): mandatory pre-restore
+##     pg_dumpall snapshot (ABORT при отказе) → clean stop → up + pg_isready →
+##     psql -v ON_ERROR_STOP=1; runbook (вкл. age-decrypt шаг) — docs-in-code выше
 ## @rationale Targets match standard module lifecycle; postgres-specific: 60s stop grace,
 ##   pg_dumpall backup, psql restore — объявлены после include (last-recipe-wins).
 # endregion MODULE_CONTRACT
@@ -46,6 +49,27 @@ backup: ## pg_dump all databases to backup spool
 
 # ── Module-specific targets ──
 ## restore: Restore from dump file DUMP_FILE=<path> (owner only)
+##
+## ── RESTORE RUNBOOK (docs-in-code, REF-0009 / DATA-504 ≡ FAIL-0803) ──
+## Полная DR-процедура восстановления кластера из off-site бэкапа:
+##   1. Достать последний ПОДТВЕРЖДЁННЫЙ дамп из S3 (sentinel-контракт REF-0009):
+##        aws s3 cp "s3://$S3_BUCKET/$S3_PREFIX/postgres/pgdumpall_<TS>.sql.gz.age" .
+##   2. Расшифровать (age-encrypt контракт REF-0009; приватный ключ — НЕ в backup-cron):
+##        age -d -i /etc/age/key.txt -o pgdumpall_<TS>.sql.gz pgdumpall_<TS>.sql.gz.age
+##   3. Восстановить: make -C core/modules/postgres restore DUMP_FILE=pgdumpall_<TS>.sql.gz
+##      (этот таргет: pre-snapshot → down → up → psql ON_ERROR_STOP=1)
+##   4. Верификация: make healthcheck + project-status по проектам.
+## Порядок фаз внутри таргета (исполнимая семантика, см. TRAP[DECISION] ниже):
+##   PHASE 1 pre-snapshot (кластер ЖИВОЙ — страховка до разрушения)
+##   → PHASE 2 down (чистый стоп, STOP_TIMEOUT=60 WAL flush)
+##   → PHASE 3 up + pg_isready wait
+##   → PHASE 4 gunzip|psql -v ON_ERROR_STOP=1.
+# 🧐 TRAP[DECISION] · 2026-08-25 · — · Restore-порядок: pre-dumpall ДО down (не down→dumpall)
+# · Rejected: литеральный порядок карточки «down → psql → up» с pre-dumpall после down
+# · Reason: pg_dumpall требует живой кластер — снапшот-страховка физически возможен
+# ·   ТОЛЬКО до остановки; psql требует слушающий сервер — восстановление идёт после
+# ·   up+pg_isready, а не между down и up. Смысл контракта сохранён: чистый down/up-
+# ·   брекет вокруг заливки + обязательный pre-snapshot + fail-fast ON_ERROR_STOP.
 restore: ## Restore from dump file (owner only, requires DUMP_FILE=)
 	@echo "[IMP:7][postgres-make][restore] Restoring from DUMP_FILE=$(DUMP_FILE)"
 	@if [[ -z "$(DUMP_FILE)" ]]; then \
@@ -54,14 +78,42 @@ restore: ## Restore from dump file (owner only, requires DUMP_FILE=)
 	@if [[ ! -f "$(DUMP_FILE)" ]]; then \
 		echo "[IMP:9][postgres-make][restore] ERROR: DUMP_FILE not found: $(DUMP_FILE)" >&2; exit 1; \
 	fi
+	@# PHASE 1: MANDATORY pre-restore snapshot (страховка перед восстановлением).
+	@# Отказ снапшота = ABORT до любых разрушающих действий (данные кластера не тронуты).
+	@PRE_TS=$$(date -u '+%Y%m%dT%H%M%SZ'); \
+	PRE_SNAPSHOT_DIR=/var/lib/platform/backup-spool/postgres; \
+	mkdir -p "$$PRE_SNAPSHOT_DIR"; \
+	echo "[IMP:8][postgres-make][restore] Pre-restore snapshot -> $$PRE_SNAPSHOT_DIR/pre_restore_$${PRE_TS}.sql"; \
+	docker exec $(CONTAINER) sh -c 'pg_dumpall -U "$$POSTGRES_USER"' \
+		> "$$PRE_SNAPSHOT_DIR/pre_restore_$${PRE_TS}.sql" || \
+		{ echo "[IMP:10][postgres-make][restore] ABORT: pre-restore snapshot failed — cluster NOT touched" >&2; exit 1; }; \
+	echo "[IMP:9][postgres-make][restore] Pre-restore snapshot OK"
 	@# ⚠️ TRAP[BUG] · 1.0.0 · HI · .sql.gz-дампы (backup-cron nightly) скармливались psql сырьём →
 	@# «invalid byte sequence»; .sql — как есть (резервная совместимость).
+	@# PHASE 2: clean stop (compose down; STOP_TIMEOUT=60 наследуется) — writers отсечены,
+	@# кластер не «полуживой» во время заливки (DATA-504: restore поверх живого кластера).
+	@echo "[IMP:7][postgres-make][restore] Stopping postgres (clean stop, WAL flush)"
+	$(COMPOSE_CMD) stop --timeout $(STOP_TIMEOUT)
+	@# PHASE 3: fresh start + readiness wait — psql требует слушающий сервер.
+	@echo "[IMP:7][postgres-make][restore] Starting postgres for restore"
+	$(COMPOSE_CMD) up -d
+	@RETRY=30; until docker exec $(CONTAINER) sh -c 'pg_isready -U "$$POSTGRES_USER"' >/dev/null 2>&1; do \
+		RETRY=$$((RETRY-1)); \
+		if [ $$RETRY -le 0 ]; then \
+			echo "[IMP:10][postgres-make][restore] ABORT: postgres not ready after wait" >&2; exit 1; \
+		fi; sleep 2; done
+	@# PHASE 4: заливка с fail-fast — ON_ERROR_STOP=1 прерывает на ПЕРВОЙ ошибке SQL
+	@# (раньше молча получали «Restore complete» над полу-смесью). pipefail: rc gunzip не теряется.
 	@if [[ "$(DUMP_FILE)" == *.gz ]]; then \
-		gunzip -c "$(DUMP_FILE)" | docker exec -i $(CONTAINER) sh -c 'psql -U "$$POSTGRES_USER" < /dev/stdin'; \
+		set -o pipefail; \
+		gunzip -c "$(DUMP_FILE)" | docker exec -i $(CONTAINER) sh -c 'psql -v ON_ERROR_STOP=1 -U "$$POSTGRES_USER" < /dev/stdin' \
+			|| { echo "[IMP:10][postgres-make][restore] FAIL: psql ON_ERROR_STOP aborted — cluster in PARTIAL state; inspect pre_restore_*.sql snapshot in /var/lib/platform/backup-spool/postgres/" >&2; exit 1; } \
 	else \
-		docker exec -i $(CONTAINER) sh -c 'psql -U "$$POSTGRES_USER" < /dev/stdin' < "$(DUMP_FILE)"; \
+		set -o pipefail; \
+		docker exec -i $(CONTAINER) sh -c 'psql -v ON_ERROR_STOP=1 -U "$$POSTGRES_USER" < /dev/stdin' < "$(DUMP_FILE)" \
+			|| { echo "[IMP:10][postgres-make][restore] FAIL: psql ON_ERROR_STOP aborted — cluster in PARTIAL state; inspect pre_restore_*.sql snapshot in /var/lib/platform/backup-spool/postgres/" >&2; exit 1; } \
 	fi
-	@echo "[IMP:8][postgres-make][restore] Restore complete from $(DUMP_FILE)"
+	@echo "[IMP:9][postgres-make][restore] Restore complete from $(DUMP_FILE) — run make healthcheck to verify"
 
 # 🧐 TRAP[DECISION] · 2026-07-18 · — · Custom overrides: postgres-specific lifecycle
 # · Rejected: use module.mk defaults only (not flexible enough)

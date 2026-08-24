@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: ssl-certs, openssl, x509, expiry, issuer, lets-encrypt, parseable, shared, checkend, san, wildcard, run-openssl
+# GREP_SUMMARY: ssl-certs, openssl, x509, expiry, issuer, lets-encrypt, parseable, shared, checkend, san, wildcard, run-openssl, pubkey-match, pair-match, fqdn-validation
 # STRUCTURE: ▶ _run_openssl ┌args,cert,timeout,op┐ → ◇ openssl x509 -in cert … → ⎋ CompletedProcess|None (5 блоков дедуплицированы)
 #            → ▶ cert_is_parseable ┌cert┐ → ◇ openssl x509 -noout → ⎋ bool → ▶ cert_check_expiry ┌cert,threshold┐ → ◇ openssl x509 -checkend → ⎋ bool
 #            → ▶ cert_get_issuer ┌cert┐ → ◇ openssl x509 -issuer → ⎋ str|None → ▶ cert_is_le_issuer ┌cert┐ → ◇ issuer contains "Let's Encrypt" → ⎋ bool
 #            → ▶ cert_get_san_list ┌cert┐ → ◇ openssl x509 -ext subjectAltName → ⊕ DNS-entries → ⎋ list[str]
 #            → ▶ _cert_covers_domain ┌cert,domain┐ → ◇ SAN? (exact|wildcard одноуровневый) : CN-fallback → ⎋ bool
+#            → ▶ cert_key_pair_matches ┌cert,key┐ → ◇ openssl pubkey(cert) == pkey pubout(key) (whitespace-normalized) → ⎋ bool [REF-0008]
+#            → ▶ validate_cert_domain_fqdn ┌fqdn┐ → ◇ labels(≥2,RFC,TLD) → ⊕ ConfigValidationError | ⎋ None [REF-0008]
 # region MODULE_CONTRACT
 ## @purpose  Shared openssl x509 primitives for certificate validation — единый SoT openssl-проверок
 ##           (DevPlan 117 D21 + 118 C9). Заменяет дублирующиеся openssl subprocess-блоки в
@@ -21,8 +23,15 @@
 ##   - cert_get_san_list: openssl x509 -in <cert> -noout -ext subjectAltName → список DNS-имён SAN
 ##     (префикс DNS: срезается регистронезависимо, trim, trailing dot убирается; IP:... игнорируются;
 ##     ошибки subprocess/timeout/rc!=0 → [] — никогда не raise)
-##   - cert_is_valid (C9): parseable → LE → (domain if expected_domains) → (expiry if check_expiry);
-##     expected_domains=None → без domain-check; check_expiry=False → без expiry-check
+##   - cert_is_valid (C9): parseable → LE → (pair-match if key_path) → (domain if expected_domains)
+##     → (expiry if check_expiry); expected_domains=None → без domain-check; check_expiry=False
+##     → без expiry-check; key_path=None → без pair-check (REF-0008: пара cert+key обязательна
+##     в restore-путях — несогласованная пара «valid on disk» = nginx outage при здоровой системе)
+##   - cert_key_pair_matches (REF-0008): openssl x509 -pubkey vs openssl pkey -pubout,
+##     whitespace-normalized сравнение; subprocess ошибки → False (никогда не raise)
+##   - validate_cert_domain_fqdn (REF-0008): fqdn ≥2 labels, каждый — RFC DNS label
+##     ([a-z0-9] start/end, ≤63), TLD [a-z]{2,}; violation → ConfigValidationError (fail-fast;
+##     закрывает path-traversal/RCE через needs.domain в cert pipeline, SEC-0026)
 ##   - Domain match (DevPlan 004 W1) — SAN primary / CN fallback (RFC 6125): SAN непуст → матч
 ##     ТОЛЬКО по SAN (exact или одноуровневый wildcard; *.example.com НЕ покрывает apex
 ##     example.com и глубже одного label); SAN пуст → CN-fallback (cert_subject_matches_domain).
@@ -48,16 +57,23 @@
 ##           2026-08-22 | T2.4 дедупликация — +_run_openssl(): 5 повторяющихся subprocess openssl
 ##                      блоков (parseable/expiry/issuer/subject/san) → единый приватный хелпер;
 ##                      публичные сигнатуры и возвращаемые значения сохранены 1:1
+##           2026-08-24 | REF-0008 (meta-refactoring В2) — +cert_key_pair_matches (pubkey-match
+##                      cert↔key), +key_path в cert_is_valid (pair-check), +validate_cert_domain_fqdn
+##                      (fail-fast FQDN-валидатор для cert-pipeline; дублирует правила
+##                      vhost_renderer.validate_vhost_identifiers — см. TRAP[DECISION] у функции)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
 import argparse
 import logging
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
 from typing import cast
+
+from core.internal.shared.exceptions import ConfigValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -343,21 +359,114 @@ def _cert_covers_domain(cert_path: str, domain: str, timeout: int = DEFAULT_OPEN
 # endregion FUNC__cert_covers_domain
 
 
+# region FUNC_cert_key_pair_matches
+## @purpose  Проверить криптографическое соответствие пары cert+key (REF-0008 подпункт 1/2):
+##           публичный ключ сертификата (openssl x509 -pubkey) == публичный ключ приватного
+##           ключа (openssl pkey -pubout). Несогласованная пара на диске = nginx падает
+##           (SSL_CTX_use_PrivateKey_file mismatch) при «здоровой» системе — класс FAIL-0300.
+## @io       ⇥ cert_path: str, key_path: str, timeout: int → ⎋ bool (True = пара согласована)
+## @complexity O(1) + 2 openssl subprocess
+## @invariants
+##   - Сравнение PEM-pubkey строк после удаления ВСЕГО whitespace (переносы строк openssl
+##     детерминированы, но нормализация делает матчинг устойчивым к 64-col wrapping разницам)
+##   - Non-fatal: subprocess error/timeout/rc!=0 → False + IMP:7 WARN (никогда не raise;
+##     канон ssl_certs graceful degradation)
+def cert_key_pair_matches(cert_path: str, key_path: str, timeout: int = DEFAULT_OPENSSL_TIMEOUT) -> bool:
+    """Check that the private key matches the certificate (pubkey comparison, REF-0008)."""
+
+    def _pubkey_output(cmd: list[str], op: str) -> str | None:
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+            logger.warning("[IMP:7][ssl_certs] openssl %s check failed (%s): %s", op, cert_path, e)
+            return None
+        if result.returncode != 0:
+            logger.info("[IMP:8][ssl_certs] openssl %s rc=%d for %s", op, result.returncode, cert_path)
+            return None
+        return result.stdout
+
+    cert_pub = _pubkey_output(["openssl", "x509", "-in", cert_path, "-noout", "-pubkey"], "x509 -pubkey")
+    if cert_pub is None:
+        return False
+    key_pub = _pubkey_output(["openssl", "pkey", "-in", key_path, "-pubout"], "pkey -pubout")
+    if key_pub is None:
+        return False
+
+    matches = "".join(cert_pub.split()) == "".join(key_pub.split())
+    if matches:
+        logger.info("[IMP:9][ssl_certs] cert/key pair match OK: %s", cert_path)
+    else:
+        logger.warning(
+            "[IMP:8][ssl_certs] cert/key MISMATCH (pubkey differs): cert=%s key=%s",
+            cert_path,
+            key_path,
+        )
+    return matches
+
+
+# endregion FUNC_cert_key_pair_matches
+
+
+# region FUNC_validate_cert_domain_fqdn
+## @purpose  Fail-fast FQDN-валидатор для cert-pipeline (REF-0008 подпункт 6, SEC-0026):
+##           needs.domain из node.yaml попадает в пути live/`domain`/, S3-keys и shell-строки
+##           reloadcmd — `../` в домене = path traversal/RCE под root. Правила идентичны
+##           vhost_renderer.validate_vhost_identifiers (fqdn-часть): ≥2 labels, RFC DNS label,
+##           TLD [a-z]{2,}.
+## @io       ⇥ fqdn: str → ⊕ ConfigValidationError | ⎋ None (PASS)
+## @complexity O(N) — regex per label
+## @invariants
+##   - Violation → ConfigValidationError (exit 4) — вызывающие (orchestrate_certs entry,
+##     add_project, register_project) обязаны НЕ продолжать обработку (fail-fast)
+# 🧐 TRAP[DECISION] · 2026-08-24 · — · Дублирование fqdn-правил vhost_renderer в shared/ssl_certs
+# · Rejected: импорт validate_vhost_identifiers из scaffold в shared/cert-модули
+# · Reason: import-linter acyclic-internal-domains — scaffold импортирует shared → ребро
+# ·   shared→scaffold создало бы цикл; перенос канонической реализации в shared = rename-риск
+# ·   для потребителей vhost_renderer вне скоупа launch-window (freeze P3: только точечные диффы)
+# · Rev: пост-launch миграция validate_vhost_identifiers в shared (или выделение fqdn-части)
+# ·   с делегацией vhost_renderer — удалить дубль и этот TRAP
+_FQDN_LABEL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+_TLD_RE = re.compile(r"^[a-z]{2,}$")
+_MIN_FQDN_LABELS = 2
+
+
+def validate_cert_domain_fqdn(fqdn: str) -> None:
+    """Validate FQDN for the cert pipeline (fail-fast on traversal/injection, REF-0008)."""
+    labels = fqdn.split(".")
+    if len(labels) < _MIN_FQDN_LABELS:
+        msg = f"Invalid cert domain FQDN (single label, no TLD): {fqdn!r}"
+        raise ConfigValidationError(msg)
+    for label in labels:
+        if not _FQDN_LABEL_RE.match(label):
+            msg = f"Invalid cert domain FQDN label {label!r} in {fqdn!r}"
+            raise ConfigValidationError(msg)
+    if not _TLD_RE.match(labels[-1]):
+        msg = f"Invalid cert domain FQDN TLD {labels[-1]!r} in {fqdn!r}"
+        raise ConfigValidationError(msg)
+
+
+# endregion FUNC_validate_cert_domain_fqdn
+
+
 # region FUNC_cert_is_valid
 ## @purpose  Единая комбинация «сертификат валиден» (DevPlan 118 C9): parseable + LE issuer +
-##           (domain match — если expected_domains задан) + (expiry — если check_expiry).
-##           Дедупликация трёх реализаций: s3_ssl_cache._validate_cert (parseable+LE+domain+expiry),
-##           cert_orchestrator._is_cert_valid (expiry+LE), context_deployer (expiry+LE inline).
-##           Domain match — SAN primary / CN fallback (DevPlan 004 W1, _cert_covers_domain).
+##           (pair-match — если key_path задан) + (domain match — если expected_domains задан) +
+##           (expiry — если check_expiry). Дедупликация трёх реализаций: s3_ssl_cache._validate_cert
+##           (parseable+LE+domain+expiry), cert_orchestrator._is_cert_valid (expiry+LE),
+##           context_deployer (expiry+LE inline). Domain match — SAN primary / CN fallback
+##           (DevPlan 004 W1, _cert_covers_domain). REF-0008: key_path включает pair-match
+##           (cert_key_pair_matches) — restore-пути обязаны проверять согласованность пары.
 ## @io       ⇥ cert_path: str; threshold: int (сек до истечения, default 30 дней);
-##              expected_domains: str | list[str] | None; check_expiry: bool; timeout: int
+##              expected_domains: str | list[str] | None; check_expiry: bool;
+##              key_path: str | None (приватный ключ для pair-match); timeout: int
 ##           ⎋ bool (True = валиден)
-## @complexity — O(1) + 2-4 openssl subprocess
+## @complexity — O(1) + 2-6 openssl subprocess
 ## @invariants
-##   - Порядок: parseable → LE issuer → (domain match: SAN primary, CN fallback) → (expiry)
-##     — fail-fast на первом False
+##   - Порядок: parseable → LE issuer → (pair-match if key_path) → (domain match: SAN primary,
+##     CN fallback) → (expiry) — fail-fast на первом False
 ##   - expected_domains=None → domain-check пропускается (cert_orchestrator/context_deployer семантика)
 ##   - check_expiry=False → expiry-check пропускается (s3_ssl_cache download-семантика)
+##   - key_path=None → pair-check пропускается (additive-only: прежние сигнатуры/поведение 1:1)
 ##   - Non-fatal: никогда не raise — subprocess ошибки → False (graceful degradation)
 def cert_is_valid(
     cert_path: str,
@@ -365,8 +474,10 @@ def cert_is_valid(
     expected_domains: str | list[str] | None = None,
     check_expiry: bool = True,
     timeout: int = DEFAULT_OPENSSL_TIMEOUT,
+    *,
+    key_path: str | None = None,
 ) -> bool:
-    """Check cert is valid: parseable + LE issuer + optional domain match (SAN primary, CN fallback) + optional expiry (C9+W1)."""
+    """Check cert is valid: parseable + LE issuer + optional pair-match + domain match + expiry (C9+W1+REF-0008)."""
     # 1. Parseable (openssl x509 -noout)
     if not cert_is_parseable(cert_path, timeout=timeout):
         return False
@@ -376,7 +487,15 @@ def cert_is_valid(
         logger.info("[IMP:8][ssl_certs] cert_is_valid: not Let's Encrypt issuer — invalid: %s", cert_path)
         return False
 
-    # 3. Domain match (опционально — expected_domains; SAN primary / CN fallback, W1)
+    # 3. Pair-match (REF-0008: приватный ключ соответствует сертификату — опционально, key_path)
+    if key_path is not None and not cert_key_pair_matches(cert_path, key_path, timeout=timeout):
+        logger.warning(
+            "[IMP:7][ssl_certs] cert_is_valid: privkey does not match certificate — invalid pair: %s",
+            cert_path,
+        )
+        return False
+
+    # 4. Domain match (опционально — expected_domains; SAN primary / CN fallback, W1)
     domains = [expected_domains] if isinstance(expected_domains, str) else (expected_domains or [])
     if domains and not any(_cert_covers_domain(cert_path, d, timeout=timeout) for d in domains):
         san_list = cert_get_san_list(cert_path, timeout=timeout)
@@ -388,7 +507,7 @@ def cert_is_valid(
         )
         return False
 
-    # 4. Expiry (>threshold до истечения, опционально — check_expiry)
+    # 5. Expiry (>threshold до истечения, опционально — check_expiry)
     if check_expiry and not cert_check_expiry(cert_path, threshold, timeout=timeout):
         logger.info("[IMP:8][ssl_certs] cert_is_valid: expires within %ds or unparseable: %s", threshold, cert_path)
         return False

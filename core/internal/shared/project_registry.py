@@ -21,6 +21,7 @@
 ## @changes  2026-07-25 · DevPlan 070 — Created
 ##           2026-07-26 · DevPlan 038b — sys.exit replaced with return tuple
 ##           2026-07-30 · DevPlan 091 Wave C — yaml.safe_load → NodeYaml bridge (AC2)
+##           2026-08-24 · REF-0008 В2 — fail-fast FQDN-валидация domain на register-входе
 # endregion MODULE_CONTRACT
 
 import logging
@@ -51,6 +52,7 @@ from core.internal.shared.deploy_paths import DEFAULT_PROJECTS_BASE as DEFAULT_P
 from core.internal.shared.exceptions import ConfigNotFoundError, ConfigValidationError
 from core.internal.shared.node_yaml import NodeYaml, ProjectEntry
 from core.internal.shared.project_yaml import get_llm, load_project_yaml
+from core.internal.shared.ssl_certs import validate_cert_domain_fqdn  # REF-0008: fail-fast fqdn
 from core.internal.shared.verbs import is_verb
 
 
@@ -133,6 +135,8 @@ def validate_project_name(name: str) -> bool:
 ## @complexity — O(N) where N = len(projects)
 ## @invariants
 ##   - Idempotent: if project name or repo already exists → returns (True, "Idempotent SKIP...")
+##   - REF-0008 (SEC-0026): domain задан и невалиден (FQDN, `../`-traversal) → (False, msg)
+##     ДО NodeYaml-мутации — fail-fast на register-входе cert-pipeline цепочки needs.domain
 ##   - Creates 'projects' key if missing
 ##   - Writes YAML with default_flow_style=False, sort_keys=False (preserves existing ordering)
 ##   - Logs to stderr at IMP:9 on success/skip
@@ -162,6 +166,17 @@ def register_project(
         )
         logger.warning("%s", msg)
         return (False, msg)
+
+    # ── REF-0008 fail-fast (SEC-0026): FQDN-валидация домена до NodeYaml-мутации ──
+    # needs.domain → cert-pipeline (live/<domain>/, reloadcmd под root); `../`-домен
+    # отклоняется на входе, а не в sink'е.
+    if domain:
+        try:
+            validate_cert_domain_fqdn(domain)
+        except ConfigValidationError as e:
+            msg = f"[IMP:10][{log_prefix}][register] Invalid domain {domain!r}: {e}"
+            logger.error("%s", msg)
+            return (False, msg)
 
     # ruff: ignore[PLW0717] — тело try присваивает имена, читаемые except/после — извлечение ломает видимость
     try:

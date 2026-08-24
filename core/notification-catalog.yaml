@@ -72,6 +72,11 @@ events:
     context: cert
     throttle_min: 1440
     action: "Renew the certificate (acme.sh --renew) within the threshold"
+  - id: cert.self_signed
+    severity: critical
+    context: cert
+    throttle_min: 720
+    action: "Self-signed certificate detected — issue a Let's Encrypt certificate (REF-0008); self-signed не перезаписывает LE"
   - id: reboot.postponed
     severity: warning
     context: reboot

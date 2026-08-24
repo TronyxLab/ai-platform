@@ -25,6 +25,7 @@
 
 import logging
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -52,13 +53,54 @@ _BACKUP_POSTGRES_PY = _SCRIPTS_DIR / "backup_postgres.py"
 # ·   если модуль не COPY'ится, cron падает (No such file / ImportError retention)
 # · Last fail: до C1 — Dockerfile копировал retention.py БЕЗ его импортов
 # · Remove if: доставка скриптов переезжает в другой механизм
-@pytest.mark.parametrize("script", ["wal_sync.py", "date_parser.py", "s3_client.py"])
+@pytest.mark.parametrize(
+    "script",
+    [
+        "wal_sync.py",
+        "date_parser.py",
+        "s3_client.py",
+        # REF-0009: sentinel-gated cleanup + age-encrypt + daily rescan retry
+        "cleanup_spool.py",
+        "age_cipher.py",
+        "spool_retry.py",
+    ],
+)
 def test_dockerfile_copies_scripts(script: str, caplog) -> None:
-    """AC-W2/AC-C1.1: Dockerfile содержит COPY scripts/<script> для всех cron-скриптов."""
+    """AC-W2/AC-C1.1/REF-0009: Dockerfile содержит COPY scripts/<script> для всех cron-скриптов."""
     content = _DOCKERFILE.read_text(encoding="utf-8")
 
     assert f"COPY scripts/{script}" in content, f"AC FAIL: Dockerfile не копирует {script}"
     logger.critical("[IMP:9][dockerfile][copy] COPY scripts/%s присутствует (PASS)", script)
+
+
+@pytest.mark.static_audit
+@ldd_trajectory
+# 🧪 TRAP[TEST] · 2026-08-25 · REGRESSION + NEGATIVE (R5) · REF-0009/AI-0070 — двойная установка crontab удалена
+# · Scenario: `crontab /etc/cron.d/platform-backup` дублировал расписание в spool root'а
+#   поверх /etc/cron.d-файла (двойной запуск/рассинхронизация); age-пакет нужен для
+#   fail-closed шифрования дампов
+# · Last fail: AI-0070 — Dockerfile:97 COPY + :101 crontab = два механизма установки
+# · Remove if: backup-cron перейдёт на systemd timers вне контейнера
+def test_dockerfile_single_crontab_install_and_age_package(caplog) -> None:
+    """REF-0009: crontab ставится ТОЛЬКО в /etc/cron.d; пакет age установлен."""
+    content = _DOCKERFILE.read_text(encoding="utf-8")
+
+    assert "COPY scripts/crontab /etc/cron.d/platform-backup" in content, (
+        "каноническая установка cron.d обязана остаться"
+    )
+    # AI-0070 R5-negative: НИ одна исполнимая строка не ставит spool-crontab
+    # (`crontab <file>` дублировал расписание root'а поверх cron.d); COPY scripts/crontab —
+    # легитимная доставка файла, исключается lookbehind'ом
+    executable_lines = [ln for ln in content.splitlines() if not ln.lstrip().startswith("#")]
+    double_install = [ln for ln in executable_lines if re.search(r"(?<!scripts/)crontab\s+\S*/cron\.d/", ln)]
+    assert not double_install, f"AI-0070 FAIL: spool-установка crontab присутствует: {double_install}"
+
+    # Пакет age — в обоих проходах retry-install (основной + fallback)
+    age_entries = re.findall(r"^\s+age\s+\\$", content, re.MULTILINE)
+    assert len(age_entries) >= 2, (
+        f"пакет age обязан быть в основном И fallback apt-install (найдено {len(age_entries)})"
+    )
+    logger.critical("[IMP:9][dockerfile][cron] single cron.d install + age package ✓")
 
 
 @pytest.mark.static_audit
@@ -189,17 +231,24 @@ def test_retention_import_in_container_negative(caplog) -> None:
 # · Last fail: до 117 D64 upload-цепочка была мёртвой (0 cron-вызовов)
 # · Remove if: upload логика переезжает в другой модуль
 def test_upload_called_after_dump(caplog) -> None:
-    """AC-C1.3: upload-s3.sh вызывается после pg_dumpall (не блокирует при ошибке)."""
+    """AC-C1.3: upload-s3.sh вызывается после pg_dumpall (не блокирует при ошибке).
+
+    REF-0009: upload получает ЗАШИФРОВАННЫЙ артефакт (.age) — plaintext не уходит с ноды.
+    """
     content = _BACKUP_POSTGRES_PY.read_text(encoding="utf-8")
 
-    # 1) Инвокация upload присутствует
-    assert "_UPLOAD_SCRIPT, dump_file, s3_key" in content, "AC-C1.3 FAIL: backup_postgres.py не вызывает upload-s3.sh"
+    # 1) Инвокация upload присутствует (зашифрованный файл + .age S3-ключ)
+    assert "_UPLOAD_SCRIPT, encrypted_file, s3_key" in content, (
+        "AC-C1.3 FAIL: backup_postgres.py не вызывает upload-s3.sh для зашифрованного дампа"
+    )
     # 2) Вызов происходит ПОСЛЕ отметки успешного дампа (backup_success = True)
     dump_success_idx = content.find("backup_success = True")
-    upload_idx = content.find("_UPLOAD_SCRIPT, dump_file, s3_key")
+    upload_idx = content.find("_UPLOAD_SCRIPT, encrypted_file, s3_key")
     assert dump_success_idx != -1 and upload_idx != -1, "markers not found in backup_postgres.py"
     assert upload_idx > dump_success_idx, "AC-C1.3 FAIL: upload вызывается ДО успешного дампа"
-    # 3) «Не блокировать при ошибке upload»: после инвокации есть проверка rc → return 0
+    # 3) Fail-closed шифрование (REF-0009): без AGE_RECIPIENT — upload SKIP, не plaintext
+    assert "AGE_RECIPIENT not set" in content, "fail-closed контракт отсутствует"
+    # 4) «Не блокировать при ошибке upload»: после инвокации есть проверка rc → return 0
     assert "return 0" in content[upload_idx:], "AC-C1.3 FAIL: upload failure должен НЕ проваливать бэкап"
 
-    logger.critical("[IMP:9][backup_postgres][upload] upload-s3.sh после дампа, non-blocking (AC-C1.3 PASS)")
+    logger.critical("[IMP:9][backup_postgres][upload] upload-s3.sh (.age) после дампа, non-blocking (AC-C1.3 PASS)")

@@ -41,7 +41,7 @@ def _make_secrets_dir(tmp_path: Path) -> Path:
 
 
 # region FUNC_test_bare_node_name_dispatches_to_its_file
-## @purpose  Bare имя ноды диспетчится в <secrets_dir>/<NODE>.enc.yaml — даже когда в каталоге
+## @purpose  Bare имя ноды диспетчится в `secrets_dir`/`NODE`.enc.yaml — даже когда в каталоге
 ##           есть alphabetically-более ранний чужой файл.
 ## @io       ⇥ tmp_path → ⎋ None (asserts)
 @ldd_trajectory

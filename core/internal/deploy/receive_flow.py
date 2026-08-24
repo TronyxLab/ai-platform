@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: receive-flow, receive, tar, stdin, unpack, validate, deploy, pre-deploy-gate, L1, PRACTICES-BLOCK, forced-command, sha-pinning, JSON, E2, orchestrator-decomposition, flock, payload-tx, backup-restore, stale-compose, orphan-sweep, concurrency
-# STRUCTURE: ▶ ReceiveFlow.run ┌stdin tar + project_name + version┐ → unpack (tar → staging) → validate (ai-platform.yaml + name) → ◆ flock per-project (fail-closed, REF-0011) → payload-tx ┌backup ВНЕ target → staging-copy → os.replace (без pre-remove) → stale-compose delete┐ → deploy (LocalChannel) → post-deploy chain → ⎋ JSON + exit code
+# GREP_SUMMARY: receive-flow, receive, tar, stdin, unpack, validate, deploy, pre-deploy-gate, L1, PRACTICES-BLOCK, forced-command, sha-pinning, JSON, E2, orchestrator-decomposition, flock, payload-tx, backup-restore, stale-compose, orphan-sweep, concurrency, resource-guards, tar-bomb, uncompressed-ceiling, statvfs
+# STRUCTURE: ▶ ReceiveFlow.run ┌stdin tar + project_name + version┐ → unpack (statvfs guard → stream-extract: ceiling + entry-cap → staging) → validate (ai-platform.yaml + name) → ◆ flock per-project (fail-closed, REF-0011) → payload-tx ┌backup ВНЕ target → staging-copy → os.replace (без pre-remove) → stale-compose delete┐ → deploy (LocalChannel) → post-deploy chain → ⎋ JSON + exit code
 # region MODULE_CONTRACT
 ## @purpose  VPS-side forced-command receive flow (DevPlan 119 E2) — экстракция receive() из
 ##           deploy/orchestrator.py (127 LOC, CC=15). Класс ReceiveFlow: unpack → validate →
@@ -14,9 +14,14 @@
 ##           violation блокирует деплой ДО orchestrator.deploy (контейнеры не запускаются).
 ## @invariants
 ##   - Пустой stdin → JSON-ошибка + exit 1 (fail-fast, БЕЗ || true-масок)
-##   - Payload > лимита (env PLATFORM_MAX_PAYLOAD_BYTES, default 1GiB; W4a: ленивый резолв
-##     через AppConfig в run()/конструкторе) → reject
+##   - Payload > лимита (env PLATFORM_MAX_PAYLOAD_BYTES, default 64 MiB — REF-0015 ↓ с 1 GiB;
+##     W4a: ленивый резолв через AppConfig в run()/конструкторе) → reject
 ##     ДО распаковки (T9.9: потоковое чтение, лимит по ходу, не после)
+##   - Resource guards (REF-0015): stream-extract с running uncompressed ceiling 200 MB +
+##     entry-count cap 512 (tar-бомба: высокий коэффициент сжатия / тысячи членов) —
+##     нарушение → ConfigValidationError ДО записи гигантского члена на диск;
+##     statvfs guard: свободное место ≥ ceiling ДО старта extract (ENOSPC mid-extract
+##     на общей FS с postgres WAL/docker layers = node-wide outage)
 ##   - ai-platform.yaml отсутствует → JSON-ошибка + exit 1 (fail-fast)
 ##   - project_name из аргументов (валидируется validate_project_name + verb-reserve U-56);
 ##     фолбэк на ai-platform.yaml `name` — ТОЛЬКО для локальных/ручных вызовов без аргументов
@@ -70,8 +75,17 @@
 ##           target_dir, restore-from-backup при сбое replace (ДО rmtree), replace без
 ##           pre-remove, удаление stale canonical compose, prefix-sweep orphan tmpdir,
 ##           restore_payload_from_backup() — отдельный шов для REF-0004
+## @changes  2026-08-25 · REF-0006 (DevPlan 11 В2) — код канала не меняется: staging-гейт
+##           (176 A.2) остаётся первым рубежом; ВТОРОЙ рубеж l1_only теперь внутри
+##           DeployOrchestrator.deploy (target_dir в момент compose — TOCTOU-закрытие);
+##           deny-set расширен volumes/socket/host-modes на обоих рубежах
+## @changes  2026-08-25 · REF-0015 (DevPlan 11 В2) — resource guards receive: stream-extract
+##           с running uncompressed ceiling (200 MB) + entry-count cap (512) + statvfs guard
+##           ДО extract; default compressed payload cap ↓ 64 MiB (AppConfig); нарушение
+##           потолка/cap → ConfigValidationError (B4 канон) → JSON FAILED + exit 1
 ## @modulemap
-##   ReceiveFlow.unpack [W:2] — tar.gz → staging (filter="data", tarfile)
+##   ReceiveFlow.unpack [W:3] — statvfs guard → stream-extract tar.gz → staging (ceiling +
+##                              entry-cap guards, filter="data")
 ##   ReceiveFlow.validate [W:3] — ai-platform.yaml parse + project name resolve/validate
 ##   ReceiveFlow.deploy [W:3] — pre-deploy L1 gate → payload-tx (backup/replace/stale-delete)
 ##                              → LocalChannel deploy → result
@@ -121,11 +135,28 @@ from core.internal.shared.timeouts import DEPLOY_TIMEOUT
 logger = logging.getLogger(__name__)
 
 # ── T9.9 (L-7, DevPlan 136 W9): лимит размера payload из stdin. Env-конфигурируемый,
-# default 1 GiB. Потоковое чтение (chunked) — reject при превышении ДО распаковки.
+# default 64 MiB (REF-0015: ↓ с 1 GiB — легитимные payload'ы канала receive — файлы
+# конфигурации, KB-масштаб; 64 MiB = ×1000 запас). Потоковое чтение (chunked) — reject
+# при превышении ДО распаковки.
 # W4a (DevPlan 160 T4.1): import-time env-чтение убрано — ЧИСТЫЙ дефолт; env резолвится
-# лениво (AppConfig.from_env) в ReceiveFlow.run()/конструкторе.
-_DEFAULT_MAX_PAYLOAD_BYTES = 1024**3  # 1 GiB
+# лениво (AppConfig.from_env) в ReceiveFlow.run()/конструкторе. SoT дефолта —
+# app_config._DEFAULT_MAX_PAYLOAD_BYTES; константа здесь — документация fallback'а.
+_DEFAULT_MAX_PAYLOAD_BYTES = 64 * 1024 * 1024  # 64 MiB
 _READ_CHUNK_BYTES = 1024 * 1024  # 1 MiB per chunk
+
+# ── REF-0015 (DevPlan 11 В2): resource guards против tar-бомб и ENOSPC.
+# Compressed-кап выше меряет только stdin; gzip даёт ~1000:1 на нулях → 1 MiB сжатых
+# данных разворачивается в гигабайты. Три рубежа:
+#   (1) running uncompressed ceiling 200 MB при stream-extract — сумма ОБЪЯВЛЕННЫХ
+#       member.size проверяется по ходу распаковки ДО записи очередного члена
+#       (tar-формат детерминирует объём записи из заголовка — учёт по заголовкам полон);
+#   (2) entry-count cap 512 — тысячи пустых членов = inode/FD-бомба даже при малом
+#       суммарном размере;
+#   (3) statvfs guard перед extract — свободное место ≥ ceiling (extract жёстко ограничен
+#       потолком, поэтому free < ceiling ⇒ потенциальный ENOSPC mid-extract на общей FS
+#       с postgres WAL / docker layers).
+_MAX_UNCOMPRESSED_CEILING_BYTES = 200 * 1024 * 1024  # 200 MB uncompressed ceiling
+_MAX_TAR_ENTRIES = 512
 
 # ── REF-0011: per-project flock периметр receive. Таймаут = полный деплой-бюджет:
 # конкурентный receive ЖДЁТ окончания активного (CI concurrency-group сериализует пуш'ы,
@@ -518,22 +549,94 @@ class ReceiveFlow:
     # endregion FUNC__make_orchestrator
 
     # region FUNC_unpack
-    ## @purpose  Extract tar.gz payload (from stdin bytes) into staging dir (filter="data").
-    ## @io       ⇥ tar_bytes: bytes, staging: str → ⎋ bool (True = extracted)
-    ## @complexity O(N) where N = tar entries
+    ## @purpose  Stream-extract tar.gz payload (stdin bytes) into staging (filter="data")
+    ##           с resource guards (REF-0015): statvfs headroom ДО старта, running
+    ##           uncompressed ceiling + entry-count cap по ходу распаковки. Члены
+    ##           обрабатываются последовательно — нарушение потолка прерывает extract
+    ##           ДО записи очередного члена (гигантский член не попадает на диск).
+    ## @io       ⇥ tar_bytes: bytes, staging: str,
+    ##              max_uncompressed_bytes: int | None = None (DI; None = _MAX_UNCOMPRESSED_CEILING_BYTES),
+    ##              max_entries: int | None = None (DI; None = _MAX_TAR_ENTRIES)
+    ##           → ⎋ bool (True = extracted)
+    ##           ⚡ ConfigValidationError — ceiling/entry-cap/statvfs нарушен (fail-fast,
+    ##             B4 канон: валидация payload → ConfigValidationError)
+    ## @complexity O(N) where N = tar entries до нарушения (запись ограничена потолком)
     ## @invariants
-    ##   - mode="r:gz", filter="data" (tarfile 3.14 API — path traversal protection)
+    ##   - mode="r:gz", filter="data" (tarfile API — path traversal protection)
     ##   - Пустой tar_bytes → False (fail-fast)
+    ##   - Running ceiling по ОБЪЯВЛЕННЫМ member.size: объём записи члена детерминирован
+    ##     заголовком tar → учёт по заголовкам полон; превышение → ConfigValidationError
+    ##     до tar.extract() данного члена
+    ##   - statvfs guard: f_bavail×f_frsize < ceiling → ConfigValidationError ДО открытия tar
+    ##   - DI-параметры потолка/cap — для unit-тестов (0 monkeypatch констант)
     @staticmethod
-    def unpack(tar_bytes: bytes, staging: str) -> bool:
-        """Extract tar.gz bytes into staging. Returns True on success."""
+    def unpack(
+        tar_bytes: bytes,
+        staging: str,
+        *,
+        max_uncompressed_bytes: int | None = None,
+        max_entries: int | None = None,
+    ) -> bool:
+        """Extract tar.gz bytes into staging with tar-bomb guards. Returns True on success."""
         if not tar_bytes:
             logger.error("[IMP:10][ReceiveFlow][unpack] No data received on stdin")
             return False
+
+        ceiling = max_uncompressed_bytes if max_uncompressed_bytes is not None else _MAX_UNCOMPRESSED_CEILING_BYTES
+        entry_cap = max_entries if max_entries is not None else _MAX_TAR_ENTRIES
+
+        # ── REF-0015: statvfs guard — свободное место обязано покрывать полный uncompressed
+        # ceiling ЕЩЁ ДО открытия tar. Staging живёт в system tmp на одной FS с postgres WAL
+        # и docker layers: ENOSPC mid-extract валит ноду целиком. Extract жёстко ограничен
+        # потолком ниже ⇒ требование free >= ceiling гарантирует, что сам extract не может
+        # исчерпать диск даже при полном развёртывании.
+        usage = os.statvfs(staging)
+        free_bytes = usage.f_bavail * usage.f_frsize
+        if free_bytes < ceiling:
+            logger.error(
+                "[IMP:10][ReceiveFlow][unpack] Insufficient disk headroom for %s: free=%d required>=%d (REF-0015)",
+                staging,
+                free_bytes,
+                ceiling,
+            )
+            msg = f"Insufficient disk space before extract: free={free_bytes} bytes, required>={ceiling}"
+            raise ConfigValidationError(msg)
+
         buf = io.BytesIO(tar_bytes)
+        total_declared = 0
+        entries = 0
         with tarfile.open(fileobj=buf, mode="r:gz") as tar:
-            tar.extractall(path=staging, filter="data")
-        logger.info("[IMP:8][ReceiveFlow][unpack] Payload extracted to %s", staging)
+            while True:
+                member = tar.next()
+                if member is None:
+                    break
+                entries += 1
+                if entries > entry_cap:
+                    logger.error(
+                        "[IMP:10][ReceiveFlow][unpack] Tar entry-count cap exceeded: %d > %d — rejecting (REF-0015)",
+                        entries,
+                        entry_cap,
+                    )
+                    msg = f"Tar payload exceeds entry-count cap ({entry_cap} entries)"
+                    raise ConfigValidationError(msg)
+                total_declared += member.size
+                if total_declared > ceiling:
+                    logger.error(
+                        "[IMP:10][ReceiveFlow][unpack] Uncompressed ceiling exceeded: >%d declared bytes "
+                        "(cap=%d) — rejecting BEFORE write of member %r (REF-0015)",
+                        total_declared,
+                        ceiling,
+                        member.name,
+                    )
+                    msg = f"Tar payload exceeds uncompressed ceiling ({ceiling} bytes)"
+                    raise ConfigValidationError(msg)
+                tar.extract(member, path=staging, filter="data")
+        logger.info(
+            "[IMP:8][ReceiveFlow][unpack] Payload extracted to %s (%d entries, %d declared bytes)",
+            staging,
+            entries,
+            total_declared,
+        )
         return True
 
     # endregion FUNC_unpack
@@ -868,11 +971,14 @@ class ReceiveFlow:
                 })
             )
             return 1
-        except (tarfile.TarError, OSError, EOFError, FileLockError) as e:
+        except (tarfile.TarError, OSError, EOFError, FileLockError, ConfigValidationError) as e:
             # EOFError (REF-0105/FAIL-0711): обрыв stdin/JSON-канала — тот же JSON-контракт
             # FAILED, а не traceback диспетчеру forced-command.
             # FileLockError (REF-0011): контеншн на вложенных локах (history snapshot и т.п.)
             # — JSON FAILED + rc 1 вместо traceback в forced-command канал.
+            # ConfigValidationError (REF-0015): resource guards unpack (uncompressed ceiling /
+            # entry-count cap / statvfs headroom) — валидация payload (B4 канон) →
+            # тот же JSON FAILED + rc 1 (traceback диспетчеру forced-command недопустим).
             logger.error("[IMP:10][ReceiveFlow][run] Error: %s", e)
             print(json.dumps({"status": "FAILED", "error": str(e)}))
             return 1

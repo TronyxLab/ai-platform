@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: verify-contracts, K3, VPS, L1, L2, L3, secrets-in-compose, ports-published, healthcheck-present, external-networks, env-file-contract, platform-labels, limits-present, privileged, cap-add, devices, compose-config-valid, drift-practices, build-check, PRACTICES-BLOCK, audit, allowlist
-# STRUCTURE: ▶ verify_project_contracts(project_dir) → load_manifest (canon: allowed_external_networks) → read practices.lock (state) → resolve compose → 10×L1 статика (secrets/ports/healthcheck/networks/env-file/labels/limits/privileged/cap-add/devices) → ◇ l1_only? → 3×L2 (compose config / drift-version / build-check) → ⊕ severity (L1: block; L2/L3: block|active-full else warn) → ⊕ VerifyReport → audit_logger (event=verify_contracts) → ⎋ has_blocking/has_warnings/format_for_ssh
+# GREP_SUMMARY: verify-contracts, K3, VPS, L1, L2, L3, secrets-in-compose, ports-published, healthcheck-present, external-networks, env-file-contract, platform-labels, limits-present, privileged, cap-add, devices, dangerous-volumes, socket-mount, host-binds, named-volumes, host-mode-keys, network-mode-host, pid, userns, sysctls, l1_only, compose-config-valid, drift-practices, build-check, PRACTICES-BLOCK, audit, allowlist
+# STRUCTURE: ▶ verify_project_contracts(project_dir) → load_manifest (canon: allowed_external_networks) → read practices.lock (state) → resolve compose → 12×L1 статика (secrets/ports/healthcheck/networks/env-file/labels/limits/privileged/cap-add/devices/volumes/host-modes) → ◇ l1_only? → 3×L2 (compose config / drift-version / build-check) → ⊕ severity (L1: block; l1_only: parse-fail block; L2/L3: block|active-full else warn) → ⊕ VerifyReport → audit_logger (event=verify_contracts) → ⎋ has_blocking/has_warnings/format_for_ssh
 # region MODULE_CONTRACT
 ## @purpose  Контракт-проверки проекта на VPS (DevPlan 137 W4, K3-канал — расширение verify
 ##           verb forced-command диспетчера): 13 контрактов по таблице §5 W4 + limits-present
-##           (DevPlan 162 W4-3) + privileged/cap-add/devices (DevPlan 176 A.1, C1 root-эскалация).
+##           (DevPlan 162 W4-3) + privileged/cap_add/devices (DevPlan 176 A.1, C1 root-эскалация)
+##           + dangerous-volumes/host-mode-keys (REF-0006, DevPlan 11 В2 — volumes/socket/
+##           host-binds/named-volumes и network_mode:host/pid/userns_mode/cgroup/sysctls).
 ##           L1-контракты — инварианты платформы
 ##           (см. секцию «Контракт окружения проекта» root AGENTS.md: «НЕ публикуй порты»,
 ##           «НЕ храни секреты», ingress = nginx proxy-net, привилегии проектам запрещены),
@@ -19,14 +21,25 @@
 ##           escalator.evaluate (на VPS нет git) — применяет готовый state из practices.lock.
 ## @invariants
 ##   - L1 (secrets-in-compose/ports-published/healthcheck-present/external-networks/
-##     env-file-contract/platform-labels/limits-present/privileged/cap-add/devices) — БЛОК всегда;
+##     env-file-contract/platform-labels/limits-present/privileged/cap-add/devices/
+##     dangerous-volumes/host-mode-keys) — БЛОК всегда;
 ##     L2/L3 — блок только в active-full
-##   - privileged/cap-add/devices (176 A.1, C1): проектам привилегии запрещены ПОЛНОСТЬЮ —
+##   - privileged/cap_add/devices (176 A.1, C1): проектам привилегии запрещены ПОЛНОСТЬЮ —
 ##     privileged truthy, ЛЮБОЙ cap_add/devices ключ (в т.ч. пустой список) → violation;
 ##     платформенные модули — через gated allowlist вне скоупа этих контрактов
-##   - l1_only=True (176 A.2 pre-deploy gate receive): ТОЛЬКО L1-статика — drift и
-##     docker-зависимые L2 (compose-config-valid/build-check) НЕ исполняются (pre-up гейт
-##     без docker-латентности); audit пишется (block-события фиксируются)
+##   - dangerous-volumes (REF-0006): socket-маунты (/var/run/docker.sock и пр.) — deny
+##     безусловно; абсолютные host-binds — только из _ALLOWED_ABSOLUTE_HOST_BINDS (минимальный
+##     allowlist); относительные (./ ../) и не-статически-резолвимые (${VAR}) источники —
+##     deny; персистентность проектов — ТОЛЬКО named volumes
+##   - host-mode-keys (REF-0006): network_mode:host / pid:host / userns_mode:host /
+##     cgroup:host → violation; cgroup_parent/sysctls — ЛЮБОЕ присутствие ключа → violation
+##     (паритет cap_add/devices)
+##   - l1_only=True (176 A.2 pre-deploy gate receive + REF-0006 pre-apply gate deploy):
+##     ТОЛЬКО L1-статика — drift и docker-зависимые L2 (compose-config-valid/build-check)
+##     НЕ исполняются (pre-up гейт без docker-латентности);
+##     ⚠️ ИСКЛЮЧЕНИЕ: непарсящийся compose (compose-config-valid parse-fail) в l1_only —
+##     БЛОКИРУЮЩИЙ (сломанный YAML больше не проходит pre-deploy гейт как L2-warning,
+##     REF-0006); audit пишется (block-события фиксируются)
 ##   - allowed_external_networks — ИЗ КАНОНА practices_manifest.yaml (не хардкод; TRAP §10.2)
 ##   - healthcheck-present — СТАТИЧЕСКАЯ проверка наличия ключа healthcheck: ИЛИ labels:
 ##     platform.healthcheck=...; канон healthcheck_poller НЕ дублируется (без runtime inspect)
@@ -49,8 +62,12 @@
 ##             общего стека (лимиты 128M/0.25CPU, K3/L1-практики); PidsLimit 256 платформенным.
 ## @changes  2026-08-05 · DevPlan 137 W4 — создан (K3-канал, 9 контрактов §5 W4)
 ## @changes  2026-08-13 · DevPlan 162 W4-3 — +L1 limits-present (наличие memory+cpus лимитов)
-## @changes  2026-08-16 · DevPlan 176 A.1/A.2 — +L1 privileged/cap-add/devices (C1 root-эскалация);
+## @changes  2026-08-16 · DevPlan 176 A.1/A.2 — +L1 privileged/cap_add/devices (C1 root-эскалация);
 ##           +l1_only режим (pre-deploy gate receive_flow) + audit_project_name override
+## @changes  2026-08-25 · REF-0006 (DevPlan 11 В2) — +L1 dangerous-volumes (socket-mounts deny,
+##           абсолютные host-binds вне минимального allowlist, named-volumes requirement) +
+##           host-mode-keys (network_mode:host/pid/userns_mode/cgroup/sysctls); l1_only:
+##           compose-config-valid parse-fail → БЛОК (сломанный YAML не проходит pre-deploy гейт)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -99,6 +116,36 @@ _PLATFORM_LABEL_PREFIX: str = "platform."
 # ── Docker-команды (таймауты) ──
 _COMPOSE_CONFIG_TIMEOUT: int = 30
 _BUILD_CHECK_TIMEOUT: int = 120
+
+# ── REF-0006 (dangerous-volumes): socket/docker-маунты — root-эквивалент ноды.
+# Точное совпадение ИЛИ вложение в каталог-префикс (/var/run/docker/*). Суффиксное
+# сопоставление не используем: "/evil/var/run/docker.sock" как host-path легитимного
+# кейса не имеет, а ложные срабатывания на container-path недопустимы — матчим ТОЛЬКО
+# source (host-сторону) маунта.
+_DANGEROUS_SOCKET_SOURCES: tuple[str, ...] = (
+    "/var/run/docker.sock",
+    "/run/docker.sock",
+    "/var/run/docker",
+    "/run/docker",
+    "/var/run/containerd/containerd.sock",
+    "/run/containerd/containerd.sock",
+    "/run/buildkit/buildkitd.sock",
+)
+
+# ── REF-0006 (dangerous-volumes): минимальный allowlist абсолютных host-binds.
+# Пуст по умолчанию: проектам bind-mounts host-путей запрещены, персистентность —
+# named volumes. Запись допускает точный путь ИЛИ каталог-префикс (запись "/srv/data"
+# разрешает "/srv/data/sub"). Расширение = правка этой константы + R5-negative на новый путь.
+_ALLOWED_ABSOLUTE_HOST_BINDS: frozenset[str] = frozenset()
+
+# ── REF-0006 (host-mode-keys): compose-ключи host-namespace-доступа → значение "host"
+# запрещено (network/pid/userns/cgroup namespace ноды = root-эквивалент).
+_HOST_MODE_VALUE_KEYS: tuple[tuple[str, str], ...] = (
+    ("network_mode", "host"),
+    ("pid", "host"),
+    ("userns_mode", "host"),
+    ("cgroup", "host"),
+)
 
 
 # region FUNC_ContractFinding
@@ -292,6 +339,9 @@ def verify_project_contracts(
                 raw.extend(_check_privileged(services))
                 raw.extend(_check_cap_add(services))
                 raw.extend(_check_devices(services))
+                # REF-0006 (DevPlan 11 В2): volumes/socket/host-binds + host-mode-ключи
+                raw.extend(_check_dangerous_volumes(services))
+                raw.extend(_check_host_mode_keys(services))
 
     # ── L2: drift practices.lock (носитель state на VPS) + docker-контракты ──
     # 176 A.2: l1_only (pre-deploy gate receive) — ТОЛЬКО L1-статика, без drift/docker-L2
@@ -306,7 +356,7 @@ def verify_project_contracts(
         ContractFinding(
             contract_id=r.contract_id,
             klass=r.klass,
-            severity=_severity_for(r.klass, state),
+            severity=_severity_for(r.klass, state, contract_id=r.contract_id, l1_only=l1_only),
             message=r.message,
         )
         for r in raw
@@ -335,11 +385,17 @@ def verify_project_contracts(
 # region FUNC__severity_for
 ## @purpose  Политика блокировки L1/L2/L3 (§4.5): L1 — block всегда; L2/L3 — block только
 ##           в active-full (по state из practices.lock), baseline/proposed/unmanaged — warning.
-## @io       ⇥ klass: str, state: str → ⎋ "block" | "warning"
+##           REF-0006: в l1_only (pre-deploy/pre-apply гейт) compose-config-valid parse-fail —
+##           БЛОК: сломанный YAML не проходит pre-up гейт как L2-warning (docker-L2 subprocess
+##           в l1_only не исполняется, но статический parse-fail = деплой невалидного compose).
+## @io       ⇥ klass: str, state: str, contract_id: str = "", *, l1_only: bool = False
+##           → ⎋ "block" | "warning"
 ## @complexity O(1)
-def _severity_for(klass: str, state: str) -> str:
-    """Compute severity by class + state (DevPlan 137 §4.5 policy)."""
+def _severity_for(klass: str, state: str, contract_id: str = "", *, l1_only: bool = False) -> str:
+    """Compute severity by class + state + l1_only policy (DevPlan 137 §4.5 / REF-0006)."""
     if klass == KLASS_L1:
+        return SEVERITY_BLOCK
+    if l1_only and contract_id == "compose-config-valid":
         return SEVERITY_BLOCK
     if state == "active-full":
         return SEVERITY_BLOCK
@@ -728,6 +784,200 @@ def _check_devices(services: dict[str, object]) -> list[_RawFinding]:
 
 
 # endregion CONTRACT_devices
+
+
+# 🧐 TRAP[DECISION] · 2026-08-25 · HI · SEC-0013 residual: ci-deploy остаётся в группе docker
+# · Rejected: socket-proxy/rootless-docker/per-project docker-изоляция (multi-tenant hardening)
+# · Reason: freeze P3 п.16 (launch week) — flat-trust модель задокументирована; deny-set выше
+# ·   закрывает ВЕКТОР (compose с docker.sock), но не саму способность docker-группы;
+# ·   владелец CI_DEPLOY_KEY при компрометации сохраняет docker-доступ вне payload-канала.
+# · Rev: первый multi-tenant инцидент ИЛИ пост-launch окно → socket-proxy/rootless
+# region CONTRACT_dangerous_volumes
+## @purpose  L1 dangerous-volumes (REF-0006, DevPlan 11 В2, SEC-0011/SEC-0030): volumes сервисов
+##           НЕ содержат (а) socket/docker-маунтов (/var/run/docker.sock и пр. — root-эквивалент:
+##           docker API ноды = все секреты + root в контейнерах), (б) абсолютных host-binds вне
+##           минимального allowlist (_ALLOWED_ABSOLUTE_HOST_BINDS), (в) относительных host-paths
+##           (./ ../ — traversal за пределы проектного каталога) и не-статически-резолвимых
+##           источников (${VAR} — fail-closed). Персистентность проектов — ТОЛЬКО named volumes /
+##           anonymous container-only volumes. Обрабатывает short-syntax ("- vol:/data") и
+##           long-syntax ({type: bind|volume, source: ...}) формы.
+## @io       ⇥ services: dict → ⎋ list[_RawFinding] (0..N — по одному на нарушающий entry)
+## @complexity O(S*V) где S = сервисы, V = volume-записи
+## @invariants
+##   - Матчится ТОЛЬКО source (host-сторона) маунта; container-path ("/data" target) не триггерит
+##   - Socket-source: точное совпадение или вложение в каталог-префикс deny-set
+##   - Named volume ([A-Za-z0-9][A-Za-z0-9_.-]*) и bare container-path (anonymous) — OK
+##   - tmpfs / source-less long-syntax — OK (host-FS не затрагивается)
+def _check_dangerous_volumes(services: dict[str, object]) -> list[_RawFinding]:
+    """L1: socket-mounts / absolute host-binds outside allowlist / non-named sources → violation."""
+    findings: list[_RawFinding] = []
+    for svc_name, svc in services.items():
+        if not isinstance(svc, dict):
+            continue
+        volumes = svc.get("volumes")
+        if volumes is None:
+            continue
+        entries: list[object]
+        if isinstance(volumes, list):
+            entries = list(volumes)
+        elif isinstance(volumes, dict):
+            # long-syntax map-форма не канонична для compose services.volumes, но fail-open на
+            # неожиданной форме недопустим: обходим значения как long-syntax записи
+            entries = list(volumes.values())
+        else:
+            findings.append(
+                _RawFinding(
+                    "dangerous-volumes",
+                    KLASS_L1,
+                    f"service '{svc_name}': volumes неожидаемой формы {volumes!r} — "
+                    f"named volumes обязателен (fail-closed, REF-0006)",
+                )
+            )
+            continue
+        for entry in entries:
+            message = _volume_entry_violation(svc_name, entry)
+            if message is not None:
+                findings.append(_RawFinding("dangerous-volumes", KLASS_L1, message))
+    return findings
+
+
+# endregion CONTRACT_dangerous_volumes
+
+
+# region FUNC__volume_entry_violation
+## @purpose  Классификация ОДНОЙ volume-записи → текст violation или None (OK).
+##           Short-syntax строки парсятся по ":" (mode-суффиксы ro/rw/z/Z/nocopy отсекаются);
+##           long-syntax dict — по type/source. Единая точка правил REF-0006.
+## @io       ⇥ svc_name: str, entry: Any → ⎋ str | None
+## @complexity O(1)
+def _volume_entry_violation(svc_name: str, entry: object) -> str | None:
+    """Return violation message for a single volumes entry, or None if allowed."""
+    if isinstance(entry, dict):
+        return _long_syntax_volume_violation(svc_name, entry)
+    if not isinstance(entry, str):
+        return (
+            f"service '{svc_name}': volumes entry {entry!r} не строка/dict — "
+            f"named volumes обязателен (fail-closed, REF-0006)"
+        )
+    raw = entry.strip()
+    parts = [p for p in raw.split(":") if p]  # mode-суффиксы остаются последним элементом
+    # bare container-path (anonymous volume) или named volume без target — host-FS не затронут
+    min_mount_parts = 2  # source + container-target
+    if len(parts) < min_mount_parts:
+        return None
+    source = parts[0]
+    return _classify_volume_source(svc_name, raw, source)
+
+
+# endregion FUNC__volume_entry_violation
+
+
+# region FUNC__long_syntax_volume_violation
+## @purpose  Long-syntax volume-запись ({type:, source:, target:, bind:,...}): tmpfs/source-less
+##           — OK; иначе та же классификация source, что short-syntax.
+## @io       ⇥ svc_name: str, entry: dict → ⎋ str | None
+## @complexity O(1)
+def _long_syntax_volume_violation(svc_name: str, entry: dict[str, object]) -> str | None:
+    """Classify long-syntax volumes entry (type/source)."""
+    vtype = entry.get("type")
+    if isinstance(vtype, str) and vtype.strip().lower() == "tmpfs":
+        return None
+    source = entry.get("source")
+    if source is None or (isinstance(source, str) and not source.strip()):
+        return None  # anonymous volume — host-FS не затронут
+    return _classify_volume_source(svc_name, str(source), str(source))
+
+
+# endregion FUNC__long_syntax_volume_violation
+
+
+# region FUNC__classify_volume_source
+## @purpose  Правила REF-0006 для источника маунта (порядок: socket → absolute-bind →
+##           relative-traversal → unresolved-var → named-volume regex fail-closed).
+## @io       ⇥ svc_name: str, raw: str (исходная запись — для сообщения), source: str
+##           → ⎋ str | None
+## @complexity O(D) где D = |_DANGEROUS_SOCKET_SOURCES|
+def _classify_volume_source(svc_name: str, raw: str, source: str) -> str | None:
+    """Apply REF-0006 rules to a mount source. Returns violation message or None."""
+
+    def _deny(reason: str) -> str:
+        return (
+            f"service '{svc_name}': volumes '{raw}' — {reason}; персистентность проектов — "
+            f"ТОЛЬКО named volumes (REF-0006/SEC-0011: bind host-path = доступ к ФС ноды)"
+        )
+
+    normalized = os.path.normpath(source).rstrip("/")
+    # 1. Socket/docker маунты — deny безусловно (точное совпадение или каталог-префикс)
+    for denied in _DANGEROUS_SOCKET_SOURCES:
+        d = denied.rstrip("/")
+        if normalized == d or normalized.startswith(d + "/"):
+            return _deny(f"socket/docker маунт '{source}' запрещён (docker API = root ноды)")
+    # 2. Абсолютные host-binds — только из минимального allowlist
+    if source.startswith("/"):
+        for allowed in sorted(_ALLOWED_ABSOLUTE_HOST_BINDS):
+            a = os.path.normpath(allowed).rstrip("/")
+            if normalized == a or normalized.startswith(a + "/"):
+                return None
+        return _deny(f"абсолютный host-bind '{source}' вне allowlist (_ALLOWED_ABSOLUTE_HOST_BINDS)")
+    # 3. Относительные host-paths — traversal за пределы проектного каталога
+    if source.startswith((".", "..")):
+        return _deny(f"относительный host-path '{source}' (traversal) запрещён")
+    # 4. Не-статически-резолвимые источники (${VAR}, команды) — fail-closed
+    if "$" in source or "`" in source:
+        return _deny(f"источник '{source}' не резолвится статически")
+    # 5. Named volume — каноническая персистентность; всё остальное — fail-closed
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.\-]*", source):
+        return _deny(f"источник '{source}' не является named volume")
+    return None
+
+
+# endregion FUNC__classify_volume_source
+
+
+# region CONTRACT_host_mode_keys
+## @purpose  L1 host-mode-keys (REF-0006, DevPlan 11 В2): namespace-ключи compose —
+##           network_mode:host / pid:host / userns_mode:host / cgroup:host → violation
+##           (шаринг namespace ноды = root-эквивалент); cgroup_parent/sysctls — ЛЮБОЕ
+##           присутствие ключа → violation (паритет cap_add/devices: намерение манипулировать
+##           kernel-контуром — вне контракта проектов; TRAP[BUG] 2026-08-16 обещал pid/sysctls).
+## @io       ⇥ services: dict → ⎋ list[_RawFinding] (0..N — по одному на ключ)
+## @complexity O(S*K) где S = сервисы, K = 6 контролируемых ключей
+## @invariants
+##   - Значение сравнивается case-insensitively со "host"; прочие значения ("bridge",
+##     "none", "container:x", "service:x") — OK (host-namespace не шарится)
+##   - cgroup_parent/sysctls: присутствие (≠ None, включая {}) → violation
+def _check_host_mode_keys(services: dict[str, object]) -> list[_RawFinding]:
+    """L1: network_mode/pid/userns_mode/cgroup == host, cgroup_parent/sysctls present → violation."""
+    findings: list[_RawFinding] = []
+    for svc_name, svc in services.items():
+        if not isinstance(svc, dict):
+            continue
+        for key, forbidden in _HOST_MODE_VALUE_KEYS:
+            value = svc.get(key)
+            if isinstance(value, str) and value.strip().lower() == forbidden:
+                findings.append(
+                    _RawFinding(
+                        "host-mode-keys",
+                        KLASS_L1,
+                        f"service '{svc_name}': {key}: {value} — host-namespace доступ проектам "
+                        f"запрещён (root-эквивалент ноды, REF-0006)",
+                    )
+                )
+        for presence_key in ("cgroup_parent", "sysctls"):
+            value = svc.get(presence_key)
+            if value is not None:
+                findings.append(
+                    _RawFinding(
+                        "host-mode-keys",
+                        KLASS_L1,
+                        f"service '{svc_name}': {presence_key}: {value} — kernel-контур ноды "
+                        f"проектам запрещён (паритет cap_add/devices, REF-0006)",
+                    )
+                )
+    return findings
+
+
+# endregion CONTRACT_host_mode_keys
 
 
 # region FUNC__is_truthy

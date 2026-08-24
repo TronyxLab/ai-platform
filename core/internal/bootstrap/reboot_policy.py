@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: reboot-policy reboot-required loginctl active-sessions telegram-notify systemd-timer platform-reboot 0430 persistent postpone state-file idempotent DevPlan-164
+# GREP_SUMMARY: reboot-policy reboot-required loginctl active-sessions telegram-notify systemd-timer platform-reboot 0545 persistent postpone state-file idempotent DevPlan-164 REF-0009
 # STRUCTURE: ▶ main ┌check [--execute]┐ → ◇ read reboot-required → ◇ loginctl active? → ◇ postpone → TG-notify (1/сутки) → ⎋ 0 │ ◇ idle → --execute? systemctl reboot + TG → ⎋ 0 │ install → ◇ unit-файлы (content-match no-op) → ⊕ bool → ⎋
 # region MODULE_CONTRACT
 ## @purpose  Reboot-политика варианта A (решение оператора, DevPlan 164 W1-1, коллапс Brief §4.1):
-##           активная SSH-сессия важнее ребута. Platform-reboot.timer (04:30, Persistent=true)
+##           активная SSH-сессия важнее ребута. Platform-reboot.timer (05:45, Persistent=true;
+##           REF-0009: 04:30 пересекал окно дампа 03:00/upload — ребут убивал nightly backup)
 ##           вызывает check --execute: /var/run/reboot-required есть + активные tty-сессии
 ##           платформенных пользователей → TG «ребут отложен» (retry завтра, Persistent) БЕЗ ребута;
 ##           idle → systemctl reboot + TG «ребут выполнен». install — идемпотентная установка
@@ -30,6 +31,8 @@
 ##            платформенный таймер — единственный ребут-канал. TRAP security_updates.py:23
 ##            (deferred reboot-required/cert-expiry) закрывается этой волной.
 ## @changes  2026-08-13 | DevPlan 164 W1-1 — Created (вариант A: сессия важнее ребута)
+##           2026-08-25 | REF-0009 (meta-refactoring W2) — OnCalendar 04:30 → 05:45
+##           (ребут вне окна nightly backup 03:00-05:00; Persistent=true сохранён)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -96,10 +99,10 @@ ExecStart=/usr/local/bin/python3 {base}/core/internal/bootstrap/cert_expiry_chec
 ExecStart=/usr/local/bin/python3 {base}/core/internal/bootstrap/reboot_policy.py check --execute
 """
     timer_text = """[Unit]
-Description=Platform reboot policy timer — daily 04:30 (DevPlan 164)
+Description=Platform reboot policy timer — daily 05:45 (DevPlan 164; REF-0009: вне окна backup 03:00-05:00)
 
 [Timer]
-OnCalendar=*-*-* 04:30:00
+OnCalendar=*-*-* 05:45:00
 Persistent=true
 
 [Install]
@@ -359,7 +362,7 @@ def check(
         if should_notify_postpone(state, current_hash, today):
             users = ", ".join(active)
             notify_telegram(
-                f"[platform] Ребут отложен: активная SSH-сессия ({users}). Повторная попытка — завтра 04:30.",
+                f"[platform] Ребут отложен: активная SSH-сессия ({users}). Повторная попытка — завтра 05:45.",
                 severity="warning",  # 003 B3: deferred → warning (reboot.postponed)
                 event="reboot.postponed",
                 notify_fn=notify_fn,
@@ -453,7 +456,7 @@ def install(unit_dir: str = UNIT_DIR, systemctl_fn: Callable[[list[str]], bool] 
     else:
         ok = _run_systemctl(("daemon-reload", "enable --now " + TIMER_UNIT_NAME))
     if ok:
-        logger.info("[IMP:9][reboot_policy][install] Units installed + timer enabled (04:30, Persistent=true)")
+        logger.info("[IMP:9][reboot_policy][install] Units installed + timer enabled (05:45, Persistent=true)")
     return ok
 
 

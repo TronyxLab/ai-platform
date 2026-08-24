@@ -497,6 +497,36 @@ def test_simplify_deploy_yml(caplog: pytest.LogCaptureFixture, tmp_path: Path, m
     assert found_imp9
 
 
+# 🧪 TRAP[TEST] · 2026-08-24 · NEGATIVE (R5) · adopter не генерирует input image_tag (REF-0001, FAIL-0802)
+# · Scenario: reusable deploy-project.yml НЕ имеет input image_tag → сгенерированный вызов
+#   с `image_tag:` детерминированно красил CI adopted-проекта («Unexpected inputs»)
+# · Last fail: project_adopter.py:230/239 — image_tag в обоих deploy-job'ах генерации
+# · Remove if: deploy-project.yml объявит легитимный input image_tag
+def test_simplify_deploy_yml_no_image_tag_input(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> None:
+    """R5 negative: генерация adopter'а БЕЗ несуществующего input image_tag."""
+    caplog.set_level(logging.INFO)
+    adopter = _make_adopter(tmp_path, domain="example.com", force=True)
+    (adopter.project_dir / ".github" / "workflows").mkdir(parents=True, exist_ok=True)
+    (adopter.deploy_yml).write_text(
+        "name: Deploy\non: [push]\njobs:\n  build:\n    runs-on: ubuntu-latest\n", encoding="utf-8"
+    )
+
+    result = adopter.simplify_deploy_yml()
+
+    assert result is True, "deploy.yml should be simplified"
+    content = adopter.deploy_yml.read_text(encoding="utf-8")
+    logger.info("[IMP:8][test][adopt] generated deploy.yml scanned for image_tag")
+    assert "image_tag" not in content, (
+        "REF-0001/FAIL-0802: генератор не должен передавать несуществующий input image_tag "
+        "(образ доставляется push-каналом build-and-push, receive получает тег из github.sha)"
+    )
+    # Оба deploy-job'а продолжают зависеть от build-and-push (порядок канала сборки→деплой)
+    assert content.count("needs: [build-and-push]") == 2, (
+        "Оба deploy-job'а (main/staging) должны иметь needs: [build-and-push]"
+    )
+    logger.info("[IMP:9][test][adopt] PASS: image_tag отсутствует, needs=[build-and-push] ×2")
+
+
 # 🧪 TRAP[TEST] · Regression · deploy.yml already simplified → skip
 # · Scenario: deploy.yml already uses reusable workflow → simplify returns False (no-op)
 # · Last fail: N/A (new test)
