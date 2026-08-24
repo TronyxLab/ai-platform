@@ -21,9 +21,24 @@
 ##           docker-compose.yml (единый SoT). Этот файл НЕ удаляется — cadvisor — реальный
 ##           сервис (node-metrics после DevPlan 010 T3.2 split, Makefile подключает на darwin).
 ##           Override согласован с базой.
+## @changes  2026-08-24 (T9 живой прогон W3): litellm DATABASE_URL="" — локальное отклонение.
+##           БД-режим LiteLLM ни разу не бутстрапнут (LiteLLM_VerificationToken пуст, админ-юзера
+##           нет), мастер-ключ в нём отклоняется → LLM недоступен всем потребителям. Пустое
+##           значение возвращает последний работоспособный режим (env master key). Долг
+##           платформы: бутстрап админ-токена в DB-режиме и возврат проводки (W3-run-report).
 # endregion MODULE_CONTRACT
 
 services:
+  litellm:
+    # @changes 2026-08-24 (T9 живой прогон W3): пустой DSN отключает Prisma/DB-режим
+    # аутентификации токенов LiteLLM. БД-режим ни разу не бутстрапнут (LiteLLM_VerificationToken
+    # пуст, админ-юзера нет) — мастер-ключ отклоняется, LLM недоступен всем потребителям.
+    # Возврат к последнему работоспособному режиму (env master key). Долг платформы:
+    # бутстрап админ-токена в DB-режиме и снятие этого оверрайда (W3-run-report).
+    environment:
+      DATABASE_URL: ""
+      CONFIG_FILE: "/app/config/litellm-config.yml"
+
   cadvisor:
     # 164 W1-5: v0.60.5 падает на macOS-VM — «could not detect clock speed» (/proc/cpuinfo
     # без cpu MHz на ARM-VM Docker Desktop); VPS-ноды (x86_64, cpu MHz есть) используют
