@@ -1,4 +1,4 @@
-<!-- GREP_SUMMARY: devplan launch-week reliability мета рефакторинг синтез аудиты волны REF rollback healthcheck secrets backup monitoring locks pins drills freeze P0 P1 TOP-20 -->
+<!-- GREP_SUMMARY: devplan launch-week reliability мета рефакторинг синтез аудиты волны REF rollback healthcheck secrets backup monitoring locks pins drills freeze P0 P1 TOP-20 ledger check-manifests -->
 <!-- STRUCTURE: ▶ вердикт+инварианты(freeze-P3) → ⊕ В0 честные сигналы(0012·0010·0005·0003·0013·0002·0016) → ⚡ В1 аварийные пути(0004·0011·0105·0007·0014) → ⚡ В2 каналы+DR(0006·0001·0008·0009·0015) → ⚡ В3 бюджеты+гигиена(0103·0104·0107·0017·S-пакет) → ∑ В4 drills(reboot·restore·age-key·load·e2e·chaos T1-T12) → ⎋ release-checklist -->
 # region MODULE_CONTRACT
 ## @purpose  Реализация результатов мета-аудита платформы (9 доменов → 10-synthesis): план на 5
@@ -26,8 +26,9 @@
 ##     REF-0009 (иначе drill добьёт кластер — FAIL-0803); load-test smoke — после удаления дубля
 ##     locust-call (PERF-080, 1 строка).
 ##   - Верификация волны: per-task `make check TEST_FILE=<файл>`; фикс-цикл и финал — `make check`
-##     (батч, до чистоты); `make agent-check` перед закрытием каждой волны; полный gate — только
-##     CI (OOM-политика 0.8; вручную не запускать).
+##     (батч, до чистоты); закрытие волны — `make agent-check` + `make check MARKER=check-manifests`
+##     (divergence generated-манифестов ловится на closed-wave, а не только pre-push/В4);
+##     полный gate — только CI (OOM-политика 0.8; вручную не запускать).
 ##   - Опасные изменения гейтятся staging-прогоном на test-VPS ДО прод: REF-0007 (транспорт
 ##     ключей → node-update), REF-0017 (сетевой attach → full-stack), REF-0009 (полный цикл
 ##     бэкапа), REF-0110 (порядок первого бутстрапа).
@@ -62,7 +63,8 @@ RATIONALE: Все дефекты confirmed (часть live-reproduced), ни о
          drills» следует критическому пути и правилу freeze P3 (главная угроза недели —
          структурные рефакторинги поверх аварийных путей, а не ненайденные дефекты).
 ACCEPTANCE_CRITERIA: (1) все TOP-20 REF закрыты с тестами из своих карточек; (2) `make check`
-         чистый, `make agent-check` exit 0 после каждой волны; (3) поведенческие инварианты §7
+         чистый, `make agent-check` exit 0 И `make check MARKER=check-manifests` чистый после
+         каждой волны; (3) поведенческие инварианты §7
          воспроизводимы; (4) drills волны 4 зелёные (reboot, restore, age-key-backup, load-smoke,
          e2e scaffold→push→deploy, chaos FULL T1–T12); (5) diff-аудит соответствия freeze P3.
 IMPLEMENTS: 10-synthesis final-summary (вердикт, TOP-20, план 4+1 день), refactoring-map §5–§8,
@@ -98,8 +100,12 @@ $START_DEVPLAN
    любого пункта freeze (rename контрактов, сплит god-файлов, правка generated-манифестов руками,
    миграция facades, wholesale test expansion, version bump) = остановка задачи.
 2. **Порядок волн авторитетен.** Перестановки допустимы только внутри волны; межволновые
-   зависимости — см. §2 (единственное исключение: REF-0107 может подниматься раньше при
-   высвобождении ёмкости — он делает все остальные проверки честнее).
+   зависимости — см. §2. Исключения (исчерпывающие): (a) REF-0107 может подниматься раньше при
+   высвобождении ёмкости — он делает все остальные проверки честнее; (b) подпункты REF-0010
+   (exporters/rules/render-dir) объявлены внутри-волновыми единицами: при перегрузе В0 легально
+   сползают в В1 (конфиг-ядро noeviction/maxmemory/noDataState из В0 не двигается). Must-set
+   дня 1, не скользит: {REF-0003, REF-0005, REF-0013}. Любое сползание фиксируется в
+   REF-леджере (§10), тихий дрейф запрещён.
 3. **Честность прежде функциональности.** Волна 0 строит правдивые сигналы (drain-status,
    PARTIAL→FAILED, false-green гейты, monitoring YAML) — на них опирается верификация всех
    последующих фиксов.
@@ -110,8 +116,11 @@ $START_DEVPLAN
 6. **Имена заморожены:** `AGE_SECRET_KEY` (35+ файлов ×4 языка), verbs, detector names, network
    names, suite-ID/markers — не переименовывать даже там, где правим рядом.
 7. **Верификация:** per-task `make check TEST_FILE=<файл>` (один файл на вызов); фикс-цикл —
-   `make check` батчем до чистоты; `make agent-check` — обязательный шаг закрытия волны;
-   журнал прогонов ведётся автоматически (`.ai/logs/runs.jsonl`, симлинк `latest.log`).
+   `make check` батчем до чистоты; закрытие волны — `make agent-check` exit 0 И `make check
+   MARKER=check-manifests` чистый (волны добавляют новые `@pytest.mark.gate` → divergence
+   generated-манифестов ловится на closed-wave, а не только pre-push'ем fix-gate или в В4);
+   журнал прогонов ведётся автоматически (`.ai/logs/runs.jsonl`, симлинк `latest.log`);
+   REF-леджер (`12-StatusReport.md`) обновляется в конце каждой сессии (§10).
 8. **Churn-бюджет:** ~2300–3500 LOC суммарно (refactoring-map §8); превышение бюджета волны —
    сигнал, что задача расползлась в рефакторинг: остановиться и сузить дифф.
 
@@ -124,6 +133,8 @@ $START_DEVPLAN
   REF-0005 drain/marker ─┼─→ честные сигналы → всё остальное
   REF-0003 PARTIAL→FAILED ┘
   REF-0013 secrets fail-fast   REF-0016 XS access   REF-0002 hook register (старт)
+  [must-set дня 1 = {0003, 0005, 0013}; подпункты 0010 exporters/rules/render-dir
+   могут сползти в В1 — исключение 2b инварианта 2]
 
 Волна 1 (день 1–2) — «Аварийные пути»:
   REF-0004 rollback contour ←─ REF-0003 (ветка вызова)
@@ -173,9 +184,9 @@ day-grid ровно два):
 | 7 | REF-0007 | Секреты вне argv/логов + atomic_writer sweep 0600/0640 | В1 | M |
 | 8 | REF-0008 | TLS-бандл (privkey/pair-match/scan/backoff/FQDN/self-signed) | В2 | M-L |
 | 9 | REF-0009 | Backup truth (sentinel/stamp/encrypt/restore/drill) | В2 | M |
-| 10 | REF-0010 | Мониторинг-минимум (noeviction/rules/noDataState/render-dir/…) | В0 | M |
+| 10 | REF-0010 | Мониторинг-минимум (noeviction/rules/noDataState/render-dir/…) | В0→В1 (только подпункты, инв. 2b) | M |
 | 11 | REF-0011 | Конкурентность деплоя (fail-closed lock/flock-perimeter/CI group) | В1 | M |
-| 12 | REF-0012 | SHA-pin 22 actions + gitleaks checksum + workflow-гигиена | В0 | S |
+| 12 | REF-0012 | SHA-pin 22 actions + gitleaks checksum + workflow-гигиена + пин шаблонных workflows | В0 | S-M |
 | 13 | REF-0013 | Secrets fail-fast (empty-parse/merge-guard/postcondition/NODE) | В0 | M |
 | 14 | REF-0014 | Самолечение: R9 build_compose_args + label-детекция + watchdog stamp | В1 | S-M |
 | 15 | REF-0015 | Ingress/receive resource guards | В2 | S-M |
@@ -313,16 +324,23 @@ hc_done пишется только при failed==[] и скоупится run-
 
 | REF | Объём | Файлы | Проверка |
 |-----|-------|-------|----------|
-| 0012 | Pin 22 actions на full commit SHA (`@<sha> # vX`); gitleaks sha256-verify; развести PR-job'ы от secrets; disable cache на pull_request_target; `permissions:{}` + quoted interpolation; SSH_OPTS из `python3 -m …ssh_opts --shell` | .github/workflows/*.yml, .github/actions/setup-gitleaks/action.yml | Новый структурный gate: все `uses:` SHA-form; grep raw `${{ }}` в `run:`; `make check-diff` |
-| 0010 (config) | langfuse-redis → noeviction (+maxmemory↑); redis main maxmemory 192mb; pgbouncer-exporter+job+rules; второй redis_exporter (langfuse) + evicted_keys alert; minio job; scrape loki/alloy + up-rules; DiskSpace/HighMemory → noDataState=Alerting; warning-push enable + critical repeat 2h; canonicalize render-dir (AI-0004); tsdb retention.size | core/modules/{langfuse,redis}/docker-compose.base.yml, infra-metrics compose, monitoring/{config_renderer.py, prometheus.yml.tmpl, alert-rules*.yml}, shared/deploy_paths.py | Gate: renders land in mounted dir (path-parity); alert-rule presence smoke (yaml-parse); runtime — на test-VPS в В4 |
+| 0012 | Pin 22 actions на full commit SHA (`@<sha> # vX`); gitleaks sha256-verify; развести PR-job'ы от secrets; disable cache на pull_request_target; `permissions:{}` + quoted interpolation; SSH_OPTS из `python3 -m …ssh_opts --shell`; SHA-form распространить на шаблонные workflows template-{backend,frontend} (канал REF-0001 рождается запиненным, TRAP[DECISION] ниже) | .github/workflows/*.yml, .github/actions/setup-gitleaks/action.yml, templates/template-{backend,frontend}/.github/workflows/deploy.yml | Новый структурный gate: все `uses:` SHA-form (glob включает templates/*/workflows); grep raw `${{ }}` в `run:`; `make check-diff` |
+| 0010 (config) | langfuse-redis → noeviction (+maxmemory↑); redis main maxmemory 192mb; pgbouncer-exporter+job+rules; второй redis_exporter (langfuse) + evicted_keys alert; minio job; scrape loki/alloy + up-rules; DiskSpace/HighMemory → noDataState=Alerting; warning-push enable + critical repeat 2h; canonicalize render-dir (AI-0004); tsdb retention.size; подпункты exporters/rules/render-dir — скользящие единицы (инв. 2b), конфиг-ядро остаётся в В0 | core/modules/{langfuse,redis}/docker-compose.base.yml, infra-metrics compose, monitoring/{config_renderer.py, prometheus.yml.tmpl, alert-rules*.yml}, shared/deploy_paths.py | Gate: renders land in mounted dir (path-parity); alert-rule presence smoke (yaml-parse); runtime — на test-VPS в В4 |
 | 0005 | drain_all_count зеркалит WIFEXITED/WEXITSTATUS (failed++/failed_names); маркер `.hc_done_in_deploy` — только при failed==[], run-id в имени, unlink на старте init/update; all_names собирать ДО drain (~10 строк) | bootstrap/deploy/parallel_runner.py, deploy_orchestrator.py, lifecycle/phases/docker.py | Тест с РЕАЛЬНЫМ drain_all_count + mocked waitpid (сегодня красный): имена из pid_to_name, non-empty all_names; `make check TEST_FILE=test_parallel_runner.py` |
 | 0003 | unhealthy/timeout → статус FAILED + exit≠0 + notify severity=critical; PARTIAL — внутренний, не success; согласовать окно со start_period (решение — вход для REF-0103) | deploy/orchestrator.py (:556/:151-153), receive_flow.py (:559-568), hooks/post_deploy_chain.py, orchestrator_cli.py | DI-тест poller=unhealthy → rc≠0; severity-mapping уведомлений (TEST-04) |
 | 0013 | Непустой enc + 0 ключей → PlatformFatalError; merge-guard Step 3.5; narrow excepts; postcondition parsed ⊇ {required∧sops}; file-wins после decrypt (override-allowlist); NODE-filter; `_loaded=True` после успешного load; signal/atexit → main(), итерировать `list(_TEMP_FILES)`, +SIGHUP + стартовый sweep /dev/shm | bootstrap/lifecycle/helpers/secrets.py, secrets_manager.py, phases/secrets.py, secrets/decrypt_secrets.py, config/platform_config.py, makefiles/ci.mk | TEST-07 (stderr-redaction), TEST-08 (signal-contract), empty-parse→fatal unit, merge-guard unit, NODE-dispatch unit |
 | 0002 (старт) | Зарегистрировать `hooks.on_project_deploy` в postgres/module.yaml + переписать hook-gate; начало ensure-convergence (role_exists+no-creds → ALTER PASSWORD + creds + GRANT + реген) | core/modules/postgres/module.yaml, hooks/on_project_deploy.py, tests/gates/test_gate_module_hooks.py | Обновлённый hook-gate; unit ensure-convergence; завершение — в В1 (GRANT-checks, psql timeout=60, REVOKE PUBLIC rider SEC-0008) |
 | 0016 | +KbdInteractiveAuthentication no +ChallengeResponseAuthentication no (+MaxAuthTries 3) в drop-in и _SSHD_EXTRA_DIRECTIVES; нейтрализовать *cloud* sshd_config.d; apply-failure → blocking; sudoers arg-spec (--mode pin / launcher-whitelist, игнор --*-key/--state-file) | bootstrap/security/sshd_policy.py, lifecycle/phases/system.py, bootstrap/setup_node.py | Gate: парсинг итогового `sshd -T` на fixture; sudoers line-format gate (прецедент sudoers_generator) |
 
-Готовность волны: `make check` чистый · `make agent-check` exit 0 · демонстрационно: unhealthy
-деплой красит CI, drain с failed-ребёнком даёт failed>0.
+🧐 TRAP[DECISION] · 2026-08-24 · — · SHA-pin распространён на шаблонные workflows проектов ·
+Rejected: «tags допустимы в project-repos» · Reason: канал build&push (REF-0001) создаётся этой
+же неделей — tag-pin в шаблонах оставил бы ту же аудит-дыру, что закрывает REF-0012, в самом
+новом канале; пин в шаблоне достаётся всем новым проектам бесплатно (adopted-легаси вне скоупа
+гейта) · Rev: если бамп actions в проектных репо станет операционной болью — пересмотреть.
+
+Готовность волны: `make check` чистый · `make agent-check` exit 0 · `make check
+MARKER=check-manifests` чистый · демонстрационно: unhealthy деплой красит CI, drain с
+failed-ребёнком даёт failed>0.
 
 ### Волна 1 (день 1–2) — «Аварийные пути»
 
@@ -340,8 +358,9 @@ hc_done пишется только при failed==[] и скоупится run-
 timeout=60 во всех ветках `_psql`, rider `REVOKE CONNECT ON DATABASE <db> FROM PUBLIC`;
 port тестов shared-db seam в ci-docker gate (TEST-18).
 
-Готовность волны: `make check` + `make agent-check` чистые; staging node-update прошёл
-(REF-0007); characterization-наборы аварийных путей зелёные до и после.
+Готовность волны: `make check` + `make agent-check` + `make check MARKER=check-manifests`
+чистые; staging node-update прошёл (REF-0007); characterization-наборы аварийных путей зелёные
+до и после.
 
 ### Волна 2 (день 2–3) — «Каналы и DR»
 
@@ -350,13 +369,14 @@ port тестов shared-db seam в ci-docker gate (TEST-18).
 | REF | Объём | Файлы | Проверка |
 |-----|-------|-------|----------|
 | 0006 | `_check_dangerous_volumes`: deny socket-mounts + абсолютные host-binds вне минимального allowlist + требование named volumes; deny-keys: network_mode:host / pid / userns_mode / cgroup / sysctls; вызов `verify_project_contracts(dir, l1_only=True)` внутри DeployOrchestrator.deploy перед _apply_deploy; compose-config-valid → блокирующий в l1_only | deploy/verify_contracts.py, receive_flow.py, orchestrator.py | R5-негативы с точным C1-input (socket-mount, `/`-bind); параметризованные traversal-негативы receive/remove через _dispatch (TEST-05); residual SEC-0013 зафиксировать в доке |
-| 0001 | Build&push job в оба шаблона (копия блока project_adopter.py:194-222); удалить строку `image_tag:` из генератора adopter; подготовить e2e scaffold→push→deploy | templates/template-{backend,frontend}/.github/workflows/deploy.yml, core/internal/scaffold/project_adopter.py | e2e на test-VPS (release-checklist; требует рабочий REF-0002); lint шаблонов (templates-check) |
+| 0001 | Build&push job в оба шаблона (копия блока project_adopter.py:194-222); удалить строку `image_tag:` из генератора adopter; подготовить e2e scaffold→push→deploy (копируемый блок уже с SHA-pins — шаблон запинен в В0, REF-0012) | templates/template-{backend,frontend}/.github/workflows/deploy.yml, core/internal/scaffold/project_adopter.py | e2e на test-VPS (release-checklist; требует рабочий REF-0002); lint шаблонов (templates-check) |
 | 0008 | 6 независимых подпунктов: (1) privkey обязателен в download_cert + openssl pubkey-match; (2) cert_is_valid проверяет пару; (3) expiry-unit `--cert-dir /etc/letsencrypt/live` + fullchain.pem в CERT_FILENAMES; (4) TG-alert source=self_signed + отказ self-signed overwrite LE-сертификата; (5) ACME sleep/backoff между attempts (shared/retry); (6) validate_vhost_identifiers на register_project И orchestrate_certs entry (fail-fast) + reloadcmd shlex.quote + install-cert через tmp+rename | bootstrap/{s3_ssl_cache,cert_orchestrator,issue_cert,cert_expiry_check,cron_installer}.py, shared/ssl_certs.py, node_yaml/projects.py, project_registry.py | Pair-match unit (valid/mismatch/missing); scan-coverage тест на tmp-каталоге; validator-negative `../`-домен (R5); сверка S3↔live — строка в DR-drill REF-0009 |
 | 0009 | `.uploaded` sentinel (или S3 HEAD-confirm) → cleanup удаляет только подтверждённое; ежедневный spool-rescan retry; touch `.last_verified` только после gzip -t OK, collector читает маркер; age-encrypt перед upload (+decrypt шаг в restore-runbook); Makefile restore: down → psql `-v ON_ERROR_STOP=1` → up + mandatory pre-restore pg_dumpall; reboot OnCalendar → 05:45 (или lock-проверка); flock -n ×4 cron-строки; убрать двойную установку crontab (Dockerfile:97/101); doc-fix PostgreSQL 18.4; выполнить `make age-key-backup` | core/modules/backup-cron/scripts/*, healthcheck/metrics/backup_collector.py, core/modules/postgres/Makefile, reboot_policy.py, core/modules/postgres/module.yaml(+docs) | Unit: cleanup не трогает unsentinel; collector читает stamp; restore-recipe dry-структурный тест; ⚠️ полный цикл бэкапа на test-VPS — precondition для restore-drill В4 |
 | 0015 | nginx: limit_conn_zone + limit_conn perip 20; client_header/body_timeout 10s, send_timeout 30s, keepalive_timeout 15s; SSE read_timeout ≤300s; receive: stream-extract с running uncompressed ceiling ~200MB + entry-count cap; default payload cap ↓ 64MiB; statvfs guard перед extract | core/modules/nginx/config/nginx.conf, vhost-шаблоны (template-контракт таймаутов), deploy/receive_flow.py | Unit на stream-extract ceiling (маленькая tar-бомба fixture); nginx `-t` structural gate дополнить проверкой директив; потолок выбрать ×3 от текущих легитимных |
 
 Готовность волны: e2e scaffold→push→deploy зелёный на test-VPS; полный цикл бэкапа прошёл;
-L1-негативы красят сборку без фикса (проверка R5-семантики).
+L1-негативы красят сборку без фикса (проверка R5-семантики); `make check
+MARKER=check-manifests` чистый.
 
 ### Волна 3 (день 3–4) — «Бюджеты, хранилища, гигиена»
 
@@ -369,7 +389,8 @@ L1-негативы красят сборку без фикса (проверк�
 | S-пакет | REF-0110: kahn-линеаризация для sequential + topo-failure → ConfigValidationError + abort remaining после critical-failure (использует честный failed-учёт REF-0005). REF-0111: параметры docker-smoke (xdist/timeout/pre-cleanup) владеет check-suite.yaml; parity-gate. REF-0112: CI вызывает `python3 -m …core_deliverer` (один owner exclude-set). PERF-080: удалить дубль locust-call (1 строка — обязательно до load-smoke) | bootstrap/deploy/deploy_orchestrator.py; check-suite.yaml + conftest-compose + workflow; core-deploy.yml + core_deliverer.py; load-test скрипт | Order-тест build_dag+kahn на 2-level DAG (TEST-29 rewrite); parity-gate сам тест; grep-gate вызова deliverer в workflow |
 
 Готовность волны: `make check` чистый; wall-time ≤ заявленного бюджета; `--only`-обманщики
-закрыты (exit 2 подтверждён).
+закрыты (exit 2 подтверждён); `make check MARKER=check-manifests` чистый (В3 добавляет
+parity-gate'ы — самый drift-опасный момент недели).
 
 ### Волна 4 (день 5) — «Консолидация и drills»
 
@@ -385,7 +406,9 @@ L1-негативы красят сборку без фикса (проверк�
    - **Load-test smoke** — после PERF-080-фикса; capacity-verdicts пригодны
      (release-checklist требование).
    - **E2E scaffold→push→deploy**: `make new-project` → push → деплой на test-VPS
-     (валидация REF-0001+0002 связки).
+     (валидация REF-0001+0002 связки); после валидации — явный cleanup `make remove-project
+     PROJECT=<throwaway> NODE=<test>` (реестр platform/projects/*.yaml и monitoring-overrides
+     не засоряются; данные/volumes/репо throwaway не удаляются — допустимо для test-VPS).
    - **Chaos FULL T1–T12** (после bootstrap).
 3. `make test-node NODE=<test>` зелёный (0 failed); `make check NODE=<test>` — нода согласована;
    `make check MARKER=check-manifests` чистый.
@@ -428,8 +451,10 @@ L1-негативы красят сборку без фикса (проверк�
 ## 7. Acceptance criteria (итоговые, verifiable)
 
 7.1. Каждый закрытый REF имеет тесты из колонки «Tests required» своей карточки P0/P1 — зелёные.
-7.2. `make check` чистый на финале; `make agent-check` exit 0 после каждой волны; журнал
-`.ai/logs/runs.jsonl` содержит прогоны всех волн (goal/exit_code/duration).
+7.2. `make check` чистый на финале; `make agent-check` exit 0 И `make check
+MARKER=check-manifests` чистый после каждой волны; журнал `.ai/logs/runs.jsonl` содержит прогоны
+всех волн (goal/exit_code/duration); REF-леджер `12-StatusReport.md` отражает финальное
+состояние всех REF.
 7.3. Поведенческие инварианты (воспроизводимы на test-VPS):
    - unhealthy-деплой → rc≠0 + Telegram critical; при готовом REF-0004 — ROLLED_BACK с
      re-verified health; «deployed» при больном стеке невозможен.
@@ -444,7 +469,8 @@ L1-негативы красят сборку без фикса (проверк�
      hermes-agent-net (аддитивно).
    - poller укладывается в задокументированный бюджет (wall-time тест).
 7.4. Drills В4 зелёные: reboot-самолечение, restore (ON_ERROR_STOP + pre-snapshot),
-     age-key-backup, load-smoke, e2e scaffold→push→deploy, chaos FULL T1–T12.
+     age-key-backup, load-smoke, e2e scaffold→push→deploy (+ remove-project cleanup),
+     chaos FULL T1–T12.
 7.5. Freeze-аудит: в диффах нет rename контрактов/сплитов/миграций facades/ручных правок
      generated-манифестов; wire-DTO изменены только additive-only.
 7.6. Churn ≤ ~3.5k LOC суммарно; ни одна волна не превысила свой бюджет §8 более чем на 20%
@@ -461,6 +487,8 @@ L1-негативы красят сборку без фикса (проверк�
 | 5 | Structural creep поверх аварийных путей | Freeze P3 + churn-бюджет + правило «один revert»; сомнение трактуется против изменения |
 | 6 | Легитимные slow-start деплои начнут падать после REF-0003/0103 | Согласовать start_period и окна в В0/В3 (решение фиксируется TRAP[DECISION] у poller) |
 | 7 | OOM/флакины полного gate на dev-машине | Полный gate НЕ запускать вручную (OOM-политика 0.8); арбитры: `make check`/`agent-check` локально, fast-gate — CI |
+| 8 | Перегруз В0: 7 задач, две M (0010-config, 0013) | Must-set дня 1 {REF-0003, REF-0005, REF-0013} неприкосновенен; подпункты REF-0010 (exporters/rules/render-dir) легально сползают в В1 (инв. 2b); сползание фиксируется в REF-леджере — тихий дрейф запрещён |
+| 9 | Manifest-drift после волны: новые `@pytest.mark.gate` расходятся с generated-манифестами | `make check MARKER=check-manifests` — обязательная часть закрытия каждой волны (инв. 7), а не только В4; fix-gate остаётся страховкой на коммите |
 
 ## 9. Явно вне окна (post-launch кандидаты)
 
@@ -482,5 +510,11 @@ L1-негативы красят сборку без фикса (проверк�
   одному за раз, таймаут bash-тула ≥300s; отказ hook'а читать в stderr hook-лога.
 - Журнал прогонов каждой команды — автоматом в `.ai/logs/runs.jsonl`; следующий агент начинает
   с `python3 -m core.internal.shared.test_journal latest`.
+- **REF-леджер кросс-сессионной работы:** `12-StatusReport.md` в папке плана — checkbox-таблица
+  статусов TOP-20 + резерва + drills В4 (`[ ]` pending / `[~]` in-progress / `[x]` done +
+  заметки-блокеры). runs.jsonl фиксирует прогоны, леджер — семантическое состояние («какие REF
+  закрыты»). Обновляется в конце КАЖДОЙ сессии, включая зафиксированные сползания единиц
+  между волнами (инв. 2b); новая сессия стартует с чтения леджера + `test_journal latest`,
+  а не с перечитывания всего DevPlan.
 
 $END_DEVPLAN
