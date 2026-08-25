@@ -218,6 +218,25 @@ def node_configs_remote(env: Mapping[str, str] | None = None) -> Path:
 # endregion FUNC_node_configs_remote
 
 
+# region FUNC_placement_remote_path
+## @purpose — Remote-путь placement.yaml ноды (DevPlan 16 T1.B / P0-2): {ncb}/{context}/
+##            placement.yaml. Единственный потребитель-создатель файла — deliver_placement
+##            (core_deliverer, канал core-push); локальная sibling-форма для потребителей на
+##            ноде — shared/placement.placement_node_relative_path (структура путей согласована:
+##            {ncb}/{node}/node.yaml → parent.parent/{context}/placement.yaml == этот путь).
+## @io — ⇥ context: str, env: dict | None → ⎋ Path ({ncb}/{context}/placement.yaml)
+## @complexity — O(1)
+## @invariants
+##   - ncb только через node_configs_remote (env NODE_CONFIGS_REMOTE_BASE → /opt/node-configs)
+##   - Никогда не raise — всегда возвращает Path
+def placement_remote_path(context: str, env: Mapping[str, str] | None = None) -> Path:
+    """Resolve remote placement.yaml path for a context ({ncb}/{context}/placement.yaml)."""
+    return node_configs_remote(env) / context / "placement.yaml"
+
+
+# endregion FUNC_placement_remote_path
+
+
 # region FUNC_platform_remote_base
 ## @purpose — Резолвер remote platform base (DevPlan 118 C7). Цепочка:
 ##            PLATFORM_REMOTE_BASE → /opt/platform (тот же канон, что

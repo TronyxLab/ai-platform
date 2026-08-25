@@ -73,6 +73,17 @@ PROJECT_PAYLOAD_FILENAMES: tuple[str, ...] = (
 ##            ровно этих имён (structural test: tests/unit/test_payload_whitelist_triple_sync.py).
 ##            Расширение списка = правка ТОЛЬКО здесь + CI-шаг синхронно (гейт ловит дрейф)."""
 
+# ── Override compose-имена (сканируемый слой verify_contracts) ───────────────
+
+PROJECT_OVERRIDE_FILENAMES: tuple[str, ...] = (
+    "docker-compose.override.yml",
+    "compose.override.yaml",
+)
+"""## @invariant Имена override-compose файлов проекта (DevPlan 16 T1.E / P1-11): verify_contracts
+##            сканирует их ВДОБАВКУ к каноническим (override может содержать security_opt/
+##            devices/gpus — слепая зона single-file скана аудита 15). НЕ входят в payload и
+##            в COMPOSE_FILENAMES (не участвуют в резолве «главного» файла)."""
+
 
 # region FUNC_resolve_compose_file
 ## @purpose  Найти первый существующий compose-файл в директории (канонический порядок).

@@ -52,7 +52,7 @@ from typing import cast
 
 # DevPlan 118 C7: remote-пути (/opt/platform, /opt/node-configs) — единые резолверы
 # shared/deploy_paths (литералы удалены из канона путей доставки).
-from core.internal.shared.deploy_paths import node_configs_remote, platform_remote_base
+from core.internal.shared.deploy_paths import node_configs_remote, placement_remote_path, platform_remote_base
 
 # DevPlan 116 B5 T2 (D1): SSH_OPTS — единый SoT shared/ssh_opts.py; дублирующие копии устранены.
 from core.internal.shared.ssh_opts import SSH_OPTS, build_rsync_ssh_opts
@@ -546,6 +546,72 @@ def deliver_node_configs(
 # endregion FUNC_deliver_node_configs
 
 
+# region FUNC_deliver_placement
+## @purpose  Phase 2b (DevPlan 16 T1.B / P0-2): доставка node-configs/{context}/placement.yaml →
+##           {ncb}/{context}/placement.yaml каналом core-push (SCP/rsync). Phase 2 rsync'ит
+##           только node-configs/{node}/ — файл placement по согласованному резолверу
+##           (deploy_paths.placement_remote_path) никто не создавал: load_placement на ноде
+##           всегда давал None → peer-firewall [], healthcheck проверял чужие singleton'ы.
+##           Канал core-push, НЕ context-overlay-git: placement живёт в node-configs рядом с
+##           node.yaml (единый SoT; git-канал создал бы второй источник истины).
+## @io  input: host, node_configs_dir, context, remote_user, ncb, dry_run, runner;
+##      output: bool True (delivered или skip)
+## @complexity  O(1) — single-file rsync
+## @invariants
+##   - context пустой → skip IMP:8 (bootstrap без контекста = легаси single-node, no-op)
+##   - файл отсутствует локально → skip IMP:8 (single-node канон: отсутствие placement.yaml =
+##     легитимное состояние, поведение байт-идентично легаси)
+##   - dry_run печатает rsync-команду без мутаций
+##   - путь назначения ТОЛЬКО через deploy_paths.placement_remote_path (единый резолвер)
+def deliver_placement(
+    host: str,
+    node_configs_dir: str,
+    context: str,
+    remote_user: str = "root",
+    ncb: str | None = None,
+    dry_run: bool = False,
+    runner: CommandRunner | None = None,
+) -> bool:
+    """Rsync node-configs/{context}/placement.yaml → {ncb}/{context}/placement.yaml (T1.B).
+
+    @raises CoreDeliveryError  On rsync failure.
+    """
+    if not context:
+        logger.info("[IMP:8][deliver_placement][skip] no --context — legacy single-node flow, no-op")
+        return True
+    ncb = ncb or resolve_node_configs_base()
+    src = pathlib.Path(node_configs_dir) / context / "placement.yaml"
+    if not src.is_file():
+        logger.info(
+            "[IMP:8][deliver_placement][skip] no placement.yaml at %s — single-node canon (no-op)",
+            src,
+        )
+        return True
+    dest_path = placement_remote_path(context)
+    cmd = [
+        "rsync",
+        "-avz",
+        "-e",
+        build_rsync_ssh_opts(),
+        str(src),
+        f"{remote_user}@{host}:{dest_path}",
+    ]
+    logger.info("[IMP:9][deliver_placement][exec] Phase 2b: %s → %s:%s", src, host, dest_path)
+    if dry_run:
+        logger.info("[IMP:8][deliver_placement][dry-run] DRY-RUN: %s", " ".join(cmd))
+        return True
+    r = _run_cmd(cmd, RSYNC_TIMEOUT, runner)
+    if r.returncode != 0:
+        logger.info("[IMP:10][deliver_placement][error] FATAL: rsync placement.yaml failed for %s", host)
+        msg = f"rsync placement.yaml failed for {host} (exit={r.returncode}): {r.stderr.strip()}"
+        raise CoreDeliveryError(msg)
+    logger.info("[IMP:9][deliver_placement][done] Phase 2b: placement.yaml delivered to %s", dest_path)
+    return True
+
+
+# endregion FUNC_deliver_placement
+
+
 # region FUNC_deliver_secrets
 ## @purpose  Phase 3/4: rsync node-configs/{node}/secrets/ → {ncb}/secrets/ с 1 exclude (.git).
 ##           Skip если per-node secrets/ директория отсутствует.
@@ -706,10 +772,13 @@ def deliver_ci(
 
 
 # region FUNC_deliver_all
-## @purpose  Оркестрация Core-доставки (полный цикл bootstrap): ensure_remote_dirs → 5 rsync-фаз
-##           (1/4 core, 1b platform-env, 1c Makefile, 2 node-configs, 3 secrets).
+## @purpose  Оркестрация Core-доставки (полный цикл bootstrap): ensure_remote_dirs → 6 rsync-фаз
+##           (1/4 core, 1b platform-env, 1c Makefile, 2 node-configs, 2b placement, 3 secrets).
+##           DevPlan 16 T1.B: deliver_placement исполняется ДО фаз-потребителей (φ8 deploy-modules/
+##           φ12 читают {ncb}/{context}/placement.yaml) — порядок в этой последовательности
+##           гарантирует наличие файла к началу деплоя.
 ##           Fail-fast: первая упавшая фаза → CoreDeliveryError (эквивалент shell || return 1).
-## @io  input: host, node, node_configs_dir, core_dir, remote_user, dry_run, runner;
+## @io  input: host, node, node_configs_dir, core_dir, context="", remote_user, dry_run, runner;
 ##      output: bool True on success
 ## @complexity  O(F_total) — суммарно по всем фазам
 def deliver_all(
@@ -717,11 +786,12 @@ def deliver_all(
     node: str,
     node_configs_dir: str,
     core_dir: str,
+    context: str = "",
     remote_user: str = "root",
     dry_run: bool = False,
     runner: CommandRunner | None = None,
 ) -> bool:
-    """Full Core delivery: mkdir + 5 rsync phases, fail-fast on first CoreDeliveryError."""
+    """Full Core delivery: mkdir + rsync phases incl. placement (T1.B), fail-fast on error."""
     base = resolve_remote_base()
     ncb = resolve_node_configs_base()
     ensure_remote_dirs(host, node, remote_user, base, ncb, dry_run, runner)
@@ -732,6 +802,7 @@ def deliver_all(
     deliver_makefiles(host, core_dir, remote_user, base, dry_run, runner)
     deliver_root_compose(host, core_dir, remote_user, base, dry_run, runner)
     deliver_node_configs(host, node, node_configs_dir, remote_user, ncb, dry_run, runner)
+    deliver_placement(host, node_configs_dir, context, remote_user, ncb, dry_run, runner)
     deliver_secrets(host, node, node_configs_dir, remote_user, ncb, dry_run, runner)
     return True
 
@@ -885,11 +956,19 @@ def cli(argv: list[str] | None = None, runner: CommandRunner | None = None) -> i
     """CLI entrypoint: deliver — full Core channel delivery. Exit 0 on success, 1 on failure."""
     p = argparse.ArgumentParser(description="core_deliverer — Core channel delivery (SCP/rsync, NO git)")
     sp = p.add_subparsers(dest="command", required=True)
-    dp = sp.add_parser("deliver", help="Deliver core/ + platform-env + Makefile + node-configs + secrets to VPS")
+    dp = sp.add_parser(
+        "deliver", help="Deliver core/ + platform-env + Makefile + node-configs + placement + secrets to VPS"
+    )
     dp.add_argument("--host", required=True)
     dp.add_argument("--node", required=True)
     dp.add_argument("--node-configs-dir", required=True)
     dp.add_argument("--core-dir", required=True)
+    dp.add_argument(
+        "--context",
+        default="",
+        help="Context name for placement.yaml delivery (DevPlan 16 T1.B): node-configs/{context}/placement.yaml "
+        "→ {ncb}/{context}/placement.yaml; пусто → skip (legacy single-node)",
+    )
     dp.add_argument("--remote-user", default="root")
     dp.add_argument("--dry-run", action="store_true")
     fp = sp.add_parser(
@@ -935,7 +1014,14 @@ def cli(argv: list[str] | None = None, runner: CommandRunner | None = None) -> i
     try:
         if args.command == "deliver":
             deliver_all(
-                args.host, args.node, args.node_configs_dir, args.core_dir, args.remote_user, args.dry_run, runner
+                args.host,
+                args.node,
+                args.node_configs_dir,
+                args.core_dir,
+                context=getattr(args, "context", ""),
+                remote_user=args.remote_user,
+                dry_run=args.dry_run,
+                runner=runner,
             )
         elif args.command == "ci-deliver":
             deliver_ci(args.host, args.core_dir, args.remote_user, None, args.dry_run, runner)

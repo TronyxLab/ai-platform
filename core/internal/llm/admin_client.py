@@ -607,33 +607,52 @@ def find_key_by_metadata(keys: list[KeyInfo], **metadata_filters: str) -> KeyInf
     ## @purpose  Чистая фильтрация уже скачанного списка (PERF-081: fetch ONCE +
     ##           filter вместо N полных скачиваний). Используется provisioner'ом
     ##           поверх одного list_keys() вызова.
-    ## @io — ⇥ keys, **metadata_filters → ⎋ KeyInfo | None (первый match или None)
-    ## @complexity O(N * F)
+    ##           DevPlan 16 T1.D (P1-7): коллизия metadata.project (>1 match) решается
+    ##           ДЕТЕРМИНИРОВАННО — сортировка по (created_at, token), победитель — первый;
+    ##           WARN с идентификаторами всех кандидатов (орфан перестаёт быть безвестным).
+    ## @io — ⇥ keys, **metadata_filters → ⎋ KeyInfo | None (детерминированный match или None)
+    ## @complexity O(N * F) + O(M log M) на коллизии
     ## @invariants
     ##   - Match = ВСЕ фильтр-пары присутствуют в metadata ключа
+    ##   - Коллизия >1 → стабильный победитель при одинаковом входе (idempotent SKIP контракт)
     """
-    result: KeyInfo | None = None
+    matches: list[KeyInfo] = []
     for k in keys:
         key_metadata = k.get("metadata") or {}
         if not isinstance(key_metadata, dict):
             continue
-        match = all(key_metadata.get(field) == value for field, value in metadata_filters.items())
-        if match:
-            result = k
-            break
+        if all(key_metadata.get(field) == value for field, value in metadata_filters.items()):
+            matches.append(k)
 
-    if result is not None:
-        logger.log(
-            logging.CRITICAL,
-            "[IMP:9][find_key_by_metadata] Key found matching metadata: %s",
-            metadata_filters,
-        )
-    else:
+    if not matches:
         logger.log(
             logging.INFO,
             "[IMP:8][find_key_by_metadata] No key matching metadata: %s",
             metadata_filters,
         )
+        return None
+
+    result: KeyInfo = matches[0]
+    if len(matches) > 1:
+        # DevPlan 16 T1.D: детерминизм (created_at, token) — first-match по порядку листинга
+        # зависел от пагинации сервера → флакующий winner порождал лишние GENERATE-дубли
+        ordered = sorted(matches, key=lambda k: (str(k.get("created_at") or ""), str(k.get("key") or "")))
+        result = ordered[0]
+        logger.log(
+            logging.WARNING,
+            "[IMP:8][find_key_by_metadata] COLLISION: %d keys match %s — deterministic winner "
+            "token=%s…, duplicates=[%s]",
+            len(matches),
+            metadata_filters,
+            str(result.get("key", ""))[:_KEY_PREVIEW_LEN],
+            ", ".join(str(k.get("key", ""))[:_KEY_PREVIEW_LEN] + "…" for k in ordered[1:]),
+        )
+
+    logger.log(
+        logging.CRITICAL,
+        "[IMP:9][find_key_by_metadata] Key found matching metadata: %s",
+        metadata_filters,
+    )
     return result
 
 

@@ -90,6 +90,10 @@ _BUDGET_EPSILON: float = 0.001  # допустимое расхождение da
 _DEFAULT_POLICY_REL_PATH = pathlib.Path("core") / "internal" / "llm" / "policy.yaml"
 _LOCK_TIMEOUT_SECONDS: float = 30.0  # ожидание store.lock при конкурентном provision
 
+# DevPlan 16 T1.D (P0-5): зарезервированные ключи метаданных — профильная конфигурация НЕ
+# может затереть их в key_metadata (иначе lookup find_key_by_metadata(project=…) ломается)
+_RESERVED_METADATA_KEYS: frozenset[str] = frozenset({"project"})
+
 # ── Project root resolution ──────────────────────────────────────────────────
 # _PROJECT_ROOT определён выше (self-bootstrap, W2 T2.10) — см. шапку модуля.
 
@@ -594,6 +598,10 @@ def provision_all(
     ##   - Consumer without 'llm' or with llm.enabled=false → skipped
     ##   - Profile always resolves to a valid, existing profile
     ##   - Every generated key is persisted via persist_project_key()
+    ##   - DevPlan 16 T1.D: metadata['project']==consumer_name ВСЕГДА (merge-guard reserved);
+    ##     весь проход find→update/generate→persist под store.lock (конкурентные дубли
+    ##     структурно невозможны); любой терминальный failed → PlatformError (φ11 не done);
+    ##     пустой токен листинга = not-found (стор пустым значением НЕ перезаписывается)
     """
     logger.log(
         logging.CRITICAL,
@@ -636,107 +644,165 @@ def provision_all(
 
     # Step 5: Provision keys
     provisioned_keys: dict[str, str] = {}
+    # DevPlan 16 T1.D (P0-5/P1-5): терминальные провалы по consumer'ам — пост-цикл
+    # PlatformError (φ11 обязан видеть провал фазы llm-keys, partial-словарь не «успех»)
+    failed_consumers: list[str] = []
+    # DevPlan 16 T1.D (P1-6): lock-scope — весь потребительский проход (find → update/
+    # generate → persist) под store.lock; конкурентный второй прогон ждёт/падает по
+    # таймауту лока → дубли структурно невозможны. FileLock реентрантен: вложенные
+    # persist_project_key берут тот же путь без deadlock.
 
-    for consumer in all_consumers:
-        consumer_name = consumer.get("name", "unknown")
+    if persist_path is None:
+        persist_path = get_default_persist_path()
 
-        # Skip disabled
-        llm_config = consumer.get("llm", {})
-        if not isinstance(llm_config, dict) or not llm_config.get("enabled", False):
-            logger.log(
-                logging.INFO,
-                "[IMP:8][provision_all] SKIP '%s': llm not enabled",
-                consumer_name,
-            )
-            continue
+    with FileLock(_store_lock_path(persist_path), timeout=_LOCK_TIMEOUT_SECONDS):
+        for consumer in all_consumers:
+            consumer_name = consumer.get("name", "unknown")
 
-        # Resolve profile
-        profile_name = resolve_profile(consumer, policy)
-        logger.log(
-            logging.INFO,
-            "[IMP:8][provision_all] Consumer '%s' → profile '%s'",
-            consumer_name,
-            profile_name,
-        )
-
-        # Get profile config + apply overrides
-        base_config = get_profile_config(profile_name, policy)
-        llm_overrides = llm_config.get("overrides") if isinstance(llm_config, dict) else None
-        # W11: YAML-граница (object) → dict[str, object] (isinstance-сужение + cast)
-        overrides: dict[str, object] | None = (
-            cast("dict[str, object]", llm_overrides) if isinstance(llm_overrides, dict) else None
-        )
-        effective_config = apply_overrides(base_config, overrides)
-
-        # Build metadata for the key
-        key_metadata: dict[str, str] = {
-            "project": consumer_name,
-        }
-        profile_metadata = effective_config.get("metadata", {})
-        if isinstance(profile_metadata, dict):
-            key_metadata.update({k: v for k, v in profile_metadata.items() if isinstance(v, str)})
-
-        # Check existing key
-        existing_key = client.get_key_by_metadata(project=consumer_name)
-
-        if existing_key and isinstance(existing_key, dict):
-            existing_token = existing_key.get("key", "")
-            if key_config_matches(existing_key, effective_config):
-                # Idempotent: key exists with matching config → skip
+            # Skip disabled
+            llm_config = consumer.get("llm", {})
+            if not isinstance(llm_config, dict) or not llm_config.get("enabled", False):
                 logger.log(
-                    logging.CRITICAL,
-                    "[IMP:9][provision_all] IDEMPOTENT SKIP '%s': key exists with matching config",
+                    logging.INFO,
+                    "[IMP:8][provision_all] SKIP '%s': llm not enabled",
                     consumer_name,
                 )
-                provisioned_keys[consumer_name] = existing_token
-                persist_project_key(consumer_name, existing_token, persist_path)
                 continue
-            # Key exists but config differs → update
+
+            # Resolve profile
+            profile_name = resolve_profile(consumer, policy)
             logger.log(
                 logging.INFO,
-                "[IMP:8][provision_all] UPDATE '%s': key exists with different config",
+                "[IMP:8][provision_all] Consumer '%s' → profile '%s'",
+                consumer_name,
+                profile_name,
+            )
+
+            # Get profile config + apply overrides
+            base_config = get_profile_config(profile_name, policy)
+            llm_overrides = llm_config.get("overrides") if isinstance(llm_config, dict) else None
+            # W11: YAML-граница (object) → dict[str, object] (isinstance-сужение + cast)
+            overrides: dict[str, object] | None = (
+                cast("dict[str, object]", llm_overrides) if isinstance(llm_overrides, dict) else None
+            )
+            effective_config = apply_overrides(base_config, overrides)
+
+            # Build metadata for the key
+            key_metadata: dict[str, str] = {
+                "project": consumer_name,
+            }
+            profile_metadata = effective_config.get("metadata", {})
+            if isinstance(profile_metadata, dict):
+                # DevPlan 16 T1.D (P0-5): merge-guard — профильные метаданные НЕ затирают
+                # зарезервированный "project" (иначе find_key_by_metadata никогда не матчит
+                # → GENERATE бюджетных дублей на каждом прогоне). Инвариант:
+                # key_metadata["project"] == consumer_name всегда.
+                for meta_key, meta_value in profile_metadata.items():
+                    if not isinstance(meta_value, str):
+                        continue
+                    if meta_key in _RESERVED_METADATA_KEYS:
+                        logger.log(
+                            logging.WARNING,
+                            "[IMP:8][provision_all] Reserved metadata key '%s' from profile "
+                            "ignored for '%s' (invariant: metadata['project']==consumer)",
+                            meta_key,
+                            consumer_name,
+                        )
+                        continue
+                    key_metadata[meta_key] = meta_value
+
+            # Check existing key
+            existing_key = client.get_key_by_metadata(project=consumer_name)
+
+            existing_token = ""
+            if existing_key and isinstance(existing_key, dict):
+                existing_token = str(existing_key.get("key") or "")
+                if not existing_token:
+                    # DevPlan 16 T1.D (P1-8): пустой токен листинга = запись not-found;
+                    # НЕ персистится поверх рабочего ключа стора
+                    logger.log(
+                        logging.WARNING,
+                        "[IMP:8][provision_all] Listing for '%s' returned EMPTY token — "
+                        "treating as not-found (store untouched by empty value)",
+                        consumer_name,
+                    )
+                    existing_key = None
+
+            if existing_key and isinstance(existing_key, dict):
+                if key_config_matches(existing_key, effective_config):
+                    # Idempotent: key exists with matching config → skip
+                    logger.log(
+                        logging.CRITICAL,
+                        "[IMP:9][provision_all] IDEMPOTENT SKIP '%s': key exists with matching config",
+                        consumer_name,
+                    )
+                    provisioned_keys[consumer_name] = existing_token
+                    persist_project_key(consumer_name, existing_token, persist_path)
+                    continue
+                # Key exists but config differs → update
+                logger.log(
+                    logging.INFO,
+                    "[IMP:8][provision_all] UPDATE '%s': key exists with different config",
+                    consumer_name,
+                )
+                try:
+                    client.update_key(
+                        key=existing_token,
+                        models=effective_config.get("models"),
+                        max_budget=effective_config.get("budget", {}).get("daily"),
+                        rpm_limit=effective_config.get("rpm_limit"),
+                        metadata=key_metadata,
+                    )
+                    logger.log(
+                        logging.CRITICAL,
+                        "[IMP:9][provision_all] KEY UPDATED '%s': %s...",
+                        consumer_name,
+                        existing_token[:_KEY_PREVIEW_LEN] if len(existing_token) > _KEY_PREVIEW_LEN else existing_token,
+                    )
+                    provisioned_keys[consumer_name] = existing_token
+                    persist_project_key(consumer_name, existing_token, persist_path)
+                    continue
+                except (OSError, ConnectionError, TimeoutError) as e:
+                    logger.log(
+                        logging.WARNING,
+                        "[IMP:8][provision_all] Update failed for '%s': %s — falling through to generate",
+                        consumer_name,
+                        e,
+                    )
+
+            # Key does not exist → generate
+            logger.log(
+                logging.INFO,
+                "[IMP:8][provision_all] GENERATE '%s': no existing key found",
                 consumer_name,
             )
             try:
-                client.update_key(
-                    key=existing_token,
-                    models=effective_config.get("models"),
-                    max_budget=effective_config.get("budget", {}).get("daily"),
-                    rpm_limit=effective_config.get("rpm_limit"),
+                gen_result = client.generate_key(
+                    models=effective_config.get("models", []),
                     metadata=key_metadata,
+                    max_budget=effective_config.get("budget", {}).get("daily", 0.0),
+                    budget_duration="1d",
+                    rpm_limit=effective_config.get("rpm_limit", 10),
                 )
-                logger.log(
-                    logging.CRITICAL,
-                    "[IMP:9][provision_all] KEY UPDATED '%s': %s...",
-                    consumer_name,
-                    existing_token[:_KEY_PREVIEW_LEN] if len(existing_token) > _KEY_PREVIEW_LEN else existing_token,
-                )
-                provisioned_keys[consumer_name] = existing_token
-                persist_project_key(consumer_name, existing_token, persist_path)
-                continue
             except (OSError, ConnectionError, TimeoutError) as e:
                 logger.log(
                     logging.WARNING,
-                    "[IMP:8][provision_all] Update failed for '%s': %s — falling through to generate",
+                    "[IMP:8][provision_all] Generate failed for '%s': %s",
                     consumer_name,
                     e,
                 )
-
-        # Key does not exist → generate
-        logger.log(
-            logging.INFO,
-            "[IMP:8][provision_all] GENERATE '%s': no existing key found",
-            consumer_name,
-        )
-        try:
-            gen_result = client.generate_key(
-                models=effective_config.get("models", []),
-                metadata=key_metadata,
-                max_budget=effective_config.get("budget", {}).get("daily", 0.0),
-                budget_duration="1d",
-                rpm_limit=effective_config.get("rpm_limit", 10),
-            )
-            new_key = gen_result.get("key", "")
+                failed_consumers.append(consumer_name)
+                continue
+            # DevPlan 16 T1.D (P1-8): пустой токен ГЕНЕРАЦИИ = терминальный провал consumer'а
+            new_key = str(gen_result.get("key") or "")
+            if not new_key:
+                logger.log(
+                    logging.WARNING,
+                    "[IMP:8][provision_all] Generate returned EMPTY token for '%s' — counted as failed",
+                    consumer_name,
+                )
+                failed_consumers.append(consumer_name)
+                continue
             logger.log(
                 logging.CRITICAL,
                 "[IMP:9][provision_all] KEY GENERATED '%s': %s...",
@@ -745,13 +811,6 @@ def provision_all(
             )
             provisioned_keys[consumer_name] = new_key
             persist_project_key(consumer_name, new_key, persist_path)
-        except (OSError, ConnectionError, TimeoutError) as e:
-            logger.log(
-                logging.WARNING,
-                "[IMP:8][provision_all] Generate failed for '%s': %s",
-                consumer_name,
-                e,
-            )
 
     # Summary
     total_skipped = len(all_consumers) - len(provisioned_keys)
@@ -761,6 +820,15 @@ def provision_all(
         len(provisioned_keys),
         total_skipped,
     )
+
+    # DevPlan 16 T1.D (P0-5): честный failed — исключение вместо WARN+continue; φ11 не
+    # фиксирует llm-keys done при проваленных ключах (инвариант exit-контракта main())
+    if failed_consumers:
+        msg = (
+            f"LLM key provisioning FAILED for {len(failed_consumers)} consumer(s): "
+            f"{sorted(failed_consumers)} — фаза llm-keys НЕ завершена (partial-словарь не успех)"
+        )
+        raise PlatformError(msg)
 
     return provisioned_keys
 

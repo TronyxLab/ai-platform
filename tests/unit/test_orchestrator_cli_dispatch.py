@@ -68,10 +68,15 @@ def _make_payload_tar(tmp_path: pytest.TempPathFactory, project: str = "testproj
         encoding="utf-8",
     )
     (proj_dir / "ai-platform.yaml").write_text(f"name: {project}\n", encoding="utf-8")
+    # DevPlan 16 T1.E: unmanaged (без lock) блокируется pre-deploy гейтом — фиксируем lock
+    (proj_dir / "practices.lock").write_text(
+        "version: 1\nlevel: auto\nstate: baseline\nlanguage: python\ngenerator_hash: sha256:test\nmaturity:\n  age_days: 1\n  code_files: 0\n",
+        encoding="utf-8",
+    )
 
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz", encoding="utf-8") as tar:
-        for fname in ("docker-compose.yml", "ai-platform.yaml"):
+        for fname in ("docker-compose.yml", "ai-platform.yaml", "practices.lock"):
             tar.add(proj_dir / fname, arcname=fname)
     return buf.getvalue()
 

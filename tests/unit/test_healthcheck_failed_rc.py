@@ -71,11 +71,15 @@ def _make_payload_tar(tmp_path: Path, project: str = "testproj") -> bytes:
     proj_dir.mkdir(exist_ok=True)
     (proj_dir / "docker-compose.yml").write_text(_VALID_COMPOSE, encoding="utf-8")
     (proj_dir / "ai-platform.yaml").write_text(f"name: {project}\n", encoding="utf-8")
+    (proj_dir / "practices.lock").write_text(
+        "version: 1\nlevel: auto\nstate: baseline\nlanguage: python\ngenerator_hash: sha256:test\nmaturity:\n  age_days: 1\n  code_files: 0\n",
+        encoding="utf-8",
+    )
     (proj_dir / ".env.platform").write_text("PLATFORM_DOMAIN=example.com\n", encoding="utf-8")
 
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz", encoding="utf-8") as tar:
-        for fname in ("docker-compose.yml", "ai-platform.yaml", ".env.platform"):
+        for fname in ("docker-compose.yml", "ai-platform.yaml", ".env.platform", "practices.lock"):
             tar.add(proj_dir / fname, arcname=fname)
     return buf.getvalue()
 
@@ -125,6 +129,10 @@ def test_unhealthy_poller_deploy_returns_failed(
     proj_dir.mkdir()
     (proj_dir / "docker-compose.yml").write_text(_VALID_COMPOSE, encoding="utf-8")
     (proj_dir / "ai-platform.yaml").write_text("name: testproj\n", encoding="utf-8")
+    (proj_dir / "practices.lock").write_text(
+        "version: 1\nlevel: auto\nstate: baseline\nlanguage: python\ngenerator_hash: sha256:test\nmaturity:\n  age_days: 1\n  code_files: 0\n",
+        encoding="utf-8",
+    )
 
     audit_log = tmp_path / "audit.log"
     orch = DeployOrchestrator(

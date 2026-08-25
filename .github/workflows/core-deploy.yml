@@ -205,6 +205,9 @@ jobs:
         if: steps.sha.outputs.skip != 'true'
         env:
           SSH_OPTS: ${{ steps.ssh_opts.outputs.opts }}
+          # DevPlan 16 T1.F (P0-7): секрет читается ТОЛЬКО в step-env — НИКОГДА не
+          # интерполируется в строку remote-команды (/proc/*/cmdline remote-shell).
+          AGE_SECRET_KEY: ${{ secrets.AGE_SECRET_KEY }}
         run: |
           SHA="${{ steps.sha.outputs.sha }}"
           # Auto-detect NODE name via canonical node_detect on the VPS
@@ -220,17 +223,27 @@ jobs:
             exit 1
           fi
           echo "[IMP:8][deploy][node-detect] Auto-detected NODE=${NODE}"
-          # W4 (DevPlan 140): AGE_SECRET_KEY env в remote-команду node-update — канон для
-          # φ9 secrets_update decrypt (ключ НЕ живёт на диске ноды: persist удалён из φ4;
-          # decrypt — tmpfs decrypt-only, S-13). Секрет настраивается оператором в GitHub
-          # Secrets org (AGE_SECRET_KEY). Если секрет НЕ настроен → Actions подставит пустую
-          # строку → detect_age_key деградирует мягко на restore-first fallback /etc/age/key.txt.
-          # REF-0012: секрет экспортируется из quoted-литерала (не inline-интерполяцией в
-          # remote-строку) — GitHub-расширение до bash-парсинга исключает word-splitting.
-          export AGE_SECRET_KEY="${{ secrets.AGE_SECRET_KEY }}"
-          ssh ${SSH_OPTS} \
-            "${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}" \
-            "cd /opt/platform && AGE_SECRET_KEY=\"$AGE_SECRET_KEY\" DEPLOY_PARALLEL=true GITHUB_SHA=$SHA make node-update NODE=$NODE"
+          # ── REF-0007 / DevPlan 16 T1.F: stdin-prelude транспорт ──
+          # AGE_SECRET_KEY уходит на ноду ТОЛЬКО через ssh-stdin (`bash -s`): prelude
+          # (export-строка, printf %q) + тело команды двумя строками stdin; в argv и
+          # /proc/*/cmdline остаётся только `bash -s` (контракт байт-в-байт с
+          # remote_executor._ssh_exec и build-ssh-cmd.sh ssh_exec_stdin).
+          # Ключ НЕ живёт на диске ноды (decrypt — tmpfs, S-13). Если секрет НЕ настроен →
+          # пустой prelude (`true`) → detect_age_key деградирует мягко на restore-first.
+          case "${AGE_SECRET_KEY}" in
+            *$'\n'*)
+              echo "::error::[IMP:10][deploy] AGE_SECRET_KEY содержит перевод строки — "
+              echo "::error::single-line контракт транспорта (b64-v2 придёт отдельным изменением)"
+              exit 1
+              ;;
+          esac
+          source core/internal/bootstrap/build-ssh-cmd.sh
+          REMOTE_CMD="$(build_update_ssh_cmd "$NODE" "" "DEPLOY_PARALLEL=true" "GITHUB_SHA=$SHA")"
+          PRELUDE="$(build_update_secret_prelude "$AGE_SECRET_KEY")"
+          { printf '%s\n' "${PRELUDE:-true}"; printf '%s\n' "$REMOTE_CMD"; } | \
+            ssh ${SSH_OPTS} \
+              "${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}" \
+              "bash -s"
 
       # ─── Step 6: Audit trail ──────────────────────────────────────────
       - name: Log deployment audit trail

@@ -1004,6 +1004,9 @@ gates:
   test_gate_ci_env_vars.py:
   - test_ci_env_vars_match_platform_env
   - test_no_hardcoded_ci_secrets
+  test_gate_ci_secrets_transport.py:
+  - test_core_deploy_no_secret_interpolation
+  - test_regression_export_interpolation_red
   test_gate_ci_trigger_strength.py:
   - strength_scanner_yaml_parseable
   - test_ci_trigger_strength_contract
@@ -1658,11 +1661,13 @@ gates:
   - test_all_external_actions_pinned_full_sha
   - test_negative_double_quoted_form_passes
   - test_negative_local_action_refs_exempt
+  - test_negative_missing_fetch_depth_detected
   - test_negative_mutable_tag_detected
   - test_negative_raw_interpolation_outside_quotes_detected
   - test_negative_sha_pin_without_version_comment_detected
   - test_negative_single_quoted_interpolation_detected
   - test_run_blocks_quoted_interpolation_only
+  - test_workflows_fetch_depth_zero
   test_gate_yaml_deterministic_output.py:
   - test_entrypoint_manifest_deterministic
   - test_platform_env_deterministic

@@ -867,10 +867,126 @@ def test_verify_contracts_l1_only_broken_yaml_blocked(
 # · Last fail: N/A
 # · Remove if: l1_only scope меняется
 def test_verify_contracts_l1_only_skips_docker_checks(monkeypatch, tmp_path: Path) -> None:
-    """l1_only=True: валидный проект без lock → 0 findings (drift/docker-L2 пропущены)."""
-    project = _make_project(tmp_path, lock_state=None)  # unmanaged: drift-finding был бы в full-режиме
+    """l1_only=True + lock: docker-L2 subprocess не исполняется, 0 findings (регрессия).
+
+    DevPlan 16 T1.E: без lock (unmanaged) l1_only теперь БЛОКИРУЕТСЯ
+    (test_l1_unmanaged_blocking ниже); здесь — прежняя семантика при наличии lock.
+    """
+    project = _make_project(tmp_path, lock_state="baseline")
     report = verify_project_contracts(project, l1_only=True, facts=_FACTS_NO_DOCKER)
     contract_ids = {f.contract_id for f in report.findings}
     assert "drift-practices" not in contract_ids, "l1_only не должен исполнять drift"
     assert "build-check" not in contract_ids, "l1_only не должен исполнять build-check"
+    assert "drift-practices-unmanaged" not in contract_ids, "lock есть → unmanaged-finding нет"
     assert not report.has_blocking_violation()
+
+
+# ═══════════════════════════════════════════════════════════════════
+# DevPlan 16 T1.E (P0-6 + P1-9..11): unmanaged-block, dict-form, GPU, override
+# ═══════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · SCENARIO · DevPlan 16 T1.E P0-6 · unmanaged блокируется на pre-deploy L1
+# · Last fail: аудит 15 P0-6 — l1_only скипал drift целиком: unmanaged-проект проходил гейт
+#   с 0 findings при заявленном контракте [PRACTICES:UNMANAGED] … блокируют деплой
+# · Scenario: l1_only + practices.lock отсутствует → has_blocking=True,
+#   contract_id=drift-practices-unmanaged, klass=L1
+# · Remove if: unmanaged-проекты получают иной канал блокировки
+def test_l1_unmanaged_blocking(tmp_path: Path) -> None:
+    project = _make_project(tmp_path, lock_state=None)
+    report = verify_project_contracts(project, l1_only=True, facts=_FACTS_NO_DOCKER)
+    unmanaged = [f for f in report.findings if f.contract_id == "drift-practices-unmanaged"]
+    assert unmanaged, report.format_for_ssh()
+    assert unmanaged[0].klass == "L1" and unmanaged[0].severity == "block"
+    assert report.has_blocking_violation() and report.exit_code == 1
+
+
+# 🧪 TRAP[TEST] · REGRESSION · DevPlan 16 T1.E P0-6 · наличие lock → прежняя семантика
+# · Scenario: full-режим + lock=baseline → drift-practices НЕ blocking (warning-класс L2/L3
+#   по state); латентность l1_only не выросла (без docker-subprocess — facts NO_DOCKER)
+# · Remove if: severity-политика пересмотрена (DevPlan 137 §4.5)
+def test_l1_with_lock_unchanged(tmp_path: Path) -> None:
+    project = _make_project(tmp_path, lock_state="baseline")
+    report = verify_project_contracts(project, l1_only=True, facts=_FACTS_NO_DOCKER)
+    assert not any(f.severity == "block" for f in report.findings), (
+        f"l1_only+lock обязан сохранить прежнюю семантику: {report.format_for_ssh()}"
+    )
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · DevPlan 16 T1.E P1-9 · dict-form security_opt детектируется
+# · Last fail: аудит 15 P1-9 — {seccomp: unconfined} (dict) не детектился вовсе; list-форма
+#   тоже отсутствовала на базовом HEAD
+# · Scenario: обе формы в одном compose → по violation на каждый сервис; case-insensitive
+# · Remove if: security_opt переносится в compose-gate иного слоя
+def test_security_opt_dict_form(tmp_path: Path) -> None:
+    from core.internal.deploy.verify_contracts import verify_project_contracts as _v
+
+    extra = """
+  evil_dict:
+    image: busybox
+    security_opt:
+      seccomp: unconfined
+  evil_list:
+    image: busybox
+    security_opt:
+      - "SECCOMP:UNCONFINED"
+"""
+    # Дополнительные сервисы вставляются ВНУТРЬ services-блока (до top-level networks:)
+    compose = _VALID_COMPOSE.replace("\nnetworks:", extra + "\nnetworks:")
+    project = _make_project(tmp_path, name="secopt", compose=compose, lock_state="baseline")
+    report = _v(project, facts=_FACTS_NO_DOCKER)
+    secopt = [f for f in report.findings if f.contract_id == "security-opt" and f.severity == "block"]
+    assert len(secopt) == 2, f"dict И list формы обязаны детектироваться: {report.format_for_ssh()}"
+    assert any("evil_dict" in f.message for f in secopt)
+    assert any("evil_list" in f.message for f in secopt)
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · DevPlan 16 T1.E P1-10 · GPU/device-reservation векторы
+# · Last fail: аудит 15 P1-10 — reservations.devices / gpus: / device_cgroup_rules вне deny-set
+# · Scenario: три вектора в compose → block по device-reservations на каждый
+# · Remove if: GPU-доступ проектам легитимизирован владельцем (TRAP[BUSINESS])
+def test_gpu_reservation_denied(tmp_path: Path) -> None:
+    extra = """
+  gpu_svc:
+    image: busybox
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+    device_cgroup_rules:
+      - "c 195:* rmw"
+  gpu_top:
+    image: busybox
+    gpus: all
+"""
+    compose = _VALID_COMPOSE.replace("\nnetworks:", extra + "\nnetworks:")
+    project = _make_project(tmp_path, name="gpu", compose=compose, lock_state="baseline")
+    report = verify_project_contracts(project, facts=_FACTS_NO_DOCKER)
+    dev = [f for f in report.findings if f.contract_id == "device-reservations" and f.severity == "block"]
+    assert len(dev) >= 3, f"все три вектора обязаны детектироваться: {report.format_for_ssh()}"
+    assert any("gpu_svc" in f.message and "reservations.devices" in f.message for f in dev)
+    assert any("device_cgroup_rules" in f.message for f in dev)
+    assert any("gpu_top" in f.message and "gpus" in f.message for f in dev)
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · DevPlan 16 T1.E P1-11 · violation в override-файле видна
+# · Last fail: аудит 15 P1-11 — сканировался ровно один compose-файл: override/include слепая зона
+# · Scenario: канонический compose чистый, docker-compose.override.yml несёт devices →
+#   finding найден С именем файла в сообщении
+# · Remove if: мульти-compose агрегация перенесена в compose-config gate
+def test_override_file_scanned(tmp_path: Path) -> None:
+    project = _make_project(tmp_path, name="ovr", lock_state="baseline")
+    (project / "docker-compose.override.yml").write_text(
+        "services:\n  sneaky:\n    image: busybox\n    devices:\n      - /dev/sda:/dev/sda\n",
+        encoding="utf-8",
+    )
+    report = verify_project_contracts(project, facts=_FACTS_NO_DOCKER)
+    dev = [
+        f
+        for f in report.findings
+        if f.contract_id in {"devices", "device-reservations"} and "docker-compose.override.yml" in f.message
+    ]
+    assert dev, f"override обязан сканироваться с именем файла: {report.format_for_ssh()}"
+    assert any(f.severity == "block" for f in dev)

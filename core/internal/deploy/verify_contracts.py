@@ -88,7 +88,7 @@ import yaml
 from core.internal.practices.generators import PracticesLock, read_lock
 from core.internal.practices.manifest import load_manifest
 from core.internal.shared.audit_logger import DEFAULT_LOG_FILE, write_audit_entry
-from core.internal.shared.compose_files import resolve_compose_file
+from core.internal.shared.compose_files import PROJECT_OVERRIDE_FILENAMES, resolve_compose_file
 from core.internal.shared.contracts import EXIT_GENERIC, EXIT_OK
 from core.internal.shared.env_facts import EnvironmentFacts, default_env_facts
 from core.internal.shared.exceptions import ConfigValidationError, PlatformError
@@ -318,30 +318,71 @@ def verify_project_contracts(
 
     raw: list[_RawFinding] = []
     compose_path = resolve_compose_file(project_dir)
+    # DevPlan 16 T1.E (P1-11): мульти-compose — сканируем ВСЕ существующие файлы проекта
+    # (канон + override-слой): override может нести security_opt/devices/gpus, невидимые
+    # single-file сканом. Findings агрегируются с именем файла в сообщении.
+    scan_files: list[Path] = []
     if compose_path is not None:
-        data, parse_err = _parse_compose(compose_path)
+        scan_files.append(compose_path)
+    for override_name in PROJECT_OVERRIDE_FILENAMES:
+        candidate = project_dir / override_name
+        if candidate.is_file() and candidate not in scan_files:
+            scan_files.append(candidate)
+
+    for scan_file in scan_files:
+        file_tag = f"[{scan_file.name}] "
+        data, parse_err = _parse_compose(scan_file)
         if data is None:
-            raw.append(_RawFinding("compose-config-valid", KLASS_L2, f"compose file не парсится как YAML: {parse_err}"))
-        else:
-            services = data.get("services")
-            networks = data.get("networks")
-            if not isinstance(services, dict):
-                raw.append(_RawFinding("compose-config-valid", KLASS_L2, "compose file не содержит services (dict)"))
-            else:
-                raw.extend(_check_secrets_in_compose(services))
-                raw.extend(_check_ports_published(services))
-                raw.extend(_check_healthcheck_present(services))
-                raw.extend(_check_external_networks(networks, manifest.allowed_external_networks))
-                raw.extend(_check_env_file(services))
-                raw.extend(_check_platform_labels(services))
-                raw.extend(_check_limits_present(services))
-                # 176 A.1 (C1 root-эскалация): привилегии проектам запрещены полностью
-                raw.extend(_check_privileged(services))
-                raw.extend(_check_cap_add(services))
-                raw.extend(_check_devices(services))
-                # REF-0006 (DevPlan 11 В2): volumes/socket/host-binds + host-mode-ключи
-                raw.extend(_check_dangerous_volumes(services))
-                raw.extend(_check_host_mode_keys(services))
+            raw.append(
+                _RawFinding(
+                    "compose-config-valid", KLASS_L2, f"{file_tag}compose file не парсится как YAML: {parse_err}"
+                )
+            )
+            continue
+        services = data.get("services")
+        networks = data.get("networks")
+
+        def _tagged(check_findings: list[_RawFinding], _tag: str = file_tag) -> list[_RawFinding]:
+            """Префикс имени файла в каждом finding (мульти-compose агрегация, T1.E)."""
+            return [_RawFinding(f.contract_id, f.klass, _tag + f.message) for f in check_findings]
+
+        if not isinstance(services, dict):
+            raw.append(
+                _RawFinding("compose-config-valid", KLASS_L2, f"{file_tag}compose file не содержит services (dict)")
+            )
+            continue
+        raw.extend(_tagged(_check_secrets_in_compose(services)))
+        raw.extend(_tagged(_check_ports_published(services)))
+        raw.extend(_tagged(_check_healthcheck_present(services)))
+        raw.extend(_tagged(_check_external_networks(networks, manifest.allowed_external_networks)))
+        raw.extend(_tagged(_check_env_file(services)))
+        raw.extend(_tagged(_check_platform_labels(services)))
+        raw.extend(_tagged(_check_limits_present(services)))
+        # 176 A.1 (C1 root-эскалация): привилегии проектам запрещены полностью
+        raw.extend(_tagged(_check_privileged(services)))
+        raw.extend(_tagged(_check_cap_add(services)))
+        raw.extend(_tagged(_check_devices(services)))
+        # DevPlan 16 T1.E (P1-10/P1-11): GPU/device-reservations + security_opt
+        raw.extend(_tagged(_check_device_reservations(services)))
+        raw.extend(_tagged(_check_security_opt(services)))
+        # REF-0006 (DevPlan 11 В2): volumes/socket/host-binds + host-mode-ключи
+        raw.extend(_tagged(_check_dangerous_volumes(services)))
+        raw.extend(_tagged(_check_host_mode_keys(services)))
+
+    # DevPlan 16 T1.E (P0-6 / P1-9): unmanaged-проект на pre-deploy гейте блокируется:
+    # l1_only + lock отсутствует → L1-finding (SEVERITY_BLOCK через _severity_for).
+    # Заявленный контракт "[PRACTICES:UNMANAGED] … L1-контракты блокируют деплой".
+    # Наличие lock → прежняя семантика (drift-check в l1_only остаётся skip).
+    if l1_only and state == "unmanaged":
+        raw.append(
+            _RawFinding(
+                "drift-practices-unmanaged",
+                KLASS_L1,
+                "practices.lock отсутствует — unmanaged-проект блокирует pre-deploy деплой "
+                "(L1: секреты/порты/healthcheck без носителя state; adopt-project или "
+                "project-set-practices обязателен)",
+            )
+        )
 
     # ── L2: drift practices.lock (носитель state на VPS) + docker-контракты ──
     # 176 A.2: l1_only (pre-deploy gate receive) — ТОЛЬКО L1-статика, без drift/docker-L2
@@ -784,6 +825,125 @@ def _check_devices(services: dict[str, object]) -> list[_RawFinding]:
 
 
 # endregion CONTRACT_devices
+
+
+# region CONTRACT_security_opt
+## @purpose  L1 security-opt (DevPlan 16 T1.E / P1-9): seccomp=unconfined (и apparmor=unconfined)
+##           в ЛЮБОЙ форме — list[str] И dict — violation: отключение seccomp-профиля = снятие
+##           kernel-сандрбокса контейнера. Детект case-insensitive по нормализованным парам
+##           key=value.
+## @io       ⇥ services: dict → ⎋ list[_RawFinding]
+## @complexity O(S * O) где O = опции сервиса
+## @invariants
+##   - list[str]-форма ("seccomp=unconfined" | "seccomp:unconfined") нормируется к key=value
+##   - dict-форма ({seccomp: unconfined}) — точный вход аудита 15 P1-9, ранее не детектилась
+def _check_security_opt(services: dict[str, object]) -> list[_RawFinding]:
+    """L1: services.*.security_opt с unconfined-профилем (list или dict форма) → violation."""
+    findings: list[_RawFinding] = []
+    for svc_name, svc in services.items():
+        if not isinstance(svc, dict):
+            continue
+        raw_opts = svc.get("security_opt")
+        if raw_opts is None:
+            continue
+        # Нормализация обеих форм → список пар key=value (case-insensitive детект ниже)
+        pairs: list[tuple[str, str]] = []
+        if isinstance(raw_opts, list):
+            for entry in raw_opts:
+                if isinstance(entry, str):
+                    key, _, value = entry.replace(":", "=").partition("=")
+                    pairs.append((key.strip().lower(), value.strip().lower()))
+        elif isinstance(raw_opts, dict):
+            for key, value in raw_opts.items():
+                pairs.append((str(key).strip().lower(), str(value).strip().lower()))
+        else:
+            findings.append(
+                _RawFinding(
+                    "security-opt",
+                    KLASS_L1,
+                    f"service '{svc_name}': security_opt неожидаемой формы {raw_opts!r} (fail-closed, DevPlan 16 T1.E)",
+                )
+            )
+            continue
+        for opt_key, opt_value in pairs:
+            if opt_value == "unconfined":
+                findings.append(
+                    _RawFinding(
+                        "security-opt",
+                        KLASS_L1,
+                        f"service '{svc_name}': security_opt {opt_key}=unconfined — отключение "
+                        f"профиля изоляции запрещено (kernel-сандрбокс снят, DevPlan 16 T1.E)",
+                    )
+                )
+    return findings
+
+
+# endregion CONTRACT_security_opt
+
+
+# region CONTRACT_device_reservations
+## @purpose  L1 device-reservations (DevPlan 16 T1.E / P1-10): GPU/device-доступ мимо закрытого
+##           service-level `devices` — deploy.resources.reservations.devices[*] (любой device,
+##           включая GPU), top-level/service gpus:, device_cgroup_rules → violation.
+## @io       ⇥ services: dict → ⎋ list[_RawFinding]
+## @complexity O(S) где S = число сервисов
+## @invariants
+##   - Любой элемент reservations.devices (пустой dict тоже) → violation (device-доступ)
+##   - top-level gpus: (compose swarm-форма) и сервисный gpus: — оба вектор
+##   - device_cgroup_rules (bpf/cgroup-доступ к устройствам) → violation
+def _check_device_reservations(services: dict[str, object]) -> list[_RawFinding]:
+    """L1: GPU/device-reservation векторы (reservations.devices / gpus / device_cgroup_rules)."""
+    findings: list[_RawFinding] = []
+
+    def _reserve_violations(svc_name: str, deploy_cfg: object) -> list[str]:
+        msgs: list[str] = []
+        if not isinstance(deploy_cfg, dict):
+            return msgs
+        resources = deploy_cfg.get("resources")
+        if not isinstance(resources, dict):
+            return msgs
+        reservations = resources.get("reservations")
+        if not isinstance(reservations, dict):
+            return msgs
+        devices = reservations.get("devices")
+        if devices:
+            if isinstance(devices, list) and len(devices) > 0:
+                msgs.append(
+                    f"service '{svc_name}': deploy.resources.reservations.devices[{len(devices)}] "
+                    f"— device-reservation (GPU и пр.) проектам запрещена (DevPlan 16 T1.E)"
+                )
+            elif not isinstance(devices, list):
+                msgs.append(f"service '{svc_name}': reservations.devices неожидаемой формы {devices!r}")
+        return msgs
+
+    for svc_name, svc in services.items():
+        if not isinstance(svc, dict):
+            continue
+        findings.extend(
+            _RawFinding("device-reservations", KLASS_L1, msg)
+            for msg in _reserve_violations(svc_name, svc.get("deploy"))
+        )
+        if svc.get("gpus") is not None:
+            findings.append(
+                _RawFinding(
+                    "device-reservations",
+                    KLASS_L1,
+                    f"service '{svc_name}': gpus: {svc['gpus']!r} — GPU-доступ проектам запрещён (DevPlan 16 T1.E)",
+                )
+            )
+        if svc.get("device_cgroup_rules") is not None:
+            findings.append(
+                _RawFinding(
+                    "device-reservations",
+                    KLASS_L1,
+                    f"service '{svc_name}': device_cgroup_rules присутствует — cgroup-доступ к "
+                    f"устройствам запрещён (DevPlan 16 T1.E)",
+                )
+            )
+    return findings
+
+
+# endregion CONTRACT_device_reservations
 
 
 # 🧐 TRAP[DECISION] · 2026-08-25 · HI · SEC-0013 residual: ci-deploy остаётся в группе docker

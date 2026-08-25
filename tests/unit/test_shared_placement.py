@@ -27,6 +27,7 @@ from pathlib import Path
 
 import pytest
 
+from core.internal.shared import placement
 from core.internal.shared.exceptions import ConfigValidationError
 from core.internal.shared.placement import (
     Placement,
@@ -644,3 +645,59 @@ def test_service_host_nodes_branch_unknown_raises_not_keyerror(tmp_path: Path) -
 
 
 # endregion TEST_form_node_refs_validation
+
+
+# region TEST_consumers_share_resolver (DevPlan 16 T1.B / P0-2)
+# 🧪 TRAP[TEST] · SCENARIO · DevPlan 16 T1.B · три потребителя — один путь placement.yaml
+# · Regression: три независимые деривации parent.parent/<context>/placement.yaml расползались
+#   бы при смене канона; единый резолвер placement_node_relative_path делает расползание
+#   невозможным, а deliver_placement создаёт файл ровно по согласованному пути
+# · Scenario: fake-дерево node-configs/<ctx>/<node>/node.yaml + placement.yaml →
+#   (a) резолвер даёт точный файл; (b) deploy_orchestrator._placement_for_node грузит его;
+#   (c) firewall_placement_args возвращает --placement на тот же файл
+# · Last fail: аудит 15 P0-2 — файл по согласованному пути никто не создавал
+# · Remove if: канон размещения placement.yaml изменён (синхронно с deploy_paths)
+def test_consumers_share_resolver_path(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> None:
+    caplog.set_level(logging.DEBUG)
+
+    ctx = "t1b-ctx"
+    node_dir = tmp_path / "node-configs" / "data-1"
+    node_dir.mkdir(parents=True)
+    (node_dir / "node.yaml").write_text(
+        f"node:\n  name: data-1\ncontexts: [{{name: {ctx}}}]\n",
+        encoding="utf-8",
+    )
+    placement_file = tmp_path / "node-configs" / ctx / "placement.yaml"
+    placement_file.parent.mkdir()
+    placement_file.write_text(
+        f"context: {ctx}\nvpn_enforced: true\nnodes: [{{name: data-1, host: 10.8.0.11}}]\n"
+        f"modules: {{postgres: {{node: data-1}}, log-collector: {{mode: all-nodes}}}}\n",
+        encoding="utf-8",
+    )
+    node_yaml = str(node_dir / "node.yaml")
+
+    # (a) Единый резолвер указывает ровно на существующий файл
+    resolved = placement.placement_node_relative_path(node_yaml, ctx)
+    assert resolved == placement_file, f"резолвер обязан дать {placement_file}: {resolved}"
+
+    # (b) Потребитель-оркестратор грузит placement через тот же резолвер
+    from core.internal.bootstrap.deploy import deploy_orchestrator
+
+    got_placement, node_name = deploy_orchestrator._placement_for_node(node_yaml)
+    assert node_name == "data-1"
+    assert got_placement is not None and got_placement.context == ctx
+
+    # (c) Firewall-фасад получает --placement тем же путём
+    args = placement.firewall_placement_args(node_yaml)
+    assert args == ["--placement", str(placement_file)], args
+
+    # Remote-форма согласована со структурой sibling-пути ({ncb}/<ctx>/placement.yaml)
+    from core.internal.shared.deploy_paths import placement_remote_path
+
+    assert placement_remote_path(ctx).as_posix() == f"/opt/node-configs/{ctx}/placement.yaml"
+
+    logger.info("[IMP:9][test_consumers_share_resolver][assert] 3 потребителя → один путь placement")
+    assert_ldd_imp9(caplog)
+
+
+# endregion TEST_consumers_share_resolver

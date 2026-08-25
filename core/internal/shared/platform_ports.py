@@ -130,6 +130,12 @@ LOKI_HTTP: int = 3100
 # 9000 на общей data-ноде; прецедент host≠container — langfuse 3001/3000, TRAP §3 DevPlan 010)
 CLICKHOUSE_NATIVE_PEER: int = 19000
 
+# ClickHouse native peer CONTAINER-порт (compose публикует host 19000 → container 9000 — нативный
+# протокол ClickHouse; хост-сдвиг снял коллизию с minio API 9000). Потребитель:
+# firewall.PEER_DNAT_PAIRS — DOCKER-USER видит post-DNAT dport (DevPlan 16 T1.A), peer-ACCEPT
+# обязан матчить CONTAINER-порт, а не host-порт публикации. Вне parity-скоупа (инвариант 5).
+CLICKHOUSE_NATIVE_CONTAINER: int = 9000
+
 # MinIO web-console (env_defaults.MINIO_CONSOLE_PORT=9001; DR-M2 fix: константа для
 # MODULE_PORTS_DENY — ранее литерал вне SoT)
 MINIO_CONSOLE_PORT: int = 9001

@@ -59,11 +59,14 @@
 ##                      тестов и CLI --apply-docker-user; импорт-пути потребителей не меняются)
 ## @changes  2026-08-22 | DevPlan 010 T2.3/T2.4 — peer-scoped firewall + reconcile fix:
 ##                      PEER_PUBLISH_PORTS (матрица кросс-нодовых портов из platform_ports),
-##                      CONSUMER_OF (эвристика потребитель→поставщик), build_peer_rules(placement)
-##                      (peer-allow ПЕРЕД module-deny), collect_stale_platform_rules full-spec
+##                      CONSUMER_OF (эвристика потребитель→поставщик), build_peer_rules(placement)##                      (peer-allow ПЕРЕД module-deny), collect_stale_platform_rules full-spec
 ##                      delete `from <peer>` (инвариант 4: форма delete allow <port>/tcp неоднозначна
 ##                      при ≥2 пирах), verify_firewall(peer_ips=...) peer-ALLOW=PASS / Anywhere=FAIL,
 ##                      run/main(--placement <path>) — single-node no-op без placement.yaml
+## @changes  2026-08-25 | DevPlan 16 T1.A (P0-1+P1-12) — DOCKER-USER peer-source data-plane:
+##                      +PEER_DNAT_PAIRS (host→container post-DNAT), _iter_peer_scopes (общий
+##                      обход с DU), build_docker_user_peer_rules, collect_stale_peer_rules
+##                      (self-heal стейл platform-peer-*), verify_firewall(expected_peer_allows)
 ## @see      core/internal/bootstrap/firewall.sh (тонкий фасад),
 ##           core/internal/bootstrap/docker_user_policy.py (iptables-домен)
 # endregion MODULE_CONTRACT
@@ -76,19 +79,23 @@ import os
 import re
 import subprocess
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import cast
 
 from core.internal.bootstrap.docker_user_policy import (
     DOCKER_BRIDGE_NETS,  # ruff: ignore[F401] — re-export (test_firewall/test_docker_installer контракт)
-    DOCKER_USER_CHAIN,  # ruff: ignore[F401] — re-export (iptables-домен в docker_user_policy, W6-D2)
+    DOCKER_USER_CHAIN,
+    IPTABLES_UNAVAILABLE_RC,  # DevPlan 16 T1.A: rc недоступного iptables (0 magic-литералов)
     apply_docker_user_policy,  # используется в main (--apply-docker-user); re-export
     desired_docker_user_rules,  # ruff: ignore[F401] — re-export (test_firewall DOCKER-USER контракт)
+    run_iptables_quiet,  # DU-probe в run() (T1.A; публичное имя leaf-модуля)
+    verify_docker_user_rules,  # re-export (DevPlan 16 T1.A: companion-check факта iptables-save)
 )
 from core.internal.shared.exceptions import ConfigValidationError
 from core.internal.shared.placement import Placement, load_placement, resolve_node_modules
 from core.internal.shared.platform_ports import (
     CADVISOR,
+    CLICKHOUSE_NATIVE_CONTAINER,
     CLICKHOUSE_NATIVE_PEER,
     HERMES_DESKTOP_PORT,
     LANGFUSE_HOST,
@@ -99,6 +106,7 @@ from core.internal.shared.platform_ports import (
     PLATFORM_PORT_CLICKHOUSE,
     PLATFORM_PORT_GRAFANA,
     PLATFORM_PORT_HERMES,
+    PLATFORM_PORT_LANGFUSE,
     PLATFORM_PORT_LITELLM,
     PLATFORM_PORT_MINIO,
     PLATFORM_PORT_PGBOUNCER,
@@ -206,6 +214,34 @@ PEER_PUBLISH_PORTS: dict[str, tuple[int, ...]] = {
     "litellm": (PLATFORM_PORT_LITELLM,),  # 4000 — LLM-фасад проектов (§8 S3)
     "langfuse": (LANGFUSE_HOST,),  # host 3001 → container 3000 (tracing UI/API проектов)
     "hermes-agent": (PLATFORM_PORT_HERMES,),  # 9119 dashboard — upstream nginx vhost (T2.8)
+}
+
+# DevPlan 16 T1.A (P0-1): пары (host_port, container_post_dnat_port) для peer-матрицы.
+# DOCKER-USER видит POST-DNAT dport: правило для host 19000 матчит --dport 9000 (CH native),
+# host 3001 → 3000 (langfuse). Без пар ufw-порт и iptables-порт расходятся → peer-ACCEPT
+# «в никуда» (тихий data-plane DROP). Host-порты = PEER_PUBLISH_PORTS (parity-тест сверяет
+# множества); значения — ТОЛЬКО из shared/platform_ports.py (0 литералов, гейт port-parity).
+# 🧐 TRAP[DECISION] · 2026-08-25 · DevPlan 16 T1.A · Peer-source ACCEPT в DOCKER-USER вместо
+#   смягчения catch-all до RFC1918 · Rejected: ACCEPT по RFC1918-open-source в DOCKER-USER ·
+#   Reason: DNAT выполняется ДО source-фильтрации — RFC1918-catch-all открыл бы DNAT'ed порты
+#   всему интернету; изоляция сохраняется только явными source=peer правилами (семантика
+#   «пиры» канонизирована placement.yaml) · Rev: появление stateful-альтернативы ctstate
+#   DNAT-трекинга — пересмотреть форму правил
+PEER_DNAT_PAIRS: dict[str, tuple[tuple[int, int], ...]] = {
+    "postgres": ((PLATFORM_PORT_PGBOUNCER, PLATFORM_PORT_PGBOUNCER),),  # 6432→6432
+    "redis": ((PLATFORM_PORT_REDIS, PLATFORM_PORT_REDIS),),  # 6379→6379
+    "minio": ((PLATFORM_PORT_MINIO, PLATFORM_PORT_MINIO),),  # 9000→9000 API
+    "clickhouse": (
+        (PLATFORM_PORT_CLICKHOUSE, PLATFORM_PORT_CLICKHOUSE),  # 8123→8123 HTTP
+        (CLICKHOUSE_NATIVE_PEER, CLICKHOUSE_NATIVE_CONTAINER),  # 19000→9000 native-peer
+    ),
+    "logging": ((LOKI_HTTP, LOKI_HTTP),),  # 3100→3100 loki-push
+    "node-metrics": ((NODE_EXPORTER, NODE_EXPORTER), (CADVISOR, CADVISOR)),  # 9100+8080 scrape
+    "service-exporters": ((POSTGRES_EXPORTER, POSTGRES_EXPORTER), (REDIS_EXPORTER, REDIS_EXPORTER)),
+    "nginx": ((NGINX_EXPORTER, NGINX_EXPORTER),),  # 9113 stub_status scrape
+    "litellm": ((PLATFORM_PORT_LITELLM, PLATFORM_PORT_LITELLM),),  # 4000→4000
+    "langfuse": ((LANGFUSE_HOST, PLATFORM_PORT_LANGFUSE),),  # 3001→3000 (container-порт UI/API)
+    "hermes-agent": ((PLATFORM_PORT_HERMES, PLATFORM_PORT_HERMES),),  # 9119→9119
 }
 
 # Эвристика потребитель→поставщик (DevPlan 010 T2.3 «упрощение v1»): нода B размещает хотя бы
@@ -391,29 +427,25 @@ def _peer_publish_ports() -> set[int]:
 # endregion FUNC__peer_publish_ports
 
 
-# region FUNC_build_peer_rules
-## @purpose  Peer-scoped allow-правила из placement.yaml (DevPlan 010 T2.3): для каждой ноды A,
-##           размещающей сервис с портами PEER_PUBLISH_PORTS[S], и каждой ДРУГОЙ ноды B-потребителя
-##           (B размещает модуль из CONSUMER_OF[S] или nginx-project-host для data-plane) —
-##           `ufw allow from <B.host> to any port <p>/tcp comment platform-peer-<p>-<B>`.
-##           Отсутствие placement.yaml → [] (single-node no-op: bind 127.0.0.1, правил нет).
-## @io       ⇥ placement: Placement | None → ⎋ list[list[str]] — ufw-команды (детерминированный порядок)
-## @complexity O(N² × S × K) — N = ноды, S = сервисы матрицы, K = порты сервиса
-## @invariants
-##   - placement None → [] (single-node байт-совместимость, DevPlan 010 §1.1)
-##   - КАЖДОЕ правило несёт `from <peer>` — Anywhere-публикация кросс-нодовых портов запрещена (инвариант 4)
-##   - 5432 НЕ публикуется: postgres не входит в PEER_PUBLISH_PORTS (потребители едут на data-ноду, §8)
-##   - Инфра-зависимости НЕ порождают правил (CONSUMER_OF — только data-plane/scrape потребители)
-##   - Результат отсортирован по (service, provider, consumer, port) — детерминизм для diff/гейтов
-## @raises   ConfigValidationError: неизвестная нода (пробрасывается из resolve_node_modules)
-def build_peer_rules(placement: Placement | None) -> list[list[str]]:
-    """Build peer-scoped ufw allow rules from placement.yaml (DevPlan 010 T2.3)."""
-    if placement is None:
-        logger.info("[IMP:8][firewall][peer] No placement.yaml — single-node no-op, peer rules = []")
-        return []
-    # Эффективные модули каждой ноды (резолв форм singleton/all-nodes/nodes[]/off — канон W0)
+# region FUNC__iter_peer_scopes
+def _iter_peer_scopes(placement: Placement) -> Iterator[tuple[str, str, str, int]]:
+    """Yield (consumer_host, consumer_name, service, host_port) for every peer-open.
+
+    ▶ ┌placement┐ → ○ sorted(services)×sorted(providers)×sorted(consumers)×ports → ⊕ yields → ⎋
+
+    ## @purpose  Единая итерация peer-открытий (DevPlan 010 T2.3 эвристика): нода B — потребитель
+    ##            сервиса S (CONSUMER_OF[S] ∪ nginx для PROJECT_HOST_SERVICES), размещённого на
+    ##            провайдере A≠B. Общий источник для build_peer_rules (ufw) и
+    ##            build_docker_user_peer_rules (DOCKER-USER, DevPlan 16 T1.A) — знание-дедуп:
+    ##            обе матрицы порождаются одним обходом, расползание невозможно.
+    ## @io — ⇥ placement → ⎋ Iterator[tuple[str, str, str, int]]
+    ## @complexity O(N² × S × K)
+    ## @invariants  Детерминированный порядок (service, provider, consumer, ports-tuple) — diff/гейты;
+    ##              co-located (provider==consumer) НЕ порождает правил (Docker DNS);
+    ##              consumer==provider skip; CONSUMER_OF[service] обязан существовать (KeyError =
+    ##              дрейф матриц — ловится тестом парности).
+    """
     placed_by_node: dict[str, set[str]] = {node: set(resolve_node_modules(placement, node)) for node in placement.nodes}
-    rules: list[list[str]] = []
     for service in sorted(PEER_PUBLISH_PORTS):
         consumer_modules = set(CONSUMER_OF[service])
         if service in PROJECT_HOST_SERVICES:
@@ -427,26 +459,54 @@ def build_peer_rules(placement: Placement | None) -> list[list[str]]:
                 if consumer_modules.isdisjoint(placed_by_node[consumer]):
                     continue  # нода B не размещает ни одного потребителя — открытия нет
                 for port in PEER_PUBLISH_PORTS[service]:
-                    peer_host = placement.nodes[consumer]
-                    rules.append([
-                        "ufw",
-                        "allow",
-                        "from",
-                        peer_host,
-                        "to",
-                        "any",
-                        "port",
-                        f"{port}/tcp",
-                        "comment",
-                        f"platform-peer-{port}-{consumer}",
-                    ])
-                    logger.info(
-                        "[IMP:8][firewall][peer] allow from %s to %d/tcp (provider=%s consumer=%s)",
-                        peer_host,
-                        port,
-                        provider,
-                        consumer,
-                    )
+                    yield placement.nodes[consumer], consumer, service, port
+
+
+# endregion FUNC__iter_peer_scopes
+
+
+# region FUNC_build_peer_rules
+## @purpose  Peer-scoped allow-правила из placement.yaml (DevPlan 010 T2.3): для каждой ноды A,
+##           размещающей сервис с портами PEER_PUBLISH_PORTS[S], и каждой ДРУГОЙ ноды B-потребителя
+##           (B размещает модуль из CONSUMER_OF[S] или nginx-project-host для data-plane) —
+##           `ufw allow from <B.host> to any port <p>/tcp comment platform-peer-<p>-<B>`.
+##           Отсутствие placement.yaml → [] (single-node no-op: bind 127.0.0.1, правил нет).
+##           DevPlan 16 T1.A: обход открытений вынесен в _iter_peer_scopes (общий с DU-билдером);
+##           форма ufw-правил не изменилась.
+## @io       ⇥ placement: Placement | None → ⎋ list[list[str]] — ufw-команды (детерминированный порядок)
+## @complexity O(N² × S × K)
+## @invariants
+##   - placement None → [] (single-node байт-совместимость, DevPlan 010 §1.1)
+##   - КАЖДОЕ правило несёт `from <peer>` — Anywhere-публикация кросс-нодовых портов запрещена (инвариант 4)
+##   - 5432 НЕ публикуется: postgres не входит в PEER_PUBLISH_PORTS (потребители едут на data-ноду, §8)
+##   - Инфра-зависимости НЕ порождают правил (CONSUMER_OF — только data-plane/scrape потребители)
+##   - Результат отсортирован по (service, provider, consumer, port) — детерминизм для diff/гейтов
+## @raises   ConfigValidationError: неизвестная нода (пробрасывается из resolve_node_modules)
+def build_peer_rules(placement: Placement | None) -> list[list[str]]:
+    """Build peer-scoped ufw allow rules from placement.yaml (DevPlan 010 T2.3)."""
+    if placement is None:
+        logger.info("[IMP:8][firewall][peer] No placement.yaml — single-node no-op, peer rules = []")
+        return []
+    rules: list[list[str]] = []
+    for peer_host, consumer, _service, port in _iter_peer_scopes(placement):
+        rules.append([
+            "ufw",
+            "allow",
+            "from",
+            peer_host,
+            "to",
+            "any",
+            "port",
+            f"{port}/tcp",
+            "comment",
+            f"platform-peer-{port}-{consumer}",
+        ])
+        logger.info(
+            "[IMP:8][firewall][peer] allow from %s to %d/tcp (consumer=%s)",
+            peer_host,
+            port,
+            consumer,
+        )
     logger.info(
         "[IMP:9][firewall][peer] Built %d peer rules from placement context=%s nodes=%d",
         len(rules),
@@ -457,6 +517,74 @@ def build_peer_rules(placement: Placement | None) -> list[list[str]]:
 
 
 # endregion FUNC_build_peer_rules
+
+
+# region FUNC_build_docker_user_peer_rules
+## @purpose  DOCKER-USER peer-ACCEPT правила из placement.yaml (DevPlan 16 T1.A, P0-1): DNAT'ed
+##           кросс-нодовый трафик идёт PREROUTING→FORWARD→DOCKER-USER, МИМО ufw — без этих правил
+##           весь data-plane молча DROPается при зелёном verify_firewall. Для каждого peer-открытия
+##           `_iter_peer_scopes` — ACCEPT `-s <peer_ip> --dport <container_post_dnat_port>` с
+##           комментарием platform-du-peer-{container_port}-{consumer} (маркер для верификации
+##           факта и стейл-детекта). dport = CONTAINER-порт (PEER_DNAT_PAIRS), НЕ host-порт.
+## @io       ⇥ placement: Placement | None → ⎋ list[list[str]] — аргументы БЕЗ -A/-C префикса
+##           (форма desired_docker_user_rules(peer_rules=...) / apply_docker_user_policy)
+## @complexity O(N² × S × K)
+## @invariants
+##   - placement None → [] (single-node: DOCKER-USER остаётся базовой политикой — байт-совместимость)
+##   - Правила содержат source=peer — Anywhere/RFC1918-catch-all запрещены (TRAP[DECISION] у PEER_DNAT_PAIRS)
+##   - Комментарий platform-du-peer-* обязателен (verify_docker_user_rules матч+стейл-детект)
+## @raises   ConfigValidationError: неизвестная нода (из resolve_node_modules через генератор)
+def build_docker_user_peer_rules(placement: Placement | None) -> list[list[str]]:
+    """Build DOCKER-USER peer-ACCEPT rule args from placement.yaml (DevPlan 16 T1.A)."""
+    if placement is None:
+        logger.info("[IMP:8][firewall][du-peer] No placement.yaml — single-node no-op, DU peer rules = []")
+        return []
+    rules: list[list[str]] = []
+    for peer_host, consumer, service, host_port in _iter_peer_scopes(placement):
+        container_port = next(
+            (c for h, c in PEER_DNAT_PAIRS.get(service, ()) if h == host_port),
+            None,
+        )
+        if container_port is None:
+            # Дрейф матриц (host-порт без DNAT-пары) — parity-тест ловит на CI; рантайм: честный
+            # IMP:10 и пропуск ОДНОГО открытия вместо тихого мисматча ufw↔iptables
+            logger.error(
+                "[IMP:10][firewall][du-peer] Нет DNAT-пары %s/%d — дрейф PEER_PUBLISH_PORTS↔PEER_DNAT_PAIRS",
+                service,
+                host_port,
+            )
+            continue
+        rules.append([
+            "-s",
+            peer_host,
+            "-p",
+            "tcp",
+            "--dport",
+            str(container_port),
+            "-j",
+            "ACCEPT",
+            "-m",
+            "comment",
+            "--comment",
+            f"platform-du-peer-{container_port}-{consumer}",
+        ])
+        logger.info(
+            "[IMP:8][firewall][du-peer] DOCKER-USER accept from %s dport %d (post-DNAT, service=%s consumer=%s)",
+            peer_host,
+            container_port,
+            service,
+            consumer,
+        )
+    logger.info(
+        "[IMP:9][firewall][du-peer] Built %d DOCKER-USER peer rules context=%s nodes=%d",
+        len(rules),
+        placement.context,
+        len(placement.nodes),
+    )
+    return rules
+
+
+# endregion FUNC_build_docker_user_peer_rules
 
 
 # region FUNC_collect_stale_platform_rules
@@ -518,6 +646,74 @@ def collect_stale_platform_rules(
 # endregion FUNC_collect_stale_platform_rules
 
 
+# region FUNC__desired_peer_pairs
+_UFW_PEER_CMD_LEN: int = (
+    9  # каноническая длина ufw peer-команды build_peer_rules (ufw allow from <ip> to any port <p>/tcp comment <c>)
+)
+
+
+def _desired_peer_pairs(peer_rules: list[list[str]]) -> set[tuple[str, int]]:
+    """Extract (source_ip, port) pairs from built ufw peer-allow commands.
+
+    ▶ ┌ufw-команды build_peer_rules┐ → ○ parse from/port → ⊕ set[(src, port)] → ⎋
+
+    ## @purpose  Желаемое множество peer-ALLOW (DevPlan 16 T1.A P1-12): вход collect_stale_peer_rules
+    ##            — стейл = platform-peer-* строка статуса, чья пара (source,port) вне множества.
+    ## @io — ⇥ peer_rules: list[list[str]] → ⎋ set[tuple[str, int]]
+    ## @complexity O(R)
+    ## @invariants  Парсит ТОЛЬКО каноническую форму build_peer_rules (`allow from <ip> ... port
+    ##              <p>/tcp comment`); иные формы молча пропускаются.
+    """
+    pairs: set[tuple[str, int]] = set()
+    for cmd in peer_rules:
+        if len(cmd) < _UFW_PEER_CMD_LEN or cmd[:3] != ["ufw", "allow", "from"]:
+            continue
+        source = cmd[3]
+        try:
+            port = int(cmd[7].removesuffix("/tcp"))
+        except ValueError:
+            continue
+        pairs.add((source, port))
+    return pairs
+
+
+# endregion FUNC__desired_peer_pairs
+
+
+# region FUNC_collect_stale_peer_rules
+## @purpose  Self-heal стейл peer-правил (DevPlan 16 T1.A п.5, P1-12): ufw platform-peer-* строки,
+##           чья пара (source, port) вышла из желаемого набора placement (пир исчез/порт вышел из
+##           матрицы) → full-spec delete `from <source>` (инвариант 4). Без этого reconcile-путь
+##           пропускал peer-порты целиком → стейл копился, verify_firewall FAIL перманентно без
+##           self-heal. Вызывается из run() ТОЛЬКО при активном placement_path (иначе легаси-набор
+##           был бы удалён).
+## @io       ⇥ status_text: str (`ufw status verbose`), desired_peer_allows: set[tuple[str,int]]
+##           (из _desired_peer_pairs(build_peer_rules(placement))) → ⎋ list[list[str]] delete-команды
+## @complexity O(L) — L = строк статуса
+## @invariants  Удаляются ТОЛЬКО строки с маркером `# platform-peer-` (чужие правила не трогаются);
+##              delete ОБЯЗАН нести source (точное совпадение с allow-формой, инвариант 4);
+##              валидные пары сохраняются (идемпотентность повторного прогона).
+def collect_stale_peer_rules(status_text: str, desired_peer_allows: set[tuple[str, int]]) -> list[list[str]]:
+    """Delete-команды для стейл platform-peer-* allow-правил (DevPlan 16 P1-12 self-heal)."""
+    deletes: list[list[str]] = []
+    for line in status_text.splitlines():
+        if "# platform-peer-" not in line:
+            continue
+        m = re.match(r"^(\d+)/tcp(?:\s+\(v6\))?\s+ALLOW\s+IN\s+(\S+)", line.strip())
+        if not m:
+            continue
+        port = int(m.group(1))
+        source = m.group(2)
+        if (source, port) in desired_peer_allows:
+            continue
+        deletes.append(["ufw", "delete", "allow", "from", source, "to", "any", "port", f"{port}/tcp"])
+        logger.info("[IMP:8][firewall][reconcile] Stale PEER allow %d/tcp (source %s) → delete", port, source)
+    return deletes
+
+
+# endregion FUNC_collect_stale_peer_rules
+
+
 # region FUNC_parse_ufw_status
 ## @purpose  Разобрать `ufw status verbose` на статус-активность + allow/deny-порты (verify-критерий).
 ## @io       ⇥ status_text: str → ⎋ tuple[bool, dict[int, str]] — (active, port→action map)
@@ -573,7 +769,10 @@ def _allow_sources_for_port(status_text: str, port: int) -> set[str]:
 ##           peer-семантика (DevPlan 010 T2.3): peer-ALLOW от известного пира = PASS,
 ##           Anywhere-публикация на кросс-нодовых портах = FAIL.
 ## @io       ⇥ status_text: str, tor_enabled: bool = False, zabbix_monitoring: bool = True,
-##           peer_ips: set[str]|None = None (известные IP нод-пиров из placement)
+##           peer_ips: set[str]|None = None (известные IP нод-пиров из placement),
+##           expected_peer_allows: set[tuple[str,int]]|None = None (DevPlan 16 T1.A: желаемый
+##           набор (source, port) из placement — отсутствие peer-ALLOW = FAIL, «зелёный»
+##           перестаёт лгать о data-plane)
 ##           → ⎋ bool
 ## @complexity O(1) — parse + проверки
 def verify_firewall(
@@ -581,6 +780,7 @@ def verify_firewall(
     tor_enabled: bool = False,
     zabbix_monitoring: bool = True,
     peer_ips: set[str] | None = None,
+    expected_peer_allows: set[tuple[str, int]] | None = None,
 ) -> bool:
     """Verify ufw status against the policy. True = compliant."""
     active, port_actions = parse_ufw_status(status_text)
@@ -651,6 +851,18 @@ def verify_firewall(
                 sorted(bad),
             )
             return False
+    # DevPlan 16 T1.A (P0-1): отсутствие ОЖИДАЕМОГО peer-ALLOW = FAIL (data-plane недостижим,
+    # даже если формально нарушений нет). expected_peer_allows передаёт run() из placement.
+    if expected_peer_allows:
+        for src, port in sorted(expected_peer_allows):
+            if src not in _allow_sources_for_port(status_text, port):
+                logger.error(
+                    "[IMP:10][firewall][verify] SECURITY: ожидаемый peer-ALLOW %d/tcp from %s "
+                    "ОТСУТСТВУЕТ — data-plane (peer, port) недостижим (DevPlan 16 P0-1)",
+                    port,
+                    src,
+                )
+                return False
     logger.info(
         "[IMP:9][firewall][verify] Firewall verified: active, 22/80/443 open, Docker ports closed, "
         "module ports denied"
@@ -723,6 +935,7 @@ def run(
     peer_rules: list[list[str]] = []
     peer_ips: set[str] = set()
     peer_ports: set[int] | None = None
+    placement: Placement | None = None
     if placement_path:
         try:
             placement = load_placement(placement_path)
@@ -759,14 +972,69 @@ def run(
     if zabbix_monitoring:
         desired_allow.add(ZABBIX_PORT)
     rules.extend(collect_stale_platform_rules(before_text, desired_allow, peer_ports=peer_ports))
+    # DevPlan 16 T1.A (P1-12): self-heal стейл peer-правил — ТОЛЬКО при активном placement
+    # (без него легаси peer-набор был бы ошибочно удалён; peer_ports=None семантика сохранена)
+    expected_peer_allows: set[tuple[str, int]] = set()
+    if placement_path and placement is not None:
+        expected_peer_allows = _desired_peer_pairs(peer_rules)
+        rules.extend(collect_stale_peer_rules(before_text, expected_peer_allows))
     if not _apply_rules_subprocess(rules, run_cmd=run_cmd):
         return False
+
+    # ── DevPlan 16 T1.A п.3: DOCKER-USER полная политика с пирами (пост-деплой конвергенция) ──
+    # systemd ExecStartPost применяет БАЗОВУЮ политику на раннем буте (placement недоступен);
+    # каждый прогон с активным placement ДОНАСТРАИВАЕТ peer-ACCEPT (idempotent -C guard).
+    # Single-node (placement=None) — байт-идентично легаси: DU не трогается здесь вовсе.
+    # Деградация честная: iptables/цепочка отсутствуют (ранний φ1, docker не поднят) →
+    # IMP:8 skip — политику донесёт ExecStartPost + следующий прогон.
+    if placement is not None:
+        du_probe = run_iptables_quiet(
+            ["iptables", "-w", "-L", DOCKER_USER_CHAIN, "-n"],
+            run_cmd=run_cmd,
+        )
+        if du_probe == IPTABLES_UNAVAILABLE_RC:
+            logger.info(
+                "[IMP:8][firewall][docker-user] iptables недоступен — DU peer-политика на "
+                "ExecStartPost/следующий прогон (graceful)"
+            )
+        elif du_probe != 0:
+            logger.info(
+                "[IMP:8][firewall][docker-user] Цепочка %s отсутствует (docker не поднят?) — "
+                "базовая политика на ExecStartPost (graceful)",
+                DOCKER_USER_CHAIN,
+            )
+        else:
+            du_rules = build_docker_user_peer_rules(placement)
+            if not apply_docker_user_policy(run_cmd=run_cmd, peer_rules=du_rules):
+                return False
+            try:
+                save_runner = subprocess.run if run_cmd is None else run_cmd
+                save_proc = cast(
+                    "subprocess.CompletedProcess[str]",
+                    save_runner(["iptables-save"], capture_output=True, text=True, check=False),
+                )
+            except OSError:
+                save_proc = None
+            if save_proc is None or save_proc.returncode != 0 or not str(save_proc.stdout or "").strip():
+                logger.info(
+                    "[IMP:8][firewall][docker-user] iptables-save недоступен/пуст — "
+                    "verify факта пропущен (правила применены)"
+                )
+            elif not verify_docker_user_rules(str(save_proc.stdout), du_rules):
+                return False
+
     try:
         status = subprocess.run(["ufw", "status", "verbose"], capture_output=True, text=True, check=False)
         status_text = status.stdout if status.returncode == 0 else ""
     except OSError:
         status_text = ""
-    return verify_firewall(status_text, tor_enabled=tor_enabled, zabbix_monitoring=zabbix_monitoring, peer_ips=peer_ips)
+    return verify_firewall(
+        status_text,
+        tor_enabled=tor_enabled,
+        zabbix_monitoring=zabbix_monitoring,
+        peer_ips=peer_ips,
+        expected_peer_allows=expected_peer_allows or None,
+    )
 
 
 # endregion FUNC_run

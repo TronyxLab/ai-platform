@@ -140,6 +140,7 @@ from core.internal.shared.placement import (
     Placement,
     lint_drift,
     load_placement,
+    placement_node_relative_path,
     resolve_node_modules,
     service_host,
     validate_topology,
@@ -372,7 +373,9 @@ def _placement_for_node(node_yaml: str, *, modules_dir: str | None = None) -> tu
             node_yaml,
         )
         return None, ""
-    placement_path = Path(node_yaml).parent.parent / context / "placement.yaml"
+    # DevPlan 16 T1.B: единый резолвер (была локальная деривация parent.parent/context);
+    # файл по этому пути создаёт deliver_placement (core_deliverer, Phase 2b)
+    placement_path = placement_node_relative_path(node_yaml, context)
     placement = load_placement(placement_path)
     if placement is None:
         # [IMP:8] single-node no-op: файла нет → легаси-путь байт-идентичен (инвариант 1)

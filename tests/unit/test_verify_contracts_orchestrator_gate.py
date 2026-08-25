@@ -99,6 +99,10 @@ def _write_project(
         ])
     (proj / "docker-compose.yml").write_text(compose, encoding="utf-8")
     (proj / "ai-platform.yaml").write_text(f"name: {name}\n", encoding="utf-8")
+    (proj / "practices.lock").write_text(
+        "version: 1\nlevel: auto\nstate: baseline\nlanguage: python\ngenerator_hash: sha256:test\nmaturity:\n  age_days: 1\n  code_files: 0\n",
+        encoding="utf-8",
+    )
     (proj / ".env.platform").write_text("PLATFORM_DOMAIN=example.com\n", encoding="utf-8")
     return proj
 

@@ -70,7 +70,10 @@ from core.internal.shared.subprocess_io import CommandRunner
 logger = logging.getLogger(__name__)
 
 _DB_NAME_RE = re.compile(r"^[a-zA-Z0-9_]+$")
-_ROLE_NAME_RE = re.compile(r"^[a-zA-Z0-9_]+$")
+# DevPlan 16 T1.C (P0-3): kebab-case роли — канон имён проектов root AGENTS.md; lowercase
+# исключает класс P1-14 (folding-рассинхрон БД ↔ .platform-db.env); дефис разрешён,
+# произвольные символы — поверхность атак впустую (SQL-идентификаторы ВСЕГДА double-quoted)
+_ROLE_NAME_RE = re.compile(r"^[a-z0-9_-]+$")
 
 __all__ = ["auto_create_db", "ensure_project_db_access", "main"]
 
@@ -118,6 +121,10 @@ def auto_create_db(
     ):
         db_name = ""
     db_name = str(db_name)
+    # DevPlan 16 T1.C (P1-14): ЕДИНАЯ точка нормы регистра — CREATE/GRANT/.platform-db.env
+    # получают одно и то же значение (PostgreSQL fold'ит некавыченные идентификаторы в
+    # lowercase: CREATE DATABASE MyApp создавал myapp при .env с MyApp)
+    db_name = db_name.lower()
 
     if not db_name:
         logger.info("[IMP:7][db] No database declared in needs.database — skipping")
@@ -145,7 +152,7 @@ def auto_create_db(
                 "-U",
                 "postgres",
                 "-c",
-                f"CREATE DATABASE {db_name} OWNER postgres;",
+                f'CREATE DATABASE "{db_name}" OWNER postgres;',
             ],
             capture_output=True,
             text=True,
@@ -162,7 +169,7 @@ def auto_create_db(
                 "-U",
                 "postgres",
                 "-c",
-                f"CREATE DATABASE {db_name} OWNER postgres;",
+                f'CREATE DATABASE "{db_name}" OWNER postgres;',
             ],
             timeout=60,
             check=False,
@@ -186,8 +193,12 @@ def auto_create_db(
     else:
         logger.info("[IMP:9][db] Database '%s' created for project '%s'", db_name, project)
 
-    # ── DevPlan 133 W2: роль + GRANT + credentials (non-fatal) ──
-    ensure_project_db_access(project_dir, project, db_name, env, runner=runner)
+    # ── DevPlan 133 W2: роль + GRANT + credentials ──
+    # DevPlan 16 T1.C (P0-3): rc≠0 роли ПРОПАГИРУЕТСЯ (невалидное имя → 2) — fail-loud
+    # контракт: деплой без provisioning невозможен молча
+    role_rc = ensure_project_db_access(project_dir, project, db_name, env, runner=runner)
+    if role_rc != 0:
+        return role_rc
     return 0
 
 
@@ -209,7 +220,8 @@ def auto_create_db(
 ## @param db_name      Database name (GRANT CONNECT ON DATABASE)
 ## @param env          Environment dict override (defaults to os.environ)
 ## @param runner       CommandRunner DI (None = subprocess.run default) — for testability
-## @return  int status: всегда 0 (non-fatal семантика сохранена)
+## @return  int status: 0 = ok/skip; 2 = invalid role name (DevPlan 16 T1.C fail-loud —
+##          вызывающий обязан поднять rc в blocking-ошибку деплоя, не глотать)
 ## @complexity O(1) — 3-5 psql вызова + файловая запись
 ## @invariants
 ##   - Ensure-convergence: role_exists+no-creds → ALTER ROLE PASSWORD → продолжение вниз
@@ -233,11 +245,19 @@ def ensure_project_db_access(
     *,
     runner: CommandRunner | None = None,
 ) -> int:
-    """Provision role + GRANT + credentials for a project DB (idempotent, non-fatal)."""
+    """Provision role + GRANT + credentials for a project DB (idempotent).
+
+    DevPlan 16 T1.C: невалидная роль → return 2 (fail-loud; было return 0 — зелёный деплой
+    без provisioning). Остальные ошибки остаются non-fatal (0).
+    """
     role = f"{project}_user"
     if not _ROLE_NAME_RE.match(role):
-        logger.error("[IMP:10][db] FATAL: invalid role name %r — skipping role provisioning", role)
-        return 0
+        logger.error(
+            "[IMP:10][db] FATAL: invalid role name %r (канон ^[a-z0-9_-]+$, kebab-case проектов) "
+            "— provisioning невозможен, rc=2 (деплой обязан упасть)",
+            role,
+        )
+        return 2
 
     effective_env = os.environ if env is None else env
     pg_password = effective_env.get("PGPASSWORD") or effective_env.get("POSTGRES_PASSWORD") or ""
