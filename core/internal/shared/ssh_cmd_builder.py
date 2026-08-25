@@ -92,6 +92,7 @@ _DEL = 0x7F  # DEL
 
 # ── Константы CLI ──
 _INIT_MIN_ARGS = 4  # init: node, owner_key, ci_deploy_key, age_key
+_UPDATE_SECRETS_ARITY = 2  # update-secrets: node + age-key (T2.B P1-17 strict)
 
 # safe-набор bash printf %q (C locale) — символы, не требующие экранирования
 _PRINTF_Q_SAFE = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_@%+=:,./-~")
@@ -450,8 +451,8 @@ def _dispatch_build(mode: str, rest: list[str]) -> str:
         _require(rest, 2, mode)
         return build_update_ssh_cmd(rest[0], rest[1], rest[2:])
     # REF-0007: *-secrets modes печатают ТОЛЬКО secret-prelude (stdout → ssh-stdin канал)
-    # QA C5 (DevPlan 14 T1.4): значения ключей читаются из STDIN (по строке, в фиксированном
-    # порядке), НЕ позиционными аргументами — /proc/<pid>/cmdline не содержит секретов.
+    # QA C5 (DevPlan 14 T1.4) + DevPlan 16 T2.B: значения ключей читаются из STDIN
+    # (канон plan-14), транспорт v2-b64/legacy внутри _read_secret_stdin
     if mode == "init-secrets":
         ci_deploy, age, ci_root = _read_secret_stdin(3)
         return build_init_secret_prelude(ci_deploy, age, ci_root)
@@ -467,6 +468,12 @@ def _dispatch_build(mode: str, rest: list[str]) -> str:
     if mode == "deploy-context":
         _require(rest, 1, mode)
         return build_deploy_context_ssh_cmd(rest[0], rest[1:])
+    # DevPlan 16 T2.B (P1-15): SoT-emit таймаута ssh-exec для shell-фасадов —
+    # build-ssh-cmd.sh резолвит значение через этот режим (0 литералов в shell, parity)
+    if mode == "ssh-exec-timeout":
+        from core.internal.shared.timeouts import DEPLOY_TIMEOUT
+
+        return str(DEPLOY_TIMEOUT)
     msg = f"unknown build mode '{mode}'"
     raise BuildModeError(msg)
 
@@ -491,18 +498,63 @@ def _read_secret_stdin(count: int) -> list[str]:
     · Fix: снимается РОВНО ОДИН финальный \n (N спецификаторов printf = N значений,
       пустые значения сохраняются); недостающие хвосты после split = ""
     """
-    data = sys.stdin.read()
-    if data.endswith("\n"):
-        data = data[:-1]
-    lines = data.split("\n") if data else []
+    raw = sys.stdin.read()
+    # DevPlan 16 T2.B (P1-4): v2-транспорт — маркер "v2" первой строкой, далее base64(value)
+    # на строку на значение: многострочные AGE-ключи транспортируются без коррупции.
+    # Legacy (без маркера) — single-line семантика plan-14 (обратная совместимость).
+    if raw.startswith("v2\n"):
+        import base64
+
+        payload = raw[3:]
+        if payload.endswith("\n"):
+            payload = payload[:-1]
+        encoded = payload.split("\n") if payload else []
+        if len(encoded) < count:
+            msg = f"stdin secret transport v2: expected {count} value(s), got {len(encoded)}"
+            raise BuildModeError(msg)
+        extra = [i for i, line in enumerate(encoded[count:], start=count + 1) if line]
+        if extra:
+            msg = f"stdin secret transport v2: unexpected extra value(s) at line(s) {extra}"
+            raise BuildModeError(msg)
+        values = [base64.b64decode(encoded[i]).decode("utf-8") if i < len(encoded) else "" for i in range(count)]
+        logger.info(
+            "[IMP:8][_read_secret_stdin][read] %d secret value(s) read from stdin v2 (values not logged)", count
+        )
+        return values
+    # ── legacy single-line (plan-14) с фиксами T2.B (P1-17/P1-18) ──
+    had_final_newline = raw.endswith("\n")
+    body = raw[:-1] if had_final_newline else raw
+    # P1-18: пустой stdin (0 байт) ≠ одна пустая строка ("\n" → [""] при count=1)
+    lines = body.split("\n") if body else ([] if not had_final_newline else [""])
     if len(lines) < count:
         msg = f"stdin secret transport: expected {count} line(s), got {len(lines)}"
+        raise BuildModeError(msg)
+    # P1-17: лишние НЕпустые строки сверх count → fail-loud (не тихий drop)
+    extra_lines = [i + 1 for i, line in enumerate(lines[count:], start=count) if line]
+    if extra_lines:
+        msg = f"stdin secret transport: unexpected extra non-empty line(s) {extra_lines} beyond expected {count}"
         raise BuildModeError(msg)
     logger.info("[IMP:8][_read_secret_stdin][read] %d secret value(s) read from stdin (values not logged)", count)
     return [lines[i] if i < len(lines) else "" for i in range(count)]
 
 
 # endregion FUNC__read_secret_stdin
+
+
+# region FUNC_encode_secret_stdin_values
+## @purpose  Эмит-сторона v2-транспорта (DevPlan 16 T2.B): caller кодирует значения
+##           encode_secret_stdin_values([...]) → stdout пайпом в `*-secrets` режим.
+## @io       ⇥ values: list[str] → ⎋ str ("v2\n" + base64(value) per line + "\n")
+## @complexity O(sum(len))
+def encode_secret_stdin_values(values: list[str]) -> str:
+    """Encode secret values for the v2 stdin transport (marker + per-value base64)."""
+    import base64
+
+    lines = ["v2", *(base64.b64encode(v.encode("utf-8")).decode("ascii") for v in values)]
+    return "\n".join(lines) + "\n"
+
+
+# endregion FUNC_encode_secret_stdin_values
 
 
 # region FUNC__require

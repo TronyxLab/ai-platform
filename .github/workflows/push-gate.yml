@@ -73,6 +73,11 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # DevPlan 16 T1.G (P0-4): гейту нужна ПОЛНАЯ git-история — freshness sha-pins
+          # использует git log/merge-base; shallow checkout (depth=1) резолвит last-touch
+          # в граничный коммит → ложный stale-pin RED на следующем пуше
+          fetch-depth: 0
 
       - name: Setup platform (composite — python + gitleaks + provisioner)
         uses: ./.github/actions/setup-platform

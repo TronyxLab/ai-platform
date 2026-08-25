@@ -119,6 +119,15 @@ _RAW_INTERNAL_ALLOWLIST: list[tuple[re.Pattern, re.Pattern, str]] = [
         re.compile(r"core/internal/provision-environment\.sh"),
         "provisioner-call/action.yml: composite action, официальный фасад для provision через actions",
     ),
+    (
+        re.compile(r"core-deploy\.yml"),
+        re.compile(r"core/internal/bootstrap/build-ssh-cmd\.sh"),
+        (
+            "core-deploy.yml: source фасада build-ssh-cmd.sh для stdin-prelude транспорта "
+            "(DevPlan 16 T1.F, REF-0007) — build_update_ssh_cmd/build_update_secret_prelude; "
+            "ключи вне argv, композиция байт-в-байт с remote_executor._ssh_exec"
+        ),
+    ),
 ]
 
 
@@ -382,10 +391,19 @@ def test_core_deploy_auto_detects_node():
     )
     assert "/opt/node-configs" in content, "core-deploy.yml must reference /opt/node-configs/ for NODE auto-detection"
 
-    # ── core-deploy.yml calls make node-update WITH NODE=$NODE ──
-    assert "make node-update NODE=$NODE" in content, (
-        "core-deploy.yml must pass NODE=$NODE to make node-update (auto-detected above)"
+    # ── core-deploy.yml calls update WITH auto-detected NODE (explicit passthrough) ──
+    # 🧐 TRAP[TEST] · 2026-08-25 · SUPERSEDED · прежний ассерт требовал литерал
+    # ·   «make node-update NODE=$NODE» в remote-строке; DevPlan 16 T1.F (P0-7) перевёл
+    # ·   node-update на stdin-prelude транспорт: REMOTE_CMD строится фасадом
+    # ·   build_update_ssh_cmd("$NODE", …) и уходит второй строкой stdin в `bash -s` —
+    # ·   NODE по-прежнему авто-детектится и явно прокидывается (инвентент сохранён),
+    # ·   секрет AGE больше НЕ интерполируется в командную строку.
+    # · Remove if: транспорт node-update изменён третий раз.
+    assert 'build_update_ssh_cmd "$NODE"' in content, (
+        "core-deploy.yml обязан строить remote-команду через build_update_ssh_cmd "
+        "с явно прокинутым $NODE (DevPlan 16 T1.F)"
     )
+    assert "bash -s" in content, "node-update обязан ехать через stdin `bash -s` (REF-0007)"
     logger.info("[IMP:9][test] core-deploy.yml auto-detects NODE and passes NODE=$NODE to make node-update")
 
     # ── makefiles/ delivery for Makefile include-split W4-E4 ──

@@ -689,3 +689,60 @@ def test_positive_fresh_probe_passes(tmp_path, caplog) -> None:
 
 
 # endregion CHANNEL_FRESHNESS_G6
+# ═══════════════════════════════════════════════════════════════════
+# region TESTS_FETCH_DEPTH (DevPlan 16 T1.G / P0-4)
+# ═══════════════════════════════════════════════════════════════════
+
+# 🧐 TRAP[DECISION] · 2026-08-25 · DevPlan 16 T1.G · shallow checkout = конфигурационная
+# ошибка, fallback в гейте не предусмотрен · Rejected: date-fallback oracle внутри
+# test_gate_workflow_sha_pins (сопоставление дат при depth=1) · Reason: дешёвый upstream-фикс
+# (fetch-depth: 0) против второй кодовой ветки сопоставления со своей поверхностью ложных
+# срабатываний — YAGNI до появления evidence · Rev: если full-history checkout станет
+# невозможен (форк-ограничения GitHub) — вернуться к fallback-оракулу
+
+_FETCH_DEPTH_WORKFLOWS: tuple[str, ...] = (
+    ".github/workflows/push-gate.yml",
+    ".github/workflows/platform-gate-fast.yml",
+)
+
+
+def _workflow_text(rel: str) -> str:
+    return (ROOT / rel).read_text(encoding="utf-8")
+
+
+@pytest.mark.gate
+# 🧪 TRAP[TEST] · 2026-08-25 · REGRESSION · DevPlan 16 T1.G P0-4 · fetch-depth: 0 в гейт-workflows
+# · Regression: без полной истории git log/merge-base freshness-гейта резолвит last-touch в
+#   граничный коммит shallow-checkout → ложный stale-pin RED на первом же пушу после CI
+# · Scenario: оба workflow содержат `fetch-depth: 0` под actions/checkout
+# · Last fail: аудит 15 P0-4 — grep: единственный fetch-depth: 0 был в mirror.yml
+# · Remove if: гейт перестанет использовать merge-base/git-log (oracle изменён)
+def test_workflows_fetch_depth_zero(caplog) -> None:
+    for rel in _FETCH_DEPTH_WORKFLOWS:
+        text = _workflow_text(rel)
+        assert re.search(
+            r"actions/checkout@[0-9a-f]{40}[^\n]*\n\s+with:\n(?:\s*#[^\n]*\n)*\s*fetch-depth:\s*0\b", text
+        ), f"{rel}: checkout обязан нести fetch-depth: 0 (полная история для merge-base, P0-4)"
+    logger.info("[IMP:9][fetch-depth][ok] %d workflow(s) с fetch-depth: 0", len(_FETCH_DEPTH_WORKFLOWS))
+
+
+@pytest.mark.gate
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · DevPlan 16 T1.G · удаление fetch-depth детектируется
+# · Scenario: probe-fixture без fetch-depth (воспроизведение исходного дефекта) не проходит
+#   паттерн-детектор
+# · Remove if: вместе с test_workflows_fetch_depth_zero
+def test_negative_missing_fetch_depth_detected(tmp_path) -> None:
+    probe = tmp_path / "probe.yml"
+    # Исходная форма (дефект): checkout БЕЗ with/fetch-depth
+    probe.write_text(
+        "steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7\n      - name: next\n",
+        encoding="utf-8",
+    )
+    pattern = r"actions/checkout@[0-9a-f]{40}[^\n]*\n\s+with:\n(?:\s*#[^\n]*\n)*\s*fetch-depth:\s*0\b"
+    assert not re.search(pattern, probe.read_text(encoding="utf-8")), (
+        "R5 FAIL: fixture воспроизводит исходный дефект, но паттерн сматчился"
+    )
+    logger.info("[IMP:9][fetch-depth][negative] PASS: отсутствие fetch-depth детектируется")
+
+
+# endregion TESTS_FETCH_DEPTH

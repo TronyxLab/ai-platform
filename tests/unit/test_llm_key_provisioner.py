@@ -590,7 +590,7 @@ def test_fetch_once_single_list_keys(policy_yaml, mock_client, tmp_path, caplog)
     ],
 )
 def test_update_fail_no_duplicate_key(policy_yaml, mock_client, tmp_path, caplog, update_exc):
-    """update-fail → потребитель в failed, generate для НЕГО не зовётся, фаза жива."""
+    """update-fail → generate для НЕГО не зовётся; фаза завершается PlatformError (T1.D)."""
     caplog.set_level(logging.DEBUG)
     existing = {
         "key": "sk-existing-token-0001",
@@ -602,17 +602,20 @@ def test_update_fail_no_duplicate_key(policy_yaml, mock_client, tmp_path, caplog
     mock_client.list_keys.return_value = [existing]
     mock_client.update_key.side_effect = update_exc
 
-    result = _run_provision(mock_client, policy_yaml, tmp_path / "keys.json")
+    # DevPlan 16 T1.D (P0-5): пост-цикл PlatformError (supersede «фаза жива» — потребители
+    # ДОЛБАТся все, но фаза завершается честным провалом)
+    import core.internal.llm.key_provisioner as kp
 
-    assert "test-backend" not in result, "failed consumer не должен попасть в provisioned"
-    gen_projects = [call.kwargs.get("metadata", {}).get("project") for call in mock_client.generate_key.call_args_list]
-    assert "test-backend" not in gen_projects, f"ДУБЛЬ КЛЮЧА: generate вызван для test-backend ({gen_projects})"
-    # Фаза жива: остальные потребители провижинены
-    assert "test-priority" in result and "hermes-agent" in result, f"фаза абортилась: {result!r}"
+    with pytest.raises(kp.PlatformError, match="test-backend"):
+        _run_provision(mock_client, policy_yaml, tmp_path / "keys.json")
+
+    assert all(
+        call.kwargs.get("metadata", {}).get("project") != "test-backend"
+        for call in mock_client.generate_key.call_args_list
+    ), "ДУБЛЬ КЛЮЧА: generate вызван для test-backend"
     logger.info(
-        "[IMP:9][test][no-fallthrough] exc=%s → test-backend failed, generate projects=%s",
+        "[IMP:9][test][no-fallthrough] exc=%s → test-backend failed, generate не вызван для него",
         type(update_exc).__name__,
-        gen_projects,
     )
     found_imp9 = _print_ldd_trajectory(caplog, "test_update_fail_no_duplicate_key")
     assert found_imp9, "LDD Error: No IMP:9 log for test_update_fail_no_duplicate_key"
@@ -636,14 +639,227 @@ def test_transport_error_consumer_failed_phase_alive(policy_yaml, mock_client, t
     mock_client.list_keys.return_value = [existing]
     mock_client.update_key.side_effect = LiteLLMTransportError("connect timeout after 30s")
 
-    result = _run_provision(mock_client, policy_yaml, tmp_path / "keys.json")
+    # DevPlan 16 T1.D (P0-5): loop продолжает ВСЕХ потребителей, итог — PlatformError
+    import core.internal.llm.key_provisioner as kp
 
-    assert "test-backend" not in result, "transport-failed consumer не должен быть в provisioned"
-    assert "hermes-agent" in result and "test-priority" in result, f"фаза должна продолжиться: {result!r}"
+    with pytest.raises(kp.PlatformError, match="test-backend"):
+        _run_provision(mock_client, policy_yaml, tmp_path / "keys.json")
+
     summary_lines = [r.getMessage() for r in caplog.records if "[IMP:9]" in r.getMessage()]
-    assert any("failed (transient-tolerant)" in m and "test-backend" in m for m in summary_lines), (
+    assert any("failed:" in m and "test-backend" in m for m in summary_lines), (
         f"нет failed-accounting в сводке: {summary_lines}"
     )
-    logger.info("[IMP:9][test][transport-tolerant] phase alive, failed=[test-backend], provisioned=%d", len(result))
+    logger.info("[IMP:9][test][transport-tolerant] all consumers attempted, raise at end")
     found_imp9 = _print_ldd_trajectory(caplog, "test_transport_error_consumer_failed_phase_alive")
     assert found_imp9, "LDD Error: No IMP:9 log"
+
+
+# DevPlan 16 T1.D (P0-5 + P1-5..8): merge-guard, честный failed, lock-scope,
+# коллизии, пустые токены
+# ═══════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · Regression · DevPlan 16 T1.D P0-5 · профильные метаданные НЕ затирают "project"
+# · Last fail: аудит 15 P0-5 — key_metadata.update(profile_metadata) перезаписывал reserved
+#   "project" → find_key_by_metadata никогда не матчит → GENERATE бюджетных дублей на каждом прогоне
+# · Scenario: профиль с metadata.project="evil" → сгенерированный ключ несёт project=consumer;
+#   повторный прогон находит ключ по метаданным → IDEMPOTENT SKIP, generate_count==0
+# · Remove if: merge-guard reserved-ключей перенесён в другой слой
+def test_reserved_project_key_not_overwritten(policy_yaml, mock_client, tmp_path, caplog):
+    import core.internal.llm.key_provisioner as kp
+
+    policy_with_evil_metadata = tmp_path / "policy-evil.yaml"
+    policy = yaml.safe_load(pathlib.Path(policy_yaml).read_text(encoding="utf-8"))
+    policy["profiles"]["default"]["metadata"] = {"project": "evil-override", "tier": "default"}
+    with pathlib.Path(policy_with_evil_metadata).open("w", encoding="utf-8") as f:
+        yaml.dump(policy, f)
+
+    with (
+        patch.object(kp, "LiteLLMAdminClient", return_value=mock_client),
+        patch.object(kp, "discover_projects") as mock_disc,
+        patch.object(kp, "get_platform_consumers") as mock_plat,
+    ):
+        mock_disc.return_value = [{"name": "test-backend", "llm": {"enabled": True}}]
+        mock_plat.return_value = []
+
+        result = kp.provision_all(
+            master_key="mk",
+            base_url="http://t:4000",
+            policy_path=policy_with_evil_metadata,
+            persist_path=tmp_path / "store.json",
+        )
+
+    # Инвариант: metadata["project"]==consumer_name всегда
+    gen_kwargs = mock_client.generate_key.call_args.kwargs
+    assert gen_kwargs["metadata"]["project"] == "test-backend"
+    assert "evil-override" not in gen_kwargs["metadata"].values()
+    assert "[IMP:8]" in caplog.text and "Reserved" in caplog.text
+
+    # Идемпотентный второй прогон: fetch-once индекс содержит ключ с каноничным project → SKIP
+    mock_client.generate_key.reset_mock()
+    canonical_info = {
+        "key": result["test-backend"],
+        "models": ["chat"],
+        "max_budget": 1.0,
+        "rpm_limit": 10,
+        "metadata": {"project": "test-backend", "tier": "default"},
+    }
+    mock_client.list_keys.return_value = [canonical_info]
+    with (
+        patch.object(kp, "LiteLLMAdminClient", return_value=mock_client),
+        patch.object(kp, "discover_projects") as mock_disc2,
+        patch.object(kp, "get_platform_consumers") as mock_plat2,
+    ):
+        mock_disc2.return_value = [{"name": "test-backend", "llm": {"enabled": True}}]
+        mock_plat2.return_value = []
+        kp.provision_all(
+            master_key="mk",
+            base_url="http://t:4000",
+            policy_path=policy_with_evil_metadata,
+            persist_path=tmp_path / "store.json",
+        )
+    assert mock_client.generate_key.call_count == 0, "повторный прогон обязан быть IDEMPOTENT SKIP"
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · DevPlan 16 T1.D P0-5 · failed≠∅ → PlatformError (не done)
+# · Last fail: аудит 15 P0-5 — failed>0 не поднимал ошибку → φ11 фиксировал llm-keys done
+#   при проваленных ключах (401 в проде как первый сигнал)
+# · Scenario: generate для одного consumer падает ConnectionError → provision_all raise
+#   PlatformError с именем consumer'а
+# · Remove if: exit-контракт фазы llm-keys изменён
+def test_failed_raises_platform_error(policy_yaml, mock_client, tmp_path):
+    import core.internal.llm.key_provisioner as kp
+
+    calls = {"n": 0}
+
+    def _gen_fail(**kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            transport_error = ConnectionError("litellm down")
+            raise transport_error
+        return {"key": f"sk-key-{calls['n']}"}
+
+    mock_client.generate_key.side_effect = _gen_fail
+
+    with (
+        patch.object(kp, "LiteLLMAdminClient", return_value=mock_client),
+        patch.object(kp, "discover_projects") as mock_disc,
+        patch.object(kp, "get_platform_consumers") as mock_plat,
+    ):
+        mock_disc.return_value = [
+            {"name": "ok-project", "llm": {"enabled": True}},
+            {"name": "bad-project", "llm": {"enabled": True}},
+        ]
+        mock_plat.return_value = []
+        with pytest.raises(kp.PlatformError, match="bad-project"):
+            kp.provision_all(
+                master_key="mk",
+                base_url="http://t:4000",
+                policy_path=policy_yaml,
+                persist_path=tmp_path / "store.json",
+            )
+
+
+# 🧪 TRAP[TEST] · SCENARIO · DevPlan 16 T1.D P1-6 · lock охватывает find→generate→persist
+# · Last fail: аудит 15 P1-5/P1-6 — list→find→generate вне лока → конкурентные дубли
+# · Scenario: FileLock-шов подменяется рекордером; порядок событий: acquire ДО первого
+#   get_key_by_metadata, release ПОСЛЕ последнего persist
+# · Remove if: lock-scope изменён
+def test_lock_covers_find_generate(policy_yaml, mock_client, tmp_path):
+    import core.internal.llm.key_provisioner as kp
+    from core.internal.shared.file_lock import FileLock as RealFileLock
+
+    events: list[str] = []
+
+    class SpyLock(RealFileLock):
+        def __enter__(self):
+            events.append("lock-acquire")
+            return super().__enter__()
+
+        def __exit__(self, *args):
+            events.append("lock-release")
+            return super().__exit__(*args)
+
+    def _list_marker():
+        events.append("find")
+        return []
+
+    def _gen_marker(**kwargs):
+        events.append("generate")
+        return {"key": "sk-lock-test-token"}
+
+    mock_client.list_keys.side_effect = _list_marker
+    mock_client.generate_key.side_effect = _gen_marker
+
+    with (
+        patch.object(kp, "FileLock", SpyLock),
+        patch.object(kp, "LiteLLMAdminClient", return_value=mock_client),
+        patch.object(kp, "discover_projects") as mock_disc,
+        patch.object(kp, "get_platform_consumers") as mock_plat,
+    ):
+        mock_disc.return_value = [{"name": "solo", "llm": {"enabled": True}}]
+        mock_plat.return_value = []
+        kp.provision_all(
+            master_key="mk",
+            base_url="http://t:4000",
+            policy_path=policy_yaml,
+            persist_path=tmp_path / "store.json",
+        )
+
+    assert events[0] == "lock-acquire", events
+    assert events[-1] == "lock-release", events
+    assert "find" in events and "generate" in events
+    assert events.index("find") > events.index("lock-acquire")
+    assert events.index("lock-release") > events.index("generate")
+
+
+# 🧪 TRAP[TEST] · REGRESSION · DevPlan 16 T1.D P1-7 · коллизия метаданных детерминирована
+# · Last fail: аудит 15 P1-7 — first-match по порядку листинга зависел от пагинации сервера
+# · Scenario: два ключа с одинаковым metadata.project → победитель по (created_at, token)
+#   при ЛЮБОМ порядке входного списка; WARN называет обоих
+# · Remove if: коллизии стали структурно невозможны (unique-index на стороне LiteLLM)
+def test_collision_deterministic_warn(caplog):
+    from core.internal.llm.admin_client import find_key_by_metadata
+
+    older = {"key": "sk-old-token", "created_at": "2026-01-01", "metadata": {"project": "dup"}}
+    newer = {"key": "sk-new-token", "created_at": "2026-06-01", "metadata": {"project": "dup"}}
+
+    caplog.set_level(logging.WARNING)
+    w1 = find_key_by_metadata([newer, older], project="dup")
+    w2 = find_key_by_metadata([older, newer], project="dup")
+
+    assert w1 is not None and w2 is not None
+    assert w1["key"] == "sk-old-token", "победитель — старейший created_at"
+    assert w2["key"] == w1["key"], "детерминизм относительно порядка входа"
+    assert "COLLISION" in caplog.text and "sk-new-token" in caplog.text, "WARN называет дубликат"
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · DevPlan 16 T1.D P1-8 · пустой токен не персистится
+# · Last fail: аудит 15 P1-8 — пустой token листинга перезаписывал рабочий ключ стора
+# · Scenario: listing вернул {"key": ""} → трактуется как not-found → GENERATE путь;
+#   стор никогда не содержит пустого значения; при отказе generate стор вообще не тронут
+# · Remove if: empty-token guard перенесён в list_keys парсер
+def test_empty_token_not_persisted(policy_yaml, mock_client, tmp_path):
+    import json as _json
+
+    import core.internal.llm.key_provisioner as kp
+
+    store = tmp_path / "store.json"
+    store.write_text(_json.dumps({"solo": "sk-existing-working-key"}), encoding="utf-8")
+
+    mock_client.get_key_by_metadata.return_value = {"key": "", "metadata": {"project": "solo"}}
+    mock_client.generate_key.side_effect = ConnectionError("network down")
+
+    with (
+        patch.object(kp, "LiteLLMAdminClient", return_value=mock_client),
+        patch.object(kp, "discover_projects") as mock_disc,
+        patch.object(kp, "get_platform_consumers") as mock_plat,
+    ):
+        mock_disc.return_value = [{"name": "solo", "llm": {"enabled": True}}]
+        mock_plat.return_value = []
+        with pytest.raises(kp.PlatformError):
+            kp.provision_all(master_key="mk", base_url="http://t:4000", policy_path=policy_yaml, persist_path=store)
+
+    data = _json.loads(store.read_text(encoding="utf-8"))
+    assert data["solo"] == "sk-existing-working-key", "рабочий ключ стора НЕ затронут пустым токеном"
+    assert "" not in data.values()

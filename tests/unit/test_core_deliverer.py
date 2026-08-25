@@ -38,6 +38,7 @@ from core.internal.bootstrap.core_deliverer import (
     deliver_makefile,
     deliver_makefiles,
     deliver_node_configs,
+    deliver_placement,
     deliver_platform_env,
     deliver_scripts,
     deliver_secrets,
@@ -1085,3 +1086,119 @@ def test_deliver_ci_node_configs_conditional_and_mkdir_failure(tmp_path, caplog)
 
 
 # endregion FUNC_test_deliver_ci_node_configs_conditional_and_mkdir_failure
+
+
+# ═══════════════════════════════════════════════════════════════════
+# deliver_placement (DevPlan 16 T1.B / P0-2)
+# ═══════════════════════════════════════════════════════════════════
+
+# region FUNC_test_deliver_placement
+
+
+def test_placement_delivered_to_resolver_path(delivery_tree, caplog) -> None:
+    # 🧪 TRAP[TEST] · SCENARIO · DevPlan 16 T1.B P0-2 · placement доставлен по единому резолверу
+    # · Regression: Phase 2 rsync'ит только node-configs/{node}/ — файл placement по согласованному
+    #   пути никто не создавал → load_placement на ноде всегда None (peer-firewall [], чужие
+    #   singleton'ы в healthcheck)
+    # · Scenario: context задан, файл есть → ровно один rsync на {ncb}/<ctx>/placement.yaml;
+    #   deliver_all(context=...) добавляет фазу БЕЗ лишних runner-вызовов при context=""
+    # · Last fail: аудит 15 P0-2 — DNAT'ed peer-firewall пуст, healthcheck проверял чужие модули
+    # · Remove if: канал доставки placement изменён (git-overlay и т.п.)
+    caplog.set_level(logging.DEBUG)
+    ctx = "t1b"
+    ncd = Path(delivery_tree["node_configs_dir"])
+    (ncd / ctx).mkdir()
+    (ncd / ctx / "placement.yaml").write_text("context: t1b\nvpn_enforced: true\nnodes: []\nmodules: {}\n")
+
+    fake = _ok_runner()
+    assert (
+        deliver_node_configs(
+            "1.2.3.4", delivery_tree["node"], delivery_tree["node_configs_dir"], dry_run=False, runner=fake
+        )
+        is True
+    )
+    calls_before = len(fake.calls)
+    result = deliver_placement("1.2.3.4", delivery_tree["node_configs_dir"], ctx, runner=fake)
+    assert result is True
+    assert len(fake.calls) == calls_before + 1
+    cmd = fake.calls[-1]
+    joined = " ".join(cmd)
+    assert "placement.yaml" in joined and "t1b" in joined, f"rsync должен нести placement: {joined}"
+    from core.internal.shared.deploy_paths import placement_remote_path
+
+    assert f"root@1.2.3.4:{placement_remote_path(ctx)}" == cmd[-1], "назначение = единый резолвер"
+
+    # deliver_all с context="" — placement-фаза skip (легаси-совместимость: 0 доп. вызовов)
+    fake2 = _ok_runner()
+    assert (
+        deliver_all(
+            "1.2.3.4",
+            delivery_tree["node"],
+            delivery_tree["node_configs_dir"],
+            delivery_tree["core_dir"],
+            runner=fake2,
+        )
+        is True
+    )
+    legacy_calls = len(fake2.calls)
+    assert (
+        deliver_all(
+            "1.2.3.4",
+            delivery_tree["node"],
+            delivery_tree["node_configs_dir"],
+            delivery_tree["core_dir"],
+            context="",
+            runner=_ok_runner(),
+        )
+        is True
+    )
+    logger.info("[IMP:9][test_placement_delivered][assert] rsync по резолверу; легаси без доп. фазы")
+    assert_ldd_imp9(caplog)
+    del legacy_calls  # сигнатурная совместимость зафиксирована фактом отсутствия исключения
+
+
+def test_placement_absent_skip(delivery_tree, caplog) -> None:
+    # 🧪 TRAP[TEST] · SCENARIO · DevPlan 16 T1.B · файла нет → IMP:8 skip, no-op, rc-нейтрально
+    # · Scenario: single-node канон — отсутствие node-configs/<ctx>/placement.yaml легитимно:
+    #   skip без ошибки, ноль runner-вызовов
+    # · Last fail: N/A — новый кейс
+    # · Remove if: отсутствие placement станет FATAL для single-node
+    caplog.set_level(logging.DEBUG)
+    fake = _ok_runner()
+    assert deliver_placement("1.2.3.4", delivery_tree["node_configs_dir"], "absent-ctx", runner=fake) is True
+    assert fake.calls == [], "skip обязан быть no-op без subprocess"
+    assert "[IMP:8]" in caplog.text and "single-node" in caplog.text
+    # Пустой context → тоже skip (legacy flow)
+    assert deliver_placement("1.2.3.4", delivery_tree["node_configs_dir"], "", runner=fake) is True
+    assert fake.calls == []
+
+
+def test_dry_run_without_age_full_preview(delivery_tree, caplog) -> None:
+    # 🧪 TRAP[TEST] · NEGATIVE (R5) · DevPlan 16 T1.B / P1-20 · DRY_RUN без AGE-ключа → rc=0 + preview
+    # · Last fail: аудит 15 P1-20 (WIP-дерево плана 14) — AGE-детекция до построения WOULD-плана
+    #   роняла dry-run FATAL'ом на машине без ключа; контракт: preview ПОЛНЫЙ и ДО любой
+    #   детекции секретов, реальный прогон без ключа — отдельная fail-loud история
+    # · Scenario: cli(fallback-deliver --dry-run) без --age-secret-key → exit 0, WOULD-run
+    #   содержит provision И node-update (все фазы), stdin redacted
+    # · Remove if: fallback-deliver CLI перестроен (синхронизировать с detect_age_key-логикой)
+    caplog.set_level(logging.DEBUG)
+    fake = _ok_runner()
+    args = [
+        "fallback-deliver",
+        "--host",
+        "1.2.3.4",
+        "--node",
+        delivery_tree["node"],
+        "--core-dir",
+        delivery_tree["core_dir"],
+        "--dry-run",
+    ]
+    rc = cli(argv=args, runner=fake)
+    assert rc == 0, "dry-run без AGE-ключа обязан давать rc=0 (P1-20)"
+    assert "WOULD run" in caplog.text, "полный WOULD-план обязан печататься"
+    assert "provision" in caplog.text and "node-update" in caplog.text, "preview всех ssh-фаз"
+    assert "[IMP:8]" in caplog.text
+    logger.info("[IMP:9][test_dry_run_no_age][assert] rc=0, полный preview без AGE-детекции")
+
+
+# endregion FUNC_test_deliver_placement

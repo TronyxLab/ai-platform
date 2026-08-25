@@ -82,12 +82,28 @@ build_update_ssh_cmd() { python3 -m core.internal.shared.ssh_cmd_builder update 
 ##    никогда не печатать в логи/dry-run.
 ## @invariants Требует SSH_OPTS_COMMON (source lib/ssh.sh — выполнено через scp-deliver.sh ранее);
 ##             пустой prelude → строка `true` (bash -s скрипт остаётся валидным);
-##             exit = rc ssh (pipeline pipefail).
+##             exit = rc ssh (pipeline pipefail);
+##             DevPlan 16 T2.B (P1-15): ssh-exec под `timeout <DEPLOY_TIMEOUT>` — SoT
+##             shared/timeouts.py через CLI-режим ssh-exec-timeout (0 литералов в shell);
+##             класс P02 CI-hang закрыт.
+# 🧐 TRAP[DECISION] · 2026-08-25 · DevPlan 16 T2.B · timeout-резолв ленивый одноразовый ·
+# Rejected: литерал 900 в shell / хардкод на source-времени ·
+# Reason: parity-требование (значение только из SoT); lazy-resolve при первом вызове + кэш
+# в переменной процесса — python3-fork один раз на lifetime фасада ·
+# Rev: если CLI-резолв станет недоступен в окружении вызова — пробросить через env явно.
 ssh_exec_stdin() {
     local host="$1"
     local prelude="$2"
     local body="$3"
-    printf '%s\n%s\n' "${prelude:-true}" "${body}" | ssh "${SSH_OPTS_COMMON[@]}" "root@${host}" "bash -s"
+    if [ -z "${SSH_EXEC_TIMEOUT_S:-}" ]; then
+        SSH_EXEC_TIMEOUT_S="$(python3 -m core.internal.shared.ssh_cmd_builder ssh-exec-timeout)" || {
+            echo "[IMP:10][ssh_exec_stdin] cannot resolve SSH timeout from SoT (timeouts.py)" >&2
+            return 1
+        }
+        export SSH_EXEC_TIMEOUT_S
+    fi
+    printf '%s\n%s\n' "${prelude:-true}" "${body}" | timeout "$SSH_EXEC_TIMEOUT_S" \
+        ssh "${SSH_OPTS_COMMON[@]}" "root@${host}" "bash -s"
 }
 # endregion FUNC_ssh_exec_stdin
 

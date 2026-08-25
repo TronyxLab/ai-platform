@@ -44,10 +44,12 @@ ALLOWLIST: dict[str, int] = {
     "core/internal/bootstrap/converge/reconciler.py": 800,
     # 650 → 700 (DevPlan 001 T5.4, 2026-08-16): +_sync_instructions (Step 5b) + _detect_project_type —
     # .kilo/-синк из живого канона при adopt; декомпозиция adopter — follow-up вне скоупа
-    # 700 → 750 (DevPlan 14 T1.1, 2026-08-25): pinned-генерация деплой-канала (QA C2/R9) —
-    # +channel_pin SoT-импорт, top-level concurrency/permissions в f-string генерации
-    # (REF-0011 паритет); вынос шаблона в отдельный модуль — follow-up при следующем touch
-    "core/internal/scaffold/project_adopter.py": 750,
+    # 700 → 750 (DevPlan 14 T1.1): pinned-генерация деплой-канала (channel_pin SoT,
+    # concurrency/permissions в f-string генерации)
+    # 750 → 800 (DevPlan 16 T2.D, 2026-08-25): P1-16 неинтерактивная деградация —
+    # _prompt_yes_no (TTY-guard, NonInteractiveBlocked состояние+rollback-hint) + --yes.
+    # Осознанное решение владельца лимита; вынос промпт-машины/шаблона — при touch сверх 800.
+    "core/internal/scaffold/project_adopter.py": 800,
 }
 
 # Test giants (DevPlan 172 W3.3, Brief H1/H10): лимиты = текущий размер + headroom 5-8%.

@@ -167,6 +167,10 @@ def main(argv: list[str] | None = None) -> int:
     """CLI: `check` — прогнать G1-G6 --check, агрегировать ошибки.
 
     ## @purpose  Точка входа check-suite (суит check-manifests, План 175 W2.1).
+    ##            АРБИТР ВОПРОСА «диск == генераторы» (DevPlan 16 T2.E): divergence =
+    ##            диск устарел относительно SoT — repair = make generate-manifests.
+    ##            (Парный арбитр «дерево == HEAD» — test_gate_manifests_up_to_date,
+    ##            repair = commit.)
     ## @io       ⇥ argv → ⎋ exit 0 (все fresh) | 1 (хотя бы один stale) | 2 (неизвестный subcommand)
     ## @complexity O(6) — шесть генераторов
     ## @invariants — порядок G1-G6; при stale — git diff по генерируемым путям (CI-DIAG)
@@ -194,9 +198,20 @@ def main(argv: list[str] | None = None) -> int:
 
     if errors > 0:
         print("[GATE:FAIL][id:check-manifests][class:L1]", file=sys.stderr)
+        # DevPlan 16 T2.E (проц.№1): арбитр вопроса «диск == генераторы» — правильное
+        # действие РЕГЕНЕРАЦИЯ (в отличие от pytest-арбитра test_manifests_up_to_date,
+        # который проверяет «дерево == HEAD» и требует commit).
         print(">>> REPAIR_RECIPE_START >>>", file=sys.stderr)
+        print(
+            "Run: make generate-manifests   # регенерировать диск из SoT (арбитр 'диск == генераторы')", file=sys.stderr
+        )
         print("make fix-gate && git add -u", file=sys.stderr)
         print("<<< REPAIR_RECIPE_END <<<", file=sys.stderr)
+        print(
+            "Если файлы правились руками ВНЕ GENERATED-регионов — регенерация затрёт правку:",
+            "правь SoT, не generated-файл.",
+            file=sys.stderr,
+        )
         print("=== [CI-DIAG][check-manifests] FULL git diff по генерируемым путям ===", file=sys.stderr)
         subprocess.run(["git", "--no-pager", "diff", "--", *_GENERATED_PATHS], check=False)
         return 1

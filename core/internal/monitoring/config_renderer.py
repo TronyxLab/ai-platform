@@ -28,6 +28,7 @@
 
 import argparse
 import logging
+import os
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -638,9 +639,76 @@ def _render_step(step_name: str, fn: Callable[..., object], *args: object) -> No
 
 # Канонический набор render-шагов (порядок DevPlan 138 §4.3) — module-level для DI (167 D3):
 # render_steps=None в run_monitoring_reconfig → этот словарь; тесты передают fake-шаги.
+# region FUNC_render_node_targets_if_placement
+## @purpose  Wiring node-targets (DevPlan 16 T2.A / P1-2): при multi-node placement рендерит
+##           file_sd нодовые таргеты через generate_node_targets — закрывает мёртвый DI-seam
+##           (generate_node_targets имел 0 production-вызовов → nodes/*.json не писались,
+##           RemoteNodeDown/LokiCollectorStale не работали; клейм 010 «Наблюдаемость ✅»
+##           был DI-seam без wiring). Single-node (placement отсутствует) → skip IMP:8 —
+##           поведение байт-совместимо с легаси.
+## @io       ⇥ platform_root: Path (родитель prometheus-targets/) → ⎋ None (non-fatal)
+## @complexity O(N × J) — resolve_node_modules на ноду + рендер jobs
+## @invariants
+##   - Источник топологии: env NODE_YAML → context → shared/placement резолвер
+##     placement_node_relative_path (единый путь с deploy_orchestrator/modules_healthcheck)
+##   - NODE_YAML недоступен / placement.yaml отсутствует → IMP:8 skip, 0 файлов
+##   - Non-fatal по контракту render-шагов: OSError → WARN, деплой не блокируется
+def render_node_targets_if_placement(platform_root: Path) -> None:
+    """Render multi-node file_sd targets from placement (no-op on single-node)."""
+    from core.internal.monitoring.prometheus_targets import NodeInfo, generate_node_targets
+    from core.internal.shared.node_yaml import NodeYaml  # лениво: прямой запуск скрипта (sys.path bootstrap выше)
+    from core.internal.shared.placement import (
+        load_placement,
+        placement_node_relative_path,
+        resolve_node_modules,
+    )
+
+    node_yaml = os.environ.get("NODE_YAML", "")
+    if not node_yaml or not Path(node_yaml).is_file():
+        logger.info("[IMP:8][node_targets][skip] NODE_YAML недоступен — single-node канон, no-op")
+        return
+    try:
+        context = NodeYaml(node_yaml).get_context()
+    # ruff: ignore[BLE001] — best-effort render step (non-fatal контракт; dev_hosts.py:631 прецедент)
+    except Exception as exc:  # noqa: EXC — best-effort render step: WARN + continue
+        logger.warning("[IMP:7][node_targets][skip] node.yaml unreadable (%s): %s", node_yaml, exc)
+        return
+    if not context:
+        logger.info("[IMP:8][node_targets][skip] нет context в %s — single-node", node_yaml)
+        return
+    placement_path = placement_node_relative_path(node_yaml, context)
+    placement = load_placement(placement_path)
+    if placement is None:
+        logger.info("[IMP:8][node_targets][skip] нет placement.yaml at %s — single-node", placement_path)
+        return
+
+    nodes = [
+        NodeInfo(
+            name=node_name,
+            host=host,
+            modules=tuple(sorted(resolve_node_modules(placement, node_name))),
+        )
+        for node_name, host in sorted(placement.nodes.items())
+    ]
+    output_dir = Path(platform_root) / DEFAULT_PROMETHEUS_TARGETS_DIR
+    result = generate_node_targets(nodes, output_dir)
+    logger.info(
+        "[IMP:9][node_targets][done] placement=%s nodes=%d → %s/nodes/ (result=%s)",
+        placement_path,
+        len(nodes),
+        output_dir,
+        result.status,
+    )
+
+
+# endregion FUNC_render_node_targets_if_placement
+
+
 _DEFAULT_RENDER_STEPS: dict[str, Callable[..., object]] = {
     "alert_rules": generate_alert_rules,
     "prometheus": generate_prometheus_target,
+    # DevPlan 16 T2.A (P1-2): нодовые file_sd таргеты ДО reload (прометей подхватит при рестарте)
+    "node_targets": render_node_targets_if_placement,
     "grafana": generate_grafana_dashboard,
     "loki": update_loki_retention,
     "reload": reload_monitoring_services,
@@ -698,9 +766,10 @@ def run_monitoring_reconfig(
     steps = _DEFAULT_RENDER_STEPS if render_steps is None else render_steps
 
     # Execute all render steps non-blocking. Порядок паритет исходного main():
-    # alert_rules → prometheus → grafana → loki → reload → langfuse → catalog (DevPlan 138 §4.3).
+    # alert_rules → prometheus → node_targets (T2.A) → grafana → loki → reload → langfuse → catalog
     _render_step("alert_rules", steps["alert_rules"], config)
     _render_step("prometheus", steps["prometheus"], config)
+    _render_step("node_targets", steps["node_targets"], platform_root)
     _render_step("grafana", steps["grafana"], config)
     _render_step("loki", steps["loki"], config)
     _render_step("reload", steps["reload"])

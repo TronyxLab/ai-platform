@@ -389,3 +389,82 @@ def test_allowlist_current() -> None:
 
 
 # endregion FUNC_test_allowlist_current
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region INTERNAL_SHELL_POLICY (DevPlan 16 T2.B / проц.№2)
+# ═══════════════════════════════════════════════════════════════════
+
+# 🧐 TRAP[DECISION] · 2026-08-25 · DevPlan 16 T2.B (проц.№2) · бинарная политика расширяется
+#   на internal .sh точечно (no-direct-binary), НЕ весь thin-wrapper контракт ·
+#   Rejected: LOC/function-count контракты на все 50 внутренних скриптов ·
+#   Reason: обход P1-15 стал возможен именно через не-покрытые бинарные вызовы; LOC-политика
+#   на bootstrap-семейство противоречит Keep-решениям AGENTS.md §Shell-исключения ·
+#   Rev: если внутренние .sh начнут плодить бизнес-логику вне фасадов — поднять полный контракт.
+_INTERNAL_SHELL_ROOT: pathlib.Path = pathlib.Path(PLATFORM_ROOT) / "core"
+_INTERNAL_SHELL_EXCLUDE_PARTS: tuple[str, ...] = ("entrypoints", "lib", "tests", "__pycache__")
+# Документированные Keep-решения / фасады с легитимными бинарными вызовами
+# (AGENTS.md §Shell-исключения; расширение = запись с причиной, иначе RED).
+_INTERNAL_SHELL_BINARY_ALLOWLIST: dict[str, str] = {
+    "build-ssh-cmd.sh": "REF-0007 stdin-фасад ssh-exec (эталон тонкого фасада)",
+    "scp-deliver.sh": "legacy SCP/SSH-оркестрация bootstrap-семейства",
+    "remote-cmd.sh": "remote_executor shell-фасад (--shell)",
+    "node-lifecycle.sh": "remote-диспетчер lifecycle (Keep AGENTS.md)",
+    "setup-node.sh": "bootstrap SSH/SCP-оркестрация (Keep bootstrap-семейство)",
+}
+
+
+def _iter_internal_shell_scripts() -> list[pathlib.Path]:
+    """Все .sh под core/ вне entrypoints/lib/tests (отсортированы)."""
+    files: list[pathlib.Path] = []
+    for p in sorted(_INTERNAL_SHELL_ROOT.rglob("*.sh")):
+        if any(part in _INTERNAL_SHELL_EXCLUDE_PARTS for part in p.parts):
+            continue
+        if "modules" in p.parts and "/context/scripts/" in p.as_posix():
+            continue  # module payload scripts — домен шаблонов, вне платформенного канона
+        files.append(p)
+    return files
+
+
+@pytest.mark.gate
+@ldd_trajectory
+# 🧪 TRAP[TEST] · 2026-08-25 · REGRESSION · DevPlan 16 T2.B проц.№2 · бинарная политика на internal .sh
+# · Last fail: аудит 15 проц.№2/P1-15 — no-direct-binary сканировал только entrypoints/*.sh:
+#   внутренний .sh с сырым ssh/rsync был вне политики (обход thin-wrapper стал возможен)
+# · Scenario: все internal .sh (вне allowlist Keep-фасадов) свободны от прямых бинарных вызовов
+# · Remove if: бинарная политика переезжает в static-detector слой
+def test_internal_shell_scripts_no_direct_binary_calls(caplog) -> None:
+    """Internal .sh (вне documented keep-фасадов) не содержат rsync/ssh/scp/ssh-keygen."""
+    files = _iter_internal_shell_scripts()
+    assert files, "скан обязан находить внутренние .sh файлы"
+    all_violations: list[str] = []
+    for f in files:
+        reason = _INTERNAL_SHELL_BINARY_ALLOWLIST.get(f.name)
+        if reason is not None:
+            logger.info("[IMP:8][internal-shell][allowlisted] %s — %s", f.relative_to(PLATFORM_ROOT), reason)
+            continue
+        for ln, txt in find_binary_violations(f):
+            all_violations.append(f"  {f.relative_to(PLATFORM_ROOT)}:{ln} — {txt}")
+    if all_violations:
+        detail = "\n".join(all_violations)
+        pytest.fail(
+            "internal .sh содержат прямые бинарные вызовы вне allowlist "
+            "(добавь фасад в _INTERNAL_SHELL_BINARY_ALLOWLIST с причиной или убери вызов):\n" + detail
+        )
+    logger.info("[IMP:9][internal-shell] PASS — %d файлов чистые", len(files))
+
+
+@pytest.mark.gate
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · DevPlan 16 T2.B · нарушение в internal .sh детектируется
+# · Scenario: probe-файл с сырым `docker ps`... точнее ssh-call во временном дереве →
+#   детектор find_binary_violations ловит (политика живая)
+# · Remove if: вместе с test_internal_shell_scripts_no_direct_binary_calls
+def test_negative_internal_shell_binary_detected(tmp_path: pathlib.Path) -> None:
+    probe = tmp_path / "rogue.sh"
+    probe.write_text("#!/usr/bin/env bash\nssh root@host 'make node-update'\n", encoding="utf-8")
+    violations = find_binary_violations(probe)
+    assert violations, "R5 FAIL: детектор пропустил raw ssh в internal .sh"
+    logger.info("[IMP:9][internal-shell][negative] raw-вызов в internal .sh детектируется ✓")
+
+
+# endregion INTERNAL_SHELL_POLICY

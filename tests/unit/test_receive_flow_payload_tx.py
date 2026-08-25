@@ -103,6 +103,10 @@ def test_crash_between_replaces_restores_from_backup(
     staging.mkdir()
     (staging / "docker-compose.yml").write_text(_VALID_COMPOSE, encoding="utf-8")  # заменяет OLD
     (staging / ".env.platform").write_text("NEW-ENV=1\n", encoding="utf-8")  # новый файл tx
+    (staging / "practices.lock").write_text(
+        "version: 1\nlevel: auto\nstate: baseline\nlanguage: python\ngenerator_hash: sha256:test\nmaturity:\n  age_days: 1\n  code_files: 0\n",
+        encoding="utf-8",
+    )
 
     # Crash-injection: второй Path.replace кидает RuntimeError («между replace'ами»)
     real_replace = Path.replace
@@ -153,6 +157,10 @@ def test_stale_canonical_compose_removed_when_absent_in_staging(
     staging.mkdir()
     (staging / "docker-compose.yml").write_text(_VALID_COMPOSE, encoding="utf-8")
     (staging / "ai-platform.yaml").write_text("name: testproj\n", encoding="utf-8")
+    (staging / "practices.lock").write_text(
+        "version: 1\nlevel: auto\nstate: baseline\nlanguage: python\ngenerator_hash: sha256:test\nmaturity:\n  age_days: 1\n  code_files: 0\n",
+        encoding="utf-8",
+    )
 
     flow = _make_flow(tmp_path, _fake_orch_success())
     result = flow.deploy("testproj", "testproj", "sha1", str(staging), str(target_dir), base=str(tmp_path / "projects"))
@@ -218,6 +226,10 @@ def test_successful_tx_leaves_no_tmp_leftovers(
     staging.mkdir()
     (staging / "docker-compose.yml").write_text(_VALID_COMPOSE, encoding="utf-8")
     (staging / "ai-platform.yaml").write_text("name: testproj\n", encoding="utf-8")
+    (staging / "practices.lock").write_text(
+        "version: 1\nlevel: auto\nstate: baseline\nlanguage: python\ngenerator_hash: sha256:test\nmaturity:\n  age_days: 1\n  code_files: 0\n",
+        encoding="utf-8",
+    )
 
     flow = _make_flow(tmp_path, _fake_orch_success())
     result = flow.deploy("testproj", "testproj", "sha1", str(staging), str(target_dir), base=str(tmp_path / "projects"))

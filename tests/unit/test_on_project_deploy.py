@@ -228,8 +228,9 @@ def test_role_created_with_grants_and_credentials(caplog, tmp_path):
     assert _invoke_hook(str(tmp_path), "myproj", runner) == 0
 
     # SQL-последовательность: CREATE DATABASE → pg_roles check → CREATE ROLE → 2 GRANT
+    # (DevPlan 16 T1.C: SQL-идентификаторы ВСЕГДА double-quoted)
     sql = " ".join(" ".join(c) for c in runner.calls)
-    assert "CREATE DATABASE myproj_db" in sql
+    assert 'CREATE DATABASE "myproj_db"' in sql
     assert "pg_roles" in sql
     assert 'CREATE ROLE "myproj_user" LOGIN PASSWORD' in sql
     assert 'GRANT CONNECT ON DATABASE "myproj_db" TO "myproj_user"' in sql
@@ -420,3 +421,71 @@ def test_grant_idempotent_rerun(caplog, tmp_path):
 
 
 # endregion Tests: QA R15/G4
+# region Tests: DevPlan 16 T1.C (P0-3 + P1-14)
+# ═══════════════════════════════════════════════════════════════════
+
+
+@ldd_trajectory
+def test_kebab_case_role_provisioned(caplog, tmp_path):
+    # 🧪 TRAP[TEST] · SCENARIO · DevPlan 16 T1.C P0-3 · kebab-case проект получает роль
+    # · Last fail: аудит 15 P0-3 — regex ^[a-zA-Z0-9_]+$ отвергал канон kebab-case имён,
+    #   FATAL лог + return 0 = зелёный деплой БЕЗ роли/GRANT/credentials
+    # · Scenario: project "my-app" → роль "my-app_user" создаётся; SQL-идентификаторы
+    #   double-quoted (дефис без quoting — синтаксическая ошибка psql)
+    # · Remove if: канон имён проектов перестанет быть kebab-case
+    _write_yaml(tmp_path, "name: my-app\nneeds:\n  database: my_app_db\n")
+    router = _make_psql_router(role_exists=False)
+    runner = FakeCommandRunner(router=router)
+
+    assert on_project_deploy.main(argv=[str(tmp_path), "my-app", "n"], runner=runner, env=_ENV) == 0
+
+    sql = " ".join(" ".join(c) for c in runner.calls)
+    assert 'CREATE ROLE "my-app_user" LOGIN PASSWORD' in sql, sql
+    assert 'GRANT CONNECT ON DATABASE "my_app_db" TO "my-app_user"' in sql, sql
+
+    creds_file = tmp_path / ".platform-db.env"
+    assert creds_file.is_file()
+    assert "PLATFORM_POSTGRES_USER=my-app_user" in creds_file.read_text()
+    logger.critical("[IMP:9][test] kebab-case роль %s provisioned", "my-app_user")
+
+
+@ldd_trajectory
+def test_invalid_role_nonzero_rc(caplog, tmp_path):
+    # 🧪 TRAP[TEST] · NEGATIVE (R5) · DevPlan 16 T1.C P0-3 · невалидная роль → rc==2 (не 0!)
+    # · Last fail: аудит 15 P0-3 — FATAL лог и return 0: «зелёный» деплой с тихим skip
+    # · Scenario: project с недопустимым символом ("my.app") → ensure_project_db_access rc=2,
+    #   auto_create_db пропагирует → main rc==2; вызывающий обязан поднять blocking
+    # · Remove if: fail-loud контракт роли изменён
+    _write_yaml(tmp_path, "name: placeholder\nneeds:\n  database: db_x\n")
+    router = _make_psql_router(role_exists=False)
+    runner = FakeCommandRunner(router=router)
+
+    rc = on_project_deploy.main(argv=[str(tmp_path), "my.app", "n"], runner=runner, env=_ENV)
+    assert rc == 2, f"невалидное имя роли обязано давать rc=2, got {rc}"
+    assert "[IMP:10]" in caplog.text and "invalid role name" in caplog.text
+    # Ни одного psql-вызова provisioning (роль не валидирована — рано)
+    assert not any("GRANT" in " ".join(c) for c in runner.calls)
+
+
+@ldd_trajectory
+def test_mixed_case_db_normalized_everywhere(caplog, tmp_path):
+    # 🧪 TRAP[TEST] · REGRESSION · DevPlan 16 T1.C P1-14 · регистр db_name нормируется ОДИН раз
+    # · Last fail: аудит 15 P1-14 — CREATE DATABASE MyApp создавал myapp (PostgreSQL folding),
+    #   quoted GRANT падал, .platform-db.env писал MyApp — три значения одной БД
+    # · Scenario: needs.database: MyAppDB → CREATE/GRANT/env-файл содержат myapp_db везде
+    # · Remove if: единая точка нормы регистра перенесена в другой слой
+    _write_yaml(tmp_path, "name: myproj\nneeds:\n  database: MyAppDB\n")
+    router = _make_psql_router(role_exists=False)
+    runner = FakeCommandRunner(router=router)
+
+    assert on_project_deploy.main(argv=[str(tmp_path), "myproj", "n"], runner=runner, env=_ENV) == 0
+
+    sql = " ".join(" ".join(c) for c in runner.calls)
+    assert 'CREATE DATABASE "myappdb"' in sql, sql
+    assert "MyAppDB" not in sql, f"нормированное значение обязано быть везде: {sql}"
+    assert 'GRANT CONNECT ON DATABASE "myappdb" TO "myproj_user"' in sql
+    content = (tmp_path / ".platform-db.env").read_text()
+    assert "PLATFORM_POSTGRES_DB=myappdb" in content, content
+
+
+# endregion Tests: DevPlan 16 T1.C

@@ -68,6 +68,15 @@ def _tar_bytes(project: str) -> io.BytesIO:
         info = tarfile.TarInfo(name="ai-platform.yaml")
         info.size = len(ai)
         tar.addfile(info, io.BytesIO(ai))
+        # DevPlan 16 T1.E: unmanaged (без lock) блокируется на pre-apply — фиксируем
+        # валидный lock в payload (тест про lock-interleave механику receive, не practices)
+        lock = (
+            b"version: 1\nlevel: auto\nstate: baseline\nlanguage: python\n"
+            b"generator_hash: sha256:test\nmaturity:\n  age_days: 1\n  code_files: 0\n"
+        )
+        info_lk = tarfile.TarInfo(name="practices.lock")
+        info_lk.size = len(lock)
+        tar.addfile(info_lk, io.BytesIO(lock))
         compose = _VALID_COMPOSE.encode()
         info2 = tarfile.TarInfo(name="docker-compose.yml")
         info2.size = len(compose)

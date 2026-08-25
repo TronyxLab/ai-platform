@@ -901,3 +901,75 @@ def test_resolve_node_yaml_path_via_nodeyaml_resolve(
 
 
 # endregion Test 17: _resolve_node_yaml_path via canonical NodeYaml.resolve (DevPlan 116 B6 T8.1)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# DevPlan 16 T2.D (P1-16): неинтерактивная деградация adopt-project
+# ═══════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · DevPlan 16 T2.D P1-16 · EOF → чистое сообщение, rc≠0, без traceback
+# · Last fail: аудит 15 P1-16 — input() без TTY ронял EOFError-traceback ПОСЛЕ частичной
+#   адопции (ai-platform.yaml уже создан) — состояние не описано, rc неконтролируем
+# · Scenario: deploy.yml упрощаем, stdin=devnull (не-TTY), без --yes/--force →
+#   NonInteractiveBlocked; сообщение содержит состояние и rollback-hint
+# · Remove if: промпты адоптера переведены на явный конфиг-файл
+def test_eof_clean_error(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    adopter = pa.ProjectAdopter(
+        project_dir=tmp_path,
+        name="eoftest",
+        org="org",
+        node="n1",
+    )
+    # deploy.yml существует и НЕ использует reusable workflow → ветка с промптом достижима
+    wf = tmp_path / ".github" / "workflows"
+    wf.mkdir(parents=True)
+    (wf / "deploy.yml").write_text("name: Deploy eoftest\non: push\n", encoding="utf-8")
+
+    import io as _io
+
+    real_stdin = sys.stdin
+    sys.stdin = _io.StringIO("")  # isatty()=False, input() → мгновенный EOF
+    try:
+        with pytest.raises(pa.NonInteractiveBlocked) as excinfo:
+            adopter.simplify_deploy_yml()
+    finally:
+        sys.stdin = real_stdin
+
+    msg = str(excinfo.value)
+    assert "stdin" in msg and "--force" in msg and "remove-project" in msg, (
+        f"сообщение обязано содержать состояние + hint: {msg}"
+    )
+    logger.info("[IMP:9][test][negative] EOF деградация чистая: NonInteractiveBlocked с hint")
+
+
+# 🧪 TRAP[TEST] · SCENARIO · DevPlan 16 T2.D P1-16 · --yes проходит неинтерактивно
+# · Last fail: N/A — новый кейс
+# · Scenario: yes=True при пустом stdin (не-TTY) → промпт авто-'yes', simplify выполняется,
+#   NonInteractiveBlocked НЕ поднимается; .bak создан
+# · Remove if: флаг автоматизации переименован/удалён
+def test_yes_flag_noninteractive(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    adopter = pa.ProjectAdopter(
+        project_dir=tmp_path,
+        name="yestest",
+        org="org",
+        node="n1",
+        yes=True,
+    )
+    wf = tmp_path / ".github" / "workflows"
+    wf.mkdir(parents=True)
+    (wf / "deploy.yml").write_text("name: Deploy yestest\non: push\n", encoding="utf-8")
+
+    import io as _io
+
+    real_stdin = sys.stdin
+    sys.stdin = _io.StringIO("")
+    try:
+        changed = adopter.simplify_deploy_yml()
+    finally:
+        sys.stdin = real_stdin
+
+    assert changed is True, "--yes обязан пройти неинтерактивно"
+    assert (wf / "deploy.yml.bak").is_file(), "backup оригинала создан"
+    assert "uses:" in (wf / "deploy.yml").read_text()
+    logger.info("[IMP:9][test][assert] --yes: неинтерактивный проход ✓")

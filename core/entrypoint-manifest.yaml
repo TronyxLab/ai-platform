@@ -1004,6 +1004,9 @@ gates:
   test_gate_ci_env_vars.py:
   - test_ci_env_vars_match_platform_env
   - test_no_hardcoded_ci_secrets
+  test_gate_ci_secrets_transport.py:
+  - test_core_deploy_no_secret_interpolation
+  - test_regression_export_interpolation_red
   test_gate_ci_trigger_strength.py:
   - strength_scanner_yaml_parseable
   - test_ci_trigger_strength_contract
@@ -1013,7 +1016,6 @@ gates:
   test_gate_collection_floors.py:
   - test_collection_floors
   - test_floor_selectors_track_manifest
-  - test_layer_below_floor_red
   test_gate_compose_base_contract.py:
   - test_all_base_yml_have_x_logging
   - test_container_name_matches_module_name
@@ -1587,6 +1589,8 @@ gates:
   - test_entrypoint_function_count
   - test_entrypoint_loc
   - test_entrypoint_no_direct_binary_calls
+  - test_internal_shell_scripts_no_direct_binary_calls
+  - test_negative_internal_shell_binary_detected
   test_gate_timeout_literals.py:
   - test_amber_timeout_literal_detected_negative
   - test_apt_subprocess_without_timeout_detected_negative
@@ -1649,6 +1653,9 @@ gates:
   - test_push_gate_uses_provisioner
   - test_workflow_count_is_correct
   - test_workflow_module_lists_match_filesystem
+  test_gate_workflow_inputs_interp.py:
+  - test_inputs_only_in_env_blocks
+  - test_negative_raw_interpolation_red
   test_gate_workflow_org_agnostic.py:
   - test_gitleaks_pin_parity
   - test_negative_dotted_py_import_detected
@@ -1657,18 +1664,15 @@ gates:
   - test_workflow_single_job_org_agnostic
   test_gate_workflow_sha_pins.py:
   - test_all_external_actions_pinned_full_sha
-  - test_channel_pins_fresh_and_consistent
   - test_negative_double_quoted_form_passes
-  - test_negative_false_snapshot_date_detected
   - test_negative_local_action_refs_exempt
-  - test_negative_missing_snapshot_date_detected
+  - test_negative_missing_fetch_depth_detected
   - test_negative_mutable_tag_detected
   - test_negative_raw_interpolation_outside_quotes_detected
   - test_negative_sha_pin_without_version_comment_detected
   - test_negative_single_quoted_interpolation_detected
-  - test_negative_stale_channel_pin_detected
-  - test_positive_fresh_probe_passes
   - test_run_blocks_quoted_interpolation_only
+  - test_workflows_fetch_depth_zero
   test_gate_yaml_deterministic_output.py:
   - test_entrypoint_manifest_deterministic
   - test_platform_env_deterministic

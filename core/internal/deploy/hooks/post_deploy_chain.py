@@ -49,6 +49,7 @@ import yaml  # module-level (deploy-hooks читают module.yaml; YAMLError в
 # W1-A1 (план 170): литералы таймаутов post_deploy_chain → канон SoT (AMBER-зачистка research-D §D1).
 # 30 (notify-hook) → CONVERGE_DOCKER_TIMEOUT; 60 (generate-catalog) → SYSTEM_CMD_TIMEOUT.
 from core.internal.shared.deploy_paths import platform_remote_base
+from core.internal.shared.exceptions import PlatformError
 from core.internal.shared.timeouts import CONVERGE_DOCKER_TIMEOUT, SYSTEM_CMD_TIMEOUT
 
 logger = logging.getLogger(__name__)
@@ -231,13 +232,16 @@ def _monitoring_reconfig(
 # region FUNC__module_deploy_hooks
 ## @purpose  Подшаг 4: Module deploy-hooks — deploy-hook для зарегистрированных модулей (B8 wire).
 ##           Registry-driven: читает core/modules/*/module.yaml (registry = файловая система),
-##           НЕ хардкодит имена модулей. Best-effort: сбой → WARN, деплой не фейлится.
-## @io       ⇥ project_dir: str, project: str, node_name: str → ⎋ None
+##           НЕ хардкодит имена модулей. DevPlan 16 T1.C (P0-3): сбой deploy-hook → PlatformError
+##           (BLOCKING — суперседит REF-0002 best-effort для этого подшага; остальные подшаги
+##           цепочки остаются WARN/non-fatal).
+## @io       ⇥ project_dir: str, project: str, node_name: str → ⎋ None;
+##           ⚡ PlatformError при отказе любого deploy-hook
 ## @complexity — O(M * K) где M = модули с hooks, K = hook-скрипты на модуль
 ## @invariants
 ##   - Каждый module.yaml с hooks.on_project_deploy → module_interface.invoke(module, "deploy-hook", ...)
 ##   - hook args: PROJECT_DIR PROJECT NODE_NAME (сигнатура nginx_reload_hook.sh)
-##   - Сбой invoke → WARN (IMP:8), не raise (Best-effort контракт post-deploy chain)
+##   - Сбой invoke → IMP:10 + PlatformError (DevPlan 16 P0-3 fail-loud; было WARN non-fatal)
 ##   - modules dir отсутствует → IMP:7 info, return (не WARN)
 def _module_deploy_hooks(project_dir: str, project: str, node_name: str) -> None:
     """Invoke registered module deploy-hooks via shared module_interface (B8)."""
@@ -269,14 +273,28 @@ def _module_deploy_hooks(project_dir: str, project: str, node_name: str) -> None
         )
         ok, output = invoke_module_hook(module_name, "deploy-hook", project_dir, project, node_name)
         if not ok:
-            logger.warning(
-                "[IMP:8][DeployOrchestrator][%s] %s deploy-hook WARN (non-fatal): %s",
+            # DevPlan 16 T1.C (P0-3): deploy-hook = provisioning data-plane prerequisite
+            # (роль/GRANT/credentials postgres и т.п.) — отказ ПОДНИМАЕТСЯ в blocking-ошибку
+            # деплоя (fail-loud), а не глотается best-effort: зелёный деплой без provisioning
+            # недопустим (AC T1.C). Суперседет REF-0002 «chain не фейлится» ДЛЯ ЭТОГО подшага.
+            # 🧐 TRAP[DECISION] · 2026-08-25 · DevPlan 16 T1.C · deploy-hook failure → raise
+            # · Rejected: WARN non-fatal (статус-кво REF-0002 D4)
+            # · Reason: аудит 15 P0-3 — FATAL+return 0 хука давал зелёный деплой БЕЗ роли/GRANT/
+            #   credentials; silent-degradation обнаруживался только по 401 в проде
+            # · Rev: если появится легитимно-опциональный deploy-hook — ввести явный
+            #   hooks.on_project_deploy.critical: false маркер в module.yaml
+            logger.error(
+                "[IMP:10][DeployOrchestrator][%s] %s deploy-hook FAILED (blocking): %s",
                 _HOOKS_BLOCK,
                 module_name,
                 (output or "").strip()[-300:],
             )
-        else:
-            logger.info("[IMP:9][DeployOrchestrator][%s] %s deploy-hook done", _HOOKS_BLOCK, module_name)
+            msg = (
+                f"deploy-hook of module '{module_name}' failed for project '{project}' "
+                f"(rc!=0) — деплой заблокирован (P0-3 fail-loud): {(output or '').strip()[-200:]}"
+            )
+            raise PlatformError(msg)
+        logger.info("[IMP:9][DeployOrchestrator][%s] %s deploy-hook done", _HOOKS_BLOCK, module_name)
 
 
 # endregion FUNC__module_deploy_hooks

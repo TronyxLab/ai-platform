@@ -732,6 +732,33 @@ def lint_drift(
 # endregion FUNC_lint_drift
 
 
+# region FUNC_placement_node_relative_path
+def placement_node_relative_path(node_yaml: str | pathlib.Path, context: str) -> pathlib.Path:
+    """Единый резолвер пути placement.yaml относительно node.yaml ноды (DevPlan 16 T1.B).
+
+    ▶ ┌(node_yaml, context)┐ → ○ parent(node dir).parent / <context> / placement.yaml → ⎋ Path
+
+    ## @purpose  Убивает три независимые деривации (deploy_orchestrator._placement_for_node,
+    ##           firewall_placement_args, modules_healthcheck._resolve_enabled_modules —
+    ##           knowledge dedup P0-2): файл по этому пути создаёт deliver_placement
+    ##           (core_deliverer) каналом core-push; remote-форма пути —
+    ##           shared/deploy_paths.placement_remote_path (та же структура {ncb}/<context>/).
+    ## @io — ⇥ node_yaml: путь к node.yaml ноды, context: имя контекста → ⎋ Path
+    ## @complexity O(1)
+    ## @invariants  Форма пути канонизирована: sibling контекстной директории рядом с нодами
+    ##              ({root}/<context>/placement.yaml при нодах {root}/<node>/node.yaml);
+    ##              существование файла НЕ проверяется (вызывающий решает no-op/fail —
+    ##              load_placement вернёт None для отсутствующего пути).
+    ## @rationale Q: почему функция, а не константа-шаблон? A: три потребителя с разными
+    ##            стилями (resolve/не-resolve) — единая точка фиксирует .resolve() канон и
+    ##            делает расползание невозможным.
+    """
+    return pathlib.Path(node_yaml).resolve().parent.parent / context / "placement.yaml"
+
+
+# endregion FUNC_placement_node_relative_path
+
+
 # region FUNC_firewall_placement_args
 def firewall_placement_args(node_yaml: str | pathlib.Path) -> list[str]:
     """CLI-аргументы --placement для firewall.sh из node.yaml ноды ([] при single-node).
@@ -747,6 +774,7 @@ def firewall_placement_args(node_yaml: str | pathlib.Path) -> list[str]:
     ## @invariants
     ##   - Деривация идентична deploy_orchestrator._placement_for_node:
     ##     placement.yaml = parent(node.yaml dir).parent / <context> / "placement.yaml"
+    ##     (DevPlan 16 T1.B: единый резолвер placement_node_relative_path)
     ##   - Fail-open ([]): нет context / нечитаемый node.yaml / отсутствующий файл →
     ##     флаг не добавляется; валидность переданного файла проверит load_placement
     ##     внутри firewall.py (invalid → ConfigValidationError, loud)
@@ -764,7 +792,8 @@ def firewall_placement_args(node_yaml: str | pathlib.Path) -> list[str]:
     if not context:
         logger.info("[IMP:8][firewall_placement_args][noop] no context in %s — no flag", node_yaml)
         return []
-    placement_path = pathlib.Path(node_yaml).resolve().parent.parent / context / "placement.yaml"
+    # DevPlan 16 T1.B: единый резолвер (была локальная деривация parent.parent/context)
+    placement_path = placement_node_relative_path(node_yaml, context)
     if not placement_path.is_file():
         logger.info(
             "[IMP:8][firewall_placement_args][noop] no placement.yaml at %s — single-node",

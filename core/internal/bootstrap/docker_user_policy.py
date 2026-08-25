@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: docker-user DOCKER-USER iptables FORWARD defense-in-depth bridge policy apply-idempotent -C-guard drop-last privoxy-input-rule build-firewall-rule 172.16.0.0/12 hermes-proxy docker-bridges DI runner-param DevPlan-170-W6-D2
-# STRUCTURE: ▶ ┌iptables-домен (DOCKER-USER FORWARD + privoxy INPUT)┐ → ○ desired_docker_user_rules (established+80+443+bridge-ACCEPT+DROP-last)
-#            → ○ apply_docker_user_policy (-C guard → -A add, DI run_cmd) → ○ build_firewall_rule (INPUT privoxy rule, dport из SoT)
-#            → ⎋ bool/структура; leaf-модуль — НЕ импортирует firewall (PRIVOXY_PORT передаёт вызывающий)
+# GREP_SUMMARY: docker-user DOCKER-USER iptables FORWARD defense-in-depth bridge policy apply-idempotent -C-guard drop-last peer-accept platform-du-peer verify iptables-save post-dnat data-plane privoxy-input-rule build-firewall-rule 172.16.0.0/12 hermes-proxy docker-bridges DI runner-param DevPlan-170-W6-D2 DevPlan-16-T1A
+# STRUCTURE: ▶ ┌iptables-домен (DOCKER-USER FORWARD + privoxy INPUT)┐ → ○ desired_docker_user_rules (established+80+443+bridge-ACCEPT+[peer-ACCEPT]+DROP-last)
+#            → ○ apply_docker_user_policy (-C guard → -A add, DI run_cmd, peer_rules passthrough)
+#            → ○ verify_docker_user_rules (iptables-save факт: DROP-last + peer-набор + стейл-детект)
+#            → ○ build_firewall_rule (INPUT privoxy rule, dport из SoT)
+#            → ⎋ bool/структура; leaf-модуль — НЕ импортирует firewall (peer_rules/dport передаёт вызывающий)
 # region MODULE_CONTRACT
 ## @purpose  iptables-домен платформенной firewall-политики (DevPlan 170 W6-D2, research-A §5):
 ##           DOCKER-USER FORWARD-chain defence-in-depth (DevPlan 162 W2-3) + INPUT-правило доступа
@@ -33,6 +35,9 @@
 ##            не дублирует значение, а требует его от вызывающего (порт как параметр правила).
 ## @changes  2026-08-15 | DevPlan 170 W6-D2 — создан: DOCKER-USER (firewall.py:162 W2-3) +
 ##                      build_firewall_rule (install_tor_proxy W4c T4.3) консолидированы в iptables-домен
+##           2026-08-25 | DevPlan 16 T1.A (P0-1+P1-12) — +desired_docker_user_rules(peer_rules),
+##                      +apply_docker_user_policy(peer_rules), +verify_docker_user_rules()
+##                      (peer-source data-plane через DOCKER-USER; DNAT'ed трафик мимо ufw)
 ## @see      core/internal/bootstrap/firewall.py (ufw-фасад + re-export),
 ##           core/internal/bootstrap/install_tor_proxy.py (build_firewall_rule обёртка),
 ##           core/internal/bootstrap/docker_installer.py (systemd ExecStartPost drop-in)
@@ -82,24 +87,42 @@ FIREWALL_SRC_NET: str = "172.16.0.0/12"
 ## @purpose  Чистая функция желаемой DOCKER-USER политики (DevPlan 162 W2-3) — список
 ##           iptables-аргументов БЕЗ префикса (-A/-C добавляется при применении). Порядок
 ##           критичен: ACCEPT-правила до catch-all DROP.
-## @io       ⇥ — → ⎋ list[list[str]] — established/related, 80, 443, по одному на docker-мост
-##           (DOCKER_BRIDGE_NETS), финальный DROP (итого 3 + B + 1 правил)
-## @complexity O(B) — B = число bridge-сетей
+##           DevPlan 16 T1.A (P0-1): peer_rules — DOCKER-USER ACCEPT-правила для кросс-нодового
+##           data-plane (DNAT'ed трафик PREROUTING→FORWARD→DOCKER-USER НЕ проходит ufw peer-ALLOW;
+##           без них весь data-plane молча DROPается при зелёном verify). Вставляются после
+##           bridge-ACCEPT, строго до DROP; изоляция — source=peer (никогда RFC1918-catch-all:
+##           DNAT выполняется ДО source-фильтрации → смягчение catch-all открыло бы порты всему
+##           интернету). None → список байт-в-байт идентичен легаси (обратная совместимость:
+##           systemd ExecStartPost раннего бута — placement ещё не доставлен).
+## @io       ⇥ peer_rules: list[list[str]] | None = None (готовые аргументы БЕЗ -A/-C; строит
+##           firewall.build_docker_user_peer_rules — leaf-контракт: матрица не импортируется)
+##           → ⎋ list[list[str]] — established/related, 80, 443, по одному на docker-мост
+##           (DOCKER_BRIDGE_NETS), [peer-ACCEPT...], финальный DROP
+## @complexity O(B + P) — B = bridge-сети, P = peer-правила
 ## @invariants  DROP — ВСЕГДА последний (catch-all; любое ACCEPT после него — мёртвое правило)
 ##              80/443 — публичный ingress nginx by-design (W2-2 allowlist)
 ##              established/related — ответный трафик контейнеров наружу (иначе ломается egress)
 ##              Мостовые ACCEPT — трафик между docker-сетями платформы (микросервисные связи)
+##              peer-ACCEPT — строго до DROP и после bridge-ACCEPT (порядок = семантика)
 ## @rationale  Правила как чистые аргументы (не полные команды) — тестируемость (-C/-A guard
-##             добавляется в apply); единый SoT для проверок идемпотентности.
-def desired_docker_user_rules() -> list[list[str]]:
-    """Desired DOCKER-USER iptables rules (без -A/-C префикса, DROP последним)."""
-    return [
+##             добавляется в apply); единый SoT для проверок идемпотентности. Peer-правила —
+##             параметр вызывающего (leaf: цикл docker_user_policy↔firewall недопустим,
+##             прецедент TRAP dport build_firewall_rule).
+def desired_docker_user_rules(peer_rules: list[list[str]] | None = None) -> list[list[str]]:
+    """Desired DOCKER-USER iptables rules (без -A/-C префикса, DROP последним).
+
+    DevPlan 16 T1.A: peer_rules вставляются между bridge-ACCEPT и DROP; None → легаси-список.
+    """
+    rules: list[list[str]] = [
         ["-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"],
         ["-p", "tcp", "--dport", "80", "-j", "ACCEPT"],
         ["-p", "tcp", "--dport", "443", "-j", "ACCEPT"],
         *(["-s", net, "-j", "ACCEPT"] for net in DOCKER_BRIDGE_NETS),
-        ["-j", "DROP"],
     ]
+    if peer_rules:
+        rules.extend(peer_rules)
+    rules.append(["-j", "DROP"])
+    return rules
 
 
 # endregion FUNC_desired_docker_user_rules
@@ -111,27 +134,35 @@ def desired_docker_user_rules() -> list[list[str]]:
 ##           systemd drop-in docker.service ExecStartPost (docker_installer.py) и CLI
 ##           firewall.py --apply-docker-user. ⚠️ ПРЕДУСЛОВИЕ: порт-аудит W2-2 завершён (иначе DROP
 ##           отрежет легитимный ingress) — см. TRAP[DECISION] в docker_installer.py.
-## @io       ⇥ dry: bool = False, run_cmd: Callable | None → ⎋ bool (True = политика применена/no-op)
+## @io       ⇥ dry: bool = False, run_cmd: Callable | None, peer_rules: list[list[str]] | None = None
+##           → ⎋ bool (True = политика применена/no-op)
 ## @complexity O(R) — R = число правил, каждое до 2 subprocess
 ## @invariants  -C rc==0 → правило существует → skip (идемпотентность, no-op)
 ##              -A rc!=0 → False (честный отказ: цепочка может отсутствовать без docker)
 ##              Первое правило (established/related) применяется первым — DROP не отрежет
 ##              ответный трафик в момент применения (атомарности нет, порядок минимизирует окно)
 ##              IPv6 сознательно не применяется (docker-мосты платформы IPv4-only)
-def apply_docker_user_policy(dry: bool = False, run_cmd: Callable[..., object] | None = None) -> bool:
+##              peer_rules=None → базовая политика (fallback-семантика раннего бута — placement
+##              недоступен); полный набор с пирами — пост-деплой хук оркестратора после T1.B
+def apply_docker_user_policy(
+    dry: bool = False,
+    run_cmd: Callable[..., object] | None = None,
+    peer_rules: list[list[str]] | None = None,
+) -> bool:
     """Apply DOCKER-USER ingress policy idempotently (-C guard, then -A add).
 
     DI (W-H DevPlan 163): run_cmd=None → subprocess.run (канон); тесты передают fake-канал.
+    DevPlan 16 T1.A: peer_rules — DOCKER-USER peer-ACCEPT (None → базовая политика).
     """
     if dry:
         logger.info("[IMP:7][docker-user][policy] dry-run: skip iptables (policy defined)")
         return True
-    for rule in desired_docker_user_rules():
-        check = _run_iptables_quiet(["iptables", "-C", DOCKER_USER_CHAIN, *rule], dry=dry, run_cmd=run_cmd)
+    for rule in desired_docker_user_rules(peer_rules):
+        check = run_iptables_quiet(["iptables", "-C", DOCKER_USER_CHAIN, *rule], dry=dry, run_cmd=run_cmd)
         if check == 0:
             logger.info("[IMP:8][docker-user][policy] Rule exists (no-op): -A %s %s", DOCKER_USER_CHAIN, " ".join(rule))
             continue
-        add = _run_iptables_quiet(["iptables", "-A", DOCKER_USER_CHAIN, *rule], dry=dry, run_cmd=run_cmd)
+        add = run_iptables_quiet(["iptables", "-A", DOCKER_USER_CHAIN, *rule], dry=dry, run_cmd=run_cmd)
         if add != 0:
             logger.error(
                 "[IMP:10][docker-user][policy] FAILED to add: iptables -A %s %s (rc=%s) — "
@@ -149,12 +180,17 @@ def apply_docker_user_policy(dry: bool = False, run_cmd: Callable[..., object] |
 # endregion FUNC_apply_docker_user_policy
 
 
+# rc iptables при недоступном бинаре (OSError-канон _run_iptables_quiet/run_iptables_quiet;
+# потребитель firewall.py сравнивает против константы — 0 magic-литералов, T1.A)
+IPTABLES_UNAVAILABLE_RC: int = 127
+
+
 # region FUNC_run_iptables_quiet
 ## @purpose  Обёртка subprocess для iptables (rc, graceful — никогда не raise). DI-шов для
 ##           тестов: run_cmd параметр (W-H DevPlan 163).
 ## @io       ⇥ cmd: list[str], dry: bool, run_cmd: Callable | None → ⎋ int (rc; 127 = бинарь недоступен)
 ## @complexity O(1)
-def _run_iptables_quiet(cmd: list[str], dry: bool = False, run_cmd: Callable[..., object] | None = None) -> int:
+def run_iptables_quiet(cmd: list[str], dry: bool = False, run_cmd: Callable[..., object] | None = None) -> int:
     """Run iptables command gracefully, return returncode.
 
     DI (W-H DevPlan 163): run_cmd=None → subprocess.run (канон); тесты передают fake-канал.
@@ -167,11 +203,16 @@ def _run_iptables_quiet(cmd: list[str], dry: bool = False, run_cmd: Callable[...
         result = runner(cmd, capture_output=True, text=True, check=False)
     except OSError as exc:
         logger.error("[IMP:10][docker-user] iptables not available: %s", exc)
-        return 127
+        return IPTABLES_UNAVAILABLE_RC
     return cast("int", result.returncode)  # pyright: ignore[reportAttributeAccessIssue] — DI run_cmd: Callable[..., object] (тест-fakes возвращают произвольные типы); W11-G3: каст returncode → int
 
 
 # endregion FUNC_run_iptables_quiet
+
+
+# Легаси-алиас приватного имени (внутренние вызовы модуля мигрированы на публичное;
+# тесты/внешние потребители ссылаются на run_iptables_quiet)
+_run_iptables_quiet = run_iptables_quiet
 
 
 # region FUNC_build_firewall_rule
@@ -209,3 +250,90 @@ def build_firewall_rule(
 
 
 # endregion FUNC_build_firewall_rule
+
+
+# region FUNC_verify_docker_user_rules
+## @purpose  Verify против ФАКТА (DevPlan 16 T1.A п.4, P0-1): разобрать вывод `iptables-save`,
+##           выделить правила цепочки DOCKER-USER и сверить с желаемой политикой — «зелёный»
+##           статус перестаёт лгать о data-plane. Проверки: (1) цепочка непуста; (2) DROP —
+##           последний target; (3) каждый ожидаемый peer-ACCEPT присутствует (source/dport/
+##           comment); (4) нет стейл platform-du-peer-* комментариев (пир исчез из placement →
+##           правило подлежит реконсиляции). peer_rules=None → структурные проверки 1–2 only
+##           (fallback-семантика раннего бута).
+## @io       ⇥ iptables_save_text: str (вывод iptables-save), peer_rules: list[list[str]] | None
+##           (та же форма, что desired_docker_user_rules(peer_rules=...)) → ⎋ bool
+## @complexity O(L + P) — L = строки save-вывода, P = peer-правила
+## @invariants  Парсер учитывает канонизацию iptables-save: `-s <ip>/32` (суффикс /32 у одиночных
+##              адресов) и разворот `-p tcp` в `-p tcp -m tcp`; сравнение семантическое
+##              (src, dport, comment)-кортежей, НЕ строковое.
+##              DROP после любого ACCEPT = мёртвые правила → FAIL.
+## @rationale  Отдельная чистая функция (строка на входе), а не встраивание в apply: apply
+##             сохраняет -C/-A контракт systemd ExecStartPost (существующие тесты фиксируют
+##             число вызовов); верификация факта — companion-check оркестратора/CLI.
+def verify_docker_user_rules(iptables_save_text: str, peer_rules: list[list[str]] | None = None) -> bool:
+    """Verify DOCKER-USER chain facts against desired policy (iptables-save text input)."""
+    chain_prefix = f"-A {DOCKER_USER_CHAIN} "
+    chain_rules: list[list[str]] = [
+        line.split()[2:] for line in iptables_save_text.splitlines() if line.startswith(chain_prefix)
+    ]
+    if not chain_rules:
+        logger.error(
+            "[IMP:10][docker-user][verify] DOCKER-USER пуста/отсутствует в iptables-save — "
+            "data-plane молча DROPается (docker не перечитал политику?)"
+        )
+        return False
+
+    def _target(rule_args: list[str]) -> str:
+        return rule_args[rule_args.index("-j") + 1] if "-j" in rule_args else ""
+
+    if _target(chain_rules[-1]) != "DROP":
+        logger.error(
+            "[IMP:10][docker-user][verify] DROP не последний в DOCKER-USER (%s…) — "
+            "ACCEPT после catch-all мёртвый, политика применена частично",
+            " ".join(chain_rules[-1][:6]),
+        )
+        return False
+
+    if peer_rules:
+        # Семантическое сравнение: iptables-save канонизирует аргументы (-m tcp, /32)
+        actual_peers: set[tuple[str, str, str]] = set()
+        for rule_args in chain_rules:
+            comment = ""
+            if "--comment" in rule_args:
+                comment = rule_args[rule_args.index("--comment") + 1]
+            if not comment.startswith("platform-du-peer-"):
+                continue
+            src = rule_args[rule_args.index("-s") + 1].removesuffix("/32")
+            dport = rule_args[rule_args.index("--dport") + 1]
+            actual_peers.add((src, dport, comment))
+        expected_peers: set[tuple[str, str, str]] = set()
+        for rule in peer_rules:
+            src = rule[rule.index("-s") + 1]
+            dport = rule[rule.index("--dport") + 1]
+            comment = rule[rule.index("--comment") + 1]
+            expected_peers.add((src, dport, comment))
+        missing = expected_peers - actual_peers
+        stale = actual_peers - expected_peers
+        if missing:
+            logger.error(
+                "[IMP:10][docker-user][verify] Отсутствуют peer-ACCEPT в DOCKER-USER: %s — "
+                "data-plane для этих (peer, port) недостижим (P0-1)",
+                sorted(missing),
+            )
+            return False
+        if stale:
+            logger.error(
+                "[IMP:10][docker-user][verify] СТЕЙЛ peer-ACCEPT в DOCKER-USER: %s — "
+                "пир исчез из placement, требуется реконсиляция (пере-apply полного набора)",
+                sorted(stale),
+            )
+            return False
+    logger.info(
+        "[IMP:9][docker-user][verify] DOCKER-USER verified: %d правил, DROP последний%s",
+        len(chain_rules),
+        f", peer-набор {len(peer_rules)} совпадает" if peer_rules else "",
+    )
+    return True
+
+
+# endregion FUNC_verify_docker_user_rules

@@ -46,7 +46,11 @@ from core.internal.shared.module_interface import invoke as invoke_module_interf
 from core.internal.shared.node_yaml import NodeYaml
 
 # DR-H4 fix: placement-awareness healthcheck (DevPlan 010 follow-up)
-from core.internal.shared.placement import load_placement, resolve_node_modules
+from core.internal.shared.placement import (
+    load_placement,
+    placement_node_relative_path,
+    resolve_node_modules,
+)
 from core.internal.shared.timeouts import DOCKER_CMD_TIMEOUT, HEALTHCHECK_CMD_TIMEOUT  # REF-0103
 
 logger = logging.getLogger(__name__)
@@ -319,7 +323,8 @@ def _resolve_enabled_modules() -> set[str] | None:
     except (ConfigNotFoundError, ConfigParseError, OSError):
         context = ""
     if context and node_name:
-        placement_path = Path(node_yaml).parent.parent / context / "placement.yaml"
+        # DevPlan 16 T1.B: единый резолвер (была локальная деривация parent.parent/context)
+        placement_path = placement_node_relative_path(node_yaml, context)
         try:
             placement = load_placement(placement_path)
         except (ConfigValidationError, ConfigNotFoundError, ConfigParseError) as exc:

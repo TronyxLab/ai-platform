@@ -80,6 +80,12 @@ def test_receive_deploy_atomic_staging_no_leftovers(
     (staging / "docker-compose.yml").write_text(_VALID_COMPOSE, encoding="utf-8")
     (staging / "ai-platform.yaml").write_text("name: testproj\n", encoding="utf-8")
     (staging / ".env.platform").write_text("PLATFORM_DOMAIN=example.com\n", encoding="utf-8")
+    # DevPlan 16 T1.E: unmanaged (без practices.lock) блокируется pre-deploy L1-гейтом
+    (staging / "practices.lock").write_text(
+        "version: 1\nlevel: auto\nstate: baseline\nlanguage: python\n"
+        "generator_hash: sha256:test\nmaturity:\n  age_days: 1\n  code_files: 0\n",
+        encoding="utf-8",
+    )
 
     fake_orch = MagicMock()
     fake_orch.deploy.return_value = MagicMock(

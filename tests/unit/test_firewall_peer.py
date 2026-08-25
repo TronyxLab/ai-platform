@@ -518,3 +518,249 @@ def test_build_peer_rules_s3_facade_ports(caplog: pytest.LogCaptureFixture) -> N
 
 
 # endregion TEST_08_facade_ports_s3
+
+
+# region TEST_09_docker_user_peer_rules (DevPlan 16 T1.A)
+def test_build_docker_user_peer_rules_post_dnat_ports(caplog: pytest.LogCaptureFixture) -> None:
+    # 🧪 TRAP[TEST] · SCENARIO · DevPlan 16 T1.A P0-1 · DU peer-ACCEPT матчит POST-DNAT dport
+    # · Regression: если билдер возьмёт host-порт вместо container (19000/3001), peer-ACCEPT
+    #   «в никуда» — DOCKER-USER видит post-DNAT dport (9000/3000) и data-plane молча DROPается
+    # · Scenario: s3.yaml → apps-1 → CH native --dport 9000 (host 19000!), langfuse UI 3000
+    #   (host 3001!), pgbouncer 6432; комментарий platform-du-peer-<container>-<consumer>
+    # · Last fail: аудит 15 P0-1 — DNAT'ed трафик мимо ufw, зелёный verify лгал о data-plane
+    # · Remove if: DOCKER-USER peer-семантика отменена синхронно с test_docker_user_policy.py
+    caplog.set_level(logging.DEBUG)
+
+    du_rules = firewall.build_docker_user_peer_rules(_load_fixture("s3"))
+    cmds = [" ".join(r) for r in du_rules]
+
+    # Post-DNAT: host 19000 → container 9000; host 3001 → container 3000
+    assert "-s 10.8.0.13 -p tcp --dport 9000 -j ACCEPT -m comment --comment platform-du-peer-9000-apps-1" in cmds, (
+        f"CH native обязан матчить container 9000, не host 19000: {cmds}"
+    )
+    assert any("--dport 3000" in c and "10.8.0.13" in c for c in cmds), f"langfuse UI: 3001→3000: {cmds}"
+    assert "-s 10.8.0.13 -p tcp --dport 6432 -j ACCEPT" in " ".join(cmds), "pgbouncer 6432→6432"
+    # source=peer у КАЖДОГО правила (никогда Anywhere/RFC1918)
+    assert all("-s 10.8." in c for c in cmds), f"все DU-peer правила source=peer: {cmds}"
+    # single-node no-op
+    assert firewall.build_docker_user_peer_rules(None) == []
+
+    logger.info(
+        "[IMP:9][test_build_du_peer][assert] %d DU-peer правил, post-dnat 9000/3000 подтверждены", len(du_rules)
+    )
+    assert_ldd_imp9(caplog)
+
+
+def test_peer_dnat_parity_with_publish_matrix() -> None:
+    # 🧪 TRAP[TEST] · REGRESSION · DevPlan 16 T1.A · host-порты PEER_DNAT_PAIRS == PEER_PUBLISH_PORTS
+    # · Regression: дрейф матриц (порт добавлен в публикацию без DNAT-пары) → рантайм IMP:10-skip
+    #   в build_docker_user_peer_rules и молча недостижимый data-plane
+    # · Scenario: множества host-портов двух SoT-констант совпадают посервисно
+    # · Last fail: N/A — новый кейс
+    # · Remove if: матрицы консолидированы в одну структуру
+    pub = {svc: set(ports) for svc, ports in firewall.PEER_PUBLISH_PORTS.items()}
+    dnat_hosts: dict[str, set[int]] = {}
+    for svc, pairs in firewall.PEER_DNAT_PAIRS.items():
+        dnat_hosts[svc] = {h for h, _c in pairs}
+        for _h, c in pairs:
+            assert isinstance(c, int) and 0 < c < 65536, f"container-порт невалиден: {svc}"
+    assert set(pub) <= set(dnat_hosts), f"сервис публикации без DNAT-пары: {set(pub) - set(dnat_hosts)}"
+    for svc, ports in pub.items():
+        assert dnat_hosts.get(svc) == ports, f"дрейф матриц по {svc}: publish={ports} dnat={dnat_hosts.get(svc)}"
+
+
+# endregion TEST_09_docker_user_peer_rules
+
+
+# region TEST_10_stale_peer_reconcile_self_heal (DevPlan 16 T1.A п.5 / P1-12)
+def test_collect_stale_includes_peer_ports() -> None:
+    # 🧪 TRAP[TEST] · NEGATIVE (R5) · DevPlan 16 T1.A P1-12 · стейл platform-peer-* удаляется
+    # · Last fail: аудит 15 P1-12 — collect_stale_platform_rules пропускал peer-порты целиком,
+    #   стейл копился, verify_firewall FAIL перманентно без self-heal
+    # · Scenario: статус содержит валидную пару (10.8.0.13, 6432) и стейл (10.8.0.99, 6379):
+    #   удаляется ТОЛЬКО стейл, full-spec формой `from <src>`
+    # · Remove if: реконсиляция peer-правил перенесена в иной механизм
+    status = (
+        "6432/tcp                     ALLOW IN  10.8.0.13     # platform-peer-6432-apps-1\n"
+        "6379/tcp                     ALLOW IN  10.8.0.99     # platform-peer-6379-gone\n"
+    )
+    desired = {("10.8.0.13", 6432)}
+    deletes = firewall.collect_stale_peer_rules(status, desired)
+    assert deletes == [["ufw", "delete", "allow", "from", "10.8.0.99", "to", "any", "port", "6379/tcp"]], deletes
+    # Валидная пара сохраняется при повторном прогоне (идемпотентность)
+    assert firewall.collect_stale_peer_rules("6432/tcp ALLOW IN 10.8.0.13 # platform-peer-6432-apps-1\n", desired) == []
+
+
+def test_verify_firewall_expected_peer_absence_fails() -> None:
+    # 🧪 TRAP[TEST] · NEGATIVE (R5) · DevPlan 16 T1.A п.4 · отсутствие ожидаемого peer-ALLOW = FAIL
+    # · Last fail: аудит 15 P0-1/P1-12 — verify был зелёным при отсутствующих peer-правилах
+    # · Scenario: expected={(10.8.0.13, 6432)}, в статусе порта нет → FAIL; правило появилось → PASS
+    # · Remove if: absence-детект встроен иначе
+    status_no_peer = (
+        "Status: active\n"
+        + "".join(f"{p}/tcp                     ALLOW IN  Anywhere\n" for p in (22, 80, 443))
+        + "5432/tcp                     DENY IN   Anywhere\n"
+    )
+    expected = {("10.8.0.13", 6432)}
+    assert (
+        firewall.verify_firewall(
+            status_no_peer, zabbix_monitoring=False, peer_ips={"10.8.0.13"}, expected_peer_allows=expected
+        )
+        is False
+    ), "отсутствующий peer-ALLOW обязан ронять verify (data-plane недостижим)"
+    status_with_peer = (
+        status_no_peer + "6432/tcp                     ALLOW IN  10.8.0.13     # platform-peer-6432-apps-1\n"
+    )
+    assert (
+        firewall.verify_firewall(
+            status_with_peer, zabbix_monitoring=False, peer_ips={"10.8.0.13"}, expected_peer_allows=expected
+        )
+        is True
+    )
+
+
+# endregion TEST_10_stale_peer_reconcile_self_heal
+
+
+# region TEST_11_run_docker_user_convergence (DevPlan 16 T1.A п.3-4)
+def _scripted_runner(responses: dict[str, object]):
+    """Fake runner: rc по подстроке команды; stdout из responses (подстрока → значение)."""
+
+    class _R:
+        def __init__(self, rc: int, out: str = "") -> None:
+            self.returncode = rc
+            self.stdout = out
+            self.stderr = ""
+
+    def fake(cmd, **kwargs):
+        joined = " ".join(str(x) for x in cmd)
+        for needle, spec in responses.items():
+            if needle in joined:
+                if isinstance(spec, tuple):
+                    return _R(spec[0], spec[1])
+                return _R(int(spec))
+        return _R(0)
+
+    return fake
+
+
+# 🧪 TRAP[TEST] · SCENARIO · DevPlan 16 T1.A п.3 · run() с placement конвергирует DOCKER-USER
+# · Scenario: scripted runner — ufw ok, iptables -L rc0, -C rc1/-A rc0, iptables-save содержит
+#   peer-line → run() True; verify факта прошёл (зелёный статус = живой data-plane)
+# · Last fail: аудит 15 P0-1 — зелёный verify при мёртвом DU data-plane
+# · Remove if: DU-конвергенция переезжает в отдельный пост-деплой verb
+def test_run_converges_docker_user_with_peers(caplog, monkeypatch) -> None:
+    caplog.set_level(logging.DEBUG)
+    placement = _load_fixture("s3")
+    du_rules = firewall.build_docker_user_peer_rules(placement)
+
+    def _save_line(rule: list[str]) -> str:
+        """Канонизация аргументной формы в формат iptables-save (/32, -m tcp)."""
+        args = list(rule)
+        i = args.index("-s")
+        src = args[i + 1]
+        if "/" not in src:
+            src += "/32"
+        args[i + 1] = src
+        j = args.index("-p", i)
+        args.insert(j + 1, "-m")
+        args.insert(j + 2, "tcp")
+        return "-A DOCKER-USER " + " ".join(args)
+
+    base_lines = [
+        "-A DOCKER-USER -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT",
+        "-A DOCKER-USER -p tcp -m tcp --dport 80 -j ACCEPT",
+        "-A DOCKER-USER -p tcp -m tcp --dport 443 -j ACCEPT",
+        "-A DOCKER-USER -s 172.16.0.0/12 -j ACCEPT",
+        "-A DOCKER-USER -s 10.32.0.0/16 -j ACCEPT",
+    ]
+    peer_lines = [_save_line(r) for r in du_rules]
+    save_text = (
+        "*filter\n:DOCKER-USER - [0:0]\n" + "\n".join(base_lines + peer_lines) + "\n-A DOCKER-USER -j DROP\nCOMMIT\n"
+    )
+    peer_line = peer_lines[0]
+    # ufw-статус тоже обязан нести фактические peer-ALLOW (verify_firewall
+    # expected_peer_allows — DevPlan 16 T1.A п.4)
+    ufw_lines = [
+        "Status: active",
+        "22/tcp                     ALLOW IN  Anywhere",
+        "80/tcp                     ALLOW IN  Anywhere",
+        "443/tcp                     ALLOW IN  Anywhere",
+        "5432/tcp                   DENY IN   Anywhere",
+        "10050/tcp                  ALLOW IN  92.53.116.12  # platform-zabbix",
+    ]
+    for cmd in firewall.build_peer_rules(placement):
+        host, port = cmd[3], int(cmd[7].removesuffix("/tcp"))
+        ufw_lines.append(
+            f"{port}/tcp                     ALLOW IN  {host}     # platform-peer-{port}-{cmd[8].split('-', 2)[-1]}"
+        )
+    fake = _scripted_runner({
+        "iptables -w -L": 0,
+        "iptables-save": (0, save_text),
+    })
+    ufw_status_text = "\n".join(ufw_lines) + "\n"
+
+    # ufw status вызывается напрямую через subprocess.run (не DI) — патчим точечно
+    class _StatusRunner:
+        def __call__(self, cmd, **_kwargs):
+            if cmd[:2] == ["ufw", "status"]:
+                return type("R", (), {"returncode": 0, "stdout": ufw_status_text, "stderr": ""})()
+            return fake(cmd)
+
+    monkeypatch.setattr(firewall.subprocess, "run", _StatusRunner())
+    result = firewall.run([], placement_path=str(_FIXTURES_DIR / "s3.yaml"), run_cmd=fake)
+    assert result is True, "конвергенция DU с корректным фактом обязана давать True"
+
+    # R5-negative: факт БЕЗ peer-line (правила не применились) → run() False
+    save_stale = save_text.replace(peer_line + "\n", "")
+    fake_bad = _scripted_runner({
+        "iptables -w -L": 0,
+        "iptables-save": (0, save_stale),
+        "ufw status": (0, "Status: active\n"),
+    })
+    assert firewall.run([], placement_path=str(_FIXTURES_DIR / "s3.yaml"), run_cmd=fake_bad) is False, (
+        "verify факта обязан ронять run() при отсутствии peer-ACCEPT в DOCKER-USER"
+    )
+    logger.info("[IMP:9][run-du-converge][assert] apply+verify факта: green=живой data-plane")
+
+
+# endregion TEST_11_run_docker_user_convergence
+
+
+# region TEST_12_minio_obs_scrape_scenario (DevPlan 16 T2.A п.4 / P1-13)
+# 🧪 TRAP[TEST] · SCENARIO · DevPlan 16 T2.A P1-13 · выделенная obs-нода получает minio peer-rule
+# · Last fail: аудит 15 P1-13 — CONSUMER_OF[minio] без monitoring: obs-нода БЕЗ nginx/langfuse
+#   не получала peer-правило 9000 → job minio down в S3-топологии 010 (клейм «Наблюдаемость ✅»)
+# · Scenario: топология data + obs (только monitoring, ни nginx ни langfuse) → ufw allow from
+#   <obs-ip> to 9000/tcp; при этом litellm-фасад НЕ открывается к obs (нет потребителя)
+# · Remove if: minio-scrape потребитель выражен иначе (module.yaml-граф вместо эвристики)
+def test_minio_peer_rule_for_dedicated_obs_node(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.DEBUG)
+    placement_yaml = tmp_path / "placement.yaml"
+    placement_yaml.write_text(
+        "context: obs-t2a\nvpn_enforced: true\n"
+        "nodes:\n  - {name: data-1, host: 10.8.0.11}\n"
+        "  - {name: obs-1, host: 10.9.0.30}\n"
+        "modules:\n"
+        "  minio: {node: data-1}\n"
+        "  monitoring: {node: obs-1}\n"
+        "  log-collector: {mode: all-nodes}\n",
+        encoding="utf-8",
+    )
+    placement = load_placement(placement_yaml)
+    assert placement is not None
+
+    rules = firewall.build_peer_rules(placement)
+    cmds = _rules_cmds(rules)
+
+    assert "ufw allow from 10.9.0.30 to any port 9000/tcp comment platform-peer-9000-obs-1" in cmds, (
+        f"obs-нода (monitoring) обязана получить peer-правило minio-scrape: {cmds}"
+    )
+    # Негатив: фасад litellm не открывается к obs (нет nginx/проектов на ней)
+    assert not any("4000/tcp" in c and "10.9.0.30" in c for c in cmds), cmds
+
+    logger.info("[IMP:9][minio-obs][assert] minio→obs peer-rule есть, лишних открытий нет")
+    assert_ldd_imp9(caplog)
+
+
+# endregion TEST_12_minio_obs_scrape_scenario

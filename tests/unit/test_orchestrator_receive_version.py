@@ -71,10 +71,16 @@ def _make_tar(tmp_path, project: str = "testproj", include_version_field: bool =
     if include_version_field:
         yaml_content += "version: from-yaml\n"
     (proj_dir / "ai-platform.yaml").write_text(yaml_content)
+    # DevPlan 16 T1.E: unmanaged (без practices.lock) блокируется pre-deploy L1-гейтом —
+    # фиксируем валидный lock в payload (тесты про version/chain, не про practices)
+    (proj_dir / "practices.lock").write_text(
+        "version: 1\nlevel: auto\nstate: baseline\nlanguage: python\n"
+        "generator_hash: sha256:test\nmaturity:\n  age_days: 1\n  code_files: 0\n"
+    )
 
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tar:
-        for fname in ("docker-compose.yml", "ai-platform.yaml"):
+        for fname in ("docker-compose.yml", "ai-platform.yaml", "practices.lock"):
             tar.add(proj_dir / fname, arcname=fname)
     return buf.getvalue()
 
