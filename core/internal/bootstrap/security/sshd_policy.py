@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: security-posture S4 sshd sshd-T maxstartups hardening drop-in apply-sshd parse_sshd_effective_config classify-directive MACs KexAlgorithms AllowUsers kbd-interactive challenge-response MaxAuthTries cloud-init neutralize REF-0016
 # STRUCTURE: ▶ parse_sshd_effective_config(sshd -T) → dict[key]=value ┌базовые 3 директивы + maxstartups + 12 расширенных┐ → ○ _classify_directive (5 форм) → ○ problems → ⎋ CheckResult ┤
-#            ○ apply_sshd_dropin: content-match no-op → ⚡ atomic write + remove superseded + neutralize *cloud* vendor drop-ins → ○ systemctl reload → fallback service → ⎋ bool
+#            ○ apply_sshd_dropin: content-match no-op → ⚡ atomic write + remove superseded + neutralize weakening *.conf vendor drop-ins (content-based) → ○ systemctl reload → fallback service → ⎋ bool
 # region MODULE_CONTRACT
 ## @purpose  S4: SSH-поверхность ноды (DevPlan 134 L2, W3/W10/162 W2-1, REF-0016). Проверка эффективного
 ##           конфига через sshd -T (PermitRootLogin/PasswordAuthentication/PubkeyAuthentication +
@@ -28,7 +28,7 @@
 ## @changes 2026-08-15 | план 170 W6-D1 — извлечено из security_posture.py (S4 + apply, 1:1 тела);
 ##            check_sshd CC29 → parse_sshd_effective_config + _classify_directive + _check_maxstartups
 ## @changes 2026-08-24 | REF-0016 (Волна 0) — +KbdInteractiveAuthentication no +ChallengeResponseAuthentication no
-##            (+MaxAuthTries 3) в drop-in и _SSHD_EXTRA_DIRECTIVES; нейтрализация *cloud* sshd_config.d
+##            (+MaxAuthTries 3) в drop-in и _SSHD_EXTRA_DIRECTIVES; нейтрализация weakening *.conf vendor drop-in'ов sshd_config.d (content-based, R10)
 ##            (glob вместо точечного 50-cloud-init.conf); rename-fail vendor drop-in → apply False (не WARN)
 # endregion MODULE_CONTRACT
 
@@ -84,12 +84,17 @@ SSHD_MAXAUTHTRIES_MAX = 3
 # Vendor/cloud drop-ins (50-cloud-init.conf, 60-cloudimg-settings.conf, …) сортируются раньше
 # 99-platform-* → их ослабляющие директивы ПОБЕЖДАЮТ (sshd Include: первое значение выигрывает).
 # Нейтрализация: rename <file> → <file>.disabled (Include *.conf не матчит .disabled — обратимо).
-_CLOUD_DROPIN_GLOB = "*cloud*"
+# QA R10/T2.E (DevPlan 14): имя файла перестаёт быть сигналом — сканируются ВСЕ *.conf
+# (кроме self-hardening и *.disabled), ослабление детектируется КОНТЕНТНО и case-insensitively
+# (vendor drop-in «60-custom.conf» с PasswordAuthentication yes больше не проходит мимо).
 _CLOUD_DISABLED_SUFFIX = ".disabled"
-# Ослабляющие значения key-only политики в vendor drop-in (yes / without-password).
+_WEAKEN_CONF_GLOB = "*.conf"
+# Ослабляющие значения key-only политики в vendor drop-in (yes / without-password);
+# IGNORECASE — ловит «passwordauthentication yes» / «PermitRootLogin Without-Password».
 _CLOUD_WEAKEN_RE = re.compile(
     r"(?m)^(PasswordAuthentication|PermitRootLogin|KbdInteractiveAuthentication"
-    r"|ChallengeResponseAuthentication)\s+(yes|without-password)\b"
+    r"|ChallengeResponseAuthentication)\s+(yes|without-password)\b",
+    re.IGNORECASE,
 )
 
 # ── S4 (W10 T10.4): расширенные sshd-директивы (проверяемы через sshd -T) ──
@@ -446,24 +451,27 @@ def _reload_sshd(
 
 
 # region FUNC__neutralize_cloud_dropins
-## @purpose  Нейтрализация vendor/cloud drop-in'ов в sshd_config.d (REF-0016): любой файл,
-##           матчащий *cloud* glob, с ослабляющей директивой (_CLOUD_WEAKEN_RE) переименовывается
-##           в *.disabled — Include *.conf его больше не читает. Обратимо, cloud-init повторно
-##           не пишет. v1.0.1 TRAP[BUG]: Ubuntu 50-cloud-init.conf с «PasswordAuthentication yes»
-##           побеждал hardening drop-in по порядку Include.
+## @purpose  Нейтрализация vendor drop-in'ов в sshd_config.d (REF-0016 + QA R10/T2.E):
+##           ЛЮБОЙ conf-файл каталога (кроме self-hardening и disabled-суффикса) с
+##           ослабляющей директивой (детектор WEAKEN, case-insensitive) переименовывается
+##           с суффиксом .disabled — Include *.conf его больше не читает. Обратимо,
+##           cloud-init повторно не пишет. Имя файла НЕ является сигналом (v1.0.1
+##           TRAP[BUG]: Ubuntu 50-cloud-init.conf с PasswordAuthentication yes побеждал
+##           hardening drop-in по порядку Include; R10: произвольное имя 60-custom.conf
+##           проходило мимо прежнего cloud-glob).
 ## @io       ⇥ config_dir: Path (каталог sshd_config.d), active_dropin: Path (сам hardening —
 ##              self-delete guard) → ⎋ tuple[bool, bool] (neutralized_any, failed_any)
-## @complexity O(F) — F файлов в каталоге
+## @complexity O(F * L) — F файлов каталога × L строк контента
 ## @invariants  Уже-.disabled файлы пропускаются (идемпотентность)
 ##              Файлы без ослабляющих директив НЕ трогаются (доброкачественный vendor-контент)
 ##              rename-fail → failed_any=True (вызывающий обязан вернуть False — fail-fast:
 ##              активный ослабляющий drop-in делает key-only политику недостоверной)
 def _neutralize_cloud_dropins(config_dir: Path, active_dropin: Path) -> tuple[bool, bool]:
-    """Rename weakening *cloud* vendor drop-ins to .disabled; returns (neutralized_any, failed_any)."""
+    """Rename weakening conf vendor drop-ins to disabled-suffix; returns (neutralized_any, failed_any)."""
     neutralized_any = False
     failed_any = False
     try:
-        candidates = sorted(config_dir.glob(_CLOUD_DROPIN_GLOB))
+        candidates = sorted(config_dir.glob(_WEAKEN_CONF_GLOB))
     except OSError:
         return False, False
     for cloud_dropin in candidates:
@@ -511,7 +519,7 @@ def _neutralize_cloud_dropins(config_dir: Path, active_dropin: Path) -> tuple[bo
 ##              (systemctl → service fallback)
 ##              Запись удалась, но reload не удался → False (конфиг не активен — честный отказ)
 ##              superseded.resolve() != path.resolve() — защита от self-delete при коллизии путей
-##              REF-0016: *cloud* vendor drop-in с ослабляющей директивой нейтрализуется
+##              REF-0016/R10: vendor drop-in (*.conf, content-based) с ослабляющей директивой нейтрализуется
 ##              (rename → .disabled); rename-fail → False (fail-fast, не WARN — активный
 ##              vendor drop-in делает key-only политику недостоверной)
 ## @rationale  apply в sshd_policy (не в phases/system.py): sshd-политика живёт в одном
@@ -532,7 +540,7 @@ def apply_sshd_dropin(
     DI (W-H DevPlan 163): hardening_dropin/superseded_dropin/sshd_config_dir/probe_fn/write_fn —
     None → канонические SSHD_HARDENING_DROPIN/SSHD_MAXSTARTUPS_DROPIN/<drop-in parent>/_probe/
     atomic_write_text; тесты передают tmp_path/fake-каналы (0 патчей модульных констант/функций).
-    REF-0016: sshd_config_dir — каталог нейтрализации *cloud* vendor drop-ins (default: каталог
+    REF-0016: sshd_config_dir — каталог нейтрализации weakening *.conf vendor drop-ins (default: каталог
     самого hardening drop-in — на ноде это /etc/ssh/sshd_config.d).
     """
     dropin_path = SSHD_HARDENING_DROPIN if hardening_dropin is None else hardening_dropin
@@ -558,7 +566,7 @@ def apply_sshd_dropin(
             )
         except OSError as e:
             logger.warning("[IMP:8][posture][sshd-hardening] Cannot remove superseded %s: %s", superseded, e)
-    # v1.0.1 TRAP[BUG] (Фаза 6, tronyx-vps) + REF-0016: нейтрализация ЛЮБОГО *cloud* vendor
+    # v1.0.1 TRAP[BUG] (Фаза 6, tronyx-vps) + REF-0016: нейтрализация ЛЮБОГО weakening *.conf vendor (content-based, case-insensitive — QA R10/T2.E)
     # drop-in с ослабляющей директивой (механика — _neutralize_cloud_dropins). rename-fail
     # БОЛЬШЕ НЕ тихий WARN → apply False (blocking через φ1 check=True): активный vendor
     # drop-in с PasswordAuthentication yes = «root только по ключу» — ложь без сигнала.
@@ -566,7 +574,7 @@ def apply_sshd_dropin(
     cloud_neutralized, neutralize_failed = _neutralize_cloud_dropins(config_dir_path, path)
     if neutralize_failed:
         logger.error(
-            "[IMP:10][posture][sshd-hardening] Vendor *cloud* drop-in left ACTIVE with weakening directive — "
+            "[IMP:10][posture][sshd-hardening] Vendor *.conf drop-in left ACTIVE with weakening directive — "
             "key-only policy NOT guaranteed; fail-fast (REF-0016)"
         )
         return False

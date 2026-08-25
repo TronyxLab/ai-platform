@@ -657,3 +657,66 @@ def test_ensure_journald_persistent_replaces_active_value(journald_conf: Path, c
 
 
 # endregion W1_CRON_HELPERS_IDEMPOTENCY
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region QA_R4_T2D_WATCHDOG
+# QA R4/T2.D (DevPlan 14): watchdog — OSError re-save не блокирует батч
+# ═══════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · 2026-08-25 · NEGATIVE (R5) · QA R4/T2.D — OSError re-save изолирован
+# · Scenario: save_state падает OSError при re-save ПОСЛЕ первого успешного restart — прежний
+#   код делал return немедленно: второй контейнер НЕ рестартился (самолечение стояло до
+#   следующего cron-прохода), штамп первого терялся вместе с продолжением
+# · Last fail: 2026-08-25 (REGRESSIONS.md R4) — `except OSError: return` в двух местах
+# · Remove if: state-commit станет транзакционным с полным батчем (иная семантика отказа)
+def test_resave_oserror_does_not_block_batch(state_file: Path, caplog, monkeypatch: pytest.MonkeyPatch) -> None:
+    """OSError на первом re-save → оба restart'а исполнены; exit 1; IMP:10."""
+    caplog.set_level(logging.INFO)
+    ts = 100.0 + 10 * 60 + 1
+    state_file.write_text(
+        json.dumps({"unhealthy_since": {"redis": 100.0, "nginx": 100.0}, "last_restart": {}}),
+        encoding="utf-8",
+    )
+    containers = [
+        _inspect_json("redis", "unhealthy", restart_count=1),
+        _inspect_json("nginx", "unhealthy", restart_count=1),
+    ]
+
+    fake = FakeDocker(containers)
+
+    # save_state падает на ПЕРВОМ re-save внутри _execute_restarts (вызов №2: №1 —
+    # начальный observational-save в run_watchdog), дальше — реальная запись
+    real_save = watchdog.save_state
+    calls: list[int] = []
+
+    def flaky_save(path: str, data: object) -> None:
+        calls.append(1)
+        if len(calls) == 2:
+            err = OSError("disk full (simulated)")
+            raise err
+        real_save(path, data)
+
+    monkeypatch.setattr(watchdog, "save_state", flaky_save)
+
+    exit_code = watchdog.run_watchdog(
+        dry_run=False,
+        state_file=str(state_file),
+        now=ts,
+        facts=FakeFacts(docker_path="/usr/bin/docker"),
+        run_cmd=fake,
+    )
+
+    assert sorted(fake.restart_calls) == ["0", "1"], (
+        f"R4 FAIL: сбой re-save первого не должен останавливать батч, restarts={fake.restart_calls}"
+    )
+    assert exit_code == 1, f"сбой re-save обязан давать exit 1, получен {exit_code}"
+    imp10 = [r for r in caplog.records if "[IMP:10][watchdog][state]" in r.message]
+    assert imp10 and any("remaining actions continue" in r.message for r in imp10), (
+        f"ожидается IMP:10 изоляции: {[r.message for r in imp10]}"
+    )
+    logger.info("[IMP:9][test_watchdog][T2.D] OSError re-save isolated: batch continued, exit 1")
+
+
+# endregion QA_R4_T2D_WATCHDOG

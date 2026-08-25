@@ -68,11 +68,13 @@ logger = logging.getLogger(__name__)
 ## ·   каждому контейнеру проекта; module name == compose project name).
 ## · Prevention: test_reconciler_r9_runtime.py::test_r9_detects_module_by_compose_project_label
 ## @param module_name  Module name (= compose project name)
-## @return  List of container names of the module's compose project (включая не-running)
+## @return  list[str] контейнеров проекта (включая не-running) | None = docker ps rc≠0
+##          (QA R4/T2.D: None ≠ [] — пустой список при успехе ps значит «проекта нет на ноде»,
+##          None значит «runtime-факт недоказуем»; caller обязан различать)
 _COOLDOWN_RUNS: int = 3  # глобальный cooldown: heal в последних 3 прогонах
 
 
-def resolve_container_name(module_name: str) -> list[str]:
+def resolve_container_name(module_name: str) -> list[str] | None:
     """Resolve container names for a module via docker ps -a --filter label (compose project)."""
     # W1: docker ps -a — shared/docker_ops (non-fatal); all=True: Exited/Created/restarting видимы (B22);
     # REF-0014: label=com.docker.compose.project=<module> — точная детекция проекта вместо substring
@@ -83,8 +85,12 @@ def resolve_container_name(module_name: str) -> list[str]:
         all=True,
     )
     if ps_r.returncode != 0:
-        logger.warning("[IMP:8][resolve_container_name] docker ps failed for module %s", module_name)
-        return []
+        # QA R4/T2.D: rc≠0 → runtime UNVERIFIED (None), а не ложное «проекта нет» ([]):
+        # прежнее [] схлопывалось в converged при транзиентном сбое docker ps.
+        logger.warning(
+            "[IMP:9][resolve_container_name] docker ps failed for module %s — runtime UNVERIFIED", module_name
+        )
+        return None
     containers = [c.strip() for c in ps_r.stdout.splitlines() if c.strip()]
     logger.info("[IMP:7][resolve_container_name] Module %s → containers: %s", module_name, containers)
     return containers
@@ -183,6 +189,45 @@ def save_cooldown(data: CooldownData, cooldown_file: str | None = None) -> None:
 # endregion FUNC_save_cooldown
 
 
+# region FUNC__count_unlabeled_containers
+## @purpose  QA R4/T2.D legacy-guard: однократный за прогон допрос всех контейнеров ноды
+##           с label-колонкой — подсчёт контейнеров БЕЗ compose-label (R9 их не видит).
+## @io       ⇥ cache: dict-состояние прогона ("scanned"/"count"), unit → ⎋ int (unlabeled)
+## @invariants  Один docker ps -a на прогон (кэш в cache-dict); rc≠0 → 0 (диагностика
+##              не должна маскировать основной UNVERIFIED-канал); найденные unlabeled →
+##              report-warn + set_exit(1) — «FULLY CONVERGED» при невидимых контейнерах ложь.
+def _count_unlabeled_containers(cache: dict[str, object], unit: str) -> int:
+    """Count containers without compose-label (one diagnostic query per run)."""
+    if cache.get("scanned"):
+        return cast(int, cache.get("count", 0))
+    cache["scanned"] = True
+    cache["count"] = 0
+    diag_r = docker_ops.docker_ps(
+        filters=[],
+        format='{{.Names}}\t{{.Label "com.docker.compose.project"}}',
+        timeout=DOCKER_TIMEOUT,
+        all=True,
+    )
+    if diag_r.returncode != 0:
+        return 0
+    rows = [line for line in diag_r.stdout.splitlines() if line.strip()]
+    unlabeled = sum(1 for line in rows if not line.rsplit("\t", 1)[-1].strip())
+    cache["count"] = unlabeled
+    if unlabeled:
+        logger.warning(
+            "[IMP:9][converge][%s] %d container(s) WITHOUT compose-label on node — "
+            "R9 cannot see them (label-filtered detection)",
+            unit,
+            unlabeled,
+        )
+        report_add(unit, "warn", f"{unlabeled} container(s) without compose-label, R9 cannot see them")
+        set_exit(1)
+    return unlabeled
+
+
+# endregion FUNC__count_unlabeled_containers
+
+
 # region FUNC_reconcile_runtime_state
 ## @purpose  Reconcile Docker container runtime state. For each docker module,
 ##           inspect container state. If state is bad (exited, restarting, dead,
@@ -205,9 +250,11 @@ def save_cooldown(data: CooldownData, cooldown_file: str | None = None) -> None:
 def reconcile_runtime_state(
     node_yaml_path: str,
     modules_dir: str,
+    cooldown_file: str | None = None,
+    *,
+    # QA-гигиена (T2.D-волна): булевы параметры — kw-only (FBT001/FBT002)
     dry_run: bool = False,
     report_only: bool = False,
-    cooldown_file: str | None = None,
 ) -> dict[str, str]:
     """Reconcile Docker container runtime state — self-heal via compose up -d.
 
@@ -268,6 +315,10 @@ def reconcile_runtime_state(
     modules_dir_path = Path(modules_dir)
     healed = 0
     errors = 0
+    # QA R4/T2.D: счётчик недоказанных runtime-фактов (docker ps rc≠0) — WARN-класс,
+    # exit 2 зарезервирован за доказанным провалом heal.
+    ps_unverified = 0
+    unlabeled_cache: dict[str, object] = {}
 
     for mod in modules:
         # W11: parse_node_modules_yaml → dict[str, object] — каст строкового поля
@@ -289,8 +340,30 @@ def reconcile_runtime_state(
 
         # Get container names for this module
         containers = resolve_container_name(mod_name)
+        if containers is None:
+            # QA R4/T2.D: ps rc≠0 → runtime UNVERIFIED — НЕ converged, но и не fail
+            # (exit 2 = доказанный провал heal); WARN + exit 1.
+            logger.error(
+                "[IMP:9][converge][%s] Runtime UNVERIFIED for module %s (docker ps failed) "
+                "— status will not be converged",
+                unit,
+                mod_name,
+            )
+            report_add(unit, "warn", f"{mod_name}: runtime UNVERIFIED (docker ps failed)")
+            ps_unverified += 1
+            set_exit(1)
+            continue
         if not containers:
-            logger.info("[IMP:7][converge][%s] No running containers for module %s", unit, mod_name)
+            # QA R4/T2.D legacy-guard: rc==0, но 0 рядов — однократный допрос всех
+            # контейнеров ноды: строки с пустым compose-label R9 не видит → warn;
+            # действительно пустая нода (0 строк) остаётся зелёной.
+            unlabeled_count = _count_unlabeled_containers(unlabeled_cache, unit)
+            if unlabeled_count:
+                logger.info(
+                    "[IMP:8][converge][%s] Module %s → 0 labeled containers (unlabeled present)", unit, mod_name
+                )
+            else:
+                logger.info("[IMP:7][converge][%s] No running containers for module %s", unit, mod_name)
             continue
 
         needs_heal = False
@@ -359,17 +432,29 @@ def reconcile_runtime_state(
     save_cooldown(cooldown, cooldown_file=cooldown_file)
 
     # ── Final report ──
-    if healed > 0:
-        status = "mutated"
-        detail = f"{healed} module(s) healed via compose up -d"
-    elif errors > 0:
+    # QA R4/T2.D: приоритет агрегата — errors(fail) > ps_unverified(warn) > healed(mutated)
+    # > converged. UNVERIFIED НИКОГДА не схлопывается в converged: транзиентный сбой docker ps
+    # после успешного docker_info не даёт ложного «FULLY CONVERGED».
+    if errors > 0:
         status = "fail"
         detail = f"{errors} module(s) had errors"
+    elif ps_unverified > 0:
+        status = "warn"
+        detail = f"{ps_unverified} module(s) runtime UNVERIFIED (docker ps failed)"
+    elif healed > 0:
+        status = "mutated"
+        detail = f"{healed} module(s) healed via compose up -d"
     else:
         status = "converged"
         detail = "All containers running"
 
-    logger.info("[IMP:9][converge][%s] DONE: healed=%d errors=%d", unit, healed, errors)
+    logger.info(
+        "[IMP:9][converge][%s] DONE: healed=%d errors=%d ps_unverified=%d",
+        unit,
+        healed,
+        errors,
+        ps_unverified,
+    )
     return {"unit": unit, "status": status, "detail": detail}
 
 

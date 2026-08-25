@@ -303,5 +303,93 @@ def test_hash_apr1_real_openssl_smoke(caplog: pytest.LogCaptureFixture) -> None:
 # endregion FUNC_test_hash_apr1_real_openssl_smoke
 
 
+# ═══════════════════════════════════════════════════════════════════
+# QA R1 (DevPlan 14 T2.A): _persist_new_vars — secure atomic persist
+# ═══════════════════════════════════════════════════════════════════
+
+
+# region FUNC_test_persist_new_vars_secure_atomic
+# 🧪 TRAP[TEST] · 2026-08-25 · NEGATIVE (R5) · QA R1/T2.A — .env.tmp chmod-after устранён
+# · Scenario: фиксированный secrets.env.tmp + open("w") + chmod ПОСЛЕ записи: (а) окно
+#   world-readable при umask 000/crash между open и chmod; (б) фиксированное имя —
+#   symlink-target риск; (в) legacy st_mode наследовался (loose-файл оставался loose)
+# · Last fail: 2026-08-25 (secrets_manager.py:_persist_new_vars) — единственный писатель
+#   секретов вне канона atomic_write после REF-0007
+# · Remove if: персист autogen-наборов мигрирует на иной механизм записи
+@ldd_trajectory
+def test_persist_new_vars_secure_atomic(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """persist_new_vars: 0600 ДО записи (replace-time), без symlink-follow, legacy tightening."""
+    caplog.set_level(logging.DEBUG)
+    from core.internal.shared import atomic_writer as aw
+
+    observed_modes: list[int] = []
+    real_replace = aw.os.replace
+
+    def tracking_replace(src: str, dst: str) -> None:
+        observed_modes.append(Path(src).stat().st_mode & 0o777)
+        real_replace(src, dst)
+
+    monkeypatch.setattr(aw.os, "replace", tracking_replace)
+
+    # Сценарий A: legacy-loose существующий файл (0644) — обязан ЗАТЯНУТЬСЯ до 0600,
+    # а не наследовать st_mode (дизайн T2.A: «legacy st_mode НЕ наследовать»)
+    secrets_env = tmp_path / "secrets.env"
+    secrets_env.write_text("OPERATOR_VAR=keep-me\n", encoding="utf-8")
+    secrets_env.chmod(0o644)
+
+    # Сценарий B: предсозданный symlink на целевой файл (валидный env-контент — strict
+    # preflight проходит) — os.replace атомарно подменяет сам путь (symlink исчезает),
+    # значение НЕ уходит в цель symlink'а
+    victim = tmp_path / "victim.txt"
+    victim.write_text("VICTIM_VAR=do-not-leak\n", encoding="utf-8")
+    symlink_target = tmp_path / "secrets-symlink.env"
+    symlink_target.symlink_to(victim)
+
+    for scenario, target in (("legacy-tighten", secrets_env), ("symlink-replace", symlink_target)):
+        observed_modes.clear()
+        sm._persist_new_vars(
+            f"T2.A-{scenario}",
+            {"NEW_AUTOGEN": "generated-value"},
+            sm.source_secrets_env,
+            str(target),
+        )
+        mode = target.stat().st_mode & 0o777
+        content = target.read_text(encoding="utf-8")
+        logger.info(
+            "[IMP:9][test][persist-new-vars] scenario=%s mode=0%03o replace_observed=%s",
+            scenario,
+            mode,
+            bool(observed_modes),
+        )
+        assert observed_modes == [0o600], (
+            f"R1 FAIL ({scenario}): temp at replace time = {[oct(m) for m in observed_modes]} "
+            "— writer не через atomic_write или осталось окно"
+        )
+        assert mode == 0o600, f"R1 FAIL ({scenario}): final mode 0{mode:o}, expected 0600 (tightening)"
+        assert "NEW_AUTOGEN=generated-value" in content
+        assert not target.is_symlink(), f"R1 FAIL ({scenario}): путь остался symlink — replace пошёл по ссылке"
+        # Остатков .env.tmp быть не должно (фиксированное имя устранено)
+        leftovers = list(tmp_path.glob("*.env.tmp"))
+        assert not leftovers, f"R1 FAIL ({scenario}): фиксированный .env.tmp остался: {leftovers}"
+    # Symlink-сценарий: жертва НЕ перезаписана значением секрета
+    assert "NEW_AUTOGEN" not in victim.read_text(encoding="utf-8"), "R1 FAIL: значение утекло в symlink-target"
+
+    # R5-пара: strict pre-flight — garbage-файл → ConfigValidationError, байты нетронуты
+    garbage = tmp_path / "garbage.env"
+    original = "GOOD=1\nbroken garbage line\n"
+    garbage.write_text(original, encoding="utf-8")
+    with pytest.raises(sm.ConfigValidationError):
+        sm._persist_new_vars("T2.A-garbage", {"X": "y"}, sm.source_secrets_env, str(garbage))
+    assert garbage.read_text(encoding="utf-8") == original, "R5 FAIL: pre-flight обязан быть read-only"
+    logger.info("[IMP:9][test][persist-new-vars] strict preflight fatal before merge-guard, bytes intact")
+
+
+# endregion FUNC_test_persist_new_vars_secure_atomic
+
+
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__]))

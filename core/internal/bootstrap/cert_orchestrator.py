@@ -124,7 +124,12 @@ from core.internal.shared.timeouts import BUILD_TIMEOUT
 # ·   в allowlist гейта как HTTP/S3-домен); единственный потребитель — этот модуль
 # · Rev: если появится второй S3-таймаут 120 — канонизировать в shared/timeouts
 S3_TIMEOUT = 120  # seconds for S3 cache operations
-ISSUE_TIMEOUT = BUILD_TIMEOUT  # seconds for issue_cert module (канон 300, W1-A1)
+# QA R11/T2.F (DevPlan 14): outer-бюджет обязан покрывать inner worst-case issue_cert
+# (ISSUE_MAX_ATTEMPTS=2 × ACME_CMD_TIMEOUT=300 + backoff [5,10] ≈ 615s). Прежний 300s
+# убивал процесс посреди второй попытки → домен молча уходил в self-signed fallback.
+# 700 = inner worst-case + запас на install/порты; литерал в HTTP/S3-домене (allowlist гейта).
+_ISSUE_INNER_WORST_CASE = 2 * 300 + 15
+ISSUE_TIMEOUT = max(BUILD_TIMEOUT, _ISSUE_INNER_WORST_CASE + 85)  # 700s
 CERT_VALIDITY_PATH = str(letsencrypt_live())  # C7: единый резолвер shared/deploy_paths
 
 
@@ -260,9 +265,10 @@ def orchestrate_certs(
     domains: list[str],
     issue_cert_script: str,
     secrets_env: str = "",
-    migrate_cron: bool = False,
     node_yaml: str = "",
     *,
+    # QA-гигиена (T2.G-волна): булевы параметры — kw-only (FBT001/FBT002)
+    migrate_cron: bool = False,
     runner: CommandRunner | None = None,
     facts: EnvironmentFacts | None = None,
     validity_path: str | None = None,

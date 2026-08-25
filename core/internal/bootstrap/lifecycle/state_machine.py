@@ -131,6 +131,16 @@ from core.internal.shared.exceptions import PlatformFatalError
 logger = logging.getLogger(__name__)
 
 
+# ── QA R2 (DevPlan 14 T2.B): run-start timestamp — хранилище вынесено в leaf
+# lifecycle/run_context.py (разрыв цикла phases/docker ↔ state_machine, import-linter);
+# здесь — re-export API для существующих потребителей (тесты, cli).
+from core.internal.bootstrap.lifecycle.run_context import (  # ruff: ignore[F401] / pyright: ignore[reportUnusedImport] — re-export для импортёров API run-start
+    get_run_start_ts,
+    reset_run_start_ts,
+    set_run_start_ts,
+)
+
+
 # ── BootstrapPhase enum (14 consolidated phases per DevPlan 087) ──
 class BootstrapPhase:
     """Consolidated bootstrap phases — 14 values (9 init + 5 update).

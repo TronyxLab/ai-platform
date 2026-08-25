@@ -89,8 +89,6 @@ def test_honesty_marker_default_skips(caplog, monkeypatch) -> None:
 
 
 # region TEST_ci_workflows_require_honesty_fail
-@pytest.mark.gate
-@ldd_trajectory
 # 🧪 TRAP[TEST] · 2026-08-02 · REGRESSION · CI workflow env-контракт (DevPlan 119 A3)
 # · Scenario: CI-workflow объявляет REQUIRE_HONESTY_MODE: fail
 # · Last fail: marker в platform-gate-fast.yml:44 и platform-test.yml:74 (skip-mode на CI)
@@ -102,32 +100,56 @@ def test_honesty_marker_default_skips(caplog, monkeypatch) -> None:
 # Теперь: ЛЮБОЙ workflow, исполняющий pytest (напрямую или через make check/gate/check-diff/
 # test-node), ОБЯЗАН нести REQUIRE_HONESTY_MODE: fail — CI не может выключить honesty,
 # добавив новый workflow (тихий обход невозможен по построению).
+#
+# QA R13/G7 (DevPlan 14 T2.G): детектор самозащищён — (а) glob *.yml РАСШИРЕН *.yaml
+# (nightly.yaml класс); (б) pin ищется В ТЕЛЕ без комментариев (закомментированный
+# «REQUIRE_HONESTY_MODE: fail» больше не satisfies).
+#
+# 🧐 TRAP[DECISION] · 2026-08-25 · — · Прямой invocation-щель: `python3 -m
+# core.internal.check_suite run` на runner'е МИНУС workflow — детекция ненадёжна (любой
+# процесс может вызвать pytest напрямую) · Rejected: блокировать прямой invocation
+# (нужен для отладки/локального dev) · Reason: остаточный риск задокументирован;
+# канон запуска CI — только через workflows, гейты ловят workflow-слой полностью
+# · Rev: если появится инцидент прямого запуска на CI — добавить runner-level guard
+
+_PYTEST_CHANNELS = ("pytest", "make gate", "make check", "make test-node", "check-diff")
+
+
+def _honesty_violations_for(workflow_paths) -> list[str]:
+    """QA R13/G7/T2.G: violations для синтетических workflow (R5-негативы + реальное дерево).
+
+    ▶ ┌paths┐ → ○ read+strip-comment-lines → ◇ pytest-канал? → ◇ pin in body? → ⎋ [violations]
+
+    ## @io  ⇥ iterable[Path] → ⎋ список relpath-нарушений
+    ## @invariants  Комментарии вырезаются ДО поиска пина; расширения .yml/.yaml равноправны.
+    """
+    violations: list[str] = []
+    for wf in workflow_paths:
+        if not wf.is_file():
+            continue
+        content = wf.read_text(errors="replace")
+        body_lines = [ln for ln in content.splitlines() if not ln.strip().startswith("#")]
+        body = "\n".join(body_lines)
+        if not any(channel in body for channel in _PYTEST_CHANNELS):
+            continue
+        if "REQUIRE_HONESTY_MODE: fail" not in body:
+            violations.append(str(wf))
+    return violations
+
+
+@pytest.mark.gate
+@ldd_trajectory
 def test_ci_workflows_require_honesty_fail(caplog) -> None:
     """Все workflow с pytest объявляют REQUIRE_HONESTY_MODE: fail (R4, deny-by-default glob)."""
     caplog.set_level(logging.INFO)
     workflows_dir = ROOT / ".github" / "workflows"
-    # Glob покрывает и шаблонные payload-workflows проектов (templates/*/…/deploy.yml):
-    # канал build&push рождается запиненным — новый workflow-обманщик невозможен.
-    candidates = sorted(workflows_dir.glob("*.yml")) + sorted(ROOT.glob("templates/*/.github/workflows/*.yml"))
+    # Glob покрывает шаблонные payload-workflows проектов (templates/*/…/deploy.yml)
+    # И расширение .yaml (nightly.yaml класс — QA R13/G7/T2.G).
+    candidates = sorted(workflows_dir.glob("*.yml")) + sorted(ROOT.glob("templates/*/.github/workflows/*.yaml"))
+    candidates = sorted(set(candidates) | set(ROOT.glob("templates/*/.github/workflows/*.yml")))
     assert candidates, "[IMP:10][honesty] ни одного workflow не найдено — репозиторий сломан?"
 
-    # Признак pytest-канала: прямой вызов pytest ИЛИ make-обёртка executor'а (check/gate/
-    # check-diff/test-node), внутри которой pytest резолвится из манифеста check-suite.yaml.
-    PYTEST_CHANNELS = ("pytest", "make gate", "make check", "make test-node", "check-diff")
-
-    violations: list[str] = []
-    for wf in candidates:
-        assert wf.is_file(), f"[IMP:10][honesty] workflow not found: {wf}"
-        content = wf.read_text(errors="replace")
-        body_lines = [ln for ln in content.splitlines() if not ln.strip().startswith("#")]
-        body = "\n".join(body_lines)
-        if not any(channel in body for channel in PYTEST_CHANNELS):
-            logger.info("[IMP:8][honesty][glob] %s — pytest-канала нет (не применим)", wf.name)
-            continue
-        if "REQUIRE_HONESTY_MODE: fail" not in content:
-            violations.append(str(wf.relative_to(ROOT)))
-        else:
-            logger.info("[IMP:8][honesty][glob] %s — REQUIRE_HONESTY_MODE: fail OK", wf.name)
+    violations = _honesty_violations_for(candidates)
 
     assert not violations, (
         f"[IMP:10][honesty] workflows с pytest без REQUIRE_HONESTY_MODE: fail "
@@ -135,8 +157,56 @@ def test_ci_workflows_require_honesty_fail(caplog) -> None:
     )
 
     logger.info(
-        "[IMP:9][honesty][ci] PASS: все %d workflow с pytest объявляют REQUIRE_HONESTY_MODE: fail", len(candidates)
+        "[IMP:9][honesty][ci] PASS: все %d workflow с pytest объявляют REQUIRE_HONESTY_MODE: fail",
+        len(candidates),
     )
 
 
 # endregion TEST_ci_workflows_require_honesty_fail
+
+
+# ═══════════════════════════════════════════════════════════════════
+# R5 self-negatives детектора (QA R13/G7/T2.G)
+# ═══════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · 2026-08-25 · NEGATIVE (R5) · QA R13/G7 — закомментированный пин ≠ пин
+# · Scenario: workflow содержит только «# REQUIRE_HONESTY_MODE: fail» (комментарий) при
+#   активном pytest-канале — прежний поиск пина по ПОЛНОМУ тексту удовлетворялся комментарием
+#   и пропускал обманщика
+# · Last fail: 2026-08-25 — strip-comments применялся к channel-детекту, но НЕ к pin-поиску
+# · Remove if: pin переезжает в структурный формат (env-манифест с валидацией)
+def test_commented_pin_does_not_satisfy(tmp_path, caplog) -> None:
+    """Комментарий с пином + pytest-канал → violation (пин обязан быть живой строкой)."""
+    caplog.set_level(logging.INFO)
+    wf = tmp_path / "sneaky.yml"
+    wf.write_text(
+        "# REQUIRE_HONESTY_MODE: fail  ← обманка в комментарии\njobs:\n  t:\n    steps:\n      - run: make check\n",
+        encoding="utf-8",
+    )
+    violations = _honesty_violations_for([wf])
+    logger.info("[IMP:9][honesty][negative] commented-pin violations=%d", len(violations))
+    assert violations, "R13 FAIL: закомментированный пин удовлетворил детектор"
+    logger.info("[IMP:9][honesty][negative] PASS: commented pin rejected")
+
+
+# 🧪 TRAP[TEST] · 2026-08-25 · NEGATIVE (R5) · QA R13/G7 — .yaml-расширение покрыто
+# · Scenario: nightly.yaml (расширение .yaml) с pytest и БЕЗ пина — прежний glob *.yml
+#   его не видел вовсе
+# · Last fail: 2026-08-25 — glob покрывал только *.yml
+# · Remove if: все workflow мигрируют на единое расширение с гейтом-эквалайзером
+def test_yaml_extension_workflow_scanned(tmp_path, caplog) -> None:
+    """.yaml workflow: без пина → violation; с пином → чисто (детектор видит расширение)."""
+    caplog.set_level(logging.INFO)
+    no_pin = tmp_path / "nightly.yaml"
+    no_pin.write_text("jobs:\n  n:\n    steps:\n      - run: pytest tests/\n", encoding="utf-8")
+    violations = _honesty_violations_for([no_pin])
+    assert violations, "R13 FAIL: .yaml workflow выпал из скана"
+
+    with_pin = tmp_path / "nightly-ok.yaml"
+    with_pin.write_text(
+        "env:\n  REQUIRE_HONESTY_MODE: fail\njobs:\n  n:\n    steps:\n      - run: pytest tests/\n",
+        encoding="utf-8",
+    )
+    assert _honesty_violations_for([with_pin]) == [], "честный .yaml workflow не должен нарушать"
+    logger.info("[IMP:9][honesty][negative] PASS: .yaml extension scanned both ways")

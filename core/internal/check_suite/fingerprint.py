@@ -80,7 +80,9 @@ _FINGERPRINT_EXTRA_FILES = ("core/check-suite.yaml", ".pre-commit-config.yaml", 
 # Изменение любой → replay старого зелёного отчёта запрещён (fingerprint = miss).
 _SALT_ENV_VARS = ("TEST_NO_XDIST", "REQUIRE_HONESTY_MODE", "CHECK_XDIST_MAX_WORKERS")
 # Toolchain-пакеты, чья версия влияет на вердикты проверок (pip-upgrade инвалидирует кэш).
-_SALT_TOOLCHAIN_PKGS = ("pytest", "pytest-xdist", "ruff")
+# QA R12/T2.G (DevPlan 14): + basedpyright — его вердикты входят в static-фазу; bump версии
+# без смены salt реплеил старые зелёные отчёты от дерева, проверенного СТАРЫМ pyright'ом.
+_SALT_TOOLCHAIN_PKGS = ("pytest", "pytest-xdist", "ruff", "basedpyright")
 
 
 # region FUNC_fingerprint_salt

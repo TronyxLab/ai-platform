@@ -101,14 +101,15 @@ def test_deploy_many_empty_list(monkeypatch, caplog: pytest.LogCaptureFixture) -
 
 
 # region FUNC_test_deploy_many_returncode_nonzero
-## @purpose — returncode != 0 → WARN + честный (deployed, failed) из JSON (НЕ (0, [])).
+## @purpose — returncode != 0 → честный (deployed, failed) из JSON (НЕ (0, [])).
 # 🧪 TRAP[TEST] · DevPlan 116 B1 T6 · R5 negative: returncode != 0
 # · Regression: returncode != 0 → (0, []) — фейлы терялись (U-30)
 # · Scenario: stdout [DEPLOYED, ROLLED_BACK], returncode 1 → (1, ['mod2'])
-# · Last fail: — return 0, [] при ненулевом exit
+# · Last fail: — return 0, [] при ненулевом exit; 2026-08-25 QA R3/T2.C — WARN-семантика
+#   заменена на CRIT + unproven-учёт (обновлено под новый контракт)
 # · Remove if: deploy-many наблюдаемость меняется
 def test_deploy_many_returncode_nonzero(monkeypatch, caplog: pytest.LogCaptureFixture) -> None:
-    """returncode != 0 → WARN + честный (deployed, failed) из JSON (DEPLOY_BEST_EFFORT)."""
+    """returncode != 0 → честный (deployed, failed) из JSON + IMP:10 (DEPLOY_BEST_EFFORT)."""
     caplog.set_level(logging.INFO)
 
     fake = _fake_run(
@@ -124,15 +125,71 @@ def test_deploy_many_returncode_nonzero(monkeypatch, caplog: pytest.LogCaptureFi
     assert_ldd_imp9(caplog)
     assert deployed == 1
     assert failed == ["mod2"]  # ROLLED_BACK считается фейлом
-    warn_msgs = [
-        r.message
-        for r in caplog.records
-        if "non-fatal" in r.message.lower() or "WARN" in r.message or "[IMP:5]" in r.message
-    ]
-    assert warn_msgs, "Ожидался WARN-лог при returncode != 0"
+    crit_msgs = [r.message for r in caplog.records if "[IMP:10][_deploy_orchestrator][fail]" in r.message]
+    assert crit_msgs, f"QA R3/T2.C: ожидается IMP:10 CRIT при returncode != 0:\n{caplog.text[-1500:]}"
 
 
 # endregion FUNC_test_deploy_many_returncode_nonzero
+
+
+# ═══════════════════════════════════════════════════════════════════
+# QA R3/T2.C (DevPlan 14): честный failed-accounting хвостов
+# ═══════════════════════════════════════════════════════════════════
+
+
+# region FUNC_test_json_corrupt_all_failed
+# 🧪 TRAP[TEST] · 2026-08-25 · NEGATIVE (R5) · QA R3/T2.C — битый JSON = ноль доказательств
+# · Scenario: deploy-many упал до записи результата (crash/OOM kill) → stdout мусор/пустой;
+#   прежний WARN оставлял failed=[] → severity-агрегация слепа, success-marker писался,
+#   healthcheck гасился при полном провале
+# · Last fail: 2026-08-25 — except JSONDecodeError логировал IMP:5 и возвращал (0, [])
+# · Remove if: deploy-many начнёт писать per-project partial-results файл (другой канал)
+def test_json_corrupt_all_failed(monkeypatch, caplog: pytest.LogCaptureFixture) -> None:
+    """Битый stdout → deployed=0, ВСЕ недоказанные проекты в failed, exit-контракт 2-класс."""
+    caplog.set_level(logging.INFO)
+
+    fake = _fake_run("Traceback (most recent call last): ...", returncode=2)
+
+    deployed, failed = mod._deploy_orchestrator(["mod1", "mod2", "mod3"], run_cmd=fake)
+
+    assert deployed == 0, "битый вывод не доказывает ни одного деплоя"
+    assert sorted(failed) == ["mod1", "mod2", "mod3"], f"R3 FAIL: недоказанные не в failed: {failed}"
+    crit = [r for r in caplog.records if "[IMP:10][_deploy_orchestrator][parse]" in r.message]
+    assert crit, "ожидается IMP:10 zero-proof-of-success лог"
+    logger.info("[IMP:9][test][json-corrupt] corrupt stdout → all %d failed", len(failed))
+    # exit-контракт: критические фейлы → exit 2 (severity-агрегация DEPLOY_BEST_EFFORT)
+    rc = mod._compute_exit_code(crit=len(failed), warn=0, deployed=deployed)
+    assert rc == 2, f"битый JSON обязан давать exit 2 (severity-агрегация), получен {rc}"
+
+
+# endregion FUNC_test_json_corrupt_all_failed
+
+
+# region FUNC_test_rc_nonzero_crit
+# 🧪 TRAP[TEST] · 2026-08-25 · NEGATIVE (R5) · QA R3/T2.C — rc≠0 + недоказанный проект
+# · Scenario: deploy-many записал только mod1=DEPLOYED и умер (rc≠0); mod2/mod3 не имеют
+#   записей — недоказанные идут в failed наравне с явными FAILED (паттерн :911-920)
+# · Last fail: 2026-08-25 — отсутствующие в выводе проекты молча игнорировались
+# · Remove if: deploy-many гарантирует запись результата для КАЖДОГО проекта при любом rc
+def test_rc_nonzero_crit(monkeypatch, caplog: pytest.LogCaptureFixture) -> None:
+    """rc≠0 + неполный вывод → unproven проекты в failed + IMP:10."""
+    caplog.set_level(logging.INFO)
+
+    fake = _fake_run(
+        _json_array({"status": "DEPLOYED", "project": "mod1"}),
+        returncode=3,
+    )
+
+    deployed, failed = mod._deploy_orchestrator(["mod1", "mod2", "mod3"], run_cmd=fake)
+
+    assert deployed == 1
+    assert sorted(failed) == ["mod2", "mod3"], f"unproven обязаны быть в failed: {failed}"
+    crit = [r for r in caplog.records if "[IMP:10][_deploy_orchestrator][fail]" in r.message]
+    assert crit and any("unproven" in m for m in (r.message for r in crit)), "ожидается IMP:10 unproven-accounting лог"
+    logger.info("[IMP:9][test][rc-crit] unproven projects accounted: %s", failed)
+
+
+# endregion FUNC_test_rc_nonzero_crit
 
 
 # region FUNC_test_deploy_many_cmd_no_scp_flag
@@ -167,21 +224,23 @@ def test_deploy_many_cmd_no_scp_flag(monkeypatch, caplog: pytest.LogCaptureFixtu
 
 
 # region FUNC_test_deploy_many_non_json_stdout
-## @purpose — stdout не-JSON → WARN + (0, []) (graceful degradation, без исключений).
+## @purpose — stdout не-JSON → IMP:10 + ВСЕ недоказанные проекты в failed (QA R3/T2.C).
 # 🧪 TRAP[TEST] · DevPlan 116 B1 T6 · не-JSON вывод
-# · Scenario: stdout = "some noise" → WARN, (0, [])
+# · Scenario: stdout = "some noise" → раньше WARN + (0, []) — маскировка полного провала;
+#   2026-08-25 (QA R3/T2.C) контракт перевёрнут: zero proof of success → all failed
+# · Last fail: старый ассерт failed==[] закреплял дефект R3
 # · Remove if: deploy-many парсинг меняется
 def test_deploy_many_non_json_stdout(monkeypatch, caplog: pytest.LogCaptureFixture) -> None:
-    """Не-JSON stdout → WARN + (0, []) (не падает)."""
+    """Не-JSON stdout → IMP:10 + недоказанные проекты в failed (не падает)."""
     caplog.set_level(logging.INFO)
 
     fake = _fake_run("some noise from deploy-many", returncode=0)
     deployed, failed = mod._deploy_orchestrator(["mod1"], run_cmd=fake)
 
     assert deployed == 0
-    assert failed == []
+    assert failed == ["mod1"], f"R3 FAIL: не-JSON вывод не доказывает успех mod1: {failed}"
     parse_msgs = [r.message for r in caplog.records if "не JSON" in r.message]
-    assert parse_msgs, "Ожидался WARN о не-JSON stdout"
+    assert parse_msgs, "Ожидался IMP:10 лог о не-JSON stdout"
 
 
 # endregion FUNC_test_deploy_many_non_json_stdout

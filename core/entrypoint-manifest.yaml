@@ -1013,6 +1013,7 @@ gates:
   test_gate_collection_floors.py:
   - test_collection_floors
   - test_floor_selectors_track_manifest
+  - test_layer_below_floor_red
   test_gate_compose_base_contract.py:
   - test_all_base_yml_have_x_logging
   - test_container_name_matches_module_name

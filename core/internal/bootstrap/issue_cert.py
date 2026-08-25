@@ -63,6 +63,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shlex
 import shutil
 import sys
@@ -107,6 +108,12 @@ PORT80_SS_TIMEOUT: int = 10
 PORT80_NETSTAT_TIMEOUT: int = 10
 ACME_CMD_TIMEOUT: int = 300
 INSTALL_CERT_TIMEOUT: int = 60
+
+# QA R11/T2.F (DevPlan 14): детектор rate-limit ответа Let's Encrypt (HTTP 429 / "rate limit"
+# в выводе acme.sh) — fail-fast без повторов: повтор жжёт тот же лимит и усиливает блок.
+_RATE_LIMIT_RE: re.Pattern[str] = re.compile(
+    r"rate\s*limit|\b429\b|too\s+many\s+(requests|certificates)", re.IGNORECASE
+)
 # DNSAPI_PLUGIN_NAME/WEBNAMES_EXT_SCRIPT — из webnames_protocol.py (W6-D2)
 
 # Порог проверки expiry в секундах (30 дней — канон ssl_certs.DEFAULT_EXPIRY_THRESHOLD)
@@ -269,9 +276,11 @@ def issue_tls_cert(
     domain: str,
     email: str,
     dns_plugin: str,
-    wildcard: bool,
     ctx: IssueContext,
     *,
+    # QA-гигиена (T2.F-волна): булевы параметры — kw-only (FBT001); все потребители
+    # (cert_orchestrator CLI + tests) уже передают wildcard= keyword'ом.
+    wildcard: bool,
     challenge_mode: str = "dns",
     cert_is_le_issuer_fn: Callable[[str], bool] | None = None,
 ) -> bool:
@@ -321,7 +330,7 @@ def issue_tls_cert(
         "acme.sh", "START", f"Issuing TLS certificate for {domain} (email: {email}) via acme.sh DNS-01 ({dns_plugin})"
     )
 
-    ok = _issue_acme_cert(domain, email, dns_plugin, wildcard, ctx)
+    ok = _issue_acme_cert(domain, email, dns_plugin, wildcard=wildcard, ctx=ctx)
 
     # ── AUTO mode: fallback to HTTP-01 on DNS-01 failure ──
     if not ok and challenge_mode == "auto":
@@ -406,19 +415,33 @@ def _acme_issue_with_retry(
         KEY_LENGTH,
     ]
     attempt_counter = [0]
+    rate_limited = False
 
     def _run_once() -> int:
+        nonlocal rate_limited
         attempt_counter[0] += 1
         result = ctx.runner.run(acme_args, timeout=ACME_CMD_TIMEOUT, check=False)
         if result.returncode != 0:
-            _log_step(log_step, "WARN", warn_fn(result.returncode, attempt_counter[0]))
+            output = f"{getattr(result, 'stdout', '') or ''}\n{getattr(result, 'stderr', '') or ''}"
+            if _RATE_LIMIT_RE.search(output):
+                # QA R11/T2.F: LE rate-limit — повтор жжёт тот же лимит и усиливает блок;
+                # fail-fast БЕЗ второй попытки и backoff (retryable-замыкание ниже).
+                rate_limited = True
+                _log_step(
+                    log_step,
+                    "FAIL",
+                    f"LE rate limit detected on attempt {attempt_counter[0]} — "
+                    "fail-fast without retry/backoff (retrying would burn the limit)",
+                )
+            else:
+                _log_step(log_step, "WARN", warn_fn(result.returncode, attempt_counter[0]))
         return result.returncode
 
     last_rc = _shared_retry(
         _run_once,
         attempts=ctx.max_attempts,
         backoff_seconds=DEFAULT_BACKOFF_SECONDS,
-        retryable=lambda rc: rc != 0,
+        retryable=lambda rc: rc != 0 and not rate_limited,
         sleep_fn=ctx.sleep_fn,
     )
     if last_rc != 0:
@@ -451,6 +474,7 @@ def _issue_acme_cert(
     domain: str,
     email: str,
     dns_plugin: str,
+    *,
     wildcard: bool,
     ctx: IssueContext,
 ) -> bool:
@@ -461,8 +485,8 @@ def _issue_acme_cert(
     _log_step("acme", "START", f"Issuing TLS certificate via acme.sh ({dns_plugin}) for {domain} (email: {email})")
 
     if dns_plugin == "webnames":
-        return _issue_acme_webnames(domain, email, wildcard, ctx)
-    return _issue_acme_generic(domain, email, dns_plugin, wildcard, ctx)
+        return _issue_acme_webnames(domain, email, wildcard=wildcard, ctx=ctx)
+    return _issue_acme_generic(domain, email, dns_plugin, wildcard=wildcard, ctx=ctx)
 
 
 # endregion FUNC__issue_acme_cert
@@ -482,7 +506,7 @@ def _issue_acme_cert(
 ## ·   domains_list. Reality: TXT add/delete WORK (add: OK, delete: OK). Wildcard *.tronyx.ru
 ## ·   issued via LE staging 2026-07-23. Root of prior failure: LE rate-limit (50/domain/week).
 ## · Prevention: НЕ отключать DNS-01 по domains_list ошибке — проверять add/delete.
-def _issue_acme_webnames(domain: str, email: str, wildcard: bool, ctx: IssueContext) -> bool:
+def _issue_acme_webnames(domain: str, email: str, *, wildcard: bool, ctx: IssueContext) -> bool:
     """webnames DNS-01: inject API key into dnsapi script + shred after acme.sh (retry-совместимо)."""
     webnames_script = str(Path(ctx.acme_home) / "dnsapi_ext" / WEBNAMES_EXT_SCRIPT)
     if not ctx.facts.path_isfile(webnames_script):
@@ -552,7 +576,7 @@ def _issue_acme_webnames(domain: str, email: str, wildcard: bool, ctx: IssueCont
 ## @invariants
 ##   - Креды env-переменными (acme.sh конвенция); НЕ inject+shred (regru TRAP — renew нужен)
 ##   - retry: --issue провал → повтор (max_attempts)
-def _issue_acme_generic(domain: str, email: str, dns_plugin: str, wildcard: bool, ctx: IssueContext) -> bool:
+def _issue_acme_generic(domain: str, email: str, dns_plugin: str, *, wildcard: bool, ctx: IssueContext) -> bool:
     """Generic DNS-01: acme.sh convention env creds (CF_Token, DP_Id, REGRU_API_*...)."""
     domain_args = [domain]
     if wildcard:

@@ -100,24 +100,7 @@ def test_collection_floors(caplog) -> None:
     suits = _pytest_tier_suits(manifest)
     assert suits, "[IMP:10][floors] check-suite.yaml: ни одной tier==pytest записи — манифест сломан?"
 
-    failures: list[str] = []
-    missing_floors: list[str] = []
-
-    for suit in suits:
-        sid = suit.get("id")
-        assert isinstance(sid, str) and sid, f"[IMP:10][floors] запись без id: {suit!r}"
-        if suit.get("allow_no_tests"):
-            logger.info("[IMP:8][floors][exempt] %s — allow_no_tests: true (опциональный слой)", sid)
-            continue
-        # Deny-by-default: обязательный слой БЕЗ floor = структурная дыра (новый rc=5→PASS канал).
-        if sid not in _FLOORS:
-            missing_floors.append(sid)
-            continue
-        selector = _FLOORS[sid]
-        count, diag = _collect_count(selector)
-        logger.info("[IMP:9][floors][collect] %s → %d collected (%s)", sid, count, diag)
-        if count < 1:
-            failures.append(f"{sid}: 0 collected ({diag}; selector: {' '.join(selector)})")
+    missing_floors, failures = _evaluate_floors(suits, _collect_count)
 
     assert not missing_floors, (
         "[IMP:10][floors] pytest-сьюты без allow_no_tests и без floor в _FLOORS — "
@@ -131,6 +114,62 @@ def test_collection_floors(caplog) -> None:
 
 
 # endregion TEST_collection_floors
+
+
+# region TEST_layer_below_floor_mutation
+def _evaluate_floors(suits: list[dict], collect_fn) -> tuple[list[str], list[str]]:
+    """Ядро floors-гейта (QA G3/T2.G): отделено от pytest-обвязки для mutation-негатива.
+
+    ## @io  ⇥ suits (tier==pytest записи), collect_fn(selector) → (count, diag)
+    ##      ⎋ (missing_floors, failures)
+    """
+    failures: list[str] = []
+    missing_floors: list[str] = []
+
+    for suit in suits:
+        sid = suit.get("id")
+        assert isinstance(sid, str) and sid, f"[IMP:10][floors] запись без id: {suit!r}"
+        if suit.get("allow_no_tests"):
+            continue
+        if sid not in _FLOORS:
+            missing_floors.append(sid)
+            continue
+        selector = _FLOORS[sid]
+        count, diag = collect_fn(selector)
+        if count < 1:
+            failures.append(f"{sid}: 0 collected ({diag}; selector: {' '.join(selector)})")
+    return missing_floors, failures
+
+
+# 🧪 TRAP[TEST] · 2026-08-25 · NEGATIVE (R5) · QA G3/T2.G — mutation «слой опустел → RED»
+# · Scenario: маркер-переименование/опечатка обнуляет коллекцию слоя (count=0) — гейт ОБЯЗАН
+#   дать RED по этому сьюту; прежняя проверка была инлайн в позитивном тесте и не имела
+#   самонегатива (детектор не доказывал, что ловит пустоту)
+# · Last fail: 2026-08-25 (REGRESSIONS.md R13/G7) — mutation-негатив отсутствовал
+# · Remove if: floors-механизм заменяется структурным учётом состава
+@pytest.mark.gate
+@ldd_trajectory
+def test_layer_below_floor_red(caplog) -> None:
+    """Mutation: каждый не-exempt слой, опустевший до 0 collected, попадает в failures."""
+    caplog.set_level(logging.INFO)
+    manifest = load_yaml(_MANIFEST)
+    suits = _pytest_tier_suits(manifest)
+
+    def empty_collector(_selector: list[str]) -> tuple[int, str]:
+        return 0, "no tests collected"
+
+    missing, failures = _evaluate_floors(suits, empty_collector)
+
+    expected_non_exempt = [s["id"] for s in suits if not s.get("allow_no_tests")]
+    assert not missing, f"mutation-прогон не должен терять floors: {missing}"
+    assert len(failures) == len(expected_non_exempt), (
+        f"G3 FAIL: детектор пропустил опустевший слой: failures={failures}, expected {len(expected_non_exempt)} RED"
+    )
+    assert any(f.startswith("gates:") for f in failures), "gates-слой обязан быть под floor'ом"
+    logger.info("[IMP:9][floors][mutation] PASS: %d emptied layer(s) → RED", len(failures))
+
+
+# endregion TEST_layer_below_floor_mutation
 
 
 # region TEST_floor_selectors_track_manifest

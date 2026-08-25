@@ -677,23 +677,27 @@ def _sweep_stale_hc_markers(
 
 # region FUNC__registry_step_healthcheck
 ## @purpose  E3 sub-step 5 (healthcheck): standalone healthcheck, skip если маркер уже стоит.
-## @io       ⇥ node_yaml: str → ⎋ bool (True = non-fatal issue occurred)
+## @io       ⇥ node_yaml: str, run_start_ts: float | None (QA R2/T2.B) → ⎋ bool (True = non-fatal issue)
 ## @complexity O(M * R) where M = modules, R = retries
 ## @invariants
 ##   - `.hc_done_in_deploy` + суффикс контекста (per-context, T9.19) → skip + unlink (не issue)
 ##   - REF-0005: run-scoped маркеры текущего прогона (`base`[.`ctx`].`run-id`) → skip + unlink;
 ##     свип на старте φ8/φ12 гарантирует, что найденный маркер — этого прогона
+##   - QA R2 (DevPlan 14 T2.B): freshness — маркер принимается ТОЛЬКО при mtime ≥ run-start
+##     (φ11 reader исполняется ДО φ12-писателя; найденный маркер = прошлый прогон → НЕ
+##     подавляет healthcheck). run_start_ts=None → legacy-семантика (нет знания о старте).
 ##   - node.yaml отсутствует → WARN + True
 ##   - Сбой healthchecks → WARN + True (best-effort)
 def _registry_step_healthcheck(
     node_yaml: str,
     *,
     context: str | None = None,
+    run_start_ts: float | None = None,
     run_healthchecks_fn: Callable[..., object] | None = None,
     isfile_fn: Callable[[str], bool] | None = None,
     glob_fn: Callable[[str], list[str]] | None = None,
 ) -> bool:
-    """Standalone healthcheck sub-step (skip if already done in deploy)."""
+    """Standalone healthcheck sub-step (skip if already done in THIS run)."""
     # T9.19 (B-11): маркер per-context (не node-global) — единый источник пути с писателем
     # (deploy_orchestrator._set_hc_marker → orchestrator_metrics.hc_marker_path). CONTEXT env
     # задаётся при деплое контекста; деплой context A не подавляет healthcheck context B.
@@ -703,6 +707,35 @@ def _registry_step_healthcheck(
 
     resolved_context = os.environ.get("CONTEXT") if context is None else context
     isfile_impl = os.path.isfile if isfile_fn is None else isfile_fn
+    # QA R2/T2.B: run-start — явный param > run_context-регистрация > None (legacy семантика).
+    # Leaf run_context (НЕ state_machine) — разрыв цикла импортов phases ↔ state_machine.
+    effective_run_start = run_start_ts
+    if effective_run_start is None:
+        from core.internal.bootstrap.lifecycle import run_context as _run_context
+
+        effective_run_start = _run_context.get_run_start_ts()
+        if effective_run_start is None:
+            logger.info(
+                "[IMP:8][phase:registry_update][freshness] run-start unknown — "
+                "legacy marker semantics (sweep at φ12 will clear stale)"
+            )
+
+    def _marker_fresh(marker: str) -> bool:
+        """QA R2/T2.B: маркер подавляет healthcheck только если он ТЕКУЩЕГО прогона."""
+        if effective_run_start is None:
+            return True
+        try:
+            fresh = pathlib.Path(marker).stat().st_mtime >= effective_run_start
+        except OSError:
+            return False
+        if not fresh:
+            logger.info(
+                "[IMP:9][phase:registry_update][freshness] stale marker %s (mtime < run-start) "
+                "— past-run marker does NOT suppress deep healthcheck",
+                marker,
+            )
+        return fresh
+
     hc_done_marker = _hc_marker_path(resolved_context)
     # ⚠️ TRAP[BUG] · 2026-08-24 · P0 · вечный hc_done-маркер гасил последний healthcheck (REF-0005)
     # · Symptom: φ11 пропускал единственный глубокий healthcheck по маркеру чужого/прошлого
@@ -711,8 +744,29 @@ def _registry_step_healthcheck(
     # · Fix: писатель пишет только при failed==[] и с run-id; читатель находит run-scoped формы;
     #   свип на старте φ8/φ12 снимает stale-маркеры прошлого прогона.
     # · Prevention: tests/unit/test_hc_marker_run_scope.py (honesty + run-scope + sweep).
-    run_scoped_markers = _find_run_scoped_hc_markers(hc_done_marker, glob_fn=glob_fn)
-    legacy_present = isfile_impl(hc_done_marker)
+    # · QA R2/T2.B: третий слой — mtime ≥ run-start (reader исполняется РАНЬШЕ писателя φ12,
+    #   поэтому найденный маркер физически не может быть этого прогона без retry-семантики).
+    run_scoped_all = _find_run_scoped_hc_markers(hc_done_marker, glob_fn=glob_fn)
+    stale_run_scoped = [m for m in run_scoped_all if not _marker_fresh(m)]
+    run_scoped_markers = [m for m in run_scoped_all if _marker_fresh(m)]
+    legacy_present_raw = isfile_impl(hc_done_marker)
+    legacy_stale = legacy_present_raw and not _marker_fresh(hc_done_marker)
+    legacy_present = legacy_present_raw and _marker_fresh(hc_done_marker)
+    # QA R2/T2.B: stale-маркеры прошлого прогона снимаются читателем (гигиена — иначе они
+    # переживут до свипа следующего φ12).
+    if stale_run_scoped or legacy_stale:
+        import contextlib
+
+        for stale_marker in stale_run_scoped:
+            with contextlib.suppress(OSError):
+                os.unlink(stale_marker)
+        if legacy_stale:
+            with contextlib.suppress(OSError):
+                os.unlink(hc_done_marker)
+        logger.info(
+            "[IMP:9][phase:registry_update][freshness] removed %d stale past-run marker(s)",
+            len(stale_run_scoped) + (1 if legacy_stale else 0),
+        )
     if legacy_present or run_scoped_markers:
         logger.info(
             "[IMP:9][phase:registry_update] Healthcheck already done during deploy "

@@ -311,6 +311,70 @@ class TestCloudDropinNeutralization:
         assert not Path(str(disabled) + ".disabled").exists()
         logger.critical("[IMP:9][test][cloud] Повторный apply не трогает .disabled")
 
+    # 🧪 TRAP[TEST] · 2026-08-25 · NEGATIVE (R5) · QA R10/T2.E — произвольное имя vendor drop-in
+    # · Scenario: «60-custom.conf» (БЕЗ "cloud" в имени!) с PasswordAuthentication yes —
+    #   прежний glob *cloud* его не видел → ослабляющая политика оставалась активной
+    # · Last fail: 2026-08-25 (REGRESSIONS.md R10) — имя файла было единственным сигналом
+    # · Remove if: нейтрализация заменена include-механизмом
+    @ldd_trajectory
+    def test_noncloud_named_weakening_dropin_neutralized(self, fake_probe, tmp_path, caplog) -> None:
+        """Drop-in произвольного имени с ослабляющей директивой → neutralized."""
+        dropin, superseded = _dropin_paths(tmp_path)
+        custom = _make_cloud_dropin(dropin.parent, "60-custom.conf", "PasswordAuthentication yes\n")
+        probe, registry, calls = fake_probe
+        registry["systemctl"] = FakeResult(0)
+        with caplog.at_level(logging.INFO):
+            ok = security_posture.apply_sshd_dropin(
+                hardening_dropin=str(dropin),
+                superseded_dropin=str(superseded),
+                probe_fn=probe,
+            )
+        assert ok is True
+        assert not custom.exists(), "R10 FAIL: weakening drop-in без 'cloud' в имени обязан нейтрализоваться"
+        assert Path(str(custom) + ".disabled").is_file(), "нейтрализация = rename → .disabled"
+        assert calls == [["systemctl", "reload", "sshd"]]
+        logger.critical("[IMP:9][test][cloud] Non-cloud имя 60-custom.conf нейтрализовано (content-based)")
+
+    # 🧪 TRAP[TEST] · 2026-08-25 · NEGATIVE (R5) · QA R10/T2.E — case-вариант директивы ловится
+    # · Scenario: «passwordauthentication YES» (нижний регистр) в vendor conf — прежний regex
+    #   без IGNORECASE пропускал
+    # · Last fail: 2026-08-25 — детект был case-sensitive
+    # · Remove if: парсер директив станет структурным (тогда кейс нормализуется там)
+    @ldd_trajectory
+    def test_case_variant_weakening_detected(self, fake_probe, tmp_path, caplog) -> None:  # ruff: ignore[ARG002]
+        """Case-insensitive детект: 'passwordauthentication yes' → neutralized."""
+        dropin, superseded = _dropin_paths(tmp_path)
+        vendor = _make_cloud_dropin(dropin.parent, "70-vendor-tweaks.conf", "passwordauthentication YES\n")
+        probe, registry, _ = fake_probe
+        registry["systemctl"] = FakeResult(0)
+        ok = security_posture.apply_sshd_dropin(
+            hardening_dropin=str(dropin),
+            superseded_dropin=str(superseded),
+            probe_fn=probe,
+        )
+        assert ok is True
+        assert not vendor.exists(), "R10 FAIL: case-вариант ослабления обязан детектироваться"
+        assert Path(str(vendor) + ".disabled").is_file()
+        logger.critical("[IMP:9][test][cloud] Case-вариант passwordauthentication YES пойман")
+
+    # 🧪 TRAP[TEST] · Regression · доброкачественный *.conf без cloud-имени НЕ трогается
+    # · Scenario: расширение скана на ВСЕ *.conf не должно переименовывать невинные файлы
+    # · Last fail: N/A (preventive против false-positive расширения R10)
+    # · Remove if: вместе со сканом *.conf
+    @ldd_trajectory
+    def test_benign_noncloud_conf_untouched(self, fake_probe, tmp_path, caplog) -> None:  # ruff: ignore[ARG002]
+        """Benign 60-motd.conf остаётся активным (content-based = только weakening)."""
+        dropin, superseded = _dropin_paths(tmp_path)
+        benign = _make_cloud_dropin(dropin.parent, "60-motd.conf", "# motd banner config\nPrintMotd no\n")
+        probe, registry, _ = fake_probe
+        registry["systemctl"] = FakeResult(0)
+        ok = security_posture.apply_sshd_dropin(
+            hardening_dropin=str(dropin), superseded_dropin=str(superseded), probe_fn=probe
+        )
+        assert ok is True
+        assert benign.is_file(), "доброкачественный non-cloud .conf не должен переименовываться"
+        logger.critical("[IMP:9][test][cloud] Benign non-cloud .conf сохранён")
+
     # 🧪 TRAP[TEST] · NEGATIVE (R5) · REF-0016 · rename-fail → apply False (не тихий WARN)
     # · Scenario: ОС отвергает rename (EACCES/EBUSY) — точный вход бага: прежний код логировал
     # ·   WARN и возвращал True при АКТИВНОМ ослабляющем vendor drop-in

@@ -17,18 +17,29 @@
 
 import inspect
 import logging
+import os
 import re
+import time
 from pathlib import Path
 
 import pytest
 
 from core.internal.bootstrap.deploy import deploy_orchestrator as orch
 from core.internal.bootstrap.deploy import orchestrator_metrics as om
+from core.internal.bootstrap.lifecycle import state_machine as stm
 from core.internal.bootstrap.lifecycle.phases import docker as phases_docker
 
 logger = logging.getLogger(__name__)
 
 _RUN_ID_SUFFIX_RE = re.compile(r"\.\d{8}T\d{6}-\d+$")
+
+
+@pytest.fixture(autouse=True)
+def _reset_run_start_ts():
+    """QA R2/T2.B: module-global run-start не должен протекать между тестами (xdist-гигиена)."""
+    stm.reset_run_start_ts()
+    yield
+    stm.reset_run_start_ts()
 
 
 @pytest.fixture()
@@ -167,3 +178,116 @@ class TestReaderAndSweep:
 
 
 # endregion TEST_reader_and_sweep
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region TEST_freshness_r2 — QA R2 (DevPlan 14 T2.B): mtime ≥ run-start
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestMarkerFreshnessR2:
+    # 🧪 TRAP[TEST] · 2026-08-25 · NEGATIVE (R5) · QA R2/T2.B — stale-маркер прошлого прогона
+    # · Scenario: φ11 reader исполняется ДО φ12-писателя в том же прогоне → любой найденный
+    #   маркер создан ПРОШЛЫМ прогоном; без freshness-проверки он глотал глубокий healthcheck
+    #   после ротации секретов в φ9 (REGRESSIONS.md R2)
+    # · Last fail: 2026-08-25 — читатель принимал любой маркер независимо от возраста
+    # · Remove if: порядок фаз изменится так, что φ11 исполняется после писателя
+    def test_stale_marker_does_not_suppress_deep_hc(self, state_dir: Path, caplog) -> None:
+        """Маркер с mtime < run-start НЕ подавляет healthcheck; файл снимается."""
+        caplog.set_level(logging.DEBUG)
+        base = om.hc_marker_path("")
+        old_marker = Path(f"{base}.20250101T000000-111")
+        old_marker.touch()
+        past = time.time() - 3600
+        os.utime(old_marker, (past, past))
+
+        hc_calls: list[int] = []
+        rc = phases_docker._registry_step_healthcheck(
+            str(state_dir / "node.yaml"),  # валидный путь — доходим до запуска healthcheck
+            context="",
+            run_start_ts=time.time(),  # прогон начался ПОСЛЕ создания маркера
+            isfile_fn=lambda _p: True,
+            run_healthchecks_fn=lambda *_, **__: hc_calls.append(1),
+        )
+        logger.info(
+            "[IMP:9][test][freshness-r2] stale marker: rc=%s hc_calls=%d exists=%s",
+            rc,
+            len(hc_calls),
+            old_marker.exists(),
+        )
+        assert rc is False
+        assert hc_calls, "R2 FAIL: stale-маркер прошлого прогона не должен глушить healthcheck"
+        assert not old_marker.exists(), "stale-маркер обязан быть снят читателем"
+
+        # Канал state_machine: run-start зарегистрирован глобально (как из cli._run_phases)
+        legacy = Path(om.hc_marker_path(""))
+        legacy.touch()
+        os.utime(legacy, (past, past))
+        stm.set_run_start_ts(time.time())
+        hc_calls.clear()
+        rc2 = phases_docker._registry_step_healthcheck(
+            str(state_dir / "node.yaml"),
+            context="",
+            isfile_fn=lambda _p: True,
+            run_healthchecks_fn=lambda *_, **__: hc_calls.append(1),
+        )
+        assert rc2 is False
+        assert hc_calls, "R2 FAIL: канал state_machine не применил freshness"
+        assert not legacy.exists()
+        logger.info("[IMP:9][test][freshness-r2] state_machine channel enforces freshness too")
+
+    # 🧪 TRAP[TEST] · 2026-08-25 · REGRESSION · QA R2/T2.B — свежий маркер подавляет (retry)
+    # · Scenario: retry-семантика — маркер, созданный ПОСЛЕ старта текущего прогона
+    #   (писатель φ12 уже отработал в предыдущей попытке), продолжает гасить standalone HC
+    # · Last fail: N/A (preventive guard против over-blocking при введении freshness)
+    # · Remove if: freshness-критерий отменён
+    def test_fresh_marker_suppresses_deep_hc(self, state_dir: Path, caplog) -> None:  # ruff: ignore[ARG002]
+        """Маркер с mtime ≥ run-start → skip + unlink (поведение REF-0005 сохранено)."""
+        caplog.set_level(logging.DEBUG)
+        run_start = time.time() - 5
+        base = om.hc_marker_path("")
+        fresh_marker = Path(f"{base}.{time.strftime('%Y%m%dT%H%M%S')}-999")
+        fresh_marker.touch()
+
+        hc_calls: list[int] = []
+        rc = phases_docker._registry_step_healthcheck(
+            "",
+            context="",
+            run_start_ts=run_start,
+            run_healthchecks_fn=lambda *_, **__: hc_calls.append(1),
+        )
+        logger.info(
+            "[IMP:9][test][freshness-r2] fresh marker: rc=%s hc_calls=%d exists=%s",
+            rc,
+            len(hc_calls),
+            fresh_marker.exists(),
+        )
+        assert rc is False
+        assert not hc_calls, "свежий маркер текущего прогона обязан гасить standalone HC"
+        assert not fresh_marker.exists(), "читатель обязан снять поглотивший маркер"
+
+    # 🧪 TRAP[TEST] · 2026-08-25 · REGRESSION · run-start неизвестен → legacy семантика
+    # · Scenario: standalone-исполнение фазы вне cli._run_phases (run-start None) — поведение
+    #   идентично до-T2.B (маркер подавляет), свип φ12 остаётся вторым слоем защиты
+    # · Last fail: N/A (backward-compat guard)
+    # · Remove if: run-start становится обязательным контрактом всех точек входа
+    def test_unknown_run_start_legacy_semantics(self, state_dir: Path, caplog) -> None:  # ruff: ignore[ARG002]
+        """run_start None (не задан нигде) → маркер подавляет как раньше."""
+        caplog.set_level(logging.DEBUG)
+        base = om.hc_marker_path("")
+        marker = Path(f"{base}.20250101T000000-222")
+        marker.touch()
+
+        hc_calls: list[int] = []
+        rc = phases_docker._registry_step_healthcheck(
+            "",
+            context="",
+            run_healthchecks_fn=lambda *_, **__: hc_calls.append(1),
+        )
+        assert rc is False
+        assert not hc_calls, "без знания о run-start сохраняется legacy-подавление"
+        assert not marker.exists()
+        logger.info("[IMP:9][test][freshness-r2] unknown run-start keeps legacy suppression")
+
+
+# endregion TEST_freshness_r2

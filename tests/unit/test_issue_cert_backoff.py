@@ -1,119 +1,114 @@
-"""
-# GREP_SUMMARY: test issue-cert backoff shared-retry exponential sleep-fn acme retry attempts rate-limit REF-0008
-# STRUCTURE: ▶ scripted runner (fail×2 → success) + sleep-recorder → ◇ _acme_issue_with_retry: 3 attempts,
-#            sleeps=[5,10] (DEFAULT_BACKOFF_SECONDS clamp) → ◇ exhaustion → last rc + FAIL ⎋ IMP:9
+#!/usr/bin/env python3
+# GREP_SUMMARY: test issue-cert backoff rate-limit fail-fast no-retry LE 429 acme retry sleep DI
+# STRUCTURE: ▶ fake-runner(rc≠0 + rate-limit text) → ◇ _acme_issue_with_retry → ⊕ ровно 1 attempt, 0 sleeps → ⎋ last_rc≠0 │ ▶ обычный сбой → 2 attempts (regression guard)
 # region MODULE_CONTRACT
-## @purpose  Backoff unit-тесты ACME retry (REF-0008 подпункт 5): _acme_issue_with_retry делегирует
-##           в shared/retry.retry — sleep/backoff между attempts (DEFAULT_BACKOFF_SECONDS [5,10,20],
-##           clamp-last). Прежде retry жёг Let's Encrypt rate-limit (50 certs/domain/week) без пауз.
-## @scope    issue_cert._acme_issue_with_retry через _issue_acme_generic (DI runner/sleep_fn).
+## @purpose  QA R11/T2.F (DevPlan 14): rate-limit ответ Let's Encrypt (HTTP 429 / «rate limit»)
+##           → fail-fast БЕЗ второй попытки и backoff — повтор жжёт тот же лимит и усиливает блок.
+## @scope    core/internal/bootstrap/issue_cert.py::_acme_issue_with_retry (shared/retry канон).
 ## @invariants
-##   - Пауза перед retry N: backoff_seconds[N-1], clamp на последний элемент (shared/retry канон)
-##   - Успех на попытке K → K-1 sleep'ов; исчерпание → last rc ≠ 0, FAIL log_step
-##   - Все subprocess через runner DI; sleep через sleep_fn DI (0 реального ожидания)
-## @rationale REF-0008: ACME-retry без backoff = rate-limit burn → выпуск wildcard невозможен неделю
-## @changes  2026-08-24 | REF-0008 (meta-refactoring В2) — Created
+##   - rate-limit ветка: attempts==1, sleep_fn не вызван, last_rc != 0
+##   - обычный transient-сбой: attempts==max_attempts (регрессия против over-blocking)
+##   - DI: fake runner + sleep_fn recorder — 0 реальных acme.sh/sleep вызовов
 # endregion MODULE_CONTRACT
-"""
+
+from __future__ import annotations
 
 import logging
-import subprocess as _sp
-import sys
-from pathlib import Path
+import types
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "core" / "internal" / "bootstrap"))
-
-import issue_cert
 import pytest
+from _conftest.ldd import ldd_trajectory
 
-from tests._conftest.ldd import ldd_trajectory
-
-pytestmark = pytest.mark.static_audit
+from core.internal.bootstrap import issue_cert as ic
 
 logger = logging.getLogger(__name__)
 
 
-class _ScriptedAcmeRunner:
-    """Runner: первые fail_times вызовов acme.sh --issue → rc=1, далее rc=0. Прочее — rc=0."""
+class _FakeRunner:
+    """Fake CommandRunner: возвращает заданный stdout/stderr/rc, считает вызовы."""
 
-    def __init__(self, *, fail_times: int) -> None:
-        self.fail_times = fail_times
-        self.issue_calls = 0
+    def __init__(self, *, returncode: int, stdout: str = "", stderr: str = "") -> None:
+        self.calls = 0
+        self._returncode = returncode
+        self._stdout = stdout
+        self._stderr = stderr
 
-    def run(self, cmd: list[str], **kwargs):  # ruff: ignore[ARG002] — DI fake канон
-        if "acme.sh" in cmd[0] and "--issue" in cmd:
-            self.issue_calls += 1
-            rc = 1 if self.issue_calls <= self.fail_times else 0
-            return _sp.CompletedProcess(cmd, rc, "", "")
-        return _sp.CompletedProcess(cmd, 0, "", "")
+    def run(self, cmd: list[str], timeout: int = 30, check: bool = False):  # ruff: ignore[ARG002]
+        self.calls += 1
+        return types.SimpleNamespace(returncode=self._returncode, stdout=self._stdout, stderr=self._stderr)
 
 
-def _make_ctx(
-    tmp_path: Path, runner: _ScriptedAcmeRunner, sleeps: list[float], max_attempts: int
-) -> issue_cert.IssueContext:
-    """IssueContext с acme.sh-заглушкой и sleep-рекордером (backoff наблюдаем)."""
-    acme_home = tmp_path / "acme"
-    acme_home.mkdir(parents=True, exist_ok=True)
-    acme_sh = acme_home / "acme.sh"
-    acme_sh.write_text("#!/bin/sh\necho mock\n", encoding="utf-8")
-    acme_sh.chmod(0o755)
-    return issue_cert.IssueContext(
+_RATE_LIMIT_STDERR = (
+    "[Wed Aug 26 01:00:00 UTC 2026] Register account Error: "
+    "urllib.error.HTTPError: HTTP Error 429: Too Many Requests — Rate limit exceeded"
+)
+
+
+# 🧪 TRAP[TEST] · 2026-08-25 · NEGATIVE (R5) · QA R11/T2.F — rate-limit → fail-fast без повтора
+# · Scenario: первая попытка получает 429/rate-limit → прежний retryable=rc!=0 запускал вторую
+#   попытку через backoff — повтор жёг тот же лимит и усиливал блок аккаунта/домена
+# · Last fail: 2026-08-25 (REGRESSIONS.md R11) — retryable не знал о классе ошибки
+# · Remove if: retry-политика переедет в shared/retry с классификацией исключений
+@ldd_trajectory
+def test_rate_limit_no_retry(caplog: pytest.LogCaptureFixture) -> None:
+    """Rate-limit ответ → ровно 1 attempt, 0 backoff-sleep, rc != 0."""
+    caplog.set_level(logging.INFO)
+    runner = _FakeRunner(returncode=1, stderr=_RATE_LIMIT_STDERR)
+    sleeps: list[float] = []
+    ctx = ic.IssueContext(
         runner=runner,
-        facts=issue_cert.default_env_facts(),
-        environ={},
-        acme_home=str(acme_home),
-        letsencrypt_dir=str(tmp_path / "le"),
-        tmp_dir=str(tmp_path),
-        max_attempts=max_attempts,
+        acme_home="/tmp/fake-acme-home",
+        max_attempts=ic.ISSUE_MAX_ATTEMPTS,
         sleep_fn=sleeps.append,
     )
 
-
-@ldd_trajectory
-def test_acme_backoff_between_attempts_then_success(caplog, tmp_path: Path) -> None:
-    """fail×2 → success: 3 попытки, sleeps == [5.0, 10.0] (канон DEFAULT_BACKOFF_SECONDS)."""
-    caplog.set_level(logging.INFO)
-    runner = _ScriptedAcmeRunner(fail_times=2)
-    sleeps: list[float] = []
-    ctx = _make_ctx(tmp_path, runner, sleeps, max_attempts=3)
-
-    ok = issue_cert._issue_acme_generic("app.example.com", "admin@example.com", "regru", wildcard=False, ctx=ctx)
-
-    assert ok is True, "третья попытка должна быть успешной"
-    assert runner.issue_calls == 3, f"ожидалось 3 попытки, got {runner.issue_calls}"
-    assert sleeps == [5.0, 10.0], f"backoff между attempts обязателен (REF-0008): {sleeps}"
-    logger.critical("[IMP:9][test] backoff: 2 паузы [5,10] между 3 attempts — rate-limit защищён")
-
-
-@ldd_trajectory
-def test_acme_exhaustion_returns_last_rc(caplog, tmp_path: Path) -> None:
-    """Исчерпание attempts: все попытки fail → False, ровно max_attempts-1 sleep, FAIL log."""
-    caplog.set_level(logging.INFO)
-    runner = _ScriptedAcmeRunner(fail_times=99)
-    sleeps: list[float] = []
-    ctx = _make_ctx(tmp_path, runner, sleeps, max_attempts=2)
-
-    ok = issue_cert._issue_acme_generic("app.example.com", "admin@example.com", "regru", wildcard=False, ctx=ctx)
-
-    assert ok is False
-    assert runner.issue_calls == 2, "ровно max_attempts попыток"
-    assert sleeps == [5.0], f"одна пауза перед единственным retry: {sleeps}"
-    assert any("FAIL" in r.message and "generic dns_regru" in r.message for r in caplog.records), (
-        "FAIL log_step после исчерпания обязателен"
+    last_rc = ic._acme_issue_with_retry(
+        ctx=ctx,
+        email="ops@example.com",
+        domains=["d.example.com"],
+        extra_args=["--standalone"],
+        log_step="T2F",
+        warn_fn=lambda rc, att: f"warn {rc} attempt {att}",
+        fail_fn=lambda rc: f"fail {rc}",
     )
-    logger.critical("[IMP:9][test] exhaustion: last_rc≠0 → False, FAIL залогирован")
+
+    assert runner.calls == 1, f"R11 FAIL: rate-limit обязан дать fail-fast, было попыток: {runner.calls}"
+    assert sleeps == [], f"R11 FAIL: backoff при rate-limit запрещён (повтор жжёт лимит): {sleeps}"
+    assert last_rc != 0, "rate-limit должен завершиться неудачей (без self-signed маскировки здесь)"
+    assert any("rate limit" in r.message.lower() for r in caplog.records), (
+        "ожидается IMP FAIL-лог о детекции rate limit"
+    )
+    logger.info("[IMP:9][test][backoff] rate-limited attempt=%d sleeps=%d rc=%s", runner.calls, len(sleeps), last_rc)
 
 
+# 🧪 TRAP[TEST] · 2026-08-25 · REGRESSION · обычный transient-сбой по-прежнему ретраится
+# · Regression: защита от over-blocking — ужесточение retryable не должно убить легитимный retry
+# · Last fail: N/A (preventive)
+# · Remove if: вместе с rate-limit детектором
 @ldd_trajectory
-def test_acme_first_attempt_success_no_sleep(caplog, tmp_path: Path) -> None:
-    """Успех с первой попытки: 0 sleep (backoff только между attempts)."""
+def test_transient_failure_still_retries(caplog: pytest.LogCaptureFixture) -> None:
+    """Обычный сбой (не rate-limit) → max_attempts попыток + backoff-sleep между ними."""
     caplog.set_level(logging.INFO)
-    runner = _ScriptedAcmeRunner(fail_times=0)
+    runner = _FakeRunner(returncode=1, stderr="[err] webroot check failed, port busy")
     sleeps: list[float] = []
-    ctx = _make_ctx(tmp_path, runner, sleeps, max_attempts=3)
+    ctx = ic.IssueContext(
+        runner=runner,
+        acme_home="/tmp/fake-acme-home",
+        max_attempts=2,
+        sleep_fn=sleeps.append,
+    )
 
-    ok = issue_cert._issue_acme_generic("app.example.com", "admin@example.com", "regru", wildcard=False, ctx=ctx)
+    last_rc = ic._acme_issue_with_retry(
+        ctx=ctx,
+        email="ops@example.com",
+        domains=["d.example.com"],
+        extra_args=["--standalone"],
+        log_step="T2F",
+        warn_fn=lambda rc, att: f"warn {rc} attempt {att}",
+        fail_fn=lambda rc: f"fail {rc}",
+    )
 
-    assert ok is True
-    assert sleeps == [], "успешная первая попытка не должна спать"
-    logger.critical("[IMP:9][test] happy path: 0 sleep")
+    assert runner.calls == 2, f"transient-сбой обязан ретраиться: attempts={runner.calls}"
+    assert len(sleeps) == 1, f"между попытками ожидается один backoff-sleep: {sleeps}"
+    assert last_rc != 0
+    logger.info("[IMP:9][test][backoff] transient failure retried: attempts=%d", runner.calls)

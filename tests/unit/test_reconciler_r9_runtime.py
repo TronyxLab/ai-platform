@@ -496,3 +496,108 @@ def test_r9_compose_argv_module_fallback_without_root(tmp_path, caplog, monkeypa
 
 
 # endregion REF0014_R9_LABEL_AND_ARGV
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region QA_R4_T2D
+# QA R4/T2.D (DevPlan 14): converge fail-closed — ps-fail/unlabeled/empty-node
+# ═══════════════════════════════════════════════════════════════════
+
+
+def _r9_mock_run(ps_rc: int = 0, ps_out: str = "", diag_out: str = ""):
+    """Mock subprocess.run: docker info / ps --filter (label) / ps label-column / inspect."""
+
+    def mock_run(cmd, *args, **kwargs):
+        cmd_str = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
+
+        def cp(rc: int, out: str = ""):
+            return subprocess.CompletedProcess(args=cmd, returncode=rc, stdout=out, stderr="")
+
+        if "docker info" in cmd_str:
+            return cp(0)
+        if "docker ps" in cmd_str and "--filter" in cmd_str:
+            return cp(ps_rc, ps_out)
+        if "docker ps" in cmd_str and "{{.Label" in cmd_str:
+            return cp(0, diag_out)
+        if "docker inspect" in cmd_str:
+            return cp(0, "running")
+        return cp(0)
+
+    return mock_run
+
+
+# 🧪 TRAP[TEST] · 2026-08-25 · NEGATIVE (R5) · QA R4/T2.D — docker ps rc≠0 ≠ «проекта нет»
+# · Scenario: транзиентный сбой docker ps ПОСЛЕ успешного docker_info — прежний код трактовал
+#   None-контейнеров как «модуля нет» → статус converged при непроверенном runtime
+# · Last fail: 2026-08-25 (REGRESSIONS.md R4) — resolve_container_name возвращал [] на rc≠0
+# · Remove if: R9 перестанет использовать docker ps как источник runtime-фактов
+@pytest.mark.usefixtures("reset_state")
+@ldd_trajectory
+def test_ps_failure_not_converged(tmp_path, caplog, node_yaml_with_modules, mock_modules_dir):
+    """ps rc≠0 → status=warn («runtime UNVERIFIED»), НЕ converged, exit 1."""
+    caplog.set_level(logging.DEBUG)
+    cooldown_file = tmp_path / ".converge_cooldown.json"
+
+    with patch.object(subprocess, "run", side_effect=_r9_mock_run(ps_rc=1)):
+        entry = reconciler.reconcile_runtime_state(
+            node_yaml_path=node_yaml_with_modules,
+            modules_dir=mock_modules_dir,
+            cooldown_file=str(cooldown_file),
+        )
+
+    assert entry["status"] == "warn", f"R4 FAIL: UNVERIFIED схлопнулся в {entry['status']!r}"
+    assert "UNVERIFIED" in entry["detail"], entry["detail"]
+    assert infra.exit_code == 1, f"R4 FAIL: ожидается exit 1, получен {infra.exit_code}"
+    assert any("UNVERIFIED" in d.get("detail", "") for d in infra.drifts), infra.drifts
+    logger.info("[IMP:9][test] R4 OK: ps failure → warn/UNVERIFIED (не converged)")
+
+
+# 🧪 TRAP[TEST] · 2026-08-25 · NEGATIVE (R5) · QA R4/T2.D — unlabeled контейнеры невидимы R9
+# · Scenario: rc==0 но 0 labeled-рядов; на ноде есть контейнеры БЕЗ compose-label —
+#   label-filtered детекция их не видит; прежний код молча говорил «No running containers»
+# · Last fail: 2026-08-25 — допрос всех контейнеров с label-колонкой отсутствовал
+# · Remove if: R9 мигрирует на не-label механизм детекции проектов
+@pytest.mark.usefixtures("reset_state")
+@ldd_trajectory
+def test_unlabeled_warn(tmp_path, caplog, node_yaml_with_modules, mock_modules_dir):
+    """Пустой label-set + unlabeled контейнеры на ноде → report-warn + exit 1."""
+    caplog.set_level(logging.DEBUG)
+    cooldown_file = tmp_path / ".converge_cooldown.json"
+    diag = "orphan-one\t\norphan-two\t\n"  # 2 строки с пустым label
+
+    with patch.object(subprocess, "run", side_effect=_r9_mock_run(ps_rc=0, ps_out="", diag_out=diag)):
+        entry = reconciler.reconcile_runtime_state(
+            node_yaml_path=node_yaml_with_modules,
+            modules_dir=mock_modules_dir,
+            cooldown_file=str(cooldown_file),
+        )
+
+    assert infra.exit_code == 1, f"R4 FAIL: unlabeled обязан давать exit 1, получен {infra.exit_code}"
+    assert any("without compose-label" in d.get("detail", "") for d in infra.drifts), infra.drifts
+    logger.info("[IMP:9][test] R4 OK: unlabeled detected → warn report (unit status=%s)", entry["status"])
+
+
+# 🧪 TRAP[TEST] · 2026-08-25 · POSITIVE · QA R4/T2.D — пустая нода остаётся зелёной
+# · Regression: защита от false-positive legacy-guard'а (diag вернул 0 строк → зелёный)
+# · Last fail: N/A (preventive)
+# · Remove if: вместе с legacy-guard'ом
+@pytest.mark.usefixtures("reset_state")
+@ldd_trajectory
+def test_empty_node_green(tmp_path, caplog, node_yaml_with_modules, mock_modules_dir):
+    """rc==0, 0 labeled, 0 всего контейнеров на ноде → converged, exit 0."""
+    caplog.set_level(logging.DEBUG)
+    cooldown_file = tmp_path / ".converge_cooldown.json"
+
+    with patch.object(subprocess, "run", side_effect=_r9_mock_run(ps_rc=0, ps_out="", diag_out="")):
+        entry = reconciler.reconcile_runtime_state(
+            node_yaml_path=node_yaml_with_modules,
+            modules_dir=mock_modules_dir,
+            cooldown_file=str(cooldown_file),
+        )
+
+    assert entry["status"] == "converged", f"пустая нода обязана быть зелёной: {entry!r}"
+    assert infra.exit_code == 0, f"пустая нода обязана держать exit 0, получен {infra.exit_code}"
+    logger.info("[IMP:9][test] R4 OK: truly empty node stays green")
+
+
+# endregion QA_R4_T2D

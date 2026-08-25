@@ -768,7 +768,17 @@ def _deploy_docker_groups(
             failed.extend(fnames)
         # ruff: ignore[BLE001] — DEPLOY_BEST_EFFORT: group failure continues to next group
         except Exception as exc:  # noqa: EXC — best-effort policy
-            logger.warning("[IMP:5][_deploy_parallel][group] Group %d deploy error (non-fatal): %s", g_idx, exc)
+            # QA R3/T2.C: сбой группы (включая OSError fork-фейлов) — честный failed-учёт
+            # всей группы (паттерн :911-920 «все недоказанные = failed»); continue к следующей
+            # группе сохранён (DEPLOY_BEST_EFFORT), но severity-агрегация больше не слепа.
+            logger.error(
+                "[IMP:10][_deploy_docker_groups][group] Group %d deploy error — marking %d module(s) failed: %s (%s)",
+                g_idx,
+                len(group),
+                group,
+                exc,
+            )
+            failed.extend(group)
         # ── REF-0110: critical-failure → dependents в следующих группах не стартуют ──
         critical_failed = [n for n in fnames if info.get(n, {}).get("severity", "warn") == "critical"]
         if critical_failed:
@@ -922,6 +932,8 @@ def _deploy_orchestrator(
     # ── Парсинг JSON-вывода deploy-many (U-30): JSON-массив ModuleDeployResult ──
     deployed = 0
     failed: list[str] = []
+    seen_deployed: set[str] = set()
+    seen_total: set[str] = set()
     # ruff: ignore[PLW0717] — тело try присваивает имена, читаемые except/после — извлечение ломает видимость
     try:
         # W11: json.loads → Any — каст к object, isinstance-гейт и per-entry каст сохраняются
@@ -931,22 +943,41 @@ def _deploy_orchestrator(
                 if not isinstance(entry, dict):
                     continue
                 edict = cast(dict[str, str], entry)
+                project_name = edict.get("project", "?")
+                seen_total.add(project_name)
                 status = edict.get("status", "")
                 if status == "DEPLOYED":
                     deployed += 1
+                    seen_deployed.add(project_name)
                 elif status in {"FAILED", "ROLLED_BACK"}:
-                    failed.append(edict.get("project", "?"))
+                    failed.append(project_name)
     except json.JSONDecodeError as exc:
-        logger.warning(
-            "[IMP:5][_deploy_orchestrator][parse] deploy-many stdout не JSON (%.120r): %s",
+        # QA R3/T2.C: битый вывод = НОЛЬ доказательств успеха. Прежний WARN с
+        # deployed=0/failed=[] маскировал полный провал как «всё чисто».
+        logger.error(
+            "[IMP:10][_deploy_orchestrator][parse] deploy-many stdout не JSON (%.120r): %s "
+            "— zero proof of success, marking ALL %d project(s) failed",
             result.stdout,
             exc,
+            len(docker_names),
         )
+        return 0, list(docker_names)
 
     if result.returncode != 0:
-        logger.warning(
-            "[IMP:5][_deploy_orchestrator][fail] deploy-many had failures (exit=%d) — continuing (DEPLOY_BEST_EFFORT)",
+        # QA R3/T2.C: rc≠0 → честный failed-учёт + severity CRIT (не WARN-only).
+        # Проекты БЕЗ DEPLOYED-записи в выводе (упали до записи результата) — недоказанные,
+        # идут в failed наравне с явными FAILED/ROLLED_BACK.
+        unproven = [n for n in docker_names if n not in seen_deployed]
+        for name in unproven:
+            if name not in failed:
+                failed.append(name)
+        logger.critical(
+            "[IMP:10][_deploy_orchestrator][fail] deploy-many exit=%d — %d unproven project(s) "
+            "added to failed: %s (total failed=%s)",
             result.returncode,
+            len(unproven),
+            unproven,
+            failed,
         )
     logger.info(
         "[IMP:9][_deploy_orchestrator][done] deploy-many: deployed=%d failed=%s",

@@ -156,42 +156,56 @@ def _parse_line(line: str) -> tuple[str, str] | None:
 
 # region FUNC__plw_body_parse
 ## @purpose  Тело try-блока (PLW0717 extraction из parse) — семантика except не меняется.
-## @io       ⇥ path, result → ⎋ результат try-тела
-## @complexity O(1) — извлечение управляющего потока
-def _plw_body_parse(path, result):
+## @io       ⇥ path, result, collect_bad: bool → ⎋ список номеров не-комментарий строк без
+##           валидного key= (пуст при collect_bad=False — backward compat)
+## @complexity O(N) — N = строк файла
+def _plw_body_parse(path, result, collect_bad: bool = False):
+    bad_lines: list[int] = []
     with pathlib.Path(path).open(encoding="utf-8") as f:
         for line_no, raw_line in enumerate(f, start=1):
+            stripped = raw_line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
             parsed = _parse_line(raw_line)
             if parsed is not None:
                 key, value = parsed
                 result[key] = value
                 logger.debug("[IMP:5][parse] Line %d: %s='%.60s'", line_no, key, value[:60])
+            elif collect_bad:
+                bad_lines.append(line_no)
+    return bad_lines
 
 
 # endregion FUNC__plw_body_parse
 
 
-def parse(path: str, prefix_filter: str | None = None) -> dict[str, str]:
+def parse(path: str, prefix_filter: str | None = None, *, strict: bool = False) -> dict[str, str]:
     """Parse a secrets.env file into a dictionary.
 
-    ▶ ┌path┐ → ◇ FileNotFoundError if absent → ⊕ _parse_line per line → ◇ prefix_filter? → ⎋ dict
+    ▶ ┌path┐ → ◇ FileNotFoundError if absent → ⊕ _parse_line per line → ◇ strict∧bad-lines? → ⎋ dict
 
     ## @purpose — Read and parse a secrets.env file. Raises FileNotFoundError if the
     ##            file does not exist — caller is responsible for existence checks.
+    ##            QA R5 (DevPlan 14 T2.A): strict=True — непустая не-комментарий строка
+    ##            без валидного key=value → ConfigValidationError со списком номеров строк
+    ##            (fail-closed ДО merge-guard'ов потребителей: файл нетронут).
     ## @io — ⇥ path: str — absolute or relative path to secrets.env file
     ##       ⇥ prefix_filter: Optional[str] — if set, only return vars whose key starts
     ##                           with this prefix (case-sensitive)
+    ##       ⇥ strict: bool — kwarg-only; False (default) = legacy skip-garbage семантика
     ##       → ⎋ dict[str, str] — parsed key-value pairs (ordered by file line order)
     ## @complexity — O(N * L) where N = lines, L = avg line length
     ## @raises FileNotFoundError — if the file does not exist
+    ## @raises ConfigValidationError — strict=True и есть нераспарсенный не-комментарий контент
     ## @invariants
     ##   - File must exist (FileNotFoundError if missing)
     ##   - Empty file → empty dict
     ##   - Only-comments file → empty dict
     ##   - Duplicate keys: last occurrence wins
     ##   - prefix_filter: case-sensitive prefix matching
+    ##   - strict=False: строки без '=' молча пропускаются (все прочие потребители не тронуты)
     """
-    logger.info("[IMP:7][parse] Opening secrets.env: %s", path)
+    logger.info("[IMP:7][parse] Opening secrets.env: %s (strict=%s)", path, strict)
 
     if not os.path.isfile(path):
         logger.error("[IMP:9][parse] File not found: %s", path)
@@ -201,7 +215,7 @@ def parse(path: str, prefix_filter: str | None = None) -> dict[str, str]:
     result: dict[str, str] = {}
 
     try:
-        _plw_body_parse(path, result)
+        bad_lines = _plw_body_parse(path, result, collect_bad=strict)
     except UnicodeDecodeError as e:
         logger.error("[IMP:9][parse] Unicode decode error in %s: %s", path, e)
         # Re-raise as ValueError to be explicit about encoding issues
@@ -210,6 +224,19 @@ def parse(path: str, prefix_filter: str | None = None) -> dict[str, str]:
     except OSError as e:
         logger.error("[IMP:9][parse] OS error reading %s: %s", path, e)
         raise
+
+    if strict and bad_lines:
+        # QA R5 (T2.A): fail-closed — garbage в секрет-файле НЕ глотается молча
+        logger.error(
+            "[IMP:10][parse] STRICT FAIL: %s has unparsable non-comment content at line(s) %s",
+            path,
+            bad_lines,
+        )
+        msg = (
+            f"Strict parse failed for {path}: unparsable non-comment content at "
+            f"line(s) {bad_lines} — refusing to proceed (merge/persist would be unsafe)"
+        )
+        raise ConfigValidationError(msg)
 
     # ── Apply prefix filter if specified ──
     if prefix_filter is not None:

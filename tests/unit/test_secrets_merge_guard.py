@@ -101,15 +101,19 @@ def test_merge_guard_aborts_on_unparsed_nonempty_file(caplog: pytest.LogCaptureF
         patch.object(sm, "_ensure_master_credentials"),
         patch.object(sm, "_ensure_derived_passwords"),
         patch.object(sm, "_ensure_htpasswd", return_value=True),
-        pytest.raises(ConfigValidationError, match=r"[Mm]erge-guard"),
+        # QA R5/T2.A (DevPlan 14): strict pre-flight срабатывает ДО merge-guard —
+        # тот же ConfigValidationError, файл нетронут; принимаем любое из двух сообщений.
+        pytest.raises(ConfigValidationError, match=r"[Mm]erge-guard|[Ss]trict parse"),
     ):
         sm.ensure_secrets(str(manifest), str(secrets_env), persist_to_sops=False)
 
     assert secrets_env.read_text(encoding="utf-8") == original_content, (
         "Merge-guard must leave the on-disk file byte-identical (operator secrets preserved)"
     )
-    imp10 = any("[IMP:10]" in r.message and "MERGE-GUARD" in r.message for r in caplog.records)
-    assert imp10, "Missing IMP:10 MERGE-GUARD log"
+    imp10 = any(
+        "[IMP:10]" in r.message and ("MERGE-GUARD" in r.message or "STRICT FAIL" in r.message) for r in caplog.records
+    )
+    assert imp10, "Missing IMP:10 fail-closed log (MERGE-GUARD or STRICT FAIL)"
     logger.info("[IMP:9][test_merge_guard_aborts_on_unparsed_nonempty_file] ✅ Guard aborted, file intact")
 
 
@@ -176,7 +180,8 @@ def test_persist_new_vars_guard(caplog: pytest.LogCaptureFixture, tmp_path: Path
     original_content = "NOT A KEY VALUE LINE\n"
     secrets_env.write_text(original_content, encoding="utf-8")
 
-    with pytest.raises(ConfigValidationError, match=r"[Mm]erge-guard"):
+    # QA R5/T2.A: strict pre-flight раньше guard'а — сообщение может быть от любого слоя
+    with pytest.raises(ConfigValidationError, match=r"[Mm]erge-guard|[Ss]trict parse"):
         sm._persist_new_vars("Master credentials", {"K": "v"}, parse_secrets_env, str(secrets_env))
 
     assert secrets_env.read_text(encoding="utf-8") == original_content, "File must remain untouched"

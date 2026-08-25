@@ -50,6 +50,27 @@ def test_salt_differs_on_toolchain_upgrade() -> None:
     logger.info("[IMP:9][fingerprint-salt] toolchain-upgrade invalidates: %s… != %s…", old[:8], new[:8])
 
 
+# 🧪 TRAP[TEST] · 2026-08-25 · REGRESSION · QA R12/T2.G — basedpyright в составе salt
+# · Scenario: bump basedpyright (его вердикты входят в static-фазу) без смены salt реплеил
+#   старые зелёные отчёты от дерева, проверенного СТАРЫМ pyright'ом
+# · Last fail: 2026-08-25 — _SALT_TOOLCHAIN_PKGS содержал только pytest/xdist/ruff
+# · Remove if: static-фаза перестанет использовать basedpyright
+def test_salt_differs_on_basedpyright_bump() -> None:
+    """Bump basedpyright → salt меняется; отсутствие пакета → 'absent' без crash."""
+    base_versions = {"pytest": "9.1.1", "pytest-xdist": "3.6.1", "ruff": "0.16.2", "basedpyright": "1.28.0"}
+    old = _fingerprint_salt(versions=dict(base_versions))
+    bumped = dict(base_versions, basedpyright="1.29.0")
+    new = _fingerprint_salt(versions=bumped)
+    assert old != new, "QA R12 FAIL: bump basedpyright обязан менять salt"
+
+    # Отсутствующий пакет → маркер "absent" (детерминирован, не бросает)
+    without = _fingerprint_salt(versions={"pytest": "9.1.1", "pytest-xdist": "3.6.1", "ruff": "0.16.2"})
+    without_again = _fingerprint_salt(versions={"pytest": "9.1.1", "pytest-xdist": "3.6.1", "ruff": "0.16.2"})
+    assert without == without_again, "absent-маркер обязан быть детерминированным"
+    assert without != old, "absent vs установленная версия — разные salt"
+    logger.info("[IMP:9][fingerprint-salt] basedpyright bump + absent-marker OK")
+
+
 def test_salt_differs_on_semantic_env_var() -> None:
     """REF-0107: каждая семантическая env-переменная меняет salt."""
     base_env = {"TEST_NO_XDIST": "", "REQUIRE_HONESTY_MODE": "", "CHECK_XDIST_MAX_WORKERS": ""}

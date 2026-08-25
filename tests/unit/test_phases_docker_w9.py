@@ -17,7 +17,6 @@
 # endregion MODULE_CONTRACT
 
 import logging
-import os
 from pathlib import Path
 
 import pytest
@@ -134,26 +133,35 @@ def test_registry_provision_passes_both_scopes(caplog: pytest.LogCaptureFixture,
 # ·   деплой context A подавлял healthcheck context B (B-11)
 # · Remove if: hc-marker scope semantics change
 @ldd_trajectory
-def test_hc_marker_per_context(caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_hc_marker_per_context(caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     """T9.19: hc_marker_path per-context; 1:1 fallback без CONTEXT (консистентность читателя/писателя)."""
     caplog.set_level(logging.INFO)
     assert hc_marker_path("ctx-a") != hc_marker_path("ctx-b"), "маркеры разных контекстов различны"
     assert hc_marker_path("ctx-a").endswith(".hc_done_in_deploy.ctx-a")
     assert hc_marker_path(None) == "/var/lib/platform/.bootstrap/.hc_done_in_deploy", "1:1 fallback (CONTEXT пуст)"
 
-    # Reader: _registry_step_healthcheck с context="ctx-a" и маркером ctx-a → skip healthcheck (DI, W-H)
-    marker = hc_marker_path("ctx-a")
-    real_isfile = os.path.isfile
+    # QA R2/T2.B: freshness-читатель делает РЕАЛЬНЫЙ stat маркера — маркер создаётся
+    # по hermetic tmp-базе (_HC_DONE_MARKER monkeypatch); run-start неизвестен →
+    # legacy-семантика подавления (контракт T9.19 не меняется).
+    from core.internal.bootstrap.deploy import orchestrator_metrics as om
+    from core.internal.bootstrap.lifecycle import state_machine as stm
+
+    monkeypatch.setattr(om, "_HC_DONE_MARKER", str(tmp_path / "state" / ".hc_done_in_deploy"))
+    stm.reset_run_start_ts()
+
+    marker = Path(hc_marker_path("ctx-a"))
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.touch()
     hc_calls: list = []
 
     assert (
         phases_docker._registry_step_healthcheck(
             "/tmp/nonexistent-node.yaml",
             context="ctx-a",
-            isfile_fn=lambda p: p == marker or real_isfile(p),
             run_healthchecks_fn=lambda *_, **__: hc_calls.append(1),
         )
         is False
     )
     assert not hc_calls, "маркер контекста → standalone healthcheck пропускается (T9.19)"
+    assert not marker.exists(), "читатель снимает поглотивший маркер"
     logger.critical("[IMP:9][test] hc marker per-context — OK (T9.19)")

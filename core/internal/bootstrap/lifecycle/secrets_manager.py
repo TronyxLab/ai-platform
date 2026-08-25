@@ -181,7 +181,8 @@ except ModuleNotFoundError:
         CONVERGE_DOCKER_TIMEOUT as _impl_timeout,  # pyright: ignore[reportUnknownVariableType] — W11-G1 cross-file: script-mode fallback import
     )
 
-    parse_secrets_env = cast(Callable[[str], dict[str, str]], _impl_parse)
+    # Callable[...] (не [str]): QA R5/T2.A strict-preflight зовёт parse(path, strict=True)
+    parse_secrets_env = cast("Callable[..., dict[str, str]]", _impl_parse)
     write_secrets_env = cast(Callable[[str, dict[str, str]], None], _impl_write)
     _iter_manifest_secrets = cast(
         "Callable[[str], list[ManifestSecret]]", _impl_iter
@@ -303,6 +304,24 @@ def source_secrets_env(secrets_env: str) -> dict[str, str]:
 
 
 # endregion FUNC_source_secrets_env
+
+
+# region FUNC_strict_parse_preflight
+## @purpose  QA R5 (DevPlan 14 T2.A): strict pre-flight поверх shared-парсера — непустой
+##           не-комментарий мусор в secrets.env → ConfigValidationError ДО merge-guard'ов.
+##           Файл НЕ трогается (parse — read-only); вызывающие получают FATAL через
+##           существующие обёртки (ensure_secrets → phase-wrapper; _persist_new_vars →
+##           catch (OSError, ConfigValidationError)).
+## @io       ⇥ secrets_env: str → ⎋ None ⚡ ConfigValidationError при garbage-строках
+def _strict_parse_preflight(secrets_env: str) -> None:
+    """Strict-parse pre-flight: garbage lines fail closed BEFORE any merge/persist."""
+    if not Path(secrets_env).is_file():
+        return  # отсутствие файла легитимно (первый bootstrap) — guard'ы ниже не сработают
+    parse_secrets_env(secrets_env, strict=True)
+    logger.info("[IMP:8][secrets_manager][strict-preflight] %s passed strict validation", secrets_env)
+
+
+# endregion FUNC_strict_parse_preflight
 
 
 # region FUNC_cleanup_secrets_env
@@ -571,6 +590,10 @@ def ensure_secrets(
     # · Fix: apply_env_file_to_osenv — файл выигрывает, кроме protected lifecycle-переменных.
     env_vars = source_secrets_env(secrets_env)
     apply_env_file_to_osenv(env_vars, label=secrets_env)
+    # QA R5 (DevPlan 14 T2.A): strict pre-flight ПОСЛЕ sourcing — garbage-строки →
+    # ConfigValidationError ДО merge-guard Step 3.5 (файл нетронут, φ4 получает FATAL
+    # через существующую phase-обёртку).
+    _strict_parse_preflight(secrets_env)
 
     # ── Step 2: Read manifest for tier=generated secrets (STRICT — raises if missing) ──
     # Hardcoded fallback list не используется: manifest всегда доставляется с core/ —
@@ -837,6 +860,10 @@ def _persist_new_vars(
 ) -> None:
     secrets_path = Path(secrets_env)
     secrets_path.parent.mkdir(parents=True, exist_ok=True)
+    # QA R5 (DevPlan 14 T2.A): strict pre-flight ДО merge-guard — garbage-строки →
+    # ConfigValidationError при нетронутом файле (вызывающие ловят
+    # (OSError, ConfigValidationError) и остаются non-fatal).
+    _strict_parse_preflight(secrets_env)
     env_vars = parse_secrets_env(secrets_env)
     # ── Merge-guard (REF-0013): тот же инвариант, что Step 3.5 — файл со значимым
     # нераспарсенным контентом (вне комментариев) не даёт себя перезаписать autogen-набором.
@@ -853,15 +880,12 @@ def _persist_new_vars(
         raise ConfigValidationError(msg)
     merged: dict[str, str] = dict(env_vars)
     merged.update(new_vars)
-    tmp_path = secrets_path.with_suffix(".env.tmp")
-    with Path(tmp_path).open("w", encoding="utf-8") as f:
-        for key, val in merged.items():
-            f.write(f"{key}={val}\n")
-    if secrets_path.exists():
-        tmp_path.chmod(secrets_path.stat().st_mode)
-    else:
-        tmp_path.chmod(0o600)
-    tmp_path.replace(secrets_path)
+    # QA R1 (DevPlan 14 T2.A): канонический atomic_write вместо фиксированного .env.tmp
+    # open("w")+chmod-after — temp создаётся 0600 (NamedTemporaryFile O_EXCL), chmod ДО
+    # os.replace (нет окна world-readable), fsync, cleanup при любом сбое; legacy st_mode
+    # НЕ наследуется — secrets.env ВСЕГДА затягивается до 0600 (tightening, паритет Step 3.5).
+    content = "".join(f"{key}={val}\n" for key, val in merged.items())
+    atomic_write(secrets_path, content, mode=0o600)
     logger.info(
         "[IMP:9][secrets_manager] %s auto-generated (values hidden) — persisted to %s",
         log_label,

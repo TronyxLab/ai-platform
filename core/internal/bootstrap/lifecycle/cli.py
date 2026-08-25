@@ -42,12 +42,16 @@ import logging
 import os
 import subprocess
 import sys
+import time
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import TypedDict, cast
 
 # DevPlan 170 W1-A3: приватный порт Privoxy из SoT firewall.py (литерал 8118 удалён)
 from core.internal.bootstrap.firewall import PRIVOXY_PORT
+
+# QA R2/T2.B: set_run_start_ts — run-start для freshness hc_done-маркера (φ11 reader)
+from core.internal.bootstrap.lifecycle import state_machine as state_machine_mod
 from core.internal.bootstrap.lifecycle.helpers.reporting import send_telegram, write_audit_log
 from core.internal.bootstrap.lifecycle.state_machine import (
     BootstrapPhase,
@@ -767,6 +771,10 @@ def _run_phases(
     notify_fn: Callable[..., object] | None = None,
 ) -> int:
     """Run phases sequentially with done/skip-check, WARN-семантика и audit (init/update общий)."""
+    # QA R2 (DevPlan 14 T2.B): run-start timestamp — reader-side freshness hc_done-маркера
+    # (φ11 принимает маркер только если marker mtime ≥ start прогона; маркер прошлого
+    # прогона не глушит глубокий healthcheck).
+    state_machine_mod.set_run_start_ts(time.time())
     audit_impl = write_audit_log if audit_fn is None else audit_fn
     notify_impl = send_telegram if notify_fn is None else notify_fn
     total = len(phases)

@@ -89,9 +89,18 @@ def oracle_secrets_manifest(
     man_path = manifest_path if manifest_path is not None else root / _MANIFEST_REL
     mods_dir = modules_dir if modules_dir is not None else root / _MODULES_DIR_REL
 
-    # W11 object-граница: yaml.safe_load → Any; типизация через cast (basedpyright strict)
-    defs_doc = cast("dict[str, object]", yaml.safe_load(defs_path.read_text(encoding="utf-8")) or {})
-    man_doc = cast("dict[str, object]", yaml.safe_load(man_path.read_text(encoding="utf-8")) or {})
+    # QA R13/G7/T2.G (DevPlan 14): read_text/safe_load оборачиваются — ЛЮБОЕ исключение
+    # загрузки превращается в RED-вердикт (нарушение в списке), а не traceback гейта.
+    try:
+        # W11 object-граница: yaml.safe_load → Any; типизация через cast (basedpyright strict)
+        defs_doc = cast("dict[str, object]", yaml.safe_load(defs_path.read_text(encoding="utf-8")) or {})
+        man_doc = cast("dict[str, object]", yaml.safe_load(man_path.read_text(encoding="utf-8")) or {})
+    except OSError as exc:
+        logger.error("[IMP:10][manifest_oracle] Cannot read manifest sources: %s", exc)
+        return [f"O0-io: cannot read definitions/manifest: {exc}"]
+    except yaml.YAMLError as exc:
+        logger.error("[IMP:10][manifest_oracle] Malformed YAML in definitions/manifest: %s", exc)
+        return [f"O0-parse: malformed YAML in definitions/manifest: {exc}"]
     defs: dict[str, dict[str, object]] = {
         str(s["name"]): s
         for s in cast("list[object]", defs_doc.get("secrets", []))
@@ -105,9 +114,16 @@ def oracle_secrets_manifest(
 
     # Реестр потребителей: name секрета → sorted[модули] из module.yaml#env_requires
     expected_consumers: dict[str, list[str]] = {}
+    violations: list[str] = []
     for mod_yaml in sorted(Path(mods_dir).glob("*/module.yaml")):
         module_name = mod_yaml.parent.name
-        doc = cast("dict[str, object]", yaml.safe_load(mod_yaml.read_text(encoding="utf-8")) or {})
+        try:
+            doc = cast("dict[str, object]", yaml.safe_load(mod_yaml.read_text(encoding="utf-8")) or {})
+        except (OSError, yaml.YAMLError) as exc:
+            # QA R13/G7/T2.G: битый module.yaml = нарушение (RED), не traceback
+            logger.error("[IMP:10][manifest_oracle] Cannot parse %s: %s", mod_yaml, exc)
+            violations.append(f"O0-parse: module.yaml '{module_name}' unreadable/unparseable: {exc}")
+            continue
         for entry in doc.get("env_requires", []) or []:
             required_name: str | None = None
             if isinstance(entry, str):
@@ -117,8 +133,6 @@ def oracle_secrets_manifest(
             else:
                 continue
             expected_consumers.setdefault(cast("str", required_name), []).append(module_name)
-
-    violations: list[str] = []
 
     # O1 — полнота в обе стороны
     violations += [

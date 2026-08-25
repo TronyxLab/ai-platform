@@ -33,17 +33,31 @@ pytestmark = pytest.mark.static_audit
 
 logger = logging.getLogger(__name__)
 
+# QA R11/T2.F: соответствие issue_cert.KEY_LENGTH → openssl-кривая
+_EC_CURVE_BY_KEYTYPE = {"ec-256": "prime256v1"}
 
-def _gen_pair(tmp_path: Path, name: str, cn: str) -> tuple[Path, Path]:
-    """Сгенерировать самоподписанную пару cert+key РЕАЛЬНЫМ openssl (tmp_path, Zero Hardcode)."""
+
+def _gen_pair(tmp_path: Path, name: str, cn: str, key_type: str = "rsa:2048") -> tuple[Path, Path]:
+    """Сгенерировать самоподписанную пару cert+key РЕАЛЬНЫМ openssl (tmp_path, Zero Hardcode).
+
+    QA R11/T2.F: key_type параметризован — prod KEY_LENGTH='ec-256' (issue_cert.py) рядом
+    с rsa:2048; pair-match обязан работать на обоих типах ключей.
+    """
     cert_path = tmp_path / f"{name}-fullchain.pem"
     key_path = tmp_path / f"{name}-privkey.pem"
+    # openssl -newkey синтаксис: rsa:N — напрямую; EC — 'ec' + pkeyopt кривой
+    # (issue_cert.KEY_LENGTH='ec-256' ↔ openssl кривая prime256v1)
+    newkey_args = (
+        ["rsa:2048"]
+        if key_type == "rsa:2048"
+        else ["ec", "-pkeyopt", f"ec_paramgen_curve:{_EC_CURVE_BY_KEYTYPE.get(key_type, 'prime256v1')}"]
+    )
     cmd = [
         "openssl",
         "req",
         "-x509",
         "-newkey",
-        "rsa:2048",
+        *newkey_args,
         "-nodes",
         "-keyout",
         str(key_path),
@@ -55,7 +69,7 @@ def _gen_pair(tmp_path: Path, name: str, cn: str) -> tuple[Path, Path]:
         f"/CN={cn}",
     ]
     proc = _sp.run(cmd, capture_output=True, text=True, timeout=60, check=False)
-    assert proc.returncode == 0, f"openssl fixture generation failed: {proc.stderr[:200]}"
+    assert proc.returncode == 0, f"openssl fixture generation failed ({key_type}): {proc.stderr[:200]}"
     return cert_path, key_path
 
 
@@ -74,6 +88,37 @@ def test_pair_match_valid(caplog, tmp_path: Path) -> None:
         "согласованная пара обязана проходить pubkey-match"
     )
     logger.critical("[IMP:9][test] pair-match VALID — matched pair accepted")
+
+
+# 🧪 TRAP[TEST] · 2026-08-25 · Regression · QA R11/T2.F — EC pair-match (прод KEY_LENGTH)
+# · Scenario: prod выпускает ec-256 (issue_cert.KEY_LENGTH), а pair-match гонялся только на
+#   rsa:2048 — несовместимость pubkey-извлечения для EC-ключей осталась бы незамеченной до DR
+# · Last fail: N/A (preventive coverage)
+# · Remove if: prod KEY_LENGTH сменит тип (обновить параметризацию)
+@pytest.mark.parametrize("key_type", ["rsa:2048", "ec-256"])
+def test_pair_match_valid_by_key_type(caplog, tmp_path: Path, key_type: str) -> None:
+    """Согласованная пара для каждого прод-типа ключа → True (rsa:2048 + ec-256)."""
+    caplog.set_level(logging.INFO)
+    cert_path, key_path = _gen_pair(tmp_path, f"valid-{key_type.replace(':', '-')}", "example.com", key_type)
+
+    assert cert_key_pair_matches(str(cert_path), str(key_path)) is True, (
+        f"pair-match обязан работать на {key_type} (прод-тип issue_cert.KEY_LENGTH)"
+    )
+    logger.critical("[IMP:9][test] pair-match VALID for %s", key_type)
+
+
+# 🧪 TRAP[TEST] · 2026-08-25 · NEGATIVE (R5) · QA R11/T2.F — кросс-типовая пара отвергается
+# · Scenario: EC-cert + RSA-key — pubkey-матч обязан провалиться независимо от типов
+# · Last fail: N/A (preventive)
+# · Remove if: вместе с pair-match механизмом
+def test_pair_match_cross_key_type_rejected(caplog, tmp_path: Path) -> None:
+    """EC-cert против RSA-key → False (pubkey не совпадают по определению)."""
+    caplog.set_level(logging.INFO)
+    cert_ec, _ = _gen_pair(tmp_path, "ec", "ec.example.com", "ec-256")
+    _, key_rsa = _gen_pair(tmp_path, "rsa", "rsa.example.com", "rsa:2048")
+
+    assert cert_key_pair_matches(str(cert_ec), str(key_rsa)) is False, "кросс-типовая пара обязана отвергаться"
+    logger.critical("[IMP:9][test] pair-match cross-type rejected")
 
 
 @ldd_trajectory

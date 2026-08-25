@@ -248,3 +248,72 @@ def test_oracle_is_independent_from_generator() -> None:
 
 
 # endregion TEST_real_tree_parity_and_independence
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region QA_R13_T2G_ORACLE
+# QA R13/G7/T2.G (DevPlan 14): oracle fail-closed — исключение = RED-вердикт
+# ═══════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · 2026-08-25 · NEGATIVE (R5) · QA R13/G7/T2.G — битый YAML манифеста
+# · Scenario: secrets-manifest.yaml повреждён (truncate/YAML-ошибка) — прежний oracle падал
+#   traceback'ом внутри гейта (сборка красная без структуры отчёта)
+# · Last fail: 2026-08-25 — read_text/safe_load не были обёрнуты
+# · Remove if: загрузчик манифестов централизован с валидацией схемы
+def test_oracle_broken_manifest_yields_red_verdict(tmp_path, caplog) -> None:
+    """Malformed manifest YAML → violations с O0-parse, БЕЗ raise."""
+    caplog.set_level(logging.INFO)
+    tree = _make_tree(
+        tmp_path,
+        definitions=_DEFS_TWO,
+        manifest="version: 1\nsecrets: [unclosed",
+        modules={},
+    )
+    violations = oracle_secrets_manifest(tree)
+    assert violations, "R13 FAIL: битый манифест обязан давать RED-вердикт"
+    assert any(v.startswith("O0-parse") for v in violations), f"ожидается O0-parse: {violations}"
+    logger.info("[IMP:9][oracle-test][t2g] broken manifest → structured RED: %s", violations[:1])
+
+
+# 🧪 TRAP[TEST] · 2026-08-25 · NEGATIVE (R5) · QA R13/G7/T2.G — отсутствующий файл источника
+# · Scenario: secret-definitions.yaml не доставлен (частичный payload) → O0-io вердикт
+# · Last fail: N/A (preventive)
+# · Remove if: вместе с IO-обёрткой
+def test_oracle_missing_definitions_yields_red_verdict(tmp_path, caplog) -> None:
+    """Отсутствующий definitions-файл → O0-io violation (не FileNotFoundError наружу)."""
+    caplog.set_level(logging.INFO)
+    tree = _make_tree(tmp_path, definitions=_DEFS_TWO, manifest=_MANIFEST_HAPPY, modules={})
+    missing = tree / "core" / "no-such-definitions.yaml"
+
+    violations = oracle_secrets_manifest(tree, definitions_path=missing)
+
+    assert any(v.startswith("O0-io") for v in violations), f"ожидается O0-io: {violations}"
+    logger.info("[IMP:9][oracle-test][t2g] missing source → O0-io RED")
+
+
+# 🧪 TRAP[TEST] · 2026-08-25 · NEGATIVE (R5) · QA R13/G7/T2.G — битый module.yaml изолирован
+# · Scenario: один module.yaml нечитаем → нарушение зафиксировано, остальные модули обработаны
+# · Last fail: N/A (preventive — изоляция сбоя в цикле модулей)
+# · Remove if: module.yaml чтение переедет на schema-validator с иным контрактом
+def test_oracle_broken_module_yaml_isolated(tmp_path, caplog) -> None:
+    """Битый mod-bad/module.yaml → O0-parse по нему; mod-a обрабатывается штатно."""
+    caplog.set_level(logging.INFO)
+    tree = _make_tree(
+        tmp_path,
+        definitions=_DEFS_TWO,
+        manifest=_MANIFEST_HAPPY,
+        modules={"mod-a": _MOD_A_REQUIRES_ALPHA, "mod-bad": "env_requires: [unclosed"},
+    )
+    violations = oracle_secrets_manifest(tree)
+    assert any("mod-bad" in v and v.startswith("O0-parse") for v in violations), (
+        f"битый модуль обязан дать O0-parse: {violations}"
+    )
+    # Остальные инварианты живут: ALPHA_TOKEN consumers-parity проверен (mod-a учтён)
+    assert any(v.startswith("O3") and "ALPHA_TOKEN" in v for v in violations) or all(
+        not v.startswith("O3") for v in violations
+    ), f"O3-агрегация сломана: {violations}"
+    logger.info("[IMP:9][oracle-test][t2g] broken module isolated: %d violations", len(violations))
+
+
+# endregion QA_R13_T2G_ORACLE

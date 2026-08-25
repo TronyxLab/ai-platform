@@ -577,7 +577,9 @@ def decide_actions(
 ## @invariants
 ##   - Успех → IMP:9 «RESTART {name} (unhealthy since {ts})»
 ##   - docker restart rc != 0 → IMP:10 + False (вызывающий → exit 1)
-def restart_container(name: str, cid: str, since: float, dry_run: bool = False, run_cmd: RunCmd | None = None) -> bool:
+def restart_container(
+    name: str, cid: str, since: float, *, dry_run: bool = False, run_cmd: RunCmd | None = None
+) -> bool:
     """Restart a container (or print plan in dry-run mode). Returns True on success."""
     if dry_run:
         logger.info("[IMP:8][watchdog][dry-run] WOULD restart %s (unhealthy since %.0f)", name, since)
@@ -609,7 +611,7 @@ def restart_container(name: str, cid: str, since: float, dry_run: bool = False, 
 ##   - PYTHONPATH={core_dir} передаётся в env дочернего процесса (cron сам без PYTHONPATH)
 ##   - Failure (rc != 0 / exception) → IMP:7 warning, False — НЕ блокирует (уведомление best-effort)
 ##   - dry-run: печатает план, без вызова
-def notify_telegram(name: str, since: float, dry_run: bool = False, run_cmd: RunCmd | None = None) -> bool:
+def notify_telegram(name: str, since: float, *, dry_run: bool = False, run_cmd: RunCmd | None = None) -> bool:
     """Send a non-blocking Telegram notification about the restart (best-effort)."""
     if dry_run:
         logger.info("[IMP:8][watchdog][dry-run] WOULD notify Telegram: restarted %s", name)
@@ -740,8 +742,14 @@ def _notify_crashloops_with_suppress(
             try:
                 save_state(path, new_state)
             except OSError as exc:
-                logger.error("[IMP:10][watchdog][state] State re-save failed: %s", exc)
-                return 1
+                # QA R4/T2.D: сбой re-save НЕ блокирует остаток батча — остальные crash-loop
+                # уведомления обрабатываются; штамп в памяти не персистирован → re-notify
+                # следующим проходом (retry-семантика). Exit 1 сохраняется за вызывающим.
+                logger.error(
+                    "[IMP:10][watchdog][state] Crashloop state re-save failed: %s — "
+                    "continuing with remaining crashloops (re-notify next pass)",
+                    exc,
+                )
     return 0
 
 
@@ -786,9 +794,15 @@ def _execute_restarts_stamp_after_success(
         try:
             save_state(path, new_state)
         except OSError as exc:
-            logger.error("[IMP:10][watchdog][state] State re-save failed: %s", exc)
-            # Штамп уже в памяти new_state, но не персистирован — сигнал внутренней ошибкой
-            return restart_failures + 1
+            # QA R4/T2.D: сбой re-save НЕ прерывает остаток батча — остальные restart'ы
+            # лечатся; штамп в памяти не персистирован → retry следующего прохода.
+            logger.error(
+                "[IMP:10][watchdog][state] State re-save failed (%s) — action counted failed, "
+                "remaining actions continue; stamp retries next pass",
+                exc,
+            )
+            restart_failures += 1
+            continue
         notify_telegram(action["name"], action["since"], dry_run=False, run_cmd=run_cmd)
     return restart_failures
 
@@ -817,10 +831,11 @@ def _execute_restarts_stamp_after_success(
 ## @changes 2026-08-24 | REF-0014 — stamp-after-success + re-save per-action; continue-on-failure;
 ##           crash-loop TG-нотификация в skip-path (watchdog.crashloop)
 def run_watchdog(
-    dry_run: bool = False,
     state_file: str | None = None,
     now: float | None = None,
     *,
+    # QA-гигиена (T2.D-волна): булевы параметры — kw-only (FBT001/FBT002)
+    dry_run: bool = False,
     facts: EnvironmentFacts | None = None,
     run_cmd: RunCmd | None = None,
 ) -> int:
