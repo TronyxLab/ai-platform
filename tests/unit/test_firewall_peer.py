@@ -5,17 +5,19 @@
 ##           build_peer_rules/collect_stale_platform_rules/verify_firewall peer-семантика.
 ##           Native imports; placement из tests/fixtures/placement/ (T0.5); tmp_path для no-op-кейса.
 ## @scope    Tests: (a) S3 содержит allow from 10.8.0.13 → 6432 (apps→data, Acceptance W2), ни одного
-##           правила без from, ни одного 5432; (b) peer-матрица включает 19000/9187/9121/9113/3100/
-##           9100/8080 (§8 S3); (c) stale-reconcile delete-команды несут source IP при ≥2 пирах
-##           на порту (инвариант 4 — баг firewall.py:268); (d) verify: peer-ALLOW от известного
-##           пира = PASS, Anywhere-публикация = FAIL; (e) single-node (без placement) → пустой план.
+##           правила без from, ни одного 5432; (b) peer-матрица включает 19000/9187/9121/3100/
+##           9100/8080 (9113 — под ключом «nginx», co-location skip в S3); (c) stale-reconcile
+##           delete-команды несут source IP при ≥2 пирах на порту (инвариант 4 — баг firewall.py:268);
+##           (d) verify: peer-ALLOW от известного пира = PASS, Anywhere-публикация = FAIL;
+##           (e) single-node (без placement) → пустой план.
 ## @invariants
 ##   - Pure functions — no subprocess, no Docker (native imports)
 ##   - Zero hardcoded paths: fixtures через Path(__file__) relative; no-op через tmp_path
 ##   - R5 anti-survivorship: (c) negative-тест на delete-форму без source (баг 268), (d) Anywhere=FAIL
 ##   - LDD: assert_ldd_imp9 (tests/helpers/gate_helpers) на success-path; failure-path — print-only
-## @rationale T2.3/T2.4 acceptance (§9): peer-план S2/S3 содержит {6432,...,9113}, НЕ содержит 5432
-##            и Anywhere; delete-команды stale-reconcile содержат `from <ip>`; single-node diff пуст.
+## @rationale T2.3/T2.4 acceptance (§9): peer-план S2/S3 содержит {6432,...,9121} + 9113 только
+##            при split nginx↔monitoring (DR-H2 fix), НЕ содержит 5432 и Anywhere; delete-команды
+##            stale-reconcile содержат `from <ip>`; single-node diff пуст.
 ## @changes 2026-08-22 · DevPlan 010 W2 T2.3/T2.4 — Created
 # endregion MODULE_CONTRACT
 
@@ -92,15 +94,17 @@ def test_build_peer_rules_s3_apps_to_pgbouncer(caplog: pytest.LogCaptureFixture)
 
 
 # region TEST_02_peer_matrix_ports (требование b)
-# 🧪 TRAP[TEST] · 2026-08-22 · S3 peer-матрица §8: 19000/9187/9121/9113/3100/9100/8080
+# 🧪 TRAP[TEST] · 2026-08-22 · S3 peer-матрица §8: 19000/9187/9121/3100/9100/8080
 # · Regression: если PEER_PUBLISH_PORTS потеряет порт (CH native 19000, exporter'ы, node-metrics),
 # ·   открытие не генерируется — метрики/логи/аналитика кросс-нодово молча теряются
-# · Scenario: s3.yaml → правила на ВСЕ порты матрицы §8 S3 (19000/9187/9121/9113/3100/9100/8080)
+# · Scenario: s3.yaml → правила на ВСЕ порты матрицы §8 S3 (19000/9187/9121/3100/9100/8080)
 # · Last fail: N/A — новый кейс W2 T2.4
 # · Remove if: каноническая порт-матрица (DevPlan 010 §6.1 T2.2) пересмотрена
-@pytest.mark.parametrize("port", [19000, 9187, 9121, 9113, 3100, 9100, 8080])
+# · 9113 исключён из матрицы (DR-H2 fix): exporter в модуле nginx, co-located с monitoring
+# ·   на apps-1 → локальный scrape без peer-правила (см. негативный тест ниже)
+@pytest.mark.parametrize("port", [19000, 9187, 9121, 3100, 9100, 8080])
 def test_build_peer_rules_s3_matrix_ports(caplog: pytest.LogCaptureFixture, port: int) -> None:
-    """build_peer_rules(s3): матрица включает 19000/9187/9121/9113/3100/9100/8080 (§8 S3)."""
+    """build_peer_rules(s3): матрица включает 19000/9187/9121/3100/9100/8080 (§8 S3)."""
     caplog.set_level(logging.DEBUG)
 
     rules = firewall.build_peer_rules(_load_fixture("s3"))
@@ -113,6 +117,98 @@ def test_build_peer_rules_s3_matrix_ports(caplog: pytest.LogCaptureFixture, port
 
 
 # endregion TEST_02_peer_matrix_ports
+
+
+# region TEST_02b_nginx_exporter_local_scrape_negative
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · DR-H2 fix — 9113 co-location skip + consumer scoping
+# · Last fail: аудит DevPlan 010 DR-H2 — старый код открывал 9113 data-1→apps-1 («ложный
+#   peer-open»), тогда как nginx-exporter жил на data-1, а рендер таргетил apps-1: скрейп
+#   был сломан во всех multi-node топологиях
+# · Scenario: (a) s3.yaml НЕ порождает 9113-правил (nginx+monitoring co-located на apps-1);
+#   (b) агент-нода БЕЗ потребителей (agent-1: hermes/litellm/langfuse) не получает правил
+#   scrape-портов 9100/8080/9187/9121/9113; (c) топология с monitoring ОТДЕЛЬНО от nginx —
+#   9113 открывается под ключом «nginx» (не service-exporters)
+# · Remove if: nginx-exporter вернёт module-granularity размещение вне модуля nginx
+def test_s3_no_9113_peer_rules_co_located(caplog: pytest.LogCaptureFixture) -> None:
+    """S3: nginx+monitoring на одной ноде → 0 peer-правил 9113 (локальный Docker-DNS scrape)."""
+    caplog.set_level(logging.DEBUG)
+
+    cmds = _rules_cmds(firewall.build_peer_rules(_load_fixture("s3")))
+    offenders = [c for c in cmds if "port 9113/tcp" in c]
+
+    print("--- LDD TRAJECTORY ---")
+    for c in cmds:
+        if "exporter" in c or "9113" in c:
+            print(c)
+    print("--- END LDD TRAJECTORY ---")
+
+    assert not offenders, f"S3: 9113 не должен публиковаться peer-правилом (co-location): {offenders}"
+    logger.info("[IMP:9][test_s3_no_9113][assert] 0 правил 9113 в S3 (co-location skip)")
+    assert_ldd_imp9(caplog)
+
+
+def test_consumer_scoping_excludes_non_monitoring_peers(caplog: pytest.LogCaptureFixture) -> None:
+    """Негативный scoping: agent-1 (без monitoring/nginx-потребителей) не получает scrape-портов."""
+    caplog.set_level(logging.DEBUG)
+
+    cmds = _rules_cmds(firewall.build_peer_rules(_load_fixture("s3")))
+    scrape_ports = ("9100", "8080", "9187", "9121", "9113")
+    offenders = [c for c in cmds if "-agent-1" in c and any(f"port {p}/tcp" in c for p in scrape_ports)]
+
+    assert not offenders, f"agent-1 не потребитель scrape-портов, но получил правила: {offenders}"
+    logger.info("[IMP:9][test_consumer_scoping][assert] agent-1 не получает 9100/8080/9187/9121/9113")
+    assert_ldd_imp9(caplog)
+
+
+def test_9113_follows_nginx_module_when_split(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> None:
+    """Топология с monitoring ОТДЕЛЬНО от nginx → 9113 открывается под ключом «nginx».
+
+    DR-H2 fix regression: правило 9113 привязано к ноде, размещающей модуль nginx
+    (exporter co-located), а не к ноде service-exporters.
+    """
+    caplog.set_level(logging.DEBUG)
+    placement_yaml = tmp_path / "placement.yaml"
+    placement_yaml.write_text(
+        """\
+context: split-lab
+vpn_enforced: true
+nodes:
+  - name: data-1
+    host: 10.8.0.11
+  - name: apps-1
+    host: 10.8.0.13
+modules:
+  postgres: { node: data-1 }
+  redis: { node: data-1 }
+  minio: { node: data-1 }
+  clickhouse: { node: data-1 }
+  backup-cron: { node: data-1 }
+  service-exporters: { node: data-1 }
+  platform-secrets: { node: data-1 }
+  hermes-agent: { mode: "off" }
+  litellm: { mode: "off" }
+  langfuse: { mode: "off" }
+  nginx: { node: apps-1 }
+  status-page: { mode: "off" }
+  monitoring: { node: data-1 }
+  logging: { node: data-1 }
+  log-collector: { mode: all-nodes }
+  node-metrics: { mode: all-nodes }
+""",
+        encoding="utf-8",
+    )
+    placement = load_placement(placement_yaml)
+    assert placement is not None
+
+    cmds = _rules_cmds(firewall.build_peer_rules(placement))
+    rule_9113 = "ufw allow from 10.8.0.11 to any port 9113/tcp comment platform-peer-9113-data-1"
+
+    assert rule_9113 in cmds, f"monitoring(data-1) обязан скрейпить nginx-exporter(apps-1) по 9113: {cmds}"
+    logger.info("[IMP:9][test_9113_split][assert] 9113 следует за модулем nginx (data-1→apps-1)")
+    assert_ldd_imp9(caplog)
+
+
+# endregion TEST_02b_nginx_exporter_local_scrape_negative
 
 
 # region TEST_03_prior_insert_before_module_deny (инвариант 4 — ufw first-match)

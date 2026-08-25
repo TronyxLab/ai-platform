@@ -71,7 +71,8 @@ _MODULE_YAML_EXPECTATIONS: list[dict] = [
         "expected": {
             "name": "log-collector",
             "install_type": "docker",
-            "spool_dir": "/var/lib/platform/alloy-data",
+            # DR-M3 fix: alloy-data — docker-managed volume ⇒ spool_dir: none (U-67, minio-прецедент)
+            "spool_dir": "none",
             "spool_volume": "alloy-data",
         },
     },

@@ -42,6 +42,9 @@ _PORT_NAME_MAP: dict[int, str] = {
     8123: "clickhouse_http",
     8642: "hermes_desktop",
     9000: "clickhouse_native",
+    # DR-L6 fix (аудит DevPlan 010): host-порт CH native peer отсутствовал в карте —
+    # сканер печатал безымянный port_19000 вместо канонического имени
+    19000: "clickhouse_native_peer",
     9090: "prometheus",
     9100: "node_exporter",
     9113: "nginx_exporter",

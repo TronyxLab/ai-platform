@@ -8,8 +8,8 @@
 ##           легаси-резолв no-op (None). Резолв: singleton {node} / all-nodes / nodes[] (nginx
 ##           multi-ingress) / off. Формы follow/public_host УДАЛЕНЫ в r2 (DevPlan 010 §2.1).
 ## @scope    core/internal/shared/ — переиспользуемая бизнес-логика размещения. Потребители:
-##           deploy_orchestrator (резолв модулей), gen_env_platform (кросс-нодовые хосты),
-##           node_config_validate (validate_topology), гейты схемы↔загрузчик (T0.6).
+##           deploy_orchestrator (резолв модулей + validate_topology в _placement_for_node),
+##           gen_env_platform (кросс-нодовые хосты), гейты схемы↔загрузчик (T0.6).
 ## @invariants
 ##   1. Single-node no-op: отсутствие placement.yaml → None; резолвер не вызывается (байт-
 ##      совместимость с легаси — DevPlan 010 §1.1).
@@ -34,7 +34,7 @@
 ##   8. lint_drift — WARNING-строки (НЕ ошибки): node.yaml#modules enabled, но не размещённые на
 ##      этой ноде, с repair-подсказкой; placement авторитетен (DevPlan 010 §1.2/§2.2 п.2).
 ## @rationale Q: почему shared/? A: потребители — deploy_orchestrator, gen_env_platform,
-##            node_config_validate, гейты (≥2) — правило shared/AGENTS.md правило 3.
+##            гейты (≥2) — правило shared/AGENTS.md правило 3.
 ##            Q: почему vpn_enforced/хост в загрузчике, а не в схеме? A: приватность (RFC1918/
 ##            CGNAT) невыразима в draft-07 без regex; решение плана T0.1 «семантика host — в
 ##            загрузчике, не в regex»; vpn_enforced — аттестация, а не структура.
@@ -55,7 +55,7 @@ from typing import cast
 
 import yaml
 
-from core.internal.shared.exceptions import ConfigParseError, ConfigValidationError
+from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError, ConfigValidationError
 from core.internal.shared.node_yaml import NodeYaml
 from core.internal.shared.schema_validator import validate_dict_against_schema
 
@@ -205,6 +205,48 @@ def _parse_placement_modules(raw_modules: object) -> dict[str, dict[str, object]
 # endregion FUNC__parse_placement_modules
 
 
+# region FUNC__validate_form_node_refs
+def _validate_form_node_refs(
+    modules: Mapping[str, Mapping[str, object]],
+    nodes: Mapping[str, str],
+) -> None:
+    """Каждая ссылка формы ({node}/{nodes:[...]}) обязана указывать на известную ноду (DR-M1 fix).
+
+    ## @purpose  Fail-fast против опечаток при ЗАГРУЗКЕ placement.yaml: {node: data-9} раньше
+    ##            молча выпадал из резолва любой ноды (модуль исчезал из деплоя без ошибки);
+    ##            частичный lazy-guard существовал только в service_host. Валидация в load_placement
+    ##            закрывает ВСЕХ потребителей (resolver, firewall, gen_env, healthcheck).
+    ## @io — ⇥ modules: имя→форма; nodes: имя→host → ⎋ None | raise ConfigValidationError
+    ## @complexity O(M*K) где K = размер nodes[]-списков
+    ## @invariants
+    ##   - mode-формы ({mode: all-nodes}/{mode: off}) не ссылаются на имена — не проверяются
+    ##   - Не-строковые элементы nodes[] отфильтрованы schema oneOf (тут только строки)
+    """
+    known = set(nodes)
+    for module, form in modules.items():
+        if "node" in form:
+            ref = str(form.get("node", "") or "")
+            if ref and ref not in known:
+                msg = (
+                    f"placement: module {module!r} references unknown node {ref!r} "
+                    f"(known: {sorted(known)}) — typo in {{node}} form"
+                )
+                raise ConfigValidationError(msg)
+        if "nodes" in form:
+            raw_list = form.get("nodes")
+            refs = [n for n in raw_list if isinstance(n, str)] if isinstance(raw_list, list) else []
+            unknown = sorted(set(refs) - known)
+            if unknown:
+                msg = (
+                    f"placement: module {module!r} references unknown nodes {unknown} "
+                    f"(known: {sorted(known)}) — typo in {{nodes:[...]}} form"
+                )
+                raise ConfigValidationError(msg)
+
+
+# endregion FUNC__validate_form_node_refs
+
+
 # region FUNC_load_placement
 def load_placement(path: str | pathlib.Path) -> Placement | None:
     """Load and validate placement.yaml → Placement, or None for single-node no-op.
@@ -263,6 +305,11 @@ def load_placement(path: str | pathlib.Path) -> Placement | None:
 
     nodes = _parse_placement_nodes(data.get("nodes"))
     modules = _parse_placement_modules(data.get("modules"))
+
+    # ── DR-M1 fix (аудит DevPlan 010): ссылки форм на ноды валидируются при загрузке ──
+    # Раньше опечатка {node: data-9} молча выпадала из резолва любой ноды (частичный
+    # lazy-guard был только в service_host) — fail-fast здесь закрывает ВСЕХ потребителей.
+    _validate_form_node_refs(modules, nodes)
 
     logger.info(
         "[IMP:9][load_placement][ok] context=%s nodes=%d modules=%d vpn_enforced=%s",
@@ -382,7 +429,13 @@ def service_host(placement: Placement, module: str, consumer_node: str) -> str |
         if consumer_node in node_list:
             return None
         if node_list:
-            host = placement.nodes[node_list[0]]
+            # DR-L4 fix: KeyError → ConfigValidationError (exit-code контракт 4; защита для
+            # программно-сконструированных Placement — load_placement валидирует refs раньше)
+            host_node = node_list[0]
+            if host_node not in placement.nodes:
+                msg = f"placement: module {module!r} nodes[0] {host_node!r} is not a known placement node"
+                raise ConfigValidationError(msg)
+            host = placement.nodes[host_node]
             logger.info("[IMP:8][service_host][multi] module=%s → host=%s (first ingress node)", module, host)
             return host
     return None
@@ -677,3 +730,49 @@ def lint_drift(
 
 
 # endregion FUNC_lint_drift
+
+
+# region FUNC_firewall_placement_args
+def firewall_placement_args(node_yaml: str | pathlib.Path) -> list[str]:
+    """CLI-аргументы --placement для firewall.sh из node.yaml ноды ([] при single-node).
+
+    ▶ ┌node.yaml┐ → ◇ context? → ⊕ path = ROOT/<context>/placement.yaml → ◇ exists? →
+      ⎋ ["--placement", path] | []
+
+    ## @purpose  DR-H1 fix (DevPlan 010 T2.3 follow-up): peer-firewall правила применяются
+    ##            только если фазы φ1/φ11 передают --placement в firewall.sh. Единая деривация
+    ##            пути — здесь (рядом с load_placement); фасад firewall.sh пробрасывает "$@".
+    ## @io — ⇥ node_yaml: путь к node.yaml ноды → ⎋ list[str] ([] = single-node no-op флаг)
+    ## @complexity 1 — NodeYaml context read + file existence check
+    ## @invariants
+    ##   - Деривация идентична deploy_orchestrator._placement_for_node:
+    ##     placement.yaml = parent(node.yaml dir).parent / <context> / "placement.yaml"
+    ##   - Fail-open ([]): нет context / нечитаемый node.yaml / отсутствующий файл →
+    ##     флаг не добавляется; валидность переданного файла проверит load_placement
+    ##     внутри firewall.py (invalid → ConfigValidationError, loud)
+    ## @rationale Q: почему в shared/? A: 2 потребителя (φ1 system_bootstrap, φ11 registry_update)
+    ##            + единая деривация пути рядом с загрузчиком — правило shared/AGENTS.md п.3.
+    """
+    try:
+        context = NodeYaml(str(node_yaml)).get_context()
+    except (ConfigNotFoundError, ConfigParseError, OSError) as exc:
+        # fail-open: bootstrap φ1 может идти до полной валидации node.yaml — peer-rules
+        # применятся на следующем прогоне; отсутствие флага = прежнее поведение
+        # (OSError покрывает пустую строку → IsADirectoryError('.') и нечитаемые пути)
+        logger.warning("[IMP:7][firewall_placement_args][skip] node.yaml unreadable: %s", exc)
+        return []
+    if not context:
+        logger.info("[IMP:8][firewall_placement_args][noop] no context in %s — no flag", node_yaml)
+        return []
+    placement_path = pathlib.Path(node_yaml).resolve().parent.parent / context / "placement.yaml"
+    if not placement_path.is_file():
+        logger.info(
+            "[IMP:8][firewall_placement_args][noop] no placement.yaml at %s — single-node",
+            placement_path,
+        )
+        return []
+    logger.info("[IMP:9][firewall_placement_args][ok] %s", placement_path)
+    return ["--placement", str(placement_path)]
+
+
+# endregion FUNC_firewall_placement_args

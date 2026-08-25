@@ -107,7 +107,7 @@ def test_generate_output_matches_original(caplog):
     )
 
 
-# endregion
+# endregion Tests: generate output structure
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -194,7 +194,7 @@ def test_load_credentials_parses_platform_db_env(caplog, tmp_path):
     logger.critical("[IMP:9][test] load_credentials parse OK — 3 keys from .platform-db.env")
 
 
-# endregion
+# endregion Tests: password-injection (DevPlan 133 W2.3)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -269,4 +269,128 @@ def test_cli_project_dir_writes_env_with_credentials(caplog, tmp_path):
     logger.critical("[IMP:9][test] CLI --project-dir OK — .env.platform written with injected password")
 
 
-# endregion
+# endregion Tests: CLI argument parsing
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region Tests: DR-H3 credentialed PLATFORM_REDIS_URL
+# ═══════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · Regression · DR-H3 fix (аудит DevPlan 010)
+# · Scenario: redis requirepass обязателен (${REDIS_PASSWORD:?}) — credential-free URL = NOAUTH
+# · Last fail: PLATFORM_REDIS_URL=redis://redis:6379/0 без пароля
+# · Remove if: redis перейдёт в no-auth режим (dev-only)
+@ldd_trajectory
+def test_redis_url_credentialed_from_credentials_dict(caplog, monkeypatch):
+    """${REDIS_PASSWORD} в шаблоне → подстановка из credentials dict (приоритет над env)."""
+    monkeypatch.delenv("REDIS_PASSWORD", raising=False)
+    data = {
+        "profiles": ["redis"],
+        "provides": {
+            "redis": {
+                "host": "redis",
+                "port": 6379,
+                "url_template": "redis://:${REDIS_PASSWORD}@redis:6379/0",
+                "networks": ["shared-cache-net"],
+            },
+        },
+    }
+
+    lines = gep.generate(
+        data, domain="test.local", project_name="myapp", credentials={"REDIS_PASSWORD": "pw-from-dict"}
+    )
+
+    print("--- LDD TRAJECTORY ---")
+    for line in lines:
+        if "REDIS" in line and "PASSWORD" not in line:
+            print(line)
+    print("--- END LDD TRAJECTORY ---")
+
+    # [IMP:9] бизнес-инвариант: URL креденцированный, пароль из dict, env не использован
+    url_line = next(line for line in lines if line.startswith("PLATFORM_REDIS_URL="))
+    assert url_line == "PLATFORM_REDIS_URL=redis://:pw-from-dict@redis:6379/0"
+    assert "${REDIS_PASSWORD}" not in url_line, "плейсхолдер остался — подстановка не выполнена"
+
+
+@ldd_trajectory
+def test_redis_url_credentialed_fallback_env(monkeypatch):
+    """Нет ключа в credentials → fallback на env REDIS_PASSWORD."""
+    monkeypatch.setenv("REDIS_PASSWORD", "pw-from-env")
+    data = {
+        "profiles": ["redis"],
+        "provides": {
+            "redis": {
+                "host": "redis",
+                "port": 6379,
+                "url_template": "redis://:${REDIS_PASSWORD}@redis:6379/0",
+                "networks": ["shared-cache-net"],
+            },
+        },
+    }
+
+    lines = gep.generate(data, domain="test.local", project_name="myapp")
+
+    assert any("PLATFORM_REDIS_URL=redis://:pw-from-env@redis:6379/0" in line for line in lines)
+
+
+def test_redis_url_placeholder_without_source_warns(caplog, monkeypatch):
+    """Ни credentials, ни env → литерал-плейсхолдер + IMP:7 warning (loud NOAUTH сигнал)."""
+    monkeypatch.delenv("REDIS_PASSWORD", raising=False)
+    caplog.set_level(logging.WARNING)
+    data = {
+        "profiles": ["redis"],
+        "provides": {
+            "redis": {
+                "host": "redis",
+                "port": 6379,
+                "url_template": "redis://:${REDIS_PASSWORD}@redis:6379/0",
+                "networks": ["shared-cache-net"],
+            },
+        },
+    }
+
+    lines = gep.generate(data, domain="test.local", project_name="myapp")
+
+    assert any("PLATFORM_REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0" in line for line in lines)
+    assert any("${REDIS_PASSWORD} placeholder has no source" in r.getMessage() for r in caplog.records), (
+        "нет loud-warning о NOAUTH — silent-деградация запрещена (DR-H3)"
+    )
+
+
+def test_redis_url_without_placeholder_untouched():
+    """Шаблон без ${REDIS_PASSWORD} не трогается (байт-совместимость легаси)."""
+    data = {
+        "profiles": ["redis"],
+        "provides": {
+            "redis": {
+                "host": "redis",
+                "port": 6379,
+                "url_template": "redis://redis:6379/0",
+                "networks": ["shared-cache-net"],
+            },
+        },
+    }
+
+    lines = gep.generate(data, domain="test.local", project_name="myapp", credentials={"REDIS_PASSWORD": "x"})
+
+    assert any("PLATFORM_REDIS_URL=redis://redis:6379/0" in line for line in lines)
+
+
+def test_sot_platform_infra_redis_template_is_credentialed():
+    """SoT core/platform-infra.yaml: redis url_template содержит ${REDIS_PASSWORD} (audit gap Row15).
+
+    Раньше SoT эмитил credential-free URL при обязательном requirepass — контракт-vs-код разрыв.
+    """
+    import yaml as _yaml
+
+    sot_path = Path(__file__).resolve().parent.parent.parent / "core" / "platform-infra.yaml"
+    with sot_path.open(encoding="utf-8") as fh:
+        data = _yaml.safe_load(fh)
+    tmpl = str(data["provides"]["redis"]["url_template"])
+
+    assert "${REDIS_PASSWORD}" in tmpl, f"SoT url_template credential-free (DR-H3 regression): {tmpl}"
+    logger.critical("[IMP:9][test] SoT redis url_template is credentialed (%s...)", tmpl[:24])
+
+
+# endregion Tests: DR-H3 credentialed PLATFORM_REDIS_URL

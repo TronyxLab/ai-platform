@@ -90,15 +90,19 @@ from core.internal.shared.placement import Placement, load_placement, resolve_no
 from core.internal.shared.platform_ports import (
     CADVISOR,
     CLICKHOUSE_NATIVE_PEER,
+    HERMES_DESKTOP_PORT,
     LANGFUSE_HOST,
     LOKI_HTTP,
+    MINIO_CONSOLE_PORT,
     NGINX_EXPORTER,
     NODE_EXPORTER,
     PLATFORM_PORT_CLICKHOUSE,
+    PLATFORM_PORT_GRAFANA,
     PLATFORM_PORT_HERMES,
     PLATFORM_PORT_LITELLM,
     PLATFORM_PORT_MINIO,
     PLATFORM_PORT_PGBOUNCER,
+    PLATFORM_PORT_PROMETHEUS,
     PLATFORM_PORT_REDIS,
     POSTGRES_EXPORTER,
     REDIS_EXPORTER,
@@ -114,27 +118,32 @@ FORBIDDEN_PORTS: tuple[int, ...] = (2375, 2376)
 PORT_MAX: int = 65535  # верхняя граница TCP/UDP порта
 
 DENY_PORT = 5432
-# Модульные внутренние порты — реестр platform-infra.yaml (provides + env_defaults):
-#   postgres 5432 (DENY_PORT), redis 6379, clickhouse 8123/9000, minio 9000/9001, litellm 4000,
-#   langfuse 3001, loki 3100, grafana 3000, prometheus 9090, hermes 9119/8642,
-#   nginx-exporter 9113, node-exporter 9100.
+# Модульные внутренние порты — ТОЛЬКО именованные константы shared/platform_ports.py
+# (зеркало platform-infra.yaml; DR-M2 fix: 13 raw-литералов заменены константами, deny-лист
+# расширен новыми кросс-нодовыми портами DevPlan 010: 6432 pgbouncer, 19000 CH native peer,
+# 9187/9121 service-exporters).
 # S-8/T10.6: DENY на уровне ufw (defense-in-depth поверх 127.0.0.1-bind в compose) И запрещены в
-# extra_ports (FORBIDDEN расширен). 8080 НЕ включён: cadvisor/status-page 127.0.0.1-bound,
-# user-проекты часто публикуют 8080 (тест-проект на test-VPS) — не блокировать.
+# extra_ports (FORBIDDEN расширен). 8080 НЕ включён: user-проекты часто публикуют 8080
+# (тест-проект на test-VPS); cadvisor/status-page защищены SERVICE_BIND_HOST + PEER-scoped
+# правилами (PEER_PUBLISH_PORTS), extra_ports для них не нужны.
 MODULE_PORTS_DENY: tuple[int, ...] = (
-    6379,
-    8123,
-    9000,
-    9001,
-    4000,
-    3001,
-    3100,
-    9090,
-    3000,
-    9119,
-    8642,
-    9113,
-    9100,
+    PLATFORM_PORT_REDIS,  # 6379
+    PLATFORM_PORT_CLICKHOUSE,  # 8123 HTTP
+    PLATFORM_PORT_MINIO,  # 9000 API
+    MINIO_CONSOLE_PORT,  # 9001 console
+    PLATFORM_PORT_LITELLM,  # 4000
+    LANGFUSE_HOST,  # 3001 host-facade
+    LOKI_HTTP,  # 3100 loki-push
+    PLATFORM_PORT_PROMETHEUS,  # 9090
+    PLATFORM_PORT_GRAFANA,  # 3000
+    PLATFORM_PORT_HERMES,  # 9119 dashboard
+    HERMES_DESKTOP_PORT,  # 8642 desktop bridge
+    NGINX_EXPORTER,  # 9113 (модуль nginx, DR-H2)
+    NODE_EXPORTER,  # 9100
+    PLATFORM_PORT_PGBOUNCER,  # 6432 — единственный кросс-нодовый PG-фасад (DevPlan 010)
+    CLICKHOUSE_NATIVE_PEER,  # 19000 — CH native peer (DevPlan 010 T2.2)
+    POSTGRES_EXPORTER,  # 9187
+    REDIS_EXPORTER,  # 9121
 )
 # Полный запрет extra_ports: Docker API + модульные порты + явный deny 5432
 FORBIDDEN_EXTRA_PORTS: tuple[int, ...] = (*FORBIDDEN_PORTS, DENY_PORT, *MODULE_PORTS_DENY)
@@ -165,11 +174,13 @@ ZABBIX_PORT: int = 10050
 # `ufw allow from <peer_host> to any port <p>/tcp comment platform-peer-<p>-<peer>`.
 # Матрица (DevPlan 010 §6.1 T2.2, TRAP §3): 6432 (pgbouncer), 6379 (redis),
 # 9000 (minio API), 8123 (CH HTTP) + 19000 (CH native peer), 3100 (loki push),
-# 9100+8080 (node-metrics), 9187/9121/9113 (service-exporters). Прямой 5432 НЕ публикуется
-# (все потребители едут на data-ноду вместе с postgres — DevPlan 010 §8). Значения — ТОЛЬКО
-# из shared/platform_ports.py (порт-литералы запрещены гейтом test_gate_port_parity).
+# 9100+8080 (node-metrics), 9187/9121 (service-exporters) + 9113 (nginx-exporter).
+# Прямой 5432 НЕ публикуется (все потребители едут на data-ноду вместе с postgres —
+# DevPlan 010 §8). Значения — ТОЛЬКО из shared/platform_ports.py (порт-литералы запрещены
+# гейтом test_gate_port_parity).
 # Ключи = имена placement-модулей (core/modules/<name>): pgbouncer-фасад 6432 живёт в модуле
-# postgres, loki-push 3100 — в модуле logging.
+# postgres, loki-push 3100 — в модуле logging, nginx-scrape 9113 — в модуле nginx
+# (DR-H2 fix: exporter co-located с nginx, см. TRAP в nginx/docker-compose.base.yml).
 #
 # 🧐 TRAP[DECISION] · 2026-08-24 · DevPlan 010 completion · Фасадные порты LLM-стека
 #   (+litellm 4000, +langfuse host 3001, +hermes dashboard 9119) добавлены в матрицу ·
@@ -187,7 +198,10 @@ PEER_PUBLISH_PORTS: dict[str, tuple[int, ...]] = {
     "clickhouse": (PLATFORM_PORT_CLICKHOUSE, CLICKHOUSE_NATIVE_PEER),  # 8123 HTTP + 19000 native-peer
     "logging": (LOKI_HTTP,),  # 3100 loki-push (центральный приём логов)
     "node-metrics": (NODE_EXPORTER, CADVISOR),  # 9100 + 8080 (scrape monitoring)
-    "service-exporters": (POSTGRES_EXPORTER, REDIS_EXPORTER, NGINX_EXPORTER),  # 9187, 9121, 9113
+    "service-exporters": (POSTGRES_EXPORTER, REDIS_EXPORTER),  # 9187 + 9121
+    # DR-H2 fix: nginx-exporter co-located с модулем nginx — 9113 публикуется nginx-нодой,
+    # а не нодой service-exporters (ранее трёхфайловое противоречие module↔renderer↔firewall)
+    "nginx": (NGINX_EXPORTER,),  # 9113 scrape stub_status-экспортёра monitoring-нодой
     # Фасадные порты LLM-стека (TRAP[DECISION] выше): потребители — nginx-ноды (проекты/vhost'ы)
     "litellm": (PLATFORM_PORT_LITELLM,),  # 4000 — LLM-фасад проектов (§8 S3)
     "langfuse": (LANGFUSE_HOST,),  # host 3001 → container 3000 (tracing UI/API проектов)
@@ -210,7 +224,8 @@ CONSUMER_OF: dict[str, frozenset[str]] = {
     "clickhouse": frozenset({"langfuse"}),
     "logging": frozenset({"log-collector", "nginx"}),  # loki-push с чужих нод + loki-vhost (T2.8)
     "node-metrics": frozenset({"monitoring"}),  # scrape 9100/8080
-    "service-exporters": frozenset({"monitoring"}),  # scrape 9187/9121/9113
+    "service-exporters": frozenset({"monitoring"}),  # scrape 9187/9121
+    "nginx": frozenset({"monitoring"}),  # DR-H2 fix: scrape nginx-exporter 9113 monitoring-нодой
     # Фасадные порты (TRAP[DECISION] выше): nginx-нода = потребители-проекты/vhost'ы;
     # litellm/langfuse получают nginx через PROJECT_HOST_SERVICES-маркер (пустые set'ы здесь)
     "litellm": frozenset(),  # LLM-фасад проектов на ingress-ноде
@@ -467,7 +482,15 @@ def collect_stale_platform_rules(
     (`delete allow <p>/tcp`) применим только к правилам без источника (Anywhere-baseline).
     """
     deletes: list[list[str]] = []
-    denied = set(MODULE_PORTS_DENY) | {DENY_PORT}
+    # ⚠️ TRAP[BUG] · 2026-08-25 · P2 · DR-M2 fix: denied-порты НЕ пропускаются в reconcile
+    # · Symptom: расширение MODULE_PORTS_DENY (6432/19000/9187/9121) сделало старый
+    #   `port in denied → skip` молчаливо сохранять ПРОТУХШИЕ peer-allow на этих портах
+    # · Root: skip появился ДО peer-правил (denied-порты не имели allow вовсе); с T2.3
+    #   peer-allow на deny-портах легитимен (pgbouncer 6432!) и при выходе порта из
+    #   placement-матрицы обязан удаляться — иначе first-match allow тенит module-deny
+    # · Fix: удаляется ЛЮБОЙ platform-* allow вне desired_allow (peer-матрица исключается
+    #   отдельной веткой ниже — ею управляет placement)
+    # · Prevention: R5-тест test_stale_reconcile_delete_carries_source_two_peers ловит
     for line in status_text.splitlines():
         # Формат: `22/tcp ALLOW IN Anywhere  # platform-baseline` /
         #         `6432/tcp ALLOW IN 10.8.0.12  # platform-peer-6432-agent-1` (source в статусе)
@@ -478,7 +501,7 @@ def collect_stale_platform_rules(
             continue
         port = int(m.group(1))
         source = m.group(2)
-        if port in desired_allow or port in denied:
+        if port in desired_allow:
             continue
         if peer_ports and port in peer_ports:
             continue  # peer-матричный порт — управляется placement, не baseline-reconcile (T2.3)

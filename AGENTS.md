@@ -313,8 +313,10 @@ VPN не строит: sslmode=disable, redis/minio без TLS — шифруе�
 
 **Security-префикс:** ни один кросс-нодовый порт (6432 pgbouncer, 6379 redis, 9000 minio,
 8123 clickhouse HTTP, 19000 CH native peer, 3100 loki push, 9100+8080 node-metrics,
-9187/9121/9113 service-exporters) не публикуется без выполненного префикса (redis requirepass,
-Loki tenant X-Scope-OrgID, pg_hba scram-sha-256 — реализовано, T2.0.*). ufw peer-ALLOW — только
+9187/9121 service-exporters, 9113 nginx-exporter [модуль nginx — DR-H2 fix: exporter co-located
+со скрейпимым nginx], фасады LLM-стека 4000 litellm / 3001 langfuse / 9119 hermes-dashboard) не
+публикуется без выполненного префикса (redis requirepass, Loki tenant X-Scope-OrgID,
+pg_hba scram-sha-256 — реализовано, T2.0.*). ufw peer-ALLOW — только
 для IP нод-пиров (`allow from <peer>`, вставка ДО module-deny); Anywhere на этих портах = FAIL;
 прямой 5432 НЕ публикуется (потребители переезжают на data-ноду вместе с postgres).
 
@@ -326,6 +328,13 @@ Loki tenant X-Scope-OrgID, pg_hba scram-sha-256 — реализовано, T2.0
 **Граница бэкапа честная:** backup-cron покрывает ТОЛЬКО postgres (pg_dumpall+WAL → внешний
 S3); project/minio/clickhouse/loki volumes не бэкапятся и в single-node. Multi-node экспозицию
 не ухудшает — фиксирует существующую (Rev: первый stateful-проект → phase-07 app-data).
+
+**SPOF-honesty (DR-L2 fix):** multi-node ≠ HA. Размещение модулей по нодам устраняет
+ресурсную конкуренцию и даёт blast-radius изоляцию (ingress/data/agent), НО каждая нода
+остаётся единой точкой отказа своего стека: failover отсутствует, автоматического
+переноса ролей нет — восстановление = re-bootstrap ноды + redeploy (RTO часы). RPO не
+улучшается multi-node'ом: бэкапы по-прежнему nightly-дампы postgres (RPO 24ч).
+Метрики/RTO/RPO и fix-forward политика — core/AGENTS.md §«Безопасность данных».
 
 Полный план: `.ai/plans/010-multi-node-module-placement/01-DevPlan.md`; сценарии S2 «данные
 отдельно» / S2b «критичные-канарейки» / S3 «data-agent-apps» — §8 плана.

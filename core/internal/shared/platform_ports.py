@@ -129,3 +129,11 @@ LOKI_HTTP: int = 3100
 # ClickHouse native cross-node peer (HOST-порт 19000: container остаётся 9000 — коллизия с minio API
 # 9000 на общей data-ноде; прецедент host≠container — langfuse 3001/3000, TRAP §3 DevPlan 010)
 CLICKHOUSE_NATIVE_PEER: int = 19000
+
+# MinIO web-console (env_defaults.MINIO_CONSOLE_PORT=9001; DR-M2 fix: константа для
+# MODULE_PORTS_DENY — ранее литерал вне SoT)
+MINIO_CONSOLE_PORT: int = 9001
+
+# Hermes desktop bridge (env_defaults.HERMES_DESKTOP_PORT=8642; DR-M2 fix: константа для
+# MODULE_PORTS_DENY — ранее литерал вне SoT)
+HERMES_DESKTOP_PORT: int = 8642

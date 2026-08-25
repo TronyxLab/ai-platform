@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import http.client
 import logging
+import os
 import shutil
 import socket
 import subprocess
@@ -144,6 +145,15 @@ def check_redis(host: str, port: str | int, timeout: int = TCP_PROBE_TIMEOUT) ->
     ## @complexity O(1) + 1 subprocess или 1 socket
     """
     if shutil.which("redis-cli"):
+        # ⚠️ TRAP[BUG] · 2026-08-25 · LOW · DR-L5 · redis-probe без auth → NOAUTH false-negative
+        # · Symptom: requirepass обязателен (T2.0a) — PING без пароля отвечает NOAUTH-error,
+        #   PONG-ветка перманентно ложная; зависимость «жива» только по TCP-fallback
+        # · Fix: REDISCLI_AUTH из env REDIS_PASSWORD (официальный env redis-cli —
+        #   пароль не светится в argv/ps); без пароля в env — прежнее поведение
+        # · Prevention: credentialed-контракт PLATFORM_REDIS_URL (DR-H3 fix, тот же аудит)
+        probe_env = dict(os.environ)
+        if os.environ.get("REDIS_PASSWORD"):
+            probe_env["REDISCLI_AUTH"] = os.environ["REDIS_PASSWORD"]
         try:
             result = subprocess.run(
                 ["redis-cli", "-h", host, "-p", str(port), "PING"],
@@ -151,6 +161,7 @@ def check_redis(host: str, port: str | int, timeout: int = TCP_PROBE_TIMEOUT) ->
                 text=True,
                 timeout=timeout,
                 check=False,
+                env=probe_env,
             )
             if "PONG" in result.stdout:
                 logger.info("[IMP:8][deps] Redis: ok (redis-cli PONG)")

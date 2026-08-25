@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# GREP_SUMMARY: nginx healthcheck check_docker_health deep check_http port-80
+# GREP_SUMMARY: nginx healthcheck check_docker_health deep check_http port-80 nginx-prometheus-exporter
 # STRUCTURE: ▶ source lib → ◇ MODE=deep? → check_docker_health + check_http localhost:80 → ⎋ | ◇ liveness: check_docker_health nginx → ⎋ 0/1
 # region MODULE_CONTRACT
 ## @purpose  Check nginx Docker container health — liveness (docker inspect) + deep (HTTP verification).
@@ -33,14 +33,18 @@ source "${SCRIPT_DIR}/../../lib/healthcheck.sh"
 
 CONTAINER="${NGINX_CONTAINER_NAME:-nginx}"
 NGINX_HTTP_PORT="${NGINX_HTTP_PORT:-80}"
+# nginx-prometheus-exporter — часть модуля nginx с DR-H2 fix (2026-08-25):
+# co-location со скрейпимым stub_status; liveness-only (scratch image, --help probe)
+EXPORTER_CONTAINER="${NGINX_EXPORTER_CONTAINER_NAME:-nginx-prometheus-exporter}"
 MODE="${1:-}"
 
 # ═══════════════════════════════════════════════════════════════════
 # Deep check: verify nginx is serving HTTP
 # ═══════════════════════════════════════════════════════════════════
 if [ "$MODE" = "deep" ]; then
-    # Step 1: Check Docker health status (same as liveness)
+    # Step 1: Check Docker health status (same as liveness) — nginx + exporter
     check_docker_health "$CONTAINER" || exit 1
+    check_docker_health "$EXPORTER_CONTAINER" || exit 1
     # Step 2: Service-specific diagnostics via check_http
     check_http "http://127.0.0.1:${NGINX_HTTP_PORT}/" "200" 5 || exit 1
     log_imp 9 "deep" "nginx deep check PASSED"
@@ -49,7 +53,8 @@ if [ "$MODE" = "deep" ]; then
 fi
 
 # ═══════════════════════════════════════════════════════════════════
-# Default (liveness): docker inspect via shared library
+# Default (liveness): docker inspect via shared library (nginx + exporter)
 # ═══════════════════════════════════════════════════════════════════
 check_docker_health "$CONTAINER" || exit 1
+check_docker_health "$EXPORTER_CONTAINER" || exit 1
 exit 0

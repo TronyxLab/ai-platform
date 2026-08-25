@@ -36,7 +36,11 @@ restart: unless-stopped
 interfaces:
   - healthcheck
 
-spool_dir: /var/lib/platform/alloy-data
+# 🧐 DR-M3 fix (аудит DevPlan 010, 2026-08-25): spool_dir → none — alloy-data это
+# docker-managed volume (root compose volumes, driver: local), host-путь /var/lib/platform/
+# не провижинится и НЕ монтируется (канон U-67: docker-volume ⇒ spool_dir: none;
+# прецедент minio/module.yaml).
+spool_dir: none
 spool_volume: alloy-data
 
 resources:

@@ -524,3 +524,123 @@ def test_unknown_node_rejected(caplog: pytest.LogCaptureFixture, tmp_path: Path)
 
 
 # endregion TEST_test_unknown_node_rejected
+
+
+# region TEST_firewall_placement_args
+
+
+# 🧐 DR-H1 fix (DevPlan 010 T2.3 wiring): фазы φ1/φ11 передают --placement в firewall.sh
+# · Rejected: деривация пути в каждой фазе локально
+# · Reason: единая деривация рядом с load_placement (SoT), 2 потребителя — shared/AGENTS.md п.3
+def test_firewall_placement_args_with_placement(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> None:
+    """placement.yaml существует → ["--placement", <path>] с канонической деривацией."""
+    caplog.set_level(logging.DEBUG)
+    node_configs = _make_node_configs(tmp_path, _CONTEXT_NAME, ["data-1"])
+    node_yaml = node_configs / "data-1" / "node.yaml"
+    ctx_dir = tmp_path / "node-configs" / _CONTEXT_NAME
+    ctx_dir.mkdir()
+    write_yaml(ctx_dir / "placement.yaml", {"context": _CONTEXT_NAME, "vpn_enforced": True})
+
+    from core.internal.shared.placement import firewall_placement_args
+
+    args = firewall_placement_args(node_yaml)
+
+    print("--- LDD TRAJECTORY ---")
+    for record in caplog.records:
+        if "[firewall_placement_args]" in record.getMessage():
+            print(record.getMessage())
+    print("--- END LDD TRAJECTORY ---")
+
+    assert args[:1] == ["--placement"], "флаг --placement отсутствует при живом placement.yaml"
+    assert Path(args[1]).is_file(), "передан путь на несуществующий файл"
+    assert args[1] == str(ctx_dir / "placement.yaml")
+    assert_ldd_imp9(caplog)
+
+
+def test_firewall_placement_args_single_node_noop(tmp_path: Path) -> None:
+    """Нет placement.yaml → [] (single-node no-op; байт-совместимость прежнего вызова)."""
+    node_configs = _make_node_configs(tmp_path, _CONTEXT_NAME, ["data-1"])
+    node_yaml = node_configs / "data-1" / "node.yaml"
+
+    from core.internal.shared.placement import firewall_placement_args
+
+    assert firewall_placement_args(node_yaml) == []
+
+
+def test_firewall_placement_args_unreadable_node_yaml_fail_open(tmp_path: Path) -> None:
+    """Нечитаемый node.yaml → [] fail-open (φ1 может идти до полной валидации)."""
+    broken = tmp_path / "broken" / "node.yaml"
+    broken.parent.mkdir()
+    broken.write_text(":::: not-yaml [\n", encoding="utf-8")
+
+    from core.internal.shared.placement import firewall_placement_args
+
+    assert firewall_placement_args(broken) == []
+
+
+# endregion TEST_firewall_placement_args
+
+
+# region TEST_form_node_refs_validation
+
+
+# 🧐 DR-M1 fix (аудит DevPlan 010): ссылки форм на ноды валидируются при загрузке
+# · Rejected: per-consumer проверки (resolver/service_host/firewall по отдельности)
+# · Reason: опечатка {node: data-9} молча выпадала из резолва — fail-fast в load_placement
+#   закрывает всех потребителей одной проверкой
+def test_load_placement_unknown_node_ref_rejected(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> None:
+    """{node: data-9} при known {data-1} → ConfigValidationError при ЗАГРУЗКЕ (не тихий пропуск)."""
+    caplog.set_level(logging.DEBUG)
+    placement_path = tmp_path / "placement.yaml"
+    write_yaml(
+        placement_path,
+        {
+            "context": _CONTEXT_NAME,
+            "vpn_enforced": True,
+            "nodes": [{"name": "data-1", "host": "10.8.0.11"}],
+            "modules": {"postgres": {"node": "data-9"}},
+        },
+    )
+
+    with pytest.raises(ConfigValidationError, match="data-9"):
+        load_placement(placement_path)
+
+    logger.info("[IMP:9][test_refs][assert] unknown {node} ref rejected at load time")
+    assert_ldd_imp9(caplog, require_imp9=False)
+
+
+def test_load_placement_unknown_nodes_list_ref_rejected(tmp_path: Path) -> None:
+    """{nodes: [apps-a, apps-z]} с неизвестным apps-z → ConfigValidationError."""
+    placement_path = tmp_path / "placement.yaml"
+    write_yaml(
+        placement_path,
+        {
+            "context": _CONTEXT_NAME,
+            "vpn_enforced": True,
+            "nodes": [{"name": "apps-a", "host": "10.8.0.13"}],
+            "modules": {"nginx": {"nodes": ["apps-a", "apps-z"]}},
+        },
+    )
+
+    with pytest.raises(ConfigValidationError, match="apps-z"):
+        load_placement(placement_path)
+
+
+def test_service_host_nodes_branch_unknown_raises_not_keyerror(tmp_path: Path) -> None:
+    """DR-L4 fix: nodes[0] вне placement.nodes → ConfigValidationError (exit 4), не KeyError."""
+    from core.internal.shared.placement import service_host
+
+    # Программно-сконструированный Placement (load-validation обошла): consumer известен,
+    # НЕ входит в nodes[] модуля, а node_list[0] неизвестен — ровно KeyError-ветка
+    placement = Placement(
+        context="ctx",
+        vpn_enforced=True,
+        nodes={"known-1": "10.8.0.11", "known-2": "10.8.0.13"},
+        modules={"nginx": {"nodes": ["ghost-x", "known-2"]}},
+    )
+
+    with pytest.raises(ConfigValidationError, match="ghost-x"):
+        service_host(placement, "nginx", "known-1")
+
+
+# endregion TEST_form_node_refs_validation

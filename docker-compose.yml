@@ -1,5 +1,5 @@
 # GREP_SUMMARY: docker-compose root include profiles networks volumes x-logging
-# STRUCTURE: ▶ include: 14 docker modules → networks: 6 external → volumes: 13 (5 bind driver_opts + 8 docker-managed) → x-logging
+# STRUCTURE: ▶ include: 15 docker modules → networks: 6 external → volumes: 13 (5 bind driver_opts + 8 docker-managed) → x-logging
 # region MODULE_CONTRACT
 ## @purpose  Root docker-compose — include: всех docker-модулей + networks + volumes + x-logging
 ## @scope    Локальный полный стек (инвариант #7) и VPS; сервисы только через include:, без инлайна
@@ -7,8 +7,8 @@
 ##   - Только include: модулей — инлайн-сервисы запрещены (core/modules/AGENTS.md запрет #7)
 ##   - Каждый модуль фильтруется profiles: [module-name] (pluggability)
 ##   - networks/volumes согласованы с platform-env.yaml
-##   - Количество модулей в STRUCTURE-комментарии — вычисляемое: 14 (DevPlan 116 T8, U-68;
-##     010 T3.1: +log-collector).
+##   - Количество модулей в STRUCTURE-комментарии — вычисляемое: 15 (DevPlan 116 T8, U-68;
+##     010 T3.1: +log-collector; 010 T3.2: +service-exporters — DR-L3 fix: счётчик синхронизирован).
 ##     При добавлении/удалении модуля обновляй комментарий (make discover-modules пересчитает include).
 ##   - volumes: root compose — ЕДИНСТВЕННЫЙ SoT (13 имён, DevPlan 116 B3 T4, U-49):
 ##     5 bind-томов с driver_opts (postgres-data, wal-archive, backup-spool, backup-logs,

@@ -41,9 +41,12 @@ import yaml
 #   Значение 5 (RestartCount > 5 = CrashLoopBackOff) НЕ меняется.
 from core.internal.healthcheck.watchdog import RESTART_LOOP_THRESHOLD
 from core.internal.shared import docker_ops  # W1: docker inspect примитив (гейт docker_sole_path)
-from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError
+from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError, ConfigValidationError
 from core.internal.shared.module_interface import invoke as invoke_module_interface
 from core.internal.shared.node_yaml import NodeYaml
+
+# DR-H4 fix: placement-awareness healthcheck (DevPlan 010 follow-up)
+from core.internal.shared.placement import load_placement, resolve_node_modules
 from core.internal.shared.timeouts import DOCKER_CMD_TIMEOUT, HEALTHCHECK_CMD_TIMEOUT  # REF-0103
 
 logger = logging.getLogger(__name__)
@@ -271,32 +274,85 @@ def check_module(
 
 # region FUNC__resolve_enabled_modules
 def _resolve_enabled_modules() -> set[str] | None:
-    """Разрешить enabled-модули ноды из node.yaml; None → фильтр выключен (все модули).
+    """Разрешить enabled-модули ноды: node.yaml ∩ placement (DR-H4 fix); None → фильтр выключен.
 
-    ## @purpose  Честный healthcheck на минимальных нодах: только enabled-модули (релиз 1.0.0).
+    ## @purpose  Честный healthcheck на минимальных нодах: только enabled-модули (релиз 1.0.0),
+    ##           а при наличии placement.yaml — ТОЛЬКО модули, размещённые на ЭТОЙ ноде
+    ##           (placement авторитетен, DevPlan 010 §1.2; DR-H4 fix: раньше читался только
+    ##           node.yaml → multi-node healthcheck проверял чужие модули / пропускал локальные).
     ## @io       ⇥ None → ⎋ set[str] | None
-    ## @complexity  O(1) — одно чтение node.yaml
+    ## @complexity  O(1) — одно чтение node.yaml (+ placement при наличии)
     ## @invariants
     ##   - node.yaml: NODE_YAML env → /opt/node-configs/<NODE_NAME>/node.yaml (нода) → None
     ##   - modules[] с enabled: true → set; нечитаемый/отсутствующий yaml → None (все модули)
+    ##   - placement.yaml = parent(node.yaml dir).parent/<context>/placement.yaml (канон деривации
+    ##     deploy_orchestrator._placement_for_node); отсутствует → node.yaml-фильтр без изменений
+    ##     (single-node байт-совместимость)
+    ##   - node_name вне placement → ConfigValidationError ловится, IMP:7 warning с repair-подсказкой,
+    ##     fallback на node.yaml-фильтр (diagnostic verb — не деплой, fail-open честнее crash'а)
     """
     import os
 
     node_yaml = os.environ.get("NODE_YAML", "")
     if not node_yaml:
-        node_name = os.environ.get("NODE_NAME", "")
-        if node_name:
-            candidate = Path(f"/opt/node-configs/{node_name}/node.yaml")
+        node_name_env = os.environ.get("NODE_NAME", "")
+        if node_name_env:
+            candidate = Path(f"/opt/node-configs/{node_name_env}/node.yaml")
             if candidate.is_file():
                 node_yaml = str(candidate)
     if not node_yaml or not Path(node_yaml).is_file():
         return None
     try:
         # node.yaml ТОЛЬКО через NodeYaml-фасад (gate node_yaml_single_source — DRIFT-088-7)
-        modules = NodeYaml(node_yaml).get_modules()
+        ny = NodeYaml(node_yaml)
+        modules = ny.get_modules()
     except (ConfigNotFoundError, ConfigParseError, OSError):
         return None
     enabled = {str(m.get("name")) for m in modules if isinstance(m, dict) and m.get("enabled") is not False}
+
+    # ── DR-H4 fix: placement-awareness — пересечение с размещением этой ноды ──
+    context = ""
+    node_name = ""
+    try:
+        context = ny.get_context()
+        node_name = str(ny.get("node.name", default="") or "")
+    except (ConfigNotFoundError, ConfigParseError, OSError):
+        context = ""
+    if context and node_name:
+        placement_path = Path(node_yaml).parent.parent / context / "placement.yaml"
+        try:
+            placement = load_placement(placement_path)
+        except (ConfigValidationError, ConfigNotFoundError, ConfigParseError) as exc:
+            logger.warning(
+                "[IMP:7][modules-healthcheck][enabled] unreadable placement %s (%s) — falling back to node.yaml filter",
+                placement_path,
+                exc,
+            )
+            placement = None
+        if placement is not None:
+            placed: set[str] | None
+            try:
+                placed = set(resolve_node_modules(placement, node_name))
+            except ConfigValidationError as exc:
+                logger.warning(
+                    "[IMP:7][modules-healthcheck][enabled] node %r not in placement (%s) — "
+                    "remove from node.yaml or add to placement.yaml; falling back to node.yaml filter",
+                    node_name,
+                    exc,
+                )
+                placed = None  # diagnostic fail-open, не деплой (healthcheck ≠ orchestrate)
+            if placed is not None:
+                filtered = enabled & placed
+                logger.info(
+                    "[IMP:9][modules-healthcheck][enabled] placement-aware filter: "
+                    "node.yaml=%d ∩ placed(%s)=%d → %d checked module(s)",
+                    len(enabled),
+                    node_name,
+                    len(placed),
+                    len(filtered),
+                )
+                return filtered
+
     logger.info("[IMP:8][modules-healthcheck][enabled] node.yaml filter: %d enabled module(s)", len(enabled))
     return enabled
 

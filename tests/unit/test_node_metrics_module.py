@@ -76,7 +76,8 @@ def test_prometheus_job_names_preserved() -> None:
 
 
 # 🧪 TRAP[TEST] · 2026-08-24 · SCENARIO · SERVICE_BIND_HOST на публикуемых портах новых модулей
-# · Scenario: node-metrics (9100/8080) и service-exporters (9187/9121/9113) биндят host-порты
+# · Scenario: node-metrics (9100/8080) и service-exporters (9187/9121) биндят host-порты
+# ·   (9113 — в модуле nginx, DR-H2 fix); log-collector НЕ публикует host-портов
 # ·   через ${SERVICE_BIND_HOST:-127.0.0.1} (T2.2); log-collector НЕ публикует host-портов
 # ·   (push-only коллектор — поверхность атаки минимальна)
 # · Last fail: N/A

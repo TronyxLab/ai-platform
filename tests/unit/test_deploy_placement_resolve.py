@@ -22,7 +22,11 @@ from pathlib import Path
 
 import pytest
 
-from core.internal.bootstrap.deploy.deploy_orchestrator import _parse_modules
+from core.internal.bootstrap.deploy.deploy_orchestrator import (
+    _parse_modules,
+    _placement_for_node,
+)
+from core.internal.shared.exceptions import ConfigValidationError
 from core.internal.shared.placement import load_placement, resolve_node_modules
 
 NODE_YAML_MULTI = """\
@@ -142,3 +146,83 @@ def test_drift_is_warning_not_error(caplog: pytest.LogCaptureFixture, tmp_path: 
 
 
 # endregion FUNC_test_drift_is_warning_not_error
+
+
+# region FUNC_test_topology_validated_in_production_path
+def _make_modules_dir(tmp_path: Path, *, extra_module: str | None = None) -> str:
+    """tmp-инвентарь core/modules: postgres + hermes-agent (+ опциональный лишний модуль).
+
+    Минимальные module.yaml (depends_on: []) — validate_topology(e) читает depends_on
+    с диска; полнота (c) требует 1:1 инвентарь↔placement-записи.
+    """
+    modules_dir = tmp_path / "modules"
+    modules_dir.mkdir()
+    for name in ("postgres", "hermes-agent"):
+        module_dir = modules_dir / name
+        module_dir.mkdir()
+        (module_dir / "module.yaml").write_text("depends_on: []\n", encoding="utf-8")
+    if extra_module:
+        module_dir = modules_dir / extra_module
+        module_dir.mkdir()
+        (module_dir / "module.yaml").write_text("depends_on: []\n", encoding="utf-8")
+    return str(modules_dir)
+
+
+def test_placement_topology_validated_in_production_path(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> None:
+    """DR-C1 fix: _placement_for_node с modules_dir вызывает validate_topology fail-fast.
+
+    Ранее валидатор был мёртвым кодом (zero production call sites) — топологические
+    ошибки ловились только тестами. Теперь wiring в production-загрузчике placement.
+    """
+    node_yaml = _make_tree(tmp_path, with_placement=True, node_yaml=NODE_YAML_MULTI)
+    modules_dir = _make_modules_dir(tmp_path)
+
+    with caplog.at_level(logging.INFO):
+        placement, node_name = _placement_for_node(node_yaml, modules_dir=modules_dir)
+
+    print("--- LDD TRAJECTORY ---")
+    for record in caplog.records:
+        if "[validate_topology]" in record.getMessage():
+            print(record.getMessage())
+    print("--- END LDD TRAJECTORY ---")
+
+    # [IMP:9] бизнес-инвариант: топология провалидирована в production-пути загрузки
+    assert placement is not None, "placement должен быть загружен"
+    assert node_name == "data-1"
+    assert any("[IMP:9][validate_topology][ok]" in r.getMessage() for r in caplog.records), (
+        "validate_topology не вызван из _placement_for_node — wiring отсутствует"
+    )
+
+
+# endregion FUNC_test_topology_validated_in_production_path
+
+
+# region FUNC_test_topology_violation_fails_fast
+def test_topology_completeness_violation_raises(tmp_path: Path) -> None:
+    """Fail-fast: модуль инвентаря без placement-записи → ConfigValidationError до деплоя."""
+    node_yaml = _make_tree(tmp_path, with_placement=True, node_yaml=NODE_YAML_MULTI)
+    # ghost-module есть в инвентаре, но нет записи в PLACEMENT_YAML → нарушение полноты (c)
+    modules_dir = _make_modules_dir(tmp_path, extra_module="ghost-module")
+
+    with pytest.raises(ConfigValidationError, match="ghost-module"):
+        _placement_for_node(node_yaml, modules_dir=modules_dir)
+
+
+# endregion FUNC_test_topology_violation_fails_fast
+
+
+# region FUNC_test_single_node_skips_validation
+def test_single_node_noop_skips_validation(tmp_path: Path) -> None:
+    """Single-node: нет placement.yaml → placement None, валидация не выполняется (байт-совместимость)."""
+    node_yaml = _make_tree(tmp_path, with_placement=False, node_yaml=NODE_YAML_SINGLE)
+    modules_dir = _make_modules_dir(tmp_path)
+
+    placement, node_name = _placement_for_node(node_yaml, modules_dir=modules_dir)
+
+    # [IMP:9] легаси no-op: валидатор не запускается, поведение идентично прежнему
+    # (node_name при этом резолвится из node.yaml — как и до wiring'а)
+    assert placement is None
+    assert node_name == "solo-1"
+
+
+# endregion FUNC_test_single_node_skips_validation

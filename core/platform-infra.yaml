@@ -123,7 +123,14 @@ provides:
   redis:
     host: redis
     port: 6379
-    url_template: "redis://redis:6379/0"
+    # 🧐 TRAP[DECISION] · 2026-08-25 · DR-H3 fix · credentialed url_template
+    # · Rejected: credential-free "redis://redis:6379/0" (прежний вид)
+    # · Reason: requirepass БЕЗУСЛОВНО обязателен (redis compose ${REDIS_PASSWORD:?}, T2.0a) —
+    #   любой проект по канону получал NOAUTH; подстановку выполняет gen_env_platform
+    #   (_apply_credentials_to_url): credentials dict → env REDIS_PASSWORD; без источника —
+    #   литерал-плейсхолдер + IMP:7 warning (loud, не silent)
+    # · Rev: если появится no-auth режим redis (dev-only) — параметризовать шаблон
+    url_template: "redis://:${REDIS_PASSWORD}@redis:6379/0"
     networks:
       - shared-cache-net
   nginx:

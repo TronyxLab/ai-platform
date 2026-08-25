@@ -248,8 +248,10 @@ def test_peer_firewall_matrix_canonical() -> None:
 
     joined = "\n".join(flat)
     assert "from" in joined, "peer-правила обязаны быть source-scoped"
-    # Порт-матрица канона (§9): суммарно по открытиям S3
-    matrix = {"6432", "6379", "9000", "8123", "19000", "3100", "9100", "8080", "9187", "9121", "9113"}
+    # Порт-матрица канона (§9): суммарно по открытиям S3.
+    # 9113 НЕ входит (DR-H2 fix): nginx-exporter co-located с monitoring на apps-1 →
+    # локальный Docker-DNS scrape, кросс-нодовое правило не порождается (co-location skip)
+    matrix = {"6432", "6379", "9000", "8123", "19000", "3100", "9100", "8080", "9187", "9121"}
     found_ports = {p for p in matrix if f"port {p}/tcp" in joined}
     logger.info("[IMP:8][gate-placement][firewall] covered ports: %s", sorted(found_ports))
     assert found_ports == matrix, f"неполная порт-матрица: отсутствуют {matrix - found_ports}"

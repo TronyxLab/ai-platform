@@ -208,7 +208,7 @@ orphan-реконсиляция и severity-based exit code {0,1,2} — в `depl
 **2. node.yaml** (`node-configs/<NODE>/node.yaml`, приватный sops-репо): contexts[].name
 (context = org), node.{name,host,owner_key,timezone: UTC}, domain, email, modules[], projects[].
 Timezone — канон UTC (backup-cron crontab 03:00-05:00 UTC); не переключать на MSK «молча».
-Валидация: `python3 -m core.internal.shared.node_config_validate`.
+Валидация: schema-проверка NodeYaml при bootstrap/converge; placement.yaml (multi-node) валидируется fail-fast `validate_topology` при деплое (`deploy_orchestrator._placement_for_node`).
 
 **3. sops/secrets:** `node-configs/secrets/<NODE>.enc.yaml` (sops/age). Цепочка детекции ключа —
 node_detect.py (env → SOPS_AGE_KEY → FILE → ~/.config/age/keys.txt → /etc/age/key.txt restore-first).

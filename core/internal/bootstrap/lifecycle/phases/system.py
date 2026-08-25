@@ -57,6 +57,9 @@ from core.internal.shared.exceptions import (
     PlatformError,
     PlatformFatalError,
 )
+
+# DR-H1 fix: peer-firewall --placement args (DevPlan 010 T2.3 wiring)
+from core.internal.shared.placement import firewall_placement_args
 from core.internal.shared.subprocess_io import CommandRunner, default_command_runner
 
 # W1-A1 (план 170): литералы таймаутов lifecycle-фаз → канон SoT (AMBER-зачистка research-D §D1).
@@ -460,6 +463,7 @@ def phase_system_bootstrap(
         runner=runner,
         facts=facts,
         script=firewall_script,
+        args=firewall_placement_args(node_yaml),
         timeout=LIFECYCLE_CMD_TIMEOUT,
         ok_msg="[IMP:9][phase:system_bootstrap] Firewall applied",
         warn_msg="[IMP:7][phase:system_bootstrap] Firewall setup failed (non-fatal): %s",

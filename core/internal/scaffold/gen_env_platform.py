@@ -238,6 +238,41 @@ def _apply_credentials_to_dsn(dsn_tmpl: str, project_name: str, credentials: dic
 
 
 # ═══════════════════════════════════════════════════════════════════
+# region FUNC_apply_credentials_to_url
+## @purpose  Password-injection для url_template (DR-H3 fix): подстановка ${REDIS_PASSWORD}
+##           в PLATFORM_REDIS_URL. Источник пароля: credentials dict → env REDIS_PASSWORD.
+##           Без обоих источников — литерал-плейсхолдер + IMP:7 warning (loud, не silent:
+##           проект получит NOAUTH — это видно в деплой-выводе).
+## @param url_val       Уже подставленный URL (после ${NAME}/${DOMAIN}/host-замены)
+## @param credentials   dict из .platform-db.env | None (ключ REDIS_PASSWORD опционален)
+## @return  str — URL с реальным паролем или литерал-плейсхолдер (+warning)
+## @complexity O(1)
+## @invariants
+##   - Подстановка ТОЛЬКО при наличии плейсхолдера ${REDIS_PASSWORD} — шаблоны без креды
+##     не трогаются (байт-совместимость легаси-тестов и синтетических yaml)
+##   - Пароль НЕ логируется (маскирование как в dsn-ветке)
+def _apply_credentials_to_url(url_val: str, credentials: dict[str, str] | None) -> str:
+    """Inject REDIS_PASSWORD into ${REDIS_PASSWORD} URL placeholders (DR-H3 fix)."""
+    if "${REDIS_PASSWORD}" not in url_val:
+        return url_val
+    pw = ""
+    if credentials:
+        pw = credentials.get("REDIS_PASSWORD", "") or ""
+    if not pw:
+        pw = os.environ.get("REDIS_PASSWORD", "") or ""
+    if not pw:
+        logger.warning(
+            "[IMP:7][gen_env_platform][url] ${REDIS_PASSWORD} placeholder has no source "
+            "(credentials/env) — emitting literal placeholder; project will get NOAUTH"
+        )
+        return url_val
+    return url_val.replace("${REDIS_PASSWORD}", pw)
+
+
+# endregion FUNC_apply_credentials_to_url
+
+
+# ═══════════════════════════════════════════════════════════════════
 # region FUNC_load_credentials
 ## @purpose  Load DB credentials from .platform-db.env (project_dir) или явного файла
 ##           (--credentials-file). Канонический парсер — shared/secrets_env_parser.
@@ -483,6 +518,8 @@ def generate(
             url_val = url_val.replace("${DOMAIN}", domain)
             if remote_host:
                 url_val = _substitute_template_host(url_val, str(host), remote_host)
+            # DR-H3 fix: credentialed URL (redis requirepass обязателен с T2.0a)
+            url_val = _apply_credentials_to_url(url_val, credentials)
             lines.append(f"PLATFORM_{svc_upper}_URL={url_val}")
 
     # Networks from provides — unique networks

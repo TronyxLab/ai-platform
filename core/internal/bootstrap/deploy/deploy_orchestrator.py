@@ -142,6 +142,7 @@ from core.internal.shared.placement import (
     load_placement,
     resolve_node_modules,
     service_host,
+    validate_topology,
 )
 
 # DevPlan 010 T2.2/T2.8: host-порты peer-публикации и vhost-upstream'ов — только из SoT
@@ -251,7 +252,7 @@ def orchestrate(
     # PHASE 2.5: MULTI-NODE RUNTIME ENV (DevPlan 010 T2.2/T2.5/T2.8) — placement-авторитетные
     # SERVICE_BIND_HOST / LOKI_TENANT / EXTRA_NO_PROXY / UPSTREAM_* ДО деплоя модулей;
     # single-node (placement None) → no-op, os.environ не трогается (байт-совместимость §1.1).
-    mn_placement, mn_node = _placement_for_node(node_yaml)
+    mn_placement, mn_node = _placement_for_node(node_yaml, modules_dir=modules_dir)
     if mn_placement is not None:
         _apply_multinode_runtime_env(mn_placement, mn_node)
 
@@ -342,19 +343,25 @@ def _preflight(core_dir: str, node_yaml: str, modules_dir: str) -> None:
 
 
 # region FUNC__placement_for_node
-## @purpose  DevPlan 010 T1.1: locate + load placement.yaml для ноды (single-node → None, no-op)
-## @io       ⇥ node_yaml: str (путь) → ⎋ tuple[Placement | None, str] (placement, node_name)
-## @complexity 1 — path derivation + load_placement
+## @purpose  DevPlan 010 T1.1: locate + load placement.yaml для ноды (single-node → None, no-op);
+##           при переданном modules_dir — fail-fast validate_topology (DR-C1 fix: production
+##           wiring валидатора, ранее вызывался только из тестов)
+## @io       ⇥ node_yaml: str (путь); modules_dir: str | None (инвентарь core/modules;
+##           None/"" → валидация пропущена — легаси-вызовы и unit-фикстуры) →
+##           ⎋ tuple[Placement | None, str] (placement, node_name)
+## @complexity 1-2 — path derivation + load_placement (+ topology validation при modules_dir)
 ## @invariants
 ##   - placement.yaml живёт в node-configs-репозитории рядом с директориями нод:
 ##     ROOT/CONTEXT/placement.yaml, где root = parent директории ноды (§2 плана)
 ##   - невалидный placement → ConfigValidationError ПРОПАГИРУЕТСЯ (fail-fast до деплоя,
 ##     инвариант 3 плана) — никаких best-effort заглушек
 ##   - отсутствие файла = легаси single-node путь (инвариант 1 плана)
+##   - validate_topology выполняется ТОЛЬКО при truthy modules_dir: проверяет инвентарь,
+##     node.yaml нод, полноту записей, exposed↔nginx, off-deps против опечаток топологии
 ## @rationale Q: почему резолв здесь, а не в secrets_validator? A: _parse_modules — единственная
 ##            точка формирования enabled/all списков деплоя; валидатор секретов остаётся
 ##            node.yaml-ориентированным (drift-проверки — его lint-слой).
-def _placement_for_node(node_yaml: str) -> tuple[Placement | None, str]:
+def _placement_for_node(node_yaml: str, *, modules_dir: str | None = None) -> tuple[Placement | None, str]:
     """Resolve context-scoped placement.yaml for this node; None when absent (legacy)."""
     node = NodeYaml(node_yaml)
     context = node.get_context()
@@ -378,6 +385,15 @@ def _placement_for_node(node_yaml: str) -> tuple[Placement | None, str]:
             len(placement.modules),
             node_name,
         )
+        # DR-C1 fix (DevPlan 010 follow-up): fail-fast валидация топологии в production-контуре.
+        # Ранее validate_topology вызывался ТОЛЬКО из тестов — топологические ошибки
+        # (неполнота, чужой context, exposed вне nginx, off-deps) ловились тестами, не деплоем.
+        if modules_dir:
+            validate_topology(
+                placement,
+                modules_dir=modules_dir,
+                node_configs_dir=str(Path(node_yaml).parent.parent),
+            )
     return placement, node_name
 
 
@@ -467,8 +483,13 @@ def multinode_runtime_env(placement: Placement, node_name: str) -> dict[str, str
 ## @purpose  Императивная обёртка multinode_runtime_env(): выставляет os.environ перед деплоем
 ##           модулей (docker_orchestrator читает os.environ при deploy_docker_module).
 ## @io       ⇥ placement, node_name → ⎋ None (side-effect: os.environ)
-def _apply_multinode_runtime_env(placement: Placement, node_name: str) -> None:
+## @invariants
+##   - placement None (single-node легаси) → no-op: os.environ НЕ трогается (байт-совместимость
+##     §1.1; guard локален — контракт не зависит от дисциплины call-site)
+def _apply_multinode_runtime_env(placement: Placement | None, node_name: str) -> None:
     """Apply multi-node runtime env to os.environ (placement-authoritative set, not setdefault)."""
+    if placement is None:
+        return  # single-node no-op (инвариант 1 плана)
     for key, value in multinode_runtime_env(placement, node_name).items():
         os.environ[key] = value
 
@@ -489,7 +510,7 @@ def _apply_multinode_runtime_env(placement: Placement, node_name: str) -> None:
 ##   - DevPlan 010 T1.1: при наличии placement.yaml enabled/all берутся из resolve_node_modules
 ##     (placement авторитетен); оверлеи остаются из node.yaml; drift node.yaml↔placement —
 ##     WARNING с repair-подсказкой, НЕ ошибка. Без placement.yaml путь байт-идентичен легаси.
-def _parse_modules(node_yaml: str, _modules_dir: str, modules_filter: str) -> ModuleLists:
+def _parse_modules(node_yaml: str, modules_dir: str, modules_filter: str) -> ModuleLists:
     """Parse node.yaml modules and apply enabled/filter/overlay resolution."""
     raw = secrets_validator.parse_modules_from_node_yaml(node_yaml)
 
@@ -522,7 +543,7 @@ def _parse_modules(node_yaml: str, _modules_dir: str, modules_filter: str) -> Mo
     # ── DevPlan 010 T1.1: placement-authoritative resolve (multi-node) ──
     # placement.yaml есть → enabled/all из resolve_node_modules (placement авторитетен,
     # node.yaml#modules для деплоя не читается); drift → WARNING (T1.2), не RED.
-    placement, placement_node = _placement_for_node(node_yaml)
+    placement, placement_node = _placement_for_node(node_yaml, modules_dir=modules_dir)
     if placement is not None and placement_node:
         # [IMP:9] drift-сигнал: node.yaml объявляет модули, которые placement не размещает
         # на этой ноде — repair-подсказка в каждой строке (удали из node.yaml или перенеси)

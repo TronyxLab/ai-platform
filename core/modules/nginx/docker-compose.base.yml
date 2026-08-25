@@ -1,6 +1,6 @@
-# @purpose  Base compose definition for nginx Docker module — container_name:nginx, profiles, x-logging, envsubst-templates, overlay-mount
-# GREP_SUMMARY: nginx docker-compose proxy-net observability-net profiles volumes envsubst-templates overlay
-# STRUCTURE: ▶ nginx:1.28-alpine [profiles:nginx] → env PLATFORM_DOMAIN → proxy-net + observability-net → port 80:80 443:443 → ┌7 templates + overlay volume + cert volume┐ → nc healthcheck → ┐
+# @purpose  Base compose definition for nginx Docker module — container_name:nginx, profiles, x-logging, envsubst-templates, overlay-mount, nginx-prometheus-exporter
+# GREP_SUMMARY: nginx docker-compose proxy-net observability-net profiles volumes envsubst-templates overlay nginx-prometheus-exporter
+# STRUCTURE: ▶ nginx:1.28-alpine [profiles:nginx] → env PLATFORM_DOMAIN → proxy-net + observability-net → port 80:80 443:443 → ┌7 templates + overlay volume + cert volume┐ → nc healthcheck → ┐ ▶ nginx-prometheus-exporter:1.5.1 [profiles:nginx] → scrape http://nginx:8081/stub_status → observability-net :9113
 # region MODULE_CONTRACT
 ## @purpose  Base compose definition for nginx Docker module — reverse proxy, TLS termination, subdomain routing
 ## @scope    Merged with root docker-compose.yml via include:
@@ -129,6 +129,53 @@ services:
       # Канон healthcheck-контракта (164 W1-4): start_period 15s default; nginx — 5s
       # (документированное исключение: быстрый старт, верхний минимум канона 10s не нужен)
       start_period: 5s
+
+  # ── Nginx Prometheus Exporter (metrics bridge) ──────────────────────────
+  # 🧐 TRAP[DECISION] · 2026-08-25 · DR-H2 fix (аудит DevPlan 010) · nginx-exporter живёт В МОДУЛЕ nginx
+  # · Rejected: оставаться в service-exporters (module-granularity placement клал бы его на data-ноду)
+  # · Reason: exporter скрейпит stub_status по Docker DNS «nginx» — co-location обязательна;
+  #   рендерер prometheus_targets таргетит ноду с модулем nginx (:9113), peer-firewall открывает
+  #   9113 под ключом «nginx» — трёхфайловое противоречие module↔renderer↔firewall устранено
+  #   в одном месте (размещение = модуль nginx)
+  # · Rev: если появится service-granularity размещение — пересмотреть ключи firewall/renderer
+  # region service:nginx-prometheus-exporter
+  nginx-prometheus-exporter:
+    image: nginx/nginx-prometheus-exporter:1.5.1@sha256:9f6d963bb2b19d706d401cc3e2c3ea8de2f1c471b96a2156ca45e76f650b1625
+    container_name: nginx-prometheus-exporter
+    profiles: [nginx]
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 32M
+          pids: 256
+        reservations:
+          memory: 16M
+    logging: *default-logging
+
+    # ⚠️ DD2: nginx is a Docker container — use Docker DNS instead of host.docker.internal
+    command:
+      - "-nginx.scrape-uri=http://nginx:8081/stub_status"
+
+    ports:
+      # [IMP:8][nginx] T2.2/T2.4: scrape-порт открыт только monitoring-ноде (peer ufw, ключ «nginx»)
+      - "${SERVICE_BIND_HOST:-127.0.0.1}:${NGINX_EXPORTER_PORT:-9113}:9113"
+
+    networks:
+      observability-net:
+        aliases:
+          - nginx-prometheus-exporter
+
+    # ⚠️ TRAP[BUG] · 2026-07-03 · P1 · Healthcheck disabled: scratch image has no shell/wget/curl.
+    # · Healthcheck is REQUIRED for docker compose up -d --wait (exit code 1 without it).
+    healthcheck:
+      # ✅ TRAP[DECISION] · 2026-07-12 · — · Verified binary path /usr/bin/nginx-prometheus-exporter
+      test: ["CMD", "/usr/bin/nginx-prometheus-exporter", "--help"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+  # endregion service:nginx-prometheus-exporter
 
 networks:
   proxy-net:

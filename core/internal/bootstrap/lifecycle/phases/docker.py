@@ -41,6 +41,9 @@ from core.internal.shared.exceptions import (
     PlatformFatalError,
 )
 
+# DR-H1 fix: peer-firewall --placement args (DevPlan 010 T2.3 wiring)
+from core.internal.shared.placement import firewall_placement_args
+
 logger = logging.getLogger(__name__)
 
 # ── Import helpers from lifecycle/helpers (public I/O API, односторонняя зависимость) ──
@@ -520,7 +523,16 @@ def _registry_step_firewall(
         return False
     try:
         runner = runner if runner is not None else default_command_runner()
-        runner.run(["bash", firewall_script], non_fatal=True, fatal_rc=(127,), timeout=LIFECYCLE_CMD_TIMEOUT)
+        node_yaml = str(source.get("NODE_YAML", "") or "")
+        # DR-H1 fix (DevPlan 010 T2.3): peer-rules применяются и в update-режиме —
+        # --placement пробрасывается когда у ноды есть placement.yaml ([] при single-node)
+        placement_args = firewall_placement_args(node_yaml) if node_yaml else []
+        runner.run(
+            ["bash", firewall_script, *placement_args],
+            non_fatal=True,
+            fatal_rc=(127,),
+            timeout=LIFECYCLE_CMD_TIMEOUT,
+        )
         logger.info("[IMP:9][phase:registry_update] Firewall baseline re-applied (incremental)")
     except (OSError, PlatformError) as e:  # noqa: EXC — non-fatal (best-effort, как privoxy/firewall в φ1)
         logger.warning("[IMP:7][phase:registry_update] Firewall re-apply failed (non-fatal): %s", e)

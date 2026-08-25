@@ -76,7 +76,7 @@ provides:
   redis:
     host: redis
     port: 6379
-    url_template: redis://redis:6379/0
+    url_template: redis://:${REDIS_PASSWORD}@redis:6379/0
     networks:
     - shared-cache-net
   nginx:
@@ -125,12 +125,12 @@ port_mappings:
   MONITORING_GRAFANA_PORT: 3000
   NGINX_PORT: 80
   NGINX_NGINX_PORT: 443
+  NGINX_NGINX_PROMETHEUS_EXPORTER_PORT: 9113
   NODE_METRICS_PORT: 8080
   NODE_METRICS_NODE_EXPORTER_PORT: 9100
   POSTGRES_PORT: 6432
   REDIS_PORT: 6379
-  SERVICE_EXPORTERS_PORT: 9113
-  SERVICE_EXPORTERS_REDIS_EXPORTER_PORT: 9121
+  SERVICE_EXPORTERS_PORT: 9121
   SERVICE_EXPORTERS_POSTGRES_EXPORTER_PORT: 9187
   SERVICE_EXPORTERS_PGBOUNCER_EXPORTER_PORT: 9127
 env_defaults:
@@ -247,11 +247,11 @@ test_ports:
   nginx:
     port_18080: 18080
     port_18443: 18443
+    port_19113: 19113
   node-metrics:
     port_18081: 18081
     port_19100: 19100
   service-exporters:
-    port_19113: 19113
     port_19127: 19127
   status-page:
     port_18082: 18082

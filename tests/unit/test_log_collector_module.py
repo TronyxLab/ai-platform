@@ -152,7 +152,8 @@ def test_module_yaml_contract(caplog) -> None:
     assert "logging" in data.get("depends_on", []), (
         "depends_on должен включать logging (010 §2.2 правило 8: log-collector требует logging — иначе оба off)"
     )
-    assert data.get("spool_dir") == "/var/lib/platform/alloy-data"
+    # DR-M3 fix: alloy-data — docker-managed volume ⇒ spool_dir: none (канон U-67, прецедент minio)
+    assert data.get("spool_dir") == "none"
     assert data.get("spool_volume") == "alloy-data"
     assert data.get("interfaces", []) == ["healthcheck"]
 

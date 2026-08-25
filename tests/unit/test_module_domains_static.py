@@ -360,14 +360,18 @@ def test_clickhouse_users_xml_no_hardcoded_password(caplog) -> None:
 
 NODE_METRICS_COMPOSE = Path(_module_dir("node-metrics")) / "docker-compose.base.yml"
 SERVICE_EXPORTERS_COMPOSE = Path(_module_dir("service-exporters")) / "docker-compose.base.yml"
+# DR-H2 fix: nginx-exporter живёт в модуле nginx (co-location со stub_status)
+NGINX_COMPOSE = Path(_module_dir("nginx")) / "docker-compose.base.yml"
 
 NODE_METRICS_EXPECTED_IMAGES = {
     "cadvisor": "ghcr.io/google/cadvisor:v0.60.5@sha256:1eb9bde04dab65b919bc51da9e7cf8eceb40d57e61ac9e93e373100369d90cd6",
     "node-exporter": "prom/node-exporter:v1.12.1@sha256:da83fae85603c4e47e6c68369a7d746e2dda683dc35ea2e234b4f171e0d92798",
 }
 SERVICE_EXPORTERS_EXPECTED_IMAGES = {
-    "nginx-prometheus-exporter": "nginx/nginx-prometheus-exporter:1.5.1@sha256:9f6d963bb2b19d706d401cc3e2c3ea8de2f1c471b96a2156ca45e76f650b1625",
     "redis-exporter": "oliver006/redis_exporter:v1.88.0@sha256:ead15fa913b45314068b9237bb5eff1e97bcb41d63fbe6267befe34667b5f856",
+}
+NGINX_EXPORTER_EXPECTED_IMAGE = {
+    "nginx-prometheus-exporter": "nginx/nginx-prometheus-exporter:1.5.1@sha256:9f6d963bb2b19d706d401cc3e2c3ea8de2f1c471b96a2156ca45e76f650b1625",
 }
 
 
@@ -418,7 +422,8 @@ def test_split_metrics_compose_healthcheck(compose_path: str, expected: dict, ca
     [
         ("node", "cadvisor", "8080"),
         ("node", "node-exporter", "9100"),
-        ("service", "nginx-prometheus-exporter", "9113"),
+        # DR-H2 fix: nginx-exporter — в модуле nginx (co-location), не в service-exporters
+        ("nginx", "nginx-prometheus-exporter", "9113"),
         ("service", "redis-exporter", "9121"),
         ("service", "postgres-exporter", "9187"),
     ],
@@ -426,17 +431,18 @@ def test_split_metrics_compose_healthcheck(compose_path: str, expected: dict, ca
 )
 def test_split_metrics_image_and_port(compose_key: str, service: str, port: str, caplog) -> None:
     """Образы с digest-pin и host-port маппингом (SERVICE_BIND_HOST — T2.2)."""
-    expected = (
-        NODE_METRICS_EXPECTED_IMAGES
-        if compose_key == "node"
-        else dict(
+    if compose_key == "node":
+        path, expected = NODE_METRICS_COMPOSE, NODE_METRICS_EXPECTED_IMAGES
+    elif compose_key == "nginx":
+        path, expected = NGINX_COMPOSE, NGINX_EXPORTER_EXPECTED_IMAGE
+    else:
+        path = SERVICE_EXPORTERS_COMPOSE
+        expected = dict(
             SERVICE_EXPORTERS_EXPECTED_IMAGES,
             **{
                 "postgres-exporter": "quay.io/prometheuscommunity/postgres-exporter:v0.20.1@sha256:4f3d82803c1f99ea5e767890de3557d2479ebbc711f63f2e04c663daa840057a"
             },
         )
-    )
-    path = NODE_METRICS_COMPOSE if compose_key == "node" else SERVICE_EXPORTERS_COMPOSE
     svc = _load_compose(path)["services"][service]
 
     image = _strip_cadvisor_default(svc["image"])

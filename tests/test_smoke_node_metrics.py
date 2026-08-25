@@ -167,10 +167,10 @@ def node_metrics_compose():
     )
 
     # ── Step 4: Remove stale containers from shared stack ─────────────────────
+    # (nginx-prometheus-exporter-test убран — DR-H2 fix: exporter в модуле nginx)
     stale_containers = [
         "cadvisor-test",
         "node-exporter-test",
-        "nginx-prometheus-exporter-test",
         "redis-exporter-test",
         "postgres-exporter-test",
     ]
@@ -472,7 +472,7 @@ def test_node_metrics_healthcheck(caplog, node_metrics_compose) -> None:
         "NODE_EXPORTER_PORT": str(_NODE_EXPORTER_PORT),
         "CADVISOR_CONTAINER_NAME": _CADVISOR_CONTAINER,
         "NODE_EXPORTER_CONTAINER_NAME": _NODE_EXPORTER_CONTAINER,
-        "NGINX_EXPORTER_CONTAINER_NAME": "nginx-prometheus-exporter-test",
+        # nginx-exporter убран (DR-H2 fix): контейнер принадлежит модулю nginx
         "REDIS_EXPORTER_CONTAINER_NAME": "redis-exporter-test",
     }
     result = subprocess.run(
