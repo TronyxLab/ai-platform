@@ -52,6 +52,10 @@ _GENERATED_FILES = [
 def test_manifests_up_to_date(caplog):
     """Verify all generated files are up to date via git diff --exit-code.
 
+    АРБИТР ВОПРОСА «дерево == HEAD» (DevPlan 16 T2.E): divergence = коммит ещё не сделан.
+    Repair-действие — COMMIT (не make generate-manifests: диск уже == генераторам, это
+    вопрос парного арбитра check-manifests в manifest_driver).
+
     Replaces subprocess.run(["make", "check-manifests"]) with direct git diff --exit-code
     on the generated files list synced from __check_manifests_original in Makefile.
     Saves ~0.5s by eliminating make-fork indirection (DevPlan 046 W3-2).
@@ -79,12 +83,19 @@ def test_manifests_up_to_date(caplog):
     if result.returncode != 0:
         diff_output = result.stdout or result.stderr or "(no diff output)"
         logger.error(
-            "[IMP:10][test_manifests_up_to_date] FAILED: Generated manifests out of date\n%s",
+            "[IMP:10][test_manifests_up_to_date] FAILED: generated files differ from committed HEAD\n%s",
             diff_output,
         )
+        # DevPlan 16 T2.E (проц.№1): арбитр отвечает на вопрос «дерево == HEAD» —
+        # правильное действие КОММИТ, а не регенерация (диск уже == генераторам;
+        # make generate-manifests здесь no-op и вводит в заблуждение).
         pytest.fail(
-            f"Generated manifests are out of date (exit code {result.returncode}).\n"
-            f"Run: make generate-manifests\n\n"
+            f"Generated manifests differ from committed HEAD (git diff exit={result.returncode}).\n"
+            ">>> Правильное действие: СКОММИТИТЬ их — git add <files> && git commit.\n"
+            ">>> НЕ запускай make generate-manifests: этот арбитр проверяет 'дерево == HEAD',\n"
+            "    диск УЖЕ соответствует генераторам (это арбитр check-manifests).\n"
+            ">>> Если файлы правились руками ВНЕ GENERATED-регионов — правка будет затёрта:\n"
+            "    откатись или правь SoT + перегенерируй осознанно.\n"
             f"Diff output:\n{diff_output}"
         )
 

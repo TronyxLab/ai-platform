@@ -40,6 +40,7 @@ import pathlib
 import pytest
 from _conftest.ldd import _print_ldd_trajectory
 
+import core.internal.monitoring.config_renderer as mcr
 from core.internal.monitoring.config_renderer import (
     _parse_retention_hours,
     _str_to_bool,
@@ -461,3 +462,84 @@ def test_load_l3_project_config(caplog) -> None:
     assert result2 == {}
 
     _print_ldd_trajectory(caplog, "test_load_l3_project_config")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# DevPlan 16 T2.A (P1-2): node_targets wiring — render_node_targets_if_placement
+# ═══════════════════════════════════════════════════════════════════
+
+
+def _make_node_tree(
+    tmp_path: pathlib.Path, ctx: str = "wired", *, with_placement: bool = True
+) -> tuple[pathlib.Path, pathlib.Path]:
+    """node.yaml + placement.yaml по канону резолвера (parent.parent/<ctx>/placement.yaml)."""
+    nc_root = tmp_path / "nc"
+    node_dir = nc_root / "data-1"
+    node_dir.mkdir(parents=True)
+    (node_dir / "node.yaml").write_text(
+        f"node:\n  name: data-1\ncontexts: [{{name: {ctx}}}]\n",
+        encoding="utf-8",
+    )
+    placement_path = nc_root / ctx / "placement.yaml"
+    if not with_placement:
+        return node_dir / "node.yaml", placement_path
+    placement_path.parent.mkdir()
+    placement_path.write_text(
+        f"context: {ctx}\nvpn_enforced: true\n"
+        f"nodes: [{{name: data-1, host: 10.8.0.11}}]\n"
+        f"modules:\n  postgres: {{node: data-1}}\n  log-collector: {{mode: all-nodes}}\n",
+        encoding="utf-8",
+    )
+    return node_dir / "node.yaml", placement_path
+
+
+# 🧪 TRAP[TEST] · SCENARIO · DevPlan 16 T2.A P1-2 · placement → nodes/*.json рендерятся
+# · Last fail: аудит 15 P1-2 — generate_node_targets имел 0 production-вызовов (DI-seam без
+#   wiring): file_sd нодовых таргетов не рендерился, RemoteNodeDown/LokiCollectorStale мертвы
+# · Scenario: NODE_YAML + placement → шаг node_targets пишет nodes/*.json в
+#   platform_root/prometheus-targets; postgres-exporter.json содержит host:9187
+# · Remove if: node-targets переезжают в отдельный verb с собственной фикстурой
+def test_node_targets_rendered_when_placement(tmp_path, monkeypatch, caplog) -> None:
+    import json as _json
+
+    caplog.set_level(logging.INFO)
+    node_yaml, _placement_path = _make_node_tree(tmp_path)
+    monkeypatch.setenv("NODE_YAML", str(node_yaml))
+    platform_root = tmp_path / "platform"
+    platform_root.mkdir()
+
+    mcr.render_node_targets_if_placement(platform_root)
+
+    nodes_dir = platform_root / "prometheus-targets" / "nodes"
+    assert nodes_dir.is_dir(), f"nodes/ обязан рендериться при placement: {nodes_dir}"
+    pg = _json.loads((nodes_dir / "postgres-exporter.json").read_text())
+    pg_targets = pg.get("targets", []) if isinstance(pg, dict) else pg
+    assert any("10.8.0.11:9187" in str(t) for t in pg_targets), f"postgres scrape host:port: {pg}"
+    # all-nodes job присутствует на каждой ноде
+    ne = _json.loads((nodes_dir / "node-exporter.json").read_text())
+    ne_targets = ne.get("targets", []) if isinstance(ne, dict) else ne
+    assert any("10.8.0.11" in str(t) for t in ne_targets), ne
+
+    logger.info("[IMP:9][node_targets][assert] file_sd nodes/*.json отрендерены из placement")
+
+
+# 🧪 TRAP[TEST] · REGRESSION · DevPlan 16 T2.A · single-node → skip, 0 файлов
+# · Scenario: NODE_YAML есть, но placement.yaml отсутствует → IMP:8 skip, nodes/ не создаётся
+#   (байт-совместимость легаси: single-node не начинает писать file_sd внезапно)
+# · Last fail: N/A — контракт плана (single-node путь байт-идентичен)
+# · Remove if: single-node fallback-рендер станет каноном
+def test_single_node_skips_node_targets(tmp_path, monkeypatch, caplog) -> None:
+    import logging as _logging
+
+    caplog.set_level(_logging.INFO)
+    node_yaml, _ = _make_node_tree(tmp_path, with_placement=False)  # placement.yaml НЕ создаём
+    monkeypatch.setenv("NODE_YAML", str(node_yaml))
+    platform_root = tmp_path / "platform"
+    platform_root.mkdir()
+
+    mcr.render_node_targets_if_placement(platform_root)
+
+    assert not (platform_root / "prometheus-targets" / "nodes").exists(), (
+        "single-node обязан пропустить рендер (байт-совместимость)"
+    )
+    assert "[IMP:8]" in caplog.text and "single-node" in caplog.text

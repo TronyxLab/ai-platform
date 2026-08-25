@@ -44,7 +44,11 @@ ALLOWLIST: dict[str, int] = {
     "core/internal/bootstrap/converge/reconciler.py": 800,
     # 650 → 700 (DevPlan 001 T5.4, 2026-08-16): +_sync_instructions (Step 5b) + _detect_project_type —
     # .kilo/-синк из живого канона при adopt; декомпозиция adopter — follow-up вне скоупа
-    "core/internal/scaffold/project_adopter.py": 700,
+    # 700 → 780 (DevPlan 16 T2.D, 2026-08-25): P1-16 неинтерактивная деградация —
+    # _prompt_yes_no (TTY-guard, NonInteractiveBlocked с состоянием+rollback-hint) + --yes.
+    # Осознанное решение владельца лимита; следующая декомпозиция — вынос промпт-машины
+    # в scaffold_helpers при первом же touch сверх 780.
+    "core/internal/scaffold/project_adopter.py": 780,
 }
 
 # Test giants (DevPlan 172 W3.3, Brief H1/H10): лимиты = текущий размер + headroom 5-8%.

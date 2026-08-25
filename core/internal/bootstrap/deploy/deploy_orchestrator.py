@@ -126,7 +126,12 @@ from core.internal.shared import deploy_paths  # 142 W2: status-metrics.json →
 # DEPLOY_BEST_EFFORT=True: failing step → WARN, деплой продолжается; WARN→exit 0; HC_DONE_MARKER всегда.
 # REF-0110: topo-failure (цикл/неизвестная зависимость depends_on) — ИСКЛЮЧЕНИЕ из best-effort:
 # ConfigValidationError пробрасывается до первого деплоя (fail-fast), main() маппит в exit 4.
-from core.internal.shared.exceptions import ConfigValidationError, PlatformError
+from core.internal.shared.exceptions import (
+    ConfigNotFoundError,
+    ConfigParseError,
+    ConfigValidationError,
+    PlatformError,
+)
 
 # DevPlan 118 C6: единый путь litellm-config.yml — shared/llm_paths (литерал удалён).
 from core.internal.shared.llm_paths import litellm_config_path
@@ -343,6 +348,26 @@ def _preflight(core_dir: str, node_yaml: str, modules_dir: str) -> None:
 # endregion FUNC__preflight
 
 
+# region FUNC__read_node_yaml_projects
+def _read_node_yaml_projects(node_yaml_path: Path) -> list[dict[str, object]]:
+    """Read node.yaml#projects with fail-fast error wrapping (DevPlan 16 T2.A).
+
+    ## @purpose  projects_scan-хелпер: ошибка чтения ЛЮБОГО node.yaml контекста →
+    ##            ConfigValidationError (fail-fast; молчаливый partial-скан скрыл бы
+    ##            чужие exposed-проекты). Вынесен из цикла — PERF203 без потери семантики.
+    ## @io        ⇥ node_yaml_path → ⎋ list[dict] (поля name/domain/expose/target_node)
+    ## @raises    ConfigValidationError: нечитаемый/невалидный node.yaml
+    """
+    try:
+        return NodeYaml(str(node_yaml_path)).get_projects()
+    except (ConfigNotFoundError, ConfigParseError, OSError, ConfigValidationError) as exc:
+        msg = f"projects_scan: node.yaml unreadable ({node_yaml_path}): {exc}"
+        raise ConfigValidationError(msg) from exc
+
+
+# endregion FUNC__read_node_yaml_projects
+
+
 # region FUNC__placement_for_node
 ## @purpose  DevPlan 010 T1.1: locate + load placement.yaml для ноды (single-node → None, no-op);
 ##           при переданном modules_dir — fail-fast validate_topology (DR-C1 fix: production
@@ -392,10 +417,30 @@ def _placement_for_node(node_yaml: str, *, modules_dir: str | None = None) -> tu
         # Ранее validate_topology вызывался ТОЛЬКО из тестов — топологические ошибки
         # (неполнота, чужой context, exposed вне nginx, off-deps) ловились тестами, не деплоем.
         if modules_dir:
+            context_root = Path(node_yaml).parent.parent
+
+            def _scan_context_projects() -> list[dict[str, object]]:
+                """Скан проектов контекста (node.yaml#projects) для exposed-валидации (T2.A).
+
+                ## @purpose  DevPlan 16 T2.A (P1-1): прод-вызов validate_topology получает
+                ##            projects_scan — тот же источник, что vhost_renderer/project_registry
+                ##            (node.yaml#projects каждой ноды контекста). Без скана
+                ##            exposed target_node/FQDN-инварианты проверялись только тестами.
+                ## @io        ⇥ — → ⎋ list[dict] (поля name/domain/expose/target_node)
+                ## @invariants  Ошибка чтения ЛЮБОГО node.yaml → ConfigValidationError
+                ##              (fail-fast: невалидный инвентарь = невалидная топология).
+                """
+                return [
+                    proj
+                    for ny_path in sorted(context_root.glob("*/node.yaml"))
+                    for proj in _read_node_yaml_projects(ny_path)
+                ]
+
             validate_topology(
                 placement,
                 modules_dir=modules_dir,
-                node_configs_dir=str(Path(node_yaml).parent.parent),
+                node_configs_dir=str(context_root),
+                projects_scan=_scan_context_projects,
             )
     return placement, node_name
 

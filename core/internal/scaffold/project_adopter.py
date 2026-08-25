@@ -78,6 +78,20 @@ class AdoptionResult:
 # endregion dataclass_AdoptionResult
 
 
+# region class_NonInteractiveBlocked
+class NonInteractiveBlocked(RuntimeError):
+    """Интерактивный промпт при не-TTY stdin без --yes/--force (DevPlan 16 T2.D, P1-16).
+
+    ## @purpose  Чистая деградация вместо EOFError-traceback после частичной адопции:
+    ##            main() ловит исключение, печатает состояние + rollback-hint, rc=2.
+    ## @io — ⇥ message: str → ⎋ instance
+    ## @complexity O(1)
+    """
+
+
+# endregion class_NonInteractiveBlocked
+
+
 # region class_ProjectAdopter
 class ProjectAdopter:
     """Adopt an existing project into the ai-platform lifecycle.
@@ -96,14 +110,18 @@ class ProjectAdopter:
         node: str,
         domain: str | None = None,
         force: bool = False,
+        yes: bool = False,
     ) -> None:
-        """Initialize ProjectAdopter with validated parameters (project_dir/name/org/node/domain/force)."""
+        """Initialize ProjectAdopter with validated parameters (project_dir/name/org/node/domain/force/yes)."""
         self.project_dir = project_dir.resolve()
         self.name = name
         self.org = org
         self.node = node
         self.domain = domain if domain else None
         self.force = force
+        # DevPlan 16 T2.D (P1-16): --yes — неинтерактивный режим автоматизации
+        # (промпты отвечаются «yes» без TTY; отличается от --force — регенерация Makefile/AGENTS.md)
+        self.yes = yes
 
         # Derived paths
         self.yaml_file = self.project_dir / "ai-platform.yaml"
@@ -115,6 +133,44 @@ class ProjectAdopter:
         self.compose_profiles = os.environ.get("COMPOSE_PROFILES") or _load_profiles()
 
         self._log_prefix = "adopt"
+
+    # region FUNC__prompt_yes_no
+    ## @purpose  Единая точка интерактивных промптов адоптера (DevPlan 16 T2.D / P1-16):
+    ##           --yes → True без чтения stdin (автоматизация); force → вызов не происходит
+    ##           (промпт пропущен выше); TTY-stdin → обычный input(); не-TTY (pipe/CI) →
+    ##           NonInteractiveBlocked с перечнем созданного + rollback-hint — НИКОГДА
+    ##           EOFError-traceback после частичной адопции.
+    ## @io       ⇥ question: str → ⎋ bool · ⚡ NonInteractiveBlocked
+    ## @complexity O(1)
+    def _prompt_yes_no(self, question: str) -> bool:
+        """Ask a yes/no question; degrade cleanly on non-TTY stdin (T2.D)."""
+        if self.yes:
+            logger.info("[IMP:8][%s][prompt] --yes: auto-answer yes: %s", self._log_prefix, question)
+            return True
+        if not sys.stdin.isatty():
+            created = (
+                "; ".join(
+                    self.project_dir.name
+                    and [
+                        str(p.relative_to(self.project_dir.parent))
+                        for p in sorted(self.project_dir.rglob("*"))
+                        if p.is_file()
+                    ][:10]
+                )
+                or "(ничего)"
+            )
+            msg = (
+                f"adopt-project требует интерактивный ввод (stdin не TTY), вопрос: {question!r}. "
+                f"Создано на данный момент: {created}. "
+                "Варианты: перезапустить c --force (пропустить промпты) или --yes "
+                "(авто-yes); откат — remove-project (данные НЕ удаляет)."
+            )
+            raise NonInteractiveBlocked(msg)
+        print(f"  {question} [y/N] ", end="", file=sys.stderr)
+        response = input().strip().lower()
+        return response in {"y", "yes"}
+
+    # endregion FUNC__prompt_yes_no
 
     # region FUNC_generate_minimal_ai_platform_yaml
     ## @purpose  Generate minimal ai-platform.yaml (auto-type-detect frontend/backend; exists → "exists"). · ⇥ None → ⎋ str "generated"|"exists" · @complexity O(1) · Не перезаписывает существующий yaml; делегирует scaffold_helpers.gen_ai_platform_yaml
@@ -167,10 +223,11 @@ class ProjectAdopter:
         logger.info("[IMP:7][%s][simplify] Simplifying deploy.yml to use reusable workflow (K4)", self._log_prefix)
 
         # Interactive prompt if not force
+        # DevPlan 16 T2.D (P1-16): не-TTY без --yes/--force → NonInteractiveBlocked (rc≠0,
+        # чистое сообщение + состояние, БЕЗ EOFError traceback после частичной адопции)
         if not self.force:
-            print("  Rewrite deploy.yml to use reusable workflow? [y/N] ", end="", file=sys.stderr)
-            response = input().strip().lower()
-            if response not in {"y", "yes"}:
+            response = self._prompt_yes_no("Rewrite deploy.yml to use reusable workflow?")
+            if not response:
                 logger.info("[IMP:7][%s][simplify] deploy.yml simplification skipped", self._log_prefix)
                 return False
 
@@ -599,7 +656,7 @@ jobs:
             resolved = NodeYaml.resolve(
                 node_name=self.node,
                 config_dir=str(Path(projects_root) / self.org) if projects_root else None,
-            )._path  # pyright: ignore[reportAttributeAccessIssue] — W11-G1 cross-file: NodeYaml.resolve returns typed resolve result, _path is private cache attr
+            )._path  # pyright: ignore[reportAttributeAccessIssue] — W11-G1 cross-file: NodeYaml.resolve typed result, _path private cache attr; SLF001 — advisory-сигнал agent-check по контракту (receive_flow.py:835 прецедент)
             return Path(resolved)
         except ConfigNotFoundError:
             # Fallback: parent-структура проекта (adopter запускается из project dir)
@@ -632,6 +689,7 @@ class _AdoptArgs(argparse.Namespace):
     project_node: ClassVar[str | None]
     project_domain: ClassVar[str | None]
     force: ClassVar[bool]
+    yes: ClassVar[bool]
 
 
 def main() -> int:
@@ -661,6 +719,12 @@ def main() -> int:
     )
     adopt_parser.add_argument("--project-domain", type=str, default=None, help="Custom domain (optional)")
     adopt_parser.add_argument("--force", action="store_true", default=False, help="Regenerate Makefile/AGENTS.md")
+    adopt_parser.add_argument(
+        "--yes",
+        action="store_true",
+        default=False,
+        help="Non-interactive mode (DevPlan 16 T2.D): auto-answer prompts 'yes' — CI/piping safe",
+    )
 
     args = parser.parse_args(namespace=_AdoptArgs())
 
@@ -684,10 +748,21 @@ def main() -> int:
             return 1
 
         adopter = ProjectAdopter(
-            project_dir=project_dir, name=d["name"], org=d["org"], node=d["node"], domain=d["domain"], force=args.force
+            project_dir=project_dir,
+            name=d["name"],
+            org=d["org"],
+            node=d["node"],
+            domain=d["domain"],
+            force=args.force,
+            yes=getattr(args, "yes", False),
         )
 
-        result = adopter.adopt()
+        try:
+            result = adopter.adopt()
+        except NonInteractiveBlocked as exc:
+            # DevPlan 16 T2.D (P1-16): чистая деградация — состояние + hint, rc=2, без traceback
+            print(f"[IMP:10][adopt] NON-INTERACTIVE BLOCKED: {exc}", file=sys.stderr)
+            return 2
         return 0 if result.success else 1
     return 0
 

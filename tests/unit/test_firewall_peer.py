@@ -725,3 +725,42 @@ def test_run_converges_docker_user_with_peers(caplog, monkeypatch) -> None:
 
 
 # endregion TEST_11_run_docker_user_convergence
+
+
+# region TEST_12_minio_obs_scrape_scenario (DevPlan 16 T2.A п.4 / P1-13)
+# 🧪 TRAP[TEST] · SCENARIO · DevPlan 16 T2.A P1-13 · выделенная obs-нода получает minio peer-rule
+# · Last fail: аудит 15 P1-13 — CONSUMER_OF[minio] без monitoring: obs-нода БЕЗ nginx/langfuse
+#   не получала peer-правило 9000 → job minio down в S3-топологии 010 (клейм «Наблюдаемость ✅»)
+# · Scenario: топология data + obs (только monitoring, ни nginx ни langfuse) → ufw allow from
+#   <obs-ip> to 9000/tcp; при этом litellm-фасад НЕ открывается к obs (нет потребителя)
+# · Remove if: minio-scrape потребитель выражен иначе (module.yaml-граф вместо эвристики)
+def test_minio_peer_rule_for_dedicated_obs_node(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.DEBUG)
+    placement_yaml = tmp_path / "placement.yaml"
+    placement_yaml.write_text(
+        "context: obs-t2a\nvpn_enforced: true\n"
+        "nodes:\n  - {name: data-1, host: 10.8.0.11}\n"
+        "  - {name: obs-1, host: 10.9.0.30}\n"
+        "modules:\n"
+        "  minio: {node: data-1}\n"
+        "  monitoring: {node: obs-1}\n"
+        "  log-collector: {mode: all-nodes}\n",
+        encoding="utf-8",
+    )
+    placement = load_placement(placement_yaml)
+    assert placement is not None
+
+    rules = firewall.build_peer_rules(placement)
+    cmds = _rules_cmds(rules)
+
+    assert "ufw allow from 10.9.0.30 to any port 9000/tcp comment platform-peer-9000-obs-1" in cmds, (
+        f"obs-нода (monitoring) обязана получить peer-правило minio-scrape: {cmds}"
+    )
+    # Негатив: фасад litellm не открывается к obs (нет nginx/проектов на ней)
+    assert not any("4000/tcp" in c and "10.9.0.30" in c for c in cmds), cmds
+
+    logger.info("[IMP:9][minio-obs][assert] minio→obs peer-rule есть, лишних открытий нет")
+    assert_ldd_imp9(caplog)
+
+
+# endregion TEST_12_minio_obs_scrape_scenario

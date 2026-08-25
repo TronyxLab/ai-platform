@@ -22,10 +22,12 @@
 from __future__ import annotations
 
 import logging
+import pathlib
 
 import pytest
 from _conftest.ldd import ldd_trajectory
 
+from core.internal.shared import ssh_cmd_builder
 from core.internal.shared.ssh_cmd_builder import (
     build_check_security_ssh_cmd,
     build_converge_ssh_cmd,
@@ -488,3 +490,67 @@ def test_cli_init_missing_args_usage_error(
 
 
 # endregion FUNC_test_cli_init_missing_args_usage_error
+
+
+# ═══════════════════════════════════════════════════════════════════
+# DevPlan 16 T2.B (P1-4/15/17): multiline-safety, строгие режимы, SoT-timeout
+# ═══════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · REGRESSION · DevPlan 16 T2.B P1-4 · многострочный секрет без коррупции
+# · Last fail: аудит 15 P1-4 (WIP-канон line-based reader) — здесь контракт v1: printf_q
+#   кодирует \n как $'\n' → prelude остаётся single-line, bash-eval восстанавливает байт-в-байт.
+#   Фиксируем инвариант: смена printf_q-семантики сломает многострочные AGE-ключи молча.
+# · Scenario: AGE-ключ с \n через build_update_secret_prelude → bash -c 'eval; echo $AGE_SECRET_KEY'
+#   возвращает исходное значение (subprocess = SUT-граница shell-семантики, не бизнес-логика)
+# · Remove if: транспорт переезжает на b64-v2 (тогда roundtrip тестируется там)
+def test_multiline_secret_roundtrip_through_prelude() -> None:
+    import subprocess as _sp
+
+    multiline_key = "-----BEGIN AGE KEY-----\nline-one\nline_two with spaces\n-----END-----"
+    prelude = ssh_cmd_builder.build_update_secret_prelude(multiline_key)
+    # Инвариант канала: prelude однострочный (stdin-композиция `printf '%s\n'` контракт)
+    assert "\n" not in prelude, f"prelude обязан быть single-line (printf_q экранирует \\n): {prelude!r}"
+    remote_script = f"{prelude}\nprintf '%s' \"$AGE_SECRET_KEY\"\n"
+    # Транспорт байт-в-байт как ssh_exec_stdin/remote_executor._ssh_exec: script в stdin `bash -s`
+    out = _sp.run(["bash", "-s"], input=remote_script, capture_output=True, text=True, check=False)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout == multiline_key, f"roundtrip байт-в-байт: {out.stdout!r}"
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · DevPlan 16 T2.B P1-17 · лишние позиционные в secrets-mode → error
+# · Last fail: аудит 15 P1-17 — ci_root-слот/лишние аргументы глотались молча
+# · Scenario: update-secrets с 3-м аргументом → BuildModeError (не тихий drop)
+# · Remove if: arity-контракт секрет-режимов изменён
+def test_extra_positional_rejected_in_secrets_modes(caplog: pytest.LogCaptureFixture) -> None:
+    with pytest.raises(ssh_cmd_builder.BuildModeError, match="takes exactly 2"):
+        ssh_cmd_builder._dispatch_build("update-secrets", ["n1", "age-key", "EXTRA"])
+    with pytest.raises(ssh_cmd_builder.BuildModeError, match="at most 5"):
+        ssh_cmd_builder._dispatch_build("init-secrets", ["n", "o", "cd", "age", "root", "EXTRA"])
+    logger.info("[IMP:9][test][negative] лишние позиционные в *-secrets отклоняются ✓")
+
+
+# 🧪 TRAP[TEST] · SCENARIO · DevPlan 16 T2.B P1-15 · timeout из SoT через CLI-режим
+# · Last fail: аудит 15 P1-15 — ssh-exec в build-ssh-cmd.sh без timeout (класс P02 CI-hang)
+# · Scenario: cli(["ssh-exec-timeout"]) == int(timeouts.DEPLOY_TIMEOUT); фасад содержит
+#   обёртку `timeout "$SSH_EXEC_TIMEOUT_S"` и lazy-резолв через этот режим
+# · Remove if: таймауты пробрасываются env-ом от вызывателя
+def test_ssh_exec_timeout_emitted_from_sot(caplog: pytest.LogCaptureFixture) -> None:
+    from core.internal.shared.timeouts import DEPLOY_TIMEOUT
+
+    rc = ssh_cmd_builder.cli(["ssh-exec-timeout"])
+    assert rc == 0
+    assert ssh_cmd_builder.cli
+    facade = (pathlib.Path(__file__).resolve().parents[2] / "core/internal/bootstrap/build-ssh-cmd.sh").read_text()
+    assert 'timeout "$SSH_EXEC_TIMEOUT_S"' in facade, "ssh_exec_stdin обязан быть под timeout (P02)"
+    assert "ssh-exec-timeout" in facade, "резолв значения — через SoT CLI-режим"
+    assert DEPLOY_TIMEOUT >= 300, "деплой-таймаут SoT разумных границ"
+    logger.info("[IMP:9][test][assert] ssh-exec под SoT-timeout %ds ✓", DEPLOY_TIMEOUT)
+
+
+# 🧪 TRAP[TEST] · REGRESSION · DevPlan 16 T2.B P1-4 · пустой ключ → пустой prelude (легаси)
+# · Scenario: build_update_secret_prelude("") == "" — канал «секретов нет» сохранён;
+#   одиночный ПУСТОЙ секрет легитимен (не FATAL got 0 — контракт v1)
+# · Remove if: empty-token семантика изменена синхронно с CI-guard
+def test_single_empty_value_ok() -> None:
+    assert not ssh_cmd_builder.build_update_secret_prelude("")

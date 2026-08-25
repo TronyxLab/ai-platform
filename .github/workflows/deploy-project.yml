@@ -135,9 +135,13 @@ jobs:
         id: node-resolution
         env:
           NODE_HOST_MAP: ${{ vars.NODE_HOST_MAP }}
+          # DevPlan 16 T2.C (P1-19): inputs ТОЛЬКО через env шага (defense-in-depth
+          # интерполяции) — run-блок потребляет quoted "$VAR"
+          INPUT_NODE: ${{ inputs.node }}
+          INPUT_HOST: ${{ inputs.host }}
         run: |
           set -euo pipefail
-          TARGET_NODE="${{ inputs.node }}"
+          TARGET_NODE="${INPUT_NODE}"
           if [ -z "${TARGET_NODE}" ]; then
             TARGET_NODE=$(grep -E '^target_node:' ai-platform.yaml 2>/dev/null | head -1 | awk '{print $2}' | tr -d '[:space:]"' || true)
           fi
@@ -151,7 +155,7 @@ jobs:
             SSH_HOST=$(echo "${NODE_HOST_MAP}" | jq -r --arg n "${TARGET_NODE}" '.[$n] // empty' 2>/dev/null) || true
           fi
           if [ -z "${SSH_HOST}" ]; then
-            SSH_HOST="${{ inputs.host }}"
+            SSH_HOST="${INPUT_HOST}"
             HOST_SOURCE="inputs"
           fi
           if [ -z "${SSH_HOST}" ]; then
@@ -173,10 +177,12 @@ jobs:
 
       # ─── Validate project payload (лёгкая YAML-проверка, caller-контекст) ──
       - name: Validate project payload
+        env:
+          INPUT_PROJECT_NAME: ${{ inputs.project_name }}
         run: |
           set -euo pipefail
           PROJECT_YAML_NAME=$(grep -E '^name:' ai-platform.yaml 2>/dev/null | head -1 | awk '{print $2}' | tr -d '[:space:]"' || true)
-          EXPECTED_NAME="${{ inputs.project_name }}"
+          EXPECTED_NAME="${INPUT_PROJECT_NAME}"
           if [ -z "${PROJECT_YAML_NAME}" ] || [ "${PROJECT_YAML_NAME}" != "${EXPECTED_NAME}" ]; then
             echo "[IMP:10][validate] FATAL: ai-platform.yaml name='${PROJECT_YAML_NAME:-<missing>}' != inputs.project_name='${EXPECTED_NAME}'"
             exit 1
@@ -411,6 +417,8 @@ jobs:
 
       # ─── Deliver + deploy (one-shot receive) ────────────────────────────
       - name: Deliver + deploy (one-shot receive)
+        env:
+          PROJECT_REF: ${{ inputs.project_name }}
         run: |
           set -euo pipefail
           FILES="ai-platform.yaml"
@@ -421,7 +429,7 @@ jobs:
           # на VPS применяет state без вычисления maturity; отсутствие → legacy-grace).
           [ -f practices.lock ] && FILES="$FILES practices.lock"
           echo "[IMP:9][deliver] Delivering to" "${{ env.ssh_host }}": "${FILES}"
-          tar czf - $FILES | ssh ${SSH_OPTS} ci-deploy@"${{ env.ssh_host }}" "receive ${{ inputs.project_name }} ${{ github.sha }}"
+          tar czf - $FILES | ssh ${SSH_OPTS} ci-deploy@"${{ env.ssh_host }}" "receive \"${PROJECT_REF}\" ${{ github.sha }}"
           echo "[IMP:9][deliver] Receive completed (exit=$?)"
 
       # ─── Post-deploy verify ────────────────────────────────────────────
@@ -429,9 +437,11 @@ jobs:
       # деплоящегося проекта. Прежний `verify <node>` брал все домены ноды —
       # параллельный деплой соседнего проекта давал 502 в момент verify → ложный FAIL.
       - name: Post-deploy verify
+        env:
+          PROJECT_REF: ${{ inputs.project_name }}
         run: |
           set -euo pipefail
-          ssh ${SSH_OPTS} ci-deploy@"${{ env.ssh_host }}" "verify ${{ env.target_node }} ${{ inputs.project_name }}"
+          ssh ${SSH_OPTS} ci-deploy@"${{ env.ssh_host }}" "verify ${{ env.target_node }} \"${PROJECT_REF}\""
 
       # ─── Failure notification (DevPlan 003 A1) ─────────────────────────
       # Caller-контекст (TRAP[BUG] 2026-08-03 + гейт test_gate_workflow_org_agnostic):
@@ -445,16 +455,17 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID_CRITICAL: ${{ secrets.TELEGRAM_CHAT_ID_CRITICAL }}
+          PROJECT_REF: ${{ inputs.project_name }}
         run: |
           set -uo pipefail
           if [ -z "${TELEGRAM_BOT_TOKEN}" ] || [ -z "${TELEGRAM_CHAT_ID_CRITICAL}" ]; then
             echo "::warning::[notify] TELEGRAM secrets not set — failure notification skipped"
             exit 0
           fi
-          MSG="🚨 <b>[CRITICAL]</b> [deploy] Deploy project ${{ inputs.project_name }} FAILED (run ${{ github.run_id }})"
+          MSG="🚨 <b>[CRITICAL]</b> [deploy] Deploy project ${PROJECT_REF} FAILED (run ${{ github.run_id }})"
           # non-blocking: уведомление не роняет workflow (результат уже failure)
           curl -s -m 30 -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
             --data-urlencode "chat_id=${TELEGRAM_CHAT_ID_CRITICAL}" \
             --data-urlencode "text=${MSG}" \
             --data-urlencode "parse_mode=HTML" > /dev/null || true
-          echo "[IMP:9][notify] failure notification sent (project=${{ inputs.project_name }})"
+          echo "[IMP:9][notify] failure notification sent (project=${PROJECT_REF})"

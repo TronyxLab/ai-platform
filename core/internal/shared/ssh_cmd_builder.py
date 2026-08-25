@@ -89,6 +89,7 @@ _DEL = 0x7F  # DEL
 
 # ── Константы CLI ──
 _INIT_MIN_ARGS = 4  # init: node, owner_key, ci_deploy_key, age_key
+_UPDATE_SECRETS_ARITY = 2  # update-secrets: node + age-key (T2.B P1-17 strict)
 
 # safe-набор bash printf %q (C locale) — символы, не требующие экранирования
 _PRINTF_Q_SAFE = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_@%+=:,./-~")
@@ -447,15 +448,8 @@ def _dispatch_build(mode: str, rest: list[str]) -> str:
         _require(rest, 2, mode)
         return build_update_ssh_cmd(rest[0], rest[1], rest[2:])
     # REF-0007: *-secrets modes печатают ТОЛЬКО secret-prelude (stdout → ssh-stdin канал)
-    if mode == "init-secrets":
-        _require(rest, _INIT_MIN_ARGS, mode)
-        node, owner, ci_deploy, age = rest[0], rest[1], rest[2], rest[3]
-        ci_root = rest[_INIT_MIN_ARGS] if len(rest) > _INIT_MIN_ARGS else ""
-        del node, owner
-        return build_init_secret_prelude(ci_deploy, age, ci_root)
-    if mode == "update-secrets":
-        _require(rest, 2, mode)
-        return build_update_secret_prelude(rest[1])
+    if mode in {"init-secrets", "update-secrets"}:
+        return _dispatch_secrets(mode, rest)
     if mode == "converge":
         _require(rest, 1, mode)
         return build_converge_ssh_cmd(rest[0], rest[1:])
@@ -465,6 +459,12 @@ def _dispatch_build(mode: str, rest: list[str]) -> str:
     if mode == "deploy-context":
         _require(rest, 1, mode)
         return build_deploy_context_ssh_cmd(rest[0], rest[1:])
+    # DevPlan 16 T2.B (P1-15): SoT-emit таймаута ssh-exec для shell-фасадов —
+    # build-ssh-cmd.sh резолвит значение через этот режим (0 литералов в shell, parity)
+    if mode == "ssh-exec-timeout":
+        from core.internal.shared.timeouts import DEPLOY_TIMEOUT
+
+        return str(DEPLOY_TIMEOUT)
     msg = f"unknown build mode '{mode}'"
     raise BuildModeError(msg)
 
@@ -472,8 +472,35 @@ def _dispatch_build(mode: str, rest: list[str]) -> str:
 # endregion FUNC__dispatch_build
 
 
-# region FUNC__require
-## @purpose  Валидация числа позиционных аргументов режима (fail-fast).
+# region FUNC__dispatch_secrets
+## @purpose  Диспетчеризация *-secrets режимов (REF-0007; DevPlan 16 T2.B C901-декомпозиция).
+## @io       ⇥ mode: init-secrets|update-secrets, rest → ⎋ str prelude ⚡ BuildModeError
+def _dispatch_secrets(mode: str, rest: list[str]) -> str:
+    """Dispatch *-secrets modes with strict arity (P1-17 fail-loud)."""
+    if mode == "init-secrets":
+        _require(rest, _INIT_MIN_ARGS, mode)
+        # DevPlan 16 T2.B (P1-17): лишние позиционные НЕ глотаются молча — fail-loud
+        if len(rest) > _INIT_MIN_ARGS + 1:
+            msg = (
+                f"mode 'init-secrets' takes at most {_INIT_MIN_ARGS + 1} args "
+                f"(node owner ci-deploy age [ci-root]), got {len(rest)}"
+            )
+            raise BuildModeError(msg)
+        ci_deploy, age = rest[2], rest[3]
+        ci_root = rest[_INIT_MIN_ARGS] if len(rest) > _INIT_MIN_ARGS else ""
+        return build_init_secret_prelude(ci_deploy, age, ci_root)
+    # update-secrets
+    _require(rest, _UPDATE_SECRETS_ARITY, mode)
+    if len(rest) > _UPDATE_SECRETS_ARITY:
+        msg = f"mode 'update-secrets' takes exactly {_UPDATE_SECRETS_ARITY} args (node age-key), got {len(rest)}"
+        raise BuildModeError(msg)
+    return build_update_secret_prelude(rest[1])
+
+
+# endregion FUNC__dispatch_secrets
+
+
+# region FUNC__require## @purpose  Валидация числа позиционных аргументов режима (fail-fast).
 ## @io       ⇥ rest: list[str], need: int, mode: str → ⎋ None ⚡ BuildModeError
 ## @complexity  O(1)
 

@@ -1589,6 +1589,8 @@ gates:
   - test_entrypoint_function_count
   - test_entrypoint_loc
   - test_entrypoint_no_direct_binary_calls
+  - test_internal_shell_scripts_no_direct_binary_calls
+  - test_negative_internal_shell_binary_detected
   test_gate_timeout_literals.py:
   - test_amber_timeout_literal_detected_negative
   - test_apt_subprocess_without_timeout_detected_negative
@@ -1651,6 +1653,9 @@ gates:
   - test_push_gate_uses_provisioner
   - test_workflow_count_is_correct
   - test_workflow_module_lists_match_filesystem
+  test_gate_workflow_inputs_interp.py:
+  - test_inputs_only_in_env_blocks
+  - test_negative_raw_interpolation_red
   test_gate_workflow_org_agnostic.py:
   - test_gitleaks_pin_parity
   - test_negative_dotted_py_import_detected

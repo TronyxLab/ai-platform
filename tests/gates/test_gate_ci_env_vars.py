@@ -94,6 +94,12 @@ _WORKFLOW_LOCAL_ENV_VARS: dict[str, str] = {
     "PLATFORM_COMPOSE_TIMEOUT": "smoke compose-up health-wait (CI single-shot, 2026-08-17), workflow-local test tuning",
     "SSH_OPTS": "ssh flags для deploy-project (caller-контекст — платформенный SoT ssh_opts.py недоступен; inline-набор без ConnectTimeout, T2.15 hoist)",
     "RSYNC_EXCLUDES": "rsync exclude-список для core-deploy (.git/ __pycache__/ *.pyc), workflow-local, T2.15 hoist",
+    # DevPlan 16 T2.C (P1-19): inputs-INDIRECT plumbing — значения ${{ inputs.* }} читаются
+    # в step-env, run-блоки потребляют quoted "$VAR" (инъекция через workflow_call input)
+    "INPUT_NODE": "deploy-project: raw input.node → env-indirect (T2.C)",
+    "INPUT_HOST": "deploy-project: raw input.host → env-indirect (T2.C)",
+    "INPUT_PROJECT_NAME": "deploy-project: raw input.project_name → env-indirect (T2.C)",
+    "PROJECT_REF": "deploy-project: project name relay из env в receive/verify/notify строки (T2.C)",
 }
 
 

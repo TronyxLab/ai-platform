@@ -7,9 +7,9 @@
 ## @scope    Native imports, tmp_path only, 0 subprocess для бизнес-логики (правило testing.md),
 ##           render-шаги и reconfig-вызов мокаются (DI > mocks на внутреннее состояние).
 ## @invariants
-##   - Контракт §4.3: build_merged_config None → return 0 (skip, IMP:8); шаги non-blocking
-##     (ошибка → WARN, continue); порядок alert_rules → prometheus → grafana → loki →
-##     reload → langfuse → catalog; возвращает 0 всегда (best-effort)
+##   - Контракт §4.3 (+T2.A): build_merged_config None → return 0 (skip, IMP:8); шаги
+##     non-blocking (ошибка → WARN, continue); порядок alert_rules → prometheus →
+##     node_targets → grafana → loki → reload → langfuse → catalog; возвращает 0 всегда
 ##   - Test Honesty R1-R5: negative-тесты (сбой render → non-fatal; сбой в chain → WARN),
 ##     0 pass-тестов, каждый тест — # 🧪 TRAP[TEST]
 ##   - LDD: assert ≥1 IMP:9-лог в успешном сценарии (Anti-Illusion rule)
@@ -36,11 +36,15 @@ pytestmark = pytest.mark.static_audit
 
 logger = logging.getLogger(__name__)
 
-# Порядок render-шагов (контракт DevPlan 138 §4.3): alert_rules → prometheus → grafana →
-# loki → reload → langfuse → catalog.
+# Порядок render-шагов: alert_rules → prometheus → node_targets → grafana → loki →
+# reload → langfuse → catalog.
+# 🧪 TRAP[TEST] · SUPERSEDED · DevPlan 16 T2.A · прежний контракт §4.3 (7 шагов) расширен
+# ·   шагом node_targets (wiring generate_node_targets — P1-2): file_sd нодовых таргетов
+# ·   рендерится ДО reload. Remove if: node-targets переезжают в отдельный verb.
 _RENDER_STEPS: tuple[tuple[str, str], ...] = (
     ("generate_alert_rules", "alert_rules"),
     ("generate_prometheus_target", "prometheus"),
+    ("render_node_targets_if_placement", "node_targets"),
     ("generate_grafana_dashboard", "grafana"),
     ("update_loki_retention", "loki"),
     ("reload_monitoring_services", "reload"),
@@ -153,7 +157,16 @@ def test_run_monitoring_reconfig_all_steps(tmp_path, caplog) -> None:
         for r in caplog.records
         if "[IMP:8][hook]" in r.message
     ]
-    expected_steps = ["alert_rules", "prometheus", "grafana", "loki", "reload", "langfuse", "catalog"]
+    expected_steps = [
+        "alert_rules",
+        "prometheus",
+        "node_targets",
+        "grafana",
+        "loki",
+        "reload",
+        "langfuse",
+        "catalog",
+    ]
     assert step_order == expected_steps, f"Render step order mismatch: {step_order} != {expected_steps}"
 
     # Моки I/O-шагов вызваны (их эффект вне tmp_path)
