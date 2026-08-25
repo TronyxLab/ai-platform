@@ -70,10 +70,15 @@ def _make_payload_tar(tmp_path: Path, project: str = "testproj", compose: str = 
     (proj_dir / "docker-compose.yml").write_text(compose, encoding="utf-8")
     (proj_dir / "ai-platform.yaml").write_text(f"name: {project}\n", encoding="utf-8")
     (proj_dir / ".env.platform").write_text("PLATFORM_DOMAIN=example.com\n", encoding="utf-8")
+    # DevPlan 16 T1.E: unmanaged (без practices.lock) блокируется pre-deploy L1-гейтом
+    (proj_dir / "practices.lock").write_text(
+        "version: 1\nlevel: auto\nstate: baseline\nlanguage: python\ngenerator_hash: sha256:test\nmaturity:\n  age_days: 1\n  code_files: 0\n",
+        encoding="utf-8",
+    )
 
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz", encoding="utf-8") as tar:
-        for fname in ("docker-compose.yml", "ai-platform.yaml", ".env.platform"):
+        for fname in ("docker-compose.yml", "ai-platform.yaml", ".env.platform", "practices.lock"):
             tar.add(proj_dir / fname, arcname=fname)
     return buf.getvalue()
 
@@ -130,6 +135,10 @@ def test_receive_validate_missing_yaml_negative(tmp_path: Path) -> None:
     staging = tmp_path / "staging"
     staging.mkdir()
     (staging / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
+    (staging / "practices.lock").write_text(
+        "version: 1\nlevel: auto\nstate: baseline\nlanguage: python\ngenerator_hash: sha256:test\nmaturity:\n  age_days: 1\n  code_files: 0\n",
+        encoding="utf-8",
+    )
     flow = ReceiveFlow()
     with pytest.raises(ConfigValidationError):
         flow.validate(str(staging), project_name="testproj")
@@ -212,6 +221,10 @@ def test_receive_deploy_overwrites_root_owned_stub(
     staging.mkdir()
     # 176 A.2: L1-валидный compose (receive исполняет pre-deploy L1-гейт)
     (staging / "docker-compose.yml").write_text(_VALID_COMPOSE, encoding="utf-8")
+    (staging / "practices.lock").write_text(
+        "version: 1\nlevel: auto\nstate: baseline\nlanguage: python\ngenerator_hash: sha256:test\nmaturity:\n  age_days: 1\n  code_files: 0\n",
+        encoding="utf-8",
+    )
     (staging / "ai-platform.yaml").write_text("name: testproj\n", encoding="utf-8")
 
     class _FakeStatus:
@@ -289,6 +302,10 @@ def test_receive_deploy_stale_remove_failure_logs_warning(
     staging.mkdir()
     # 176 A.2: L1-валидный compose (receive исполняет pre-deploy L1-гейт)
     (staging / "docker-compose.yml").write_text(_VALID_COMPOSE, encoding="utf-8")
+    (staging / "practices.lock").write_text(
+        "version: 1\nlevel: auto\nstate: baseline\nlanguage: python\ngenerator_hash: sha256:test\nmaturity:\n  age_days: 1\n  code_files: 0\n",
+        encoding="utf-8",
+    )
 
     fake_orch = MagicMock()
     fake_orch.deploy.return_value = MagicMock(is_success=lambda: True, status=type("S", (), {"value": "DEPLOYED"})())
@@ -399,6 +416,12 @@ def test_receive_flow_pre_deploy_gate_passes_valid(
     (staging / "docker-compose.yml").write_text(_VALID_COMPOSE, encoding="utf-8")
     (staging / "ai-platform.yaml").write_text("name: testproj\n", encoding="utf-8")
     (staging / ".env.platform").write_text("PLATFORM_DOMAIN=example.com\n", encoding="utf-8")
+    # DevPlan 16 T1.E: unmanaged (без practices.lock) блокируется pre-deploy L1-гейтом
+    (staging / "practices.lock").write_text(
+        "version: 1\nlevel: auto\nstate: baseline\nlanguage: python\n"
+        "generator_hash: sha256:test\nmaturity:\n  age_days: 1\n  code_files: 0\n",
+        encoding="utf-8",
+    )
 
     fake_orch = MagicMock()
     fake_orch.deploy.return_value = MagicMock(
