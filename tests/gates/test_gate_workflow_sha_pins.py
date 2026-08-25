@@ -36,6 +36,11 @@
 ##            канона применена к образам (инвариант DevOps), но не к actions/binary — гейт
 ##            закрепляет вторую половину.
 ## @changes 2026-08-24 | REF-0012 — Created (uses-SHA-form + raw-interpolation + R5 negatives)
+##           2026-08-25 | QA C2/G6 (DevPlan 14 T1.1) — freshness-критерий деплой-канала:
+##                      каждый literal deploy-project.yml@<40hex> (templates ×2, adopter-source,
+##                      channel_pin.SoT) обязан содержать last-touch commit workflow'а
+##                      (git merge-base --is-ancestor) и нести честную дату снапшота ≥ даты
+##                      последнего изменения; негативы stale-pin / ложная дата / отсутствие даты
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -43,6 +48,7 @@ from __future__ import annotations
 import logging
 import pathlib
 import re
+import subprocess
 
 import pytest
 
@@ -442,3 +448,244 @@ def test_negative_double_quoted_form_passes(tmp_path, caplog) -> None:
 
 
 # endregion TESTS_NEGATIVE_R5
+
+
+# region CHANNEL_FRESHNESS_G6 (QA C2/G6 — DevPlan 14 T1.1)
+
+# Пин reusable деплой-канала: `deploy-project.yml@<40hex> # <comment>`
+_DEPLOY_CHANNEL_USES_RE = re.compile(r"deploy-project\.yml@([0-9a-f]{40})[ \t]*(?:#[ \t]*(.*))?")
+_SNAPSHOT_DATE_RE = re.compile(r"main snapshot (\d{4}-\d{2}-\d{2})")
+_PLATFORM_WF_RELPATH = ".github/workflows/deploy-project.yml"
+_ADOPTER_RELPATH = "core/internal/scaffold/project_adopter.py"
+_CHANNEL_PIN_RELPATH = "core/internal/scaffold/channel_pin.py"
+
+
+# region FUNC_collect_deploy_channel_pins
+def collect_deploy_channel_pins(root: pathlib.Path) -> list[tuple[str, str, str]]:
+    """Collect (label, sha, comment) for every literal deploy-channel pin + the channel_pin SoT value.
+
+    ▶ ┌root┐ → ○ scan templates/*/workflows + adopter source literals → ⊕ append SoT DEPLOY_CHANNEL_PIN → ⎋ list[(label, sha, comment)]
+
+    ## @purpose — Единая выборка всех трёх мест пина канала (гейт-equalizer triple-literal):
+    ##            шаблоны ×2, остаточные литералы в исходнике adopter'а, значение SoT-модуля.
+    ## @io — ⇥ root репо → ⎋ список (label, sha, comment); label — relpath источника
+    ## @complexity — O(T + A), T/A — размеры шаблонов и project_adopter.py
+    ## @invariants — SoT-значение добавляется ВСЕГДА (даже если нигде больше не найдено).
+    """
+    pins: list[tuple[str, str, str]] = []
+    for pattern in _TEMPLATE_WF_GLOBS:
+        pins.extend(
+            (path.relative_to(root).as_posix(), m.group(1), m.group(2) or "")
+            for path in sorted(root.glob(pattern))
+            for m in _DEPLOY_CHANNEL_USES_RE.finditer(path.read_text(encoding="utf-8", errors="replace"))
+        )
+    adopter_src = root / _ADOPTER_RELPATH
+    if adopter_src.exists():
+        pins.extend(
+            (f"{_ADOPTER_RELPATH}:literal", m.group(1), m.group(2) or "")
+            for m in _DEPLOY_CHANNEL_USES_RE.finditer(adopter_src.read_text(encoding="utf-8", errors="replace"))
+        )
+    # Lazy import: tests/conftest добавляет repo-root в sys.path
+    from core.internal.scaffold.channel_pin import DEPLOY_CHANNEL_PIN, PIN_COMMENT
+
+    pins.append((_CHANNEL_PIN_RELPATH, DEPLOY_CHANNEL_PIN, PIN_COMMENT))
+    return pins
+
+
+# endregion FUNC_collect_deploy_channel_pins
+
+
+# region FUNC_check_channel_pin_freshness
+def check_channel_pin_freshness(root: pathlib.Path, pin: str, comment: str) -> list[str]:
+    """Offline freshness check of one deploy-channel pin against git history.
+
+    ▶ ┌root,pin,comment┐ → ◇ last-touch(workflow) → ◇ merge-base --is-ancestor(last-touch, pin)? → ◇ snapshot-date ≥ last-touch-date? → ⎋ list[str]
+
+    ## @purpose — G6 freshness: пин обязан содержать последнее изменение deploy-project.yml,
+    ##            а комментарий-снапшот — честную дату ≥ даты того изменения (fixture QA C2:
+    ##            «main snapshot 2026-08-24» при пине от 2026-08-18 = ложь).
+    ## @io — ⇥ root/pin/comment → ⎋ violations ([] = fresh)
+    ## @complexity — O(1) git-запросов (2 вызова)
+    ## @invariants — Работает офлайн на локальной git-истории; отсутствие истории → violation.
+    """
+    violations: list[str] = []
+    log_proc = subprocess.run(
+        ["git", "log", "-1", "--format=%H %cI", "--", _PLATFORM_WF_RELPATH],
+        cwd=str(root),
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    if log_proc.returncode != 0 or not log_proc.stdout.strip():
+        return [f"{_PLATFORM_WF_RELPATH}: cannot resolve last-touch commit ({log_proc.stderr.strip()[:120]})"]
+    parts = log_proc.stdout.strip().split(maxsplit=1)
+    last_sha, last_date = parts[0], parts[1][:10]
+    anc = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", last_sha, pin],
+        cwd=str(root),
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    if anc.returncode != 0:
+        violations.append(
+            f"stale pin {pin[:12]}…: {_PLATFORM_WF_RELPATH} последний раз менялся в "
+            f"{last_sha[:12]}… ({last_date}) — пин НЕ содержит это изменение "
+            "(git merge-base --is-ancestor != 0)"
+        )
+    date_match = _SNAPSHOT_DATE_RE.search(comment or "")
+    if not date_match:
+        violations.append(
+            f"pin {pin[:12]}…: комментарий без даты снапшота ('main snapshot YYYY-MM-DD' обязателен): {comment!r}"
+        )
+    elif date_match.group(1) < last_date:
+        violations.append(
+            f"pin {pin[:12]}…: ложная дата комментария {date_match.group(1)} < даты последнего "
+            f"изменения {_PLATFORM_WF_RELPATH} ({last_date})"
+        )
+    return violations
+
+
+# endregion FUNC_check_channel_pin_freshness
+
+
+def _init_probe_channel_repo(tmp_path: pathlib.Path) -> tuple[str, str]:
+    """Build a minimal git repo with a 2-commit workflow history → (stale_sha, fresh_sha).
+
+    ▶ ┌tmp_path┐ → ○ git init+config → ⚡ commit c1 (base) → commit c2 (hardening) → ⎋ (c1, c2)
+
+    ## @purpose — Изолированная git-история для R5-негативов freshness-критерия (без записи в рабочее репо).
+    ## @io — ⇥ tmp_path → ⎋ (sha первого коммита, sha второго)
+    """
+
+    def run(*args: str) -> subprocess.CompletedProcess[str]:
+        proc = subprocess.run(
+            ["git", *args], cwd=str(tmp_path), capture_output=True, text=True, timeout=30, check=False
+        )
+        assert proc.returncode == 0, f"git {args} failed: {proc.stderr}"
+        return proc
+
+    run("init", "-q")
+    run("config", "user.email", "gate-probe@example.local")
+    run("config", "user.name", "gate-probe")
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    wf = wf_dir / "deploy-project.yml"
+    wf.write_text("name: Deploy Project (Reusable)\n", encoding="utf-8")
+    run("add", "-A")
+    run("commit", "-qm", "c1 base workflow")
+    stale_sha = run("rev-parse", "HEAD").stdout.strip()
+    wf.write_text("name: Deploy Project (Reusable)\n# REF-0011/0012 hardening (+74/-12)\n", encoding="utf-8")
+    run("add", "-A")
+    run("commit", "-qm", "c2 hardening")
+    fresh_sha = run("rev-parse", "HEAD").stdout.strip()
+    return stale_sha, fresh_sha
+
+
+@pytest.mark.gate
+@ldd_trajectory
+# 🧪 TRAP[TEST] · 2026-08-25 · REGRESSION · freshness деплой-канала (QA C2/G6, DevPlan 14 T1.1)
+# · Scenario: шаблонные и adopted проекты получают канал от stale-pin 4425ce0 (2026-08-18),
+#   который НЕ содержит +74/−12 харденинга REF-0011/0012 — новые проекты рождаются без защиты
+# · Last fail: 2026-08-25 — оба шаблона + adopter генерировали @4425ce0…/@main с ложной датой
+#   комментария «2026-08-24»
+# · Remove if: деплой-канал мигрирует на механизм, где freshness гарантирован платформой
+#   (например, org-level pinned release channel)
+def test_channel_pins_fresh_and_consistent(caplog) -> None:
+    """Все literal пины канала (шаблоны ×2 + SoT) свежи и байт-идентичны channel_pin.py."""
+    pins = collect_deploy_channel_pins(ROOT)
+    assert len(pins) >= 3, f"ожидались пины из 2 шаблонов + SoT channel_pin.py, найдено: {pins!r}"
+    logger.info("[IMP:8][channel-freshness][collect] %d pin site(s): %s", len(pins), [p[0] for p in pins])
+
+    from core.internal.scaffold.channel_pin import DEPLOY_CHANNEL_PIN, PIN_COMMENT
+
+    template_pins = {(sha, cmt) for label, sha, cmt in pins if label.startswith("templates/")}
+    assert template_pins == {(DEPLOY_CHANNEL_PIN, PIN_COMMENT)}, (
+        f"Шаблонные пины расходятся с SoT channel_pin.py {(DEPLOY_CHANNEL_PIN, PIN_COMMENT)!r}: {template_pins!r}"
+    )
+
+    violations: list[str] = []
+    for label, sha, cmt in pins:
+        violations.extend(f"{label}: {v}" for v in check_channel_pin_freshness(ROOT, sha, cmt))
+    if violations:
+        for v in violations:
+            logger.error("[IMP:10][channel-freshness] %s", v)
+        pytest.fail(
+            "[GATE:FAIL][id:workflow-sha-pins][class:L2]\n"
+            f"Deploy-channel pin stale/false-comment ({len(violations)}):\n"
+            + "\n".join(f"  - {v}" for v in violations)
+            + "\n\nFix: перепинить templates/*/deploy.yml + core/internal/scaffold/channel_pin.py "
+            "на HEAD и поставить ЧЕСТНУЮ дату снапшота."
+        )
+    logger.info("[IMP:9][channel-freshness] PASS: все %d пинов канала свежи и консистентны с SoT", len(pins))
+
+
+@pytest.mark.gate
+# 🧪 TRAP[TEST] · 2026-08-25 · NEGATIVE (R5) · freshness — stale-pin (исходный вход QA C2)
+# · Last fail: пин 4425ce0 (родитель last-touch коммита с харденингом) — ровно этот вход
+# · Remove if: freshness-детектор удалён вместе с позитивным тестом
+def test_negative_stale_channel_pin_detected(tmp_path, caplog) -> None:
+    """R5 negative: пин-родитель last-touch коммита (не содержит изменение) → RED."""
+    stale_sha, _fresh_sha = _init_probe_channel_repo(tmp_path)
+    violations = check_channel_pin_freshness(tmp_path, stale_sha, "main snapshot 2099-01-01")
+    logger.info("[IMP:8][channel-freshness][negative] stale violations=%d", len(violations))
+    assert len(violations) >= 1, f"R5 FAIL: stale-pin не детектирован: {violations!r}"
+    assert any("stale pin" in v for v in violations), f"R5 FAIL: неверная категория: {violations!r}"
+    logger.info("[IMP:9][channel-freshness][negative] PASS: stale-pin детектируется")
+
+
+@pytest.mark.gate
+# 🧪 TRAP[TEST] · 2026-08-25 · NEGATIVE (R5) · freshness — ложная дата комментария (QA C2 fixture)
+# · Last fail: комментарий «main snapshot 2026-08-24» при пине от 2026-08-18 — ложь в комментарии
+#   прошла бы незамеченной без дата-критерия
+# · Remove if: дата-критерий отменён планом
+def test_negative_false_snapshot_date_detected(tmp_path, caplog) -> None:
+    """R5 negative: дата комментария РАНЬШЕ даты последнего изменения файла → RED."""
+    _stale_sha, fresh_sha = _init_probe_channel_repo(tmp_path)
+    violations = check_channel_pin_freshness(tmp_path, fresh_sha, "main snapshot 2020-01-01")
+    logger.info("[IMP:8][channel-freshness][negative] false-date violations=%d", len(violations))
+    assert any("ложная дата" in v for v in violations), f"R5 FAIL: ложная дата не детектирована: {violations!r}"
+    logger.info("[IMP:9][channel-freshness][negative] PASS: ложная дата комментария детектируется")
+
+
+@pytest.mark.gate
+# 🧪 TRAP[TEST] · 2026-08-25 · NEGATIVE (R5) · freshness — комментарий без даты снапшота
+# · Last fail: N/A (preventive — формат 'main snapshot YYYY-MM-DD' контракт гейта)
+# · Remove if: формат комментария отменён
+def test_negative_missing_snapshot_date_detected(tmp_path, caplog) -> None:
+    """R5 negative: пин без 'main snapshot YYYY-MM-DD' в комментарии → RED."""
+    _stale_sha, fresh_sha = _init_probe_channel_repo(tmp_path)
+    violations = check_channel_pin_freshness(tmp_path, fresh_sha, "some unrelated note")
+    logger.info("[IMP:8][channel-freshness][negative] no-date violations=%d", len(violations))
+    assert any("без даты снапшота" in v for v in violations), (
+        f"R5 FAIL: отсутствие даты не детектировано: {violations!r}"
+    )
+    logger.info("[IMP:9][channel-freshness][negative] PASS: отсутствие даты снапшота детектируется")
+
+
+@pytest.mark.gate
+# 🧪 TRAP[TEST] · 2026-08-25 · NEGATIVE (R5) · freshness — свежий пин с честной датой проходит
+# · Regression: защита от false-positive — легитимный bump пина не должен ломать CI
+# · Last fail: N/A (preventive)
+# · Remove if: вместе с детектором
+def test_positive_fresh_probe_passes(tmp_path, caplog) -> None:
+    """Свежий пин (= last-touch commit) с датой ≥ даты коммита → 0 violations."""
+    _stale_sha, fresh_sha = _init_probe_channel_repo(tmp_path)
+    date_proc = subprocess.run(
+        ["git", "log", "-1", "--format=%cI", "--", ".github/workflows/deploy-project.yml"],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    honest_date = date_proc.stdout.strip()[:10]
+    violations = check_channel_pin_freshness(tmp_path, fresh_sha, f"main snapshot {honest_date}")
+    logger.info("[IMP:8][channel-freshness][positive-probe] violations=%d", len(violations))
+    assert violations == [], f"R5 FAIL: ложное срабатывание на свежем пине: {violations!r}"
+    logger.info("[IMP:9][channel-freshness][positive-probe] PASS: свежий пин с честной датой проходит")
+
+
+# endregion CHANNEL_FRESHNESS_G6

@@ -38,6 +38,11 @@
 ##                      redact_secrets() для error-логов; +_run_cmd_stdin
 ##           2026-08-25 | REF-0112 (meta-refactoring S-пакет) — +deliver_ci()/CLI `ci-deliver`:
 ##                      CI core-deploy доставляет файлы модульным вызовом (один owner exclude-set)
+##           2026-08-25 | QA C5 (DevPlan 14 T1.4) — CLI-флаг --age-secret-key УДАЛЁН:
+##                      deliver_fallback детектирует ключ внутри Python (node_detect цепочка),
+##                      /proc cmdline локального python не содержит секрета; redact
+##                      ПЕРЕД truncate в error-логах (суффикс ключа на границе окна больше
+##                      не уходит в лог)
 # endregion MODULE_CONTRACT
 
 import argparse
@@ -55,6 +60,7 @@ from typing import cast
 from core.internal.shared.deploy_paths import node_configs_remote, platform_remote_base
 
 # DevPlan 116 B5 T2 (D1): SSH_OPTS — единый SoT shared/ssh_opts.py; дублирующие копии устранены.
+from core.internal.shared.node_detect import detect_age_key
 from core.internal.shared.ssh_opts import SSH_OPTS, build_rsync_ssh_opts
 from core.internal.shared.subprocess_io import CommandRunner
 
@@ -232,6 +238,7 @@ def ensure_remote_dirs(
     user: str = "root",
     base: str | None = None,
     ncb: str | None = None,
+    *,
     dry_run: bool = False,
     runner: CommandRunner | None = None,
 ) -> bool:
@@ -724,7 +731,7 @@ def deliver_all(
     """Full Core delivery: mkdir + 5 rsync phases, fail-fast on first CoreDeliveryError."""
     base = resolve_remote_base()
     ncb = resolve_node_configs_base()
-    ensure_remote_dirs(host, node, remote_user, base, ncb, dry_run, runner)
+    ensure_remote_dirs(host, node, remote_user, base, ncb, dry_run=dry_run, runner=runner)
     deliver_core(host, core_dir, remote_user, base, dry_run, runner)
     deliver_platform_env(host, core_dir, remote_user, base, dry_run, runner)
     deliver_makefile(host, core_dir, remote_user, base, dry_run, runner)
@@ -744,7 +751,7 @@ def deliver_all(
 ##           makefiles, scripts, root compose) → ssh provision → ssh node-update.
 ##           Зеркало core-deploy.yml CI-воркфлоу для GitHub Outage / ручного деплоя.
 ##           НЕ трогает /opt/node-configs (орг-репозиторий, gitignored — инвариант core-deliver).
-## @io  input: host, node, core_dir, age_secret_key, remote_user, dry_run;
+## @io  input: host, node, core_dir, remote_user, dry_run;
 ##           output: bool True on success, False on step failure (ssh-шаги fail-fast)
 ## @complexity  O(F) — rsync-фазы + 2 ssh-шага
 ## @invariants
@@ -752,18 +759,34 @@ def deliver_all(
 ##     deliver_scripts/deliver_root_compose (guard'ы источников — TRAP[BUG] 125 T4)
 ##   - REF-0007: AGE_SECRET_KEY уходит в remote ТОЛЬКО через ssh-stdin prelude
 ##     (`bash -s`) — вне argv и вне логов; stderr error-путей redact'ится (redact_secrets)
+##   - QA C5 (DevPlan 14 T1.4): ключ детектируется ВНУТРИ Python через detect_age_key()
+##     (env AGE_SECRET_KEY → SOPS_AGE_KEY → AGE_SECRET_KEY_FILE → default files) —
+##     CLI argv-канал удалён, /proc cmdline локального python не содержит секрета;
+##     отсутствие ключа → явный FATAL return False (не тихий skip φ9)
+##   - redact-before-truncate: redact_secrets применяется к ПОЛНОМУ stderr ДО окна [-500:]
+##     (QA R6/T1.4 — суффикс ключа на границе окна больше не попадает в лог)
 ##   - dry_run: печатает ssh-команды без мутаций (R5 142 W5); stdin-скрипт — только размер
 ##   - ssh-команды через SSH_OPTS (shared/ssh_opts.py — единый SoT, DevPlan 116 B5 T2)
 def deliver_fallback(
     host: str,
     node: str,
     core_dir: str,
-    age_secret_key: str = "",
     remote_user: str = "root",
     dry_run: bool = False,
     runner: CommandRunner | None = None,
 ) -> bool:
     """Fallback core delivery: rsync phases + provision + node-update (core-deploy.yml mirror)."""
+    # QA C5 (DevPlan 14 T1.4): детекция ВНУТРИ Python — та же цепочка, что у shell-версии
+    # (env→SOPS_AGE_KEY→FILE→default files), но БЕЗ argv-транспорта значения.
+    age_secret_key = detect_age_key() or ""
+    if not age_secret_key:
+        logger.error(
+            "[IMP:10][deliver_fallback][age] FATAL: AGE master key not found "
+            "(node_detect chain: AGE_SECRET_KEY env → SOPS_AGE_KEY env → AGE_SECRET_KEY_FILE → "
+            "~/.config/age/keys.txt) — φ9 secrets-update на ноде упадёт; доставка прервана fail-fast"
+        )
+        return False
+    logger.info("[IMP:8][deliver_fallback][age] AGE key detected in-process (not via argv)")
     base = resolve_remote_base()
     # ── 1. rsync-фазы (guard'ы внутри каждой функции, TRAP[BUG] 125 T4) ──
     deliver_core(host, core_dir, remote_user, base, dry_run, runner)
@@ -816,10 +839,13 @@ def deliver_fallback(
         return True
     r = _run_cmd_stdin(update_cmd, remote_script, SSH_CMD_TIMEOUT, runner)
     if r.returncode != 0:
+        # QA R6/T1.4: redact-before-truncate — redact по ПОЛНОМУ stderr, окно [-500:]
+        # берётся УЖЕ от redact'ированного текста (иначе суффикс ключа на границе окна
+        # уходил в лог неповреждённым).
         logger.error(
             "[IMP:10][deliver_fallback][node-update] FATAL: node-update failed (exit=%d): %s",
             r.returncode,
-            redact_secrets(r.stderr.strip()[-500:], age_secret_key),
+            redact_secrets(r.stderr, age_secret_key).strip()[-500:],
         )
         return False
     logger.info("[IMP:9][deliver_fallback][done] core-deliver COMPLETE (NODE=%s)", node)
@@ -899,9 +925,8 @@ def cli(argv: list[str] | None = None, runner: CommandRunner | None = None) -> i
     fp.add_argument("--host", required=True)
     fp.add_argument("--node", required=True)
     fp.add_argument("--core-dir", required=True)
-    fp.add_argument(
-        "--age-secret-key", default="", help="AGE secret key (LOCAL value; delivered to remote via ssh-stdin only)"
-    )
+    # QA C5 (DevPlan 14 T1.4): --age-secret-key флаг УДАЛЁН — ключ детектируется
+    # внутри deliver_fallback через node_detect (argv-канал секрета закрыт).
     fp.add_argument("--remote-user", default="root")
     fp.add_argument("--dry-run", action="store_true")
     cp = sp.add_parser(
@@ -929,7 +954,6 @@ def cli(argv: list[str] | None = None, runner: CommandRunner | None = None) -> i
             self.core_dir: str
             self.remote_user: str
             self.dry_run: bool
-            self.age_secret_key: str
 
     args = p.parse_args(argv, namespace=_CliArgs())
     try:
@@ -939,9 +963,7 @@ def cli(argv: list[str] | None = None, runner: CommandRunner | None = None) -> i
             )
         elif args.command == "ci-deliver":
             deliver_ci(args.host, args.core_dir, args.remote_user, None, args.dry_run, runner)
-        elif not deliver_fallback(
-            args.host, args.node, args.core_dir, args.age_secret_key, args.remote_user, args.dry_run, runner
-        ):
+        elif not deliver_fallback(args.host, args.node, args.core_dir, args.remote_user, args.dry_run, runner):
             return 1
     except CoreDeliveryError as exc:
         logger.info("[IMP:10][cli][error] %s", exc)

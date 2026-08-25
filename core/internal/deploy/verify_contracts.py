@@ -140,11 +140,15 @@ _ALLOWED_ABSOLUTE_HOST_BINDS: frozenset[str] = frozenset()
 
 # ── REF-0006 (host-mode-keys): compose-ключи host-namespace-доступа → значение "host"
 # запрещено (network/pid/userns/cgroup namespace ноды = root-эквивалент).
+# QA C3 (DevPlan 14 T1.2): ipc/uts добавлены — host IPC (shared memory с произвольными
+# процессами ноды) и host UTS (shared hostname) — тот же класс root-эквивалента.
 _HOST_MODE_VALUE_KEYS: tuple[tuple[str, str], ...] = (
     ("network_mode", "host"),
     ("pid", "host"),
     ("userns_mode", "host"),
     ("cgroup", "host"),
+    ("ipc", "host"),
+    ("uts", "host"),
 )
 
 
@@ -325,6 +329,9 @@ def verify_project_contracts(
         else:
             services = data.get("services")
             networks = data.get("networks")
+            # QA C3 (DevPlan 14 T1.2): top-level volumes сканируется НЕЗАВИСИМО от валидности
+            # services — bind через driver_opts определения named volume обходит services-scan
+            raw.extend(_check_top_level_volumes(data.get("volumes")))
             if not isinstance(services, dict):
                 raw.append(_RawFinding("compose-config-valid", KLASS_L2, "compose file не содержит services (dict)"))
             else:
@@ -935,17 +942,20 @@ def _classify_volume_source(svc_name: str, raw: str, source: str) -> str | None:
 
 
 # region CONTRACT_host_mode_keys
-## @purpose  L1 host-mode-keys (REF-0006, DevPlan 11 В2): namespace-ключи compose —
-##           network_mode:host / pid:host / userns_mode:host / cgroup:host → violation
-##           (шаринг namespace ноды = root-эквивалент); cgroup_parent/sysctls — ЛЮБОЕ
-##           присутствие ключа → violation (паритет cap_add/devices: намерение манипулировать
-##           kernel-контуром — вне контракта проектов; TRAP[BUG] 2026-08-16 обещал pid/sysctls).
-## @io       ⇥ services: dict → ⎋ list[_RawFinding] (0..N — по одному на ключ)
-## @complexity O(S*K) где S = сервисы, K = 6 контролируемых ключей
+## @purpose  L1 host-mode-keys (REF-0006, DevPlan 11 В2 + QA C3 DevPlan 14 T1.2):
+##           namespace/isolation-ключи compose → violation:
+##           network_mode/pid/userns_mode/cgroup/ipc/uts == host (шаринг namespace ноды =
+##           root-эквивалент); cgroup_parent/sysctls — присутствие ключа → violation
+##           (kernel-контур вне контракта проектов); security_opt содержащий unconfined
+##           (seccomp/apparmor/systempaths off = root-эквивалент); volumes_from — присутствие
+##           (наследование чужих маунтов обходит dangerous-volumes скана; паритет cap_add/devices).
+## @io       ⇥ services: dict → ⎋ list[_RawFinding] (0..N — по одному на ключ/значение)
+## @complexity O(S*K) где S = сервисы, K = контролируемые ключи (6 value + 2 presence + 2 isolation)
 ## @invariants
 ##   - Значение сравнивается case-insensitively со "host"; прочие значения ("bridge",
 ##     "none", "container:x", "service:x") — OK (host-namespace не шарится)
-##   - cgroup_parent/sysctls: присутствие (≠ None, включая {}) → violation
+##   - cgroup_parent/sysctls/volumes_from: присутствие (≠ None, включая {}) → violation
+##   - security_opt: любой элемент строки содержащий "unconfined" (case-insensitive) → violation
 def _check_host_mode_keys(services: dict[str, object]) -> list[_RawFinding]:
     """L1: network_mode/pid/userns_mode/cgroup == host, cgroup_parent/sysctls present → violation."""
     findings: list[_RawFinding] = []
@@ -974,10 +984,85 @@ def _check_host_mode_keys(services: dict[str, object]) -> list[_RawFinding]:
                         f"проектам запрещён (паритет cap_add/devices, REF-0006)",
                     )
                 )
+        # QA C3 (DevPlan 14 T1.2): security_opt с unconfined снимает seccomp/apparmor/
+        # systempaths-профили (root-эквивалент); volumes_from наследует чужие маунты целиком
+        # (обход per-service dangerous-volumes скана) — паритет cap_add/devices.
+        security_opt = svc.get("security_opt")
+        if security_opt is not None:
+            opt_values: list[object] = security_opt if isinstance(security_opt, list) else [security_opt]
+            findings.extend(
+                _RawFinding(
+                    "host-mode-keys",
+                    KLASS_L1,
+                    f"service '{svc_name}': security_opt '{item}' — unconfined профили "
+                    "запрещены проектам (seccomp/apparmor/systempaths off = root-эквивалент, REF-0006)",
+                )
+                for item in opt_values
+                if isinstance(item, str) and "unconfined" in item.lower()
+            )
+        volumes_from = svc.get("volumes_from")
+        if volumes_from is not None:
+            findings.append(
+                _RawFinding(
+                    "host-mode-keys",
+                    KLASS_L1,
+                    f"service '{svc_name}': volumes_from: {volumes_from!r} — наследование чужих "
+                    "маунтов запрещено (обход dangerous-volumes скана, паритет cap_add/devices, REF-0006)",
+                )
+            )
     return findings
 
 
 # endregion CONTRACT_host_mode_keys
+
+
+# region CONTRACT_top_level_volumes
+## @purpose  L1 top-level volumes (QA C3, DevPlan 14 T1.2): named-volume ОПРЕДЕЛЕНИЕ с непустым
+##           driver_opts → violation. Все вызывающие verify_project_contracts — проектный payload
+##           (receive_flow.py/orchestrator.py/orchestrator_cli.py, l1_only=True): платформенный
+##           стек (postgres driver_opts-bind'ы) этим путём НЕ сканируется, легитимных
+##           bind-driver_opts у проектов нет по канону персистентности («named docker-managed
+##           volume») — правило «присутствие → violation» паритетно cap_add/devices и не требует
+##           эвристик путей. Вектор C3: {driver: local, driver_opts:{type:none,o:bind,
+##           device:/var/run/docker.sock}} + сервисный named-ref «sock» проходил services-scan —
+##           ловится здесь; имя device включается в сообщение (defense-in-depth).
+## @io       ⇥ top_volumes: Any (compose data["volumes"]) → ⎋ list[_RawFinding]
+## @complexity O(V) где V = именованные определения
+## @invariants
+##   - driver_opts присутствует и truthy ({}/None/"" — docker-managed определение, OK) → violation
+##   - Не-dict определения пропускаются (compose-config-valid отловит структурный мусор отдельно)
+def _check_top_level_volumes(top_volumes: object) -> list[_RawFinding]:
+    """L1: top-level named-volume definition with non-empty driver_opts → violation."""
+    logger.info("[IMP:8][verify_contracts][top-volumes] scanning %s", type(top_volumes).__name__)
+    findings: list[_RawFinding] = []
+    if not isinstance(top_volumes, dict):
+        return findings
+    for vol_name, definition in top_volumes.items():
+        if not isinstance(definition, dict):
+            continue
+        driver_opts = definition.get("driver_opts")
+        if not driver_opts:  # None / {} / "" — легитимное docker-managed определение
+            continue
+        device = driver_opts.get("device") if isinstance(driver_opts, dict) else None
+        device_note = f" (device: {device!r})" if isinstance(device, str) and device.strip() else ""
+        logger.info(
+            "[IMP:9][verify_contracts][top-volumes] violation: volume=%r driver_opts keys=%s",
+            vol_name,
+            sorted(driver_opts) if isinstance(driver_opts, dict) else type(driver_opts).__name__,
+        )
+        findings.append(
+            _RawFinding(
+                "dangerous-volumes",
+                KLASS_L1,
+                f"top-level volume '{vol_name}': driver_opts{device_note} запрещены проектам — "
+                "bind через определение named volume обходит services-scan "
+                "(QA C3/REF-0006); персистентность проектов — ТОЛЬКО docker-managed named volumes",
+            )
+        )
+    return findings
+
+
+# endregion CONTRACT_top_level_volumes
 
 
 # region FUNC__is_truthy

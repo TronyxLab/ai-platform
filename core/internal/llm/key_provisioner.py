@@ -65,6 +65,8 @@ if str(_PROJECT_ROOT) not in sys.path:
 from core.internal.llm.admin_client import (
     KeyInfo,
     LiteLLMAdminClient,
+    LiteLLMTransportError,
+    find_key_by_metadata,
 )
 from core.internal.llm.policy_schema import LLMPolicy
 
@@ -389,7 +391,9 @@ def _load_key_store(persist_path: pathlib.Path) -> dict[str, str]:
     ##           · Fix: corruption → PlatformError; восстановление — только осознанное
     ##             удаление файла оператором (или restore), никогда молча из provisioner'а.
     ##           · Prevention: fail-fast контракт _load_key_store + FileLock от гонок +
-    ##             atomic_write_json от truncate-окон; corruption-chain unit-тест.
+    ##             atomic_write_json от truncate-окон; corruption-chain unit-тест существует:
+    ##             tests/unit/test_llm_key_provisioner.py::test_corruption_chain_fail_loud
+    ##             (QA C4/G2, DevPlan 14 T1.3).
     ## @io
     ##   - ⎋ dict[str, str] — project_name → virtual key token
     ##   - ⚡ PlatformError — файл есть, но невалиден (truncated/non-dict/non-str)
@@ -636,6 +640,19 @@ def provision_all(
 
     # Step 5: Provision keys
     provisioned_keys: dict[str, str] = {}
+    # QA C4 (DevPlan 14 T1.3): fetch-once (PERF-081) — ОДИН list_keys() за прогон,
+    # lookup'ы — фильтр поверх скачанного списка; после успешного update/generate запись
+    # обновляется локально (консистентность в рамках прогона; конкурентные прогоны
+    # сериализованы store-lock).
+    known_keys: list[KeyInfo] = client.list_keys()
+    logger.log(
+        logging.INFO,
+        "[IMP:8][provision_all] Fetch-once index built: %d existing key(s) downloaded in 1 list_keys() call",
+        len(known_keys),
+    )
+    # QA C4: failed-consumer учёт — transient-сбой LiteLLM НЕ абортит фазу (WARN +
+    # переход к следующему потребителю), но честно попадает в итоговую сводку.
+    failed_consumers: list[str] = []
 
     for consumer in all_consumers:
         consumer_name = consumer.get("name", "unknown")
@@ -676,8 +693,9 @@ def provision_all(
         if isinstance(profile_metadata, dict):
             key_metadata.update({k: v for k, v in profile_metadata.items() if isinstance(v, str)})
 
-        # Check existing key
-        existing_key = client.get_key_by_metadata(project=consumer_name)
+        # Check existing key (QA C4 fetch-once: фильтр поверх одного list_keys(),
+        # НИКАКИХ per-consumer пагинаций)
+        existing_key = find_key_by_metadata(known_keys, project=consumer_name)
 
         if existing_key and isinstance(existing_key, dict):
             existing_token = existing_key.get("key", "")
@@ -697,6 +715,7 @@ def provision_all(
                 "[IMP:8][provision_all] UPDATE '%s': key exists with different config",
                 consumer_name,
             )
+            update_ok = False
             try:
                 client.update_key(
                     key=existing_token,
@@ -705,22 +724,42 @@ def provision_all(
                     rpm_limit=effective_config.get("rpm_limit"),
                     metadata=key_metadata,
                 )
-                logger.log(
-                    logging.CRITICAL,
-                    "[IMP:9][provision_all] KEY UPDATED '%s': %s...",
-                    consumer_name,
-                    existing_token[:_KEY_PREVIEW_LEN] if len(existing_token) > _KEY_PREVIEW_LEN else existing_token,
-                )
-                provisioned_keys[consumer_name] = existing_token
-                persist_project_key(consumer_name, existing_token, persist_path)
-                continue
-            except (OSError, ConnectionError, TimeoutError) as e:
+                update_ok = True
+            except (OSError, ConnectionError, TimeoutError, LiteLLMTransportError) as e:
+                # QA C4 (DevPlan 14 T1.3): fall-through-to-generate УДАЛЁН. Неудачный update
+                # оставляет живой валидный ключ со СТАРОЙ конфигурацией — деградация конфига;
+                # generate создал бы ВТОРОЙ budget-bearing ключ с тем же metadata (мина
+                # массовых дублей DATA-класса). Generate достижим ТОЛЬКО при existing is None.
                 logger.log(
                     logging.WARNING,
-                    "[IMP:8][provision_all] Update failed for '%s': %s — falling through to generate",
+                    "[IMP:8][provision_all] UPDATE FAILED '%s': %s — ключ сохранён со старой "
+                    "конфигурацией; generate НЕ выполняется (запрет дублей ключей)",
                     consumer_name,
                     e,
                 )
+                failed_consumers.append(consumer_name)
+            if not update_ok:
+                continue
+            logger.log(
+                logging.CRITICAL,
+                "[IMP:9][provision_all] KEY UPDATED '%s': %s...",
+                consumer_name,
+                existing_token[:_KEY_PREVIEW_LEN] if len(existing_token) > _KEY_PREVIEW_LEN else existing_token,
+            )
+            provisioned_keys[consumer_name] = existing_token
+            persist_project_key(consumer_name, existing_token, persist_path)
+            # QA C4: локальное обновление индекса — консистентность в рамках прогона
+            if isinstance(existing_key, dict):
+                budget_cfg = effective_config.get("budget")
+                budget_daily = cast("float", budget_cfg.get("daily", 0.0)) if isinstance(budget_cfg, dict) else 0.0
+                existing_key.update(
+                    key=existing_token,
+                    models=cast("list[str]", effective_config.get("models") or []),
+                    max_budget=budget_daily,
+                    rpm_limit=cast("int", effective_config.get("rpm_limit", 10)),
+                    metadata=cast("dict[str, object]", key_metadata),
+                )
+            continue
 
         # Key does not exist → generate
         logger.log(
@@ -728,38 +767,53 @@ def provision_all(
             "[IMP:8][provision_all] GENERATE '%s': no existing key found",
             consumer_name,
         )
+        gen_ok = False
+        gen_result: dict[str, object] = {}
         try:
-            gen_result = client.generate_key(
-                models=effective_config.get("models", []),
-                metadata=key_metadata,
-                max_budget=effective_config.get("budget", {}).get("daily", 0.0),
-                budget_duration="1d",
-                rpm_limit=effective_config.get("rpm_limit", 10),
+            gen_raw: object = cast(
+                "object",
+                client.generate_key(
+                    models=effective_config.get("models", []),
+                    metadata=key_metadata,
+                    max_budget=effective_config.get("budget", {}).get("daily", 0.0),
+                    budget_duration="1d",
+                    rpm_limit=effective_config.get("rpm_limit", 10),
+                ),
             )
-            new_key = gen_result.get("key", "")
-            logger.log(
-                logging.CRITICAL,
-                "[IMP:9][provision_all] KEY GENERATED '%s': %s...",
-                consumer_name,
-                new_key[:_KEY_PREVIEW_LEN] if len(new_key) > _KEY_PREVIEW_LEN else new_key,
-            )
-            provisioned_keys[consumer_name] = new_key
-            persist_project_key(consumer_name, new_key, persist_path)
-        except (OSError, ConnectionError, TimeoutError) as e:
+            gen_result = cast("dict[str, object]", gen_raw)
+            gen_ok = True
+        except (OSError, ConnectionError, TimeoutError, LiteLLMTransportError) as e:
             logger.log(
                 logging.WARNING,
-                "[IMP:8][provision_all] Generate failed for '%s': %s",
+                "[IMP:8][provision_all] GENERATE FAILED '%s': %s — фаза продолжает следующих потребителей",
                 consumer_name,
                 e,
             )
+            failed_consumers.append(consumer_name)
+        if not gen_ok:
+            continue
+        new_key = cast("str", gen_result.get("key", ""))
+        logger.log(
+            logging.CRITICAL,
+            "[IMP:9][provision_all] KEY GENERATED '%s': %s...",
+            consumer_name,
+            new_key[:_KEY_PREVIEW_LEN] if len(new_key) > _KEY_PREVIEW_LEN else new_key,
+        )
+        provisioned_keys[consumer_name] = new_key
+        persist_project_key(consumer_name, new_key, persist_path)
+        # QA C4: локальное пополнение индекса — консистентность в рамках прогона
+        known_keys.append(cast("KeyInfo", cast("object", gen_result)))
 
     # Summary
     total_skipped = len(all_consumers) - len(provisioned_keys)
     logger.log(
         logging.CRITICAL,
-        "[IMP:9][provision_all] Provisioning complete: %d keys provisioned, %d skipped",
+        "[IMP:9][provision_all] Provisioning complete: %d keys provisioned, %d skipped, "
+        "%d failed (transient-tolerant): %s",
         len(provisioned_keys),
         total_skipped,
+        len(failed_consumers),
+        failed_consumers or "none",
     )
 
     return provisioned_keys

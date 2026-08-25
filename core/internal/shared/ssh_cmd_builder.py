@@ -38,6 +38,9 @@
 ## @changes 2026-08-14 | DevPlan 164 W3.5-1 — Created (порт build-ssh-cmd.sh 179 LOC → ~150 LOC)
 ##           2026-08-24 | REF-0007 (11-DevPlan Волна 1) — секреты вне argv: +build_*_secret_prelude;
 ##                      тело init/update без AGE/ci-ключей (транспорт ssh-stdin → bash -s)
+##           2026-08-25 | QA C5 (DevPlan 14 T1.4) — CLI-режимы init-secrets/update-secrets читают
+##                      ЗНАЧЕНИЯ ключей из STDIN (по строке, фиксированный порядок), НЕ позиционным
+##                      argv: /proc/<pid>/cmdline короткоживущего python больше не содержит секрет
 # ⚠️ TRAP[DECISION] · 2026-07-26 · — · printf %q quoting — НЕПРИКОСНОВЕННО (D3)
 # · Rejected: shlex.quote() (Python stdlib) — single-quote-wrapping ≠ printf %q backslash-escaping;
 # ·   смена форматирования ломает byte-parity с bash-эпохой и глобавльный diff-аудит remote-команд
@@ -447,15 +450,14 @@ def _dispatch_build(mode: str, rest: list[str]) -> str:
         _require(rest, 2, mode)
         return build_update_ssh_cmd(rest[0], rest[1], rest[2:])
     # REF-0007: *-secrets modes печатают ТОЛЬКО secret-prelude (stdout → ssh-stdin канал)
+    # QA C5 (DevPlan 14 T1.4): значения ключей читаются из STDIN (по строке, в фиксированном
+    # порядке), НЕ позиционными аргументами — /proc/<pid>/cmdline не содержит секретов.
     if mode == "init-secrets":
-        _require(rest, _INIT_MIN_ARGS, mode)
-        node, owner, ci_deploy, age = rest[0], rest[1], rest[2], rest[3]
-        ci_root = rest[_INIT_MIN_ARGS] if len(rest) > _INIT_MIN_ARGS else ""
-        del node, owner
+        ci_deploy, age, ci_root = _read_secret_stdin(3)
         return build_init_secret_prelude(ci_deploy, age, ci_root)
     if mode == "update-secrets":
-        _require(rest, 2, mode)
-        return build_update_secret_prelude(rest[1])
+        (age,) = _read_secret_stdin(1)
+        return build_update_secret_prelude(age)
     if mode == "converge":
         _require(rest, 1, mode)
         return build_converge_ssh_cmd(rest[0], rest[1:])
@@ -470,6 +472,37 @@ def _dispatch_build(mode: str, rest: list[str]) -> str:
 
 
 # endregion FUNC__dispatch_build
+
+
+# region FUNC__read_secret_stdin
+## @purpose  QA C5 (DevPlan 14 T1.4): stdin-транспорт значений секретов для *-secrets режимов.
+##           Читает ровно `count` переводострок-разделённых значений (пустая строка = пустое
+##           значение); завершающий перевод строки не считается значением. Значения НЕ логируются.
+## @io       ⇥ count: int → ⎋ list[str] длиной count (недостающие хвосты = "")
+## @raises BuildModeError  stdin короче count (fail-fast — вызывающий обязан подать все значения)
+## @complexity  O(len(stdin))
+def _read_secret_stdin(count: int) -> list[str]:
+    """Read `count` newline-separated secret values from stdin (never logged).
+
+    ⚠️ TRAP[BUG] · 2026-08-25 · P1 · Пустые хвостовые значения съедались как «лишние \n»
+    · Symptom: build_init_secret_prelude ci age "" → printf даёт «ci\nage\n\n»; наивный
+      pop-всех-trailing-пустых превращал это в 2 значения → FATAL «expected 3 got 2»
+    · Root: пустое значение неотличимо от завершающего перевода строки при pop-all
+    · Fix: снимается РОВНО ОДИН финальный \n (N спецификаторов printf = N значений,
+      пустые значения сохраняются); недостающие хвосты после split = ""
+    """
+    data = sys.stdin.read()
+    if data.endswith("\n"):
+        data = data[:-1]
+    lines = data.split("\n") if data else []
+    if len(lines) < count:
+        msg = f"stdin secret transport: expected {count} line(s), got {len(lines)}"
+        raise BuildModeError(msg)
+    logger.info("[IMP:8][_read_secret_stdin][read] %d secret value(s) read from stdin (values not logged)", count)
+    return [lines[i] if i < len(lines) else "" for i in range(count)]
+
+
+# endregion FUNC__read_secret_stdin
 
 
 # region FUNC__require

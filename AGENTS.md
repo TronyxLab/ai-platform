@@ -424,7 +424,10 @@ make deploy-project → tar+ssh (orchestrator_cli deliver → forced-command rec
    включая gitleaks) зелёный; `make check MARKER=check-manifests` чистый.
 4. **Деплой:** `make deploy` (проект) / `make context-promote CONTEXT=<context>` (платформа);
    пост-деплой: `make e2e-verify NODE=<prod>` или `make healthcheck NODE=<prod>`.
-5. **После:** мониторинг без новых ошибок; release-заметка при необходимости.
+5. **Off-site DR активен:** `AGE_RECIPIENT` непуст в env backup-cron на prod (sops-матрица
+   ноды; QA C6, DevPlan 14 T1.5); последние nightly uploads без `BackupUploadFailure`
+   (пусто → fail-closed SKIP = RPO 24ч фиктивен).
+6. **После:** мониторинг без новых ошибок; release-заметка при необходимости.
 
 ---
 

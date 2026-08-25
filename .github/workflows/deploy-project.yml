@@ -46,6 +46,9 @@
 ##           2026-08-24 | REF-0012 (meta-refactoring W0): +permissions contents:read; external
 ##                      actions → full commit SHA; raw ${{ }} в run:-блоках → quoted; inline
 ##                      gitleaks L1 скачивается с sha256-верификацией checksums.txt
+##           2026-08-25 | QA R8 (DevPlan 14 T1.1): job deploy +timeout-minutes:30 (parity
+##                      core-deploy) — зависший SSH-шаг больше не держит очередь проекта
+##                      дефолтные 360 минут
 # endregion MODULE_CONTRACT
 
 name: Deploy Project (Reusable)
@@ -92,6 +95,10 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    # QA R8 (DevPlan 14 T1.1): job-level бюджет 30 мин (parity core-deploy). Дефолт GitHub
+    # для job'а = 360 минут: зависший SSH-шаг (потерянный пакет, чёрная дыра маршрута)
+    # блокировал concurrency-очередь деплоев проекта до 6 часов на попытку.
+    timeout-minutes: 30
     # 🧐 TRAP[DECISION] · 2026-08-24 · — · SSH_OPTS в caller-контексте — inline-набор без --shell (REF-0012)
     # · Rejected: `python3 -m core.internal.shared.ssh_opts --shell` как в core-deploy.yml
     # · Reason: reusable workflow исполняется в КОНТЕКСТЕ ПРОЕКТА-CALLER'А, где платформенного

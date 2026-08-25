@@ -441,6 +441,8 @@ class LiteLLMAdminClient:
         ##   - 404 → [] («ключей ещё нет» — не ошибка)
         ##   - Цикл до исчерпания total_pages; anti-runaway ceiling _MAX_PAGES
         ##   - Ответ без total_pages → single-page (совместимость с legacy LiteLLM)
+        ##   - QA L6 (T1.3): total_pages строгая конверсия — int или числовая строка;
+        ##     bool/float/нечисловая строка → LiteLLMTransportError("malformed pagination payload")
         """
         all_keys: list[KeyInfo] = []
         page = 1
@@ -473,7 +475,29 @@ class LiteLLMAdminClient:
             else:
                 all_keys.extend(_parse_keys_payload(data))
                 total_pages: object = data.get("total_pages")
-                if isinstance(total_pages, int) and page < total_pages:
+                if total_pages is None:
+                    break  # legacy-сервер без пагинации — single-page (контракт @invariants)
+                # QA L6 (DevPlan 14 T1.3): строгая конверсия — int или числовая строка;
+                # bool/float/мусор → LiteLLMTransportError ("2" молча обрывала листинг
+                # после страницы 1 → дубликаты ключей за пределами страницы 1).
+                if isinstance(total_pages, bool):
+                    msg = f"GET /key/info page={page}: malformed pagination payload (total_pages={total_pages!r})"
+                    raise LiteLLMTransportError(msg)
+                if isinstance(total_pages, int):
+                    pages_total: int = total_pages
+                elif isinstance(total_pages, str):
+                    try:
+                        pages_total = int(total_pages.strip())
+                    except ValueError as conv_err:
+                        msg = f"GET /key/info page={page}: malformed pagination payload (total_pages={total_pages!r})"
+                        raise LiteLLMTransportError(msg) from conv_err
+                    if str(pages_total) != total_pages.strip():
+                        msg = f"GET /key/info page={page}: malformed pagination payload (total_pages={total_pages!r})"
+                        raise LiteLLMTransportError(msg)
+                else:
+                    msg = f"GET /key/info page={page}: malformed pagination payload (total_pages={total_pages!r})"
+                    raise LiteLLMTransportError(msg)
+                if page < pages_total:
                     page += 1
                     continue
                 break
@@ -516,6 +540,11 @@ class LiteLLMAdminClient:
         """Async: GET /key/info?key={key}.
 
         ## @purpose  Async version of get_key_info for use in async contexts.
+        ##           QA L6 (DevPlan 14 T1.3): httpx-ошибки БОЛЬШЕ НЕ глотаются в None —
+        ##           transport-сбой ≠ «ключа нет»; 404 → None, остальное →
+        ##           LiteLLMTransportError (fail-loud).
+        ## @io       ⇥ key → ⎋ KeyInfo | None (None ТОЛЬКО при 404)
+        ##           ⚡ LiteLLMTransportError — transport/non-404 HTTP сбой
         ## @complexity O(1)
         """
         logger.log(
@@ -530,13 +559,12 @@ class LiteLLMAdminClient:
                     return None
                 response.raise_for_status()
                 return cast("KeyInfo", response.json())  # W11: json → Any → KeyInfo
-        except (httpx.HTTPError, httpx.ConnectError, httpx.TimeoutException) as e:
-            logger.log(
-                logging.WARNING,
-                "[IMP:8][async_get_key_info] Error: %s",
-                e,
-            )
-            return None
+        except httpx.HTTPStatusError as e:
+            msg = f"GET /key/info failed: HTTP {e.response.status_code}"
+            raise LiteLLMTransportError(msg) from e
+        except httpx.HTTPError as e:
+            msg = f"GET /key/info failed: {type(e).__name__}: {e}"
+            raise LiteLLMTransportError(msg) from e
 
     async def async_generate_key(
         self,

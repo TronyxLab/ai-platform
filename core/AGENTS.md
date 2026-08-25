@@ -191,6 +191,9 @@ degradation при отсутствии ShellCheck).
 **Инвариант:** plaintext мастер-ключ за пределы ноды НЕ выходит — backup только зашифрованный
 (sops age-реципиент или KMS; хранилище — S3 timeweb.cloud, отдельный bucket, private ACL;
 резервный слой — второй KMS-регион/печатная копия; периодичность — при каждой ротации).
+Backup-дампы postgres шифруются тем же recipient — публичный ключ `AGE_RECIPIENT`
+(backup-cron env из sops-матрицы ноды; пусто → nightly upload fail-closed SKIP,
+QA C6 / DevPlan 14 T1.5).
 
 **Процедура:** прочитать ключ → `sops encrypt --age <recipient>` → выгрузить .enc в приватный
 bucket → sha256-сверка (целостность до удаления локального plaintext).
@@ -212,7 +215,9 @@ KMS-компрометация → отдельный KMS-ключ + ротац�
 ### 5. Completion status (операционные долги)
 
 - `/etc/age/key.txt` plaintext — закрыто: persist удалён из φ4, канон env → tmpfs decrypt-only.
-- Off-node encrypted backup — **Debt** (`DR-offnode-backup`, Rev 2026-08-31).
+- Off-node encrypted backup матрицы — закрыто кодом: `AGE_RECIPIENT` в secret-definitions +
+  release-checklist шаг (QA C6); фактическое заведение ключа оператором в sops-матрицу prod —
+  Track O (Debt `DR-offnode-backup`, Rev 2026-08-31, закрывается после заведения).
 - DR-drill на test-VPS — **Debt** (`DR-drill`, Rev 2026-08-31).
 - `make age-key-backup` — отложена до drill'а.
 

@@ -874,3 +874,163 @@ def test_verify_contracts_l1_only_skips_docker_checks(monkeypatch, tmp_path: Pat
     assert "drift-practices" not in contract_ids, "l1_only не должен исполнять drift"
     assert "build-check" not in contract_ids, "l1_only не должен исполнять build-check"
     assert not report.has_blocking_violation()
+
+
+# ═══════════════════════════════════════════════════════════════════
+# QA C3 (DevPlan 14 T1.2): top-level volumes + расширенный deny-set
+# ═══════════════════════════════════════════════════════════════════
+
+# Точный вход из CRITICAL.md §C3: bind прячется в driver_opts определения named volume,
+# сервис ссылается named-ref'ом (regex-pass) — сегодня проходит все L1-проверки.
+_C3_FIXTURE_COMPOSE: str = """\
+volumes:
+  sock:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/run/docker.sock
+services:
+  app:
+    image: busybox:latest
+    env_file:
+      - .env.platform
+    healthcheck:
+      test: ["CMD", "echo", "ok"]
+    deploy:
+      resources:
+        limits:
+          memory: "128M"
+          cpus: "0.25"
+    labels:
+      - "platform.type=backend"
+      - "platform.domain=example.com"
+    networks:
+      - proxy-net
+    volumes:
+      - "sock:/var/run/docker.sock"
+networks:
+  proxy-net:
+    external: true
+"""
+
+# Позитив: docker-managed named volume БЕЗ driver_opts — легитимная персистентность.
+_C3_PLAIN_VOLUME_OK_COMPOSE: str = """\
+volumes:
+  data:
+    driver: local
+services:
+  app:
+    image: busybox:latest
+    env_file:
+      - .env.platform
+    healthcheck:
+      test: ["CMD", "echo", "ok"]
+    deploy:
+      resources:
+        limits:
+          memory: "128M"
+          cpus: "0.25"
+    labels:
+      - "platform.type=backend"
+      - "platform.domain=example.com"
+    networks:
+      - proxy-net
+    volumes:
+      - "data:/var/lib/data"
+networks:
+  proxy-net:
+    external: true
+"""
+
+
+def _compose_with_service_extra(extra_block: str) -> str:
+    """Insert an extra service-level block into _VALID_COMPOSE (before networks key)."""
+    anchor = "    networks:\n      - proxy-net\n"
+    assert anchor in _VALID_COMPOSE, "anchor networks-block не найден в _VALID_COMPOSE"
+    return _VALID_COMPOSE.replace(anchor, extra_block + anchor)
+
+
+# 🧪 TRAP[TEST] · 2026-08-25 · NEGATIVE (R5) · dangerous-volumes — точный вектор QA C3
+# · Scenario: CRITICAL.md §C3 — top-level volume с driver_opts.o=bind device:/var/run/docker.sock
+#   + сервисный named-ref «sock» — root ноды через docker API при формально named-маунте
+# · Last fail: 2026-08-25 — fixture проходила все L1-проверки (top-level volumes не читался)
+# · Remove if: модель персистентности проектов меняется (bind-driver_opts легализуют)
+def test_verify_contracts_toplevel_volume_driver_opts_blocked(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """C3 fixture: bind через top-level driver_opts → L1 block, device виден в сообщении."""
+    project = _make_project(tmp_path, name="c3fixture", compose=_C3_FIXTURE_COMPOSE)
+
+    with caplog.at_level(logging.INFO):
+        report = verify_project_contracts(project, facts=_FACTS_NO_DOCKER)
+
+    _assert_blocking(report, "dangerous-volumes", caplog)
+    tlv = [f for f in report.findings if f.contract_id == "dangerous-volumes" and "driver_opts" in f.message]
+    assert tlv, f"нет top-level volumes finding: {report.format_for_ssh()}"
+    assert "/var/run/docker.sock" in tlv[0].message, (
+        f"defense-in-depth: имя device обязано быть в сообщении: {tlv[0].message}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("extra_block", "expected_fragment"),
+    [
+        pytest.param("    ipc: host\n", "ipc: host", id="ipc-host"),
+        pytest.param("    uts: host\n", "uts: host", id="uts-host"),
+        pytest.param('    security_opt:\n      - "seccomp=unconfined"\n', "security_opt", id="security-opt-unconfined"),
+        pytest.param(
+            '    security_opt:\n      - "AppArmor=unconfined"\n', "security_opt", id="security-opt-case-insensitive"
+        ),
+        pytest.param("    volumes_from:\n      - sibling\n", "volumes_from", id="volumes-from-present"),
+    ],
+)
+# 🧪 TRAP[TEST] · 2026-08-25 · NEGATIVE (R5) · host-mode-keys — расширенный deny-set QA C3
+# · Scenario: ipc/uts:host (shared namespace ноды), security_opt unconfined (снятие профилей),
+#   volumes_from (наследование чужих маунтов мимо per-service скана)
+# · Last fail: 2026-08-25 — deny-set покрывал только network_mode/pid/userns_mode/cgroup
+#   против собственного TRAP-обещания REF-0006
+# · Remove if: ключ легализован для проектов (требует пересмотра всего deny-set)
+def test_verify_contracts_extended_deny_set_keys_blocked(
+    extra_block: str,
+    expected_fragment: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Каждый новый ключ deny-set → отдельный L1-блок по host-mode-keys."""
+    project = _make_project(tmp_path, name="c3keys", compose=_compose_with_service_extra(extra_block))
+
+    with caplog.at_level(logging.INFO):
+        report = verify_project_contracts(project, facts=_FACTS_NO_DOCKER)
+
+    _assert_blocking(report, "host-mode-keys", caplog)
+    hits = [f for f in report.findings if f.contract_id == "host-mode-keys" and expected_fragment in f.message]
+    assert hits, f"{expected_fragment} не пойман: {report.format_for_ssh()}"
+
+
+# 🧪 TRAP[TEST] · 2026-08-25 · POSITIVE · dangerous-volumes — docker-managed volume без
+# driver_opts остаётся легитимным (защита от false-positive на каноне персистентности)
+# · Last fail: N/A (preventive)
+# · Remove if: правило top-level volumes меняется
+def test_verify_contracts_toplevel_plain_volume_ok(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Named volume без driver_opts (docker-managed) + named-ref сервиса → 0 блоков."""
+    project = _make_project(tmp_path, name="c3ok", compose=_C3_PLAIN_VOLUME_OK_COMPOSE)
+
+    with caplog.at_level(logging.INFO):
+        report = verify_project_contracts(project, facts=_FACTS_NO_DOCKER)
+
+    dangerous = [f for f in report.findings if f.contract_id == "dangerous-volumes"]
+    mode_keys = [f for f in report.findings if f.contract_id == "host-mode-keys"]
+    assert not dangerous, f"plain named volume не должен блокироваться: {dangerous}"
+    assert not mode_keys, f"plain named volume не должен триггерить host-mode-keys: {mode_keys}"
+    assert not report.has_blocking_violation(), report.format_for_ssh()
+    logger.info("--- plain-volume report ---")
+    logger.info("%s", report.format_for_ssh())
+    assert _print_ldd_trajectory(caplog), "LDD: нет IMP:9 лога verify_contracts"

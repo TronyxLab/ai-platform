@@ -648,11 +648,13 @@ def test_cli_exit_codes(delivery_tree, caplog) -> None:
 
 
 # region FUNC_test_fallback_deliver_success
-def test_fallback_deliver_success(delivery_tree, caplog) -> None:
+def test_fallback_deliver_success(delivery_tree, caplog, monkeypatch: pytest.MonkeyPatch) -> None:
     """fallback-deliver: rsync-фазы + provision + node-update → True (2 ssh вызова)."""
     caplog.set_level(logging.DEBUG)
     logger.info("[IMP:7][test_fallback_deliver_success][start] BEGIN")
 
+    # QA C5 (DevPlan 14 T1.4): ключ через env-цепочку node_detect (CLI-флаг удалён)
+    monkeypatch.setenv("AGE_SECRET_KEY", "AGE-KEY-123")
     args = [
         "fallback-deliver",
         "--host",
@@ -661,8 +663,6 @@ def test_fallback_deliver_success(delivery_tree, caplog) -> None:
         delivery_tree["node"],
         "--core-dir",
         delivery_tree["core_dir"],
-        "--age-secret-key",
-        "AGE-KEY-123",
     ]
     fake = _ok_runner()
     assert cli(argv=args, runner=fake) == 0, "fallback-deliver success must return 0"
@@ -683,7 +683,8 @@ def test_fallback_deliver_success(delivery_tree, caplog) -> None:
     # 🧪 TRAP[TEST] · 2026-08-07 · 142 W5 — fallback-деплой: ssh-вызовы provision/node-update
     # · Scenario: успешный прогон — все фазы; REF-0007: AGE_SECRET_KEY через stdin prelude,
     # ·   НЕ в argv (`bash -s`)
-    # · Last fail: REF-0007 red→green — env-префикс в argv заменён stdin-транспортом
+    # · Last fail: REF-0007 red→green — env-префикс в argv заменён stdin-транспортом;
+    # ·   2026-08-25 QA C5 — ключ теперь из env node_detect (argv-флаг удалён)
     # · Remove if: fallback-deliver subcommand removed
     assert_ldd_imp9(caplog)
 
@@ -692,11 +693,13 @@ def test_fallback_deliver_success(delivery_tree, caplog) -> None:
 
 
 # region FUNC_test_fallback_deliver_provision_fail
-def test_fallback_deliver_provision_fail(delivery_tree, caplog) -> None:
+def test_fallback_deliver_provision_fail(delivery_tree, caplog, monkeypatch: pytest.MonkeyPatch) -> None:
     """fallback-deliver: provision FAIL → cli() возвращает 1 (fail-fast)."""
     caplog.set_level(logging.DEBUG)
     logger.info("[IMP:7][test_fallback_deliver_provision_fail][start] BEGIN")
 
+    # QA C5: без ключа deliver_fallback падает ДО provision — для сценария provision-fail даём ключ
+    monkeypatch.setenv("AGE_SECRET_KEY", "AGE-PROVISION-TEST-KEY")
     args = [
         "fallback-deliver",
         "--host",
@@ -764,12 +767,15 @@ def test_fallback_deliver_dry_run(delivery_tree, caplog) -> None:
 # · Scenario: node-update падает; remote stderr СОДЕРЖИТ значение ключа (echo $AGE_SECRET_KEY)
 # ·   → error-лог deliver_fallback обязан содержать ***REDACTED*** и НИКОГДА само значение;
 # ·   argv ssh-вызова тоже без ключа (`bash -s` stdin-транспорт)
-# · Last fail: 2026-08-24 — AGE_SECRET_KEY светился в argv И в dry-run логах deliver_fallback
+# · Last fail: 2026-08-24 — AGE_SECRET_KEY светился в argv И в dry-run логах deliver_fallback;
+# ·   2026-08-25 QA C5 — ключ теперь из env node_detect (argv-флаг удалён)
 # · Remove if: redact_secrets() удалён/переименован или транспорт вернул key-in-argv
-def test_fallback_deliver_redacts_key_from_stderr_logs(delivery_tree, caplog) -> None:
+def test_fallback_deliver_redacts_key_from_stderr_logs(delivery_tree, caplog, monkeypatch: pytest.MonkeyPatch) -> None:
     """REF-0007 (TEST-07): fallback node-update failure — ключ redact'ится в логах."""
     caplog.set_level(logging.DEBUG)
     logger.info("[IMP:7][test_fallback_deliver_redacts][start] BEGIN")
+    # QA C5 (T1.4): ключ через env (CLI-флаг --age-secret-key удалён)
+    monkeypatch.setenv("AGE_SECRET_KEY", "AGE-SUPERSECRET-VALUE-42")
     args = [
         "fallback-deliver",
         "--host",
@@ -778,8 +784,6 @@ def test_fallback_deliver_redacts_key_from_stderr_logs(delivery_tree, caplog) ->
         delivery_tree["node"],
         "--core-dir",
         delivery_tree["core_dir"],
-        "--age-secret-key",
-        "AGE-SUPERSECRET-VALUE-42",
     ]
     # core + platform-env + Makefile (scripts/makefiles/root-compose skip; mkdir не входит
     # в fallback-канал) + provision ok, затем node-update FAIL с ключом в remote stderr
@@ -811,10 +815,12 @@ def test_fallback_deliver_redacts_key_from_stderr_logs(delivery_tree, caplog) ->
 # · Scenario: --dry-run с --age-secret-key → WOULD-лог содержит размер скрипта, не значение
 # · Last fail: 2026-08-24 — " ".join(update_cmd) печатал ключ в dry-run лог
 # · Remove if: dry-run контракт меняется
-def test_fallback_deliver_dry_run_no_key_in_output(delivery_tree, caplog) -> None:
+def test_fallback_deliver_dry_run_no_key_in_output(delivery_tree, caplog, monkeypatch: pytest.MonkeyPatch) -> None:
     """REF-0007: fallback --dry-run с ключом — значение отсутствует в выводе."""
     caplog.set_level(logging.DEBUG)
     logger.info("[IMP:7][test_fallback_dryrun_nokey][start] BEGIN")
+    # QA C5 (T1.4): ключ через env (CLI-флаг --age-secret-key удалён)
+    monkeypatch.setenv("AGE_SECRET_KEY", "AGE-DRYRUN-SECRET-99")
     args = [
         "fallback-deliver",
         "--host",
@@ -823,8 +829,6 @@ def test_fallback_deliver_dry_run_no_key_in_output(delivery_tree, caplog) -> Non
         delivery_tree["node"],
         "--core-dir",
         delivery_tree["core_dir"],
-        "--age-secret-key",
-        "AGE-DRYRUN-SECRET-99",
         "--dry-run",
     ]
     fake = _ok_runner()
@@ -836,6 +840,128 @@ def test_fallback_deliver_dry_run_no_key_in_output(delivery_tree, caplog) -> Non
 
 
 # endregion FUNC_test_fallback_deliver_dry_run_no_key_in_output
+
+
+# ═══════════════════════════════════════════════════════════════════
+# QA C5/R6/R7 (DevPlan 14 T1.4): redact-before-truncate + argv-чистота
+# ═══════════════════════════════════════════════════════════════════
+
+
+# region FUNC_test_redact_before_truncate_boundary
+# 🧪 TRAP[TEST] · 2026-08-25 · NEGATIVE (R5) · QA R6 — redact ДО truncate (boundary)
+# · Scenario: stderr, где значение ключа попадает в последние 500 символов — старый порядок
+#   (strip()[-500:] → redact) резал окно ПЕРЕД redact'ом: суффикс/префикс ключа на границе
+#   окна уходил в лог неповреждённым
+# · Last fail: core_deliverer.py:822 — redact_secrets(r.stderr.strip()[-500:], key)
+# · Remove if: error-канал перестанет обрезать stderr
+def test_redact_before_truncate_boundary(delivery_tree, caplog, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ключ целиком внутри последних 500 символов stderr → в лог ни ключ, ни его суффикс."""
+    caplog.set_level(logging.DEBUG)
+    logger.info("[IMP:7][test_redact_boundary][start] BEGIN")
+    secret = "AGE-BOUNDARY-SUFFIX-7777"
+    monkeypatch.setenv("AGE_SECRET_KEY", secret)
+    # Ключ начинается ~на границе окна [-500:] и продолжается за неё:
+    # 600 filler + "key=" + secret + 40 filler → старый код брал последние 500 символов,
+    # куда попадал хвост ключа; новый код redact'ит ДО окна.
+    crafted_stderr = "x" * 600 + f"decrypt failed near key={secret} " + "y" * 40
+
+    args = [
+        "fallback-deliver",
+        "--host",
+        "1.2.3.4",
+        "--node",
+        delivery_tree["node"],
+        "--core-dir",
+        delivery_tree["core_dir"],
+    ]
+    fake = FakeCommandRunner(
+        results=[
+            _proc(0),  # rsync core/
+            _proc(0),  # rsync platform-env.yaml
+            _proc(0),  # rsync Makefile
+            _proc(0),  # provision
+            _proc(1, stderr=crafted_stderr),  # node-update FAIL
+        ]
+    )
+    assert cli(argv=args, runner=fake) == 1, "node-update failure must return 1"
+    # Ни полный ключ, ни его суффикс не присутствуют в логах
+    assert secret not in caplog.text, f"R6 FAIL: ключ утёк в лог:\n{caplog.text[-1500:]}"
+    assert secret[-10:] not in caplog.text, f"R6 FAIL: суффикс ключа утёк на границе окна:\n{caplog.text[-1500:]}"
+    assert "***REDACTED***" in caplog.text, "redaction marker missing"
+    logger.info("[IMP:9][test_redact_boundary][done] redact-before-truncate verified on boundary window")
+
+
+# endregion FUNC_test_redact_before_truncate_boundary
+
+
+# region FUNC_test_no_key_in_argv_and_missing_key_fatal
+# 🧪 TRAP[TEST] · 2026-08-25 · NEGATIVE (R5) · QA C5 — argv-чистота всех runner-вызовов
+# · Scenario: fallback-deliver c env-ключом — /proc-argv НИ ОДНОГО runner-процесса (rsync/ssh)
+#   не содержит значения ключа; CLI-флаг --age-secret-key больше не существует
+# · Last fail: core-deliver.sh:107 передавал detected key флагом --age-secret-key (argv python)
+# · Remove if: появится другой argv-транспорт секретов (запрещён инвариантом REF-0007/C5)
+def test_no_key_in_argv(delivery_tree, caplog, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ни один runner-cmd не содержит значение ключа; флаг --age-secret-key отвергнут."""
+    caplog.set_level(logging.DEBUG)
+    secret = "AGE-ARGV-PURITY-CHECK-42"
+    monkeypatch.setenv("AGE_SECRET_KEY", secret)
+    args = [
+        "fallback-deliver",
+        "--host",
+        "1.2.3.4",
+        "--node",
+        delivery_tree["node"],
+        "--core-dir",
+        delivery_tree["core_dir"],
+    ]
+    fake = _ok_runner()
+    assert cli(argv=args, runner=fake) == 0
+    for i, call in enumerate(fake.calls):
+        assert secret not in call, f"C5 FAIL: секрет в argv вызова #{i}: {call}"
+    # stdin node-update несёт export (транспорт — НЕ argv)
+    update_input = fake.kwargs[-1].get("input") or ""
+    assert f"export AGE_SECRET_KEY={secret}" in update_input
+    # CLI-флаг удалён: argparse отвергает неизвестный аргумент (SystemExit 2)
+    with pytest.raises(SystemExit) as exc_info:
+        cli(argv=["fallback-deliver", "--host", "h", "--node", "n", "--core-dir", "c", "--age-secret-key", "x"])
+    assert exc_info.value.code == 2, "удалённый флаг обязан давать argparse usage-error (exit 2)"
+    logger.info("[IMP:9][test_no_key_in_argv][done] 0 argv hits across %d calls; flag removed", len(fake.calls))
+    assert_ldd_imp9(caplog)
+
+
+# 🧪 TRAP[TEST] · 2026-08-25 · NEGATIVE (R5) · QA C5 — отсутствие ключа → явный FATAL
+# · Scenario: env/file цепочка пуста → deliver_fallback возвращает False ДО любых remote-
+#   действий (не тихий skip φ9)
+# · Last fail: shell-версия WARN'ила и продолжала (φ9 молча пропускался)
+# · Remove if: появятся легитимные сценарии core-deliver без AGE-ключа
+def test_missing_age_key_fails_fast(delivery_tree, caplog, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Без ключа в env — rc=1, ноль runner-вызовов, IMP:10 FATAL."""
+    caplog.set_level(logging.DEBUG)
+    # Детерминизм: dev-машина имеет ~/.config/age/keys.txt (default-file цепочки) —
+    # подменяем саму детекцию на «не найдено» (тестируется ветка FATAL deliver_fallback)
+    import core.internal.bootstrap.core_deliverer as _cd
+
+    monkeypatch.setattr(_cd, "detect_age_key", lambda *_args, **_kwargs: None)
+    args = [
+        "fallback-deliver",
+        "--host",
+        "1.2.3.4",
+        "--node",
+        delivery_tree["node"],
+        "--core-dir",
+        delivery_tree["core_dir"],
+    ]
+    fake = _ok_runner()
+    assert cli(argv=args, runner=fake) == 1, "missing key must fail the delivery"
+    assert len(fake.calls) == 0, f"fail-fast до remote-действий, было вызовов: {len(fake.calls)}"
+    assert any("[IMP:10][deliver_fallback][age] FATAL" in r.message for r in caplog.records), (
+        "ожидается явный FATAL-лог об отсутствии ключа"
+    )
+    logger.info("[IMP:9][test_missing_age_key_fails_fast][done] fail-fast before any remote action")
+    assert_ldd_imp9(caplog)
+
+
+# endregion FUNC_test_no_key_in_argv_and_missing_key_fatal
 
 
 # ═══════════════════════════════════════════════════════════════════

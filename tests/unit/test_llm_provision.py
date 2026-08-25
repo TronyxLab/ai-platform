@@ -149,3 +149,120 @@ class TestRenderAndProvisionLlm:
             render_and_provision_llm(core_dir_override=str(tmp_path))
 
         assert any("Failed to render litellm-config.yml" in r.message for r in caplog.records)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# QA L6/G2 (DevPlan 14 T1.3): admin_client.list_keys pagination —
+# строгая конверсия total_pages + transport-error fail-loud
+# ($TEST_SPEC: module under test = admin_client.list_keys)
+# ═══════════════════════════════════════════════════════════════════
+
+import httpx
+
+from core.internal.llm.admin_client import (
+    LiteLLMAdminClient,
+    LiteLLMTransportError,
+)
+
+_KEY_PAGE_BODY = {
+    "key": "sk-x",
+    "models": [],
+    "max_budget": 0,
+    "rpm_limit": 1,
+    "metadata": {},
+}
+
+
+def _paginated_handler(total_pages_value: object, seen_pages: list[str]):
+    """MockTransport handler: /key/info?page=N → keys page с заданным total_pages."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        page = request.url.params.get("page", "1")
+        seen_pages.append(page)
+        body = {"keys": [dict(_KEY_PAGE_BODY, key=f"sk-page{page}")], "total_pages": total_pages_value}
+        return httpx.Response(200, json=body)
+
+    return handler
+
+
+# 🧪 TRAP[TEST] · 2026-08-25 · REGRESSION · QA L6 — строковый total_pages "2"
+# · Scenario: LiteLLM отдал total_pages строкой "2" → isinstance(int) ложно → листинг молча
+#   обрывался после страницы 1 → provisioner генерировал дубликаты ключей за её пределами
+# · Last fail: 2026-08-25 (admin_client.py:476) — строка "2" не проходила isinstance(int)
+# · Remove if: LiteLLM гарантированно отдаёт int total_pages (контракт зафиксирован)
+def test_pagination_string_total_pages():
+    """str '2' → обе страницы прочитаны (строгая конверсия QA L6)."""
+    seen_pages: list[str] = []
+    client = LiteLLMAdminClient(
+        base_url="http://litellm-test:4000",
+        master_key="mk-test",
+        transport=httpx.MockTransport(_paginated_handler("2", seen_pages)),
+    )
+    keys = client.list_keys()
+    client.close()
+
+    assert len(keys) == 2, f"обе страницы обязаны быть прочитаны: {len(keys)}"
+    assert {k["key"] for k in keys} == {"sk-page1", "sk-page2"}
+    assert seen_pages == ["1", "2"], f"пагинация должна пройти страницы 1→2: {seen_pages}"
+    print("[IMP:9][test][pagination] string '2' → pages fetched:", seen_pages)
+
+
+# 🧪 TRAP[TEST] · 2026-08-25 · REGRESSION · int total_pages ≥2 страниц (базовая пагинация)
+# · Last fail: N/A (preventive — guard базового пути при ужесточении конверсии)
+# · Remove if: вместе с детектором
+def test_pagination_int_total_pages_two_pages():
+    """int 2 → обе страницы прочитаны."""
+    seen_pages: list[str] = []
+    client = LiteLLMAdminClient(
+        base_url="http://litellm-test:4000",
+        master_key="mk-test",
+        transport=httpx.MockTransport(_paginated_handler(2, seen_pages)),
+    )
+    keys = client.list_keys()
+    client.close()
+
+    assert len(keys) == 2 and seen_pages == ["1", "2"]
+
+
+@pytest.mark.parametrize("junk", [{"pages": True}, 2.5, True, "две"])
+# 🧪 TRAP[TEST] · 2026-08-25 · NEGATIVE (R5) · malformed pagination payload → fail-loud
+# · Scenario: мусорный total_pages (dict/float/bool/нечисловая строка) раньше молча трактовался
+#   как single-page; теперь → LiteLLMTransportError (fail-closed)
+# · Last fail: N/A (preventive, паритет strict-conversion QA L6)
+# · Remove if: политика пагинации меняется
+def test_pagination_malformed_total_pages_raises(junk):
+    """Мусорный total_pages → LiteLLMTransportError('malformed pagination payload')."""
+    seen_pages: list[str] = []
+    client = LiteLLMAdminClient(
+        base_url="http://litellm-test:4000",
+        master_key="mk-test",
+        transport=httpx.MockTransport(_paginated_handler(junk, seen_pages)),
+    )
+    with pytest.raises(LiteLLMTransportError, match="malformed pagination payload"):
+        client.list_keys()
+    client.close()
+    print(f"[IMP:9][test][pagination] malformed total_pages={junk!r} → TransportError")
+
+
+# 🧪 TRAP[TEST] · 2026-08-25 · REGRESSION · transport-error ≠ 404 → TransportError
+# · Scenario: ConnectError при GET /key/info — раньше generic-исключение абортило фазу;
+#   контракт REF-0104: transport-сбой оборачивается в LiteLLMTransportError (ловится
+#   provisioner'ом как WARN+failed), а не маскируется в «нет ключей»
+# · Last fail: 2026-08-25 (QA C4) — кортеж provisioner'а физически не ловил TransportError
+# · Remove if: транспорт мигрирует на другой HTTP-стек
+def test_list_keys_connect_error_raises_transport_error():
+    """httpx.ConnectError → LiteLLMTransportError (не None, не сырой httpx)."""
+
+    def failing_handler(request: httpx.Request) -> httpx.Response:
+        connect_err = httpx.ConnectError("connection refused", request=request)
+        raise connect_err
+
+    client = LiteLLMAdminClient(
+        base_url="http://litellm-test:4000",
+        master_key="mk-test",
+        transport=httpx.MockTransport(failing_handler),
+    )
+    with pytest.raises(LiteLLMTransportError, match="ConnectError"):
+        client.list_keys()
+    client.close()
+    print("[IMP:9][test][transport] ConnectError wrapped into LiteLLMTransportError")

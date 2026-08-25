@@ -413,7 +413,8 @@ def test_secret_prelude_facade(caplog) -> None:
     stdout_p, stderr_p, rc_p = _test_func(
         BUILD_SSH_CMD_SH,
         ["build_update_secret_prelude"],
-        'build_update_secret_prelude "test-node" "AGE-SECRET-KEY-PRELUDE1"\necho "[IMP:9][prelude] Exit=$?"',
+        # QA C5/T1.4: фасад принимает ТОЛЬКО значение ключа ($1); значение едет в python по stdin
+        'build_update_secret_prelude "AGE-SECRET-KEY-PRELUDE1"\necho "[IMP:9][prelude] Exit=$?"',
         env={"__LOG_PREFIX": "test"},
     )
     assert rc_p == 0, f"build_update_secret_prelude failed: {stderr_p}"
@@ -424,7 +425,8 @@ def test_secret_prelude_facade(caplog) -> None:
     stdout_i, stderr_i, rc_i = _test_func(
         BUILD_SSH_CMD_SH,
         ["build_init_secret_prelude"],
-        'build_init_secret_prelude "test-node" "owner" "" "" ""\necho "[IMP:9][prelude-init] Exit=$?"',
+        # QA C5/T1.4: 3 значения через stdin (ci_deploy/age/ci_root), все пустые → пустой prelude
+        'build_init_secret_prelude "" "" ""\necho "[IMP:9][prelude-init] Exit=$?"',
         env={"__LOG_PREFIX": "test"},
     )
     assert rc_i == 0, f"build_init_secret_prelude failed: {stderr_i}"
@@ -1034,11 +1036,12 @@ echo "[IMP:9][build_ssh_cmd_ci_root] Exit=$?"
     assert "PLATFORM_CI_ROOT_KEY=" not in cmd, f"REF-0007: тело БЕЗ экспорта: {cmd}"
     logger.info("[IMP:9][test_build_ssh_cmd_ci_root][assert] body secret-free (ci_root)")
 
-    # Ключ в prelude (ssh-stdin канал), %q-quoting сохранён
+    # Ключ в prelude (ssh-stdin канал), %q-quoting сохранён.
+    # QA C5/T1.4: фасад = (ci_deploy, age, ci_root) — значения через stdin
     stdout_p, stderr_p, rc_p = _test_func(
         BUILD_SSH_CMD_SH,
         ["build_init_secret_prelude"],
-        f"""build_init_secret_prelude "test-node" "owner" "" "" "{ci_root_key}"
+        f"""build_init_secret_prelude "" "" "{ci_root_key}"
 echo "[IMP:9][prelude_ci_root] Exit=$?"
 """,
         env={"__LOG_PREFIX": "test"},

@@ -21,7 +21,9 @@
 
 from __future__ import annotations
 
+import io
 import logging
+import sys
 
 import pytest
 from _conftest.ldd import ldd_trajectory
@@ -417,24 +419,30 @@ def test_cli_init_prints_command(caplog: pytest.LogCaptureFixture, capsys: pytes
 
 # region FUNC_test_cli_secrets_modes
 # 🧪 TRAP[TEST] · Regression · REF-0007: *-secrets CLI modes печатают ТОЛЬКО prelude в stdout
-# · Scenario: cli(["update-secrets", node, age]) → stdout = export-строка, exit 0;
-# ·   cli(["init-secrets", ...]) → export-строки ключей
-# · Last fail: N/A (new modes)
+# · Scenario: cli(["update-secrets"]) со значением в stdin → stdout = export-строка, exit 0;
+# ·   cli(["init-secrets"]) с 3 строками stdin → export-строки ключей
+# · Last fail: 2026-08-25 (QA C5/T1.4) — значения подавались позиционным argv; переведены
+#   на stdin-транспорт (по строке: init = ci_deploy/age/ci_root, update = age)
 # · Remove if: CLI контракт меняется
 @ldd_trajectory
 def test_cli_secrets_modes(
     caplog: pytest.LogCaptureFixture,
     capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """CLI init-secrets/update-secrets: stdout = secret-prelude для ssh-stdin."""
+    """CLI init-secrets/update-secrets: значения из stdin, stdout = secret-prelude."""
     caplog.set_level(logging.DEBUG)
-    rc_update = cli(["update-secrets", "n1", "age-777"])
+    # QA C5: значение ключа — STDIN (одна строка), argv содержит только mode
+    monkeypatch.setattr(sys, "stdin", io.StringIO("age-777\n"))
+    rc_update = cli(["update-secrets"])
     out_update, _ = capsys.readouterr()
     logger.info("[IMP:9][test][cli-update-secrets] rc=%s stdout=%r", rc_update, out_update.strip())
     assert rc_update == 0
     assert out_update == "export AGE_SECRET_KEY=age-777\n"
 
-    rc_init = cli(["init-secrets", "n1", "owner", "ci-key val", "age-888", "root-key"])
+    # QA C5: три значения по строкам (ci_deploy / age / ci_root), argv только mode
+    monkeypatch.setattr(sys, "stdin", io.StringIO("ci-key val\nage-888\nroot-key\n"))
+    rc_init = cli(["init-secrets"])
     out_init, _ = capsys.readouterr()
     lines = out_init.strip().splitlines()
     logger.info("[IMP:9][test][cli-init-secrets] rc=%s %d export lines", rc_init, len(lines))
@@ -444,6 +452,26 @@ def test_cli_secrets_modes(
     assert any(line.startswith("export PLATFORM_CI_ROOT_KEY=") for line in lines)
     # Тело команды НЕ печатается secrets-mode'ом
     assert "node-lifecycle" not in out_init
+
+
+# 🧪 TRAP[TEST] · 2026-08-25 · NEGATIVE (R5) · QA C5 — короткий stdin → fail-fast
+# · Scenario: init-secrets c <3 строками stdin → BuildModeError/exit≠0 (не молча пустые prelude)
+# · Last fail: N/A (новый контракт stdin-транспорта)
+# · Remove if: транспорт секретов изменится
+@ldd_trajectory
+def test_cli_secrets_short_stdin_fails(
+    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """stdin короче ожидаемого → exit 2 + FATAL в stderr (fail-fast, usage-ошибка)."""
+    caplog.set_level(logging.DEBUG)
+    monkeypatch.setattr(sys, "stdin", io.StringIO("only-one-value\n"))
+    rc = cli(["init-secrets"])
+    assert rc == 2, f"короткий stdin обязан давать exit 2, получен {rc}"
+    err = capsys.readouterr().err
+    assert "stdin secret transport" in err, f"ожидается FATAL-сообщение в stderr: {err}"
+    logger.info("[IMP:9][test][cli-short-stdin] short stdin rejected with exit=2")
 
 
 # endregion FUNC_test_cli_secrets_modes

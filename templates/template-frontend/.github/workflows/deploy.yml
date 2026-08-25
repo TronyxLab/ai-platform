@@ -26,6 +26,9 @@
 ##           существует — образ доставляется push-каналом, не ручным тегом
 ## @changes 2026-08-24 | REF-0012: deploy-project.yml@main → @<full-sha>
 ## @changes 2026-08-24 | REF-0011: +concurrency group (сериализация деплоев проекта)
+## @changes 2026-08-25 | QA C2 (DevPlan 14 T1.1): re-pin 4425ce0 (2026-08-18, БЕЗ харденинга
+##           REF-0011/0012) → 42679a0 (snapshot 2026-08-25); дата комментария честна —
+##           freshness-гейт test_gate_workflow_sha_pins RED'ит ложную дату и stale-pin
 # endregion MODULE_CONTRACT
 name: Deploy
 
@@ -78,7 +81,7 @@ jobs:
 
   deploy:
     needs: [build-and-push]
-    uses: {{ORG_NAME}}/ai-platform/.github/workflows/deploy-project.yml@4425ce0835665b1d0a9ef3f1e2cbf702663645ed # main snapshot 2026-08-24 (REF-0012)
+    uses: {{ORG_NAME}}/ai-platform/.github/workflows/deploy-project.yml@42679a084ff7b3a1281a4543e336f57cbc687875 # main snapshot 2026-08-25 (REF-0012)
     with:
       project_name: {{PROJECT_NAME}}
     secrets: inherit

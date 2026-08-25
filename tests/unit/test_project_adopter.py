@@ -26,6 +26,9 @@ from pathlib import Path
 
 import pytest
 
+# T1.1 (DevPlan 14): SoT-пин деплой-канала — ассерты запиненной генерации
+from core.internal.scaffold.channel_pin import DEPLOY_CHANNEL_PIN, PIN_COMMENT
+
 # LDD trajectory decorator
 from tests._conftest.ldd import ldd_trajectory
 
@@ -456,7 +459,8 @@ def test_validate_org_casing_mismatch(caplog: pytest.LogCaptureFixture, tmp_path
 
 # 🧪 TRAP[TEST] · Regression · Simplify deploy.yml with reusable workflow
 # · Scenario: Old deploy.yml → simplify → becomes reusable workflow pattern
-# · Last fail: N/A (new test)
+# · Last fail: 2026-08-25 (QA C2/R9) — генерация содержала mutable @main и tag-pins @v7/@v4;
+#   обновлено под pinned-генерацию T1.1 (SHA-pin канала + concurrency + permissions)
 # · Remove if: simplify_deploy_yml logic changes
 @ldd_trajectory
 def test_simplify_deploy_yml(caplog: pytest.LogCaptureFixture, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -480,10 +484,55 @@ def test_simplify_deploy_yml(caplog: pytest.LogCaptureFixture, tmp_path: Path, m
     assert old_deploy.exists(), "deploy.yml should still exist"
     # Check it has the reusable workflow pattern
     content = old_deploy.read_text(encoding="utf-8")
-    assert "deploy-project.yml@main" in content, "Should use reusable workflow"
+    assert f"deploy-project.yml@{DEPLOY_CHANNEL_PIN}" in content, "Should pin reusable workflow to full commit SHA"
+    assert PIN_COMMENT in content, "Should carry honest snapshot comment"
     assert "ghcr.io" in content, "Should have image registry"
     assert old_deploy.with_suffix(".yml.bak").exists(), "Backup should exist"
+    # T1.1 (DevPlan 14, QA C2/R9): генерация содержит top-level concurrency + permissions
+    assert "concurrency:" in content and "cancel-in-progress: false" in content, (
+        "Top-level concurrency обязателен (REF-0011 паритет)"
+    )
+    assert "permissions:" in content and "contents: read" in content, (
+        "Top-level permissions обязателен (REF-0012 паритет)"
+    )
 
+    found_imp9 = False
+    logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
+    for record in list(caplog.records):
+        if "[IMP:" in record.message:
+            imp_level = int(record.message.split("[IMP:")[1].split("]")[0])
+            if imp_level >= 7:
+                logger.info("%s", record.message)
+            if imp_level >= 9:
+                found_imp9 = True
+    logger.info("--- END LDD TRAJECTORY ---")
+    assert found_imp9
+
+
+# 🧪 TRAP[TEST] · 2026-08-25 · NEGATIVE (R5) · adopter не генерирует mutable refs (QA C2/R9, DevPlan 14 T1.1)
+# · Scenario: генерация с deploy-project.yml@main / checkout@v7 рождала проекты без харденинга
+#   канала и с плавающими action-тегами — supply-chain дыра идентичная шаблонной
+# · Last fail: project_adopter.py:232/240 (@main) + :206/:209/:212/:219 (tag-pins)
+# · Remove if: генерация мигрирует на рендер из шаблона (mutable refs станут невозможны структурно)
+@ldd_trajectory
+def test_simplify_deploy_yml_no_mutable_refs(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> None:
+    """R5 negative: генерация БЕЗ @main и без tag-pins actions — только full-SHA pins."""
+    caplog.set_level(logging.INFO)
+    adopter = _make_adopter(tmp_path, domain="example.com", force=True)
+    (adopter.project_dir / ".github" / "workflows").mkdir(parents=True, exist_ok=True)
+    (adopter.deploy_yml).write_text(
+        "name: Deploy\non: [push]\njobs:\n  build:\n    runs-on: ubuntu-latest\n", encoding="utf-8"
+    )
+
+    result = adopter.simplify_deploy_yml()
+
+    assert result is True, "deploy.yml should be simplified"
+    content = adopter.deploy_yml.read_text(encoding="utf-8")
+    logger.info("[IMP:8][test][adopt] generated deploy.yml scanned for mutable refs")
+    assert "deploy-project.yml@main" not in content, "mutable @main запрещён (QA C2)"
+    for mutable in ("checkout@v7", "setup-buildx-action@v4", "login-action@v4", "build-push-action@v7"):
+        assert mutable not in content, f"mutable ref {mutable!r} в генерации (QA R9)"
+    assert f"@{DEPLOY_CHANNEL_PIN}" in content, "генерация обязана нести SHA-pin канала"
     found_imp9 = False
     logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
     for record in list(caplog.records):

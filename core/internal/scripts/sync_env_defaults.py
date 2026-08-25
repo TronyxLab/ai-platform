@@ -463,6 +463,9 @@ def _section_s3_backup(env_defaults: dict[str, str]) -> list[str]:
     lines.append("AWS_ACCESS_KEY_ID=" + _get_env_val(env_defaults, "AWS_ACCESS_KEY_ID"))
     lines.append("AWS_SECRET_ACCESS_KEY=" + _get_env_val(env_defaults, "AWS_SECRET_ACCESS_KEY"))
     lines.append("PLATFORM_CONTEXT=" + _get_env_val(env_defaults, "PLATFORM_CONTEXT", "personal"))
+    # QA C6 (DevPlan 14 T1.5): AGE_RECIPIENT СОЗНАТЕЛЬНО НЕ попадает в .env.example —
+    # parity-гейт требует зеркала env_defaults (platform-infra.yaml не трогаем); канал
+    # доставки — per-node sops-матрица → secrets.env → compose --env-file.
     return lines
 
 

@@ -345,3 +345,78 @@ def test_r5_pgbouncer_wildcard_routing_not_hardcoded_list(caplog):
 
 
 # endregion Tests: R5-negative
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region Tests: QA R15/G4 (DevPlan 14 T1.6) — GRANT таргетинг в целевую БД
+# ═══════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · 2026-08-25 · NEGATIVE (R5) · QA R15/G4 — DDL без -d <db> не проходит
+# · Scenario: CREATE DATABASE ... OWNER postgres → проектная роль НЕ owner БД →
+#   GRANT CREATE,USAGE ON SCHEMA public в admin-DB (postgres) НЕ даёт прав на схему
+#   public целевой БД (pg_database_owner неприменим) — грант обязан исполниться В целевой БД
+# · Last fail: 2026-08-25 — все psql-вызовы шли кластерно (без -d), гранты оседали в postgres DB
+# · Remove if: CREATE DATABASE сменит OWNER на проектную роль (гранты станут избыточными)
+@ldd_trajectory
+def test_grant_targets_project_db(caplog, tmp_path):
+    """Каждый GRANT/REVOKE-вызов содержит `-d myproj_db`; точный argv schema-grant зафиксирован."""
+    caplog.set_level(logging.DEBUG)
+    _write_yaml(tmp_path, "name: myproj\nneeds:\n  database: myproj_db\n")
+    runner = FakeCommandRunner(router=_make_psql_router(role_exists=False))
+
+    assert _invoke_hook(str(tmp_path), "myproj", runner) == 0
+
+    ddl_calls = [c for c in runner.calls if "GRANT" in " ".join(c) or "REVOKE" in " ".join(c)]
+    assert len(ddl_calls) == 3, f"ожидается ровно 3 DDL-вызова (2×GRANT + REVOKE): {ddl_calls}"
+    for call in ddl_calls:
+        joined = " ".join(call)
+        assert " -d myproj_db " in f" {joined} ", f"G4 FAIL: DDL без таргетинга в целевую БД: {joined}"
+    # Точный argv schema-grant зафиксирован (регрессия против тихого возврата к кластерным вызовам)
+    schema_grant = next(c for c in ddl_calls if "SCHEMA public" in " ".join(c))
+    assert schema_grant == [
+        "docker",
+        "exec",
+        "postgres",
+        "psql",
+        "-U",
+        "postgres",
+        "-d",
+        "myproj_db",
+        "-c",
+        'GRANT CREATE, USAGE ON SCHEMA public TO "myproj_user"',
+    ], f"argv schema-grant изменился: {schema_grant}"
+    # Ролевые операции остаются КЛАСТЕРНЫМИ (pg_roles SELECT / CREATE ROLE — без -d)
+    role_calls = [c for c in runner.calls if "pg_roles" in " ".join(c) or "CREATE ROLE" in " ".join(c)]
+    assert role_calls, "ролевые операции ожидаются в диалоге"
+    for call in role_calls:
+        assert "-d" not in call, f"ролевая операция обязана быть кластерной: {call}"
+    logger.critical(
+        "[IMP:9][test] G4 OK: %d DDL таргетированы в myproj_db, ролевые операции кластерные", len(ddl_calls)
+    )
+
+
+# 🧪 TRAP[TEST] · 2026-08-25 · REGRESSION · идемпотентность повторного деплоя после T1.6
+# · Scenario: второй прогон (БД существует, роль существует, creds на месте) → GRANT no-op,
+#   critical_failures=0, rc=0
+# · Last fail: N/A (preventive — таргетинг не должен ломать идемпотентность)
+# · Remove if: hook-семантика изменится на неидемпотентную
+@ldd_trajectory
+def test_grant_idempotent_rerun(caplog, tmp_path):
+    """Повторный деплой → GRANT исполняется повторно как no-op без critical_failures."""
+    caplog.set_level(logging.DEBUG)
+    _write_yaml(tmp_path, "name: myproj\nneeds:\n  database: myproj_db\n")
+    (tmp_path / ".platform-db.env").write_text("PLATFORM_POSTGRES_PASSWORD=known-pass\n", encoding="utf-8")
+    runner = FakeCommandRunner(router=_make_psql_router(create_db_rc=1, role_exists=True))
+
+    assert _invoke_hook(str(tmp_path), "myproj", runner) == 0
+
+    ddl_calls = [c for c in runner.calls if "GRANT" in " ".join(c) or "REVOKE" in " ".join(c)]
+    assert len(ddl_calls) == 3 and all(" -d myproj_db " in f"{' '.join(c)} " for c in ddl_calls), (
+        f"повторные DDL обязаны остаться таргетированными: {ddl_calls}"
+    )
+    assert "critical_failures=0" in caplog.text, f"ожидаются нулевые critical_failures:\n{caplog.text[-1500:]}"
+    logger.critical("[IMP:9][test] idempotent rerun OK — grants re-applied as no-op, 0 critical failures")
+
+
+# endregion Tests: QA R15/G4

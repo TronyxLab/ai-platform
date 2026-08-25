@@ -29,6 +29,8 @@ import pytest
 import yaml
 from _conftest.ldd import _print_ldd_trajectory
 
+from core.internal.llm.admin_client import LiteLLMTransportError
+
 pytestmark = pytest.mark.static_audit
 
 logger = logging.getLogger(__name__)
@@ -114,6 +116,8 @@ def mock_client() -> MagicMock:
     client.get_key_info.return_value = None
     client.generate_key.return_value = {"key": "sk-mock-generated-key-abc123def456"}
     client.update_key.return_value = {"key": "sk-mock-key", "models": ["chat"]}
+    # QA C4 (DevPlan 14 T1.3): provisioner читает индекс из ОДНОГО list_keys() вызова
+    client.list_keys.return_value = []
     client.get_key_by_metadata.return_value = None
     client.delete_key.return_value = True
     return client
@@ -193,38 +197,31 @@ def test_idempotent_same_key_on_second_call(policy_yaml, mock_client, tmp_path, 
         assert result_1["test-backend"] == generated_key_value
 
         # --- Second call: key exists, should skip ---
-        # Mock get_key_by_metadata to return existing keys
-        existing_key_info = {
-            "key": generated_key_value,
-            "models": ["chat"],
-            "max_budget": 1.0,
-            "rpm_limit": 10,
-            "metadata": {"project": "test-backend", "tier": "default"},
-        }
-
-        def _get_key_by_metadata_side_effect(**metadata_filters):
-            project_name = metadata_filters.get("project", "")
-            if project_name == "test-backend":
-                return existing_key_info
-            if project_name == "test-priority":
-                return {
-                    "key": "sk-priority-key-xxx",
-                    "models": ["reasoning", "chat"],
-                    "max_budget": 10.0,
-                    "rpm_limit": 60,
-                    "metadata": {"project": "test-priority", "tier": "premium"},
-                }
-            if project_name == "hermes-agent":
-                return {
-                    "key": "sk-hermes-key-xxx",
-                    "models": ["reasoning", "chat"],
-                    "max_budget": 50.0,
-                    "rpm_limit": 120,
-                    "metadata": {"project": "hermes-agent", "tier": "unlimited"},
-                }
-            return None
-
-        mock_client.get_key_by_metadata.side_effect = _get_key_by_metadata_side_effect
+        # QA C4 (DevPlan 14 T1.3): существующие ключи подаются через fetch-once индекс
+        # list_keys() (get_key_by_metadata provisioner'ом больше не вызывается)
+        mock_client.list_keys.return_value = [
+            {
+                "key": generated_key_value,
+                "models": ["chat"],
+                "max_budget": 1.0,
+                "rpm_limit": 10,
+                "metadata": {"project": "test-backend", "tier": "default"},
+            },
+            {
+                "key": "sk-priority-key-xxx",
+                "models": ["reasoning", "chat"],
+                "max_budget": 10.0,
+                "rpm_limit": 60,
+                "metadata": {"project": "test-priority", "tier": "premium"},
+            },
+            {
+                "key": "sk-hermes-key-xxx",
+                "models": ["reasoning", "chat"],
+                "max_budget": 50.0,
+                "rpm_limit": 120,
+                "metadata": {"project": "hermes-agent", "tier": "unlimited"},
+            },
+        ]
 
         logger.info("[IMP:7][test_idempotent] Starting second provision_all (idempotent)...")
         result_2 = _run_provision(mock_client, policy_yaml, persist_path)
@@ -268,7 +265,8 @@ def test_different_config_updates_key(policy_yaml, mock_client, tmp_path, caplog
             "metadata": {"project": "test-backend", "tier": "default"},
         }
 
-        mock_client.get_key_by_metadata.return_value = existing_key_info
+        # QA C4 (DevPlan 14 T1.3): existing key подаётся через fetch-once индекс list_keys()
+        mock_client.list_keys.return_value = [existing_key_info]
         mock_client.update_key.return_value = {"key": "sk-existing-key-123", "models": ["chat"]}
 
         logger.info("[IMP:7][test_different_config] Running provision with mismatched config...")
@@ -506,6 +504,146 @@ def test_no_duplicate_keys(policy_yaml, mock_client, tmp_path, caplog):
             len(result_1),
             len(store),
         )
-
         found_imp9 = _print_ldd_trajectory(caplog, "test_no_duplicate")
         assert found_imp9, "LDD Error: No IMP:9 log for test_no_duplicate"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# QA C4/G2 (DevPlan 14 T1.3): corruption-chain, fetch-once,
+# запрет fall-through-generate, transport-tolerance
+# ═══════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · 2026-08-25 · NEGATIVE (R5) · corruption-chain — truncated store fail-loud
+# · Scenario: OOM/crash во время записи обрезал store; следующий reader обязан ПАДАТЬ
+#   (PlatformError), а не глотать corruption в {} и заливать partial-store поверх всех ключей
+#   (DATA-902 mass-401 инцидент)
+# · Last fail: 2026-08-25 (QA C4) — TRAP в _load_key_store ссылался на несуществующий тест;
+#   сам fail-loud контракт уже был реализован (REF-0104), теста не было
+# · Remove if: key store мигрирует с JSON на СУБД (corruption-chain станет доменом БД)
+def test_corruption_chain_fail_loud(tmp_path, caplog):
+    """Truncated/non-dict store → PlatformError; байты файла нетронуты."""
+    caplog.set_level(logging.DEBUG)
+    import core.internal.llm.key_provisioner as kp
+
+    # 1. Truncated JSON
+    store = tmp_path / "litellm-project-keys.json"
+    original_bytes = '{"proj-a": "sk-aaa", "proj-b": "sk-bbb"'  # без закрывающей }
+    store.write_text(original_bytes, encoding="utf-8")
+
+    with pytest.raises(kp.PlatformError):
+        kp._load_key_store(store)
+
+    assert store.read_text(encoding="utf-8") == original_bytes, (
+        "corruption-chain: файл обязан остаться байт-в-байт нетронутым"
+    )
+    logger.info("[IMP:9][test][corruption] truncated store → PlatformError, bytes intact")
+
+    # 2. Валидный JSON, но не-dict
+    array_store = tmp_path / "array-store.json"
+    array_store.write_text('["not", "a", "dict"]', encoding="utf-8")
+    with pytest.raises(kp.PlatformError):
+        kp._load_key_store(array_store)
+    logger.info("[IMP:9][test][corruption] non-dict store → PlatformError")
+
+    found_imp9 = _print_ldd_trajectory(caplog, "test_corruption_chain_fail_loud")
+    assert found_imp9, "LDD Error: No IMP:9 log for test_corruption_chain_fail_loud"
+
+
+# 🧪 TRAP[TEST] · 2026-08-25 · REGRESSION · fetch-once (PERF-081)
+# · Scenario: N потребителей → ровно ОДИН list_keys() вызов за прогон; per-consumer
+#   пагинации (get_key_by_metadata внутри цикла) устранены
+# · Last fail: 2026-08-25 (QA C4) — get_key_by_metadata внутри цикла = N полных пагинаций
+# · Remove if: provisioner перестанет использовать fetch-once индекс
+def test_fetch_once_single_list_keys(policy_yaml, mock_client, tmp_path, caplog):
+    """3 enabled consumers → ровно 1 list_keys(); get_key_by_metadata не зовётся вовсе."""
+    caplog.set_level(logging.DEBUG)
+    mock_client.list_keys.return_value = []
+
+    _run_provision(mock_client, policy_yaml, tmp_path / "keys.json")
+
+    assert mock_client.list_keys.call_count == 1, (
+        f"fetch-once нарушен: list_keys вызван {mock_client.list_keys.call_count} раз(а)"
+    )
+    mock_client.get_key_by_metadata.assert_not_called()
+    logger.info(
+        "[IMP:9][test][fetch-once] list_keys calls=%d, get_key_by_metadata calls=0",
+        mock_client.list_keys.call_count,
+    )
+    found_imp9 = _print_ldd_trajectory(caplog, "test_fetch_once_single_list_keys")
+    assert found_imp9, "LDD Error: No IMP:9 log for test_fetch_once_single_list_keys"
+
+
+# 🧪 TRAP[TEST] · 2026-08-25 · NEGATIVE (R5) · update-fail → generate НЕ выполняется
+# · Scenario: существующий ключ с другой конфигурацией + update падает → второй ключ с тем же
+#   metadata НЕ создаётся (спящая мина массовых дублей budget-bearing ключей, QA C4)
+# · Last fail: 2026-08-25 — ветка «falling through to generate» активировалась бы при первом же
+#   расширении except-кортежа
+# · Remove if: появится re-lookup+generate семантика (требует явного owner-решения)
+@pytest.mark.parametrize(
+    "update_exc",
+    [
+        pytest.param(ConnectionError("connection reset"), id="ConnectionError"),
+        pytest.param(TimeoutError("timeout"), id="TimeoutError"),
+        pytest.param(OSError("disk io"), id="OSError"),
+        pytest.param(LiteLLMTransportError("transport down"), id="LiteLLMTransportError"),
+    ],
+)
+def test_update_fail_no_duplicate_key(policy_yaml, mock_client, tmp_path, caplog, update_exc):
+    """update-fail → потребитель в failed, generate для НЕГО не зовётся, фаза жива."""
+    caplog.set_level(logging.DEBUG)
+    existing = {
+        "key": "sk-existing-token-0001",
+        "metadata": {"project": "test-backend"},
+        "models": ["legacy-model"],
+        "max_budget": 0.5,
+        "rpm_limit": 5,
+    }
+    mock_client.list_keys.return_value = [existing]
+    mock_client.update_key.side_effect = update_exc
+
+    result = _run_provision(mock_client, policy_yaml, tmp_path / "keys.json")
+
+    assert "test-backend" not in result, "failed consumer не должен попасть в provisioned"
+    gen_projects = [call.kwargs.get("metadata", {}).get("project") for call in mock_client.generate_key.call_args_list]
+    assert "test-backend" not in gen_projects, f"ДУБЛЬ КЛЮЧА: generate вызван для test-backend ({gen_projects})"
+    # Фаза жива: остальные потребители провижинены
+    assert "test-priority" in result and "hermes-agent" in result, f"фаза абортилась: {result!r}"
+    logger.info(
+        "[IMP:9][test][no-fallthrough] exc=%s → test-backend failed, generate projects=%s",
+        type(update_exc).__name__,
+        gen_projects,
+    )
+    found_imp9 = _print_ldd_trajectory(caplog, "test_update_fail_no_duplicate_key")
+    assert found_imp9, "LDD Error: No IMP:9 log for test_update_fail_no_duplicate_key"
+
+
+# 🧪 TRAP[TEST] · 2026-08-25 · REGRESSION · transport-error → failed-consumer учёт, фаза жива
+# · Scenario: LiteLLMTransportError (ранее НЕ ловился кортежем → аборт всей φ-provision-llm
+#   через generic-handler) теперь ловится: WARN + failed++, следующие потребители обслуживаются
+# · Last fail: 2026-08-25 (QA C4) — LiteLLMTransportError(Exception) физически не мог быть пойман
+# · Remove if: семантика фазы изменится на abort-on-first-failure
+def test_transport_error_consumer_failed_phase_alive(policy_yaml, mock_client, tmp_path, caplog):
+    """Transport-сбой на одном потребителе → он в failed-сводке IMP:9, остальные провижинены."""
+    caplog.set_level(logging.DEBUG)
+    existing = {
+        "key": "sk-existing-token-0002",
+        "metadata": {"project": "test-backend"},
+        "models": ["legacy-model"],
+        "max_budget": 0.5,
+        "rpm_limit": 5,
+    }
+    mock_client.list_keys.return_value = [existing]
+    mock_client.update_key.side_effect = LiteLLMTransportError("connect timeout after 30s")
+
+    result = _run_provision(mock_client, policy_yaml, tmp_path / "keys.json")
+
+    assert "test-backend" not in result, "transport-failed consumer не должен быть в provisioned"
+    assert "hermes-agent" in result and "test-priority" in result, f"фаза должна продолжиться: {result!r}"
+    summary_lines = [r.getMessage() for r in caplog.records if "[IMP:9]" in r.getMessage()]
+    assert any("failed (transient-tolerant)" in m and "test-backend" in m for m in summary_lines), (
+        f"нет failed-accounting в сводке: {summary_lines}"
+    )
+    logger.info("[IMP:9][test][transport-tolerant] phase alive, failed=[test-backend], provisioned=%d", len(result))
+    found_imp9 = _print_ldd_trajectory(caplog, "test_transport_error_consumer_failed_phase_alive")
+    assert found_imp9, "LDD Error: No IMP:9 log"

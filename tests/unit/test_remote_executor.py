@@ -266,6 +266,38 @@ def test_execute_update_ssh_exec_success_returns_0(executor, caplog) -> None:
 # endregion FUNC_test_execute_update_ssh_exec_success_returns_0
 
 
+# region FUNC_test_stdin_payload_branch_uses_bash_s_input
+# 🧪 TRAP[TEST] · 2026-08-25 · REGRESSION · QA G1/C5 (DevPlan 14 T1.4) — stdin-ветка ssh_exec
+# · Scenario: execute_update с secret_prelude → cmd заканчивается `bash -s`, скрипт уходит
+#   в input=kwarg; секрет и remote_cmd ОТСУТСТВУЮТ в argv — удаление stdin-ветки ломает тест
+#   (единственный страж argv-мира для транспорта ключей)
+# · Last fail: 2026-08-25 — ветка существовала с REF-0007, но не была покрыта (G1)
+# · Remove if: ssh_exec перестанет поддерживать stdin-транспорт (возврат к argv = RED инварианта)
+def test_stdin_payload_branch_uses_bash_s_input(executor, caplog) -> None:
+    """stdin_payload present → argv=`bash -s` only; payload в input=; секрет вне argv."""
+    caplog.set_level(logging.INFO)
+    secret = "AGE-STDIN-BRANCH-SECRET-01"
+    prelude = f"export AGE_SECRET_KEY={secret}"
+
+    rc = executor.execute_update("test-node", REMOTE_CMD_UPDATE, secret_prelude=prelude)
+
+    assert rc == 0, "success path expected"
+    cmd = executor.runner.calls[-1]
+    assert cmd[0] == "ssh", f"unexpected transport: {cmd}"
+    assert cmd[-1] == "bash -s", f"G1 FAIL: stdin-ветка обязана давать `bash -s` в argv: {cmd}"
+    joined_argv = " ".join(cmd)
+    assert secret not in joined_argv, f"C5 FAIL: секрет в argv: {cmd}"
+    assert REMOTE_CMD_UPDATE not in joined_argv, f"G1 FAIL: remote_cmd в argv при stdin-режиме: {cmd}"
+    payload = executor.runner.last_kwargs.get("input") or ""
+    assert secret in payload, "секрет обязан ехать в stdin-payload"
+    assert REMOTE_CMD_UPDATE in payload, "remote_cmd обязан быть частью stdin-скрипта"
+    print(f"[IMP:9][test][stdin-branch] argv={cmd[:3]}… payload={len(payload)}B (secret in input=, not in argv)")
+    assert _print_ldd_trajectory(caplog)
+
+
+# endregion FUNC_test_stdin_payload_branch_uses_bash_s_input
+
+
 # region FUNC_test_execute_update_ssh_exec_timeout_returns_124
 # 🧪 TRAP[TEST] · Regression · SSH timeout detection (mirror lib/ssh.sh exit=124)
 # · Scenario: _TimeoutRunner бросает TimeoutExpired → execute_update возвращает 124, IMP:10 лог

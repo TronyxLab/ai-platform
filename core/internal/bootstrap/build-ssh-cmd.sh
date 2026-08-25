@@ -46,7 +46,11 @@ build_ssh_cmd() { python3 -m core.internal.shared.ssh_cmd_builder init "$@"; }
 # ══════════════════════════════════════════════════════════════════════
 # region FUNC_build_init_secret_prelude
 ## ⚠️ Вывод содержит ЗНАЧЕНИЯ ключей — только в $(...) подстановку, не в логи/dry-run.
-build_init_secret_prelude() { python3 -m core.internal.shared.ssh_cmd_builder init-secrets "$@"; }
+## QA C5 (DevPlan 14 T1.4): значения подаются через STDIN (bash builtin printf → pipe),
+## НЕ позиционным argv python-процесса — /proc/<pid>/cmdline не содержит секретов.
+build_init_secret_prelude() {
+    printf '%s\n%s\n%s\n' "${1:-}" "${2:-}" "${3:-}" | python3 -m core.internal.shared.ssh_cmd_builder init-secrets
+}
 # endregion FUNC_build_init_secret_prelude
 
 # ══════════════════════════════════════════════════════════════════════
@@ -54,7 +58,10 @@ build_init_secret_prelude() { python3 -m core.internal.shared.ssh_cmd_builder in
 # ══════════════════════════════════════════════════════════════════════
 # region FUNC_build_update_secret_prelude
 ## ⚠️ Вывод содержит ЗНАЧЕНИЕ ключа — только в $(...) подстановку, не в логи/dry-run.
-build_update_secret_prelude() { python3 -m core.internal.shared.ssh_cmd_builder update-secrets "$@"; }
+## QA C5 (T1.4): значение через STDIN (вне argv).
+build_update_secret_prelude() {
+    printf '%s\n' "${1:-}" | python3 -m core.internal.shared.ssh_cmd_builder update-secrets
+}
 # endregion FUNC_build_update_secret_prelude
 
 # ══════════════════════════════════════════════════════════════════════

@@ -179,7 +179,8 @@ def test_build_ssh_cmd_has_env_export(caplog) -> None:
     script = textwrap.dedent(f"""\
         set -euo pipefail
         source "{BUILD_SSH_CMD_SH}"
-        prelude=$(build_init_secret_prelude "test-node" "owner" "" "AGE-SECRET-KEY-12345" "")
+        # QA C5/T1.4: фасад = (ci_deploy, age, ci_root); значения едут в python по stdin
+        prelude=$(build_init_secret_prelude "" "AGE-SECRET-KEY-12345" "")
         echo "$prelude"
         echo "[IMP:9][test][prelude] Prelude constructed"
     """)

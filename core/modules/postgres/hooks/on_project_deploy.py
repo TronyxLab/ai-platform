@@ -299,7 +299,11 @@ def ensure_project_db_access(
 
     # ── 2. GRANT-ы (идемпотентны) + REVOKE PUBLIC rider — REF-0002 W1: проверка результата
     #    КАЖДОЙ операции, сбои АГРЕГИРУЮТСЯ в critical_failures (IMP:10), не тихий continue.
-    #    Non-fatal семантика сохранена: счётчик не блокирует деплой, но честно рапортуется. ──
+    #    Non-fatal семантика сохранена: счётчик не блокирует деплой, но честно рапортуется.
+    #    QA R15/G4 (DevPlan 14 T1.6): ВСЕ три DDL исполняются С ТАРГЕТИНГОМ в целевую БД
+    #    (-d <db_name>) — CREATE DATABASE ... OWNER postgres делает роль НЕ-owner, поэтому
+    #    GRANT ... ON SCHEMA public обязан исполниться В собственной БД проекта
+    #    (pg_database_owner неприменим); повторный прогон идемпотентен (GRANT no-op). ──
     critical_failures = 0
     ddl_statements: list[tuple[str, str]] = [
         (f"GRANT CONNECT ON {db_name} → {role}", f'GRANT CONNECT ON DATABASE "{db_name}" TO "{role}"'),
@@ -309,7 +313,7 @@ def ensure_project_db_access(
         (f"REVOKE CONNECT ON {db_name} FROM PUBLIC", f'REVOKE CONNECT ON DATABASE "{db_name}" FROM PUBLIC'),
     ]
     for desc, sql in ddl_statements:
-        out = _psql("-c", sql, runner=runner)
+        out = _psql("-c", sql, runner=runner, database=db_name)
         if out is None:
             critical_failures += 1
             logger.error("[IMP:10][db] CRITICAL: %s — psql exec failed", desc)
@@ -346,16 +350,23 @@ def ensure_project_db_access(
 ## @purpose  Run psql inside the postgres container (docker exec). Returns stdout or None on error.
 ## @param psql_args  Args after `psql -U postgres` (e.g. ["-c", "SELECT 1"])
 ## @param runner     CommandRunner DI (None = subprocess.run default) — for testability
+## @param database   QA R15/G4 (DevPlan 14 T1.6): kwarg-only таргетинг в БД (`-d <database>`);
+##                   GRANT/REVOKE на проектную БД ОБЯЗАНЫ исполняться в ней (CREATE DATABASE
+##                   ... OWNER postgres → проектная роль НЕ owner БД, pg_database_owner
+##                   неприменим — гранты в admin-DB не дают прав на схему public целевой БД);
+##                   ролевые операции (pg_roles SELECT, CREATE/ALTER ROLE) остаются кластерными.
 ## @return  str (stdout+stderr merged) | None — None = exec failure (non-fatal caller)
 ## @complexity O(1) — single subprocess
 ## @changes 2026-08-13 | E1 (160): +runner DI — runner=None → subprocess.run (default),
 ##            runner задан → runner.run (fake scripted)
-def _psql(*psql_args: str, runner: CommandRunner | None = None) -> str | None:
+## @changes 2026-08-25 | QA R15/G4 (DevPlan 14 T1.6): +database kwarg-only — таргетинг DDL
+def _psql(*psql_args: str, runner: CommandRunner | None = None, database: str | None = None) -> str | None:
     """Execute psql inside the postgres container; return merged output or None on failure."""
+    db_args: list[str] = ["-d", database] if database else []
     try:
         if runner is None:
             result = subprocess.run(
-                ["docker", "exec", "postgres", "psql", "-U", "postgres", *psql_args],
+                ["docker", "exec", "postgres", "psql", "-U", "postgres", *db_args, *psql_args],
                 capture_output=True,
                 text=True,
                 timeout=60,
@@ -363,7 +374,7 @@ def _psql(*psql_args: str, runner: CommandRunner | None = None) -> str | None:
             )
         else:
             result = runner.run(
-                ["docker", "exec", "postgres", "psql", "-U", "postgres", *psql_args],
+                ["docker", "exec", "postgres", "psql", "-U", "postgres", *db_args, *psql_args],
                 timeout=60,
                 check=False,
             )

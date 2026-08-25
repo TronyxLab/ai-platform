@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # GREP_SUMMARY: entrypoint core-deliver fallback deploy node-update provision git-outage age-key dry-run python3 thin-facade
-# STRUCTURE: ▶ init ┌parse --node --dry-run --age-secret-key-file┐ → ◇ --node required → ○ resolve node.yaml (node_resolver CLI) → ○ detect AGE key (node_detect, exit 3 non-fatal) → ⚡ python3 core_deliverer fallback-deliver (deliver+provision+node-update, exit 0|1) → ⎋ passthrough
+# STRUCTURE: ▶ init ┌parse --node --dry-run --age-secret-key-file┐ → ◇ --node required → ○ resolve node.yaml (node_resolver CLI) → ⚡ python3 core_deliverer fallback-deliver (AGE-ключ детектируется ВНУТРИ Python node_detect; deliver+provision+node-update, exit 0|1) → ⎋ passthrough
 # region MODULE_CONTRACT
 ## @purpose  Thin entrypoint for `make core-deliver` — ЛОКАЛЬНОЕ зеркало core-deploy.yml
 ##           CI-воркфлоу (142 W5, A6): доставка core/ + scripts/ + makefiles/ + platform-env.yaml
@@ -14,6 +14,9 @@
 ##   - 0 прямых бинарных вызовов в entrypoint (гейт test_entrypoint_no_direct_binary_calls):
 ##     вся доставка делегируется `python3 -m core.internal.bootstrap.core_deliverer fallback-deliver`
 ##   - AGE_SECRET_KEY уходит в remote ТОЛЬКО как env (канон W4 DevPlan 140; путь на remote не передаётся)
+##   - QA C5 (DevPlan 14 T1.4): значение ключа НИКОГДА не идёт argv'ом — CLI-флаг
+##     --age-secret-key удалён, детекция внутри Python (node_detect цепочка env→FILE);
+##     отсутствие ключа → FATAL в deliver_fallback (не тихий skip φ9)
 ##   - --dry-run: печатает команды без мутаций (R5 142 W5)
 ## @rationale 142 W5 (Q4 «а»): fallback-таргет CI-канала. В циклах 1/2 141 GitHub Major Outage
 ##           (16:30-20:30) блокировал core-deploy — ручной эквивалент воспроизводился вручную (A6).
@@ -23,6 +26,8 @@
 ##           2026-08-07 | Refactored: 152 LOC shell → тонкий фасад (гейты thin-wrapper/layer2 RED)
 ##           2026-08-12 | DevPlan 157 W2 T2 — warning: AGE_SECRET_KEY env-сессии перекрывает
 ##                      node_detect/--age-secret-key-file (informational, не блокирует)
+##           2026-08-25 | QA C5 (DevPlan 14 T1.4) — детекция AGE-ключа перенесена в Python
+##                      (deliver_fallback/detect_age_key); флаг --age-secret-key удалён
 # endregion MODULE_CONTRACT
 set -euo pipefail
 
@@ -83,20 +88,11 @@ main() {
     fi
     echo "[IMP:8][core-deliver][entrypoint] node.yaml=${node_yaml} host=${host}" >&2
 
-    # ── Detect AGE key (локальная цепочка node_detect; exit 3 = key absent, non-fatal) ──
-    local detected_age_key=""
-    detected_age_key="$(python3 -m core.internal.shared.node_detect --detect-age-key 2>/dev/null)" || {
-        local _detect_rc=$?
-        if [[ ${_detect_rc} -eq 3 ]]; then
-            detected_age_key=""
-            echo "[IMP:7][core-deliver][entrypoint] WARN: AGE key not found — φ9 decrypt will be skipped" >&2
-        else
-            echo "[IMP:10][core-deliver][entrypoint] FATAL: python3 or node_detect unavailable" >&2
-            exit 1
-        fi
-    }
-
     # ── Делегирование: фазы доставки + provision + node-update в Python (exit 0|1) ──
+    # QA C5 (DevPlan 14 T1.4): detected key больше НЕ передаётся argv'ом (--age-secret-key
+    # удалён) — deliver_fallback детектирует ключ внутри Python через node_detect
+    # (AGE_SECRET_KEY/SOPS_AGE_KEY env → AGE_SECRET_KEY_FILE → default files);
+    # /proc/<pid>/cmdline python-процесса не содержит секрета.
     local dry_arg=""
     [[ "${DRY_RUN}" == "true" ]] && dry_arg="--dry-run"
     echo "[IMP:8][core-deliver][entrypoint] Delegating to core_deliverer fallback-deliver (host=${host})" >&2
@@ -104,7 +100,6 @@ main() {
         --host "${host}" \
         --node "${NODE_NAME}" \
         --core-dir "${CORE_DIR}" \
-        --age-secret-key "${detected_age_key}" \
         ${dry_arg:+--dry-run}
 }
 
