@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 # ── Constants (mirror core/lib/ssh.sh SSH_OPTS_COMMON + state_machine.DEFAULT_STATE_FILE) ──
 _STATE_FILE = "/var/lib/platform/.bootstrap/state.json"
 _DEFAULT_SSH_TIMEOUT = 60  # ssh_read default (lib/ssh.sh: 60s)
-_DEPLOY_SSH_TIMEOUT = 600  # ssh_exec deploy default (lib/ssh.sh: 600s)
+_DEPLOY_SSH_TIMEOUT = 900  # ssh_exec deploy default (lib/ssh.sh: 900s — REF-0103, SoT DEPLOY_TIMEOUT)
 
 # 9 INIT phases (φ1-φ8.5) + 5 UPDATE phases (φ9-φ13) — BootstrapPhase enum canonical keys
 # (T6, DevPlan 116 B10): literals replaced by enum values — state.json keys == enum values.

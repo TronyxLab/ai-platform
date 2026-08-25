@@ -212,7 +212,12 @@ jobs:
       # гейт test_gate_workflow_org_agnostic). pytest-timeout ОБЯЗАТЕЛЕН (иначе
       # --timeout=60 → unrecognized arguments). pytest exit 5 (нет тестов) = PASS
       # (канон allow_no_tests). build — только при package.json с build-скриптом (§7).
+      # REF-0107: REQUIRE_HONESTY_MODE=fail — R4 honesty pin (deny-by-default glob-гейт
+      # test_gate_honesty_mode: workflow с pytest без пина = RED; отсутствие сервиса
+      # в проектных тестах = FAIL, не массовый skip).
       - name: Quality lint/test
+        env:
+          REQUIRE_HONESTY_MODE: fail
         run: |
           set -uo pipefail
           QUALITY_FAIL=0

@@ -48,16 +48,18 @@ logger = logging.getLogger(__name__)
 # ────────────────────────────────────────────────────────────
 # region FIXTURES
 # ────────────────────────────────────────────────────────────
-
-
 @pytest.fixture
 def mock_subprocess():
     """Fixture: mock subprocess.run for all docker CLI calls.
 
     ## @purpose — Provide a central mock for subprocess.run that tests can configure.
+
     ##   Default return: returncode=0, stdout=b"", stderr=b"".
+
     ## @io — ⎋ mock.MagicMock configured as subprocess.run
+
     """
+
     with mock.patch.object(subprocess, "run") as mock_run:
         mock_run.return_value = mock.MagicMock(
             returncode=0,
@@ -66,6 +68,19 @@ def mock_subprocess():
             spec=subprocess.CompletedProcess,
         )
         yield mock_run
+
+
+def _streaming_result(returncode: int = 0, stdout: str = "", stderr: str = ""):
+    """Фабрика StreamingResult для мока killpg-канона module_interface (REF-0103).
+
+    ## @purpose — invoke_module_interface идёт через run_subprocess_streaming (Popen+killpg);
+    ##            тесты healthcheck_runner мокают канон этим double.
+    """
+    from core.internal.shared.subprocess_io import StreamingResult
+
+    return StreamingResult(
+        cmd=["bash", "-c", "invoke_module_interface"], returncode=returncode, stdout=stdout, stderr=stderr
+    )
 
 
 @pytest.fixture
@@ -508,43 +523,50 @@ def test_prunner_pull_images_no_compose(tmp_path):
 # 🧪 TRAP[TEST] · Regression · Readiness succeeds on first attempt · Last fail: N/A · Remove if: wait_for_readiness interface changes
 def test_wait_for_readiness_pass(mock_subprocess):
     """Test wait_for_readiness returns True when readiness check passes."""
-    # Mock invoke_module_interface bash call to succeed
-    mock_subprocess.return_value = mock.MagicMock(
-        returncode=0, stdout=b"", stderr=b"", spec=subprocess.CompletedProcess
-    )
+    # REF-0103: канал invoke_module_interface — subprocess_io streaming-канон (killpg);
+    # мокается сам канон, а не raw subprocess.run (bash_cmd ассерты сохранены).
+    fake_result = _streaming_result(returncode=0)
+    with mock.patch(
+        "core.internal.shared.module_interface.run_subprocess_streaming", return_value=fake_result
+    ) as mock_stream:
+        result = dorch.wait_for_readiness("test_mod", max_attempts=3, interval_sec=0)
 
-    result = dorch.wait_for_readiness("test_mod", max_attempts=3, interval_sec=0)
-
-    assert result is True
-    # Verify the invoke_module_interface was called with readiness
-    bash_calls = [c for c in mock_subprocess.call_args_list if "invoke_module_interface" in str(c)]
-    assert len(bash_calls) >= 1
-    bash_cmd = " ".join(bash_calls[0].args[0]) if bash_calls[0].args else ""
-    assert "readiness" in bash_cmd
+        assert result is True
+        # Verify the invoke_module_interface was called with readiness
+        bash_calls = [c for c in mock_stream.call_args_list if "invoke_module_interface" in str(c)]
+        assert len(bash_calls) >= 1
+        bash_cmd = " ".join(bash_calls[0].args[0]) if bash_calls[0].args else ""
+        assert "readiness" in bash_cmd
 
 
 # 🧪 TRAP[TEST] · Regression · Readiness timeout after max attempts · Last fail: N/A · Remove if: timeout handling changes
 def test_wait_for_readiness_timeout(mock_subprocess):
     """Test wait_for_readiness returns False after max attempts when check keeps failing."""
-    mock_subprocess.return_value = mock.MagicMock(
-        returncode=1, stdout=b"", stderr=b"not ready", spec=subprocess.CompletedProcess
-    )
+    fake_fail = _streaming_result(returncode=1, stderr="not ready")
+    with mock.patch(
+        "core.internal.shared.module_interface.run_subprocess_streaming", return_value=fake_fail
+    ) as mock_stream:
+        result = dorch.wait_for_readiness("test_mod", max_attempts=3, interval_sec=0)
 
-    result = dorch.wait_for_readiness("test_mod", max_attempts=3, interval_sec=0)
-
-    assert result is False
-    # Should have tried exactly max_attempts times
-    bash_calls = [c for c in mock_subprocess.call_args_list if "invoke_module_interface" in str(c)]
-    assert len(bash_calls) == 3
+        assert result is False
+        # Should have tried exactly max_attempts times
+        bash_calls = [c for c in mock_stream.call_args_list if "invoke_module_interface" in str(c)]
+        assert len(bash_calls) == 3
 
 
 # 🧪 TRAP[TEST] · Edge-case · Readiness subprocess error · Last fail: N/A · Remove if: error handling changes
-# GUARD-PRESERVE (168): единственное покрытие ветки subprocess-error (TimeoutExpired → False) в wait_for_readiness
+# GUARD-PRESERVE (168): единственное покрытие ветки subprocess-error → False в wait_for_readiness
+# REF-0103: «ошибка канала» теперь выражается OSError от killpg-канона (TimeoutExpired канон
+# обрабатывает внутри — graceful rc=124), invoke возвращает (False, msg) — никогда не raise
 def test_wait_for_readiness_subprocess_error(mock_subprocess):
-    """Test wait_for_readiness handles subprocess errors gracefully."""
-    mock_subprocess.side_effect = subprocess.TimeoutExpired(cmd="bash", timeout=60)
+    """Test wait_for_readiness handles channel errors gracefully (OSError → False)."""
 
-    result = dorch.wait_for_readiness("test_mod", max_attempts=2, interval_sec=0)
+    def _raise_oserror(*_args, **_kwargs):
+        msg = "spawn failed"
+        raise OSError(msg)
+
+    with mock.patch("core.internal.shared.module_interface.run_subprocess_streaming", side_effect=_raise_oserror):
+        result = dorch.wait_for_readiness("test_mod", max_attempts=2, interval_sec=0)
 
     assert result is False
 
@@ -560,31 +582,32 @@ def test_wait_for_readiness_subprocess_error(mock_subprocess):
 # 🧪 TRAP[TEST] · Regression · Healthcheck passes on first attempt · Last fail: N/A · Remove if: run_healthcheck interface changes
 def test_run_healthcheck_pass(mock_subprocess):
     """Test run_healthcheck returns True when healthcheck passes."""
-    mock_subprocess.return_value = mock.MagicMock(
-        returncode=0, stdout=b"", stderr=b"", spec=subprocess.CompletedProcess
-    )
+    # REF-0103: канал invoke_module_interface — killpg-канон; мокается канон (не raw run)
+    fake_ok = _streaming_result(returncode=0)
+    with mock.patch(
+        "core.internal.shared.module_interface.run_subprocess_streaming", return_value=fake_ok
+    ) as mock_stream:
+        result = dorch.run_healthcheck("test_mod", "docker", max_retries=3, retry_interval=0)
 
-    result = dorch.run_healthcheck("test_mod", "docker", max_retries=3, retry_interval=0)
-
-    assert result is True
-    bash_calls = [c for c in mock_subprocess.call_args_list if "invoke_module_interface" in str(c)]
-    assert len(bash_calls) >= 1
-    bash_cmd = " ".join(bash_calls[0].args[0]) if bash_calls[0].args else ""
-    assert "liveness" in bash_cmd
+        assert result is True
+        bash_calls = [c for c in mock_stream.call_args_list if "invoke_module_interface" in str(c)]
+        assert len(bash_calls) >= 1
+        bash_cmd = " ".join(bash_calls[0].args[0]) if bash_calls[0].args else ""
+        assert "liveness" in bash_cmd
 
 
 # 🧪 TRAP[TEST] · Regression · Healthcheck fails after max retries · Last fail: N/A · Remove if: retry logic changes
 def test_run_healthcheck_fail(mock_subprocess):
     """Test run_healthcheck returns False after max retries when check keeps failing."""
-    mock_subprocess.return_value = mock.MagicMock(
-        returncode=1, stdout=b"", stderr=b"unhealthy", spec=subprocess.CompletedProcess
-    )
+    fake_fail = _streaming_result(returncode=1, stderr="unhealthy")
+    with mock.patch(
+        "core.internal.shared.module_interface.run_subprocess_streaming", return_value=fake_fail
+    ) as mock_stream:
+        result = dorch.run_healthcheck("test_mod", "docker", max_retries=3, retry_interval=0)
 
-    result = dorch.run_healthcheck("test_mod", "docker", max_retries=3, retry_interval=0)
-
-    assert result is False
-    bash_calls = [c for c in mock_subprocess.call_args_list if "invoke_module_interface" in str(c)]
-    assert len(bash_calls) == 3
+        assert result is False
+        bash_calls = [c for c in mock_stream.call_args_list if "invoke_module_interface" in str(c)]
+        assert len(bash_calls) == 3
 
 
 # endregion TEST_run_healthcheck
@@ -753,20 +776,21 @@ def test_cleanup_stale_container_not_found(mock_subprocess):
 # 🧪 TRAP[TEST] · Regression · healthcheck_runner.invoke_healthcheck calls bash with invoke_module_interface · Last fail: N/A · Remove if: healthcheck invocation changes
 def test_hcrunner_invoke_readiness(mock_subprocess):
     """Test healthcheck_runner.invoke_healthcheck constructs the correct bash command."""
-    mock_subprocess.return_value = mock.MagicMock(
-        returncode=0, stdout=b"", stderr=b"", spec=subprocess.CompletedProcess
-    )
+    # REF-0103: канал — killpg-канон subprocess_io; мокается run_subprocess_streaming
+    with mock.patch(
+        "core.internal.shared.module_interface.run_subprocess_streaming",
+        return_value=_streaming_result(returncode=0),
+    ) as mock_stream:
+        result = hcrunner.invoke_healthcheck("test_mod", "readiness")
 
-    result = hcrunner.invoke_healthcheck("test_mod", "readiness")
-
-    assert result is True
-    assert mock_subprocess.call_count >= 1
-    call_args = mock_subprocess.call_args[0][0]
-    assert call_args[0] == "bash"
-    assert call_args[1] == "-c"
-    assert "invoke_module_interface" in call_args[2]
-    assert "test_mod" in call_args[2]
-    assert "readiness" in call_args[2]
+        assert result is True
+        assert mock_stream.call_count >= 1
+        call_args = mock_stream.call_args[0][0]
+        assert call_args[0] == "bash"
+        assert call_args[1] == "-c"
+        assert "invoke_module_interface" in call_args[2]
+        assert "test_mod" in call_args[2]
+        assert "readiness" in call_args[2]
 
 
 # 🧪 TRAP[TEST] · Edge-case · healthcheck_runner.invoke_healthcheck returns False on non-zero exit · Last fail: N/A · Remove if: healthcheck invocation changes

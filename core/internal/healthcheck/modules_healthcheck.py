@@ -44,7 +44,7 @@ from core.internal.shared import docker_ops  # W1: docker inspect примити
 from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError
 from core.internal.shared.module_interface import invoke as invoke_module_interface
 from core.internal.shared.node_yaml import NodeYaml
-from core.internal.shared.timeouts import DOCKER_CMD_TIMEOUT
+from core.internal.shared.timeouts import DOCKER_CMD_TIMEOUT, HEALTHCHECK_CMD_TIMEOUT  # REF-0103
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +64,7 @@ RestartLoopFn = Callable[[str], bool]
 ## @invariants
 ##   - restarting=true → loop (независимо от count)
 ##   - restart_count > threshold → loop (контейнер может быть "healthy" между рестартами)
-def is_restart_loop(restarting: bool, restart_count: int, threshold: int = RESTART_LOOP_THRESHOLD) -> bool:
+def is_restart_loop(*, restarting: bool, restart_count: int, threshold: int = RESTART_LOOP_THRESHOLD) -> bool:
     """Return True if container is in a restart loop (Restarting or RestartCount > threshold)."""
     return bool(restarting) or restart_count > threshold
 
@@ -189,7 +189,7 @@ def check_restart_loop(
         restart_count = int(count_raw.strip() or "0")
     except ValueError:
         return False
-    loop = is_restart_loop(restarting, restart_count)
+    loop = is_restart_loop(restarting=restarting, restart_count=restart_count)
     if loop:
         logger.warning(
             "[IMP:9][modules-healthcheck][restart] FAIL: %s restart loop (restarting=%s, restarts=%d)",
@@ -229,11 +229,13 @@ def check_module(
 
     # DI (E1): invoke_fn задан (тесты) → fake dispatch; None → канонический
     # invoke_module_interface (статический контракт-тест требует literal-вызов — E4 DRIFT-H7).
+    # REF-0103: liveness/deep-инвок — HEALTHCHECK_CMD_TIMEOUT=60 (канон probe), не
+    # унаследованный COMPOSE_UP_TIMEOUT=180 (3× окно поллинга на каждый модуль φ11).
     if mode == "deep":
         if invoke_fn is not None:
             ok, _err = invoke_fn(module, "healthcheck", "deep")
         else:
-            ok, _err = invoke_module_interface(module, "healthcheck", "deep")
+            ok, _err = invoke_module_interface(module, "healthcheck", "deep", timeout=HEALTHCHECK_CMD_TIMEOUT)
         if not ok:
             logger.warning("[IMP:9][modules-healthcheck][check] FAIL (deep): %s", module)
             return False
@@ -243,7 +245,7 @@ def check_module(
     if invoke_fn is not None:
         ok, _err = invoke_fn(module, "healthcheck", "liveness")
     else:
-        ok, _err = invoke_module_interface(module, "healthcheck", "liveness")
+        ok, _err = invoke_module_interface(module, "healthcheck", "liveness", timeout=HEALTHCHECK_CMD_TIMEOUT)
     if not ok:
         logger.warning("[IMP:9][modules-healthcheck][check] FAIL (liveness): %s", module)
         return False

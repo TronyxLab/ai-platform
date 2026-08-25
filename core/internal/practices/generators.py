@@ -358,7 +358,7 @@ def render_test_health(project_type: str = "") -> str:
             "",
             "def test_nginx_reachable() -> None:",
             '    """TCP-probe: nginx платформы принимает соединения (у проекта нет /health и /ready)."""',
-            '    host = os.environ.get("PLATFORM_NGINX_HOST", "nginx-proxy")',
+            '    host = os.environ.get("PLATFORM_NGINX_HOST", "nginx")',
             '    port = int(os.environ.get("PLATFORM_NGINX_PORT", "443"))',
             "    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:",
             "        sock.settimeout(2.0)",

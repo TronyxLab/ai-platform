@@ -1,6 +1,6 @@
 # @purpose  Base compose definition for clickhouse — official clickhouse/clickhouse-server:24.12 image with config.d overrides
-# GREP_SUMMARY: clickhouse docker-compose clickhouse-24.12 observability-net ulimits nofile SYS_NICE healthcheck wget-ping
-# STRUCTURE: ▶ clickhouse:24.12 → observability-net → config.d/*.xml → wget /ping → ┐
+# GREP_SUMMARY: clickhouse docker-compose clickhouse-24.12 observability-net hermes-agent-net ulimits nofile SYS_NICE healthcheck wget-ping
+# STRUCTURE: ▶ clickhouse:24.12 → observability-net + hermes-agent-net → config.d/*.xml → wget /ping → ┐
 # region MODULE_CONTRACT
 ## @purpose  Base compose definition for clickhouse — official clickhouse/clickhouse-server:24.12 LTS image
 ## @scope    Part of observability stack: no separate network, no host ports in base, config.d overrides
@@ -123,6 +123,12 @@ services:
       observability-net:
         aliases:
           - clickhouse
+      # [IMP:9][clickhouse-compose] REF-0017: SoT placement (platform-infra.yaml
+      # provides.clickhouse.networks) — hermes-agent tenants достигают analytics по
+      # agent-сети. Аддитивный attach; observability-net (scrape) не убран.
+      hermes-agent-net:
+        aliases:
+          - clickhouse
 
     # [IMP:9][clickhouse-compose] HTTP /ping healthcheck — wget --spider (no output, non-zero on failure)
     healthcheck:
@@ -137,3 +143,7 @@ networks:
   observability-net:
     external: true
     name: observability-net
+  # REF-0017: аддитивное членство (SoT placement); сеть pre-created deploy-modules.sh
+  hermes-agent-net:
+    external: true
+    name: hermes-agent-net

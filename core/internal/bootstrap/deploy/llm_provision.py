@@ -108,14 +108,17 @@ def render_and_provision_llm(core_dir_override: str | None = None) -> None:
     logger.info("[IMP:7][llm] Rendering litellm-config.yml from policy.yaml...")
     try:
         _plw_body_render_and_provision_llm(core_dir)
-    except (subprocess.CalledProcessError, OSError, FileNotFoundError) as e:
+    # REF-0103: +subprocess.SubprocessError — TimeoutExpired (SYSTEM_CMD_TIMEOUT) вне кортежа
+    # ронял deploy-context после N деплоев вместо non-fatal WARN
+    except (subprocess.CalledProcessError, subprocess.SubprocessError, OSError) as e:
         logger.warning("[IMP:7][llm] Failed to render litellm-config.yml (non-fatal): %s", e)
 
     # Step 2: Provision virtual keys via subprocess
     logger.info("[IMP:7][llm] Provisioning LiteLLM virtual keys...")
     try:
         _plw_body_render_and_provision_llm_2(core_dir)
-    except (subprocess.CalledProcessError, OSError, FileNotFoundError) as e:
+    # REF-0103: +subprocess.SubprocessError — аналогично Step 1
+    except (subprocess.CalledProcessError, subprocess.SubprocessError, OSError) as e:
         logger.warning("[IMP:7][llm] Failed to provision keys (non-fatal): %s", e)
 
 

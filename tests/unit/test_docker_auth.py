@@ -439,3 +439,84 @@ def test_ghcr_login_no_chown_when_non_root(caplog) -> None:
 
 
 # endregion Tests: ghcr_login chown docker config (D16 — DevPlan 136 W1 T1.7)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region Tests: DOCKER_AUTH_TIMEOUT (REF-0103)
+# ═══════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · Regression · REF-0103 · docker_login получает канонный timeout
+# · Scenario: subprocess.run kwargs содержит timeout == DOCKER_AUTH_TIMEOUT (60)
+# · Last fail: N/A (до REF-0103 вызов шёл без timeout — зависший registry морозил φ6 бессрочно)
+# · Remove if: docker_login перестаёт использовать канон DOCKER_AUTH_TIMEOUT
+@ldd_trajectory
+def test_docker_login_passes_canon_timeout(caplog) -> None:
+    """docker_login: timeout kwarg == timeouts.DOCKER_AUTH_TIMEOUT."""
+    from core.internal.shared.timeouts import DOCKER_AUTH_TIMEOUT
+
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+
+    with patch("core.internal.shared.docker_auth.subprocess.run", return_value=mock_result) as mock_run:
+        ok = docker_login("https://index.docker.io/v1/", "u", "t")
+
+    assert ok is True
+    assert mock_run.call_args.kwargs.get("timeout") == DOCKER_AUTH_TIMEOUT, (
+        f"timeout kwarg должен быть канонным DOCKER_AUTH_TIMEOUT={DOCKER_AUTH_TIMEOUT}"
+    )
+    logger.critical("[IMP:9][test] docker_login canon timeout=%s — OK", DOCKER_AUTH_TIMEOUT)
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · REF-0103 · TimeoutExpired → False, никогда не raise
+# · Scenario: зависший registry → subprocess.run TimeoutExpired → IMP:10 + return False
+# ·   (исходный вход BUG-класса REF-0103 «hang'и без дедлайна»: без timeout-ветки исключение
+# ·   вообще не возникало, а hang был вечным)
+# · Remove if: timeout-обработка docker_login меняется
+@ldd_trajectory
+def test_docker_login_timeout_returns_false(caplog) -> None:
+    """docker_login на TimeoutExpired → False (не raise)."""
+    caplog.set_level(logging.INFO)
+
+    with (
+        patch(
+            "core.internal.shared.docker_auth.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd=["docker", "login"], timeout=60),
+        ),
+        patch.dict(os.environ, {"DOCKER_HUB_USERNAME": "u", "DOCKER_HUB_TOKEN": "t"}, clear=True),
+    ):
+        ok = docker_login()
+
+    assert ok is False
+    assert any("[IMP:10]" in r.message and "timed out" in r.message for r in caplog.records), caplog.text
+
+
+# 🧪 TRAP[TEST] · Regression · REF-0103 · ghcr_login паритет: canon timeout + TimeoutExpired→False
+# · Scenario: ghcr_login получает DOCKER_AUTH_TIMEOUT; таймаут → IMP:10 + False
+# · Last fail: N/A (до REF-0103 оба login-вызова шли без дедлайна)
+# · Remove if: ghcr_login timeout-семантика меняется
+@ldd_trajectory
+def test_ghcr_login_timeout_canon_and_graceful(caplog) -> None:
+    """ghcr_login: canon timeout kwarg + TimeoutExpired → False (не raise)."""
+    from core.internal.shared.timeouts import DOCKER_AUTH_TIMEOUT
+
+    caplog.set_level(logging.INFO)
+
+    with (
+        patch(
+            "core.internal.shared.docker_auth.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd=["docker", "login"], timeout=60),
+        ) as mock_run,
+        patch("core.internal.shared.docker_auth.resolve_user_home", return_value="/home/ci-deploy"),
+        patch("core.internal.shared.docker_auth.os.path.isdir", return_value=False),
+        patch.dict(os.environ, {"GHCR_PULL_TOKEN": "ghp_ref0103"}, clear=True),
+    ):
+        ok = ghcr_login()
+
+    assert ok is False
+    assert mock_run.call_args.kwargs.get("timeout") == DOCKER_AUTH_TIMEOUT
+    assert any("[IMP:10]" in r.message and "timed out" in r.message for r in caplog.records), caplog.text
+    logger.critical("[IMP:9][test] ghcr_login timeout canon+graceful — OK")
+
+
+# endregion Tests: DOCKER_AUTH_TIMEOUT (REF-0103)

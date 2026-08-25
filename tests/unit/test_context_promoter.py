@@ -174,6 +174,58 @@ def test_promote_via_ssh_failure() -> None:
 # endregion FUNC_test_promote_via_ssh_failure
 
 
+# region FUNC_test_promote_via_ssh_argv_ref0103
+# 🧪 TRAP[TEST] · Regression · REF-0103 · mirror-argv: GIT_SSH_COMMAND + DEPLOY_TIMEOUT
+# · Scenario: promote_via_ssh передаёт env.GIT_SSH_COMMAND (строка "ssh -o ..." из SoT
+# ·   ssh_opts.build_rsync_ssh_opts) и timeout=DEPLOY_TIMEOUT на push / SSH_READ_TIMEOUT на ls-remote.
+# · Last fail: REF-0103 — git push --mirror шёл без timeout/GIT_SSH_COMMAND → вечный hang
+# ·   release-checklist step 4 и транспорт без канонических SSH-флагов (BatchMode/ServerAlive).
+# · Remove if: mirror-канал перестаёт использовать SoT ssh_opts/DEPLOY_TIMEOUT
+def test_promote_via_ssh_git_ssh_command_and_timeouts(caplog: pytest.LogCaptureFixture) -> None:
+    """GIT_SSH_COMMAND присутствует в env; mirror-push/ls-remote несут канонные таймауты."""
+    from core.internal.shared.ssh_opts import build_rsync_ssh_opts
+    from core.internal.shared.timeouts import DEPLOY_TIMEOUT, SSH_READ_TIMEOUT
+
+    caplog.set_level(logging.INFO)
+
+    with mock.patch(
+        "core.internal.deploy.context_promoter.subprocess.run",
+        side_effect=[
+            _proc(rc=0),  # git push --mirror
+            _proc(rc=0, stdout=f"{MIRROR_SHA}\tHEAD\n"),  # git ls-remote
+        ],
+    ) as mocked:
+        context_promoter.promote_via_ssh("myctx")
+
+    push_call, ls_call = mocked.call_args_list
+
+    # GIT_SSH_COMMAND из единого SoT флагов (ssh_opts) — присутствует в env push И ls-remote.
+    expected_cmd = build_rsync_ssh_opts()
+    for call in (push_call, ls_call):
+        env = call.kwargs.get("env") or {}
+        assert env.get("GIT_SSH_COMMAND") == expected_cmd, (
+            f"GIT_SSH_COMMAND должен быть '{expected_cmd}', got {env.get('GIT_SSH_COMMAND')!r}"
+        )
+        assert env["GIT_SSH_COMMAND"].startswith("ssh "), "GIT_SSH_COMMAND — ssh-строка"
+        assert "BatchMode=yes" in env["GIT_SSH_COMMAND"], "канонические флаги SoT в GIT_SSH_COMMAND"
+
+    # Бюджеты REF-0103: тяжёлый mirror-push = DEPLOY_TIMEOUT, лёгкий ls-remote = SSH_READ_TIMEOUT.
+    assert push_call.kwargs.get("timeout") == DEPLOY_TIMEOUT, (
+        f"push timeout должен быть DEPLOY_TIMEOUT={DEPLOY_TIMEOUT}"
+    )
+    assert ls_call.kwargs.get("timeout") == SSH_READ_TIMEOUT, (
+        f"ls-remote timeout должен быть SSH_READ_TIMEOUT={SSH_READ_TIMEOUT}"
+    )
+    logger.critical(
+        "[IMP:9][test][REF-0103] mirror argv OK: GIT_SSH_COMMAND=%s… push_timeout=%ds ls_timeout=%ds",
+        expected_cmd[:30],
+        DEPLOY_TIMEOUT,
+        SSH_READ_TIMEOUT,
+    )
+
+
+# endregion FUNC_test_promote_via_ssh_argv_ref0103
+
 # ── verify_mirror (AC6) ───────────────────────────────────────────────────
 
 

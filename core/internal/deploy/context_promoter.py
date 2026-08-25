@@ -26,6 +26,8 @@
 ##           2026-08-02 | DevPlan 118 C2 — ручные -o флаги → SSH_OPTS (единый SoT, 0 ручных флагов)
 ##           2026-08-16 | DevPlan 177 W2.1 — HTTPS-fallback удалён: promote_via_https, token-параметры,
 ##                       GIT_ASKPASS-механика; GIT_MIRROR_TOKEN → tier: removed
+##           2026-08-25 | REF-0103 — GIT_SSH_COMMAND из ssh_opts + DEPLOY_TIMEOUT/SSH_READ_TIMEOUT
+##                       на mirror-push/ls-remote; promote_context ловит SubprocessError
 ## 🧐 TRAP[DECISION] · RESOLVED · 2026-08-16 · SSH primary, HTTPS fallback (DevPlan 103)
 ## · Rejected: HTTPS-only (required token, unavailable locally — B4)
 ## · Reason: fallback удалён по Rev-условию — mirror.yml официально SSH-only (2026-07-23),
@@ -47,7 +49,9 @@ import yaml  # type: ignore[import-untyped]
 from core.internal.shared import audit_logger
 
 # SSH_OPTS — единый SoT флагов (shared/ssh_opts.py): 0 ручных -o флагов (AC-C2).
-from core.internal.shared.ssh_opts import SSH_OPTS
+# REF-0103: build_rsync_ssh_opts — единственная реализация "ssh <flags>" → GIT_SSH_COMMAND.
+from core.internal.shared.ssh_opts import SSH_OPTS, build_rsync_ssh_opts
+from core.internal.shared.timeouts import DEPLOY_TIMEOUT, SSH_READ_TIMEOUT  # REF-0103: mirror-бюджеты
 
 logger = logging.getLogger(__name__)
 
@@ -161,6 +165,10 @@ def promote_via_ssh(context: str) -> str:
     ## @complexity — O(refs) push + O(1) ls-remote
     ## @invariants
     ##   - `git push --mirror` raises CalledProcessError on non-zero exit (check=True)
+    ##   - REF-0103: GIT_SSH_COMMAND = build_rsync_ssh_opts() (единый SoT ssh_opts) в env —
+    ##     git-транспорт получает канонические SSH-флаги (BatchMode/ConnectTimeout/ServerAlive);
+    ##   - REF-0103: timeout=DEPLOY_TIMEOUT на push, SSH_READ_TIMEOUT на ls-remote — зависший
+    ##     registry/SSH больше не морозил release-checklist step 4 бессрочно;
     ##   - Empty ls-remote HEAD (empty target repo) → returns "" (surfaces as mirror mismatch later)
     ##   - Target repo must already exist (created by `make new-context`)
     """
@@ -168,11 +176,17 @@ def promote_via_ssh(context: str) -> str:
     logger.info("[IMP:9][promote_via_ssh] Promoting platform to context org: %s", context)
     logger.info("[IMP:8][promote_via_ssh] SSH target: %s", target)
 
+    # REF-0103: SSH-флаги для git-транспорта — через единый SoT (ssh_opts), не ручные -o.
+    # GIT_SSH_COMMAND читается самим git; операторский агент остаётся источником ключа.
+    git_env = {**os.environ, "GIT_SSH_COMMAND": build_rsync_ssh_opts()}
+
     subprocess.run(
         ["git", "push", "--mirror", target],
         check=True,
         capture_output=True,
         text=True,
+        timeout=DEPLOY_TIMEOUT,
+        env=git_env,
     )
     logger.info("[IMP:9][promote_via_ssh] SSH push to %s/ai-platform successful", context)
 
@@ -181,6 +195,8 @@ def promote_via_ssh(context: str) -> str:
         check=True,
         capture_output=True,
         text=True,
+        timeout=SSH_READ_TIMEOUT,
+        env=git_env,
     )
     parts = ls.stdout.split()
     mirror_head = parts[0] if parts else ""
@@ -279,7 +295,9 @@ def promote_context(
     logger.info("[IMP:9][promote_context] Promoting platform to context org: %s", org)
     try:
         mirror_head = promote_via_ssh(org)
-    except (subprocess.CalledProcessError, OSError) as exc:
+    # REF-0103: +subprocess.SubprocessError — TimeoutExpired от mirror-бюджетов (DEPLOY_TIMEOUT/
+    # SSH_READ_TIMEOUT) должен давать честный FAIL-audit, а не crash оператора
+    except (subprocess.CalledProcessError, subprocess.SubprocessError, OSError) as exc:
         logger.error("[IMP:10][promote_context] FAILED: SSH push to %s/ai-platform failed: %s", org, exc)
         logger.error(
             "[IMP:10][promote_context] Check that target org %s/ai-platform exists and operator has push access",

@@ -1,6 +1,6 @@
 # @purpose  Base compose definition for minio — official minio/minio image, loopback-only ports
-# GREP_SUMMARY: minio docker-compose local-s3 backup-net shared-db-net observability-net loopback-127001 one-shot-createbuckets prometheus-anonymous-metrics
-# STRUCTURE: ▶ minio:RELEASE → backup-net + shared-db-net + observability-net (metrics) → healthcheck /dev/tcp:9000 → one-shot mc createbuckets → ┐
+# GREP_SUMMARY: minio docker-compose local-s3 backup-net shared-db-net observability-net hermes-agent-net loopback-127001 one-shot-createbuckets prometheus-anonymous-metrics
+# STRUCTURE: ▶ minio:RELEASE → backup-net + shared-db-net + observability-net (metrics) + hermes-agent-net → healthcheck /dev/tcp:9000 → one-shot mc createbuckets → ┐
 # region MODULE_CONTRACT
 ## @purpose  Base compose definition for minio — official minio/minio RELEASE image, loopback-only ports
 ## @scope    Local S3 for backup-cron (backup-net) and langfuse (shared-db-net); two services: minio + minio-createbuckets
@@ -8,6 +8,8 @@
 ##   - Ports: 127.0.0.1:${MINIO_PORT:-9000}:9000 (S3 API) + 127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001 — loopback ONLY
 ##   - Networks: backup-net + shared-db-net + observability-net (REF-0010: scrape-доступ
 ##     центрального Prometheus к /minio/v2/metrics/cluster; аддитивный attach — external:true)
+##   - Networks: hermes-agent-net (REF-0017: SoT placement provides.minio.networks —
+##     agent-plane фасад S3; аддитивный attach, существующие сети не убраны)
 ##   - MINIO_PROMETHEUS_ANONYMOUS_ACCESS=on (REF-0010): метрики без bearer-токена — плоская
 ##     внутренняя сеть, flat-trust модель (P3 п.16); секрет в prometheus.yml.tmpl потребовал бы
 ##     расширения envsubst-канала config-init (вне скоупа REF-0010)
@@ -53,6 +55,12 @@ services:
       # [IMP:8][minio-compose] REF-0010: scrape-доступ центрального Prometheus (job "minio",
       # file_sd nodes/minio.json); аддитивный attach — external:true, ничего не убираем
       observability-net:
+        aliases:
+          - minio
+      # [IMP:9][minio-compose] REF-0017: SoT placement (platform-infra.yaml
+      # provides.minio.networks) — agent-plane фасад S3. Аддитивный attach; текущие сети
+      # НЕ убраны (миграция потребителей с shared-db-net — отдельное согласование).
+      hermes-agent-net:
         aliases:
           - minio
     environment:
@@ -130,3 +138,7 @@ networks:
   observability-net:
     external: true
     name: observability-net
+  # REF-0017: аддитивное членство (SoT placement agent-plane фасад); pre-created deploy-modules.sh
+  hermes-agent-net:
+    external: true
+    name: hermes-agent-net

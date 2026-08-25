@@ -223,48 +223,55 @@ def test_topo_sort_enriched_output(caplog, tmp_path) -> None:
 # ══════════════════════════════════════════════════════════════════════════════
 
 # region FUNC_test_rsync_consolidation
-## @purpose  Static audit: verify core-deploy.yml has consolidated rsync (2 calls, not 3 separate steps).
+## @purpose  Static audit (S5 → REF-0112): core-deploy.yml консолидированный шаг доставки —
+##           МОДУЛЬНЫЙ вызов `core_deliverer ci-deliver`; inline-rsync отсутствует (один owner
+##           exclude-set'ов); отдельные 5b/5c steps не вернулись.
 ## @io       ⇥ caplog, .github/workflows/core-deploy.yml → ⎋ None
 ## @complexity 1 — static grep
 
 
 @pytest.mark.static_audit
 def test_rsync_consolidation(caplog) -> None:
-    """core-deploy.yml: консолидированный rsync (2 вызова), 5b/5c steps удалены."""
+    """core-deploy.yml: доставка файлов через core_deliverer ci-deliver, без inline rsync."""
     caplog.set_level(logging.DEBUG)
     core_deploy_yml = repo_root() / ".github" / "workflows" / "core-deploy.yml"
     logger.info("[IMP:7][test_rsync_consolidation] Reading core-deploy.yml ...")
     content = core_deploy_yml.read_text()
 
-    assert "Rsync core + config to VPS" in content, (
-        "S5 violation: consolidated step 'Rsync core + config to VPS' not found"
+    assert "Deliver core + config to VPS" in content, (
+        "Consolidated delivery step 'Deliver core + config to VPS' not found"
     )
-    logger.info("[IMP:9][test_rsync_consolidation] Consolidated step name found OK")
+    logger.info("[IMP:9][test_rsync_consolidation] Consolidated delivery step name found OK")
 
     assert "name: Rsync platform-env.yaml to VPS" not in content, (
-        "S5 violation: separate 5b step 'Rsync platform-env.yaml to VPS' still present"
+        "Violation: separate 5b step 'Rsync platform-env.yaml to VPS' still present"
     )
     assert "name: Rsync Makefile to VPS" not in content, (
-        "S5 violation: separate 5c step 'Rsync Makefile to VPS' still present"
+        "Violation: separate 5c step 'Rsync Makefile to VPS' still present"
     )
     logger.info("[IMP:9][test_rsync_consolidation] Separate 5b/5c YAML steps removed OK")
 
-    rsync_core_delete = "rsync -avz --delete" in content
-    rsync_config = "rsync -avz" in content
-    assert rsync_core_delete, "S5 violation: rsync for core/ with --delete not found"
-    assert rsync_config, "S5 violation: rsync for config files not found"
-    logger.info("[IMP:9][test_rsync_consolidation] Both rsync calls (core+config) found OK")
-
-    assert "platform-env.yaml" in content, "S5 violation: platform-env.yaml reference not found"
-    assert "Makefile" in content, "S5 violation: Makefile reference not found"
-    logger.info("[IMP:9][test_rsync_consolidation] platform-env.yaml + Makefile in rsync OK")
+    # REF-0112: файловая фаза = модульный вызов deliverer; inline-rsync запрещён
+    # (дивергентные exclude-set'ы двух каналов = исходный баг)
+    has_module_call = "core.internal.bootstrap.core_deliverer" in content and "ci-deliver" in content
+    has_inline_delete_rsync = "rsync -avz --delete" in content
+    logger.critical("[IMP:9][test_rsync_consolidation] module call present: %s", has_module_call)
+    logger.critical("[IMP:9][test_rsync_consolidation] inline --delete rsync absent: %s", not has_inline_delete_rsync)
+    assert has_module_call, (
+        "core-deploy.yml must invoke 'python3 -m core.internal.bootstrap.core_deliverer ci-deliver' "
+        "(REF-0112: single-owner exclude-sets)"
+    )
+    assert not has_inline_delete_rsync, (
+        "core-deploy.yml contains inline 'rsync -avz --delete' — divergent exclude channel (REF-0112 regression)"
+    )
+    logger.info("[IMP:9][test_rsync_consolidation] Module-call contract verified OK")
 
     assert_ldd_imp9(caplog)
 
 
-# 🧪 TRAP[TEST] · Regression: S5 rsync consolidation 3 steps → 2 rsync calls
-# · Scenario: static audit of core-deploy.yml for consolidated step and removed 5b/5c
-# · Last fail: N/A
+# 🧪 TRAP[TEST] · Regression: S5 consolidation (3 steps → 1) evolved into REF-0112 module-call
+# · Scenario: static audit of core-deploy.yml for consolidated step + no inline rsync
+# · Last fail: карточка REF-0112 — CI inline-rsync тянул чужой exclude-set в prod-tree
 # · Remove if: CI deployment strategy changes fundamentally
 # endregion FUNC_test_rsync_consolidation
 

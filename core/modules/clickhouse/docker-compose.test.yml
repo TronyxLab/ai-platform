@@ -39,6 +39,11 @@ services:
       test-observability-net:
         aliases:
           - clickhouse
+      # REF-0017: зеркалирование аддитивного hermes-agent-net attach из base.yml (structural
+      # consistency: prod hermes-agent-net ⇔ test-hermes-agent-net)
+      test-hermes-agent-net:
+        aliases:
+          - clickhouse
     # ── Test-specific host ports (non-standard — avoid production conflicts) ──
     ports:
       - "127.0.0.1:18123:8123"     # HTTP interface
@@ -55,4 +60,7 @@ volumes:
 
 networks:
   test-observability-net:
+    external: true
+  # REF-0017: зеркалирование base.yml attach (test-isolation канон DevPlan 017 Option B)
+  test-hermes-agent-net:
     external: true

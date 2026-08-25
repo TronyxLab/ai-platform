@@ -26,7 +26,16 @@ import logging
 # · Rejected: lifecycle держит собственный биндинг docker_compose_up + тест патчит оба модуля (8-й патч в фикстуре)
 # · Reason: один holder → один тест-патч-таргет покрывает и up_atomic (flow), и rollback (lifecycle)
 # · Rev: если тест-фикстура deploy_boundary перестанет патчить единый таргет — вернуть биндинг в lifecycle
-from core.internal.deploy.engine import flow as _flow
+#
+# ⚠️ TRAP[BUG] · 2026-08-25 · P2 · REF-0107: import flow через пакетную атрибуцию
+# · Symptom: `from core.internal.deploy.engine import flow` резолвит атрибут ЧАСТИЧНО
+# ·   инициализированного пакета при цикле __init__↔submodule (мина под make check, REF-0107 p.7).
+# · Root: импорт через package-namespace зависит от порядка исполнения __init__.
+# · Fix: прямой module-path (`import core.internal.deploy.engine.flow as _flow`) — резолв
+# ·   по sys.modules, не по атрибуту пакета; runtime-чтение `_flow.shared_docker_compose_up`
+# ·   (patchable holder) сохранено.
+# · Prevention: субмодули пакета не импортируют соседей через пакетный namespace.
+import core.internal.deploy.engine.flow as _flow
 from core.internal.deploy.engine.results import ImageInfo
 
 # DevPlan 128 W1 (P2-5/D6): docker image inspect/tag примитивы — shared/docker_ops

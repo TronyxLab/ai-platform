@@ -1,6 +1,6 @@
 # @purpose  Base compose definition for langfuse module — LLM Tracing
-# GREP_SUMMARY: langfuse docker-compose langfuse-worker llm-tracing profiles x-logging observability-net shared-db-net postgres clickhouse v4 encryption-key langfuse-redis noeviction redis-exporter queue
-# STRUCTURE: ▶ langfuse:4.10.0 [profiles:langfuse] + langfuse-worker (v4: очереди) + langfuse-redis (noeviction) + langfuse-redis-exporter → observability-net + shared-db-net → ┐
+# GREP_SUMMARY: langfuse docker-compose langfuse-worker llm-tracing profiles x-logging observability-net shared-db-net hermes-agent-net postgres clickhouse v4 encryption-key langfuse-redis noeviction redis-exporter queue
+# STRUCTURE: ▶ langfuse:4.10.0 [profiles:langfuse] + langfuse-worker (v4: очереди) + langfuse-redis (noeviction) + langfuse-redis-exporter → observability-net + shared-db-net + hermes-agent-net → ┐
 # region MODULE_CONTRACT
 ## @purpose  Base compose definition for langfuse Docker module
 ## @scope    Merged with root docker-compose.yml via include:
@@ -22,6 +22,9 @@
 ##     (headroom ~25% на overhead/AOF-буфер, FAIL-0202: maxmemory != cgroup-лимит)
 ##   - REF-0010: langfuse-redis-exporter (второй redis_exporter instance) — очередь видима
 ##     Prometheus'у (redis_up/evicted_keys/memory), alert-rules в platform-alerts.yml
+##   - REF-0017 (2026-08-25): hermes-agent-net членство web-сервиса — SoT placement
+##     (platform-infra.yaml#provides.langfuse.networks) отражён в рантайме; аддитивный
+##     attach, существующие сети не убраны (parity-гейт test_gate_provides_networks_parity)
 ## @rationale Profiles enable selective startup via `make up MODULES=langfuse`
 # endregion MODULE_CONTRACT
 
@@ -132,6 +135,13 @@ services:
         aliases:
           - langfuse
       observability-net:
+        aliases:
+          - langfuse
+      # [IMP:9][langfuse-compose] REF-0017: SoT placement (platform-infra.yaml
+      # provides.langfuse.networks) — hermes-agent tenants достигают tracing API по
+      # выделенной agent-сети. Аддитивный attach; существующие сети НЕ убраны
+      # (зависимости shared-db/observability согласуются отдельно).
+      hermes-agent-net:
         aliases:
           - langfuse
 
@@ -278,3 +288,7 @@ networks:
   shared-db-net:
     external: true
     name: shared-db-net
+  # REF-0017: аддитивное членство web-сервиса (SoT placement); сеть pre-created deploy-modules.sh
+  hermes-agent-net:
+    external: true
+    name: hermes-agent-net

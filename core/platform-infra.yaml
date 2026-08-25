@@ -22,6 +22,9 @@
 ##            test_ports, env_defaults.
 ##            T2.17 — env_defaults.NO_PROXY удалён (дубль proxy.no_proxy_internal; SoT —
 ##            единый список; .env.example NO_PROXY выводится из него join'ом запятой).
+##            REF-0017 (2026-08-25) — network truth: langfuse url_template → слушающий
+##            :3000; nginx host → реальный alias «nginx»; семантика provides.networks =
+##            подмножество фактического attach (гейт test_gate_provides_networks_parity).
 # endregion MODULE_CONTRACT
 
 networks:
@@ -101,6 +104,16 @@ proxy:
   no_proxy_internal: "localhost,127.0.0.1,.local,postgres,pgbouncer,redis,clickhouse,litellm,langfuse,minio,grafana,prometheus,loki,nginx,node-exporter,cadvisor,hermes-agent,status-page,backup-cron,nginx-prometheus-exporter,redis-exporter,postgres-exporter"
 
 provides:
+  # Контракт networks (REF-0017): declares — ПОТРЕБИТЕЛЬСКИ-значимые сети; фактический
+  # attach в composes может быть ШИРЕ (аддитивный attach — канон). Направление parity —
+  # подмножество ⊆; enforce: tests/gates/test_gate_provides_networks_parity.py.
+  # ⚠️ TRAP[DECISION] · 2026-08-25 · — · url_template = контейнерно-слушающий порт
+  # · (Docker DNS изнутри tenant-контейнера); поле port = host-facade для кросс-нодового
+  # · peer-доступа (DevPlan 010 T2.2) и НЕ обязано совпадать с url_template
+  # · Rejected: единая семантика порта (url=port) · Reason: у langfuse host≠container
+  # ·   (3001→3000) — collapse сломал бы либо peer-facade, либо in-container резолв
+  # ·   (исходный баг REF-0017: URL целил host-publish 3001 → connection refused)
+  # · Rev: если появится потребитель PLATFORM_*_URL вне docker-сетей — пересмотреть
   postgres:
     host: pgbouncer
     port: 6432
@@ -114,7 +127,14 @@ provides:
     networks:
       - shared-cache-net
   nginx:
-    host: nginx-proxy
+    # 🧐 TRAP[DECISION] · 2026-08-25 · — · host = реальный Docker DNS alias «nginx»
+    # · (container_name + aliases compose nginx-модуля)
+    # · Rejected: alias «nginx-proxy» в compose ради сохранения старого литерала
+    # · Reason: фантомный hostname (REF-0017) — smoke TCP-probe проектов не резолвил
+    # ·   PLATFORM_NGINX_HOST → постоянный false-pass; выравнивание декларации за рантаймом
+    # ·   честнее второго DNS-имени-маски
+    # · Rev: если внешние потребители захардкодят старое имя — вернуть через аддитивный alias
+    host: nginx
     port: 443
     url_template: "https://${DOMAIN}"
     networks:
@@ -128,7 +148,9 @@ provides:
   langfuse:
     host: langfuse
     port: 3001
-    url_template: "http://langfuse:3001"
+    # url_template — слушающий контейнерный порт 3000 (compose маппинг :3001:3000);
+    # port выше — host-facade (см. TRAP[DECISION] в шапке provides)
+    url_template: "http://langfuse:3000"
     networks:
       - hermes-agent-net
   minio:

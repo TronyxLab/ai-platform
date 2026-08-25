@@ -41,6 +41,9 @@
 ## @changes  2026-08-14 | план 170 W1-A1 — +SYSTEM_CMD_TIMEOUT (60), +LIFECYCLE_CMD_TIMEOUT (120):
 ##                      AMBER-зачистка lifecycle/healthcheck/monitoring доменов (research-D §D1,
 ##                      16×120 + 15×60 литералов канонизированы; домен-скоуп гейта расширен)
+## @changes  2026-08-25 | DevPlan meta-refactoring REF-0103 — +HEALTHCHECK_CMD_TIMEOUT (60),
+##                      +DOCKER_AUTH_TIMEOUT (60), +LITELLM_REQUEST_TIMEOUT (120): только НОВЫЕ
+##                      имена рядом с существующими (freeze P3 п.1 — rename запрещён)
 # endregion MODULE_CONTRACT
 
 # ── Docker domain ────────────────────────────────────────────────────────────
@@ -112,6 +115,24 @@ LIFECYCLE_CMD_TIMEOUT = 120
 #   интервал опроса docker info + число попыток (6 × 5s = 30s окно ожидания демона)
 DOCKER_RESTART_POLL_INTERVAL = 5
 DOCKER_RESTART_POLL_RETRIES = 6
+
+# REF-0103: per-invocation timeout ОДНОГО модульного healthcheck-скрипта
+#   (module_interface.invoke liveness/deep — modules_healthcheck, deploy_orchestrator
+#   system-liveness). До фикса liveness-инвок наследовал COMPOSE_UP_TIMEOUT=180 — 3× окно
+#   поллинга; 60s = HEALTHCHECK_POLL_TIMEOUT канон. НОВОЕ имя рядом с существующими
+#   (freeze P3 п.1 — rename запрещён).
+HEALTHCHECK_CMD_TIMEOUT = 60
+
+# REF-0103: сетевой docker login (docker_auth.docker_login/ghcr_login) — до фикса без
+#   timeout → зависший registry морозил bootstrap φ6/φ11 бессрочно.
+DOCKER_AUTH_TIMEOUT = 60
+
+# ── LLM domain ───────────────────────────────────────────────────────────────
+
+# LiteLLM proxy request_timeout на upstream-запрос (config_renderer litellm_settings;
+# FAIL-0304: ключ отсутствовал — медленный/зависший провайдер держал соединение бессрочно).
+LITELLM_REQUEST_TIMEOUT = 120
+
 
 # docker manifest inspect + docker image inspect/prune (check_image_exists, image-майнтенанс)
 IMAGE_CHECK_TIMEOUT = 60

@@ -370,7 +370,14 @@ def _deploy_single_project_via_orchestrator(
         project.name,
     )
     facts_obj = facts or default_env_facts()
-    is_healthy: Callable[[str], bool] = health_fn if health_fn is not None else _is_project_healthy
+
+    # REF-0103: cold-skip gate — single-shot probe (attempts=1). Отсутствующий/стартующий
+    # проект не должен сжигать полное окно поллинга в idempotent-проверке; полный
+    # deadline-driven поллинг остаётся в DeployOrchestrator после деплоя.
+    def _gate_single_shot(name: str) -> bool:
+        return _is_project_healthy(name, single_shot=True)
+
+    is_healthy: Callable[[str], bool] = health_fn if health_fn is not None else _gate_single_shot
 
     # Check if already healthy (idempotent skip)
     if is_healthy(project.name):
@@ -681,12 +688,16 @@ def _is_bootstrap_stub_compose(project_dir: str) -> bool:
 ##   - Uses shared healthcheck_poll for health status
 ##   - Stub guard: is_stub_container() → False (stub никогда не «здоров» для skip)
 ##   - Non-fatal: if docker unavailable, returns False
+##   - REF-0103 single_shot=True: ОДНА проверка (attempts=1) — idempotent-skip gate на
+##     отсутствующем проекте не сжигает полное окно поллинга (до фикса 60s на cold-проект)
 ## @changes 2026-08-13 | E1 (160): +stub_detector_fn/healthcheck_poll_fn DI (тесты без monkeypatch)
+## @changes 2026-08-25 | REF-0103: +single_shot kwarg (cold-skip gate — одна проверка, не окно)
 def _is_project_healthy(
     project_name: str,
     *,
     stub_detector_fn: Callable[[str], bool] | None = None,
     healthcheck_poll_fn: Callable[..., str] | None = None,
+    single_shot: bool = False,
 ) -> bool:
     """Check if project containers are healthy via shared healthcheck_poll.
 
@@ -713,6 +724,18 @@ def _is_project_healthy(
             project_name,
         )
         return False
+    # REF-0103 single-shot: одна проверка (attempts=1) — skip-gate не должен поллить полное
+    # окно на отсутствующем контейнере; полный deadline-driven режим — только default-путь.
+    if single_shot:
+        return (
+            healthcheck_poll(
+                project_name,
+                timeout=HEALTHCHECK_POLL_TIMEOUT,
+                interval=HEALTHCHECK_POLL_INTERVAL,
+                attempts=1,
+            )
+            == "healthy"
+        )
     return (
         healthcheck_poll(project_name, timeout=HEALTHCHECK_POLL_TIMEOUT, interval=HEALTHCHECK_POLL_INTERVAL)
         == "healthy"
@@ -1090,7 +1113,9 @@ def _step_vhosts(
                 check=False,
             )
         logger.info("[IMP:9][_step_vhosts] Vhosts rendered for node=%s", node_name)
-    except (subprocess.CalledProcessError, OSError, FileNotFoundError) as e:
+    # REF-0103: +subprocess.SubprocessError — TimeoutExpired (timeout=60) вне кортежа ронял
+    # deploy-context после N деплоев вместо non-fatal WARN
+    except (subprocess.CalledProcessError, subprocess.SubprocessError, OSError) as e:
         logger.warning("[IMP:7][_step_vhosts] Vhost render failed (non-fatal): %s", e)
 
 
@@ -1114,7 +1139,9 @@ def _step_nginx_reload(*, nginx_reload_fn: Callable[[], None] | None = None) -> 
 
     try:
         reload_fn()
-    except (OSError, subprocess.CalledProcessError, FileNotFoundError) as e:
+    # REF-0103: +subprocess.SubprocessError — nginx_reload (docker exec, timeout) документирует
+    # raise TimeoutExpired, но caller его не ловил → crash вместо non-fatal WARN
+    except (OSError, subprocess.CalledProcessError, subprocess.SubprocessError) as e:
         logger.warning("[IMP:7][_step_nginx_reload] Nginx reload failed (non-fatal): %s", e)
 
 
@@ -1170,7 +1197,9 @@ def _step_verify(
                 check=False,
             )
         logger.info("[IMP:9][_step_verify] Verify complete for node=%s", node_name)
-    except (subprocess.CalledProcessError, OSError, FileNotFoundError) as e:
+    # REF-0103: +subprocess.SubprocessError — TimeoutExpired (timeout=120) вне кортежа
+    # ронял deploy-context вместо non-fatal WARN
+    except (subprocess.CalledProcessError, subprocess.SubprocessError, OSError) as e:
         logger.warning("[IMP:7][_step_verify] Verify failed (non-fatal): %s", e)
 
 

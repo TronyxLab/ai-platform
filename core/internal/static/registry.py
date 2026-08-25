@@ -140,6 +140,11 @@ DETECTORS: tuple[DetectorSpec, ...] = (
         "secrets.env inline parsing outside shared/secrets_env_parser (086)",
         cast(DetectFn, _import_detector("inline_secrets").detect),
     ),
+    DetectorSpec(
+        "exception-import-path",
+        "PlatformError-family imports outside core.internal.shared.exceptions — dual-class loading (REF-0107)",
+        cast(DetectFn, _import_detector("exception_imports").detect),
+    ),
 )
 
 

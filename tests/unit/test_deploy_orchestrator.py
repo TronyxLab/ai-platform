@@ -53,12 +53,21 @@ def _write_node_yaml(tmp_path: Path, modules: dict, context: str = "") -> Path:
     return node_yaml
 
 
-def _write_module_yaml(tmp_path: Path, name: str, install_type: str = "docker", severity: str = "warn") -> Path:
-    """Write modules/<name>/module.yaml with install_type + severity."""
+def _write_module_yaml(
+    tmp_path: Path,
+    name: str,
+    install_type: str = "docker",
+    severity: str = "warn",
+    depends_on: list[str] | None = None,
+) -> Path:
+    """Write modules/<name>/module.yaml with install_type + severity (+ optional depends_on)."""
     module_dir = tmp_path / "modules" / name
     module_dir.mkdir(parents=True, exist_ok=True)
     yaml_path = module_dir / "module.yaml"
-    yaml_path.write_text(yaml.safe_dump({"name": name, "install_type": install_type, "severity": severity}))
+    data: dict = {"name": name, "install_type": install_type, "severity": severity}
+    if depends_on is not None:
+        data["depends_on"] = depends_on
+    yaml_path.write_text(yaml.safe_dump(data))
     return yaml_path
 
 
@@ -691,7 +700,11 @@ def test_deploy_sequential_iterates_modules(tmp_path, caplog) -> None:
         f"system module needs install + healthcheck invocations, got {mock_invoke.call_count}"
     )
     mock_invoke.assert_any_call("nginx", "install")
-    mock_invoke.assert_any_call("nginx", "healthcheck", "liveness")
+    # REF-0103: liveness-инвок несёт канонный probe-timeout 60s (HEALTHCHECK_CMD_TIMEOUT),
+    # не унаследованный COMPOSE_UP_TIMEOUT=180
+    from core.internal.shared.timeouts import HEALTHCHECK_CMD_TIMEOUT
+
+    mock_invoke.assert_any_call("nginx", "healthcheck", "liveness", timeout=HEALTHCHECK_CMD_TIMEOUT)
     assert deployed == 3, f"Expected 3 deployed modules, got {deployed}"
     assert failed == [], f"Expected no failures, got {failed}"
     logger.info(
@@ -706,3 +719,243 @@ def test_deploy_sequential_iterates_modules(tmp_path, caplog) -> None:
 # · Last fail: N/A
 # · Remove if: sequential deploy path is removed
 # endregion FUNC_test_deploy_sequential_iterates_modules
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# REF-0110 (meta-refactoring S-пакет): kahn-линеаризация sequential + fail-fast topo + abort remaining
+# ══════════════════════════════════════════════════════════════════════════════
+
+# region FUNC_test_sequential_order_follows_depends_on_two_level_dag
+## @purpose  TEST-29 (карточка REF-0110): order-test с РЕАЛЬНЫМ build_dag+kahn на 2-level DAG —
+##           порядок входного списка node.yaml ("app" раньше "base") НЕ авторитетен; деплой идёт
+##           по depends_on: base → app. До REF-0110 sequential шёл в порядке списка.
+## @io       tmp_path, caplog → None (реальный topo-пайплайн, моки только I/O-деплоя)
+## @complexity 2 — real load_module_yamls+build_dag+kahn через _deploy_sequential
+## @invariants
+##   - deploy_docker_module вызывается в топологическом порядке ["base", "app"]
+##   - Оба модуля задеплоены, failed пуст
+
+
+def test_sequential_order_follows_depends_on_two_level_dag(tmp_path, caplog) -> None:
+    """
+    # ▶ module.yamls: app depends_on [base] → ⚡ _deploy_sequential(["app","base"]) (real kahn)
+    # → ◇ assert call order == [base, app] → ⎋ pass | fail
+    """
+    caplog.set_level(logging.DEBUG)
+    _write_module_yaml(tmp_path, "base", install_type="docker", severity="critical")
+    _write_module_yaml(tmp_path, "app", install_type="docker", severity="warn", depends_on=["base"])
+    logger.info("[IMP:7][test_sequential_order_follows_depends_on] START — TEST-29 order check")
+
+    with (
+        mock.patch.object(orch.secrets_validator, "check_env_requires", return_value=[]),
+        mock.patch.object(orch.docker_orchestrator, "deploy_docker_module", return_value=True) as mock_docker,
+    ):
+        deployed, failed = orch._deploy_sequential(["app", "base"], str(tmp_path / "modules"), str(tmp_path / "core"))
+
+    call_order = [call.args[0] for call in mock_docker.call_args_list]
+    assert call_order == ["base", "app"], f"Deploy order must follow depends_on (base first), got {call_order}"
+    assert deployed == 2, f"Both modules must deploy, got {deployed}"
+    assert failed == [], f"No failures expected, got {failed}"
+    logger.info("[IMP:9][test_sequential_order_follows_depends_on] order=%s (depends_on-aware)", call_order)
+
+    assert_ldd_imp9(caplog)
+
+
+# 🧪 TRAP[TEST] · Regression · TEST-29/REF-0110 · sequential deploy order is depends_on-aware
+# · Last fail: карточка REF-0110 — sequential шёл в порядке node.yaml (depends_on только в parallel)
+# · Remove if: sequential ordering stops being topo-driven
+# endregion FUNC_test_sequential_order_follows_depends_on_two_level_dag
+
+
+# region FUNC_test_sequential_critical_failure_aborts_remaining_groups
+## @purpose  REF-0110 abort semantics: critical-failure в группе G → все модули ПОСЛЕДУЮЩИХ групп
+##           добавляются в failed и НЕ деплоятся; сосед по группе G (независим, kahn) продолжается;
+##           warn-failure НЕ прерывает цикл (DEPLOY_BEST_EFFORT сохранён).
+## @io       tmp_path, caplog → None
+## @complexity 2 — 3-module DAG: cache(no deps), db(critical, no deps), web(depends_on db)
+## @invariants
+##   - db critical fail → web aborted (в failed, deploy NOT attempted); cache (сосед по группе) deployed
+##   - IMP:10 abort log присутствует
+
+
+def test_sequential_critical_failure_aborts_remaining_groups(tmp_path, caplog) -> None:
+    """
+    # ▶ DAG cache|db(critical) → web → ⚡ _deploy_sequential, db fails → ◇ assert web aborted + IMP:10 → ⎋ pass | fail
+    """
+    caplog.set_level(logging.DEBUG)
+    _write_module_yaml(tmp_path, "cache", install_type="docker", severity="warn")
+    _write_module_yaml(tmp_path, "db", install_type="docker", severity="critical")
+    _write_module_yaml(tmp_path, "web", install_type="docker", severity="warn", depends_on=["db"])
+    logger.info("[IMP:7][test_sequential_critical_failure_aborts] START — critical abort check")
+
+    def _fail_db(name: str, **_kwargs: object) -> bool:
+        return name != "db"
+
+    with (
+        mock.patch.object(orch.secrets_validator, "check_env_requires", return_value=[]),
+        mock.patch.object(orch.docker_orchestrator, "deploy_docker_module", side_effect=_fail_db) as mock_docker,
+    ):
+        deployed, failed = orch._deploy_sequential(
+            ["cache", "db", "web"], str(tmp_path / "modules"), str(tmp_path / "core")
+        )
+
+    # cache — сосед db по первой kahn-группе (независим) → деплоится; web (зависимая группа) — abort
+    attempted = [call.args[0] for call in mock_docker.call_args_list]
+    assert "cache" in attempted and "db" in attempted, f"cache+db must be attempted, got {attempted}"
+    assert "web" not in attempted, f"Dependent 'web' must be aborted after critical 'db' failure, got {attempted}"
+    assert deployed == 1, f"Only cache deploys, got {deployed}"
+    assert failed == ["db", "web"], f"Honest failed accounting: [db, web], got {failed}"
+    assert "[abort]" in caplog.text and "[IMP:10]" in caplog.text, "Missing IMP:10 abort log"
+    logger.info("[IMP:9][test_sequential_critical_failure_aborts] attempted=%s failed=%s", attempted, failed)
+
+    assert_ldd_imp9(caplog)
+
+
+# 🧪 TRAP[TEST] · Regression · REF-0110 · critical failure stops dependents, honest failed accounting
+# · Last fail: карточка REF-0110 — failed группа откатывалась и цикл продолжался (web crash-loop без db)
+# · Remove if: best-effort continue restored for critical failures
+# endregion FUNC_test_sequential_critical_failure_aborts_remaining_groups
+
+
+# region FUNC_test_sequential_warn_failure_continues
+## @purpose  Негатив к abort-semantics (R5): warn-failure НЕ прерывает sequential-цикл —
+##           DEPLOY_BEST_EFFORT сохранён для некритических отказов.
+
+
+def test_sequential_warn_failure_continues(tmp_path, caplog) -> None:
+    """warn-fail первого модуля → второй всё равно деплоится (best-effort, no abort)."""
+    caplog.set_level(logging.DEBUG)
+    _write_module_yaml(tmp_path, "m1", install_type="docker", severity="warn")
+    _write_module_yaml(tmp_path, "m2", install_type="docker", severity="warn")
+    logger.info("[IMP:7][test_sequential_warn_failure_continues] START — warn continues")
+
+    def _fail_m1(name: str, **_kwargs: object) -> bool:
+        return name != "m1"
+
+    with (
+        mock.patch.object(orch.secrets_validator, "check_env_requires", return_value=[]),
+        mock.patch.object(orch.docker_orchestrator, "deploy_docker_module", side_effect=_fail_m1),
+    ):
+        deployed, failed = orch._deploy_sequential(["m1", "m2"], str(tmp_path / "modules"), str(tmp_path / "core"))
+
+    assert deployed == 1 and failed == ["m1"], f"warn-failure must continue cycle: {deployed}, {failed}"
+    assert "[abort]" not in caplog.text, "warn-failure must NOT trigger abort log"
+    logger.info("[IMP:9][test_sequential_warn_failure_continues] warn continued (deployed=%d)", deployed)
+
+    assert_ldd_imp9(caplog)
+
+
+# endregion FUNC_test_sequential_warn_failure_continues
+
+
+# region FUNC_test_linearize_unknown_dependency_raises
+## @purpose  REF-0110 fail-fast: depends_on на имя без module.yaml → ConfigValidationError
+##           (build_dag молча ронял неизвестные зависимости → невидимый отсутствующий порядок).
+
+
+def test_linearize_unknown_dependency_raises(tmp_path, caplog) -> None:
+    """depends_on=['ghost'] (нет module.yaml ghost) → ConfigValidationError от _linearize_deploy_order."""
+    caplog.set_level(logging.DEBUG)
+    _write_module_yaml(tmp_path, "app", install_type="docker", severity="warn", depends_on=["ghost"])
+    logger.info("[IMP:7][test_linearize_unknown_dependency_raises] START — unknown-dep guard")
+
+    from core.internal.shared.exceptions import ConfigValidationError
+
+    with pytest.raises(ConfigValidationError, match="ghost"):
+        orch._linearize_deploy_order(["app"], str(tmp_path / "modules"))
+
+    logger.info("[IMP:9][test_linearize_unknown_dependency_raises] unknown dep rejected fail-fast")
+
+    assert_ldd_imp9(caplog)
+
+
+# endregion FUNC_test_linearize_unknown_dependency_raises
+
+
+# region FUNC_test_orchestrate_cycle_propagates_config_validation_error
+## @purpose  REF-0110 сквозной контракт: топо-цикл через orchestrate() ПРОПАГАЦИРУЕТСЯ как
+##           ConfigValidationError (раньше деградировал в WARN + unordered sequential fallback);
+##           main() маппит PlatformError → exit 4 (canon exit-code контракт).
+
+
+def test_orchestrate_cycle_propagates_config_validation_error(tmp_path, caplog) -> None:
+    """Цикл a↔b: orchestrate() raises ConfigValidationError; main([...]) → exit 4."""
+    caplog.set_level(logging.DEBUG)
+    node_yaml = _write_node_yaml(tmp_path, {"a": {"enabled": True}, "b": {"enabled": True}})
+    _write_module_yaml(tmp_path, "a", install_type="docker", severity="critical", depends_on=["b"])
+    _write_module_yaml(tmp_path, "b", install_type="docker", severity="critical", depends_on=["a"])
+    logger.info("[IMP:7][test_orchestrate_cycle_propagates] START — cycle fail-fast")
+
+    from core.internal.shared.exceptions import ConfigValidationError
+
+    argv = [
+        "--node-yaml",
+        str(node_yaml),
+        "--modules-dir",
+        str(tmp_path / "modules"),
+        "--core-dir",
+        str(tmp_path / "core"),
+        "--templates-dir",
+        str(tmp_path / "templates"),
+    ]
+    with (
+        mock.patch.object(orch, "_preflight", return_value=None),
+        mock.patch.object(orch, "_postflight", return_value=None),
+        pytest.raises(ConfigValidationError, match=r"[Cc]ycle"),
+    ):
+        orch.orchestrate(str(node_yaml), str(tmp_path / "modules"), str(tmp_path / "core"), str(tmp_path / "templates"))
+
+    rc = orch.main(argv)
+    assert rc == 4, f"main must map ConfigValidationError to exit 4, got {rc}"
+    logger.info("[IMP:9][test_orchestrate_cycle_propagates] cycle → ConfigValidationError → main exit=4")
+
+    assert_ldd_imp9(caplog)
+
+
+# 🧪 TRAP[TEST] · Regression · REF-0110 · topo failure no longer degrades to unordered fallback
+# · Last fail: карточка REF-0110 — ошибка topo-sort деградировала в unordered sequential
+# · Remove if: topo failures become non-fatal again
+# endregion FUNC_test_orchestrate_cycle_propagates_config_validation_error
+
+
+# region FUNC_test_parallel_group_critical_failure_aborts_remaining_groups
+## @purpose  REF-0110 parallel-path abort: critical-failure группы → последующие группы в failed,
+##           deploy_docker_group для них НЕ вызывается.
+
+
+def test_parallel_group_critical_failure_aborts_remaining_groups(caplog) -> None:
+    """groups=[[postgres],[redis]], postgres critical fails → redis aborted, одна group-call."""
+    caplog.set_level(logging.DEBUG)
+    modules_yamls = [
+        {"name": "postgres", "install_type": "docker", "severity": "critical"},
+        {"name": "redis", "install_type": "docker", "severity": "warn"},
+    ]
+    logger.info("[IMP:7][test_parallel_group_critical_abort] START — group abort check")
+
+    with (
+        mock.patch.object(orch.topo_sort, "load_module_yamls", return_value=modules_yamls),
+        mock.patch.object(orch.topo_sort, "filter_docker_modules", return_value=modules_yamls),
+        mock.patch.object(orch.topo_sort, "build_dag", return_value={"postgres": [], "redis": []}),
+        mock.patch.object(orch.topo_sort, "kahn_topological_sort", return_value=[["postgres"], ["redis"]]),
+        mock.patch.object(orch.docker_orchestrator, "pre_pull_images", return_value=(2, 0)),
+        mock.patch.object(orch.secrets_validator, "batch_check_env", return_value=[]),
+        mock.patch.object(
+            orch.docker_orchestrator, "deploy_docker_group", return_value=(0, 0, ["postgres"], True)
+        ) as mock_group,
+        mock.patch.object(orch, "_deploy_system_modules", return_value=(0, [])),
+        mock.patch.object(orch, "_set_hc_marker"),
+    ):
+        deployed, failed, _info = orch._deploy_parallel(
+            ["postgres", "redis"], {}, "/mods", "/core", deploy_orchestrator=False
+        )
+
+    assert mock_group.call_count == 1, f"Only first group deploys, got {mock_group.call_count} calls"
+    assert deployed == 0, f"No successful deploys expected, got {deployed}"
+    assert failed == ["postgres", "redis"], f"Honest failed accounting incl. aborted dependents, got {failed}"
+    assert "[IMP:10][_deploy_docker_groups][abort]" in caplog.text, "Missing IMP:10 group-abort log"
+    logger.info("[IMP:9][test_parallel_group_critical_abort] failed=%s (redis aborted)", failed)
+
+    assert_ldd_imp9(caplog)
+
+
+# endregion FUNC_test_parallel_group_critical_failure_aborts_remaining_groups

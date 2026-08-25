@@ -2,8 +2,8 @@
 """
 Shared healthcheck poller for DeployOrchestrator. Extracted from context_deployer._shared_healthcheck_poll() + docker_compose.py.
 """
-# GREP_SUMMARY: healthcheck, poll, http, docker-inspect, retry, timeout, health-status
-# STRUCTURE: ▶ HealthcheckPoller.__init__(timeout, interval, max_retries) → ○ poll_project(project_name) → ◇ HTTP GET /health → ◇ docker inspect → ⎋ str(healthy|unhealthy)
+# GREP_SUMMARY: healthcheck, poll, http, docker-inspect, retry, timeout, health-status, monotonic-deadline, wall-time-budget
+# STRUCTURE: ▶ HealthcheckPoller.__init__(timeout, interval, max_retries) → ○ poll_until_healthy ┌deadline=start+max_retries×interval┐ → ○ poll_project(budget=min(timeout, remaining)) → ◇ HTTP GET /health → ◇ docker inspect → ⎋ str(healthy|unhealthy)
 # region MODULE_CONTRACT
 ## @purpose  Shared healthcheck polling utility. Supports two protocols:
 ##           1. HTTP GET /health → 200 (web services)
@@ -20,6 +20,11 @@ Shared healthcheck poller for DeployOrchestrator. Extracted from context_deploye
 ##   4. HTTP check: GET /health endpoint, 200 = healthy
 ##   5. Docker check: inspect State.Health.Status == "healthy" OR State.Status == "running" (no healthcheck)
 ##   6. Non-fatal: returns "unhealthy" on failure, does NOT raise
+##   7. REF-0103: единый monotonic deadline = start + max_retries × interval — СУММАРНОЕ wall-time
+##      poll_until_healthy ≤ бюджету независимо от числа попыток; каждая попытка получает
+##      budget = min(self.timeout, остаток до deadline) и прокидывает его вниз (HTTP per-check
+##      и docker-poll window). До фикса вложенные бюджеты давали 20×(60+3)s ≈ 21 мин при
+##      документированных 60s.
 ## @rationale DevPlan 089 DD4: context_deployer AND DeployEngine both do healthcheck →
 ##            double work. Single HealthcheckPoller used once by DeployOrchestrator.
 ## @changes 2026-07-30 | DevPlan 089 T5 — Created
@@ -30,6 +35,9 @@ Shared healthcheck poller for DeployOrchestrator. Extracted from context_deploye
 ## @changes 2026-08-24 | REF-0003 — поведение поллера НЕ менялось; success-предикат сужен выше
 ##                      по стеку (_verify_deploy unhealthy/timeout → FAILED). start_period-окно
 ##                      задокументировано TRAP[DECISION] у DEFAULT_* (вход REF-0103)
+## @changes 2026-08-25 | REF-0103 — единый monotonic deadline в poll_until_healthy + budget-
+##                      прокидка в poll_project/_try_http/_try_docker; DI sleep_fn/clock_fn;
+##                      TRAP[DECISION] бюджета у DEFAULT_* обновлён (deferred закрыт)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -37,6 +45,7 @@ from __future__ import annotations
 import logging
 import time
 import urllib.error
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from core.internal.shared import http_client  # W3.2 (177): HTTP-слой консолидирован в shared/http_client.py
@@ -56,6 +65,14 @@ DEFAULT_POLL_TIMEOUT = HEALTHCHECK_POLL_TIMEOUT
 DEFAULT_POLL_INTERVAL = HEALTHCHECK_POLL_INTERVAL
 DEFAULT_MAX_RETRIES = HEALTHCHECK_POLL_MAX_RETRIES
 # 🧐 TRAP[DECISION] · 2026-08-24 · — · Poll-окно 60s (20×3s) — де-факто start_period-бюджет деплоя (REF-0003) · Rejected: расширение окна до 180-300s под slow-start приложения до запуска · Reason: deferred — единый deadline и per-project стартовые окна (compose start_period) — скоуп REF-0103; launch-week churn минимален, легитимные slow-start деплои после REF-0003 падают честно (карточка: Regression risk «смягчается start_period/окном из REF-0103») · Rev: REF-0103 (таймауты/единый deadline) — пересмотреть окно вместе со start_period проектов
+# 🧐 TRAP[DECISION] · 2026-08-25 · — · Единый wall-time бюджет поллера = max_retries×interval (60s),
+# deadline прокидывается вниз попыткам (REF-0103, закрывает deferred выше) · Rejected: расширение
+# окна до 180-300s И статус-кво «per-attempt полный timeout» (реальность ~21 мин против
+# документированных 60s) · Reason: честность сигнала важнее ширины окна — документированный
+# бюджет должен быть реальностью; вложенные бюджеты блокировали очередь деплоя десятками минут;
+# стартовые окна slow-start приложений — compose start_period самих проектов (вне poller'а) ·
+# Rev: если легитимные slow-start деплои начнут падать после REF-0003 — поднимать
+# HEALTHCHECK_POLL_MAX_RETRIES в SoT timeouts.py (единая точка, НЕ здесь)
 HTTP_OK: int = 200  # статус успешного HTTP-ответа
 # T2.8: минимальный разумный per-URL timeout при делении бюджета проверки на число URL —
 # sub-second timeout даёт ложные negative на медленном старте контейнера.
@@ -93,6 +110,8 @@ class HealthcheckPoller:
     ##   - HTTP check: 200 on /health = healthy
     ##   - Docker check: State.Health.Status == "healthy" or running without healthcheck
     ##   - Total poll window = interval × max_retries
+    ##   - REF-0103: wall-time poll_until_healthy ≤ max_retries×interval (monotonic deadline);
+    ##     попытки получают budget = min(timeout, остаток до deadline)
     """
 
     def __init__(
@@ -100,30 +119,41 @@ class HealthcheckPoller:
         timeout: int = DEFAULT_POLL_TIMEOUT,
         interval: int = DEFAULT_POLL_INTERVAL,
         max_retries: int = DEFAULT_MAX_RETRIES,
+        *,
+        sleep_fn: Callable[[float], None] | None = None,
+        clock_fn: Callable[[], float] | None = None,
     ):
         self.timeout = timeout
         self.interval = interval
         self.max_retries = max_retries
+        # REF-0103 DI-швы: sleep_fn/clock_fn — детерминированный wall-time тест бюджета
+        # (0 monkeypatch; None → time.sleep / time.monotonic — прежнее поведение).
+        self._sleep = sleep_fn if sleep_fn is not None else time.sleep
+        self._clock = clock_fn if clock_fn is not None else time.monotonic
 
-    def poll_project(self, project_name: str, project_dir: str | None = None) -> HealthcheckResult:
+    def poll_project(
+        self, project_name: str, project_dir: str | None = None, *, budget: int | None = None
+    ) -> HealthcheckResult:
         """Poll project health until healthy or retries exhausted.
 
         Args:
             project_name: Project name for container/URL resolution.
             project_dir: Optional project directory for docker compose operations.
+            budget: Optional per-attempt wall-time cap in seconds (REF-0103) — прокидывается
+                вниз в HTTP per-check и docker-poll window. None = полный self.timeout.
 
         Returns:
             HealthcheckResult with status.
         """
         # Try HTTP healthcheck first
-        http_result = self._try_http(project_name)
+        http_result = self._try_http(project_name, budget=budget)
         if http_result:
             logger.info("[IMP:9][HealthcheckPoller][http] %s healthy via HTTP", project_name)
             return HealthcheckResult(status="healthy", project=project_name, method="http", attempts=1)
 
         # Fall back to Docker inspect
         if project_dir:
-            return self._try_docker(project_name, project_dir)
+            return self._try_docker(project_name, project_dir, budget=budget)
 
         logger.warning("[IMP:7][HealthcheckPoller][unknown] %s: no healthcheck method available", project_name)
         return HealthcheckResult(
@@ -137,6 +167,9 @@ class HealthcheckPoller:
     def poll_until_healthy(self, project_name: str, project_dir: str | None = None) -> HealthcheckResult:
         """Poll repeatedly until healthy or max_retries exhausted.
 
+        ▶ ┌deadline = start + max_retries×interval┐ → ○ attempt(budget=min(timeout, remaining))
+          → ◇ healthy? → ⎋ result │ now ≥ deadline? → ⎋ timeout │ sleep(interval)
+
         Args:
             project_name: Project name.
             project_dir: Optional project directory.
@@ -144,27 +177,41 @@ class HealthcheckPoller:
         Returns:
             HealthcheckResult with final status.
         """
-        for attempt in range(1, self.max_retries + 1):
-            result = self.poll_project(project_name, project_dir)
+        # REF-0103: единый monotonic deadline — СУММАРНОЕ wall-time ≤ max_retries×interval;
+        # каждая попытка получает остаток бюджета (не полный timeout — до фикса вложенные
+        # бюджеты давали max_retries×(timeout+interval) ≈ 21 мин при документированных 60s).
+        # int()-округление остатка вниз компенсируется min-бюджетом 1s: sub-second остаток
+        # ещё даёт попытке ровно один короткий probe (паритет со старым range(max_retries)).
+        deadline = self._clock() + self.max_retries * self.interval
+        attempts = 0
+        while True:
+            remaining = deadline - self._clock()
+            if remaining <= 0:
+                break
+            attempts += 1
+            result = self.poll_project(project_name, project_dir, budget=min(self.timeout, max(int(remaining), 1)))
             if result.status == "healthy":
                 return result
+
+            if self._clock() >= deadline:
+                break
 
             logger.info(
                 "[IMP:8][HealthcheckPoller][retry] %s attempt %d/%d: %s — retrying in %ds",
                 project_name,
-                attempt,
+                attempts,
                 self.max_retries,
                 result.status,
                 self.interval,
             )
-            time.sleep(self.interval)
+            self._sleep(self.interval)
 
         return HealthcheckResult(
             status="timeout",
             project=project_name,
             method="unknown",
-            attempts=self.max_retries,
-            detail=f"Healthcheck timeout after {self.max_retries * self.interval}s",
+            attempts=max(attempts, 1),
+            detail=f"Healthcheck timeout after {self.max_retries * self.interval}s wall-time budget",
         )
 
     def _try_url(self, url: str, timeout: int | None = None) -> bool:
@@ -181,11 +228,12 @@ class HealthcheckPoller:
         except (urllib.error.URLError, urllib.error.HTTPError, OSError, TimeoutError):
             return False
 
-    def _try_http(self, project_name: str) -> bool:
+    def _try_http(self, project_name: str, *, budget: int | None = None) -> bool:
         """Try HTTP GET /health for a project.
 
         Args:
             project_name: Project/container name for host resolution.
+            budget: Optional per-attempt wall-time cap (REF-0103); None → self.timeout.
 
         Returns:
             True if HTTP /health returns 200.
@@ -196,17 +244,20 @@ class HealthcheckPoller:
 
         # T2.8 (perf): timeout — общий бюджет ОДНОЙ HTTP-проверки на ВСЕ URL (не per-URL).
         # До фикса worst-case = 6 URL × 60s = 360s на attempt ≫ окно поллинга (max_retries×interval = 60s).
-        # per-URL = max(MIN_PER_URL_TIMEOUT, timeout // len(urls)) — суммарный HTTP-attempt укладывается
+        # REF-0103: check-budget дополнительно ограничен остатком общего deadline поллера.
+        check_budget = min(self.timeout, budget) if budget is not None else self.timeout
+        # per-URL = max(MIN_PER_URL_TIMEOUT, budget // len(urls)) — суммарный HTTP-attempt укладывается
         # в бюджет проверки (семантика «timeout per check» из MODULE_CONTRACT сохранена).
-        per_url_timeout = max(MIN_PER_URL_TIMEOUT, self.timeout // len(urls))
+        per_url_timeout = max(MIN_PER_URL_TIMEOUT, check_budget // len(urls))
         return any(self._try_url(url, timeout=per_url_timeout) for url in urls)
 
-    def _try_docker(self, project_name: str, _project_dir: str) -> HealthcheckResult:
+    def _try_docker(self, project_name: str, _project_dir: str, *, budget: int | None = None) -> HealthcheckResult:
         """Try Docker health via shared healthcheck_poll (sole path — DevPlan 116 B5 T7.3).
 
         Args:
             project_name: Project/container name.
             project_dir: Project directory (unused — shared docker-path is global via docker ps).
+            budget: Optional per-attempt wall-time cap (REF-0103); None → self.timeout.
 
         Returns:
             HealthcheckResult with Docker health status.
@@ -215,7 +266,8 @@ class HealthcheckPoller:
         # HTTP-путь (GET /health) остаётся в poller — это отдельная HTTP-политика, не docker-критерий.
         from core.internal.shared.docker_compose import healthcheck_poll as _shared_healthcheck_poll
 
-        status = _shared_healthcheck_poll(project_name, timeout=self.timeout, interval=self.interval)
+        poll_window = min(self.timeout, budget) if budget is not None else self.timeout
+        status = _shared_healthcheck_poll(project_name, timeout=poll_window, interval=self.interval)
         if status == "healthy":
             logger.info("[IMP:9][HealthcheckPoller][docker] %s healthy (inspect criterion)", project_name)
             return HealthcheckResult(
@@ -229,7 +281,7 @@ class HealthcheckPoller:
         logger.info(
             "[IMP:8][HealthcheckPoller][docker] %s not healthy after %ds poll window",
             project_name,
-            self.timeout,
+            poll_window,
         )
         return HealthcheckResult(
             status="timeout",

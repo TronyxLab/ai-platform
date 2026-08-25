@@ -1,6 +1,6 @@
 """
 # GREP_SUMMARY: check-suite, fingerprint, cache, tree-files, sha256, git-ls-files, check-cache.json, atomic-write
-# STRUCTURE: ▶ tree_files ┌git ls-files -c -o --exclude-standard┐ → ○ compute_fingerprint ┌sha256(extra + files)┐ → ⎋ fp → ◇ cache_path ┌git rev-parse --git-dir┐ → ○ load_cache / save_cache ┌tmp + os.replace┐ → ⎋ dict|None
+# STRUCTURE: ▶ tree_files ┌git ls-files -c -o --exclude-standard┐ → ○ _fingerprint_salt ┌toolchain-digest + env-vars┐ → ○ compute_fingerprint ┌sha256(salt + extra + files)┐ → ⎋ fp → ◇ cache_path ┌git rev-parse --git-dir┐ → ○ load_cache / save_cache ┌atomic_write_json (unique tmp)┐ → ⎋ dict|None
 # region MODULE_CONTRACT
 ## @purpose  Fingerprint-кэш пакета check_suite (DevPlan 170 W3 — извлечено из монолита
 ##           core/internal/check_suite.py): fingerprint всего дерева (git ls-files +
@@ -10,15 +10,20 @@
 ##           __init__.py (re-export FINGERPRINT_EXCLUDE_PARTS/RE, compute_fingerprint).
 ## @invariants
 ##   - Байт-идентичное дерево → тот же fingerprint; любая правка/untracked-файл → miss
+##   - REF-0107 salt: fingerprint = sha256(toolchain-digest + 3 env-var + дерево) — pip-upgrade
+##     или смена TEST_NO_XDIST/REQUIRE_HONESTY_MODE/CHECK_XDIST_MAX_WORKERS → miss (старый
+##     зелёный отчёт не реплеится против нового тулчейна)
 ##   - Excludes: FINGERPRINT_EXCLUDE_PARTS (.venv/__pycache__/.pytest_cache/node_modules/.git)
 ##     + FINGERPRINT_EXCLUDE_RE (tests/report*.xml, .test_counter.json[.lock])
 ##   - None = git недоступен (кэш off); cache_path: $(git rev-parse --git-dir)/check-cache.json
-##   - save_cache атомарно: tmp + os.replace (конкурентные executor'ы не портят файл)
+##   - save_cache атомарно: atomic_write_json (уникальный tmp + fsync + os.replace) —
+##     конкурентные make check не рвут кэш-файл
 ##   - monkeypatch-контракт: tree_files резолвится через пакетную атрибуцию (check_suite.tree_files)
 ## @rationale Чистый Python вместо xargs sha256sum (TRAP[DECISION] ниже): один git subprocess
 ##            + hashlib; формат-контракт DevPlan §3.4 сохранён.
 ## @changes 170 W3 — extracted from check_suite.py (monolith 1666→package); 170 private-imports:
 ##           приватные имена переименованы в публичные (U-07)
+## @changes 2026-08-25 | REF-0107 — salt (toolchain-digest + env) + save_cache → atomic_write_json
 # endregion MODULE_CONTRACT
 """
 
@@ -27,13 +32,17 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 import subprocess
+import sys
+from importlib import metadata as _metadata
 from pathlib import Path
 from typing import TypedDict, cast
 
 from core.internal import check_suite as cs
 from core.internal.check_suite.report import CheckPayload
+from core.internal.shared.atomic_writer import atomic_write_json
 from core.internal.shared.subprocess_io import run_subprocess_streaming
 
 logger = logging.getLogger(__name__)
@@ -66,6 +75,47 @@ _CACHE_FILENAME = "check-cache.json"
 # ·   (тот же байт-набор дерева, тот же fingerprint-контракт).
 # · Rev: если дерево вырастет >100k файлов и хеширование станет бутылочным горлышком → xargs -P.
 _FINGERPRINT_EXTRA_FILES = ("core/check-suite.yaml", ".pre-commit-config.yaml", "pyproject.toml")
+
+# REF-0107: env-переменные, меняющие СЕМАНТИКУ исполнения проверок (не только вывод).
+# Изменение любой → replay старого зелёного отчёта запрещён (fingerprint = miss).
+_SALT_ENV_VARS = ("TEST_NO_XDIST", "REQUIRE_HONESTY_MODE", "CHECK_XDIST_MAX_WORKERS")
+# Toolchain-пакеты, чья версия влияет на вердикты проверок (pip-upgrade инвалидирует кэш).
+_SALT_TOOLCHAIN_PKGS = ("pytest", "pytest-xdist", "ruff")
+
+
+# region FUNC_fingerprint_salt
+## @purpose  Salt fingerprint'а (REF-0107): toolchain-digest (python + версии pytest/xdist/ruff)
+##           + 3 семантических env-var. Без salt pip-upgrade/смена honesty-mode реплеили
+##           старые зелёные отчёты от дерева, которое больше не проверяется тем же тулчейном.
+## @io       ⇥ env: Mapping[str, str] | None (None = os.environ; DI для тестов),
+##             versions: dict[str, str] | None (None = importlib.metadata; DI для тестов)
+##           ⎋ str (hex-digest)
+## @complexity O(P) где P = len(_SALT_TOOLCHAIN_PKGS)
+## @invariants
+##   - Отсутствующий пакет/env → маркер "absent" (детерминирован, не бросает)
+def _fingerprint_salt(
+    env: dict[str, str] | None = None,
+    versions: dict[str, str] | None = None,
+) -> str:
+    """Digest of toolchain versions + semantic check-env vars (cache-invalidation salt)."""
+    source_env: dict[str, str] = dict(os.environ) if env is None else env
+    hasher = hashlib.sha256()
+    hasher.update(sys.version.encode("utf-8"))
+    for pkg in _SALT_TOOLCHAIN_PKGS:
+        if versions is not None:
+            ver: str = versions.get(pkg, "absent")
+        else:
+            try:
+                ver = _metadata.version(pkg)
+            except _metadata.PackageNotFoundError:
+                ver = "absent"
+        hasher.update(f"{pkg}={ver}\0".encode())
+    for var in _SALT_ENV_VARS:
+        hasher.update(f"{var}={source_env.get(var, '')}\0".encode())
+    return hasher.hexdigest()
+
+
+# endregion FUNC_fingerprint_salt
 
 
 # region FUNC_tree_files
@@ -119,6 +169,10 @@ def compute_fingerprint(root: Path) -> str | None:
         return None
 
     hasher = hashlib.sha256()
+    # REF-0107: salt (toolchain-digest + 3 env-var) — ПЕРВЫЙ блок хеша. Дерево, проверяемое
+    # другим тулчейном/env, обязано давать другой fingerprint (replay старого green = miss).
+    hasher.update(_fingerprint_salt().encode("utf-8"))
+    hasher.update(b"\0")
     for rel in _FINGERPRINT_EXTRA_FILES:
         p = root / rel
         if p.is_file():
@@ -190,19 +244,18 @@ def load_cache(path: Path | None) -> CheckCacheDict | None:
 
 
 # region FUNC_save_cache
-## @purpose  Запись кэш-JSON (атомарно: tmp + os.replace — конкурентные executor'ы не портят файл).
+## @purpose  Запись кэш-JSON атомарно через shared/atomic_writer.atomic_write_json
+##           (REF-0107: уникальный tmp-файл NamedTemporaryFile вместо фиксированного
+##           .json.tmp — два параллельных make check больше не рвут кэш взаимным replace;
+##           fsync перед rename — torn-file невозможен).
 ## @io       ⇥ path: Path | None, data: dict → None
 ## @complexity O(1)
 def save_cache(path: Path | None, data: CheckCacheDict) -> None:
-    """Write cache JSON atomically (tmp + os.replace)."""
+    """Write cache JSON atomically (unique tmp via atomic_writer + os.replace)."""
     if path is None:
         return
     try:
-        tmp = path.with_suffix(".json.tmp")
-        with Path(tmp).open("w", encoding="utf-8") as f:
-            json.dump(data, f)
-            f.write("\n")
-        Path(tmp).replace(path)
+        atomic_write_json(path, dict(data))
     except OSError as exc:
         logger.warning("[IMP:7][cache][write] cache write failed: %s", exc)
 

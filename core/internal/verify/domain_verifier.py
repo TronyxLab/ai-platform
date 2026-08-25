@@ -47,10 +47,14 @@ from typing import cast
 # B3: канонический platform base — shared/deploy_paths (литерал /opt/platform удалён)
 from core.internal.shared.deploy_paths import platform_remote_base
 
+# REF-0107: Config*Error — ТОЛЬКО канонический импорт-путь shared.exceptions (детектор
+# exception-import-path; re-export node_yaml создаёт второй путь к тем же классам).
+from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError
+
 # W1-A1 (план 170): STATUS_PAGE_TIMEOUT=30 (дубль SoT) → SSH_CONNECT_TIMEOUT (30) — каноническое
 # 30s окно HTTP/ssh-проверок; значение идентично, источник значений — единый реестр timeouts.py.
 from core.internal.shared.http_probe import curl_http_code
-from core.internal.shared.node_yaml import ConfigNotFoundError, ConfigParseError, NodeYaml
+from core.internal.shared.node_yaml import NodeYaml
 from core.internal.shared.timeouts import SSH_CONNECT_TIMEOUT
 
 logger = logging.getLogger(__name__)

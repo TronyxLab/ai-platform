@@ -206,9 +206,9 @@ Python (`core/internal/practices/`), НЕ копируются в проект.
 |--------|-------|------------|
 | `postgres` | `pgbouncer:6432` (`PLATFORM_POSTGRES_DSN`) | Единый PostgreSQL 16 + пулер соединений. Проект подключается своей ролью `${project}_user` к своей БД `needs.database` (роль/БД/GRANT создаются хук-ом postgres при деплое) |
 | `redis` | `redis:6379` (`PLATFORM_REDIS_URL`) | Общий кэш/очереди |
-| `nginx` | `nginx-proxy:443` (`PLATFORM_NGINX_URL`) | Ingress + TLS (единственная точка публикации) |
+| `nginx` | `nginx:443` (`PLATFORM_NGINX_URL`) | Ingress + TLS (единственная точка публикации) |
 | `litellm` | `litellm:4000` (`PLATFORM_LITELLM_URL`) | LLM-прокси (единый ключ через платформу) |
-| `langfuse` | `langfuse:3001` (`PLATFORM_LANGFUSE_URL`) | Трейсинг/наблюдаемость LLM |
+| `langfuse` | `langfuse:3000` (`PLATFORM_LANGFUSE_URL`; host-facade 3001) | Трейсинг/наблюдаемость LLM |
 | `minio` | `minio:9000` (`PLATFORM_MINIO_URL`) | S3-совместимое хранилище |
 | `clickhouse` | `clickhouse:8123` (`PLATFORM_CLICKHOUSE_URL/DSN`) | Аналитика/логи |
 

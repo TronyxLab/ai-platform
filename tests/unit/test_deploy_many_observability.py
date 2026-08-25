@@ -185,3 +185,49 @@ def test_deploy_many_non_json_stdout(monkeypatch, caplog: pytest.LogCaptureFixtu
 
 
 # endregion FUNC_test_deploy_many_non_json_stdout
+
+
+# region FUNC_test_deploy_many_timeout_marks_all_failed
+## @purpose — TimeoutExpired/OSError → (0, [ВСЕ запрошенные]) — незавершённые = failed.
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · REF-0103 · таймаут deploy-many ≠ «0 фейлов»
+# · Scenario: subprocess.run бросает TimeoutExpired (DEPLOY_TIMEOUT=900) → старый код
+# ·   возвращал (0, []) — нулевой failed маскировал убитый deploy-many как успех (exit 0).
+# ·   Новый код обязан пометить ВСЕ недошедшие проекты failed.
+# · Remove if: _deploy_orchestrator перестаёт честно маркировать незавершённые
+def test_deploy_many_timeout_marks_all_failed(caplog: pytest.LogCaptureFixture) -> None:
+    """TimeoutExpired → (0, ['mod1', 'mod2']) — все незавершённые = failed, не (0, [])."""
+    import subprocess
+
+    caplog.set_level(logging.INFO)
+
+    def _timeout_run(cmd, *args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=cmd, timeout=900)
+
+    deployed, failed = mod._deploy_orchestrator(["mod1", "mod2"], run_cmd=_timeout_run)
+
+    assert deployed == 0
+    assert failed == ["mod1", "mod2"], f"REF-0103 FAIL: таймаут должен помечать ВСЕ незавершённые failed, got {failed}"
+    warn_msgs = [r.message for r in caplog.records if "incomplete" in r.message]
+    assert warn_msgs, "Ожидался WARN о неполном deploy-many (наблюдаемость REF-0103)"
+    logger.critical("[IMP:9][test][REF-0103] timeout → all-failed: %s", failed)
+
+
+# 🧪 TRAP[TEST] · Regression · REF-0103 · OSError (канал умер) → паритет с таймаутом
+# · Scenario: subprocess.run бросает OSError → все незавершённые = failed
+# · Remove if: error-handling _deploy_orchestrator расходится для Timeout/OSError
+def test_deploy_many_oserror_marks_all_failed(caplog: pytest.LogCaptureFixture) -> None:
+    """OSError → (0, ['mod1']) — тот же честный контракт, что и для таймаута."""
+    caplog.set_level(logging.INFO)
+
+    def _oserror_run(cmd, *args, **kwargs):
+        msg = "spawn failed"
+        raise OSError(msg)
+
+    deployed, failed = mod._deploy_orchestrator(["mod1"], run_cmd=_oserror_run)
+
+    assert deployed == 0
+    assert failed == ["mod1"]
+    logger.critical("[IMP:9][test][REF-0103] OSError → all-failed: %s", failed)
+
+
+# endregion FUNC_test_deploy_many_timeout_marks_all_failed

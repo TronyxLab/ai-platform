@@ -16,6 +16,8 @@ services:
     networks: !override  # DevPlan 017 W2.3 + REF-0010 — test-shared-db-net (backup path) + test-observability-net (metrics scrape)
       - test-shared-db-net
       - test-observability-net
+      # REF-0017: зеркалирование аддитивного hermes-agent-net attach из base.yml
+      - test-hermes-agent-net
     ports: !override []  # ⚠️ TRAP[BUG] · 2026-07-18 · HIGH · compose merge склеивает ports base+test → тестовый minio биндит 9000/9001 (F-7) · Fix: !override — minio internal-only в тестах
 
   minio-createbuckets:
@@ -27,4 +29,7 @@ networks:
   test-shared-db-net:
     external: true
   test-observability-net:
+    external: true
+  # REF-0017: зеркалирование base.yml attach (test-isolation канон DevPlan 017 Option B)
+  test-hermes-agent-net:
     external: true

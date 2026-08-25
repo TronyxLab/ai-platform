@@ -52,6 +52,10 @@ from core.internal.llm.policy_schema import DeploymentList, LLMPolicy
 from core.internal.shared.exceptions import ConfigValidationError
 from core.internal.shared.llm_paths import litellm_template_path  # C6: единый путь shared/llm_paths
 
+# REF-0103 (FAIL-0304): request_timeout — из единого реестра таймаутов; отсутствие ключа
+# оставляло медленный/зависший upstream-провайдер держать соединение бессрочно.
+from core.internal.shared.timeouts import LITELLM_REQUEST_TIMEOUT
+
 logger = logging.getLogger(__name__)
 
 # ── Template resolution ──────────────────────────────────────────────────────
@@ -275,6 +279,7 @@ def render_litellm_config(
     # Step 3: Build template data
     settings = {
         "num_retries": 3,
+        "request_timeout": LITELLM_REQUEST_TIMEOUT,  # REF-0103 (FAIL-0304): 120s на upstream-запрос
         "drop_params": True,
         "success_callback": ["prometheus", "langfuse"],
         "failure_callback": ["prometheus"],

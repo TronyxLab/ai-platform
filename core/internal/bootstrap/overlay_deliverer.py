@@ -35,7 +35,11 @@ from core.internal.bootstrap.core_deliverer import CoreDeliveryError, deliver_co
 # DevPlan 118 C7: /opt/node-configs — единый резолвер shared/deploy_paths.node_configs_remote().
 # DevPlan 119 B3: /opt/platform — единый резолвер shared/deploy_paths.platform_remote_base().
 from core.internal.shared.deploy_paths import node_configs_remote, platform_remote_base
-from core.internal.shared.node_yaml import ConfigNotFoundError, ConfigParseError, ConfigValidationError, NodeYaml
+
+# REF-0107: Config*Error — ТОЛЬКО канонический импорт-путь shared.exceptions (детектор
+# exception-import-path; re-export node_yaml создаёт второй путь к тем же классам).
+from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError, ConfigValidationError
+from core.internal.shared.node_yaml import NodeYaml
 
 # DevPlan 116 B5 T2 (D1): SSH_OPTS — единый SoT shared/ssh_opts.py (дублирующие копии устранены)
 from core.internal.shared.ssh_opts import SSH_OPTS, build_rsync_ssh_opts

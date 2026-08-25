@@ -80,7 +80,7 @@ provides:
     networks:
     - shared-cache-net
   nginx:
-    host: nginx-proxy
+    host: nginx
     port: 443
     url_template: https://${DOMAIN}
     networks:
@@ -94,7 +94,7 @@ provides:
   langfuse:
     host: langfuse
     port: 3001
-    url_template: http://langfuse:3001
+    url_template: http://langfuse:3000
     networks:
     - hermes-agent-net
   minio:

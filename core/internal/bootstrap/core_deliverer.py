@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: core-deliverer deliver_core deliver_platform_env deliver_makefile deliver_node_configs deliver_secrets ensure_remote_dirs rsync ssh mkdir-p core-channel strangler scp-to-server DI runner-param W4d
-# STRUCTURE: ▶ ┌resolve_remote_base/env chain┐ → ⚡ ensure_remote_dirs(ssh mkdir -p) → ⚡ Phase 1/4 deliver_core(rsync core/) → ⚡ 1b deliver_platform_env → ⚡ 1c deliver_makefile → ⚡ Phase 2/4 deliver_node_configs → ◇ secrets dir? → ⚡ Phase 3/4 deliver_secrets → ⎋ exit 0|1
+# GREP_SUMMARY: core-deliverer deliver_core deliver_ci deliver_platform_env deliver_makefile deliver_node_configs deliver_secrets ensure_remote_dirs rsync ssh mkdir-p core-channel strangler scp-to-server DI runner-param W4d
+# STRUCTURE: ▶ ┌resolve_remote_base/env chain┐ → ⚡ ensure_remote_dirs(ssh mkdir -p) → ⚡ Phase 1/4 deliver_core(rsync core/) → ⚡ 1b deliver_platform_env → ⚡ 1c deliver_makefile → ⚡ Phase 2/4 deliver_node_configs → ◇ secrets dir? → ⚡ Phase 3/4 deliver_secrets | ▶ deliver_ci(CI-канал, REF-0112: mkdir+guarded phases, один owner excludes) → ⎋ exit 0|1
 # region MODULE_CONTRACT
 ## @purpose  Core delivery channel (push-based SCP/rsync, NO git) — Python-порт scp-deliver.sh
 ##           scp_to_server(): ensure_remote_dirs (ssh mkdir -p) + 5 rsync фаз (core/,
 ##           platform-env.yaml, Makefile, node-configs/{node}/, secrets/). Standalone — НЕ
 ##           импортирует overlay_deliverer (разрыв цикла импорта overlay→core, DevPlan 108 D2).
 ## @scope    Вызывается: (1) scp-deliver.sh фасад — CLI `deliver` (bootstrap.sh путь, AC3);
-##           (2) overlay_deliverer.sync_core_to_vps() — делегирование deliver_core() (AC4).
+##           (2) overlay_deliverer.sync_core_to_vps() — делегирование deliver_core() (AC4);
+##           (3) CI .github/workflows/core-deploy.yml — CLI `ci-deliver` (REF-0112: модульный
+##           вызов вместо inline-rsync; единый owner exclude-set'ов для обоих каналов).
 ##           Канал Core per root AGENTS.md «Три канала доставки кода на VPS».
 ## @invariants
 ##   - SSH_OPTS — единый SoT из shared/ssh_opts.py (DevPlan 116 B5 T2, D1) — НЕ mirror lib/ssh.sh
 ##   - RSYNC_EXCLUDES_CORE 6 паттернов / _NODE 3 / _SECRETS 1 — точное соответствие таблице AC7
-##     (+ docker-compose.test.yml, DevPlan 162 W10-2)
+##     (+ docker-compose.test.yml, DevPlan 162 W10-2); REF-0112: ЕДИНСТВЕННЫЙ владелец exclude-set'ов
+##     обоих каналов (CI не дублирует rsync/exclude-логику shell'ом)
 ##   - Fail-fast: первая упавшая фаза → CoreDeliveryError → CLI exit 1 (эквивалент shell || return 1)
 ##   - Timeouts: mkdir=30 (parity ssh_exec scp-deliver.sh:142), rsync=600 (deploy-дефолт lib/ssh.sh:119)
 ##   - DRY_RUN: печать команд в stderr (IMP:8), 0 subprocess-вызовов, успех
@@ -33,6 +36,8 @@
 ##           2026-08-13 | DevPlan 160 W4d — +runner: CommandRunner | None (DI), cli(argv, runner)
 ##           2026-08-24 | REF-0007 — deliver_fallback: AGE-ключ через ssh-stdin (`bash -s`),
 ##                      redact_secrets() для error-логов; +_run_cmd_stdin
+##           2026-08-25 | REF-0112 (meta-refactoring S-пакет) — +deliver_ci()/CLI `ci-deliver`:
+##                      CI core-deploy доставляет файлы модульным вызовом (один owner exclude-set)
 # endregion MODULE_CONTRACT
 
 import argparse
@@ -596,6 +601,110 @@ def deliver_secrets(
 # endregion FUNC_deliver_secrets
 
 
+# region FUNC_deliver_ci
+## @purpose  REF-0112: CI core-deploy step «Rsync core + config to VPS» — МОДУЛЬНЫЙ вызов вместо
+##           inline-rsync в workflow. Единый владелец exclude-set'ов — константы этого модуля
+##           (RSYNC_EXCLUDES_CORE/NODE): раньше CI дублировал exclude-логику shell'ом с ДРУГИМ
+##           набором (.git/__pycache__/*.pyc без .pytest_cache/docker-compose.test.yml) →
+##           чередование каналов переписывало прод-дерево (13 docker-compose.test.yml +
+##           .pytest_cache попадали в /opt/platform/core основным каналом).
+##           Фазы (parity с прежним workflow-шагом): ssh mkdir {base}/core+scripts → guard'ed
+##           rsync --delete core/ (6 excludes) → platform-env.yaml + Makefile + makefiles/
+##           (combined-guard) → scripts/ → node-configs/ (conditional, БЕЗ --delete — орг-репо).
+## @io  input: host, core_dir, remote_user, base, dry_run, runner; output: bool True on success
+## @complexity  O(F_total) — суммарно по фазам; guard'ы источников — TRAP[BUG] DevPlan 125 T4 parity
+## @invariants
+##   - Exclude-set'ы ТОЛЬКО из констант модуля (один owner — REF-0112); workflow НЕ содержит rsync
+##   - core/ пуст/отсутствует на раннере → --delete-rsync ПРОПУЩЕН (guard против уноса прод-дерева)
+##   - node-configs синк БЕЗ --delete (инвариант core-deliver: орг-репозиторий не перетирается)
+##   - provision/node-update НЕ входят (отдельные workflow-шаги) — это файловая фаза канала Core
+def deliver_ci(
+    host: str,
+    core_dir: str,
+    remote_user: str = "root",
+    base: str | None = None,
+    dry_run: bool = False,
+    runner: CommandRunner | None = None,
+) -> bool:
+    """CI core-deploy delivery: mkdir + guarded rsync phases with module-owned exclude-sets."""
+    base = base or resolve_remote_base()
+    ncb = resolve_node_configs_base()
+    repo_root = pathlib.Path(os.path.normpath(pathlib.Path(core_dir) / ".."))
+    logger.info(
+        "[IMP:9][deliver_ci][start] CI channel file-delivery → %s:%s (REF-0112 single-owner excludes)", host, base
+    )
+
+    # ── mkdir (parity CI: до --delete-rsync; без node/secrets-директоров ensure_remote_dirs —
+    # это update-путь, полный bootstrap делает deliver_all) ──
+    mkdir_cmd = ["ssh", *SSH_OPTS, f"{remote_user}@{host}", f"mkdir -p {base}/core {base}/scripts"]
+    if dry_run:
+        logger.info("[IMP:8][deliver_ci][dry-run] DRY-RUN: %s", " ".join(mkdir_cmd))
+    else:
+        r = _run_cmd(mkdir_cmd, FILE_OP_TIMEOUT, runner)
+        if r.returncode != 0:
+            msg = f"ssh mkdir -p failed for {host} (exit={r.returncode}): {r.stderr.strip()}"
+            raise CoreDeliveryError(msg)
+
+    # ── Phase 1: core/ с --delete + guard непустого источника (TRAP[BUG] DevPlan 125 T4 parity) ──
+    core_src = pathlib.Path(core_dir)
+    if core_src.is_dir() and any(core_src.iterdir()):
+        deliver_core(host, core_dir, remote_user, base, dry_run, runner)
+    else:
+        logger.info(
+            "[IMP:8][deliver_ci][skip] core/ отсутствует/пуст на раннере — rsync --delete ПРОПУЩЕН "
+            "(предотвращение уноса %s)",
+            f"{base}/core",
+        )
+
+    # ── Phase 1b-1e: root-level config (combined-guard parity с прежним workflow-шагом) ──
+    if (
+        (repo_root / "platform-env.yaml").is_file()
+        and (repo_root / "Makefile").is_file()
+        and (repo_root / "makefiles").is_dir()
+    ):
+        deliver_platform_env(host, core_dir, remote_user, base, dry_run, runner)
+        deliver_makefile(host, core_dir, remote_user, base, dry_run, runner)
+        deliver_makefiles(host, core_dir, remote_user, base, dry_run, runner)
+    else:
+        logger.info("[IMP:8][deliver_ci][skip] platform-env.yaml/Makefile/makefiles отсутствуют на раннере — пропуск")
+
+    # ── Phase 1d: scripts/ (собственный is_dir-guard внутри deliver_scripts) ──
+    deliver_scripts(host, core_dir, remote_user, base, dry_run, runner)
+
+    # ── Phase 2 (conditional): node-configs целиком, БЕЗ --delete (орг-репозиторий gitignored —
+    # на раннере обычно отсутствует; доставляется bootstrap'ом оператора) ──
+    nc_src = repo_root / "node-configs"
+    if nc_src.is_dir():
+        cmd = [
+            "rsync",
+            "-avz",
+            "-e",
+            build_rsync_ssh_opts(),
+            *RSYNC_EXCLUDES_NODE,
+            f"{nc_src}/",
+            f"{remote_user}@{host}:{ncb}/",
+        ]
+        logger.info("[IMP:9][deliver_ci][node-configs] Rsyncing node-configs/ → %s:%s/", host, ncb)
+        if dry_run:
+            logger.info("[IMP:8][deliver_ci][dry-run] DRY-RUN: %s", " ".join(cmd))
+        else:
+            r = _run_cmd(cmd, RSYNC_TIMEOUT, runner)
+            if r.returncode != 0:
+                msg = f"rsync node-configs/ failed for {host} (exit={r.returncode}): {r.stderr.strip()}"
+                raise CoreDeliveryError(msg)
+    else:
+        logger.info(
+            "[IMP:8][deliver_ci][skip] node-configs/ отсутствует (gitignored, орг-репозиторий) — "
+            "пропуск (доставлен bootstrap'ом)"
+        )
+
+    logger.info("[IMP:9][deliver_ci][done] CI file-delivery complete")
+    return True
+
+
+# endregion FUNC_deliver_ci
+
+
 # region FUNC_deliver_all
 ## @purpose  Оркестрация Core-доставки (полный цикл bootstrap): ensure_remote_dirs → 5 rsync-фаз
 ##           (1/4 core, 1b platform-env, 1c Makefile, 2 node-configs, 3 secrets).
@@ -795,6 +904,18 @@ def cli(argv: list[str] | None = None, runner: CommandRunner | None = None) -> i
     )
     fp.add_argument("--remote-user", default="root")
     fp.add_argument("--dry-run", action="store_true")
+    cp = sp.add_parser(
+        "ci-deliver",
+        help=(
+            "CI core-deploy file-delivery (REF-0112): mkdir + guarded rsync phases "
+            "(core/, platform-env, Makefile, makefiles/, scripts/, node-configs conditional) — "
+            "single-owner exclude-sets; provision/node-update остаются workflow-шагами"
+        ),
+    )
+    cp.add_argument("--host", required=True)
+    cp.add_argument("--core-dir", required=True)
+    cp.add_argument("--remote-user", default="root")
+    cp.add_argument("--dry-run", action="store_true")
 
     class _CliArgs(argparse.Namespace):
         """Типизированный argparse-Namespace (W11-G3)."""
@@ -816,6 +937,8 @@ def cli(argv: list[str] | None = None, runner: CommandRunner | None = None) -> i
             deliver_all(
                 args.host, args.node, args.node_configs_dir, args.core_dir, args.remote_user, args.dry_run, runner
             )
+        elif args.command == "ci-deliver":
+            deliver_ci(args.host, args.core_dir, args.remote_user, None, args.dry_run, runner)
         elif not deliver_fallback(
             args.host, args.node, args.core_dir, args.age_secret_key, args.remote_user, args.dry_run, runner
         ):

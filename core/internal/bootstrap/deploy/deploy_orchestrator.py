@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: deploy-orchestrator, routing, severity, parallel, sequential, orchestrator-cli, import-native, deploy-modules
-# STRUCTURE: ▶ orchestrate [preflight → parse → route → postflight → severity] → _deploy_parallel [topo_sort → pre_pull → batch_check_env → deploy-many|groups → system → hc_marker] | _deploy_sequential [for-loop] → _aggregate_severity → _compute_exit_code → ⎋ {0,1,2}
+# GREP_SUMMARY: deploy-orchestrator, routing, severity, parallel, sequential, orchestrator-cli, import-native, deploy-modules, kahn, linearize
+# STRUCTURE: ▶ orchestrate [preflight → parse → route → postflight → severity] → _deploy_parallel [linearize → pre_pull → batch_check_env → deploy-many|groups → system → hc_marker] | _deploy_sequential [linearize(kahn) → for-loop ordered + abort-on-critical] → _aggregate_severity → _compute_exit_code → ⎋ {0,1,2,4=config}
 # region MODULE_CONTRACT
 ## @purpose  Routing + severity orchestrator for module deployment (DevPlan 100). Extracts the
 ##           PARALLEL/ORCHESTRATOR/SEQUENTIAL routing decision and severity aggregation from
@@ -18,8 +18,11 @@
 ##   - NO subprocess for business logic — existing Python modules are IMPORTED (D1)
 ##   - Subprocess allowed ONLY for: orchestrator_cli deploy-many (separate CLI layer, D1 exception)
 ##     and invoke_module_interface (shell function from core/lib/module-interface.sh, D4)
-##   - exit code contract: CRIT>0 → 2, WARN>0 → 0 (logged), no failures → 0 (shell parity)
-##   - Deploy failures are non-fatal — orchestrator continues and aggregates severity
+##   - exit code contract: CRIT>0 → 2, WARN>0 → 0 (logged), no failures → 0 (shell parity);
+##     ConfigValidationError (топо-цикл/неизвестная зависимость, REF-0110) → exit 4 через main()
+##   - Deploy failures are non-fatal — orchestrator continues and aggregates severity.
+##     ИСКЛЮЧЕНИЕ (REF-0110): critical-failure модуля прерывает деплой ОСТАЛЬНЫХ
+##     (dependents не стартуют против отсутствующих зависимостей); невыполненные — в failed
 ##   - Depends on PYTHONPATH=<project root> from the shell facade; also self-bootstraps sys.path
 ##     (4 levels up) for direct-script invocation (TRAP[BUG] pattern from sudoers_generator.py)
 ## @rationale D1: Python-import faster than subprocess (no fork+exec per call), testable via
@@ -30,6 +33,9 @@
 ## @changes   2026-08-03 · DevPlan 123 T8 — контракт sequential/parallel: _deploy_sequential прокидывает
 ##            secrets_env_file/platform_root в deploy_docker_module (паритет с parallel_runner);
 ##            docstring-инварианты приведены к фактическому поведению (overlay передаётся, не «NOT passed»)
+## @changes   2026-08-25 · REF-0110 (meta-refactoring S-пакет) — kahn-линеаризация и для sequential
+##            (порядок node.yaml больше не авторитетен); topo-failure → fail-fast ConfigValidationError
+##            (без деградации в unordered fallback); critical-failure → abort remaining
 ## @modulemap
 ##   ModuleDeployResult [W:1] — dataclass: deployed, failed, crit_count, warn_count, exit_code
 ##   ModuleLists [W:1] — dataclass: all_names, enabled_names, overlays
@@ -38,9 +44,11 @@
 ##   _preflight [W:3] — context_overlay.ensure_context_repo + spool_validator.verify_spool_dirs + status-metrics + charset validation
 ##   _parse_modules [W:2] — secrets_validator.parse_modules_from_node_yaml + enabled/filter + overlay resolution
 ##   _route_deploy [W:3] — PARALLEL → _deploy_parallel, else → _deploy_sequential
-##   _deploy_parallel [W:5] — topo_sort → pre_pull → batch_check_env → deploy-many | groups → system → hc_marker
+##   _deploy_parallel [W:5] — linearize (kahn) → pre_pull → batch_check_env → deploy-many | groups → system → hc_marker
 ##   _deploy_orchestrator [W:2] — subprocess orchestrator_cli deploy-many --scp (docker modules only, R4)
-##   _deploy_sequential [W:4] — for-loop: check_env → detect_type → deploy_docker_module | invoke_module_interface
+##   _linearize_deploy_order [W:3] — kahn-линеаризация enabled по depends_on (REF-0110); ConfigValidationError на цикл/неизвестную зависимость
+##   _deploy_docker_groups [W:3] — sequential topo-группы + abort remaining после critical-failure (REF-0110)
+##   _deploy_sequential [W:4] — kahn-ordered for-loop: check_env → detect_type → deploy_docker_module | invoke_module_interface; abort remaining после critical-failure
 ##   _deploy_system_modules [W:2] — sequential system deploy via invoke_module_interface
 ##   _postflight [W:3] — sudoers batch + orphans detect + litellm config render
 ##   _aggregate_severity [W:2] — enriched modules dict lookup, fallback per-module metadata call
@@ -114,14 +122,17 @@ from core.internal.bootstrap.deploy.orchestrator_metrics import (
 from core.internal.llm import config_renderer
 from core.internal.shared import deploy_paths  # 142 W2: status-metrics.json → persistent run
 
+# DevPlan 116 B4 T1 (U-39): deploy-политика best-effort — контракт, а не комментарии.
+# DEPLOY_BEST_EFFORT=True: failing step → WARN, деплой продолжается; WARN→exit 0; HC_DONE_MARKER всегда.
+# REF-0110: topo-failure (цикл/неизвестная зависимость depends_on) — ИСКЛЮЧЕНИЕ из best-effort:
+# ConfigValidationError пробрасывается до первого деплоя (fail-fast), main() маппит в exit 4.
+from core.internal.shared.exceptions import ConfigValidationError, PlatformError
+
 # DevPlan 118 C6: единый путь litellm-config.yml — shared/llm_paths (литерал удалён).
 from core.internal.shared.llm_paths import litellm_config_path
 
 # DevPlan 118 C5: единая bash-обёртка invoke_module_interface — shared/module_interface.py (вход для B8).
 from core.internal.shared.module_interface import invoke as module_interface_invoke
-
-# DevPlan 116 B4 T1 (U-39): deploy-политика best-effort — контракт, а не комментарии.
-# DEPLOY_BEST_EFFORT=True: failing step → WARN, деплой продолжается; WARN→exit 0; HC_DONE_MARKER всегда.
 from core.internal.shared.node_yaml import NodeYaml
 
 # DevPlan 010 T1.1: placement-авторитетный резолв модулей ноды (multi-node)
@@ -145,7 +156,8 @@ from core.internal.shared.platform_ports import (
 )
 
 # DevPlan 116 B5 T1: таймауты — единый реестр shared/timeouts.py (U-11, гейт timeout_literals)
-from core.internal.shared.timeouts import COMPOSE_UP_TIMEOUT, DEPLOY_TIMEOUT
+# REF-0103: +HEALTHCHECK_CMD_TIMEOUT — liveness-инвок модулей (60s) вместо полного COMPOSE_UP_TIMEOUT
+from core.internal.shared.timeouts import COMPOSE_UP_TIMEOUT, DEPLOY_TIMEOUT, HEALTHCHECK_CMD_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -618,57 +630,83 @@ def _route_deploy(
 
 
 # region FUNC__deploy_parallel
-## @purpose  DEPLOY_PARALLEL=true path: topo_sort → pre-pull → batch-check-env → (deploy-many | groups)
-##           → system modules → HC_DONE_MARKER. Returns enriched modules dict for severity lookup.
+## @purpose  DEPLOY_PARALLEL=true path: linearize (kahn) → pre-pull → batch-check-env →
+##           (deploy-many | groups) → system modules → HC_DONE_MARKER. Returns enriched
+##           modules dict for severity lookup.
 ## @io       ⇥ enabled_names, overlays, modules_dir, core_dir, deploy_orchestrator
 ##           ⎋ tuple[int, list[str], dict[str, dict[str, str]]] — (deployed, failed, modules_info)
 ## @complexity 4 — topo DAG + parallel group deploy + system dispatch
 ## @invariants
-##   - topo_sort failure (e.g. dependency cycle) → WARN + sequential fallback, empty modules_info
+##   - topo_sort failure (dependency cycle / unknown depends_on) → ConfigValidationError
+##     ПРОПАГИРУЕТСЯ (fail-fast до первого деплоя, REF-0110) — никакой unordered fallback
 ##   - pre-pull + batch-check-env are best-effort (`|| true` parity)
 ##   - deploy_orchestrator=True → orchestrator_cli deploy-many for DOCKER modules only (R4), which
 ##     REPLACES group-based deploy (DevPlan §3 either/or — see TRAP[DECISION])
-##   - Group deploy failures ARE aggregated into failed (see TRAP[DECISION])
+##   - Group deploy failures ARE aggregated into failed (see TRAP[DECISION]);
+##     critical-failure группы abort'ит оставшиеся группы (REF-0110)
 ##   - HC_DONE_MARKER always set at the end of the parallel path (best-effort)
 
 
-# region FUNC__topo_sort_groups
-def _topo_sort_groups(
+# region FUNC__linearize_deploy_order
+def _linearize_deploy_order(
     enabled_names: list[str],
     modules_dir: str,
-) -> tuple[list[list[str]], dict[str, dict[str, str]]] | None:
-    """Topo-sort → deploy groups + enriched modules dict (C901-extraction).
+) -> tuple[list[list[str]], dict[str, dict[str, str]]]:
+    """kahn-линеаризация enabled-модулей по depends_on (REF-0110) → deploy groups + enriched dict.
 
-    ⎋ None — topo_sort упал: вызывающий уходит в sequential fallback (best-effort).
+    ▶ load_module_yamls → ◇ unknown-dep guard → filter_docker_modules → build_dag → kahn → ⟦(groups, modules_info)⟧
+
+    Единый источник порядка для ОБЕИХ веток (parallel-группы И sequential-плоский порядок):
+    раньше sequential шёл в порядке списка node.yaml, игнорируя depends_on (REF-0110).
+
+    🧐 TRAP[DECISION] · 2026-08-25 · — · kahn-линеаризация для sequential + fail-fast topo-failure (REF-0110)
+    · Rejected: сохранить node.yaml-порядок с WARN+sequential-fallback при ошибке topo (статус-кво)
+    · Reason: канонический fresh-node путь (DEPLOY_PARALLEL=false) стартовал зависимые модули
+      против отсутствующих зависимостей (crash-loop postgres-less litellm), а ошибка topo-sort
+      молча деградировала в unordered; детерминированный порядок — precondition честного деплоя.
+    · Rev: если появится легитимная циклическая soft-dep семантика между модулями — ввести
+      dep_type=soft в module.yaml вместо возврата к unordered fallback.
+
+    ## @invariants
+    ##   - Цикл depends_on → ConfigValidationError из kahn_topological_sort (fail-fast ДО деплоя)
+    ##   - Неизвестная зависимость (нет module.yaml ни у одного загруженного модуля) → ConfigValidationError;
+    ##     зависимость на известный не-enabled/системный модуль молча отбрасывается (канон build_dag)
+    ##   - enabled-модуль без module.yaml НЕ попадает в DAG — вызывающий добирает его хвостом
+    ##     (легаси-путь: detect_install_type → docker → честный failed, поведение сохранено)
+    ## @raises ConfigValidationError  На цикл или неизвестную зависимость.
     """
+    all_modules = topo_sort.load_module_yamls(modules_dir)
+
+    # ── unknown-dep guard: зависимость должна резолвиться в ЗАГРУЖЕННЫЙ модуль ──
+    # build_dag молча роняет всё, что вне docker-set; опечатка в depends_on стала бы
+    # невидимым отсутствием порядка — здесь она громкая конфигурационная ошибка.
+    known_names = {str(m.get("name", "")) for m in all_modules if m.get("name")}
+    enabled_set = set(enabled_names)
+    for entry in all_modules:
+        name = str(entry.get("name") or "")
+        if name not in enabled_set:
+            continue
+        unknown = [d for d in topo_sort.extract_depends_on(entry) if d not in known_names]
+        if unknown:
+            msg = f"Module '{name}' declares unknown depends_on entries {unknown} — no module.yaml found for them"
+            raise ConfigValidationError(msg)
+
+    docker_modules = topo_sort.filter_docker_modules(all_modules)
+    dag = topo_sort.build_dag(docker_modules, filter_names=enabled_names)
+    groups: list[list[str]] = topo_sort.kahn_topological_sort(dag) if dag else []
     modules_info: dict[str, dict[str, str]] = {}
-    groups: list[list[str]] = []
-    # ruff: ignore[PLW0717] — тело try присваивает имена, читаемые except/после
-    try:
-        all_modules = topo_sort.load_module_yamls(modules_dir)
-        docker_modules = topo_sort.filter_docker_modules(all_modules)
-        dag = topo_sort.build_dag(docker_modules, filter_names=enabled_names)
-        if dag:
-            groups = topo_sort.kahn_topological_sort(dag)
-        for m in all_modules:
-            name = m.get("name", "")
-            if name:
-                modules_info[name] = {
-                    "install_type": m.get("install_type", "unknown"),
-                    "severity": m.get("severity", "warn"),
-                }
-        logger.info("[IMP:9][_topo_sort_groups][ok] Topo-sorted into %d deploy groups", len(groups))
-    # ruff: ignore[BLE001] — DEPLOY_BEST_EFFORT: широкий спектр helper-API (git/yaml/jinja/subprocess/docker)
-    except Exception as exc:  # noqa: EXC — topo failure falls back to sequential (best-effort)
-        logger.warning(
-            "[IMP:5][_topo_sort_groups][fallback] topo_sort failed (%s) — sequential deploy",
-            exc,
-        )
-        return None
+    for m in all_modules:
+        name = m.get("name", "")
+        if name:
+            modules_info[name] = {
+                "install_type": m.get("install_type", "unknown"),
+                "severity": m.get("severity", "warn"),
+            }
+    logger.info("[IMP:9][_linearize_deploy_order][ok] Topo-sorted into %d deploy group(s)", len(groups))
     return groups, modules_info
 
 
-# endregion FUNC__topo_sort_groups
+# endregion FUNC__linearize_deploy_order
 
 
 # region FUNC__deploy_docker_groups
@@ -676,8 +714,13 @@ def _deploy_docker_groups(
     groups: list[list[str]],
     overlays: dict[str, str],
     modules_dir: str,
+    modules_info: dict[str, dict[str, str]] | None = None,
 ) -> tuple[int, list[str]]:
     """Последовательный деплой topo-групп с агрегацией failures (C901-extraction).
+
+    REF-0110: critical-failure группы → abort оставшихся групп — зависимые не стартуют
+    против откаченной зависимости; невыполненные группы добавляются в failed ЧЕСТНО
+    (REF-0005 failed-учёт), severity-агрегация видит весь незадеплоенный хвост.
 
     🧐 TRAP[DECISION] · 2026-07-31 · — · Group failures aggregated into severity
     · Rejected: shell dropped deploy_docker_group failures (WARN only → exit 0 always)
@@ -687,6 +730,7 @@ def _deploy_docker_groups(
     """
     deployed = 0
     failed: list[str] = []
+    info = modules_info or {}
     logger.info("[IMP:7][_deploy_parallel][groups] Deploying %d docker group(s) sequentially", len(groups))
     for g_idx, group in enumerate(groups):
         group_entries = _build_entries(group, overlays)
@@ -696,6 +740,7 @@ def _deploy_docker_groups(
             len(groups) - 1,
             group_entries,
         )
+        fnames: list[str] = []
         try:
             d, _f, fnames, _rolled = docker_orchestrator.deploy_docker_group(group_entries, modules_dir)
             deployed += d
@@ -703,6 +748,20 @@ def _deploy_docker_groups(
         # ruff: ignore[BLE001] — DEPLOY_BEST_EFFORT: group failure continues to next group
         except Exception as exc:  # noqa: EXC — best-effort policy
             logger.warning("[IMP:5][_deploy_parallel][group] Group %d deploy error (non-fatal): %s", g_idx, exc)
+        # ── REF-0110: critical-failure → dependents в следующих группах не стартуют ──
+        critical_failed = [n for n in fnames if info.get(n, {}).get("severity", "warn") == "critical"]
+        if critical_failed:
+            remaining = [name for later in groups[g_idx + 1 :] for name in later]
+            logger.error(
+                "[IMP:10][_deploy_docker_groups][abort] Critical failure(s) %s in group %d — "
+                "aborting %d remaining module(s): %s",
+                critical_failed,
+                g_idx,
+                len(remaining),
+                remaining,
+            )
+            failed.extend(remaining)
+            break
     return deployed, failed
 
 
@@ -721,11 +780,9 @@ def _deploy_parallel(
     secrets_manifest = os.path.join(core_dir, "secrets-manifest.yaml")
     logger.info("[IMP:9][_deploy_parallel][start] DEPLOY_PARALLEL=true — topo_sort + pre-pull + batch deploy")
 
-    prepared = _topo_sort_groups(enabled_names, modules_dir)
-    if prepared is None:
-        deployed, failed = _deploy_sequential(enabled_names, modules_dir, core_dir, overlays)
-        return deployed, failed, {}
-    groups, modules_info = prepared
+    # REF-0110: ConfigValidationError (цикл/неизвестная зависимость) пробрасывается из
+    # _linearize_deploy_order — fail-fast до первого деплоя, без unordered-фолбэка.
+    groups, modules_info = _linearize_deploy_order(enabled_names, modules_dir)
 
     # ── 2. pre-pull docker images (best-effort — compose up retries pull) ──
     try:
@@ -761,7 +818,7 @@ def _deploy_parallel(
         deployed += orch_deployed
         failed.extend(orch_failed)
     elif groups:
-        g_deployed, g_failed = _deploy_docker_groups(groups, overlays, modules_dir)
+        g_deployed, g_failed = _deploy_docker_groups(groups, overlays, modules_dir, modules_info)
         deployed += g_deployed
         failed.extend(g_failed)
     else:
@@ -831,8 +888,15 @@ def _deploy_orchestrator(
     try:
         result = runner(cmd, capture_output=True, text=True, timeout=DEPLOY_TIMEOUT, check=False)
     except (subprocess.TimeoutExpired, OSError) as exc:
+        # REF-0103: таймаут/ошибка запуска → ВСЕ незавершённые проекты = failed (честный сигнал).
+        # Прежний return (0, []) маскировал убитый deploy-many как «0 фейлов» → exit 0.
         logger.warning("[IMP:5][_deploy_orchestrator][error] deploy-many error (non-fatal): %s", exc)
-        return 0, []
+        logger.warning(
+            "[IMP:7][_deploy_orchestrator][error] deploy-many incomplete — marking ALL %d project(s) failed: %s",
+            len(docker_names),
+            docker_names,
+        )
+        return 0, list(docker_names)
 
     # ── Парсинг JSON-вывода deploy-many (U-30): JSON-массив ModuleDeployResult ──
     deployed = 0
@@ -875,12 +939,21 @@ def _deploy_orchestrator(
 
 
 # region FUNC__deploy_sequential
-## @purpose  sequential path (DEPLOY_PARALLEL != true): for-loop over enabled modules —
-##           check-env → detect-type → deploy_docker_module | invoke_module_interface.
+## @purpose  sequential path (DEPLOY_PARALLEL != true): kahn-ordered for-loop over enabled modules —
+##           linearize(depends_on) → check-env → detect-type → deploy_docker_module |
+##           invoke_module_interface. REF-0110: порядок = топологическая линеаризация (НЕ порядок
+##           списка node.yaml); critical-failure → abort remaining.
 ## @io       ⇥ enabled_names, modules_dir, core_dir, overlays, secrets_env_file, platform_root
 ##           ⎋ tuple[int, list[str]] — (deployed, failed)
-## @complexity 3 — linear for-loop with per-module env/type/deploy dispatch
+## @complexity 3 — linearize + for-loop with per-module env/type/deploy dispatch
 ## @invariants
+##   - Порядок деплоя docker-модулей = flatten(kahn groups); хвост (system-модули и enabled
+##     без module.yaml) добирается в исходном относительном порядке как виртуальная
+##     финальная группа (индекс len(groups))
+##   - ConfigValidationError (цикл/неизвестная зависимость) ПРОПАГИРУЕТСЯ — fail-fast до деплоя
+##   - Critical-failure модуля → abort ПОСЛЕДУЮЩИХ групп (+хвост); соседи по той же группе
+##     независимы (kahn) и продолжают деплоиться; невыполненные добавляются в failed (честный
+##     учёт), severity-агрегация даёт exit 2; warn-failure продолжает цикл (DEPLOY_BEST_EFFORT)
 ##   - Missing env vars → module FAILED + skipped (best-effort)
 ##   - install_type "system" → invoke_module_interface install + best-effort healthcheck liveness
 ##   - Everything else (docker/unknown) → deploy_docker_module (module.yaml missing → docker path,
@@ -899,7 +972,7 @@ def _deploy_sequential(
     secrets_env_file: str | None = None,
     platform_root: str | None = None,
 ) -> tuple[int, list[str]]:
-    """Sequential deploy for-loop (path — contract parity with parallel_runner, DevPlan 123 T8)."""
+    """Sequential deploy in topological order (kahn по depends_on — REF-0110)."""
     secrets_manifest = os.path.join(core_dir, "secrets-manifest.yaml")
     deployed = 0
     failed: list[str] = []
@@ -908,7 +981,18 @@ def _deploy_sequential(
         len(enabled_names),
     )
 
-    for m_name in enabled_names:
+    # ── REF-0110: kahn-линеаризация (ConfigValidationError пробрасывается — fail-fast) ──
+    groups, topo_info = _linearize_deploy_order(enabled_names, modules_dir)
+    # Хвост вне DAG: system-модули + enabled без module.yaml — легаси-пер-модульный путь,
+    # виртуальная финальная группа (индекс len(groups)).
+    docker_names_set = {name for group in groups for name in group}
+    tail = [n for n in enabled_names if n not in docker_names_set]
+    order_plan: list[tuple[int, str]] = [(g_idx, name) for g_idx, group in enumerate(groups) for name in group]
+    order_plan += [(len(groups), n) for n in tail]
+    ordered = [name for _, name in order_plan]
+    logger.info("[IMP:9][_deploy_sequential][order] Deploy order (depends_on-aware): %s", ordered)
+
+    for idx, m_name in enumerate(ordered):
         # ── env check (missing vars → fail module, skip deploy) ──
         try:
             missing = secrets_validator.check_env_requires(m_name, secrets_manifest)
@@ -932,7 +1016,9 @@ def _deploy_sequential(
                 deployed += 1
             else:
                 failed.append(m_name)
-            _ = _invoke_module_interface(m_name, "healthcheck", "liveness")  # best-effort, non-fatal
+            _ = _invoke_module_interface(
+                m_name, "healthcheck", "liveness", timeout=HEALTHCHECK_CMD_TIMEOUT
+            )  # best-effort, non-fatal (REF-0103: 60s probe)
         else:
             try:
                 ok = docker_orchestrator.deploy_docker_module(
@@ -950,6 +1036,20 @@ def _deploy_sequential(
                 deployed += 1
             else:
                 failed.append(m_name)
+
+        # ── REF-0110: critical-failure → dependents в ПОСЛЕДУЮЩИХ группах не стартуют ──
+        # (соседи по текущей группе независимы по построению kahn — продолжают деплоиться)
+        if m_name in failed and topo_info.get(m_name, {}).get("severity", "warn") == "critical":
+            failed_group_idx = order_plan[idx][0]
+            remaining = [name for g_idx2, name in order_plan[idx + 1 :] if g_idx2 > failed_group_idx]
+            logger.error(
+                "[IMP:10][_deploy_sequential][abort] Critical failure: %s — aborting %d dependent module(s): %s",
+                m_name,
+                len(remaining),
+                remaining,
+            )
+            failed.extend(remaining)
+            break
 
     logger.info("[IMP:9][_deploy_sequential][done] deployed=%d failed=%s", deployed, failed)
     return deployed, failed
@@ -978,7 +1078,9 @@ def _deploy_system_modules(system_names: list[str]) -> tuple[int, list[str]]:
             deployed += 1
         else:
             failed.append(m_name)
-        _ = _invoke_module_interface(m_name, "healthcheck", "liveness")  # best-effort
+        _ = _invoke_module_interface(
+            m_name, "healthcheck", "liveness", timeout=HEALTHCHECK_CMD_TIMEOUT
+        )  # best-effort (REF-0103: 60s probe)
     logger.info("[IMP:9][_deploy_system_modules][done] deployed=%d failed=%s", deployed, failed)
     return deployed, failed
 
@@ -996,9 +1098,11 @@ def _deploy_system_modules(system_names: list[str]) -> tuple[int, list[str]]:
 ##   - Сборка bash -c и экранирование — в shared/module_interface (единый источник, C5)
 ##   - Failure/timeout → False (never raises)
 ##   - Timeout 180s (COMPOSE_UP_TIMEOUT канон) — install can take minutes for system services
-def _invoke_module_interface(module_name: str, interface: str, *args: str) -> bool:
+##   - REF-0103: healthcheck liveness-инвок передаёт timeout=HEALTHCHECK_CMD_TIMEOUT (60) —
+##     полный COMPOSE_UP_TIMEOUT=180 предназначен для install, не для probe
+def _invoke_module_interface(module_name: str, interface: str, *args: str, timeout: int = COMPOSE_UP_TIMEOUT) -> bool:
     """Call invoke_module_interface (bash) — delegating to shared/module_interface.invoke (C5)."""
-    success, _ = module_interface_invoke(module_name, interface, *args, timeout=COMPOSE_UP_TIMEOUT)
+    success, _ = module_interface_invoke(module_name, interface, *args, timeout=timeout)
     return success
 
 
@@ -1238,10 +1342,12 @@ class _CliArgs(Protocol):
 
 
 ## @purpose  CLI entry point: argparse → orchestrate() → exit code (called via `exec python3` from the facade).
-## @io       sys.argv → int exit code {0,1,2}
+## @io       sys.argv → int exit code {0,1,2,4} — 4 = ConfigValidationError (REF-0110 topo fail-fast)
 ## @complexity 1 — argparse + delegation
 ## @invariants
 ##   - --deploy-parallel / --deploy-orchestrator accept "true"/"false" strings (shell flag parity)
+##   - PlatformError (ConfigValidationError топо-цикла/неизвестной зависимости) → e.exit_code
+##     без traceback (canon exit-code контракт: 4 = ConfigValidation)
 ##   - Logging to stderr (keeps stdout clean for any tooling)
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point — orchestrate() wrapper (facade executes this via `exec python3`)."""
@@ -1276,15 +1382,20 @@ def main(argv: list[str] | None = None) -> int:
     # choices=["true","false"] уже ограничивает регистр, но нормализация сравнения
     # (вместо строгого == "true") устойчива к любому регистру и проходит гейт булевых
     # литералов — обоснование выбора: нормализация предпочтительнее per-line allowlist.
-    result = orchestrate(
-        node_yaml=args.node_yaml,
-        modules_dir=args.modules_dir,
-        core_dir=args.core_dir,
-        templates_dir=args.templates_dir,
-        modules_filter=args.modules_filter,
-        deploy_parallel=(args.deploy_parallel or "").lower() == "true",
-        deploy_orchestrator=(args.deploy_orchestrator or "").lower() == "true",
-    )
+    try:
+        result = orchestrate(
+            node_yaml=args.node_yaml,
+            modules_dir=args.modules_dir,
+            core_dir=args.core_dir,
+            templates_dir=args.templates_dir,
+            modules_filter=args.modules_filter,
+            deploy_parallel=(args.deploy_parallel or "").lower() == "true",
+            deploy_orchestrator=(args.deploy_orchestrator or "").lower() == "true",
+        )
+    except PlatformError as exc:
+        # REF-0110: топо-цикл / неизвестная зависимость → exit 4 (ConfigValidation) без traceback.
+        logger.error("[IMP:10][main][config-error] %s (exit_code=%d)", exc, exc.exit_code)
+        return exc.exit_code
     logger.info("[IMP:9][main][exit] exit_code=%d", result.exit_code)
     return result.exit_code
 

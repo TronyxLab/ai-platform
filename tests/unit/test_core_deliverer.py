@@ -33,6 +33,7 @@ from core.internal.bootstrap.core_deliverer import (
     CoreDeliveryError,
     cli,
     deliver_all,
+    deliver_ci,
     deliver_core,
     deliver_makefile,
     deliver_makefiles,
@@ -843,3 +844,118 @@ def test_fallback_deliver_dry_run_no_key_in_output(delivery_tree, caplog) -> Non
 
 
 # T2.16a: _assert_imp9 консолидирован в gate_helpers.assert_ldd_imp9
+
+
+# ═══════════════════════════════════════════════════════════════════
+# deliver_ci (REF-0112): CI core-deploy file-delivery — один owner exclude-set'ов
+# ═══════════════════════════════════════════════════════════════════
+
+
+# region FUNC_test_deliver_ci_full_sequence
+## @purpose  REF-0112: полный сценарий deliver_ci на дереве раннера (core/ + platform-env.yaml +
+##           Makefile + makefiles/ + scripts/ + node-configs/) — mkdir → core --delete (owner
+##           excludes) → platform-env/Makefile/makefiles → scripts → node-configs БЕЗ --delete.
+## @io       tmp_path, caplog, FakeCommandRunner → None (эффект-ассерты по argv-последовательности)
+def test_deliver_ci_full_sequence(tmp_path, caplog) -> None:
+    """deliver_ci: 7 runner-вызовов в порядке фаз; core-rsync несёт RSYNC_EXCLUDES_CORE; node-configs без --delete."""
+    caplog.set_level(logging.DEBUG)
+    logger.info("[IMP:7][test_deliver_ci_full_sequence][start] BEGIN")
+    core_dir = tmp_path / "core"
+    core_dir.mkdir()
+    (core_dir / "internal").mkdir()
+    (tmp_path / "platform-env.yaml").write_text("DOMAIN: test")
+    (tmp_path / "Makefile").write_text(".PHONY: test")
+    (tmp_path / "makefiles").mkdir()
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "node-configs").mkdir()
+
+    fake = _ok_runner()
+    assert deliver_ci("1.2.3.4", str(core_dir), runner=fake) is True
+
+    # Фазы: ssh mkdir → rsync core → rsync platform-env → rsync Makefile → rsync makefiles →
+    # rsync scripts → rsync node-configs
+    assert len(fake.calls) == 7, f"Expected 7 delivery commands, got {len(fake.calls)}: {fake.calls}"
+    assert fake.calls[0] == [
+        "ssh",
+        *SSH_OPTS,
+        "root@1.2.3.4",
+        "mkdir -p /opt/platform/core /opt/platform/scripts",
+    ], f"Unexpected mkdir phase: {fake.calls[0]}"
+
+    core_cmd = fake.calls[1]
+    assert core_cmd[0] == "rsync" and "--delete" in core_cmd, "core phase must use rsync --delete"
+    for exclude in RSYNC_EXCLUDES_CORE:
+        assert exclude in core_cmd, f"core phase missing owner exclude {exclude} (REF-0112 single-owner)"
+    assert core_cmd[-1] == "root@1.2.3.4:/opt/platform/core/"
+
+    nc_cmd = fake.calls[-1]
+    assert nc_cmd[0] == "rsync", "last phase must be node-configs rsync"
+    assert "--delete" not in nc_cmd, "node-configs sync must NOT use --delete (org repo is not wiped)"
+    for exclude in RSYNC_EXCLUDES_NODE:
+        assert exclude in nc_cmd, f"node-configs phase missing owner exclude {exclude}"
+    logger.info(
+        "[IMP:9][test_deliver_ci_full_sequence][done] %d phases verified (single-owner excludes)", len(fake.calls)
+    )
+    assert_ldd_imp9(caplog)
+
+
+# endregion FUNC_test_deliver_ci_full_sequence
+
+
+# region FUNC_test_deliver_ci_empty_core_guard_skips_delete
+## @purpose  Guard-parity с прежним workflow-шагом (TRAP[BUG] DevPlan 125 T4): пустой/отсутствующий
+##           core/ на раннере → rsync --delete ПРОПУЩЕН (против уноса прод-дерева), остальные фазы живут.
+def test_deliver_ci_empty_core_guard_skips_delete(tmp_path, caplog) -> None:
+    """Пустой core/ → нет --delete-rsync; skip-лог присутствует; config-фазы исполняются."""
+    caplog.set_level(logging.DEBUG)
+    logger.info("[IMP:7][test_deliver_ci_empty_core_guard][start] BEGIN")
+    core_dir = tmp_path / "core"
+    core_dir.mkdir()  # пустая директория
+    (tmp_path / "platform-env.yaml").write_text("DOMAIN: test")
+    (tmp_path / "Makefile").write_text(".PHONY: test")
+    (tmp_path / "makefiles").mkdir()
+
+    fake = _ok_runner()
+    assert deliver_ci("1.2.3.4", str(core_dir), runner=fake) is True
+
+    rsync_cmds = [c for c in fake.calls if c[0] == "rsync"]
+    assert all("--delete" not in c for c in rsync_cmds), "No --delete rsync may run on empty core source"
+    assert any("ПРОПУЩЕН" in c for c in [str(rsync_cmds)]) or "отсутствует/пуст" in caplog.text, (
+        "Skip-log for empty core/ expected"
+    )
+    assert len(fake.calls) >= 4, f"Config phases must still run, got {len(fake.calls)} calls"
+    logger.info("[IMP:9][test_deliver_ci_empty_core_guard][done] delete-rsync skipped on empty source")
+    assert_ldd_imp9(caplog)
+
+
+# endregion FUNC_test_deliver_ci_empty_core_guard_skips_delete
+
+
+# region FUNC_test_deliver_ci_node_configs_conditional_and_mkdir_failure
+## @purpose  (а) node-configs отсутствует (gitignored орг-репо) → rsync не вызывается, skip-лог;
+##           (б) mkdir-фаза упала → CoreDeliveryError (fail-fast parity CI-шага).
+
+
+def test_deliver_ci_node_configs_conditional_and_mkdir_failure(tmp_path, caplog) -> None:
+    """Без node-configs/: 6 вызовов (нет последней фазы); mkdir rc=1 → CoreDeliveryError."""
+    caplog.set_level(logging.DEBUG)
+    logger.info("[IMP:7][test_deliver_ci_conditional_failfast][start] BEGIN")
+    core_dir = tmp_path / "core"
+    core_dir.mkdir()
+    (core_dir / "f.txt").write_text("x")  # непустой core/
+
+    fake = _ok_runner()
+    assert deliver_ci("1.2.3.4", str(core_dir), runner=fake) is True
+    assert "gitignored" in caplog.text, "node-configs skip-log expected"
+    assert all(c[0] != "rsync" or "/opt/node-configs/" not in c[-1] for c in fake.calls if c[0] == "rsync"), (
+        "No node-configs rsync without local node-configs/"
+    )
+
+    failing = FakeCommandRunner(default=_proc(1, stderr="ssh: Connection refused"))
+    with pytest.raises(CoreDeliveryError, match="mkdir -p failed"):
+        deliver_ci("1.2.3.4", str(core_dir), runner=failing)
+    logger.info("[IMP:9][test_deliver_ci_conditional_failfast][done] conditional skip + fail-fast verified")
+    assert_ldd_imp9(caplog)
+
+
+# endregion FUNC_test_deliver_ci_node_configs_conditional_and_mkdir_failure

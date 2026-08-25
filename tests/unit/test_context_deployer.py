@@ -564,3 +564,101 @@ def test_real_compose_deploys(caplog, tmp_path):
 
 
 # endregion FUNC_test_real_compose_deploys
+
+
+# ═══════════════════════════════════════════════════════════════════
+# REF-0103 — single-shot cold-skip gate
+# ═══════════════════════════════════════════════════════════════════
+
+
+# region FUNC_test_cold_skip_gate_single_shot
+# 🧪 TRAP[TEST] · Regression · REF-0103 · cold-skip gate = ОДНА проверка (attempts=1)
+# · Scenario: _is_project_healthy(single_shot=True) → healthcheck_poll получает attempts=1
+# ·   (отсутствующий проект не сжигает полное окно поллинга в idempotent-skip проверке);
+# ·   default-вызов сохраняет deadline-driven режим (attempts не передаётся).
+# · Last fail: REF-0103 — skip-gate поллил 60s на каждый cold-проект контекста.
+# · Remove if: single-shot семантика gate меняется
+@ldd_trajectory
+@pytest.mark.parametrize(
+    ("single_shot", "expected_attempts_kwarg"),
+    [
+        pytest.param(True, 1, id="single-shot-gate"),
+        pytest.param(False, None, id="default-deadline-driven"),
+    ],
+)
+def test_is_project_healthy_single_shot_attempts(caplog, single_shot, expected_attempts_kwarg):
+    """single_shot=True → healthcheck_poll(attempts=1); default → прежнее поведение."""
+    captured: dict = {}
+
+    def _poll(name, **kwargs):
+        captured.update(kwargs)
+        return "unhealthy"
+
+    kwargs = {"single_shot": True} if single_shot else {}
+    result = cd._is_project_healthy(
+        "test-proj",
+        stub_detector_fn=lambda _: False,
+        healthcheck_poll_fn=_poll,
+        **kwargs,
+    )
+
+    assert result is False
+    assert captured.get("attempts") == expected_attempts_kwarg, (
+        f"REF-0103: single_shot={single_shot} → attempts kwarg {expected_attempts_kwarg}, got {captured}"
+    )
+    logger.critical(
+        "[IMP:9][test][REF-0103] single_shot=%s → healthcheck_poll kwargs=%s",
+        single_shot,
+        captured,
+    )
+
+
+# 🧪 TRAP[TEST] · Regression · REF-0103 · default-путь skip-gate использует single-shot
+# · Scenario: _deploy_single_project_via_orchestrator БЕЗ injected health_fn → внутренний
+# ·   gate вызывает _is_project_healthy(name, single_shot=True) (проверяется monkeypatch'ом
+# ·   cd._is_project_healthy — module-global lookup в замыкании gate).
+# · Remove if: gate-wiring меняется
+@ldd_trajectory
+def test_deploy_gate_uses_single_shot_by_default(caplog, tmp_path):
+    """Default cold-skip gate → _is_project_healthy(..., single_shot=True)."""
+    project = cd.ProjectInfo(
+        name="gate-proj",
+        repo="https://github.com/test/gate-proj",
+        type="frontend",
+        domain="gate.example.com",
+        context="test-ctx",
+    )
+    project_dir = tmp_path / "projects" / "gate-proj"
+    project_dir.mkdir(parents=True)
+    # Stub compose → выход awaiting_deploy ДО orchestrator; нам важен только вызов gate.
+    (project_dir / "docker-compose.yml").write_text(
+        "# GENERATED-STUB: Bootstrap reverse proxy.\nservices:\n  gate-proj:\n    image: nginx:alpine\n",
+        encoding="utf-8",
+    )
+
+    seen: dict = {}
+
+    def _fake_is_healthy(name, **kwargs):
+        seen["name"] = name
+        seen.update(kwargs)
+        return False
+
+    orig = cd._is_project_healthy
+    cd._is_project_healthy = _fake_is_healthy
+    try:
+        result = cd._deploy_single_project_via_orchestrator(
+            project,
+            str(tmp_path / "projects"),
+            _ghcr_fallback_build=True,
+            orchestrator_deploy_fn=lambda **_kw: pytest.fail("stub должен выйти до orchestrator"),
+        )
+    finally:
+        cd._is_project_healthy = orig
+
+    assert seen.get("name") == "gate-proj"
+    assert seen.get("single_shot") is True, f"REF-0103 FAIL: gate без single_shot: {seen}"
+    assert result.status == "awaiting_deploy"
+    logger.critical("[IMP:9][test][REF-0103] default gate → single_shot=True OK")
+
+
+# endregion FUNC_test_cold_skip_gate_single_shot

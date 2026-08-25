@@ -77,7 +77,11 @@ checks:
     gate_modes: [fast, full]
     # DevPlan 163 W-D D4 (AC-5): blocking dep-audit (DEP001/002 ignore, DEP003 blocking)
   - id: check-exception-patterns
-    cmd: python3 -m core.internal.static check --only exception_patterns
+    # REF-0107 (2026-08-25): было `--only exception_patterns` (underscore) — имя НЕ совпадало
+    # с детектором `exception-patterns` → все 14 детекторов тихо skip, PASS без проверок
+    # (live false-green). Теперь: точное имя реестра + CLI валидирует --only против реестра
+    # (неизвестное имя → exit 2, rename детектора больше не тихий no-op).
+    cmd: python3 -m core.internal.static check --only exception-patterns
     tier: static
     timeout: 30
     gate_modes: [fast]
@@ -161,8 +165,8 @@ checks:
     xdist: true
     junit: tests/report-ai-instructions.xml
     cmds:
-      fast: python3 -m core.internal.test_runner --marker ai-instructions --timeout=300 --junit-output tests/report-ai-instructions.xml
-      full: python3 -m core.internal.test_runner --marker ai-instructions --timeout=300 --junit-output tests/report-ai-instructions.xml
+      fast: python3 -m core.internal.test_runner --marker ai_instructions --timeout=300 --junit-output tests/report-ai-instructions.xml
+      full: python3 -m core.internal.test_runner --marker ai_instructions --timeout=300 --junit-output tests/report-ai-instructions.xml
   - id: static_audit
     tier: pytest
     timeout: 900

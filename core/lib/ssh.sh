@@ -15,7 +15,7 @@
 ##   - Каждый ssh_exec/ssh_read вызов обёрнут в `timeout`
 ##   - exit=124 детектируется явно → log_imp 1 "SSH timeout"
 ##   - SSH_OPTS_COMMON — readonly (защита от случайной мутации)
-##   - timeout default: deploy mode = 600s, read mode = 60s
+##   - timeout default: deploy mode = 900s (SoT timeouts.DEPLOY_TIMEOUT, REF-0103), read mode = 60s
 ##   - fail-fast: пустой host/cmd или non-int timeout → return 2
 ## @rationale Q: Why a shared SSH facade instead of inline ssh calls?
 ##            A: Устраняет CRITICAL-проблему P02 (CI hangs из-за SSH-вызовов без timeout).
@@ -30,7 +30,7 @@
 ##             — status: ssh_read "host" "ci-deploy" "docker ps" 60
 # endregion MODULE_CONTRACT
 # GREP_SUMMARY: ssh, facade, timeout, ssh-exec, ssh-read, ssh-opts, remote-cmd, bootstrap, scaffold, deploy
-# STRUCTURE: ▶ ┌SSH_OPTS_COMMON readonly┐ → ○ ssh_exec(h,u,c,t=600,m) → ◇ validate:h/c nonempty,t=int → ⚡ timeout t ssh opts u@h c → ◇ exit124→log1:ret124 | exit0→log9:ret0 | rc≠0→log7:retRC → ○ ssh_read(h,u,c,t=60)→ssh_exec
+# STRUCTURE: ▶ ┌SSH_OPTS_COMMON readonly┐ → ○ ssh_exec(h,u,c,t=900,m) → ◇ validate:h/c nonempty,t=int → ⚡ timeout t ssh opts u@h c → ◇ exit124→log1:ret124 | exit0→log9:ret0 | rc≠0→log7:retRC → ○ ssh_read(h,u,c,t=60)→ssh_exec
 #            └─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 
 # ── Default prefix ─────────────────────────────────────────────────
@@ -91,8 +91,8 @@ fi
 ## @param $1  SSH host (IP or domain)
 ## @param $2  SSH user
 ## @param $3  Command to execute on remote host
-## @param $4  Timeout in seconds (default: 600 for deploy mode)
-## @param $5  Mode: "deploy" (default, 600s) or "read" (60s)
+## @param $4  Timeout in seconds (default: 900 for deploy mode — SoT timeouts.DEPLOY_TIMEOUT, REF-0103)
+## @param $5  Mode: "deploy" (default, 900s) or "read" (60s)
 ## @return   0   — success (SSH command completed)
 ## @return   124 — timeout (SSH command exceeded timeout limit)
 ## @return   2   — input validation failure (empty host/cmd, non-int timeout)
@@ -108,7 +108,7 @@ ssh_exec() {
     local host="$1"
     local user="$2"
     local cmd="$3"
-    local timeout="${4:-600}"
+    local timeout="${4:-900}"
     local mode="${5:-deploy}"
 
     # ── Input validation (fail-fast) ──────────────────────────────
@@ -175,11 +175,12 @@ ssh_read() {
 }
 # endregion FUNC_ssh_read
 
-# 🧐 TRAP[DECISION] · 2026-07-21 · HI · Timeout-дефолты 600s deploy / 60s read
+# 🧐 TRAP[DECISION] · 2026-08-25 · HI · Deploy-дефолт 900s — выровнен с Python SoT (REF-0103)
 # · Rejected: единый timeout=300 (риск: прерывание длинных rsync на медленных каналах)
-# · Reason: remote-deploy (rsync/docker-pull/converge): ServerAliveCountMax=10 ×
-# ·         ServerAliveInterval=30s = 5 мин safe-margin. 600s = 10 мин ≈ 2× safe-margin
-# ·         для длинных docker-pull на медленных каналах.
+# · Reason: до REF-0103 дефолт был 600s при Python SoT timeouts.DEPLOY_TIMEOUT=900 —
+# ·         «parity»-комментарий ниже утверждал согласованность, которой не было (canon
+# ·         divergence 600vs900 из аудита). 900s покрывает холодный pull ноды (v1.0.1
+# ·         TRAP[BUG]: 14 модулей ~2-3 GB на первом deploy-modules) и совпадает с SoT;
 # ·         read-only (docker ps, project-list): короткие команды, 60s = 2× типичного
 # ·         времени ответа сервера.
-# · Rev: если CI-deploy стабильно < 300s → снизить deploy-default до 400s
+# · Rev: если CI-deploy стабильно < 300s → снизить ОБА дефолта (SoT + здесь) до 400s

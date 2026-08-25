@@ -19,11 +19,14 @@
 ##   3. stdout redirected to /dev/null (subprocess.DEVNULL) to prevent token leakage in logs
 ##   4. Non-fatal credential fallback: missing env vars → log at IMP:7, return True (anonymous)
 ##   5. No file I/O in configure_docker_auth — returns dict, caller decides persistence
+##   6. REF-0103: subprocess.run обёрнут timeout=DOCKER_AUTH_TIMEOUT — зависший registry
+##      больше не морозит bootstrap φ6/φ11 бессрочно; TimeoutExpired → IMP:10 + False
 ## @rationale DRIFT elimination (D8): 5 duplicate Docker auth implementations consolidated into
 ##            one canonical shared module. --password-stdin + DEVNULL prevents token leak which
 ##            was a systemic risk in the old per-file implementations. Each had subtle differences
 ##            in error handling and logging — now unified with consistent IMP levels.
 ## @changes  2026-07-30 · — Created as shared module (DRIFT-D8)
+## @changes  2026-08-25 | REF-0103 — DOCKER_AUTH_TIMEOUT (60s) на оба login-вызова
 ## @usecases
 ##   - docker_login: bootstrap pipeline Docker Hub auth, module pull auth
 ##   - ghcr_login: ghcr.io image pull auth during bootstrap
@@ -40,6 +43,20 @@ import os
 import pathlib
 import pwd
 import subprocess
+import sys
+
+# ⚠️ TRAP[BUG] · 2026-08-25 · P1 · REF-0103 rider: script-mode import без bootstrap
+# · Symptom: docker_login() (lib/docker.sh → `python3 …/docker_auth.py docker-login`)
+# ·   падал ModuleNotFoundError: core под set -euo pipefail (bootstrap φ6, CI).
+# · Root: REF-0103 добавил import core.internal.shared.timeouts, но скрипт вызывается
+# ·   КАК ФАЙЛ (python3 path/script.py) — project root не в sys.path (script-dir не CWD).
+# · Fix: sys.path bootstrap parents[3] до core.*-импорта (паттерн on_project_deploy.py).
+# · Prevention: любой core.internal.*-модуль, вызываемый как файл, обязан иметь bootstrap.
+_PROJECT_ROOT = str(pathlib.Path(__file__).resolve().parents[3])
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
+from core.internal.shared.timeouts import DOCKER_AUTH_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +86,37 @@ def resolve_user_home(user: str) -> str:
 
 
 # endregion FUNC_resolve_user_home
+
+
+# region FUNC_chown_docker_config
+def _chown_path_if_exists(path: str, uid: int, gid: int) -> None:
+    """chown одного пути при его существовании (PLW0717: держит try-блок ≤5 statements)."""
+    if pathlib.Path(path).exists():
+        os.chown(path, uid, gid)
+
+
+def _chown_docker_config_to_user(user_home: str, user: str) -> None:
+    """chown docker config.json целевому пользователю после root-записи (D16, REF-0103 extract).
+
+    ## @purpose — Вынесено из ghcr_login (C901 ≤10): bootstrap выполняется от root с
+    ##            HOME=<user-home> → config.json root-овый; receive (ci-deploy) получает
+    ##            permission denied без chown. Non-fatal: KeyError/OSError → WARN.
+    ## @io — ⇥ user_home: str, user: str → ⎋ None (side-effect: chown/chmod config)
+    ## @complexity — O(1)
+    """
+    config_path = os.path.join(user_home, ".docker", "config.json")
+    try:
+        pwd_entry = pwd.getpwnam(user)
+        for path in (os.path.join(user_home, ".docker"), config_path):
+            _chown_path_if_exists(path, pwd_entry.pw_uid, pwd_entry.pw_gid)
+        if os.path.isfile(config_path):
+            os.chmod(config_path, 0o600)
+        logger.info("[IMP:9][ghcr_login] docker config chowned to %s", user)
+    except (KeyError, OSError) as e:
+        logger.warning("[IMP:7][ghcr_login] Cannot chown docker config to %s: %s", user, e)
+
+
+# endregion FUNC_chown_docker_config
 
 # ═══════════════════════════════════════════════════════════════════
 # region FUNC_docker_login
@@ -121,6 +169,7 @@ def docker_login(
             stderr=subprocess.PIPE,
             text=True,
             check=False,
+            timeout=DOCKER_AUTH_TIMEOUT,  # REF-0103: зависший registry ≠ вечный hang bootstrap
         )
         if result.returncode == 0:
             logger.info("[IMP:9][docker_login] Auth success for %s (user=%s)", registry, username)
@@ -132,6 +181,9 @@ def docker_login(
         )
     except FileNotFoundError:
         logger.error("[IMP:10][docker_login] docker command not found on PATH")
+        return False
+    except subprocess.TimeoutExpired:
+        logger.error("[IMP:10][docker_login] Auth timed out after %ds for %s", DOCKER_AUTH_TIMEOUT, registry)
         return False
     except OSError as e:
         logger.error("[IMP:10][docker_login] OS error running docker login: %s", e)
@@ -199,9 +251,13 @@ def ghcr_login(token: str | None = None, user: str = "ci-deploy") -> bool:
             text=True,
             env=docker_env,
             check=False,
+            timeout=DOCKER_AUTH_TIMEOUT,  # REF-0103: паритет с docker_login
         )
     except FileNotFoundError:
         logger.error("[IMP:10][ghcr_login] docker command not found on PATH")
+        return False
+    except subprocess.TimeoutExpired:
+        logger.error("[IMP:10][ghcr_login] Auth timed out after %ds for ghcr.io", DOCKER_AUTH_TIMEOUT)
         return False
     except OSError as e:
         logger.error("[IMP:10][ghcr_login] OS error running docker login for ghcr.io: %s", e)
@@ -219,19 +275,7 @@ def ghcr_login(token: str | None = None, user: str = "ci-deploy") -> bool:
     # создаются root-овыми → receive (ci-deploy) получает «permission denied».
     # chown конфига пользователю (только при root-процессе и не-root пользователе).
     if os.geteuid() == 0 and user != "root":
-        # ruff: ignore[PLW0717] — try вложен в условный блок внутри функции — после-try чтение локалей неанализируемо
-        try:
-            pwd_entry = pwd.getpwnam(user)
-            docker_dir = os.path.join(user_home, ".docker")
-            config_path = os.path.join(docker_dir, "config.json")
-            for path in (docker_dir, config_path):
-                if pathlib.Path(path).exists():
-                    os.chown(path, pwd_entry.pw_uid, pwd_entry.pw_gid)
-            if os.path.isfile(config_path):
-                os.chmod(config_path, 0o600)
-            logger.info("[IMP:9][ghcr_login] docker config chowned to %s", user)
-        except (KeyError, OSError) as e:
-            logger.warning("[IMP:7][ghcr_login] Cannot chown docker config to %s: %s", user, e)
+        _chown_docker_config_to_user(user_home, user)
     logger.info("[IMP:9][ghcr_login] Auth success for ghcr.io as %s", user)
     return True
 

@@ -525,27 +525,35 @@ def healthcheck_poll(
     *,
     docker: _DockerOpsProtocol | None = None,  # DI-объект docker_ops (docker_ps/inspect_state_health, 167 D2)
     sleep_fn: Callable[[float], None] | None = None,  # DI: time.sleep fake (None → time.sleep)
+    attempts: int | None = None,  # REF-0103: max число проверок (None → deadline-driven; 1 = single-shot)
 ) -> str:
     """Poll container health for a project until healthy or timeout (inspect-критерий, D5).
 
-    ▶ ┌project_name + timeout┐ → ○ loop [interval]: ◇ docker ps/compose ps → cids → ○ for cid: inspect State.Status|Health.Status → ◇ все (running AND healthy|""|none)? → "healthy"
+    ▶ ┌project_name + timeout┐ → ○ loop [interval; ≤attempts]: ◇ docker ps/compose ps → cids →
+      ○ for cid: inspect State.Status|Health.Status → ◇ все (running AND healthy|""|none)? → "healthy"
     │                                                                                                     → timeout? → "unhealthy"
 
     ## @purpose — Wait for a docker compose project to become healthy. ЕДИНЫЙ критерий «здоров»:
     ##            контейнер running AND Health.Status ∈ {healthy, "", "none"} (running-без-healthcheck
     ##            = здоров). "unhealthy" НЕ фейлит сразу — стартовые гонки (ждём).
     ## @io — ⇥ project_name: str, timeout: int, interval: int, service: str | None,
-    ##       docker: DI-объект (None → docker_ops), sleep_fn: DI-fn (None → time.sleep)
-    ##       → ⎋ str ("healthy"|"unhealthy")
-    ## @complexity — O(T/I) где T = timeout, I = interval
+    ##       docker: DI-объект (None → docker_ops), sleep_fn: DI-fn (None → time.sleep),
+    ##       attempts: int | None (REF-0103 single-shot gate) → ⎋ str ("healthy"|"unhealthy")
+    ## @complexity — O(min(T/I, attempts)) где T = timeout, I = interval
     ## @invariants
     ##   - service задан → `docker compose ps -q {service}` (deploy_engine; cwd = project_dir через chdir);
     ##     иначе `docker ps --filter name={project_name}` (глобальный фильтр)
     ##   - inspect: --format '{{.State.Status}}|{{.State.Health.Status}}'
     ##   - ВСЕ контейнеры должны быть здоровы (любой не-здоров → ждать)
     ##   - timeout → "unhealthy"; non-fatal: docker-ошибки → ждать (не raise)
+    ##   - attempts (REF-0103): None → прежнее deadline-driven поведение байт-в-байт;
+    ##     N ≥ 1 → не более N проверок (single-shot skip-gate); N < 1 трактуется как 1
     ## @changes 2026-08-01 · DevPlan 116 B5 T3 — критерий переработан на inspect (5 реализаций → 1, D5)
     ##           2026-08-14 · DevPlan 167 D2 — DI-швы docker-объект + sleep_fn (0 monkeypatch в тестах)
+    ##           2026-08-16 · DevPlan 177 W3.1 — retry_pull: retry-цикл → shared/retry.py
+    ##           2026-08-25 · REF-0103 — +attempts kwarg (аддитивный single-shot режим для
+    ##                        cold-skip gate context_deployer: отсутствующий проект не должен
+    ##                        сжигать полное окно поллинга в idempotent-skip проверке)
     ## 🧐 TRAP[DI-SEAM] · 2026-08-14 · — · DI-швы healthcheck_poll: docker-объект + sleep_fn
     ## · Rejected: прямой вызов docker_ops/time.sleep (тест патчил их monkeypatch.setattr)
     ## · Reason: seam = тестируемость реального вызова; docker-объект — один DI-шов для
@@ -557,7 +565,12 @@ def healthcheck_poll(
     sleep = sleep_fn if sleep_fn is not None else time.sleep
     deadline = time.monotonic() + timeout
 
+    iterations = 0
+    max_iterations = max(int(attempts), 1) if attempts is not None else None
     while time.monotonic() < deadline:
+        if max_iterations is not None and iterations >= max_iterations:
+            break
+        iterations += 1
         # ruff: ignore[PLW0717] — try вложен в условный блок внутри функции — после-try чтение локалей неанализируемо
         try:
             if service:

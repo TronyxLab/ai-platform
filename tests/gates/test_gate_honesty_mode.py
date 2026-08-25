@@ -11,7 +11,9 @@
 ## @invariants
 ##   - REQUIRE_HONESTY_MODE=fail + Docker недоступен → pytest.fail (R4: NO_SERVICE = FAIL, not skip)
 ##   - REQUIRE_HONESTY_MODE не задан (локальная машина) → default "marker" → pytest.skip
-##   - Оба CI-workflow объявляют REQUIRE_HONESTY_MODE: fail
+##   - ВСЕ workflow с pytest (glob .github/workflows/*.yml + templates/*/workflows) объявляют
+##     REQUIRE_HONESTY_MODE: fail — deny-by-default (REF-0107): новый pytest-workflow без
+##     пина = RED, CI не может выключить honesty добавлением файла
 ## @rationale R4 (Test Honesty): skip-as-bug-masking запрещён. CI-раннеры имеют Docker —
 ##            переход marker→fail (D46-C закрыт DevPlan 119 A3). Локально переменная
 ##            не задаётся → marker через default в _honesty_mode().
@@ -28,10 +30,6 @@ from tests.helpers.gate_helpers import repo_root
 logger = logging.getLogger(__name__)
 
 ROOT = repo_root()
-_WORKFLOWS = (
-    ROOT / ".github" / "workflows" / "platform-gate-fast.yml",
-    ROOT / ".github" / "workflows" / "platform-test.yml",
-)
 
 
 # region TEST_honesty_fail_on_missing_docker
@@ -94,24 +92,51 @@ def test_honesty_marker_default_skips(caplog, monkeypatch) -> None:
 @pytest.mark.gate
 @ldd_trajectory
 # 🧪 TRAP[TEST] · 2026-08-02 · REGRESSION · CI workflow env-контракт (DevPlan 119 A3)
-# · Scenario: оба CI-workflow объявляют REQUIRE_HONESTY_MODE: fail
+# · Scenario: CI-workflow объявляет REQUIRE_HONESTY_MODE: fail
 # · Last fail: marker в platform-gate-fast.yml:44 и platform-test.yml:74 (skip-mode на CI)
 # · Remove if: REQUIRE_HONESTY_MODE механизм отменяется
+#
+# REF-0107 (2026-08-25): deny-by-default glob вместо фиксированного списка _WORKFLOWS.
+# Прежний гейт покрывал 2 именованных workflow; deploy-project.yml (quality pytest) и
+# push-gate.yml остались вне списка → honesty default "marker" = массовый skip на CI.
+# Теперь: ЛЮБОЙ workflow, исполняющий pytest (напрямую или через make check/gate/check-diff/
+# test-node), ОБЯЗАН нести REQUIRE_HONESTY_MODE: fail — CI не может выключить honesty,
+# добавив новый workflow (тихий обход невозможен по построению).
 def test_ci_workflows_require_honesty_fail(caplog) -> None:
-    """CI-workflow'ы объявляют REQUIRE_HONESTY_MODE: fail (R4 compliant, DevPlan 119 A3)."""
+    """Все workflow с pytest объявляют REQUIRE_HONESTY_MODE: fail (R4, deny-by-default glob)."""
     caplog.set_level(logging.INFO)
+    workflows_dir = ROOT / ".github" / "workflows"
+    # Glob покрывает и шаблонные payload-workflows проектов (templates/*/…/deploy.yml):
+    # канал build&push рождается запиненным — новый workflow-обманщик невозможен.
+    candidates = sorted(workflows_dir.glob("*.yml")) + sorted(ROOT.glob("templates/*/.github/workflows/*.yml"))
+    assert candidates, "[IMP:10][honesty] ни одного workflow не найдено — репозиторий сломан?"
+
+    # Признак pytest-канала: прямой вызов pytest ИЛИ make-обёртка executor'а (check/gate/
+    # check-diff/test-node), внутри которой pytest резолвится из манифеста check-suite.yaml.
+    PYTEST_CHANNELS = ("pytest", "make gate", "make check", "make test-node", "check-diff")
+
     violations: list[str] = []
-    for wf in _WORKFLOWS:
+    for wf in candidates:
         assert wf.is_file(), f"[IMP:10][honesty] workflow not found: {wf}"
         content = wf.read_text(errors="replace")
+        body_lines = [ln for ln in content.splitlines() if not ln.strip().startswith("#")]
+        body = "\n".join(body_lines)
+        if not any(channel in body for channel in PYTEST_CHANNELS):
+            logger.info("[IMP:8][honesty][glob] %s — pytest-канала нет (не применим)", wf.name)
+            continue
         if "REQUIRE_HONESTY_MODE: fail" not in content:
             violations.append(str(wf.relative_to(ROOT)))
+        else:
+            logger.info("[IMP:8][honesty][glob] %s — REQUIRE_HONESTY_MODE: fail OK", wf.name)
 
     assert not violations, (
-        f"[IMP:10][honesty] CI workflows missing REQUIRE_HONESTY_MODE: fail (R4 NO_SERVICE = FAIL на CI): {violations}"
+        f"[IMP:10][honesty] workflows с pytest без REQUIRE_HONESTY_MODE: fail "
+        f"(R4 NO_SERVICE = FAIL на CI; deny-by-default, REF-0107): {violations}"
     )
 
-    logger.info("[IMP:9][honesty][ci] PASS: both CI workflows declare REQUIRE_HONESTY_MODE: fail")
+    logger.info(
+        "[IMP:9][honesty][ci] PASS: все %d workflow с pytest объявляют REQUIRE_HONESTY_MODE: fail", len(candidates)
+    )
 
 
 # endregion TEST_ci_workflows_require_honesty_fail

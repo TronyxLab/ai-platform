@@ -17,7 +17,8 @@
 ##   - --changed: git diff --name-only HEAD (cwd=root); git-сбой → WARNING + полный проход
 ##   - exit 0 при 0 находках; exit 1 при находках; детектор-сбой → traceback + exit 1
 ##   - --json: единый JSON {findings: [...], summary: {total, by_rule}}
-##   - --only: фильтр по именам правил (реестр DETECTORS)
+##   - --only: фильтр по именам правил (реестр DETECTORS); неизвестное имя → exit 2 (REF-0107:
+##     тихий skip всех детекторов = false-green PASS — запрещён)
 ## @rationale Быстрый детерминированный сигнал для агента (замена 637 s static_audit):
 ##            один вызов — все классы дефектов grep-гейтов.
 ## @changes 2026-08-13 | DevPlan 163 W-C C1 — Created
@@ -36,7 +37,7 @@ from typing import cast
 # W1-A1 (план 170): timeout=30 литерал (git diff --name-only) → канон SoT
 # CONVERGE_DOCKER_TIMEOUT (30, системная команда) — AMBER-зачистка research-D §D1.
 from core.internal.shared.timeouts import CONVERGE_DOCKER_TIMEOUT
-from core.internal.static.registry import human_report, json_report, run_all
+from core.internal.static.registry import DETECTORS, human_report, json_report, run_all
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +147,24 @@ def main(argv: list[str] | None = None) -> int:
 
     changed: set[str] | None = _resolve_changed_files(root) if changed_flag else None
     only = set(only_flag) if only_flag else None
+
+    # REF-0107: --only строго против реестра — неизвестное имя → exit 2 (fail-fast).
+    # До фикса неизвестное имя тихо скипало ВСЕ детекторы → «PASS 0 findings» без единой
+    # проверки (live-reproduced: `--only exception_patterns` vs детектор `exception-patterns`
+    # в check-suite.yaml давал зелёный check-exception-patterns при [skip]×14).
+    if only is not None:
+        known = {spec.name for spec in DETECTORS}
+        unknown = sorted(only - known)
+        if unknown:
+            known_sorted = ", ".join(sorted(known))
+            logger.error(
+                "[IMP:10][cli][only] unknown detector name(s): %s (known: %s)",
+                ", ".join(unknown),
+                known_sorted,
+            )
+            fail_line = f"static check: FAIL — unknown --only detector name(s): {', '.join(sorted(unknown))}"
+            print(fail_line, file=sys.stderr)  # ruff: ignore[T201] — CLI stderr-канал вне logging (fail-fast контракт REF-0107)
+            return 2
 
     logger.info("[IMP:8][cli] static check root=%s changed=%s only=%s", root, changed_flag, only)
     findings = run_all(root, changed, only)

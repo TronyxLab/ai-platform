@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: key_provisioner, idempotent, virtual-keys, LiteLLM, provision_all, CLI, persist, profile-rules
+# GREP_SUMMARY: key_provisioner, idempotent, virtual-keys, LiteLLM, provision_all, CLI, persist, profile-rules, atomic-store
 # STRUCTURE: ▶ parse_args() → ◇ provision_all(master_key, base_url, policy_path) →
-#            ◇ load policy.yaml → ◇ discover consumers (projects + platform) → ○ for each consumer:
+#            ◇ load policy.yaml → ◇ discover consumers (projects + platform) →
+#            ◇ list_keys() ONCE (пагинация внутри) → ⊕ all_keys cache → ○ for each consumer:
 #            ┌─ ◇ resolve profile (explicit → rule → default) → ┌─ ◇ get profile config → ⊕ apply overrides →
-#            ├─ ◇ get_key_by_metadata(project=<name>) → ◇ exists? ─┬─ models match? → ⚡ skip
-#            │                                                  ├─ models differ? → ⚡ update_key
-#            │                                                  └─ not exists? → ⚡ generate_key
-#            ├─ ◇ persist_project_key(name, key) → ⊕ keys[name] = key
-#            └─ ⚡ return keys dict
-#            ⎋ persist — print summary → exit_code
+#            ├─ ◇ find_key_by_metadata(all_keys, project=name) → ◇ exists? ─┬─ models match? → ⚡ skip
+#            │                                                          ├─ models differ? → ⚡ update_key (fail → WARN+failed)
+#            │                                                          └─ not exists? → ⚡ generate_key (fail → WARN+failed)
+#            ├─ ◇ persist_project_key(name, key) [FileLock(store.lock) + atomic_write_json] → ⊕ keys[name] = key
+#            └─ ⚡ failed>0 → ⚡ PlatformError
+#            ⎋ summary (created/updated/idempotent/skipped_disabled/failed ≠ mixed-skip) → exit_code
 # region MODULE_CONTRACT
 ## @purpose  Idempotent virtual key provisioner for LiteLLM. Discovers LLM consumers
 ##           (projects + platform services), resolves profiles, and creates/updates/skips
@@ -20,7 +21,12 @@
 ##   - Idempotent: same key on repeated calls if config unchanged
 ##   - Profile resolution order: explicit (project.llm.profile) → rule match → default
 ##   - Empty overrides are safe (no-op merge)
-##   - persist_project_key is a stub — SOPS integration planned for Wave 6
+##   - Store write: FileLock(<store>.lock) + atomic_write_json(mode=0600); corrupt store
+##     → PlatformError (fail-loud, НИКОГДА overwrite-all — REF-0104)
+##   - Key-list скачивается ONCE за прогон; lookup — локальный filter (PERF-081)
+##   - Transport-failure при lookup/update/generate → WARN + failed++, НЕ «no key»
+##     (REF-0104: иначе transient-сбой порождает дубликаты budget-bearing ключей);
+##     failed>0 → PlatformError (exit≠0), честный summary отличает failure от skipped
 ## @rationale Python-first: all business logic in Python, shell is a thin facade.
 ##            Idempotency prevents duplicate key creation during retries.
 ## @changes — 2026-07-24 | Created (DevPlan 049 Phase 4)
@@ -29,6 +35,8 @@
 ##           2026-08-14 | DevPlan 170 W1-A3 — _DEFAULT_BASE_URL порт из shared/platform_ports
 ##           2026-08-24 | REF-0007 — persist_project_key: atomic_write_json(mode=0600) от создания
 ##                      (plain open("w")+chmod-после удалён — нет world-readable окна)
+##           2026-08-25 | REF-0104 — corrupt-store fail-fast + FileLock; list_keys ONCE;
+##                      transport-error ≠ no-key; честный фазовый summary (failed ≠ skipped)
 # endregion MODULE_CONTRACT
 
 import argparse
@@ -54,13 +62,20 @@ _PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from core.internal.llm.admin_client import KeyInfo, LiteLLMAdminClient
+from core.internal.llm.admin_client import (
+    KeyInfo,
+    LiteLLMAdminClient,
+)
 from core.internal.llm.policy_schema import LLMPolicy
 
 # REF-0007 (11-DevPlan Волна 1): канонический atomic writer — plaintext JSON-хранилище
 # LLM-ключей пишется mode=0600 ОТ СОЗДАНИЯ (нет окна world-readable в tmpdir)
 from core.internal.shared.atomic_writer import atomic_write_json
 from core.internal.shared.exceptions import PlatformError
+
+# REF-0104 (11-DevPlan Волна 3): FileLock сериализует read-modify-write стора между
+# конкурентными provision-прогонами (bootstrap φ8/φ12 гонка с ручным make provision-llm)
+from core.internal.shared.file_lock import FileLock
 
 # DevPlan 170 W1-A3: порт из единого реестра shared/platform_ports (литерал 4000 удалён)
 from core.internal.shared.platform_ports import PLATFORM_PORT_LITELLM
@@ -73,6 +88,7 @@ _DEFAULT_BASE_URL: str = f"http://litellm:{PLATFORM_PORT_LITELLM}"
 _KEY_PREVIEW_LEN: int = 16  # сколько символов ключа показывать в логах (маскировка)
 _BUDGET_EPSILON: float = 0.001  # допустимое расхождение daily-бюджета (float-сравнение)
 _DEFAULT_POLICY_REL_PATH = pathlib.Path("core") / "internal" / "llm" / "policy.yaml"
+_LOCK_TIMEOUT_SECONDS: float = 30.0  # ожидание store.lock при конкурентном provision
 
 # ── Project root resolution ──────────────────────────────────────────────────
 # _PROJECT_ROOT определён выше (self-bootstrap, W2 T2.10) — см. шапку модуля.
@@ -344,6 +360,84 @@ def get_default_persist_path() -> pathlib.Path:
     return pathlib.Path(os.environ.get("PLATFORM_STATE_DIR", tempfile.gettempdir())) / "litellm-project-keys.json"
 
 
+def _store_lock_path(persist_path: pathlib.Path) -> pathlib.Path:
+    """Return the lock-file path guarding read-modify-write of the key store.
+
+    ## @purpose  REF-0104: <store>.lock рядом со стором — сериализация
+    ##           read-modify-write между конкурентными provision-прогонами.
+    ## @complexity O(1)
+    """
+    return pathlib.Path(str(persist_path) + ".lock")
+
+
+# region FUNC_load_key_store
+## @purpose  Загрузка key-store с fail-fast на corruption (REF-0104 / DATA-902).
+## @io       ⇥ persist_path → ⎋ dict[str, str] │ ⚡ PlatformError
+## @complexity O(K)
+## @invariants
+##   - Отсутствующий файл → {} (легитимный первый запуск)
+##   - Невалидный JSON / не-dict / не-str значения → PlatformError (НИКОГДА silent {})
+def _load_key_store(persist_path: pathlib.Path) -> dict[str, str]:
+    """Load the JSON key store; corrupt/unreadable store fails LOUD.
+
+    ## @purpose  ⚠️ TRAP[BUG] · 2026-08-25 · P0 · Truncated store silently wiped ALL keys
+    ##           · Symptom: OOM/crash во время open("w") обрезал store; следующий reader
+    ##             глотал JSONDecodeError в {} и ЗАЛИВАЛ одно-ключевой store поверх всех —
+    ##             потеря ВСЕХ virtual keys = mass 401 до ручного re-provision (DATA-902).
+    ##           · Root: except (JSONDecodeError, OSError): store = {} — corruption
+    ##             неотличима от «файла нет», overwrite-all был дефолтом.
+    ##           · Fix: corruption → PlatformError; восстановление — только осознанное
+    ##             удаление файла оператором (или restore), никогда молча из provisioner'а.
+    ##           · Prevention: fail-fast контракт _load_key_store + FileLock от гонок +
+    ##             atomic_write_json от truncate-окон; corruption-chain unit-тест.
+    ## @io
+    ##   - ⎋ dict[str, str] — project_name → virtual key token
+    ##   - ⚡ PlatformError — файл есть, но невалиден (truncated/non-dict/non-str)
+    ## @complexity O(K)
+    """
+    if not persist_path.exists():
+        logger.log(
+            logging.INFO,
+            "[IMP:7][_load_key_store] Store does not exist yet: %s",
+            persist_path,
+        )
+        return {}
+    try:
+        with persist_path.open(encoding="utf-8") as f:
+            data = cast("object", json.load(f))
+    except json.JSONDecodeError as e:
+        msg = (
+            f"LLM key store is CORRUPT (invalid JSON): {persist_path} ({e}). "
+            f"Refusing to overwrite existing keys — repair or delete the file deliberately."
+        )
+        raise PlatformError(msg) from e
+    except OSError as e:
+        msg = f"LLM key store is unreadable: {persist_path} ({e})"
+        raise PlatformError(msg) from e
+
+    if not isinstance(data, dict):
+        msg = f"LLM key store has unexpected shape (expected object, got {type(data).__name__}): {persist_path}"
+        raise PlatformError(msg)
+
+    store: dict[str, str] = {}
+    for k, v in cast("dict[object, object]", data).items():
+        if not isinstance(k, str) or not isinstance(v, str):
+            msg = f"LLM key store has non-string entry ({k!r}: …): {persist_path}"
+            raise PlatformError(msg)
+        store[k] = v
+
+    logger.log(
+        logging.INFO,
+        "[IMP:7][_load_key_store] Loaded %d entr(y/ies) from %s",
+        len(store),
+        persist_path,
+    )
+    return store
+
+
+# endregion FUNC_load_key_store
+
+
 def persist_project_key(
     project_name: str,
     key: str,
@@ -353,57 +447,51 @@ def persist_project_key(
 
     ## @purpose  Write key to a JSON file at persist_path. Creates the file
     ##           if it doesn't exist, otherwise merges with existing entries.
-    ##           This is a stub — real SOPS integration planned for Wave 6.
+    ##           REF-0104: read-modify-write под FileLock(<store>.lock); corrupt
+    ##           store → PlatformError (fail-loud, НИКОГДА overwrite-all).
+    ##           SOPS integration planned for Wave 6.
     ## @io
     ##   - project_name: str — consumer name
     ##   - key: str — virtual key token
-    ##   - persist_path: Path | None — path to JSON store (default: /var/tmp/...)
-    ## @complexity O(1) — single file read/write
+    ##   - persist_path: Path | None — path to JSON store (default: PLATFORM_STATE_DIR)
+    ##   - ⚡ PlatformError — corrupt/unreadable store
+    ##   - ⚡ FileLockError — lock не взят за _LOCK_TIMEOUT_SECONDS (fail-closed)
+    ## @complexity O(K) — single file read/write
     ## @invariants
     ##   - File is valid JSON (dict of project_name → key)
-    ##   - If file doesn't exist, it is created
+    ##   - If file doesn't exist, it is created (mode 0600 via atomic_write_json)
     ##   - If project already exists in store, it is overwritten
-    ## @rationale Stub: actual SOPS encryption will be added in Wave 6.
-    ##            For now, plain JSON is sufficient for testing and integration.
+    ##   - Конкурентные писатели сериализованы; corrupt-стор блокирует запись
+    ## @rationale Ключи — единственная копия credentials проектов в сторе: потеря
+    ##            необратима (нет backup-домена), поэтому запись честнее доступности.
     """
     if persist_path is None:
         persist_path = get_default_persist_path()
 
-    # Load existing store
-    store: dict[str, str] = {}
-    if persist_path.exists():
-        try:
-            with pathlib.Path(persist_path).open(encoding="utf-8") as f:
-                store = cast("dict[str, str]", json.load(f))  # W11: json → Any → dict[str, str]
-        except (json.JSONDecodeError, OSError) as e:
-            logger.log(
-                logging.WARNING,
-                "[IMP:6][persist_project_key] Failed to read existing store, overwriting: %s",
-                e,
-            )
-            store = {}
+    with FileLock(_store_lock_path(persist_path), timeout=_LOCK_TIMEOUT_SECONDS):
+        # Fail-fast load: corrupt store → PlatformError, НИКОГДА overwrite-all (REF-0104)
+        store = _load_key_store(persist_path)
 
-    # Update store
-    store[project_name] = key
-    logger.log(
-        logging.CRITICAL,
-        "[IMP:9][persist_project_key] Key persisted: project=%s, key=%s..., path=%s",
-        project_name,
-        key[:_KEY_PREVIEW_LEN] if len(key) > _KEY_PREVIEW_LEN else key,
-        persist_path,
-    )
+        store[project_name] = key
+        logger.log(
+            logging.CRITICAL,
+            "[IMP:9][persist_project_key] Key persisted: project=%s, key=%s..., path=%s",
+            project_name,
+            key[:_KEY_PREVIEW_LEN] if len(key) > _KEY_PREVIEW_LEN else key,
+            persist_path,
+        )
 
-    # REF-0007 (11-DevPlan Волна 1): канонический atomic_write_json(mode=0600) вместо
-    # plain open("w") + chmod-после — temp создаётся 0600 (mkstemp-семантика), chmod до
-    # replace: нет окна с world-readable plaintext-ключами в tmpdir; crash → cleanup temp.
-    atomic_write_json(persist_path, cast("dict[str, object]", store), mode=0o600)
+        # REF-0007 (11-DevPlan Волна 1): канонический atomic_write_json(mode=0600) вместо
+        # plain open("w") + chmod-после — temp создаётся 0600 (mkstemp-семантика), chmod до
+        # replace: нет окна с world-readable plaintext-ключами в tmpdir; crash → cleanup temp.
+        atomic_write_json(persist_path, cast("dict[str, object]", store), mode=0o600)
 
-    logger.log(
-        logging.INFO,
-        "[IMP:8][persist_project_key] Store updated: %d entries at %s",
-        len(store),
-        persist_path,
-    )
+        logger.log(
+            logging.INFO,
+            "[IMP:8][persist_project_key] Store updated: %d entries at %s",
+            len(store),
+            persist_path,
+        )
 
 
 # endregion KEY_PERSISTENCE

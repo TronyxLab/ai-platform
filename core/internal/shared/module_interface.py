@@ -13,17 +13,23 @@
 ## @invariants
 ##   1. bash -c: source paths.sh && source module-interface.sh && invoke_module_interface '<m>' '<i>' [args...]
 ##   2. Сигнатура: invoke(module_name, interface, *args, timeout=COMPOSE_UP_TIMEOUT) → tuple[bool, str]
-##      — (success, stderr-output); никогда не raise (TimeoutExpired/OSError → (False, msg))
+##      — (success, stderr-output); никогда не raise (OSError → (False, msg); таймаут обрабатывает
+##      канон subprocess_io — graceful rc=124)
 ##   3. Пути paths.sh/module-interface.sh резолвятся относительно модуля (core/lib/), НЕ из env
 ##   4. args экранируются shlex.quote (безопасная передача строк с пробелами)
 ##   5. Модуль не импортирует bootstrap/deploy/* (слой shared — только вниз)
+##   6. REF-0103: исполнение через subprocess_io streaming-канон (Popen+start_new_session+killpg
+##      при таймауте) — прежний subprocess.run убивал ТОЛЬКО bash; внуки (docker/healthcheck-скрипты)
+##      оставались орфанами и держали ресурсы после «завершения» invoke.
 ## @rationale C5 (DevPlan 118): две идентичные сборки `source paths.sh && source module-interface.sh &&
 ##            invoke_module_interface ...` — правка обёртки требовала 2 правок с риском расхождения
 ##            (таймауты/семантика возврата). Единый invoke() в shared/ устраняет дубль; B8 wire
-##            module-hooks строится поверх этого канала.
+##            module-hooks строится поверх этого канона.
 ## @changes  2026-08-02 | DevPlan 118 C5 — Created (единая bash-обёртка invoke_module_interface)
 ##           2026-08-02 | DevPlan 119 D4 — +dispatch()/CLI invoke (dual-SoT устранён):
 ##                      module-interface.sh → тонкий фасад; validate+dispatch логика здесь
+##           2026-08-25 | REF-0103 — invoke/_run_module_script переведены на
+##                      run_subprocess_streaming (killpg всей группы процессов при таймауте)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -31,7 +37,6 @@ from __future__ import annotations
 import argparse
 import logging
 import shlex
-import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -39,6 +44,7 @@ from typing import cast
 
 import yaml
 
+from core.internal.shared.subprocess_io import run_subprocess_streaming
 from core.internal.shared.timeouts import COMPOSE_UP_TIMEOUT
 
 logger = logging.getLogger(__name__)
@@ -58,7 +64,8 @@ _MODULE_INTERFACE_SH = _LIB_DIR / "module-interface.sh"
 ## @invariants
 ##   - bash -c собирается из _PATHS_SH/_MODULE_INTERFACE_SH (source paths + module-interface)
 ##   - args экранируются shlex.quote (никакого инъекционного пробела в команду)
-##   - rc==0 → (True, stderr); rc!=0 → (False, stderr); TimeoutExpired/OSError → (False, str(exc))
+##   - rc==0 → (True, stderr); rc!=0 → (False, stderr); OSError → (False, str(exc));
+##     таймаут — graceful rc=124 через subprocess_io canon (killpg группы, REF-0103)
 ##   - timeout — канон shared/timeouts (потребитель передаёт свой: HEALTHCHECK_POLL_TIMEOUT / COMPOSE_UP_TIMEOUT)
 def invoke(
     module_name: str,
@@ -79,9 +86,12 @@ def invoke(
     if args:
         bash_cmd += " " + " ".join(shlex.quote(a) for a in args)
     logger.info("[IMP:8][module_interface][invoke] %s %s (timeout=%ds)", module_name, interface, timeout)
+    # REF-0103: killpg через subprocess_io canon — start_new_session + os.killpg(SIGKILL) всей
+    # группы при таймауте (stream=False: tee-вывод не нужен; heartbeat=0: без heartbeat-шума).
+    # Таймаут больше НЕ бросает TimeoutExpired наверх — канон возвращает graceful rc=124.
     try:
-        result = subprocess.run(["bash", "-c", bash_cmd], capture_output=True, text=True, timeout=timeout, check=False)
-    except (subprocess.TimeoutExpired, OSError) as exc:
+        result = run_subprocess_streaming(["bash", "-c", bash_cmd], timeout=timeout, stream=False, heartbeat=0)
+    except OSError as exc:
         logger.warning("[IMP:7][module_interface][error] %s %s error: %s", module_name, interface, exc)
         return False, str(exc)
     if result.returncode != 0:
@@ -169,19 +179,16 @@ def _run_module_script(
     """Выполнить скрипт модуля через `bash <script> [args...]`.
 
     ## @purpose — D4: диспетчеризация на скрипт модуля (эквивалент shell `bash "$script" "$@"`).
-    ## @io — ⇥ script: Path, args, timeout → ⎋ (rc, stderr) — никогда не raise (TimeoutExpired → rc 1)
+    ## @io — ⇥ script: Path, args, timeout → ⎋ (rc, stderr) — никогда не raise (таймаут → rc 124 каноном)
     ## @complexity O(1) — single bash subprocess
     """
     if not script.is_file():
         logger.info("[IMP:8][module_interface][dispatch] Script not found — skipping: %s", script)
         return 0, ""
+    # REF-0103: killpg через subprocess_io canon (паритет с invoke) — внуки скрипта
+    # (docker/psql-процессы healthcheck.sh) умирают вместе с группой при таймауте.
     try:
-        result = subprocess.run(
-            ["bash", str(script), *args], capture_output=True, text=True, timeout=timeout, check=False
-        )
-    except subprocess.TimeoutExpired as exc:
-        logger.warning("[IMP:7][module_interface][dispatch] Timeout (%ds): %s", timeout, script)
-        return 1, str(exc)
+        result = run_subprocess_streaming(["bash", str(script), *args], timeout=timeout, stream=False, heartbeat=0)
     except OSError as exc:
         logger.warning("[IMP:7][module_interface][dispatch] Cannot run %s: %s", script, exc)
         return 1, str(exc)
@@ -225,7 +232,7 @@ def dispatch(
     ##   - unknown interface (в interfaces, вне case) → rc 0 (skip)
     ##   - healthcheck/install/deploy-hook/remove-hook → bash script; script отсутствует → rc 0
     ##   - deploy-hook/remove-hook читают hooks.on_project_deploy/on_project_remove из module.yaml
-    ##   - Никогда не raise — TimeoutExpired/OSError → rc 1
+    ##   - Никогда не raise — OSError → rc 1; таймаут → graceful rc=124 (killpg canon, REF-0103)
     """
     module_dir = resolve_module_dir(module_name, modules_dir)
     module_yaml = module_dir / "module.yaml"

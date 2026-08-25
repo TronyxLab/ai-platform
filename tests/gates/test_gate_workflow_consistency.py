@@ -388,11 +388,19 @@ def test_core_deploy_auto_detects_node():
     )
     logger.info("[IMP:9][test] core-deploy.yml auto-detects NODE and passes NODE=$NODE to make node-update")
 
-    # ── core-deploy.yml rsyncs makefiles/ for Makefile include-split W4-E4 ──
-    assert "./makefiles/" in content, (
-        "core-deploy.yml must rsync makefiles/ to VPS (required by Makefile include-split W4-E4)"
+    # ── makefiles/ delivery for Makefile include-split W4-E4 ──
+    # 🧐 TRAP[TEST] · 2026-08-25 · SUPERSEDED · прежний ассерт требовал литерал «./makefiles/»
+    # ·   в core-deploy.yml (rsync-шаг); REF-0112 (11-DevPlan W3) перенёс доставку в модульный
+    # ·   вызов core_deliverer ci-deliver — фаза deliver_makefiles() сохранена (core_deliverer).
+    # · Remove if: доставка makefiles переезжает в третий канал.
+    assert "ci-deliver" in content and "core_deliverer" in content, (
+        "core-deploy.yml обязан доставлять файлы модульно через core_deliverer ci-deliver (REF-0112)"
     )
-    logger.info("[IMP:9][test] core-deploy.yml rsyncs makefiles/ to VPS")
+    deliverer_content = (repo_root() / "core/internal/bootstrap/core_deliverer.py").read_text()
+    assert "deliver_makefiles" in deliverer_content, (
+        "core_deliverer обязан содержать deliver_makefiles (makefiles/ доставляется, W4-E4)"
+    )
+    logger.info("[IMP:9][test] core-deploy.yml delivers via core_deliverer ci-deliver incl. makefiles phase")
 
     # ── bootstrap.sh delegates node detection to python3 -m node_detect (DevPlan 104) ──
     bootstrap_path = repo_root() / "core/entrypoints/bootstrap.sh"

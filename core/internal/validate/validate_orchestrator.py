@@ -83,6 +83,22 @@ logger = logging.getLogger(__name__)
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCHEMAS_DIR = Path(__file__).resolve().parents[2] / "schemas"
 
+# REF-0107: discovery roots argless-validate — ТОЛЬКО каталоги, где живут routable-
+# декларации (module.yaml в модулях, node.yaml в node-configs). Прежний корень core/internal
+# не содержал НИ ОДНОЙ routable-схемы → «OK: All files valid» всегда (вакуумный PASS).
+# ⚠️ TRAP[DECISION] · 2026-08-25 · — · Discovery roots: core/modules + node-configs
+# · Rejected: весь репозиторий (rglob от root) — тысячи non-declaration yaml (compose,
+#   workflows, templates) шумели бы skip-строками и замедляли pre-commit; корень проектов
+#   ~/projects/<ctx>/<proj>/ai-platform.yaml — вне репозитория платформы (проектный CI
+#   валидирует свои декларации сам, K2 quality-шаг deploy-project.yml).
+# · Reason: routable-схемы (_SCHEMA_ROUTING) физически существуют только в этих двух корнях;
+#   discovery должен покрывать ровно их носители.
+# · Rev: появление нового routable-типа декларации в третьем месте → добавить корень сюда.
+DISCOVERY_ROOTS: tuple[Path, ...] = (
+    REPO_ROOT / "core" / "modules",
+    REPO_ROOT / "node-configs",
+)
+
 # Schema routing map — 1:1 по case из validate.sh L223-238 (D1: ровно 3 схемы)
 _SCHEMA_ROUTING: dict[str, str] = {
     "node.yaml": "node.schema.json",
@@ -533,11 +549,15 @@ def main(
         return e.exit_code
     emit(6, "start", f"Using validator: {chosen_validator}")
 
-    # Files to validate: from args or auto-discover (D2: непустые args → discovery пропущен)
+    # Files to validate: from args or auto-discover (D2: непустые args → discovery пропущен).
+    # REF-0107: discovery по DISCOVERY_ROOTS (core/modules + node-configs) — корни, где
+    # routable-декларации физически существуют; прежний корень core/internal давал
+    # вакуумный «All files valid» (0 routable-файлов). Отсутствующий корень (node-configs
+    # на свежем clone без контекстов) — не ошибка discovery (skip, не FAIL).
     # Sequence (ковариантно): targets принимает и list[str] (args), и list[Path] (discover_targets)
     targets: Sequence[Path | str] = list(args)
     if not targets:
-        targets = discover_impl(Path(__file__).resolve().parent.parent)
+        targets = [path for root_dir in DISCOVERY_ROOTS if root_dir.is_dir() for path in discover_impl(root_dir)]
 
     if not targets:
         emit(6, "main", "No YAML files found to validate")

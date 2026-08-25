@@ -603,17 +603,18 @@ def _run_one_step(
                 f"{_remote_workdir(config)}/results",
                 str(config.results_dir),
             )
-            result = _run_locust_process(["locust", *args], env, timeout=timeout)
-            if result.returncode != 0:
-                tail = result.stdout.strip()[-1500:] if result.stdout.strip() else result.stderr.strip()[-1500:]
-                return {"error": f"locust rc={result.returncode}: {tail}"}
+            # PERF-080 (meta-refactoring): ЛОКАЛЬНЫЙ _run_locust_process в remote-ветке УДАЛЁН —
+            # дублировал полный второй прогон после remote-ранa (2× трафик + false FAIL:
+            # local CSV писал в несуществующий /lt/results → rc≠0). Парсинг CSV ниже общий.
         else:
             # ⚠️ TRAP[BUG] · 2026-08-14 · P1 · Локальный запуск locust отсутствовал после BUG-8
             # · Symptom: load-test (local) → "CSV не найден: .../run_stats.csv" → ложный FAIL
             # ·   (baseline W4-3 169); locust никогда не запускался в local-режиме.
             # · Root: регрессия BUG-8 (1dd928ad6): при переносе remote.fetch ДО парсинга ветка
             # ·   `else: _run_locust_process(...)` была потеряна — вызов остался внутри `if remote:`
-            # · Fix: восстановлена else-ветка локального запуска (паритет с 6c7f6925a original)
+            # · Fix: восстановлена else-ветка локального запуска (паритет с 6c7f6925a original);
+            # ·   2026-08-25 PERF-080 — дубль вызова из remote-ветки удалён (был продублирован,
+            # ·   а не перемещён: remote-ран гонял locust ДВАЖДЫ, второй — ложно падал)
             # · Prevention: unit-тест на local-режим _run_one_step (tests/unit/test_loadtest_runner.py)
             result = _run_locust_process(["locust", *args], env, timeout=timeout)
             if result.returncode != 0:
