@@ -1016,6 +1016,7 @@ gates:
   test_gate_collection_floors.py:
   - test_collection_floors
   - test_floor_selectors_track_manifest
+  - test_layer_below_floor_red
   test_gate_compose_base_contract.py:
   - test_all_base_yml_have_x_logging
   - test_container_name_matches_module_name
@@ -1664,13 +1665,18 @@ gates:
   - test_workflow_single_job_org_agnostic
   test_gate_workflow_sha_pins.py:
   - test_all_external_actions_pinned_full_sha
+  - test_channel_pins_fresh_and_consistent
   - test_negative_double_quoted_form_passes
+  - test_negative_false_snapshot_date_detected
   - test_negative_local_action_refs_exempt
   - test_negative_missing_fetch_depth_detected
+  - test_negative_missing_snapshot_date_detected
   - test_negative_mutable_tag_detected
   - test_negative_raw_interpolation_outside_quotes_detected
   - test_negative_sha_pin_without_version_comment_detected
   - test_negative_single_quoted_interpolation_detected
+  - test_negative_stale_channel_pin_detected
+  - test_positive_fresh_probe_passes
   - test_run_blocks_quoted_interpolation_only
   - test_workflows_fetch_depth_zero
   test_gate_yaml_deterministic_output.py:

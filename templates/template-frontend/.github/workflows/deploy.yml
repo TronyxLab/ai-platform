@@ -81,7 +81,7 @@ jobs:
 
   deploy:
     needs: [build-and-push]
-    uses: {{ORG_NAME}}/ai-platform/.github/workflows/deploy-project.yml@77c8221689df20a32ce838a7ab075a7df0ac30a4 # main snapshot 2026-08-25 (REF-0012)
+    uses: {{ORG_NAME}}/ai-platform/.github/workflows/deploy-project.yml@4e623c1234053302920c0c84cfab4f30bbdb8fab # main snapshot 2026-08-26 — merge DevPlan 16 (P0/P1 fixes: stdin-prelude CI, inputs env-indirect)
     with:
       project_name: {{PROJECT_NAME}}
     secrets: inherit

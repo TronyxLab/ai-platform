@@ -24,9 +24,9 @@
 # endregion MODULE_CONTRACT
 
 # Full commit SHA платформы (main snapshot), содержащий актуальный харденинг deploy-project.yml.
-# 2026-08-25 (волна 2): re-pin 42679a0 → 77c8221 — волна 1 добавила timeout-minutes:30 в job
-# deploy (QA R8/T1.1); freshness-гейт G6 корректно RED'ит устаревший пин — это его работа.
-DEPLOY_CHANNEL_PIN = "77c8221689df20a32ce838a7ab075a7df0ac30a4"
+# 2026-08-26: re-pin 77c8221 → 4e623c1 — post-audit волна 2 изменила deploy-project.yml
+# (4e623c1, 2026-08-26); freshness-гейт G6 корректно RED'ил устаревший пин — это его работа.
+DEPLOY_CHANNEL_PIN = "4e623c1234053302920c0c84cfab4f30bbdb8fab"
 
 # Честный комментарий-снапшот (формат фиксируется freshness-гейтом: 'main snapshot YYYY-MM-DD …').
-PIN_COMMENT = "main snapshot 2026-08-25 (REF-0012)"
+PIN_COMMENT = "main snapshot 2026-08-26 — merge DevPlan 16 (P0/P1 fixes: stdin-prelude CI, inputs env-indirect)"
