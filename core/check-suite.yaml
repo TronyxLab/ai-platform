@@ -165,8 +165,8 @@ checks:
     xdist: true
     junit: tests/report-ai-instructions.xml
     cmds:
-      fast: python3 -m core.internal.test_runner --marker ai_instructions --timeout=300 --junit-output tests/report-ai-instructions.xml
-      full: python3 -m core.internal.test_runner --marker ai_instructions --timeout=300 --junit-output tests/report-ai-instructions.xml
+      fast: python3 -m core.internal.test_runner --marker ai-instructions --timeout=300 --junit-output tests/report-ai-instructions.xml
+      full: python3 -m core.internal.test_runner --marker ai-instructions --timeout=300 --junit-output tests/report-ai-instructions.xml
   - id: static_audit
     tier: pytest
     timeout: 900

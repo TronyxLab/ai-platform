@@ -161,9 +161,21 @@ def test_floor_selectors_track_manifest(caplog) -> None:
                 f"[IMP:10][floors] {sid}: маркер floor ({floor_marker!r}) ≠ cmds.fast ({fast_cmd!r})"
             )
         else:
-            # test_runner --marker M ≡ pytest tests/ -m M (канон marker-режима)
-            assert _marker_of(cmd_tokens, "--marker") == floor_marker, (
-                f"[IMP:10][floors] {sid}: --marker floor ({floor_marker!r}) ≠ cmds.fast ({fast_cmd!r})"
+            # test_runner --marker M: M — КЛЮЧЬ реестра test_runner (может отличаться от
+            # pytest-маркера: ai-instructions → -m ai_instructions, DevPlan 001 T4.6).
+            # Паритет проверяется через РЕЗОЛВ реестра: resolved pytest-маркер == floor.
+            from core.internal.test_runner import MARKER_MAP as _registry
+
+            registry_key = _marker_of(cmd_tokens, "--marker")
+            assert registry_key is not None, f"[IMP:10][floors] {sid}: cmds.fast без --marker: {fast_cmd!r}"
+            assert registry_key in _registry and _registry[registry_key] is not None, (
+                f"[IMP:10][floors] {sid}: --marker {registry_key!r} не в реестре test_runner"
+            )
+            resolved = " ".join(_registry[registry_key])
+            # Реестр может расширять базовый маркер исключениями (static_audit: "-m X or
+            # (not e2e and …)") — паритет = базовый маркер совпадает и резолв НЕ пустой.
+            assert resolved.startswith(f"-m {floor_marker}"), (
+                f"[IMP:10][floors] {sid}: реестр резолвит {resolved!r}, floor ожидает '-m {floor_marker}'"
             )
         logger.info("[IMP:8][floors][parity] %s ↔ %r", sid, fast_cmd)
     logger.info("[IMP:9][floors] PASS: floor-селекторы отслеживают манифест")
