@@ -1,0 +1,39 @@
+{
+  "name": "{{PROJECT_NAME}}",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "AI Project bot/service project (scaffolded from template-ai-project, W3 D9)",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "lint": "eslint .",
+    "self-check": "ai-project-static check only-sdk-imports no-deep-imports no-user-strings-in-os capability-manifest-valid role-grants-valid glossary-drift generated-drift --root .",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@ai-project/cap-knowledge": "^0.1.0",
+    "@ai-project/cap-llm": "^0.1.0",
+    "@ai-project/channel-telegram": "^0.1.0",
+    "@ai-project/kernel": "^0.1.0",
+    "@ai-project/platform-adapters": "^0.1.0",
+    "@ai-project/sdk": "^0.1.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.32.0",
+    "@types/node": "^24.0.0",
+    "eslint": "^9.32.0",
+    "globals": "^16.0.0",
+    "typescript": "^5.9.2",
+    "typescript-eslint": "^8.38.0",
+    "vitest": "^3.2.4"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  }
+}

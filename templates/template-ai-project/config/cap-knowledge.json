@@ -1,0 +1,8 @@
+{
+  "_doc": "defaults per W3 devplan D5 — retriever v1 (Postgres FTS russian, ts_rank, GIN): лимит размера чанка и перекрытие, top-k, порог релевантности, fts-конфиг. Пустой результат или всё ниже порога = честное «не найдено» БЕЗ вызова LLM (легаси 1.7). Ключ _doc — маркер источника дефолтов; при сборке пилота (T7) синхронизируется с configSchema cap-knowledge и удаляется.",
+  "chunkSize": 2048,
+  "chunkOverlap": 256,
+  "topK": 5,
+  "relevanceThreshold": 0.2,
+  "ftsConfig": "russian"
+}

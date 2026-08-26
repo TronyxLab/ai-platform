@@ -1,0 +1,16 @@
+# practices.lock — каркас-заглушка (W3 D9; бриф §6.3 «практики: каждый проектный шаблон несёт
+# practices.lock-совместимый каркас»). Файл перегенерируется каналом практик платформы
+# (`make project-sync-practices`) при создании проекта и при дрейфе — ручные правки затираются.
+# Формат снапшота: core/internal/practices/generators.py::render_lock (version/level/state/
+# maturity/generated_at/generator_hash/language/files).
+# GREP_SUMMARY: practices.lock version level state maturity generator_hash language
+version: 1
+level: auto
+state: baseline
+maturity:
+  age_days: 0
+  code_files: 0
+generated_at: "2026-08-22T00:00:00Z"
+generator_hash: "skeleton-before-first-sync"
+language: typescript
+files: {}

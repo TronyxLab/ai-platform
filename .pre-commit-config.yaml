@@ -262,6 +262,10 @@ repos:
       - id: check-json
         name: check-json
         description: Validate JSON file syntax
+        # template-ai-project tsconfig* — JSONC (комментарии — канон TS, tsc парсит нативно);
+        # payload шаблона вне скоупа инварианта 4 (templates/template-*/) → scoped-exclude,
+        # остальной JSON строгий (проверка не ослаблена)
+        exclude: ^templates/template-ai-project/tsconfig(\.build)?\.json$
         stages: [pre-commit]
 
   - repo: local

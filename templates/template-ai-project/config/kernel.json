@@ -1,0 +1,8 @@
+{
+  "_doc": "defaults per W3 devplan — секция ядра (KernelConfig): healthPort (совпадает с monitoring.metrics_port, бриф §7), bindHost, пороги скоринга интентов (W2 D3: DEFAULT_MATCH_THRESHOLD 0.45 / DEFAULT_HARD_THRESHOLD 0.25), idempotencyTtlHours. Ключ _doc — маркер источника дефолтов; при сборке пилота (T7) синхронизируется с KernelConfig и удаляется.",
+  "healthPort": 8787,
+  "bindHost": "127.0.0.1",
+  "matchThreshold": 0.45,
+  "hardThreshold": 0.25,
+  "idempotencyTtlHours": 24
+}

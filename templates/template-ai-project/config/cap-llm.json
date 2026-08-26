@@ -1,0 +1,13 @@
+{
+  "_doc": "defaults per W3 devplan D6/D4 — LLM-профили (LiteLLM): модель, температура, лимиты, таймауты, ретраи; baseUrl — сеть платформы (LLM_BASE_URL из compose/env, бриф §7: LLM только через сеть платформы). Деградация — ТОЛЬКО при недоступности (IntegrationError → кандидаты из базы + подсказка из контента, degrade_llm_total +1, D6). Ключ _doc — маркер источника дефолтов; при сборке пилота (T7) синхронизируется с configSchema cap-llm и удаляется.",
+  "profiles": {
+    "default": {
+      "model": "gpt-4o-mini",
+      "baseUrl": "http://litellm:4000",
+      "temperature": 0.2,
+      "maxTokens": 512,
+      "timeoutMs": 30000,
+      "retries": 2
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "_doc": "defaults per W3 devplan D4 — канал данными (ChannelCapabilities(tg)): transport polling/webhook, дедуп update_id (персистентный курсор в Store, переживает рестарт), token — SOPS-референс, НЕ в репозитории и НЕ в образе (бриф §7/§16). {{PROJECT_NAME}} рендерится scaffold-ом. Ключ _doc — маркер источника дефолтов; при сборке пилота (T7) синхронизируется с configSchema channel-telegram и удаляется.",
+  "transport": "polling",
+  "token": "tg:{{PROJECT_NAME}}:bot-token",
+  "polling": {
+    "timeoutSec": 30,
+    "limit": 100
+  }
+}

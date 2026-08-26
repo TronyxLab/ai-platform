@@ -1,0 +1,26 @@
+# GREP_SUMMARY: template.yaml scaffold metadata root template ai-project os bot project tree
+# STRUCTURE: ┌template.yaml┐ → ◇ name/version/requires_practices_version/requires_instructions_version → ⎋ read_template_yaml + scaffold_instructions validation
+# region MODULE_CONTRACT
+## @purpose  Scaffold metadata корневого шаблона template-ai-project (W3 D9; бриф §6.1): корень
+##           дерева шаблонов БЕЗ parent — базовый шаблон ЛЮБОГО проекта на AI Project (боты,
+##           сервисы, админки): Cordis + @ai-project/* + src/{capabilities,entrypoints,roles,plugins}
+##           + статические проверки. Сверка requires_practices_version против
+##           practices_manifest.version (read_template_yaml) и requires_instructions_version
+##           против pin платформы (scaffold_instructions).
+## @scope    template-ai-project; потребляется core/internal/scaffold/scaffold_helpers.py
+##           и core/internal/scaffold/project_scaffolder.py (scaffold_instructions)
+## @invariants
+##   - БЕЗ parent: корневой слой дерева шаблонов (§6.1); parent-цепочка пуста → циклов нет
+##   - requires_practices_version > practices_manifest.version → scaffold fail (ConfigValidationError)
+##   - requires_instructions_version > pins templates.requires_instructions_version → scaffold fail
+##   - Отсутствие файла — graceful (scaffold не блокируется)
+## @rationale Корень дерева = точка конкатенации для будущих дочерних слоёв (§6.2); шаблон НЕ несёт
+##   снапшот инструкций — только анти-дрейф версии (TRAP §6 W0, шаблон-прецедент template-frontend)
+# endregion MODULE_CONTRACT
+
+# template.yaml — scaffold metadata (корень дерева шаблонов, без parent)
+name: template-ai-project
+version: 1
+requires_practices_version: 1
+requires_instructions_version: 0.7.0
+description: "AI Project base template — Cordis + @ai-project/* + src/{capabilities,entrypoints,roles,plugins} + static gates (bots, services, admin apps)"

@@ -1,0 +1,44 @@
+{
+  "//_doc": "os-gates.json — подмножество гейтов @ai-project/static для проекта (бриф §6.4: ai-project-специфичные гейты поставляются пакетом @ai-project/static и включаются в template-ai-project). Декларативный список; исполнение — `npm run self-check` (ai-project-static check --root .) и CI (ci.yml). Каждый пункт — rationale почему гейт проектно-релевантен.",
+  "gates": [
+    {
+      "id": "only-sdk-imports",
+      "level": "full",
+      "rationale": "R7: проект импортирует только @ai-project/sdk + объявленные cap-*; kernel/testkit не входят. Исключение: src/index.ts (composition root) легально импортирует @ai-project/kernel (createKernel — единственная точка сборки ядра, бриф §8) — гейт вызывается с extraAllowedPackages=['@ai-project/kernel'] до уточнения 'composition-root-only' в @ai-project/static."
+    },
+    {
+      "id": "no-deep-imports",
+      "level": "full",
+      "rationale": "R7: запрет глубоких импортов внутрь пакетов (@ai-project/kernel/src/...) — только публичные barrel-экспорты."
+    },
+    {
+      "id": "no-user-strings-in-os",
+      "level": "full",
+      "rationale": "R6: ни одной пользовательской строки в ОС — все тексты/кнопки/меню в content/ (strings.json + knowledge/), не в коде проекта."
+    },
+    {
+      "id": "capability-manifest-valid",
+      "level": "full",
+      "rationale": "R8/P3: манифесты capability (defineCapability) — id/version/configSchema/permissions/migrations; нарушение = ошибка старта, а не ревью (§6.4)."
+    },
+    {
+      "id": "role-grants-valid",
+      "level": "full",
+      "rationale": "P8/§9: гранты ролей ссылаются на существующие действия (справедливо и для ядра — validateStartup класс (b))."
+    },
+    {
+      "id": "glossary-drift",
+      "level": "full",
+      "rationale": "P3(словарь): имена в коде — из словаря §2 брифа/glossary.json; дрейф терминов ломает гейт."
+    },
+    {
+      "id": "generated-drift",
+      "level": "full",
+      "rationale": "§7: GENERATED-файлы (Dockerfile/docker-compose.yml/Makefile/.github/workflows/ci.yml) приходят синком практик; ручные правки в них = дрейф = гейт падает."
+    }
+  ],
+  "notes": [
+    "Проект не несёт no-domain-in-kernel (домен — код проекта, ядро вне зоны правок) и no-raw-vendor-clients (vendor-клиенты — только внутри пакетов ОС; проект каналов не пишет).",
+    "Канон платформы дополнительно исполняет: vitest (baseline, L3), ts-agent-check (baseline, L3: tsc strict + grep-summary + advisory-eslint) — бриф §6.4, решения W0."
+  ]
+}

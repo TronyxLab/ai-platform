@@ -1,0 +1,40 @@
+# GREP_SUMMARY: dockerignore template-ai-project build-context node_modules cache secrets exclude
+# STRUCTURE: ┌.dockerignore┐ → исключения build-контекста Docker (node-бот проекта AI Project)
+# region MODULE_CONTRACT
+## @purpose  Build-контекст Docker для проекта template-ai-project: исключает node_modules/кэши/
+##           секреты/конфиг-контент. Копируется в проект при make new-project TEMPLATE=ai-project.
+## @scope    Проекты-боты/сервисы (node:22-alpine, dist/index.js); канон template-frontend
+##           .dockerignore (170 W12 C8) + правила слоя AI Project.
+## @invariants
+##   - node_modules исключён (устанавливается in-image: npm ci --omit=dev)
+##   - .env* исключены ВСЕГДА (секреты никогда не попадают в build-контекст)
+##   - config/ и content/ исключены: живут на volume (бриф §7: «Конфиг и контент клиента — на
+##     volume, hot-reload; образ неизменяем») — в образе не нужны, монтируются при старте
+## @rationale Образ неизменяем (§7); конфиг/контент правит редактор на volume без ребилда.
+# endregion MODULE_CONTRACT
+
+# Node
+node_modules/
+dist/
+npm-debug.log*
+*.tsbuildinfo
+
+# Git
+.git/
+.gitignore
+
+# Секреты и окружение (никогда в образе)
+.env
+.env.*
+!.env.example
+
+# Конфиг и контент — только на volume (hot-reload, образ неизменяем)
+config/
+content/
+
+# Локальные артефакты
+logs/
+*.log
+.DS_Store
+.coverage/
+.kilo/
