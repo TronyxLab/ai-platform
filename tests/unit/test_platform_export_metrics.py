@@ -143,7 +143,9 @@ class TestDockerCollector:
                         "State": {
                             "Running": True,
                             "ExitCode": 0,
-                            "Status": "Up 2 hours (healthy)",
+                            # docker inspect API-значение State.Status (НЕ ps-строка «Up …»);
+                            # DevPlan 17 T1.3: фикстура приведена к реальному формату
+                            "Status": "running",
                             "Health": {"Status": "healthy"},
                         },
                         "Config": {"Image": "nginx:latest"},
@@ -155,7 +157,7 @@ class TestDockerCollector:
                         "State": {
                             "Running": False,
                             "ExitCode": 137,
-                            "Status": "Exited (137) 1 hour ago",
+                            "Status": "exited",
                             "Health": {"Status": "unhealthy"},
                         },
                         "Config": {"Image": "redis:alpine"},

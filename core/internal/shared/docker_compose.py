@@ -514,6 +514,26 @@ def docker_compose_images(
 # endregion FUNC_docker_compose_images
 
 
+# region FUNC_is_container_healthy
+def is_container_healthy(state: str | None, health: str | None) -> bool:
+    """Единый критерий «здоров» контейнера (D5, AI-0065): running AND Health.Status ∈ {healthy,"",none}.
+
+    ## @purpose  Канонический leaf-предикат здоровья — единственная реализация критерия;
+    ##            переиспользуется healthcheck_poll и метрическим docker_collector (паритет
+    ##            collector↔canon: running-без-healthcheck = здоров).
+    ## @io       ⇥ state: State.Status ("running"/"exited"/...), health: Health.Status
+    ##           ("healthy"/"unhealthy"/"starting"/""/None) → ⎋ bool
+    ## @complexity O(1)
+    ## @invariants
+    ##   - health=None/""/"none" (контейнер без HEALTHCHECK) при running → healthy=True
+    ##   - "starting"/"unhealthy" или не-running → False
+    """
+    return state == "running" and health in {"healthy", "", "none", None}
+
+
+# endregion FUNC_is_container_healthy
+
+
 # region FUNC_healthcheck_poll
 
 
@@ -603,7 +623,7 @@ def healthcheck_poll(
             for cid in cids:
                 # docker inspect State.Status|State.Health.Status (W1: примитив — shared/docker_ops)
                 state, health = dops.inspect_state_health(cid, timeout=DOCKER_CMD_TIMEOUT)
-                if not (state == "running" and health in {"healthy", "", "none"}):
+                if not is_container_healthy(state, health):
                     # "unhealthy"/"starting"/exited — ждём (стартовые гонки), не fail сразу
                     logger.debug(
                         "[IMP:6][healthcheck_poll] %s container %s not healthy yet (state=%s health=%s)",

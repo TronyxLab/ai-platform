@@ -19,7 +19,10 @@ import json
 import logging
 from typing import TypedDict, cast
 
-from core.internal.shared import docker_ops  # W1: docker ps/inspect/stats/image примитивы (гейт docker_sole_path)
+from core.internal.shared import (  # W1: docker ps/inspect/stats/image примитивы (гейт docker_sole_path); docker_compose — канон критерия здоровья (AI-0065)
+    docker_compose,
+    docker_ops,
+)
 
 # W1-A1 (план 170): _SUBPROCESS_TIMEOUT=15 (дубль SoT) → FILE_OP_TIMEOUT (15) — каноническое
 # 15s окно файловых/инспекционных операций (DevPlan 119 B7).
@@ -262,16 +265,21 @@ def get_image_sizes(image_ids: set[str]) -> dict[str, int]:
 
 # region HELPER__get_health_status
 def _get_health_status(state: dict[str, object]) -> bool:
-    """Extract health status from docker container State dict.
+    """Extract health verdict from docker container State dict — канон D5 (AI-0065).
 
-    ## @purpose  Normalize Health.Status field: 'healthy' → True, all else → False
+    ## @purpose  Единый критерий «здоров» (shared/docker_compose.is_container_healthy):
+    ##            running AND Health.Status ∈ {healthy,"",none} — running-без-healthcheck
+    ##            = healthy (раньше «Status=='healthy'» клеймил легитимные контейнеры больными).
     ## @io       ⇥ state: dict from docker inspect → ⎋ bool
     ## @complexity  O(1)
     ## @changes  2026-08-15 | DevPlan 170 W11 — dict[str, object] (граница JSON)
+    ## @changes  2026-08-26 | DevPlan 17 T1.3 (AI-0065) — переиспользование канона вместо
+    ##            локального 'healthy'-only матчинга
     """
     health_raw = state.get("Health")
     health = cast("dict[str, object]", health_raw) if isinstance(health_raw, dict) else cast("dict[str, object]", {})
-    return health.get("Status") == "healthy"
+    status = cast("str | None", state.get("Status"))
+    return docker_compose.is_container_healthy(status, cast("str | None", health.get("Status")))
 
 
 # endregion HELPER__get_health_status
