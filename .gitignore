@@ -108,3 +108,6 @@ logs/
 # Load-test results — полные отчёты (DevPlan 146 инвариант 6): целиком в gitignore
 # без negate-паттернов; baseline history.json живёт в core/loadtest/history/ (коммитится)
 load-results/
+
+# Agent/git worktrees (isolated checkouts)
+.worktrees/

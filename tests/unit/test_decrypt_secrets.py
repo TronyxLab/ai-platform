@@ -1,5 +1,5 @@
-# GREP_SUMMARY: test-decrypt-secrets, sops, age, decrypt, temp-key, dd-wipe, cleanup, ldd, unit-test
-# STRUCTURE: ▶ 4 tests → ◇ decrypt_success → ◇ decrypt_fail → ◇ dd_wiped → ◇ no_secret_logged → ⎋ pass|fail
+# GREP_SUMMARY: test-decrypt-secrets, sops, age, decrypt, temp-key, dd-wipe, cleanup, ldd, unit-test, ci_default, auto-inject, plan-012
+# STRUCTURE: ▶ 4 tests → ◇ decrypt_success → ◇ decrypt_fail → ◇ dd_wiped → ◇ no_secret_logged → ⊕ 3 ci_default tests (inject/fail-loud/unchanged) → ⎋ pass|fail
 # region MODULE_CONTRACT
 ## @purpose  Unit tests for core/internal/secrets/decrypt_secrets.py.
 ##           Verifies decrypt_sops_file() with mocked subprocess calls for sops --decrypt
@@ -24,7 +24,9 @@ from unittest import mock
 import pytest
 
 from core.internal.secrets.decrypt_secrets import (
+    _CI_DEFAULT_MARKER,
     _TEMP_FILES,
+    apply_ci_default_injection,
     decrypt_sops_file,
     resolve_enc_path,
 )
@@ -306,3 +308,118 @@ def test_resolve_enc_path(tmp_path: pytest.TempPathFactory) -> None:
 
 
 # endregion FUNC_test_resolve_enc_path
+
+
+# ── Plan 012 T3 (D3/F-014): ci_default auto-inject при decrypt ────────────────
+
+
+def _write_definitions(tmp_path: pathlib.Path, entries: str) -> str:
+    """Write a minimal secret-definitions.yaml fixture; return its path."""
+    defs_path = tmp_path / "secret-definitions.yaml"
+    defs_path.write_text(f"version: 1\nsecrets:\n{entries}", encoding="utf-8")
+    return str(defs_path)
+
+
+# region FUNC_test_ci_default_auto_inject
+## @purpose  Отсутствующий tier=optional+ci_default ключ дописывается в secrets.env
+##           c маркер-комментарием и WARN-строкой в логах (F-014, прецедент ZAI).
+## @io       ⇥ caplog, tmp_path → ⎋ None (asserts content + WARN)
+## @complexity O(1)
+@ldd_trajectory
+def test_ci_default_auto_inject(caplog: pytest.LogCaptureFixture, tmp_path: pathlib.Path) -> None:
+    """Missing optional+ci_default key is appended with marker comment and WARN log."""
+    # 🧪 TRAP[TEST] · 2026-08-26 · REGRESSION · F-014 ci_default auto-inject (plan 012 T3)
+    # · Scenario: optional+ci_default absent → appended with marker + WARN; present key untouched
+    # · Last fail: F-014 — ZAI-ключ отсутствовал в матрице → compose ${VAR:?} unsatisfied,
+    #   оператор чинил вручную; автоматизация убирает класс (D3)
+    # · Remove if: auto-inject перенесён из decrypt_secrets в другой слой
+    env_content = "EXISTING_KEY='value'\n"
+    defs_path = _write_definitions(
+        tmp_path,
+        "  - name: ZAI_API_KEY\n    tier: optional\n    source: sops\n    ci_default: 'test-zai-key'\n"
+        "  - name: EXISTING_KEY\n    tier: required\n    source: sops\n",
+    )
+
+    new_content, injected = apply_ci_default_injection(env_content, definitions_path=defs_path)
+
+    assert injected == ["ZAI_API_KEY"], f"Expected ZAI_API_KEY injected, got {injected}"
+    assert f"{_CI_DEFAULT_MARKER}\nZAI_API_KEY='test-zai-key'" in new_content, (
+        f"Marker comment + KEY line expected:\n{new_content}"
+    )
+    assert "EXISTING_KEY='value'" in new_content, "Present keys must remain untouched"
+    assert any("[IMP:9]" in r.message and "Auto-injected" in r.message for r in caplog.records), (
+        "WARN [IMP:9] about injection expected in output"
+    )
+    logger.critical("[IMP:9][test] ci_default auto-inject verified (marker + WARN + content)")
+
+
+# endregion FUNC_test_ci_default_auto_inject
+
+
+# region FUNC_test_missing_required_fails_loud
+## @purpose  Отсутствующий required/generated → PlatformFatalError со списком имён,
+##           ДО записи файла (fail-loud D3); список — все отсутствующие за один проход.
+## @io       ⇥ tmp_path → ⎋ None (asserts raise + message)
+## @complexity O(1)
+@ldd_trajectory
+def test_missing_required_fails_loud(tmp_path: pathlib.Path) -> None:
+    """Missing required/generated keys → PlatformFatalError listing ALL names."""
+    # 🧪 TRAP[TEST] · 2026-08-26 · REGRESSION · F-014 fail-loud required/generated (plan 012 T3)
+    # · Scenario: two required missing + one generated missing → single error with full list
+    # · Last fail: полу-стек поднимался с пустыми секретами как «success»
+    # · Remove if: fail-loud валидация перенесена в другой слой
+    env_content = "PRESENT='x'\n"
+    defs_path = _write_definitions(
+        tmp_path,
+        "  - name: MISSING_REQ_A\n    tier: required\n    source: sops\n"
+        "  - name: MISSING_REQ_B\n    tier: required\n    source: sops\n"
+        "  - name: MISSING_GEN\n    tier: generated\n    source: autogen\n"
+        "  - name: OPTIONAL_OK\n    tier: optional\n    source: sops\n",
+    )
+
+    with pytest.raises(PlatformFatalError) as exc_info:
+        apply_ci_default_injection(env_content, definitions_path=defs_path)
+
+    message = str(exc_info.value)
+    for name in ("MISSING_REQ_A", "MISSING_REQ_B", "MISSING_GEN"):
+        assert name in message, f"Missing key {name} must be listed in error: {message}"
+    assert "OPTIONAL_OK" not in message, "Optional keys must not be reported as missing"
+    logger.critical("[IMP:9][test] Missing required/generated → fail-loud with full list")
+
+
+# endregion FUNC_test_missing_required_fails_loud
+
+
+# region FUNC_test_complete_matrix_unchanged
+## @purpose  Полная матрица → вывод байт-идентичен входу (никаких дописанных строк),
+##           отсутствие реестра → тоже без изменений (легаси-поведение).
+## @io       ⇥ tmp_path → ⎋ None (asserts byte-equality)
+## @complexity O(1)
+@ldd_trajectory
+def test_complete_matrix_unchanged(caplog: pytest.LogCaptureFixture, tmp_path: pathlib.Path) -> None:
+    """Complete matrix → byte-identical output; absent registry → unchanged too."""
+    # 🧪 TRAP[TEST] · 2026-08-26 · REGRESSION · F-014 complete-matrix byte-identity (plan 012 T3)
+    # · Scenario: все ключи реестра присутствуют → content == input (byte-identical);
+    #             definitions-файл отсутствует → без изменений, без ошибки
+    # · Last fail: N/A (регрессион-контракт Change Impact T3 — потребители парсинга)
+    # · Remove if: контракт «полная матрица не мутируется» отменён владельцем
+    env_content = "KEY_A='a'\nKEY_B='b'\n"
+    defs_path = _write_definitions(
+        tmp_path,
+        "  - name: KEY_A\n    tier: required\n    source: sops\n"
+        "  - name: KEY_B\n    tier: optional\n    source: sops\n    ci_default: 'x'\n",
+    )
+
+    new_content, injected = apply_ci_default_injection(env_content, definitions_path=defs_path)
+    assert new_content == env_content, "Complete matrix must produce byte-identical output"
+    assert injected == [], "No injections expected for complete matrix"
+
+    missing_defs = tmp_path / "nope.yaml"
+    content_no_defs, injected_no_defs = apply_ci_default_injection(env_content, definitions_path=str(missing_defs))
+    assert content_no_defs == env_content, "Absent registry must keep legacy behavior"
+    assert injected_no_defs == []
+    assert any("skipped" in r.message for r in caplog.records), "IMP:8 skip-log expected for absent registry"
+    logger.critical("[IMP:9][test] Complete matrix / absent registry → byte-identical legacy behavior")
+
+
+# endregion FUNC_test_complete_matrix_unchanged

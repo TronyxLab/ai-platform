@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: sops, age, decrypt, secrets, env, temp-key, dd-wipe, cleanup, SOPS_AGE_KEY_FILE, fail-fast
-# STRUCTURE: ▶ main() [register handlers (TERM/INT/HUP+atexit) → sweep stale /dev/shm] → ◇ resolve_enc_path [path | NODE name | glob] → ◇ detect_age_key ⚡ → ◇ decrypt_sops_file [temp key 0600 → sops --decrypt → dd wipe] → ◇ empty-parse guard ⚡PlatformFatalError → ◇ write_secrets_env [tempfile+rename atomic] → ⎋ exit 0|1|10
+# GREP_SUMMARY: sops, age, decrypt, secrets, env, temp-key, dd-wipe, cleanup, SOPS_AGE_KEY_FILE, fail-fast, ci_default, auto-inject, plan-012
+# STRUCTURE: ▶ main() [register handlers (TERM/INT/HUP+atexit) → sweep stale /dev/shm] → ◇ resolve_enc_path [path | NODE name | glob] → ◇ detect_age_key ⚡ → ◇ decrypt_sops_file [temp key 0600 → sops --decrypt → dd wipe] → ◇ empty-parse guard ⚡PlatformFatalError → ◇ apply_ci_default_injection [optional+ci_default → inject+WARN · required/generated missing ⚡fail-loud] → ◇ write_secrets_env [tempfile+rename atomic] → ⎋ exit 0|1|10
 # region MODULE_CONTRACT
 ## @purpose  Python core for decrypting SOPS/age-encrypted secrets. Extracted from
 ##           core/internal/secrets/decrypt-secrets.sh. Manages temp age key file with
@@ -27,6 +27,11 @@
 ##          (пустой secrets.env НЕ пишется, «decrypted successfully» при пустом результате
 ##          невозможен); явный enc-path/имя ноды, которых нет на диске → FileNotFoundError
 ##          БЕЗ glob-fallback (тихая расшифровка alphabetically-first чужой ноды устранена)
+##   Plan 012 T3 (D3/F-014): ci_default auto-inject при decrypt — ключ tier=optional с
+##          ci_default, отсутствующий в матрице → дописан c маркером «# auto-injected
+##          ci_default (plan 012)» + WARN; отсутствующий required/generated → PlatformFatalError
+##          со списком имён ДО записи файла (fail-loud, полу-стек невозможен);
+##          полная матрица → байт-идентичный вывод (регрессион-тест)
 ## @rationale DevPlan Strangler-Fig — Python core extracted from 223-line shell script.
 ##            Security-critical operations (key handling, cleanup) must be auditable,
 ##            testable, and verifiable via unit tests. Shell trap pattern replaced with
@@ -42,6 +47,10 @@
 ##             /dev/shm; sops stderr redact также значения age-ключа (TEST-07); resolve_enc_path:
 ##             bare NODE=<name> → <secrets_dir>/<name>.enc.yaml, явный отсутствующий путь →
 ##             FileNotFoundError без glob-fallback (alphabetically-first нода устранена)
+## @changes  2026-08-26 | Plan 012 T3 (D3/F-014) — ci_default auto-inject при decrypt:
+##             optional+ci_default отсутствующий → inject + WARN; required/generated
+##             отсутствующий → fail-loud со списком имён; SoT — core/secret-definitions.yaml
+##             через shared/yaml_loader.load_secret_definitions
 ## ⚠️ TRAP[DECISION] · 2026-07-30 · MED · Cleanup architecture migrated from shell (trap+cleanup_all) to Python (atexit+signal)
 ## · Rejected: Keeping cleanup in shell (risk: two parallel cleanup paradigms — shell trap AND Python atexit — creates ambiguity)
 ## · Reason: Python atexit+signal provides deterministic cleanup order, testability, and replaces shell trap EXIT INT TERM
@@ -93,6 +102,10 @@ from core.internal.shared.exceptions import PlatformError, PlatformFatalError
 
 # Детекция AGE-ключа делегируется в канонический node_detect.py.
 from core.internal.shared.node_detect import detect_age_key as _detect_age_key_impl
+
+# Plan 012 T3 (D3/F-014): SoT-реестр секретов читается единым загрузчиком (DRY —
+# никакого повторного парсинга secret-definitions.yaml).
+from core.internal.shared.yaml_loader import load_secret_definitions
 
 # ── Global cleanup state ───────────────────────────────────────────────────────
 _TEMP_FILES: list[str] = []
@@ -512,6 +525,105 @@ def resolve_enc_path(enc_path: str | None, *, secrets_dir: str = _NODE_CONFIGS_S
 # endregion FUNC_resolve_enc_path
 
 
+# region FUNC_apply_ci_default_injection
+## Plan 012 T3 (D3/F-014): маркер-комментарий инъецированных ci_default ключей.
+_CI_DEFAULT_MARKER = "# auto-injected ci_default (plan 012)"
+_FAIL_LOUD_TIERS: tuple[str, ...] = ("required", "generated")
+
+
+def _definitions_path() -> pathlib.Path:
+    """SoT-реестр секретов: SECRETS_DEFINITIONS env → канонический core/secret-definitions.yaml.
+
+    ## @purpose — env-override для тестов/нестандартных установок; дефолт — parents[2] = core/.
+    ## @io — ⇥ None → ⎋ Path
+    ## @complexity O(1)
+    """
+    override = os.environ.get("SECRETS_DEFINITIONS", "").strip()
+    if override:
+        return pathlib.Path(override)
+    return pathlib.Path(__file__).resolve().parents[2] / "secret-definitions.yaml"
+
+
+def apply_ci_default_injection(
+    env_content: str,
+    definitions_path: str | pathlib.Path | None = None,
+) -> tuple[str, list[str]]:
+    """Auto-inject tier=optional+ci_default keys missing from the decrypted matrix (plan 012 T3).
+
+    ▶ ┌env_content + secret-definitions┐ → ○ scan defs →
+      ◇ optional ∧ ci_default ∧ missing → ⊕ append marker+KEY ·
+      ◇ required|generated ∧ missing → collect → ⚡ PlatformFatalError (fail-loud список) →
+      ⎋ (new_content, injected_names)
+
+    ## @purpose — Лечение класса ошибок «ключ есть в compose, отсутствует в матрице»
+    ##            (прецедент DEEPSEEK/ZAI, F-014): отсутствующий optional-ключ с ci_default
+    ##            дописывается автоматически; отсутствующий required/generated — fail-loud
+    ##            ДО записи secrets.env. Полная матрица → байт-идентичный вывод.
+    ## @io — ⇥ env_content: str (KEY='value' строки), definitions_path: путь SoT-реестра
+    ##          (None = канонический core/secret-definitions.yaml) → ⎋ tuple (контент, имена)
+    ## @complexity — O(D + K), D = записи реестра, K = строки env_content
+    ## @invariants
+    ##   - Inject ТОЛЬКО tier=optional с непустым ci_default (test-only значения)
+    ##   - required/generated missing → PlatformFatalError СО СПИСКОМ имён за один проход,
+    ##     ДО записи файла (полу-стек невозможен как «success», D3)
+    ##   - Пустой/отсутствующий реестр → контент без изменений (валидация невозможна —
+    ##     легаси-поведение сохранено, byte-identical)
+    ##   - Формат KEY='value' сохранён (потребители парсинга совместимы — Change Impact T3)
+    """
+    path = _definitions_path() if definitions_path is None else pathlib.Path(definitions_path)
+    present_keys = {
+        m.group(1) for ln in env_content.splitlines() if (m := re.match(r"^([A-Za-z_][A-Za-z0-9_]*)=", ln.strip()))
+    }
+
+    # load_secret_definitions: отсутствующий файл → [] (+ warning внутри загрузчика) —
+    # валидация/инъекция невозможны → легаси-поведение без изменений.
+    definitions = load_secret_definitions(path)
+    if not definitions:
+        logger.info("[IMP:8][ci_default_inject] No secret definitions at %s — injection/validation skipped", path)
+        return env_content, []
+
+    injected: list[str] = []
+    missing: list[str] = []
+    extra_lines: list[str] = []
+    for definition in definitions:
+        name = str(definition.get("name", ""))
+        if not name or name in present_keys:
+            continue
+        tier = str(definition.get("tier", ""))
+        ci_default = definition.get("ci_default") or ""
+        if tier == "optional" and ci_default:
+            escaped = str(ci_default).replace("'", "'\\''")
+            extra_lines.extend((_CI_DEFAULT_MARKER, f"{name}='{escaped}'"))
+            injected.append(name)
+        elif tier in _FAIL_LOUD_TIERS:
+            missing.append(name)
+
+    if missing:
+        logger.error(
+            "[IMP:10][ci_default_inject] FAIL-LOUD: required/generated keys missing from decrypted "
+            "matrix (%s): %s — refusing to write partial secrets.env (D3)",
+            path,
+            ", ".join(missing),
+        )
+        msg = f"Missing required/generated secrets after decrypt ({path}): {', '.join(missing)}"
+        raise PlatformFatalError(msg)
+
+    if not injected:
+        return env_content, []
+
+    logger.warning(
+        "[IMP:9][ci_default_inject] Auto-injected %d optional ci_default key(s): %s (test-only values from %s)",
+        len(injected),
+        ", ".join(injected),
+        path,
+    )
+    new_content = env_content.rstrip("\n") + "\n" + "\n".join(extra_lines) + "\n"
+    return new_content, injected
+
+
+# endregion FUNC_apply_ci_default_injection
+
+
 # region FUNC_main
 class _DecryptArgs(argparse.Namespace):
     """Typed argparse namespace (W11: Namespace attribute access is Any).
@@ -590,8 +702,17 @@ def _plw_body_main(args: _DecryptArgs, enc_path: str) -> None:
         parsed_count,
         max(unparsed_lines, 0),
     )
+
+    # Plan 012 T3 (D3/F-014): ci_default auto-inject (optional) + fail-loud required/generated —
+    # вызов ДО write_secrets_env: частичный secrets.env невозможен.
+    env_content, injected = apply_ci_default_injection(env_content)
+
     write_secrets_env(env_content, args.output_path)
-    logger.info("[IMP:9][main] Secrets decrypted successfully: %s", args.output_path)
+    logger.info(
+        "[IMP:9][main] Secrets decrypted successfully: %s (%d injected ci_default)",
+        args.output_path,
+        len(injected),
+    )
 
 
 # endregion FUNC__plw_body_main

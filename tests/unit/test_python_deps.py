@@ -100,7 +100,7 @@ def test_python_deps_content_hash_skip(caplog, tmp_path):
     logger.critical("[IMP:9][test] Content hash + python version match — install skipped")
 
 
-# endregion
+# endregion FUNC_test_python_deps_content_hash_skip
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -150,7 +150,7 @@ def test_python_deps_content_hash_changed(caplog, tmp_path):
     logger.critical("[IMP:9][test] Marker mismatch — Python 3.14 + requirements installed")
 
 
-# endregion
+# endregion FUNC_test_python_deps_content_hash_changed
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -196,7 +196,7 @@ def test_python_deps_core_dir_missing(caplog, tmp_path):
     logger.critical("[IMP:9][test] Core dir missing — ensure_python_deps returned False")
 
 
-# endregion
+# endregion FUNC_test_python_deps_core_dir_missing
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -224,7 +224,7 @@ def test_python_deps_python314_idempotent_skip(caplog):
     logger.critical("[IMP:9][test] Python 3.14 already installed — interpreter install skipped")
 
 
-# endregion
+# endregion FUNC_test_python_deps_python314_idempotent_skip
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -289,7 +289,7 @@ def test_python_deps_python314_deadsnakes_install(caplog, tmp_path):
     logger.critical("[IMP:9][test] Python 3.14 installed via deadsnakes PPA (6-command sequence)")
 
 
-# endregion
+# endregion FUNC_test_python_deps_python314_deadsnakes_install
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -340,7 +340,7 @@ def test_python_deps_marker_hash_version(caplog, tmp_path):
     logger.critical("[IMP:9][test] Marker carries hash + python version — old-format and drift detected")
 
 
-# endregion
+# endregion FUNC_test_python_deps_marker_hash_version
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -379,4 +379,103 @@ def test_python_deps_fallback_non_ubuntu_2404(caplog, tmp_path):
     logger.critical("[IMP:9][test] Non-24.04 fallback to system python3-pip (WARN + fail-soft)")
 
 
-# endregion
+# endregion FUNC_test_python_deps_fallback_non_ubuntu_2404
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region FUNC_test_requirements_canonical_path
+# ═══════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · Regression · Plan 012 T2 (F-019) — canonical requirements resolution
+# · Scenario A: requirements.txt в <core_dir>/ → резолвится строго оттуда (канон доставки)
+# · Scenario B: в core_dir файла НЕТ, но есть <core_dir>/core/requirements.txt
+#               (caller передал корень платформы — инцидент F-019) → WARN [IMP:9] +
+#               канонический путь <root>/core/requirements.txt
+# · Last fail: F-019 — python_deps искал /opt/platform/requirements.txt, pip-deps не ставились,
+#              оператор лечил ручным `cp core/requirements.txt → /opt/platform/`
+# · Remove if: резолюция requirements перестанет быть частью python_deps (вынесена в caller)
+@ldd_trajectory
+def test_requirements_canonical_path(caplog, tmp_path):
+    """## @purpose requirements.txt resolves from <core_dir> only; platform-root mis-call self-heals."""
+    # ── Scenario A: canonical core dir ──
+    core_dir = tmp_path / "core"
+    core_dir.mkdir()
+    req_file = core_dir / "requirements.txt"
+    req_file.write_text("requests==2.31.0\n")
+
+    resolved = python_deps._resolve_requirements_path(str(core_dir))
+    assert Path(resolved) == req_file, f"Canonical path expected, got {resolved}"
+    logger.critical("[IMP:9][test] Canonical resolution from <core_dir>/requirements.txt OK")
+
+    # ── Scenario B: platform root passed instead of core dir (F-019) → self-heal ──
+    platform_root = tmp_path / "platform"
+    platform_root.mkdir()
+    canon_dir = platform_root / "core"
+    canon_dir.mkdir()
+    canon_req = canon_dir / "requirements.txt"
+    canon_req.write_text("requests==2.31.0\n")
+
+    resolved_healed = python_deps._resolve_requirements_path(str(platform_root))
+    assert Path(resolved_healed) == canon_req, f"Self-healed canonical path expected, got {resolved_healed}"
+    warn_messages = [r.getMessage() for r in caplog.records if "F-019" in r.getMessage() or "КОРЕНЬ" in r.getMessage()]
+    assert warn_messages, "Expected loud WARN about platform-root mis-call (F-019 diagnosis)"
+    logger.critical("[IMP:9][test] Platform-root mis-call self-healed to <root>/core/requirements.txt with WARN")
+
+
+# endregion FUNC_test_requirements_canonical_path
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region FUNC_test_marker_invalidated_by_failed_import
+# ═══════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · Regression · Plan 012 T2 (F-019) — marker does not block reinstall
+# · Scenario: marker (hash + pyver) MATCHES, но import-probe boto3 проваливается
+#             (rc=1 через FakeCommandRunner) → переустановка выполняется despite marker;
+#             успешный probe → no-op сохраняется (идемпотентность, AC c)
+# · Last fail: F-019 — маркер ложно говорил «match» и блокировал переустановку при
+#              отсутствующем boto3 (S3-cache был мёртв на живой ноде)
+# · Remove if: import-probe инвалидация маркера удалена/заменена другим механизмом
+@ldd_trajectory
+def test_marker_invalidated_by_failed_import(caplog, tmp_path):
+    """## @purpose Marker-match + failed import-probe → reinstall; successful probe → no-op preserved."""
+    core_dir = tmp_path / "core"
+    core_dir.mkdir()
+    req_file = core_dir / "requirements.txt"
+    req_file.write_text("requests==2.31.0\nboto3==1.43.80\n")
+
+    h = hashlib.sha256()
+    h.update(req_file.read_bytes())
+    hash_file = _make_hash_dir(tmp_path)[1]
+    hash_file.write_text(f"{h.hexdigest()}\n3.14.5\n")
+
+    # ── Case 1: probe FAILED (import boto3 → rc=1) → reinstall despite valid marker ──
+    runner_fail = FakeCommandRunner(default=_proc(1))
+    with (
+        patch.object(python_deps, "_probe_critical_imports", return_value=(False, ["boto3"])),
+        patch.object(python_deps, "_install_python314", return_value=True) as mock_inst,
+        patch.object(python_deps, "_install_requirements", return_value=True) as mock_reqs,
+    ):
+        result = python_deps.ensure_python_deps(str(core_dir), runner=runner_fail, hash_file=str(hash_file))
+
+    assert result is True, "Reinstall after failed probe must succeed end-to-end"
+    mock_inst.assert_called_once()
+    mock_reqs.assert_called_once()
+    logger.critical("[IMP:9][test] Failed import-probe invalidated marker — reinstall executed")
+
+    # ── Case 2: probe OK → идемпотентный no-op сохранён (AC c) ──
+    with (
+        patch.object(python_deps, "_probe_critical_imports", return_value=(True, [])),
+        patch.object(python_deps, "_install_python314", return_value=True) as mock_inst_ok,
+    ):
+        result_ok = python_deps.ensure_python_deps(
+            str(core_dir), runner=FakeCommandRunner(default=_proc(0)), hash_file=str(hash_file)
+        )
+    assert result_ok is True, "Valid marker + passing probe must remain a no-op"
+    mock_inst_ok.assert_not_called()
+    logger.critical("[IMP:9][test] Valid marker + passing probe — idempotent no-op preserved")
+
+
+# endregion FUNC_test_marker_invalidated_by_failed_import

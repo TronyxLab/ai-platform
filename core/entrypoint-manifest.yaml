@@ -1028,6 +1028,9 @@ gates:
   - test_include_matches_discovered_modules
   - test_regeneration_is_noop_on_committed
   - test_root_compose_uses_include
+  test_gate_compose_interpolation_sot.py:
+  - test_all_required_vars_registered
+  - test_unknown_var_red
   test_gate_compose_no_base_image.py:
   - test_no_base_image_anywhere
   - test_root_compose_uses_context_image_var

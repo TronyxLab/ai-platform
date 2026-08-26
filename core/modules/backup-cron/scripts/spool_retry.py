@@ -20,6 +20,9 @@ Daily spool rescan retry (REF-0009): re-upload backups left in spool.
     sibling ``.uploaded`` sentinel (legacy ``.backup_ran_*`` markers excluded).
   - Plain dumps (.sql.gz) are encrypted FIRST via age_cipher.age_encrypt — same
     fail-closed contract as backup_postgres.py; plaintext never uploaded.
+  - SEC-0018 (plan 012 T7): pre_restore_* plaintext snapshots excluded from the
+    scan entirely (writer moved to backup-spool/pre-restore/; legacy leftovers
+    in scan dirs skipped by prefix with a WARN).
   - Already-encrypted artifacts (.age) are uploaded as-is with key
     ``<subdir>/<filename>`` (matches nightly pipeline naming).
   - Per-file failure is non-fatal: remaining candidates still attempted;
@@ -51,6 +54,10 @@ _UPLOAD_SCRIPT = "/usr/local/bin/upload-s3.sh"
 _LEGACY_MARKER_PREFIX = ".backup_ran_"
 _SENTINEL_SUFFIX = ".uploaded"
 _SPOOL_SUBDIRS = ("postgres", "app-data")
+# SEC-0018 (plan 012 T7): plaintext pre_restore снапшоты (postgres restore target) живут
+# в backup-spool/pre-restore/ ВНЕ скана; legacy-экземпляры, оставшиеся в postgres/ от
+# старых версий, дополнительно исключаются по префиксу — plaintext не попадает в S3.
+_PRE_RESTORE_PREFIX = "pre_restore_"
 
 
 # region DATA_RunnerLike
@@ -99,6 +106,15 @@ def find_pending(spool_dir: str | None = None) -> list[tuple[str, str]]:
             if not filepath.is_file() or name.startswith("."):
                 continue
             if name.startswith(_LEGACY_MARKER_PREFIX):
+                continue
+            # SEC-0018 (plan 012 T7): plaintext pre_restore снапшоты не загружаются —
+            # легаси-файлы в скан-каталоге исключаются по префиксу (громко, не молча)
+            if name.startswith(_PRE_RESTORE_PREFIX):
+                logger.warning(
+                    "[IMP:8][spool_retry][scan] Skipping plaintext pre-restore snapshot (SEC-0018, "
+                    "move to backup-spool/pre-restore/): %s",
+                    filepath,
+                )
                 continue
             # Сам sentinel-файл — НЕ кандидат на upload (маркер, не данные)
             if name.endswith(_SENTINEL_SUFFIX):

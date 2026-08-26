@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: age-key-backup, DR, sops, S3, sha256, off-node-backup, master-key, AGE_RECIPIENT, dry-run, no-upload, S-13
-# STRUCTURE: ▶ detect_age_key (node_detect) → ◇ validate recipient → ◇ sops encrypt (tmpfs 0600 dd-wipe) → ◇ [--output-enc] → ◇ upload S3 (private ACL) → ⚡ sha256 verify → ⎋ exit 0|1|2|10
+# GREP_SUMMARY: age-key-backup, DR, sops, S3, sha256, off-node-backup, master-key, AGE_RECIPIENT, dry-run, no-upload, S-13, node-matrix, F-033
+# STRUCTURE: ▶ detect_age_key (node_detect) → ◇ resolve_setting [explicit env → node matrix secrets.env] → ◇ validate recipient ⚡ConfigNotFound → ◇ sops encrypt (tmpfs 0600 dd-wipe) → ◇ [--output-enc] → ◇ upload S3 (private ACL, bucket/S3_* из матрицы) → ⚡ sha256 verify → ⎋ exit 0|1|2|10
 # region MODULE_CONTRACT
 ## @purpose  DevPlan 147 W2 (D-136-W10-S-13): off-node encrypted backup AGE мастер-ключа.
 ##           Автоматизация процедуры DR §2 (блок DR_PROCEDURE ниже; бывш. документ
@@ -21,10 +21,15 @@
 ##   6. --dry-run: ключ читается и шифруется (валидация цепочки + sops + реципиента),
 ##      но выгрузка и запись файлов ПРОПУСКАЮТСЯ — 0 мутаций (тест dry-run не мутирует)
 ##   7. --no-upload: только шифрование (с --output-enc сохраняет .enc локально для SCP на ноду)
+##   8. Plan 012 T6 (F-033): AGE_RECIPIENT/S3_* резолвятся цепочкой «явный env → матрица
+##      ноды» (secrets.env ноды — тот же носитель, что потребляет backup-cron); явные
+##      CLI/env сохраняют приоритет; ни матрицы, ни env → читаемая ошибка exit 2 (не тихий skip)
 ## @rationale DevPlan 147 W2 (TRAP[DECISION] S-13): ручная процедура §2 невоспроизводима —
 ##           CLI + make-таргет делают DR-drill (W3.1) воспроизводимым и проверяемым.
 ##           Размещение в core/internal/deploy/ — по XML код-графа 147 (path=core/internal/deploy/age_key_backup.py).
 ## @changes  2026-08-11 | DevPlan 147 W2 — Created
+## @changes  2026-08-26 | Plan 012 T6 (F-033) — resolve_setting: AGE_RECIPIENT/S3_* из
+##             матрицы ноды (secrets.env через shared/secrets_env_parser), env приоритетнее
 # endregion MODULE_CONTRACT
 
 
@@ -193,6 +198,50 @@ def _mask_key(key: str) -> str:
 # endregion FUNC__mask_key
 
 
+# region FUNC_resolve_setting
+## @purpose  Резолв настройки backup: явный env → матрица ноды (secrets.env) → "".
+##           Механизм матрицы = тот же носитель, что потребляет backup-cron
+##           (/var/lib/platform/run/secrets.env — расшифрованная sops-матрица ноды,
+##           plan 012 T6 / F-033: ручной env больше не обязателен).
+## @io       ⇥ name: str (имя переменной), env: Mapping | None, secrets_env_path: str | None
+##              (None = SECRETS_ENV_FILE env → deploy_paths.secrets_env_file())
+##           → ⎋ tuple[str, str] — (значение или "", источник: "env"|"matrix"|"none")
+## @complexity O(1); файл матрицы читается один раз на вызов
+## @invariants
+##   - Явный env ПРИОРИТЕТНЕЕ матрицы (override-контракт AC T6b)
+##   - Значения НИКОГДА не логируются — только имя ключа и источник (инвариант 1)
+##   - Отсутствующий файл матрицы → ("", "none") без ошибки (ошибку решает вызывающий)
+def resolve_setting(
+    name: str,
+    *,
+    env: dict[str, str] | None = None,
+    secrets_env_path: str | None = None,
+) -> tuple[str, str]:
+    source = os.environ if env is None else env
+    explicit = source.get(name, "").strip()
+    if explicit:
+        logger.info("[IMP:8][age_key_backup][resolve] %s resolved from explicit env", name)
+        return explicit, "env"
+
+    from core.internal.shared.deploy_paths import secrets_env_file
+    from core.internal.shared.secrets_env_parser import parse as parse_secrets_env
+
+    path = secrets_env_path or source.get("SECRETS_ENV_FILE") or str(secrets_env_file(source))
+    if not pathlib.Path(path).is_file():
+        logger.info("[IMP:8][age_key_backup][resolve] %s: node matrix not found at %s", name, path)
+        return "", "none"
+    matrix = parse_secrets_env(path)
+    value = matrix.get(name, "").strip()
+    if value:
+        logger.info("[IMP:8][age_key_backup][resolve] %s resolved from node matrix %s", name, path)
+        return value, "matrix"
+    logger.info("[IMP:8][age_key_backup][resolve] %s absent in node matrix %s", name, path)
+    return "", "none"
+
+
+# endregion FUNC_resolve_setting
+
+
 # region FUNC__wipe_and_remove
 ## @purpose — Безопасное удаление temp-файла с ключом: dd-wipe нулями до rm (S-13, DD5-2).
 ## @io — ⇥ path: str → ⎋ None
@@ -328,12 +377,13 @@ def upload_backup(
     enc_bytes: bytes,
     sha256_hex: str,
     s3_key: str,
-    dry_run: bool = False,
     *,
+    dry_run: bool = False,
     s3_client: object | None = None,
 ) -> None:
     """Upload encrypted backup to a private S3 bucket and verify sha256 integrity."""
-    bucket = os.environ.get("S3_BUCKET", "").strip()
+    # Plan 012 T6 (F-033): bucket/S3_* — явный env → матрица ноды (backup-cron parity)
+    bucket = resolve_setting("S3_BUCKET")[0]
 
     if dry_run:
         logger.info(
@@ -345,15 +395,33 @@ def upload_backup(
         return
 
     if not bucket:
-        msg = "S3_BUCKET env not set — off-node backup requires a private bucket (dr.md §2)"
+        msg = (
+            "S3_BUCKET not set (env or node matrix secrets.env) — off-node backup requires a private bucket (dr.md §2)"
+        )
         raise ConfigNotFoundError(msg)
 
     # ruff: ignore[PLW0717] — тело try >5 операторов (длинный upload-verify блок) — извлечение неразумно
     try:
         from core.internal.shared.s3_client import get_s3_client
 
+        # Матричные S3_* (F-033): резолвим ДО фабрики и передаём явно — фабричный
+        # env-fallback сохраняется для значений, которых нет ни в env, ни в матрице.
+        endpoint = resolve_setting("S3_ENDPOINT_URL")[0]
+        access_key = resolve_setting("S3_ACCESS_KEY")[0]
+        secret_key = resolve_setting("S3_SECRET_KEY")[0]
+        region = resolve_setting("S3_REGION")[0]
+
         # W4b (160 T4.2): клиент параметром + ленивый default — ровно текущее поведение
-        client = s3_client if s3_client is not None else get_s3_client()  # env-fallback
+        client = (
+            s3_client
+            if s3_client is not None
+            else get_s3_client(
+                endpoint=endpoint or None,
+                access_key=access_key or None,
+                secret_key=secret_key or None,
+                region=region or None,
+            )
+        )  # env/matrix fallback
         logger.info("[IMP:8][age_key_backup][upload] put_object ACL=private bucket=%s key=%s", bucket, s3_key)
         client.put_object(  # pyright: ignore[reportAttributeAccessIssue] — boto3-клиент (stub-less); DI-переданный fake поддерживает тот же API
             Bucket=bucket,
@@ -446,11 +514,13 @@ def run_backup(
     assert isinstance(age_key, str)  # _UNSET_AGE_KEY заменён на detect_age_key() выше; None отфильтрован
     logger.info("[IMP:8][age_key_backup][key] AGE master key found (%s)", _mask_key(age_key))
 
-    # ── 2. Реципиент: --recipient или AGE_RECIPIENT env ──
-    recipient = (args.recipient or os.environ.get(_AGE_RECIPIENT_ENV, "")).strip()
+    # ── 2. Реципиент: --recipient → AGE_RECIPIENT env → матрица ноды (F-033, plan 012 T6) ──
+    recipient = (args.recipient or "").strip() or resolve_setting(_AGE_RECIPIENT_ENV)[0]
     if not recipient:
         logger.error(
-            "[IMP:9][age_key_backup][recipient] AGE_RECIPIENT not set — usage: make age-key-backup AGE_RECIPIENT=<pubkey>"
+            "[IMP:9][age_key_backup][recipient] AGE_RECIPIENT not set and not found in node matrix "
+            "(secrets.env) — usage: make age-key-backup AGE_RECIPIENT=<pubkey> "
+            "or add AGE_RECIPIENT to the node sops matrix"
         )
         return EXIT_CONFIG_NOT_FOUND
 

@@ -117,9 +117,26 @@ def test_zero_parsed_keys_fatal(
 ## @purpose  Контроль green-пути: плоский KEY:value payload проходит guard'ы, пишет файл, rc=0 —
 ##           доказывает, что fail-fast не ложноположительный.
 ## @io       ⇥ monkeypatch, tmp_path → ⎋ None (asserts)
+## @changes  2026-08-26 | plan 012 T3: SECRETS_DEFINITIONS указывает на минимальную матрицу
+##           фикстуры — ci_default fail-loud валидация (D3) сверяет против неё, не канона
 @ldd_trajectory
 def test_flat_payload_success_control(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Flat KEY:value payload passes guards, writes secrets.env, exit 0."""
+    # 🧪 TRAP[TEST] · 2026-08-26 · UPDATED · plan 012 T3 ci_default validation scope
+    # · Scenario: минимальная definitions-матрица фикстуры (2 required) — green-path
+    #             контроль изолирован от канонического реестра репозитория
+    # · Last fail: после T3 main() валидирует против core/secret-definitions.yaml —
+    #   минимальная фикстура ловила fail-loud «missing required»
+    # · Remove if: ci_default валидация получает собственный DI-шов в main()
+    defs = tmp_path / "definitions.yaml"
+    defs.write_text(
+        "version: 1\nsecrets:\n"
+        "  - name: POSTGRES_PASSWORD\n    tier: required\n    source: sops\n"
+        "  - name: GHCR_PULL_TOKEN\n    tier: required\n    source: sops\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SECRETS_DEFINITIONS", str(defs))
+
     payload = "POSTGRES_PASSWORD: pg-pass\nGHCR_PULL_TOKEN: gh-token\n"
     rc, out_path = _run_main(monkeypatch, tmp_path, decrypted_payload=payload)
 

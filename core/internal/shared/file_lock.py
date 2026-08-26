@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: file-lock, flock, fcntl, lock, deploy-lock, state-lock, concurrency, non-blocking, pid-holder, stale-cleanup, reentrant, fail-closed, eacces, chown, ci-deploy, canonical
-# STRUCTURE: ▶ FileLock(path, timeout, poll) → ○ acquire ┌mkdir parent → open O_RDWR|O_CREAT 0664 → ◇ EACCES-existing? → ⚡ FileLockError (fail-closed) │ degrade-no-lock (dev)┐ → flock LOCK_EX|LOCK_NB (timeout-loop) → registry holder refs++ → write PID┐ → ○ release ┌depth-- → refs==0? → flock LOCK_UN + close + del entry┐ → ⎋ context-manager
+# STRUCTURE: ▶ FileLock(path, timeout, poll) → ○ acquire ┌mkdir parent → open O_RDWR|O_CREAT 0664 → ◇ EACCES-existing? → ⚡ FileLockError (fail-closed) │ degrade-no-lock (dev)┐ → flock LOCK_EX|LOCK_NB (timeout-loop) → registry holder refs++ → write PID┐ → ○ release ┌depth-- → refs==0? → flock LOCK_UN + close + del entry + UNLINK lock-file (F-025)┐ → ⎋ context-manager
 # region MODULE_CONTRACT
 ## @purpose  Canonical fcntl.flock-based advisory file lock (DevPlan 136 W9 T9.1/T9.2/T9.10;
 ##           REF-0011 — fail-closed конкурентность деплоя).
@@ -48,6 +48,9 @@
 ## @changes  2026-08-24 · REF-0011 (meta-refactoring В1) — fail-closed EACCES-existing;
 ##           locks 0664 + chown ci-deploy (history.py:188); _REENTRANT module-depth →
 ##           instance _depth + _ACTIVE_HOLDERS(fd,refs); unbalanced-release guard
+## @changes  2026-08-26 · Plan 012 T5 (F-025) — release() удаляет lock-файл при refs==0
+##           (cross-user самобой EACCES устранён); platform_lock_path — делегирование
+##           в deploy_paths.deploy_lock_path (uid-канон, единственный SoT пути)
 ## @modulemap
 ##   FileLock [W:2] — reentrant flock context manager (timeout/poll/PID/stale-cleanup/fail-closed)
 ##   FileLockError [W:1] — контеншн/таймаут/EACCES-existing → «locked by PID X»
@@ -410,6 +413,24 @@ class FileLock:
             os.close(holder.fd)
         except OSError as e:
             logger.warning("[IMP:7][FileLock][release] close error on %s (non-fatal): %s", self.path, e)
+        # Plan 012 T5 (F-025): удаляем lock-ФАЙЛ при полном release (не только flock UN).
+        # Инцидент F-025: оставленный файл с chown ci-deploy → следующий прогон другим
+        # пользователем ловил EACCES-existing fail-closed (самобой). Удаление файла даёт
+        # каждому acquire свежий файл с корректными правами (0664 + chown текущего юзера).
+        # 🧐 TRAP[DECISION] · 2026-08-26 · — · Unlink lock-файла после release (F-025)
+        # · Rejected: держать файл вечно (flock kernel-managed, stale невозможны) — отказ
+        # ·   от unlink оставлял cross-user самобой (EACCES на чужом 0644/root-файле)
+        # · Reason: mutex во время hold — всё равно inode-flock; unlink выполняется ПОСЛЕ
+        # ·   LOCK_UN+close (последний держатель), окно гонки «новый acquirer открыл inode
+        # ·   до unlink» — миллисекунды и закрыто сериализацией выше (CI/receive per project);
+        # ·   best-effort: ENOENT/OSError → WARN без raise (release не маскирует бизнес-ошибки)
+        # · Rev: если появится несериализованный конкурентный consumer замков — вернуть
+        # ·   persistent-файл и решать cross-user через группу, не через удаление
+        try:
+            self.path.unlink(missing_ok=True)
+            logger.info("[IMP:8][FileLock][release] Lock file removed: %s", self.path)
+        except OSError as e:
+            logger.warning("[IMP:7][FileLock][release] Cannot remove lock file %s (non-fatal): %s", self.path, e)
         logger.info("[IMP:8][FileLock][release] Released %s", self.path)
 
     # endregion FUNC_release
@@ -436,19 +457,23 @@ class FileLock:
 
 
 # region FUNC_platform_lock_path
-## @purpose  Canonical per-project deploy lock path: PLATFORM_LOCK_DIR env override →
-##           /var/lock/platform-deploy-{project}.lock (канон DevPlan 136 T9.1 / deploy_history
-##           контракт). На ноде /var/lock = /run/lock (1777) — пишется и root, и ci-deploy.
+## @purpose  Canonical per-project deploy lock path (SoT-делегирование в deploy_paths,
+##           plan 012 T5/F-025: uid-канон через канонический реестр путей).
+##           PLATFORM_LOCK_DIR env override → /var/lock/platform-deploy-{project}.lock
+##           (канон DevPlan 136 T9.1 / deploy_history контракт).
+##           На ноде /var/lock = /run/lock (1777) — пишется и root, и ci-deploy.
 ## @io       ⇥ project: str → ⎋ str (lock file path)
 ## @complexity O(1)
 ## @invariants
-##   - project_name НЕ экранируется — путь строится через os.path.join (вне shell-команды);
+##   - project_name НЕ экранируется — путь строится через Path join (вне shell-команды);
 ##     валидация имени — ответственность validate_project_name (T9.7), не lock-пути
 ##   - PLATFORM_LOCK_DIR позволяет оператору/тестам переопределить каталог замков
+##   - Единственный SoT пути — deploy_paths.deploy_lock_path (plan 012 T5)
 def platform_lock_path(project: str) -> str:
     """Return the canonical per-project deploy lock file path."""
-    lock_dir = os.environ.get("PLATFORM_LOCK_DIR", "/var/lock")
-    return str(Path(lock_dir) / f"platform-deploy-{project}.lock")
+    from core.internal.shared.deploy_paths import deploy_lock_path
+
+    return str(deploy_lock_path(project))
 
 
 # endregion FUNC_platform_lock_path

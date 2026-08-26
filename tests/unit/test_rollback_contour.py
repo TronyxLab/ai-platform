@@ -331,7 +331,7 @@ def test_engine_rolled_back_skips_second_snapshot_rollback(tmp_path, monkeypatch
     ("compose_ok", "expect_status"), [(False, DeployStatus.FAILED), (True, DeployStatus.ROLLED_BACK)]
 )
 def test_payload_restored_only_after_successful_compose_rollback(
-    tmp_path, monkeypatch, compose_ok: bool, expect_status: DeployStatus
+    tmp_path, monkeypatch, *, compose_ok: bool, expect_status: DeployStatus
 ) -> None:
     """REF-0004: порядок rollback = compose СНАЧАЛА; payload-файлы — только при успехе compose."""
     target = tmp_path / "projects" / "ord"
@@ -566,3 +566,102 @@ def test_previous_rollback_ref_skips_pull(engine_boundary, engine, caplog) -> No
 
 
 # endregion FUNC_test_engine_bug0100_and_reverify
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# B. Plan 012 T5 (F-025): rollback honesty — local previous-image + lock removal
+# ════════════════════════════════════════════════════════════════════════════
+
+
+# region FUNC_test_local_previous_image_no_registry_pull
+def test_local_previous_image_no_registry_pull(tmp_path, monkeypatch, caplog) -> None:
+    """F-025/AC(a): compose-up отката использует ЛОКАЛЬНЫЙ previous-image без попытки
+    registry-pull — docker_tag перетегировал, engine.deploy получил skip_pull=True."""
+    # 🧪 TRAP[TEST] · 2026-08-26 · REGRESSION · F-025 doomed GHCR pull при rollback
+    # · Scenario: snapshot с compose_state.previous_image → _rollback_compose →
+    #             docker_ops.docker_tag(previous→previous-rollback) + deploy(skip_pull=True),
+    #             retry_pull НЕ вызывается (локальный тег в registry не существует)
+    # · Last fail: F-025 — up с локальным тегом триггерил PULL из ghcr.io (~135s ×5) →
+    #   up-fail → внутренний rollback → вердикт FAILED вместо честного ROLLED_BACK
+    # · Remove if: rollback перестаёт идти через локальный перетег предыдущего образа
+    caplog.set_level(logging.INFO)
+    proj = _write_project(tmp_path, "roll-proj")
+    monkeypatch.setenv("PLATFORM_LOCK_DIR", str(tmp_path / "locks"))
+
+    tag_calls: list[tuple[str, str]] = []
+    deploy_calls: list[dict] = []
+
+    class _FakeEngine:
+        def __init__(self, *, projects_base: str) -> None:
+            self.projects_base = projects_base
+
+        def deploy(self, **kwargs):
+            deploy_calls.append(kwargs)
+
+            class _R:
+                success = True
+
+            return _R()
+
+    orch = _make_orch(tmp_path, monkeypatch, poller=_SeqPoller(["healthy"]))
+
+    snapshot = {
+        "snapshot_id": "snap-f025",
+        "compose_state": {"previous_image": "sha256:prevlocal"},
+    }
+
+    with (
+        patch.object(orch, "_compose_rollback", None),  # форсируем реальный _rollback_compose
+        patch("core.internal.deploy.rollback.DeployEngine", _FakeEngine),
+        patch("core.internal.deploy.rollback.docker_ops.docker_tag", side_effect=lambda i, t: tag_calls.append((i, t))),
+    ):
+        ok = orch._rollback_compose(str(proj), "roll-proj", snapshot)
+
+    assert ok is True, "Rollback compose must succeed on local previous image"
+    assert tag_calls == [("sha256:prevlocal", "roll-proj:previous-rollback")], (
+        f"Expected local re-tag of previous image, got {tag_calls}"
+    )
+    assert len(deploy_calls) == 1 and deploy_calls[0].get("skip_pull") is True, (
+        f"F-025 FAIL: deploy обязан идти со skip_pull=True (no registry pull): {deploy_calls}"
+    )
+    logger.info("[IMP:9][test] rollback uses local previous-image re-tag; no registry pull")
+
+
+# endregion FUNC_test_local_previous_image_no_registry_pull
+
+
+# region FUNC_test_lock_file_removed_on_release
+def test_lock_file_removed_on_release(tmp_path, caplog) -> None:
+    """F-025/AC(b): release удаляет lock-ФАЙЛ (не только flock UN) — cross-user самобой
+    EACCES на оставленном chown-ci-deploy файле устранён; повторный acquire создаёт свежий.
+    """
+    # 🧪 TRAP[TEST] · 2026-08-26 · REGRESSION · F-025 stale lock-file самобой
+    # · Scenario: acquire → release → файла нет на диске; второй acquire → файл создан заново,
+    #             блокировка работоспособна (flock mutex сохранён)
+    # · Last fail: F-025 — FileLock оставлял файл после release с chown ci-deploy →
+    #   следующий root-прогон fail-closed (EACCES-existing)
+    # · Remove if: канон сменится на persistent lock-файлы с групповым доступом (см. TRAP[DECISION] в file_lock.py)
+    from core.internal.shared.file_lock import FileLock
+
+    caplog.set_level(logging.INFO)
+    lock_path = tmp_path / "locks" / "platform-deploy-f025.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+
+    lock = FileLock(lock_path, timeout=0.0)
+    lock.acquire()
+    assert lock_path.exists(), "Lock file must exist while held"
+
+    lock.release()
+    assert not lock_path.exists(), "F-025 FAIL: release must REMOVE the lock file (not just unlock)"
+
+    # Повторный цикл: свежий файл, замок работоспособен
+    lock2 = FileLock(lock_path, timeout=0.0)
+    lock2.acquire()
+    assert lock_path.exists(), "Re-acquire must recreate a fresh lock file"
+    lock2.release()
+    assert not lock_path.exists()
+    assert any("removed" in r.getMessage() for r in caplog.records), "IMP log about removal expected"
+    logger.info("[IMP:9][test] release removes lock file; re-acquire recreates fresh lock")
+
+
+# endregion FUNC_test_lock_file_removed_on_release

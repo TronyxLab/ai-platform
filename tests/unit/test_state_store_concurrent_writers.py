@@ -117,20 +117,24 @@ def test_save_state_concurrent_writers_consistent(run: int, caplog: pytest.LogCa
 
 
 # 🧪 TRAP[TEST] · 2026-08-05 · Regression · T9.2 — save_state держит lock на state.json.lock
-# · Scenario: после save_state lock-файл существует; повторный non-blocking acquire проходит
-# ·   (flock снят в finally) — нет «зависшего замка»
-# · Remove if: save semantics change
+# · Scenario: после save_state flock снят в finally — повторный non-blocking acquire проходит;
+#   plan 012 T5 (F-025): release удаляет lock-файл → после save файла НЕТ, re-acquire создаёт свежий
+# · Last fail: F-025 — оставленный lock-файл давал cross-user EACCES самобой
+# · Remove if: save semantics change / FileLock перестанет.unlink'ать при release
 @ldd_trajectory
 def test_save_state_lock_released(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> None:
-    """T9.2: lock state.json.lock освобождается после save (try/finally)."""
+    """T9.2 + plan 012 T5: flock освобождён после save; lock-файл удалён (unlink-on-release)."""
     caplog.set_level(logging.INFO)
     from core.internal.shared.file_lock import FileLock
 
     state_file = tmp_path / "state.json"
     save_state(BootstrapState(mode="init", node="n"), state_file)
     lock_path = tmp_path / "state.json.lock"
-    assert lock_path.exists(), "lock-файл создаётся при save"
+    assert not lock_path.exists(), (
+        "plan 012 T5 (F-025): release обязан УДАЛЯТЬ lock-файл — leftover = cross-user EACCES самобой"
+    )
     lock = FileLock(lock_path, timeout=0.0)
-    lock.acquire()  # не должно быть FileLockError — иначе lock не освобождён
+    lock.acquire()  # не должно быть FileLockError — иначе lock не освобождён; файл создастся заново
+    assert lock_path.exists(), "re-acquire создаёт свежий lock-файл"
     lock.release()
-    logger.critical("[IMP:9][test] state save lock released — OK (T9.2)")
+    logger.critical("[IMP:9][test] state save lock released — OK (T9.2 + F-025 unlink)")

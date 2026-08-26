@@ -1,5 +1,5 @@
-# GREP_SUMMARY: python-deps, python3.14, deadsnakes, pip, apt, requirements, content-hash, idempotent, ensurepip, symlink, DI, runner-param, facts-param, CommandRunner, EnvironmentFacts
-# STRUCTURE: ▶ ensure_python_deps → _check_content_hash(hash+pyver) → _install_python314(PPA) → _install_requirements(/usr/local/bin/python3 -m pip) → ⎋ CLI
+# GREP_SUMMARY: python-deps, python3.14, deadsnakes, pip, apt, requirements, content-hash, idempotent, ensurepip, symlink, DI, runner-param, facts-param, CommandRunner, EnvironmentFacts, import-probe, canonical-path, F-019
+# STRUCTURE: ▶ ensure_python_deps → _resolve_requirements_path(canonical+F-019 self-heal) → _check_content_hash(hash+pyver) → ◇ match → _probe_critical_imports(boto3) ⚡ fail→reinstall / ok→no-op → _install_python314(PPA) → _install_requirements(/usr/local/bin/python3 -m pip) → ⎋ CLI
 
 # region MODULE_CONTRACT
 ## @purpose  Idempotent install of Python 3.14 (deadsnakes PPA) + platform Python
@@ -20,6 +20,10 @@
 ##   - All subprocess calls with capture_output=True, text=True
 ##   - E1 (160): runner/facts DI-параметры (runner=None → subprocess.run, facts=None →
 ##     реальные системные вызовы); поведение/exit-коды/идемпотентность НЕ изменены
+##   - Plan 012 T2 (F-019): requirements резолвится ТОЛЬКО от `core_dir`/requirements.txt
+##     (канон доставки); передача корня платформы самолечится WARN'ом → `root`/core/
+##   - Plan 012 T2 (F-019): marker-match НЕ блокирует переустановку — выполняется
+##     import-probe критичных модулей (boto3 минимум); проваленный probe → reinstall
 ## @rationale Shell→Python migration (Strangler-Fig). User decision 2026-08-01: deadsnakes
 ##            PPA for Python 3.14 on Ubuntu 24.04 (see TRAP[DECISION] below).
 ## @changes
@@ -30,6 +34,8 @@
 ##               НЕ конфликтуют с apt python3-* (python3-yaml/jinja2/cryptography удовлетворяют
 ##               пины; boto3/botocore/httpx/pydantic не ставятся apt; httpcore — транзитив httpx)
 ##   2026-08-13  DevPlan 160 E1 — +runner: CommandRunner / facts: EnvironmentFacts (DI)
+##   2026-08-26  Plan 012 T2 (F-019) — canonical requirements path + import-probe
+##               invalidation of marker (boto3); F-019 self-heal для корня платформы
 # endregion MODULE_CONTRACT
 
 # 🧐 TRAP[DECISION] · 2026-08-01 · HI · Python 3.14 через deadsnakes PPA (Ubuntu 24.04)
@@ -70,10 +76,102 @@ logger = logging.getLogger(__name__)
 # · Prevention: T7-гейт расширен на python_deps.py (test_apt_timeouts_use_canon) — канон APT_TIMEOUT
 # ·   enforce-ится для ВСЕЙ apt bootstrap-цепи; новые apt-вызовы обязаны импортировать константу.
 
+# 🧐 TRAP[DECISION] · 2026-08-26 · — · F-019 self-heal: корень платформы в core_dir → WARN + канонический путь
+# · Rejected: строгий fail-loud без самолечения (оператор вручную cp requirements.txt —
+#   именно обход, который план 012 устраняет) / тихий fallback без WARN (invisible failure)
+# · Reason: one-command bootstrap (AC1) требует самолечения класса ошибок; WARN [IMP:9]
+#   сохраняет честность диагноза для оператора
+# · Rev: если появятся легитимные не-core каталоги с requirements.txt рядом с core_dir —
+#   заменить эвристику «core.name == 'core'» на явный контракт вызывающего
 _MARKER_PARTS: int = 2  # маркер: <requirements-hash>\n<python-version>
+
+# Plan 012 T2 (F-019): критичные модули для import-probe при marker-match.
+# Расширяется по мере роста критичности (первый элемент — boto3: S3-cache/certs).
+CRITICAL_IMPORT_PROBES: tuple[str, ...] = ("boto3",)
 
 HASH_DIR = "/var/lib/platform/.bootstrap"
 HASH_FILE = os.path.join(HASH_DIR, "python-deps.hash")
+
+
+# region FUNC__resolve_requirements_path
+## @purpose  Каноническое разрешение requirements.txt: ТОЛЬКО `core_dir`/requirements.txt
+##           (канон доставки core на ноду). Самолечение F-019: если caller передал корень
+##           платформы вместо core/ — WARN с точным диагнозом + канонический путь.
+## @io       core_dir: str → str (путь к requirements.txt)
+## @complexity O(1) — 1-2 filesystem checks
+## @invariants
+##   - Файл берётся ИЗ каталога core (канон доставки), никогда не из корня платформы
+## @changes 2026-08-26 | Plan 012 T2 (F-019) — created
+def _resolve_requirements_path(core_dir: str) -> str:
+    # endregion FUNC__resolve_requirements_path
+    # abspath (лексическая нормализация «..») БЕЗ resolve(): resolve() трогает симлинки
+    # (/var → /private/var на macOS) и ломает сравнение путей в тестах/логах.
+    # ruff: ignore[PTH100] — намеренный lexical-normalize без симлинк-резолва
+    core = pathlib.Path(os.path.abspath(core_dir))
+    req = core / "requirements.txt"
+    if req.is_file():
+        logger.info("[IMP:9][_resolve_requirements_path] Canonical requirements: %s", req)
+        return str(req)
+
+    # F-019 self-heal: caller передал КОРЕНЬ платформы (root без /core).
+    candidate_core = core if core.name == "core" else core / "core"
+    healed = candidate_core / "requirements.txt"
+    if healed.is_file():
+        logger.warning(
+            "[IMP:9][_resolve_requirements_path] requirements.txt НЕ найден в %s, но найден в %s "
+            "— в core_dir передан КОРЕНЬ платформы вместо core/ (инцидент F-019). "
+            "Использую канонический путь; почини вызывающего (CORE_DIR должен указывать на core/).",
+            req,
+            healed,
+        )
+        return str(healed)
+
+    logger.warning("[IMP:7][_resolve_requirements_path] requirements.txt not found at canonical path %s", req)
+    return str(req)
+
+
+# region FUNC__probe_one
+## @purpose  Import-probe одного модуля в целевом интерпретаторе: rc==0 → ок.
+## @io       module: str, python_bin: str, runner DI → bool
+## @complexity O(1) — single subprocess
+def _probe_one(module: str, python_bin: str, *, runner: CommandRunner | None = None) -> bool:
+    # endregion FUNC__probe_one
+    cmd = [python_bin, "-c", f"import {module}"]
+    try:
+        if runner is None:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60, check=False)
+            rc = result.returncode
+        else:
+            rc = runner.run(cmd, timeout=60).returncode
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return rc == 0
+
+
+# region FUNC__probe_critical_imports
+## @purpose  Import-probe критичных модулей (boto3 минимум) в АКТИВНОМ интерпретаторе
+##           платформы. Инвалидатор маркера: marker-match + проваленный probe → reinstall.
+## @io       facts/runner DI → tuple[bool, list[str]] — (все ок, список проваленных модулей)
+## @complexity O(P) subprocess probes, P = len(CRITICAL_IMPORT_PROBES)
+## @rationale Q: почему subprocess, а не importlib.util.find_spec? A: маркер проверяет
+##            интерпретатор /usr/local/bin/python3 (3.14), а сам python_deps может исполняться
+##            другим python — probe через целевой бинарь честнее in-process find_spec.
+## @changes 2026-08-26 | Plan 012 T2 (F-019) — created
+def _probe_critical_imports(
+    *,
+    facts: EnvironmentFacts | None = None,
+    runner: CommandRunner | None = None,
+) -> tuple[bool, list[str]]:
+    # endregion FUNC__probe_critical_imports
+    python_bin = _resolve_python_bin(facts=facts)
+    failed: list[str] = []
+    for module in CRITICAL_IMPORT_PROBES:
+        if _probe_one(module, python_bin, runner=runner):
+            logger.info("[IMP:8][_probe_critical_imports] Import-probe ok: %s (%s)", module, python_bin)
+        else:
+            failed.append(module)
+            logger.warning("[IMP:7][_probe_critical_imports] Import-probe FAILED for %r via %s", module, python_bin)
+    return (not failed, failed)
 
 
 # region FUNC__load_saved_hash
@@ -582,13 +680,23 @@ def ensure_python_deps(
     """
     # endregion FUNC_ensure_python_deps
 
-    req_path = os.path.join(core_dir, "requirements.txt")
-    logger.info("[IMP:9][ensure_python_deps] Start — core_dir=%s", core_dir)
+    # Plan 012 T2 (F-019): каноническое разрешение requirements (core-dir, не корень платформы)
+    req_path = _resolve_requirements_path(core_dir)
+    logger.info("[IMP:9][ensure_python_deps] Start — core_dir=%s req=%s", core_dir, req_path)
 
-    # ── Content-hash guard (requirements hash + python version) ────────────
+    # ── Content-hash guard (requirements hash + python version + import-probe) ──
     if _check_content_hash(req_path, runner=runner, hash_file=hash_file):
-        logger.info("[IMP:9][ensure_python_deps] Hash + python version match — deps already up to date")
-        return True
+        ok_probe, failed_modules = _probe_critical_imports(facts=facts, runner=runner)
+        if ok_probe:
+            logger.info(
+                "[IMP:9][ensure_python_deps] Hash + python version match + import-probe OK — deps already up to date"
+            )
+            return True
+        logger.warning(
+            "[IMP:9][ensure_python_deps] Marker matched but import-probe FAILED for %s — reinstalling "
+            "(marker does not block, F-019: boto3 отсутствовал при ложном «match»)",
+            failed_modules,
+        )
 
     # ── Install Python 3.14 (deadsnakes PPA on Ubuntu 24.04) ───────────────
     if not _install_python314(runner=runner, facts=facts, os_release_path=os_release_path):
@@ -596,7 +704,8 @@ def ensure_python_deps(
         return False
 
     # ── Install Python requirements into the active interpreter ────────────
-    if not _install_requirements(core_dir, runner=runner, facts=facts):
+    resolved_core = str(pathlib.Path(req_path).parent)
+    if not _install_requirements(resolved_core, runner=runner, facts=facts):
         logger.warning("[IMP:7][ensure_python_deps] Requirements installation failed")
         return False
 

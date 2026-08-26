@@ -311,6 +311,29 @@ def secrets_env_file(env: Mapping[str, str] | None = None) -> Path:
 # endregion FUNC_secrets_env_file
 
 
+# region FUNC_deploy_lock_path
+## @purpose — Канонический путь per-project deploy lock (uid-канон F-025, plan 012 T5):
+##            PLATFORM_LOCK_DIR env → /var/lock/platform-deploy-{project}.lock.
+##            /var/lock (= /run/lock на ноде) — 1777 sticky: пишется и root, и ci-deploy;
+##            замок 0664 + chown ci-deploy (file_lock.ensure_ci_deploy_owner) — оба
+##            пользователя сосуществуют без коллизий; НИКАКИХ /tmp-путей.
+## @io — ⇥ project: str, env: Mapping | None → ⎋ Path
+## @complexity — O(1)
+## @invariants
+##   - env PLATFORM_LOCK_DIR приоритетнее дефолта (тесты/нестандартные окружения)
+##   - project НЕ экранируется — путь вне shell-команд (валидация имени — T9.7)
+## @changes 2026-08-26 | Plan 012 T5 (F-025) — lock path перенесён в канонический реестр
+##             путей; единственный SoT для orchestrator/receive_flow/deploy_history
+def deploy_lock_path(project: str, env: Mapping[str, str] | None = None) -> Path:
+    """Resolve per-project deploy lock path (PLATFORM_LOCK_DIR → /var/lock/platform-deploy-{p}.lock)."""
+    source = os.environ if env is None else env
+    lock_dir = str(source.get("PLATFORM_LOCK_DIR") or "/var/lock")
+    return Path(lock_dir) / f"platform-deploy-{project}.lock"
+
+
+# endregion FUNC_deploy_lock_path
+
+
 # region FUNC_prometheus_rules_dir
 ## @purpose — Резолвер PROMETHEUS_RULES_DIR (170 W12 C5, drift-фикс): env → /opt/prometheus/rules.
 ##            ⚠️ REF-0010 (2026-08-24): fallback /opt/prometheus/rules — СТАРЫЙ дефолт,

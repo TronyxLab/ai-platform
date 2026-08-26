@@ -40,9 +40,13 @@ _POSTGRES_MAKEFILE = Path(__file__).resolve().parent.parent.parent / "core" / "m
 
 # region HELPERS
 def _recipe() -> str:
-    """Текст restore-рецепта (строки таб-отступа после target'а restore)."""
+    """Текст restore-рецепта (строки таб-отступа после target'а restore).
+
+    plan 012 T7 (F-031): якорь — `restore: ##` (target-строка с help-комментарием),
+    чтобы не зацепить target-specific variable `restore: COMPOSE_FILE = ...` выше.
+    """
     lines = _POSTGRES_MAKEFILE.read_text(encoding="utf-8").splitlines()
-    start = next(i for i, ln in enumerate(lines) if re.match(r"^restore:", ln))
+    start = next(i for i, ln in enumerate(lines) if re.match(r"^restore:\s*##", ln))
     recipe_lines = []
     for ln in lines[start + 1 :]:
         if ln and not ln.startswith(("\t", " ", "#")):
@@ -79,7 +83,17 @@ def test_restore_recipe_order_and_guards(caplog) -> None:
 
     # 2) Порядок: snapshot → clean stop → up → readiness wait → psql ON_ERROR_STOP.
     #    (pg_dumpall требует живой кластер, psql — слушающий сервер: см. TRAP[DECISION].)
-    order = _positions(text, ["Pre-restore snapshot", "$(COMPOSE_CMD) stop", "$(COMPOSE_CMD) up -d", "pg_isready"])
+    #    plan 012 T7 (F-031): restore-фазы идут через $(COMPOSE_CMD) с target-specific
+    #    COMPOSE_FILE=root-compose + env COMPOSE_PROFILES=postgres — маркеры синхронизированы.
+    order = _positions(
+        text,
+        [
+            "Pre-restore snapshot",
+            "COMPOSE_PROFILES=postgres $(COMPOSE_CMD) stop",
+            "COMPOSE_PROFILES=postgres $(COMPOSE_CMD) up -d",
+            "pg_isready",
+        ],
+    )
     assert order, f"маркеры порядка не найдены в рецепте:\n{text}"
 
     # 3) Fail-fast SQL: обе ветки (.gz и .sql) используют psql -v ON_ERROR_STOP=1
