@@ -850,14 +850,23 @@ def deliver_fallback(
     # QA C5 (DevPlan 14 T1.4): детекция ВНУТРИ Python — та же цепочка, что у shell-версии
     # (env→SOPS_AGE_KEY→FILE→default files), но БЕЗ argv-транспорта значения.
     age_secret_key = detect_age_key() or ""
-    if not age_secret_key:
+    if not age_secret_key and not dry_run:
+        # F-038 план 011: fail-fast ТОЛЬКО для реального прогона; dry-run обязан давать
+        # полный WOULD-preview до любой детекции секретов (контракт P1-20, тест
+        # test_dry_run_without_age_full_preview)
         logger.error(
             "[IMP:10][deliver_fallback][age] FATAL: AGE master key not found "
             "(node_detect chain: AGE_SECRET_KEY env → SOPS_AGE_KEY env → AGE_SECRET_KEY_FILE → "
             "~/.config/age/keys.txt) — φ9 secrets-update на ноде упадёт; доставка прервана fail-fast"
         )
         return False
-    logger.info("[IMP:8][deliver_fallback][age] AGE key detected in-process (not via argv)")
+    if age_secret_key:
+        logger.info("[IMP:8][deliver_fallback][age] AGE key detected in-process (not via argv)")
+    else:
+        logger.warning(
+            "[IMP:7][deliver_fallback][age] AGE key not found — dry-run preview continues "
+            "(реальный прогон без ключа прервётся на φ9)"
+        )
     base = resolve_remote_base()
     # ── 1. rsync-фазы (guard'ы внутри каждой функции, TRAP[BUG] 125 T4) ──
     deliver_core(host, core_dir, remote_user, base, dry_run, runner)

@@ -72,9 +72,15 @@ def curl_http_code(
     cmd.append(url)
     logger.info("[IMP:7][curl_http_code][curl] Checking %s (timeout=%ds)", url, timeout)
 
-    actual_runner = runner if runner is not None else subprocess.run
     try:
-        result = actual_runner(cmd, timeout + 5)
+        # F-018 план 011: capture_output ОБЯЗАТЕЛЕН — без него CompletedProcess.stdout=None
+        # при returncode=0 → AttributeError на .strip() вместо честного HTTP-кода.
+        # Кастомные runner'ы имеют собственный контракт (cmd, timeout) — флаги только
+        # для дефолтного пути (прямой subprocess.run, чтобы basedpyright видел сигнатуру)
+        if runner is None:
+            result = subprocess.run(cmd, timeout + 5, capture_output=True, text=True, check=False)
+        else:
+            result = runner(cmd, timeout + 5)
     except subprocess.TimeoutExpired:
         logger.error("[IMP:10][curl_http_code][timeout] %s timed out for %s", timeout_label, url)
         return None, f"{timeout_label} timed out (>{timeout}s)"

@@ -35,12 +35,14 @@
 
 loki.write "default" {
   endpoint {
-    url = "${LOKI_URL}/loki/api/v1/push"
+    // F-010 план 011: флага --config.expand-env в Alloy v1.x НЕТ (это флаг старого
+    // Agent Flow) — env-подстановка штатно делается функцией env() с coalesce-дефолтом.
+    url = coalesce(env("LOKI_URL"), "http://loki:3100") + "/loki/api/v1/push"
     // DevPlan 010 T2.0b: tenant-изоляция — header X-Scope-OrgID; tenant = имя контекста,
     // приходит через LOKI_TENANT (emission — другой агент); дефолт "platform" единый по стеку.
     // Loki принимает любого tenant без пре-декларации (auth_enabled: true, multi-tenant ingest).
     headers = {
-      "X-Scope-OrgID" = "${LOKI_TENANT}",
+      "X-Scope-OrgID" = coalesce(env("LOKI_TENANT"), "platform"),
     }
   }
 }
