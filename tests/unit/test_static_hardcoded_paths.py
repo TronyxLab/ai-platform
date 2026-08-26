@@ -110,3 +110,22 @@ def test_hardcoded_paths_autodetect_not_flagged(caplog, tmp_path) -> None:
     hits = [f for f in findings if "_probe_autodetect" in f.file]
     assert not hits, f"PASS-control FAIL: autodetect/env-fallback flagged: {hits}"
     logger.info("[IMP:9][test_hardcoded_paths] autodetect/env-fallback not flagged")
+
+
+# 🧪 TRAP[TEST] · 2026-08-26 · P3 · R5-негатив: CI-path исключён, user-path ловится (AI-0036)
+# · Regression: lookahead стоял после ПЕРВОГО компонента (`/home/[\w.-]+/(?!runner/work/)`)
+#   — исключение /home/runner/work/ не работало, ложные срабатывания на CI
+# · Scenario: '/home/runner/work/repo/repo/…' НЕ матчится; '/home/user/projects/app/src/main.py'
+#   матчится (прямой unit на regex-компилят hardcoded_paths)
+# · Last fail: DevPlan 17 верификация @64c2090 (аудит AI-0036)
+# · Remove if: regex заменяется на конфигурируемый allowlist путей
+def test_ci_path_excluded_negative() -> None:
+    """R5: runner/work не матчится, обычный /home/user/ матчится (T7.6)."""
+    from core.internal.static.hardcoded_paths import _HARDCODED_HOME_PATH
+
+    ci_hit = _HARDCODED_HOME_PATH.search('"/home/runner/work/repo/repo/src/main.py"')
+    assert not ci_hit, f"CI-path обязан быть исключён: {ci_hit}"
+
+    user_hit = _HARDCODED_HOME_PATH.search('"/home/user/projects/app/src/main.py"')
+    assert user_hit, "обычный /home/user/... обязан матчиться"
+    logger.critical("[IMP:9][test_hardcoded_paths] CI excluded, user flagged — OK (AI-0036)")

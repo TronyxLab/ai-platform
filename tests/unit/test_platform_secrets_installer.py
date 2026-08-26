@@ -72,7 +72,7 @@ def test_ensure_age_key_permission_autofix(tmp_path: Path) -> None:
     assert age_key.stat().st_mode & 0o777 == 0o600
 
 
-# endregion
+# endregion TEST_ensure_age_key
 
 
 # region TEST_ensure_secrets_enc
@@ -109,7 +109,7 @@ def test_ensure_secrets_enc_missing_fails(tmp_path: Path) -> None:
     assert "not found" in msg
 
 
-# endregion
+# endregion TEST_ensure_secrets_enc
 
 
 # region TEST_check_prerequisites
@@ -129,21 +129,33 @@ def test_check_prerequisites_abort_missing_key(tmp_path: Path) -> None:
     assert ps.check_prerequisites(tmp_path, {}) is False
 
 
-# endregion
+# endregion TEST_check_prerequisites
 
 
 # region TEST_ensure_platform_dirs
-def test_ensure_platform_dirs_creates_2775(tmp_path: Path) -> None:
+def test_ensure_platform_dirs_creates_2775() -> None:
     # 🧪 TRAP[TEST] · 2026-08-02 · test_ensure_platform_dirs_creates_2775 — DevPlan 118 E migration unit test
     """ensure_platform_dirs: platform_root/prometheus-targets/secrets created with setgid 2775."""
-    ok = ps.ensure_platform_dirs(tmp_path / "platform")
-    assert ok is True
-    for d in (tmp_path / "platform", tmp_path / "platform" / "prometheus-targets", tmp_path / "platform" / "secrets"):
-        assert d.is_dir(), f"{d} must exist"
-        assert d.stat().st_mode & 0o2775 == 0o2775, f"{d} must be setgid 2775 (got {oct(d.stat().st_mode)})"
+    # ⚠️ TRAP[BUG] · 2026-08-26 · P3 · setgid-тест падал на macOS под pytest-tmp_path
+    # · Symptom: st_mode возвращался без S_ISGID при вызове из tmp_path (/private/tmp/…)
+    # · Root: macOS kernel МОЛЧА сбрасывает S_ISGID у каталогов внутри world-writable
+    #   sticky-каталога (/tmp) — security-hardening; chmod(0o2775) проходит, бит не ставится.
+    #   Прод (Linux, /var/lib/platform) не затронут.
+    # · Fix: база через tempfile.mkdtemp() (/var/folders/…) — вне sticky-каталога;
+    #   ассерты не ослаблены
+    # · Prevention: setgid-ассерты — только вне world-writable sticky-баз (macOS)
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as base:
+        platform_root = Path(base) / "platform"
+        ok = ps.ensure_platform_dirs(platform_root)
+        assert ok is True
+        for d in (platform_root, platform_root / "prometheus-targets", platform_root / "secrets"):
+            assert d.is_dir(), f"{d} must exist"
+            assert d.stat().st_mode & 0o2775 == 0o2775, f"{d} must be setgid 2775 (got {oct(d.stat().st_mode)})"
 
 
-# endregion
+# endregion TEST_ensure_platform_dirs
 
 
 # region TEST_install_service
@@ -196,7 +208,7 @@ def test_shipped_unit_requires_mounts_for_etc_platform() -> None:
     assert "RequiredBy=docker.service" in content, "Requires-связь docker.service сохраняется (не Wants)"
 
 
-# endregion
+# endregion TEST_install_service
 
 
 # region TEST_run
@@ -217,4 +229,4 @@ def test_run_full_pipeline_dry(
     assert (tmp_path / "etc" / "age-key.txt").read_text().startswith("AGE_SECRET_KEY=secret")
 
 
-# endregion
+# endregion TEST_run

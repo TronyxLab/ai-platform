@@ -55,7 +55,6 @@ def template_metrics_configs(tmp_path: pathlib.Path) -> list[tuple[str, pathlib.
         gen_ai_platform_yaml(
             name=f"test-{ptype}",
             ptype=ptype,
-            org="tronyx161",
             node="test-node",
             domain="test.local",
             database="",

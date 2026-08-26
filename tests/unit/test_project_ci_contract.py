@@ -266,7 +266,7 @@ def test_template_has_env_platform_makefile_agents(caplog, tmp_path: pathlib.Pat
         project_dir.mkdir()
 
         # Makefile — K3 контракт: фасад платформенных операций (генератор — SoT)
-        gen_project_makefile(f"test-{ptype}", "test.local", str(project_dir / "Makefile"), force=True)
+        gen_project_makefile(name=f"test-{ptype}", output_path=str(project_dir / "Makefile"), force=True)
         makefile = (project_dir / "Makefile").read_text(encoding="utf-8")
         issues.extend(
             f"{ptype}: Makefile без таргета '{target}' (K3 contract)"

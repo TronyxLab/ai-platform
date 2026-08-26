@@ -1,5 +1,5 @@
 # GREP_SUMMARY: policy_schema, LLMPolicy, Pydantic, YAML, validation, aliases, profiles, providers, auto_provision
-# STRUCTURE: ▶ load_yaml(path) → ◇ validate_with_jsonschema(data) → ◇ LLMPolicy.model_validate(data) → ⎋ LLMPolicy instance
+# STRUCTURE: ▶ LLMPolicy.from_yaml(path) → ⚡ json.loads/YAML → ◇ model_validate → ⊕ cross-field 4a/4b (profiles↔aliases, from_yaml step 4) → ⎋ LLMPolicy
 # region MODULE_CONTRACT
 ## @purpose  Pydantic models for LLM policy validation. Loads and validates
 ##           policy.yaml — the single source of truth for providers, aliases,
@@ -25,7 +25,7 @@ from typing import TypeAlias, cast
 import jsonschema
 import yaml
 from jsonschema.exceptions import ValidationError
-from pydantic import BaseModel, Field, ValidationInfo, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from core.internal.shared.exceptions import ConfigValidationError
 
@@ -272,24 +272,6 @@ class LLMPolicy(BaseModel):
         if "default" not in v:
             msg = "profiles must include a 'default' profile (required by auto-provision)"
             raise ConfigValidationError(msg)
-        return v
-
-    @field_validator("auto_provision")
-    @classmethod
-    def _validate_default_profile_exists(
-        cls,
-        v: AutoProvisionDef,
-        info: ValidationInfo,  # ruff: ignore[ARG003] — pydantic field_validator контракт
-    ) -> AutoProvisionDef:
-        """Validate default_profile references an existing profile.
-
-        ## @purpose  Prevent runtime errors during key provisioning where a non-existent
-        ##           profile is referenced. Validation happens at load time, not at runtime.
-        ## @complexity O(1)
-        ## @note This validator is best-effort because profiles may not be loaded yet
-        ##       (Pydantic v2 does not pass other fields to model validators directly).
-        ##       Cross-field validation is handled in from_yaml().
-        """
         return v
 
     @classmethod

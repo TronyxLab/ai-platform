@@ -747,7 +747,6 @@ def main(argv: list[str] | None = None, config: AppConfig | None = None) -> int:
         gen_ai_platform_yaml(
             name=args.name,
             ptype=args.template,
-            org=org,
             node=node,
             domain=domain,
             database=args.database,
@@ -772,7 +771,6 @@ def main(argv: list[str] | None = None, config: AppConfig | None = None) -> int:
 
     gen_project_makefile(
         name=args.name,
-        domain=domain,
         output_path=Path(project_dir) / "Makefile",
         force=True,
     )
@@ -825,7 +823,6 @@ def main(argv: list[str] | None = None, config: AppConfig | None = None) -> int:
         register_in_node_yaml(
             name=args.name,
             org=org,
-            node=node,
             ptype=args.template,
             domain=domain,
             database=args.database,

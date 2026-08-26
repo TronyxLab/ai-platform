@@ -238,7 +238,7 @@ def test_verify_mirror_match(caplog: pytest.LogCaptureFixture) -> None:
     # · Last fail: N/A (new test, DevPlan 103 §9)
     # · Remove if: mirror verification semantics change
 
-    assert context_promoter.verify_mirror("myctx", MIRROR_SHA, MIRROR_SHA) is True
+    assert context_promoter.verify_mirror(MIRROR_SHA, MIRROR_SHA) is True
 
     found_imp9 = assert_ldd_imp9(caplog, require_imp9=False)
     assert "[IMP:9][verify_mirror] Mirror sync verified" in caplog.text
@@ -257,7 +257,7 @@ def test_verify_mirror_mismatch(caplog: pytest.LogCaptureFixture) -> None:
     # · Last fail: N/A (new test, DevPlan 103 §9)
     # · Remove if: mirror verification semantics change
 
-    assert context_promoter.verify_mirror("myctx", MIRROR_SHA, SOURCE_SHA) is False
+    assert context_promoter.verify_mirror(MIRROR_SHA, SOURCE_SHA) is False
 
     assert_ldd_imp9(caplog, require_imp9=False)
     assert "[IMP:10][verify_mirror] FAIL: mirror HEAD" in caplog.text

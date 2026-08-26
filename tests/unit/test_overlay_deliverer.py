@@ -133,7 +133,7 @@ def test_resolve_node_yaml_not_found(tmp_path: str, caplog) -> None:
     platform_root = str(tmp_path / "empty-root")
     pathlib.Path(platform_root).mkdir(parents=True)
     with pytest.raises(NodeYamlNotFoundError, match=r"node\.yaml not found"):
-        resolve_node_yaml("nonexistent", platform_root=platform_root, projects_dir=str(tmp_path / "projects"))
+        resolve_node_yaml("nonexistent", platform_root=platform_root)
     logger.info("[IMP:9][test_resolve_node_yaml_not_found][done] NodeYamlNotFoundError raised as expected")
     # 🧪 TRAP[TEST] · Regression: resolve_node_yaml fails silently instead of raising
     # · Scenario: non-existent node should raise, not return None or empty

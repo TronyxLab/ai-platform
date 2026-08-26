@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: preflight, gate, ssh-probe, disk-space, s3-probe, ghcr-probe, dockerhub, dns-resolution, graceful-degradation, fatal-warn
-# STRUCTURE: ▶ ┌node.yaml + context┐ → ○ run_all_checks(ssh|disk|s3|ghcr|dockerhub|dns) → ◇ classify(FATAL/WARN) → ⊕ JSON stdout → ⎋ exit 0|1
+# STRUCTURE: ▶ ┌node.yaml + context┐ → ○ run_preflight(ssh|disk|s3|ghcr|dockerhub|dns) → ◇ classify(FATAL/WARN) → ⊕ JSON stdout → ⎋ exit 0|1
 # region MODULE_CONTRACT
 ## @purpose  Pre-flight checks executed BEFORE the bootstrap state machine starts.
 ##           Probes SSH connectivity, disk space, S3/ghcr.io/Docker Hub availability,

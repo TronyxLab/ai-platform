@@ -10,4 +10,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLATFORM_ROOT="${PLATFORM_ROOT:-$(cd "${SCRIPT_DIR}/../../.." 2>/dev/null && pwd || dirname "$(dirname "$(dirname "$SCRIPT_DIR")")")}"
 
+# AI-0076 (DevPlan 17 T7.10): PLATFORM_ROOT вычислялся, но НЕ экспортировался —
+# `python3 -m core.*` падал ModuleNotFoundError вне repo root / с чистым PYTHONPATH
+export PYTHONPATH="${PLATFORM_ROOT}:${PYTHONPATH:-}"
+
 exec python3 -m core.internal.scaffold.project_remover "$@"

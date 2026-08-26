@@ -1,7 +1,7 @@
 """Dead-code detector — reachability analysis for shell scripts (DevPlan 163 W-C).
 
 # GREP_SUMMARY: static dead-code reachability shell call-graph entrypoint-manifest source exec glob shebang
-# STRUCTURE: ▶ _parse_manifest_edges + _scan_makefile_refs + _scan_precommit_refs → ⊕ seeds
+# STRUCTURE: ▶ _parse_manifest_edges + _scan_file_refs(Makefile/pre-commit) → ⊕ seeds
 #            → ○ BFS via _find_source_calls → ⟦reachable_set⟧
 #            → glob core/**/*.sh → ∖ exceptions → ◇ entrypoints|internal without caller?
 #            → ⎋ DEAD_CODE Finding

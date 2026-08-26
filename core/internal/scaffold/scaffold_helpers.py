@@ -94,9 +94,8 @@ def load_compose_profiles_from_platform_env() -> str:
 ## @purpose  Generate ai-platform.yaml for a project (shared between new-project + adopt).
 ## @param name         Project name
 ## @param ptype        Project type: frontend, backend
-## @param org          Organization name
-## @param node         Target node name
-## @param domain       Domain name (optional)
+## @param node         Target node (default: _DEFAULT_NODE)
+## @param domain       Domain (needs.domain; empty → False)
 ## @param database     Database name (optional)
 ## @param mode         Deployment mode: "dev" enables staging
 ## @param output_path  Where to write the YAML file
@@ -110,7 +109,6 @@ def load_compose_profiles_from_platform_env() -> str:
 def gen_ai_platform_yaml(
     name: str,
     ptype: str,
-    org: str,  # ruff: ignore[ARG001]
     node: str = "",
     domain: str = "",
     database: str = "",
@@ -122,7 +120,8 @@ def gen_ai_platform_yaml(
 
     ## @purpose  Unified yaml generation: add-project.sh generate_ai_platform_yaml +
     ##           project_adopter.generate_minimal_ai_platform_yaml.
-    ## @io        ⇥ name, ptype, org, ... → ⎋ str — "generated" | "exists"
+    ## @io        ⇥ name, ptype, node, domain, database, mode, output_path, minimal
+    ##           → ⎋ str — "generated" | "exists"
     ## @complexity O(1)
     """
     out = Path(output_path) if output_path else Path()
@@ -282,21 +281,19 @@ def read_template_yaml(template_dir: str | Path) -> dict[str, object]:
 ## @purpose  Generate minimal Makefile in project directory (K3 contract).
 ##           Does NOT overwrite existing Makefile unless force=True.
 ## @param name         Project name
-## @param domain       Domain (for sync-env reference)
 ## @param output_path  Where to write the Makefile
 ## @param force        Overwrite existing Makefile
 ## @return   "generated" | "exists" | "skipped"
 ## @complexity O(1)
 def gen_project_makefile(
     name: str,
-    domain: str = "",  # ruff: ignore[ARG001]
     output_path: str | Path = "",
     force: bool = False,
 ) -> str:
     """Generate project Makefile.
 
     ## @purpose  Unified from add-project.sh gen_project_makefile + adopter.gen_project_makefile.
-    ## @io        ⇥ name, domain, output_path, force → ⎋ str — "generated" | "exists" | "skipped"
+    ## @io        ⇥ name, output_path, force → ⎋ str — "generated" | "exists" | "skipped"
     ## @complexity O(1)
     ## @invariants
     ##   - Does NOT overwrite existing Makefile unless force=True
@@ -479,7 +476,8 @@ node: {node_val}
 ##   - platform-env.yaml: repo root (тот же канон, что project_scaffolder.gen_env_platform)
 ##   - Без PROJECTS_BASE → node_yaml_path="" → генератор рендерит warning-секцию (graceful)
 def gen_project_platform_md(
-    name: str,  # ruff: ignore[ARG001]
+    name: str,  # ruff: ignore[ARG001] — AI-0033 (T7.3): тело name не читает; параметр оставлен
+    #             для keyword-контракта callers (scaffolder/adopter/converge) без ломки
     org: str = "",
     node: str = "",
     domain: str = "",
@@ -527,7 +525,6 @@ def gen_project_platform_md(
 ##           Shared between new-project (scaffolder) and adopt-project (adopter).
 ## @param name         Project name
 ## @param org          Organization name
-## @param node         Node name
 ## @param ptype        Project type (frontend/backend/adopted)
 ## @param domain       Domain name (optional)
 ## @param database     Database name (optional)
@@ -544,7 +541,6 @@ def gen_project_platform_md(
 def register_in_node_yaml(
     name: str,
     org: str = "",
-    node: str = "",  # ruff: ignore[ARG001]
     ptype: str = "",
     domain: str = "",
     database: str = "",

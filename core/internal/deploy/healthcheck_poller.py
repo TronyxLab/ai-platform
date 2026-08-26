@@ -3,7 +3,7 @@
 Shared healthcheck poller for DeployOrchestrator. Extracted from context_deployer._shared_healthcheck_poll() + docker_compose.py.
 """
 # GREP_SUMMARY: healthcheck, poll, http, docker-inspect, retry, timeout, health-status, monotonic-deadline, wall-time-budget
-# STRUCTURE: ▶ HealthcheckPoller.__init__(timeout, interval, max_retries) → ○ poll_until_healthy ┌deadline=start+max_retries×interval┐ → ○ poll_project(budget=min(timeout, remaining)) → ◇ HTTP GET /health → ◇ docker inspect → ⎋ str(healthy|unhealthy)
+# STRUCTURE: ▶ HealthcheckPoller.__init__(timeout, interval, max_retries) → ○ poll_until_healthy ┌deadline=start+max_retries×interval┐ → ○ poll_project(budget=min(timeout, remaining)) → ◇ HTTP GET /health → ⎋ HealthcheckResult(status="healthy"|"unhealthy"|"timeout")
 # region MODULE_CONTRACT
 ## @purpose  Shared healthcheck polling utility. Supports two protocols:
 ##           1. HTTP GET /health → 200 (web services)
@@ -19,7 +19,7 @@ Shared healthcheck poller for DeployOrchestrator. Extracted from context_deploye
 ##   3. max retries: HEALTHCHECK_POLL_MAX_RETRIES (20) — окно поллинга 60s
 ##   4. HTTP check: GET /health endpoint, 200 = healthy
 ##   5. Docker check: inspect State.Health.Status == "healthy" OR State.Status == "running" (no healthcheck)
-##   6. Non-fatal: returns "unhealthy" on failure, does NOT raise
+##   6. Non-fatal: возвращает HealthcheckResult со статусом "unhealthy"/"timeout" при сбое, не raise
 ##   7. REF-0103: единый monotonic deadline = start + max_retries × interval — СУММАРНОЕ wall-time
 ##      poll_until_healthy ≤ бюджету независимо от числа попыток; каждая попытка получает
 ##      budget = min(self.timeout, остаток до deadline) и прокидывает его вниз (HTTP per-check
@@ -106,7 +106,7 @@ class HealthcheckPoller:
     ## @io — ⇥ project_name → ⎋ HealthcheckResult
     ## @complexity — O(max_retries) — each attempt is O(1)
     ## @invariants
-    ##   - Non-fatal: returns "unhealthy" on any failure
+    ##   - Non-fatal: результат — HealthcheckResult (status "unhealthy"/"timeout"), никогда не raise
     ##   - HTTP check: 200 on /health = healthy
     ##   - Docker check: State.Health.Status == "healthy" or running without healthcheck
     ##   - Total poll window = interval × max_retries

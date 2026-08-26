@@ -85,18 +85,21 @@ class DeliveryError(OverlayDelivererError):
 
 # region FUNC_resolve_node_yaml
 ## @purpose  Search node.yaml via NodeYaml.resolve() (unified 3-path resolver).
-## @io  input: node_name (str), platform_root (str), projects_dir (Optional[str], unused)
+## @io  input: node_name (str), platform_root (str)
 ##      output: resolved absolute path as str
 ## @complexity  O(n) where n = number of candidate paths (≤4) — delegates to NodeYaml.resolve()
 ## @invariants  Delegates to NodeYaml.resolve() — single source of truth per AC4.
-##              If projects_dir is provided, sets PLATFORM_ROOT env for NodeYaml.resolve().
 ##              Raises NodeYamlNotFoundError wrapping ConfigNotFoundError.
 ## @rationale  DRIFT-088-1 fix: own 3-path implementation was not migrated. Now delegates to
 ##             NodeYaml.resolve() which is the single canonical 3-path resolver (AC4).
+# 🧐 TRAP[DECISION] · 2026-08-26 · — · projects_dir снят с цепочки (AI-0035, DevPlan 17 T7.5)
+# · Rejected: оставить параметр с VESTIGIAL-аннотацией (byte-compat keep)
+# · Reason: параметр нигде не читался (ложное заявление «sets PLATFORM_ROOT» удалено);
+#   callers в репо не передавали его
+# · Rev: если появится реальный consumer projects_dir — вернуть с реализацией
 def resolve_node_yaml(
     node_name: str,
     platform_root: str = str(platform_remote_base()),
-    projects_dir: str | None = None,  # ruff: ignore[ARG001]
 ) -> str:
     """Search node.yaml via NodeYaml.resolve() (unified 3-path resolver).
 
@@ -111,7 +114,6 @@ def resolve_node_yaml(
 
     logger.info("[IMP:8][resolve_node_yaml][search] Resolving node.yaml for node=%s", node_name)
     try:
-        # Support custom projects_dir by setting PLATFORM_ROOT if different from default
         resolved_config_dir: str = platform_root
         ny = NodeYaml.resolve(node_name=node_name, config_dir=resolved_config_dir)
         resolved = ny._path
@@ -311,7 +313,6 @@ class _CliArgs(argparse.Namespace):
         self.command: str
         self.node: str
         self.platform_root: str
-        self.projects_dir: str | None
         self.yaml_path: str
         self.host: str
         self.core_src: str
@@ -329,7 +330,7 @@ class _CliArgs(argparse.Namespace):
 ## @complexity O(1) — извлечение управляющего потока
 def _plw_body_cli(args: _CliArgs) -> None:
     if args.command == "resolve-node":
-        sys.stdout.write(resolve_node_yaml(args.node, args.platform_root, args.projects_dir) + "\n")
+        sys.stdout.write(resolve_node_yaml(args.node, args.platform_root) + "\n")
     elif args.command == "extract-host":
         sys.stdout.write(extract_node_host(args.yaml_path) + "\n")
     elif args.command == "sync-core":
@@ -349,7 +350,6 @@ def cli() -> int:
     rp = sp.add_parser("resolve-node", help="Resolve node.yaml path")
     rp.add_argument("--node", required=True)
     rp.add_argument("--platform-root", default=str(platform_remote_base()))
-    rp.add_argument("--projects-dir", default=None)
 
     ep = sp.add_parser("extract-host", help="Extract SSH host from node.yaml")
     ep.add_argument("--yaml", required=True, dest="yaml_path")

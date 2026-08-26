@@ -1370,7 +1370,7 @@ def _aggregate_severity(
 ##   - Only CRIT failures escalate to exit 2
 def _compute_exit_code(crit: int, warn: int, deployed: int) -> int:
     """Severity-based exit code (DEPLOY_BEST_EFFORT contract: CRIT→2, WARN→0, DONE→0)."""
-    code = _metrics_exit_code(crit, warn, deployed)
+    code = _metrics_exit_code(crit, warn)
     if code == EXIT_CRITICAL:
         logger.error("[IMP:10][_compute_exit_code][critical] Critical:%d Warn:%d → exit 2", crit, warn)
     elif warn > 0:

@@ -7,6 +7,11 @@
 ## @invariants  <30 LOC; zero business logic; exit code passthrough
 # endregion MODULE_CONTRACT
 set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PLATFORM_ROOT="${PLATFORM_ROOT:-$(cd "${SCRIPT_DIR}/../../.." 2>/dev/null && pwd || true)}"
 
-# Map --list / --status to explicit flags for project_lister.py
+# AI-0076 (DevPlan 17 T7.10): PYTHONPATH-фикс add-vhost.sh — канон для `python3 -m core.*`
+# из произвольного cwd с чистым окружением (ModuleNotFoundError без него)
+export PYTHONPATH="${PLATFORM_ROOT}:${PYTHONPATH:-}"
+
 exec python3 -m core.internal.scaffold.project_lister "$@"

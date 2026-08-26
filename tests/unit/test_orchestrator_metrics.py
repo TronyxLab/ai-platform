@@ -50,9 +50,9 @@ def test_aggregate_severity(caplog: pytest.LogCaptureFixture) -> None:
 # · Remove if: exit_code_from_results API changes
 def test_exit_code_from_results() -> None:
     """exit_code_from_results: CRIT→2, WARN→0, none→0 (DEPLOY_BEST_EFFORT)."""
-    assert orchestrator_metrics.exit_code_from_results(crit=1, warn=0, deployed=1) == 2
-    assert orchestrator_metrics.exit_code_from_results(crit=0, warn=1, deployed=1) == 0
-    assert orchestrator_metrics.exit_code_from_results(crit=0, warn=0, deployed=5) == 0
+    assert orchestrator_metrics.exit_code_from_results(crit=1, warn=0) == 2
+    assert orchestrator_metrics.exit_code_from_results(crit=0, warn=1) == 0
+    assert orchestrator_metrics.exit_code_from_results(crit=0, warn=0) == 0
 
 
 # 🧪 TRAP[TEST] · 2026-08-02 · unit · status metrics JSON pure
@@ -106,7 +106,7 @@ def test_orchestrator_metrics_pure_negative(tmp_path) -> None:
     r2a, r2b = orchestrator_metrics.aggregate_severity(["a", "b"], {"a": "critical"})
     assert (r1a, r1b) == (r2a, r2b)
 
-    assert orchestrator_metrics.exit_code_from_results(1, 0, 1) == orchestrator_metrics.exit_code_from_results(1, 0, 1)
+    assert orchestrator_metrics.exit_code_from_results(1, 0) == orchestrator_metrics.exit_code_from_results(1, 0)
     assert orchestrator_metrics.status_metrics_json() == orchestrator_metrics.status_metrics_json()
 
     # No filesystem side-effects (functions must not create/delete files)

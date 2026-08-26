@@ -96,7 +96,6 @@ def _format_cli_value(value: object) -> str:
 def resolve_node_yaml(
     node_name: str | None = None,
     platform_root: str | None = None,
-    projects_dir: str | None = None,  # ruff: ignore[ARG001]
     env: Mapping[str, str] | None = None,
 ) -> str:
     """Резолв node.yaml через 3-path search (NodeYaml.resolve) → абсолютный путь.
