@@ -35,7 +35,9 @@ def _no_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
 #   РОВНО 1 вызов + IMP:9 «PERMANENT failure»; (2) transient-stderr → все 10 попыток
 # · Last fail: DevPlan 17 верификация @64c2090 (аудит AI-0015)
 # · Remove if: invoke начинает возвращать типизированный error-kind вместо текста
-def test_permanent_error_no_retry(tmp_path: Path, caplog: pytest.LogCaptureFixture, _no_sleep, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_permanent_error_no_retry(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, _no_sleep, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Permanent-ошибка → 1 вызов; transient → полный бюджет."""
     caplog.set_level(0)
 
@@ -54,9 +56,7 @@ def test_permanent_error_no_retry(tmp_path: Path, caplog: pytest.LogCaptureFixtu
     reporting.run_healthchecks(str(node_yaml))
 
     assert len(calls) == 1, f"permanent-ошибка обязана дать 1 вызов, не {len(calls)}"
-    assert any("PERMANENT failure" in r.getMessage() for r in caplog.records), (
-        "IMP:9 no-retry запись обязательна"
-    )
+    assert any("PERMANENT failure" in r.getMessage() for r in caplog.records), "IMP:9 no-retry запись обязательна"
     print("--- LDD TRAJECTORY ---")
     for r in caplog.records:
         if "[IMP:" in r.getMessage():
@@ -70,7 +70,9 @@ def test_permanent_error_no_retry(tmp_path: Path, caplog: pytest.LogCaptureFixtu
 # · Scenario: invoke возвращает transient-stderr → invoke вызван hc_max_retries раз
 # · Last fail: контрсценарий-охранник T3.4 (DevPlan 17)
 # · Remove if: вместе с test_permanent_error_no_retry
-def test_transient_still_retried(tmp_path: Path, caplog: pytest.LogCaptureFixture, _no_sleep, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_transient_still_retried(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, _no_sleep, monkeypatch: pytest.MonkeyPatch
+) -> None:
     caplog.set_level(0)
     calls: list[str] = []
 
