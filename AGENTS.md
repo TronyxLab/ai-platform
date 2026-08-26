@@ -419,7 +419,7 @@ make deploy-project → tar+ssh (orchestrator_cli deliver → forced-command rec
 
 1. **E2E на test-VPS:** `make test-node NODE=<test>` зелёный (0 failed; skip — только при
    документированной инфраструктурной недоступности) → нода согласована (`make check NODE=<test>`).
-2. **Chaos:** `chaos FULL T1–T12` (после bootstrap).
+2. **Resilience drills:** fast (`-m "chaos and not night"`, ≤30 мин) + night (`-m night`, отдельное окно ~25 мин) — после bootstrap.
 3. **CI-гейты:** `make check` локально зелёный; CI на целевой ветке (platform-test + security-scan
    включая gitleaks) зелёный; `make check MARKER=check-manifests` чистый.
 4. **Деплой:** `make deploy` (проект) / `make context-promote CONTEXT=<context>` (платформа);

@@ -29,9 +29,11 @@
 ##   NOT included in `make check` or `make gate` — expensive, requires dedicated test-VPS
 ##   Per AGENTS.md invariant 9: test-VPS is recreatable — tests use cold-start only
 ##   Marker: requires_node (orthogonal to e2e = HTTP checks against *.tronyx.ru)
-##   Chaos excluded (DevPlan 136 W6 T6.1, B4): chaos fault-injection (126) targets a
-##   BOOTSTRAPPED node and breaks the bare-node cold-start suite. Run chaos separately:
-##   PYTEST_NO_ESCALATION=1 $(PYTHON) -m pytest tests/e2e/test_chaos_resilience.py -m chaos -v --tb=short -rs
+##   Chaos excluded (DevPlan 136 W6 T6.1, B4): chaos fault-injection targets a
+##   BOOTSTRAPPED node and breaks the bare-node cold-start suite. Resilience drills run
+##   separately (DevPlan 013, two tiers):
+##     fast:  PYTEST_NO_ESCALATION=1 $(PYTHON) -m pytest tests/e2e/test_chaos_resilience.py -m "chaos and not night" -v --tb=short -rs
+##     night (separate operator window ~25 min): ... -m night -v --tb=short -rs
 ##   (pre-flight «голоты» check is skipped for chaos sessions — see tests/e2e/README.md)
 ##   DevPlan 165: прогон журналируется (test_journal record --junit report-node.xml);
 ##   rc прогона пробрасывается неизменным.
