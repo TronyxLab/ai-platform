@@ -55,7 +55,10 @@ services:
     environment:
       PLATFORM_DOMAIN: ${PLATFORM_DOMAIN:-}
       NODE_NAME: ${NODE_NAME:-unknown}
-      NODE_CONFIGS_DIR: ${NODE_CONFIGS_DIR:-/opt/node-configs}
+      # Контейнерный путь КОНСТАНТА (маунт node.yaml выше всегда кладёт файл в
+      # /opt/node-configs/<node>/); хостовой ${NODE_CONFIGS_DIR} сюда пробрасывать НЕЛЬЗЯ —
+      # на dev он = macOS-путь, app.py получит ENOENT → healthz 503 (F-009 план 011)
+      NODE_CONFIGS_DIR: /opt/node-configs
       # STATUS_PAGE_PORT — SoT: platform-infra.yaml env_defaults (DevPlan 122 T3).
       # Порт внутренний (без host-bind); значение 8080 дублирует CADVISOR_PORT намеренно —
       # разные интерфейсы: status-page слушает внутри контейнера, cadvisor — host-bind 127.0.0.1.
