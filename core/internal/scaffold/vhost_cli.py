@@ -16,6 +16,8 @@
 ## @rationale God-file trim (план simplify-refactor-waves T3.7): 230 LOC CLI-слоя не смешиваются
 ##            с render-ядром; ядро остаётся единственным импортируемым API.
 ## @changes  2026-08-22 · T3.7 — извлечён из vhost_renderer.py (CLI-блок verbatim)
+## @changes  2026-08-27 · DevPlan 015 F-10-test — резолв platform_domain извлечён в
+##            _resolve_platform_domain (CLI>env>node.yaml>None; unit-тестируемость цепочки)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -24,6 +26,7 @@ import argparse
 import logging
 import os
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from typing import ClassVar
 
@@ -31,6 +34,55 @@ from typing import ClassVar
 # внутри main() (канон import-outside-top-level, defer §4.4 ruff.toml). Единственное
 # статическое ребро: vhost_renderer → vhost_cli (реэкспорт CLI-фасада).
 logger = logging.getLogger(__name__)
+
+
+# region FUNC__resolve_platform_domain
+## @purpose  Резолв platform_domain (F-10, DevPlan 015): CLI arg > env PLATFORM_DOMAIN >
+##           node.yaml#domain (top-level `get("domain")`) > None. Извлечён из main() (строки
+##           177-194) для unit-тестируемости цепочки (F-10-test: CLI>env>node.yaml>None).
+## @io       ⇥ cli_value: str | None (--platform-domain), env: Mapping[str, str] (DI, нет
+##           скрытых os.environ), node: str | None, node_configs_dir: str → ⎋ str | None
+## @complexity — O(1) + NodeYaml-чтение (только при отсутствии CLI/env)
+## @invariants
+##   - Приоритет: CLI arg → env PLATFORM_DOMAIN → node.yaml#domain → None
+##   - node.yaml читается ТОЛЬКО если CLI и env пусты И node задан
+##   - Ошибки чтения/парсинга node.yaml → None + INFO (wildcard resolution skipped)
+##   - top-level `get("domain")` (не node.domain) — канон F-10
+def _resolve_platform_domain(
+    cli_value: str | None,
+    env: Mapping[str, str],
+    node: str | None,
+    node_configs_dir: str,
+) -> str | None:
+    """Resolve platform_domain: CLI arg > env PLATFORM_DOMAIN > node.yaml#domain > None (F-10)."""
+    if cli_value:
+        logger.info("[IMP:8][main] platform_domain from CLI: %s", cli_value)
+        return cli_value
+    env_value = env.get("PLATFORM_DOMAIN")
+    if env_value:
+        logger.info("[IMP:8][main] platform_domain from env PLATFORM_DOMAIN: %s", env_value)
+        return env_value
+    if not node:
+        return None
+    node_yaml_path = Path(node_configs_dir) / node / "node.yaml"
+    from core.internal.shared.exceptions import (
+        ConfigNotFoundError,
+        ConfigParseError,
+        ConfigValidationError,
+    )
+    from core.internal.shared.node_yaml import NodeYaml
+
+    try:
+        resolved_domain = NodeYaml(str(node_yaml_path)).get("domain")
+        if isinstance(resolved_domain, str) and resolved_domain:
+            logger.info("[IMP:8][main] platform_domain resolved from node.yaml: %s", resolved_domain)
+            return resolved_domain
+    except (ConfigNotFoundError, ConfigParseError, ConfigValidationError):
+        logger.info("[IMP:7][main] node.yaml domain unavailable — wildcard resolution skipped")
+    return None
+
+
+# endregion FUNC__resolve_platform_domain
 
 
 # region CLI
@@ -175,23 +227,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(_normalize_mode(list(sys.argv[1:] if argv is None else argv)), namespace=_VhostArgs())
 
     # Resolve platform_domain: CLI arg > env var > node.yaml#node.domain (F-10) > None
-    platform_domain: str | None = args.platform_domain or os.environ.get("PLATFORM_DOMAIN")
-    if not platform_domain and args.node:
-        node_yaml_path = Path(args.node_configs_dir) / args.node / "node.yaml"
-        from core.internal.shared.exceptions import (
-            ConfigNotFoundError,
-            ConfigParseError,
-            ConfigValidationError,
-        )
-        from core.internal.shared.node_yaml import NodeYaml
-
-        try:
-            resolved_domain = NodeYaml(str(node_yaml_path)).get("domain")
-            if isinstance(resolved_domain, str) and resolved_domain:
-                platform_domain = resolved_domain
-                logger.info("[IMP:8][main] platform_domain resolved from node.yaml: %s", resolved_domain)
-        except (ConfigNotFoundError, ConfigParseError, ConfigValidationError):
-            logger.info("[IMP:7][main] node.yaml domain unavailable — wildcard resolution skipped")
+    platform_domain: str | None = _resolve_platform_domain(
+        args.platform_domain,
+        os.environ,
+        args.node if hasattr(args, "node") else None,
+        getattr(args, "node_configs_dir", ""),
+    )
     platform_root: str | None = args.platform_root or os.environ.get("PLATFORM_ROOT")
     # Resolve dev-mode suffix: CLI arg > env var > None (prod renders are unaffected)
     dev_domain_suffix: str | None = args.dev_domain_suffix or os.environ.get("DEV_DOMAIN_SUFFIX") or None

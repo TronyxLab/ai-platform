@@ -265,10 +265,58 @@ def ensure_remote_dirs(
 # endregion FUNC_ensure_remote_dirs
 
 
+# region FUNC_invalidate_pycache
+## @purpose  F-07 (DevPlan 015): post-rsync инвалидация __pycache__ на ноде. rsync исключает
+##           __pycache__ (RSYNC_EXCLUDES_CORE) и `--delete` НЕ удаляет excluded-файлы на
+##           назначении → после инкрементальной доставки (rsync -t сохраняет mtime источников)
+##           Python мог НЕ перекомпилировать .py при более новом .pyc (mtime-сравнение) →
+##           стейл байткод против нового кода. Remote `find <base>/core -type d -name
+##           __pycache__ -exec rm -rf {} +` гарантирует перекомпиляцию при следующем импорте.
+## @io  input: host, base (remote), remote_user, dry_run, runner → bool True (best-effort)
+## @complexity  O(F) — find-обход дерева core на ноде
+## @invariants
+##   - Только remote-пути (base = resolve_remote_base = /opt/platform) — НИКАКИХ локальных путей
+##   - Best-effort: find-сбой → WARN, доставка НЕ проваливается (rsync уже успешен)
+##   - dry_run: печатает команду (IMP:8), 0 subprocess-вызовов
+##   - Guard: `|| true` — find на несуществующем core не должен ронять доставку
+def invalidate_pycache(
+    host: str,
+    base: str,
+    remote_user: str = "root",
+    dry_run: bool = False,
+    runner: CommandRunner | None = None,
+) -> bool:
+    """Remove __pycache__ dirs on the node after rsync (F-07: force bytecode recompilation)."""
+    remote_cmd = f"find {base}/core -type d -name __pycache__ -exec rm -rf {{}} + 2>/dev/null || true"
+    cmd = ["ssh", *SSH_OPTS, f"{remote_user}@{host}", remote_cmd]
+    logger.info("[IMP:9][invalidate_pycache][exec] F-07: invalidating __pycache__ on %s", host)
+    if dry_run:
+        logger.info("[IMP:8][invalidate_pycache][dry-run] DRY-RUN: %s", " ".join(cmd))
+        return True
+    r = _run_cmd(cmd, FILE_OP_TIMEOUT, runner)
+    if r.returncode != 0:
+        logger.warning(
+            "[IMP:7][invalidate_pycache][warn] F-07: __pycache__ invalidation failed on %s "
+            "(exit=%d): %s — stale bytecode may persist",
+            host,
+            r.returncode,
+            r.stderr.strip()[:200],
+        )
+        return False
+    logger.info("[IMP:9][invalidate_pycache][done] __pycache__ invalidated on %s", host)
+    return True
+
+
+# endregion FUNC_invalidate_pycache
+
+
 # region FUNC_deliver_core
 ## @purpose  Phase 1/4: rsync core/ → {base}/core/ с 6 exclude-паттернами (AC7 + 162 W10-2
 ##           docker-compose.test.yml). Чистый rsync-фаз —
 ##           БЕЗ ensure_remote_dirs (mkdir живёт в deliver_all; sync-путь overlay не получает mkdir — D3).
+##           F-07 (DevPlan 015): ПОСЛЕ успешного rsync — инвалидация __pycache__ на ноде
+##           (invalidate_pycache): rsync исключает __pycache__ и --delete не чистит excluded →
+##           стейл .pyc против нового кода при инкрементальной доставке.
 ## @io  input: host, core_dir, remote_user, base, dry_run, runner; output: bool True on success
 ## @complexity  O(F) where F = number of files transferred
 ## @rationale  Делегируется из overlay_deliverer.sync_core_to_vps() — DRY-унификация двойного
@@ -305,6 +353,8 @@ def deliver_core(
         logger.info("[IMP:10][deliver_core][error] FATAL: rsync core/ failed for %s", host)
         msg = f"rsync core/ failed for {host} (exit={r.returncode}): {r.stderr.strip()}"
         raise CoreDeliveryError(msg)
+    # F-07 (DevPlan 015): post-rsync __pycache__ invalidation — best-effort (не роняет доставку)
+    invalidate_pycache(host, base, remote_user, dry_run=dry_run, runner=runner)
     logger.info("[IMP:9][deliver_core][done] Phase 1/4: core/ rsync complete")
     return True
 

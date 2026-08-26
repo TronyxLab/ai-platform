@@ -204,8 +204,9 @@ def test_deliver_core_excludes_exact(tmp_path, caplog) -> None:
     fake = _ok_runner()
     result = deliver_core("1.2.3.4", core_dir, runner=fake)
     assert result is True
-    assert len(fake.calls) == 1
-    cmd = fake.last_cmd
+    # F-07 (DevPlan 015): deliver_core = rsync + post-rsync __pycache__ invalidation (2 вызова)
+    assert len(fake.calls) == 2, f"F-07: ожидается rsync + invalidate, got {len(fake.calls)}"
+    cmd = fake.calls[0]
     expected = [
         "rsync",
         "-avz",
@@ -223,8 +224,15 @@ def test_deliver_core_excludes_exact(tmp_path, caplog) -> None:
     assert "--exclude=docker-compose.test.yml" in excludes, (
         "162 W10-2: docker-compose.test.yml не исключается из core-доставки"
     )
-    assert fake.last_kwargs["timeout"] == 600, "rsync timeout must be 600 (deploy default)"
-    logger.info("[IMP:9][test_deliver_core_excludes_exact][done] 6 excludes + flags verified")
+    assert fake.kwargs[0]["timeout"] == 600, "rsync timeout must be 600 (deploy default)"
+    # F-07: второй вызов — remote-инвалидация __pycache__ (find + rm -rf)
+    invalidate_cmd = " ".join(fake.calls[1])
+    assert "find /opt/platform/core -type d -name __pycache__" in invalidate_cmd, (
+        f"F-07: invalidate-шаг должен идти по remote core, got: {invalidate_cmd}"
+    )
+    assert invalidate_cmd.startswith("ssh "), "F-07: инвалидация идёт через ssh (канал Core)"
+    assert fake.kwargs[1]["timeout"] == 15, "F-07: invalidate — файловая операция (FILE_OP_TIMEOUT)"
+    logger.info("[IMP:9][test_deliver_core_excludes_exact][done] 6 excludes + flags + F-07 invalidate verified")
     # 🧪 TRAP[TEST] · Regression: core/ rsync exclude patterns drift (AC7 + 162 W10-2)
     # · Scenario: .git/__pycache__/.pytest_cache/default-user.xml/.env/docker-compose.test.yml not all excluded
     # · Last fail: N/A (new test; docker-compose.test.yml added DevPlan 162 W10-2)
@@ -521,17 +529,19 @@ def test_deliver_all_success_ldd(delivery_tree, caplog) -> None:
         runner=fake,
     )
     assert result is True
-    # 6 шагов: mkdir + core + platform-env + Makefile + node-configs + secrets
+    # 6 шагов + F-07 invalidate (deliver_core → post-rsync ssh __pycache__):
+    # mkdir + core + invalidate + platform-env + Makefile + node-configs + secrets = 7 вызовов
     calls = fake.calls
-    assert len(calls) == 6, f"Expected 6 runner calls, got {len(calls)}"
+    assert len(calls) == 7, f"Expected 7 runner calls (6 phases + F-07 invalidate), got {len(calls)}"
     assert calls[0][0] == "ssh", f"Step 1 must be ssh mkdir: {calls[0]}"
-    assert all(c[0] == "rsync" for c in calls[1:]), "Steps 2-6 must be rsync"
+    assert all(c[0] == "rsync" for c in [calls[1], calls[3], calls[4], calls[5], calls[6]]), "rsync-фазы"
+    assert "find /opt/platform/core -type d -name __pycache__" in " ".join(calls[2]), "F-07: invalidate после core"
     assert calls[1][-1] == "root@1.2.3.4:/opt/platform/core/"
-    assert calls[2][-1] == "root@1.2.3.4:/opt/platform/platform-env.yaml"
-    assert calls[3][-1] == "root@1.2.3.4:/opt/platform/Makefile"
-    assert calls[4][-1] == "root@1.2.3.4:/opt/node-configs/test-node/"
-    assert calls[5][-1] == "root@1.2.3.4:/opt/node-configs/secrets/"
-    logger.info("[IMP:9][test_deliver_all_success_ldd][done] 6 phases ordered + IMP:9 trajectory")
+    assert calls[3][-1] == "root@1.2.3.4:/opt/platform/platform-env.yaml"
+    assert calls[4][-1] == "root@1.2.3.4:/opt/platform/Makefile"
+    assert calls[5][-1] == "root@1.2.3.4:/opt/node-configs/test-node/"
+    assert calls[6][-1] == "root@1.2.3.4:/opt/node-configs/secrets/"
+    logger.info("[IMP:9][test_deliver_all_success_ldd][done] phases ordered + F-07 invalidate verified")
     # 🧪 TRAP[TEST] · Regression: phase ordering / count drift
     # · Scenario: mkdir→core→env→Makefile→node-configs→secrets order must hold
     # · Last fail: N/A (new test)
@@ -667,20 +677,21 @@ def test_fallback_deliver_success(delivery_tree, caplog, monkeypatch: pytest.Mon
     ]
     fake = _ok_runner()
     assert cli(argv=args, runner=fake) == 0, "fallback-deliver success must return 0"
-    # rsync-фазы (5) + provision (1) + node-update (1) — все через runner
+    # rsync-фазы (5) + provision (1) + node-update (1) + F-07 invalidate (ssh внутри deliver_core)
     ssh_calls = [c for c in fake.calls if c and c[0] == "ssh"]
-    assert len(ssh_calls) == 2, f"Expected 2 ssh calls (provision + node-update), got {len(ssh_calls)}"
-    assert "provision" in ssh_calls[0][-1], "First ssh call must run make provision"
+    assert len(ssh_calls) == 3, f"Expected 3 ssh calls (invalidate + provision + node-update), got {len(ssh_calls)}"
+    assert "find /opt/platform/core -type d -name __pycache__" in " ".join(ssh_calls[0]), "F-07: invalidate первым ssh"
+    assert "provision" in ssh_calls[1][-1], "Second ssh call must run make provision"
     # REF-0007: node-update = `ssh ... 'bash -s'` — ключ в argv ОТСУТСТВУЕТ
-    assert ssh_calls[1] == ["ssh", *SSH_OPTS, "root@1.2.3.4", "bash -s"], (
-        f"REF-0007: node-update must be bash -s without key in argv, got {ssh_calls[1]}"
+    assert ssh_calls[2] == ["ssh", *SSH_OPTS, "root@1.2.3.4", "bash -s"], (
+        f"REF-0007: node-update must be bash -s without key in argv, got {ssh_calls[2]}"
     )
     # REF-0007: ключ доставляется stdin-скриптом (export + make node-update)
     update_input = fake.kwargs[-1].get("input") or ""
-    assert "AGE-KEY-123" not in ssh_calls[1][-1], "REF-0007: AGE key must NOT be in argv"
+    assert "AGE-KEY-123" not in ssh_calls[2][-1], "REF-0007: AGE key must NOT be in argv"
     assert "export AGE_SECRET_KEY=AGE-KEY-123" in update_input, "stdin script must carry the AGE export"
     assert "DEPLOY_PARALLEL=true make node-update NODE=test-node" in update_input
-    logger.info("[IMP:9][test_fallback_deliver_success][done] Success path: 5 rsync + 2 ssh verified")
+    logger.info("[IMP:9][test_fallback_deliver_success][done] Success path: 5 rsync + 3 ssh (incl. F-07) verified")
     # 🧪 TRAP[TEST] · 2026-08-07 · 142 W5 — fallback-деплой: ssh-вызовы provision/node-update
     # · Scenario: успешный прогон — все фазы; REF-0007: AGE_SECRET_KEY через stdin prelude,
     # ·   НЕ в argv (`bash -s`)
@@ -710,12 +721,17 @@ def test_fallback_deliver_provision_fail(delivery_tree, caplog, monkeypatch: pyt
         "--core-dir",
         delivery_tree["core_dir"],
     ]
-    # 3 rsync (core, platform-env, makefile; scripts/ + root-compose skip — нет файлов) + provision(fail)
-    fake = FakeCommandRunner(results=[_proc(0), _proc(0), _proc(0), _proc(1, stderr="make: *** provision FAILED")])
+    # 3 rsync (core, platform-env, makefile; scripts/ + root-compose skip — нет файлов) +
+    # F-07 invalidate (ssh внутри deliver_core) + provision(fail)
+    fake = FakeCommandRunner(
+        results=[_proc(0), _proc(0), _proc(0), _proc(0), _proc(1, stderr="make: *** provision FAILED")]
+    )
     assert cli(argv=args, runner=fake) == 1, "provision failure must return 1"
-    # node-update НЕ должен вызываться после провала provision
+    # node-update НЕ должен вызываться после провала provision (bash -s отсутствует)
     ssh_calls = [c for c in fake.calls if c and c[0] == "ssh"]
-    assert len(ssh_calls) == 1, f"Expected only provision ssh call, got {len(ssh_calls)}"
+    assert len(ssh_calls) == 2, f"Expected 2 ssh calls (invalidate + provision), got {len(ssh_calls)}"
+    assert "provision" in ssh_calls[-1][-1], "последний ssh — provision (fail-fast)"
+    assert not any("bash -s" in c[-1] for c in ssh_calls), "node-update не вызывается после провала provision"
     logger.info("[IMP:9][test_fallback_deliver_provision_fail][done] Fail-fast on provision verified")
     # 🧪 TRAP[TEST] · 2026-08-07 · 142 W5 — fail-fast: provision failure останавливает pipeline
     # · Scenario: provision exit!=0 → return False → cli()=1, node-update не выполняется
@@ -786,11 +802,12 @@ def test_fallback_deliver_redacts_key_from_stderr_logs(delivery_tree, caplog, mo
         "--core-dir",
         delivery_tree["core_dir"],
     ]
-    # core + platform-env + Makefile (scripts/makefiles/root-compose skip; mkdir не входит
-    # в fallback-канал) + provision ok, затем node-update FAIL с ключом в remote stderr
+    # core + F-07 invalidate + platform-env + Makefile (scripts/makefiles/root-compose skip;
+    # mkdir не входит в fallback-канал) + provision ok, затем node-update FAIL с ключом в remote stderr
     fake = FakeCommandRunner(
         results=[
             _proc(0),  # rsync core/
+            _proc(0),  # F-07: ssh invalidate __pycache__ (внутри deliver_core)
             _proc(0),  # rsync platform-env.yaml
             _proc(0),  # rsync Makefile
             _proc(0),  # provision
@@ -878,6 +895,7 @@ def test_redact_before_truncate_boundary(delivery_tree, caplog, monkeypatch: pyt
     fake = FakeCommandRunner(
         results=[
             _proc(0),  # rsync core/
+            _proc(0),  # F-07: ssh invalidate __pycache__ (внутри deliver_core)
             _proc(0),  # rsync platform-env.yaml
             _proc(0),  # rsync Makefile
             _proc(0),  # provision
@@ -999,9 +1017,11 @@ def test_deliver_ci_full_sequence(tmp_path, caplog) -> None:
     fake = _ok_runner()
     assert deliver_ci("1.2.3.4", str(core_dir), runner=fake) is True
 
-    # Фазы: ssh mkdir → rsync core → rsync platform-env → rsync Makefile → rsync makefiles →
-    # rsync scripts → rsync node-configs
-    assert len(fake.calls) == 7, f"Expected 7 delivery commands, got {len(fake.calls)}: {fake.calls}"
+    # Фазы: ssh mkdir → rsync core → F-07 invalidate ssh → rsync platform-env → rsync Makefile →
+    # rsync makefiles → rsync scripts → rsync node-configs
+    assert len(fake.calls) == 8, (
+        f"Expected 8 delivery commands (7 + F-07 invalidate), got {len(fake.calls)}: {fake.calls}"
+    )
     assert fake.calls[0] == [
         "ssh",
         *SSH_OPTS,
@@ -1015,13 +1035,20 @@ def test_deliver_ci_full_sequence(tmp_path, caplog) -> None:
         assert exclude in core_cmd, f"core phase missing owner exclude {exclude} (REF-0112 single-owner)"
     assert core_cmd[-1] == "root@1.2.3.4:/opt/platform/core/"
 
+    # F-07 (DevPlan 015): post-rsync __pycache__ invalidation сразу после core-фазы
+    invalidate_cmd = fake.calls[2]
+    assert invalidate_cmd[0] == "ssh" and "find /opt/platform/core -type d -name __pycache__" in " ".join(
+        invalidate_cmd
+    ), f"F-07: invalidate-шаг после core rsync, got {invalidate_cmd}"
+
     nc_cmd = fake.calls[-1]
     assert nc_cmd[0] == "rsync", "last phase must be node-configs rsync"
     assert "--delete" not in nc_cmd, "node-configs sync must NOT use --delete (org repo is not wiped)"
     for exclude in RSYNC_EXCLUDES_NODE:
         assert exclude in nc_cmd, f"node-configs phase missing owner exclude {exclude}"
     logger.info(
-        "[IMP:9][test_deliver_ci_full_sequence][done] %d phases verified (single-owner excludes)", len(fake.calls)
+        "[IMP:9][test_deliver_ci_full_sequence][done] %d phases verified (single-owner excludes + F-07)",
+        len(fake.calls),
     )
     assert_ldd_imp9(caplog)
 
@@ -1199,6 +1226,61 @@ def test_dry_run_without_age_full_preview(delivery_tree, caplog) -> None:
     assert "provision" in caplog.text and "node-update" in caplog.text, "preview всех ssh-фаз"
     assert "[IMP:8]" in caplog.text
     logger.info("[IMP:9][test_dry_run_no_age][assert] rc=0, полный preview без AGE-детекции")
+
+
+# region FUNC_test_deliver_core_invalidates_pyc
+# 🧪 TRAP[TEST] · 2026-08-27 · F-07 (P2) · deliver_core добавляет __pycache__ invalidate-шаг
+# · Regression: F-07-followup — стейл .pyc на живой ноде при инкрементальной доставке
+# ·   (rsync -t сохраняет mtime; rsync исключает __pycache__ и --delete не чистит excluded →
+# ·   Python не перекомпилирует .py с более свежим .pyc → стейл байткод против нового кода).
+# · Last fail: session 014 — core-deliver без инвалидации (стейл .pyc на tronyx-vps)
+# · Remove if: invalidate_pycache/вызов в deliver_core удалены
+def test_deliver_core_invalidates_pyc(tmp_path, caplog) -> None:
+    """F-07: deliver_core (runner-DI) → invalidate-шаг (find __pycache__ rm) после rsync."""
+    caplog.set_level(logging.DEBUG)
+    core_dir = str(tmp_path / "core")
+    pathlib.Path(core_dir).mkdir(parents=True)
+    fake = _ok_runner()
+
+    assert deliver_core("1.2.3.4", core_dir, runner=fake) is True
+
+    # rsync + invalidate — 2 вызова; последний = remote find __pycache__ -exec rm -rf
+    assert len(fake.calls) == 2, f"F-07: ожидается rsync + invalidate, got {len(fake.calls)}"
+    invalidate_cmd = fake.calls[1]
+    assert invalidate_cmd[0] == "ssh", "invalidate идёт через ssh (канал Core, push-based)"
+    joined = " ".join(invalidate_cmd)
+    assert "find /opt/platform/core -type d -name __pycache__ -exec rm -rf" in joined, (
+        f"F-07: remote find-инвалидация __pycache__, got: {joined}"
+    )
+    assert "|| true" in joined, "F-07: guard — find-сбой не роняет доставку"
+    logger.info("[IMP:9][test_deliver_core_invalidates_pyc][done] invalidate-шаг в команде verified")
+
+
+# 🧪 TRAP[TEST] · 2026-08-27 · F-07 (P2) · invalidate: dry-run печатает, без subprocess; сбой non-fatal
+# · Regression: F-07 — инвалидация не должна ронять доставку (rsync уже успешен) и обязана
+# ·   уважать dry-run (0 subprocess-вызовов)
+# · Last fail: N/A (новый — контракт guard'ов F-07)
+# · Remove if: invalidate_pycache семантика меняется
+def test_invalidate_pycache_dry_run_and_failure(tmp_path, caplog) -> None:
+    """F-07: dry-run печатает команду (0 вызовов); сбой invalidate → WARN, не raise."""
+    from core.internal.bootstrap.core_deliverer import invalidate_pycache
+
+    caplog.set_level(logging.DEBUG)
+    fake = _ok_runner()
+
+    # dry-run: команда печатается, subprocess НЕ вызывается
+    assert invalidate_pycache("1.2.3.4", "/opt/platform", dry_run=True, runner=fake) is True
+    assert fake.calls == [], "dry-run обязан быть без subprocess-вызовов"
+    assert "DRY-RUN" in caplog.text and "__pycache__" in caplog.text
+
+    # сбой invalidate → False + WARN (best-effort, НЕ CoreDeliveryError)
+    failing = FakeCommandRunner(default=_proc(2, stderr="find: permission denied"))
+    assert invalidate_pycache("1.2.3.4", "/opt/platform", runner=failing) is False
+    assert "invalidate_pycache" in caplog.text or "stale bytecode" in caplog.text
+    logger.info("[IMP:9][test_invalidate_pycache][done] dry-run + non-fatal failure verified")
+
+
+# endregion FUNC_test_deliver_core_invalidates_pyc
 
 
 # endregion FUNC_test_deliver_placement

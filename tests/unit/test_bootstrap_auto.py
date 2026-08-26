@@ -483,11 +483,15 @@ def test_rsync_command_generation(caplog, tmp_path) -> None:
         result = deliver_all(host, node, str(ncd), str(cd))
     assert result is True, "deliver_all must succeed with all phases present"
 
-    # 6 subprocess calls: ssh mkdir + 5 rsync фаз (1, 1b, 1c, 2, 3)
-    assert len(calls) == 6, f"Expected 6 subprocess calls, got {len(calls)}: {calls}"
+    # 7 subprocess calls: ssh mkdir + 5 rsync фаз (1, 1b, 1c, 2, 3) + F-07 invalidate (ssh внутри deliver_core)
+    assert len(calls) == 7, f"Expected 7 subprocess calls (6 + F-07 invalidate), got {len(calls)}: {calls}"
     assert calls[0][0] == "ssh", f"Step 1 must be ssh mkdir: {calls[0]}"
-    rsync_phases = calls[1:]
-    assert all(c[0] == "rsync" for c in rsync_phases), "Steps 2-6 must be rsync"
+    # F-07 (DevPlan 015): после rsync core/ — ssh-инвалидация __pycache__ на ноде
+    assert calls[2][0] == "ssh" and "find /opt/platform/core -type d -name __pycache__" in " ".join(calls[2]), (
+        f"F-07: invalidate-шаг после core rsync, got {calls[2]}"
+    )
+    rsync_phases = [calls[1], *calls[3:]]
+    assert all(c[0] == "rsync" for c in rsync_phases), "rsync-фазы должны идти по списку (с F-07-пропуском)"
 
     # Phase 1/4: core/ — --delete + runtime-artifact excludes
     p1 = " ".join(rsync_phases[0])
@@ -535,11 +539,13 @@ def test_rsync_command_generation(caplog, tmp_path) -> None:
     with mock.patch.object(subprocess, "run", side_effect=_recorder2):
         result2 = deliver_all(host, node, str(ncd2), str(cd2))
     assert result2 is True
-    # ssh mkdir + core + node-configs = 3 calls; 1b+1c+3 skipped → 2 rsync
-    assert len(calls2) == 3, f"Expected 3 subprocess calls, got {len(calls2)}: {calls2}"
+    # ssh mkdir + core + F-07 invalidate + node-configs = 4 calls; 1b+1c+3 skipped → 2 rsync
+    assert len(calls2) == 4, f"Expected 4 subprocess calls (3 + F-07 invalidate), got {len(calls2)}: {calls2}"
     rsync2 = [c for c in calls2 if c[0] == "rsync"]
     assert len(rsync2) == 2, f"Expected 2 rsync, got {len(rsync2)}"
-    logger.info("[IMP:9][test_rsync][assert] Without root-level files + secrets: 2 phases only")
+    invalidate2 = [c for c in calls2 if c[0] == "ssh" and "__pycache__" in " ".join(c)]
+    assert len(invalidate2) == 1, "F-07: invalidate-шаг присутствует в минимальном сценарии"
+    logger.info("[IMP:9][test_rsync][assert] Without root-level files + secrets: 2 phases only (+F-07 invalidate)")
 
     # LDD trajectory
     found_imp9 = False

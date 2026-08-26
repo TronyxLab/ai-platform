@@ -50,7 +50,11 @@ from typing import cast
 
 from core.internal import check_suite as cs
 from core.internal.check_suite.models import CheckOutcome, CheckSpec
-from core.internal.shared.subprocess_io import run_subprocess, run_subprocess_streaming
+from core.internal.shared.subprocess_io import (
+    reap_process_tree,  # F-06 (DevPlan 015): process-tree reaper для орфанов, переживших killpg
+    run_subprocess,
+    run_subprocess_streaming,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -294,6 +298,10 @@ def run_cmd(
             logger.info("[IMP:9][run_cmd][timeout][partial-stdout] %s", result.stdout[-4000:])
         if result.stderr:
             logger.info("[IMP:9][run_cmd][timeout][partial-stderr] %s", result.stderr[-4000:])
+        # F-06 (DevPlan 015): вторичный process-tree reaper — shared run_subprocess_streaming уже
+        # добил орфанов (killpg + reap_process_tree), здесь — страховка от гонки (ребёнок, успевший
+        # уйти из группы между снапшотом и киллом). NoSuchProcess → no-op.
+        reap_process_tree(result.pid, include_root=True)
         return CheckOutcome(
             name=tokens[0] if tokens else "?",
             exit_code=124,

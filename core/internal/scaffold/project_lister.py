@@ -20,6 +20,8 @@
 ##           DP-092 Wave 1
 ## @changes  2026-07-30 · Wave 1 — initial implementation
 ##           2026-08-02 · DevPlan 118 C11 — timeout=10 → SSH_READ_TIMEOUT (единый канон)
+##           2026-08-27 · DevPlan 015 F-11 — scan-root → NODE_CONFIGS_DIR (env) → repo/node-configs;
+##                      find_node_yaml_files: `*/node.yaml` ∪ backward-compat `*/node-configs/*/node.yaml`
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -81,28 +83,73 @@ def _shared_ssh_read(h: str, u: str, cmd: str, timeout: int = SSH_READ_TIMEOUT) 
 # endregion FUNC__shared_ssh_read
 
 
+# region FUNC__resolve_scan_root
+## @purpose  F-11 (DevPlan 015): резолв scan-root для find_node_yaml_files. Канонический
+##           dev-layout — `node-configs/(node)/node.yaml` прямо в корне репо (NODE_CONFIGS_DIR
+##           из .env); прежний glob `*/node-configs/*/node.yaml` кодировал НЕ-каноничный
+##           layout `(context)/node-configs/` и давал «Found 0 node.yaml file(s)» на dev.
+##           Цепочка: NODE_CONFIGS_DIR (env) → repo/node-configs (существует) → repo-root
+##           (PROJECTS_BASE-режим, прежнее поведение).
+## @io       ⇥ base_root: Path (--projects-root / _DEFAULT_PROJECTS_ROOT) → ⎋ Path (scan-root)
+## @complexity — O(1) — env-чтение + 1 filesystem check
+## @invariants
+##   - NODE_CONFIGS_DIR задан → используется как есть (remote-нода: /opt/node-configs)
+##   - `base_root`/node-configs существует → этот каталог (dev-корень репо)
+##   - Иначе → base_root (PROJECTS_BASE-режим, backward-compat)
+def _resolve_scan_root(base_root: Path) -> Path:
+    """Resolve the node.yaml scan root: NODE_CONFIGS_DIR env → `repo`/node-configs → base_root (F-11)."""
+    env_dir = os.environ.get("NODE_CONFIGS_DIR")
+    if env_dir:
+        logger.info("[IMP:8][list][scan-root] NODE_CONFIGS_DIR=%s", env_dir)
+        return Path(env_dir)
+    node_configs = base_root / "node-configs"
+    if node_configs.is_dir():
+        logger.info("[IMP:8][list][scan-root] <base>/node-configs=%s", node_configs)
+        return node_configs
+    logger.info("[IMP:8][list][scan-root] fallback base_root=%s (PROJECTS_BASE-режим)", base_root)
+    return base_root
+
+
+# endregion FUNC__resolve_scan_root
+
+
 # region FUNC_find_node_yaml_files
-## @purpose  Find all node.yaml files under PROJECTS_BASE/*/node-configs/*/
-## @param projects_root  Base directory (PROJECTS_BASE)
+## @purpose  Find all node.yaml files под scan-root (F-11): паттерн `*/node.yaml` (dev/bare-NODE:
+##           node-configs/(node)/node.yaml) ∪ backward-compat `*/node-configs/*/node.yaml`
+##           (multi-context: (context)/node-configs/(node)/node.yaml).
+## @param projects_root  Base directory (scan-root — резолв в main/_resolve_scan_root)
 ## @param node_filter    Optional node name to filter
 ## @return  List of Path objects to node.yaml files
-## @complexity O(f) where f = number of files under node-configs/
+## @complexity O(f) where f = number of files under scan-root
 def find_node_yaml_files(projects_root: Path, node_filter: str = "") -> list[Path]:
     """Find node.yaml files matching optional node filter.
 
     ## @purpose  Mirror of find_node_yaml_files() from project-list.sh:109-121.
     ##           Prefers Path.glob over find for cross-platform compatibility.
+    ##           F-11 (DevPlan 015): dual-pattern — `*/node.yaml` (канонический dev/bare-NODE
+    ##           layout node-configs/(node)/) + backward-compat `*/node-configs/*/node.yaml`.
     ## @io        ⇥ projects_root: Path, node_filter: str → ⎋ list[Path]
     ## @complexity O(f) where f = files matched
+    ## @invariants
+    ##   - Node-filter применяется к обоим паттернам
+    ##   - Дубли (один файл, оба паттерна) дедуплицируются сортированным set
     """
     if not projects_root.exists():
         logger.info("[IMP:7][list][find] Projects root not found: %s", projects_root)
         return []
 
-    pattern = f"*/node-configs/{node_filter}/node.yaml" if node_filter else "*/node-configs/*/node.yaml"
+    if node_filter:
+        patterns = (f"{node_filter}/node.yaml", f"*/node-configs/{node_filter}/node.yaml")
+    else:
+        patterns = ("*/node.yaml", "*/node-configs/*/node.yaml")
 
-    yaml_files = sorted(projects_root.glob(pattern))
-    logger.info("[IMP:7][list][find] Found %d node.yaml file(s) (filter=%r)", len(yaml_files), node_filter or "*")
+    yaml_files = sorted({p for pattern in patterns for p in projects_root.glob(pattern)})
+    logger.info(
+        "[IMP:7][list][find] Found %d node.yaml file(s) under %s (filter=%r)",
+        len(yaml_files),
+        projects_root,
+        node_filter or "*",
+    )
     return yaml_files
 
 
@@ -459,21 +506,24 @@ def main(argv: list[str] | None = None) -> int:
 
     # Default mode: list
     mode = args.mode if args.mode else "list"
-    projects_root = Path(args.projects_root)
+    # F-11 (DevPlan 015): scan-root = NODE_CONFIGS_DIR → repo/node-configs → --projects-root
+    base_root = Path(args.projects_root)
+    scan_root = _resolve_scan_root(base_root)
 
     logger.info(
-        "[IMP:7][list][main] Args: mode=%s node=%s name=%s format=%s root=%s",
+        "[IMP:7][list][main] Args: mode=%s node=%s name=%s format=%s root=%s scan_root=%s",
         mode,
         args.node_name or "<auto>",
         args.project_name or "<all>",
         args.output_format,
-        projects_root,
+        base_root,
+        scan_root,
     )
 
     if mode == "list":
         logger.info("[IMP:7][list][main] Mode: list — offline project listing")
         list_projects_offline(
-            projects_root=projects_root,
+            projects_root=scan_root,
             node_filter=args.node_name,
             project_name=args.project_name,
             output_format=args.output_format,
@@ -488,7 +538,7 @@ def main(argv: list[str] | None = None) -> int:
 
         node_yaml_path, ssh_host = find_project_node(
             name=args.project_name,
-            projects_root=projects_root,
+            projects_root=scan_root,
             node_filter=args.node_name,
         )
         if node_yaml_path is None:

@@ -73,6 +73,8 @@ _GOLDEN_FAST: tuple[str, ...] = (
 #   check-dead-code → static-ast → arch-imports → vulture → deptry → lint →
 #   doxygen-check → check-file-lines → gates → contract → ai-instructions →
 #   static_audit → predeploy → smoke → component
+# DevPlan 015 F-02: +pyright-full (полный репо-скоуп pyright — отдельный шаг, только full-гейт;
+#   pyright — changed-files скоуп) — осознанное изменение gate-семантики (обновление golden).
 _GOLDEN_FULL: tuple[str, ...] = (
     "pre-commit",
     "validate",
@@ -85,6 +87,7 @@ _GOLDEN_FULL: tuple[str, ...] = (
     "doxygen-check",
     "check-file-lines",
     "pyright",
+    "pyright-full",  # DevPlan 015 F-02: полный pyright — только CI full-гейт
     "gates",
     "contract",
     "ai-instructions",  # DevPlan 001 T4.6

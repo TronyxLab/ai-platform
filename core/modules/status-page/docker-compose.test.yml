@@ -34,7 +34,10 @@ services:
       - ${TEST_MODULE_DIR:-.}/collectors/:/app/collectors/:ro
       - ${TEST_MODULE_DIR:-.}/renderer/:/app/renderer/:ro
       - /tmp/test-node-configs/test-node/node.yaml:/opt/node-configs/test-node/node.yaml:ro
-      - /tmp/run/platform/status-metrics.json:/var/lib/platform/run/status-metrics.json:ro
+      # F-09 (DevPlan 015): ДИРЕКТОРИЯ вместо файла — atomic_writer (os.replace) меняет inode при
+      # каждой записи, bind-mount файла застревает на старом inode (inode-swap → вечный stale).
+      # Фикстура /tmp/run/platform/status-metrics.json видна через маунт директории.
+      - /tmp/run/platform:/var/lib/platform/run:ro
 
 networks:
   test-proxy-net:

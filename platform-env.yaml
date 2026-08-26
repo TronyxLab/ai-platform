@@ -138,6 +138,7 @@ env_defaults:
   NODE_NAME: test-node
   CONTEXT_IMAGE: ghcr.io/tronyxlab/hermes-agent-context:latest@sha256:0105cd5f9ff969b2f6aff035e7e4ff7ec0677546667616423ac2dd6cc690e986
   NODE_CONFIGS_DIR: ''
+  STATUS_METRICS_DIR: ''
   STATUS_METRICS_JSON: ''
   HTPASSWD_FILE: ''
   PLATFORM_DOMAIN: ai-platform.local

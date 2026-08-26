@@ -8,6 +8,8 @@
 ##   - env-fallback цепочка: explicit → S3_* env → AWS_* env → defaults
 ##   - LDD: IMP:8 log присутствует при создании клиента
 ## @changes 2026-08-01 | DevPlan 117 D26 — создан
+## @changes 2026-08-27 | DevPlan 015 F-08 — патч-таргет: s3_client.boto3.client → boto3.client
+##            (lazy-импорт boto3 внутри get_s3_client — module-level атрибута boto3 больше нет)
 # endregion MODULE_CONTRACT
 
 import logging
@@ -46,7 +48,7 @@ def test_explicit_params_override_env(clean_env, caplog: pytest.LogCaptureFixtur
     os.environ["S3_SECRET_KEY"] = "env-secret"
     os.environ["S3_REGION"] = "env-region"
 
-    with patch("core.internal.shared.s3_client.boto3.client") as mock_boto:
+    with patch("boto3.client") as mock_boto:
         get_s3_client(
             endpoint="https://explicit.example",
             access_key="explicit-key",
@@ -75,7 +77,7 @@ def test_env_fallback_s3_prefix(clean_env, caplog: pytest.LogCaptureFixture) -> 
     os.environ["AWS_SECRET_ACCESS_KEY"] = "aws-secret"
     os.environ["S3_REGION"] = "ru-1"
 
-    with patch("core.internal.shared.s3_client.boto3.client") as mock_boto:
+    with patch("boto3.client") as mock_boto:
         get_s3_client(max_attempts=3)
         kwargs = mock_boto.call_args.kwargs
         assert kwargs["aws_access_key_id"] == "s3-key"
@@ -90,7 +92,7 @@ def test_env_fallback_aws_aliases(clean_env, caplog: pytest.LogCaptureFixture) -
     os.environ["AWS_ACCESS_KEY_ID"] = "aws-key"
     os.environ["AWS_SECRET_ACCESS_KEY"] = "aws-secret"
 
-    with patch("core.internal.shared.s3_client.boto3.client") as mock_boto:
+    with patch("boto3.client") as mock_boto:
         get_s3_client(max_attempts=3)
         kwargs = mock_boto.call_args.kwargs
         assert kwargs["aws_access_key_id"] == "aws-key"
@@ -100,7 +102,7 @@ def test_env_fallback_aws_aliases(clean_env, caplog: pytest.LogCaptureFixture) -
 def test_env_fallback_empty_when_unset(clean_env, caplog: pytest.LogCaptureFixture) -> None:
     """Без env — пустые ключи + default endpoint (graceful)."""
     caplog.set_level(logging.INFO)
-    with patch("core.internal.shared.s3_client.boto3.client") as mock_boto:
+    with patch("boto3.client") as mock_boto:
         get_s3_client(max_attempts=3)
         kwargs = mock_boto.call_args.kwargs
         assert kwargs["endpoint_url"] == DEFAULT_S3_ENDPOINT_URL
@@ -115,7 +117,7 @@ def test_env_fallback_empty_when_unset(clean_env, caplog: pytest.LogCaptureFixtu
 def test_max_attempts_passthrough(clean_env, caplog: pytest.LogCaptureFixture) -> None:
     """max_attempts пробрасывается в BotoConfig retries (preflight probe = 1)."""
     caplog.set_level(logging.INFO)
-    with patch("core.internal.shared.s3_client.boto3.client") as mock_boto:
+    with patch("boto3.client") as mock_boto:
         get_s3_client(max_attempts=1)
         kwargs = mock_boto.call_args.kwargs
         assert kwargs["config"].retries == {"max_attempts": 1, "mode": "standard"}

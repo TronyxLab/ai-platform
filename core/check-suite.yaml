@@ -121,7 +121,7 @@ checks:
     tier: static
     timeout: 60
   - id: pyright
-    cmd: core/entrypoints/pyright-hook.sh
+    cmd: core/entrypoints/pyright-hook.sh --changed
     tier: static
     timeout: 120
     gate_modes: [fast, full]
@@ -129,18 +129,26 @@ checks:
     # v1.0.1: cmd → facade pyright-hook.sh (вердикт по grep ': error:', резолв .venv/bin →
     # PATH; .venv/bin/basedpyright на CI-раннере не существует — pip ставит в system
     # site-packages из-за удалённого pyvenv.cfg). Единый измеритель make fix-pyright.
-    # 📝 TRAP[DEBT] · 2026-08-26 · LO · Полный pyright-прогон репо на dev-машине >120s при
-    # параллельной нагрузке (xdist) — таймаут 124 (пре-существующий флак, НЕ регрессия кода;
-    # изменённые файлы pyright-clean за ~110s). Suspected: хот-старт basedpyright + полный
-    # репо-скоуп; Impact: ложный RED make check на dev, CI не затронут (тихий/быстрый раннер).
-    # When: plan 012 волны 3-4 прогоны. Rev: if CI-прогон тоже стабильно >120s — поднять timeout до 180.
-    # 🧐 TRAP[DECISION] · 2026-08-26 · — · pyright full-repo timeout 120s на dev: keep 120s
-    # · Rejected: поднять timeout до 180s сразу (маскирует медленный полный скоуп на dev;
-    #   CI-раннер проходит быстрее — таймаут релевантен только dev-нагрузке)
-    # · Reason: флак инфраструктурный (xdist CPU-конкуренция), не регрессия кода; изменённые
-    #   файлы pyright-clean за ~110s; локальный полный прогон — вне юрисдикции make check
-    # · Rev: если полный pyright стабильно >120s И на CI (не только dev) — поднять до 180 ИЛИ
-    #   разбить скоуп на changed-files (check-diff-режим) + full-only в CI-gate
+    # DevPlan 015 F-02: --changed — changed-files скоуп (git diff HEAD + untracked *.py,
+    # как agent-check/check-diff). Пустой changed-набор (CI-checkout) → full-repo fallback
+    # (false-green guard). Полный репо-скоуп — отдельный опциональный шаг pyright-full
+    # (diagnostic: false; только full-гейт, где раннер быстрее dev-машины).
+    # 🧐 TRAP[DECISION] · 2026-08-26 · — · pyright full-repo timeout 120s на dev: changed-files scope (F-02)
+    # · Rejected: поднять timeout до 180s (маскирует медленный полный скоуп на dev) / full-only в CI
+    # · Reason: F-02-verify подтвердил full-repo >120s в изоляции на dev (Rev-условие прежнего
+    # ·   TRAP выполнено); changed-files дешевле (совпадает с agent-check/check-diff), не маскирует
+    # ·   медленный full-scan; полный скоуп остаётся опциональным шагом pyright-full (CI full-гейт)
+    # · Rev: если CI full-гейт стабильно >120s — поднять timeout pyright-full до 180/300
+  - id: pyright-full
+    cmd: core/entrypoints/pyright-hook.sh
+    tier: static
+    timeout: 300
+    gate_modes: [full]
+    diagnostic: false
+    # DevPlan 015 F-02: полный репо-скоуп pyright — ОТДЕЛЬНЫЙ опциональный шаг (НЕ в make check —
+    # diagnostic: false; НЕ в fast-гейте). Только CI full-гейт: раннер проходит быстрее dev-машины.
+    # Dev-машина: make check / agent-check / check-diff покрывают changed-files; полный прогон
+    # локально — make check MARKER=pyright-full (или pyright-hook.sh напрямую).
   - id: e2e-verify
     cmd: make e2e-verify NODE=<node>
     tier: static

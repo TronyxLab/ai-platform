@@ -265,10 +265,16 @@ def _section_platform_context(env_defaults: dict[str, str]) -> list[str]:
     lines.append("# Локальные оверрайды dev-локалей (RC-сессия 2026-08-03). Пустой дефолт = прод-")
     lines.append("# поведение compose (${VAR:-default} в base.yml): NODE_CONFIGS_DIR → /opt/node-configs,")
     lines.append(
-        "# STATUS_METRICS_JSON / HTPASSWD_FILE → /var/lib/platform/run (persistent, 142 W2). Локально (macOS, Docker"
+        "# STATUS_METRICS_DIR / HTPASSWD_FILE → /var/lib/platform/run (persistent, 142 W2). Локально (macOS, Docker"
     )
     lines.append("# Desktop не шарит /opt и /run) .env переопределяет абсолютными путями.")
     lines.append("NODE_CONFIGS_DIR=" + _get_env_val(env_defaults, "NODE_CONFIGS_DIR", ""))
+    # F-09 (DevPlan 015): status-page монтирует ДИРЕКТОРИЮ (не файл) — atomic_writer (os.replace)
+    # меняет inode при каждой экспорте → bind-mount файла застревает на старом inode (вечный stale,
+    # /healthz 503). STATUS_METRICS_DIR = родительская директория STATUS_METRICS_JSON:
+    #   STATUS_METRICS_DIR=/path/to/run  STATUS_METRICS_JSON=/path/to/run/status-metrics.json
+    # STATUS_METRICS_JSON остаётся для make dev-metrics (файл экспорта); compose-mount — только DIR.
+    lines.append("STATUS_METRICS_DIR=" + _get_env_val(env_defaults, "STATUS_METRICS_DIR", ""))
     lines.append("STATUS_METRICS_JSON=" + _get_env_val(env_defaults, "STATUS_METRICS_JSON", ""))
     lines.append("HTPASSWD_FILE=" + _get_env_val(env_defaults, "HTPASSWD_FILE", ""))
     lines.append("# PLATFORM_DOMAIN — домен платформы для dev-сертификатов и vhost-роутинга.")

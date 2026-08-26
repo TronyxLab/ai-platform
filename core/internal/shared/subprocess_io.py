@@ -45,7 +45,7 @@ import contextlib
 import logging
 import subprocess
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from typing import Protocol, cast, runtime_checkable
 
 from core.internal.shared.exceptions import PlatformFatalError
 
@@ -221,6 +221,8 @@ class StreamingResult:
     ## @invariants
     ##   - stdout/stderr — ПОЛНЫЙ накопленный вывод (даже после таймаут-килла — partial)
     ##   - timed_out=True ⇔ rc=124 (синтетический); FileNotFoundError → rc=127
+    ##   - pid — PID запущенного процесса (0 при FileNotFoundError); нужен reaper'у орфанов
+    ##     (DevPlan 015 F-06)
     """
 
     cmd: list[str]
@@ -229,9 +231,75 @@ class StreamingResult:
     stderr: str
     duration_ms: int = 0
     timed_out: bool = False
+    pid: int = 0
 
 
 # endregion CLASS_StreamingResult
+
+
+# region FUNC_reap_process_tree
+## @purpose  F-06 (DevPlan 015): psutil-рекурсивный process-tree kill — добивает воркеров,
+##           УШЕДШИХ из process-group (killpg их не достаёт). Прецедент: утёкший basedpyright-орфан
+##           (209 мин CPU) при timeout pyright-шага check-suite — node-воркеры basedpyright могут
+##           создать новую сессию/группу → killpg не видит их → орфан живёт бесконечно.
+## @io       ⇥ pid: int, include_root: bool = False → ⎋ int (число добитых процессов)
+## @complexity — O(1) + psutil-обход потомков (рекурсивный)
+## @invariants
+##   - Best-effort: psutil отсутствует → 0 (killpg остаётся единственным механизмом)
+##   - NoSuchProcess/AccessDenied → 0 (процесс уже мёртв/чужая сессия)
+##   - include_root=True — убивает и сам pid (нужно post-hoc reaper'у: killpg мог не дойти)
+##   - Логирует WARN при ненулевом результате (видимость орфанов, конституция §4)
+def reap_process_tree(pid: int, *, include_root: bool = False) -> int:
+    """Recursively kill the process tree of pid (F-06: workers escaped the process-group)."""
+    try:
+        import psutil  # runtime-зависимость (lazy, как runner.memory_available_bytes)
+    except ImportError:
+        logger.info("[IMP:7][reap_process_tree][skip] psutil not available — killpg-only reaping")
+        return 0
+    try:
+        root_proc = psutil.Process(pid)
+    except (psutil.NoSuchProcess, psutil.AccessDenied):  # type: ignore[attr-defined] — psutil без pyi-стабов
+        return 0
+    targets: list[object] = []
+    try:
+        targets = list(root_proc.children(recursive=True))
+    except (psutil.NoSuchProcess, psutil.AccessDenied):  # type: ignore[attr-defined] — psutil без pyi-стабов
+        targets = []
+    if include_root:
+        targets = [root_proc, *targets]
+    killed = sum(1 for proc in targets if _kill_proc(proc))
+    if killed:
+        logger.warning(
+            "[IMP:7][reap_process_tree] Killed %d orphaned process(es) of pid=%d (escaped process-group, F-06)",
+            killed,
+            pid,
+        )
+    return killed
+
+
+# endregion FUNC_reap_process_tree
+
+
+# region FUNC__kill_proc
+## @purpose  F-06 helper: kill одного процесса psutil'ом, NoSuchProcess/AccessDenied → False.
+##           Вынесен из reap_process_tree (ruff B909 try-except-in-loop — производительность).
+## @io       ⇥ proc: psutil.Process (as object — psutil без pyi-стабов) → ⎋ bool (убит)
+## @complexity — O(1)
+def _kill_proc(proc: object) -> bool:
+    """Kill a single psutil process; already-dead/denied → False (non-fatal)."""
+    try:
+        import psutil  # runtime-зависимость (lazy — как runner.memory_available_bytes)
+    except ImportError:
+        return False
+    try:
+        cast("psutil.Process", proc).kill()  # type: ignore[attr-defined] — psutil без pyi-стабов
+    except (psutil.NoSuchProcess, psutil.AccessDenied):  # type: ignore[attr-defined] — psutil без pyi-стабов
+        return False
+    else:
+        return True
+
+
+# endregion FUNC__kill_proc
 
 
 # region FUNC_run_subprocess_streaming
@@ -353,6 +421,10 @@ def run_subprocess_streaming(
             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
         except (ProcessLookupError, PermissionError):
             proc.kill()  # группа уже умерла или недоступна — добить напрямую
+        # F-06 (DevPlan 015): killpg НЕ достаёт воркеров, ушедших из process-group (setsid/
+        # новая сессия — basedpyright/node). Process-tree reaper добивает их ПОКА родитель жив
+        # (children(recursive=True) валиден только до proc.wait()).
+        reap_process_tree(proc.pid)
         proc.wait()
 
     hb_stop.set()
@@ -372,6 +444,7 @@ def run_subprocess_streaming(
         stderr_text,
         duration_ms=duration_ms,
         timed_out=timed_out,
+        pid=proc.pid,  # F-06: pid для post-hoc reaper (runner.run_cmd при timeout)
     )
 
     if timed_out:

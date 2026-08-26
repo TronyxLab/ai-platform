@@ -222,3 +222,54 @@ def test_find_project_node_found(single_node_yaml: pathlib.Path, caplog) -> None
     assert node_yaml_path is not None, "Expected to find node.yaml for 'myapp'"
     assert ssh_host, "Expected non-empty SSH host"
     assert "test-context" in str(node_yaml_path), f"Expected path containing test-context, got {node_yaml_path}"
+
+
+# 🧪 TRAP[TEST] · 2026-08-27 · F-11 (P2) · scan-root NODE_CONFIGS_DIR-layout → ≥1 node.yaml
+# · Regression: F-11 — `make project-list` на dev давал «Found 0 node.yaml file(s)»:
+# ·   scan-root резолвился в repo-root, glob `*/node-configs/*/node.yaml` кодировал
+# ·   НЕ-каноничный layout `<context>/node-configs/`, а канонический dev-layout —
+# ·   `node-configs/<node>/node.yaml` прямо в корне репо (NODE_CONFIGS_DIR из .env).
+# · Last fail: session 014 — make project-list → «Found 0 node.yaml file(s)» (B5)
+# · Remove if: find_node_yaml_files/_resolve_scan_root логика резолва scan-root меняется
+@ldd_trajectory
+def test_find_node_yaml_files_node_configs_dir(tmp_path: pathlib.Path, caplog, monkeypatch) -> None:
+    """F-11: scan-root NODE_CONFIGS_DIR-layout → ≥1 node.yaml (dev/bare-NODE канон)."""
+    from core.internal.scaffold.project_lister import _resolve_scan_root
+
+    # Канонический dev-layout: node-configs/<node>/node.yaml (NODE_CONFIGS_DIR из .env)
+    node_configs_dir = tmp_path / "node-configs"
+    (node_configs_dir / "tronyx-vps").mkdir(parents=True)
+    (node_configs_dir / "tronyx-vps" / "node.yaml").write_text("domain: tronyx.ru\n", encoding="utf-8")
+
+    # 1. find_node_yaml_files с scan-root = node-configs → находит dev-layout
+    files = find_node_yaml_files(node_configs_dir)
+    logger.info("[IMP:8][test][lister] F-11: find_node_yaml_files(%s) → %d file(s)", node_configs_dir, len(files))
+    assert len(files) >= 1, "F-11: dev-layout node-configs/<node>/node.yaml обязан находиться"
+    assert files[0].parent.name == "tronyx-vps", f"Unexpected node dir: {files[0]}"
+
+    # 2. Backward-compat: multi-context layout всё ещё находится (без регрессии)
+    (tmp_path / "ctx-a" / "node-configs" / "dev-server").mkdir(parents=True)
+    (tmp_path / "ctx-a" / "node-configs" / "dev-server" / "node.yaml").write_text(
+        "domain: dev.example.com\n", encoding="utf-8"
+    )
+    compat = find_node_yaml_files(tmp_path)
+    assert len(compat) >= 1, "F-11: backward-compat `*/node-configs/*/node.yaml` не должен регрессировать"
+    assert any("dev-server" in str(f) for f in compat), f"Expected dev-server node.yaml in {compat}"
+
+    # 3. _resolve_scan_root: NODE_CONFIGS_DIR env побеждает (F-11 цепочка)
+    monkeypatch.setenv("NODE_CONFIGS_DIR", str(node_configs_dir))
+    resolved = _resolve_scan_root(tmp_path)
+    assert resolved == node_configs_dir, f"F-11: NODE_CONFIGS_DIR должен резолвиться в scan-root, got {resolved}"
+    monkeypatch.delenv("NODE_CONFIGS_DIR")
+
+    # 4. _resolve_scan_root: <base>/node-configs существует → этот каталог (dev-корень репо)
+    resolved_repo = _resolve_scan_root(tmp_path)
+    assert resolved_repo == node_configs_dir, f"F-11: <repo>/node-configs должен резолвиться, got {resolved_repo}"
+
+    # 5. _resolve_scan_root: fallback на base_root (PROJECTS_BASE-режим)
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    resolved_bare = _resolve_scan_root(bare)
+    assert resolved_bare == bare, "F-11: fallback base_root (PROJECTS_BASE-режим)"
+
+    logger.critical("[IMP:9][test][lister] F-11: scan-root NODE_CONFIGS_DIR-layout найден (≥1 node.yaml)")

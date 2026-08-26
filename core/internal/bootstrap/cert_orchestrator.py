@@ -82,11 +82,21 @@ logger = logging.getLogger(__name__)
 # · Root: top-level import требует bootstrap-директорию в sys.path; cli.py (VPS)
 #   запускается без неё → ImportError → s3_ssl_cache=None → S3 cache выключен.
 # · Fix: канонический dotted-импорт from core.internal.bootstrap import s3_ssl_cache.
+# DevPlan 015 F-08: s3_ssl_cache теперь грузится БЕЗ boto3 (lazy-импорты) — этот except
+# срабатывает только при реальной ошибке модуля; probe-импорт boto3 даёт точный диагноз.
 try:
     from core.internal.bootstrap import s3_ssl_cache
 except ImportError:
     s3_ssl_cache = None  # type: ignore[assignment]
-    logger.warning("[IMP:7][cert_orchestrator] s3_ssl_cache module not available — S3 operations disabled")
+    try:
+        import boto3  # ruff: ignore[F401] — probe: модуль упал НЕ из-за boto3 (F-08)
+        import botocore  # ruff: ignore[F401] — probe: модуль упал НЕ из-за boto3 (F-08)
+
+        logger.warning("[IMP:7][cert_orchestrator] s3_ssl_cache module not available — S3 operations disabled")
+    except ImportError:
+        logger.warning(
+            "[IMP:7][cert_orchestrator] s3_ssl_cache module not loaded — boto3 missing (install via python_deps ensure)"
+        )
 
 # ── Provider registry (DevPlan 154 W1, вариант C): модульный реестр DNS-провайдеров ──
 # Тот же graceful-паттерн, что у s3_ssl_cache: реестр недоступен (старый core на VPS) →

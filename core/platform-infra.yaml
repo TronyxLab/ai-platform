@@ -185,9 +185,12 @@ env_defaults:
   CONTEXT_IMAGE: "ghcr.io/tronyxlab/hermes-agent-context:latest@sha256:0105cd5f9ff969b2f6aff035e7e4ff7ec0677546667616423ac2dd6cc690e986"
   # ── Локальные оверрайды (RC-сессия 2026-08-03, dev-локали) ──────────────────
   # Пустые дефолты = прод-поведение compose (${VAR:-default} в base.yml):
-  #   NODE_CONFIGS_DIR → /opt/node-configs, STATUS_METRICS_JSON/HTPASSWD_FILE → /var/lib/platform/run (142 W2).
-  # Локально (macOS, Docker Desktop не шарит /opt и /run) .env переопределяет абсолютными путями.
+  #   NODE_CONFIGS_DIR → /opt/node-configs, STATUS_METRICS_DIR/HTPASSWD_FILE → /var/lib/platform/run (142 W2).
+  # STATUS_METRICS_JSON остаётся для make dev-metrics (файл экспорта); compose-mount status-page
+  # использует ТОЛЬКО STATUS_METRICS_DIR (F-09 DevPlan 015: директория вместо файла — atomic
+  # os.replace меняет inode → bind-mount файла застревает на старом inode → вечный stale /healthz 503).
   NODE_CONFIGS_DIR: ""
+  STATUS_METRICS_DIR: ""
   STATUS_METRICS_JSON: ""
   HTPASSWD_FILE: ""
   # PLATFORM_DOMAIN — единственный SoT домена платформы (DevPlan 116 T3, U-16).

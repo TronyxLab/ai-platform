@@ -18,6 +18,7 @@
 """
 
 import io
+import logging
 import sys
 import tarfile
 import types
@@ -397,12 +398,15 @@ def test_validate_cert_checkend_expiring_fails(caplog, tmp_path, monkeypatch):
 # · Regression: 052 — S3 failures must never raise (graceful degradation)
 # · Last fail: N/A (gap fill for non-fatal return False per B10 T2)
 # · Remove if: _download_s3_file error handling changes
+# · F-08 (DevPlan 015): ClientError импортируется локально (top-level boto3-импорт убран)
 @ldd_trajectory
 def test_download_s3_file_nonfatal_on_client_error(caplog, tmp_path):
     """_download_s3_file() returns False (not raises) on boto3 ClientError — non-fatal."""
 
+    from botocore.exceptions import ClientError as _BotoClientError  # lazy boto3 (F-08)
+
     mock_client = MagicMock()
-    mock_client.download_file.side_effect = s3_ssl_cache.ClientError({"Error": {"Code": "NoSuchKey"}}, "download_file")
+    mock_client.download_file.side_effect = _BotoClientError({"Error": {"Code": "NoSuchKey"}}, "download_file")
     with patch.object(s3_ssl_cache, "_get_s3_client", return_value=mock_client):
         ok = s3_ssl_cache._download_s3_file(
             "platform/ssl-certs/x/fullchain.pem", str(tmp_path / "dst.pem"), bucket="test-bucket"
@@ -416,14 +420,18 @@ def test_download_s3_file_nonfatal_on_client_error(caplog, tmp_path):
 # · Regression: 052 — S3 upload failures must never raise (graceful degradation)
 # · Last fail: N/A (gap fill for non-fatal return False per B10 T2)
 # · Remove if: _upload_s3_file error handling changes
+# · F-08 (DevPlan 015): ClientError импортируется локально (top-level boto3-импорт убран)
 @ldd_trajectory
 def test_upload_s3_file_nonfatal_on_client_error(caplog, tmp_path):
     """_upload_s3_file() returns False (not raises) on boto3 ClientError — non-fatal."""
+
+    from botocore.exceptions import ClientError as _BotoClientError  # lazy boto3 (F-08)
+
     src = tmp_path / "cert.pem"
     src.write_text("content")
 
     mock_client = MagicMock()
-    mock_client.upload_file.side_effect = s3_ssl_cache.ClientError({"Error": {"Code": "AccessDenied"}}, "upload_file")
+    mock_client.upload_file.side_effect = _BotoClientError({"Error": {"Code": "AccessDenied"}}, "upload_file")
     with patch.object(s3_ssl_cache, "_get_s3_client", return_value=mock_client):
         ok = s3_ssl_cache._upload_s3_file(str(src), "platform/ssl-certs/x/fullchain.pem", bucket="test-bucket")
 
@@ -519,3 +527,67 @@ def test_download_cert_restores_all_artifacts(caplog, tmp_path):
 
 
 # endregion B10 T2 additions
+
+
+# ═══════════════════════════════════════════════════════════════════
+# DevPlan 015 F-08 — lazy boto3/botocore (S3-кеш грузится без boto3)
+# ═══════════════════════════════════════════════════════════════════
+
+# region F-08 lazy boto3 tests
+
+
+# 🧪 TRAP[TEST] · 2026-08-27 · F-08 (P1) · модуль импортируется БЕЗ boto3 (lazy-импорт)
+# · Regression: F-08 — `s3_ssl_cache module not loaded — S3 restore unavailable» на свежей ноде:
+# ·   top-level `from boto3.exceptions import S3UploadFailedError` / `from botocore.exceptions
+# ·   import ClientError` роняли весь модуль → S3-кеш молча выключен (F-019 класс).
+# · Last fail: bootstrap_b2b.log — s3_ssl_cache module not loaded (все 4 домена, φ7)
+# · Remove if: lazy-деградация заменена полноценной доставкой boto3 без lazy-механизма
+@ldd_trajectory
+def test_module_imports_without_boto3(caplog, monkeypatch):
+    """F-08 AC1: `import s3_ssl_cache` без boto3 → модуль грузится; check_cert → WARN + False (не raise)."""
+    caplog.set_level(logging.INFO)
+
+    # Имитация окружения БЕЗ boto3/botocore: sys.modules[None] → `import boto3` raises ImportError
+    monkeypatch.setitem(sys.modules, "boto3", None)
+    monkeypatch.setitem(sys.modules, "botocore", None)
+
+    # Модуль уже импортирован наверху файла (top-level импорты lazy — грузится и без boto3).
+    # Проверяем отсутствие top-level boto3-атрибутов (F-08: они больше не тянутся на импорте).
+    assert not hasattr(s3_ssl_cache, "ClientError"), "top-level boto3 ClientError должен отсутствовать (F-08)"
+    assert not hasattr(s3_ssl_cache, "S3UploadFailedError"), "top-level S3UploadFailedError должен отсутствовать (F-08)"
+
+    result = s3_ssl_cache.check_cert("example.com", s3_bucket="test-bucket")
+
+    assert result is False, "check_cert без boto3 обязан вернуть False (non-fatal, не raise)"
+    assert any("boto3 missing" in r.message for r in caplog.records), (
+        "должен быть точный WARN «boto3 missing», а не «module not loaded»"
+    )
+    logger.critical("[IMP:9][test] F-08: модуль грузится без boto3, check_cert деградирует WARN+False")
+
+
+# 🧪 TRAP[TEST] · 2026-08-27 · F-08 (P1) · shared/s3_client.get_s3_client — ленивый boto3
+# · Regression: F-08 — s3_client.py:31-32 top-level `import boto3` + `from botocore.config import
+# ·   Config` роняли s3_ssl_cache (косвенный импорт через get_s3_client) при отсутствии boto3.
+# · Last fail: bootstrap_b2b.log — s3_ssl_cache module not loaded (косвенный путь F-08)
+# · Remove if: s3_client перестанет использовать boto3
+@ldd_trajectory
+def test_get_s3_client_lazy_boto3(caplog, monkeypatch):
+    """F-08: shared/s3_client импортируется БЕЗ boto3; вызов без boto3 → ImportError (диагноз), не на импорте."""
+    caplog.set_level(logging.INFO)
+
+    from core.internal.shared import s3_client as _s3_client_mod
+
+    # Модуль импортирован без top-level boto3 (ленивый импорт внутри get_s3_client)
+    assert not hasattr(_s3_client_mod, "boto3"), "top-level boto3 должен отсутствовать в s3_client (F-08)"
+
+    # Блокируем boto3/botocore → вызов get_s3_client даёт ImportError (диагноз вызывающему),
+    # а НЕ тихий сбой/молчаливый None (s3_ssl_cache ловит через _boto3_available → non-fatal False)
+    monkeypatch.setitem(sys.modules, "boto3", None)
+    monkeypatch.setitem(sys.modules, "botocore", None)
+    with pytest.raises(ImportError):
+        _s3_client_mod.get_s3_client()
+
+    logger.critical("[IMP:9][test] F-08: get_s3_client без boto3 — ImportError на вызове, импорт модуля жив")
+
+
+# endregion F-08 lazy boto3 tests

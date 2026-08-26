@@ -23,11 +23,17 @@
 ##   - REF-0008: privkey ОБЯЗАТЕЛЕН в download (partial restore без ключа = TLS outage при DR)
 ##     + pubkey-match пары cert↔key ДО commit на диск (несогласованная пара не пишется никогда)
 ##   - account.tar.gz is the tar of acme.sh domain dir for domain persistence
+##   - DevPlan 015 F-08: НЕТ top-level импортов boto3/botocore — модуль грузится БЕЗ boto3;
+##     S3-операции деградируют точным WARN «boto3 missing» + return False (non-fatal),
+##     а не «module not loaded» (модуль выключен целиком)
 ## @rationale Eliminates root cause of DevPlan 052 bug (subshell credential propagation).
 ##            Eliminates two Tier-1 Strangler triggers (inline python3 heredoc in
 ##            _s3_download_file and _s3_bulk_restore). Direct import enables typed API
 ##            contract instead of subprocess string-based protocol.
 ## @changes   CREATED: 2026-07-25 · DevPlan 052 Phase 1 — Python port of the shell s3-ssl-cache
+## @changes   2026-08-27 | DevPlan 015 F-08 — lazy boto3/botocore: top-level импорты убраны,
+##            _boto3_available() + _get_s3_client→None + локальные exception-классы (S3-кеш
+##            грузится и деградирует точным диагнозом при отсутствии boto3)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -40,9 +46,6 @@ import tarfile
 import tempfile
 from pathlib import Path
 from typing import cast
-
-from boto3.exceptions import S3UploadFailedError
-from botocore.exceptions import ClientError
 
 # ⚠️ TRAP[BUG] · 2026-08-05 · HI · cron-контекст acme.sh: python3 s3_ssl_cache.py upload $domain → ModuleNotFoundError
 # · Symptom: issue_cert.py --reloadcmd/--renew-hook (install-cert reloadcmd, cron_installer --renew-hook) вызывают
@@ -98,17 +101,45 @@ DEFAULT_SSL_CACHE_PREFIX = "platform/ssl-certs"
 # region INTERNAL HELPERS
 
 
+# region FUNC__boto3_available
+## @purpose  Lazy-проверка доступности boto3/botocore (DevPlan 015 F-08). Модуль грузится
+##           БЕЗ boto3 (top-level импортов нет); S3-операции деградируют точным WARN +
+##           return False (non-fatal контракт) вместо «module not loaded» (кеш выключен целиком).
+## @io       ⇥ None → ⎋ bool (True = boto3/botocore доступны)
+## @complexity — O(1) — import-проба
+## @invariants
+##   - ImportError → WARN «boto3 missing — install via python_deps ensure» + return False
+##   - Логируется ОДИН раз за вызов (не спамит в цикле по доменам)
+def _boto3_available() -> bool:
+    """Return True if boto3/botocore are importable (lazy — module loads without them, F-08)."""
+    try:
+        import boto3  # ruff: ignore[F401] — lazy-проба (F-08)
+        import botocore  # ruff: ignore[F401] — lazy-проба (F-08)
+    except ImportError:
+        logger.warning(
+            "[IMP:7][s3_ssl_cache] boto3 missing — S3 cache degraded "
+            "(boto3 не установлен в интерпретаторе; install via python_deps ensure)"
+        )
+        return False
+    return True
+
+
+# endregion FUNC__boto3_available
+
+
 # region FUNC_get_s3_client
 ## @purpose  Create boto3 S3 client from os.environ. Strips proxy vars first
 ##           (defence-in-depth against leaked HTTPS_PROXY from secrets.env).
 ##           Делегирует создание клиента в shared/s3_client.get_s3_client (DevPlan 117 D26).
-## @io — ⇥ None (reads env) → ⎋ boto3 S3 client
+##           Возвращает None при отсутствии boto3 (F-08: lazy-деградация, non-fatal).
+## @io — ⇥ None (reads env) → ⎋ boto3 S3 client | None (boto3 missing)
 ## @complexity — O(1)
 ## @invariants
 ##   - Proxy vars (HTTPS_PROXY, HTTP_PROXY, NO_PROXY) stripped before client creation
 ##   - Fallbacks (endpoint/keys/region) — в shared/s3_client (env-цепочка, DevPlan 117 D26)
 ##   - Uses botocore retries: max_attempts=3, mode='standard'
-def _get_s3_client() -> object:
+##   - None при отсутствии boto3 — вызывающий обязан вернуть False (не raise)
+def _get_s3_client() -> object | None:
     """Create boto3 S3 client from environment variables (delegates to shared/s3_client).
 
     Strips proxy vars that may have leaked from secrets.env to prevent
@@ -116,6 +147,7 @@ def _get_s3_client() -> object:
 
     ## @changes 2026-08-15 | W11-G3 — аннотация boto3.client → object (boto3 stub-less;
     ##            клиент используется только через attribute-access с ignore-комментариями)
+    ## @changes 2026-08-27 | DevPlan 015 F-08 — None при отсутствии boto3 (lazy-деградация)
     """
     # Defence-in-depth: strip proxy vars that leaked from secrets.env
     for proxy_var in (
@@ -127,6 +159,9 @@ def _get_s3_client() -> object:
         "no_proxy",
     ):
         os.environ.pop(proxy_var, None)
+
+    if not _boto3_available():
+        return None  # WARN уже в _boto3_available; контракт non-fatal — caller вернёт False
 
     return cast(
         "object", _shared_get_s3_client(max_attempts=3)
@@ -197,7 +232,12 @@ def _download_s3_file(
     """
     # ruff: ignore[PLW0717] — try-тело содержит return-ветки с fall-through (после-try код) — извлечение небезопасно
     try:
-        client = s3_client if s3_client is not None else _get_s3_client()
+        if s3_client is None:
+            s3_client = _get_s3_client()
+            if s3_client is None:
+                # F-08: boto3 missing — WARN уже в _boto3_available(); non-fatal контракт
+                return False
+        client = cast("object", s3_client)
         resolved_bucket = (
             bucket if bucket is not None else os.environ.get("S3_BUCKET", platform_config.default_s3_bucket_sentinel())
         )
@@ -206,20 +246,27 @@ def _download_s3_file(
             return False
         client.download_file(resolved_bucket, s3_key, local_dst)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType] — boto3-клиент (stub-less, object); DI-переданный fake поддерживает тот же API
         logger.info("[IMP:9][s3_ssl_cache] Downloaded: %s → %s", s3_key, local_dst)
-    except ClientError as e:
-        code = e.response.get("Error", {}).get("Code", "Unknown")
-        if code in {"NoSuchKey", "404"}:
-            logger.info("[IMP:8][s3_ssl_cache] S3 key not found (cache miss): %s", s3_key)
-        else:
-            logger.warning(
-                "[IMP:7][s3_ssl_cache] S3 ClientError (code=%s) for key %s: %s",
-                code,
-                s3_key,
-                e,
+    # ruff: ignore[blind-except] — non-fatal контракт: любые boto3/OSError → WARN + False (F-08)
+    except Exception as e:  # noqa: EXC — best-effort (non-fatal контракт s3_ssl_cache: never raise, return False; F-08: boto3-классы резолвятся ЛОКАЛЬНО)
+        try:
+            from botocore.exceptions import (
+                ClientError as BotoClientError,  # type: ignore[import-untyped]  # lazy (F-08)
             )
-        return False
-    except (ClientError, OSError) as e:  # ruff: ignore[B025] — ClientError is boto3, not OSError subclass
-        logger.warning("[IMP:7][s3_ssl_cache] S3 download failed for key %s: %s", s3_key, e)
+        except ImportError:
+            BotoClientError = ()  # boto3 отсутствует — классификация не нужна (guard не пустил бы сюда)
+        if isinstance(e, BotoClientError):
+            code = e.response.get("Error", {}).get("Code", "Unknown")
+            if code in {"NoSuchKey", "404"}:
+                logger.info("[IMP:8][s3_ssl_cache] S3 key not found (cache miss): %s", s3_key)
+            else:
+                logger.warning(
+                    "[IMP:7][s3_ssl_cache] S3 ClientError (code=%s) for key %s: %s",
+                    code,
+                    s3_key,
+                    e,
+                )
+        else:
+            logger.warning("[IMP:7][s3_ssl_cache] S3 download failed for key %s: %s", s3_key, e)
         return False
     else:
         return True
@@ -250,7 +297,12 @@ def _upload_s3_file(
     """
     # ruff: ignore[PLW0717] — try-тело содержит return-ветки с fall-through (после-try код) — извлечение небезопасно
     try:
-        client = s3_client if s3_client is not None else _get_s3_client()
+        if s3_client is None:
+            s3_client = _get_s3_client()
+            if s3_client is None:
+                # F-08: boto3 missing — WARN уже в _boto3_available(); non-fatal контракт
+                return False
+        client = cast("object", s3_client)
         resolved_bucket = (
             bucket if bucket is not None else os.environ.get("S3_BUCKET", platform_config.default_s3_bucket_sentinel())
         )
@@ -259,7 +311,10 @@ def _upload_s3_file(
             return False
         client.upload_file(local_path, resolved_bucket, s3_key)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType] — boto3-клиент (stub-less, object); DI-переданный fake поддерживает тот же API
         logger.info("[IMP:9][s3_ssl_cache] Uploaded: %s → %s", local_path, s3_key)
-    except (ClientError, S3UploadFailedError, FileNotFoundError, OSError) as e:
+    # ruff: ignore[blind-except] — non-fatal контракт: любые boto3/OSError → WARN + False (F-08)
+    except Exception as e:  # noqa: EXC — best-effort (non-fatal контракт s3_ssl_cache: never raise, return False; F-08: top-level boto3-импорты убраны)
+        # Прежний (ClientError, S3UploadFailedError, FileNotFoundError, OSError) → единый WARN;
+        # except Exception покрывает тот же набор + любые boto3-сбои (контракт инварианта non-fatal).
         logger.warning(
             "[IMP:7][s3_ssl_cache] S3 upload failed for %s → %s: %s",
             local_path,
