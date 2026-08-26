@@ -374,6 +374,7 @@ def test_missing_required_fails_loud(tmp_path: pathlib.Path) -> None:
         "  - name: MISSING_REQ_A\n    tier: required\n    source: sops\n"
         "  - name: MISSING_REQ_B\n    tier: required\n    source: sops\n"
         "  - name: MISSING_GEN\n    tier: generated\n    source: autogen\n"
+        "  - name: MISSING_CI\n    tier: required\n    source: ci-secret\n"
         "  - name: OPTIONAL_OK\n    tier: optional\n    source: sops\n",
     )
 
@@ -381,9 +382,10 @@ def test_missing_required_fails_loud(tmp_path: pathlib.Path) -> None:
         apply_ci_default_injection(env_content, definitions_path=defs_path)
 
     message = str(exc_info.value)
-    for name in ("MISSING_REQ_A", "MISSING_REQ_B", "MISSING_GEN"):
-        assert name in message, f"Missing key {name} must be listed in error: {message}"
-    assert "OPTIONAL_OK" not in message, "Optional keys must not be reported as missing"
+    for name in ("MISSING_REQ_A", "MISSING_REQ_B"):
+        assert name in message, f"Missing sops key {name} must be listed in error: {message}"
+    for name in ("MISSING_GEN", "MISSING_CI", "OPTIONAL_OK"):
+        assert name not in message, f"Non-sops/optional key {name} must NOT be reported as missing: {message}"
     logger.critical("[IMP:9][test] Missing required/generated → fail-loud with full list")
 
 

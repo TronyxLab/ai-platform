@@ -18,12 +18,12 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from pathlib import Path
 from typing import cast
 
 from core.internal.bootstrap.converge import infra
 from core.internal.bootstrap.converge.infra import report_add, set_exit
+from core.internal.bootstrap.deploy.compose_args import build_compose_args  # F-07-class: root-compose-first
 from core.internal.shared import (
     deploy_paths,  # 142 W2: secrets.env → persistent /var/lib/platform/run
     docker_ops,  # W1: docker info/volume inspect примитивы (гейт docker_sole_path)
@@ -220,10 +220,11 @@ def reconcile_volumes(
         # · Symptom: "required variable POSTGRES_PASSWORD is missing" (26 вхождений/прогон) —
         # ·   ${VAR:?} в base.yml падал → R7 detect-only мимо (0 сервисов), orphan-детекция слепа.
         # · Fix: --env-file /var/lib/platform/run/secrets.env если существует (канон _build_compose_args).
-        compose_args = ["-f", str(compose_file), "--profile", mod_name]
         secrets_env = str(deploy_paths.secrets_env_file())
-        if os.path.isfile(secrets_env):
-            compose_args = ["--env-file", secrets_env, *compose_args]
+        # F-07-class fix: канонический build_compose_args (root-compose-first, U-49) вместо
+        # изолированного -f <module>/base.yml (давал «undefined volume <name>-data» — named
+        # volumes объявлены в root docker-compose.yml, единственный SoT).
+        compose_args = build_compose_args(compose_file, secrets_env, None, None, mod_name)
         config_r = _shared_docker_compose_config(
             str(compose_file.parent),
             timeout=DOCKER_TIMEOUT,

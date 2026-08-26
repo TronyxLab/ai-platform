@@ -634,7 +634,7 @@ def apply_ci_default_injection(
             escaped = str(ci_default).replace("'", "'\\''")
             extra_lines.extend((_CI_DEFAULT_MARKER, f"{name}='{escaped}'"))
             injected.append(name)
-        elif tier in _FAIL_LOUD_TIERS:
+        elif tier in _FAIL_LOUD_TIERS and definition.get("source") == "sops":
             missing.append(name)
 
     if missing:

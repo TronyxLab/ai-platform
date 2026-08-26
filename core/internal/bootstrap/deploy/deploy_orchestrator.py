@@ -101,6 +101,7 @@ from core.internal.bootstrap.deploy import (
     spool_validator,
     sudoers_generator,
 )
+from core.internal.bootstrap.deploy.compose_args import build_compose_args  # plan 012 T10 fix: root-compose-first
 
 # DevPlan 119 E6: чистые функции severity/exit-code/status-metrics/hc-marker/llm-summary —
 # извлечены в orchestrator_metrics.py (AUDIT-2 M5). I/O-обёртки здесь делегируют вычисления.
@@ -399,10 +400,16 @@ def _interpolation_dryrun(
         compose_file = resolve_compose_file(os.path.join(modules_dir, name))
         if compose_file is None:
             continue  # отсутствие compose-файла репортует сам деплой
-        cmd = ["docker", "compose", "-f", str(compose_file)]
-        if Path(secrets_env).is_file():
-            cmd += ["--env-file", secrets_env]
-        cmd += ["config", "--quiet"]
+        # plan 012 T10 fix (F-07): канонический build_compose_args (root-compose-first, U-49).
+        # Изолированный -f <module>/base.yml давал «undefined volume <name>-data» — volumes
+        # объявлены в root docker-compose.yml (единственный SoT), не в модульных base.yml.
+        cmd = [
+            "docker",
+            "compose",
+            *build_compose_args(compose_file, secrets_env, None, overlays.get(name), name),
+            "config",
+            "--quiet",
+        ]
         dry_env = {**os.environ, "COMPOSE_PROFILES": full_profiles}
         try:
             result = run(cmd, capture_output=True, text=True, timeout=60, env=dry_env, check=False)

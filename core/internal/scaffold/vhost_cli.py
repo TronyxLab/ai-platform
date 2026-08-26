@@ -174,8 +174,24 @@ def main(argv: list[str] | None = None) -> int:
     # DevPlan 173 W2.3: legacy add-vhost.sh flags (--add/--remove/--render-all) → subcommand
     args = parser.parse_args(_normalize_mode(list(sys.argv[1:] if argv is None else argv)), namespace=_VhostArgs())
 
-    # Resolve platform_domain: CLI arg > env var > None
+    # Resolve platform_domain: CLI arg > env var > node.yaml#node.domain (F-10) > None
     platform_domain: str | None = args.platform_domain or os.environ.get("PLATFORM_DOMAIN")
+    if not platform_domain and args.node:
+        node_yaml_path = Path(args.node_configs_dir) / args.node / "node.yaml"
+        from core.internal.shared.exceptions import (
+            ConfigNotFoundError,
+            ConfigParseError,
+            ConfigValidationError,
+        )
+        from core.internal.shared.node_yaml import NodeYaml
+
+        try:
+            resolved_domain = NodeYaml(str(node_yaml_path)).get("domain")
+            if isinstance(resolved_domain, str) and resolved_domain:
+                platform_domain = resolved_domain
+                logger.info("[IMP:8][main] platform_domain resolved from node.yaml: %s", resolved_domain)
+        except (ConfigNotFoundError, ConfigParseError, ConfigValidationError):
+            logger.info("[IMP:7][main] node.yaml domain unavailable — wildcard resolution skipped")
     platform_root: str | None = args.platform_root or os.environ.get("PLATFORM_ROOT")
     # Resolve dev-mode suffix: CLI arg > env var > None (prod renders are unaffected)
     dev_domain_suffix: str | None = args.dev_domain_suffix or os.environ.get("DEV_DOMAIN_SUFFIX") or None
