@@ -57,13 +57,11 @@ services:
     logging: *default-logging
 
     command:
+      # F-010 план 011: флаги ОБЯЗАНЫ идти ДО позиционного аргумента (Go-flag семантика);
+      # --config.expand-env удалён — такого флага в Alloy v1.x нет (env() в config.alloy)
       - "run"
-      - "/etc/alloy/config.alloy"
-      # DevPlan 010 T3.1: --config.expand-env — env-подстановка ${LOKI_URL}/${LOKI_TENANT}
-      # в config.alloy (переменные приходят из environment контейнера, НЕ из файла)
-      - "--config.expand-env"
-      # WAL/positions — обязателен writable volume (иначе Alloy не стартует)
       - "--storage.path=/var/lib/alloy/data"
+      - "/etc/alloy/config.alloy"
 
     environment:
       # DevPlan 010 T3.1: endpoint параметризован (был захардкожен http://loki:3100);

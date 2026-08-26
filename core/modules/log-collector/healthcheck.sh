@@ -23,10 +23,12 @@ echo "[IMP:7][log-collector-hc][main] Starting log-collector healthcheck" >&2
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../../lib/healthcheck.sh"
 
+# F-012 план 011: дефолт ОБЯЗАН стоять ДО использования в CONTAINERS —
+# при set -u обращение к необъявленной переменной = unbound variable crash
+ALLOY_CONTAINER_NAME="${ALLOY_CONTAINER_NAME:-alloy}"
 CONTAINERS=(
     "${ALLOY_CONTAINER_NAME}"
 )
-ALLOY_CONTAINER_NAME="${ALLOY_CONTAINER_NAME:-alloy}"
 MODE="${1:-}"
 
 if [ "$MODE" = "deep" ]; then
