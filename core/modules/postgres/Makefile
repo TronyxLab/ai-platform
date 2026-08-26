@@ -136,15 +136,16 @@ restore: ## Restore from dump file (owner only, requires DUMP_FILE=)
 	fi
 	@echo "[IMP:9][postgres-make][restore] Restore complete from $(DUMP_FILE) — run make healthcheck to verify"
 
-## ── DR-порядок и стратегия чистоты (plan 012 T7 / F-032, docs-in-code) ──
+## ── DR-порядок и стратегия чистоты (plan 012 T7 / F-032, owner-канон) ──
 ## Порядок DR: «postgres-only → restore → приложения» — восстановление выполняется на
 ## ноде БЕЗ приложений (COMPOSE_PROFILES=postgres), затем поднимается остальной стек.
-## Стратегия чистоты — ПО ФАКТУ КОДА: pg_dumpall пишет дамп БЕЗ --clean/--create →
-## заливка поверх кластера с init-инициализацией конфликтует («role/database already
-## exists», F-032). Честные варианты: (а) свежая нода / ПУСТОЙ volume postgres-data
-## перед restore (канон пересоздания, инвариант 9 root); (б) --clean-дампы (смена
-## стратегии backup — отдельное решение владельца). ON_ERROR_STOP=1 делает частичную
-## заливку громкой (rc=3), pre_restore_* снапшот в $(PRE_RESTORE_DIR) — страховка.
+## Стратегия чистоты (решение владельца 2026-08-27, F-032 закрыт): backup-канал пишет
+## pg_dumpall С --clean --if-exists → заливка поверх кластера с init-инициализацией
+## идемпотентна (DROP перед CREATE; --if-exists делает сбросы условными — «role/
+## database/type already exists» не возникает). postgres-data volume НЕ разрушается.
+## Пустой volume остаётся ТОЛЬКО для полного пересоздания кластера (инвариант 9 root).
+## ON_ERROR_STOP=1 делает частичную заливку громкой (rc=3), pre_restore_* снапшот в
+## $(PRE_RESTORE_DIR) — страховка.
 
 # 🧐 TRAP[DECISION] · 2026-07-18 · — · Custom overrides: postgres-specific lifecycle
 # · Rejected: use module.mk defaults only (not flexible enough)

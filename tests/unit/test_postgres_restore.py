@@ -1,23 +1,31 @@
-# GREP_SUMMARY: test-postgres-restore, DR-runbook, F-031, F-032, SEC-0018, root-compose, COMPOSE_PROFILES, pre-restore-isolation, plan-012 T7
-# STRUCTURE: ▶ Makefile text parse → ◇ test_restore_target_contract [root-compose ∋ env-file ∋ profile] → ◇ test_plaintext_sql_not_in_retry_scan [pre-restore dir ∉ scan · legacy skip · detector alive] → ⎋ LDD [IMP:9]
+# GREP_SUMMARY: test-postgres-restore, DR-runbook, F-031, F-032, SEC-0018, root-compose, COMPOSE_PROFILES, pre-restore-isolation, plan-012 T7, clean-strategy
+# STRUCTURE: ▶ Makefile text parse → ◇ test_restore_target_contract [root-compose ∋ env-file ∋ profile] → ◇ test_plaintext_sql_not_in_retry_scan [pre-restore dir ∉ scan · legacy skip · detector alive] → ◇ test_restore_clean_strategy [fake-runner argv ∋ --clean ∋ --if-exists] → ⎋ LDD [IMP:9]
 # region MODULE_CONTRACT
 ## @purpose  Контрактные тесты DR restore (plan 012 T7 / F-031/F-032/SEC-0018):
 ##           (a) restore-таргет postgres использует ROOT-compose + secrets env-file +
 ##           COMPOSE_PROFILES (никаких «undefined volume»/«no service selected»);
+##           (b) backup-канал эмитит --clean/--if-exists (F-032 owner-канон, restore
+##           поверх init-кластера идемпотентен);
 ##           (c) plaintext pre_restore_* не попадает в S3 retry-скан.
-## @scope    Static Makefile parsing + tmp_path spool fixtures; 0 Docker, 0 subprocess.
+## @scope    Static Makefile parsing + fake-runner runtime argv + tmp_path spool fixtures;
+##           0 Docker, 0 real subprocess.
 ## @invariants
 ##   - Makefile парсится текстово по образцу test_deploy_mk_chain/test_makefile_parser
-##   - spool_retry импорт через sys.path core/modules/backup-cron/scripts
+##   - spool_retry/backup_postgres импорт через sys.path core/modules/backup-cron/scripts
 ##     (контейнерный контракт: 0 imports из core/internal — тест повторяет канон)
 ##   - Негатив SEC-0018: детектор жив (обычный дамп сканируется), pre_restore — нет (R5-парность)
+##   - F-032: runtime-argv assert через DI runner (DevPlan 167 D2), не static-подмена
 ## @rationale F-031: restore «из коробки» падал (env/profiles/volumes); F-032/SEC-0018:
-##            plaintext pre_restore снапшоты в скан-каталоге — риск S3-загрузки plaintext.
+##            plaintext pre_restore снапшоты в скан-каталоге — риск S3-загрузки plaintext;
+##            F-032 restore конфликт init-кластера — owner-стратегия --clean в backup-канале.
 ## @changes   CREATED 2026-08-26 | DevPlan 012 T7 — DR restore contract tests
+##           2026-08-27 | DevPlan 016 T8/F-032 — test_restore_clean_strategy
 # endregion MODULE_CONTRACT
 
+import io
 import logging
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -34,6 +42,7 @@ _SCRIPTS_DIR: str = str(PLATFORM_ROOT / "core" / "modules" / "backup-cron" / "sc
 if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 
+import backup_postgres  # pyright: ignore[reportImportCycles] — контейнерный модуль (path-inject выше)
 from spool_retry import find_pending  # pyright: ignore[reportImportCycles] — контейнерный модуль (path-inject выше)
 
 pytestmark = pytest.mark.static_audit
@@ -42,6 +51,77 @@ pytestmark = pytest.mark.static_audit
 def _read_makefile() -> str:
     assert POSTGRES_MAKEFILE.is_file(), f"[IMP:9][t7] FAIL: postgres Makefile not found: {POSTGRES_MAKEFILE}"
     return POSTGRES_MAKEFILE.read_text(encoding="utf-8")
+
+
+# ── Fake runner for backup_postgres (DevPlan 167 D2 DI-seam, replica test_backup_postgres) ──
+
+
+@dataclass
+class _FakeRunResult:
+    """Fake subprocess.CompletedProcess."""
+
+    stdout: str = ""
+    stderr: str = ""
+    returncode: int = 0
+
+
+class _FakePopenProc:
+    """Fake Popen process with stdout pipe + wait() returncode 0."""
+
+    def __init__(self, stdout_text: str = ""):
+        self.stdout = io.StringIO(stdout_text)
+        self._rc = 0
+
+    def wait(self) -> int:
+        return self._rc
+
+
+# Реалистичный text-формат дампа pg_dumpall (header + SQL-стейтменты) — для zcat-валидации
+_FAKE_DUMP_TEXT = (
+    "--\n"
+    "-- PostgreSQL database cluster dump\n"
+    "--\n"
+    "CREATE TABLE public.t (id serial);\n"
+    "COPY public.t (id) FROM stdin;\n"
+    "\\.\n"
+)
+
+
+class _FakeCleanStrategyRunner:
+    """Minimal fake subprocess: records pg_dumpall argv, stubs the rest to success.
+
+    Передаётся в backup_postgres.run_backup(runner=...) — DI-объект (DevPlan 167 D2),
+    Popen/run/PIPE/DEVNULL интерфейс идентичен реальному subprocess-модулю. AGE_RECIPIENT
+    в env теста НЕ задан → fail-closed ветка возвращает 0 ДО age/upload — достаточно
+    записать pg_dumpall argv (первый Popen-вызов).
+    """
+
+    DEVNULL = object()
+    PIPE = object()
+
+    def __init__(self) -> None:
+        self.popen_calls: list[list[object]] = []
+        self.run_calls: list[list[object]] = []
+        self.dump_cmd: list[str] | None = None
+
+    def Popen(self, cmd: list[str], **kwargs: object) -> _FakePopenProc:
+        self.popen_calls.append([cmd, kwargs])
+        name = cmd[0]
+        if name == "pg_dumpall":
+            self.dump_cmd = list(cmd)
+            return _FakePopenProc()
+        if name == "gzip":
+            return _FakePopenProc()
+        if name == "zcat":
+            return _FakePopenProc(stdout_text=_FAKE_DUMP_TEXT)
+        msg = f"unexpected Popen command: {cmd}"
+        raise AssertionError(msg)
+
+    def run(self, cmd: list[str], **kwargs: object) -> _FakeRunResult:
+        self.run_calls.append([cmd, kwargs])
+        if cmd[0] == "du":
+            return _FakeRunResult(stdout=f"1.2M\t{cmd[1]}\n")
+        return _FakeRunResult(returncode=0)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -140,3 +220,62 @@ def test_plaintext_sql_not_in_retry_scan(tmp_path: Path, caplog: pytest.LogCaptu
     legacy_warns = [r for r in caplog.records if "SEC-0018" in r.getMessage() and "pre_restore" in r.getMessage()]
     assert legacy_warns, "Legacy in-scan pre_restore must be skipped LOUDLY (WARN)"
     logger.critical("[IMP:9][t7] Plaintext pre_restore isolated from S3 scan; detector alive for real dumps")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Test 3: backup channel emits --clean/--if-exists (F-032 owner-канон)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_RESTORE_ENV = {
+    "POSTGRES_HOST": "postgres",
+    "POSTGRES_PASSWORD": "test-password",
+    "POSTGRES_USER": "postgres",
+    # AGE_RECIPIENT намеренно НЕ задан — fail-closed ветка (возврат 0 до age/upload)
+    # оставляет pg_dumpall argv записанным в fake-раннере (первый Popen-вызов).
+}
+
+
+@ldd_trajectory
+def test_restore_clean_strategy(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> None:
+    """Backup channel emits --clean/--if-exists → restore over init cluster is idempotent (F-032).
+
+    ## @purpose — F-032 AC owner-канон (стратегия (a)): pg_dumpall argv содержит
+    ##            --clean (DROP перед CREATE) и --if-exists (условные сбросы) — restore
+    ##            поверх init-инициализированного кластера больше не падает с
+    ##            «role/database/type already exists»; postgres-data volume не разрушается.
+    ## @io — ⇥ tmp_path spool + fake runner → ⎋ None (asserts pg_dumpall argv)
+    ## @complexity — O(1) fake subprocess
+    ## @scenario — AC T8: выбранная стратегия (a) --clean dumps в backup-канале;
+    ##             runtime-argv assert (honest behavior), не static-подмена
+    """
+    # 🧪 TRAP[TEST] · 2026-08-27 · REGRESSION · F-032 restore init-conflict
+    # · Scenario: backup_postgres.run_backup(runner=fake) → fake.dump_cmd (argv первого
+    #   Popen) обязан содержать --clean и --if-exists
+    # · Last fail: F-032 — pg_dumpall БЕЗ --clean → restore поверх init-кластера падал
+    #   «role/database/type already exists»; вариант (б) пустой volume требовал ручного
+    #   вмешательства (down -v) и разрушения postgres-data
+    # · Remove if: backup-канал перестаёт использовать pg_dumpall (другая стратегия дампа)
+    fake = _FakeCleanStrategyRunner()
+
+    rc = backup_postgres.run_backup(
+        spool_dir=str(tmp_path),
+        timestamp="20260827T000000Z",
+        env=_RESTORE_ENV,
+        runner=fake,
+    )
+
+    assert rc == 0, "[IMP:9][t7] FAIL: clean-strategy backup pipeline must complete"
+    dump_cmd = fake.dump_cmd
+    assert dump_cmd is not None, "[IMP:9][t7] FAIL: pg_dumpall must be invoked"
+    assert dump_cmd[0] == "pg_dumpall", f"[IMP:9][t7] FAIL: first argv element must be pg_dumpall: {dump_cmd}"
+    assert "--clean" in dump_cmd, f"[IMP:9][t7] FAIL: pg_dumpall must emit --clean (DROP before CREATE): {dump_cmd}"
+    assert "--if-exists" in dump_cmd, f"[IMP:9][t7] FAIL: --clean requires --if-exists (conditional DROP): {dump_cmd}"
+
+    # Doc-parity (static, Makefile): прежний стейл-канон «дамп БЕЗ --clean» удалён из
+    # DR-комментария; owner-канон --clean/--if-exists зафиксирован (F-032 закрыт).
+    content = _read_makefile()
+    assert "пишет дамп БЕЗ --clean" not in content, (
+        "[IMP:9][t7] FAIL: Makefile DR-комментарий всё ещё утверждает дамп БЕЗ --clean (стейл-канон)"
+    )
+    assert "--if-exists" in content, "[IMP:9][t7] FAIL: Makefile DR-комментарий не фиксирует --clean/--if-exists канон"
+    logger.critical("[IMP:9][t7] F-032 clean strategy verified: pg_dumpall argv=%s", dump_cmd)

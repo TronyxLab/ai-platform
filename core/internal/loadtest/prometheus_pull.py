@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: loadtest prometheus promql query-range discovery saturation insufficient missing-metrics rate-window
+# GREP_SUMMARY: loadtest prometheus promql query-range discovery saturation insufficient missing-metrics rate-window cli node-side
 # STRUCTURE: ▶ build_queries(run_time) → ◇ discover_metric_names (label/__name__/values) → ◇ query_range per query
 #           (window [t0-60s, t1+60s], step 30s) → ○ aggregate avg/max (cpu → pct=avg×100) → ⊕ missing/insufficient
-#           → ⎋ SaturationResult
+#           → ⎋ SaturationResult → ○ CLI main (F-036 node-side pull): JSON stdout → ⎋ exit 0|1
 # region MODULE_CONTRACT
 ## @purpose  Post-run PromQL pull из существующего Prometheus ноды (DevPlan 146 W2, инвариант 5:
 ##           НОЛЬ новой мониторинговой инфраструктуры — никаких новых экспортёров/pushgateway).
@@ -22,23 +22,57 @@
 ##   6. cpu_* rate-метрики → ключ *_pct = avg×100 (проценты одного ядра, как в примере
 ##      отчёта DevPlan 146: "cpu_nginx_pct": 42.3)
 ##   7. Модуль не импортирует bootstrap/deploy/* (слой shared — только вниз)
+##   8. Standalone-исполнение (F-036, DevPlan 016 TASK-9): node-side CLI запускается на ноде
+##      БЕЗ core на sys.path — report.SaturationAgg (только аннотации) и shared.http_client
+##      опциональны (fallback: локальный TypedDict + stdlib urllib). Бизнес-логика pull НЕ
+##      дублируется: на ноде выполняется тот же run_saturation/discover/query_range.
 ## @rationale Существующая телеметрия (Prometheus + cadvisor + node-exporter + экспортёры)
 ##            уже покрывает все нужные сигналы — saturation читается post-run pull-ом,
-##            без новой инфраструктуры (D4 Brief 146).
+##            без новой инфраструктуры (D4 Brief 146). CLI (F-036) делает pull исполняемым
+##            НА ноде через единичную read-only ssh-команду — REF-0016 (AllowTcpForwarding=no)
+##            сохраняется: TCP-forwarding не используется и не требуется.
 ## @changes  2026-08-11 | DevPlan 146 W2 — Created
+## @changes  2026-08-27 | DevPlan 016 TASK-9 — CLI main() + standalone-импорт (F-036 node-side pull)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
+import argparse
+import http.client
+import json
 import logging
 import re
+import sys
+import urllib.error
 import urllib.parse
+import urllib.request
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
-from typing import TypeAlias, cast
+from dataclasses import asdict, dataclass, field
+from typing import TYPE_CHECKING, TypeAlias, TypedDict, cast
 
-from core.internal.loadtest.report import SaturationAgg
-from core.internal.shared import http_client  # W3.2 (177): HTTP-слой консолидирован в shared/http_client.py
+# F-036 (DevPlan 016 TASK-9): node-side CLI исполняется НА ноде (python3 <workdir>/prometheus_pull.py)
+# БЕЗ core на sys.path — оба core-импорта опциональны: SaturationAgg используется только в
+# аннотациях (ленивые строки, from __future__ import annotations), http_client — заменяется
+# stdlib-urllib-фолбэком _http_get_json_stdlib. Класс-твин зеркалит report.SaturationAgg.
+if TYPE_CHECKING:
+    from core.internal.loadtest.report import SaturationAgg
+else:
+    try:
+        from core.internal.loadtest.report import SaturationAgg
+    except ImportError:  # pragma: no cover — standalone node-side (no core on sys.path)
+
+        class SaturationAgg(TypedDict, total=False):
+            """Standalone twin report.SaturationAgg (F-036) — только для node-side исполнения."""
+
+            avg: float | None
+            max: float | None
+            pct: float | None
+
+
+try:
+    from core.internal.shared import http_client as _http_client_impl  # W3.2 (177): HTTP-слой в shared/
+except ImportError:  # pragma: no cover — standalone node-side (no core on sys.path)
+    _http_client_impl = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -163,21 +197,27 @@ def build_queries(run_time: int) -> dict[str, tuple[str, str]]:
 def _http_get_json(url: str, timeout: int = 15) -> dict[str, object]:
     """GET + JSON-parse через shared/http_client (единая точка для monkeypatch/DI в тестах).
 
-    ▶ ┌url┐ → ○ http_client.get_json(timeout) → ◇ HttpRequestError → PrometheusError → ◇ HttpJsonError → PrometheusError → ⎋ dict
+    ▶ ┌url┐ → ◇ _http_client_impl None (F-036 standalone) → stdlib urllib fallback →
+      → ○ http_client.get_json(timeout) → ◇ HttpRequestError → PrometheusError → ◇ HttpJsonError → PrometheusError → ⎋ dict
 
     ## @purpose  HTTP-слой пула: urllib через shared/http_client (requests не runtime-зависимость
     ##            платформы). Все сетевые/JSON-ошибки → PrometheusError с читаемым сообщением (exit 1).
+    ##            Standalone-ветка (F-036): node-side CLI без core на sys.path → stdlib urllib
+    ##            (_http_get_json_stdlib) с той же контрактной семантикой PrometheusError.
     ## @io — ⇥ url: str, timeout: int → ⎋ dict (JSON-ответ)
     ## @complexity — O(1) — один запрос
     ## @raises — PrometheusError: недоступен / не-200 / битый JSON
     ## @changes 2026-08-16 | DevPlan 177 W3.2 — транспорт мигрирован на shared/http_client.get_json
+    ## @changes 2026-08-27 | DevPlan 016 TASK-9 — +stdlib-ветка (F-036 standalone node-side)
     """
+    if _http_client_impl is None:
+        return _http_get_json_stdlib(url, timeout)
     try:
-        payload = http_client.get_json(url, timeout=timeout)
-    except http_client.HttpRequestError as exc:
+        payload = _http_client_impl.get_json(url, timeout=timeout)
+    except _http_client_impl.HttpRequestError as exc:
         msg = f"Prometheus недоступен: {exc}"
         raise PrometheusError(msg) from exc
-    except http_client.HttpJsonError as exc:
+    except _http_client_impl.HttpJsonError as exc:
         msg = f"Prometheus вернул не-JSON: {exc}"
         raise PrometheusError(msg) from exc
     # W11: json.loads → Any → dict[str, object] (граница JSON)
@@ -185,6 +225,46 @@ def _http_get_json(url: str, timeout: int = 15) -> dict[str, object]:
 
 
 # endregion FUNC__http_get_json
+
+
+# region FUNC__http_get_json_stdlib
+def _http_get_json_stdlib(url: str, timeout: int = 15) -> dict[str, object]:
+    """Standalone stdlib urllib fallback (F-036 node-side CLI — core недоступен на ноде).
+
+    ▶ ┌url┐ → ○ urllib.request.urlopen → ◇ URLError/Timeout/OSError → PrometheusError →
+      → ○ json.loads → ◇ JSONDecodeError → PrometheusError → ◇ не dict → PrometheusError → ⎋ dict
+
+    ## @purpose  Зеркало семантики http_client.get_json (инвариант 3 shared/http_client):
+    ##            сетевые ошибки → «Prometheus недоступен», битый JSON → «не-JSON»;
+    ##            HTTPError ⊂ URLError — 4xx/5xx попадает в PrometheusError автоматически.
+    ##            НЕ дублирует бизнес-логику pull — только транспортный слой для node-side
+    ##            исполнения (F-036): PromQL-пул и агрегация — тот же run_saturation.
+    ## @io — ⇥ url: str, timeout: int → ⎋ dict (JSON-ответ)
+    ## @complexity — O(B) — B = размер ответа
+    ## @raises — PrometheusError: недоступен / не-JSON / не-JSON-объект
+    ## @changes 2026-08-27 | DevPlan 016 TASK-9 — Created (F-036 standalone node-side)
+    """
+    try:
+        # W11: urlopen перегружен (HTTPResponse | file-like) → Any; cast к HTTPResponse —
+        #      .read() → bytes → .decode() → str (явная граница транспорта, pyright strict)
+        resp = cast("http.client.HTTPResponse", urllib.request.urlopen(url, timeout=timeout))  # nosec B310 — внутренний endpoint ноды (localhost:9090), caller-обоснованный
+        with resp:
+            body: str = resp.read().decode("utf-8", errors="replace")
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        msg = f"Prometheus недоступен: {exc}"
+        raise PrometheusError(msg) from exc
+    try:
+        parsed = cast("object", json.loads(body))  # W11: json.loads → Any → object (isinstance-гард ниже)
+    except json.JSONDecodeError as exc:
+        msg = f"Prometheus вернул не-JSON: {exc}"
+        raise PrometheusError(msg) from exc
+    if not isinstance(parsed, dict):
+        msg = "Prometheus вернул не-JSON-объект"
+        raise PrometheusError(msg)
+    return cast("dict[str, object]", parsed)
+
+
+# endregion FUNC__http_get_json_stdlib
 
 
 # region FUNC_discover_metric_names
@@ -381,3 +461,61 @@ def run_saturation(
 
 
 # endregion FUNC_run_saturation
+
+
+# region FUNC_main
+def main(argv: list[str] | None = None) -> int:
+    """CLI node-side PromQL pull (F-036): SaturationResult → JSON stdout, exit 0|1.
+
+    ▶ ┌argv┐ → ○ argparse (--base-url --run-time --t0 --t1 [--timeout]) → ○ run_saturation
+      → ○ print asdict JSON → ◇ PrometheusError → stderr + exit 1 → ⎋ int
+
+    ## @purpose  Исполняемая точка pull для node-side режима (F-036, DevPlan 016 TASK-9):
+    ##            runner_remote.pull_promql_node_side выполняет на ноде
+    ##            `python3 <workdir>/prometheus_pull.py --base-url http://localhost:9090 ...`
+    ##            (единичная read-only ssh-команда, ssh_read-семантика). stdout — чистый JSON
+    ##            (dataclasses.asdict), ошибки — stderr + exit 1 (парсер на ноде не читает stderr
+    ##            как данные). Инвариант main()-контракта core/AGENTS.md: sys.exit — только в __main__.
+    ## @io — ⇥ argv: list[str] | None → ⎋ int (0 ok, 1 PrometheusError)
+    ## @complexity — O(Q×(S + M)) — полный pull (как run_saturation)
+    ## @raises — нет (PrometheusError перехватывается → exit 1)
+    ## @changes 2026-08-27 | DevPlan 016 TASK-9 — Created (F-036 node-side pull)
+    """
+    parser = argparse.ArgumentParser(
+        prog="prometheus_pull",
+        description="Post-run PromQL saturation pull (F-036 node-side CLI — ssh_read, без TCP-forwarding)",
+    )
+    parser.add_argument("--base-url", required=True, help="Prometheus base URL (node-side: http://localhost:<port>)")
+    parser.add_argument("--run-time", type=int, required=True, help="Run duration in seconds (rate-window выбор)")
+    parser.add_argument("--t0", type=float, required=True, help="Run start unix timestamp (float)")
+    parser.add_argument("--t1", type=float, required=True, help="Run end unix timestamp (float)")
+    parser.add_argument("--timeout", type=int, default=15, help="HTTP timeout per Prometheus request (default: 15)")
+    # argparse.Namespace → типизированная граница (W11): двойной cast через object
+    from dataclasses import dataclass
+
+    @dataclass
+    class _CliArgs:
+        base_url: str
+        run_time: int
+        t0: float
+        t1: float
+        timeout: int
+
+    args = cast(_CliArgs, cast(object, parser.parse_args(argv)))
+    try:
+        result = run_saturation(args.base_url, args.run_time, args.t0, args.t1, timeout=args.timeout)
+    except PrometheusError as exc:
+        # T20 (ruff): print в production запрещён; *_cli.py glob-ignore неприменим (имя файла
+        # фиксировано контрактом F-036) — stdout-контракт через sys.stdout/stderr.write
+        sys.stderr.write(f"PrometheusError: {exc}\n")
+        return 1
+    sys.stdout.write(json.dumps(asdict(result), sort_keys=True) + "\n")
+    logger.info("[IMP:9][prometheus][cli] Saturation pull OK: %d aggregates", len(result.aggregates))
+    return 0
+
+
+# endregion FUNC_main
+
+
+if __name__ == "__main__":
+    sys.exit(main())

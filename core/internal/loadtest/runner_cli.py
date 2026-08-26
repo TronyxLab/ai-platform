@@ -42,6 +42,9 @@
 ##            (диспетчеры режимов) — тестируемость через unit-тесты конфигурации/вердиктов.
 ## @changes  2026-08-11 | DevPlan 146 W1-W5 — Created
 ## @changes  2026-08-12 | DevPlan 148 TASK-7 — duration_s + tasks в отчёт/history, network проброс
+## @changes  2026-08-27 | DevPlan 016 TASK-9 — node-side PromQL-pull (F-036): _saturation_pull
+##           диспетчер local|node, ship_pull_module в remote-ветках; PromQL-pull не требует
+##           TCP-forwarding (ssh_read, REF-0016 AllowTcpForwarding=no preserved)
 # endregion MODULE_CONTRACT
 
 
@@ -170,7 +173,9 @@
 ##      Механика: rsync core/loadtest/ → /tmp/loadtest-{ts}/ (SSH через канон shared.ssh_opts)
 ##      → docker run --rm --network {net} --cpus ${LOAD_CPUS:-2} -v /tmp/loadtest-{ts}:/lt -w
 ##      /lt ${LOAD_IMAGE:-locustio/locust:2.32.10} -f ... --headless → rsync CSV обратно;
-##      PromQL-pull и отчёт — локально. Генератор ВНЕ стека (не compose-сервис, не
+##      PromQL-pull — node-side (F-036: нода тянет СВОЙ Prometheus на localhost через единичную
+##      read-only ssh-команду prometheus_pull.py — ssh_read, БЕЗ TCP-forwarding, REF-0016
+##      AllowTcpForwarding=no preserved), отчёт — локально. Генератор ВНЕ стека (не compose-сервис, не
 ##      observability-net); LOAD_IMAGE — ghcr.io-зеркало при Docker Hub rate-limit (StatusReport
 ##      045); boto3 в locust-образе отсутствует — s3 через HTTP API minio (SigV4). --network:
 ##      host (default) — web/s3 на host-сети; shared-db-net — db (PostgreSQL публикуется
@@ -673,22 +678,50 @@ def _remote_workdir(config: LoadtestConfig) -> str:
 
 # region FUNC__saturation_pull
 def _saturation_pull(config: LoadtestConfig, t0: float, t1: float) -> prometheus_pull.SaturationResult:
-    """PromQL-saturation (post-run, локальная машина → Prometheus ноды).
+    """PromQL-saturation (post-run): диспетчер node-side (F-036) | локальная машина → Prometheus ноды.
 
-    ▶ ┌config, t0, t1┐ → ○ run_saturation(base=prometheus_host:LOAD_PROMETHEUS_PORT,
-      окно [t0-60, t1+60]) → ⎋ SaturationResult | LoadtestRunError
+    ▶ ┌config, t0, t1┐ → ◇ load_runner == "node" → node-side ssh_read pull (localhost:<port>,
+      REF-0016: без TCP-forwarding) | → локальный pull (prometheus_host:port) → ⎋ SaturationResult
+      | LoadtestRunError
 
     ## @purpose  Инвариант 5: saturation — ТОЛЬКО post-run pull из существующего Prometheus.
+    ##            Диспетчер каналов (F-036, DevPlan 016 TASK-9): node-режим — нода тянет
+    ##            СВОЙ Prometheus на localhost (host network) через
+    ##            runner_remote.pull_promql_node_side (единичная read-only ssh-команда,
+    ##            ssh_read — REF-0016 AllowTcpForwarding=no сохраняется); local-режим —
+    ##            с dev-машины на prometheus_host:port (146-m2 override).
     ##            Недоступный Prometheus → LoadtestRunError (exit 1, guard-таблица §3.7).
-    ##            host = config.prometheus_host (146-m2): LOAD_PROMETHEUS_HOST override —
-    ##            например localhost при SSH-туннеле (ssh -L 19090:localhost:9090), когда
-    ##            внешний IP ноды принимает TCP на 9090, но HTTP не отвечает (фаервол ноды).
     ## @io — ⇥ config, t0/t1: float (unix) → ⎋ SaturationResult
+    ## @complexity — O(Q×(S+M)) — пул запросов
+    ## @raises — LoadtestRunError: Prometheus недоступен / remote-pull упал
+    """
+    run_time = int(max(1, t1 - t0))
+    if config.load_runner == "node":
+        return _pull_saturation_node(config, run_time, t0, t1)
+    return _pull_saturation_local(config, run_time, t0, t1)
+
+
+# endregion FUNC__saturation_pull
+
+
+# region FUNC__pull_saturation_local
+def _pull_saturation_local(
+    config: LoadtestConfig, run_time: int, t0: float, t1: float
+) -> prometheus_pull.SaturationResult:
+    """Локальный PromQL-pull: dev-машина → Prometheus ноды (существующий путь, LOAD_RUNNER=local).
+
+    ▶ ┌config, run_time, t0, t1┐ → ○ run_saturation(base=prometheus_host:LOAD_PROMETHEUS_PORT,
+      окно [t0-60, t1+60]) → ⎋ SaturationResult | LoadtestRunError
+
+    ## @purpose  Инвариант 5 (локальный канал): pull с dev-машины. host = config.prometheus_host
+    ##            (146-m2): LOAD_PROMETHEUS_HOST override — например localhost при SSH-туннеле
+    ##            (ssh -L 19090:localhost:9090), когда внешний IP ноды принимает TCP на 9090,
+    ##            но HTTP не отвечает (фаервол ноды).
+    ## @io — ⇥ config, run_time: int, t0/t1: float → ⎋ SaturationResult
     ## @complexity — O(Q×(S+M)) — пул запросов
     ## @raises — LoadtestRunError: Prometheus недоступен (через PrometheusError)
     """
     base_url = f"http://{config.prometheus_host}:{config.prometheus_port}"
-    run_time = int(max(1, t1 - t0))
     try:
         return prometheus_pull.run_saturation(base_url, run_time, t0, t1)
     except prometheus_pull.PrometheusError as exc:
@@ -696,7 +729,47 @@ def _saturation_pull(config: LoadtestConfig, t0: float, t1: float) -> prometheus
         raise LoadtestRunError(msg) from exc
 
 
-# endregion FUNC__saturation_pull
+# endregion FUNC__pull_saturation_local
+
+
+# region FUNC__pull_saturation_node
+def _pull_saturation_node(
+    config: LoadtestConfig, run_time: int, t0: float, t1: float
+) -> prometheus_pull.SaturationResult:
+    """Node-side PromQL-pull: ssh_read prometheus_pull.py на ноде → localhost:<port> (F-036).
+
+    ▶ ┌config, run_time, t0, t1┐ → ○ runner_remote.pull_promql_node_side(host=node_host,
+      base_url=http://localhost:<port>, ...) → ⎋ SaturationResult | LoadtestRunError
+
+    ## @purpose  F-036 (DevPlan 016 TASK-9): нода тянет СВОЙ Prometheus на localhost (host
+    ##            network) — единичная read-only ssh-команда (ssh_read), TCP-forwarding НЕ
+    ##            используется (REF-0016 AllowTcpForwarding=no preserved). prometheus_host НЕ
+    ##            используется в node-режиме: это override для локального канала (SSH-туннель);
+    ##            нода всегда обращается к своему Prometheus по localhost:<port>. Модуль
+    ##            prometheus_pull.py уже доставлен ship_pull_module в remote-ветках диспетчеров
+    ##            режимов (precondition — см. ship-блоки _run_single_mode/_run_capacity_mode).
+    ## @io — ⇥ config, run_time: int, t0/t1: float → ⎋ SaturationResult
+    ## @complexity — O(Q×(S+M)) — полный pull на ноде
+    ## @raises — LoadtestRunError: RemoteError (ssh rc≠0) или PrometheusError (не-JSON stdout)
+    """
+    remote_workdir = _remote_workdir(config)
+    base_url = f"http://localhost:{config.prometheus_port}"
+    try:
+        return runner_remote.pull_promql_node_side(
+            config.node_host,
+            _ssh_user(),
+            remote_workdir,
+            base_url=base_url,
+            run_time=run_time,
+            t0=t0,
+            t1=t1,
+        )
+    except (prometheus_pull.PrometheusError, runner_remote.RemoteError) as exc:
+        msg = f"Prometheus pull failed (node-side): {exc}"
+        raise LoadtestRunError(msg) from exc
+
+
+# endregion FUNC__pull_saturation_node
 
 
 # region FUNC__run_single_mode
@@ -726,6 +799,13 @@ def _run_single_mode(config: LoadtestConfig, args: CliArgs) -> tuple[int, Report
 
     if remote:
         runner_remote.ship(config.node_host, _ssh_user(), str(REPO_ROOT / "core" / "loadtest"), _remote_workdir(config))
+        # 🧐 TRAP[DECISION] · 2026-08-27 · — · ship_pull_module в remote-ветках диспетчеров (fail-fast
+        # · ДО прогона), а не внутри _saturation_pull · Rejected: ship в _saturation_pull (post-run
+        # · ship-ошибка списывает regression-ран 300s + pull-модуль доставляется при --skip-prometheus
+        # · всё равно) · Reason: fail-fast + когезия доставки (все remote-файлы — один phase);
+        # · модуль нужен ТОЛЬКО node-side pull (F-036) · Rev: если ship-ошибка станет редкой, а
+        # · --skip-prometheus-прогоны начнут платить заметный rsync-оверхед — перенести в _saturation_pull
+        runner_remote.ship_pull_module(config.node_host, _ssh_user(), _remote_workdir(config))
 
     t0 = time.time()
     csv_prefix = str(local_dir / "run") if not remote else f"/lt/results/{rel_dir}/run"
@@ -847,6 +927,9 @@ def _run_capacity_mode(config: LoadtestConfig, args: CliArgs) -> tuple[int, Repo
 
     if remote:
         runner_remote.ship(config.node_host, _ssh_user(), str(REPO_ROOT / "core" / "loadtest"), _remote_workdir(config))
+        # F-036 (DevPlan 016 TASK-9): node-side PromQL-pull — pull-модуль шипается вместе со
+        # сценариями (fail-fast до прогона; см. TRAP[DECISION] в _run_single_mode)
+        runner_remote.ship_pull_module(config.node_host, _ssh_user(), _remote_workdir(config))
 
     def _step(rps: int) -> StepStats:
         csv_prefix = f"/lt/results/{rel_dir}/step-{rps}/run" if remote else str(local_dir / f"step-{rps}" / "run")

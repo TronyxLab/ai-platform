@@ -530,6 +530,31 @@ def test_section_compose_profiles_count(caplog):
     assert "COMPOSE_PROFILES=postgres,redis,nginx,litellm,langfuse,hermes-agent,monitoring,status-page" in text
 
 
+# 🧪 TRAP[TEST] · Regression · T4.2 — PLATFORM_DEPLOY_TIMEOUT fallback = "900" (канон DEPLOY_TIMEOUT)
+# · Scenario: env_defaults БЕЗ PLATFORM_DEPLOY_TIMEOUT → рендер PLATFORM_DEPLOY_TIMEOUT=900 (не "600");
+# ·           прежний fallback-литерал "600" расходился с SoT (platform-infra.yaml env_defaults=900,
+# ·           app_config fallback str(DEPLOY_TIMEOUT), channels DEFAULT_DEPLOY_TIMEOUT=900)
+# · Last fail: sync_env_defaults.py:805 — _get_env_val(..., "600") при unset env
+# · Remove if: _section_misc перестаёт генерировать PLATFORM_DEPLOY_TIMEOUT
+# GUARD-PRESERVE (T4.2): позитивная половина — рендер 900 при unset env; source-гвард
+# '"600"' not in source — прямой литерал-AC DevPlan 016 (grep -n '"600"' → пусто)
+@ldd_trajectory
+def test_deploy_timeout_default_is_900(caplog):
+    """T4.2: при unset PLATFORM_DEPLOY_TIMEOUT fallback = "900" (не "600") — канон shared/timeouts."""
+    lines = sed._section_misc({})
+    text = "\n".join(lines)
+    assert "PLATFORM_DEPLOY_TIMEOUT=900" in text, (
+        f"T4.2 FAIL: fallback должен быть 900 (канон DEPLOY_TIMEOUT): {text!r}"
+    )
+    assert "PLATFORM_DEPLOY_TIMEOUT=600" not in text, "T4.2 FAIL: прежний fallback '600' всё ещё рендерится"
+    # Literal-AC (DevPlan 016 T4.2): grep -n '"600"' sync_env_defaults.py → пусто
+    source = Path(sed.__file__).read_text(encoding="utf-8")
+    assert '"600"' not in source, (
+        "T4.2 R5 FAIL: fallback-литерал '600' всё ещё в sync_env_defaults.py — должен быть '900' (SoT DEPLOY_TIMEOUT)"
+    )
+    logger.critical("[IMP:9][test] T4.2: PLATFORM_DEPLOY_TIMEOUT fallback = 900 (канон DEPLOY_TIMEOUT)")
+
+
 # 🧪 TRAP[TEST] · Regression · section builder for github_actions
 # · Scenario: only comments + GHCR_PULL_TOKEN/GHCR_PUSH_TOKEN
 # · Last fail: N/A (new test for DevPlan 117 G T57)

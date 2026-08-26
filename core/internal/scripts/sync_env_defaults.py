@@ -26,6 +26,8 @@
 ##           2026-08-22 | T2.17 — NO_PROXY выводится из platform-env proxy.no_proxy_internal
 ##                      (SoT, join запятой); захардкоженный subset-литерал удалён (дрейф списка);
 ##                      env_defaults.NO_PROXY из platform-infra.yaml удалён (дубль SoT)
+##           2026-08-27 | DevPlan 016 T4.2 — fallback PLATFORM_DEPLOY_TIMEOUT 600→900
+##                      (канон shared/timeouts.py DEPLOY_TIMEOUT; комментарий уже утверждал 900)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -801,8 +803,11 @@ def _section_misc(env_defaults: dict[str, str]) -> list[str]:
     from core.internal.shared.deploy_paths import DEFAULT_PROJECTS_BASE
 
     lines.append("PROJECTS_BASE=" + _get_env_val(env_defaults, "PROJECTS_BASE", DEFAULT_PROJECTS_BASE))
+    # T4.2 (DevPlan 016): fallback = канон shared/timeouts.py DEPLOY_TIMEOUT (900) — прежний
+    # литерал 600 расходился с SoT (platform-infra.yaml env_defaults PLATFORM_DEPLOY_TIMEOUT=900,
+    # app_config.py fallback str(DEPLOY_TIMEOUT)); ленивый fallback-литерал зеркалит SoT.
     lines.append("# PLATFORM_DEPLOY_TIMEOUT — таймаут деплоя в секундах для DeliveryChannel (default: 900)")
-    lines.append("PLATFORM_DEPLOY_TIMEOUT=" + _get_env_val(env_defaults, "PLATFORM_DEPLOY_TIMEOUT", "600"))
+    lines.append("PLATFORM_DEPLOY_TIMEOUT=" + _get_env_val(env_defaults, "PLATFORM_DEPLOY_TIMEOUT", "900"))
     return lines
 
 

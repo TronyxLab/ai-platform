@@ -32,6 +32,9 @@
            fake-subprocess-объект DI (0 monkeypatch в тестах).
            2026-08-25 | REF-0009 (meta-refactoring W2) — .last_verified stamp +
            age-encrypt дампов перед upload (fail-closed без AGE_RECIPIENT).
+           2026-08-27 | DevPlan 016 T8/F-032 — pg_dumpall --clean/--if-exists
+           (owner-решение: restore поверх init-кластера идемпотентен, volume не
+           разрушается; unit-тест test_restore_clean_strategy).
 
 @ PITR RESTORE PROCEDURE (TASK-1: B1 — WAL archiving)
   Point-In-Time Recovery (PITR) — PostgreSQL WAL-based restore.
@@ -210,9 +213,15 @@ def run_backup(
         logger.info("[IMP:7][dump] Running pg_dumpall %s:%s → %s", postgres_host, postgres_port, dump_file)
         pg_env = dict(effective_env)
         pg_env["PGPASSWORD"] = postgres_password
+        # DevPlan 016 T8 (F-032): --clean --if-exists — backup-channel canon (owner decision).
+        # pg_dumpall emits DROP DATABASE/ROLE/... before CREATE → restore over the
+        # init-initialized cluster is idempotent (no «role/database/type already exists»);
+        # --if-exists makes the drops conditional. postgres-data volume is NOT destroyed.
         dump_proc = runner_mod.Popen(
             [
                 "pg_dumpall",
+                "--clean",
+                "--if-exists",
                 "-h",
                 postgres_host,
                 "-p",

@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: loadtest remote runner rsync docker-run locust container node LOAD_RUNNER image cpus ssh network
-# STRUCTURE: ▶ ship (rsync core/loadtest/ → /tmp/loadtest-<ts>/) → ◇ docker run --rm --network <network>
-#           --cpus ${LOAD_CPUS:-2} -v remote:/lt -w /lt ${LOAD_IMAGE:-locustio/locust:2.32.10} → ◇ fetch
-#           (rsync results обратно) → ⎋ локальная сборка отчёта (PromQL pull с локальной машины)
+# GREP_SUMMARY: loadtest remote runner rsync docker-run locust container node LOAD_RUNNER image cpus ssh network promql pull-promql node-side ssh_read ship-pull-module
+# STRUCTURE: ▶ ship (rsync core/loadtest/ → /tmp/loadtest-<ts>/) → ◇ ship_pull_module (prometheus_pull.py
+#           → remote workdir, F-036) → ◇ docker run --rm --network <network> --cpus ${LOAD_CPUS:-2}
+#           -v remote:/lt -w /lt ${LOAD_IMAGE:-locustio/locust:2.32.10} → ◇ fetch (rsync results обратно)
+#           → ◇ pull_promql_node_side (ssh_read prometheus_pull.py на ноде, localhost:<port> — БЕЗ
+#           TCP-forwarding, REF-0016) → ⎋ локальная сборка отчёта
 # region MODULE_CONTRACT
 ## @purpose  Remote-режим генератора (DevPlan 146 W5, LOAD_RUNNER=node): locust-прогон
 ##           выполняется в docker-контейнере НА ноде (не через docker compose сервисов —
@@ -10,6 +12,11 @@
 ##           ноду (канон shared.ssh_opts — НЕ tests/_conftest, runtime не импортирует
 ##           тестовую инфраструктуру), docker run с --network host и --cpus LOAD_CPUS,
 ##           rsync CSV обратно; PromQL-pull и сборка отчёта — локально.
+##           F-036 (DevPlan 016 TASK-9): node-side PromQL-pull — нода тянет СВОЙ Prometheus
+##           на localhost через единичную read-only ssh-команду (ssh_read-семантика,
+##           НИКАКИХ -L/-R/AllowTcpForwarding — REF-0016 preserved); pull-модуль
+##           prometheus_pull.py доставляется ship_pull_module (тот же код, что и локальный
+##           путь — бизнес-логика НЕ дублируется).
 ## @scope    Потребитель: runner_cli.py (LOAD_RUNNER=node ветка). Командостроители —
 ##           чистые функции (unit-тесты), exec-обёртки — subprocess через ssh_opts.
 ## @invariants
@@ -34,16 +41,22 @@
 ##            в эту сеть, чтобы достать их по DNS-алиасу без хардкода IP.
 ## @changes  2026-08-11 | DevPlan 146 W5 — Created
 ## @changes  2026-08-12 | DevPlan 148 TASK-4 — network-параметр (--network, default host)
+## @changes  2026-08-27 | DevPlan 016 TASK-9 — node-side PromQL-pull (F-036): ship_pull_module +
+##           pull_promql_node_side (ssh_read, без TCP-forwarding, REF-0016 preserved)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
+import json
 import logging
 import shlex
 import subprocess
 import time
 from collections.abc import Callable
+from pathlib import Path
+from typing import cast
 
+from core.internal.loadtest import prometheus_pull
 from core.internal.shared.ssh_opts import SSH_OPTS, build_rsync_ssh_opts
 from core.internal.shared.subprocess_io import run_subprocess
 
@@ -102,6 +115,29 @@ def build_rsync_fetch_cmd(remote_dir: str, user: str, host: str, local_dir: str)
 
 
 # endregion FUNC_build_rsync_fetch_cmd
+
+
+# region FUNC_build_rsync_pull_module_cmd
+def build_rsync_pull_module_cmd(src_file: str, user: str, host: str, remote_dir: str) -> list[str]:
+    """Команда rsync одиночного файла prometheus_pull.py на ноду (ssh-e из канона ssh_opts).
+
+    ▶ ┌src_file, user, host, remote_dir┐ → ○ ssh-e = build_rsync_ssh_opts → ⎋ ["rsync", "-az", "-e", ...]
+
+    ## @purpose  Ship-команда node-side PromQL-pull (F-036, DevPlan 016 TASK-9): единичный
+    ##            файл prometheus_pull.py → remote_workdir. Trailing-slash контракт ship()
+    ##            неприменим к файлу (он для директорий): rsync ФАЙЛА в <remote_dir>/ кладёт
+    ##            его в директорию, не вложенной папкой.
+    ## @io — ⇥ src_file: str (локальный путь к prometheus_pull.py), user/host: str,
+    ##         remote_dir: str (существующий remote_workdir) → ⎋ list[str] — argv для subprocess
+    ## @complexity — O(1)
+    ## @invariants
+    ##   - ssh-e = build_rsync_ssh_opts() (единый канон SSH-флагов, DevPlan 116 B5 D1)
+    ##   - remote_dir обязан существовать (создаётся предшествующим ship() в runner_cli)
+    """
+    return ["rsync", "-az", "-e", build_rsync_ssh_opts(), src_file, f"{user}@{host}:{remote_dir}/"]
+
+
+# endregion FUNC_build_rsync_pull_module_cmd
 
 
 # region FUNC_build_ssh_docker_run_cmd
@@ -212,6 +248,48 @@ def ship(
 # endregion FUNC_ship
 
 
+# region FUNC_ship_pull_module
+def ship_pull_module(
+    host: str,
+    user: str,
+    remote_workdir: str,
+    timeout: int = 120,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
+) -> None:
+    """rsync prometheus_pull.py (single file) → remote_workdir (шаг 0 node-side pull, F-036).
+
+    ▶ ┌host, user, remote_workdir┐ → ○ src_file = <модуль>/prometheus_pull.py → ○ rsync push
+      (ssh_opts) → ◇ rc != 0 → RemoteError → ⎋ None
+
+    ## @purpose  Доставка pull-модуля на ноду (F-036, DevPlan 016 TASK-9): нода выполняет
+    ##            тот же prometheus_pull.py на СВОЁМ Prometheus (localhost) — бизнес-логика
+    ##            pull НЕ дублируется, транспортом остаётся единый модуль. Паттерн ship()
+    ##            (rsync через канон ssh_opts + DI runner=, DevPlan 167 D0), но для ОДНОГО
+    ##            файла: chmod-шаг ship() не нужен — python3 читает файл как пользователь
+    ##            SSH (root), а не non-root docker-uid контейнера.
+    ## @io — ⇥ host: str, user: str, remote_workdir: str (например /tmp/loadtest-<ts>, создан
+    ##         предшествующим ship()), timeout: int,
+    ##         runner: Callable | None (DI, как ship(); None → run_subprocess) → ⎋ None
+    ## @complexity — O(1) — один rsync одного файла
+    ## @raises — RemoteError: rsync вернул ненулевой rc
+    ## @invariants
+    ##   - src_file резолвится от __file__ (никаких хардкод-путей вне модуля)
+    ##   - remote_workdir обязан существовать (runner_cli: ship() ДО ship_pull_module)
+    """
+    run_impl = runner if runner is not None else run_subprocess
+    src_file = str(Path(__file__).resolve().parent / "prometheus_pull.py")
+    cmd = build_rsync_pull_module_cmd(src_file, user, host, remote_workdir)
+    result = run_impl(cmd, timeout=timeout, check=False, non_fatal=True)
+    if result.returncode != 0:
+        msg = f"rsync ship_pull_module failed (rc={result.returncode}): {result.stderr.strip()[:300]}"
+        raise RemoteError(msg)
+    logger.info("[IMP:9][remote][ship_pull_module] %s → %s@%s:%s/", src_file, user, host, remote_workdir)
+
+
+# endregion FUNC_ship_pull_module
+
+
 # region FUNC_fetch
 def fetch(host: str, user: str, remote_dir: str, local_dir: str, timeout: int = 300) -> None:
     """rsync результатов с ноды → локальный load-results/ (шаг 4 remote-режима).
@@ -276,6 +354,120 @@ def run_remote_locust(
 
 
 # endregion FUNC_run_remote_locust
+
+
+# region FUNC_build_pull_promql_cmd
+def build_pull_promql_cmd(remote_workdir: str, base_url: str, run_time: int, t0: float, t1: float, timeout: int) -> str:
+    """Сборка node-side команды pull: python3 <workdir>/prometheus_pull.py --base-url ... (F-036).
+
+    ▶ ┌workdir, base_url, run_time, t0, t1, timeout┐ → ○ shlex.quote каждого токена → ⎋ str
+
+    ## @purpose  Единственный builder node-side PromQL-pull (F-036): CLI prometheus_pull.py
+    ##            выполняется НА ноде против localhost:<port> — REF-0016 (AllowTcpForwarding=no)
+    ##            сохраняется: TCP-forwarding не используется и не требуется. Значения
+    ##            экранируются shlex.quote (как build_ssh_docker_run_cmd) — без shell-инъекции.
+    ## @io — ⇥ remote_workdir: str, base_url: str (node-side: http://localhost:<port>),
+    ##         run_time: int (s), t0/t1: float (unix секунды), timeout: int (HTTP per-request)
+    ##       → ⎋ str — одна shell-команда для `ssh user@host <cmd>`
+    ## @complexity — O(1)
+    ## @invariants
+    ##   - Команда НЕ содержит -L/-R/AllowTcpForwarding/-N/-f токенов (read-only ssh_read)
+    ##   - stdout CLI = чистый JSON SaturationResult (asdict); ошибки — stderr + exit 1
+    ##   - timeout передаётся ВСЕГДА (детерминизм теста и runtime-контракта)
+    """
+    parts = [
+        "python3",
+        f"{remote_workdir}/prometheus_pull.py",
+        "--base-url",
+        base_url,
+        "--run-time",
+        str(run_time),
+        "--t0",
+        str(t0),
+        "--t1",
+        str(t1),
+        "--timeout",
+        str(timeout),
+    ]
+    return " ".join(shlex.quote(part) for part in parts)
+
+
+# endregion FUNC_build_pull_promql_cmd
+
+
+# region FUNC_pull_promql_node_side
+def pull_promql_node_side(
+    host: str,
+    user: str,
+    remote_workdir: str,
+    base_url: str,
+    run_time: int,
+    t0: float,
+    t1: float,
+    timeout: int = 120,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
+) -> prometheus_pull.SaturationResult:
+    """Node-side PromQL-pull: ssh_read prometheus_pull.py на ноде → SaturationResult (F-036).
+
+    ▶ ┌host, user, workdir, base_url, run_time, t0, t1, timeout┐ → ○ build_pull_promql_cmd
+      → ○ ssh (SSH_OPTS, read-only) → ◇ rc != 0 → RemoteError → ○ json.loads(stdout)
+      → ◇ не-JSON → PrometheusError → ○ SaturationResult(**parsed) → ⎋ SaturationResult
+
+    ## @purpose  F-036 (DevPlan 016 TASK-9): нода сама тянет СВОЙ Prometheus (localhost,
+    ##            host network) через единичную read-only ssh-команду — ssh_read-семантика,
+    ##            НИКАКИХ -L/-R/AllowTcpForwarding/-N/-f (REF-0016 preserved). Бизнес-логика
+    ##            pull живёт в prometheus_pull.py (тот же модуль, что и локальный путь) —
+    ##            здесь только транспорт: argv → stdout-JSON → SaturationResult.
+    ## @io — ⇥ host: str, user: str, remote_workdir: str (куда ship_pull_module положил модуль),
+    ##         base_url: str (node-side: http://localhost:<port>), run_time: int (s),
+    ##         t0/t1: float (unix секунды), timeout: int (ssh subprocess + HTTP per-request),
+    ##         runner: Callable | None (DI, как ship(); None → run_subprocess)
+    ##       → ⎋ prometheus_pull.SaturationResult (реконструкция из remote JSON stdout)
+    ## @complexity — O(Q×(S+M)) — полный pull на ноде (как run_saturation)
+    ## @raises — RemoteError: ssh вернул ненулевой rc (CLI печатает ошибку в stderr)
+    ## @raises — prometheus_pull.PrometheusError: stdout не является JSON SaturationResult
+    ## @invariants
+    ##   - ssh argv = ["ssh", *SSH_OPTS, f"{user}@{host}", cmd] — read-only, без forwarding-флагов
+    ##   - stdout парсится СТРОГО как JSON-объект (не-JSON → PrometheusError, fail-loud)
+    ##   - Модуль prometheus_pull.py доставлен ship_pull_module (precondition, runner_cli ordering)
+    """
+    run_impl = runner if runner is not None else run_subprocess
+    cmd = build_pull_promql_cmd(remote_workdir, base_url, run_time, t0, t1, timeout)
+    argv = ["ssh", *SSH_OPTS, f"{user}@{host}", cmd]
+    result = run_impl(argv, timeout=timeout, check=False, non_fatal=True)
+    if result.returncode != 0:
+        tail = (result.stderr.strip() or result.stdout.strip())[-300:]
+        msg = f"node-side PromQL pull failed (rc={result.returncode}): {tail}"
+        raise RemoteError(msg)
+    try:
+        parsed = cast("object", json.loads(result.stdout))  # W11: json.loads → Any → object (isinstance-гард ниже)
+    except json.JSONDecodeError as exc:
+        msg = f"node-side pull: stdout не является JSON: {exc}"
+        raise prometheus_pull.PrometheusError(msg) from exc
+    if not isinstance(parsed, dict):
+        msg = "node-side pull: stdout не является JSON-объектом"
+        raise prometheus_pull.PrometheusError(msg)
+    payload = cast("dict[str, object]", parsed)
+    # W11: JSON-граница — per-field cast к полям SaturationResult (все поля имеют дефолты —
+    #      отсутствующий ключ → None → cast-совместим, датакласс применит default)
+    result_obj = prometheus_pull.SaturationResult(
+        aggregates=cast("dict[str, prometheus_pull.SaturationAgg]", payload.get("aggregates")),
+        missing_metrics=cast("list[str]", payload.get("missing_metrics")),
+        insufficient_metrics=cast("list[str]", payload.get("insufficient_metrics")),
+    )
+    logger.info(
+        "[IMP:9][remote][pull_promql] %s@%s: %d aggregates, %d missing, %d insufficient",
+        user,
+        host,
+        len(result_obj.aggregates),
+        len(result_obj.missing_metrics),
+        len(result_obj.insufficient_metrics),
+    )
+    return result_obj
+
+
+# endregion FUNC_pull_promql_node_side
 
 
 # region FUNC_make_remote_dir

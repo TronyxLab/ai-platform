@@ -137,7 +137,7 @@ def mock_status_metrics_json_all_pass(tmp_path: Path) -> Path:
                 "healthy": True,
                 "exit_code": 0,
                 "status_line": "Up 3 hours (healthy)",
-                "image": "postgres:16",
+                "image": "postgres:18.4",
                 "memory_usage_bytes": 52428800,
                 "memory_limit_bytes": 1073741824,
                 "cpu_percent": 2.1,
@@ -240,7 +240,7 @@ def mock_status_metrics_json_one_unhealthy(tmp_path: Path) -> Path:
                 "healthy": False,
                 "exit_code": 0,
                 "status_line": "Up 3 hours (unhealthy)",
-                "image": "postgres:16",
+                "image": "postgres:18.4",
             },
             {
                 "name": "redis",

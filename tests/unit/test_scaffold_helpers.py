@@ -1,8 +1,9 @@
-# GREP_SUMMARY: test scaffold_helpers gen_ai_platform_yaml gen_makefile gen_agents register_in_node_yaml shared extraction
+# GREP_SUMMARY: test scaffold_helpers gen_ai_platform_yaml gen_makefile gen_agents gen_project_platform_md register_in_node_yaml shared extraction
 # STRUCTURE: ┌tmp_path fixture┐ → ○ 13 tests → ⊕ LDD trajectory (IMP:9) → ⚡ anti-loop counter
 # region MODULE_CONTRACT
 ## @purpose  Unit-тесты scaffold_helpers.py: gen_ai_platform_yaml (full + minimal + all types),
 ##           gen_project_makefile (generate + idempotent + force), gen_project_agents (generate + idempotent),
+##           gen_project_platform_md (name kwarg потребляется — DevPlan 016 T7.3),
 ##           register_in_node_yaml (dry-run). LDD IMP:9 + Anti-Loop + R1-R5.
 ## @scope    Tests under tests/ (unit, no Docker). DI over Mocks для NodeYaml CLI subprocess.
 ## @invariants  Все тесты используют tmp_path (R1). R1-R5 compliance: негативные тесты для overwrite protection.
@@ -15,6 +16,7 @@
 ## · Rev: если unit-директория вернётся к полному покрытию — ресинхронизировать inventory.
 ## @changes 2026-07-31 · DevPlan 092 AC4 — initial implementation
 ## @changes 2026-07-31 · Dedup fix — уникальные ассерты перенесены из tests/unit/
+## @changes 2026-08-27 · DevPlan 016 T7.3 — test_gen_project_platform_md_no_unused_name
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -32,6 +34,7 @@ from core.internal.scaffold.scaffold_helpers import (
     gen_ai_platform_yaml,
     gen_project_agents,
     gen_project_makefile,
+    gen_project_platform_md,
     register_in_node_yaml,
 )
 
@@ -207,6 +210,44 @@ def test_gen_agents_exists_no_overwrite(tmp_path: pathlib.Path, caplog) -> None:
     result = gen_project_agents(name="test-project", org="test-org", output_path=agents_path, force=False)
     assert result == "exists"
     assert agents_path.read_text() == original
+
+
+# ── gen_project_platform_md tests ────────────────────────────────────────
+
+
+# 🧪 TRAP[TEST] · Regression · ARG001-ignore снят — name kwarg потребляется телом
+# · Scenario: gen_project_platform_md(name=...) без PROJECTS_BASE → AI-PLATFORM.md создан;
+#   статика несёт имя проекта; IMP:9-лог обёртки несёт name (семантический след параметра)
+# · Last fail: T7.3 — параметр name не читался телом (только ignore-комментарий)
+# · Remove if: сигнатура gen_project_platform_md теряет параметр name
+@ldd_trajectory
+def test_gen_project_platform_md_no_unused_name(tmp_path: pathlib.Path, caplog) -> None:
+    """DevPlan 016 T7.3: name kwarg callable; параметр потребляется в IMP:9-траектории."""
+    logger.info("[IMP:9][test][helpers] test_gen_project_platform_md_no_unused_name")
+    proj_dir = tmp_path / "myapp"
+    proj_dir.mkdir(parents=True, exist_ok=True)
+    (proj_dir / "ai-platform.yaml").write_text("name: myapp\ntype: backend\n", encoding="utf-8")
+    output_path = proj_dir / "AI-PLATFORM.md"
+
+    result = gen_project_platform_md(
+        name="myapp",
+        org="",
+        node="",
+        project_dir=str(proj_dir),
+        output_path=output_path,
+        force=False,
+    )
+
+    assert result in {"created", "updated"}, f"Expected created/updated, got {result}"
+    assert output_path.exists(), "AI-PLATFORM.md must be written"
+    content = output_path.read_text(encoding="utf-8")
+    assert "# AI-PLATFORM.md — myapp" in content, "static part must carry the project name"
+    assert "GENERATED" in content, "GENERATED section markers must be present"
+
+    # Semantic trace: параметр name потребляется телом (IMP:9 обёртки несёт имя проекта)
+    trace = " ".join(r.message for r in caplog.records)
+    assert "for myapp:" in trace, "IMP:9 wrapper log must reference the name param (T7.3)"
+    logger.critical("[IMP:9][test][helpers] gen_project_platform_md OK — name kwarg consumed")
 
 
 # ── register_in_node_yaml tests ───────────────────────────────────────────

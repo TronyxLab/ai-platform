@@ -44,17 +44,16 @@ logger = logging.getLogger(__name__)
 SCHEMA_VERSION = 2
 
 
-# ⚠️ TRAP[DOCKER-BIND-MOUNT] · 2026-07-24 · HI · Direct overwrite instead of os.replace
-# · Rejected: atomic rename via os.replace (risk: creates new inode, Docker bind mount
-#   of single files binds to old inode → container sees stale data permanently)
-# · Reason: Docker bind mount for individual files uses inode-level binding. os.replace()
-#   creates a new inode, breaking the mount. Direct overwrite (open+write+fsync) preserves
-#   the inode. Race window: target is empty between truncate and write (microseconds for
-#   16KB JSON). Acceptable trade-off for cron-exported metrics (updated every 60s).
-# · Recovery: if the race window becomes problematic (readers consistently see empty file),
-#   switch to directory-level bind mount (/var/lib/platform/run/ instead of single file).
-# · Rev: if status-page log shows >1% JSONDecodeError on metrics file reads → escalate to
-#   directory mount solution.
+# 🪦 TRAP[ARCHIVED] · 2026-08-27 · — · Стейл TRAP[DOCKER-BIND-MOUNT] заархивирован
+#   (DevPlan 016 T3.2/TASK-4 — противоречие «Rejected: os.replace» vs реализация устранено)
+# · Было: ⚠️ 2026-07-24 · HI · «Direct overwrite instead of os.replace» — Rejected: atomic
+#   rename via os.replace (новый inode ломает bind mount одиночного файла → контейнер
+#   видит stale data); выбран truncate-in-place.
+# · Закрыто: DevPlan 17 T3.2 (AI-0009) перевёл json_writer на tempfile + fsync + os.replace:
+#   rename в пределах одного каталога/маунта валиден и на bind-mount Linux, reader
+#   (status-page) открывает файл заново каждый цикл — смена inode прозрачна. Актуальное
+#   решение — TRAP[DECISION] AI-0009 (MODULE_CONTRACT + шаг 5 atomic_write). Условие Rev
+#   (>1% JSONDecodeError) не наступило — прежний риск погашен сменой алгоритма.
 
 
 # region FUNC_atomic_write

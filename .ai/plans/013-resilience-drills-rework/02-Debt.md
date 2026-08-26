@@ -24,6 +24,8 @@ REQUIRES: решение архитектора (фикс \ref → относи�
 
 ## D-013a · MED · Абсолютные `\ref` в AGENTS.md ломают doxygen-check вне канонического пути
 
+# 🪦 TRAP[ARCHIVED] · 2026-08-27 · — · Долг закрыт конвергенцией 013+main (b889551): doxygen-ссылки переведены на relative markdown-links, исходные пути удалены (grep по коду пуст)
+
 - **Observed:** `make check` в worktree `.worktrees/013-resilience-drills` — doxygen-check FAIL:
   ровно 2 warning'а «unable to resolve reference to '/Users/tronyx/projects/ai-platform/…'».
 - **Suspected:** `\ref` с АБСОЛЮТНЫМ путём резолвится только когда совпадает с INPUT-корнем

@@ -1,4 +1,4 @@
-# GREP_SUMMARY: e2e, bootstrap-pipeline, test-vps, requires-node, chaos-marker, node-preflight, NODE_PREBOOTSTRAPPED, devplan-095, devplan-136
+# GREP_SUMMARY: e2e, bootstrap-pipeline, test-vps, requires-node, chaos-marker, node-preflight, NODE_PREBOOTSTRAPPED, devplan-095, devplan-136, worktree-parity
 # STRUCTURE: ┌test-VPS prep (SC2 operator recreate)┐ → ◇ env vars (NODE/AGE/SSH/NODE_PREBOOTSTRAPPED) → ◇ pre-flight «голоты» → ◇ run (make test-node, chaos отдельно) → ◇ troubleshooting → ⎋ coverage limits (B6/B7)
 # E2E Bootstrap Pipeline Tests (DevPlan 095, канонизация харнесса — DevPlan 136 W6)
 
@@ -157,3 +157,36 @@ make test-node NODE=test-e2e     # 10 requires_node тестов (без chaos) 
   в `/tmp/chaos-<date>` (не в .ai/plans/)
 - **GNU `timeout` (macOS)** — ssh timeout в тестах Python-side (subprocess timeout),
   macOS-safe; lib/ssh.sh DRIFT-note не блокирует
+
+## Worktree Parity (D-013b, DevPlan 016 TASK-10)
+
+**Проблема (реестр D-013b):** `make check`/тесты в чистом git worktree падают, когда
+parity-артефакты операторской среды отсутствуют — 6 тестов дают FAIL (в т.ч. `.venv` нет →
+rc 127).
+
+**Минимальный набор symlink'ов из основного репо (`~/projects/ai-platform/`):**
+
+| Артефакт | Когда нужен |
+|----------|-------------|
+| `.venv` | всегда — не копируется worktree-тулингом |
+| `.env` | только если уже не provisioned worktree-тулингом как реальный файл |
+| `node-configs/` | тесты, читающие `node.yaml` |
+| `core/modules/hermes-agent/.env` | тесты, читающие hermes-agent env |
+
+**Создание (только недостающее, из корня worktree):**
+
+```bash
+ln -s ~/projects/ai-platform/.venv .venv
+ln -s ~/projects/ai-platform/.env .env                                          # если .env не создан worktree-тулингом
+ln -s ~/projects/ai-platform/node-configs node-configs
+ln -s ~/projects/ai-platform/core/modules/hermes-agent/.env core/modules/hermes-agent/.env
+```
+
+**Fallback-конвенция (когда parity невозможен):** R4-стиль skip→FAIL с сообщением
+«отсутствует &lt;артефакт&gt; — операторская среда» (Rule R4: инфраструктурная недоступность —
+FAIL, не skip).
+
+**Затронутые тесты (реестр D-013b):** тесты, требующие `.env` / `node-configs` /
+hermes-agent `.env` / `.venv` — 6 падающих: `tests/unit/test_s3_ssl_cache.py` (×2),
+`tests/unit/test_secrets_validation.py` (×3),
+`tests/test_predeploy_gate.py::test_required_env_vars_present`.

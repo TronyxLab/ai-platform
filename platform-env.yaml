@@ -85,24 +85,32 @@ provides:
     url_template: https://${DOMAIN}
     networks:
     - proxy-net
+    - observability-net
   litellm:
     host: litellm
     port: 4000
     url_template: http://litellm:4000
     networks:
     - hermes-agent-net
+    - shared-db-net
+    - observability-net
   langfuse:
     host: langfuse
     port: 3001
     url_template: http://langfuse:3000
     networks:
     - hermes-agent-net
+    - shared-db-net
+    - observability-net
   minio:
     host: minio
     port: 9000
     url_template: http://minio:9000
     networks:
     - hermes-agent-net
+    - shared-db-net
+    - observability-net
+    - backup-net
   clickhouse:
     host: clickhouse
     port: 8123
@@ -110,6 +118,7 @@ provides:
     dsn_template: clickhouse://clickhouse:8123/${NAME}
     networks:
     - hermes-agent-net
+    - observability-net
 port_mappings:
   CLICKHOUSE_PORT: 8123
   CLICKHOUSE_NATIVE_PEER_PORT: 19000
