@@ -1,5 +1,5 @@
-# GREP_SUMMARY: test-deploy-orchestrator, routing, severity, parallel, sequential, orchestrator-cli, unit
-# STRUCTURE: ▶ routing tests [_route_deploy: seq|parallel|orchestrator] → ▶ severity tests [_aggregate_severity + _compute_exit_code: crit|warn|none] → ▶ orchestrate tests [empty-noop | parse | preflight | postflight] → ▶ deploy tests [parallel topo | sequential loop] → ⎋ LDD [IMP:9]
+# GREP_SUMMARY: test-deploy-orchestrator, routing, severity, parallel, sequential, orchestrator-cli, public-observable, unit
+# STRUCTURE: ▶ routing tests [orchestrate: seq|parallel|orchestrator → public observables] → ▶ severity tests [_aggregate_severity + _compute_exit_code: crit|warn|none] → ▶ orchestrate tests [empty-noop | parse | preflight | postflight] → ▶ deploy tests [parallel topo | sequential loop — через orchestrate()] → ⎋ LDD [IMP:9]
 # region MODULE_CONTRACT
 ## @purpose  Unit tests for deploy_orchestrator.py (DevPlan 100 TASK-4a) — routing decision,
 ##           severity aggregation, preflight/postflight wiring, parallel/sequential deploy paths.
@@ -8,6 +8,9 @@
 ##           sequential/parallel/orchestrator routing, critical/warn/no-failure exit codes,
 ##           empty-modules noop, node.yaml parsing, preflight/postflight call wiring,
 ##           parallel topo_sort invocation, sequential module iteration.
+##           T8.2 (DevPlan 016 TASK-6): routing/deploy tests drive the PUBLIC orchestrate() API
+##           and assert on ModuleDeployResult observables (deployed/failed/exit_code) + public
+##           docker-worker seams — patches of _deploy_sequential/_deploy_parallel removed.
 ## @invariants
 ##   - Native imports only — no subprocess.run for business logic (RULES §TESTING)
 ##   - tmp_path fixture for node.yaml/module.yaml fixtures (Zero Hardcode Rule)
@@ -76,150 +79,217 @@ def _write_module_yaml(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ROUTING (§9: _route_deploy)
+# ROUTING (§9: DEPLOY_PARALLEL / DEPLOY_ORCHESTRATOR маршруты — через публичный orchestrate())
 # ══════════════════════════════════════════════════════════════════════════════
 
 # region FUNC_test_orchestrate_sequential_routing
-## @purpose  deploy_parallel=False → _route_deploy dispatches to _deploy_sequential (not _deploy_parallel)
-## @io       caplog → None (pytest.fail if wrong route taken)
-## @complexity 1 — mocked dispatch assert
+## @purpose  deploy_parallel=False → orchestrate() routes to the sequential deploy path: modules
+##           deployed via docker_orchestrator.deploy_docker_module (public worker seam), the
+##           parallel worker deploy_docker_group is NOT used; result observables honest.
+## @io       tmp_path, caplog → None (pytest.fail if wrong route taken)
+## @complexity 2 — real orchestrate() + real sequential loop + mocked external I/O phases
 ## @invariants
-##   - Sequential route must NOT call _deploy_parallel
-##   - Sequential route returns empty modules_info {} (severity falls back to per-module lookup)
+##   - Sequential route must NOT call deploy_docker_group (parallel worker)
+##   - result.deployed counts every deployed module; result.failed stays empty
 
 
 @pytest.mark.smoke
-def test_orchestrate_sequential_routing(caplog) -> None:
+def test_orchestrate_sequential_routing(tmp_path, caplog) -> None:
     """
-    # ▶ mock _deploy_sequential → ◇ _route_deploy(deploy_parallel=False) → ⚡ assert seq called, parallel NOT → ⎋ pass | fail
+    # ▶ node.yaml (postgres,redis) → ⚡ orchestrate(deploy_parallel=False) → ◇ assert seq worker used, parallel NOT → ⎋ pass | fail
     """
     caplog.set_level(logging.DEBUG)
+    _write_module_yaml(tmp_path, "postgres", install_type="docker", severity="critical")
+    _write_module_yaml(tmp_path, "redis", install_type="docker", severity="warn")
+    node_yaml = _write_node_yaml(tmp_path, {"postgres": {"enabled": True}, "redis": {"enabled": True}})
     logger.info("[IMP:7][test_orchestrate_sequential_routing] START — sequential routing check")
 
-    # intentional-seam: воркеры маршрута — дизайн-шов для подмены (T8.2)
+    # T8.2: приватные воркеры маршрута (_deploy_sequential/_deploy_parallel) НЕ патчатся —
+    # маршрут тестируется через ПУБЛИЧНЫЙ orchestrate() + публичные observable результата
+    # (result.deployed/failed/exit_code) + публичные seam'ы docker-воркеров.
     with (
-        mock.patch.object(orch, "_deploy_sequential", return_value=(2, [])) as mock_seq,
-        mock.patch.object(orch, "_deploy_parallel", return_value=(0, [], {})) as mock_par,
+        mock.patch.object(orch, "_preflight", return_value=None),
+        mock.patch.object(orch, "_postflight", return_value=None),
+        mock.patch.object(orch, "_interpolation_dryrun", return_value=[]),
+        mock.patch.object(orch.secrets_validator, "check_env_requires", return_value=[]),
+        mock.patch.object(orch.docker_orchestrator, "deploy_docker_module", return_value=True) as mock_seq_deploy,
+        mock.patch.object(orch.docker_orchestrator, "deploy_docker_group", return_value=(2, 0, [], [])) as mock_group,
     ):
-        deployed, failed, modules_info = orch._route_deploy(
-            ["postgres", "redis"], {}, "/mods", "/core", deploy_parallel=False, deploy_orchestrator=False
+        result = orch.orchestrate(
+            str(node_yaml),
+            str(tmp_path / "modules"),
+            str(tmp_path / "core"),
+            str(tmp_path / "templates"),
+            deploy_parallel=False,
         )
 
-    # AI-0047 (DevPlan 17 T8.2): наблюдаемые исходы вместо пиннинга приватной сигнатуры —
-    # маршрут выбран (seq вызван ровно один раз с тем же списком модулей, parallel нет)
-    mock_seq.assert_called_once()
-    called_modules = mock_seq.call_args.args[0]
-    assert list(called_modules) == ["postgres", "redis"], (
-        f"sequential route обязан получить те же модули: {called_modules}"
+    # AI-0047 (DevPlan 17 T8.2): маршрут выбран через наблюдаемые исходы — sequential-воркер
+    # получил те же модули, параллельный воркер не вызван, результат публично честен
+    assert mock_seq_deploy.call_count == 2, (
+        f"sequential worker must deploy both modules, got {mock_seq_deploy.call_count}"
     )
-    mock_par.assert_not_called()
-    assert deployed == 2, f"Sequential route should return deployed=2, got {deployed}"
-    assert failed == [], f"Sequential route should return no failures, got {failed}"
-    assert modules_info == {}, "Sequential route must return empty modules_info (per-module severity fallback)"
+    deployed_names = {call.args[0] for call in mock_seq_deploy.call_args_list}
+    assert deployed_names == {"postgres", "redis"}, f"sequential route обязан получить те же модули: {deployed_names}"
+    mock_group.assert_not_called()
+    assert result.deployed == 2, f"Sequential route should report deployed=2, got {result.deployed}"
+    assert result.failed == [], f"Sequential route should report no failures, got {result.failed}"
+    assert result.exit_code == 0, f"Clean sequential deploy must exit 0, got {result.exit_code}"
     logger.info(
-        "[IMP:9][test_orchestrate_sequential_routing] SEQUENTIAL route dispatched correctly (deployed=%d)", deployed
+        "[IMP:9][test_orchestrate_sequential_routing] SEQUENTIAL route dispatched correctly (deployed=%d)",
+        result.deployed,
     )
 
     assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · Regression: DEPLOY_PARALLEL=false must dispatch to sequential path (best-effort)
-# · Scenario: _route_deploy(deploy_parallel=False) with mocked _deploy_sequential → seq called, parallel NOT
+# · Scenario: orchestrate(deploy_parallel=False) → deploy_docker_module per module, deploy_docker_group NOT called
 # · Last fail: N/A
-# · Remove if: routing decision moves out of _route_deploy
+# · Remove if: routing decision moves out of orchestrate()
 # endregion FUNC_test_orchestrate_sequential_routing
 
 
 # region FUNC_test_orchestrate_parallel_routing
-## @purpose  deploy_parallel=True, deploy_orchestrator=False → _route_deploy dispatches to _deploy_parallel
-## @io       caplog → None (pytest.fail if wrong route taken)
-## @complexity 1 — mocked dispatch assert
+## @purpose  deploy_parallel=True, deploy_orchestrator=False → orchestrate() routes to the parallel
+##           deploy path: topo groups deployed via docker_orchestrator.deploy_docker_group (public
+##           worker seam), the sequential worker deploy_docker_module is NOT used.
+## @io       tmp_path, caplog → None (pytest.fail if wrong route taken)
+## @complexity 2 — real orchestrate() + real topo on tmp module.yamls + mocked group deploy
 ## @invariants
-##   - Parallel route must NOT call _deploy_sequential
-##   - deploy_orchestrator flag forwarded to _deploy_parallel as positional arg (False)
+##   - Parallel route must NOT call deploy_docker_module (sequential worker)
+##   - deploy_orchestrator=False → group-based deploy path (not deploy-many)
+##   - result.deployed/failed mirror the group worker outcome (public observables)
 
 
 @pytest.mark.smoke
-def test_orchestrate_parallel_routing(caplog) -> None:
+def test_orchestrate_parallel_routing(tmp_path, caplog) -> None:
     """
-    # ▶ mock _deploy_parallel → ◇ _route_deploy(deploy_parallel=True) → ⚡ assert parallel called, seq NOT → ⎋ pass | fail
+    # ▶ node.yaml (postgres,redis) → ⚡ orchestrate(deploy_parallel=True) → ◇ assert group worker used, seq NOT → ⎋ pass | fail
     """
     caplog.set_level(logging.DEBUG)
+    _write_module_yaml(tmp_path, "postgres", install_type="docker", severity="critical")
+    _write_module_yaml(tmp_path, "redis", install_type="docker", severity="warn")
+    node_yaml = _write_node_yaml(tmp_path, {"postgres": {"enabled": True}, "redis": {"enabled": True}})
     logger.info("[IMP:7][test_orchestrate_parallel_routing] START — parallel routing check")
 
-    # intentional-seam: воркеры маршрута — дизайн-шов для подмены (T8.2)
     with (
-        mock.patch.object(orch, "_deploy_parallel", return_value=(1, ["postgres"], {"postgres": {}})) as mock_par,
-        mock.patch.object(orch, "_deploy_sequential", return_value=(0, [])) as mock_seq,
+        mock.patch.object(orch, "_preflight", return_value=None),
+        mock.patch.object(orch, "_postflight", return_value=None),
+        mock.patch.object(orch, "_interpolation_dryrun", return_value=[]),
+        mock.patch.object(orch.docker_orchestrator, "pre_pull_images", return_value=(2, 0)),
+        mock.patch.object(orch.secrets_validator, "batch_check_env", return_value=[]),
+        mock.patch.object(orch.docker_orchestrator, "deploy_docker_group", return_value=(2, 0, [], [])) as mock_group,
+        mock.patch.object(orch, "_deploy_system_modules", return_value=(0, [])),
+        mock.patch.object(orch, "_set_hc_marker"),
+        mock.patch.object(orch.docker_orchestrator, "deploy_docker_module", return_value=True) as mock_seq_deploy,
     ):
-        deployed, failed, modules_info = orch._route_deploy(
-            ["postgres"], {"postgres": ""}, "/mods", "/core", deploy_parallel=True, deploy_orchestrator=False
+        result = orch.orchestrate(
+            str(node_yaml),
+            str(tmp_path / "modules"),
+            str(tmp_path / "core"),
+            str(tmp_path / "templates"),
+            deploy_parallel=True,
+            deploy_orchestrator=False,
         )
 
-    # AI-0047 (T8.2): observable forwarding — флаг доезжает до параллельного воркера
-    mock_par.assert_called_once()
-    passed_modules = mock_par.call_args.args[0]
-    assert list(passed_modules) == ["postgres"], f"parallel route modules: {passed_modules}"
-    assert mock_par.call_args.kwargs.get("deploy_orchestrator") is False, (
-        "deploy_orchestrator=False обязан форвардиться в параллельный воркер"
-    )
-    mock_seq.assert_not_called()
-    assert deployed == 1, f"Parallel route should return deployed=1, got {deployed}"
-    assert failed == ["postgres"], f"Parallel route should propagate failures, got {failed}"
-    assert "postgres" in modules_info, "Parallel route must return enriched modules_info for severity lookup"
+    # AI-0047 (T8.2): observable forwarding — флаг доезжает до группового воркера
+    mock_group.assert_called_once()
+    group_entries = mock_group.call_args.args[0]
+    assert set(group_entries) == {"postgres", "redis"}, f"parallel route modules: {group_entries}"
+    mock_seq_deploy.assert_not_called()
+    assert result.deployed == 2, f"Parallel route should report deployed=2, got {result.deployed}"
+    assert result.failed == [], f"Parallel route should report no failures, got {result.failed}"
+    assert result.exit_code == 0, f"Clean parallel deploy must exit 0, got {result.exit_code}"
     logger.info(
-        "[IMP:9][test_orchestrate_parallel_routing] PARALLEL route dispatched correctly (deployed=%d)", deployed
+        "[IMP:9][test_orchestrate_parallel_routing] PARALLEL route dispatched correctly (deployed=%d)",
+        result.deployed,
     )
 
     assert_ldd_imp9(caplog)
 
 
 # 🧪 TRAP[TEST] · Regression: DEPLOY_PARALLEL=true must dispatch to parallel path (DevPlan 050)
-# · Scenario: _route_deploy(deploy_parallel=True, deploy_orchestrator=False) → parallel called with flag False
+# · Scenario: orchestrate(deploy_parallel=True, deploy_orchestrator=False) → deploy_docker_group, seq worker NOT called
 # · Last fail: N/A
-# · Remove if: routing decision moves out of _route_deploy
+# · Remove if: routing decision moves out of orchestrate()
 # endregion FUNC_test_orchestrate_parallel_routing
 
 
-# region FUNC_test_orchestrate_orchestrator_routing
-## @purpose  deploy_parallel=True, deploy_orchestrator=True → _route_deploy forwards flag to _deploy_parallel
-## @io       caplog → None (pytest.fail if flag not forwarded)
-## @complexity 1 — mocked dispatch assert
+# region FUNC_test_deploy_uses_public_observable
+## @purpose  deploy_parallel=True, deploy_orchestrator=True → orchestrate() routes to the
+##           DeployOrchestrator CLI path (deploy-many): the docker module list reaches the
+##           deploy-many seam, group-based deploy and sequential worker are NOT used.
+##           Asserts on PUBLIC observables: result.deployed/result.failed/result.exit_code
+##           and public worker call patterns (T8.2 — no _deploy_sequential/_deploy_parallel patches).
+## @io       tmp_path, caplog → None (pytest.fail if deploy-many path not taken)
+## @complexity 2 — real orchestrate() + real topo + mocked deploy-many subprocess seam
 ## @invariants
-##   - Orchestrator flag must reach _deploy_parallel (which then calls _deploy_orchestrator)
-##   - Parallel route with orchestrator flag must NOT fall to sequential
+##   - Orchestrator flag must route to deploy-many (replaces group deploy — either/or)
+##   - Only DOCKER module names forwarded to deploy-many (R4)
+##   - result.deployed/failed mirror the deploy-many result (public observables)
 
 
 @pytest.mark.smoke
-def test_orchestrate_orchestrator_routing(caplog) -> None:
+def test_deploy_uses_public_observable(tmp_path, caplog) -> None:
     """
-    # ▶ mock _deploy_parallel → ◇ _route_deploy(deploy_parallel=True, deploy_orchestrator=True) → ⚡ assert flag forwarded → ⎋ pass | fail
+    # ▶ node.yaml (postgres,redis) → ⚡ orchestrate(deploy_parallel=True, deploy_orchestrator=True)
+    # → ◇ assert deploy-many gets the docker module list; group+seq workers NOT used → ⎋ pass | fail
     """
     caplog.set_level(logging.DEBUG)
-    logger.info("[IMP:7][test_orchestrate_orchestrator_routing] START — orchestrator routing check")
+    _write_module_yaml(tmp_path, "postgres", install_type="docker", severity="critical")
+    _write_module_yaml(tmp_path, "redis", install_type="docker", severity="warn")
+    node_yaml = _write_node_yaml(tmp_path, {"postgres": {"enabled": True}, "redis": {"enabled": True}})
+    logger.info("[IMP:7][test_deploy_uses_public_observable] START — DeployOrchestrator routing check")
 
+    # T8.2: маршрут тестируется через ПУБЛИЧНЫЙ orchestrate() + публичные observable результата.
+    # _deploy_orchestrator — subprocess-шов к внешнему CLI (orchestrator_cli deploy-many):
+    # единственная точка, где реальный subprocess заменён моком (DI-seam run_cmd недоступен
+    # через orchestrate()) — это НЕ пиннинг приватной декомпозиции маршрута.
     with (
-        mock.patch.object(orch, "_deploy_parallel", return_value=(0, [], {})) as mock_par,
-        mock.patch.object(orch, "_deploy_sequential", return_value=(0, [])) as mock_seq,
+        mock.patch.object(orch, "_preflight", return_value=None),
+        mock.patch.object(orch, "_postflight", return_value=None),
+        mock.patch.object(orch, "_interpolation_dryrun", return_value=[]),
+        mock.patch.object(orch.docker_orchestrator, "pre_pull_images", return_value=(2, 0)),
+        mock.patch.object(orch.secrets_validator, "batch_check_env", return_value=[]),
+        mock.patch.object(orch, "_deploy_orchestrator", return_value=(2, [])) as mock_deploy_many,
+        mock.patch.object(orch, "_deploy_system_modules", return_value=(0, [])),
+        mock.patch.object(orch, "_set_hc_marker"),
+        mock.patch.object(orch.docker_orchestrator, "deploy_docker_group", return_value=(2, 0, [], [])) as mock_group,
+        mock.patch.object(orch.docker_orchestrator, "deploy_docker_module", return_value=True) as mock_seq_deploy,
     ):
-        deployed, failed, modules_info = orch._route_deploy(
-            ["postgres", "redis"], {}, "/mods", "/core", deploy_parallel=True, deploy_orchestrator=True
+        result = orch.orchestrate(
+            str(node_yaml),
+            str(tmp_path / "modules"),
+            str(tmp_path / "core"),
+            str(tmp_path / "templates"),
+            deploy_parallel=True,
+            deploy_orchestrator=True,
         )
 
-    mock_par.assert_called_once_with(["postgres", "redis"], {}, "/mods", "/core", deploy_orchestrator=True)
-    mock_seq.assert_not_called()
-    assert deployed == 0 and failed == [], "Orchestrator route must propagate mocked (0, []) result"
-    assert modules_info == {}, "Orchestrator route returns mocked modules_info"
-    logger.info("[IMP:9][test_orchestrate_orchestrator_routing] ORCHESTRATOR flag forwarded to _deploy_parallel")
+    # DeployOrchestrator (deploy-many) получил список docker-модулей — observable маршрута
+    mock_deploy_many.assert_called_once()
+    passed_modules = mock_deploy_many.call_args.args[0]
+    assert list(passed_modules) == ["postgres", "redis"], f"deploy-many должен получить docker-модули: {passed_modules}"
+    mock_group.assert_not_called()
+    mock_seq_deploy.assert_not_called()
+    assert result.deployed == 2, f"Orchestrator route must report deployed=2, got {result.deployed}"
+    assert result.failed == [], f"Orchestrator route must report no failures, got {result.failed}"
+    assert result.exit_code == 0, f"Clean orchestrator deploy must exit 0, got {result.exit_code}"
+    logger.info(
+        "[IMP:9][test_deploy_uses_public_observable] DEPLOY_ORCHESTRATOR=true → deploy-many (deployed=%d failed=%s)",
+        result.deployed,
+        result.failed,
+    )
 
     assert_ldd_imp9(caplog)
 
 
-# 🧪 TRAP[TEST] · Regression: DEPLOY_ORCHESTRATOR=true must reach _deploy_parallel (DevPlan 089 T14)
-# · Scenario: _route_deploy(deploy_parallel=True, deploy_orchestrator=True) → parallel called with flag True
+# 🧪 TRAP[TEST] · Regression: DEPLOY_ORCHESTRATOR=true must route to DeployOrchestrator deploy-many
+# · Scenario: orchestrate(deploy_parallel=True, deploy_orchestrator=True) → deploy-many gets
+# ·   ["postgres","redis"]; group-based deploy + sequential worker NOT called; deployed=2 failed=[]
 # · Last fail: N/A
-# · Remove if: routing decision moves out of _route_deploy
-# endregion FUNC_test_orchestrate_orchestrator_routing
+# · Remove if: DEPLOY_ORCHESTRATOR routing moves out of orchestrate()
+# endregion FUNC_test_deploy_uses_public_observable
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -594,14 +664,15 @@ def test_postflight_selfheal_removes_orphans(tmp_path, caplog) -> None:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# DEPLOY PATHS (§9: parallel topo_sort, sequential iteration)
+# DEPLOY PATHS (§9: parallel topo_sort, sequential iteration — через orchestrate())
 # ══════════════════════════════════════════════════════════════════════════════
 
-# region FUNC_test_deploy_parallel_calls_topo_sort
-## @purpose  _deploy_parallel must call _topo_sort pipeline (load → filter → build_dag → kahn) and
-##           deploy each topo group via deploy_docker_group.
+# region FUNC_test_parallel_path_wires_topo_pipeline
+## @purpose  DEPLOY_PARALLEL=true path через ПУБЛИЧНЫЙ orchestrate(): _linearize_deploy_order
+##           pipeline (load → filter → build_dag → kahn) wired; each topo group deployed via
+##           docker_orchestrator.deploy_docker_group; result.deployed/failed — публичные observable.
 ## @io       tmp_path, caplog → None
-## @complexity 2 — mocked topo pipeline + group deploy assert
+## @complexity 2 — mocked topo pipeline + group deploy assert through orchestrate()
 ## @invariants
 ##   - kahn output groups deployed sequentially via deploy_docker_group (one call per group)
 ##   - deploy_docker_group entries use module:overlay format
@@ -609,18 +680,24 @@ def test_postflight_selfheal_removes_orphans(tmp_path, caplog) -> None:
 ##   - deploy_orchestrator=False → group-based deploy path (not deploy-many)
 
 
-def test_deploy_parallel_calls_topo_sort(tmp_path, caplog) -> None:
+def test_parallel_path_wires_topo_pipeline(tmp_path, caplog) -> None:
     """
-    # ▶ mock topo pipeline (2 docker modules → 2 groups) → ⚡ _deploy_parallel → ◇ assert topo + group calls → ⎋ pass | fail
+    # ▶ mock topo pipeline (2 docker modules → 2 groups) → ⚡ orchestrate(deploy_parallel=True) → ◇ assert topo + group calls → ⎋ pass | fail
     """
     caplog.set_level(logging.DEBUG)
-    logger.info("[IMP:7][test_deploy_parallel_calls_topo_sort] START — parallel topo wiring")
+    _write_module_yaml(tmp_path, "postgres", install_type="docker", severity="critical")
+    _write_module_yaml(tmp_path, "redis", install_type="docker", severity="warn")
+    node_yaml = _write_node_yaml(tmp_path, {"postgres": {"enabled": True}, "redis": {"enabled": True}})
+    logger.info("[IMP:7][test_parallel_path_wires_topo_pipeline] START — parallel topo wiring")
 
     modules_yamls = [
         {"name": "postgres", "install_type": "docker", "severity": "critical"},
         {"name": "redis", "install_type": "docker", "severity": "warn"},
     ]
     with (
+        mock.patch.object(orch, "_preflight", return_value=None),
+        mock.patch.object(orch, "_postflight", return_value=None),
+        mock.patch.object(orch, "_interpolation_dryrun", return_value=[]),
         mock.patch.object(orch.topo_sort, "load_module_yamls", return_value=modules_yamls) as mock_load,
         mock.patch.object(orch.topo_sort, "filter_docker_modules", return_value=modules_yamls) as mock_filter,
         mock.patch.object(orch.topo_sort, "build_dag", return_value={"postgres": [], "redis": []}) as mock_dag,
@@ -631,8 +708,13 @@ def test_deploy_parallel_calls_topo_sort(tmp_path, caplog) -> None:
         mock.patch.object(orch, "_deploy_system_modules", return_value=(0, [])) as mock_sys,
         mock.patch.object(orch, "_set_hc_marker") as mock_hc,
     ):
-        deployed, failed, modules_info = orch._deploy_parallel(
-            ["postgres", "redis"], {}, str(tmp_path / "modules"), str(tmp_path / "core"), deploy_orchestrator=False
+        result = orch.orchestrate(
+            str(node_yaml),
+            str(tmp_path / "modules"),
+            str(tmp_path / "core"),
+            str(tmp_path / "templates"),
+            deploy_parallel=True,
+            deploy_orchestrator=False,
         )
 
     mock_load.assert_called_once_with(str(tmp_path / "modules"))
@@ -645,11 +727,11 @@ def test_deploy_parallel_calls_topo_sort(tmp_path, caplog) -> None:
     # No system modules in mocked topo output → system deploy correctly skipped
     mock_sys.assert_not_called()
     mock_hc.assert_called_once()
-    assert deployed == 2, f"Expected deployed=2 (1 per group), got {deployed}"
-    assert failed == [], f"Expected no failures, got {failed}"
-    assert modules_info["postgres"]["severity"] == "critical", "modules_info must carry severity for aggregation"
+    assert result.deployed == 2, f"Expected deployed=2 (1 per group), got {result.deployed}"
+    assert result.failed == [], f"Expected no failures, got {result.failed}"
+    assert result.exit_code == 0, f"Clean parallel topo deploy must exit 0, got {result.exit_code}"
     logger.info(
-        "[IMP:9][test_deploy_parallel_calls_topo_sort] topo pipeline + %d group deploys wired correctly",
+        "[IMP:9][test_parallel_path_wires_topo_pipeline] topo pipeline + %d group deploys wired correctly",
         mock_group.call_count,
     )
 
@@ -660,37 +742,49 @@ def test_deploy_parallel_calls_topo_sort(tmp_path, caplog) -> None:
 # · Scenario: 2 docker modules, kahn → [[postgres],[redis]] → deploy_docker_group called once per group
 # · Last fail: N/A
 # · Remove if: parallel deploy order stops being topo-driven
-# endregion FUNC_test_deploy_parallel_calls_topo_sort
+# endregion FUNC_test_parallel_path_wires_topo_pipeline
 
 
-# region FUNC_test_deploy_sequential_iterates_modules
-## @purpose  _deploy_sequential iterates all enabled modules: docker → deploy_docker_module,
-##           system → invoke_module_interface install (+ liveness healthcheck).
+# region FUNC_test_sequential_path_iterates_modules
+## @purpose  orchestrate(deploy_parallel=False) iterates all enabled modules: docker →
+##           deploy_docker_module, system → invoke_module_interface install (+ liveness
+##           healthcheck). Assertions через ПУБЛИЧНЫЕ observable result.deployed/result.failed.
 ## @io       tmp_path, caplog → None
-## @complexity 2 — real detect_install_type on tmp module.yamls + mocked deploy calls
+## @complexity 2 — real detect_install_type on tmp module.yamls + mocked deploy calls through orchestrate()
 ## @invariants
-##   - 3 modules (2 docker + 1 system) → 3 deploy attempts, deployed=3
+##   - 3 modules (2 docker + 1 system) → 3 deploy attempts, result.deployed=3
 ##   - system module gets install + healthcheck liveness invocations
 ##   - docker modules get deploy_docker_module with modules_dir
 
 
-def test_deploy_sequential_iterates_modules(tmp_path, caplog) -> None:
+def test_sequential_path_iterates_modules(tmp_path, caplog) -> None:
     """
-    # ▶ tmp modules (postgres,redis docker + nginx system) → ⚡ _deploy_sequential → ◇ assert 3 deploys → ⎋ pass | fail
+    # ▶ tmp modules (postgres,redis docker + nginx system) → ⚡ orchestrate(deploy_parallel=False) → ◇ assert 3 deploys → ⎋ pass | fail
     """
     caplog.set_level(logging.DEBUG)
     _write_module_yaml(tmp_path, "postgres", install_type="docker", severity="critical")
     _write_module_yaml(tmp_path, "redis", install_type="docker", severity="warn")
     _write_module_yaml(tmp_path, "nginx", install_type="system", severity="critical")
-    logger.info("[IMP:7][test_deploy_sequential_iterates_modules] START — sequential iteration")
+    node_yaml = _write_node_yaml(
+        tmp_path,
+        {"postgres": {"enabled": True}, "redis": {"enabled": True}, "nginx": {"enabled": True}},
+    )
+    logger.info("[IMP:7][test_sequential_path_iterates_modules] START — sequential iteration")
 
     with (
+        mock.patch.object(orch, "_preflight", return_value=None),
+        mock.patch.object(orch, "_postflight", return_value=None),
+        mock.patch.object(orch, "_interpolation_dryrun", return_value=[]),
         mock.patch.object(orch.secrets_validator, "check_env_requires", return_value=[]) as mock_env,
         mock.patch.object(orch.docker_orchestrator, "deploy_docker_module", return_value=True) as mock_docker,
         mock.patch.object(orch, "_invoke_module_interface", return_value=True) as mock_invoke,
     ):
-        deployed, failed = orch._deploy_sequential(
-            ["postgres", "redis", "nginx"], str(tmp_path / "modules"), str(tmp_path / "core")
+        result = orch.orchestrate(
+            str(node_yaml),
+            str(tmp_path / "modules"),
+            str(tmp_path / "core"),
+            str(tmp_path / "templates"),
+            deploy_parallel=False,
         )
 
     assert mock_env.call_count == 3, f"env check must run per module, got {mock_env.call_count}"
@@ -698,14 +792,15 @@ def test_deploy_sequential_iterates_modules(tmp_path, caplog) -> None:
     mock_docker.assert_any_call(
         "postgres",
         modules_dir=str(tmp_path / "modules"),
-        overlay_dir=None,
+        # через публичный orchestrate() _resolve_overlay_dirs возвращает overlay="" (не None)
+        overlay_dir="",
         secrets_env_file=None,
         platform_root=None,
     )
     mock_docker.assert_any_call(
         "redis",
         modules_dir=str(tmp_path / "modules"),
-        overlay_dir=None,
+        overlay_dir="",
         secrets_env_file=None,
         platform_root=None,
     )
@@ -719,10 +814,13 @@ def test_deploy_sequential_iterates_modules(tmp_path, caplog) -> None:
     from core.internal.shared.timeouts import HEALTHCHECK_CMD_TIMEOUT
 
     mock_invoke.assert_any_call("nginx", "healthcheck", "liveness", timeout=HEALTHCHECK_CMD_TIMEOUT)
-    assert deployed == 3, f"Expected 3 deployed modules, got {deployed}"
-    assert failed == [], f"Expected no failures, got {failed}"
+    assert result.deployed == 3, f"Expected 3 deployed modules, got {result.deployed}"
+    assert result.failed == [], f"Expected no failures, got {result.failed}"
+    assert result.exit_code == 0, f"Clean sequential deploy must exit 0, got {result.exit_code}"
     logger.info(
-        "[IMP:9][test_deploy_sequential_iterates_modules] sequential deploy: deployed=%d failed=%s", deployed, failed
+        "[IMP:9][test_sequential_path_iterates_modules] sequential deploy: deployed=%d failed=%s",
+        result.deployed,
+        result.failed,
     )
 
     assert_ldd_imp9(caplog)
@@ -732,7 +830,7 @@ def test_deploy_sequential_iterates_modules(tmp_path, caplog) -> None:
 # · Scenario: 2 docker + 1 system module → 2× deploy_docker_module + 1× install + 1× liveness
 # · Last fail: N/A
 # · Remove if: sequential deploy path is removed
-# endregion FUNC_test_deploy_sequential_iterates_modules
+# endregion FUNC_test_sequential_path_iterates_modules
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -740,36 +838,48 @@ def test_deploy_sequential_iterates_modules(tmp_path, caplog) -> None:
 # ══════════════════════════════════════════════════════════════════════════════
 
 # region FUNC_test_sequential_order_follows_depends_on_two_level_dag
-## @purpose  TEST-29 (карточка REF-0110): order-test с РЕАЛЬНЫМ build_dag+kahn на 2-level DAG —
-##           порядок входного списка node.yaml ("app" раньше "base") НЕ авторитетен; деплой идёт
-##           по depends_on: base → app. До REF-0110 sequential шёл в порядке списка.
+## @purpose  TEST-29 (карточка REF-0110): order-test через ПУБЛИЧНЫЙ orchestrate() с РЕАЛЬНЫМ
+##           build_dag+kahn на 2-level DAG — порядок входного списка node.yaml ("app" раньше
+##           "base") НЕ авторитетен; деплой идёт по depends_on: base → app. До REF-0110
+##           sequential шёл в порядке списка.
 ## @io       tmp_path, caplog → None (реальный topo-пайплайн, моки только I/O-деплоя)
-## @complexity 2 — real load_module_yamls+build_dag+kahn через _deploy_sequential
+## @complexity 2 — real load_module_yamls+build_dag+kahn через orchestrate()
 ## @invariants
 ##   - deploy_docker_module вызывается в топологическом порядке ["base", "app"]
-##   - Оба модуля задеплоены, failed пуст
+##   - Оба модуля задеплоены, result.failed пуст
 
 
 def test_sequential_order_follows_depends_on_two_level_dag(tmp_path, caplog) -> None:
     """
-    # ▶ module.yamls: app depends_on [base] → ⚡ _deploy_sequential(["app","base"]) (real kahn)
+    # ▶ module.yamls: app depends_on [base] → ⚡ orchestrate(deploy_parallel=False) (real kahn)
     # → ◇ assert call order == [base, app] → ⎋ pass | fail
     """
     caplog.set_level(logging.DEBUG)
     _write_module_yaml(tmp_path, "base", install_type="docker", severity="critical")
     _write_module_yaml(tmp_path, "app", install_type="docker", severity="warn", depends_on=["base"])
+    # входной порядок node.yaml: app раньше base — НЕ авторитетен (REF-0110)
+    node_yaml = _write_node_yaml(tmp_path, {"app": {"enabled": True}, "base": {"enabled": True}})
     logger.info("[IMP:7][test_sequential_order_follows_depends_on] START — TEST-29 order check")
 
     with (
+        mock.patch.object(orch, "_preflight", return_value=None),
+        mock.patch.object(orch, "_postflight", return_value=None),
+        mock.patch.object(orch, "_interpolation_dryrun", return_value=[]),
         mock.patch.object(orch.secrets_validator, "check_env_requires", return_value=[]),
         mock.patch.object(orch.docker_orchestrator, "deploy_docker_module", return_value=True) as mock_docker,
     ):
-        deployed, failed = orch._deploy_sequential(["app", "base"], str(tmp_path / "modules"), str(tmp_path / "core"))
+        result = orch.orchestrate(
+            str(node_yaml),
+            str(tmp_path / "modules"),
+            str(tmp_path / "core"),
+            str(tmp_path / "templates"),
+            deploy_parallel=False,
+        )
 
     call_order = [call.args[0] for call in mock_docker.call_args_list]
     assert call_order == ["base", "app"], f"Deploy order must follow depends_on (base first), got {call_order}"
-    assert deployed == 2, f"Both modules must deploy, got {deployed}"
-    assert failed == [], f"No failures expected, got {failed}"
+    assert result.deployed == 2, f"Both modules must deploy, got {result.deployed}"
+    assert result.failed == [], f"No failures expected, got {result.failed}"
     logger.info("[IMP:9][test_sequential_order_follows_depends_on] order=%s (depends_on-aware)", call_order)
 
     assert_ldd_imp9(caplog)
@@ -782,45 +892,57 @@ def test_sequential_order_follows_depends_on_two_level_dag(tmp_path, caplog) -> 
 
 
 # region FUNC_test_sequential_critical_failure_aborts_remaining_groups
-## @purpose  REF-0110 abort semantics: critical-failure в группе G → все модули ПОСЛЕДУЮЩИХ групп
-##           добавляются в failed и НЕ деплоятся; сосед по группе G (независим, kahn) продолжается;
-##           warn-failure НЕ прерывает цикл (DEPLOY_BEST_EFFORT сохранён).
+## @purpose  REF-0110 abort semantics через orchestrate(): critical-failure в группе G → все
+##           модули ПОСЛЕДУЮЩИХ групп добавляются в result.failed и НЕ деплоятся; сосед по
+##           группе G (независим, kahn) продолжается; warn-failure НЕ прерывает цикл
+##           (DEPLOY_BEST_EFFORT сохранён).
 ## @io       tmp_path, caplog → None
 ## @complexity 2 — 3-module DAG: cache(no deps), db(critical, no deps), web(depends_on db)
 ## @invariants
 ##   - db critical fail → web aborted (в failed, deploy NOT attempted); cache (сосед по группе) deployed
-##   - IMP:10 abort log присутствует
+##   - result.deployed/result.failed — честные публичные observable; IMP:10 abort log присутствует
 
 
 def test_sequential_critical_failure_aborts_remaining_groups(tmp_path, caplog) -> None:
     """
-    # ▶ DAG cache|db(critical) → web → ⚡ _deploy_sequential, db fails → ◇ assert web aborted + IMP:10 → ⎋ pass | fail
+    # ▶ DAG cache|db(critical) → web → ⚡ orchestrate(deploy_parallel=False), db fails → ◇ assert web aborted + IMP:10 → ⎋ pass | fail
     """
     caplog.set_level(logging.DEBUG)
     _write_module_yaml(tmp_path, "cache", install_type="docker", severity="warn")
     _write_module_yaml(tmp_path, "db", install_type="docker", severity="critical")
     _write_module_yaml(tmp_path, "web", install_type="docker", severity="warn", depends_on=["db"])
+    node_yaml = _write_node_yaml(
+        tmp_path,
+        {"cache": {"enabled": True}, "db": {"enabled": True}, "web": {"enabled": True}},
+    )
     logger.info("[IMP:7][test_sequential_critical_failure_aborts] START — critical abort check")
 
     def _fail_db(name: str, **_kwargs: object) -> bool:
         return name != "db"
 
     with (
+        mock.patch.object(orch, "_preflight", return_value=None),
+        mock.patch.object(orch, "_postflight", return_value=None),
+        mock.patch.object(orch, "_interpolation_dryrun", return_value=[]),
         mock.patch.object(orch.secrets_validator, "check_env_requires", return_value=[]),
         mock.patch.object(orch.docker_orchestrator, "deploy_docker_module", side_effect=_fail_db) as mock_docker,
     ):
-        deployed, failed = orch._deploy_sequential(
-            ["cache", "db", "web"], str(tmp_path / "modules"), str(tmp_path / "core")
+        result = orch.orchestrate(
+            str(node_yaml),
+            str(tmp_path / "modules"),
+            str(tmp_path / "core"),
+            str(tmp_path / "templates"),
+            deploy_parallel=False,
         )
 
     # cache — сосед db по первой kahn-группе (независим) → деплоится; web (зависимая группа) — abort
     attempted = [call.args[0] for call in mock_docker.call_args_list]
     assert "cache" in attempted and "db" in attempted, f"cache+db must be attempted, got {attempted}"
     assert "web" not in attempted, f"Dependent 'web' must be aborted after critical 'db' failure, got {attempted}"
-    assert deployed == 1, f"Only cache deploys, got {deployed}"
-    assert failed == ["db", "web"], f"Honest failed accounting: [db, web], got {failed}"
+    assert result.deployed == 1, f"Only cache deploys, got {result.deployed}"
+    assert result.failed == ["db", "web"], f"Honest failed accounting: [db, web], got {result.failed}"
     assert "[abort]" in caplog.text and "[IMP:10]" in caplog.text, "Missing IMP:10 abort log"
-    logger.info("[IMP:9][test_sequential_critical_failure_aborts] attempted=%s failed=%s", attempted, failed)
+    logger.info("[IMP:9][test_sequential_critical_failure_aborts] attempted=%s failed=%s", attempted, result.failed)
 
     assert_ldd_imp9(caplog)
 
@@ -833,7 +955,7 @@ def test_sequential_critical_failure_aborts_remaining_groups(tmp_path, caplog) -
 
 # region FUNC_test_sequential_warn_failure_continues
 ## @purpose  Негатив к abort-semantics (R5): warn-failure НЕ прерывает sequential-цикл —
-##           DEPLOY_BEST_EFFORT сохранён для некритических отказов.
+##           DEPLOY_BEST_EFFORT сохранён для некритических отказов (через orchestrate()).
 
 
 def test_sequential_warn_failure_continues(tmp_path, caplog) -> None:
@@ -841,24 +963,40 @@ def test_sequential_warn_failure_continues(tmp_path, caplog) -> None:
     caplog.set_level(logging.DEBUG)
     _write_module_yaml(tmp_path, "m1", install_type="docker", severity="warn")
     _write_module_yaml(tmp_path, "m2", install_type="docker", severity="warn")
+    node_yaml = _write_node_yaml(tmp_path, {"m1": {"enabled": True}, "m2": {"enabled": True}})
     logger.info("[IMP:7][test_sequential_warn_failure_continues] START — warn continues")
 
     def _fail_m1(name: str, **_kwargs: object) -> bool:
         return name != "m1"
 
     with (
+        mock.patch.object(orch, "_preflight", return_value=None),
+        mock.patch.object(orch, "_postflight", return_value=None),
+        mock.patch.object(orch, "_interpolation_dryrun", return_value=[]),
         mock.patch.object(orch.secrets_validator, "check_env_requires", return_value=[]),
         mock.patch.object(orch.docker_orchestrator, "deploy_docker_module", side_effect=_fail_m1),
     ):
-        deployed, failed = orch._deploy_sequential(["m1", "m2"], str(tmp_path / "modules"), str(tmp_path / "core"))
+        result = orch.orchestrate(
+            str(node_yaml),
+            str(tmp_path / "modules"),
+            str(tmp_path / "core"),
+            str(tmp_path / "templates"),
+            deploy_parallel=False,
+        )
 
-    assert deployed == 1 and failed == ["m1"], f"warn-failure must continue cycle: {deployed}, {failed}"
+    assert result.deployed == 1 and result.failed == ["m1"], (
+        f"warn-failure must continue cycle: {result.deployed}, {result.failed}"
+    )
     assert "[abort]" not in caplog.text, "warn-failure must NOT trigger abort log"
-    logger.info("[IMP:9][test_sequential_warn_failure_continues] warn continued (deployed=%d)", deployed)
+    logger.info("[IMP:9][test_sequential_warn_failure_continues] warn continued (deployed=%d)", result.deployed)
 
     assert_ldd_imp9(caplog)
 
 
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · abort-semantics — warn-failure does NOT abort the cycle
+# · Scenario: m1 (warn) fails → m2 still deploys; deployed=1 failed=[m1]; no [abort] log
+# · Last fail: N/A — negative to test_sequential_critical_failure_aborts_remaining_groups
+# · Remove if: warn failures start aborting dependents
 # endregion FUNC_test_sequential_warn_failure_continues
 
 
@@ -933,13 +1071,16 @@ def test_orchestrate_cycle_propagates_config_validation_error(tmp_path, caplog) 
 
 
 # region FUNC_test_parallel_group_critical_failure_aborts_remaining_groups
-## @purpose  REF-0110 parallel-path abort: critical-failure группы → последующие группы в failed,
-##           deploy_docker_group для них НЕ вызывается.
+## @purpose  REF-0110 parallel-path abort через orchestrate(): critical-failure группы →
+##           последующие группы в result.failed, deploy_docker_group для них НЕ вызывается.
 
 
-def test_parallel_group_critical_failure_aborts_remaining_groups(caplog) -> None:
+def test_parallel_group_critical_failure_aborts_remaining_groups(tmp_path, caplog) -> None:
     """groups=[[postgres],[redis]], postgres critical fails → redis aborted, одна group-call."""
     caplog.set_level(logging.DEBUG)
+    _write_module_yaml(tmp_path, "postgres", install_type="docker", severity="critical")
+    _write_module_yaml(tmp_path, "redis", install_type="docker", severity="warn")
+    node_yaml = _write_node_yaml(tmp_path, {"postgres": {"enabled": True}, "redis": {"enabled": True}})
     modules_yamls = [
         {"name": "postgres", "install_type": "docker", "severity": "critical"},
         {"name": "redis", "install_type": "docker", "severity": "warn"},
@@ -947,6 +1088,9 @@ def test_parallel_group_critical_failure_aborts_remaining_groups(caplog) -> None
     logger.info("[IMP:7][test_parallel_group_critical_abort] START — group abort check")
 
     with (
+        mock.patch.object(orch, "_preflight", return_value=None),
+        mock.patch.object(orch, "_postflight", return_value=None),
+        mock.patch.object(orch, "_interpolation_dryrun", return_value=[]),
         mock.patch.object(orch.topo_sort, "load_module_yamls", return_value=modules_yamls),
         mock.patch.object(orch.topo_sort, "filter_docker_modules", return_value=modules_yamls),
         mock.patch.object(orch.topo_sort, "build_dag", return_value={"postgres": [], "redis": []}),
@@ -959,17 +1103,29 @@ def test_parallel_group_critical_failure_aborts_remaining_groups(caplog) -> None
         mock.patch.object(orch, "_deploy_system_modules", return_value=(0, [])),
         mock.patch.object(orch, "_set_hc_marker"),
     ):
-        deployed, failed, _info = orch._deploy_parallel(
-            ["postgres", "redis"], {}, "/mods", "/core", deploy_orchestrator=False
+        result = orch.orchestrate(
+            str(node_yaml),
+            str(tmp_path / "modules"),
+            str(tmp_path / "core"),
+            str(tmp_path / "templates"),
+            deploy_parallel=True,
+            deploy_orchestrator=False,
         )
 
     assert mock_group.call_count == 1, f"Only first group deploys, got {mock_group.call_count} calls"
-    assert deployed == 0, f"No successful deploys expected, got {deployed}"
-    assert failed == ["postgres", "redis"], f"Honest failed accounting incl. aborted dependents, got {failed}"
+    assert result.deployed == 0, f"No successful deploys expected, got {result.deployed}"
+    assert result.failed == ["postgres", "redis"], (
+        f"Honest failed accounting incl. aborted dependents, got {result.failed}"
+    )
+    assert result.exit_code == 2, f"Critical failure must exit 2, got {result.exit_code}"
     assert "[IMP:10][_deploy_docker_groups][abort]" in caplog.text, "Missing IMP:10 group-abort log"
-    logger.info("[IMP:9][test_parallel_group_critical_abort] failed=%s (redis aborted)", failed)
+    logger.info("[IMP:9][test_parallel_group_critical_abort] failed=%s (redis aborted)", result.failed)
 
     assert_ldd_imp9(caplog)
 
 
+# 🧪 TRAP[TEST] · Regression · REF-0110 · parallel group critical failure aborts remaining groups
+# · Scenario: groups=[[postgres],[redis]], postgres critical fails → redis in failed (one group-call), exit 2
+# · Last fail: карточка REF-0110 — group-failures не агрегировались, dependents стартовали против отката
+# · Remove if: parallel abort semantics changes
 # endregion FUNC_test_parallel_group_critical_failure_aborts_remaining_groups

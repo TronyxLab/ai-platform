@@ -424,7 +424,7 @@ def modules_dir(tmp_path) -> Path:
     mod_dir = tmp_path / "modules"
     pg_dir = mod_dir / "postgres"
     pg_dir.mkdir(parents=True)
-    (pg_dir / "compose.yaml").write_text("services:\n  postgres:\n    image: postgres:16\n")
+    (pg_dir / "compose.yaml").write_text("services:\n  postgres:\n    image: postgres:18.4\n")
     return mod_dir
 
 

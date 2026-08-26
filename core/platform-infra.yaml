@@ -107,6 +107,17 @@ provides:
   # Контракт networks (REF-0017): declares — ПОТРЕБИТЕЛЬСКИ-значимые сети; фактический
   # attach в composes может быть ШИРЕ (аддитивный attach — канон). Направление parity —
   # подмножество ⊆; enforce: tests/gates/test_gate_provides_networks_parity.py.
+  # [IMP:9][platform-infra] DR-M4 (DevPlan 016 TASK-7, 2026-08-27): СИСТЕМНАЯ выверка
+  # provides.networks ↔ docker-compose.base.yml всех 7 provides-модулей — SoT приведён
+  # к РАВЕНСТВУ с фактическим multi-network attach (не точечный патч). Каждая добавленная
+  # сеть — фактическое членство сервиса (alias в compose), поэтому равенство остаётся
+  # корректным подмножеством ⊆ для parity-гейта (additive attach легален, REF-0017):
+  #   postgres/redis — без изменений (уже равенство);
+  #   nginx      proxy-net → +observability-net (scrape-сеть модуля);
+  #   litellm    hermes-agent-net → +shared-db-net, +observability-net;
+  #   langfuse   hermes-agent-net → +shared-db-net, +observability-net;
+  #   minio      hermes-agent-net → +shared-db-net, +observability-net, +backup-net;
+  #   clickhouse hermes-agent-net → +observability-net.
   # ⚠️ TRAP[DECISION] · 2026-08-25 · — · url_template = контейнерно-слушающий порт
   # · (Docker DNS изнутри tenant-контейнера); поле port = host-facade для кросс-нодового
   # · peer-доступа (DevPlan 010 T2.2) и НЕ обязано совпадать с url_template
@@ -144,35 +155,54 @@ provides:
     host: nginx
     port: 443
     url_template: "https://${DOMAIN}"
+    # DR-M4 (2026-08-27): +observability-net — фактическое членство nginx +
+    # nginx-prometheus-exporter (scrape центральным Prometheus, alias nginx)
     networks:
       - proxy-net
+      - observability-net
   litellm:
     host: litellm
     port: 4000
     url_template: "http://litellm:4000"
+    # DR-M4 (2026-08-27): +shared-db-net (postgres-зависимость litellm), +observability-net
+    # (метрики Prometheus) — оба фактических членства сервиса (alias litellm)
     networks:
       - hermes-agent-net
+      - shared-db-net
+      - observability-net
   langfuse:
     host: langfuse
     port: 3001
     # url_template — слушающий контейнерный порт 3000 (compose маппинг :3001:3000);
     # port выше — host-facade (см. TRAP[DECISION] в шапке provides)
     url_template: "http://langfuse:3000"
+    # DR-M4 (2026-08-27): +shared-db-net (postgres langfuse), +observability-net —
+    # фактическое членство langfuse/langfuse-worker/langfuse-redis(-exporter) (alias langfuse)
     networks:
       - hermes-agent-net
+      - shared-db-net
+      - observability-net
   minio:
     host: minio
     port: 9000
     url_template: "http://minio:9000"
+    # DR-M4 (2026-08-27): +shared-db-net, +observability-net, +backup-net — фактическое
+    # членство minio/minio-init (alias minio на каждой сети); backup-net — канал backup-cron
     networks:
       - hermes-agent-net
+      - shared-db-net
+      - observability-net
+      - backup-net
   clickhouse:
     host: clickhouse
     port: 8123
     url_template: "http://clickhouse:8123"
     dsn_template: "clickhouse://clickhouse:8123/${NAME}"
+    # DR-M4 (2026-08-27): +observability-net — фактическое членство clickhouse
+    # (scrape :9363 / Grafana-запросы :8123, alias clickhouse)
     networks:
       - hermes-agent-net
+      - observability-net
 
 env_defaults:
   # ── Platform / Context ──

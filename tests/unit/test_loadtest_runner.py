@@ -1,7 +1,8 @@
-# GREP_SUMMARY: loadtest runner unit build-locust-args no-max-rps lt-target-rps lt-users rps-wait-time helper constant-throughput fallback
+# GREP_SUMMARY: loadtest runner unit build-locust-args no-max-rps lt-target-rps lt-users rps-wait-time helper constant-throughput fallback promql-pull node-side ssh no-tcp-forward
 # STRUCTURE: ▶ fake-config (SimpleNamespace) → ◇ _build_locust_args (no-rate-limit-flag / structure / parametrized)
 #           → ◇ _locust_env (LT_TARGET_RPS/LT_USERS, per-step override) → ◇ rps_wait_time (constant_throughput | fallback)
-#           → ⎋ 6 тестов, LDD IMP:7-10 траектория (Anti-Illusion Rule)
+#           → ◇ pull_promql_node_side (F-036: ssh_read без TCP-forwarding, SaturationResult из remote JSON)
+#           → ⎋ 7 тестов, LDD IMP:7-10 траектория (Anti-Illusion Rule)
 # region MODULE_CONTRACT
 ## @purpose  Unit-тесты runner_cli (DevPlan 146-m1 TASK-8, §$TEST_SPEC): регрессия BUG-1 —
 ##           _build_locust_args НЕ содержит rate-limit флага (--max-rps не существует
@@ -9,6 +10,10 @@
 ##           _locust_env (в capacity — per-step override); helper rps_wait_time
 ##           (core/loadtest/scenarios/__init__.py) строит constant_throughput
 ##           (per-user = target/users) или between(0.05, 0.2) fallback.
+##           F-036 (DevPlan 016 TASK-9): node-side PromQL-pull (runner_remote.
+##           pull_promql_node_side) — единичная read-only ssh-команда БЕЗ TCP-forwarding
+##           (REF-0016 AllowTcpForwarding=no preserved), SaturationResult реконструируется
+##           из remote JSON stdout.
 ## @scope    Чистые функции — без subprocess, без сети, без реального locust-прогона.
 ##           runner_cli НЕ импортирует locust (префлайт find_spec) — тесты build/env
 ##           работают в любом окружении; rps_wait_time-тесты требуют locust (load extra).
@@ -23,6 +28,7 @@
 ##            constant_throughput/between валидируют РЕАЛЬНЫЙ механизм locust 2.32
 ##            (пин <2.33 закреплён в pyproject.toml — TASK-6).
 ## @changes  2026-08-11 | DevPlan 146-m1 TASK-8 — Created (BUG-1 RPS-фикс)
+## @changes  2026-08-27 | DevPlan 016 TASK-9 — +test_promql_pull_without_tcp_forward (F-036 regression)
 # 📝 TRAP[DEBT] · 2026-08-11 · MED · CI setup-python-venv не устанавливает load extra → rps_wait_time-тесты skipped в CI
 # · Observed: .github/actions/setup-python-venv ставит только core/requirements.txt (locust — optional, вне [project].dependencies)
 # · Suspected: CI gate (static_audit) выполняет test_loadtest_runner.py без locust → importorskip → 2 skipped
@@ -41,12 +47,15 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from types import SimpleNamespace
 
 import pytest
 
+from core.internal.loadtest import prometheus_pull, runner_remote
 from core.internal.loadtest.runner_cli import _build_locust_args, _locust_env
+from core.internal.shared.ssh_opts import SSH_OPTS
 from tests.helpers.gate_helpers import assert_ldd_imp9
 
 pytestmark = pytest.mark.static_audit
@@ -296,3 +305,74 @@ def test_rps_wait_time_fallback(monkeypatch, caplog) -> None:
 
 
 # endregion TEST_rps_wait_time_fallback
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# F-036 node-side PromQL-pull — REF-0016 (AllowTcpForwarding=no) preserved
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+# region TEST_promql_pull_without_tcp_forward
+# 🧪 TRAP[TEST] · Scenario: F-036 регрессия — PromQL-pull НЕ требует TCP-forwarding;
+# · node-side pull реконструирует SaturationResult из remote JSON stdout
+# · Regression: node-side pull снова введёт ssh -L/-R/AllowTcpForwarding/-N/-f (REF-0016
+# ·   AllowTcpForwarding=no на ноде → туннель молча отвергается, pull зависает/падает)
+# · Last fail: 2026-08-25 — launch-validation F-036 (DevPlan 011 VerificationReport):
+# ·   локальный pull на :9090 блокирован AllowTcpForwarding=no
+# · Remove if: REF-0016 смягчён (sshd-исключение на порт Prometheus) ИЛИ pull-канал
+# ·   заменён на иной механизм (не ssh_read)
+def test_promql_pull_without_tcp_forward(caplog) -> None:
+    """Node-side PromQL-pull: единичный read-only ssh (без -L/-R/AllowTcpForwarding/-N/-f); SaturationResult из remote JSON."""
+    caplog.set_level(logging.INFO)
+    captured: dict = {}
+
+    def _fake_runner(cmd, timeout, check, non_fatal):
+        captured.setdefault("cmds", []).append(cmd)
+        captured["cmd"] = cmd
+        return SimpleNamespace(
+            returncode=0,
+            stderr="",
+            stdout=json.dumps({
+                "aggregates": {"cpu_nginx": {"avg": 0.5, "max": 0.6, "pct": 50.0}},
+                "missing_metrics": ["node_load1"],
+                "insufficient_metrics": [],
+            }),
+        )
+
+    result = runner_remote.pull_promql_node_side(
+        "203.0.113.10",
+        "root",
+        "/tmp/loadtest-123",
+        base_url="http://localhost:9090",
+        run_time=90,
+        t0=1700000000.0,
+        t1=1700000090.0,
+        timeout=120,
+        runner=_fake_runner,
+    )
+    argv = captured["cmd"]
+    logger.info("[IMP:9][test][promql_pull] ssh argv: %s", " ".join(argv))
+    assert_ldd_imp9(caplog)
+    # (1) REF-0016: ни одного TCP-forwarding токена в ssh argv (read-only ssh_read)
+    for token in argv:
+        assert token not in {"-L", "-R", "-N", "-f"}, f"forwarding-токен {token!r} в ssh argv"
+        assert "AllowTcpForwarding" not in token
+    # (2) Единичная read-only ssh-команда с CLI prometheus_pull.py (без второй команды/туннеля)
+    assert len(captured["cmds"]) == 1
+    assert argv[0] == "ssh"
+    assert argv[1:-2] == SSH_OPTS  # канонический набор флагов, без forwarding
+    assert argv[-2] == "root@203.0.113.10"
+    assert "prometheus_pull.py" in argv[-1]
+    assert "--base-url http://localhost:9090" in argv[-1]
+    assert "--run-time 90" in argv[-1]
+    assert "--t0 1700000000.0" in argv[-1]
+    assert "--t1 1700000090.0" in argv[-1]
+    assert "--timeout 120" in argv[-1]
+    # (3) SaturationResult реконструирован из remote JSON stdout (поля совпадают)
+    assert isinstance(result, prometheus_pull.SaturationResult)
+    assert result.aggregates["cpu_nginx"] == {"avg": 0.5, "max": 0.6, "pct": 50.0}
+    assert result.missing_metrics == ["node_load1"]
+    assert result.insufficient_metrics == []
+
+
+# endregion TEST_promql_pull_without_tcp_forward

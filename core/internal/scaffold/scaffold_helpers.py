@@ -462,7 +462,8 @@ node: {node_val}
 ##           gen_project_agents/gen_project_makefile). Разрешает node.yaml
 ##           (PROJECTS_BASE/org/node-configs/node/node.yaml) и platform-env.yaml
 ##           (repo root). Не перезаписывает существующий файл без маркеров (без force).
-## @param name         Project name
+## @param name         Project name (потребляется в IMP:9 log-траектории; имя проекта в сам
+##                     файл генератор выводит из project_dir/ai-platform.yaml — DevPlan 016 T7.3)
 ## @param org          Organization name
 ## @param node         Target node name
 ## @param domain       Domain (fallback для ${DOMAIN} подстановки)
@@ -475,9 +476,10 @@ node: {node_val}
 ##   - Node.yaml resolution: PROJECTS_BASE/org/node-configs/node/node.yaml
 ##   - platform-env.yaml: repo root (тот же канон, что project_scaffolder.gen_env_platform)
 ##   - Без PROJECTS_BASE → node_yaml_path="" → генератор рендерит warning-секцию (graceful)
+##   - name обязателен (keyword-контракт callers: scaffolder/adopter) и потребляется телом
+##     в log-траектории — тело не делегирует его генератору (имя выводится из project_dir)
 def gen_project_platform_md(
-    name: str,  # ruff: ignore[ARG001] — AI-0033 (T7.3): тело name не читает; параметр оставлен
-    #             для keyword-контракта callers (scaffolder/adopter/converge) без ломки
+    name: str,
     org: str = "",
     node: str = "",
     domain: str = "",
@@ -513,7 +515,7 @@ def gen_project_platform_md(
         force=force,
         domain=domain,
     )
-    logger.info("[IMP:9][helpers][platform_md] AI-PLATFORM.md %s: %s", status, target)
+    logger.info("[IMP:9][helpers][platform_md] AI-PLATFORM.md %s for %s: %s", status, name, target)
     return status
 
 

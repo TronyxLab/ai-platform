@@ -135,7 +135,7 @@ def modules_dir(tmp_path) -> Path:
     # postgres — uses compose.yaml
     pg_dir = mod_dir / "postgres"
     pg_dir.mkdir(parents=True)
-    (pg_dir / "compose.yaml").write_text("services:\n  postgres:\n    image: postgres:16\n", encoding="utf-8")
+    (pg_dir / "compose.yaml").write_text("services:\n  postgres:\n    image: postgres:18.4\n", encoding="utf-8")
 
     # redis — uses docker-compose.yaml
     redis_dir = mod_dir / "redis"

@@ -589,12 +589,12 @@ class TestS8:
         docker_probe["docker inspect --format {{json .}} abc123"] = self._inspect(
             json.dumps({
                 "Config": {
-                    "Image": "postgres:16@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+                    "Image": "postgres:18.4@sha256:1111111111111111111111111111111111111111111111111111111111111111"
                 },
                 "RepoDigests": ["sha256:1111111111111111111111111111111111111111111111111111111111111111"],
             })
         )
-        docker_probe["docker manifest inspect --verbose postgres:16"] = self._manifest(
+        docker_probe["docker manifest inspect --verbose postgres:18.4"] = self._manifest(
             json.dumps({
                 "Descriptor": {"digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"}
             })
@@ -639,12 +639,12 @@ class TestS8:
         docker_probe["docker inspect --format {{json .}} abc123"] = self._inspect(
             json.dumps({
                 "Config": {
-                    "Image": "postgres:16@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+                    "Image": "postgres:18.4@sha256:1111111111111111111111111111111111111111111111111111111111111111"
                 },
                 "RepoDigests": ["sha256:1111111111111111111111111111111111111111111111111111111111111111"],
             })
         )
-        docker_probe["docker manifest inspect --verbose postgres:16"] = self._manifest(
+        docker_probe["docker manifest inspect --verbose postgres:18.4"] = self._manifest(
             json.dumps({
                 "Descriptor": {"digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"}
             })
@@ -652,7 +652,7 @@ class TestS8:
         result = security_posture.check_image_freshness(ops=docker_probe)
         assert result.status == security_posture.STATUS_WARN
         assert "pin устарел" in result.message
-        assert "postgres:16" in result.message
+        assert "postgres:18.4" in result.message
 
     def test_warn_tag_based_newer(self, docker_probe):
         """Tag-based L2: локальный digest отличен от registry → WARN с рекомендацией пересборки."""
@@ -695,12 +695,12 @@ class TestS8:
         docker_probe["docker inspect --format {{json .}} abc123"] = self._inspect(
             json.dumps({
                 "Config": {
-                    "Image": "postgres:16@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+                    "Image": "postgres:18.4@sha256:1111111111111111111111111111111111111111111111111111111111111111"
                 },
                 "RepoDigests": ["sha256:1111111111111111111111111111111111111111111111111111111111111111"],
             })
         )
-        docker_probe["docker manifest inspect --verbose postgres:16"] = self._manifest(
+        docker_probe["docker manifest inspect --verbose postgres:18.4"] = self._manifest(
             "", rc=1, stderr='Error response from daemon: Get "https://registry-1.docker.io/v2/": dial tcp: i/o timeout'
         )
         result = security_posture.check_image_freshness(ops=docker_probe)
