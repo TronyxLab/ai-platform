@@ -1,6 +1,4 @@
 {
-  // Build-конфиг проекта (канон монорепо packages/*/tsconfig.build.json): эмит в dist/,
-  // только src/ (без vitest.config.ts). Проверка типов — tsconfig.json (tsc --noEmit).
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": false,

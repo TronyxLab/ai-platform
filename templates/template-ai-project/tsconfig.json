@@ -1,7 +1,4 @@
 {
-  // tsconfig.base-подход монорепо ai-project (packages/*/tsconfig.json extends ../../tsconfig.base.json):
-  // шаблон самодостаточен (проект вне монорепо) — базовые strict-опции инлайнятся здесь.
-  // noUncheckedIndexedAccess + exactOptionalPropertyTypes — обязательны (бриф §6.4, DoD W3).
   "compilerOptions": {
     "target": "ES2022",
     "module": "nodenext",
