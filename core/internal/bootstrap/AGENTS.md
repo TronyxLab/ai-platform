@@ -213,13 +213,24 @@ Timezone — канон UTC (backup-cron crontab 03:00-05:00 UTC); не пере
 **3. sops/secrets:** `node-configs/secrets/<NODE>.enc.yaml` (sops/age). Цепочка детекции ключа —
 node_detect.py (env → SOPS_AGE_KEY → FILE → ~/.config/age/keys.txt → /etc/age/key.txt restore-first).
 Проверка: `make secrets-unlock NODE=<NODE>`. Plaintext-ключ вне ноды — только в защищённом месте.
+Dev-машина без /opt: bare-NODE резолвится в репо `node-configs/<NODE>/secrets/<NODE>.enc.yaml`
+(plan 012 T18/F-013).
 
-**4. Bootstrap:** `make bootstrap-node NODE=<NODE> AGE_SECRET_KEY_FILE=~/.config/age/keys.txt`
+**4. Bootstrap (one-command, plan 012):** `make bootstrap-node NODE=<NODE> AGE_SECRET_KEY_FILE=~/.config/age/keys.txt`
 (dry-run: DRY_RUN=1). 9 INIT фаз (~30 мин), идемпотентен (повтор = no-op). Python 3.14 на ноде —
-deadsnakes PPA (φ1, FATAL); системный /usr/bin/python3 НЕ трогается.
+deadsnakes PPA (φ1, FATAL); системный /usr/bin/python3 НЕ трогается. Без единого ручного обхода:
+- **strict-init (T9)**: init-режим failed≠∅/crit>0 → exit 2 + state=failed (resumable — повтор доводит);
+  update-режим (φ12) сохраняет WARN→0 (DEPLOY_BEST_EFFORT, D2).
+- **Auto-inject ci_default (T3)**: optional+ci_default ключ, отсутствующий в матрице → дописан в
+  secrets.env с `# auto-injected ci_default (plan 012)` + WARN; required/generated missing → FAIL
+  со списком ДО φ8. Parity-гейт `${VAR:?}` ↔ SoT (test_gate_compose_interpolation_sot).
+- **Interpolation dry-run (T10)**: перед деплоем каждой группы `docker compose config --quiet`
+  с собранным env — первый unsatisfied `${VAR:?}` → FAIL со списком модулей ДО контейнеров.
+- **Post-bootstrap report (T17)**: после φ8.5 печатается summary (deployed/failed, TLS,
+  awaiting_projects, 3 next commands; JSON при REPORT_JSON=1).
 
 **5. Verify:** `make check-security NODE=<NODE>` (S1-S9) → `make e2e-verify NODE=<NODE>`
-(HTTP+TLS sweep) → `make converge NODE=<NODE>`.
+(HTTP+TLS sweep; ожидает ответ только от exposed-доменов — F-034) → `make converge NODE=<NODE>`.
 
 **6. Пост-bootstrap аудит:** registry-mirrors — если docker.io covered (кредами) → удалить
 mirrors из daemon.json (mirror.gcr.io даёт 404 на docker.io-пулах); fstab — убрать

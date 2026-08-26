@@ -399,9 +399,12 @@ projects: []
 
         _print_ldd_trajectory(caplog)
 
-    def test_stub_without_ghcr(self, tmp_path, caplog):
+    def test_stub_without_ghcr(self, tmp_path, caplog, monkeypatch):
         """Stub project, no GHCR image → warn status."""
         caplog.set_level(logging.INFO)
+        # plan 012 T18 (F-017): явный канон-путь — тест проверяет канон-структуру,
+        # dev-fallback (PROJECTS_BASE → ~/projects при недоступном /opt) НЕ должен вмешиваться.
+        monkeypatch.setenv("PROJECTS_BASE", "/opt/projects")
 
         content = """
 projects:
@@ -409,7 +412,7 @@ projects:
 """
         yaml_path = _make_node_yaml(tmp_path, content)
 
-        # reconcile_projects uses hardcoded /opt/projects path.
+        # reconcile_projects uses PROJECTS_BASE-resolved path (A3 + F-017).
         # Mock Path.is_dir to simulate directory exists, and
         # is_stub_project to simulate GENERATED-STUB detection.
         original_is_dir = Path.is_dir
@@ -440,9 +443,10 @@ projects:
         assert_ldd_imp9(caplog)
         _print_ldd_trajectory(caplog)
 
-    def test_already_deployed(self, tmp_path, caplog):
+    def test_already_deployed(self, tmp_path, caplog, monkeypatch):
         """Real ai-platform.yaml (already deployed) → skipped."""
         caplog.set_level(logging.INFO)
+        monkeypatch.setenv("PROJECTS_BASE", "/opt/projects")  # plan 012 T18 (F-017): канон-путь
 
         content = """
 projects:
@@ -492,9 +496,10 @@ projects:
         assert_ldd_imp9(caplog)
         _print_ldd_trajectory(caplog)
 
-    def test_dry_run_mode(self, tmp_path, caplog):
+    def test_dry_run_mode(self, tmp_path, caplog, monkeypatch):
         """Dry-run mode with stub + GHCR image → deployed count incremented but no actual deploy."""
         caplog.set_level(logging.INFO)
+        monkeypatch.setenv("PROJECTS_BASE", "/opt/projects")  # plan 012 T18 (F-017): канон-путь
 
         content = """
 projects:

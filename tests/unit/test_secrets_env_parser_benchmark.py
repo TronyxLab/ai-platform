@@ -34,6 +34,13 @@ logger = logging.getLogger(__name__)
 # ── Constants ───────────────────────────────────────────────────────────────
 
 # Performance thresholds
+# 📝 TRAP[DEBT] · 2026-08-26 · LO · DEV_THRESHOLD_MS=50 флакает под xdist-нагрузкой
+# (51ms при параллельном make check на dev-машине; standalone 0.23s, CI_THRESHOLD=100).
+# Observed: plan 012 волны 3-4 прогоны — 2 ложных FAIL за 5 прогонов (1-2ms сверх порога).
+# Suspected: CPU-конкуренция xdist-воркеров на dev; не регрессия парсера (мой код не тронут).
+# Impact: ложный RED make check на dev при высокой нагрузке.
+# When: plan 012 wave 3-4 verification. Rev: if флак повторится >2 раз/нед — поднять DEV
+# порог до CI_THRESHOLD или изолировать бенчмарк от xdist (single-process маркер).
 DEV_THRESHOLD_MS: float = 50.0  # Development threshold (fast local machine)
 CI_THRESHOLD_MS: float = 100.0  # CI gate threshold (accounting for runner variability)
 NUM_VARIABLES: int = 1000  # Number of variables to generate

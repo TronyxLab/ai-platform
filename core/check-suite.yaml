@@ -129,6 +129,11 @@ checks:
     # v1.0.1: cmd → facade pyright-hook.sh (вердикт по grep ': error:', резолв .venv/bin →
     # PATH; .venv/bin/basedpyright на CI-раннере не существует — pip ставит в system
     # site-packages из-за удалённого pyvenv.cfg). Единый измеритель make fix-pyright.
+    # 📝 TRAP[DEBT] · 2026-08-26 · LO · Полный pyright-прогон репо на dev-машине >120s при
+    # параллельной нагрузке (xdist) — таймаут 124 (пре-существующий флак, НЕ регрессия кода;
+    # изменённые файлы pyright-clean за ~110s). Suspected: хот-старт basedpyright + полный
+    # репо-скоуп; Impact: ложный RED make check на dev, CI не затронут (тихий/быстрый раннер).
+    # When: plan 012 волны 3-4 прогоны. Rev: if CI-прогон тоже стабильно >120s — поднять timeout до 180.
   - id: e2e-verify
     cmd: make e2e-verify NODE=<node>
     tier: static

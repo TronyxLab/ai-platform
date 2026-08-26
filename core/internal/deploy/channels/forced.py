@@ -95,14 +95,16 @@ class ForcedCommandChannel(DeliveryChannel):
         remote_cmd = f"receive {shlex.quote(payload.project_name)} {shlex.quote(version)}"
 
         # Build SSH command with piped tar
+        # plan 012 T18 (F-024): пустой key_file → НЕ добавлять `-i ""` (ssh падал
+        # «Warning: Identity file  not accessible» и использовал дефолтные ключи).
         ssh_cmd = [
             "ssh",
-            "-i",
-            key_file,
             *self.ssh_opts,
             remote_user,
             remote_cmd,
         ]
+        if key_file:
+            ssh_cmd[1:1] = ["-i", key_file]
 
         logger.info(
             "[IMP:8][ForcedCommandChannel][deliver] Delivering %s to %s via forced-command",

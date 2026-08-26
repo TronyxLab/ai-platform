@@ -462,6 +462,36 @@ def write_secrets_env(decrypted_data: str, output_path: str) -> None:
 _NODE_CONFIGS_SECRETS_DIR = "/opt/node-configs/secrets"  # nosec B108
 
 
+# region FUNC__resolve_dev_secrets_path
+## @purpose  plan 012 T18 (F-013): dev-резолв bare-NODE в репо node-configs/{NODE}/secrets/.
+##           Локальный dispatch: /opt/node-configs/secrets недоступен на dev-машине → ищем
+##           NODE_CONFIGS_DIR env → {repo}/node-configs → ~/projects layout. Remote-passthrough
+##           НЕ затрагивается (гейт test_gate_local_path_in_remote: локальные пути не форвардятся).
+## @io       ⇥ node_name: str → ⎋ str | None (путь к {NODE}.enc.yaml в dev-репо или None)
+## @complexity O(1) — 1-2 isfile probe
+## @invariants
+##   - NODE_CONFIGS_DIR env приоритетен (явный dev-репо); иначе CWD/node-configs
+##   - Только существующий {node-configs}/{NODE}/secrets/{NODE}.enc.yaml принимается
+##   - None при недоступности (вызывающий поднимает читаемую ошибку)
+def _resolve_dev_secrets_path(node_name: str) -> str | None:
+    """Resolve bare-NODE secrets in the dev repo layout (F-013), or None."""
+    base_env = os.environ.get("NODE_CONFIGS_DIR", "")
+    candidates: list[pathlib.Path] = []
+    if base_env:
+        candidates.append(pathlib.Path(base_env) / node_name / "secrets")
+    # CWD-канон: репо-корень проекта (dev-машина оператора)
+    candidates.append(pathlib.Path.cwd() / "node-configs" / node_name / "secrets")
+
+    for secrets_dir in candidates:
+        candidate = secrets_dir / f"{node_name}.enc.yaml"
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
+# endregion FUNC__resolve_dev_secrets_path
+
+
 def resolve_enc_path(enc_path: str | None, *, secrets_dir: str = _NODE_CONFIGS_SECRETS_DIR) -> str:
     """Resolve encrypted secrets file path (env → explicit path → bare NODE name → glob fallback).
 
@@ -498,11 +528,22 @@ def resolve_enc_path(enc_path: str | None, *, secrets_dir: str = _NODE_CONFIGS_S
     # ── Bare NODE name dispatch (REF-0013): make secrets-unlock NODE=<name> ──
     # Имя ноды — одиночный токен без разделителей пути и без yaml-суффикса.
     if enc_path and "/" not in enc_path and os.sep not in enc_path and not enc_path.endswith(".yaml"):
+        # Канон ноды: /opt/node-configs/secrets/<NODE>.enc.yaml
         candidate = pathlib.Path(secrets_dir) / f"{enc_path}.enc.yaml"
         if candidate.is_file():
             logger.info("[IMP:8][resolve_enc_path] NODE '%s' → %s", enc_path, candidate)
             return str(candidate)
-        msg: str = f"Encrypted secrets for node '{enc_path}' not found: {candidate} (no fallback to other nodes' files)"
+        # plan 012 T18 (F-013): dev-fallback — репо node-configs/<NODE>/secrets/<NODE>.enc.yaml
+        # (локальный dispatch; remote-passthrough не трогаем — гейт test_gate_local_path_in_remote).
+        # NODE_CONFIGS_DIR env → <repo>/node-configs; /opt-путь на dev отсутствует.
+        dev_fallback = _resolve_dev_secrets_path(enc_path)
+        if dev_fallback is not None:
+            logger.info("[IMP:8][resolve_enc_path] NODE '%s' → dev repo %s (F-013)", enc_path, dev_fallback)
+            return str(dev_fallback)
+        msg: str = (
+            f"Encrypted secrets for node '{enc_path}' not found: {candidate} "
+            f"(no fallback to other nodes' files; dev: node-configs/<NODE>/secrets/<NODE>.enc.yaml)"
+        )
         raise FileNotFoundError(msg)
 
     # ── Пустой вход → glob fallback (single-node канон) ──

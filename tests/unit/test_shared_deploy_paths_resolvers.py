@@ -18,6 +18,7 @@
 # endregion MODULE_CONTRACT
 
 import logging
+from pathlib import Path
 
 import pytest
 
@@ -102,14 +103,22 @@ def test_platform_remote_base_chain() -> None:
     )
 
 
-# 🧪 TRAP[TEST] · Regression · projects_base (A3)
-# · Scenario: PROJECTS_BASE env → /opt/projects
-# · Last fail: N/A (A3 — существующий резолвер)
+# 🧪 TRAP[TEST] · Regression · projects_base (A3) + plan 012 T18 (F-017 dev-fallback)
+# · Scenario: PROJECTS_BASE env приоритетнее; без env → /opt/projects если доступен,
+#   иначе dev-fallback ~/projects (F-017 — операторская машина без /opt/projects)
+# · Last fail: N/A (A3 — существующий резолвер); F-017 — ручная правка .env на dev
 # · Remove if: projects_base resolver removed
 def test_projects_base() -> None:
-    """projects_base → /opt/projects (default) или PROJECTS_BASE env."""
-    assert str(projects_base({})) == "/opt/projects"
+    """projects_base → PROJECTS_BASE env → /opt/projects → dev-fallback ~/projects (F-017)."""
+    # env приоритетен всегда (нода/CI/явный dev)
     assert str(projects_base({"PROJECTS_BASE": "/tmp/projects"})) == "/tmp/projects"
+    # Без env: канон /opt/projects, если он существует; иначе dev-fallback ~/projects
+    resolved = projects_base({})
+    if Path("/opt/projects").is_dir():
+        assert str(resolved) == "/opt/projects"
+    else:
+        assert str(resolved) == str(Path("~/projects").expanduser()), f"dev-fallback F-017: {resolved}"
+    logger.info("[IMP:9][test][projects_base] env-priority + dev-fallback PASS (resolved=%s)", resolved)
 
 
 # 🧪 TRAP[TEST] · Regression · run-артефакты (142 W2, B21)

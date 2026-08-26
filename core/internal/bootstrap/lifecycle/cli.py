@@ -695,7 +695,8 @@ def post_bootstrap_report(sm: StateMachine) -> None:
             from core.internal.shared.node_yaml import NodeYaml
 
             awaiting = [p.name for p in NodeYaml(node_yaml).get_project_entries() if p.name]
-        except Exception as exc:  # ruff: ignore[BLE001] — report non-blocking (T17 контракт)
+        # ruff: ignore[BLE001] — report best-effort (T17 контракт: никогда не роняет bootstrap)
+        except Exception as exc:  # noqa: EXC001 — report best-effort, non-blocking (T17 контракт)
             logger.warning("[IMP:7][report] node.yaml projects unreadable: %s", exc)
 
     report_lines = [

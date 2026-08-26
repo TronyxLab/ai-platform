@@ -30,7 +30,7 @@ LOADTEST_MODE ?= smoke
 ##   DevPlan 165: прогон журналируется (test_journal record — exit code);
 ##   rc прогона пробрасывается неизменным.
 load-test:
-	@python3 -m core.internal.loadtest.runner_cli \
+	@$(PYTHON) -m core.internal.loadtest.runner_cli \
 		--scenario $(LOADTEST_SCENARIO) --node $(LOADTEST_NODE) --mode $(LOADTEST_MODE); _rc=$$?; \
 	$(PYTHON) -m core.internal.shared.test_journal record --goal load-test --exit-code $$_rc || true; \
 	exit $$_rc

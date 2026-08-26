@@ -145,3 +145,38 @@ def test_ci_mk_node_validation_structural() -> None:
 
 
 # endregion FUNC_test_ci_mk_node_validation_structural
+
+
+# ═══════════════════════════════════════════════════════════════════
+# plan 012 T18 (F-013): dev-repo fallback для bare-NODE
+# ═══════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · REGRESSION · plan 012 T18 F-013 · dev-repo резолв bare-NODE
+# · Scenario: /opt-канон недоступен (dev-машина), NODE_CONFIGS_DIR → репо
+#   node-configs/<NODE>/secrets/<NODE>.enc.yaml существует → резолв из dev-репо
+# · Last fail: F-013 — make secrets-unlock NODE=X на dev требовал ручного SECRETS_FILE
+# · Remove if: dev-резолв перенесён в другой слой
+def test_dev_repo_fallback_resolves(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """F-013: bare-NODE резолвится в dev-репо node-configs/<NODE>/secrets/."""
+    dev_repo = tmp_path / "node-configs" / "my-dev-node" / "secrets"
+    dev_repo.mkdir(parents=True)
+    (dev_repo / "my-dev-node.enc.yaml").write_text("secrets: encrypted\n", encoding="utf-8")
+    monkeypatch.setenv("NODE_CONFIGS_DIR", str(tmp_path / "node-configs"))
+
+    resolved = resolve_enc_path("my-dev-node", secrets_dir=str(tmp_path / "opt" / "node-configs" / "secrets"))
+
+    assert resolved.endswith("node-configs/my-dev-node/secrets/my-dev-node.enc.yaml"), (
+        f"dev-fallback broken: {resolved}"
+    )
+    logger.info("[IMP:9][test][F-013] dev-repo fallback PASS")
+
+
+# 🧪 TRAP[TEST] · REGRESSION · plan 012 T18 F-013 · dev-резолв отсутствующего → читаемая ошибка
+# · Remove if: dev-резолв перенесён в другой слой
+def test_dev_repo_missing_still_raises(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """F-013: нода нет ни в каноне, ни в dev-репо → FileNotFoundError с именем."""
+    monkeypatch.setenv("NODE_CONFIGS_DIR", str(tmp_path / "node-configs"))
+    with pytest.raises(FileNotFoundError, match="no-such-node"):
+        resolve_enc_path("no-such-node", secrets_dir=str(tmp_path / "opt" / "node-configs" / "secrets"))
+    logger.info("[IMP:9][test][F-013] dev-repo missing → loud error PASS")

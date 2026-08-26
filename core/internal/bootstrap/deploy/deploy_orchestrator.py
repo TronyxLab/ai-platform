@@ -121,6 +121,8 @@ from core.internal.bootstrap.deploy.orchestrator_metrics import (
 )
 from core.internal.llm import config_renderer
 from core.internal.shared import deploy_paths  # 142 W2: status-metrics.json → persistent run
+from core.internal.shared.compose_files import resolve_compose_file  # plan 012 T10: публичный резолвер
+from core.internal.shared.compose_profiles import load_profiles as compose_profiles_load_profiles  # plan 012 T10
 
 # DevPlan 116 B4 T1 (U-39): deploy-политика best-effort — контракт, а не комментарии.
 # DEPLOY_BEST_EFFORT=True: failing step → WARN, деплой продолжается; WARN→exit 0; HC_DONE_MARKER всегда.
@@ -383,15 +385,18 @@ def _interpolation_dryrun(
     run = subprocess.run if runner is None else runner
     secrets_env = os.environ.get("SECRETS_ENV_FILE") or str(deploy_paths.secrets_env_file())
     docker_orchestrator.ensure_nginx_overlay_env(overlays.get("nginx") or os.environ.get("NGINX_OVERLAY_DIR"))
-    try:
-        full_profiles = docker_orchestrator._resolve_compose_profiles_from_infra()
-    except (KeyError, OSError) as exc:
-        logger.warning("[IMP:7][_interpolation_dryrun][profiles] infra profiles unavailable (%s) — skip dry-run", exc)
+    # plan 012 T10: публичный SoT-резолвер профилей (shared/compose_profiles) — БЕЗ приватного
+    # доступа docker_orchestrator._resolve_* (private-imports гейт).
+    full_profiles = ",".join(compose_profiles_load_profiles())
+    if not full_profiles:
+        logger.warning(
+            "[IMP:7][_interpolation_dryrun][profiles] COMPOSE_PROFILES empty in platform-infra.yaml (SoT) — skip dry-run"
+        )
         return []
 
     broken: list[tuple[str, str]] = []
     for name in enabled_names:
-        compose_file = docker_orchestrator._resolve_compose_file(os.path.join(modules_dir, name))
+        compose_file = resolve_compose_file(os.path.join(modules_dir, name))
         if compose_file is None:
             continue  # отсутствие compose-файла репортует сам деплой
         cmd = ["docker", "compose", "-f", str(compose_file)]

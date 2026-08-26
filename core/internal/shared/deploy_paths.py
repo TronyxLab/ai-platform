@@ -40,9 +40,12 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Mapping
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # ── Canonical Deploy Paths ──────────────────────────────────────────────────
 # These are the 6 documented code delivery mechanisms. Every deploy-related
@@ -152,20 +155,43 @@ def get_deprecated_paths() -> dict[str, dict[str, str]]:
 DEFAULT_PROJECTS_BASE: str = "/opt/projects"
 """## @invariant Канонический дефолт PROJECTS_BASE (совпадает с orchestrator/deploy_history/context_deployer)."""
 
+# plan 012 T18 (F-017): dev-fallback ~/projects — на dev-машине /opt/projects недоступен,
+# операторские проекты живут в ~/projects/<context>/<project>/; нода всегда имеет /opt/projects
+# (φ3 platform-setup создаёт) → fallback НЕ срабатывает на ноде/CI.
+_DEV_PROJECTS_BASE: str = "~/projects"
+
 
 # region FUNC_projects_base
 ## @purpose — Резолвер PROJECTS_BASE из env-цепочки (PROJECTS_BASE env → /opt/projects).
+##            plan 012 T18 (F-017): при незаданном env и недоступном каноническом /opt/projects —
+##            dev-fallback ~/projects (существующий) — операторская эргономика без ручного .env.
 ##            Единый резолвер для reconciler_projects и будущих потребителей (C7 — активация deploy_paths).
 ## @io — ⇥ env: dict | None (None = os.environ) → ⎋ Path
 ## @complexity — O(1)
 ## @invariants
 ##   - env PROJECTS_BASE приоритетнее дефолта (тот же канон, что orchestrator_cli/receive)
 ##   - Никогда не raise — всегда возвращает Path
+##   - dev-fallback: /opt/projects НЕ существует И ~/projects существует → ~/projects
+##     (нода: /opt/projects всегда есть → fallback не срабатывает; CI: env задан → не срабатывает)
 ##   - Параметр env позволяет тестировать без monkeypatch.setenv (tmp_path в тестах)
 def projects_base(env: Mapping[str, str] | None = None) -> Path:
-    """Resolve PROJECTS_BASE from the environment chain (env → /opt/projects)."""
+    """Resolve PROJECTS_BASE: env → /opt/projects → dev-fallback ~/projects (plan 012 T18/F-017)."""
     source = os.environ if env is None else env
-    return Path(str(source.get("PROJECTS_BASE", DEFAULT_PROJECTS_BASE)))
+    explicit = str(source.get("PROJECTS_BASE", "") or "")
+    if explicit:
+        return Path(explicit)
+    canonical = Path(DEFAULT_PROJECTS_BASE)
+    if canonical.is_dir():
+        return canonical
+    dev_candidate = Path(_DEV_PROJECTS_BASE).expanduser()
+    if dev_candidate.is_dir():
+        logger.info(
+            "[IMP:7][projects_base] Canonical %s unavailable — dev fallback %s (F-017)",
+            canonical,
+            dev_candidate,
+        )
+        return dev_candidate
+    return canonical
 
 
 # endregion FUNC_projects_base
