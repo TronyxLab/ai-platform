@@ -1,11 +1,10 @@
 """
 # GREP_SUMMARY: test-shared-compose-files, COMPOSE_FILENAMES, resolve-compose-file, requires-compose-project, A2, canon, docker-compose-base
 # STRUCTURE: ▶ test_canonical_tuple (exact order, no compose.yml) → ◇ test_resolve_priority [compose.yaml|base.yml|none] →
-#            ◇ test_requires_compose_project [true|false] → ⊕ LDD IMP:9 → ⎋
 # region MODULE_CONTRACT
 ## @purpose  Unit tests for shared/compose_files.py — единый SoT списков compose-файлов (DevPlan 118 A2).
 ## @scope    Verifies the canonical COMPOSE_FILENAMES tuple, resolve_compose_file priority order,
-##           and requires_compose_project semantics. No Docker required.
+##           and resolve_compose_file semantics. No Docker required.
 ## @invariants
 ##   - Canonical order: compose.yaml → docker-compose.yaml → docker-compose.yml → docker-compose.base.yml
 ##   - compose.yml — НЕ канонический (0 модулей в ФС + git-истории)
@@ -25,7 +24,6 @@ import pytest
 from core.internal.shared.compose_files import (
     COMPOSE_FILENAMES,
     PROJECT_COMPOSE_FILENAMES,
-    requires_compose_project,
     resolve_compose_file,
 )
 from tests._conftest.ldd import ldd_trajectory
@@ -110,25 +108,6 @@ def test_resolve_none_when_missing(caplog, tmp_path) -> None:
 
     assert resolved is None
     logger.critical("[IMP:9][test] resolve missing → None — OK")
-
-
-# 🧪 TRAP[TEST] · Regression · A2 — requires_compose_project semantics
-# · Scenario: dir with canonical compose → True; empty dir → False
-# · Last fail: N/A
-# · Remove if: requires_compose_project changes
-@ldd_trajectory
-def test_requires_compose_project(caplog, tmp_path) -> None:
-    """requires_compose_project True iff canonical compose file exists."""
-    caplog.set_level(logging.INFO)
-    mod_dir = tmp_path / "postgres"
-    mod_dir.mkdir()
-    (mod_dir / "docker-compose.base.yml").write_text("services: {}\n")
-    empty_dir = tmp_path / "no-compose"
-    empty_dir.mkdir()
-
-    assert requires_compose_project(str(mod_dir)) is True
-    assert requires_compose_project(str(empty_dir)) is False
-    logger.critical("[IMP:9][test] requires_compose_project True/False — OK")
 
 
 # 🧪 TRAP[TEST] · NEGATIVE (R5) · A2 — compose.yml must NOT resolve (non-canonical name)

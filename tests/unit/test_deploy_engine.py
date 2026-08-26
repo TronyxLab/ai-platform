@@ -53,6 +53,10 @@ from core.internal.deploy.deploy_engine import (
     ServiceDeployResult,
     StatusResult,
 )
+
+# AI-0056 (DevPlan 17 T6.6): шимы engine._* инlinedены — тесты зовут flow/lifecycle напрямую
+from core.internal.deploy.engine.flow import up_atomic
+from core.internal.deploy.engine.lifecycle import perform_rollback, save_previous_image
 from tests._conftest.ldd import _print_ldd_trajectory
 
 logger = logging.getLogger(__name__)
@@ -326,7 +330,7 @@ def test_atomic_up_success(deploy_boundary, engine, caplog):
     up_kwargs: list[dict] = []
     b.up.side_effect = lambda *_, **k: (up_kwargs.append(k), True)[1]
 
-    result = engine._atomic_up("/tmp", "app", "v1.0.0")
+    result = up_atomic("/tmp", "app", "v1.0.0")
 
     assert result is True
     assert up_kwargs[0].get("env_override") == {"IMAGE_TAG": "v1.0.0"}, (
@@ -462,7 +466,7 @@ def test_save_previous_image_exists(deploy_boundary, caplog, tmp_project, engine
     b.images.return_value = _cp(stdout="sha256:prev123\n")
     b.run.return_value = _cp(stdout="test-app:latest\n")
 
-    result = engine._save_previous_image(tmp_project, "app")
+    result = save_previous_image(tmp_project, "app")
 
     assert _print_ldd_trajectory(caplog)
     assert result is not None
@@ -481,7 +485,7 @@ def test_save_previous_image_first_deploy(deploy_boundary, caplog, tmp_project, 
     b = deploy_boundary
     b.images.return_value = _cp(stdout="")
 
-    result = engine._save_previous_image(tmp_project, "app")
+    result = save_previous_image(tmp_project, "app")
 
     assert _print_ldd_trajectory(caplog)
     assert result is None
@@ -592,7 +596,7 @@ def test_perform_rollback_success(deploy_boundary, caplog, tmp_project, engine):
     b.run.return_value = _cp(stdout="", stderr="")
     prev_image = ImageInfo(id="sha256:prev123", tag="test-app:prev")
 
-    result = engine._perform_rollback(tmp_project, "app", prev_image)
+    result = perform_rollback(tmp_project, "app", prev_image)
 
     assert _print_ldd_trajectory(caplog)
     assert result is True
@@ -607,7 +611,7 @@ def test_perform_rollback_no_image(caplog, engine):
     """_perform_rollback returns False with no previous image."""
     caplog.set_level(logging.INFO)
 
-    result = engine._perform_rollback("/tmp", "app", None)
+    result = perform_rollback("/tmp", "app", None)
 
     assert _print_ldd_trajectory(caplog)
     assert result is False

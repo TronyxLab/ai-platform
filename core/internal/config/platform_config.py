@@ -192,22 +192,6 @@ def default_s3_region() -> str:
 # endregion FUNC_default_s3_region
 
 
-# region FUNC_default_s3_prefix
-## @purpose  Get default S3 prefix for backups (SoT: platform-infra.yaml env_defaults.S3_PREFIX)
-## @io       None → ⎋ str ("" при отсутствии файла — fail-visible)
-## @complexity  O(1)
-def default_s3_prefix() -> str:
-    """Get default S3 prefix for backups.
-
-    Returns default from platform-env.yaml env_defaults.S3_PREFIX,
-    or "" if not found (fail-visible — без литерального fallback).
-    """
-    return get_default("S3_PREFIX")
-
-
-# endregion FUNC_default_s3_prefix
-
-
 # region FUNC_default_s3_bucket_sentinel
 ## @purpose  Get S3_BUCKET sentinel value — empty string signals graceful degradation
 ## @io       None → ⎋ "" (str)
@@ -263,22 +247,5 @@ def default_context_sentinel() -> str:
 
 # endregion FUNC_default_context_sentinel
 
-
-# region FUNC_default_platform_context
-## @purpose  Get default PLATFORM_CONTEXT value (SoT: platform-infra.yaml env_defaults.PLATFORM_CONTEXT)
-## @io       None → ⎋ str ("" при отсутствии файла — fail-visible)
-## @complexity  O(1)
-## @invariants  Без литерального fallback'а — fail-visible.
-##              Потребителей вне platform_config нет.
-def default_platform_context() -> str:
-    """Get default PLATFORM_CONTEXT value.
-
-    Returns default from platform-env.yaml env_defaults.PLATFORM_CONTEXT,
-    or "" if not found (fail-visible — без литерального fallback).
-    """
-    return get_default("PLATFORM_CONTEXT")
-
-
-# endregion FUNC_default_platform_context
 
 # endregion TYPED ACCESSORS

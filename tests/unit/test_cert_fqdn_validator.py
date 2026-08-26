@@ -32,7 +32,6 @@ import pytest
 
 from core.internal.shared.exceptions import ConfigValidationError
 from core.internal.shared.node_yaml import NodeYaml, ProjectEntry
-from core.internal.shared.project_registry import register_project
 from core.internal.shared.ssl_certs import validate_cert_domain_fqdn
 from tests._conftest.ldd import ldd_trajectory
 
@@ -155,21 +154,19 @@ def _write_node_yaml(tmp_path: Path) -> Path:
 
 @ldd_trajectory
 def test_register_project_rejects_invalid_domain(caplog, tmp_path: Path) -> None:
-    """register_project: невалидный домен → (False, msg), node.yaml НЕ мутируется."""
+    """Невалидный домен → ConfigValidationError на chokepoint, node.yaml НЕ мутируется.
+
+    AI-0058r (DevPlan 17 T6.4): register_project демонтирован вместе с CLI — тест
+    перенацелен на NodeYaml.add_project (chokepoint ВСЕХ mutation-путей).
+    """
     caplog.set_level(logging.INFO)
     yaml_path = _write_node_yaml(tmp_path)
 
-    ok, msg = register_project(
-        name="myproj",
-        repo="org/myproj",
-        node_yaml_path=str(yaml_path),
-        domain="../evil.com",
-    )
+    with pytest.raises(ConfigValidationError):
+        NodeYaml(str(yaml_path)).add_project(ProjectEntry(name="myproj", repo="org/myproj", domain="../evil.com"))
 
-    assert ok is False, "невалидный домен обязан отклоняться"
-    assert "Invalid domain" in msg or "FQDN" in msg, f"сообщение должно называть причину: {msg}"
     assert "projects: []" in yaml_path.read_text(encoding="utf-8"), "node.yaml не должен мутироваться"
-    logger.critical("[IMP:9][test] register_project fail-fast: traversal-домен отклонён до мутации")
+    logger.critical("[IMP:9][test] traversal-домен отклонён на chokepoint до мутации")
 
 
 @ldd_trajectory
@@ -187,18 +184,16 @@ def test_add_project_rejects_invalid_domain(caplog, tmp_path: Path) -> None:
 
 @ldd_trajectory
 def test_register_project_valid_domain_registers(caplog, tmp_path: Path) -> None:
-    """Позитив: легитимный домен регистрируется штатно (гейт не ломает канал)."""
+    """Позитив: легитимный домен регистрируется штатно (гейт не ломает канал).
+
+    AI-0058r (DevPlan 17 T6.4): перенацелен на NodeYaml.add_project chokepoint.
+    """
     caplog.set_level(logging.INFO)
     yaml_path = _write_node_yaml(tmp_path)
 
-    ok, _msg = register_project(
-        name="myproj",
-        repo="org/myproj",
-        node_yaml_path=str(yaml_path),
-        domain="app.example.com",
-    )
+    ny = NodeYaml(str(yaml_path))
+    ny.add_project(ProjectEntry(name="myproj", repo="org/myproj", domain="app.example.com"))
 
-    assert ok is True
     content = yaml_path.read_text(encoding="utf-8")
     assert "domain: app.example.com" in content
     logger.critical("[IMP:9][test] register с валидным доменом — канал регистрации работает")

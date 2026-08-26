@@ -43,7 +43,8 @@
 ## @see      core/entrypoint-manifest.yaml — target manifest file
 ## @changes 2026-07-22 | Created (DevPlan 051 Wave 2)
 ##           2026-07-30 | Added --check mode: byte-level comparison, exit 0/1, stderr diff
-##           2026-07-30 | G3 CYCLE BREAK: load_structural_sections() replaces load_existing_manifest()
+##           2026-07-30 | G3 CYCLE BREAK: load_structural_sections() — единственный loader;
+##           load_existing_manifest() демонтирован (AI-0058, DevPlan 17 T6.1)
 ##                        in main(). allowed_verbs and gates NEVER read from manifest (DevPlan 090 T6).
 ##           2026-08-03 | DevPlan 123 T2 (P-14): статический .PHONY-парсинг → PRIMARY;
 ##                        make -np → fallback; diff в --check — полный (не 20 строк)
@@ -346,33 +347,6 @@ def collect_gate_tests(tests_dir: str) -> _GatesMap:
     return gates
 
 
-def load_existing_manifest(path: str) -> _ManifestData:
-    """Load existing entrypoint-manifest.yaml (full load — backward compat).
-
-    ## @purpose  Read YAML manifest from disk. Loads ALL sections including allowed_verbs/gates.
-    ##            ⚠️ DEPRECATED for main() flow: use load_structural_sections() instead.
-    ##            Kept for backward compatibility with external consumers importing this function.
-    ## @io       ⇥ path: path to entrypoint-manifest.yaml
-    ##           → ⎋ dict: parsed YAML content (empty dict if file missing)
-    ## @complexity O(1) — single file read + parse
-    ## @invariants
-    ##   - Returns ALL keys from manifest, including allowed_verbs and gates
-    ##   - Missing file returns empty dict
-    """
-    print(f"[IMP:7][load_existing_manifest] Loading existing manifest from {path}", file=sys.stderr)
-    manifest_path = Path(path)
-    if not manifest_path.is_file():
-        print(f"[IMP:6][load_existing_manifest] Manifest not found at {path}, returning empty", file=sys.stderr)
-        return {}
-    with Path(str(manifest_path)).open(encoding="utf-8") as f:
-        # W11: yaml.safe_load returns Any → cast to opaque mapping boundary
-        data = cast(_ManifestData | None, yaml.safe_load(f))
-    if data is None:
-        data = {}
-    print(f"[IMP:9][load_existing_manifest] Loaded manifest with {len(data)} top-level keys", file=sys.stderr)
-    return data
-
-
 def load_structural_sections(path: str) -> _ManifestData:
     """Load structural sections ONLY from entrypoint-manifest.yaml — explicitly excludes allowed_verbs and gates.
 
@@ -662,7 +636,7 @@ def main(
     ##           → ⎋ exit code 0 on success/match, 1 on error/divergence
     ## @complexity O(T + N) where T=targets, N=gate tests
     ## @invariants
-    ##   - Uses load_structural_sections() NOT load_existing_manifest() — G3 cycle break
+    ##   - Uses load_structural_sections() ONLY (G3 cycle break; load_existing_manifest удалён)
     ##   - allowed_verbs/gates come EXCLUSIVELY from Makefile/pytest, never from manifest
     ## @rationale G3 CYCLE BREAK (DevPlan 090 T6): structural sections only from manifest
     ## @changes 2026-08-14 | DevPlan 167 D1 — +argv/open_fn DI-параметры (AF-4 + open-fn seam)

@@ -35,11 +35,15 @@ interfaces:
 # данные живут в docker-томах (langfuse-redis-data / postgres / clickhouse).
 spool_dir: none
 
+# AI-0005 (DevPlan 17 T6.7): агрегат по ВСЕМ сервисам модуля синхронно base.yml:
+#   limits       = 1536M(web) + 1024M(worker) + 128M(redis) + 128M(redis-exporter) = 2816M
+#   reservations = 512M(web) + 256M(worker) + 64M(redis) + 64M(redis-exporter)     = 896M
+# Сверяются гейтом test_memory_limits (langfuse-case: limits+reservations).
 resources:
   limits:
-    memory: 1536M
+    memory: 2816M
   reservations:
-    memory: 512M
+    memory: 896M
 
 env_requires:
   - NEXTAUTH_SECRET

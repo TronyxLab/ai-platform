@@ -94,13 +94,7 @@ def test_yaml_branch_uses_canon_grammar(yaml_line: str, expected: str) -> None:
 # · Last fail: контрсценарий-охранник T5.5 (DevPlan 17)
 # · Remove if: вместе с test_quoted_hash_identical_across_parsers
 def test_last_match_and_multiline(tmp_path: Path) -> None:
-    content = (
-        "# header comment\n"
-        "\n"
-        'FOO="first"\n'
-        "BAR=x\n"
-        "FOO=second # wins"
-    )
+    content = '# header comment\n\nFOO="first"\nBAR=x\nFOO=second # wins'
     path = _write(tmp_path, content)
     assert env_reader.get_env_value(Path(path), "FOO") == "second"
     assert secrets_env_parser.parse(path)["FOO"] == "second"

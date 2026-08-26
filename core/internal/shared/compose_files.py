@@ -3,7 +3,6 @@
 # STRUCTURE: ▶ COMPOSE_FILENAMES (canonical order) → PROJECT_COMPOSE_FILENAMES (payload subset) →
 #            PROJECT_PAYLOAD_FILENAMES (единый file-list tar-payload: compose + platform-файлы) →
 #            ◇ resolve_compose_file ┌module_dir┐ → ⚡ scan canon order → ⎋ Path|None →
-#            ◇ requires_compose_project ┌module_dir┐ → ⎋ bool
 # region MODULE_CONTRACT
 ## @purpose  Единый SoT списков compose-файлов и резолва compose-файла в директории модуля/проекта
 ##           (DevPlan 118 A2). Устраняет 6 расходящихся кортежей (docker_orchestrator, converge/runtime,
@@ -23,7 +22,6 @@
 ##   5. PROJECT_COMPOSE_FILENAMES — подмножество для tar-payload'ов (whitelist deliver-канала):
 ##      docker-compose.yml, compose.yaml. docker-compose.base.yml НЕ в payload — модульный паттерн.
 ##   6. resolve_compose_file: первый существующий файл в порядке COMPOSE_FILENAMES → Path | None
-##   7. requires_compose_project: True iff resolve_compose_file находит файл (docker-модуль)
 ## @rationale U-13/парадигма sole-path: 6 копий списков = правка канона в 6 местах. Калибровочный
 ##            grep по core/internal/*.py выявил 6 потребителей (5 из DevPlan + orphan_reconciler).
 ##            ФС-проверка core/modules/* показала: все 14 docker-модулей — только docker-compose.base.yml;
@@ -103,18 +101,3 @@ def resolve_compose_file(module_dir: str | Path) -> Path | None:
 
 
 # endregion FUNC_resolve_compose_file
-
-
-# region FUNC_requires_compose_project
-## @purpose  Проверить, является ли директория compose-проектом (docker-модулем).
-## @io       ⇥ module_dir: str | Path → ⎋ bool (True = есть канонический compose-файл)
-## @complexity O(4) — делегирование в resolve_compose_file
-## @invariants
-##   - True iff resolve_compose_file находит файл
-##   - Используется converge (runtime/volumes) для пропуска не-docker модулей
-def requires_compose_project(module_dir: str | Path) -> bool:
-    """Return True if the directory contains a canonical compose file (docker module)."""
-    return resolve_compose_file(module_dir) is not None
-
-
-# endregion FUNC_requires_compose_project

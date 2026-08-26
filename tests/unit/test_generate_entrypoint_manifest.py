@@ -1,6 +1,6 @@
 """
-# GREP_SUMMARY: test_generate_entrypoint_manifest, extract_phony_targets, collect_gate_tests, merge, load_existing_manifest, load_structural_sections, tmp_path, g3-cycle-break
-# STRUCTURE: ▶ merge 3× (preserves-sections/replaces-allowed/replaces-gates) → ▶ extract_phony_targets 2× (gmake/grep) → ▶ load_existing_manifest 2× (valid/missing) → ▶ load_structural_sections 3× (excludes/missing/preserves) → ⎋ LDD trajectory
+# GREP_SUMMARY: test_generate_entrypoint_manifest, extract_phony_targets, collect_gate_tests, merge, load-structural-sections, tmp-path, g3-cycle-break
+# STRUCTURE: ▶ merge 3× (preserves-sections/replaces-allowed/replaces-gates) → ▶ extract_phony_targets 2× (gmake/grep) → ▶ load_structural_sections 3× (excludes/missing/preserves) → ⎋ LDD trajectory
 # region MODULE_CONTRACT
 ## @purpose  Unit tests for generate_entrypoint_manifest.py — merge(), extract_phony_targets(),
 ##           load_existing_manifest(), load_structural_sections(). No subprocess calls in merge tests.
@@ -177,51 +177,10 @@ def test_extract_phony_targets_grep_fallback(caplog, tmp_path):
 
 # endregion Tests: extract_phony_targets (grep fallback)
 
-# region Tests: load_existing_manifest
+# region Tests: load_existing_manifest — DEMOTED (AI-0058, DevPlan 17 T6.1)
 # ═══════════════════════════════════════════════════════════════════
-
-
-# 🧪 TRAP[TEST] · Regression · load_existing_manifest loads valid YAML file
-# · Scenario: tmp_path with valid YAML → returns parsed dict
-# · Last fail: N/A (new test)
-# · Remove if: load_existing_manifest logic changes
-@ldd_trajectory
-def test_load_existing_manifest(caplog, tmp_path):
-    """load_existing_manifest should parse existing YAML manifest file."""
-    manifest_file = tmp_path / "manifest.yaml"
-    manifest_data = {
-        "bootstrap": [{"make_target": "bootstrap-node"}],
-        "allowed_verbs": ["deploy", "test"],
-    }
-    with Path(str(manifest_file)).open("w", encoding="utf-8") as f:
-        yaml.dump(manifest_data, f)
-
-    result = gem.load_existing_manifest(str(manifest_file))
-    assert result["allowed_verbs"] == ["deploy", "test"], "allowed_verbs should be loaded"
-
-    logger.critical("[IMP:9][test] load_existing_manifest loaded %d keys", len(result))
-
-
-# 🧪 TRAP[TEST] · Regression · missing-file loaders → {} (параметризовано, F5)
-# · Scenario: Non-existent path → returns empty dict
-# · Last fail: N/A (new test)
-# · Remove if: loader logic changes
-@ldd_trajectory
-@pytest.mark.parametrize(
-    "load_missing",
-    [
-        lambda: gem.load_existing_manifest("/tmp/nonexistent_manifest.yaml"),
-        lambda: gem.load_structural_sections("/tmp/nonexistent_structural_manifest.yaml"),
-    ],
-)
-def test_loaders_missing_file_returns_empty(caplog, load_missing):
-    """load_existing_manifest/load_structural_sections → {} для missing file."""
-    result = load_missing()
-    assert result == {}, f"Expected empty dict, got {result}"
-
-    logger.critical("[IMP:9][test] missing-file loader returns {}")
-
-
+# Функция load_existing_manifest() демонтирована вместе с её тестами;
+# missing-file семантику покрывает test_load_structural_sections_missing_file.
 # ═══════════════════════════════════════════════════════════════════
 
 # endregion Tests: load_existing_manifest

@@ -56,7 +56,6 @@ from core.internal.deploy.engine.lifecycle import (
     save_previous_image,
 )
 from core.internal.deploy.engine.results import (
-    ImageInfo,
     RemoveResult,
     ServiceDeployResult,
     StatusResult,
@@ -485,54 +484,6 @@ class DeployEngine:
         run_preflight(project_dir, service, self._validate_script)
 
     # endregion FUNC__preflight_checks
-
-    # region FUNC__save_previous_image
-    ## @purpose  Save current image ID before pull (enables rollback). API-compat шim:
-    ##           реализация — engine/lifecycle.save_previous_image (170 W4-B2).
-    ## @io       ⇥ project_dir, service → ⎋ Optional[ImageInfo]
-    ## @complexity — O(1) — one docker compose images call + optional docker inspect
-    @staticmethod
-    def _save_previous_image(project_dir: str, service: str) -> ImageInfo | None:
-        """Save current image ID and tag before deploy (delegates to engine.lifecycle)."""
-        return save_previous_image(project_dir, service)
-
-    # endregion FUNC__save_previous_image
-
-    # region FUNC__atomic_up
-    ## @purpose  Execute docker compose up -d for single service. API-compat shim:
-    ##           реализация — engine/flow.up_atomic (170 W4-B2).
-    ## @io       ⇥ project_dir, service, ref → ⎋ bool
-    ## @complexity — O(1) — делегирование в shared docker_compose_up
-    @staticmethod
-    def _atomic_up(project_dir: str, service: str, ref: str) -> bool:
-        """Start service via docker compose up -d (delegates to engine.flow.up_atomic)."""
-        return up_atomic(project_dir, service, ref)
-
-    # endregion FUNC__atomic_up
-
-    # region FUNC__perform_rollback
-    ## @purpose  Rollback to previous image: re-tag + docker compose up --force-recreate.
-    ##           API-compat shim: реализация — engine/lifecycle.perform_rollback (170 W4-B2).
-    ## @io       ⇥ project_dir, service, previous_image → ⎋ bool
-    ## @complexity — O(1) — tag + compose up calls
-    @staticmethod
-    def _perform_rollback(project_dir: str, service: str, previous_image: ImageInfo | None) -> bool:
-        """Rollback to previous image (delegates to engine.lifecycle.perform_rollback)."""
-        return perform_rollback(project_dir, service, previous_image)
-
-    # endregion FUNC__perform_rollback
-
-    # region FUNC__handle_first_deploy
-    ## @purpose  Handle first deploy failure — no rollback possible, escalate.
-    ##           API-compat shim: реализация — engine/lifecycle.handle_first_deploy (170 W4-B2),
-    ##           которая делегирует в deploy/first_deploy.py (DevPlan 119 E4).
-    ## @io       ⇥ project, service, ref, reason → ⎋ None (raises PlatformFatalError, exit 10)
-    @staticmethod
-    def _handle_first_deploy(project: str, service: str, ref: str, reason: str) -> None:
-        """Handle first deploy failure — no rollback possible (delegates to engine.lifecycle)."""
-        handle_first_deploy(project, service, ref, reason)
-
-    # endregion FUNC__handle_first_deploy
 
 
 # endregion CLASS_DeployEngine

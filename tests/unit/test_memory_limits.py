@@ -38,6 +38,8 @@ _COMPOSE_FILES = {
     "logging": _REPO_ROOT / "core" / "modules" / "logging" / "docker-compose.base.yml",
     "log-collector": _REPO_ROOT / "core" / "modules" / "log-collector" / "docker-compose.base.yml",
     "clickhouse": _REPO_ROOT / "core" / "modules" / "clickhouse" / "docker-compose.base.yml",
+    # AI-0005 (DevPlan 17 T6.7): langfuse — web+worker
+    "langfuse": _REPO_ROOT / "core" / "modules" / "langfuse" / "docker-compose.base.yml",
 }
 
 _MODULE_YAMLS = {
@@ -46,6 +48,8 @@ _MODULE_YAMLS = {
     "logging": _REPO_ROOT / "core" / "modules" / "logging" / "module.yaml",
     "log-collector": _REPO_ROOT / "core" / "modules" / "log-collector" / "module.yaml",
     "clickhouse": _REPO_ROOT / "core" / "modules" / "clickhouse" / "module.yaml",
+    # AI-0005 (DevPlan 17 T6.7): langfuse — web+worker, агрегатные resources
+    "langfuse": _REPO_ROOT / "core" / "modules" / "langfuse" / "module.yaml",
 }
 
 # Канон DevPlan 144 W3: минимальный лимит каждого ключевого сервиса (bytes)
@@ -147,7 +151,9 @@ def test_module_yaml_sync_all(caplog) -> None:
     caplog.set_level(logging.INFO)
     for module in ("node-metrics", "service-exporters", "logging", "log-collector", "clickhouse"):
         _assert_module_yaml_sync(_MODULE_YAMLS[module], _compose_data(module))
-    logger.info("[IMP:9][test_memory_limits] module.yaml resources sync (4 modules) PASS")
+    # AI-0005 (DevPlan 17 T6.7): langfuse — web+worker+redis+exporter в сумме лимитов
+    _assert_module_yaml_sync(_MODULE_YAMLS["langfuse"], _compose_data("langfuse"))
+    logger.info("[IMP:9][test_memory_limits] module.yaml resources sync (+langfuse web+worker) PASS")
 
 
 # 🧪 TRAP[TEST] · NEGATIVE (R5) · cadvisor 128M/256M — DevPlan 144 W3 (D2)
@@ -217,3 +223,43 @@ def test_clickhouse_limit_negative_removed(tmp_path: Path) -> None:
     compose = yaml.safe_load(compose_file.read_text(encoding="utf-8"))
     with pytest.raises(AssertionError):
         _assert_memory_limit(compose, "clickhouse", _CANON_MIN_LIMITS["clickhouse"])
+
+
+# 🧪 TRAP[TEST] · 2026-08-26 · P2 · langfuse reservations синхронны base.yml (AI-0005)
+# · Regression: compose держал worker (1024M) и web без reservations, module.yaml
+#   декларировал только web — рассинхрон заявки ресурсов не ловился никем
+# · Scenario: module.yaml resources.reservations.memory == сумме reservations всех
+#   langfuse-сервисов base.yml (web 512M + worker 256M = 768M); limits == сумма (2560M)
+# · Last fail: DevPlan 17 верификация @64c2090 (аудит AI-0005)
+# · Remove if: langfuse переходит на per-service модель resources в module.yaml
+@r1_delegates
+def test_langfuse_resources_sync(caplog) -> None:
+    """langfuse: module.yaml limits/reservations == суммы compose web+worker."""
+    caplog.set_level(logging.INFO)
+    import yaml as _yaml
+
+    mod = _yaml.safe_load(_MODULE_YAMLS["langfuse"].read_text(encoding="utf-8"))
+    compose = _compose_data("langfuse")
+
+    services = sorted(compose["services"])  # все сервисы модуля (агрегат)
+    assert "langfuse" in services and "langfuse-worker" in services, f"compose обязан содержать web+worker: {services}"
+
+    def _reservations(service: str) -> int:
+        res = compose["services"][service].get("deploy", {}).get("resources", {}).get("reservations", {})
+        assert "memory" in res, f"{service}: deploy.resources.reservations.memory отсутствует (T6.7)"
+        return _parse_memory(res["memory"])
+
+    limits_sum = sum(_service_memory_limit(compose, n) for n in services)
+    res_sum = sum(_reservations(n) for n in services)
+
+    mod_limits = _parse_memory(mod["resources"]["limits"]["memory"])
+    mod_res = _parse_memory(mod["resources"]["reservations"]["memory"])
+
+    print(f"[IMP:8][langfuse] services={services} limits_sum={limits_sum} res_sum={res_sum}")
+    assert mod_limits == limits_sum, (
+        f"module.yaml limits {mod_limits} != суммы compose-лимитов {limits_sum} (web 1536M + worker 1024M)"
+    )
+    assert mod_res == res_sum, (
+        f"module.yaml reservations {mod_res} != суммы compose-reservations {res_sum} (web 512M + worker 256M)"
+    )
+    logger.critical("[IMP:9][test_memory_limits] langfuse resources sync (web+worker, limits+reservations) — OK")
