@@ -75,7 +75,12 @@ def ensure_age_key(age_key: Path, env: dict[str, str]) -> tuple[bool, str]:
     mode = _mode_of(age_key)
     if owner != "root:root":
         logger.info("[IMP:8][platform-secrets][prereqs] Age key owner is %s, fixing to root:root", owner)
-        _chown(age_key)
+        import os
+
+        if not _chown(age_key) and hasattr(os, "geteuid") and os.geteuid() == 0:
+            # AI-0052r: под root неудачный chown = реальная misconfiguration → prereq fail
+            logger.error("[IMP:8][platform-secrets][prereqs] chown failed under root — failing prerequisite")
+            return False, f"Cannot chown {age_key} to root:root"
     if mode != "600":
         logger.info("[IMP:8][platform-secrets][prereqs] Age key mode is %s, fixing to 600", mode)
         age_key.chmod(0o600)
@@ -279,10 +284,20 @@ def _mode_of(path: Path) -> str:
         return "unknown"
 
 
-def _chown(path: Path) -> None:
-    """chown root:root (best-effort subprocess — локальные тесты могут не иметь прав)."""
-    with contextlib.suppress(OSError, subprocess.TimeoutExpired):
-        subprocess.run(["chown", "root:root", str(path)], check=False, timeout=_SYSTEMCTL_TIMEOUT)
+def _chown(path: Path) -> bool:
+    """chown root:root; False при неудаче (warn — AI-0052r, DevPlan 17 T3.5).
+
+    Локальные тесты без root получают warn, но не падают; под root неудача
+    чинится вызывающим в prereq-fail (fail-closed).
+    """
+    try:
+        result = subprocess.run(["chown", "root:root", str(path)], check=False, timeout=_SYSTEMCTL_TIMEOUT)
+        ok = result.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        ok = False
+    if not ok:
+        logger.warning("[IMP:8][platform-secrets][prereqs] chown root:root failed for %s", path)
+    return ok
 
 
 def _platform_gid() -> str:

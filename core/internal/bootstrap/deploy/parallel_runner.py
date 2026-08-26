@@ -96,8 +96,15 @@ def pull_module_images(
         if "build:" in content:
             logger.info("[IMP:7][pull_module_images][skip] Local build detected for %s — skipping pull", mod_name)
             return True
-    except OSError:
-        pass
+    except OSError as exc:
+        # AI-0044 (DevPlan 17): нечитаемый compose = needs-build — НЕ молча; warn +
+        # skip-pull (retry_pull по несуществующему файлу гарантированно красил бы фазу)
+        logger.warning(
+            "[IMP:8][pull_module_images][needs-build] Cannot read %s (%s) — treating as needs-build",
+            compose_file,
+            exc,
+        )
+        return True
 
     # ── Build pull args and delegate to shared retry_pull (T4.5: retry [5,10,20]) ──
     pull_args = build_compose_args(
