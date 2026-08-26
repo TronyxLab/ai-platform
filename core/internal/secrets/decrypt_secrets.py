@@ -79,7 +79,6 @@ logger = logging.getLogger(__name__)
 # · Prevention: НЕ использовать bare-импорты из shared/ во вновь редактируемых файлах.
 # ── Константы ─────────────────────────────────────────────────────────────
 _AGE_KEY_PREVIEW_LEN: int = 8  # сколько символов AGE-ключа показывать в логах (маскировка)
-_QUOTED_VALUE_MIN_LEN: int = 2  # минимальная длина quoted-значения ("" / '')
 _STDERR_CLEAN_MAX: int = 500  # обрезка stderr sops в ошибках
 _PLATFORM_ROOT = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))),
@@ -94,6 +93,7 @@ from core.internal.shared.exceptions import PlatformError, PlatformFatalError
 
 # Детекция AGE-ключа делегируется в канонический node_detect.py.
 from core.internal.shared.node_detect import detect_age_key as _detect_age_key_impl
+from core.internal.shared.secrets_env_parser import escape_single_quotes, parse_line
 
 # ── Global cleanup state ───────────────────────────────────────────────────────
 _TEMP_FILES: list[str] = []
@@ -251,18 +251,13 @@ def detect_age_key() -> str:
 
 
 # region FUNC__yaml_to_env
-## @purpose — Convert YAML key:value format to shell secrets.env KEY='value' format.
-##            Handles comments, quoted values, empty values, and single-quote escaping.
-## @io — ⇥ yaml_content: str → ⎋ env_content: str
-## @complexity — O(n) where n = lines
+## @purpose  YAML key:value → KEY='value' env (AI-0055, DevPlan 17 T5.5): разбор значений
+##           через канон secrets_env_parser.parse_line (кавычки/unquoted-# едины),
+##           escaping через escape_single_quotes. Локальная re-имплементация удалена.
+## @io       ⇥ yaml_content: str → ⎋ env_content: str
+## @complexity — O(n) где n = строки
 ## @invariants
-##   - Skips empty lines and full-line comments (starting with #)
-##   - Surrounding quotes (single or double) are stripped from values
-##   - Single quotes in values are escaped as '\''
-##   - Final line ends with \n
-##   - Returns empty string for all-comment/empty input
-## @rationale Shell's export_secrets_to_env() used bash regex + line-by-line printf.
-##            Python version uses re.match + str.replace for the same semantics.
+##   - Пустые/комментарий-строки пропускаются; итог заканчивается \n; пустой вход → ""
 def _yaml_to_env(yaml_content: str) -> str:
     """Convert YAML key:value pairs to KEY='value' env format."""
     lines: list[str] = []
@@ -271,15 +266,13 @@ def _yaml_to_env(yaml_content: str) -> str:
         if not stripped or stripped.startswith("#"):
             continue
         match = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.*)$", stripped)
-        if match:
-            key = match.group(1)
-            value = match.group(2).strip()
-            # Strip surrounding quotes (single or double)
-            if len(value) >= _QUOTED_VALUE_MIN_LEN and value[0] == value[-1] and value[0] in {'"', "'"}:
-                value = value[1:-1]
-            # Escape single quotes in value
-            escaped = value.replace("'", "'\\''")
-            lines.append(f"{key}='{escaped}'")
+        if not match:
+            continue
+        # значение разбирается КАНОНИЧЕСКОЙ dotenv-грамматикой (key=value reconstruction)
+        parsed = parse_line(f"{match.group(1)}={match.group(2).strip()}")
+        if parsed is None:
+            continue
+        lines.append(f"{parsed[0]}='{escape_single_quotes(parsed[1])}'")
     if not lines:
         return ""
     return "\n".join(lines) + "\n"
