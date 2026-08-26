@@ -622,6 +622,24 @@ def test_diff_steps_scope() -> None:
     logger.critical("[IMP:9][test] diff-скоуп: .py→ruff+pre-commit, test→ruff+pytest, README→pre-commit, пусто→[]")
 
 
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · diff-скоуп — tests/e2e (requires_node) не гоняется в check-diff
+# · Scenario: _build_diff_steps с tests/e2e/test_chaos_resilience.py → НЕТ pytest-шага
+# ·   (e2e-сьюты требуют test-VPS; make check/gate их исключают фильтром requires_node,
+# ·   R4: без NODE они FAIL, а не skip — check-diff не должен их запускать)
+# · Last fail: merge 013→17→main добавил tests/e2e/test_chaos_resilience.py → make check-diff
+# ·   падал на всех requires_node-тестах («NODE environment variable not set»)
+# · Remove if: e2e-конвенция изменена (e2e войдут в make check)
+def test_diff_steps_negative_e2e_excluded() -> None:
+    """R5 negative: tests/e2e/** исключаются из pytest-шага diff-скоупа (requires_node)."""
+    root = Path("/tmp/placeholder")  # пути не читаются — только имена шагов
+    steps = _build_diff_steps(root, ["tests/e2e/test_chaos_resilience.py"])
+    names = [s[0] for s in steps]
+    assert "pytest (diff)" not in names, f"R5 FAIL: e2e-файл попал в pytest-шаг check-diff: {names}"
+    # pre-commit + ruff остаются (это .py) — только pytest исключается
+    assert names == ["pre-commit (diff)", "ruff check (diff)"], names
+    logger.critical("[IMP:9][test] diff-скоуп-negative: tests/e2e исключён из pytest-шага")
+
+
 # 🧪 TRAP[TEST] · Wave 4 · diff files: tracked-правка + untracked включаются
 # · Scenario: git_repo: правка tracked + новый untracked файл → оба в diff-наборе
 # · Last fail: N/A
@@ -639,6 +657,28 @@ def test_diff_files_detects_tracked_and_untracked(git_repo: Path) -> None:
     assert changed is not None
     assert "a.txt" in changed and "new.txt" in changed
     logger.critical("[IMP:9][test] diff-files: tracked-правка + untracked детектированы (%d)", len(changed))
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · diff_files — merge-удаление не ломает check-diff
+# · Scenario: git_repo: commit файла → удалить из рабочего дерева (git rm) → _diff_files
+# ·   НЕ должен возвращать удалённый файл (нет на диске → pre-commit/ruff/pytest
+# ·   упали бы «file or directory not found», check-diff exit 2)
+# · Last fail: merge 17→main удалил tests/unit/test_project_registry.py (17-волна T6
+# ·   мёртвый код) → make check-diff: pytest ERROR file not found (флак merge-удалений)
+# · Remove if: diff-детекция изменена на существование-на-диске
+def test_diff_files_negative_deleted_file_excluded(git_repo: Path) -> None:
+    """R5 negative: удалённый tracked-файл исключается из diff-скоупа (его нет на диске)."""
+    victim = git_repo / "gone.txt"
+    victim.write_text("v1\n")
+    subprocess.run(["git", "add", "gone.txt"], cwd=git_repo, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-qm", "init"], cwd=git_repo, check=True, capture_output=True)
+
+    subprocess.run(["git", "rm", "-q", "gone.txt"], cwd=git_repo, check=True, capture_output=True)
+
+    changed = _diff_files(git_repo)
+    assert changed is not None
+    assert "gone.txt" not in changed, f"R5 FAIL: deleted file leaked into diff-scope: {changed}"
+    logger.critical("[IMP:9][test] diff-files-negative: удалённый файл исключён из diff-скоупа")
 
 
 # 🧪 TRAP[TEST] · Wave 4 · run_diff: пустой diff → exit 0 («nothing to diff»)

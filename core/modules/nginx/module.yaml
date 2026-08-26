@@ -19,8 +19,14 @@ depends_on: []
 
 # D5 (118 G4): severity/restart/resources/env_requires — reverse proxy, critical
 # (TLS-терминация и маршрутизация ВСЕХ сервисов — deploy failure блокирует node-update);
-# restart согласован с base.yml (unless-stopped); resources — limits 256M из base.yml;
-# env_requires: [] — секреты не требуются (PLATFORM_DOMAIN передаётся через env_shared)
+# restart согласован с base.yml (unless-stopped); resources — limits 256M из base.yml
+# AI-0072 (DevPlan 17 T3.6): nginx — фактический потребитель master-кредов
+# (.htpasswd-platform для Basic Auth: platform/prometheus/loki/status vhosts;
+# раньше env_requires: [] — «секреты не требуются» — это противоречило факту)
+env_requires:
+  - PLATFORM_MASTER_EMAIL
+  - PLATFORM_MASTER_PASSWORD
+
 severity: critical
 restart: unless-stopped
 
@@ -34,8 +40,6 @@ env_shared:
 resources:
   limits:
     memory: 256M
-
-env_requires: []
 
 spool_dir: none  # reverse proxy — no persistent data (stateless)
 

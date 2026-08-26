@@ -120,7 +120,7 @@ def test_deploy_context_projects_routes_via_orchestrator(
     ]
     seen: list[str] = []
 
-    def fake_via_orchestrator(project, projects_base, ghcr_fallback_build, **kw):  # type: ignore[no-untyped-def]
+    def fake_via_orchestrator(project, projects_base, **kw):  # type: ignore[no-untyped-def]
         seen.append(project.name)
         return cd.ProjectDeployResult(name=project.name, status="deployed", channel="orchestrator", health="healthy")
 

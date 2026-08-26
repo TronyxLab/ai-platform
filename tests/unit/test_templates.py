@@ -94,7 +94,6 @@ def runtime_ai_platform_yamls(tmp_path_factory) -> dict[str, str]:
         gen_ai_platform_yaml(
             name=f"test-{ptype}",
             ptype=ptype,
-            org="tronyx161",
             node="test-node",
             domain="example.com",
             database="",

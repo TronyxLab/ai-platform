@@ -18,15 +18,14 @@
 ## @changes  2026-08-15 · DevPlan 170 W7-E2 — extracted from app.py:_handle_healthz (79 LOC → thin)
 # endregion MODULE_CONTRACT
 
-import json
 import os
-import pathlib
 import sys
 import time
 from collections.abc import Callable
 from typing import TypedDict, cast
 
-from .config import MetricsData
+from .config import SCHEMA_VERSION_MIN, MetricsData
+from .config import load_status_metrics as config_load_status_metrics
 from .staleness import compute_staleness
 
 
@@ -50,19 +49,30 @@ StalenessFn = Callable[[str | None], str | None]
 
 
 def _read_metrics_file(path: str) -> tuple[MetricsData | None, str | None, str | None]:
-    """Read metrics JSON → (metrics, reason, message). reason=None = ok.
+    """Read metrics через GATED loader → (metrics, reason, message). reason=None = ok.
 
     # ▶ ┌path┐ → ◇ isfile? → (None, "metrics_file_missing", msg)
-    #          → ◇ json.load ok? → (data, None, None)
-    #          → ◇ OSError/JSONDecodeError → (None, "metrics_file_unreadable", msg)
+    #          → ⊕ config.load_status_metrics (единый loader, schema-гейт)
+    #          → ◇ fallback-структура? → (None, "metrics_file_unreadable", errors)
+    #          → ◇ schema_version<2? → (None, "metrics_schema_stale", msg)
+    #          → ⎋ (data, None, None)
+
+    ## @changes AI-0068 (DevPlan 17 T4.x→5.4): второй reader удалён — /healthz читает
+    ##          через тот же gated loader, что и /health; старая схема теперь FAIL
+    ##          на /healthz так же, как на /health (раньше PASS со stale-схемой).
     """
     if not os.path.isfile(path):
         return None, "metrics_file_missing", f"{path} not found or not a regular file"
-    try:
-        with pathlib.Path(path).open(encoding="utf-8") as f:
-            return cast("MetricsData", json.load(f)), None, None  # W11: json → Any → MetricsData
-    except (OSError, json.JSONDecodeError) as e:
-        return None, "metrics_file_unreadable", f"Cannot read {path}: {e}"
+    data = config_load_status_metrics(path)
+    # fallback-структура loader'а: нет schema_version + errors[] (missing-dir/unparseable)
+    if "schema_version" not in data:
+        errs = cast("list[str]", data.get("errors") or [])
+        detail = "; ".join(errs)[:200] if errs else f"Cannot read {path}"
+        return None, "metrics_file_unreadable", detail
+    sv = cast("int", data.get("schema_version", 0))
+    if sv < SCHEMA_VERSION_MIN:
+        return None, "metrics_schema_stale", f"schema_version={sv}, expected >=2"
+    return data, None, None
 
 
 # region FUNC_readiness_check

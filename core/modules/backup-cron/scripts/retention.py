@@ -35,14 +35,17 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TypedDict, cast
 
-import boto3
-from botocore.config import Config as BotoConfig
 from botocore.exceptions import BotoCoreError, ClientError
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from backup_config import BackupConfigError, get_backup_config  # pyright: ignore[reportImplicitRelativeImport]
 from date_parser import DateParser  # pyright: ignore[reportImplicitRelativeImport]
-from s3_client import Boto3S3, S3Client, S3Object  # pyright: ignore[reportImplicitRelativeImport]
+from s3_client import (  # pyright: ignore[reportImplicitRelativeImport] — AI-0073
+    Boto3S3,
+    S3Client,
+    S3Object,
+    build_boto3_s3_client,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -439,23 +442,18 @@ def main() -> None:
         logger.critical("[IMP:9][retention][main] Config error: %s", exc)
         sys.exit(2)
 
-    # Create S3 client (D10/128 W5: таймауты — именованные константы модуля)
-    boto_config = BotoConfig(
-        retries={"max_attempts": _BOTO_RETRIES, "mode": "standard"},
-        connect_timeout=_BOTO_CONNECT_TIMEOUT,
-        read_timeout=_BOTO_READ_TIMEOUT,
-    )
-
-    # W11: boto3.client → Any (boto3 untyped) → cast к Boto3S3-протоколу
+    # Create S3 client (D10/128 W5 + AI-0073: таймауты — именованные константы модуля,
+    # пробрасываются ЯВНЫМ override в единый строитель s3_client.build_boto3_s3_client)
     s3_client = cast(
         "Boto3S3",
-        boto3.client(  # pyright: ignore[reportUnknownMemberType] — W11 external boto3.client untyped-оверлоады
-            "s3",
+        build_boto3_s3_client(
             endpoint_url=config["endpoint_url"],
-            aws_access_key_id=config["aws_access_key_id"],
-            aws_secret_access_key=config["aws_secret_access_key"],
-            region_name=config["region"],
-            config=boto_config,
+            access_key=config["aws_access_key_id"],
+            secret_key=config["aws_secret_access_key"],
+            region=config["region"],
+            connect_timeout=_BOTO_CONNECT_TIMEOUT,
+            read_timeout=_BOTO_READ_TIMEOUT,
+            max_attempts=_BOTO_RETRIES,
         ),
     )
 

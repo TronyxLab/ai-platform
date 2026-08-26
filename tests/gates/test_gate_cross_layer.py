@@ -199,6 +199,13 @@ class TestCrossLayerNegativeR5:
     # · Scenario: контракт НЕ ловит легитимный modules→shared postgres-hook (D1 by design)
     # · Remove if: postgres-hook allowlist заменён
     def test_postgres_hook_allowlisted(self) -> None:
+        # 📝 TRAP[DEBT] · 2026-08-26 · LO · редкий интермитент-флейк R5-негатива под серийными
+        # · Observed: 2 раза из ~15 локальных прогонов static_audit тест флипался (kept=False)
+        #   на неизменённом дереве; изолированно и в 8/8 повторах — зелёный
+        # · Suspected: глобальное состояние importlinter/grimp (реестр контрактов/кэш графа)
+        #   при многократных collection-imports в одном процессе; needs investigation
+        # · Impact: редкий ложный RED в dev-цикле, CI-детерминизм не подтверждён
+        # · When: DevPlan 17 W3 — расследование прервано по anti-loop (не воспроизводится)
         """Позитив: postgres-hook modules→shared НЕ является нарушением (D1 by design)."""
         # region FUNC_test_postgres_hook_allowlisted
         caught = _il_contract_fails(

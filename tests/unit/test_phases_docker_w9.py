@@ -1,5 +1,5 @@
 # GREP_SUMMARY: test-phases-docker-w9, T9.14, nginx-overlay, content-hash, reload-gate, T9.16, provision-scopes, networks-volumes, T9.19, hc-marker, per-context
-# STRUCTURE: ▶ test_*_overlay_hash ┌overlay .conf v1┐ → reload; ┌v1 (без изменений)┐ → НЕТ reload; ┌удаление .conf┐ → reload (deletions в hash) │ ▶ test_*_provision_both_scopes → cmd содержит --scope networks --scope volumes │ ▶ test_*_hc_marker_per_context → CONTEXT → маркер .hc_done_in_deploy.<ctx>
+# STRUCTURE: ▶ test_*_overlay_hash ┌overlay .conf v1┐ → reload; ┌v1 (без изменений)┐ → НЕТ reload; ┌удаление .conf┐ → reload (deletions в hash) │ ▶ test_*_provision_both_scopes → cmd содержит --scope networks --scope volumes │ ▶ test_*_hc_marker_per_context → CONTEXT → маркер .hc_done_in_deploy.<ctx> │ ▶ test_llm_provision_failure_surfaces → provision rc≠0 → failed_consumers=N + issue; rc=0 → IMP:9 success
 # region MODULE_CONTRACT
 ## @purpose  Regression-тесты T9.14 (B-10), T9.16 (B-13), T9.19 (B-11) DevPlan 136 W9:
 ##           nginx overlay reload-gate по content-hash ВСЕГО содержимого dir (включая deletions);
@@ -165,3 +165,69 @@ def test_hc_marker_per_context(caplog: pytest.LogCaptureFixture, monkeypatch: py
     assert not hc_calls, "маркер контекста → standalone healthcheck пропускается (T9.19)"
     assert not marker.exists(), "читатель снимает поглотивший маркер"
     logger.critical("[IMP:9][test] hc marker per-context — OK (T9.19)")
+
+
+def _fake_run_subprocess(rc_by_bin: dict[str, int], stderr_by_bin: dict[str, str] | None = None):
+    """Fake helpers_subprocess.run_subprocess: rc/stderr по первому токену cmd."""
+    from subprocess import CompletedProcess
+
+    stderr_by_bin = stderr_by_bin or {}
+
+    def _run(cmd: list[str], **kwargs: object) -> CompletedProcess[str]:
+        # entrypoint-вызовы имеют форму ["bash", <script>] — матчим любой токен
+        names = [Path(token).name for token in cmd[:2]]
+        bin_key = next((n for n in names if n in rc_by_bin), None)
+        return CompletedProcess(
+            cmd,
+            rc_by_bin.get(bin_key, 0),
+            "",
+            stderr_by_bin.get(bin_key, ""),
+        )
+
+    return _run
+
+
+# 🧪 TRAP[TEST] · 2026-08-26 · P2 · rc≠0 провижинера обязан surfaced в сводке φ11 (AI-0010r)
+# · Regression: run_subprocess(non_fatal=True) результат не читался → ложный IMP:9
+#   «LLM virtual keys provisioned» при rc≠0 → φ11 done зелёным без ключей
+# · Scenario: renderer rc=0, provision rc=1 (stderr «FAILED for 2 consumer(s)») → шаг True,
+#   ERROR «llm_provision: failed_consumers=2», success-лог отсутствует;
+#   контрсценарий rc=0 → прежний IMP:9 success сохранён
+# · Last fail: DevPlan 17 верификация @64c2090 (аудит AI-0010)
+# · Remove if: llm-provision переезжает из φ11 в отдельный verb с собственным отчётом
+@ldd_trajectory
+def test_llm_provision_failure_surfaces(
+    caplog: pytest.LogCaptureFixture, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AI-0010r: rc≠0 provision-llm.sh → ERROR failed_consumers=N + issue=True; rc=0 → success."""
+    caplog.set_level(logging.INFO)
+
+    core_dir = tmp_path / "core"
+    (core_dir / "internal" / "llm").mkdir(parents=True)
+    (core_dir / "entrypoints").mkdir(parents=True)
+    (core_dir / "internal" / "llm" / "config_renderer.py").write_text("# renderer\n", encoding="utf-8")
+    (core_dir / "entrypoints" / "provision-llm.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+
+    # ── failure: provision rc=1 с failed_consumers=2 в stderr ──
+    monkeypatch.setattr(
+        phases_docker.helpers_subprocess,
+        "run_subprocess",
+        _fake_run_subprocess(
+            {"provision-llm.sh": 1},
+            {"provision-llm.sh": "LLM key provisioning FAILED for 2 consumer(s): ['litellm', 'monitoring']"},
+        ),
+    )
+    assert phases_docker._registry_step_llm_provision(str(core_dir)) is True, (
+        "rc≠0 провижинера обязан пометить фазу issue (True)"
+    )
+    assert "failed_consumers=2" in caplog.text, "failed_consumers=N обязан доезжать до сводки"
+    assert "provisioned" not in caplog.text.split("failed_consumers")[0] or (
+        "LLM virtual keys provisioned" not in caplog.text
+    ), "ложный success-лог при rc≠0 запрещён"
+
+    # ── success: оба rc=0 → прежний IMP:9 success ──
+    caplog.clear()
+    monkeypatch.setattr(phases_docker.helpers_subprocess, "run_subprocess", _fake_run_subprocess({}))
+    assert phases_docker._registry_step_llm_provision(str(core_dir)) is False
+    assert "LLM virtual keys provisioned" in caplog.text, "успешный прогон сохраняет IMP:9 success"
+    logger.critical("[IMP:9][test] llm provision failure surfaces — OK (AI-0010r)")

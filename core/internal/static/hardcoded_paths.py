@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 # Хардкод-пути home-директорий (macOS/Linux): "/Users/tronyx/...", "/home/runner/..."
 # /home/runner/work/ — легитимный CI-путь (не хардкод девелоперской машины).
 _HARDCODED_HOME_PATH: re.Pattern[str] = re.compile(
-    r'["\'](/Users/[\w.-]+/|/home/[\w.-]+/(?!runner/work/)[\w.-]+/)',
+    r'["\'](/Users/[\w.-]+/|/home/(?!runner/work/)[\w.-]+/[\w.-]+/)',
 )
 
 # Хардкод-серверные пути (без env-fallback): "/opt/platform/core/..." и т.п.

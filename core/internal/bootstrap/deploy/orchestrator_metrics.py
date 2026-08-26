@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: orchestrator-metrics, severity, exit-code, status-metrics-json, hc-marker, llm-summary, pure-functions, E6, deploy-orchestrator-decomposition
-# STRUCTURE: ▶ aggregate_severity ┌failed + severity_map┐ → ⊕ count crit/warn → ⎋ (crit, warn) │ ▶ exit_code_from_results ┌crit, warn, deployed┐ → ◇ crit>0? 2 : warn>0? 0 : 0 │ ▶ status_metrics_json → ⊕ json.dumps(template) │ ▶ hc_marker_path → ⎋ str │ ▶ render_llm_summary → ⎋ str
+# STRUCTURE: ▶ aggregate_severity ┌failed + severity_map┐ → ⊕ count crit/warn → ⎋ (crit, warn) │ ▶ exit_code_from_results ┌crit, warn┐ → ◇ crit>0? 2 : warn>0? 0 : 0 │ ▶ status_metrics_json → ⊕ json.dumps(template) │ ▶ hc_marker_path → ⎋ str │ ▶ render_llm_summary → ⎋ str
 # region MODULE_CONTRACT
 ## @purpose  Pure functions extracted from deploy_orchestrator.py (DevPlan 119 E6): severity
 ##           aggregation, exit-code computation, status-metrics JSON serialization, hc-marker
@@ -21,7 +21,7 @@
 ## @changes 2026-08-02 · DevPlan 119 E6 — создан, извлечено из deploy_orchestrator.py
 ## @modulemap
 ##   aggregate_severity [W:1] — pure: failed + severity_map → (crit_count, warn_count)
-##   exit_code_from_results [W:1] — pure: (crit, warn, deployed) → int {0,2}
+##   exit_code_from_results [W:1] — pure: (crit, warn) → int {0,2} (deployed срезан T7.4)
 ##   status_metrics_json [W:1] — pure: template → JSON string
 ##   hc_marker_path [W:1] — pure: → marker path constant
 ##   render_llm_summary [W:1] — pure: core_dir + status → summary string
@@ -96,7 +96,7 @@ def aggregate_severity(failed: list[str], severity_map: dict[str, str]) -> tuple
 ## @invariants
 ##   - WARN → exit 0 (DEPLOY_BEST_EFFORT policy — warnings are non-critical by definition)
 ##   - Only CRIT failures escalate to exit 2
-def exit_code_from_results(crit: int, warn: int, deployed: int) -> int:  # ruff: ignore[ARG001]
+def exit_code_from_results(crit: int, warn: int) -> int:
     """Severity-based exit code (DEPLOY_BEST_EFFORT contract: CRIT→2, WARN→0, DONE→0)."""
     if crit > 0:
         return 2

@@ -18,7 +18,7 @@
 ##   3. RETRY_BACKOFF_SECONDS — список [5,10,20]; канал использует [0] с delay *= 2
 ##      (экспоненциальное поведение сохраняется).
 ##   4. Значения канонизированы: up=180, pull=300, build=300, healthcheck-poll=60,
-##      ssh-connect=30, deploy=600, ssh-read=60, image-check=60, docker-cmd=10,
+##      ssh-connect=30, deploy=900, ssh-read=60, image-check=60, docker-cmd=10,
 ##      docker-stop=30, apt=300 (bootstrap-цепь: python_deps/lifecycle/tor_setup/install-acme),
 ##      rsync=600, system-cmd=60, lifecycle-cmd=120 (план 170 W1-A1: AMBER-зачистка
 ##      lifecycle/healthcheck/monitoring доменов — research-D §D1),
@@ -169,6 +169,11 @@ RETRY_BACKOFF_EXPONENTIAL_BASE = 2
 
 # Таймаут curl Tor-proxy healthcheck (tor_proxy_check.py, DevPlan 118 E5 — MAX_TIME=30)
 TOR_PROXY_CURL_TIMEOUT = 30
+
+# gh/git подвызовы GitHub-операций саппорта (github_ops.create_github_repo —
+# repo view/create, git remote/push; DevPlan 17 T3.3 AI-0017: без таймаута зависшая сеть
+# висела вечно). Покрывает холодный gh API + начальный push небольшого scaffold-репо.
+GITHUB_OPS_TIMEOUT = 120
 
 # ── Healthcheck ports domain ───────────────────────────────────────────────────
 

@@ -123,6 +123,22 @@ def detect_hosts_drift(node_yaml_path: str) -> dict[str, str]:
 # ═══════════════════════════════════════════════════════════════════
 # R6 — verify_vhosts
 # ═══════════════════════════════════════════════════════════════════
+# region FUNC__preview_note
+def _preview_note(unit: str, *, dry_run: bool, report_only: bool, plan: str) -> bool:
+    """Печатать план dry-run/report-only; вернуть True если прогон preview-режима (AI-0031).
+
+    ## @purpose  Общая ветка флагов для detect/verify-only юнитов converge — C901
+    ##            основных функций не растёт.
+    """
+    if not (dry_run or report_only):
+        return False
+    logger.info("[IMP:9][converge][%s] DRY-RUN/REPORT-ONLY: %s", unit, plan)
+    return True
+
+
+# endregion FUNC__preview_note
+
+
 # region FUNC_verify_vhosts
 ## @purpose  Read-only verification of nginx vhost config integrity.
 ##           Checks: (1) for each project with domain, <domain\>.conf exists;
@@ -144,9 +160,13 @@ def detect_hosts_drift(node_yaml_path: str) -> dict[str, str]:
 def verify_vhosts(
     node_yaml_path: str,
     converge_node: str,
-    core_dir: str,  # ruff: ignore[ARG001] — keyword-контракт (тесты вызывают core_dir=)
-    dry_run: bool = False,  # ruff: ignore[ARG001]
-    report_only: bool = False,  # ruff: ignore[ARG001]
+    core_dir: str,  # ruff: ignore[ARG001] — keyword-контракт оркестратора/тестов (core_dir=)
+    # AI-0031 (DevPlan 17 T7.1): флаги подключены по образцу networks/runtime — юнит
+    # verify-only; при dry_run/report_only печатается план («мутаций нет»),
+    # detail помечается [dry-run]. Keyword-only: FBT (булевы позиционные запрещены)
+    *,
+    dry_run: bool = False,
+    report_only: bool = False,
     overlay_base: str | None = None,
 ) -> dict[str, str]:
     """Verify nginx vhost config integrity.
@@ -154,6 +174,12 @@ def verify_vhosts(
     Returns a drift entry dict with status: ok|skipped|warn|fail.
     """
     unit = "R6"
+    preview = bool(dry_run or report_only)
+    if preview:
+        logger.info(
+            "[IMP:9][converge][%s] DRY-RUN/REPORT-ONLY: план мутаций ПУСТ (verify-only) — конфиги не пишутся, nginx не перезагружается",
+            unit,
+        )
     logger.info("[IMP:8][converge][%s] START: verify_vhosts — checking nginx vhost integrity", unit)
 
     node_yaml = Path(node_yaml_path)

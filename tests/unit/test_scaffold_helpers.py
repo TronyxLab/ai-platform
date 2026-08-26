@@ -45,7 +45,6 @@ def test_gen_yaml_backend_full(tmp_path: pathlib.Path, caplog) -> None:
     result = gen_ai_platform_yaml(
         name="test-backend",
         ptype="backend",
-        org="test-org",
         node="tronyx-vps",
         domain="backend.tronyx.ru",
         database="backend_db",
@@ -75,7 +74,6 @@ def test_gen_yaml_frontend_full(tmp_path: pathlib.Path, caplog) -> None:
     result = gen_ai_platform_yaml(
         name="test-frontend",
         ptype="frontend",
-        org="test-org",
         domain="frontend.tronyx.ru",
         output_path=yaml_path,
         minimal=False,
@@ -96,7 +94,6 @@ def test_gen_yaml_minimal_mode(tmp_path: pathlib.Path, caplog) -> None:
     result = gen_ai_platform_yaml(
         name="test-adopted",
         ptype="backend",
-        org="test-org",
         domain="adopted.tronyx.ru",
         output_path=yaml_path,
         minimal=True,
@@ -116,9 +113,7 @@ def test_gen_yaml_minimal_mode(tmp_path: pathlib.Path, caplog) -> None:
 def test_gen_yaml_dev_mode(tmp_path: pathlib.Path, caplog) -> None:
     yaml_path = tmp_path / "ai-platform.yaml"
     logger.info("[IMP:9][test][helpers] test_gen_yaml_dev_mode")
-    result = gen_ai_platform_yaml(
-        name="test-dev", ptype="backend", org="test-org", mode="dev", output_path=yaml_path, minimal=False
-    )
+    result = gen_ai_platform_yaml(name="test-dev", ptype="backend", mode="dev", output_path=yaml_path, minimal=False)
     assert result == "generated"
     parsed = yaml.safe_load(yaml_path.read_text())
     assert parsed.get("staging") is True, f"Expected staging=True in dev mode, got {parsed.get('staging')}"
@@ -131,7 +126,7 @@ def test_gen_yaml_dev_mode(tmp_path: pathlib.Path, caplog) -> None:
 def test_gen_makefile_new(tmp_path: pathlib.Path, caplog) -> None:
     makefile_path = tmp_path / "Makefile"
     logger.info("[IMP:9][test][helpers] test_gen_makefile_new")
-    result = gen_project_makefile(name="test-project", domain="test.tronyx.ru", output_path=makefile_path, force=False)
+    result = gen_project_makefile(name="test-project", output_path=makefile_path, force=False)
     assert result == "generated"
     assert makefile_path.exists()
     content = makefile_path.read_text()
@@ -155,7 +150,7 @@ def test_gen_makefile_exists_no_overwrite(tmp_path: pathlib.Path, caplog) -> Non
     original = "# Custom Makefile — DO NOT OVERWRITE\n.PHONY: all\n"
     makefile_path.write_text(original)
     logger.info("[IMP:9][test][helpers] test_gen_makefile_exists_no_overwrite")
-    result = gen_project_makefile(name="test-project", domain="test.tronyx.ru", output_path=makefile_path, force=False)
+    result = gen_project_makefile(name="test-project", output_path=makefile_path, force=False)
     assert result == "exists"
     assert makefile_path.read_text() == original
 
@@ -165,7 +160,7 @@ def test_gen_makefile_force_overwrite(tmp_path: pathlib.Path, caplog) -> None:
     makefile_path = tmp_path / "Makefile"
     makefile_path.write_text("# OLD Makefile")
     logger.info("[IMP:9][test][helpers] test_gen_makefile_force_overwrite")
-    result = gen_project_makefile(name="forced-project", domain="", output_path=makefile_path, force=True)
+    result = gen_project_makefile(name="forced-project", output_path=makefile_path, force=True)
     assert result == "generated"
     content = makefile_path.read_text()
     assert "forced-project" in content
@@ -240,8 +235,6 @@ def test_register_dry_run(tmp_path: pathlib.Path, caplog) -> None:
     logger.info("[IMP:9][test][helpers] test_register_dry_run")
     result = register_in_node_yaml(
         name="test-project",
-        org="test-org",
-        node="tronyx-vps",
         ptype="backend",
         domain="test.tronyx.ru",
         yaml_path=yaml_path,

@@ -16,11 +16,10 @@
 ##           план 170 W5-C1); I/O → lifecycle/helpers/; CLI → lifecycle/cli.py.
 ## @invariants
 ##   1. State file is at /var/lib/platform/.bootstrap/state.json (configurable via --state-file)
-##   2. All subprocess.run calls use capture_output=True, text=True, timeout=120;
-##      exception: node_update=600s (self-invocation wraps entire update pipeline:
-##      deploy 14 modules ~300s + provision + ssl + healthcheck + converge)
+##   2. Phase subprocess timeouts задаются вызываемыми фазами через shared/timeouts
+##      (канон SoT); state_machine сам subprocess не исполняет (фазы — lifecycle/phases/*.py)
 ##   3. Non-fatal failures log WARN and continue — errors list collected for final audit
-##   4. Content hash uses hashlib.sha256 of step script paths (always includes node-lifecycle.sh)
+##   4. Content hash = sha256(node.yaml modules/services + state_machine.py + phases/*.py байты)
 ##   5. --dry-run prints plan and exits 0 BEFORE any mutations
 ##   6. --force clears all state (rm state file)
 ##   7. --resume loads existing state and continues from last checkpoint
@@ -453,9 +452,8 @@ class StateMachine:
     ##          Persistence (state.json I/O) — в lifecycle/state_store.py (B9 T2).
     ## @invariants
     ##   - save() MUST be called after every state mutation
-    ##   - All subprocess calls have 120s timeout
     ##   - Non-fatal failures (WARN) do not advance current_step
-    ##   - Content hash always includes node-lifecycle.sh + step-specific paths
+    ##   - Content hash = node.yaml modules/services + state_machine.py + lifecycle/phases/*.py
     ##   - Step index 0 = not started; step N = last successfully completed step
     ## @complexity — O(1) per transition; O(N) for full init/update run
     """
@@ -521,19 +519,26 @@ class StateMachine:
     # region FUNC__phase_input_hash
     ## @purpose — Compute content hash of phase-relevant INPUTS (DevPlan 136 W9 T9.3, L-4/B-1):
     ##            modules + services из node.yaml (релевантные поля, НЕ весь файл — риск §9 meta)
-    ##            + lifecycle code (state_machine.py) + phase-агрегатор (phases/__init__.py),
+    ##            + lifecycle code (state_machine.py) + код фаз (lifecycle/phases/*.py, AI-0038),
     ##            чтобы смена кода платформы тоже инвалидировала done-фазу.
     ##            Hash сохраняется в StepState.hash при успехе фазы (см. cli._mark_phase_success).
-    ## @io — ⇥ phase_value: str, env: Mapping | None (DI, DevPlan 160 E2) → ⎋ str (SHA256 hexdigest)
-    ## @complexity O(N) где N = размер релевантных полей node.yaml
+    ## @io       ⇥ phase_value: str, env: Mapping | None (DI, DevPlan 160 E2),
+    ##              phases_dir: Path | str | None (DI, AI-0038 тесты; None → lifecycle/phases рядом
+    ##              с __file__) → ⎋ str (SHA256 hexdigest)
+    ## @complexity O(N + P*F) где N = размер релевантных полей node.yaml, P*F = байты phases/*.py
     ## @invariants
     ##   - ТОЛЬКО релевантные поля (modules, services) — правка нерелевантного поля (например,
     ##     ssh_authorized_keys) НЕ инвалидирует deploy-фазы (risk §9: «hash только по релевантным полям»)
     ##   - node.yaml отсутствует/битый → детерминированный «no-node-yaml» сегмент (не падает)
-    ##   - Включает state_machine.py + phases/__init__.py: обновление платформы перевыполняет
-    ##     deploy-фазы (B-1: update-фазы инвалидируются hash'ом)
+    ##   - Включает state_machine.py + ВСЕ lifecycle/phases/*.py (sorted, байты): обновление
+    ##     платформы или правка кода любой фазы перевыполняет deploy-фазы (B-1 + AI-0038)
     @staticmethod
-    def _phase_input_hash(phase_value: str, *, env: Mapping[str, str] | None = None) -> str:
+    def _phase_input_hash(
+        phase_value: str,
+        *,
+        env: Mapping[str, str] | None = None,
+        phases_dir: Path | str | None = None,
+    ) -> str:
         """Hash of phase-relevant inputs (node.yaml modules/services + lifecycle code)."""
         import hashlib
 
@@ -568,6 +573,15 @@ class StateMachine:
                 hasher.update(f.read())
         except OSError:
             hasher.update(b"code-missing")
+        # Код-инвалидация фаз (AI-0038): байты lifecycle/phases/*.py в отсортированном порядке —
+        # правка кода ЛЮБОЙ фазы меняет hash → done-фаза перевыполняется (bytes, не mtime:
+        # git-checkout выравнивает mtime — sha256 детерминирован и дёшев на 6-10 файлах)
+        resolved_phases_dir = Path(phases_dir) if phases_dir is not None else code_path.parent / "phases"
+        try:
+            for phase_file in sorted(resolved_phases_dir.glob("*.py")):
+                hasher.update(phase_file.read_bytes())
+        except OSError:
+            hasher.update(b"phases-missing")
         digest = hasher.hexdigest()
         logger.debug("[IMP:6][_phase_input_hash] Phase %s input hash: %s", phase_value, digest[:12])
         return digest

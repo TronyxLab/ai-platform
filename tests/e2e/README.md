@@ -11,9 +11,11 @@ receive).
 **Маркеры (DevPlan 136 W6 T6.1, B4):**
 - `requires_node` — основной suite: 10 тестов (8 bootstrap pipeline + 2 failure scenarios).
   Ортогонален `e2e` (= HTTP-проверки `*.tronyx.ru`).
-- `chaos` — fault-injection (DevPlan 126, 11 тестов T1-T11). **ИСКЛЮЧЁН из `make test-node`**
-  (маркер-фикс B4): chaos-тесты требуют ЗАБУТСТРАПЛЕННУЮ ноду (tronyx-vps), а не голую —
+- `chaos` — resilience drills (DevPlan 013: 9 fast + 3 night сценария). **ИСКЛЮЧЁН из `make test-node`**
+  (маркер-фикс B4): drills требуют ЗАБУТСТРАПЛЕННУЮ ноду (tronyx-vps), а не голую —
   на голой ноде они падают (нет docker/контейнеров). Запуск отдельно, см. «Running Tests».
+- `night` — long-running drills (reboot/outbound-partition/docker-daemon-restart, DevPlan 013);
+  подмножество chaos, отдельное операторское окно (~25 мин).
 
 **Pre-flight «голоты» (DevPlan 136 W6 T6.2, B3+):** до suite conftest проверяет по SSH,
 что нода достижима и «голая» (нет docker и /opt/platform). Если нода уже забутстраплена,
@@ -84,17 +86,20 @@ make test-node NODE=test-e2e -k "bootstrap_pipeline"  # только happy-path 
 make test-node NODE=test-e2e -k "failure_scenarios"   # только failure (2)
 ```
 
-Chaos-тесты (DevPlan 126, fault-injection T1-T11) — **отдельный прогон** (маркер-фикс B4):
+Resilience drills (DevPlan 013, два тира) — **отдельный прогон** (маркер-фикс B4):
 
 ```bash
 # На ЗАБУТСТРАПЛЕННОЙ ноде (tronyx-vps или test-VPS после bootstrap) — goloty pre-flight для chaos не применяется
-PYTEST_NO_ESCALATION=1 python3 -m pytest tests/e2e/test_chaos_resilience.py -m chaos -v --tb=short -rs
-# Опционально -k <T...> для одного сценария (например -k "t06 or t07")
+# fast-тир: 9 drills, ≤30 мин wall-clock (каждый ≤6 мин)
+PYTEST_NO_ESCALATION=1 python3 -m pytest tests/e2e/test_chaos_resilience.py -m "chaos and not night" -v --tb=short -rs
+# night-тир: 3 drills (reboot / outbound-partition / docker-daemon-restart), отдельное окно ~25 мин
+PYTEST_NO_ESCALATION=1 python3 -m pytest tests/e2e/test_chaos_resilience.py -m night -v --tb=short -rs
+# Опционально -k <drill> для одного сценария (например -k "crash_postgres")
 ```
 
 Ожидание основного suite: **8 PASSED** + **2 PASSED** (~1 час: 1 cold start ~10-30 мин +
-инкрементальные). Chaos: 11 тестов, длительность зависит от сценариев (reboot/disk/network —
-до нескольких часов суммарно, требуют операторского окна).
+инкрементальные). Resilience drills (DevPlan 013): fast-тир — 9 PASSED ≤30 мин суммарно;
+night-тир — 3 PASSED в отдельном окне ~25 мин (reboot ~4-8 мин из них).
 
 Gate-проверки (без VPS):
 
@@ -147,7 +152,8 @@ make test-node NODE=test-e2e     # 10 requires_node тестов (без chaos) 
   DeployHistory snapshot на VPS (`/opt/projects/<p>/.deploy-snapshots/`)
 - **`make healthcheck NODE=`** — modules-healthcheck.sh локальный; здоровье контейнера
   проверяется docker inspect на VPS напрямую
-- **Chaos-сценарии 126** — отдельный прогон (`-m chaos`), требует забутстрапленную ноду
-  и операторское окно; артефакты пишутся в `/tmp/chaos-<date>` (не в .ai/plans/)
+- **Resilience drills (DevPlan 013)** — отдельный прогон (fast `-m "chaos and not night"` /
+  night `-m night`), требует забутстрапленную ноду и операторское окно; артефакты пишутся
+  в `/tmp/chaos-<date>` (не в .ai/plans/)
 - **GNU `timeout` (macOS)** — ssh timeout в тестах Python-side (subprocess timeout),
   macOS-safe; lib/ssh.sh DRIFT-note не блокирует

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: deploy-engine, DeployEngine, atomic-deploy, rollback, remove, status, deploy-compose, 170-W4-B2
-# STRUCTURE: ▶ DeployEngine ┌projects_base┐ → deploy(project,ref,service,project_dir,node,max_wait,keep_images):
+# STRUCTURE: ▶ DeployEngine ┌projects_base┐ → deploy(project,ref,service,project_dir,node,max_wait):
 #            contextlib.chdir → _preflight_checks → lifecycle.save_previous_image → flow.pull_images →
 #            flow.up_atomic → flow.wait_health → success(DEPLOY_STATUS=success) | first_deploy→exit |
 #            rollback→lifecycle.perform_rollback → remove(status) → ⎋ ServiceDeployResult/RemoveResult/StatusResult
@@ -56,7 +56,6 @@ from core.internal.deploy.engine.lifecycle import (
     save_previous_image,
 )
 from core.internal.deploy.engine.results import (
-    ImageInfo,
     RemoveResult,
     ServiceDeployResult,
     StatusResult,
@@ -108,7 +107,7 @@ class DeployEngine:
     ## @complexity — O(N) where N = deploy steps
     ## @invariants
     ##   - Extracts project name from project_dir basename
-    ##   - Uses default max_wait=60 and keep_images=3
+    ##   - Uses default max_wait=60
     ##   - Returns ServiceDeployResult compatible with DeployOrchestrator
     def deploy_compose(self, project_dir: str, service: str, version: str) -> ServiceDeployResult:
         """Deploy a single compose service. Called by DeployOrchestrator.
@@ -135,7 +134,6 @@ class DeployEngine:
             project_dir=project_dir,
             node="",
             max_wait=60,
-            keep_images=3,
         )
 
     # endregion FUNC_deploy_compose
@@ -148,7 +146,7 @@ class DeployEngine:
     ##           170 W4-B2: приватные шаги извлечены в engine/flow.py (pull_images/up_atomic/wait_health)
     ##           и engine/lifecycle.py (save_previous_image/perform_rollback/handle_first_deploy) —
     ##           семантика 1:1, поведение НЕ изменено.
-    ## @io       ⇥ project, ref, service, project_dir, node, max_wait, keep_images → ⎋ ServiceDeployResult
+    ## @io       ⇥ project, ref, service, project_dir, node, max_wait → ⎋ ServiceDeployResult
     ## @complexity — O(N) where N = pull retry attempts + healthcheck attempts
     ## @invariants
     ##   - Previous image saved BEFORE pull (enables rollback)
@@ -163,7 +161,6 @@ class DeployEngine:
         project_dir: str,
         node: str = "",  # ruff: ignore[ARG002]
         max_wait: int = 60,
-        keep_images: int = 3,  # ruff: ignore[ARG002]
         *,
         skip_pull: bool = False,
     ) -> ServiceDeployResult:
@@ -176,7 +173,6 @@ class DeployEngine:
             project_dir: Path to project directory.
             node: Node name (hostname).
             max_wait: Max seconds to wait for healthcheck.
-            keep_images: Number of old images to keep during prune.
             skip_pull: Skip the pull step (REF-0004): rollback re-tags previous image
                 locally (`<service>:previous-rollback`) — registry pull локального тега
                 обречён (~135s ретраев ×5) и не нужен, образ уже на ноде.
@@ -488,54 +484,6 @@ class DeployEngine:
         run_preflight(project_dir, service, self._validate_script)
 
     # endregion FUNC__preflight_checks
-
-    # region FUNC__save_previous_image
-    ## @purpose  Save current image ID before pull (enables rollback). API-compat шim:
-    ##           реализация — engine/lifecycle.save_previous_image (170 W4-B2).
-    ## @io       ⇥ project_dir, service → ⎋ Optional[ImageInfo]
-    ## @complexity — O(1) — one docker compose images call + optional docker inspect
-    @staticmethod
-    def _save_previous_image(project_dir: str, service: str) -> ImageInfo | None:
-        """Save current image ID and tag before deploy (delegates to engine.lifecycle)."""
-        return save_previous_image(project_dir, service)
-
-    # endregion FUNC__save_previous_image
-
-    # region FUNC__atomic_up
-    ## @purpose  Execute docker compose up -d for single service. API-compat shim:
-    ##           реализация — engine/flow.up_atomic (170 W4-B2).
-    ## @io       ⇥ project_dir, service, ref → ⎋ bool
-    ## @complexity — O(1) — делегирование в shared docker_compose_up
-    @staticmethod
-    def _atomic_up(project_dir: str, service: str, ref: str) -> bool:
-        """Start service via docker compose up -d (delegates to engine.flow.up_atomic)."""
-        return up_atomic(project_dir, service, ref)
-
-    # endregion FUNC__atomic_up
-
-    # region FUNC__perform_rollback
-    ## @purpose  Rollback to previous image: re-tag + docker compose up --force-recreate.
-    ##           API-compat shim: реализация — engine/lifecycle.perform_rollback (170 W4-B2).
-    ## @io       ⇥ project_dir, service, previous_image → ⎋ bool
-    ## @complexity — O(1) — tag + compose up calls
-    @staticmethod
-    def _perform_rollback(project_dir: str, service: str, previous_image: ImageInfo | None) -> bool:
-        """Rollback to previous image (delegates to engine.lifecycle.perform_rollback)."""
-        return perform_rollback(project_dir, service, previous_image)
-
-    # endregion FUNC__perform_rollback
-
-    # region FUNC__handle_first_deploy
-    ## @purpose  Handle first deploy failure — no rollback possible, escalate.
-    ##           API-compat shim: реализация — engine/lifecycle.handle_first_deploy (170 W4-B2),
-    ##           которая делегирует в deploy/first_deploy.py (DevPlan 119 E4).
-    ## @io       ⇥ project, service, ref, reason → ⎋ None (raises PlatformFatalError, exit 10)
-    @staticmethod
-    def _handle_first_deploy(project: str, service: str, ref: str, reason: str) -> None:
-        """Handle first deploy failure — no rollback possible (delegates to engine.lifecycle)."""
-        handle_first_deploy(project, service, ref, reason)
-
-    # endregion FUNC__handle_first_deploy
 
 
 # endregion CLASS_DeployEngine

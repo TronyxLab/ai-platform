@@ -205,7 +205,6 @@ class ProjectAdopter:
         return gen_ai_platform_yaml(
             name=self.name,
             ptype=type_guess,
-            org=self.org,
             node=self.node,
             domain=self.domain or "",
             output_path=str(self.yaml_file),
@@ -398,7 +397,6 @@ jobs:
 
         return _gen(
             name=self.name,
-            domain=self.domain or "",
             output_path=str(self.project_dir / "Makefile"),
             force=self.force,
         )
@@ -485,7 +483,6 @@ jobs:
         return _register(
             name=self.name,
             org=self.org,
-            node=self.node or os.environ.get("PLATFORM_DEFAULT_NODE", ""),
             ptype="adopted",
             domain=self.domain or "",
             database="",

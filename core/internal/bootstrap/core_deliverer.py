@@ -100,7 +100,7 @@ from core.internal.shared.timeouts import FILE_OP_TIMEOUT, RSYNC_TIMEOUT
 # W1-A1 (план 170): значение 1800 уникально — НЕ в SoT-наборе {10,15,30,60,120,180,300,600};
 # SSH_CMD_TIMEOUT остаётся модульной константой (delivery-пайплайн, TRAP ниже).
 # 🧐 TRAP[DECISION] · 2026-08-14 · — · SSH_CMD_TIMEOUT=1800 — уникальное значение delivery-пайплайна
-# · Rejected: импорт существующей SoT-константы (DEPLOY_TIMEOUT=600) · Reason: 600s недостаточно
+# · Rejected: импорт существующей SoT-константы (DEPLOY_TIMEOUT=600 недостаточно; SoT теперь 900) · Reason: 600s недостаточно
 # ·   для полного node-update-цикла (5-30 мин) — замена изменила бы поведение; значение 1800
 # ·   вне канонического SoT-набора, канонизация не требуется (один потребитель — core_deliverer)
 # · Rev: если появится второй потребитель 1800 — канонизировать в shared/timeouts

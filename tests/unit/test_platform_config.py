@@ -117,9 +117,7 @@ def test_load_from_yaml(isolated_config_with_yaml, caplog: pytest.LogCaptureFixt
 
     # Trigger load via accessors
     assert pc.default_s3_region() == "ru-1"
-    assert pc.default_s3_prefix() == "platform/backups"
     assert pc.default_context() == "test"
-    assert pc.default_platform_context() == "personal"
     # Sentinel
     assert not pc.default_s3_bucket_sentinel()
     assert not pc.default_context_sentinel()
@@ -147,9 +145,7 @@ def test_missing_file_empty_semantics(isolated_config, caplog: pytest.LogCapture
 
     # DevPlan 116 B5 T8 (D2): fallback-константы УДАЛЕНЫ — все accessors возвращают ""
     assert not pc.default_s3_region()
-    assert not pc.default_s3_prefix()
     assert not pc.default_context()
-    assert not pc.default_platform_context()
     # Sentinel values всегда ""
     assert not pc.default_s3_bucket_sentinel()
     assert not pc.default_context_sentinel()
@@ -181,12 +177,6 @@ def test_typed_accessors(isolated_config_with_yaml, caplog: pytest.LogCaptureFix
     assert val == "ru-1"
     logger.info("%s", f"[IMP:9][test][s3_region] default_s3_region() = {val}")
 
-    # ── default_s3_prefix ──
-    val = pc.default_s3_prefix()
-    assert isinstance(val, str)
-    assert val == "platform/backups"
-    logger.info("%s", f"[IMP:9][test][s3_prefix] default_s3_prefix() = {val}")
-
     # ── default_s3_bucket_sentinel ──
     val = pc.default_s3_bucket_sentinel()
     assert isinstance(val, str)
@@ -204,12 +194,6 @@ def test_typed_accessors(isolated_config_with_yaml, caplog: pytest.LogCaptureFix
     assert isinstance(val, str)
     assert not val
     logger.info("%s", f"[IMP:9][test][context_sentinel] default_context_sentinel() = '{val}'")
-
-    # ── default_platform_context ──
-    val = pc.default_platform_context()
-    assert isinstance(val, str)
-    assert val == "personal"
-    logger.info("%s", f"[IMP:9][test][platform_context] default_platform_context() = {val}")
 
     # LDD trajectory
     logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")

@@ -151,6 +151,32 @@ def _parse_line(line: str) -> tuple[str, str] | None:
 # endregion FUNC__parse_line
 
 
+# region FUNC_parse_line
+def parse_line(line: str) -> tuple[str, str] | None:
+    """Публичный контракт построчного разбора dotenv-грамматики (AI-0055, DevPlan 17 T5.5).
+
+    ## @purpose  Единая грамматика для всех читателей env-строк: env_reader и
+    ##            decrypt_secrets._yaml_to_env переиспользуют её вместо локальных копий.
+    ## @io        ⇥ line: str → ⎋ tuple[str, str] | None (None = строка пропущена)
+    """
+    return _parse_line(line)
+
+
+# endregion FUNC_parse_line
+
+
+# region FUNC_escape_single_quotes
+def escape_single_quotes(value: str) -> str:
+    """Shell-escaping одиночных кавычек: ' → '\'' (канон export_shell).
+
+    ## @purpose  Одна имплементация '\'' -escaping для export_shell и decrypt_secrets.
+    """
+    return value.replace("'", "'\\''")
+
+
+# endregion FUNC_escape_single_quotes
+
+
 # region FUNC_parse
 
 
@@ -159,7 +185,7 @@ def _parse_line(line: str) -> tuple[str, str] | None:
 ## @io       ⇥ path, result, collect_bad: bool → ⎋ список номеров не-комментарий строк без
 ##           валидного key= (пуст при collect_bad=False — backward compat)
 ## @complexity O(N) — N = строк файла
-def _plw_body_parse(path, result, collect_bad: bool = False):
+def _plw_body_parse(path, result, *, collect_bad: bool = False):
     bad_lines: list[int] = []
     with pathlib.Path(path).open(encoding="utf-8") as f:
         for line_no, raw_line in enumerate(f, start=1):
@@ -378,8 +404,7 @@ def export_shell(path: str) -> str:
 
     lines: list[str] = []
     for key, value in data.items():
-        # Escape single quotes: replace ' with '\''
-        escaped = value.replace("'", "'\\''")
+        escaped = escape_single_quotes(value)
         lines.append(f"export {key}='{escaped}'")
 
     result = "\n".join(lines) + "\n"

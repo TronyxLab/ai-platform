@@ -52,7 +52,7 @@ step_10_decrypt_secrets() {
     export SECRETS_FILE="$enc_file"
     python3 "${CORE_DIR}/internal/secrets/decrypt_secrets.py" || exit 1
     python3 "${CORE_DIR}/internal/bootstrap/lifecycle/secrets_manager.py" cleanup \
-        --secrets-env "${SECRETS_ENV_FILE:-/var/lib/platform/run/secrets.env}" --tor-enabled "${TOR_ENABLED:-false}" || exit 1
+        --secrets-env "${SECRETS_ENV_FILE:-${PLATFORM_RUN_BASE:-/var/lib/platform/run}/secrets.env}" --tor-enabled "${TOR_ENABLED:-false}" || exit 1
     step_done "decrypt-secrets" "Secrets decrypted (key wiped)"
 }
 # endregion FUNC_step_10_decrypt_secrets

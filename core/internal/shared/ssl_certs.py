@@ -334,6 +334,29 @@ def _san_entry_covers(san: str, domain: str) -> bool:
 # endregion FUNC__san_entry_covers
 
 
+# region FUNC_san_list_covers
+def san_list_covers(cert_san: list[str], domain: str) -> bool:
+    """Покрывает ли SAN-список сертификата домен (exact или one-level wildcard).
+
+    ## @purpose  Публичный list-level контракт поверх _san_entry_covers (AI-0066,
+    ##            DevPlan 17 T5.2): единая точка SAN-матчинга — cert_collector
+    ##            переиспользует канон вместо третьей локальной копии.
+    ## @io       ⇥ cert_san: list[str] (например ['example.com', '*.example.com']),
+    ##              domain: str → ⎋ bool
+    ## @complexity O(N) где N = len(cert_san)
+    ## @invariants
+    ##   - '*.example.com' матчит sub.example.com, НЕ example.com и НЕ a.b.example.com
+    ##   - Trailing-dot FQDN ('example.com.') нормализуется на ОБОИХ сторонах
+    ##     (прежнее поведение cert_collector._san_match — AI-0066 миграция без
+    ##     изменения семантики; _san_entry_covers ожидает уже нормализованные записи)
+    """
+    domain_n = domain.lower().strip(".")
+    return any(_san_entry_covers(san.lower().strip("."), domain_n) for san in cert_san)
+
+
+# endregion FUNC_san_list_covers
+
+
 # region FUNC__cert_covers_domain
 ## @purpose  SAN-aware domain matching (DevPlan 004 W1): SAN primary / CN fallback (RFC 6125).
 ##           SAN непуст → матч ТОЛЬКО по SAN (без CN-fallback); SAN пуст → CN через

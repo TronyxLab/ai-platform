@@ -24,7 +24,10 @@ from typing import TypedDict, cast
 
 import yaml  # module-level — except-ветка читает yaml.YAMLError (reportPossiblyUnboundVariable)
 
-_SCHEMA_VERSION_MIN: int = 2  # минимальная schema_version метрик (старые частично совместимы)
+# AI-0068 (DevPlan 17 T5.4): публичное имя для кросс-модульных потребителей (readiness);
+# приватный алиас оставлен для внутренней совместимости
+SCHEMA_VERSION_MIN: int = 2  # минимальная schema_version метрик (старые частично совместимы)
+_SCHEMA_VERSION_MIN = SCHEMA_VERSION_MIN
 
 
 # region DATA_ContainerEntry

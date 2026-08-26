@@ -38,6 +38,22 @@ from core.internal.shared.timeouts import CONVERGE_DOCKER_TIMEOUT as DOCKER_TIME
 
 logger = logging.getLogger(__name__)
 
+
+# region FUNC__preview_note
+def _preview_note(unit: str, *, dry_run: bool, report_only: bool, plan: str) -> bool:
+    """Печатать план dry-run/report-only; вернуть True если прогон preview-режима (AI-0031).
+
+    ## @purpose  Общая ветка флагов для detect/verify-only юнитов converge — C901
+    ##            основных функций не растёт.
+    """
+    if not (dry_run or report_only):
+        return False
+    logger.info("[IMP:9][converge][%s] DRY-RUN/REPORT-ONLY: %s", unit, plan)
+    return True
+
+
+# endregion FUNC__preview_note
+
 # pyright: reportUnusedParameter = false
 # R7-контракт оркестратора: reconcile_volumes обязан принимать dry_run/report_only (единая сигнатура
 # R-юнитов); параметры не используются — detect-only (O7); ruff: ignore[ARG001] — тот же контракт
@@ -138,14 +154,24 @@ def extract_named_volumes(compose_json: dict[str, object]) -> list[str]:
 ##   - Bind mounts (type=bind) → excluded from inspection
 def reconcile_volumes(
     node_yaml_path: str,
-    dry_run: bool = False,  # ruff: ignore[ARG001]
-    report_only: bool = False,  # ruff: ignore[ARG001]
+    *,
+    dry_run: bool = False,
+    report_only: bool = False,
 ) -> dict[str, str]:
     """Reconcile Docker named volumes — detect-only (O7 invariant).
 
     Returns a drift entry dict with status: ok|skipped|converged|warn|fail.
+
+    AI-0031 (DevPlan 17 T7.1): флаги подключены по образцу networks/runtime — юнит
+    detect-only (мутаций нет), при dry_run/report_only печатается план («мутаций
+    не будет») и detail помечается [dry-run] для отчёта оркестратора.
     """
     unit = "R7"
+    preview = bool(dry_run or report_only)
+    if preview:
+        logger.info(
+            "[IMP:9][converge][%s] DRY-RUN/REPORT-ONLY: план мутаций ПУСТ (O7 detect-only) — тома не создаются", unit
+        )
     logger.info("[IMP:8][converge][%s] START: reconcile_volumes — detect-only named volume check (O7)", unit)
 
     # ── Check docker daemon (W1: docker info — shared/docker_ops) ──
@@ -262,8 +288,9 @@ def reconcile_volumes(
         }
 
     logger.info("[IMP:9][converge][%s] DONE: All named volumes exist (converged)", unit)
-    report_add(unit, "converged", "All named volumes exist")
-    return {"unit": unit, "status": "converged", "detail": "All named volumes exist"}
+    detail = "All named volumes exist" + (" [dry-run]" if preview else "")
+    report_add(unit, "converged", "All named volumes exist" + (" [dry-run]" if preview else ""))
+    return {"unit": unit, "status": "converged", "detail": detail}
 
 
 # endregion FUNC_reconcile_volumes

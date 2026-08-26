@@ -34,13 +34,20 @@ from __future__ import annotations
 
 # region IMPORTS
 import argparse
-import difflib
 import logging
 import sys
 from pathlib import Path
 from typing import ClassVar, cast
 
 import yaml
+
+# Standalone CLI bootstrap: паттерн sync_requirements.py — repo root на sys.path.
+if __name__ == "__main__" or not __package__:
+    _REPO_ROOT = Path(Path(Path(__file__).parent, "..", "..", "..")).resolve()
+    if str(_REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(_REPO_ROOT))
+
+from core.internal.scripts.generated_check import check_generated
 
 # endregion IMPORTS
 
@@ -420,21 +427,8 @@ def main() -> int:
                     return 0
                 logger.warning("[IMP:6][main][CHECK][root] glossary is stale — exit 1")
                 print("[IMP:6][main][CHECK][root] glossary divergence detected", file=sys.stderr)
-                diff_lines = list(
-                    difflib.unified_diff(
-                        existing_content.splitlines(keepends=True),
-                        simulated.splitlines(keepends=True),
-                        fromfile=f"{agents_md} (file)",
-                        tofile=f"{agents_md} (regenerated)",
-                    )
-                )
-                for line in diff_lines[:20]:
-                    print(line, end="", file=sys.stderr)
-                if len(diff_lines) > DIFF_LINES_MAX:
-                    print(
-                        f"[IMP:6][check] ... truncated ({len(diff_lines) - DIFF_LINES_MAX} more lines)", file=sys.stderr
-                    )
-                return 1
+                # AI-0063 (DevPlan 17 T2.3): канон generated_check — полный diff
+                return check_generated(agents_md, simulated, to_label=f"{agents_md} (regenerated)")
 
             inject_into_md(agents_md, glossary_marker, glossary_content)
             print(f"[IMP:9][main][root] Glossary generation complete — {agents_md} updated", file=sys.stderr)
@@ -465,19 +459,8 @@ def main() -> int:
 
             logger.warning("[IMP:6][main][CHECK] AGENTS.md is stale — exit 1")
             print("[IMP:6][main][CHECK] AGENTS.md is stale — divergence detected", file=sys.stderr)
-            diff_lines = list(
-                difflib.unified_diff(
-                    existing_content.splitlines(keepends=True),
-                    simulated_content.splitlines(keepends=True),
-                    fromfile=f"{agents_md} (file)",
-                    tofile=f"{agents_md} (regenerated)",
-                )
-            )
-            for line in diff_lines[:20]:
-                print(line, end="", file=sys.stderr)
-            if len(diff_lines) > DIFF_LINES_MAX:
-                print(f"[IMP:6][check] ... truncated ({len(diff_lines) - DIFF_LINES_MAX} more lines)", file=sys.stderr)
-            return 1
+            # AI-0063 (DevPlan 17 T2.3): канон generated_check — полный diff
+            return check_generated(agents_md, simulated_content, to_label=f"{agents_md} (regenerated)")
         if canon_table:
             inject_into_md(agents_md, args.marker, canon_table)
         print(f"[IMP:9][main] AGENTS.md generation complete — {agents_md} updated", file=sys.stderr)

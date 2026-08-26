@@ -1,6 +1,6 @@
-# GREP_SUMMARY: status-page collectors containers check-container anti-recursion exit-code status-line
+# GREP_SUMMARY: status-page collectors containers check-container anti-recursion exit-code status-line health-canon
 # STRUCTURE: ▶ ┌container dict┐ → ◇ name=="status-page"? → ⎋ None (anti-recursion)
-#            → ◇ running+healthy → PASS → ◇ running+!healthy → WARN
+#            → ◇ running+healthy(канон D5) → PASS → ◇ running+!healthy(unhealthy/starting) → WARN
 #            → ◇ !running → exit_code parse (field|status_line) → PASS(0)|FAIL(>0) → ⎋ check dict
 # region MODULE_CONTRACT
 ## @purpose  Container status check for status-page — extracted from collectors.py (DevPlan 170 W7-E2).
@@ -8,7 +8,9 @@
 ## @scope    Consumed by collectors/aggregate.py (get_all_checks container phase)
 ## @invariants
 ##   - Anti-recursion: "status-page" container → None (excluded from self-checks)
-##   - Running & healthy → PASS; running & not healthy → WARN
+##   - healthy в metrics.json — канон-вердикт D5 (docker_collector ↔ shared/docker_compose,
+##     AI-0065): running-без-healthcheck ⇒ healthy=True ⇒ БЕЗ вечного WARN
+##   - Running & healthy → PASS; running & not healthy (unhealthy/starting) → WARN
 ##   - Not running: exit_code=0 OR "Exited (0)" → PASS (oneshot/init completed); exit_code>0 → FAIL
 ## @rationale  DevPlan 170 W7-E2 — containers.py extracted verbatim from collectors.py (AC-G7).
 ## @changes  2026-08-15 · DevPlan 170 W7-E2 — extracted from collectors.py

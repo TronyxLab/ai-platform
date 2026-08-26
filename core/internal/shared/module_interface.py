@@ -12,7 +12,8 @@
 ##           module-interface.sh — тонкий слой поверх module.yaml#interfaces контракта).
 ## @invariants
 ##   1. bash -c: source paths.sh && source module-interface.sh && invoke_module_interface '<m>' '<i>' [args...]
-##   2. Сигнатура: invoke(module_name, interface, *args, timeout=COMPOSE_UP_TIMEOUT) → tuple[bool, str]
+##   2. Сигнатура: invoke(module_name, interface, *args, timeout=None) → tuple[bool, str];
+##      None → канон по интерфейсу (healthcheck=HEALTHCHECK_CMD_TIMEOUT=60, остальное=COMPOSE_UP_TIMEOUT)
 ##      — (success, stderr-output); никогда не raise (OSError → (False, msg); таймаут обрабатывает
 ##      канон subprocess_io — graceful rc=124)
 ##   3. Пути paths.sh/module-interface.sh резолвятся относительно модуля (core/lib/), НЕ из env
@@ -45,7 +46,7 @@ from typing import cast
 import yaml
 
 from core.internal.shared.subprocess_io import run_subprocess_streaming
-from core.internal.shared.timeouts import COMPOSE_UP_TIMEOUT
+from core.internal.shared.timeouts import COMPOSE_UP_TIMEOUT, HEALTHCHECK_CMD_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +59,8 @@ _MODULE_INTERFACE_SH = _LIB_DIR / "module-interface.sh"
 # region FUNC_invoke
 ## @purpose  Вызвать интерфейс модуля через shell-функцию invoke_module_interface (DevPlan 118 C5).
 ## @io       ⇥ module_name: str; interface: str ("healthcheck"/"install"/...); *args: str;
-##              timeout: int (default COMPOSE_UP_TIMEOUT=180)
+##              timeout: int | None (None → канон по интерфейсу: healthcheck =
+##              HEALTHCHECK_CMD_TIMEOUT=60, остальное = COMPOSE_UP_TIMEOUT=180; AI-0012r)
 ##           ⎋ tuple[bool, str] — (success, stderr-output) — НИКОГДА не raise
 ## @complexity O(1) — single bash subprocess
 ## @invariants
@@ -66,18 +68,25 @@ _MODULE_INTERFACE_SH = _LIB_DIR / "module-interface.sh"
 ##   - args экранируются shlex.quote (никакого инъекционного пробела в команду)
 ##   - rc==0 → (True, stderr); rc!=0 → (False, stderr); OSError → (False, str(exc));
 ##     таймаут — graceful rc=124 через subprocess_io canon (killpg группы, REF-0103)
-##   - timeout — канон shared/timeouts (потребитель передаёт свой: HEALTHCHECK_POLL_TIMEOUT / COMPOSE_UP_TIMEOUT)
+##   - Единый бюджет healthcheck-invoke (AI-0012r): interface="healthcheck" без явного
+##     timeout получает HEALTHCHECK_CMD_TIMEOUT — тот же probe не может получить 30/60/180
+##     в зависимости от пути вызова; COMPOSE_UP_TIMEOUT остаётся дефолтом compose-up/install
 def invoke(
     module_name: str,
     interface: str,
     *args: str,
-    timeout: int = COMPOSE_UP_TIMEOUT,
+    timeout: int | None = None,
 ) -> tuple[bool, str]:
     """Invoke a module interface via the bash facade (module-interface.sh, C5).
 
     ▶ ┌module + interface + args┐ → ○ build bash_cmd (source ×2 + invoke_module_interface) →
       → ⚡ subprocess.run(["bash","-c",cmd], capture, text, timeout) → ◇ rc==0? → ⎋ (True, stderr) │ (False, stderr)
     """
+    effective_timeout = (
+        HEALTHCHECK_CMD_TIMEOUT
+        if timeout is None and interface == "healthcheck"
+        else (COMPOSE_UP_TIMEOUT if timeout is None else timeout)
+    )
     bash_cmd = (
         f"source '{_PATHS_SH}' && "
         f"source '{_MODULE_INTERFACE_SH}' && "
@@ -85,12 +94,14 @@ def invoke(
     )
     if args:
         bash_cmd += " " + " ".join(shlex.quote(a) for a in args)
-    logger.info("[IMP:8][module_interface][invoke] %s %s (timeout=%ds)", module_name, interface, timeout)
+    logger.info("[IMP:8][module_interface][invoke] %s %s (timeout=%ds)", module_name, interface, effective_timeout)
     # REF-0103: killpg через subprocess_io canon — start_new_session + os.killpg(SIGKILL) всей
     # группы при таймауте (stream=False: tee-вывод не нужен; heartbeat=0: без heartbeat-шума).
     # Таймаут больше НЕ бросает TimeoutExpired наверх — канон возвращает graceful rc=124.
     try:
-        result = run_subprocess_streaming(["bash", "-c", bash_cmd], timeout=timeout, stream=False, heartbeat=0)
+        result = run_subprocess_streaming(
+            ["bash", "-c", bash_cmd], timeout=effective_timeout, stream=False, heartbeat=0
+        )
     except OSError as exc:
         logger.warning("[IMP:7][module_interface][error] %s %s error: %s", module_name, interface, exc)
         return False, str(exc)
@@ -212,7 +223,7 @@ def dispatch(
     module_name: str,
     interface: str,
     *args: str,
-    timeout: int = COMPOSE_UP_TIMEOUT,
+    timeout: int | None = None,
     modules_dir: str | None = None,
 ) -> tuple[int, str]:
     """Полный dispatch модульного интерфейса (DevPlan 119 D4) — единый канон.
@@ -223,8 +234,11 @@ def dispatch(
 
     ## @purpose — Замена shell-логики module-interface.sh (invoke_module_interface +
     ##            _invoke_validate_interface + _invoke_dispatch_*) — dual-SoT устранён.
-    ## @io — ⇥ module_name: str, interface: str, *args: str, timeout: int, modules_dir: str | None
-    ##           ⎋ tuple[int, str] — (rc, stderr); rc: 0=success/skip, 1=script failed, 2=invalid config
+    ## @io — ⇥ module_name: str, interface: str, *args: str,
+    ##           timeout: int | None (None → канон по интерфейсу: healthcheck =
+    ##           HEALTHCHECK_CMD_TIMEOUT=60, остальное = COMPOSE_UP_TIMEOUT=180; AI-0012r),
+    ##           modules_dir: str | None → ⎋ tuple[int, str] — (rc, stderr);
+    ##           rc: 0=success/skip, 1=script failed, 2=invalid config
     ## @complexity O(n) — n = зарегистрированные интерфейсы (validate) + 1 subprocess
     ## @invariants
     ##   - module.yaml отсутствует → rc 2 (invalid config, как shell)
@@ -233,7 +247,13 @@ def dispatch(
     ##   - healthcheck/install/deploy-hook/remove-hook → bash script; script отсутствует → rc 0
     ##   - deploy-hook/remove-hook читают hooks.on_project_deploy/on_project_remove из module.yaml
     ##   - Никогда не raise — OSError → rc 1; таймаут → graceful rc=124 (killpg canon, REF-0103)
+    ##   - Единый бюджет healthcheck-invoke (AI-0012r): см. invoke()
     """
+    effective_timeout = (
+        HEALTHCHECK_CMD_TIMEOUT
+        if timeout is None and interface == "healthcheck"
+        else (COMPOSE_UP_TIMEOUT if timeout is None else timeout)
+    )
     module_dir = resolve_module_dir(module_name, modules_dir)
     module_yaml = module_dir / "module.yaml"
 
@@ -257,9 +277,9 @@ def dispatch(
     # ── Dispatch ──
     logger.info("[IMP:8][module_interface][invoke] Invoking module=%s interface=%s", module_name, interface)
     if interface == "healthcheck":
-        return _run_module_script(module_dir / "healthcheck.sh", args, timeout)
+        return _run_module_script(module_dir / "healthcheck.sh", args, effective_timeout)
     if interface == "install":
-        return _run_module_script(module_dir / "install.sh", (), timeout)
+        return _run_module_script(module_dir / "install.sh", (), effective_timeout)
     if interface in {"deploy-hook", "remove-hook"}:
         field = "hooks.on_project_deploy" if interface == "deploy-hook" else "hooks.on_project_remove"
         data = _read_module_yaml(module_yaml)
@@ -269,7 +289,7 @@ def dispatch(
         if not hook_path:
             logger.info("[IMP:8][module_interface][dispatch] Hook field '%s' not found — skipping", field)
             return 0, ""
-        return _run_module_script(module_dir / str(hook_path), args, timeout)
+        return _run_module_script(module_dir / str(hook_path), args, effective_timeout)
     # Unknown interface (зарегистрирован, но вне канона) — graceful skip
     logger.info(
         "[IMP:9][module_interface][invoke] SKIP: Unknown interface '%s' for module '%s'", interface, module_name

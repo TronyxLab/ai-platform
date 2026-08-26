@@ -34,7 +34,6 @@
 from __future__ import annotations
 
 import argparse
-import difflib
 import logging
 import sys
 from collections.abc import Callable
@@ -48,6 +47,14 @@ _PLATFORM_ROOT = str(Path(Path(Path(Path(Path(__file__).resolve()).parent).paren
 if _PLATFORM_ROOT not in sys.path:
     sys.path.insert(0, _PLATFORM_ROOT)
 
+# Standalone CLI bootstrap: `python3 core/internal/scripts/<script>.py` (makefile)
+# не имеет `core` пакета на sys.path — добавляем repo root (паттерн sync_requirements.py).
+if __name__ == "__main__" or not __package__:
+    _REPO_ROOT = Path(Path(Path(__file__).parent, "..", "..", "..")).resolve()
+    if str(_REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(_REPO_ROOT))
+
+from core.internal.scripts.generated_check import check_generated
 from core.internal.shared.exceptions import ConfigParseError
 
 # region TYPED_CONTRACTS
@@ -465,43 +472,13 @@ def generate_helpers_py(ci_defaults: dict[str, str]) -> str:
 def _check_generated_content(content: str, path: Path, label: str) -> int:
     """Compare generated content with existing file byte-by-byte.
 
-    ## @purpose  Byte-level comparison for --check mode. Returns 0 if match,
-    ##            1 if divergence. Prints first 20 lines of unified diff on stderr.
+    ## @purpose  Делегирует в канон generated_check.check_generated (AI-0063, DevPlan 17 T2.3):
+    ##            полный unified diff вместо среза [:20]; rc-семантика --check сохранена.
     ## @io        ⇥ content: generated string, path: existing file, label: display name
     ##           → ⎋ int: 0=match, 1=diverges
-    ## @complexity O(N) where N = file size
-    ## @invariants
-    ##   - Reads file as text (UTF-8)
-    ##   - Prints diff only on divergence
-    ##   - Never writes to disk
     """
     logger.info("[IMP:7][check][START] Checking %s against %s", label, path)
-
-    if not path.is_file():
-        logger.error("[IMP:1][check][FAIL] File not found: %s — cannot check", path)
-        print(f"[IMP:1][check] File not found: {path} — cannot check", file=sys.stderr)
-        return 1
-
-    existing = path.read_text(encoding="utf-8")
-    if content == existing:
-        logger.info("[IMP:9][check][OK] %s — matches on disk", label)
-        return 0
-
-    logger.warning("[IMP:6][check][DIVERGE] %s — content differs from %s", label, path)
-    print(f"[IMP:6][check] Divergence in {label}:", file=sys.stderr)
-    diff_lines = list(
-        difflib.unified_diff(
-            existing.splitlines(keepends=True),
-            content.splitlines(keepends=True),
-            fromfile=f"{label} (file)",
-            tofile=f"{label} (generated)",
-        )
-    )
-    for line in diff_lines[:20]:
-        print(line, end="", file=sys.stderr)
-    if len(diff_lines) > DIFF_LINES_MAX:
-        print(f"[IMP:6][check] ... truncated ({len(diff_lines) - DIFF_LINES_MAX} more lines)", file=sys.stderr)
-    return 1
+    return check_generated(path, content, to_label=f"{label} (generated)")
 
 
 # endregion FUNC_check_generated_content

@@ -43,7 +43,8 @@
 ## @see      core/entrypoint-manifest.yaml — target manifest file
 ## @changes 2026-07-22 | Created (DevPlan 051 Wave 2)
 ##           2026-07-30 | Added --check mode: byte-level comparison, exit 0/1, stderr diff
-##           2026-07-30 | G3 CYCLE BREAK: load_structural_sections() replaces load_existing_manifest()
+##           2026-07-30 | G3 CYCLE BREAK: load_structural_sections() — единственный loader;
+##           load_existing_manifest() демонтирован (AI-0058, DevPlan 17 T6.1)
 ##                        in main(). allowed_verbs and gates NEVER read from manifest (DevPlan 090 T6).
 ##           2026-08-03 | DevPlan 123 T2 (P-14): статический .PHONY-парсинг → PRIMARY;
 ##                        make -np → fallback; diff в --check — полный (не 20 строк)
@@ -59,7 +60,6 @@ from __future__ import annotations
 
 # region IMPORTS
 import argparse
-import difflib
 import logging
 import os
 import re
@@ -70,6 +70,15 @@ from pathlib import Path
 from typing import ClassVar, TextIO, cast
 
 import yaml
+
+# Standalone CLI bootstrap: `python3 core/internal/scripts/<script>.py` (makefile)
+# не имеет `core` пакета на sys.path — добавляем repo root (паттерн sync_requirements.py).
+if __name__ == "__main__" or not __package__:
+    _REPO_ROOT = Path(Path(Path(__file__).parent, "..", "..", "..")).resolve()
+    if str(_REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(_REPO_ROOT))
+
+from core.internal.scripts.generated_check import check_generated
 
 # endregion IMPORTS
 
@@ -338,33 +347,6 @@ def collect_gate_tests(tests_dir: str) -> _GatesMap:
     return gates
 
 
-def load_existing_manifest(path: str) -> _ManifestData:
-    """Load existing entrypoint-manifest.yaml (full load — backward compat).
-
-    ## @purpose  Read YAML manifest from disk. Loads ALL sections including allowed_verbs/gates.
-    ##            ⚠️ DEPRECATED for main() flow: use load_structural_sections() instead.
-    ##            Kept for backward compatibility with external consumers importing this function.
-    ## @io       ⇥ path: path to entrypoint-manifest.yaml
-    ##           → ⎋ dict: parsed YAML content (empty dict if file missing)
-    ## @complexity O(1) — single file read + parse
-    ## @invariants
-    ##   - Returns ALL keys from manifest, including allowed_verbs and gates
-    ##   - Missing file returns empty dict
-    """
-    print(f"[IMP:7][load_existing_manifest] Loading existing manifest from {path}", file=sys.stderr)
-    manifest_path = Path(path)
-    if not manifest_path.is_file():
-        print(f"[IMP:6][load_existing_manifest] Manifest not found at {path}, returning empty", file=sys.stderr)
-        return {}
-    with Path(str(manifest_path)).open(encoding="utf-8") as f:
-        # W11: yaml.safe_load returns Any → cast to opaque mapping boundary
-        data = cast(_ManifestData | None, yaml.safe_load(f))
-    if data is None:
-        data = {}
-    print(f"[IMP:9][load_existing_manifest] Loaded manifest with {len(data)} top-level keys", file=sys.stderr)
-    return data
-
-
 def load_structural_sections(path: str) -> _ManifestData:
     """Load structural sections ONLY from entrypoint-manifest.yaml — explicitly excludes allowed_verbs and gates.
 
@@ -611,44 +593,11 @@ def _generate_output(merged: _ManifestData, existing_raw: str = "") -> str:
 def _check_generated_content(content: str, path: Path) -> int:
     """Compare generated content with existing file byte-by-byte.
 
-    ## @purpose  Byte-level comparison for --check mode. Returns 0 if match,
-    ##            1 if divergence. Prints FULL unified diff on stderr
-    ##            (DevPlan 123 T2/P-14: полный diff — CI-самодиагностика; первые 20 строк
-    ##            скрывали источник расхождения в check-manifests RED).
-    ## @io        ⇥ content: generated string, path: existing file
-    ##           → ⎋ int: 0=match, 1=diverges
-    ## @complexity O(N) where N = file size
-    ## @invariants
-    ##   - Reads file as text (UTF-8)
-    ##   - Prints diff only on divergence
-    ##   - Never writes to disk
-    ##   - Полный unified_diff без обрезки (P-14)
+    ## @purpose  Тонкая обёртка над каноном generated_check.check_generated (AI-0063,
+    ##            DevPlan 17 T2.3): полная diff-диагностика P-14 — единственная реализация.
+    ## @io        ⇥ content: generated string, path: existing file → ⎋ int: 0=match, 1=diverges
     """
-    logger.info("[IMP:7][check][START] Checking against %s", path)
-
-    if not path.is_file():
-        logger.error("[IMP:1][check][FAIL] File not found: %s", path)
-        print(f"[IMP:1][check] File not found: {path} — cannot check", file=sys.stderr)
-        return 1
-
-    existing = path.read_text(encoding="utf-8")
-    if content == existing:
-        logger.info("[IMP:9][check][OK] Content matches %s", path)
-        return 0
-
-    logger.warning("[IMP:6][check][DIVERGE] Content differs from %s", path)
-    print(f"[IMP:6][check] Divergence in {path.name}:", file=sys.stderr)
-    diff_lines = list(
-        difflib.unified_diff(
-            existing.splitlines(keepends=True),
-            content.splitlines(keepends=True),
-            fromfile=f"{path.name} (file)",
-            tofile=f"{path.name} (generated)",
-        )
-    )
-    for line in diff_lines:
-        print(line, end="", file=sys.stderr)
-    return 1
+    return check_generated(path, content)
 
 
 # endregion CHECK_HELPERS
@@ -687,7 +636,7 @@ def main(
     ##           → ⎋ exit code 0 on success/match, 1 on error/divergence
     ## @complexity O(T + N) where T=targets, N=gate tests
     ## @invariants
-    ##   - Uses load_structural_sections() NOT load_existing_manifest() — G3 cycle break
+    ##   - Uses load_structural_sections() ONLY (G3 cycle break; load_existing_manifest удалён)
     ##   - allowed_verbs/gates come EXCLUSIVELY from Makefile/pytest, never from manifest
     ## @rationale G3 CYCLE BREAK (DevPlan 090 T6): structural sections only from manifest
     ## @changes 2026-08-14 | DevPlan 167 D1 — +argv/open_fn DI-параметры (AF-4 + open-fn seam)

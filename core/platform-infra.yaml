@@ -311,4 +311,4 @@ env_defaults:
   GHCR_PUSH_TOKEN: ""
   # ── Deploy (F4 debt: документированные overrides orchestrator) ──
   PROJECTS_BASE: "/opt/projects"
-  PLATFORM_DEPLOY_TIMEOUT: "600"
+  PLATFORM_DEPLOY_TIMEOUT: "900"

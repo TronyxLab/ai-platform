@@ -204,7 +204,7 @@ Python (`core/internal/practices/`), НЕ копируются в проект.
 
 | Сервис | Фасад | Назначение |
 |--------|-------|------------|
-| `postgres` | `pgbouncer:6432` (`PLATFORM_POSTGRES_DSN`) | Единый PostgreSQL 16 + пулер соединений. Проект подключается своей ролью `${project}_user` к своей БД `needs.database` (роль/БД/GRANT создаются хук-ом postgres при деплое) |
+| `postgres` | `pgbouncer:6432` (`PLATFORM_POSTGRES_DSN`) | Единый PostgreSQL 18.4 + пулер соединений. Проект подключается своей ролью `${project}_user` к своей БД `needs.database` (роль/БД/GRANT создаются хук-ом postgres при деплое) |
 | `redis` | `redis:6379` (`PLATFORM_REDIS_URL`) | Общий кэш/очереди |
 | `nginx` | `nginx:443` (`PLATFORM_NGINX_URL`) | Ingress + TLS (единственная точка публикации) |
 | `litellm` | `litellm:4000` (`PLATFORM_LITELLM_URL`) | LLM-прокси (единый ключ через платформу) |
@@ -419,7 +419,7 @@ make deploy-project → tar+ssh (orchestrator_cli deliver → forced-command rec
 
 1. **E2E на test-VPS:** `make test-node NODE=<test>` зелёный (0 failed; skip — только при
    документированной инфраструктурной недоступности) → нода согласована (`make check NODE=<test>`).
-2. **Chaos:** `chaos FULL T1–T12` (после bootstrap).
+2. **Resilience drills:** fast (`-m "chaos and not night"`, ≤30 мин) + night (`-m night`, отдельное окно ~25 мин) — после bootstrap.
 3. **CI-гейты:** `make check` локально зелёный; CI на целевой ветке (platform-test + security-scan
    включая gitleaks) зелёный; `make check MARKER=check-manifests` чистый.
 4. **Деплой:** `make deploy` (проект) / `make context-promote CONTEXT=<context>` (платформа);

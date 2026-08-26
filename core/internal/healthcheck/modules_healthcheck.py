@@ -356,11 +356,15 @@ def _resolve_enabled_modules() -> set[str] | None:
     """
     import os
 
+    # AI-0025 (DevPlan 17 T4.1): резолв через канон deploy_paths.node_configs_remote
+    # (env NODE_CONFIGS_REMOTE_BASE → /opt/node-configs), не локальный literal
+    from core.internal.shared.deploy_paths import node_configs_remote
+
     node_yaml = os.environ.get("NODE_YAML", "")
     if not node_yaml:
         node_name_env = os.environ.get("NODE_NAME", "")
         if node_name_env:
-            candidate = Path(f"/opt/node-configs/{node_name_env}/node.yaml")
+            candidate = Path(node_configs_remote()) / node_name_env / "node.yaml"
             if candidate.is_file():
                 node_yaml = str(candidate)
     if not node_yaml or not Path(node_yaml).is_file():

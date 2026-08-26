@@ -36,7 +36,7 @@ from unittest import mock
 
 import pytest
 
-from core.internal.practices.check_project import _run_check, check_project
+from core.internal.practices.check_project import check_project
 from core.internal.practices.generators import GENERATED_HEADER, read_lock
 from core.internal.practices.manifest import load_manifest
 from core.internal.practices.set_practices import set_practices
@@ -280,9 +280,15 @@ def test_mock_has_five_generated_files(tmp_path: Path) -> None:
 
 # region HELPER__run_single_check
 def _run_single_check(check_id: str, project: Path) -> Any:
-    """Исполнить ОДИН handler канона напрямую (минуя select_checks — full-проверки тоже)."""
+    """Один handler через ПУБЛИЧНЫЙ run_check пакета (AI-0049, T8.4).
+
+    ## @purpose  Мок-точка = публичная функция run_check (exec); приватный алиас
+    ##            _run_check больше не референсится тестом.
+    """
+    from core.internal.practices.check_project.exec import run_check
+
     check = load_manifest().by_id()[check_id]
-    return _run_check(check, project, fix=False)
+    return run_check(check, project, fix=False)
 
 
 # endregion HELPER__run_single_check

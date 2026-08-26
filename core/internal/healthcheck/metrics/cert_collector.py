@@ -30,6 +30,7 @@ from cryptography.x509.oid import NameOID
 from core.internal.shared.deploy_paths import letsencrypt_live
 from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError
 from core.internal.shared.node_yaml import NodeYaml
+from core.internal.shared.ssl_certs import san_list_covers
 
 logger = logging.getLogger(__name__)
 
@@ -59,33 +60,13 @@ class CertInfo(TypedDict, total=False):
 
 
 # region FUNC__san_match
-## @purpose  Check if a certificate SAN list covers a given domain (exact or wildcard match)
-## @io       ⇥ cert_san: list[str] — SAN entries from cert (e.g. ['example.com', '*.example.com'])
-##           ⇥ domain: str — domain to match (e.g. 'sub.example.com')
-##           ⎋ bool — True if domain is covered
-## @complexity  O(N) where N = len(cert_san)
+## @purpose  Тонкая делегация на канон shared/ssl_certs.san_list_covers (AI-0066,
+##           DevPlan 17 T5.2): третья незадокументированная копия wildcard-match удалена.
+##           Имя сохранено — тесты импортируют _san_match напрямую.
+## @io       ⇥ cert_san: list[str], domain: str → ⎋ bool
 def _san_match(cert_san: list[str], domain: str) -> bool:
-    """Check if domain is covered by certificate SAN entries (exact or wildcard).
-
-    # ▶ ┌cert_san[] + domain┐ → ◇ exact match? → True | ◇ wildcard *.suffix match? → True | ⎋ False
-
-    Wildcard: *.example.com matches sub.example.com but NOT example.com itself.
-    """
-    domain = domain.lower().strip(".")
-    for san_entry in cert_san:
-        san = san_entry.lower().strip(".")
-        # Exact match
-        if san == domain:
-            return True
-        # Wildcard match: *.suffix → check domain ends with .suffix AND has exactly one subdomain level
-        if san.startswith("*."):
-            suffix = san[2:]  # Remove "*."
-            if domain.endswith("." + suffix):
-                # Count subdomain levels — must be exactly one level
-                remaining = domain[: -len(suffix) - 1] if domain.endswith("." + suffix) else domain
-                if remaining and "." not in remaining:
-                    return True
-    return False
+    """Check if domain is covered by certificate SAN entries (exact or wildcard)."""
+    return san_list_covers(cert_san, domain)
 
 
 # endregion FUNC__san_match

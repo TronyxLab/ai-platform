@@ -89,11 +89,11 @@ def test_provision_networks_no_docker_raises_platform_fatal(caplog, tmp_path) ->
 # 🧪 TRAP[TEST] · Regression · deploy_engine._handle_first_deploy raises (DevPlan 116 B4 T3.1)
 def test_deploy_engine_first_deploy_raises_platform_fatal(caplog) -> None:
     """_handle_first_deploy → PlatformFatalError (а не SystemExit), exit_code 10."""
-    from core.internal.deploy.deploy_engine import DeployEngine
+    from core.internal.deploy.engine.lifecycle import handle_first_deploy
 
-    engine = DeployEngine()
     with pytest.raises(PlatformFatalError) as excinfo:
-        engine._handle_first_deploy("proj", "svc", "ref", "test reason")
+        # AI-0056 (DevPlan 17 T6.6): шим _handle_first_deploy инlinedен — зовём lifecycle напрямую
+        handle_first_deploy("proj", "svc", "ref", "test reason")
 
     assert excinfo.value.exit_code == 10
     assert "no rollback possible" in str(excinfo.value)

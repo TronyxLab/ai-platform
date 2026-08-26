@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: deploy-paths, canonical, deprecated, registry, bootstrap-compose-stub, removal-plan, projects-base, resolver, letsencrypt-live, node-configs-remote, platform-remote-base
-# STRUCTURE: ▶ CANONICAL_DEPLOY_PATHS (6 paths) → ◇ DEPRECATED_DEPLOY_PATHS (1 stub) → ⊕ get_canonical_paths() →
+# STRUCTURE: ▶ CANONICAL_DEPLOY_PATHS (6 paths) → ◇ DEPRECATED_DEPLOY_PATHS (1 stub) → ⊕ резолверы env-knobs →
 #            ▶ projects_base() ┌env┐ → ◇ PROJECTS_BASE → ⎋ Path (default /opt/projects) →
 #            ▶ letsencrypt_live() / node_configs_remote() / platform_remote_base() (C7) → ⎋ Path
 # region MODULE_CONTRACT
@@ -126,28 +126,8 @@ SCP_RSYNC_ALLOWED_PATHS: tuple[str, ...] = (
 )
 
 
-# region FUNC_get_canonical_paths
-## @purpose — Return immutable list of canonical deploy paths.
-## @io — ⇥ None → ⎋ list[str] (6 paths)
-## @complexity — O(1)
-def get_canonical_paths() -> list[str]:
-    """Return the list of canonical deploy paths."""
-    return list(CANONICAL_DEPLOY_PATHS)
-
-
-# endregion FUNC_get_canonical_paths
-
-
-# region FUNC_get_deprecated_paths
-## @purpose — Return immutable dict of deprecated deploy paths with removal plans.
-## @io — ⇥ None → ⎋ dict[str, dict[str, str]]
-## @complexity — O(1)
-def get_deprecated_paths() -> dict[str, dict[str, str]]:
-    """Return the dict of deprecated deploy paths with removal plans."""
-    return dict(DEPRECATED_DEPLOY_PATHS)
-
-
-# endregion FUNC_get_deprecated_paths
+# T6.3 (AI-0062, DevPlan 17): тест-онли геттеры get_canonical_paths/get_deprecated_paths
+# удалены — потребители читают константы CANONICAL_DEPLOY_PATHS/DEPRECATED_DEPLOY_PATHS напрямую.
 
 
 # ── PROJECTS_BASE resolver (DevPlan 118 A3) ──────────────────────────────────

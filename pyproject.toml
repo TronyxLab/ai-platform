@@ -129,6 +129,7 @@ markers = [
     "requires_node: E2E pipeline tests against a recreatable test-VPS (needs NODE env, SSH, Docker)",
     "local_stack: integration tests requiring the full local production stack (make up) — excluded from CI collection (DevPlan 007 W2)",
     "chaos: chaos-engineering fault injection tests on the test-VPS (126-chaos-resilience; needs NODE env, SSH, operator window; NOT in regular gate)",
+    "night: long-running resilience drills (reboot/outbound-partition/daemon-restart, DevPlan 013) — run in a separate operator window via `-m night`; subset of chaos",
     "gate: CI gate tests",
     "requires_docker: tests that require a running Docker daemon",
     "local_auth: tests that require local auth setup",

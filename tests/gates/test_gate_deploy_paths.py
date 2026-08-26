@@ -40,8 +40,8 @@ if _SHARED_DIR not in sys.path:
 import pathlib
 
 from deploy_paths import (
-    get_canonical_paths,
-    get_deprecated_paths,
+    CANONICAL_DEPLOY_PATHS,
+    DEPRECATED_DEPLOY_PATHS,
 )
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -101,7 +101,7 @@ def test_canonical_paths_registered():
     if not deploy_targets:
         pytest.skip("No deploy targets found in entrypoint-manifest.yaml")
 
-    canonical = get_canonical_paths()
+    canonical = list(CANONICAL_DEPLOY_PATHS)
     logger.info("[IMP:9][gate_deploy_paths] Canonical deploy paths: %d", len(canonical))
     logger.info("[IMP:9][gate_deploy_paths] Deploy-related targets from manifest: %d", len(deploy_targets))
 
@@ -124,7 +124,7 @@ def test_canonical_paths_registered():
 @pytest.mark.gate
 def test_no_unregistered_paths():
     """CANONICAL_DEPLOY_PATHS has exactly 6 documented paths."""
-    canonical = get_canonical_paths()
+    canonical = list(CANONICAL_DEPLOY_PATHS)
 
     # Enforce exactly 6 canonical paths
     assert len(canonical) == 6, (
@@ -149,7 +149,7 @@ def test_no_unregistered_paths():
 @pytest.mark.gate
 def test_deprecated_have_removal_plan():
     """Every deprecated path has target_date, removal_mechanism, and verification."""
-    deprecated = get_deprecated_paths()
+    deprecated = dict(DEPRECATED_DEPLOY_PATHS)
 
     required_fields = {"target_date", "removal_mechanism", "verification", "description", "fallback", "rev_date"}
 

@@ -208,7 +208,7 @@ def promote_via_ssh(context: str) -> str:
 
 
 # region FUNC_verify_mirror
-def verify_mirror(context: str, mirror_head: str, source_head: str) -> bool:  # ruff: ignore[ARG001]
+def verify_mirror(mirror_head: str, source_head: str) -> bool:
     """Compare remote mirror HEAD against local HEAD — post-push verification (AC6).
 
     ▶ ┌mirror_head, source_head┐ → ◇ equal? → ├─yes: [IMP:9] Mirror sync verified ┤ └─no: [IMP:10] FAIL → ⎋ bool
@@ -319,7 +319,7 @@ def promote_context(
         audit_logger.write_audit_entry(tag, "FAIL", f"git rev-parse HEAD failed ({exc})", log_file=log_file)
         return 1
 
-    if verify_mirror(org, mirror_head, source_head):
+    if verify_mirror(mirror_head, source_head):
         # 2026-08-16: авто-провижининг org-секретов контекстной организации (best-effort) —
         # mirror-org CI (core-deploy/deploy-project) без ручной настройки UI.
         secrets_ok = True

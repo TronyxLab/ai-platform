@@ -961,14 +961,29 @@ def _deploy_parallel(
         logger.warning("[IMP:5][_deploy_parallel][pre_pull] Pre-pull error (non-fatal): %s", exc)
 
     # ── 3. batch-check-env (one call replaces per-module check-env) ──
+    # 📝 TRAP[DEBT] · 2026-08-26 · MED · batch-check-env результат не гейтит parallel-deploy
+    # · Observed: env_results вычисляется и логируется, но не читается ни одной веткой деплоя
+    #   (deploy-many и групповые ветки не получают env-вердиктов)
+    # · Suspected: гейтинг потерян при декомпозиции deploy-modules.sh; параллельный путь
+    #   исторически полагается на серверные проверки
+    # · Impact: required-secrets gate фактически отсутствует в DEPLOY_PARALLEL=true пути
+    #   (краш валидатора сейчас громкий, но pass-результаты всё равно не применяются)
+    # · When: DevPlan 17 T1.1 (фикс sequential-сайта; parallel-гейтинг — отдельный триаж)
+    env_results: list[dict[str, str]] = []
     try:
         env_results = secrets_validator.batch_check_env(modules_dir, secrets_manifest)
         logger.info(
             "[IMP:9][_deploy_parallel][batch_check_env] batch-check-env completed for %d modules", len(env_results)
         )
-    # ruff: ignore[BLE001] — DEPLOY_BEST_EFFORT: широкий спектр helper-API (git/yaml/jinja/subprocess/docker)
-    except Exception as exc:  # noqa: EXC — batch env check non-fatal (best-effort: DEPLOY_BEST_EFFORT policy)
-        logger.warning("[IMP:5][_deploy_parallel][batch_check_env] error (non-fatal): %s", exc)
+    # ruff: ignore[BLE001] — DEPLOY_BEST_EFFORT/best-effort: краш batch-check-env НЕ эквивалентен
+    # «нет missing» (AI-0011 класс): делаем краш громким (fail-closed сигнал в лог), но
+    # параллельный путь исторически не гейтится env_results (см. DEBT ниже) — поведение не меняем
+    except Exception as exc:  # noqa: EXC — loud non-fatal, best-effort policy: env gate unavailable, risk surfaced
+        logger.error(
+            "[IMP:9][_deploy_parallel][batch_check_env_error] validator crashed — env gate NOT enforced this run: %s",
+            exc,
+        )
+        env_results = []
 
     deployed = 0
     failed: list[str] = []
@@ -1143,7 +1158,9 @@ def _deploy_orchestrator(
 ##   - Critical-failure модуля → abort ПОСЛЕДУЮЩИХ групп (+хвост); соседи по той же группе
 ##     независимы (kahn) и продолжают деплоиться; невыполненные добавляются в failed (честный
 ##     учёт), severity-агрегация даёт exit 2; warn-failure продолжает цикл (DEPLOY_BEST_EFFORT)
-##   - Missing env vars → module FAILED + skipped (best-effort)
+##   - Missing env vars → module FAILED + skipped; краш валидатора (env_check_error) → ТОЖЕ
+##     module FAILED (sentinel missing, fail-closed) — AI-0011: required-secrets L1-класс,
+##     DEPLOY_BEST_EFFORT не распространяется; счётчик env_check_errors в [done]-сводке
 ##   - install_type "system" → invoke_module_interface install + best-effort healthcheck liveness
 ##   - Everything else (docker/unknown) → deploy_docker_module (module.yaml missing → docker path,
 ##     best-effort — compose resolution fails there)
@@ -1165,6 +1182,7 @@ def _deploy_sequential(
     secrets_manifest = os.path.join(core_dir, "secrets-manifest.yaml")
     deployed = 0
     failed: list[str] = []
+    env_check_errors = 0
     logger.info(
         "[IMP:9][_deploy_sequential][start] DEPLOY_PARALLEL=false — sequential for-loop over %d modules",
         len(enabled_names),
@@ -1182,13 +1200,27 @@ def _deploy_sequential(
     logger.info("[IMP:9][_deploy_sequential][order] Deploy order (depends_on-aware): %s", ordered)
 
     for idx, m_name in enumerate(ordered):
+        # ⚠️ TRAP[BUG] · 2026-08-26 · P1 · краш env-check валидатора молча пропускал модуль без required secrets
+        # · Symptom: secrets_validator.check_env_requires raise → warning IMP:8 → missing=[] → модуль деплоился
+        #   без проверки required secrets (неотличим от pass)
+        # · Root: except-ветка DEPLOY_BEST_EFFORT глотала краш валидатора как «нет missing»
+        # · Fix: sentinel missing=["<env_check_error>: …"] → module FAILED (fail-closed) + счётчик
+        #   env_check_errors в [done]-сводке; DEPLOY_BEST_EFFORT не распространяется на L1-класс
+        # · Prevention: tests/unit/test_deploy_orchestrator_envcheck.py (crash_is_loud + pass_deploys R5)
         # ── env check (missing vars → fail module, skip deploy) ──
         try:
             missing = secrets_validator.check_env_requires(m_name, secrets_manifest)
-        # ruff: ignore[BLE001] — DEPLOY_BEST_EFFORT: широкий спектр helper-API (git/yaml/jinja/subprocess/docker)
-        except Exception as exc:  # noqa: EXC — env check failure treated as non-blocking (best-effort: DEPLOY_BEST_EFFORT policy)
-            logger.warning("[IMP:8][_deploy_sequential][env_check] env check error for %s: %s", m_name, exc)
-            missing = []
+        # ruff: ignore[BLE001] — DEPLOY_BEST_EFFORT/best-effort НЕ покрывает required-secrets
+        # (L1-класс: безопасность блокирует на любом уровне) → краш конвертируется в громкий
+        # fail-closed фейл модуля, а не в тихий pass (AI-0011)
+        except Exception as exc:  # noqa: EXC — DEPLOY_BEST_EFFORT не покрывает L1 required-secrets → loud fail-closed
+            env_check_errors += 1
+            logger.error(
+                "[IMP:9][_deploy_sequential][env_check_error] validator crashed for %s — failing module (fail-closed): %s",
+                m_name,
+                exc,
+            )
+            missing = [f"<env_check_error>: {exc}"]
         if missing:
             logger.warning(
                 "[IMP:8][_deploy_sequential][env_fail] Missing env vars for %s (%s) — skipping deploy",
@@ -1240,7 +1272,12 @@ def _deploy_sequential(
             failed.extend(remaining)
             break
 
-    logger.info("[IMP:9][_deploy_sequential][done] deployed=%d failed=%s", deployed, failed)
+    logger.info(
+        "[IMP:9][_deploy_sequential][done] deployed=%d failed=%s env_check_errors=%d",
+        deployed,
+        failed,
+        env_check_errors,
+    )
     return deployed, failed
 
 
@@ -1455,6 +1492,8 @@ def _aggregate_severity(
 ##   - WARN maps to exit 0 in update mode (DEPLOY_BEST_EFFORT — warnings non-critical)
 ##   - strict_init: ЛЮБОЙ failed-модуль (включая warn-severity) или crit>0 → exit 2
 ##   - IMP:9 summary deployed=N failed=[...] в обоих режимах
+##   - _metrics_exit_code (orchestrator_metrics.exit_code_from_results) принимает (crit, warn) —
+##     deployed удалён волной 17 T7.1 (был неиспользуем, ruff: ignore[ARG001])
 def _compute_exit_code(
     crit: int,
     warn: int,
@@ -1473,7 +1512,7 @@ def _compute_exit_code(
             crit,
         )
         return EXIT_CRITICAL
-    code = _metrics_exit_code(crit, warn, deployed)
+    code = _metrics_exit_code(crit, warn)
     if code == EXIT_CRITICAL:
         logger.error("[IMP:10][_compute_exit_code][critical] Critical:%d Warn:%d → exit 2", crit, warn)
     elif warn > 0:

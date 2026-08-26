@@ -168,7 +168,6 @@ def test_new_backend_project_scaffold(tmp_path: pathlib.Path, caplog) -> None:
     r = gen_ai_platform_yaml(
         name="test-backend",
         ptype="backend",
-        org="test-org",
         node="tronyx-vps",
         domain="backend.tronyx.ru",
         database="backend_db",
@@ -183,13 +182,10 @@ def test_new_backend_project_scaffold(tmp_path: pathlib.Path, caplog) -> None:
     assert parsed["type"] == "backend"
     assert parsed["monitoring"]["metrics"] is True
     assert parsed["needs"]["database"] == "backend_db"
-    mk = gen_project_makefile(
-        name="test-backend", domain="backend.tronyx.ru", output_path=project_dir / "Makefile", force=False
-    )
+    mk = gen_project_makefile(name="test-backend", output_path=project_dir / "Makefile", force=False)
     assert mk == "generated"
     ag = gen_project_agents(
         name="test-backend",
-        org="test-org",
         template="backend",
         node="tronyx-vps",
         domain="backend.tronyx.ru",
@@ -212,7 +208,6 @@ def test_new_frontend_project_scaffold(tmp_path: pathlib.Path, caplog) -> None:
     gen_ai_platform_yaml(
         name="test-frontend",
         ptype="frontend",
-        org="test-org",
         domain="frontend.tronyx.ru",
         output_path=yaml_path,
         minimal=False,
@@ -232,8 +227,8 @@ def test_checklist_generated(tmp_path: pathlib.Path, caplog) -> None:
     result = generate_checklist(
         project_dir=str(project_dir),
         name="test-project",
-        org="test-org",
         template="backend",
+        org="test-org",
         domain="test.tronyx.ru",
         database="test_db",
     )

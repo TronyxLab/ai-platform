@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import logging
 import os
-import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -37,6 +36,7 @@ from pathlib import Path
 from core.internal.bootstrap.firewall import PRIVOXY_PORT
 from core.internal.shared import deploy_paths, telegram_notifier
 from core.internal.shared.env_facts import EnvironmentFacts, default_env_facts
+from core.internal.shared.http_probe import curl_http_code as sot_curl_http_code
 from core.internal.shared.subprocess_io import CommandRunner
 from core.internal.shared.timeouts import TOR_PROXY_CURL_TIMEOUT
 
@@ -50,26 +50,25 @@ GetMeFn = Callable[..., bool]
 
 
 # region FUNC_curl_http_code
-## @purpose  curl-проверка с таймаутом: вернуть HTTP-код (или None при ошибке).
-## @io       ⇥ args: list[str] (curl flags), runner: CommandRunner | None → ⎋ str | None
-## @complexity O(1) — один curl subprocess
-## @changes 2026-08-13 | E1 (160): +runner DI — runner=None → subprocess.run (default),
-##            runner задан → runner.run (fake scripted)
+## @purpose  curl-проба через SoT shared/http_probe.curl_http_code (AI-0064, DevPlan 17 T5.1):
+##            локальная копия с `-s` (молча глотала OSError→None) заменена каноном `-sS`
+##            fail-verbose; семантика возврата tor-домена сохранена (str|None).
+## @io       ⇥ args: list[str] (extra flags + URL), runner: CommandRunner | None → ⎋ str | None
+## @complexity O(1) — один subprocess
+## @invariants
+##   - Флаги: SoT фиксирует -sS -o /dev/null -w %{http_code} --max-time {t}; extra_args
+##     добавляются ПОСЛЕ (--socks5-hostname/--proxy + URL) — прежний контракт вызовов
+##   - Ошибка/таймаут/rc≠0 → None (tor-hc домен: bool-вердикт наверху, verbose-лог SoT)
 def curl_http_code(args: list[str], *, runner: CommandRunner | None = None) -> str | None:
-    """Run curl with --max-time TOR_PROXY_CURL_TIMEOUT and return HTTP code (None on error)."""
-    cmd = ["curl", "-s", "--max-time", str(TOR_PROXY_CURL_TIMEOUT), "-o", "/dev/null", "-w", "%{http_code}", *args]
-    try:
-        if runner is None:
-            result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=TOR_PROXY_CURL_TIMEOUT + 5, check=False
-            )
-        else:
-            result = runner.run(cmd, timeout=TOR_PROXY_CURL_TIMEOUT + 5)
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    if result.returncode != 0:
-        return None
-    return result.stdout.strip() or None
+    """SoT-обёртка: HTTP-код или None при ошибке (verbose -sS из http_probe)."""
+    # args=[] (unit-проба без URL) → пустой url: curl rc≠0 → None — прежняя семантика
+    code, _error = sot_curl_http_code(
+        args[-1] if args else "",
+        TOR_PROXY_CURL_TIMEOUT,
+        extra_args=args[:-1] if len(args) > 1 else None,
+        runner=(lambda cmd, timeout: runner.run(cmd, timeout=timeout)) if runner is not None else None,
+    )
+    return str(code) if code is not None else None
 
 
 # endregion FUNC_curl_http_code

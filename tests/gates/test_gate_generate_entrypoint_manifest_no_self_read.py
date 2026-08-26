@@ -8,7 +8,7 @@
 ## @scope    CI gate — static source code analysis
 ## @invariants
 ##   - Generator reads existing manifest ONLY via load_structural_sections() which explicitly
-##     EXCLUDES allowed_verbs and gates keys. load_existing_manifest() is kept for backward
+##     EXCLUDES allowed_verbs and gates keys. load_existing_manifest() демонтирована (T6.1)
 ##     compat but NOT used in main().
 ##   - Generator NEVER reads allowed_verbs or gates from existing manifest
 ##   - `load_structural_sections()` is called from main() — allowed_verbs/gates NEVER in result
@@ -22,7 +22,7 @@
 ##            read self-generated sections.
 ## @changes 2026-07-30 · Created — DevPlan 090 gate
 ##           2026-07-30 · Updated for load_structural_sections() — main() now uses this instead
-##                        of load_existing_manifest(). load_existing_manifest() kept as backward
+##                        of load_structural_sections(); оговорка снята вместе с функцией
 ##                        compat for external consumers.
 # endregion MODULE_CONTRACT
 
@@ -48,7 +48,7 @@ _GENERATOR_PATH = "core/internal/scripts/generate_entrypoint_manifest.py"
 ## 🧪 TRAP[TEST] · 2026-07-30 · REGRESSION · G3 no-self-read contract
 ## · Scenario: G3 must NOT read allowed_verbs/gates from its own YAML output.
 ##             Verified by: (1) load_structural_sections() explicitly excludes these keys,
-##             (2) load_existing_manifest() is NOT called from main(), (3) merge() overwrites
+##             (2) load_existing_manifest() отсутствует вовсе (T6.1), (3) merge() overwrites
 ##             allowed_verbs/gates unconditionally.
 ## · Last fail: N/A (new gate)
 ## · Remove if: entrypoint-manifest.yaml generation is restructured (e.g., split into separate files)
@@ -97,21 +97,11 @@ def test_no_self_read(caplog) -> None:
     )
     print("[IMP:7][test_no_self_read] load_structural_sections() defined and called from main() — OK", file=sys.stderr)
 
-    # ── Verify 1b: `load_existing_manifest()` exists for backward compat but NOT called from main() ──
-    assert "def load_existing_manifest" in source, (
-        f"Missing load_existing_manifest() function in {_GENERATOR_PATH} — kept for backward compat"
+    # ── Verify 1b: `load_existing_manifest()` демонтирован (AI-0058, DevPlan 17 T6.1) ──
+    assert "def load_existing_manifest" not in source, (
+        f"load_existing_manifest() вернулся в {_GENERATOR_PATH} — мёртвый символ запрещён"
     )
-    # load_existing_manifest should NOT be called from main() — only from unit tests or external consumers
-    # The function definition contains "load_existing_manifest(" but main() should NOT call it
-    # Check that the call pattern "existing = load_existing_manifest" is NOT present
-    assert "existing = load_existing_manifest" not in source, (
-        "G3 CYCLE BREAK VIOLATION: main() still calls load_existing_manifest() instead of "
-        "load_structural_sections(). Replace with load_structural_sections() to break the cycle."
-    )
-    print(
-        "[IMP:7][test_no_self_read] load_existing_manifest() defined (backward compat) but NOT called from main() — OK",
-        file=sys.stderr,
-    )
+    print("[IMP:7][test_no_self_read] load_existing_manifest() absent (demoted T6.1) — OK", file=sys.stderr)
 
     # ── Verify 2: `merge()` receives `allowed_verbs` and `gates` as arguments ──
     # The merge function signature is: merge(allowed_verbs, gates, existing)

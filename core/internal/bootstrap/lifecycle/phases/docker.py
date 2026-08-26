@@ -555,7 +555,9 @@ def _registry_step_firewall(
 ## @invariants
 ##   - config_renderer.py отсутствует → skip (не issue)
 ##   - provision-llm.sh отсутствует → skip (не issue)
-##   - Сбой любого шага → WARN + True (best-effort)
+##   - Сбой любого шага → IMP:9 ERROR + True (non-fatal для бутстрапа, но сигнал provisioner
+##     ДОЕЗЖАЕТ до фазовой сводки: AI-0010r — rc≠0 больше не маскируется success-логом;
+##     non_fatal=True сохранён — бутстрап не падает, сводка отличает failed от skipped)
 def _registry_step_llm_provision(core_dir: str) -> bool:
     """Provision LLM keys (render config + virtual keys) sub-step."""
     llm_dir = os.path.join(core_dir, "internal", "llm")
@@ -566,11 +568,18 @@ def _registry_step_llm_provision(core_dir: str) -> bool:
         return False
     # ruff: ignore[PLW0717] — try-тело содержит return-ветки с fall-through (после-try код) — извлечение небезопасно
     try:
-        helpers_subprocess.run_subprocess(
+        render_result = helpers_subprocess.run_subprocess(
             ["python3", renderer_script, "--output", config_output],
             non_fatal=True,
             fatal_rc=(127,),
         )
+        # AI-0010r: rc рендера читается — false-success лог «rendered» при rc≠0 удалён
+        if render_result.returncode != 0:
+            logger.warning(
+                "[IMP:8][phase:registry_update][llm_render] litellm-config render failed (rc=%d) — config may be stale",
+                render_result.returncode,
+            )
+            return True
         logger.info("[IMP:9][phase:registry_update] LiteLLM config rendered")
         provision_entrypoint = os.path.join(core_dir, "entrypoints", "provision-llm.sh")
         if not os.path.isfile(provision_entrypoint):
@@ -579,14 +588,36 @@ def _registry_step_llm_provision(core_dir: str) -> bool:
                 provision_entrypoint,
             )
             return False
-        helpers_subprocess.run_subprocess(
+        provision_result = helpers_subprocess.run_subprocess(
             ["bash", provision_entrypoint],
             non_fatal=True,
             fatal_rc=(127,),
         )
+        # AI-0010r: rc провижинера читается — failed_consumers доезжает до сводки фазы
+        # ⚠️ TRAP[BUG] · 2026-08-26 · P2 · rc≠0 провижинера молча логировался как успех
+        # · Symptom: LiteLLM-down → provision-llm.sh rc≠0 → IMP:9 «LLM virtual keys provisioned»
+        #   → φ11 done зелёным, отсутствие ключей обнаруживалось только на деплое проектов
+        # · Root: результат run_subprocess(non_fatal=True) не читался — non_fatal глушит raise,
+        #   но не обязан глушить разбор rc вызывающим
+        # · Fix: читать result.returncode; rc≠0 → IMP:9 ERROR «llm_provision: failed_consumers=N»
+        #   + issue-флаг (φ11 done_with_warnings); success-лог только при rc=0
+        # · Prevention: tests/unit/test_phases_docker_w9.py::test_llm_provision_failure_surfaces
+        if provision_result.returncode != 0:
+            stderr_tail = (provision_result.stderr or "").strip().splitlines()
+            detail = stderr_tail[-1] if stderr_tail else f"exit={provision_result.returncode}"
+            m = re.search(r"FAILED for (\d+) consumer", detail)
+            failed_n = m.group(1) if m else "unknown"
+            logger.error(
+                "[IMP:9][phase:registry_update][llm_provision] llm_provision: failed_consumers=%s — %s",
+                failed_n,
+                detail,
+            )
+            return True
         logger.info("[IMP:9][phase:registry_update] LLM virtual keys provisioned")
     except (OSError, PlatformError) as e:  # noqa: EXC — non-fatal (best-effort: DEPLOY_BEST_EFFORT policy)
-        logger.warning("[IMP:7][phase:registry_update] LLM key provisioning failed (non-fatal): %s", e)
+        logger.error(
+            "[IMP:9][phase:registry_update][llm_provision] llm_provision: failed (%s): %s", type(e).__name__, e
+        )
         return True
     else:
         return False

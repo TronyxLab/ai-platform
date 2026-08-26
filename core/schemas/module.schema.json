@@ -113,11 +113,8 @@
     "hooks": {
       "type": "object",
       "description": "Lifecycle hooks (on_project_deploy, on_project_remove) — paths относительно module-dir"
-    },
-    "systemd": {
-      "type": "object",
-      "description": "System-модуль специфичные поля: unit, required_by (для install_type: system)"
     }
   },
+  "$comment": "TRAP[DECISION] 2026-08-26: свойство systemd удалено из properties (AI-0030, DevPlan 17 T4.4) — инсталлер держит UNIT_NAME hardcode, RequiredBy живёт в .unit-файле; schema-обещание было мёртвым. Rejected: реализовать per-module systemd-конфиг (неиспользуемая поверхность). Rev: понадобится per-module systemd-конфиг — вернуть свойство + реализацию.",
   "additionalProperties": true
 }

@@ -39,6 +39,7 @@ from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseErro
 # B3: канонический platform root — shared/deploy_paths; T3.8: platform_remote_base
 # удалён вместе с последним inline bash-вызовом (канон — module_interface.invoke)
 from core.internal.shared.module_interface import invoke as module_interface_invoke
+from core.internal.shared.timeouts import HEALTHCHECK_CMD_TIMEOUT
 
 
 class _StateView(Protocol):
@@ -70,6 +71,38 @@ class StateMachineProtocol(Protocol):
 
 
 logger = logging.getLogger(__name__)
+
+
+# region FUNC__is_permanent_healthcheck_error
+_PERMANENT_HC_MARKERS: tuple[str, ...] = (
+    "no such file",
+    "not found",
+    "does not exist",
+    "invalid config",
+    "module.yaml",
+    "permission denied",
+    "command not found",
+)
+
+
+def _is_permanent_healthcheck_error(err: str | None) -> bool:
+    """Классифицирует ошибку healthcheck как ПОСТОЯННУЮ (retry бесполезен).
+
+    ## @purpose  AI-0015 (DevPlan 17 T3.4): прежний цикл ретраил ЛЮБУЮ not-ok — в том числе
+    ##             постоянные ошибки (отсутствующий module.yaml/script) 10×10s = 100s впустую
+    ##            на каждый такой модуль.
+    ## @io        ⇥ err: stderr invoke → ⎋ bool (True = постоянная, не ретраить)
+    ## @complexity O(m) по маркерам
+    ## @invariants
+    ##   - Пустой/None stderr → False (transient: молчаливый фейл может быть гонкой старта)
+    """
+    if not err:
+        return False
+    lowered = err.lower()
+    return any(marker in lowered for marker in _PERMANENT_HC_MARKERS)
+
+
+# endregion FUNC__is_permanent_healthcheck_error
 
 
 # region FUNC_run_healthchecks
@@ -140,7 +173,9 @@ def run_healthchecks(node_yaml: str) -> None:
             # ·   в invoke/check_module ретраев НЕТ (сверено с планом).
             # · Prevention: вызовы модулей — ТОЛЬКО через module_interface.invoke.
             for attempt in range(1, hc_max_retries + 1):
-                ok, err = module_interface_invoke(mod_name, "healthcheck", "liveness", timeout=30)
+                # AI-0012r (DevPlan 17 T1.5): канон HEALTHCHECK_CMD_TIMEOUT (60) вместо literal 30 —
+                # тот же `<mod> healthcheck liveness` получает один бюджет на всех путях
+                ok, err = module_interface_invoke(mod_name, "healthcheck", "liveness", timeout=HEALTHCHECK_CMD_TIMEOUT)
                 if ok:
                     logger.info(
                         "[IMP:9][healthcheck:%s] Healthcheck PASS (attempt %d/%d)",
@@ -156,6 +191,15 @@ def run_healthchecks(node_yaml: str) -> None:
                         mod_name,
                         (err or "(empty)").strip()[-200:] if err else "(empty)",
                     )
+                # AI-0015: постоянная ошибка (нет module.yaml/script, права) — retry бесполезен,
+                # fail-fast вместо 10×10s впустую; transient (гонка старта, сеть) — ретраим
+                if _is_permanent_healthcheck_error(err):
+                    logger.error(
+                        "[IMP:9][healthcheck:%s] PERMANENT failure (no retry): %s",
+                        mod_name,
+                        (err or "").strip()[-200:],
+                    )
+                    break
                 if attempt < hc_max_retries:
                     time.sleep(hc_retry_interval)
 

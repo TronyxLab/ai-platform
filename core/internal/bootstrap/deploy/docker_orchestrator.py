@@ -786,7 +786,6 @@ class _CliArgs(Protocol):
     action: str
     module_name: str | None
     module_entries: list[str] | None
-    node_yaml: str | None
     modules_dir: str | None
     secrets_env_file: str | None
     platform_root: str | None
@@ -817,7 +816,6 @@ def main() -> int:
         default=None,  # 170 W1-A2: None вместо [] (ловушка mutable default в argparse; None → `or []` при чтении)
         help="Module entries in module:overlay format (for pre-pull, deploy-group)",
     )
-    _ = parser.add_argument("--node-yaml", help="Path to node.yaml (unused in docker_orchestrator)")
     _ = parser.add_argument("--modules-dir", help="Path to modules directory")
     _ = parser.add_argument("--secrets-env-file", help="Path to secrets.env file")
     _ = parser.add_argument(

@@ -152,18 +152,22 @@ def _assert_retry_warning(caplog, *, present: bool) -> None:
 @ldd_trajectory
 def test_create_s3_client_config(caplog) -> None:
     """create_s3_client constructs boto3 client with correct config.
-    Uses unittest.mock.patch only for boto3 import — legitimate use (фабрика = публичный API).
+    AI-0073 (DevPlan 17 T2.4): конструкция делегирована в s3_client.build_boto3_s3_client
+    (единственный boto3.client в backup-cron); патчим модуль boto3 в sys.modules.
     """
+    import sys as _sys
+    from unittest.mock import MagicMock
     from unittest.mock import patch as mock_patch
 
-    with caplog.at_level(logging.DEBUG), mock_patch("upload.boto3") as mock_boto3:
+    with caplog.at_level(logging.DEBUG), mock_patch.dict(_sys.modules, {"boto3": MagicMock()}):
+        fake_boto3 = _sys.modules["boto3"]
         from upload import create_s3_client
 
         config = _make_config()
         create_s3_client(config)
 
-        mock_boto3.client.assert_called_once()
-        call_kwargs = mock_boto3.client.call_args[1]
+        fake_boto3.client.assert_called_once()
+        call_kwargs = fake_boto3.client.call_args[1]
         logger.critical(
             "[IMP:9][test_upload][create_client] ASSERT: endpoint=%s bucket=%s region=%s",
             call_kwargs.get("endpoint_url"),

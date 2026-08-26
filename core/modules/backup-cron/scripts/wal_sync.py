@@ -51,12 +51,10 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import TypedDict, cast
+from typing import NamedTuple, TypedDict, cast
 
-import boto3
-from botocore.config import Config
 from botocore.exceptions import ClientError  # pyright: ignore[reportImplicitRelativeImport]
-from s3_client import Boto3S3, S3Client  # pyright: ignore[reportImplicitRelativeImport]
+from s3_client import Boto3S3, S3Client, build_boto3_s3_client  # pyright: ignore[reportImplicitRelativeImport]
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +78,24 @@ DEFAULT_WAL_ARCHIVE_DIR = "/var/lib/platform/wal-archive"
 DEFAULT_LOCAL_RETENTION_DAYS = 7
 DEFAULT_S3_RETENTION_DAYS = 14
 DEFAULT_MAX_UPLOAD_PER_RUN = 200
+
+
+# 🧐 TRAP[DECISION] · 2026-08-26 · — · Жёсткий S3-бюджет wal_sync (10/30/×3) сохранён осознанно
+# · Rejected: унификация с дефолтом строителя 30/60 (upload/retention)
+# · Reason: WAL-sync обслуживает RPO-критичный канал репликации — зависание на широком
+#   бюджете откладывало бы обнаружение недоступности S3 и сдвигало бы RPO; жёсткие таймауты
+#   дают быстрый fail → retry-цикл cron'а. Значения НЕ изменились относительно прежних
+#   inline Config(connect=10, read=30, retries=3) — только именованы (DevPlan 17 T2.4).
+# · Rev: если появится требование long-tail объектов (медленный S3-канал) — пересмотреть read.
+class _WalSyncS3Timeouts(NamedTuple):
+    """Именованный S3-бюджет wal_sync (RPO-критичный канал)."""
+
+    connect: int
+    read: int
+    max_attempts: int
+
+
+WAL_SYNC_S3_TIMEOUTS = _WalSyncS3Timeouts(connect=10, read=30, max_attempts=3)
 
 
 class WalSyncError(Exception):
@@ -208,18 +224,18 @@ def build_s3_client(env: dict[str, str] | None = None) -> S3Client:
     secret_key = _env_str("S3_SECRET_KEY", "", env)
     bucket = _env_str("S3_BUCKET", "", env)
 
-    session = boto3.Session(  # публичный API (НЕ boto3.session — v1.0.1 CI-fix: boto3 1.39+ py.typed без stubs → reportAttributeAccessIssue)
-        aws_access_key_id=access_key or None,
-        aws_secret_access_key=secret_key or None,
-        region_name=region,
-    )
-    # W11: boto3 Session.client → Any (boto3 untyped) → cast к Boto3S3-протоколу
+    # AI-0073 (DevPlan 17 T2.4): единый строитель s3_client.build_boto3_s3_client;
+    # жёсткий RPO-бюджет wal_sync — именованная константа WAL_SYNC_S3_TIMEOUTS
     raw_client = cast(
         "Boto3S3",
-        session.client(  # pyright: ignore[reportUnknownMemberType] — W11 external boto3 Session.client untyped-оверлоады
-            "s3",
+        build_boto3_s3_client(
             endpoint_url=endpoint,
-            config=Config(connect_timeout=10, read_timeout=30, retries={"max_attempts": 3}),
+            access_key=access_key or None,
+            secret_key=secret_key or None,
+            region=region,
+            connect_timeout=WAL_SYNC_S3_TIMEOUTS.connect,
+            read_timeout=WAL_SYNC_S3_TIMEOUTS.read,
+            max_attempts=WAL_SYNC_S3_TIMEOUTS.max_attempts,
         ),
     )
     logger.info("[IMP:7][wal_sync][s3] S3 client built: bucket=%s endpoint=%s region=%s", bucket, endpoint, region)

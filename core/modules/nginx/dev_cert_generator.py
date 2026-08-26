@@ -40,6 +40,13 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
 
+# 🧐 TRAP[DECISION] · 2026-08-26 · — · DEV_CERT_CMD_TIMEOUT локально, не из shared/timeouts
+# · Rejected: импорт core/internal/shared/timeouts (единый SoT таймаутов)
+# · Reason: кросс-слойный гейт — core.modules НЕ импортирует core.internal (import-linter);
+#   паттерн модулей — локальные именованные константы (ср. wal_sync WAL_SYNC_S3_TIMEOUTS)
+# · Rev: если появится канонический мост модульных таймаутов — мигрировать константу
+DEV_CERT_CMD_TIMEOUT = 30
+
 DEFAULT_PLATFORM_DOMAIN = "ai-platform.local"
 DEFAULT_DEV_CERTS_DIR = str(Path(__file__).resolve().parent / "dev-certs")
 DEFAULT_CERT_BACKEND = "auto"
@@ -192,6 +199,7 @@ def get_cert_sans(cert_file: Path) -> list[str]:
             capture_output=True,
             text=True,
             check=False,
+            timeout=DEV_CERT_CMD_TIMEOUT,
         )
     except FileNotFoundError:
         _log(7, "get_cert_sans", "openssl not found on PATH — cannot parse SAN")
@@ -275,6 +283,7 @@ def cert_is_current(cert_file: Path, key_file: Path, platform_domain: str) -> bo
             ],
             capture_output=True,
             text=True,
+            timeout=DEV_CERT_CMD_TIMEOUT,
             check=False,
         )
     except FileNotFoundError:
@@ -320,6 +329,7 @@ def generate_mkcert(dev_certs_dir: Path, sans: list[str]) -> Path:
             ["mkcert", "-cert-file", str(cert_file), "-key-file", str(key_file), *sans_list.split()],
             capture_output=True,
             text=True,
+            timeout=DEV_CERT_CMD_TIMEOUT,
             check=False,
         )
     except FileNotFoundError:
@@ -428,6 +438,7 @@ def generate_openssl(
                 ],
                 capture_output=True,
                 text=True,
+                timeout=DEV_CERT_CMD_TIMEOUT,
                 check=False,
             )
         except FileNotFoundError:

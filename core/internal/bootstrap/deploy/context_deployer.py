@@ -85,6 +85,7 @@ from core.internal.shared.node_yaml import NodeYaml, ProjectEntry
 from core.internal.shared.platform_ports import PLATFORM_PORT_LITELLM
 from core.internal.shared.ssl_certs import DEFAULT_EXPIRY_THRESHOLD, cert_is_valid  # C9: единая комбинация
 from core.internal.shared.subprocess_io import CommandRunner
+from core.internal.shared.timeouts import SYSTEM_CMD_TIMEOUT
 
 # DevPlan 091 Wave A (AC4): _ORCHESTRATOR_AVAILABLE fallback removed — DeployOrchestrator is sole path.
 # ⚠️ TRAP[DECISION] · 2026-07-30 · HI · Removed _ORCHESTRATOR_AVAILABLE vestigial flag
@@ -296,7 +297,7 @@ def resolve_context_projects(
 ## @purpose — Deploy a single project via DeployOrchestrator (sole deploy path, DevPlan 091 Wave A).
 ##            Параллельный deploy-путь отсутствует:
 ##            it bypassed AuditLogger / DeployHistory snapshots / HealthcheckPoller unification.
-## @io — ⇥ project: ProjectInfo, projects_base: str, ghcr_fallback_build: bool → ⎋ ProjectDeployResult
+## @io — ⇥ project: ProjectInfo, projects_base: str → ⎋ ProjectDeployResult
 ## @complexity — O(T) where T = deploy lifecycle
 ## @invariants
 ##   - Always uses DeployOrchestrator.deploy() (no fallback)
@@ -352,7 +353,6 @@ def _plw_body__deploy_single_project_via_orchestrator(
 def _deploy_single_project_via_orchestrator(
     project: ProjectInfo,
     projects_base: str,
-    _ghcr_fallback_build: bool,
     *,
     runner: CommandRunner | None = None,
     facts: EnvironmentFacts | None = None,
@@ -466,20 +466,19 @@ def _deploy_single_project_via_orchestrator(
 ##            Uses ghcr.io pull as primary, falls back to on-node build.
 ##            Idempotent: skips healthy projects.
 ## @io — ⇥ node_yaml: str, context: str, projects_base: str,
-##       ghcr_fallback_build: bool, runner: CommandRunner | None, facts: EnvironmentFacts | None,
+##       runner: CommandRunner | None, facts: EnvironmentFacts | None,
 ##       health_fn/audit_fn/orchestrator_deploy_fn (DI) → ⎋ list[ProjectDeployResult]
 ## @complexity — O(P * T) where P = projects, T = health-gate timeout
 ## @invariants
 ##   - Each project is processed independently (non-fatal on failure)
 ##   - Healthcheck before deploy (skip if already healthy)
-##   - ghcr.io pull primary, build fallback if ghcr_fallback_build=True
+##   - Deploy через ghcr-образ (fallback-build удалён DevPlan 091/17 T4.3)
 ##   - Audit log entry per deploy
 ## @changes 2026-08-13 | E1 (160): +DI threading (runner/facts/health_fn/audit_fn/orchestrator_deploy_fn)
 def deploy_context_projects(
     node_yaml: str,
     context: str,
     projects_base: str = DEFAULT_PROJECTS_BASE,
-    ghcr_fallback_build: bool = True,
     *,
     runner: CommandRunner | None = None,
     facts: EnvironmentFacts | None = None,
@@ -508,7 +507,6 @@ def deploy_context_projects(
         result = _deploy_single_project_via_orchestrator(
             project,
             projects_base,
-            ghcr_fallback_build,
             runner=runner,
             facts=facts,
             health_fn=health_fn,
@@ -581,11 +579,11 @@ def _ensure_bootstrap_compose(
                 ["chown", "ci-deploy:ci-deploy", project_dir],
                 capture_output=True,
                 text=True,
-                timeout=30,
+                timeout=SYSTEM_CMD_TIMEOUT,
                 check=False,
             )
         else:
-            _ = runner.run(["chown", "ci-deploy:ci-deploy", project_dir], timeout=30, check=False)
+            _ = runner.run(["chown", "ci-deploy:ci-deploy", project_dir], timeout=SYSTEM_CMD_TIMEOUT, check=False)
 
     domain = getattr(project, "domain", None) or project.name
 
@@ -1227,7 +1225,6 @@ def build_parser() -> argparse.ArgumentParser:
     _ = parser.add_argument("--node-yaml", required=True, help="Path to node.yaml")
     _ = parser.add_argument("--context", default="", help="Deployment context (auto-extracted if empty)")
     _ = parser.add_argument("--projects-base", default=DEFAULT_PROJECTS_BASE, help="Projects base directory")
-    _ = parser.add_argument("--no-fallback-build", action="store_true", help="Disable build fallback")
     return parser
 
 
@@ -1247,7 +1244,6 @@ class _CliArgs(Protocol):
     node_yaml: str
     context: str
     projects_base: str
-    no_fallback_build: bool
 
 
 ## @purpose — CLI entry point for standalone deploy-context.

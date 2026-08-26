@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: project_registry, node-yaml, register-project, deregister-project, scaffold, idempotent, NodeYaml-bridge
-# STRUCTURE: ▶ register_project → ◇ NodeYaml.add_project → ◇ soft-idempotency bridge (ConfigValidationError→skip) → ⎋ (bool, str)
-#            └ deregister_project → ◇ NodeYaml.remove_project → ⎋ (bool, str)
-#            └ list_projects → ◇ NodeYaml.get_projects → ⊕ stdout: "name repo type domain" → ⎋ exit 0
+# GREP_SUMMARY: project-registry, validate-project-name, discover-llm-projects, node-yaml
+# STRUCTURE: ▶ validate_project_name ┌name┐ → ⎋ bool │ discover_llm_projects ┌node_yaml┐ → ⊕ LLM-проекты → ⎋ list
 # region MODULE_CONTRACT
 ## @purpose  Project registry — thin wrapper over NodeYaml for project registration/deregistration/listing.
 ##           DevPlan 091 Wave C (AC2): migrated from yaml.safe_load/dump to NodeYaml.add_project/remove_project/get_projects.
@@ -45,34 +43,12 @@ logger = logging.getLogger(__name__)
 # DevPlan 091 Wave C (AC2): NodeYaml replaces yaml.safe_load/dump.
 # Imports are module-level — the sys.path bootstrap above ensures they resolve
 # in standalone CLI (subprocess) mode. For pytest, rootdir = project root.
-from dataclasses import dataclass
-from typing import cast
 
 from core.internal.shared.deploy_paths import DEFAULT_PROJECTS_BASE as DEFAULT_PROJECTS_ROOT
 from core.internal.shared.exceptions import ConfigNotFoundError, ConfigValidationError
-from core.internal.shared.node_yaml import NodeYaml, ProjectEntry
+from core.internal.shared.node_yaml import NodeYaml
 from core.internal.shared.project_yaml import get_llm, load_project_yaml
-from core.internal.shared.ssl_certs import validate_cert_domain_fqdn  # REF-0008: fail-fast fqdn
 from core.internal.shared.verbs import is_verb
-
-
-# region DATACLASS_CliArgs
-@dataclass
-class _CliArgs:
-    """Типизированная граница argparse.Namespace CLI (W11, DevPlan 170).
-    Аннотации без значений — cast no-op, argparse ставит свои дефолты."""
-
-    action: str
-    name: str
-    repo: str
-    type: str
-    node_yaml: str
-    domain: str
-    database: str
-    log_prefix: str
-
-
-# endregion DATACLASS_CliArgs
 
 # ── LLM-проекты: default projects root на VPS (B2 — переиспользование канона deploy_paths) ──
 # DEFAULT_PROJECTS_ROOT = deploy_paths.DEFAULT_PROJECTS_BASE (единый SoT, B2)
@@ -124,215 +100,6 @@ def validate_project_name(name: str) -> bool:
     # Strict regex: must start [a-zA-Z0-9]; then [a-zA-Z0-9_-]* — no spaces, slashes,
     # path traversal ('.' not in class), or leading '-'/'_' (DevPlan 116 B6 T3).
     return bool(re.match(r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$", name))
-
-
-# region FUNC_register_project
-## @purpose — Register a project in node.yaml. Idempotent: skips if name/repo already exist.
-##            Supports optional domain and database fields. Appends entry to projects list.
-## @io — ⇥ name: str, repo: str, project_type: str = "", node_yaml_path: str = "",
-##        domain: str = "", database: str = "", log_prefix: str = "add-project"
-##        → ⎋ tuple[bool, str]: (True, message) on success, (False, message) on error
-## @complexity — O(N) where N = len(projects)
-## @invariants
-##   - Idempotent: if project name or repo already exists → returns (True, "Idempotent SKIP...")
-##   - REF-0008 (SEC-0026): domain задан и невалиден (FQDN, `../`-traversal) → (False, msg)
-##     ДО NodeYaml-мутации — fail-fast на register-входе cert-pipeline цепочки needs.domain
-##   - Creates 'projects' key if missing
-##   - Writes YAML with default_flow_style=False, sort_keys=False (preserves existing ordering)
-##   - Logs to stderr at IMP:9 on success/skip
-##   - Does NOT call sys.exit() — caller (CLI or test) handles exit code
-## @rationale Extracted from add-project.sh:719 heredoc and adopt-project.sh:674 heredoc
-##            (DRIFT-B5 elimination, Brief 077). Idempotency check prevents duplicate entries.
-##            DevPlan 038b: sys.exit replaced with return tuple for testability.
-def register_project(
-    name: str,
-    repo: str,
-    project_type: str = "",
-    node_yaml_path: str = "",
-    domain: str = "",
-    database: str = "",
-    log_prefix: str = "add-project",
-) -> tuple[bool, str]:
-    """Register a project in node.yaml via NodeYaml. Idempotent. Returns (success, message).
-
-    DevPlan 091 Wave C (AC2/DRIFT-088-7): replaced yaml.safe_load/dump with NodeYaml.add_project().
-    Soft-idempotency preserved: NodeYaml.add_project() raises ConfigValidationError on duplicate →
-    caught and translated to (True, "Idempotent SKIP") to maintain the existing consumer contract.
-    Signal signature unchanged — consumers (project_adopter.py, CLI) are not affected.
-    """
-    if not name or not repo or not node_yaml_path:
-        msg = (
-            f"[IMP:7][{log_prefix}][register] Missing required params (name={name}, repo={repo}, yaml={node_yaml_path})"
-        )
-        logger.warning("%s", msg)
-        return (False, msg)
-
-    # ── REF-0008 fail-fast (SEC-0026): FQDN-валидация домена до NodeYaml-мутации ──
-    # needs.domain → cert-pipeline (live/<domain>/, reloadcmd под root); `../`-домен
-    # отклоняется на входе, а не в sink'е.
-    if domain:
-        try:
-            validate_cert_domain_fqdn(domain)
-        except ConfigValidationError as e:
-            msg = f"[IMP:10][{log_prefix}][register] Invalid domain {domain!r}: {e}"
-            logger.error("%s", msg)
-            return (False, msg)
-
-    # ruff: ignore[PLW0717] — тело try присваивает имена, читаемые except/после — извлечение ломает видимость
-    try:
-        ny = NodeYaml(node_yaml_path)
-
-        # Pre-check: repo-based idempotency (backward-compat with old yaml.safe_load path).
-        # NodeYaml.add_project() only guards on name; the old code also checked repo.
-        for p in ny.get_projects():
-            if p.get("repo") == repo and p.get("name") != name:
-                msg = f"[IMP:9][{log_prefix}][register] Idempotent SKIP — {name} already in node.yaml (repo duplicate: {repo})"
-                logger.info("%s", msg)
-                return (True, msg)
-
-        project = ProjectEntry(
-            name=name,
-            repo=repo,
-            type=project_type,
-            domain=domain,
-            database=database,
-        )
-        ny.add_project(project)
-        msg = f"[IMP:9][{log_prefix}][register] Registered {name} → {node_yaml_path}"
-        logger.info("%s", msg)
-    except ConfigValidationError as e:
-        # Bridge: NodeYaml hard-error on duplicate → soft-idempotent skip
-        if "already exists" in str(e).lower() or "duplicate" in str(e).lower():
-            msg = f"[IMP:9][{log_prefix}][register] Idempotent SKIP — {name} already in node.yaml"
-            logger.info("%s", msg)
-            return (True, msg)
-        msg = f"[IMP:10][{log_prefix}][register] Validation error: {e}"
-        logger.error("%s", msg)
-        return (False, msg)
-    except (OSError, ValueError) as e:
-        msg = f"[IMP:10][{log_prefix}][register] Failed to register {name}: {e}"
-        logger.error("%s", msg)
-        return (False, msg)
-    else:
-        return (True, msg)
-
-
-# endregion FUNC_register_project
-
-
-# region FUNC_deregister_project
-## @purpose — Remove a project from node.yaml by name. Idempotent.
-## @io — ⇥ name: str = "", node_yaml_path: str = "", log_prefix: str = "remove-project"
-##        → ⎋ tuple[bool, str]: (True, message) on success, (False, message) on error
-## @complexity — O(N) where N = len(projects)
-## @invariants
-##   - Idempotent: if project not found → returns (True, ...) (no error)
-##   - Filters projects list, preserving all other entries
-##   - Writes YAML with default_flow_style=False, sort_keys=False
-##   - Reports removed count at IMP:9
-##   - Does NOT call sys.exit() — caller handles exit code
-## @rationale Extracted from remove-project.sh:212 heredoc (DRIFT-B5 elimination, Brief 077).
-##            DevPlan 038b: sys.exit replaced with return tuple for testability.
-def deregister_project(
-    name: str = "",
-    node_yaml_path: str = "",
-    log_prefix: str = "remove-project",
-) -> tuple[bool, str]:
-    """Remove a project from node.yaml by name via NodeYaml. Idempotent. Returns (success, message).
-
-    DevPlan 091 Wave C (AC2): replaced yaml.safe_load/dump with NodeYaml.remove_project().
-    NodeYaml.remove_project() returns bool (True=removed, False=not found) → wrapped in tuple.
-    """
-    if not name or not node_yaml_path:
-        msg = f"[IMP:7][{log_prefix}][unregister] Missing required params (name={name}, yaml={node_yaml_path})"
-        print(msg, file=sys.stderr)
-        return (False, msg)
-
-    # ruff: ignore[PLW0717] — тело try присваивает имена, читаемые except/после — извлечение ломает видимость
-    try:
-        ny = NodeYaml(node_yaml_path)
-
-        # Pre-check: count existing projects for backward-compat message format.
-        existing_projects = ny.get_projects()
-        if not existing_projects:  # type: ignore[truthy-function]
-            msg = f"[IMP:8][{log_prefix}][unregister] No projects section — nothing to remove"
-            print(msg, file=sys.stderr)
-            return (True, msg)
-
-        orig_count = len(existing_projects)  # type: ignore[arg-type]
-        removed = ny.remove_project(name)
-
-        if removed:
-            removed_count = orig_count - len(ny.get_projects())  # type: ignore[arg-type]
-            msg = f"[IMP:9][{log_prefix}][unregister] Removed '{name}' from {node_yaml_path} ({removed_count} entries removed)"
-        else:
-            msg = f"[IMP:8][{log_prefix}][unregister] Removed '{name}' from {node_yaml_path} (0 entries removed)"
-        print(msg, file=sys.stderr)
-    except (OSError, ValueError) as e:
-        msg = f"[IMP:10][{log_prefix}][unregister] Failed to deregister {name}: {e}"
-        print(msg, file=sys.stderr)
-        return (False, msg)
-    else:
-        return (True, msg)
-
-
-# endregion FUNC_deregister_project
-
-
-# region FUNC_list_projects
-## @purpose — List all projects registered in node.yaml. Outputs one line per project to stdout,
-##            space-separated: name repo type domain. Empty fields output as "-".
-## @io — ⇥ node_yaml_path: str = "", log_prefix: str = "list-projects"
-##        → ⎋ tuple[bool, str]: (True, message) on success, (False, message) on error
-## @complexity — O(N) where N = len(projects)
-## @invariants
-##   - Outputs to stdout (designed for shell `grep` / `while read` consumers)
-##   - Empty projects list → returns (True, ...), no stdout output
-##   - Missing projects key → returns (True, ...), no stdout output
-##   - Errors (missing file, invalid YAML) → returns (False, ...) with message to stderr
-##   - Does NOT call sys.exit() — caller handles exit code
-## @rationale Extracted from duplicate project-existence checks in adopt-project.sh:687 and
-##            add-project.sh:725 heredocs (DRIFT-B5 elimination, Brief 077).
-##            Forward-looking: DevPlans 079/080 need project listing for drift detection.
-##            DevPlan 038b: sys.exit replaced with return tuple for testability.
-def list_projects(
-    node_yaml_path: str = "",
-    log_prefix: str = "list-projects",
-) -> tuple[bool, str]:
-    """List all projects via NodeYaml.get_projects(). Outputs 'name repo type domain' per line.
-
-    DevPlan 091 Wave C (AC2): replaced yaml.safe_load with NodeYaml.get_projects().
-    """
-    if not node_yaml_path:
-        msg = f"[IMP:7][{log_prefix}][list] Missing node_yaml_path"
-        print(msg, file=sys.stderr)
-        return (False, msg)
-
-    try:
-        ny = NodeYaml(node_yaml_path)
-        projects = ny.get_projects()
-    except ConfigNotFoundError:
-        msg = f"[IMP:8][{log_prefix}][list] Failed to read {node_yaml_path}: FileNotFoundError"
-        print(msg, file=sys.stderr)
-        return (False, msg)
-    except (OSError, ValueError, FileNotFoundError) as e:
-        msg = f"[IMP:8][{log_prefix}][list] Failed to read {node_yaml_path}: {e}"
-        print(msg, file=sys.stderr)
-        return (False, msg)
-
-    for p in projects:
-        name = p.get("name", "-") or "-"
-        repo = p.get("repo", "-") or "-"
-        ptype = p.get("type", "-") or "-"
-        domain = p.get("domain", "-") or "-"
-        print(f"{name} {repo} {ptype} {domain}")
-
-    msg = f"[IMP:9][{log_prefix}][list] Listed {len(projects)} project(s) from {node_yaml_path}"
-    print(msg, file=sys.stderr)
-    return (True, msg)
-
-
-# endregion FUNC_list_projects
 
 
 # region FUNC_discover_llm_projects
@@ -417,65 +184,16 @@ def discover_llm_projects(
 # endregion FUNC_discover_llm_projects
 
 
-# region FUNC_CLI
-## @purpose — CLI entrypoint. Usage:
-##   python3 project_registry.py register --name X --repo Y --type Z --node-yaml N [--domain D] [--database DB] [--log-prefix P]
-##   python3 project_registry.py deregister --name X --node-yaml N [--log-prefix P]
-##   python3 project_registry.py list --node-yaml N [--log-prefix P]
+# AI-0059r (DevPlan 17 T6.4): CLI register/deregister/list срезан — конкурирующий «второй»
+# реестровый CLI; канон регистрации — scaffold-путь (make new-project → scaffold.mk).
+# Библиотечные функции validate_project_name/discover_llm_projects сохранены.
 if __name__ == "__main__":
-    import argparse
+    import sys
 
-    parser = argparse.ArgumentParser(description="Project Registry — register/deregister/list projects in node.yaml")
-    sub = parser.add_subparsers(dest="action", required=True)
-
-    reg = sub.add_parser("register", help="Register a project")
-    reg.add_argument("--name", required=True)
-    reg.add_argument("--repo", required=True)
-    reg.add_argument("--type", default="")
-    reg.add_argument("--node-yaml", required=True)
-    reg.add_argument("--domain", default="")
-    reg.add_argument("--database", default="")
-    reg.add_argument("--log-prefix", default="add-project")
-
-    dereg = sub.add_parser("deregister", help="Deregister a project")
-    dereg.add_argument("--name", required=True)
-    dereg.add_argument("--node-yaml", required=True)
-    dereg.add_argument("--log-prefix", default="remove-project")
-
-    lst = sub.add_parser("list", help="List all projects")
-    lst.add_argument("--node-yaml", required=True)
-    lst.add_argument("--log-prefix", default="list-projects")
-
-    # argparse.Namespace → типизированная граница (W11): двойной cast через object
-    args = cast(_CliArgs, cast(object, parser.parse_args()))
-
-    if args.action == "register":
-        success, msg = register_project(
-            name=args.name,
-            repo=args.repo,
-            project_type=args.type,
-            node_yaml_path=args.node_yaml,
-            domain=args.domain,
-            database=args.database,
-            log_prefix=args.log_prefix,
-        )
-        print(msg, file=sys.stderr)
-        sys.exit(0 if success else 1)
-    elif args.action == "deregister":
-        success, msg = deregister_project(
-            name=args.name,
-            node_yaml_path=args.node_yaml,
-            log_prefix=args.log_prefix,
-        )
-        print(msg, file=sys.stderr)
-        sys.exit(0 if success else 1)
-    elif args.action == "list":
-        success, msg = list_projects(
-            node_yaml_path=args.node_yaml,
-            log_prefix=args.log_prefix,
-        )
-        print(msg, file=sys.stderr)
-        sys.exit(0 if success else 1)
-
-
-# endregion FUNC_CLI
+    print(
+        "project_registry: CLI удалён (AI-0059r). "
+        "Канон регистрации проектов — make new-project (scaffold); "
+        "библиотечные функции импортируйте напрямую.",
+        file=sys.stderr,
+    )
+    raise SystemExit(2)

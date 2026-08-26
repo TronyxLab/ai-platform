@@ -448,7 +448,8 @@ def _locust_env(
         "LT_ENDPOINT": config.endpoint,
         "LT_SSL_VERIFY": "true" if spec.ssl_verify else "false",
         "LT_ENABLED": "true",
-        "LT_METHOD": spec.method,
+        # AI-0074 (DevPlan 17 T4.5): LT_METHOD emission удалён — читателей ноль
+        # (web.py GET, остальные POST захардкожены); метод живёт в spec сценария
         "LT_PATHS": json.dumps(list(spec.paths)),
         "LT_STREAM": "true" if spec.stream else "false",
         "LT_CHUNK_TIMEOUT": str(spec.chunk_timeout),

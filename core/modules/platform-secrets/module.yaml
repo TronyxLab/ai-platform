@@ -1,13 +1,17 @@
 # GREP_SUMMARY: platform-secrets sops age systemd oneshot secrets.env tmpfs decrypt
 # STRUCTURE: ▶ boot → sops-decrypt → /var/lib/platform/run/secrets.env (142 W2) → docker.service → ┐
 # region MODULE_CONTRACT
-## @purpose  Systemd oneshot that decrypts SOPS/age secrets to tmpfs on boot.
+## @purpose  Systemd oneshot that decrypts SOPS/age secrets on boot.
 ##           Provides /var/lib/platform/run/secrets.env for all docker containers (142 W2).
+##           AI-0075: decrypted secrets PERSIST on disk 0600 вне payload/git — решение
+##           142-W2; tmpfs используется только для temp-key (/dev/shm).
 ## @scope    Boot-time secret provisioning; depends on host-age-key being pre-configured.
 ## @invariants
 ##   - install_type: system — NOT Docker, systemd-managed
 ##   - Runs before docker.service (RequiredBy=docker.service)
-##   - Secrets written to tmpfs (in-memory, never touches disk decrypted)
+##   - Decrypted secrets persist on disk 0600 (/var/lib/platform/run/secrets.env,
+##     вне payload/git — AGENTS.md DO NOT #4); tmpfs — только temp-key (/dev/shm);
+##     прежний инвариант «never touches disk decrypted» был ложью (AI-0075)
 ##   - Fails closed: if age key missing, service fails and docker doesn't start
 ##   # ⚠️ TRAP[BUG] · 2026-07-18 · P1 · RequiredBy=docker.service added — fails-closed invariant enforced
 ##   # · Symptom: drift-аудит выявил отсутствие RequiredBy — unit had only Before=docker.service +
@@ -24,11 +28,13 @@
 ##              · Added systemd.required_by field to module.yaml
 # endregion MODULE_CONTRACT
 
+# 🧐 TRAP[DECISION] · 2026-08-26 · — · systemd-блок module.yaml удалён (AI-0030, DevPlan 17 T4.4)
+# · Rejected: реализовать чтение unit/required_by из module.yaml инсталлером
+# · Reason: инсталлер держит UNIT_NAME hardcode, RequiredBy живёт в .unit-файле —
+#   поле было мёртвой schema-обещанием; реализация добавила бы неиспользуемую поверхность
+# · Rev: если понадобится per-module systemd-конфиг — вернуть поле + реализацию
 name: platform-secrets
 install_type: system
-systemd:
-  unit: platform-secrets.service
-  required_by: docker.service
 description: "Systemd oneshot service that regenerates /var/lib/platform/run/secrets.env from encrypted SOPS/age secrets"
 
 interfaces:
@@ -46,4 +52,4 @@ resources: {}
 env_requires:
   - AGE_SECRET_KEY
 
-spool_dir: none  # systemd oneshot — tmpfs-based, no persistent data
+spool_dir: none  # systemd oneshot; secrets.env персистентен на диске 0600 (142 W2, AI-0075)

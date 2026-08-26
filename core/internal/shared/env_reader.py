@@ -33,11 +33,12 @@ from __future__ import annotations
 
 import argparse
 import logging
-import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
+
+from core.internal.shared import secrets_env_parser
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +50,11 @@ logger = logging.getLogger(__name__)
 # ·   provision-llm) без выигрыша: обязательность проверяют recipe-level :? checks.
 # · Rev: если появится потребитель, которому нужен строгий режим — добавить --required.
 
-_LINE_RE = re.compile(r"^(?:export\s+)?(?P<name>[A-Za-z_][A-Za-z0-9_]*)=(?P<value>.*)$")
+# AI-0055 (DevPlan 17 T5.5): локальная _LINE_RE удалена — канон
+# secrets_env_parser.parse_line (кавычки + unquoted-# + export-prefix).
+# lenient-фасад: отсутствующий файл/переменная → "" (TRAP[DECISION] ниже),
+# strict не пробрасывается — потребители make-цепей ждут пустую подстановку.
+_parse_line = secrets_env_parser.parse_line
 
 
 # region FUNC_get_env_value
@@ -69,9 +74,9 @@ def get_env_value(env_file: Path, var_name: str) -> str:
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
-        match = _LINE_RE.match(line)
-        if match and match.group("name") == var_name:
-            result = match.group("value")
+        parsed = _parse_line(line)
+        if parsed is not None and parsed[0] == var_name:
+            result = parsed[1]
     return result
 
 

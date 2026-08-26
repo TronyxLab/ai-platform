@@ -504,6 +504,16 @@ class TestExtractNodeName:
 # ══════════════════════════════════════════════════════════════════════
 
 
+# ── T8.3 (DevPlan 17): литералы сервисов — из collector-конфига (инфраструктура), не из теста ──
+from collectors.checks.platform import PLATFORM_SERVICES as _INFRA_SERVICES
+
+_G_INFRA = next(svc for svc in _INFRA_SERVICES if svc["name"] == "Grafana")
+_svc_internal: str = _G_INFRA["internal"]
+_svc_health_path: str = _G_INFRA["health_path"]
+_svc_target: str = _svc_internal.split(":", maxsplit=1)[0]  # observable target из инфра-реестра
+_svc_timeout: int = 5  # бюджет DNS-probe платформенной проверки (канон checks/platform)
+
+
 class TestCheckPlatformServiceDnsProbe:
     """Tests for _check_platform_service() — DNS probe → DISABLED."""
 
@@ -517,10 +527,10 @@ class TestCheckPlatformServiceDnsProbe:
             mock.patch("collectors.socket.gethostbyname", side_effect=OSError("nxdomain")),
             mock.patch("collectors.checks.platform._curl_platform_service") as curl_mock,
         ):
-            result = _check_platform_service("grafana:3000", "/api/health")
+            result = _check_platform_service(_svc_internal, _svc_health_path)
 
         assert result["status"] == "DISABLED"
-        assert result["target"] == "grafana"
+        assert result["target"] == _svc_target
         assert "DNS unresolved" in result["error"]
         curl_mock.assert_not_called()
 
@@ -535,10 +545,11 @@ class TestCheckPlatformServiceDnsProbe:
             mock.patch("collectors.socket.gethostbyname", return_value="172.22.0.5"),
             mock.patch("collectors.checks.platform._curl_platform_service", return_value=curl_result) as curl_mock,
         ):
-            result = _check_platform_service("grafana:3000", "/api/health")
+            result = _check_platform_service(_svc_internal, _svc_health_path)
 
         assert result == curl_result
-        curl_mock.assert_called_once_with("grafana:3000", "/api/health", 5)
+        # T8.3: аргументы сверяются с инфра-реестром, не с литералами теста
+        curl_mock.assert_called_once_with(_svc_internal, _svc_health_path, _svc_timeout)
 
 
 # ══════════════════════════════════════════════════════════════════════

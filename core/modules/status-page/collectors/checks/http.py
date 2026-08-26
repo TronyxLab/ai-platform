@@ -68,6 +68,13 @@ class CheckResult(TypedDict, total=False):
 
 
 # region FUNC_curl_http_code
+# 🧐 TRAP[DECISION] · 2026-08-26 · — · Сознательная копия curl-обёртки (AI-0064, DevPlan 17 T5.1)
+# · Rejected: импорт SoT core/internal/shared/http_probe.curl_http_code
+# · Reason: module-contract status-page ЗАПРЕЩАЕТ импорт core/internal (контейнерный модуль,
+#   кросс-слойный гейт #8) — копия неизбежна; семантика ошибок выровнена: OSError surfaced
+#   в dict.error (fail-verbose), а не глотается
+# · Rev: если статус-страница получит доступ к shared-слою или переедет в core/internal —
+#   заменить на импорт SoT и удалить эту копию
 def curl_http_code(
     url: str,
     timeout: int,

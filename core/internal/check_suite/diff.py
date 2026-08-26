@@ -41,10 +41,13 @@ logger = logging.getLogger(__name__)
 # region FUNC_diff_files
 ## @purpose  Файлы diff-скоупа: git diff --name-only HEAD (tracked) + git ls-files -o
 ##           --exclude-standard (untracked). None = git недоступен.
+##           Удалённые tracked-файлы (статус D) ОТФИЛЬТРОВЫВАЮТСЯ: их нет на диске,
+##           а pre-commit/ruff/pytest не принимают несуществующие пути (merge-удаления
+##           ломали check-diff: «file or directory not found»).
 ## @io       ⇥ root: Path → ⎋ list[str] | None
 ## @complexity O(N)
 def diff_files(root: Path) -> list[str] | None:
-    """Collect changed files: tracked (vs HEAD) + untracked non-ignored."""
+    """Collect changed files: tracked (vs HEAD) + untracked non-ignored, существующие на диске."""
     changed: list[str] = []
     # ruff: ignore[PLW0717] — try-тело содержит return-ветки с fall-through (после-try код) — извлечение небезопасно
     # DevPlan 006 W3: subprocess.run → run_subprocess_streaming (graceful; rc!=0 → None)
@@ -63,7 +66,7 @@ def diff_files(root: Path) -> list[str] | None:
         changed.extend(line for line in r2.stdout.splitlines() if line.strip())
     except OSError:
         return None
-    return sorted(set(changed))
+    return sorted({f for f in changed if (root / f).exists()})
 
 
 # endregion FUNC_diff_files
@@ -72,12 +75,16 @@ def diff_files(root: Path) -> list[str] | None:
 # region FUNC_build_diff_steps
 ## @purpose  Diff-скоуп (DevPlan §3.5): (1) pre-commit run --files \<изменённые\> — ВСЕГДА при
 ##           diff; (2) ruff check \<изменённые .py\>; (3) pytest \<изменённые test-файлы\>
-##           (tests/**/test_*.py). Без кэша. Пустой diff → [] (exit 0 «nothing to diff»).
+##           (tests/**/test_*.py, КРОМЕ tests/e2e/ — requires_node-сьюты гоняются только
+##           через make test-node NODE=имя (без угловых скобок — doxygen xml-тег),
+##           R4: без test-VPS они FAIL, а не skip).
+##           Без кэша. Пустой diff → [] (exit 0 «nothing to diff»).
 ## @io       ⇥ root: Path, changed: list[str] → list[tuple[str, str, int]] (name, cmd, timeout)
+##           — doxygen-безопасно: generics без угловых скобок в docstring (xml-тег)
 ## @complexity O(N)
 ## @invariants
 ##   - pre-commit --files заменяет --all-files (9.9s → ~2s на узком diff)
-##   - ruff только по изменённым .py; pytest только по tests/**/test_*.py
+##   - ruff только по изменённым .py; pytest только по tests/**/test_*.py (не e2e)
 ##   - Нет изменений → пустой список → exit 0
 def build_diff_steps(_root: Path, changed: list[str]) -> list[tuple[str, str, int]]:
     """Build the narrow diff-step list (pre-commit --files + ruff diff + pytest diff)."""
@@ -90,7 +97,7 @@ def build_diff_steps(_root: Path, changed: list[str]) -> list[tuple[str, str, in
     if py_files:
         py_arg = " ".join(shlex.quote(f) for f in py_files)
         steps.append(("ruff check (diff)", f"ruff check {py_arg}", 60))
-    test_files = [f for f in changed if re.match(r"^tests/.*test_.*\.py$", f)]
+    test_files = [f for f in changed if re.match(r"^tests/.*test_.*\.py$", f) and not f.startswith("tests/e2e/")]
     if test_files:
         test_arg = " ".join(shlex.quote(f) for f in test_files)
         steps.append(("pytest (diff)", f"pytest {test_arg} -q --tb=short", 300))

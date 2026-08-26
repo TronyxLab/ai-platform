@@ -38,8 +38,6 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Protocol, TypedDict, cast
 
-import boto3
-from botocore.config import Config as BotoConfig
 from botocore.exceptions import BotoCoreError, ClientError
 
 # Import shared config from same directory
@@ -52,6 +50,7 @@ from backup_config import (  # pyright: ignore[reportImplicitRelativeImport]
     get_backup_config,
     get_s3_config,
 )
+from s3_client import build_boto3_s3_client  # pyright: ignore[reportImplicitRelativeImport] — AI-0073 единый строитель
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -111,7 +110,6 @@ HTTP_CLIENT_ERROR_MAX: int = 500  # верхняя граница 4xx
 
 _MAX_RETRIES = 3
 _RETRY_INTERVAL_SEC = 30 * 60  # 30 minutes between retry attempts
-_BOTO_RETRIES = 3  # botocore built-in retry count
 
 # 🧐 TRAP[DECISION] · 2026-06-11 · — · Retry: 3 попытки × 30 минут (total 90 min max)
 # · Rejected: exponential backoff (1m, 5m, 15m) · Reason: файлы большие (>1GB), сеть нестабильная;
@@ -200,22 +198,18 @@ def create_s3_client(config: S3Config) -> S3Client:
     Returns:
         boto3 S3 client instance.
     """
-    boto_config = BotoConfig(
-        retries={"max_attempts": _BOTO_RETRIES, "mode": "standard"},
-        connect_timeout=30,
-        read_timeout=60,
-    )
-
-    # W11: boto3.client → Any (boto3 untyped) → cast к S3Client-протоколу
+    # AI-0073 (DevPlan 17 T2.4): единый строитель s3_client.build_boto3_s3_client —
+    # дефолтный бюджет (connect 30 / read 60 / standard ×3) живёт в каноне
     client = cast(
         "S3Client",
-        boto3.client(  # pyright: ignore[reportUnknownMemberType] — W11 external boto3.client untyped-оверлоады
-            "s3",
-            endpoint_url=config["endpoint_url"],
-            aws_access_key_id=config["aws_access_key_id"],
-            aws_secret_access_key=config["aws_secret_access_key"],
-            region_name=config["region"],
-            config=boto_config,
+        cast(
+            object,
+            build_boto3_s3_client(  # object-мост: Boto3S3↔S3Client Protocol-границы (W11)
+                endpoint_url=config["endpoint_url"],
+                access_key=config["aws_access_key_id"],
+                secret_key=config["aws_secret_access_key"],
+                region=config["region"],
+            ),
         ),
     )
 

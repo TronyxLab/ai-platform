@@ -249,17 +249,20 @@ def test_check_project_extension_allows_yaml(tmp_path, caplog, capsys) -> None:
 @pytest.mark.parametrize(
     ("facts", "find_spec_fn", "expected"),
     [
-        pytest.param(_FakeFacts(ajv_path="/usr/local/bin/ajv"), None, "ajv", id="ajv_preferred"),
-        pytest.param(_FakeFacts(ajv_path=None), lambda _name: object(), "python", id="python_fallback"),
+        # AI-0055r (DevPlan 17 T5.6): ajv в PATH ИГНОРИРУЕТСЯ — движок pinned к python-Draft7
+        pytest.param(
+            _FakeFacts(ajv_path="/usr/local/bin/ajv"), lambda _name: object(), "python", id="fake_ajv_on_path_ignored"
+        ),
+        pytest.param(_FakeFacts(ajv_path=None), lambda _name: object(), "python", id="python_only"),
     ],
 )
 def test_detect_validator_priority(facts, find_spec_fn, expected, caplog) -> None:
-    """detect_validator: ajv приоритетен (which найден) → 'ajv'; иначе python-jsonschema fallback → 'python'."""
-    # 🧪 TRAP[TEST] · Regression: DevPlan 107 — detect_validator() из validate.sh L49-51
-    # · Scenario: ajv в PATH → приоритет перед python-jsonschema (find_spec не вызывается);
-    # ·   which→None + jsonschema доступен → 'python'
-    # · Last fail: N/A
-    # · Remove if: порядок выбора валидатора меняется
+    """detect_validator: движок PINNED к python-Draft7 — фейковый ajv в PATH игнорируется (AI-0055r)."""
+    # 🧪 TRAP[TEST] · 2026-08-26 · Regression: DevPlan 17 T5.6 (заменил ajv-приоритет-тест)
+    # · Scenario: ajv в PATH + jsonschema доступен → 'python' (окружение не выбирает движок);
+    #   без ajv → 'python'
+    # · Last fail: DevPlan 17 верификация @64c2090 (аудит AI-0055)
+    # · Remove if: появится явный config-выбор движка валидации
     logger.critical("[IMP:9][test] test_detect_validator_priority — validator selection")
 
     assert validate_orchestrator.detect_validator(facts=facts, find_spec_fn=find_spec_fn) == expected

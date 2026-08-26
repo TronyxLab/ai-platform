@@ -1,17 +1,22 @@
 # GREP_SUMMARY: hermes-agent module docker agent-net proxy-net readiness liveness restart-always
-# STRUCTURE: ▶ module:hermes-agent → proxy-net + agent-net → /health + /ready → skills → ┐
+# STRUCTURE: ▶ module:hermes-agent → proxy-net + hermes-agent-net + observability-net (+ loopback 9119/8642) → /health + /ready → skills → ┐
 # region MODULE_CONTRACT
 ## @purpose  AI agent module (hermes-agent) providing monitoring, alerting, and self-update capabilities
 ## @scope    Phase 04 base-layer: agent HTTP API (/health, /ready, /), skill loading at startup
 ## @invariants
 ##   - install_type: docker — managed by compose, multi-stage base+overlay build
-##   - Networks: proxy-net + <project>-net (both external:true, pre-created by bootstrap)
+##   - Networks: proxy-net + hermes-agent-net + observability-net (external:true,
+##     pre-created by bootstrap; AI-0071: текст приведён к compose-факту :183-186)
 ##   - restart: always — agent must survive container crashes and host reboots
 ##   - stop_grace_period: 30s — time to complete active tasks and send final notifications (06 §13)
 ##   - Readiness: /ready endpoint — agent has loaded all skills and is ready to serve
 ##   - Liveness: /health endpoint — process is responding (Docker healthcheck interval)
 ##   - Deploy key read-only: mounted via volumes, agent never writes to deployed config
-##   - NO ports — agent accessed via nginx proxy-net only
+##   - Порты: LOOPBACK-ONLY bind — НЕ host-публикация (исключение канона «NO ports»,
+##     AI-0071): dashboard 9119 → SERVICE_BIND_HOST (peer-доступ ufw T2.3, default
+##     127.0.0.1) для upstream nginx hermes-dashboard vhost; Desktop 8642 → только
+##     127.0.0.1; healthcheck.sh deep-check зависит от host-loopback 9119. Основной
+##     доступ агента — по-прежнему через nginx proxy-net
 ##   - Skills loaded at startup, no hot-reload (07 §4.4)
   ##   - Resource limits: memory 1G (соответствует compose)
 ## @rationale Separate image from base skills allows overlay-based customization per context (06 §5.4)

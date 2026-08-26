@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: validate-orchestrator, yaml, json-schema, ajv, python-jsonschema, discovery, schema-routing, lint-routing, error-aggregation, validate.sh-migration, pre-commit, exit1
-# STRUCTURE: ▶ main(args) → ◇ --check-fqdn|--check-ports (subprocess conflict_checks) → ⊕ targets=args|discover_targets(os.walk) → ◇ for file: ┌resolve_schema(basename)┐ → ◇ skip|ai-platform-extension|validate_file → ◇ ajv|python subprocess → ∑ ERRORS → ⎋ exit 0|1
+# STRUCTURE: ▶ main(args) → ◇ --check-fqdn|--check-ports (subprocess conflict_checks) → ⊕ targets=args|discover_targets(os.walk) → ◇ for file: ┌resolve_schema(basename)┐ → ◇ skip|ai-platform-extension|validate_file → ⚡ python-Draft7 (schema_validator, pinned) → ∑ ERRORS → ⎋ exit 0|1
 # region MODULE_CONTRACT
 ## @purpose  Python-порт оркестрации validate.sh (DevPlan 107). Все «тяжёлые» операции уже
 ##           делегированы в Python-CLI: jsonschema_validate.py (093 W1), conflict_checks.py
@@ -60,7 +60,6 @@ import logging
 import os
 import subprocess
 import sys
-import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
@@ -73,7 +72,7 @@ _PLATFORM_ROOT = os.path.join(
 if _PLATFORM_ROOT not in sys.path:
     sys.path.insert(0, _PLATFORM_ROOT)
 
-from core.internal.shared.env_facts import EnvironmentFacts, default_env_facts
+from core.internal.shared.env_facts import EnvironmentFacts
 from core.internal.shared.exceptions import PlatformError, PlatformFatalError
 
 logger = logging.getLogger(__name__)
@@ -152,26 +151,24 @@ def detect_validator(
     facts: EnvironmentFacts | None = None,
     find_spec_fn: Callable[[str], object] | None = None,
 ) -> str:
-    """Определить доступный schema-валидатор: ajv (приоритет) → python-jsonschema → exit 1.
+    """Движок валидации PINNED к python-Draft7: вернуть "python" или упасть.
 
-    ▶ ◇ which('ajv')? → "ajv" · ◇ find_spec('jsonschema')? → "python" · ✗ → emit ERROR + exit 1
+    ▶ ◇ find_spec('jsonschema')? → "python" · ✗ → PlatformFatalError
 
-    ## @purpose — Selection validator'а с приоритетом ajv > python (байт-идентично detect_validator() из validate.sh).
-    ## @io — ⇥ facts: EnvironmentFacts | None (None = реальные системные; which ajv через DI),
-    ##          find_spec_fn: Callable | None (DI, W-H DevPlan 163 — find_spec-канал;
-    ##              None = importlib.util.find_spec) → ⎋ str ("ajv" | "python")
+    ## @purpose — AI-0055r (DevPlan 17 T5.6): ajv-ветка УДАЛЕНА — «единственная Draft7-точка»
+    ##            (schema_validator.py) обходилась окружением: один YAML валидировался разными
+    ##            движками dev-vs-CI. Выбор движка — не окружение; явный config при будущей
+    ##            необходимости.
+    ## @io — ⇥ facts/find_spec_fn: DI сохранены (совместимость вызовов/тестов)
+    ##       → ⎋ str ("python")
     ## @complexity — O(1)
     ## @invariants
-    ##   - facts.which('ajv') непустой → "ajv" (не проверяем jsonschema)
-    ##   - find_spec('jsonschema') не-None → "python"
-    ##   - Ни один не доступен → PlatformFatalError (T3.6: business sys.exit → raise)
-    ## @changes 2026-08-13 | DevPlan 160 W4b — +facts (which ajv через DI, убирает monkeypatch shutil)
-    ## @changes 2026-08-13 | DevPlan 163 W-H — +find_spec_fn (0 патчей importlib.util в тестах)
+    ##   - Наличие ajv в PATH ИГНОРИРУЕТСЯ (фейковый ajv не переключает движок)
+    ##   - jsonschema недоступен → PlatformFatalError (ручное действие: pip3 install jsonschema pyyaml)
+    ## @changes 2026-08-26 | DevPlan 17 T5.6 — ajv-приоритет удалён (pinned python-Draft7)
     """
-    facts = facts or default_env_facts()
+    _ = facts  # DI сохранён для совместимости сигнатуры; ajv больше не проверяется
     find_spec_impl = importlib.util.find_spec if find_spec_fn is None else find_spec_fn
-    if facts.which("ajv"):
-        return "ajv"
     try:
         spec = find_spec_impl("jsonschema")
     except (ModuleNotFoundError, ValueError):
@@ -180,7 +177,7 @@ def detect_validator(
     if spec is not None:
         return "python"
     # T3.6 (DevPlan 116 B4): business sys.exit → raise PlatformFatalError (нет валидатора — ручное действие)
-    msg = "No validator found. Install: npm install -g ajv-cli ajv-formats  OR  pip3 install jsonschema pyyaml"
+    msg = "No validator found. Install: pip3 install jsonschema pyyaml"
     raise PlatformFatalError(msg)
 
 
@@ -264,83 +261,6 @@ def check_project_extension(path: Path) -> bool:
 # endregion FUNC_check_project_extension
 
 
-# region FUNC_validate_with_ajv
-def validate_with_ajv(
-    yaml_file: Path, schema_file: Path, run_cmd: Callable[..., subprocess.CompletedProcess[str]] | None = None
-) -> bool:
-    """Валидация через ajv-cli: YAML→JSON (node_yaml --json-output) → ajv validate.
-
-    ▶ ┌(yaml_file, schema_file)┐ → ○ subprocess node_yaml --json-output → ○ tmp json → ○ ajv validate → ◇ rc → ⎋ bool
-
-    ## @purpose — ajv-путь валидации (байт-идентично validate_with_ajv() из validate.sh L62-85).
-    ## @io — ⇥ yaml_file: Path · schema_file: Path → ⎋ bool (True = valid)
-    ## @complexity — O(S*I) доминирует ajv (subprocess)
-    ## @invariants
-    ##   - node_yaml fail → [IMP:9][validate][ajv] FAIL: Failed to parse YAML: <file>
-    ##   - ajv fail → [IMP:9][validate][ajv] FAIL: <file>: <output> (однострочный формат)
-    ##   - Успех → [IMP:7][validate][ajv] OK: <file>
-    ##   - temp-файл удаляется в finally (mktemp + trap RETURN эквивалент)
-    """
-    tmp_json_path: Path | None = None
-    runner = subprocess.run if run_cmd is None else run_cmd
-    try:
-        with tempfile.NamedTemporaryFile(
-            encoding="utf-8", prefix="platform-validate-", suffix=".json", mode="w", delete=False
-        ) as tmp:
-            tmp_json_path = Path(tmp.name)
-
-        proc = runner(
-            [
-                sys.executable,
-                "-m",
-                "core.internal.shared.node_yaml",
-                "--file",
-                str(yaml_file),
-                "--json-output",
-            ],
-            capture_output=True,
-            text=True,
-            cwd=str(REPO_ROOT),
-            check=False,
-        )
-        if proc.returncode != 0:
-            emit(9, "ajv", f"FAIL: Failed to parse YAML: {yaml_file}")
-            return False
-        tmp_json_path.write_text(proc.stdout)
-
-        proc2 = runner(
-            [
-                "ajv",
-                "validate",
-                "-s",
-                str(schema_file),
-                "-d",
-                str(tmp_json_path),
-                "--errors=text",
-                "--all-errors",
-            ],
-            capture_output=True,
-            text=True,
-            cwd=str(REPO_ROOT),
-            check=False,
-        )
-        if proc2.returncode != 0:
-            emit(9, "ajv", f"FAIL: {yaml_file}: {proc2.stderr}")
-            return False
-        emit(7, "ajv", f"OK: {yaml_file}")
-        return True
-    finally:
-        if tmp_json_path is not None:
-            try:
-                tmp_json_path.unlink(missing_ok=True)
-            except OSError:
-                # mktemp-trap эквивалент: cleanup best-effort, не маскирует основной результат
-                logger.info("[IMP:4][validate][ajv] tmp cleanup skipped: %s", tmp_json_path)
-
-
-# endregion FUNC_validate_with_ajv
-
-
 # region FUNC_validate_with_python
 def validate_with_python(
     yaml_file: Path, schema_file: Path, run_cmd: Callable[..., subprocess.CompletedProcess[str]] | None = None
@@ -391,15 +311,15 @@ def validate_with_python(
 def validate_file(
     yaml_file: Path,
     schema_file: Path,
-    validator: str,
+    validator: str,  # ruff: ignore[ARG001] — AI-0055r: pinned python, параметр для совместимости
     run_cmd: Callable[..., subprocess.CompletedProcess[str]] | None = None,
 ) -> bool:
-    """Проверить существование файлов → dispatching по validator (ajv|python).
+    """Проверить существование файлов → валидация python-Draft7 (pinned, AI-0055r).
 
-    ▶ ┌(yaml_file, schema_file, validator)┐ → ◇ -f yaml? → ◇ -f schema? → ⊕ emit Validating → ◇ validator → ⎋ bool
+    ▶ ┌(yaml_file, schema_file)┐ → ◇ -f yaml? → ◇ -f schema? → ⊕ emit Validating → ⚡ python-Draft7 → ⎋ bool
 
     ## @purpose — Центральная точка валидации одного файла (байт-идентично validate_file() из validate.sh L124-144).
-    ## @io — ⇥ yaml_file: Path · schema_file: Path · validator: str ("ajv"|"python"),
+    ## @io — ⇥ yaml_file: Path · schema_file: Path · validator: str (игнорируется, pinned python),
     ##          run_cmd: Callable | None (DI, W-H — subprocess-канал; None = subprocess.run) → ⎋ bool
     ## @complexity — O(1) + делегирование валидатору
     ## @invariants
@@ -416,8 +336,7 @@ def validate_file(
 
     emit(6, "validate", f"Validating: {yaml_file} against {Path(schema_file).name}")
 
-    if validator == "ajv":
-        return validate_with_ajv(yaml_file, schema_file, run_cmd=run_cmd)
+    # AI-0055r (DevPlan 17 T5.6): движок один — python-Draft7 (validator-параметр игнорируется)
     return validate_with_python(yaml_file, schema_file, run_cmd=run_cmd)
 
 

@@ -28,11 +28,10 @@
 ##            дедупликация ≥2 реализаций, RC3 C1) централизует loop/backoff/sleep/logging;
 ##            доменные различия (raise vs result, attempts-семантика) выражаются параметрами.
 ## @changes 2026-08-16 | DevPlan 177 W3.1 — Created (консолидация 4 retry-дублей)
-# 🧐 TRAP[DECISION] · 2026-08-16 · — · Инвентарная запись shared/AGENTS.md (таблица модулей) НЕ добавлена
-# · Rejected: правка shared/AGENTS.md в рамках 177 W3.1 (файл вне разрешённого списка волны)
-# · Reason: deferred, out of scope — инвариант 3(c) shared/AGENTS.md требует запись «retry.py» в таблицу
-# · Rev: при следующей волне, трогающей shared/AGENTS.md — добавить строку (API: retry/exponential_backoff,
-# ·   потребители: state_machine/system/channels/docker_compose)
+# 🪦 TRAP[ARCHIVED] · 2026-08-26 · — · Инвентарная запись shared/AGENTS.md (закрыто)
+# · Было: TRAP[DECISION] «запись НЕ добавлена» (deferred 177 W3.1)
+# · Закрыто: запись retry.py присутствует в core/internal/shared/AGENTS.md (:53,
+#   API + потребители задокументированы) — условие Rev выполнено и погашено.
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
