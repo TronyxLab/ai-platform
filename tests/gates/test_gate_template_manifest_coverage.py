@@ -35,7 +35,8 @@ NGINX_COMPOSE = ROOT / "core" / "modules" / "nginx" / "docker-compose.base.yml"
 
 # Директории, исключаемые из find *.template
 # .kilo — служебная директория Kilo (worktrees агентных сессий, копии репо) — не продукт-контент.
-_EXCLUDED_PARTS = {".git", "node_modules", ".venv", "__pycache__", ".kilo"}
+# .worktrees — Agent Manager git-worktrees (gitignored чекауты других веток/планов) — не репо-контент.
+_EXCLUDED_PARTS = {".git", "node_modules", ".venv", "__pycache__", ".kilo", ".worktrees"}
 
 
 def _registered_template_paths() -> set[str]:

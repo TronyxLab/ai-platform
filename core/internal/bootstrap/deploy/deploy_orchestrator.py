@@ -131,6 +131,7 @@ from core.internal.shared.exceptions import (
     ConfigParseError,
     ConfigValidationError,
     PlatformError,
+    PlatformFatalError,
 )
 
 # DevPlan 118 C6: единый путь litellm-config.yml — shared/llm_paths (литерал удалён).
@@ -241,9 +242,16 @@ def orchestrate(
     modules_filter: str = "",
     deploy_parallel: bool = False,
     deploy_orchestrator: bool = False,
+    strict_init: bool = False,
 ) -> ModuleDeployResult:
-    """Main orchestration entry point — importable and CLI-callable."""
-    logger.info("[IMP:7][orchestrate][start] node_yaml=%s modules_dir=%s", node_yaml, modules_dir)
+    """Main orchestration entry point — importable and CLI-callable.
+
+    strict_init (plan 012 T9 / F-015b): init-режим — failed≠∅ ИЛИ crit>0 → exit 2
+    (resumable); update-режим (False) сохраняет контракт DEPLOY_BEST_EFFORT (WARN→0).
+    """
+    logger.info(
+        "[IMP:7][orchestrate][start] node_yaml=%s modules_dir=%s strict_init=%s", node_yaml, modules_dir, strict_init
+    )
 
     # PHASE 1: PREFLIGHT (all steps non-fatal — shell used `|| true` semantics)
     _preflight(core_dir, node_yaml, modules_dir)
@@ -262,6 +270,10 @@ def orchestrate(
     if mn_placement is not None:
         _apply_multinode_runtime_env(mn_placement, mn_node)
 
+    # PHASE 2.7 (plan 012 T10/D8): node-side interpolation dry-run — unsatisfied ${VAR:?}
+    # ловится ДО создания контейнеров; strict (init) → FAIL со списком, update → WARN.
+    _interpolation_dryrun(modules.enabled_names, modules.overlays, modules_dir, strict=strict_init)
+
     # PHASE 3: ROUTE & DEPLOY
     deployed, failed, modules_info = _route_deploy(
         modules.enabled_names,
@@ -277,7 +289,7 @@ def orchestrate(
 
     # PHASE 5: SEVERITY → EXIT CODE
     crit, warn = _aggregate_severity(failed, modules_info, modules_dir)
-    exit_code = _compute_exit_code(crit, warn, deployed)
+    exit_code = _compute_exit_code(crit, warn, deployed, failed=failed, strict_init=strict_init)
     logger.info(
         "[IMP:9][orchestrate][done] deployed=%d failed=%s crit=%d warn=%d exit_code=%d",
         deployed,
@@ -346,6 +358,80 @@ def _preflight(core_dir: str, node_yaml: str, modules_dir: str) -> None:
 
 
 # endregion FUNC__preflight
+
+
+# region FUNC__interpolation_dryrun
+## @purpose  Node-side interpolation dry-run (plan 012 T10 / D8): `docker compose config
+##           --quiet` по каждому enabled-модулю с собранным env (secrets.env + infra defaults
+##           + profiles + NGINX_OVERLAY_DIR) ДО создания контейнеров. Защита стоит НА пути
+##           исполнения — unsatisfied ${VAR:?} ловится здесь, а не на живой ноде.
+## @io       ⇥ enabled_names: list[str], overlays: dict[str,str], modules_dir: str,
+##              strict: bool, runner DI (None = subprocess.run) → ⎋ list[str] (broken modules)
+##              ⚡ PlatformFatalError при strict и broken≠∅
+## @complexity O(M) compose config вызовов (~0.5s/модуль; <60s на init, AC T10)
+## @invariants
+##   - Собираются ВСЕ проблемные модули за один проход (не first-fail-abort)
+##   - strict=False (update φ12/D2): WARN + continue; strict=True (init φ8): FAIL со списком
+##   - COMPOSE_PROFILES для dry-run = полный infra-список (паритет с CI compose config)
+def _interpolation_dryrun(
+    enabled_names: list[str],
+    overlays: dict[str, str],
+    modules_dir: str,
+    *,
+    strict: bool = False,
+    runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
+) -> list[str]:
+    # endregion FUNC__interpolation_dryrun
+    run = subprocess.run if runner is None else runner
+    secrets_env = os.environ.get("SECRETS_ENV_FILE") or str(deploy_paths.secrets_env_file())
+    docker_orchestrator.ensure_nginx_overlay_env(overlays.get("nginx") or os.environ.get("NGINX_OVERLAY_DIR"))
+    try:
+        full_profiles = docker_orchestrator._resolve_compose_profiles_from_infra()
+    except (KeyError, OSError) as exc:
+        logger.warning("[IMP:7][_interpolation_dryrun][profiles] infra profiles unavailable (%s) — skip dry-run", exc)
+        return []
+
+    broken: list[tuple[str, str]] = []
+    for name in enabled_names:
+        compose_file = docker_orchestrator._resolve_compose_file(os.path.join(modules_dir, name))
+        if compose_file is None:
+            continue  # отсутствие compose-файла репортует сам деплой
+        cmd = ["docker", "compose", "-f", str(compose_file)]
+        if Path(secrets_env).is_file():
+            cmd += ["--env-file", secrets_env]
+        cmd += ["config", "--quiet"]
+        dry_env = {**os.environ, "COMPOSE_PROFILES": full_profiles}
+        try:
+            result = run(cmd, capture_output=True, text=True, timeout=60, env=dry_env, check=False)
+            rc, err = result.returncode, (result.stderr or "")[-400:]
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            rc, err = 1, f"dry-run failed: {exc}"
+        if rc != 0:
+            logger.error("[IMP:9][_interpolation_dryrun][fail] %s: interpolation/config error: %s", name, err.strip())
+            broken.append((name, err.strip()))
+        else:
+            logger.info("[IMP:8][_interpolation_dryrun][ok] %s: interpolation OK", name)
+
+    if not broken:
+        return []
+
+    names = [n for n, _ in broken]
+    if strict:
+        logger.error(
+            "[IMP:10][_interpolation_dryrun] FAIL: %d module(s) with unsatisfied interpolation BEFORE "
+            "container creation (D8): %s",
+            len(broken),
+            ", ".join(names),
+        )
+        msg = (
+            "Interpolation dry-run failed for modules: "
+            + ", ".join(names)
+            + " — check secrets matrix / env_defaults before deploy"
+        )
+        raise PlatformFatalError(msg)
+    for name, err in broken:
+        logger.warning("[IMP:7][_interpolation_dryrun][warn-nonstrict] %s: %s", name, err)
+    return names
 
 
 # region FUNC__read_node_yaml_projects
@@ -1326,18 +1412,43 @@ def _aggregate_severity(
 # region FUNC__compute_exit_code
 ## @purpose  Compute final exit code: CRIT>0 → 2, WARN>0 → 0 (logged), no failures → 0.
 ##           Чистое вычисление — orchestrator_metrics.exit_code_from_results (E6); здесь логгинг.
-## @io       ⇥ crit: int, warn: int, deployed: int → ⎋ int
+##           plan 012 T9 (F-015b): strict_init — failed≠∅ ИЛИ crit>0 → 2 (init fail-loud,
+##           state.json=failed, resumable); update сохраняет WARN→0 (DEPLOY_BEST_EFFORT).
+## @io       ⇥ crit: int, warn: int, deployed: int, failed: list | None, strict_init: bool → ⎋ int
 ## @complexity 1 — delegation + logging
 ## @invariants
-##   - WARN maps to exit 0 (DEPLOY_BEST_EFFORT policy — warnings are non-critical by definition)
-##   - Only CRIT failures escalate to exit 2
-def _compute_exit_code(crit: int, warn: int, deployed: int) -> int:
-    """Severity-based exit code (DEPLOY_BEST_EFFORT contract: CRIT→2, WARN→0, DONE→0)."""
+##   - WARN maps to exit 0 in update mode (DEPLOY_BEST_EFFORT — warnings non-critical)
+##   - strict_init: ЛЮБОЙ failed-модуль (включая warn-severity) или crit>0 → exit 2
+##   - IMP:9 summary deployed=N failed=[...] в обоих режимах
+def _compute_exit_code(
+    crit: int,
+    warn: int,
+    deployed: int,
+    *,
+    failed: list[str] | None = None,
+    strict_init: bool = False,
+) -> int:
+    """Severity-based exit code; strict_init escalates any failure to exit 2 (plan 012 T9)."""
+    if strict_init and (crit > 0 or failed):
+        logger.error(
+            "[IMP:9][_compute_exit_code][strict-init] INIT failed≠∅ (deployed=%d failed=%s crit=%d) "
+            "→ exit 2 (resumable: повтор bootstrap доводит)",
+            deployed,
+            failed,
+            crit,
+        )
+        return EXIT_CRITICAL
     code = _metrics_exit_code(crit, warn, deployed)
     if code == EXIT_CRITICAL:
         logger.error("[IMP:10][_compute_exit_code][critical] Critical:%d Warn:%d → exit 2", crit, warn)
     elif warn > 0:
-        logger.warning("[IMP:8][_compute_exit_code][warn] Warn:%d (non-critical — continuing) → exit 0", warn)
+        logger.warning(
+            "[IMP:8][_compute_exit_code][warn] Warn:%d (non-critical — continuing) → exit 0 "
+            "[IMP:9][summary] deployed=%d failed=%s",
+            warn,
+            deployed,
+            failed,
+        )
     else:
         logger.info("[IMP:9][_compute_exit_code][done] Deploy complete: %d modules (warnings: 0) → exit 0", deployed)
     return code
@@ -1439,6 +1550,7 @@ class _CliArgs(Protocol):
     modules_filter: str
     deploy_parallel: str
     deploy_orchestrator: str
+    strict_init: str
 
 
 ## @purpose  CLI entry point: argparse → orchestrate() → exit code (called via `exec python3` from the facade).
@@ -1471,6 +1583,12 @@ def main(argv: list[str] | None = None) -> int:
         choices=["true", "false"],
         help="DEPLOY_ORCHESTRATOR flag (default: false)",
     )
+    _ = parser.add_argument(
+        "--strict-init",
+        default="false",
+        choices=["true", "false"],
+        help="plan 012 T9: init-режим fail-loud — failed≠∅ ИЛИ crit>0 → exit 2 (default: false)",
+    )
     # W11: parse_args → Namespace (атрибуты Any) — Protocol-cast через object (см. _CliArgs)
     args = cast(_CliArgs, cast(object, parser.parse_args(argv)))
 
@@ -1491,6 +1609,7 @@ def main(argv: list[str] | None = None) -> int:
             modules_filter=args.modules_filter,
             deploy_parallel=(args.deploy_parallel or "").lower() == "true",
             deploy_orchestrator=(args.deploy_orchestrator or "").lower() == "true",
+            strict_init=(args.strict_init or "").lower() == "true",
         )
     except PlatformError as exc:
         # REF-0110: топо-цикл / неизвестная зависимость → exit 4 (ConfigValidation) без traceback.

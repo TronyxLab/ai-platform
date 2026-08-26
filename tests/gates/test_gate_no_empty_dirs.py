@@ -25,7 +25,19 @@ import pytest
 # 177 W1.7: + .kilo (состояние Kilo-расширения, gitignored) и load-results (gitignored
 # артефакты load-тестов, core/AGENTS.md §Нагрузочное тестирование) — dev-локали имели
 # пустые каталоги-артефакты; CI (fresh checkout) их не имеет по построению.
-_SKIP_PARTS = {".git", ".venv", "logs", ".ai", "node_modules", "__pycache__", "build", "dist", ".kilo", "load-results"}
+_SKIP_PARTS = {
+    ".git",
+    ".venv",
+    "logs",
+    ".ai",
+    "node_modules",
+    "__pycache__",
+    "build",
+    "dist",
+    ".kilo",
+    "load-results",
+    ".worktrees",
+}
 
 
 # region FUNC_scan_empty_dirs

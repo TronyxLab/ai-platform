@@ -37,7 +37,7 @@ _MARKER_RE = re.compile(r"<!--\s*GENERATED:START:([\w-]+)\s*-->")
 
 # 177 W1.7: + .kilo — состояние Kilo-расширения (gitignored); .kilo/worktrees/* — чекауты
 # ДРУГИХ веток с историческими маркерами — не репо-контент текущего дерева (CI их не имеет).
-_SKIP_PARTS = {".git", ".venv", "logs", "node_modules", "__pycache__", ".kilo"}
+_SKIP_PARTS = {".git", ".venv", "logs", "node_modules", "__pycache__", ".kilo", ".worktrees"}
 
 # Файлы-генераторы имеют право упоминать произвольные маркеры (f-string-шаблоны инжекции).
 _GENERATOR_FILES: frozenset[str] = frozenset(owner for owner, _ in _GENERATOR_OWNERS.values())

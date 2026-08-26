@@ -922,3 +922,45 @@ def test_phase_observability_best_effort(mock_subprocess, tmp_path):
 
 
 # endregion TEST_phases_E1
+
+
+# ────────────────────────────────────────────────────────────
+# region TEST_nginx_overlay_env_T8
+# ────────────────────────────────────────────────────────────
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · ensure_nginx_overlay_env — F-015 (plan 012 T8)
+# · Scenario: деплой НЕ-nginx модуля с overlay_dir на «голой» ноде (без внешнего env) →
+#             NGINX_OVERLAY_DIR экспортирован ДО compose-вызова → интерполяция
+#             ${NGINX_OVERLAY_DIR:?} проходит; param перезаписывает существующий env.
+# · Last fail: F-015 — экспорт был под гейтом module_name == "nginx": деплой любого другого
+# ·   модуля оставлял env без NGINX_OVERLAY_DIR → интерполяция падала на голой ноде.
+# · Remove if: NGINX_OVERLAY_DIR перестаёт быть частью deploy-контракта compose-интерполяции.
+def test_overlay_dir_exported_for_non_nginx(mock_subprocess, module_dir, monkeypatch):
+    """F-015a: non-nginx deploy exports NGINX_OVERLAY_DIR before first compose call."""
+    monkeypatch.delenv("NGINX_OVERLAY_DIR", raising=False)
+
+    result = dorch.deploy_docker_module(
+        module_name="test_mod",
+        overlay_dir="/opt/node-configs/test-node/overlays/nginx",
+        modules_dir=module_dir,
+    )
+
+    assert result is True
+    exported = dorch.os.environ.get("NGINX_OVERLAY_DIR")
+    assert exported == "/opt/node-configs/test-node/overlays/nginx", (
+        f"F-015 FAIL: NGINX_OVERLAY_DIR must be exported for non-nginx modules, got {exported!r}"
+    )
+
+    # Param приоритетен: явный overlay_dir перезаписывает существующий env
+    monkeypatch.setenv("NGINX_OVERLAY_DIR", "/stale/overlay")
+    dorch.ensure_nginx_overlay_env("/opt/node-configs/other/overlays/nginx")
+    assert dorch.os.environ["NGINX_OVERLAY_DIR"] == "/opt/node-configs/other/overlays/nginx"
+
+    # Пустые все источники → не экспортируется, env не мутируется пустышкой
+    monkeypatch.setenv("NGINX_OVERLAY_DIR", "")
+    assert not dorch.ensure_nginx_overlay_env(None)
+    logger.info("[IMP:9][test] NGINX_OVERLAY_DIR exported unconditionally for non-nginx module (T8)")
+
+
+# endregion TEST_nginx_overlay_env_T8

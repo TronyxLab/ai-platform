@@ -72,9 +72,11 @@ import logging
 import os
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Protocol, cast
+
+import yaml
 
 # ⚠️ TRAP[BUG] · 2026-08-05 · HI · Standalone-инвокация docker_orchestrator.py без PYTHONPATH → ModuleNotFoundError
 # · Symptom: `env -i python3 docker_orchestrator.py --help` из cwd≠root падал на `from core.internal...`
@@ -119,6 +121,7 @@ from core.internal.bootstrap.deploy.build_cache import (
 # B3: канонический platform root — shared/deploy_paths (литерал /opt/platform удалён)
 from core.internal.shared import docker_ops
 from core.internal.shared.audit_logger import write_audit_entry as _shared_write_audit_entry
+from core.internal.shared.compose_profiles import resolve_infra_path
 from core.internal.shared.deploy_paths import platform_remote_base
 
 # DevPlan 079 DRIFT-B6 + 116 B5 T4: shared docker compose operations — ЕДИНСТВЕННЫЙ путь
@@ -252,7 +255,59 @@ def _check_image_exists(image_ref: str) -> bool:
 # endregion FUNC__check_image_exists
 
 
-# region FUNC_deploy_docker_module
+# region FUNC_ensure_nginx_overlay_env
+## @purpose  Безусловный экспорт NGINX_OVERLAY_DIR до первого compose-вызова ЛЮБОГО модуля
+##           (plan 012 T8 / F-015a). Цепочка значения: параметр overlay_dir (caller резолвит
+##           из node.yaml#config_overlay/контекст-оверлеев) → существующий env → env_defaults
+##           platform-infra.yaml (только непустой). Пустой результат НЕ экспортируется.
+## @io       ⇥ overlay_dir: str | None, env: Mapping | None (DI) → ⎋ str (итоговое значение)
+## @complexity O(1) (+1 yaml read при env_defaults-fallback)
+## @invariants
+##   - Экспорт выполняется для ЛЮБОГО module_name (nginx-гейт устранён — F-015)
+##   - Вызов ДО фаз rebuild/up/hermes — интерполяция ${NGINX_OVERLAY_DIR:?} защищена на пути
+##   - Явный param приоритетен (deploy-контракт per-node); setdefault для env-источника
+def ensure_nginx_overlay_env(
+    overlay_dir: str | None,
+    env: Mapping[str, str] | None = None,
+) -> str:
+    source_env = os.environ if env is None else dict(env)
+
+    value = (overlay_dir or "").strip()
+    source = "param"
+    if not value:
+        existing = str(source_env.get("NGINX_OVERLAY_DIR", "")).strip()
+        if existing:
+            value, source = existing, "env"
+    if not value:
+        infra_path = resolve_infra_path(source_env)
+        if infra_path is not None:
+            try:
+                with Path(infra_path).open(encoding="utf-8") as fh:
+                    defaults = (yaml.safe_load(fh) or {}).get("env_defaults") or {}
+            except OSError as exc:
+                logger.warning("[IMP:7][ensure_nginx_overlay_env] Cannot read %s: %s", infra_path, exc)
+                defaults = {}
+            candidate = str(defaults.get("NGINX_OVERLAY_DIR", "")).strip()
+            if candidate:
+                value, source = candidate, "env_defaults"
+
+    if not value:
+        logger.info(
+            "[IMP:8][ensure_nginx_overlay_env] No NGINX_OVERLAY_DIR source (param/env/env_defaults) — not exported"
+        )
+        return ""
+
+    # param перезаписывает env (per-node авторитет); env/env_defaults — setdefault-семантика
+    if source == "param" or not source_env.get("NGINX_OVERLAY_DIR"):
+        os.environ["NGINX_OVERLAY_DIR"] = value
+    logger.info("[IMP:9][ensure_nginx_overlay_env] NGINX_OVERLAY_DIR=%s (source=%s)", value, source)
+    return value
+
+
+# endregion FUNC_ensure_nginx_overlay_env
+
+
+# region FUNC__handle_hermes_agent
 ## @purpose  Handle hermes-agent special case — DevPlan 118 D1: реализация вынесена в
 ##           hermes_workflow.handle_hermes_agent (спец-workflow). Тонкий фасад сохраняет
 ##           публичное имя для обратной совместимости (тесты, deploy_docker_module).
@@ -294,6 +349,8 @@ def _handle_hermes_agent(compose_args: list[str], module_dir: str, module_name: 
 ##             (P0 bug: status-page showing old container after core-deploy)
 ##            2026-08-02 · DevPlan 119 E1 — phased decomposition (PHASES dispatch)
 ##            2026-08-14 · DevPlan 167 D3 — +orphan_reconciler_impl (DI-объект, 0 monkeypatch в тестах)
+##            2026-08-26 · Plan 012 T8 (F-015a) — ensure_nginx_overlay_env: безусловный экспорт
+##            NGINX_OVERLAY_DIR для любого модуля до первого compose-вызова
 def deploy_docker_module(
     module_name: str,
     overlay_dir: str | None = None,
@@ -339,6 +396,11 @@ def deploy_docker_module(
         module_name=module_name,
     )
 
+    # ── NGINX overlay env (plan 012 T8 / F-015a): безусловно, ДО первого compose-вызова ──
+    # Любой модуль на «голой» ноде получает интерполяцию ${NGINX_OVERLAY_DIR:?} — гейт
+    # module_name == "nginx" устранён; цепочка param → env → env_defaults.
+    ensure_nginx_overlay_env(overlay_dir)
+
     # ── PHASE DISPATCH (E1): спец-фазы по имени модуля ──
     phase_fn = PHASES.get(module_name)
     if phase_fn is not None:
@@ -366,11 +428,6 @@ def deploy_docker_module(
     if orphans:
         removed = reconciler.remove_orphans(orphans)
         logger.info("[IMP:9][deploy_docker_module][orphan] Removed %d orphan container(s) for %s", removed, module_name)
-
-    # ── NGINX overlay env ──
-    if module_name == "nginx" and overlay_dir:
-        os.environ["NGINX_OVERLAY_DIR"] = overlay_dir
-        logger.info("[IMP:8][deploy_docker_module][nginx] Set NGINX_OVERLAY_DIR=%s", overlay_dir)
 
     # ── PHASE: rebuild (build:-modules) ──
     rebuild_ok, has_local_build = _phase_rebuild(

@@ -1426,3 +1426,143 @@ def test_phase_input_hash_parses_yaml_node_yaml(caplog, tmp_path):
 
 
 # endregion B8 (142 W7): _phase_input_hash парсит YAML node.yaml
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# plan 012 T9 (F-015b): strict-init exit semantics + update best-effort preserved
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _bootstrap_flow_env(parent: Path):
+    """Минимальный env-дикт фаз для StateMachine(env=...) — канон _flow_env (ключи owner/ci-deploy)."""
+    return {
+        "NODE_NAME": "test-node",
+        "NODE_YAML": str(parent / "node.yaml"),
+        "SECRETS_ENV_FILE": str(parent / "secrets.env"),
+        "TOR_ENABLED": "false",
+        "NODE_CONFIGS_REMOTE_BASE": str(parent / "node-configs"),
+        "PLATFORM_OWNER_KEY": "ssh-ed25519 AAAA... test@test",
+        "PLATFORM_CI_DEPLOY_KEY": "ssh-ed25519 BBBB... ci@test",
+        "GHCR_PULL_TOKEN": "ghp_test_token",
+        "AGE_SECRET_KEY": "AGE-SECRET-KEY-TEST-RC121",
+    }
+
+
+# 🧪 TRAP[TEST] · Regression · plan 012 T9 (F-015b) — strict-init fail-loud + resumable
+# · Scenario: φ8 INIT вызывает deploy-modules.sh --strict-init; rc≠0 (failed≠∅) →
+#             PlatformFatalError → шаг DEPLOY_SERVICES = failed в state.json (persist),
+#             run_init_mode возвращает ≠0; повторный прогон с успешным деплоем доводит фазу.
+# · Last fail: F-015b — init c failed-модулем warn-severity давал exit 0 → «полу-стек = success».
+# · Remove if: strict-init семантика отменена/перенесена в другой слой.
+@ldd_trajectory
+def test_init_strict_exit_on_failed(caplog, state_file, mock_subprocess, monkeypatch):
+    """φ8 INIT: deploy-modules rc=2 → state failed + exit≠0; resumable повтор доводит."""
+    import core.internal.shared.exceptions as pex
+    import core.internal.shared.subprocess_io as sio
+    from core.internal.bootstrap.lifecycle.phases import docker as dph
+
+    secrets_env = Path(state_file).parent / "secrets.env"
+    secrets_env.write_text("PLATFORM_MASTER_PASSWORD=test-password\nPLATFORM_MASTER_EMAIL=admin@test.local\n")
+    (Path(state_file).parent / "secrets-manifest.yaml").write_text("secrets: []\n")
+    core_bootstrap_dir = Path(state_file).parent / "internal" / "bootstrap"
+    core_bootstrap_dir.mkdir(parents=True, exist_ok=True)
+    for script in ("node-lifecycle.sh", "deploy-modules.sh", "converge.sh"):
+        (core_bootstrap_dir / script).write_text("#!/bin/bash\necho ok\n")
+    for script in (
+        "python_deps.py",
+        "install-docker.sh",
+        "install-tor-proxy.sh",
+        "firewall.sh",
+        "security_updates.py",
+        "setup-node.sh",
+        "install-acme.sh",
+    ):
+        (core_bootstrap_dir / script).write_text("#!/bin/bash\nexit 0\n")
+    (Path(state_file).parent / "node-configs" / "test-node").mkdir(parents=True, exist_ok=True)
+    node_yaml_path = Path(state_file).parent / "node.yaml"
+    node_yaml_path.write_text("node:\n  name: test-node\n  platform_domain: test.local\nprojects: []\n")
+
+    captured: list[list] = []
+    real_run = sio.run_subprocess
+
+    def _strict_fail(cmd, **kwargs):
+        if any("deploy-modules.sh" in str(part) for part in cmd):
+            captured.append(list(cmd))
+            msg = "deploy-modules exited 2 (strict-init: failed≠∅)"
+            raise pex.PlatformFatalError(msg)
+        return real_run(cmd, **kwargs)
+
+    monkeypatch.setattr(dph.helpers_subprocess, "run_subprocess", _strict_fail)
+
+    m = sm.StateMachine(
+        state_file_path=str(state_file),
+        env=_bootstrap_flow_env(Path(state_file).parent),
+        facts=FakeFacts(is_root=True),
+        system_helpers=FakeSystemHelpers(),
+        users_helpers=FakeUserHelpers(),
+        val_helpers=FakeValHelpers(),
+    )
+    m.core_dir = str(Path(state_file).parent)
+    m.setup_state(mode="init", node="test-node")
+
+    rc = cli.run_init_mode(m, smoke_fn=lambda: True, audit_fn=lambda _, **__: None, notify_fn=lambda _: None)
+    assert rc != 0, f"strict-init failure must yield non-zero exit, got {rc}"
+    assert captured and any("--strict-init" in map(str, cmd) for cmd in captured), (
+        f"φ8 обязан передавать --strict-init фасаду: {captured}"
+    )
+
+    step = m.state.steps.get(sm.BootstrapPhase.DEPLOY_SERVICES)
+    assert step is not None and step.status == "failed", (
+        f"F-015b FAIL: DEPLOY_SERVICES должен быть failed в state.json, got {step}"
+    )
+    persisted = json.loads(Path(state_file).read_text(encoding="utf-8"))
+    assert persisted["steps"]["deploy_services"]["status"] == "failed", "state.json обязан быть persist'нут"
+
+    # Resumable: повторный прогон с успешным деплоем доводит φ8 → done
+    def _ok_run(cmd, **kwargs):
+        return real_run(cmd, **kwargs)
+
+    monkeypatch.setattr(dph.helpers_subprocess, "run_subprocess", _ok_run)
+    m2 = sm.StateMachine(
+        state_file_path=str(state_file),
+        env=_bootstrap_flow_env(Path(state_file).parent),
+        facts=FakeFacts(is_root=True),
+        system_helpers=FakeSystemHelpers(),
+        users_helpers=FakeUserHelpers(),
+        val_helpers=FakeValHelpers(),
+    )
+    m2.core_dir = str(Path(state_file).parent)
+    m2.setup_state(mode="init", node="test-node")
+    rc2 = cli.run_init_mode(m2, smoke_fn=lambda: True, audit_fn=lambda _, **__: None, notify_fn=lambda _: None)
+    assert rc2 == 0, f"resumable re-run must succeed, got {rc2}"
+    assert m2.state.steps[sm.BootstrapPhase.DEPLOY_SERVICES].status == "done"
+    logger.critical("[IMP:9][test] strict-init: failed→exit≠0+state failed; re-run довёл до done")
+
+
+# 🧪 TRAP[TEST] · Regression · plan 012 T9 — update-mode best-effort preserved (D2)
+# · Scenario: тот же результат (failed=["redis"], crit=0, warn>0) в UPDATE-режиме →
+#             exit 0 + IMP:9 summary deployed=N failed=[...]; strict_init=True → exit 2.
+# · Last fail: N/A (контракт-тест нового параметра; D2 — не ломать CI node-update)
+# · Remove if: WARN→0 контракт update-режима пересмотрен владельцем.
+@ldd_trajectory
+def test_update_best_effort_preserved(caplog):
+    """Update-режим сохраняет WARN→0 с честным summary; strict_init эскалирует тот же результат."""
+    from core.internal.bootstrap.deploy.deploy_orchestrator import _compute_exit_code
+
+    caplog.set_level(logging.INFO)
+
+    # Update-семантика (strict_init=False): warn-only failures → exit 0 + summary
+    code_update = _compute_exit_code(0, 2, 4, failed=["redis"], strict_init=False)
+    assert code_update == 0, f"D2 FAIL: update WARN→0 контракт сломан: {code_update}"
+    assert any("[IMP:9][summary] deployed=4" in r.getMessage() and "redis" in r.getMessage() for r in caplog.records), (
+        "Императив T9: IMP:9 summary deployed=N failed=[...] обязан присутствовать"
+    )
+
+    # Init-семантика (strict_init=True): тот же результат → exit 2
+    code_init = _compute_exit_code(0, 2, 4, failed=["redis"], strict_init=True)
+    assert code_init == 2, f"F-015b FAIL: strict_init обязан эскалировать failed≠∅ до 2, got {code_init}"
+
+    # Crit>0 эскалируется в обоих режимах
+    assert _compute_exit_code(1, 0, 3, failed=["postgres"], strict_init=False) == 2
+    assert _compute_exit_code(1, 0, 3, failed=["postgres"], strict_init=True) == 2
+    logger.critical("[IMP:9][test] update WARN→0 preserved; strict_init escalates the same result to 2")

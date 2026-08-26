@@ -181,8 +181,12 @@ def phase_deploy_services(core_dir: str, node_name: str, node_yaml: str) -> bool
             # deploy всех модулей FAILED на свежей ноде. INIT-режим запускает deploy-modules.sh
             # БЕЗ --skip-provision (встроенный provision networks/volumes, Fail-Fast,
             # идемпотентен); UPDATE (φ12) сохраняет --skip-provision (сети уже существуют).
+            #
+            # plan 012 T9 (F-015b): INIT — strict-init семантика. failed≠∅ ИЛИ crit>0 →
+            # exit 2 → PlatformFatalError → фаза failed в state.json (resumable, повтор
+            # доводит). UPDATE (φ12) флаг НЕ передаёт — WARN→0 контракт CI сохранён (D2).
             helpers_subprocess.run_subprocess(
-                ["bash", deploy_script],
+                ["bash", deploy_script, "--strict-init"],
                 # T9.15 (B-12): deploy 14+ модулей может занять >300с (pull + build + healthcheck
                 # per module) — канон DEPLOY_TIMEOUT (900, холодная нода) вместо 300.
                 timeout=DEPLOY_TIMEOUT,

@@ -7,7 +7,10 @@
 ## @invariants Shell: args/root/NODE_YAML/provision/docker-login. Python: routing/deploy/sudoers/orphans/severity.
 ##   - exec python3 replaces shell (same PID) — exit {0,1,2} auto-propagates (D2); docker_login writes ~/.docker/config.json (R2)
 ##   - PYTHONPATH exported for core.* imports (converge.sh:64 pattern); set -euo pipefail preserved
+##   - plan 012 T9: --strict-init → deploy_orchestrator --strict-init (failed≠∅ ИЛИ crit>0 → exit 2;
+##     вызывает φ8 INIT; update φ12 НЕ передаёт флаг — контракт WARN→0 сохранён)
 ## @changes   2026-07-31 · DevPlan 100 TASK-2 — routing+severity extracted to deploy_orchestrator.py (260→≤50 LOC)
+##            2026-08-26 · plan 012 T9 — +--strict-init passthrough
 # endregion MODULE_CONTRACT
 
 set -euo pipefail
@@ -17,9 +20,10 @@ source "${SCRIPT_DIR}/../../lib/docker.sh"
 __LOG_PREFIX="deploy-modules"
 
 # ── Arg parsing ──
-MODULES_FILTER=""; SKIP_PROVISION=false
+MODULES_FILTER=""; SKIP_PROVISION=false; STRICT_INIT=false
 while [[ $# -gt 0 ]]; do case "$1" in
     --modules) MODULES_FILTER="$2"; shift 2 ;; --skip-provision) SKIP_PROVISION=true; shift ;;
+    --strict-init) STRICT_INIT=true; shift ;;
     *) break ;; esac
 done
 [[ "$(id -u)" -eq 0 ]] || { echo "[IMP:10][deploy-modules] ERROR: must run as root" >&2; exit 1; }
@@ -71,4 +75,5 @@ exec python3 "${SCRIPT_DIR}/deploy/deploy_orchestrator.py" \
     --core-dir "$PATHS_CORE_DIR" \
     --templates-dir "$PATHS_TEMPLATES_DIR" \
     --modules-filter "$MODULES_FILTER" \
-    --deploy-parallel "${DEPLOY_PARALLEL:-false}" --deploy-orchestrator "${DEPLOY_ORCHESTRATOR:-false}"
+    --deploy-parallel "${DEPLOY_PARALLEL:-false}" --deploy-orchestrator "${DEPLOY_ORCHESTRATOR:-false}" \
+    --strict-init "$STRICT_INIT"
