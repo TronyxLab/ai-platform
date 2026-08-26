@@ -16,7 +16,7 @@ Package re-export: former channels.py monolith (514 LOC) decomposed into base/sc
 ##           in place), ForcedCommandChannel for CI/tar+SSH forced-command.
 ## @invariants
 ##   1. Payload must contain at minimum tar_path and project_name
-##   2. All channels have configurable timeout (default 600s) via PLATFORM_DEPLOY_TIMEOUT env var
+##   2. All channels have configurable timeout (default 900s — cold-node TRAP в shared/timeouts) via PLATFORM_DEPLOY_TIMEOUT env var
 ##   3. Retry: 2 retries + exponential backoff (initial 5s, factor 2×)
 ##   4. Auth: SSH key-based only (no password auth)
 ##   5. SCPChannel uses SSH agent forwarding

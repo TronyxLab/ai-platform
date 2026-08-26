@@ -62,6 +62,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from pathlib import Path
 from typing import ClassVar
 
 # W1-A1 (план 170): литералы таймаутов → канон SoT (AMBER-зачистка research-D §D1).
@@ -445,11 +446,13 @@ def write_secrets_env(decrypted_data: str, output_path: str) -> None:
 # region FUNC_resolve_enc_path
 # Канон-резолв входного enc-файла (перенесено из decrypt-secrets.sh, DevPlan 173 W1.3):
 # env SECRETS_FILE / positional → точный путь → glob <secrets_dir>/*.enc.yaml fallback.
-# nosec B108: hardcoded /opt/node-configs/secrets — канон платформы (node-side secrets dir), не секрет.
-_NODE_CONFIGS_SECRETS_DIR = "/opt/node-configs/secrets"  # nosec B108
+# AI-0025 (DevPlan 17 T4.1): secrets_dir резолвится каноном deploy_paths.node_configs_remote
+# (env NODE_CONFIGS_REMOTE_BASE → /opt/node-configs); DI-параметр сохранён для тестов.
+def resolve_enc_path(enc_path: str | None, *, secrets_dir: str | None = None) -> str:
+    if secrets_dir is None:
+        from core.internal.shared.deploy_paths import node_configs_remote
 
-
-def resolve_enc_path(enc_path: str | None, *, secrets_dir: str = _NODE_CONFIGS_SECRETS_DIR) -> str:
+        secrets_dir = str(Path(node_configs_remote()) / "secrets")
     """Resolve encrypted secrets file path (env → explicit path → bare NODE name → glob fallback).
 
     ▶ ┌enc_path┐ → ◇ isfile? → ⎋ enc_path

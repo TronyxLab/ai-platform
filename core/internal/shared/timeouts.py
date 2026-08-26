@@ -18,7 +18,7 @@
 ##   3. RETRY_BACKOFF_SECONDS — список [5,10,20]; канал использует [0] с delay *= 2
 ##      (экспоненциальное поведение сохраняется).
 ##   4. Значения канонизированы: up=180, pull=300, build=300, healthcheck-poll=60,
-##      ssh-connect=30, deploy=600, ssh-read=60, image-check=60, docker-cmd=10,
+##      ssh-connect=30, deploy=900, ssh-read=60, image-check=60, docker-cmd=10,
 ##      docker-stop=30, apt=300 (bootstrap-цепь: python_deps/lifecycle/tor_setup/install-acme),
 ##      rsync=600, system-cmd=60, lifecycle-cmd=120 (план 170 W1-A1: AMBER-зачистка
 ##      lifecycle/healthcheck/monitoring доменов — research-D §D1),

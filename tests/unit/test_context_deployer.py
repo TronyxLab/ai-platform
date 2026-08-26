@@ -512,7 +512,6 @@ def test_stub_compose_awaiting_deploy(caplog, tmp_path):
     result = cd._deploy_single_project_via_orchestrator(
         project,
         str(tmp_path / "projects"),
-        _ghcr_fallback_build=True,
         health_fn=lambda _: False,
         orchestrator_deploy_fn=_must_not_deploy,
     )
@@ -553,7 +552,6 @@ def test_real_compose_deploys(caplog, tmp_path):
     result = cd._deploy_single_project_via_orchestrator(
         project,
         str(tmp_path / "projects"),
-        _ghcr_fallback_build=True,
         health_fn=lambda _: False,
         orchestrator_deploy_fn=fake_deploy,
     )
@@ -649,7 +647,6 @@ def test_deploy_gate_uses_single_shot_by_default(caplog, tmp_path):
         result = cd._deploy_single_project_via_orchestrator(
             project,
             str(tmp_path / "projects"),
-            _ghcr_fallback_build=True,
             orchestrator_deploy_fn=lambda **_kw: pytest.fail("stub должен выйти до orchestrator"),
         )
     finally:

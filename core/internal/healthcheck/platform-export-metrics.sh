@@ -61,7 +61,9 @@ export NODE_NAME
 # Прод-дефолт /var/lib/platform/run/status-metrics.json (persistent, 142 W2); dev-локаль (macOS)
 # переопределяет через env — см. .env STATUS_METRICS_JSON.
 # 142 W2 (B21): persistent /var/lib/platform/run (tmpfs /run/platform не переживает reboot)
-STATUS_METRICS_JSON="${STATUS_METRICS_JSON:-/var/lib/platform/run/status-metrics.json}"
+# AI-0024 (DevPlan 17 T4.1): default деривируется от канонического knob'а PLATFORM_RUN_BASE —
+# установка knob'а relocates run-артефакты единообразно (shell-потребители консультируют env)
+STATUS_METRICS_JSON="${STATUS_METRICS_JSON:-${PLATFORM_RUN_BASE:-/var/lib/platform/run}/status-metrics.json}"
 export STATUS_METRICS_JSON
 
 # Ensure output directory exists (tmpfs on prod, empty after reboot). Fail-fast на

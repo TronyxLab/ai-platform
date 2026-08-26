@@ -274,16 +274,6 @@
       },
       "description": "Registered projects deployed on this node"
     },
-    "postgres_init_databases": {
-      "type": "array",
-      "minItems": 0,
-      "items": {
-        "type": "string",
-        "minLength": 1,
-        "description": "Database name to create in postgres on bootstrap"
-      },
-      "description": "Databases to initialize in postgres"
-    },
     "repos": {
       "type": "object",
       "additionalProperties": false,
@@ -291,10 +281,6 @@
         "core": {
           "type": "string",
           "description": "Git URL for core repository"
-        },
-        "node_configs": {
-          "type": "string",
-          "description": "Git URL for node-configs repository"
         }
       }
     }

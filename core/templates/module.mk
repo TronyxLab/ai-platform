@@ -48,7 +48,8 @@ MODULE_NAME ?= my-module
 # SHELL + MODULE_DIR — общий канон (DevPlan 172 W2.5: shared-vars.mk, единая формула)
 include ../../templates/shared-vars.mk
 COMPOSE_FILE ?= $(MODULE_DIR)/docker-compose.base.yml
-SECRETS_ENV ?= $(or $(SECRETS_ENV_FILE),/var/lib/platform/run/secrets.env)
+# AI-0024 (DevPlan 17 T4.1): PLATFORM_RUN_BASE relocates run-артефакты единообразно
+SECRETS_ENV ?= $(or $(SECRETS_ENV_FILE),$(or $(PLATFORM_RUN_BASE),/var/lib/platform/run)/secrets.env)
 CONTAINER ?= $(MODULE_NAME)
 COMPOSE_PROFILES ?= $(MODULE_NAME)
 

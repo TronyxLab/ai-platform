@@ -12,7 +12,7 @@ Shared delivery-channel primitives: Payload, DeliveryResult, DeliveryChannel ABC
 ##           DeliveryChannel) keep their import path via the package re-export.
 ## @invariants
 ##   1. Payload must contain at minimum tar_path and project_name
-##   2. All channels have configurable timeout (default 600s) via PLATFORM_DEPLOY_TIMEOUT env var
+##   2. All channels have configurable timeout (default 900s — cold-node TRAP в shared/timeouts) via PLATFORM_DEPLOY_TIMEOUT env var
 ##   3. Retry: 2 retries + exponential backoff (initial 5s, factor 2×)
 ##   4. DeliveryResult always has duration_s populated
 ##   5. Runner DI-seam (self._run) — subprocess.run по умолчанию, тесты инжектят fake runner

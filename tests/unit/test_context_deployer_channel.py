@@ -163,7 +163,6 @@ def test_context_deployer_uses_local_channel(caplog, tmp_path, fake_orchestrator
     result = cd._deploy_single_project_via_orchestrator(
         project,
         str(tmp_path / "projects"),
-        _ghcr_fallback_build=False,
         health_fn=lambda _: False,
         orchestrator_cls=fake_cls,
         facts=_FakeFacts(),

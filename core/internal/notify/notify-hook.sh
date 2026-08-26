@@ -38,7 +38,8 @@ EMOJI="${1:-✅}"
 MESSAGE="${2:-}"
 CONTEXT="${PLATFORM_CONTEXT:-platform}"
 # 142 W2 (B21): persistent /var/lib/platform/run (tmpfs /run/platform не переживает reboot)
-SECRETS_FILE="${SECRETS_ENV_FILE:-/var/lib/platform/run/secrets.env}"
+# AI-0024 (DevPlan 17 T4.1): PLATFORM_RUN_BASE relocates run-артефакты единообразно
+SECRETS_FILE="${SECRETS_ENV_FILE:-${PLATFORM_RUN_BASE:-/var/lib/platform/run}/secrets.env}"
 
 FULL_MESSAGE="${EMOJI}"
 [[ -n "$MESSAGE" ]] && FULL_MESSAGE="[${CONTEXT}] ${EMOJI} ${MESSAGE}"

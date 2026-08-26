@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: deploy-engine, DeployEngine, atomic-deploy, rollback, remove, status, deploy-compose, 170-W4-B2
-# STRUCTURE: ▶ DeployEngine ┌projects_base┐ → deploy(project,ref,service,project_dir,node,max_wait,keep_images):
+# STRUCTURE: ▶ DeployEngine ┌projects_base┐ → deploy(project,ref,service,project_dir,node,max_wait):
 #            contextlib.chdir → _preflight_checks → lifecycle.save_previous_image → flow.pull_images →
 #            flow.up_atomic → flow.wait_health → success(DEPLOY_STATUS=success) | first_deploy→exit |
 #            rollback→lifecycle.perform_rollback → remove(status) → ⎋ ServiceDeployResult/RemoveResult/StatusResult
@@ -108,7 +108,7 @@ class DeployEngine:
     ## @complexity — O(N) where N = deploy steps
     ## @invariants
     ##   - Extracts project name from project_dir basename
-    ##   - Uses default max_wait=60 and keep_images=3
+    ##   - Uses default max_wait=60
     ##   - Returns ServiceDeployResult compatible with DeployOrchestrator
     def deploy_compose(self, project_dir: str, service: str, version: str) -> ServiceDeployResult:
         """Deploy a single compose service. Called by DeployOrchestrator.
@@ -135,7 +135,6 @@ class DeployEngine:
             project_dir=project_dir,
             node="",
             max_wait=60,
-            keep_images=3,
         )
 
     # endregion FUNC_deploy_compose
@@ -148,7 +147,7 @@ class DeployEngine:
     ##           170 W4-B2: приватные шаги извлечены в engine/flow.py (pull_images/up_atomic/wait_health)
     ##           и engine/lifecycle.py (save_previous_image/perform_rollback/handle_first_deploy) —
     ##           семантика 1:1, поведение НЕ изменено.
-    ## @io       ⇥ project, ref, service, project_dir, node, max_wait, keep_images → ⎋ ServiceDeployResult
+    ## @io       ⇥ project, ref, service, project_dir, node, max_wait → ⎋ ServiceDeployResult
     ## @complexity — O(N) where N = pull retry attempts + healthcheck attempts
     ## @invariants
     ##   - Previous image saved BEFORE pull (enables rollback)
@@ -163,7 +162,6 @@ class DeployEngine:
         project_dir: str,
         node: str = "",  # ruff: ignore[ARG002]
         max_wait: int = 60,
-        keep_images: int = 3,  # ruff: ignore[ARG002]
         *,
         skip_pull: bool = False,
     ) -> ServiceDeployResult:
@@ -176,7 +174,6 @@ class DeployEngine:
             project_dir: Path to project directory.
             node: Node name (hostname).
             max_wait: Max seconds to wait for healthcheck.
-            keep_images: Number of old images to keep during prune.
             skip_pull: Skip the pull step (REF-0004): rollback re-tags previous image
                 locally (`<service>:previous-rollback`) — registry pull локального тега
                 обречён (~135s ретраев ×5) и не нужен, образ уже на ноде.

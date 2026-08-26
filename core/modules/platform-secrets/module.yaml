@@ -28,11 +28,13 @@
 ##              · Added systemd.required_by field to module.yaml
 # endregion MODULE_CONTRACT
 
+# 🧐 TRAP[DECISION] · 2026-08-26 · — · systemd-блок module.yaml удалён (AI-0030, DevPlan 17 T4.4)
+# · Rejected: реализовать чтение unit/required_by из module.yaml инсталлером
+# · Reason: инсталлер держит UNIT_NAME hardcode, RequiredBy живёт в .unit-файле —
+#   поле было мёртвой schema-обещанием; реализация добавила бы неиспользуемую поверхность
+# · Rev: если понадобится per-module systemd-конфиг — вернуть поле + реализацию
 name: platform-secrets
 install_type: system
-systemd:
-  unit: platform-secrets.service
-  required_by: docker.service
 description: "Systemd oneshot service that regenerates /var/lib/platform/run/secrets.env from encrypted SOPS/age secrets"
 
 interfaces:

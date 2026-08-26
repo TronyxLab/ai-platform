@@ -801,7 +801,7 @@ def _section_misc(env_defaults: dict[str, str]) -> list[str]:
     from core.internal.shared.deploy_paths import DEFAULT_PROJECTS_BASE
 
     lines.append("PROJECTS_BASE=" + _get_env_val(env_defaults, "PROJECTS_BASE", DEFAULT_PROJECTS_BASE))
-    lines.append("# PLATFORM_DEPLOY_TIMEOUT — таймаут деплоя в секундах для DeliveryChannel (default: 600)")
+    lines.append("# PLATFORM_DEPLOY_TIMEOUT — таймаут деплоя в секундах для DeliveryChannel (default: 900)")
     lines.append("PLATFORM_DEPLOY_TIMEOUT=" + _get_env_val(env_defaults, "PLATFORM_DEPLOY_TIMEOUT", "600"))
     return lines
 

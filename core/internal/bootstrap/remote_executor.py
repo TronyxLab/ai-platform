@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: remote-executor execute-update execute-converge execute-reconcile VPS-self-SSH sync-core ssh-exec DRY_RUN exit-codes remote-cmd
-# STRUCTURE: ▶ CLI(3 subcmds) → RemoteExecutor → resolve+extract → ◇ host?→2 | ◇ VPS self-SSH→2 → prepare_ssh_opts(update) → ◇ update?→sync-core → ◇ dry-run?→print→0 → ⚡ ssh subprocess.run(timeout=600) → ⎋ exit 0|1|2|124
+# STRUCTURE: ▶ CLI(3 subcmds) → RemoteExecutor → resolve+extract → ◇ host?→2 | ◇ VPS self-SSH→2 → prepare_ssh_opts(update) → ◇ update?→sync-core → ◇ dry-run?→print→0 → ⚡ ssh subprocess.run(timeout=DEPLOY_TIMEOUT) → ⎋ exit 0|1|2|124
 # region MODULE_CONTRACT
 ## @purpose  Execute remote node commands over SSH: full orchestration cycle (resolve node.yaml →
 ##           extract host → VPS self-SSH detect → prepare ssh opts → sync-core → ssh exec) for
@@ -13,7 +13,7 @@
 ##              — DRY_RUN: печатает команды (IMP:8), НЕ вызывает ssh/rsync, exit 0
 ##              — sync-core выполняется ТОЛЬКО в execute_update (converge/reconcile — нет)
 ##              — VPS self-SSH detect — только в execute_update (локальная проверка файла, как в shell)
-##              — ssh через subprocess.run(["ssh", *SSH_OPTS, f"root@{host}", remote_cmd], timeout=600)
+##              — ssh через subprocess.run(["ssh", *SSH_OPTS, f"root@{host}", remote_cmd], timeout=DEPLOY_TIMEOUT)
 ## @rationale SRP (DevPlan 101 D2): overlay_deliverer (421 LOC) = доставка, remote_executor = исполнение.
 ##            D4: Python не вызывает shell-функцию ssh_exec — subprocess.run + timeout зеркалит поведение
 ##            (exit=124 → timeout). Логика без set -e — P4-контекст bare ssh_exec не применим.
@@ -63,7 +63,7 @@ from core.internal.shared.timeouts import DEPLOY_TIMEOUT, SSH_CONNECT_TIMEOUT
 logging.basicConfig(level=logging.WARNING, format="%(message)s", stream=sys.stderr)
 logger = logging.getLogger(__name__)
 
-# Аналог lib/ssh.sh ssh_exec deploy-mode default (600s) — SoT: timeouts.DEPLOY_TIMEOUT (U-11)
+# Аналог lib/ssh.sh ssh_exec deploy-mode default (900s, cold-node TRAP timeouts.py:147) — SoT: timeouts.DEPLOY_TIMEOUT (U-11)
 SSH_EXEC_TIMEOUT = DEPLOY_TIMEOUT
 
 # VPS self-SSH marker — та же проверка, что remote-cmd.sh:165 (локальный filesystem probe)
@@ -224,7 +224,7 @@ class RemoteExecutor:
     ##            runner задан → runner.run(cmd, timeout=...)
     ## @changes 2026-08-24 | REF-0007: +stdin_payload — транспорт ключей вне argv (`bash -s`)
     def _ssh_exec(self, host: str, remote_cmd: str, stdin_payload: str = "") -> int:
-        """Run ssh root@host with 600s timeout. Returns 0/124/propagated rc."""
+        """Run ssh root@host with DEPLOY_TIMEOUT (900s). Returns 0/124/propagated rc."""
         if stdin_payload:
             # REF-0007: скрипт (prelude+тело) в stdin; в argv только `bash -s`
             cmd = ["ssh", *SSH_OPTS, f"root@{host}", "bash -s"]

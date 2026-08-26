@@ -40,7 +40,6 @@ class _CliArgs:
     project_dir: str
     node: str
     max_wait: int
-    keep_images: int
     stub_aware: bool
 
 
@@ -68,7 +67,6 @@ def main(argv: list[str] | None = None) -> int:
     deploy_parser.add_argument("--project-dir", required=True)
     deploy_parser.add_argument("--node", default="")
     deploy_parser.add_argument("--max-wait", type=int, default=60)
-    deploy_parser.add_argument("--keep-images", type=int, default=3)
 
     # ── Remove subcommand ──
     remove_parser = sub.add_parser("remove", help="Idempotent remove (data preserved)")
@@ -95,7 +93,6 @@ def main(argv: list[str] | None = None) -> int:
                 project_dir=args.project_dir,
                 node=args.node,
                 max_wait=args.max_wait,
-                keep_images=args.keep_images,
             )
             # JSON output for shell facade
             print(
