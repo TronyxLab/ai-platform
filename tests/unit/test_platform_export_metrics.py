@@ -46,6 +46,7 @@ import pytest
 # W4e (DevPlan 160 E2): main()/_get_* принимают env=Mapping (DI) — импорт на module level,
 # reload/importlib не требуется (координатор читает env только через env-параметр).
 from core.internal.healthcheck.platform_export_metrics import _get_node_name, _get_node_yaml_path, main
+from tests._conftest.ldd import _print_ldd_trajectory
 
 logger = logging.getLogger(__name__)
 
@@ -182,15 +183,7 @@ class TestDockerCollector:
         containers = get_containers()
 
         # ── LDD TRAJECTORY ──
-        logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in list(caplog.records):
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        logger.info("%s", msg)
-        logger.info("--- END LDD TRAJECTORY ---")
+        _print_ldd_trajectory(caplog)
 
         assert len(containers) == 2, f"Expected 2 containers, got {len(containers)}"
         # First container: nginx
@@ -232,15 +225,7 @@ class TestDockerCollector:
 
         containers = get_containers()
 
-        logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in list(caplog.records):
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        logger.info("%s", msg)
-        logger.info("--- END LDD TRAJECTORY ---")
+        _print_ldd_trajectory(caplog)
 
         assert containers == [], f"Expected empty list, got {containers}"
 
@@ -283,15 +268,7 @@ class TestDockerCollector:
 
         containers = get_containers()
 
-        logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in list(caplog.records):
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        logger.info("%s", msg)
-        logger.info("--- END LDD TRAJECTORY ---")
+        _print_ldd_trajectory(caplog)
 
         assert len(containers) == 1
         assert containers[0]["started_at"] == "2026-07-24T00:00:00.000000000Z", (
@@ -332,15 +309,7 @@ class TestDockerCollector:
 
         containers = get_containers()
 
-        logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in list(caplog.records):
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        logger.info("%s", msg)
-        logger.info("--- END LDD TRAJECTORY ---")
+        _print_ldd_trajectory(caplog)
 
         assert len(containers) == 1
         assert containers[0]["started_at"] is None, (
@@ -370,15 +339,7 @@ class TestDockerImageSizes:
 
         sizes = get_image_sizes({"sha256:abc123", "sha256:def456"})
 
-        logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in list(caplog.records):
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        logger.info("%s", msg)
-        logger.info("--- END LDD TRAJECTORY ---")
+        _print_ldd_trajectory(caplog)
 
         assert sizes.get("sha256:abc123") == 150000000
         assert sizes.get("sha256:def456") == 45000000
@@ -392,15 +353,7 @@ class TestDockerImageSizes:
 
         sizes = get_image_sizes(set())
 
-        logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in list(caplog.records):
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        logger.info("%s", msg)
-        logger.info("--- END LDD TRAJECTORY ---")
+        _print_ldd_trajectory(caplog)
 
         assert sizes == {}
 
@@ -454,15 +407,7 @@ class TestCertCollector:
 
         result = _load_cert(str(cert_path))
 
-        logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in list(caplog.records):
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        logger.info("%s", msg)
-        logger.info("--- END LDD TRAJECTORY ---")
+        _print_ldd_trajectory(caplog)
 
         assert result is not None, "Cert should be parsed"
         assert "T" in result["not_after_iso"], f"Expected ISO 8601 date, got {result['not_after_iso']}"
@@ -490,15 +435,7 @@ class TestHostCollector:
 
             result = get_host_disk()
 
-            logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-            for record in list(caplog.records):
-                for attr in ["message", "msg"]:
-                    msg = getattr(record, attr, "")
-                    if "[IMP:" in str(msg):
-                        imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                        if imp_level >= 7:
-                            logger.info("%s", msg)
-            logger.info("--- END LDD TRAJECTORY ---")
+            _print_ldd_trajectory(caplog)
 
             assert result["disk_total_gb"] == 100.0
             assert result["disk_free_gb"] == 30.0
@@ -535,15 +472,7 @@ class TestHostCollector:
 
         result = get_host_uptime(open_fn=_mock_open)
 
-        logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in list(caplog.records):
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        logger.info("%s", msg)
-        logger.info("--- END LDD TRAJECTORY ---")
+        _print_ldd_trajectory(caplog)
 
         assert result["uptime_seconds"] == 12345.67, f"Expected 12345.67, got {result['uptime_seconds']}"
         assert result["load_1m"] == 0.5, f"Expected 0.5, got {result['load_1m']}"
@@ -571,15 +500,7 @@ class TestHostCollector:
 
         result = get_host_uptime(open_fn=_mock_open)
 
-        logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in list(caplog.records):
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        logger.info("%s", msg)
-        logger.info("--- END LDD TRAJECTORY ---")
+        _print_ldd_trajectory(caplog)
 
         assert result["uptime_seconds"] is None
         assert result["load_1m"] is None
@@ -606,15 +527,7 @@ class TestJsonWriter:
 
         atomic_write(data, str(target))
 
-        logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in list(caplog.records):
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        logger.info("%s", msg)
-        logger.info("--- END LDD TRAJECTORY ---")
+        _print_ldd_trajectory(caplog)
 
         assert target.exists(), "Target file should exist"
         content = json.loads(target.read_text())
@@ -632,15 +545,7 @@ class TestJsonWriter:
 
         atomic_write(data, str(target))
 
-        logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in list(caplog.records):
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        logger.info("%s", msg)
-        logger.info("--- END LDD TRAJECTORY ---")
+        _print_ldd_trajectory(caplog)
 
         loaded = json.loads(target.read_text())
         assert loaded["schema_version"] == SCHEMA_VERSION, (
@@ -660,15 +565,7 @@ class TestJsonWriter:
         with contextlib.suppress(TypeError, RuntimeError, OSError):
             atomic_write(data, str(target))
 
-        logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in list(caplog.records):
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        logger.info("%s", msg)
-        logger.info("--- END LDD TRAJECTORY ---")
+        _print_ldd_trajectory(caplog)
 
         # Target should NOT exist (write failed atomically)
         assert not target.exists(), "Target should not exist after failed write"
@@ -697,15 +594,7 @@ class TestCacheManager:
         # Immediately get — should be HIT
         result = cache.get("test_key", ttl_seconds=3600)
 
-        logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in list(caplog.records):
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        logger.info("%s", msg)
-        logger.info("--- END LDD TRAJECTORY ---")
+        _print_ldd_trajectory(caplog)
 
         assert result is not None, "Expected cache HIT"
         assert result["value"] == 42
@@ -727,15 +616,7 @@ class TestCacheManager:
         # Get with 1 hour TTL — should MISS
         result = cache.get("test_key", ttl_seconds=3600)
 
-        logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in list(caplog.records):
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        logger.info("%s", msg)
-        logger.info("--- END LDD TRAJECTORY ---")
+        _print_ldd_trajectory(caplog)
 
         assert result is None, "Expected cache MISS (TTL expired)"
 
@@ -752,15 +633,7 @@ class TestCacheManager:
         future_mtime = time.time() + 100
         result = cache.get("test_mtime", ttl_seconds=3600, source_mtime=future_mtime)
 
-        logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in list(caplog.records):
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        logger.info("%s", msg)
-        logger.info("--- END LDD TRAJECTORY ---")
+        _print_ldd_trajectory(caplog)
 
         assert result is None, "Expected cache MISS (mtime invalidated)"
 
@@ -796,15 +669,7 @@ class TestProjectCollector:
 
             projects1 = get_projects(mock_node_yaml, image_cache={}, cache_mgr=cache)
 
-            logger.info("--- LDD TRAJECTORY — FIRST CALL ---")
-            for record in list(caplog.records):
-                for attr in ["message", "msg"]:
-                    msg = getattr(record, attr, "")
-                    if "[IMP:" in str(msg):
-                        imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                        if imp_level >= 7:
-                            logger.info("%s", msg)
-            logger.info("--- END LDD TRAJECTORY ---")
+            _print_ldd_trajectory(caplog)
 
             assert len(projects1) > 0
             assert mock_run.called, "du should have been called on first call"
@@ -817,15 +682,7 @@ class TestProjectCollector:
         ):
             projects2 = get_projects(mock_node_yaml, image_cache={}, cache_mgr=cache)
 
-            logger.info("--- LDD TRAJECTORY — SECOND CALL ---")
-            for record in list(caplog.records):
-                for attr in ["message", "msg"]:
-                    msg = getattr(record, attr, "")
-                    if "[IMP:" in str(msg):
-                        imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                        if imp_level >= 7:
-                            logger.info("%s", msg)
-            logger.info("--- END LDD TRAJECTORY ---")
+            _print_ldd_trajectory(caplog)
 
             assert len(projects2) > 0
             assert not mock_run2.called, "du should NOT be called on second call (cache HIT)"
@@ -839,15 +696,7 @@ class TestProjectCollector:
 
         projects = get_projects(mock_node_yaml_no_projects)
 
-        logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in list(caplog.records):
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        logger.info("%s", msg)
-        logger.info("--- END LDD TRAJECTORY ---")
+        _print_ldd_trajectory(caplog)
 
         assert projects == []
 
@@ -878,15 +727,7 @@ class TestCoordinator:
 
         exit_code = main(env=env)
 
-        logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in list(caplog.records):
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        logger.info("%s", msg)
-        logger.info("--- END LDD TRAJECTORY ---")
+        _print_ldd_trajectory(caplog)
 
         assert exit_code == 0, f"Expected exit code 0, got {exit_code}"
         assert metrics_file.exists(), "Metrics file should exist"
@@ -938,15 +779,7 @@ class TestCoordinator:
 
         exit_code = main(env=env)
 
-        logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in list(caplog.records):
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        logger.info("%s", msg)
-        logger.info("--- END LDD TRAJECTORY ---")
+        _print_ldd_trajectory(caplog)
 
         assert exit_code == 0, f"Expected exit code 0 (partial data OK), got {exit_code}"
         data = json.loads(metrics_file.read_text())
@@ -975,15 +808,7 @@ class TestCoordinator:
 
         exit_code = main(env=env)
 
-        logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in list(caplog.records):
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        logger.info("%s", msg)
-        logger.info("--- END LDD TRAJECTORY ---")
+        _print_ldd_trajectory(caplog)
 
         assert exit_code == 0, "Should still exit 0 with partial data"
         data = json.loads(metrics_file.read_text())

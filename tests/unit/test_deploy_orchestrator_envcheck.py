@@ -58,9 +58,7 @@ def test_env_check_crash_is_loud(
     monkeypatch.setattr(deploy_orchestrator.secrets_validator, "check_env_requires", _boom)
 
     with caplog.at_level(logging.INFO, logger="core.internal.bootstrap.deploy.deploy_orchestrator"):
-        deployed, failed = deploy_orchestrator._deploy_sequential(
-            ["postgres"], str(modules_dir), str(core_dir)
-        )
+        deployed, failed = deploy_orchestrator._deploy_sequential(["postgres"], str(modules_dir), str(core_dir))
 
     assert _print_ldd_trajectory(caplog), "LDD Error: нет IMP:9 записи о env_check_error"
     assert failed == ["postgres"], f"модуль обязан быть FAILED при краше валидатора: failed={failed}"
@@ -84,9 +82,7 @@ def test_env_check_pass_deploys_negative(
     core_dir = tmp_path / "core"
     core_dir.mkdir()
 
-    monkeypatch.setattr(
-        deploy_orchestrator.secrets_validator, "check_env_requires", lambda _name, _manifest: []
-    )
+    monkeypatch.setattr(deploy_orchestrator.secrets_validator, "check_env_requires", lambda _name, _manifest: [])
     calls: list[tuple[str, ...]] = []
 
     def _fake_deploy(name: str, **kwargs: object) -> bool:
@@ -96,9 +92,7 @@ def test_env_check_pass_deploys_negative(
     monkeypatch.setattr(deploy_orchestrator.docker_orchestrator, "deploy_docker_module", _fake_deploy)
 
     with caplog.at_level(logging.INFO, logger="core.internal.bootstrap.deploy.deploy_orchestrator"):
-        deployed, failed = deploy_orchestrator._deploy_sequential(
-            ["redis"], str(modules_dir), str(core_dir)
-        )
+        deployed, failed = deploy_orchestrator._deploy_sequential(["redis"], str(modules_dir), str(core_dir))
 
     for record in caplog.records:
         if "[IMP:" in record.getMessage():

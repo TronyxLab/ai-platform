@@ -58,12 +58,8 @@ def test_phase_code_edit_invalidates(tmp_path: Path) -> None:
     assert h3 != h2, "новый файл в phases/ обязан менять hash"
 
     # Отсутствующий phases-dir → детерминированный fallback, не падает
-    missing = StateMachine._phase_input_hash(
-        "deploy_services", env={}, phases_dir=tmp_path / "nope"
-    )
-    missing_again = StateMachine._phase_input_hash(
-        "deploy_services", env={}, phases_dir=tmp_path / "nope"
-    )
+    missing = StateMachine._phase_input_hash("deploy_services", env={}, phases_dir=tmp_path / "nope")
+    missing_again = StateMachine._phase_input_hash("deploy_services", env={}, phases_dir=tmp_path / "nope")
     assert missing == missing_again, "fallback отсутствующего dir детерминирован"
     logger.critical("[IMP:9][test] phase-code edit invalidates hash, replay stable — OK (AI-0038)")
 
@@ -82,8 +78,6 @@ def test_default_phases_dir_is_module_relative() -> None:
     module_file = sys.modules[StateMachine.__module__].__file__
     assert module_file is not None, "модуль state_machine обязан иметь __file__"
     module_dir = Path(module_file).resolve().parent
-    explicit_h = StateMachine._phase_input_hash(
-        "deploy_update", phases_dir=module_dir / "phases"
-    )
+    explicit_h = StateMachine._phase_input_hash("deploy_update", phases_dir=module_dir / "phases")
     assert explicit_h == default_h1, "DI None обязан резолвиться в lifecycle/phases модуля"
     logger.critical("[IMP:9][test] default phases dir == module-relative — OK (T1.4)")

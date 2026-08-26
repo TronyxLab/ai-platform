@@ -24,7 +24,7 @@ _CASES: list[tuple[dict[str, object], str | None]] = [
     ({"Status": "running", "Health": {"Status": "starting"}}, "starting"),
     ({"Status": "running", "Health": {"Status": ""}}, ""),
     ({"Status": "running", "Health": {"Status": "none"}}, "none"),
-    ({'Status': "running"}, None),  # контейнер БЕЗ HEALTHCHECK — ключевой случай AI-0065
+    ({"Status": "running"}, None),  # контейнер БЕЗ HEALTHCHECK — ключевой случай AI-0065
     ({"Status": "exited", "Health": {"Status": "healthy"}}, "healthy"),
     ({"Status": "exited"}, None),
 ]

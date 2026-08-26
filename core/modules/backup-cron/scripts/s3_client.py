@@ -1,17 +1,19 @@
-# GREP_SUMMARY: s3_client thin-wrapper boto3 list-objects delete-objects pagination timeout
-# STRUCTURE: class S3Client → list_objects(prefix, max_keys) → delete_objects(keys)
+# GREP_SUMMARY: s3_client thin-wrapper boto3 builder build-client timeouts retries list-objects delete-objects pagination
+# STRUCTURE: ▶ build_boto3_s3_client (единственный boto3.client в backup-cron, AI-0073) → class S3Client → list_objects(prefix, max_keys) → delete_objects(keys)
 # region MODULE_CONTRACT
 """
-Thin wrapper around boto3 S3 client for list/delete operations.
+Thin wrapper around boto3 S3 client for list/delete operations + единый строитель клиента.
 
 @purpose  Isolate S3 interaction logic from retention business logic. Provides
-          paginated list and batch delete.
-@scope    Used by RetentionPolicy for S3 operations.
+          paginated list and batch delete, а также ЕДИНСТВЕННУЮ точку конструирования
+          boto3-клиента для всех модулей backup-cron (upload/wal_sync/retention — AI-0073).
+@scope    Used by RetentionPolicy (list/delete) and upload/wal_sync/retention (builder).
 @invariants
-  - Таймауты живут в boto3 Config (botocore.config.Config connect_timeout/read_timeout)
-    на уровне конструирования клиента (retention.py: BotoConfig) — это единственное место,
-    где boto3 Config применим (Config — per-client, не per-call). Сюда параметр timeout
-    НЕ пробрасывается (мёртвый).
+  - build_boto3_s3_client — единственное место в backup-cron, где вызывается
+    boto3.client (AI-0073: раньше клиент строился в трёх модулях с расползающимися
+    таймаутами 10/30 vs 30/60)
+  - Таймауты/retries живут в botocore.config.Config при конструировании клиента
+    (Config — per-client, не per-call); override — явными параметрами строителя
   - delete_objects batches in chunks of 1000 (S3 API limit)
 """
 # endregion MODULE_CONTRACT
@@ -27,6 +29,53 @@ logger = logging.getLogger(__name__)
 # region CONSTANTS
 
 _MAX_LIST_KEYS = 1000
+
+# Дефолтный бюджет S3-клиента (canon upload/retention до AI-0073): connect 30 / read 60 /
+# standard retries ×3. wal_sync переопределяет жёстким RPO-бюджетом (см. WAL_SYNC_S3_TIMEOUTS).
+_DEFAULT_CONNECT_TIMEOUT = 30
+_DEFAULT_READ_TIMEOUT = 60
+_DEFAULT_MAX_ATTEMPTS = 3
+
+
+def build_boto3_s3_client(
+    *,
+    endpoint_url: str | None,
+    access_key: str | None,
+    secret_key: str | None,
+    region: str | None,
+    connect_timeout: int = _DEFAULT_CONNECT_TIMEOUT,
+    read_timeout: int = _DEFAULT_READ_TIMEOUT,
+    max_attempts: int = _DEFAULT_MAX_ATTEMPTS,
+) -> "Boto3S3":
+    """Единый строитель boto3 S3-клиента backup-cron (AI-0073).
+
+    ▶ ┌endpoint+creds+region┐ → ⚡ botocore Config(connect/read/retries-standard) → ⚡ boto3.client("s3") → ⎋ Boto3S3
+
+    ## @purpose  Один строитель вместо трёх копий boto3.client с расползающимися
+    ##            таймаутами; per-call override — ЯВНЫМИ параметрами.
+    ## @io       ⇥ endpoint/keys/region (None-креды → botocore env-chain), бюджеты → ⎋ Boto3S3
+    ## @invariants
+    ##   - Единственный boto3.client("s3") в backup-cron (AC T2.4)
+    ##   - None-креды пробрасываются как None (botocore сам резолвит env/session-chain)
+    """
+    import boto3  # lazy: тяжёлый импорт только там, где реально нужен клиент
+    from botocore.config import Config as BotoConfig
+
+    boto_config = BotoConfig(
+        retries={"max_attempts": max_attempts, "mode": "standard"},
+        connect_timeout=connect_timeout,
+        read_timeout=read_timeout,
+    )
+    raw = boto3.client(  # pyright: ignore[reportUnknownMemberType] — W11 external boto3.client untyped-оверлоады
+        "s3",
+        endpoint_url=endpoint_url,
+        aws_access_key_id=access_key,
+        aws_secret_access_key=secret_key,
+        region_name=region,
+        config=boto_config,
+    )
+    return cast("Boto3S3", cast(object, raw))
+
 
 # endregion CONSTANTS
 

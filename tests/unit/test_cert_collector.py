@@ -33,6 +33,7 @@ import pytest
 # 177 W2.4: канонический импорт (core.internal...); sys.path-хак и bare-импорт internal.
 # удалены — conftest предоставляет <repo_root>/ (tests/AGENTS.md §sys.path policy)
 from core.internal.healthcheck.metrics.cert_collector import _load_cert, _san_match
+from tests._conftest.ldd import _print_ldd_trajectory
 
 logger = logging.getLogger(__name__)
 
@@ -115,16 +116,8 @@ class TestCertCollectorTimezone:
 
             result = _load_cert(mock_cert_pem)
 
-        # ── LDD TRAJECTORY ──
-        logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in list(caplog.records):
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        logger.info("%s", msg)
-        logger.info("--- END LDD TRAJECTORY ---")
+        found_imp9 = _print_ldd_trajectory(caplog)
+        assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
 
         assert result is not None, "_load_cert returned None — should have succeeded"
         assert "days_remaining" in result, "Missing days_remaining in result"
@@ -158,15 +151,8 @@ class TestCertCollectorTimezone:
 
             result = _load_cert(mock_cert_pem)
 
-        logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in list(caplog.records):
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        logger.info("%s", msg)
-        logger.info("--- END LDD TRAJECTORY ---")
+        found_imp9 = _print_ldd_trajectory(caplog)
+        assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
 
         assert result is not None
         assert result["days_remaining"] > 0
@@ -192,15 +178,8 @@ class TestCertCollectorTimezone:
 
             result = _load_cert(mock_cert_pem)
 
-        logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in list(caplog.records):
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        logger.info("%s", msg)
-        logger.info("--- END LDD TRAJECTORY ---")
+        found_imp9 = _print_ldd_trajectory(caplog)
+        assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
 
         assert result is not None
         assert result["days_remaining"] > 0
@@ -247,15 +226,8 @@ class TestCertCollectorErrors:
 
         result = _load_cert(str(tmp_path / "nonexistent.pem"))
 
-        logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in list(caplog.records):
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        logger.info("%s", msg)
-        logger.info("--- END LDD TRAJECTORY ---")
+        # error-path: IMP:8 warn по дизайну, IMP:9 отсутствует — assert только на success-путях
+        _print_ldd_trajectory(caplog)
 
         assert result is None
 
@@ -268,14 +240,7 @@ class TestCertCollectorErrors:
 
         result = _load_cert(str(bad_file))
 
-        logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in list(caplog.records):
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        logger.info("%s", msg)
-        logger.info("--- END LDD TRAJECTORY ---")
+        # error-path: IMP:8 warn по дизайну, IMP:9 отсутствует — assert только на success-путях
+        _print_ldd_trajectory(caplog)
 
         assert result is None

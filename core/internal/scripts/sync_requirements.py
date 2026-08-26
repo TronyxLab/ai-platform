@@ -26,7 +26,6 @@
 from __future__ import annotations
 
 import argparse
-import difflib
 import logging
 import sys
 from pathlib import Path
@@ -52,6 +51,7 @@ if __name__ == "__main__" or not __package__:
         sys.path.insert(0, str(_REPO_ROOT))
 
 # DevPlan 119 E5: атомарная запись — единый канон shared/atomic_writer (tempfile+fsync+replace).
+from core.internal.scripts.generated_check import check_generated
 from core.internal.shared.atomic_writer import atomic_write_text as _atomic_write_text
 from core.internal.shared.exceptions import ConfigValidationError
 
@@ -193,20 +193,7 @@ def main(argv: list[str] | None = None) -> int:
         if not output_path.is_file():
             logger.error("[IMP:9][sync_req][CHECK] Output file %s does not exist — cannot compare", output_path)
             return 1
-        existing = output_path.read_text()
-        if existing != generated:
-            diff_lines = list(
-                difflib.unified_diff(
-                    existing.splitlines(keepends=True),
-                    generated.splitlines(keepends=True),
-                    fromfile=str(output_path),
-                    tofile="generated",
-                )
-            )
-            for line in diff_lines[:20]:
-                sys.stderr.write(line)
-            if len(diff_lines) > DIFF_LINES_MAX:
-                sys.stderr.write(f"... ({len(diff_lines) - DIFF_LINES_MAX} more lines)\n")
+        if check_generated(output_path, generated) != 0:
             logger.error(
                 "[IMP:9][sync_req][CHECK] Divergence detected — requirements.txt is stale. Run: make generate-requirements"
             )

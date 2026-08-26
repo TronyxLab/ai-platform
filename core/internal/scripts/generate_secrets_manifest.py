@@ -25,7 +25,6 @@
 from __future__ import annotations
 
 import argparse
-import difflib
 import io
 import logging
 import sys
@@ -44,6 +43,13 @@ if _PLATFORM_ROOT not in sys.path:
 
 # DevPlan 177 W3.5: типизированный SoT-YAML читатель secret-definitions — shared/yaml_loader.
 # Re-export имени для обратной совместимости: тесты и main() вызывают gsm.load_secret_definitions.
+# Standalone CLI bootstrap: паттерн sync_requirements.py — repo root на sys.path.
+if __name__ == "__main__" or not __package__:
+    _REPO_ROOT = Path(Path(Path(__file__).parent, "..", "..", "..")).resolve()
+    if str(_REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(_REPO_ROOT))
+
+from core.internal.scripts.generated_check import check_generated
 from core.internal.shared.yaml_loader import load_secret_definitions
 
 # region TYPED_CONTRACTS
@@ -248,50 +254,19 @@ def generate(secret_defs: list[dict[str, object]], modules: list[_ModuleEntry]) 
 
 # region FUNC_check_output
 def _check_output(generated_content: str, output_path: Path) -> bool:
-    """Byte-level comparison for --check mode. True if fresh, False if stale.
+    """Compare generated content against the output file (--check mode).
 
-    ## @purpose  Compare generated content with existing file byte-by-byte.
-    ##            Prints diff (first 20 lines) to stderr on divergence.
-    ##            NEVER writes to disk.
+    ## @purpose  Делегирует в канон generated_check.check_generated (AI-0063, DevPlan 17 T2.3):
+    ##            полный unified diff вместо среза [:20]; bool-семантика сохранена (True = fresh).
     ## @io        ⇥ generated_content: str, output_path: Path → ⎋ bool (True = fresh)
-    ## @complexity O(N) where N = file size in bytes
-    ## @invariants
-    ##   - NEVER writes to disk — pure read-only comparison
-    ##   - True if content matches, False if divergence (T3.6: sys.exit → return bool)
-    ##   - Prints first 20 lines of diff to stderr on divergence
     """
-    logger.info("[IMP:7][_check_output][START] Checking output against %s", output_path)
-
-    if not output_path.is_file():
-        logger.error("[IMP:9][_check_output][ERROR] Output file %s does not exist — cannot compare", output_path)
-        return False
-
-    generated_bytes = generated_content.encode("utf-8")
-    existing_bytes = output_path.read_bytes()
-
-    if generated_bytes == existing_bytes:
-        logger.info("[IMP:9][_check_output][OK] Output is fresh — matches %s", output_path)
-        return True
-
-    # Divergence — compute and print diff
-    diff_lines = list(
-        difflib.unified_diff(
-            existing_bytes.decode("utf-8").splitlines(keepends=True),
-            generated_content.splitlines(keepends=True),
-            fromfile=str(output_path),
-            tofile="generated",
+    fresh = check_generated(output_path, generated_content) == 0
+    if not fresh:
+        logger.error(
+            "[IMP:9][_check_output][FAIL] Divergence detected — %s is stale. Regenerate without --check.",
+            output_path,
         )
-    )
-    for line in diff_lines[:20]:
-        sys.stderr.write(line)
-    if len(diff_lines) > DIFF_LINES_MAX:
-        sys.stderr.write(f"... ({len(diff_lines) - DIFF_LINES_MAX} more lines)\n")
-
-    logger.error(
-        "[IMP:9][_check_output][FAIL] Divergence detected — %s is stale. Regenerate without --check.",
-        output_path,
-    )
-    return False
+    return fresh
 
 
 # endregion FUNC_check_output

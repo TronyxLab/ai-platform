@@ -204,7 +204,7 @@ Python (`core/internal/practices/`), НЕ копируются в проект.
 
 | Сервис | Фасад | Назначение |
 |--------|-------|------------|
-| `postgres` | `pgbouncer:6432` (`PLATFORM_POSTGRES_DSN`) | Единый PostgreSQL 16 + пулер соединений. Проект подключается своей ролью `${project}_user` к своей БД `needs.database` (роль/БД/GRANT создаются хук-ом postgres при деплое) |
+| `postgres` | `pgbouncer:6432` (`PLATFORM_POSTGRES_DSN`) | Единый PostgreSQL 18.4 + пулер соединений. Проект подключается своей ролью `${project}_user` к своей БД `needs.database` (роль/БД/GRANT создаются хук-ом postgres при деплое) |
 | `redis` | `redis:6379` (`PLATFORM_REDIS_URL`) | Общий кэш/очереди |
 | `nginx` | `nginx:443` (`PLATFORM_NGINX_URL`) | Ingress + TLS (единственная точка публикации) |
 | `litellm` | `litellm:4000` (`PLATFORM_LITELLM_URL`) | LLM-прокси (единый ключ через платформу) |

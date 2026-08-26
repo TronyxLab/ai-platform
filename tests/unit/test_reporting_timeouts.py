@@ -46,9 +46,7 @@ def _capturing_runner(captured: list[int]):
 #   (4) явный timeout перекрывает дефолт
 # · Last fail: DevPlan 17 верификация @64c2090 (аудит AI-0012 partial-остаток)
 # · Remove if: healthcheck-бюджет переезжает в конфигурируемый контракт с одним ридером
-def test_healthcheck_invoke_single_budget(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_healthcheck_invoke_single_budget(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """reporting + module_interface используют HEALTHCHECK_CMD_TIMEOUT для healthcheck."""
     # ── 1. Source-инвариант reporting: literal 30 исчез, константа присутствует ──
     src = inspect.getsource(reporting.run_healthchecks)
@@ -69,15 +67,11 @@ def test_healthcheck_invoke_single_budget(
 
     mod_dir = tmp_path / "modules" / "herm"
     mod_dir.mkdir(parents=True)
-    (mod_dir / "module.yaml").write_text(
-        json.dumps({"interfaces": ["healthcheck"]}), encoding="utf-8"
-    )
+    (mod_dir / "module.yaml").write_text(json.dumps({"interfaces": ["healthcheck"]}), encoding="utf-8")
     (mod_dir / "healthcheck.sh").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
 
     captured.clear()
-    rc, dispatch_err = module_interface.dispatch(
-        "herm", "healthcheck", modules_dir=str(tmp_path / "modules")
-    )
+    rc, dispatch_err = module_interface.dispatch("herm", "healthcheck", modules_dir=str(tmp_path / "modules"))
     assert rc == 0, f"healthcheck.sh exit 0 обязан дать rc 0: {dispatch_err}"
     assert captured[-1] == HEALTHCHECK_CMD_TIMEOUT, (
         f"dispatch healthcheck без явного timeout обязан получить {HEALTHCHECK_CMD_TIMEOUT}: {captured}"

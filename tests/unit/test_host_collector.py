@@ -22,6 +22,8 @@ from unittest import mock
 
 import pytest
 
+from tests._conftest.ldd import _print_ldd_trajectory
+
 logger = logging.getLogger(__name__)
 
 pytestmark = pytest.mark.static_audit
@@ -64,19 +66,7 @@ SwapFree:        3900123 kB
 
             result = host_collector.get_host_memory()
 
-        # ── LDD TRAJECTORY ──
-        logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-        found_imp9 = False
-        for record in list(caplog.records):
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        logger.info("%s", msg)
-                    if imp_level >= 9:
-                        found_imp9 = True
-        logger.info("--- END LDD TRAJECTORY ---")
+        found_imp9 = _print_ldd_trajectory(caplog)
 
         # MemTotal: 16234500 kB → 16234500 / 1024^2 = ~15.5 GB
         assert result["memory_total_gb"] == 15.5, f"Expected 15.5, got {result['memory_total_gb']}"
@@ -105,16 +95,8 @@ SwapFree:        3900123 kB
 
             result = host_collector.get_host_memory()
 
-        # ── LDD TRAJECTORY ──
-        logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in list(caplog.records):
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        logger.info("%s", msg)
-        logger.info("--- END LDD TRAJECTORY ---")
+        # error-path: IMP:8 по дизайну — assert только на success-путях
+        _print_ldd_trajectory(caplog)
 
         # All fields should be 0
         assert result["memory_total_gb"] == 0.0
@@ -150,19 +132,7 @@ class TestGetHostUname:
 
             result = host_collector.get_host_uname()
 
-        # ── LDD TRAJECTORY ──
-        logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-        found_imp9 = False
-        for record in list(caplog.records):
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        logger.info("%s", msg)
-                    if imp_level >= 9:
-                        found_imp9 = True
-        logger.info("--- END LDD TRAJECTORY ---")
+        found_imp9 = _print_ldd_trajectory(caplog)
 
         assert result["os_name"] == "Linux"
         assert result["kernel_version"] == "6.1.0"
@@ -181,16 +151,8 @@ class TestGetHostUname:
 
             result = host_collector.get_host_uname()
 
-        # ── LDD TRAJECTORY ──
-        logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in list(caplog.records):
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        logger.info("%s", msg)
-        logger.info("--- END LDD TRAJECTORY ---")
+        # error-path: IMP:8 по дизайну — assert только на success-путях
+        _print_ldd_trajectory(caplog)
 
         assert result["os_name"] == "unknown"
         assert result["kernel_version"] == "unknown"

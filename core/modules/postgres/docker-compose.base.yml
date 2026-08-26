@@ -1,6 +1,6 @@
 # @purpose  Base compose definition for postgres Docker module — container_name:postgres/pgbouncer, profiles, x-logging, command loads mounted configs
 # GREP_SUMMARY: postgres docker-compose shared-db-net profiles restart-unless-stopped stop-grace-period pgbouncer command-loads-config wildcard DATABASE_URLS auth-delegation
-# STRUCTURE: ▶ postgres:16 [profiles:postgres] → ⚡ command -c config_file -c hba_file → shared-db-net → pgbouncer:6432 [profiles:postgres] wildcard DATABASE_URLS → pg_isready healthcheck → ┐
+# STRUCTURE: ▶ postgres:18.4 [profiles:postgres] → ⚡ command -c config_file -c hba_file → shared-db-net → pgbouncer:6432 [profiles:postgres] wildcard DATABASE_URLS → pg_isready healthcheck → ┐
 # region MODULE_CONTRACT
 ## @purpose  Base compose definition for postgres Docker module
 ## @scope    Merged with root docker-compose.yml via include:
