@@ -190,7 +190,12 @@ class TestGateStatusPageSecretsRegistered:
 
         email_entry = next(s for s in secrets if s["name"] == "PLATFORM_MASTER_EMAIL")
         assert email_entry.get("tier") == "required", "PLATFORM_MASTER_EMAIL tier should be required"
-        assert "status-page" in email_entry.get("consumers", []), "status-page should consume PLATFORM_MASTER_EMAIL"
+        # AI-0072 (DevPlan 17 T3.6): фактический потребитель master-кредов — nginx
+        # (.htpasswd-platform Basic Auth), НЕ status-page (контейнер их не читает)
+        assert "nginx" in email_entry.get("consumers", []), "nginx should consume PLATFORM_MASTER_EMAIL"
+        assert "status-page" not in email_entry.get("consumers", []), (
+            "status-page НЕ читает PLATFORM_MASTER_EMAIL — fake-env-requires запрещён"
+        )
 
     def test_master_password_registered(self):
         """PLATFORM_MASTER_PASSWORD in secrets-manifest.yaml."""

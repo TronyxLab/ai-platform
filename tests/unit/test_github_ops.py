@@ -146,16 +146,17 @@ class TestCreateGithubRepo:
         assert any("Initial push to origin/main complete" in r.message for r in caplog.records)
 
     # 🧪 TRAP[TEST] · Regression · Scenario: gh create fails (returncode != 0)
-    # · Expect: WARN "Failed to create GitHub repo", returns True (non-fatal)
-    # · Last fail: None (new test for DevPlan 117 G T58.1)
+    # · Expect: ERROR "Failed to create GitHub repo", returns FALSE (AI-0037, DevPlan 17 T3.3:
+    #   неудача создания repo больше НЕ репортится успехом; обновлено со старого True)
+    # · Last fail: DevPlan 17 верификация @64c2090 (аудит AI-0037)
     # · Remove if: create-failure branch logic changes
     def test_create_repo_gh_create_fails(self, tmp_path: Path, caplog) -> None:
-        """gh create fails → WARN + True (non-fatal)."""
+        """gh create fails → ERROR + False (честный сигнал, AI-0037)."""
         caplog.set_level(0)
 
         def mock_run(cmd, **kwargs):
             if cmd[0] == "gh":
-                return mock.MagicMock(returncode=1, stdout="", stderr="")
+                return mock.MagicMock(returncode=1, stdout="", stderr="auth error")
             return mock.MagicMock(returncode=0, stdout="", stderr="")
 
         with (
@@ -164,7 +165,7 @@ class TestCreateGithubRepo:
         ):
             result = create_github_repo("org1", "proj1", str(tmp_path))
 
-        assert result is True
+        assert result is False, "фейл создания repo обязан возвращать False (AI-0037)"
         assert any("Failed to create GitHub repo" in r.message for r in caplog.records)
 
 

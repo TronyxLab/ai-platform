@@ -52,7 +52,9 @@ from renderer import render_html as _render_html_impl
 
 # ═══════════════ CONFIGURATION ═══════════════
 LISTEN_PORT = int(os.environ.get("STATUS_PAGE_PORT", "8080"))
-LISTEN_HOST = os.environ.get("STATUS_PAGE_HOST", "0.0.0.0")
+# AI-0072 (DevPlan 17 T3.6): env-ручка STATUS_PAGE_HOST удалена — никто её не задавал;
+# контейнер не публикует порты (ingress через nginx proxy_pass) → bind 0.0.0.0 внутри сети
+LISTEN_HOST = "0.0.0.0"
 NODE_NAME = os.environ.get("NODE_NAME", "test-node")
 NODE_CONFIGS_DIR = os.environ.get("NODE_CONFIGS_DIR", "/opt/node-configs")
 # 142 W2 (B21): прод-дефолт — persistent /var/lib/platform/run (переживает reboot).

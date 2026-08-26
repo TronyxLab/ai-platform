@@ -73,6 +73,38 @@ class StateMachineProtocol(Protocol):
 logger = logging.getLogger(__name__)
 
 
+# region FUNC__is_permanent_healthcheck_error
+_PERMANENT_HC_MARKERS: tuple[str, ...] = (
+    "no such file",
+    "not found",
+    "does not exist",
+    "invalid config",
+    "module.yaml",
+    "permission denied",
+    "command not found",
+)
+
+
+def _is_permanent_healthcheck_error(err: str | None) -> bool:
+    """Классифицирует ошибку healthcheck как ПОСТОЯННУЮ (retry бесполезен).
+
+    ## @purpose  AI-0015 (DevPlan 17 T3.4): прежний цикл ретраил ЛЮБУЮ not-ok — в том числе
+    ##             постоянные ошибки (отсутствующий module.yaml/script) 10×10s = 100s впустую
+    ##            на каждый такой модуль.
+    ## @io        ⇥ err: stderr invoke → ⎋ bool (True = постоянная, не ретраить)
+    ## @complexity O(m) по маркерам
+    ## @invariants
+    ##   - Пустой/None stderr → False (transient: молчаливый фейл может быть гонкой старта)
+    """
+    if not err:
+        return False
+    lowered = err.lower()
+    return any(marker in lowered for marker in _PERMANENT_HC_MARKERS)
+
+
+# endregion FUNC__is_permanent_healthcheck_error
+
+
 # region FUNC_run_healthchecks
 ## @purpose  Run healthchecks on all deployed modules (liveness via invoke_module_interface).
 ## @io       ⇥ node_yaml → ⎋ None (non-fatal)
@@ -159,6 +191,15 @@ def run_healthchecks(node_yaml: str) -> None:
                         mod_name,
                         (err or "(empty)").strip()[-200:] if err else "(empty)",
                     )
+                # AI-0015: постоянная ошибка (нет module.yaml/script, права) — retry бесполезен,
+                # fail-fast вместо 10×10s впустую; transient (гонка старта, сеть) — ретраим
+                if _is_permanent_healthcheck_error(err):
+                    logger.error(
+                        "[IMP:9][healthcheck:%s] PERMANENT failure (no retry): %s",
+                        mod_name,
+                        (err or "").strip()[-200:],
+                    )
+                    break
                 if attempt < hc_max_retries:
                     time.sleep(hc_retry_interval)
 

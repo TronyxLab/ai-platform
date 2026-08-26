@@ -31,6 +31,7 @@ from core.internal.bootstrap.converge.infra import (
     run_subprocess,
     set_exit,
 )
+from core.internal.shared.atomic_writer import atomic_write_text
 
 # R3-каноны констант — прямые импорты из shared SoT (pyright reportPrivateLocalImportUsage)
 from core.internal.shared.deploy_paths import DEFAULT_PROJECTS_BASE as PROJECTS_BASE
@@ -306,8 +307,9 @@ def reconcile_env_platform(
             placement=placement,
             consumer_node=consumer_node,
         )
-        _ = env_file.write_text("\n".join(lines) + "\n")
-        _ = run_subprocess(["chmod", "0640", str(env_file)], timeout=FILE_OP_TIMEOUT)
+        # AI-0008 (DevPlan 17 T3.1): атомарная запись с mode 0640 — без umask-окна и
+        # неатомарного write→chmod-разрыва; chown остаётся отдельным шагом
+        atomic_write_text(env_file, "\n".join(lines) + "\n", mode=0o640)
         _ = run_subprocess(["chown", "ci-deploy:ci-deploy", str(env_file)], timeout=FILE_OP_TIMEOUT)
         logger.info("[IMP:9][converge][%s] DONE: %s generated via generate_env_platform()", unit, env_file)
         report_add(unit, "mutated", f".env.platform created for {proj_name}")

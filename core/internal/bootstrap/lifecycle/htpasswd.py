@@ -41,6 +41,7 @@ from pathlib import Path
 # crypto импортируется как модуль пакета (module-binding) — тесты патчат
 # core.internal.shared.crypto.generate_htpasswd_entry и перехват работает на call-time.
 from core.internal.shared import crypto
+from core.internal.shared.atomic_writer import atomic_write_text
 from core.internal.shared.deploy_paths import htpasswd_file as _resolve_htpasswd
 from core.internal.shared.deploy_paths import secrets_env_file as _resolve_secrets_env
 from core.internal.shared.secrets_env_parser import parse as parse_secrets_env
@@ -145,9 +146,9 @@ def write_htpasswd_file(
                 logger.warning("[IMP:7][secrets_manager] shared crypto generate_htpasswd_entry failed")
                 return False
         htpasswd_path.parent.mkdir(parents=True, exist_ok=True)
-        htpasswd_path.write_text(expected_entry + "\n", encoding="utf-8")
-        # M8a (security hardening): htpasswd — 0600 (было 0o644, world-readable).
-        htpasswd_path.chmod(0o600)
+        # AI-0008 (DevPlan 17 T3.1): атомарная запись с mode — читатель между созданием и
+        # chmod больше не видит ни частичный файл, ни umask-окно 0644 (0600 атомарно)
+        atomic_write_text(htpasswd_path, expected_entry + "\n", mode=0o600)
         os.environ["HTPASSWD_FILE"] = htpasswd_file
         logger.info("[IMP:9][secrets_manager] htpasswd generated at %s for %s", htpasswd_file, email)
 

@@ -170,6 +170,11 @@ RETRY_BACKOFF_EXPONENTIAL_BASE = 2
 # Таймаут curl Tor-proxy healthcheck (tor_proxy_check.py, DevPlan 118 E5 — MAX_TIME=30)
 TOR_PROXY_CURL_TIMEOUT = 30
 
+# gh/git подвызовы GitHub-операций саппорта (github_ops.create_github_repo —
+# repo view/create, git remote/push; DevPlan 17 T3.3 AI-0017: без таймаута зависшая сеть
+# висела вечно). Покрывает холодный gh API + начальный push небольшого scaffold-репо.
+GITHUB_OPS_TIMEOUT = 120
+
 # ── Healthcheck ports domain ───────────────────────────────────────────────────
 
 # Эвристические порты HTTP /health для проектов без healthcheck (healthcheck_poller _try_http)

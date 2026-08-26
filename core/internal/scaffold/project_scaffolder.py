@@ -17,7 +17,8 @@
 ##   - git init + initial commit done in the new project directory
 ##   - _SETUP_CHECKLIST.md generated with exact GitHub commands
 ##   - If --domain: calls add-vhost.sh for nginx config generation
-##   - Never auto-creates GitHub repos (no token access — developer runs gh commands manually)
+##   - Step 7 АВТО-создаёт приватный GitHub repo через gh CLI, ЕСЛИ gh установлен
+##     (create_github_repo; фейл создания/пуша → False в отчёте — AI-0037); нет gh → skip с warn
 ## @rationale Largest scaffold shell script — 782 LOC, 16 functions. Strangler-Fig migration.
 ##            Uses scaffold_helpers for shared gen functions (AC6). DI for subprocess calls.
 ## @links    CALLED_BY: add-project.sh (facade)

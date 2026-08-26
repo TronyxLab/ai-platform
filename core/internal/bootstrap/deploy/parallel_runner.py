@@ -214,7 +214,14 @@ def pre_pull_images(
                 )
                 os._exit(0 if success else 1)
             # ruff: ignore[BLE001] — forked-child: любой сбой модуля → os._exit(1), best-effort (DEPLOY_BEST_EFFORT)
-            except Exception:  # noqa: EXC — forked child: catch all to prevent base exception propagation (best-effort: DEPLOY_BEST_EFFORT policy)
+            # AI-0016 (DevPlan 17 T3.4): причина сбоя ЛОГИРУЕТСЯ до _exit (OSError-цепь и пр. —
+            # иначе родитель видит только exit 1 без диагностики); stderr переживает fork
+            except Exception as child_exc:  # noqa: EXC — forked child: catch all to prevent base exception propagation (best-effort: DEPLOY_BEST_EFFORT policy)
+                logger.error(
+                    "[IMP:9][deploy_docker_groups][child_crash] %s failed: %r",
+                    mod_name,
+                    child_exc,
+                )
                 os._exit(1)
         else:
             pids.append(pid)
@@ -334,7 +341,14 @@ def deploy_docker_group(
                 )
                 os._exit(0 if success else 1)
             # ruff: ignore[BLE001] — forked-child: любой сбой модуля → os._exit(1), best-effort (DEPLOY_BEST_EFFORT)
-            except Exception:  # noqa: EXC — forked child: catch all to prevent base exception propagation (best-effort: DEPLOY_BEST_EFFORT policy)
+            # AI-0016 (DevPlan 17 T3.4): причина сбоя ЛОГИРУЕТСЯ до _exit (OSError-цепь и пр. —
+            # иначе родитель видит только exit 1 без диагностики); stderr переживает fork
+            except Exception as child_exc:  # noqa: EXC — forked child: catch all to prevent base exception propagation (best-effort: DEPLOY_BEST_EFFORT policy)
+                logger.error(
+                    "[IMP:9][deploy_docker_groups][child_crash] %s failed: %r",
+                    mod_name,
+                    child_exc,
+                )
                 os._exit(1)
         else:
             pids.append(pid)
@@ -404,7 +418,14 @@ def deploy_docker_group(
                 success = healthcheck_runner.run_healthcheck(mod_name, "docker")
                 os._exit(0 if success else 1)
             # ruff: ignore[BLE001] — forked-child: любой сбой модуля → os._exit(1), best-effort (DEPLOY_BEST_EFFORT)
-            except Exception:  # noqa: EXC — forked child: catch all to prevent base exception propagation (best-effort: DEPLOY_BEST_EFFORT policy)
+            # AI-0016 (DevPlan 17 T3.4): причина сбоя ЛОГИРУЕТСЯ до _exit (OSError-цепь и пр. —
+            # иначе родитель видит только exit 1 без диагностики); stderr переживает fork
+            except Exception as child_exc:  # noqa: EXC — forked child: catch all to prevent base exception propagation (best-effort: DEPLOY_BEST_EFFORT policy)
+                logger.error(
+                    "[IMP:9][deploy_docker_groups][child_crash] %s failed: %r",
+                    mod_name,
+                    child_exc,
+                )
                 os._exit(1)
         else:
             hc_pids.append(pid)

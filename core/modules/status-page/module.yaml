@@ -50,6 +50,6 @@ resources:
 env_shared:
   PLATFORM_DOMAIN: "${PLATFORM_DOMAIN}"
 
-env_requires:
-  - PLATFORM_MASTER_EMAIL
-  - PLATFORM_MASTER_PASSWORD
+# AI-0072 (DevPlan 17 T3.6): env_requires ПУСТ — контейнер не читает master-креды;
+# Basic Auth живёт в nginx (.htpasswd-platform из PLATFORM_MASTER_EMAIL/PASSWORD,
+# потребитель — nginx/module.yaml + secret-definitions.yaml глобально)

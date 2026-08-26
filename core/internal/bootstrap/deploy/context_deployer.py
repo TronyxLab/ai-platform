@@ -85,6 +85,7 @@ from core.internal.shared.node_yaml import NodeYaml, ProjectEntry
 from core.internal.shared.platform_ports import PLATFORM_PORT_LITELLM
 from core.internal.shared.ssl_certs import DEFAULT_EXPIRY_THRESHOLD, cert_is_valid  # C9: единая комбинация
 from core.internal.shared.subprocess_io import CommandRunner
+from core.internal.shared.timeouts import SYSTEM_CMD_TIMEOUT
 
 # DevPlan 091 Wave A (AC4): _ORCHESTRATOR_AVAILABLE fallback removed — DeployOrchestrator is sole path.
 # ⚠️ TRAP[DECISION] · 2026-07-30 · HI · Removed _ORCHESTRATOR_AVAILABLE vestigial flag
@@ -581,11 +582,11 @@ def _ensure_bootstrap_compose(
                 ["chown", "ci-deploy:ci-deploy", project_dir],
                 capture_output=True,
                 text=True,
-                timeout=30,
+                timeout=SYSTEM_CMD_TIMEOUT,
                 check=False,
             )
         else:
-            _ = runner.run(["chown", "ci-deploy:ci-deploy", project_dir], timeout=30, check=False)
+            _ = runner.run(["chown", "ci-deploy:ci-deploy", project_dir], timeout=SYSTEM_CMD_TIMEOUT, check=False)
 
     domain = getattr(project, "domain", None) or project.name
 
