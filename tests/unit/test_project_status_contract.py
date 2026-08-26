@@ -24,7 +24,6 @@ import pytest
 
 from core.internal.deploy.deploy_engine import StatusResult
 from core.internal.deploy.orchestrator import DeployOrchestrator, ProjectStatus
-from core.internal.deploy.orchestrator_cli import _dispatch
 from core.internal.scaffold.project_lister import get_status_via_ssh
 from tests.helpers.gate_helpers import assert_ldd_imp9
 
@@ -100,39 +99,33 @@ def test_orchestrator_status_to_dict_canon(monkeypatch, tmp_path) -> None:
 
 
 # region FUNC_test_dispatch_status_exit_codes
-## @purpose — exit-коды status через dispatch: found → 0, not_found → 1 (D6).
-# 🧪 TRAP[TEST] · DevPlan 116 B1 T3 · D6 exit-коды честные
-# · Regression: orchestrator_cli status всегда exit 0 (ранее)
-# · Scenario: dispatch "status nonexistent" → rc 1; dispatch "status <existing>" → rc 0
-# · Last fail: — status всегда exit 0 (orchestrator_cli.py:212-215)
+## @purpose — exit-коды status через ПУБЛИЧНЫЙ CLI-глагол (main): found → 0, not_found → 1 (D6).
+# 🧪 TRAP[TEST] · DevPlan 116 B1 T3 · D6 exit-коды честные · T8.4 (DevPlan 17): публичный verb
+# · Regression: orchestrator_cli status всегда exit 0 (ранее); T8.4 — тест пинал приватный
+#   _dispatch; переписан на public main() (мок-точка = AppConfig env, не приватная функция)
+# · Scenario: main(["status","--project",X]) → rc 0 (found) / rc 1 (not_found) + JSON payload
+# · Last fail: DevPlan 17 верификация @64c2090
 # · Remove if: status-контракт меняется
 def test_dispatch_status_exit_codes(monkeypatch, capsys, tmp_path) -> None:
-    """dispatch status: found → 0, not_found → 1 (D6)."""
-    from core.internal.deploy.orchestrator import DeployOrchestrator as RealOrch
+    """CLI status: found → 0, not_found → 1 (D6), через публичный main()."""
+    from core.internal.deploy import orchestrator_cli
 
-    # found: создаём проект в tmp
     proj_dir = tmp_path / "myproj"
     proj_dir.mkdir()
     (proj_dir / "ai-platform.yaml").write_text("name: myproj\n")
 
-    def _factory(*args, **kwargs):
-        kwargs.setdefault("projects_base", str(tmp_path))
-        return RealOrch(*args, **kwargs)
+    monkeypatch.setenv("PROJECTS_BASE", str(tmp_path))
 
-    # found → exit 0
-    monkeypatch.setenv("SSH_ORIGINAL_COMMAND", "status myproj")
-    rc_found = _dispatch([], orchestrator_factory=_factory)
-    capsys.readouterr()  # сброс found-payload — парсим только not_found
-
-    # not_found → exit 1
-    monkeypatch.setenv("SSH_ORIGINAL_COMMAND", "status nonexistent")
-    rc_not_found = _dispatch([], orchestrator_factory=_factory)
+    # not_found → exit 1 + JSON payload
+    rc_not_found = orchestrator_cli.main(["status", "--project", "nonexistent"])
     out = capsys.readouterr().out
     payload = json.loads(out)
-
-    assert rc_found == 0, "found → exit 0 (D6)"
     assert rc_not_found == 1, "not_found → exit 1 (D6)"
     assert payload["status"] == "not_found"
+
+    # found → exit 0
+    rc_found = orchestrator_cli.main(["status", "--project", "myproj"])
+    assert rc_found == 0, f"found → exit 0 (D6), got {rc_found}"
 
 
 # endregion FUNC_test_dispatch_status_exit_codes

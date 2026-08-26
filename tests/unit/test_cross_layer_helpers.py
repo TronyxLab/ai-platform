@@ -328,13 +328,28 @@ class TestTraceVariableAssignment:
 class TestShellCheckIntegration:
     """Unit tests for tests/_conftest/shellcheck.py integration (graceful degradation)."""
 
-    def test_check_available_returns_bool(self) -> None:
-        """_check_shellcheck_available returns (bool, str)."""
+    def test_check_available_verdict_is_falsifiable(self) -> None:
+        """AI-0050 (T8.5): поведенческий ассерт вместо тавтологичного isinstance.
+
+        ## @purpose  Фальсифицируемость: вердикт согласован с фактическим наличием
+        ##            бинарника (shutil.which) — падает при сломанном хелпере, а не
+        ##            при смене языка.
+        """
+        import shutil
+
         from _conftest.shellcheck import _check_shellcheck_available
 
+        shellcheck_on_path = shutil.which("shellcheck") is not None
         available, msg = _check_shellcheck_available()
-        assert isinstance(available, bool)
-        assert isinstance(msg, str)
+
+        if shellcheck_on_path:
+            # бинарник есть → вердикт True и сообщение — версия (не ошибка)
+            assert available is True, f"shellcheck в PATH, но вердикт False: {msg}"
+            assert "not found" not in msg.lower(), f"сообщение об ошибке при живом бинарнике: {msg}"
+        else:
+            # бинарника нет → честный False + сообщение о причине
+            assert available is False, "shellcheck отсутствует, но вердикт True"
+            assert msg, "отсутствие бинарника обязано давать сообщение-причину"
 
     def test_parse_sc2154_empty_file(self, tmp_path: Path) -> None:
         """Empty file has no SC2154 diagnostics."""

@@ -32,6 +32,7 @@ import pytest
 
 # 177 W2.4: канонический импорт (core.internal...); sys.path-хак и bare-импорт internal.
 # удалены — conftest предоставляет <repo_root>/ (tests/AGENTS.md §sys.path policy)
+# intentional-seam: приватный API тестируется напрямую по дизайну (unit-seam, T8.1)
 from core.internal.healthcheck.metrics.cert_collector import _load_cert, _san_match
 from tests._conftest.ldd import _print_ldd_trajectory
 

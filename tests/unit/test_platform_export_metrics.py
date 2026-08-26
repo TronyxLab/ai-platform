@@ -45,6 +45,7 @@ import pytest
 
 # W4e (DevPlan 160 E2): main()/_get_* принимают env=Mapping (DI) — импорт на module level,
 # reload/importlib не требуется (координатор читает env только через env-параметр).
+# intentional-seam: приватный API тестируется напрямую по дизайну (unit-seam, T8.1)
 from core.internal.healthcheck.platform_export_metrics import _get_node_name, _get_node_yaml_path, main
 from tests._conftest.ldd import _print_ldd_trajectory
 

@@ -96,6 +96,7 @@ def test_orchestrate_sequential_routing(caplog) -> None:
     caplog.set_level(logging.DEBUG)
     logger.info("[IMP:7][test_orchestrate_sequential_routing] START — sequential routing check")
 
+    # intentional-seam: воркеры маршрута — дизайн-шов для подмены (T8.2)
     with (
         mock.patch.object(orch, "_deploy_sequential", return_value=(2, [])) as mock_seq,
         mock.patch.object(orch, "_deploy_parallel", return_value=(0, [], {})) as mock_par,
@@ -104,7 +105,13 @@ def test_orchestrate_sequential_routing(caplog) -> None:
             ["postgres", "redis"], {}, "/mods", "/core", deploy_parallel=False, deploy_orchestrator=False
         )
 
-    mock_seq.assert_called_once_with(["postgres", "redis"], "/mods", "/core", {})
+    # AI-0047 (DevPlan 17 T8.2): наблюдаемые исходы вместо пиннинга приватной сигнатуры —
+    # маршрут выбран (seq вызван ровно один раз с тем же списком модулей, parallel нет)
+    mock_seq.assert_called_once()
+    called_modules = mock_seq.call_args.args[0]
+    assert list(called_modules) == ["postgres", "redis"], (
+        f"sequential route обязан получить те же модули: {called_modules}"
+    )
     mock_par.assert_not_called()
     assert deployed == 2, f"Sequential route should return deployed=2, got {deployed}"
     assert failed == [], f"Sequential route should return no failures, got {failed}"
@@ -140,6 +147,7 @@ def test_orchestrate_parallel_routing(caplog) -> None:
     caplog.set_level(logging.DEBUG)
     logger.info("[IMP:7][test_orchestrate_parallel_routing] START — parallel routing check")
 
+    # intentional-seam: воркеры маршрута — дизайн-шов для подмены (T8.2)
     with (
         mock.patch.object(orch, "_deploy_parallel", return_value=(1, ["postgres"], {"postgres": {}})) as mock_par,
         mock.patch.object(orch, "_deploy_sequential", return_value=(0, [])) as mock_seq,
@@ -148,7 +156,13 @@ def test_orchestrate_parallel_routing(caplog) -> None:
             ["postgres"], {"postgres": ""}, "/mods", "/core", deploy_parallel=True, deploy_orchestrator=False
         )
 
-    mock_par.assert_called_once_with(["postgres"], {"postgres": ""}, "/mods", "/core", deploy_orchestrator=False)
+    # AI-0047 (T8.2): observable forwarding — флаг доезжает до параллельного воркера
+    mock_par.assert_called_once()
+    passed_modules = mock_par.call_args.args[0]
+    assert list(passed_modules) == ["postgres"], f"parallel route modules: {passed_modules}"
+    assert mock_par.call_args.kwargs.get("deploy_orchestrator") is False, (
+        "deploy_orchestrator=False обязан форвардиться в параллельный воркер"
+    )
     mock_seq.assert_not_called()
     assert deployed == 1, f"Parallel route should return deployed=1, got {deployed}"
     assert failed == ["postgres"], f"Parallel route should propagate failures, got {failed}"
