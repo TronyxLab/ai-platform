@@ -14,7 +14,12 @@
 ##   - provision-llm.sh non-zero → WARN with stderr excerpt
 ## @rationale  DevPlan 117 G T58.5 — extracted verbatim (_render_and_provision_llm, ~56 LOC) with
 ##            all LDD logs and docstring preserved — no behavior change (AC-G7).
+##            plan 012 T12 (F-020): Step 2 subprocess env-less — LITELLM_MASTER_KEY резолвится
+##            ВНУТРИ key_provisioner.main() (CLI → env → secrets.env ноды, deploy_paths).
+##            Эта цепочка закрывает F-020: deploy-context НЕ должен прокидывать env —
+##            ключ приходит из файлового fallback на ноде.
 ## @changes  2026-08-01 · DevPlan 117 G T58.5 — extracted from context_deployer.py
+##           2026-08-26 · plan 012 T12 — F-020 chain doc (no behavior change)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations

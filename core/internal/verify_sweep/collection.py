@@ -357,6 +357,39 @@ def _resolve_node_host(node: str, node_yaml_path: str) -> str:
 # endregion FUNC__resolve_node_host
 
 
+# region FUNC__endpoint_expose_enabled
+## @purpose  Expose-фильтр endpoint'а (plan 012 T15 / F-034): e2e-verify ожидает ответ ТОЛЬКО
+##           от exposed-доменов node.yaml. Проект с expose=false в ai-platform.yaml НЕ даёт
+##           endpoint (иначе sweep проверял бы неэкспонированный домен → ложный FAIL/TLS-шум).
+##           Проект без локального ai-platform.yaml → True (домен node.yaml авторитетен).
+## @io       ⇥ entry: ProjectEntry → ⎋ bool (True = endpoint включается)
+## @complexity O(1) — resolve project dir + read ai-platform.yaml
+## @invariants
+##   - Тот же контракт, что vhost_renderer._project_expose_enabled (единый expose-смысл)
+##   - project dir: `{projects_base}/{context}/{name}` (fallback name-only)
+##   - ai-platform.yaml отсутствует → True (не блокировать развёрнутые домены)
+def _endpoint_expose_enabled(entry: ProjectEntry) -> bool:
+    """Return True if project ai-platform.yaml has expose:true (or config absent — keep)."""
+    from core.internal.shared import project_yaml as shared_project_yaml
+    from core.internal.shared.deploy_paths import projects_base
+
+    base = projects_base()
+    project_dir = base / entry.context / entry.name if entry.context else base / entry.name
+    data = shared_project_yaml.load_project_yaml(project_dir)
+    if not data:
+        logger.warning(
+            "[IMP:7][_endpoint_expose_enabled] ai-platform.yaml not found for %s (resolved %s) — "
+            "keep endpoint (node.yaml domain authoritative)",
+            entry.name,
+            project_dir,
+        )
+        return True
+    return bool(shared_project_yaml.get_expose(data))
+
+
+# endregion FUNC__endpoint_expose_enabled
+
+
 # region FUNC__collect_local
 def _collect_local(ctx: NodeContext) -> list[Endpoint]:
     """Локальная коллекция: node.yaml projects (domain) + overlays/nginx server_names.
@@ -388,6 +421,17 @@ def _collect_local(ctx: NodeContext) -> list[Endpoint]:
         fqdn = entry.domain.strip().lower()
         if not fqdn:
             logger.info("[IMP:7][_collect_local] Project %s has no domain — skip", entry.name)
+            continue
+        # plan 012 T15 (F-034): e2e-verify ожидает ответ только от EXPOSED-доменов.
+        # node.yaml#projects несёт домены и expose=false проектов; без сверки с
+        # ai-platform.yaml sweep проверял бы неэкспонированные домены → ложные FAIL/TLS-шумы.
+        # Проект без локального ai-platform.yaml → консервативно включаем (домен node.yaml
+        # авторитетен для развёрнутых проектов; remote-mode читает conf.d — фильтр только local).
+        if not _endpoint_expose_enabled(entry):
+            logger.info(
+                "[IMP:8][_collect_local] Project %s expose=false — endpoint skipped (F-034)",
+                entry.name,
+            )
             continue
         endpoints.append(Endpoint(name=entry.name, fqdn=fqdn, host=ctx.host, source="node-yaml"))
     logger.info("[IMP:8][_collect_local] %d endpoint(s) from node.yaml projects", len(endpoints))

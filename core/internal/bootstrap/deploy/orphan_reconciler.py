@@ -404,6 +404,86 @@ def batch_orphan_reconciliation(module_entries: list[str], modules_dir: str) -> 
 # endregion FUNC_batch_orphan_reconciliation
 
 
+# region FUNC__list_module_dirs
+## @purpose  Список всех директорий-модулей в modules_dir (для disabled-детекции T14/F-027).
+## @io       ⇥ modules_dir: str → ⎋ list[str] (имена модулей; [] при отсутствии dir)
+## @complexity O(N) — один listdir
+## @invariants
+##   - Только директории (файлы игнорируются)
+##   - Скрытые/служебные каталоги (.git, __pycache__) отфильтрованы
+def _list_module_dirs(modules_dir: str) -> list[str]:
+    """List all module directory names under modules_dir (plan 012 T14)."""
+    base = Path(modules_dir)
+    if not base.is_dir():
+        return []
+    return sorted(d.name for d in base.iterdir() if d.is_dir() and not d.name.startswith((".", "_")))
+
+
+# endregion FUNC__list_module_dirs
+
+
+# region FUNC_detect_disabled_module_containers
+## @purpose  plan 012 T14 (F-027): детекция контейнеров ВЫКЛЮЧЕННЫХ модулей — живой контейнер
+##           модуля, отсутствующего в желаемом наборе (COMPOSE_PROFILES/node.yaml enabled),
+##           снимается. Containers ONLY — volumes НЕ затрагиваются (docker rm без -v;
+##           docker_ops.docker_rm не имеет volume-флагов). Dry-run = детекция без remove.
+## @io       ⇥ enabled_names: list[str], modules_dir: str → ⎋ list[dict[str, str]] (orphans)
+## @complexity 2 — listdir + docker ps -a + per-disabled compose config
+## @invariants
+##   - disabled = все module-dir'ы с compose-файлом МИНУС enabled_names
+##   - Контейнер учитывается как orphan только если реально существует в docker ps -a
+##   - Volumes НЕ удаляются (удаление только контейнера — remove_orphans → docker rm -f)
+##   - Subprocess-сбои WARN-logged, никогда не raise (graceful, зеркально batch_*)
+## @rationale Существующий batch_orphan_reconciliation детектит ЧУЖИЕ контейнеры (project-label
+##            mismatch) среди ENABLED модулей; контейнеры отключённого модуля (правильный label,
+##            но модуль убран из node.yaml) он не видит — F-027. Отдельная детекция по
+##            дополнению желаемого набора.
+def detect_disabled_module_containers(enabled_names: list[str], modules_dir: str) -> list[dict[str, str]]:
+    """Detect live containers of modules NOT in the desired set (plan 012 T14 / F-027)."""
+    enabled_set = set(enabled_names)
+    all_dirs = _list_module_dirs(modules_dir)
+    disabled_entries = [name for name in all_dirs if name not in enabled_set]
+    if not disabled_entries:
+        logger.info("[IMP:8][detect_disabled] All %d module dirs are enabled — no disabled modules", len(all_dirs))
+        return []
+
+    compose_files = _find_compose_files(disabled_entries, modules_dir)
+    if not compose_files:
+        logger.info("[IMP:8][detect_disabled] No disabled modules with compose files")
+        return []
+
+    existing = _get_existing_containers()
+    if not existing:
+        logger.info("[IMP:8][detect_disabled] docker ps -a empty — nothing to reconcile")
+        return []
+
+    orphans: dict[str, dict[str, str]] = {}
+    for mod_name, cf_path in compose_files:
+        container_names, _project = _get_compose_services(cf_path, mod_name)
+        for cname in container_names:
+            if cname in existing:
+                logger.info(
+                    "[IMP:9][detect_disabled] DISABLED-MODULE CONTAINER: %s (module=%s, disabled) — will be removed",
+                    cname,
+                    mod_name,
+                )
+                orphans[cname] = {"container_name": cname, "project": mod_name}
+            else:
+                logger.info(
+                    "[IMP:7][detect_disabled] %s not running (module=%s disabled) — nothing to remove", cname, mod_name
+                )
+
+    orphan_list = list(orphans.values())
+    logger.info(
+        "[IMP:9][detect_disabled] Disabled-module reconciliation complete — %d container(s) of disabled modules",
+        len(orphan_list),
+    )
+    return orphan_list
+
+
+# endregion FUNC_detect_disabled_module_containers
+
+
 # region FUNC_remove_orphans
 ## @purpose  Remove orphan containers detected by batch_orphan_reconciliation.
 ##           Публичный wrapper над приватной _self_heal_orphan_containers (DevPlan 117 D18) —
@@ -528,6 +608,7 @@ class _CliArgs(Protocol):
     module_entries: str
     modules_dir: str
     self_heal: bool
+    dry_run: bool
 
 
 ## @purpose  CLI entrypoint: parse args, run reconciliation, optionally self-heal (--self-heal).
@@ -577,6 +658,12 @@ def main() -> int:
         default=False,
         help="Enable self-heal mode: remove orphan containers and prune aged images (default: detect-only)",
     )
+    _ = parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=False,
+        help="plan 012 T14: печатает план (disabled-module containers) без мутаций (implied detect-only)",
+    )
 
     # W11: parse_args → Namespace (атрибуты Any) — Protocol-cast через object (см. _CliArgs)
     args = cast(_CliArgs, cast(object, parser.parse_args()))
@@ -584,30 +671,41 @@ def main() -> int:
     # Parse comma-separated entries
     entries = [e.strip() for e in args.module_entries.split(",") if e.strip()]
     logger.info(
-        "[IMP:7][main] CLI args: module_entries=%s, modules_dir=%s, self_heal=%s",
+        "[IMP:7][main] CLI args: module_entries=%s, modules_dir=%s, self_heal=%s, dry_run=%s",
         entries,
         args.modules_dir,
         args.self_heal,
+        args.dry_run,
     )
 
     # Run reconciliation
     orphans = batch_orphan_reconciliation(entries, args.modules_dir)
+    # plan 012 T14 (F-027): контейнеры выключенных модулей (docker rm БЕЗ -v → volumes целы)
+    disabled_orphans = detect_disabled_module_containers(entries, args.modules_dir)
+    all_orphans = orphans + [o for o in disabled_orphans if o not in orphans]
 
-    # ── Self-heal mode (W5-E5) ──
-    if args.self_heal:
-        if orphans:
-            removed = _self_heal_orphan_containers(orphans)
+    # ── Self-heal mode (W5-E5 + plan 012 T14) ──
+    if args.self_heal and not args.dry_run:
+        if all_orphans:
+            removed = _self_heal_orphan_containers(all_orphans)
             logger.info("[IMP:9][main][self_heal] Removed %d orphan container(s)", removed)
         else:
             logger.info("[IMP:7][main][self_heal] No orphan containers to remove")
         pruned = _self_heal_aged_images()
         logger.info("[IMP:9][main][self_heal] Pruned %d aged image(s)", pruned)
+    elif args.dry_run:
+        for orphan in all_orphans:
+            logger.info(
+                "[IMP:8][main][dry-run] WOULD remove orphan %s (project=%s)",
+                orphan["container_name"],
+                orphan["project"],
+            )
 
     # Output each orphan on its own line as "container_name|project_name"
-    for orphan in orphans:
+    for orphan in all_orphans:
         print(f"{orphan['container_name']}|{orphan['project']}")
 
-    logger.info("[IMP:7][main] CLI complete — %d orphans output to stdout", len(orphans))
+    logger.info("[IMP:7][main] CLI complete — %d orphans output to stdout", len(all_orphans))
     return 0
 
 

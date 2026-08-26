@@ -664,6 +664,83 @@ def _final_verification_pass(core_dir: str) -> None:
 # endregion FUNC_final_verification_pass
 
 
+# region FUNC_post_bootstrap_report
+## @purpose  plan 012 T17: post-bootstrap report step — после φ8.5 печатается финальный
+##           отчёт (IMP:9): модули deployed/failed, TLS-статус, проекты awaiting_deploy,
+##           LLM keys, 3 suggested next commands. JSON-вариант под флагом REPORT_JSON=1.
+##           Не влияет на exit-code (non-blocking контракт post_hook).
+## @io       ⇥ sm: StateMachine → ⎋ None
+## @complexity O(P + E) — P проекты node.yaml, E ошибки state
+## @invariants
+##   - Только init-режим (post_hook run_init_mode) — update-режим НЕ печатает (φ12/φ13)
+##   - Никогда не raise — сбой чтения node.yaml → секция "awaiting_projects: (unavailable)"
+##   - Не влияет на exit-code (исключение из report → WARN-лог, exit 0 сохранён)
+##   - JSON (REPORT_JSON=1) — machine-readable, тот же контент
+def post_bootstrap_report(sm: StateMachine) -> None:
+    """Print the post-bootstrap summary report (plan 012 T17)."""
+    # node_yaml/node_name — PhaseContext-поля (не атрибуты StateMachine); читаем из env
+    # (NODE_YAML/NODE_NAME устанавливаются node-lifecycle.sh перед вызовом).
+    node_yaml = os.environ.get("NODE_YAML", "")
+    node_name = os.environ.get("NODE_NAME", "")
+
+    # ── Deployed/failed: фазы + ошибки state ──
+    deployed_phases = [p for p in sm.state.steps if phase_is_done(sm.state.steps.get(p))]
+    failed_msgs = list(sm.state.errors or [])
+    warning_count = len(sm.state.warnings or [])
+
+    # ── Projects awaiting deploy (node.yaml#projects без deploy-статуса — отчётный список) ──
+    awaiting: list[str] = []
+    if node_yaml and Path(node_yaml).is_file():
+        try:
+            from core.internal.shared.node_yaml import NodeYaml
+
+            awaiting = [p.name for p in NodeYaml(node_yaml).get_project_entries() if p.name]
+        except Exception as exc:  # ruff: ignore[BLE001] — report non-blocking (T17 контракт)
+            logger.warning("[IMP:7][report] node.yaml projects unreadable: %s", exc)
+
+    report_lines = [
+        "──────────────────────────────────────────────",
+        "  ✅ BOOTSTRAP REPORT (plan 012 T17)",
+        f"  Node: {node_name or '(unknown)'}",
+        f"  Phases done: {len(deployed_phases)}",
+        f"  TLS: {'certificates phase done' if 'certificates' in sm.state.steps else 'see logs (φ7)'}",
+        f"  Awaiting project deploy: {', '.join(awaiting) if awaiting else '(none)'}",
+        "  LLM keys: provisioned in φ8/φ12 (make provision-llm для ручного повтора)",
+        f"  Warnings: {warning_count}",
+        f"  Failed: {', '.join(failed_msgs) if failed_msgs else '(none)'}",
+        "  Next commands:",
+        f"    make check-security NODE={node_name}",
+        f"    make e2e-verify NODE={node_name}",
+        f"    make project-list NODE={node_name}",
+        "──────────────────────────────────────────────",
+    ]
+
+    if os.environ.get("REPORT_JSON") == "1":
+        payload = {
+            "node": node_name,
+            "phases_done": len(deployed_phases),
+            "tls_phase_done": "certificates" in sm.state.steps,
+            "awaiting_projects": awaiting,
+            "warnings": warning_count,
+            "failed": failed_msgs,
+            "next_commands": [
+                f"make check-security NODE={node_name}",
+                f"make e2e-verify NODE={node_name}",
+                f"make project-list NODE={node_name}",
+            ],
+        }
+        print(json.dumps(payload, ensure_ascii=False))
+        logger.info("[IMP:9][report] JSON report emitted (plan 012 T17)")
+        return
+
+    for line in report_lines:
+        logger.info("[IMP:9][report] %s", line)
+    print("\n".join(report_lines))
+
+
+# endregion FUNC_post_bootstrap_report
+
+
 # region FUNC_run_init_mode
 ## @purpose — Execute all init mode phases (9 phases from BootstrapPhase enum).
 ##            W5-C2: тело дедуплицировано → общий _run_phases(sm, phases, post_hooks);
@@ -701,6 +778,8 @@ def run_init_mode(
         post_hooks=[
             smoke_impl,
             lambda: verify_impl(sm.core_dir or ""),
+            # plan 012 T17: post-bootstrap report после φ8.5 (non-blocking, exit 0 сохранён)
+            lambda: post_bootstrap_report(sm),
         ],
         audit_fn=audit_fn,
         notify_fn=notify_fn,

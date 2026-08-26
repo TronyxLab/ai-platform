@@ -1566,3 +1566,70 @@ def test_update_best_effort_preserved(caplog):
     assert _compute_exit_code(1, 0, 3, failed=["postgres"], strict_init=False) == 2
     assert _compute_exit_code(1, 0, 3, failed=["postgres"], strict_init=True) == 2
     logger.critical("[IMP:9][test] update WARN→0 preserved; strict_init escalates the same result to 2")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# plan 012 T17: post-bootstrap report step
+# ═══════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · REGRESSION · plan 012 T17 · report печатает summary (модули/TLS/projects/next)
+# · Scenario: init-mode завершился → post_bootstrap_report выводит BOOTSTRAP REPORT с
+#   deployed/failed, TLS-статусом, awaiting projects и 3 next commands; не влияет на exit
+# · Last fail: N/A (new step — plan 012 T17)
+# · Remove if: report step удалён/перенесён
+def test_post_bootstrap_report_emits_summary(caplog, state_file, tmp_path, monkeypatch):
+    """T17: report печатает BOOTSTRAP REPORT + JSON-вариант; exit-code не меняет."""
+    from core.internal.bootstrap.lifecycle import cli as lifecycle_cli
+    from core.internal.bootstrap.lifecycle.state_machine import StateMachine
+    from core.internal.bootstrap.lifecycle.state_store import BootstrapState, StepState
+
+    sm = StateMachine(state_file_path=str(state_file))
+    sm.state = BootstrapState(
+        mode="init",
+        node="test-node",
+        steps={
+            "system_bootstrap": StepState(name="system_bootstrap", status="done"),
+            "certificates": StepState(name="certificates", status="done"),
+        },
+        errors=["postgres: failed to pull"],
+        warnings=["w1"],
+    )
+    node_yaml_path = tmp_path / "node.yaml"
+    node_yaml_path.write_text("projects:\n  - name: app-one\n    domain: app-one.example.com\n", encoding="utf-8")
+    monkeypatch.setenv("NODE_YAML", str(node_yaml_path))
+    monkeypatch.setenv("NODE_NAME", "test-node")
+
+    with caplog.at_level(logging.INFO):
+        lifecycle_cli.post_bootstrap_report(sm)
+
+    combined = "\n".join(r.getMessage() for r in caplog.records)
+    assert "BOOTSTRAP REPORT" in combined, "report шапка отсутствует"
+    assert "Next commands" in combined, "нет секции next commands"
+    assert "make e2e-verify NODE=test-node" in combined, "нет e2e-verify suggestion"
+    assert "app-one" in combined, "awaiting project отсутствует"
+    assert "postgres: failed to pull" in combined, "failed-список отсутствует"
+
+    # JSON-вариант
+    monkeypatch.setenv("REPORT_JSON", "1")
+    lifecycle_cli.post_bootstrap_report(sm)
+    logger.info("[IMP:9][test][T17] report summary + JSON PASS")
+
+
+# 🧪 TRAP[TEST] · REGRESSION · plan 012 T17 · report не ломается без node.yaml
+# · Remove if: report step удалён/перенесён
+def test_post_bootstrap_report_no_node_yaml(caplog, state_file, monkeypatch):
+    """T17: node.yaml отсутствует → report продолжает (awaiting: none/unavailable), не raise."""
+    from core.internal.bootstrap.lifecycle import cli as lifecycle_cli
+    from core.internal.bootstrap.lifecycle.state_machine import StateMachine
+    from core.internal.bootstrap.lifecycle.state_store import BootstrapState
+
+    sm = StateMachine(state_file_path=str(state_file))
+    sm.state = BootstrapState(mode="init", node="n", steps={}, errors=[], warnings=[])
+    monkeypatch.delenv("NODE_YAML", raising=False)
+    monkeypatch.delenv("NODE_NAME", raising=False)
+
+    with caplog.at_level(logging.INFO):
+        lifecycle_cli.post_bootstrap_report(sm)  # не должен raise
+    assert not [r for r in caplog.records if "Traceback" in r.getMessage()], "report не должен ронять traceback"
+    logger.info("[IMP:9][test][T17] report без node.yaml не raise PASS")

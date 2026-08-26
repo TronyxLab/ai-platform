@@ -542,3 +542,103 @@ def test_foreign_project_container_is_orphan(modules_dir: Path, caplog) -> None:
 
 
 # endregion FUNC_test_foreign_project_container_is_orphan
+
+
+# ═══════════════════════════════════════════════════════════════════
+# plan 012 T14 (F-027): disabled-module containers
+# ═══════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · REGRESSION · plan 012 T14 F-027 · enabled:false → контейнер снят, volume цел
+# · Scenario: модуль redis выключен (нет в enabled_names), его контейнер жив → detect_disabled
+#   возвращает orphan; remove_orphans → docker rm (БЕЗ -v — volume сохранён)
+# · Last fail: F-027 — контейнер отключённого модуля (правильный project-label) не детектился
+#   batch_orphan_reconciliation (тот ищет только среди ENABLED) → висел вечно
+# · Remove if: disabled-детекция перенесена в другой слой
+@ldd_trajectory
+def test_disabled_module_container_detected_and_removed_volume_kept(modules_dir: Path, caplog) -> None:
+    """F-027: redis enabled:false → контейнер в orphans; remove без -v (volume цел)."""
+    mock_run = _make_mock_run(
+        ps_containers={"redis-ct", "postgres-ct"},
+        compose_responses={
+            str(modules_dir / "redis" / "docker-compose.yaml"): {
+                "services": {
+                    "redis": {
+                        "container_name": "redis-ct",
+                        "name": "redis",
+                    }
+                }
+            },
+            str(modules_dir / "postgres" / "compose.yaml"): {
+                "services": {
+                    "postgres": {
+                        "container_name": "postgres-ct",
+                        "name": "postgres",
+                    }
+                }
+            },
+        },
+        inspect_responses={"redis-ct": "redis", "postgres-ct": "postgres"},
+    )
+    removed_calls: list[list[str]] = []
+
+    def _rm_capture(cmd, *args, **kwargs):
+        if isinstance(cmd, list) and cmd[:2] == ["docker", "rm"]:
+            removed_calls.append(cmd)
+        return mock_run(cmd, *args, **kwargs)
+
+    from orphan_reconciler import detect_disabled_module_containers, remove_orphans
+
+    with patch("orphan_reconciler.subprocess.run", side_effect=_rm_capture):
+        disabled = detect_disabled_module_containers(["postgres"], str(modules_dir))
+        assert any(o["container_name"] == "redis-ct" for o in disabled), f"redis-ct должен быть orphan: {disabled}"
+        removed = remove_orphans(disabled)
+
+    assert removed == 1
+    rm_args = [c for c in removed_calls if c and "redis-ct" in c]
+    assert rm_args, f"docker rm redis-ct не вызван: {removed_calls}"
+    assert not any(flag in rm_args[0] for flag in ("-v", "--volumes")), (
+        f"F-027 FAIL: volume удалён (docker rm -v): {rm_args[0]}"
+    )
+    logger.info("[IMP:9][test][F-027] disabled redis container removed, volume kept PASS")
+
+
+# 🧪 TRAP[TEST] · REGRESSION · plan 012 T14 F-027 · все модули enabled → 0 disabled-orphans
+# · Remove if: disabled-детекция перенесена в другой слой
+@ldd_trajectory
+def test_no_disabled_modules_no_orphans(modules_dir: Path, caplog) -> None:
+    """F-027: enabled включает ВСЕ module-dir → disabled-orphans пусты."""
+    from orphan_reconciler import detect_disabled_module_containers
+
+    with patch("orphan_reconciler.subprocess.run", side_effect=_make_mock_run(ps_containers={"postgres-ct"})):
+        disabled = detect_disabled_module_containers(["postgres", "redis"], str(modules_dir))
+    assert disabled == [], f"все enabled → пусто, got {disabled}"
+    logger.info("[IMP:9][test][F-027] no disabled modules → no orphans PASS")
+
+
+# 🧪 TRAP[TEST] · REGRESSION · plan 012 T14 F-027 · dry-run: детекция без мутаций
+# · Remove if: dry-run семантика CLI изменится
+def test_dry_run_detects_without_mutation(modules_dir: Path, caplog) -> None:
+    """F-027: dry-run — detect возвращает orphans, docker rm НЕ вызывается."""
+    from orphan_reconciler import detect_disabled_module_containers
+
+    mock_run = _make_mock_run(
+        ps_containers={"redis-ct"},
+        compose_responses={
+            str(modules_dir / "redis" / "docker-compose.yaml"): {
+                "services": {"redis": {"container_name": "redis-ct", "name": "redis"}}
+            }
+        },
+    )
+    rm_calls: list = []
+
+    def _capture(cmd, *args, **kwargs):
+        if isinstance(cmd, list) and cmd[:2] == ["docker", "rm"]:
+            rm_calls.append(cmd)
+        return mock_run(cmd, *args, **kwargs)
+
+    with patch("orphan_reconciler.subprocess.run", side_effect=_capture):
+        disabled = detect_disabled_module_containers(["postgres"], str(modules_dir))
+    assert len(disabled) == 1, f"dry-run: redis-ct детектится, got {disabled}"
+    assert rm_calls == [], "dry-run: мутаций быть не должно"
+    logger.info("[IMP:9][test][F-027] dry-run detect-only PASS")

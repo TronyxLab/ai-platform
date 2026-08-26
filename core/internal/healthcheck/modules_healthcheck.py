@@ -26,9 +26,11 @@
 
 from __future__ import annotations
 
+import datetime
 import logging
 import subprocess
 import sys
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import cast
@@ -39,7 +41,12 @@ import yaml
 #   watchdog stdlib-only (@invariant 1: cron без PYTHONPATH, TRAP[BUG] 142 W2) — импортировать
 #   modules_healthcheck НЕ может; обратный импорт безопасен (module-level watchdog = чистый stdlib).
 #   Значение 5 (RestartCount > 5 = CrashLoopBackOff) НЕ меняется.
-from core.internal.healthcheck.watchdog import RESTART_LOOP_THRESHOLD
+#   plan 012 T13 (F-026): RESTART_WINDOW_SEC — скользящее окно (см. watchdog @rationale).
+from core.internal.healthcheck.watchdog import RESTART_LOOP_THRESHOLD, RESTART_WINDOW_SEC
+
+# plan 012 T13 (F-026): сегмент StartedAt в format-строке inspect
+# "{{.State.Restarting}}|{{.RestartCount}}|{{.State.StartedAt}}" (0-индексировано)
+_STARTED_AT_SEGMENT: int = 2
 from core.internal.shared import docker_ops  # W1: docker inspect примитив (гейт docker_sole_path)
 from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError, ConfigValidationError
 from core.internal.shared.module_interface import invoke as invoke_module_interface
@@ -65,15 +72,34 @@ RestartLoopFn = Callable[[str], bool]
 
 
 # region FUNC_is_restart_loop
-## @purpose  Restart-loop детекция: State.Restarting=true ИЛИ RestartCount > threshold.
-## @io       ⇥ restarting: bool, restart_count: int, threshold: int = 5 → ⎋ bool
+## @purpose  Restart-loop детекция: State.Restarting=true ИЛИ (RestartCount > threshold В окне).
+##           plan 012 T13 (F-026): lifetime RestartCount от легитимных пересозданий (деплой)
+##           НЕ триггерит — окно считается по started_at_age_sec (None = консервативно loop,
+##           т.е. если возраст старта неизвестен, старый контракт RestartCount>T сохраняется).
+## @io       ⇥ restarting: bool, restart_count: int, threshold: int = 5,
+##              started_at_age_sec: float | None = None, window_sec: float = RESTART_WINDOW_SEC → ⎋ bool
 ## @complexity O(1)
 ## @invariants
 ##   - restarting=true → loop (независимо от count)
-##   - restart_count > threshold → loop (контейнер может быть "healthy" между рестартами)
-def is_restart_loop(*, restarting: bool, restart_count: int, threshold: int = RESTART_LOOP_THRESHOLD) -> bool:
-    """Return True if container is in a restart loop (Restarting or RestartCount > threshold)."""
-    return bool(restarting) or restart_count > threshold
+##   - restart_count > threshold И (age None ИЛИ age <= window) → loop
+##   - restart_count > threshold, но age > window (контейнер УЖЕ долго жив) → НЕ loop (F-026)
+def is_restart_loop(
+    *,
+    restarting: bool,
+    restart_count: int,
+    threshold: int = RESTART_LOOP_THRESHOLD,
+    started_at_age_sec: float | None = None,
+    window_sec: float = RESTART_WINDOW_SEC,
+) -> bool:
+    """Return True if container is in a restart loop (Restarting or recent RestartCount > threshold)."""
+    if restarting:
+        return True
+    if restart_count <= threshold:
+        return False
+    # plan 012 T13 (F-026): RestartCount > T только при старте В окне; age None — старый контракт
+    if started_at_age_sec is None:
+        return True
+    return started_at_age_sec <= window_sec
 
 
 # endregion FUNC_is_restart_loop
@@ -167,20 +193,23 @@ def _compose_container_names(compose: Path) -> list[str]:
 
 
 # region FUNC_check_restart_loop
-## @purpose  Проверить restart-loop по docker inspect (State.Restarting + RestartCount).
+## @purpose  Проверить restart-loop по docker inspect (State.Restarting + RestartCount + StartedAt).
+##           plan 012 T13 (F-026): StartedAt → age старта → окно (lifetime RestartCount от
+##           деплой-пересозданий не триггерит при долгом аптайме).
 ## @io       ⇥ container: str, docker_inspect_fn (DI; None = docker_ops.docker_inspect) → ⎋ bool
 ## @complexity O(1) — 1-2 docker inspect subprocess
 ## @changes 2026-08-13 | E1 (160): +docker_inspect_fn DI (тесты передают fake вместо monkeypatch
 ##            core.internal.shared.docker_ops.subprocess.run)
+##           2026-08-26 | plan 012 T13 — +StartedAt в format-строку (окно F-026)
 def check_restart_loop(
     container: str,
     *,
     docker_inspect_fn: InspectFn | None = None,
 ) -> bool:
-    """Inspect container State.Restarting/RestartCount → restart loop? (W1: shared/docker_ops)."""
+    """Inspect container State.Restarting/RestartCount/StartedAt → restart loop? (W1: shared/docker_ops)."""
     inspect = (docker_inspect_fn or docker_ops.docker_inspect)(
         container,
-        format="{{.State.Restarting}}|{{.RestartCount}}",
+        format="{{.State.Restarting}}|{{.RestartCount}}|{{.State.StartedAt}}",
         timeout=DOCKER_CMD_TIMEOUT,
     )
     if inspect.returncode != 0:
@@ -191,12 +220,20 @@ def check_restart_loop(
         )
         return False
     try:
-        restarting_raw, count_raw = inspect.stdout.strip().split("|", 1)
-        restarting = restarting_raw.strip().lower() == "true"
-        restart_count = int(count_raw.strip() or "0")
+        parts = inspect.stdout.strip().split("|")
+        restarting = parts[0].strip().lower() == "true" if parts else False
+        restart_count = int(parts[1].strip() or "0") if len(parts) > 1 else 0
+        # plan 012 T13 (F-026): третий сегмент format-строки — State.StartedAt (окно)
+        started_at_age_sec = (
+            _started_at_age_sec(parts[_STARTED_AT_SEGMENT].strip()) if len(parts) > _STARTED_AT_SEGMENT else None
+        )
     except ValueError:
         return False
-    loop = is_restart_loop(restarting=restarting, restart_count=restart_count)
+    loop = is_restart_loop(
+        restarting=restarting,
+        restart_count=restart_count,
+        started_at_age_sec=started_at_age_sec,
+    )
     if loop:
         logger.warning(
             "[IMP:9][modules-healthcheck][restart] FAIL: %s restart loop (restarting=%s, restarts=%d)",
@@ -208,6 +245,28 @@ def check_restart_loop(
 
 
 # endregion FUNC_check_restart_loop
+
+
+# region FUNC__started_at_age_sec
+## @purpose  Возраст State.StartedAt (ISO-8601) в секундах от now. Битый/пустой → None
+##           (консервативный старый контракт в is_restart_loop).
+## @io       ⇥ raw: str → ⎋ float | None
+## @complexity O(1)
+def _started_at_age_sec(raw: str) -> float | None:
+    """Parse ISO-8601 StartedAt → age seconds from now; malformed → None."""
+    if not raw:
+        return None
+    try:
+        normalized = raw
+        if normalized.endswith("Z"):
+            normalized = normalized[:-1] + "+00:00"
+        started = datetime.datetime.fromisoformat(normalized).timestamp()
+    except ValueError:
+        return None
+    return time.time() - started
+
+
+# endregion FUNC__started_at_age_sec
 
 
 # region FUNC_check_module

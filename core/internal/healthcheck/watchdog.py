@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import datetime
 import json
 import logging
 import os
@@ -96,6 +97,12 @@ DEFAULT_COOLDOWN_MIN = 30  # WATCHDOG_COOLDOWN_MIN — пауза между р�
 # безопасен (module-level watchdog = чистый stdlib). modules_healthcheck.RESTART_LOOP_THRESHOLD
 # импортируется отсюда (DevPlan T2.6). Значение 5 НЕ меняется: RestartCount > 5 = CrashLoopBackOff.
 RESTART_LOOP_THRESHOLD = 5
+# plan 012 T13 (F-026): скользящее окно рестартов. RestartCount — LIFETIME счётчик: легитимные
+# пересоздания (деплой: docker compose up → новый контейнер; rollback; converge) накапливают
+# RestartCount без crash-loop. «restart-loop» поднимается ТОЛЬКО при рестартах В окне:
+# контейнер, стартовавший ≤ RESTART_WINDOW_SEC назад с RestartCount > порога — активный loop;
+# Up 46 мин healthy после 14 деплой-рестартов (E-сценарий F-026) — НЕ loop.
+RESTART_WINDOW_SEC = 15 * 60  # WATCHDOG_RESTART_WINDOW_MIN (env, мин) — скользящее окно
 DOCKER_TIMEOUT = 30  # таймаут docker-команд (файл вне domain-скоупа timeout-literals гейта)
 # REF-0014: suppress-окно TG «crash-loop detected, не рестарчу» per-container. CLI-throttle
 # notifications.py процесс-локален (cron = новый процесс каждые 5 мин — реестр пуст), поэтому
@@ -120,6 +127,7 @@ class ContainerRecord(TypedDict):
     health: str | None
     restart_count: int
     restart_policy: str
+    started_at: float | None  # plan 012 T13 (F-026): unix-ts последнего старта (State.StartedAt)
 
 
 # endregion DATA_ContainerRecord
@@ -363,53 +371,90 @@ def _parse_inspect(cid: str, data: list[object]) -> ContainerRecord:
         restart_count = int(cast("int | str", state.get("RestartCount", 0)))
     except (TypeError, ValueError):
         restart_count = 0
+    started_at = _parse_started_at(state.get("StartedAt"))
     return ContainerRecord(
         id=cid,
         name=raw_name,
         health=health,
         restart_count=restart_count,
         restart_policy=restart_policy,
+        started_at=started_at,
     )
 
 
 # endregion FUNC__parse_inspect
 
 
+# region FUNC__parse_started_at
+## @purpose  Парсинг State.StartedAt (ISO-8601 от docker) → unix-ts. Некорректная/пустая
+##           строка → None (окно-детекция T13: неизвестный старт = консервативно НЕ loop).
+## @io       ⇥ raw: object | None → ⎋ float | None
+## @complexity O(1)
+def _parse_started_at(raw: object | None) -> float | None:
+    """Parse docker State.StartedAt (ISO-8601, e.g. 2026-08-26T09:00:00.123456789Z) → unix ts."""
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        normalized = raw.strip()
+        if normalized.endswith("Z"):
+            normalized = normalized[:-1] + "+00:00"
+        return datetime.datetime.fromisoformat(normalized).timestamp()
+    except ValueError:
+        return None
+
+
+# endregion FUNC__parse_started_at
+
+
 # region FUNC__is_eligible
-## @purpose  Кандидат на рестарт: health существует И != healthy/none; restart != "no"; RestartCount <= 5.
-## @io       ⇥ c: dict → ⎋ bool
+## @purpose  Кандидат на рестарт: health существует И != healthy/none; restart != "no";
+##           НЕ crash-looping в скользящем окне (plan 012 T13 / F-026).
+## @io       ⇥ c: dict, now: float | None (ts окна; None = time.time()) → ⎋ bool
 ## @complexity O(1)
 ## @invariants
 ##   - restart_policy "no" исключает one-shot (prometheus-config-init, minio-createbuckets)
-##   - RestartCount > 5 = CrashLoopBackOff (RESTART_LOOP_THRESHOLD канон, T2.6) — рестартом не лечится
-def _is_eligible(c: ContainerRecord) -> bool:
-    """Return True if the container is a restart candidate (unhealthy + restartable + not crash-looping)."""
+##   - Логика crash-loop инвертирована: eligible = unhealthy + restartable + NOT window-loop
+##     (lifetime RestartCount от легитимных пересозданий НЕ блокирует рестарт — F-026)
+def _is_eligible(c: ContainerRecord, now: float | None = None) -> bool:
+    """Return True if the container is a restart candidate (unhealthy + restartable + not window-crash-looping)."""
     health = c.get("health")
     if health is None or health in {"healthy", "none"}:
         return False
     if c.get("restart_policy") == "no":
         return False
-    return int(c.get("restart_count", 0)) <= RESTART_LOOP_THRESHOLD
+    return not _is_crash_looping(c, now=now)
 
 
 # endregion FUNC__is_eligible
 
 
 # region FUNC__is_crash_looping
-## @purpose  Crash-loop детекция skip-path (REF-0014): нездоровый контейнер с рестарт-политикой
-##           и RestartCount > RESTART_LOOP_THRESHOLD — docker restart не лечит (T2.6 канон),
-##            только TG-нотификация оператору («crash-loop detected, не рестарчу»).
-## @io       ⇥ c: ContainerRecord → ⎋ bool
+## @purpose  Crash-loop детекция skip-path (REF-0014 + plan 012 T13 / F-026): нездоровый
+##           контейнер с рестарт-политикой и RestartCount > порога В СКОЛЬЗЯЩЕМ ОКНЕ —
+##           docker restart не лечит (T2.6 канон), только TG-нотификация оператору
+##           («crash-loop detected, не рестарчу»). Lifetime RestartCount при УЖЕ ДОЛГОМ
+##           аптайме (старт > окна назад) = легитимные пересоздания, НЕ loop (E-сценарий
+##           F-026: Up 46 мин healthy после 14 деплой-рестартов → PASS).
+## @io       ⇥ c: ContainerRecord, now: float | None (ts окна; None = time.time()) → ⎋ bool
 ## @complexity O(1)
-## @invariants — зеркальна _is_eligible по порогу: eligible = ...<= T, crash-loop = ...> T
-def _is_crash_looping(c: ContainerRecord) -> bool:
-    """Return True for an unhealthy restartable container over RESTART_LOOP_THRESHOLD (T2.6)."""
+## @invariants
+##   - restarting=true ИЛИ RestartCount > T И старт В окне (≤ RESTART_WINDOW_SEC назад) → loop
+##   - started_at неизвестен (None) → консервативно НЕ loop (легитимные пересоздания не
+##     должны ложно триггерить при нечитаемом StartedAt)
+def _is_crash_looping(c: ContainerRecord, now: float | None = None) -> bool:
+    """Return True for an unhealthy restartable container over threshold within the sliding window."""
     health = c.get("health")
     if health is None or health in {"healthy", "none"}:
         return False
     if c.get("restart_policy") == "no":
         return False
-    return int(c.get("restart_count", 0)) > RESTART_LOOP_THRESHOLD
+    if int(c.get("restart_count", 0)) <= RESTART_LOOP_THRESHOLD:
+        return False
+    started_at = c.get("started_at")
+    if started_at is None:
+        return False
+    window_ts = time.time() if now is None else now
+    return window_ts - started_at <= RESTART_WINDOW_SEC
 
 
 # endregion FUNC__is_crash_looping
@@ -509,9 +554,9 @@ def decide_actions(
     cooldown_sec: float,
 ) -> tuple[list[Action], WatchdogState]:
     """Decide restart actions based on state and current health. Returns (actions, new_state)."""
-    eligible = {c["name"]: c for c in containers if _is_eligible(c)}
+    eligible = {c["name"]: c for c in containers if _is_eligible(c, now=now)}
     current_names = {c["name"] for c in containers}
-    crashloop_now = {c["name"] for c in containers if _is_crash_looping(c)}
+    crashloop_now = {c["name"] for c in containers if _is_crash_looping(c, now=now)}
 
     new_state: WatchdogState = {
         "unhealthy_since": dict(state.get("unhealthy_since", {})),
@@ -869,8 +914,8 @@ def run_watchdog(
         cooldown_min * 60.0,
     )
 
-    # ── REF-0014: crash-loop skip-path (>RESTART_LOOP_THRESHOLD) — TG «не рестарчу» ──
-    crashloop_names = sorted({c["name"] for c in containers if _is_crash_looping(c)})
+    # ── REF-0014 + plan 012 T13 (F-026): crash-loop skip-path (window) — TG «не рестарчу» ──
+    crashloop_names = sorted({c["name"] for c in containers if _is_crash_looping(c, now=ts)})
 
     if dry_run:
         for action in actions:

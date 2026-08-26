@@ -20,8 +20,10 @@
 ##           2026-08-13 | E1 (160) — DI-конвертация (setattr 13 → 0, −100%)
 # endregion MODULE_CONTRACT
 
+import datetime
 import logging
 import re
+import time
 from pathlib import Path
 from unittest import mock
 
@@ -396,3 +398,40 @@ def test_healthcheck_detects_restart_loop(caplog) -> None:
 
 
 # endregion TEST_MODULES_HEALTHCHECK_STATIC
+
+
+# ═══════════════════════════════════════════════════════════════════
+# plan 012 T13 (F-026): window-based restart-детекция (modules_healthcheck)
+# ═══════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · REGRESSION · plan 012 T13 F-026 · долгий аптайм + RestartCount>5 → НЕ loop
+# · Scenario: Restarting=false, RestartCount=14, StartedAt 46 мин назад (вне окна) →
+#   is_restart_loop=False (E-сценарий F-026 PASS)
+# · Last fail: F-026 — lifetime RestartCount>5 триггерил loop несмотря на 46 мин healthy
+# · Remove if: window-детекция перенесена в другой слой
+def test_is_restart_loop_long_uptime_not_loop() -> None:
+    """F-026: RestartCount=14 + старт 46 мин назад (age > window) → НЕ loop."""
+    assert mh.is_restart_loop(restarting=False, restart_count=14, started_at_age_sec=46 * 60) is False
+    logger.info("[IMP:9][test][F-026] long uptime + high count → not loop PASS")
+
+
+# 🧪 TRAP[TEST] · REGRESSION · plan 012 T13 F-026 · рестарты В окне → loop
+# · Scenario: RestartCount=6 + старт 2 мин назад (age ≤ window) → loop True
+# · Remove if: window-детекция перенесена в другой слой
+def test_is_restart_loop_recent_restarts_loop() -> None:
+    """F-026: RestartCount=6 + старт 2 мин назад (age ≤ window) → loop."""
+    assert mh.is_restart_loop(restarting=False, restart_count=6, started_at_age_sec=2 * 60) is True
+    logger.info("[IMP:9][test][F-026] recent restarts in window → loop PASS")
+
+
+# 🧪 TRAP[TEST] · REGRESSION · plan 012 T13 F-026 · check_restart_loop парсит StartedAt
+# · Scenario: docker inspect "false|14|<46-min-ago ISO>" → не loop; "false|6|<2-min-ago ISO>" → loop
+# · Remove if: format-строка inspect изменится
+def test_check_restart_loop_window_parsing() -> None:
+    """F-026: check_restart_loop учитывает StartedAt из inspect (окно)."""
+    old_start = datetime.datetime.fromtimestamp(time.time() - 46 * 60, tz=datetime.timezone.utc).isoformat()
+    recent_start = datetime.datetime.fromtimestamp(time.time() - 2 * 60, tz=datetime.timezone.utc).isoformat()
+    assert mh.check_restart_loop("postgres", docker_inspect_fn=_inspect_fn(f"false|14|{old_start}\n")) is False
+    assert mh.check_restart_loop("postgres", docker_inspect_fn=_inspect_fn(f"false|6|{recent_start}\n")) is True
+    logger.info("[IMP:9][test][F-026] check_restart_loop StartedAt window PASS")

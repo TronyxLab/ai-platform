@@ -22,6 +22,7 @@
 
 import json
 import logging
+import os
 import pathlib
 from unittest.mock import MagicMock, patch
 
@@ -863,3 +864,97 @@ def test_empty_token_not_persisted(policy_yaml, mock_client, tmp_path):
     data = _json.loads(store.read_text(encoding="utf-8"))
     assert data["solo"] == "sk-existing-working-key", "рабочий ключ стора НЕ затронут пустым токеном"
     assert "" not in data.values()
+
+
+# ═══════════════════════════════════════════════════════════════════
+# plan 012 T12 (F-020/F-021/F-022): master-key chain + proxy-neutral + list_keys transport
+# ═══════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · REGRESSION · plan 012 T12 F-020 · master-key резолв из secrets.env
+# · Scenario: CLI/env пусты, secrets.env ноды несёт LITELLM_MASTER_KEY → резолв из файла
+#   (закрывает deploy-context цепочку: provision-llm.sh subprocess env-less)
+# · Last fail: F-020 — deploy-context provision падал на отсутствии LITELLM_MASTER_KEY в env
+# · Remove if: master-key chain переедет в другой слой
+def test_master_key_resolved_from_secrets_env(tmp_path, caplog):
+    """F-020: CLI → env → secrets.env fallback для LITELLM_MASTER_KEY."""
+    import core.internal.llm.key_provisioner as kp
+
+    secrets_env = tmp_path / "secrets.env"
+    secrets_env.write_text("LITELLM_MASTER_KEY=sk-from-secrets-env-123\nOTHER=1\n", encoding="utf-8")
+
+    with patch.object(kp, "secrets_env_file", return_value=secrets_env):
+        assert kp._resolve_master_key(None, {}) == "sk-from-secrets-env-123"
+        # приоритет: CLI > env > file
+        assert kp._resolve_master_key("sk-cli", {"LITELLM_MASTER_KEY": "sk-env"}) == "sk-cli"
+        assert kp._resolve_master_key(None, {"LITELLM_MASTER_KEY": "sk-env"}) == "sk-env"
+    caplog.set_level(logging.INFO)
+    logger.info("[IMP:9][test][master-key] secrets.env fallback работает (F-020)")
+
+
+# 🧪 TRAP[TEST] · REGRESSION · plan 012 T12 F-020 · отсутствие ключа везде → пустая строка
+# · Scenario: нет CLI, env, файла (или файл без ключа) → "" → main печатает ошибку, exit 1
+# · Remove if: master-key required-семантика изменится
+def test_master_key_missing_returns_empty(tmp_path, caplog):
+    """F-020: все источники пусты → '' (main ругается, НЕ тихий сквозной прогон)."""
+    import core.internal.llm.key_provisioner as kp
+
+    secrets_env = tmp_path / "secrets.env"
+    secrets_env.write_text("OTHER=1\n", encoding="utf-8")
+    with patch.object(kp, "secrets_env_file", return_value=secrets_env):
+        assert not kp._resolve_master_key(None, {})
+        assert not kp._resolve_master_key("", {})
+
+
+# 🧪 TRAP[TEST] · REGRESSION · plan 012 T12 F-021 · list_keys transport-failure → failed++,
+# generate НЕ вызывается (дубль-гвард REF-0104)
+# · Scenario: list_keys кидает LiteLLMTransportError → ВСЕ enabled counted failed,
+#   generate_key НЕ вызывается ни для кого, PlatformError с сообщением листинга
+# · Last fail: F-021 — list_keys вне try → необработанный transport-сбой ронял прогон
+#   (или при пробросе generic-handler — скрытая семантика)
+# · Remove if: list_keys перенесётся под per-consumer try
+def test_list_keys_transport_fails_loud_no_generate(policy_yaml, mock_client, tmp_path, caplog):
+    """F-021 (AC-c): listing-сбой — честный failed (НЕ generate-дубликаты)."""
+    import core.internal.llm.key_provisioner as kp
+
+    mock_client.list_keys.side_effect = LiteLLMTransportError("connect timeout to litellm:4000")
+
+    with (
+        patch.object(kp, "LiteLLMAdminClient", return_value=mock_client),
+        patch.object(kp, "discover_projects") as mock_disc,
+        patch.object(kp, "get_platform_consumers") as mock_plat,
+    ):
+        mock_disc.return_value = [{"name": "test-backend", "llm": {"enabled": True}}]
+        mock_plat.return_value = []
+        with pytest.raises(kp.PlatformError, match="listing failed"):
+            kp.provision_all(
+                master_key="mk", base_url="http://t:4000", policy_path=policy_yaml, persist_path=tmp_path / "k.json"
+            )
+
+    assert mock_client.generate_key.call_count == 0, "generate НЕ вызывается при незнании existing keys (REF-0104)"
+    logger.info("[IMP:9][test][list-transport] listing fail → no generate, честный PlatformError")
+
+
+# 🧪 TRAP[TEST] · REGRESSION · plan 012 T12 F-022 · host-run proxy-нейтральность
+# · Scenario: base_url=127.0.0.1 → NO_PROXY дополнен loopback/litellm; remote base_url → не тронут
+# · Last fail: F-022 — httpx trust_env читал HTTP_PROXY и ломал connect к локальному фасаду
+# · Remove if: клиент перейдёт на trust_env=False
+def test_no_proxy_for_local_facades(tmp_path, monkeypatch, caplog):
+    """F-022: loopback/litellm base_url → NO_PROXY setdefault; удалённый host не мутируется."""
+    import core.internal.llm.key_provisioner as kp
+
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    kp._ensure_local_proxy_neutral("http://127.0.0.1:4000")
+    no_proxy = os.environ.get("NO_PROXY", "")
+    assert "127.0.0.1" in no_proxy and "litellm" in no_proxy, f"NO_PROXY={no_proxy!r}"
+
+    # существующий NO_PROXY не затирается (setdefault-семантика)
+    monkeypatch.setenv("NO_PROXY", "10.0.0.0/8")
+    kp._ensure_local_proxy_neutral("http://litellm:4000")
+    assert "10.0.0.0/8" in os.environ["NO_PROXY"] and "localhost" in os.environ["NO_PROXY"]
+
+    # удалённый host — не локальный фасад, NO_PROXY не трогаем
+    monkeypatch.setenv("NO_PROXY", "keep-me")
+    kp._ensure_local_proxy_neutral("http://api.remote.example:443")
+    assert os.environ["NO_PROXY"] == "keep-me"
+    logger.info("[IMP:9][test][proxy-neutral] loopback/litellm в NO_PROXY, remote не тронут (F-022)")

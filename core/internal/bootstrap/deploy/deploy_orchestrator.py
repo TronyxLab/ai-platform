@@ -361,17 +361,15 @@ def _preflight(core_dir: str, node_yaml: str, modules_dir: str) -> None:
 
 
 # region FUNC__interpolation_dryrun
-## @purpose  Node-side interpolation dry-run (plan 012 T10 / D8): `docker compose config
-##           --quiet` по каждому enabled-модулю с собранным env (secrets.env + infra defaults
-##           + profiles + NGINX_OVERLAY_DIR) ДО создания контейнеров. Защита стоит НА пути
-##           исполнения — unsatisfied ${VAR:?} ловится здесь, а не на живой ноде.
-## @io       ⇥ enabled_names: list[str], overlays: dict[str,str], modules_dir: str,
-##              strict: bool, runner DI (None = subprocess.run) → ⎋ list[str] (broken modules)
-##              ⚡ PlatformFatalError при strict и broken≠∅
-## @complexity O(M) compose config вызовов (~0.5s/модуль; <60s на init, AC T10)
+## @purpose  Node-side interpolation dry-run (plan 012 T10 / D8): docker compose config --quiet
+##           по каждому enabled-модулю с собранным env ДО создания контейнеров.
+## @io       ⇥ enabled_names list[str] · overlays dict[str,str] · modules_dir str · strict bool
+##           → ⎋ list[str] (broken modules); strict+broken → PlatformFatalError
+## @complexity O(M) compose config вызовов (~0.5s/модуль; <60s на init)
 ## @invariants
 ##   - Собираются ВСЕ проблемные модули за один проход (не first-fail-abort)
-##   - strict=False (update φ12/D2): WARN + continue; strict=True (init φ8): FAIL со списком
+##   - strict=False — update-режим WARN+continue (DEPLOY_BEST_EFFORT)
+##   - strict=True — init-режим FAIL со списком проблемных модулей
 ##   - COMPOSE_PROFILES для dry-run = полный infra-список (паритет с CI compose config)
 def _interpolation_dryrun(
     enabled_names: list[str],
@@ -1338,11 +1336,43 @@ def _postflight(
     except Exception as exc:  # noqa: EXC — orphan detection non-fatal (best-effort: DEPLOY_BEST_EFFORT policy)
         logger.warning("[IMP:5][_postflight][orphans] error (non-fatal): %s", exc)
 
+    # ── plan 012 T14 (F-027): контейнеры ВЫКЛЮЧЕННЫХ модулей (enabled:false → снять;
+    #    volumes НЕ затрагиваются — docker rm без -v) ──
+    _reconcile_disabled_module_containers(enabled_names, modules_dir)
+
     # ── litellm-config.yml render (best-effort — existing config kept on failure) ──
     _render_litellm_config(core_dir)
 
 
 # endregion FUNC__postflight
+
+
+# region FUNC__reconcile_disabled_module_containers
+## @purpose  plan 012 T14 (F-027): детекция + снятие контейнеров ВЫКЛЮЧЕННЫХ модулей
+##           (containers only — volumes НЕ затрагиваются, docker rm без -v). Non-fatal.
+## @io       ⇥ enabled_names: list[str], modules_dir: str → ⎋ None
+## @complexity O(D) — D выключенных модулей (compose config + docker ps)
+## @invariants
+##   - ЛЮБОЙ сбой → WARN, never raise (DEPLOY_BEST_EFFORT policy)
+##   - Volumes сохраняются (remove_orphans → docker rm -f, без -v)
+def _reconcile_disabled_module_containers(enabled_names: list[str], modules_dir: str) -> None:
+    """Remove containers of disabled modules (plan 012 T14 / F-027), volumes kept."""
+    try:
+        disabled_orphans = orphan_reconciler.detect_disabled_module_containers(enabled_names, modules_dir)
+        if not disabled_orphans:
+            logger.info("[IMP:7][_postflight][disabled-modules] no disabled-module containers")
+            return
+        removed = orphan_reconciler.remove_orphans(disabled_orphans)
+        logger.info(
+            "[IMP:9][_postflight][disabled-modules] removed %d disabled-module container(s) (volumes kept)",
+            removed,
+        )
+    # ruff: ignore[BLE001] — DEPLOY_BEST_EFFORT: широкий спектр helper-API (git/yaml/jinja/subprocess/docker)
+    except Exception as exc:  # noqa: EXC — disabled-module orphan detection non-fatal (best-effort policy)
+        logger.warning("[IMP:5][_postflight][disabled-modules] error (non-fatal): %s", exc)
+
+
+# endregion FUNC__reconcile_disabled_module_containers
 
 
 # region FUNC__render_litellm_config

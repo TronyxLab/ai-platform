@@ -52,7 +52,7 @@ from pathlib import Path
 from typing import cast
 
 from core.internal.shared import project_yaml as shared_project_yaml
-from core.internal.shared.deploy_paths import letsencrypt_live  # C7/C6: единый резолвер LE-live (118 C7)
+from core.internal.shared.deploy_paths import letsencrypt_live, projects_base  # C7/C6: единый резолвер LE-live (118 C7)
 from core.internal.shared.exceptions import (
     ConfigNotFoundError,
     ConfigParseError,
@@ -200,8 +200,11 @@ def read_node_yaml_projects(node_yaml_path: str) -> list[ProjectEntry]:
 
     ## @purpose — T2.11: локальный парсер node.yaml#projects свёрнут к канону
     ##            NodeYaml.get_project_entries() (единый project-parser, DevPlan 116 B6 D3,
-    ##            invariant «Single project parser canon»). Формат канона — list[ProjectEntry];
+    ##            инвариант «Single project parser canon»). Формат канона — list[ProjectEntry];
     ##            адаптация в месте вызова: фильтр name+domain (как и в прежнем парсере).
+    ##            plan 012 T15 (F-034): БЕЗ expose-фильтра — он применяется в render_all
+    ##            (см. _project_expose_enabled) — здесь сохраняется контракт «все доменные
+    ##            проекты» для call-sites, которым expose-семантика не нужна.
     ## @io — ⇥ node_yaml_path: str — path to node.yaml
     ##       → ⎋ list[ProjectEntry] — projects with non-empty name and domain
     ## @complexity — O(P) where P = number of projects
@@ -241,6 +244,48 @@ def read_node_yaml_projects(node_yaml_path: str) -> list[ProjectEntry]:
 
 
 # endregion FUNC_read_node_yaml_projects
+
+
+# region FUNC__project_expose_enabled
+## @purpose  Проверка expose-флага проекта (plan 012 T15 / F-034): vhost генерируется ТОЛЬКО
+##           для проектов с expose:true в ai-platform.yaml. Root-cause F-034: render_all (batch)
+##           рендерил vhost для ЛЮБОГО доменного проекта node.yaml, НЕ сверяясь с expose —
+##           рассинхрон с single-project путём configure_vhost → load_vhost_config.
+## @io       ⇥ entry: ProjectEntry, projects_base_dir: str | None (DI) → ⎋ bool (True = expose)
+## @complexity O(1) — resolve project dir + read ai-platform.yaml
+## @invariants
+##   - Project dir резолвится как `{projects_base}/{context}/{name}` (контекст из entry.context;
+##     fallback: базовая директория проекта = name)
+##   - ai-platform.yaml отсутствует → WARN + True (не блокировать легитимные домены без конфига)
+##   - expose != true → False (vhost НЕ генерируется — R5-негатив F-034)
+def _project_expose_enabled(entry: ProjectEntry, projects_base_dir: str | None = None) -> bool:
+    """Return True if project ai-platform.yaml has expose:true (or config absent — keep)."""
+    base = Path(projects_base_dir) if projects_base_dir else projects_base()
+    # Орг/контекст: entry.context если задан; иначе parent-резолв невозможен — пробуем name-каталог
+    project_dir = base / entry.context / entry.name if entry.context else base / entry.name
+
+    data = shared_project_yaml.load_project_yaml(project_dir)
+    if not data:
+        logger.warning(
+            "[IMP:7][_project_expose_enabled] ai-platform.yaml not found for %s (resolved %s) — "
+            "keep vhost (domain from node.yaml is authoritative)",
+            entry.name,
+            project_dir,
+        )
+        return True
+
+    expose = shared_project_yaml.get_expose(data)
+    if not expose:
+        logger.info(
+            "[IMP:9][_project_expose_enabled] %s: expose=false — vhost NOT generated (F-034)",
+            entry.name,
+        )
+        return False
+    logger.info("[IMP:8][_project_expose_enabled] %s: expose=true — vhost eligible", entry.name)
+    return True
+
+
+# endregion FUNC__project_expose_enabled
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -917,6 +962,19 @@ def render_all(
         # ── Step 4: Render all vhosts to temp dir ─────────────────
         rendered_vhosts: list[VhostFile] = []
         for entry in entries:
+            # plan 012 T15 (F-034): expose-фильтр — vhost только для expose:true (R5-негатив).
+            # Реальный источник «vhost для expose=false» — render_all БЕЗ сверки с ai-platform.yaml
+            # (в отличие от single-project configure_vhost). Закрыт фильтром здесь.
+            # ⚠️ TRAP[BUG] · 2026-08-26 · F-034 · vhost генерировался для expose=false проектов
+            # · Symptom: node.yaml#projects содержит домен, ai-platform.yaml проекта expose:false —
+            #   render-all создавал vhost (overlay-артефакт), nginx публиковал неэкспонированный проект
+            # · Root: render_all фильтровал ТОЛЬКО name+domain из node.yaml; expose проверялся
+            #   лишь в single-project пути configure_vhost→load_vhost_config — batch-путь рассинхронился
+            # · Fix: _project_expose_enabled() в render_all + remove stale GENERATED vhost ниже;
+            #   e2e-verify (verify_sweep) ожидает ответ только от exposed-доменов
+            # · Prevention: единый expose-контракт в обоих путях рендера; R5-негатив в тестах
+            if not _project_expose_enabled(entry):
+                continue
             logger.info("[IMP:7][render_all] Rendering vhost for %s → %s", entry.name, entry.domain)
             vhost = render_vhost(
                 entry=entry,
@@ -941,6 +999,9 @@ def render_all(
         overlay_dir.mkdir(parents=True, exist_ok=True)
 
         # Remove existing GENERATED vhosts (files with GENERATED marker)
+        # plan 012 T15 (F-034): удаляются ВСЕ прежние GENERATED vhost'ы — устаревшие артефакты
+        # expose=false проектов (рендеренные ранее, до введения expose-фильтра) исчезают:
+        # mv ниже переносит только vhost'ы нового expose-отфильтрованного набора.
         existing_count = 0
         for gen_file in overlay_dir.glob("*.conf"):
             if not gen_file.is_file():

@@ -46,6 +46,7 @@ import os
 import pathlib
 import sys
 import tempfile
+from collections.abc import Mapping
 from copy import deepcopy
 from typing import TypedDict, cast
 
@@ -73,6 +74,10 @@ from core.internal.llm.policy_schema import LLMPolicy
 # REF-0007 (11-DevPlan Волна 1): канонический atomic writer — plaintext JSON-хранилище
 # LLM-ключей пишется mode=0600 ОТ СОЗДАНИЯ (нет окна world-readable в tmpdir)
 from core.internal.shared.atomic_writer import atomic_write_json
+
+# plan 012 T12 (F-020): PLATFORM_STATE_DIR через канонический резолвер deploy_paths
+# (литерал tempfile.gettempdir() удалён из дефолта стора; dev-fallback — WARN+tmp)
+from core.internal.shared.deploy_paths import bootstrap_state_dir, secrets_env_file
 from core.internal.shared.exceptions import PlatformError
 
 # REF-0104 (11-DevPlan Волна 3): FileLock сериализует read-modify-write стора между
@@ -359,11 +364,27 @@ def apply_overrides(
 def get_default_persist_path() -> pathlib.Path:
     """Return the default path for the project keys JSON file.
 
-    ## @purpose  Keys are persisted to PLATFORM_STATE_DIR or temp dir.
+    ## @purpose  Keys are persisted to PLATFORM_STATE_DIR (canonical: /var/lib/platform/.bootstrap)
+    ##           or temp dir on dev (dir unwritable — WARN + fallback).
     ##           SOPS integration planned for Wave 6.
     ## @complexity O(1)
+    ## @invariants
+    ##   - plan 012 T12 (F-022): PLATFORM_STATE_DIR через deploy_paths.bootstrap_state_dir()
+    ##     (литерал tempfile.gettempdir() как дефолт удалён — гейт run_paths_sole)
+    ##   - dev-машина без PLATFORM_STATE_DIR: каноническая дира root-owned → mkdir падает →
+    ##     WARN + tempdir (проверяемый OSError, не молчаливый перехват)
     """
-    return pathlib.Path(os.environ.get("PLATFORM_STATE_DIR", tempfile.gettempdir())) / "litellm-project-keys.json"
+    state_dir = bootstrap_state_dir()
+    try:
+        state_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        logger.warning(
+            "[IMP:7][get_default_persist_path] Canonical state dir %s not writable (%s) — dev fallback to tempdir",
+            state_dir,
+            exc,
+        )
+        state_dir = pathlib.Path(tempfile.gettempdir())
+    return state_dir / "litellm-project-keys.json"
 
 
 def _store_lock_path(persist_path: pathlib.Path) -> pathlib.Path:
@@ -662,7 +683,38 @@ def provision_all(
         persist_path = get_default_persist_path()
 
     with FileLock(_store_lock_path(persist_path), timeout=_LOCK_TIMEOUT_SECONDS):
-        known_keys: list[KeyInfo] = client.list_keys()
+        # plan 012 T12 (F-020/F-021, AC-c): list_keys — транспортный call-site ВНЕ per-consumer
+        # try. LiteLLMTransportError здесь НЕ может быть «no key» (REF-0104) — listing-сбой
+        # означает: мы не знаем существующие ключи → любой generate создал бы дубликаты.
+        # Семантика: все enabled-потребители counted failed → PlatformError в summary.
+        known_keys: list[KeyInfo]
+        try:
+            known_keys = client.list_keys()
+        except LiteLLMTransportError as exc:
+            listing_failed = [
+                str(c.get("name", "unknown")) for c in all_consumers if (c.get("llm") or {}).get("enabled", False)
+            ]
+            failed_consumers.extend(listing_failed)
+            logger.log(
+                logging.WARNING,
+                "[IMP:8][provision_all] list_keys TRANSPORT FAILURE: %s — %d enabled consumer(s) "
+                "counted failed (generate NOT attempted — duplicate-key guard REF-0104)",
+                exc,
+                len(listing_failed),
+            )
+            logger.log(
+                logging.CRITICAL,
+                "[IMP:9][provision_all] Provisioning complete: %d keys provisioned, %d skipped, %d failed: %s",
+                0,
+                len(all_consumers) - len(listing_failed),
+                len(failed_consumers),
+                failed_consumers or "none",
+            )
+            listing_msg = (
+                f"LLM Admin API listing failed (transport): {exc} — "
+                "phase NOT done; generate suppressed to avoid duplicate keys"
+            )
+            raise PlatformError(listing_msg) from exc
         logger.log(
             logging.INFO,
             "[IMP:8][provision_all] Fetch-once index built: %d existing key(s) downloaded in 1 list_keys() call",
@@ -882,6 +934,87 @@ def provision_all(
 # endregion PROVISION_CORE
 
 
+# region FUNC__resolve_master_key
+## @purpose  Резолв LITELLM_MASTER_KEY: CLI-флаг → env → secrets.env ноды (plan 012 T12 / F-020).
+##           Файловый fallback закрывает deploy-context цепочку: provision-llm.sh вызывается
+##           subprocess'ом из llm_provision.py (env-less) — ключ приходит из secrets.env,
+##           а не из env-дерева вызова.
+## @io       ⇥ cli_value: str | None, env: Mapping | None (DI) → ⎋ str (пустая при отсутствии)
+## @complexity O(S) — чтение secrets.env при непустом env-фолбэке (только если CLI/env пусты)
+## @invariants
+##   - Приоритет: CLI > env > secrets_env_file() > "" (main печатает ошибку на "")
+##   - secrets.env читается через канонический парсер shared/secrets_env_parser
+##   - Пустая строка = источник отсутствует (не ошибка на этом уровне)
+def _resolve_master_key(
+    cli_value: str | None,
+    env: Mapping[str, str] | None = None,
+) -> str:
+    source = os.environ if env is None else env
+    if cli_value:
+        logger.log(logging.INFO, "[IMP:8][_resolve_master_key] Using CLI --master-key")
+        return cli_value
+    env_key = str(source.get("LITELLM_MASTER_KEY") or "")
+    if env_key:
+        logger.log(logging.INFO, "[IMP:8][_resolve_master_key] Using LITELLM_MASTER_KEY env")
+        return env_key
+    secrets_path = secrets_env_file(source)
+    if secrets_path.is_file():
+        from core.internal.shared.secrets_env_parser import parse as parse_secrets_env
+
+        secrets = parse_secrets_env(str(secrets_path), strict=False)
+        file_key = str(secrets.get("LITELLM_MASTER_KEY") or "")
+        if file_key:
+            logger.log(
+                logging.INFO,
+                "[IMP:9][_resolve_master_key] LITELLM_MASTER_KEY resolved from %s (F-020)",
+                secrets_path,
+            )
+            return file_key
+        logger.log(
+            logging.INFO,
+            "[IMP:7][_resolve_master_key] %s exists but has no LITELLM_MASTER_KEY",
+            secrets_path,
+        )
+    return ""
+
+
+# endregion FUNC__resolve_master_key
+
+
+# region FUNC__ensure_local_proxy_neutral
+## @purpose  Host-run proxy-нейтральность (plan 012 T12 / F-022): когда base_url указывает
+##           на локальный фасад (127.0.0.1/localhost/litellm), HTTP(S)_PROXY не должен
+##           перехватывать loopback-трафик (httpx trust_env читает env-proxy и ломает
+##           connect к 127.0.0.1:4000). Метод: setdefault NO_PROXY для локальных хостов;
+##           явный CLI --no-proxy приоритетен.
+## @io       ⇥ base_url: str, no_proxy: str | None (DI) → ⎋ None (мутирует os.environ)
+## @complexity O(1)
+## @invariants
+##   - Применяется ТОЛЬКО когда host base_url — loopback/litellm (host-run на ноде/dev)
+##   - NO_PROXY добавляется setdefault-семантикой (существующий не затирается)
+def _ensure_local_proxy_neutral(base_url: str, no_proxy: str | None = None) -> None:
+    local_hosts = {"127.0.0.1", "localhost", "::1", "litellm"}
+    host = (
+        base_url.split("://", 1)[-1].split("/", 1)[0].split(":", 1)[0]
+        if "://" in base_url
+        else base_url.split(":", 1)[0]
+    )
+    if host not in local_hosts:
+        return
+    current = no_proxy if no_proxy is not None else os.environ.get("NO_PROXY", "")
+    merged = ",".join(part for part in (current, "127.0.0.1,localhost,::1,litellm") if part)
+    os.environ["NO_PROXY"] = merged
+    logger.log(
+        logging.INFO,
+        "[IMP:8][_ensure_local_proxy_neutral] Local facade %s — NO_PROXY=%s (F-022)",
+        host,
+        merged,
+    )
+
+
+# endregion FUNC__ensure_local_proxy_neutral
+
+
 # region CLI
 
 
@@ -916,8 +1049,8 @@ def _parse_args(argv: list[str] | None = None) -> CliArgs:
     parser.add_argument(
         "--base-url",
         type=str,
-        default=_DEFAULT_BASE_URL,
-        help=f"LiteLLM base URL (default: {_DEFAULT_BASE_URL})",
+        default=os.environ.get("LITELLM_BASE_URL", _DEFAULT_BASE_URL),
+        help=f"LiteLLM base URL (default: $LITELLM_BASE_URL → {_DEFAULT_BASE_URL})",
     )
     parser.add_argument(
         "--policy",
@@ -978,14 +1111,17 @@ def main(argv: list[str] | None = None) -> int:
     """
     args = _parse_args(argv)
 
-    # Resolve master key: CLI arg → env var
-    master_key = args.master_key or os.environ.get("LITELLM_MASTER_KEY", "")
+    # Resolve master key: CLI arg → env → secrets.env (plan 012 T12 F-020)
+    master_key = _resolve_master_key(args.master_key)
     if not master_key:
         logger.log(
             logging.CRITICAL,
-            "[IMP:10][main] LITELLM_MASTER_KEY not provided — use --master-key or set env var",
+            "[IMP:10][main] LITELLM_MASTER_KEY not provided — use --master-key, set env var, or add it to secrets.env",
         )
-        print("ERROR: LITELLM_MASTER_KEY is required (--master-key or LITELLM_MASTER_KEY env var)", file=sys.stderr)
+        print(
+            "ERROR: LITELLM_MASTER_KEY is required (--master-key | LITELLM_MASTER_KEY env | secrets.env)",
+            file=sys.stderr,
+        )
         return 1
 
     # Resolve policy path
@@ -993,6 +1129,9 @@ def main(argv: list[str] | None = None) -> int:
 
     # Resolve persist path
     persist_path = pathlib.Path(args.persist) if args.persist else None
+
+    # plan 012 T12 (F-022): host-run provision нейтрален к proxy для локальных фасадов
+    _ensure_local_proxy_neutral(args.base_url)
 
     logger.log(
         logging.INFO,
@@ -1013,7 +1152,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return e.exit_code
     # ruff: ignore[BLE001] — top-level CLI handler for unknown exceptions
-    except Exception as e:  # noqa: EXC — top-level CLI handler for unknown exceptions
+    except Exception as e:  # noqa: EXC001 — top-level CLI handler for unknown exceptions
         logger.log(
             logging.CRITICAL,
             "[IMP:10][main] Provisioning failed: %s: %s",

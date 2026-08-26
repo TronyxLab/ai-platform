@@ -16,6 +16,7 @@
 ## @changes  2026-08-04 | DevPlan 132 W1 — created
 # endregion MODULE_CONTRACT
 
+import datetime
 import json
 import logging
 import subprocess
@@ -48,11 +49,20 @@ class FakeFacts:
         return False
 
 
-def _inspect_json(name, health, restart_count=0, restart_policy="unless-stopped") -> list:
+def _inspect_json(
+    name,
+    health,
+    restart_count=0,
+    restart_policy="unless-stopped",
+    started_at=None,
+) -> list:
     """Build docker inspect JSON output for a single container."""
     state: dict = {"RestartCount": restart_count}
     if health is not None:
         state["Health"] = {"Status": health}
+    if started_at is not None:
+        # plan 012 T13 (F-026): StartedAt (ISO-8601) — вход window-детекции
+        state["StartedAt"] = started_at
     return [
         {
             "Name": f"/{name}",
@@ -240,7 +250,8 @@ def test_restart_no_policy_excluded(state_file: Path, caplog) -> None:
 def test_restart_count_over_5_skipped(state_file: Path, caplog) -> None:
     """CrashLoopBackOff (RestartCount > 5) — restart не лечит, watchdog пропускает (is_n_loop канон)."""
     caplog.set_level(logging.INFO)
-    containers = [_inspect_json("litellm", "unhealthy", restart_count=6)]
+    # plan 012 T13 (F-026): loop только при старте В окне — StartedAt 60s назад
+    containers = [_inspect_json("litellm", "unhealthy", restart_count=6, started_at="2026-08-26T00:00:01+00:00")]
 
     exit_code, fake = _run(containers, state_file, now=100.0)
 
@@ -458,7 +469,9 @@ def test_failed_restart_does_not_block_other_actions(state_file: Path, caplog) -
 def test_crashloop_skip_notifies_suppresses_and_cleans(state_file: Path, caplog) -> None:
     """Crash-loop: notify → suppress → cleanup (полный жизненный цикл skip-path)."""
     caplog.set_level(logging.INFO)
-    containers = [_inspect_json("litellm", "unhealthy", restart_count=6)]
+    # plan 012 T13 (F-026): loop требует старт В окне — StartedAt 60s назад от now=1000.0
+    started_iso = datetime.datetime.fromtimestamp(940.0, tz=datetime.timezone.utc).isoformat()
+    containers = [_inspect_json("litellm", "unhealthy", restart_count=6, started_at=started_iso)]
 
     # ── Pass 1: детекция + первая нотификация ──
     fake1 = FakeDocker(containers)
@@ -720,3 +733,72 @@ def test_resave_oserror_does_not_block_batch(state_file: Path, caplog, monkeypat
 
 
 # endregion QA_R4_T2D_WATCHDOG
+
+
+# ═══════════════════════════════════════════════════════════════════
+# plan 012 T13 (F-026): window-based restart-детекция
+# ═══════════════════════════════════════════════════════════════════
+
+_NOW_T13 = 1785110400.0  # 2026-07-26T00:00:00Z — фиксированный «сейчас» для детерминизма
+
+
+# 🧪 TRAP[TEST] · REGRESSION · plan 012 T13 F-026 · lifetime RestartCount не триггерит loop
+# · Scenario: RestartCount=14 (деплой-пересоздания) + аптайм 46 мин (StartedAt вне окна) +
+#   unhealthy → НЕ crash-loop → watchdog РЕСТАРТИТ (легитимный unhealthy рестарт)
+# · Last fail: F-026 — RestartCount>5 без окна блокировал рестарт (skip-path) несмотря на
+#   долгий здоровый аптайм; E-сценарий «Up 46 мин healthy после 14 деплой-рестартов» → FAIL
+# · Remove if: window-детекция перенесена в другой слой
+def test_lifetime_restarts_with_long_uptime_are_restarted(state_file: Path, caplog) -> None:
+    """F-026 E-сценарий: RestartCount=14, аптайм 46 мин → рестарт (не crash-loop)."""
+    caplog.set_level(logging.INFO)
+    # now - 46*60 = старт 46 мин назад (вне окна 15 мин); unhealthy_since 11 мин назад (≥10 мин порог)
+    started_iso = datetime.datetime.fromtimestamp(_NOW_T13 - 46 * 60, tz=datetime.timezone.utc).isoformat()
+    state_file.write_text(
+        json.dumps({"unhealthy_since": {"litellm": _NOW_T13 - 11 * 60}, "last_restart": {}}), encoding="utf-8"
+    )
+    containers = [_inspect_json("litellm", "unhealthy", restart_count=14, started_at=started_iso)]
+
+    exit_code, fake = _run(containers, state_file, now=_NOW_T13)
+
+    assert exit_code == 0
+    assert fake.restart_calls != [], "F-026 FAIL: долгий аптайм + RestartCount=14 обязан рестартиться"
+    saved = json.loads(state_file.read_text(encoding="utf-8"))
+    assert "litellm" in saved.get("unhealthy_since", {}), "unhealthy tracked"
+    logger.info("[IMP:9][test_watchdog][F-026] lifetime restarts + long uptime → restart PASS")
+
+
+# 🧪 TRAP[TEST] · REGRESSION · plan 012 T13 F-026 · рестарты В окне → crash-loop skip
+# · Scenario: RestartCount=6 + старт 2 мин назад (в окне) + unhealthy → crash-loop →
+#   skip restart + TG «не рестарчу» (старый контракт T2.6 сохранён для активных loop'ов)
+# · Remove if: window-детекция перенесена в другой слой
+def test_recent_restarts_in_window_trip_crashloop(state_file: Path, caplog) -> None:
+    """F-026: рестарты В скользящем окне → crash-loop skip (T2.6 канон для активных loop'ов)."""
+    caplog.set_level(logging.INFO)
+    started_iso = datetime.datetime.fromtimestamp(_NOW_T13 - 2 * 60, tz=datetime.timezone.utc).isoformat()
+    containers = [_inspect_json("litellm", "unhealthy", restart_count=6, started_at=started_iso)]
+
+    exit_code, fake = _run(containers, state_file, now=_NOW_T13)
+
+    assert exit_code == 0
+    assert fake.restart_calls == [], "активный loop (старт в окне) — рестарт запрещён"
+    assert fake.notify_calls, "crash-loop skip-path обязан TG-нотифицировать (REF-0014)"
+    logger.info("[IMP:9][test_watchdog][F-026] recent restarts in window → crash-loop PASS")
+
+
+# 🧪 TRAP[TEST] · REGRESSION · plan 012 T13 F-026 · started_at неизвестен → НЕ loop
+# · Scenario: RestartCount=7, StartedAt отсутствует (старый docker/другой формат) →
+#   консервативно НЕ loop → рестарт (легитимные пересоздания не ложно-блокируются)
+# · Remove if: StartedAt гарантирован docker API
+def test_unknown_started_at_not_crashloop(state_file: Path, caplog) -> None:
+    """F-026: started_at=None → консервативно НЕ loop (рестарт разрешён)."""
+    caplog.set_level(logging.INFO)
+    state_file.write_text(
+        json.dumps({"unhealthy_since": {"litellm": _NOW_T13 - 11 * 60}, "last_restart": {}}), encoding="utf-8"
+    )
+    containers = [_inspect_json("litellm", "unhealthy", restart_count=7)]  # без StartedAt
+
+    exit_code, fake = _run(containers, state_file, now=_NOW_T13)
+
+    assert exit_code == 0
+    assert fake.restart_calls != [], "started_at=None не должен блокировать рестарт (F-026)"
+    logger.info("[IMP:9][test_watchdog][F-026] unknown started_at → restart PASS")
