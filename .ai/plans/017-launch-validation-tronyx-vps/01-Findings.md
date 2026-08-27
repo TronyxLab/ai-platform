@@ -137,3 +137,49 @@ B1 secrets-unlock: ✅ 58 ключей расшифрованы (AGE chain ок)
 ### NOTE-N2 · телеметрия
 docker_compose_build/pull обрезают stderr до 200 символов — при диагностике
 реальных причинloses. Rev: повысить лимит/писать полный stderr в spool-лог.
+
+---
+
+## ФАЗА B — ПРОДОЛЖЕНИЕ (03:50–04:12)
+
+### F-04 · 04:00 · Фаза B · P0
+- Симптом: φ8 context_deployer «Complete deployed=0 skipped=0 failed=0» при 4
+  resolved-проектах; все → awaiting_deploy (GENERATED-STUB guard), счётчики
+  невидимы для awaiting; фаза помечена success → маскировка.
+- Гипотеза→подтверждение: у контекста нет канала cold-delivery: ghcr образы
+  проектов ABSENT ×4; stub-guard отдаёт awaiting без попытки реального деплоя.
+- Фикс (Coder): новая ЛОКАЛЬНАЯ фаза bootstrap — core/internal/deploy/
+  project_payload_delivery.py: после remote init entrypoint delivers payload
+  каждого локального проекта ~/projects/<ctx>/<name> через продовый канал
+  orchestrator_cli deliver (forced-command receive → ReceiveFlow → compose up
+  → healthcheck → snapshot → hooks); старый stub-guard нетронут.
+- Ре-верификация: резюм №3 → delivered=3 skipped=1(no_local_source oldapp)
+  failed=0; Trinity: tronyx-site/dance-site/botanika DEPLOYED healthy.
+- Статус: fixed
+- Evidence: logs/make/20260827-04????-bootstrap...log, snapshots на ноде
+  /opt/projects/*/.deploy-snapshots/.
+
+### F-05 · 04:08 · Фаза B · P1
+- Симптом: post-deploy hook nginx rc=1 «unknown shorthand flag: 'T'» —
+  успешный деплой проекта помечался FAILED (fail-loud P0-3), bootstrap.rc=2.
+- Root: nginx_reload_hook.sh::run_in_nginx использовал `docker exec -T` —
+  флаг `-T` существует только у compose exec; ручной docker exec зелёный.
+- Фикс: primary-ветка без -T (stdin не нужен), compose-fallback сохранён;
+  TRAP[BUG] инлайн. Single-file SCP как оперативный канал.
+- Ре-верификация: хук на ноде RC=0 reload OK; повторный полный цикл
+  delivery×3 exit=0 DEPLOYED×3.
+- Статус: fixed
+
+### NOTE-N3 · параллельный писатель на dev-машине
+Документированные самовольные изменения вне сессии: коммит d5b3e83 (tsconfig),
+пересоздание пустого projects/asi-faq ×3, ОТКАТ локального node.yaml к версии
+с oldapp в 02:36 (нанёс resume-прогону stale-конфиги). Подозреваемый —
+живая worktree-сессия .worktrees/013-resilience-drills + множественные kilo
+serve. Владельцу рекомендовано закрыть чужую сессию перед промоутом.
+Митигация этой сессии: re-apply решения владельца (remove-project) перед
+каждой нодовой операцией; гейт no-empty-dirs расширён skip 'projects'.
+
+### NOTE-N4 · телеметрия ReceiveFlow
+audit.jsonl Permission denied (ci-deploy пишет в root-owned
+/var/log/platform/audit.jsonl) — записи dropped. Требует chown/tmpfiles.d
+фикса ноды (закрыть в Фазе E или отдельным фикс-таском).

@@ -51,7 +51,6 @@ main() {
         NODE_NAME=$(python3 -m core.internal.shared.node_detect --detect-node-name 2>/dev/null) || { echo "[IMP:10][bootstrap][entrypoint] FATAL: Cannot detect node — use make bootstrap-node NODE=<name>" >&2; exit 1; }
         echo "[IMP:9][bootstrap][entrypoint] Auto-detected NODE_NAME=${NODE_NAME}"
     fi
-    # Резолв node.yaml (3-path) + полей + CONTEXT fallback + owner_key + host — bootstrap_resolver.py (170 W9-F1)
     echo "[IMP:8][bootstrap][entrypoint] Resolving node.yaml + fields via bootstrap_resolver (node=${NODE_NAME})"
     RESOLVE_OUTPUT="$(python3 -m core.internal.bootstrap.bootstrap_resolver resolve --node "${NODE_NAME}" --platform-root "${PLATFORM_ROOT}")" || {
         local _resolve_rc=$?; echo "[IMP:10][bootstrap][entrypoint] FATAL: bootstrap_resolver resolve failed (rc=${_resolve_rc})" >&2; exit "${_resolve_rc}"
@@ -70,10 +69,8 @@ main() {
     if [[ -z "${SSH_HOST}" ]]; then
         echo "[IMP:9][bootstrap][entrypoint] No SSH host — executing node-lifecycle.sh --mode init LOCALLY"
         local a=(--node-name "$NODE_NAME" --node-yaml "$NODE_YAML" --owner-key "$OWNER_KEY" --resume)
-        [[ -n "${DETECTED_AGE_KEY}" ]] && a+=(--age-secret-key "${DETECTED_AGE_KEY}")
-        [[ -n "${CI_DEPLOY_KEY}" ]] && a+=(--ci-deploy-key "${CI_DEPLOY_KEY}")
-        [[ -n "${CI_ROOT_KEY}" ]] && a+=(--ci-root-key "${CI_ROOT_KEY}")
-        [[ -n "${PLATFORM_DOMAIN:-}" ]] && a+=(--platform-domain "${PLATFORM_DOMAIN}")
+        [[ -n "${DETECTED_AGE_KEY}" ]] && a+=(--age-secret-key "${DETECTED_AGE_KEY}"); [[ -n "${CI_DEPLOY_KEY}" ]] && a+=(--ci-deploy-key "${CI_DEPLOY_KEY}")
+        [[ -n "${CI_ROOT_KEY}" ]] && a+=(--ci-root-key "${CI_ROOT_KEY}"); [[ -n "${PLATFORM_DOMAIN:-}" ]] && a+=(--platform-domain "${PLATFORM_DOMAIN}")
         [[ -n "${CONTEXT:-}" ]] && a+=(--context "${CONTEXT}")
         a+=("${PASSTHROUGH_ARGS[@]}")
         $DRY_RUN && { echo "[IMP:8][bootstrap][dry-run] DRY-RUN: ${NODE_LIFECYCLE} ${a[*]}" >&2; exit 0; }
@@ -89,12 +86,14 @@ main() {
         scp_to_server "${SSH_HOST}" "${NODE_NAME}" "${NODE_CONFIGS_DIR}" "${CORE_DIR}" || { echo "[IMP:10][bootstrap][entrypoint] FATAL: SCP phase failed" >&2; exit 1; }
         echo "[IMP:9][bootstrap][scp] SCP phase complete"
     fi
-    # REF-0007 (11-DevPlan В1): AGE/ci-ключи ВНЕ argv — secret-prelude через ssh-stdin (`bash -s`).
     # 🧐 TRAP[DECISION] · 2026-08-24 · stdin→bash -s вместо SCP 0600 root-file+unset · Rejected: prelude-файл на ноде · Reason: crash между scp и rm оставляет plaintext-ключ на диске (SEC-0015 класс), stdin не оставляет артефактов · Rev: потоковый канал >1MB prelude (не ожидается) — пересмотреть
     REMOTE_CMD="$(build_ssh_cmd "${NODE_NAME}" "${OWNER_KEY}" "${CI_DEPLOY_KEY}" "${DETECTED_AGE_KEY}" "${CI_ROOT_KEY}" "${PASSTHROUGH_ARGS[@]}")"; SECRET_PRELUDE="$(build_init_secret_prelude "${CI_DEPLOY_KEY}" "${DETECTED_AGE_KEY}" "${CI_ROOT_KEY}")"
     # DRY-RUN печатает ТОЛЬКО тело (значения prelude НЕ логируются — размер в байтах)
     $DRY_RUN && { echo "[IMP:8][bootstrap][dry-run] DRY-RUN: ssh ${SSH_OPTS_COMMON[*]} root@${SSH_HOST} 'bash -s' <<< stdin(prelude=${#SECRET_PRELUDE}B [redacted] + remote-cmd)" >&2; echo "[IMP:8][bootstrap][dry-run] DRY-RUN remote cmd: ${REMOTE_CMD}" >&2; echo "[IMP:9][bootstrap][dry-run] DRY-RUN complete" >&2; exit 0; }
     echo "[IMP:9][bootstrap][entrypoint] SSH node-lifecycle.sh --mode init on root@${SSH_HOST} (keys via stdin prelude)"
     ssh_exec_stdin "${SSH_HOST}" "${SECRET_PRELUDE}" "${REMOTE_CMD}"
+    # P0 (017): deliver context project payloads (operator sources ~/projects/<ctx>/<p>/) after SSH init — awaiting_deploy → live (orchestrator receive, compose up; rc: 0 ok / 2 failed)
+    echo "[IMP:8][bootstrap][projects] Delivering context project payloads (node=${NODE_NAME})"
+    python3 -m core.internal.deploy.project_payload_delivery --node "${NODE_NAME}" --node-yaml "${NODE_YAML}" || { _ppd_rc=$?; echo "[IMP:10][bootstrap][projects] FATAL: project payload delivery failed (rc=${_ppd_rc}) — ≥1 context project not live" >&2; exit "${_ppd_rc}"; }
 }
 main "$@"

@@ -63,8 +63,15 @@ export NGINX_OVERLAY_DIR
 run_in_nginx() {
     # Primary: docker exec по каноническому container_name (base.yml: container_name:nginx) —
     # БЕЗ compose-интерполяции. Fallback: compose exec c собранным self-env.
+    # ⚠️ TRAP[BUG] · 2026-08-27 · P1 · «unknown shorthand flag: 'T' in -T» на docker exec
+    # · Symptom: nginx_reload_hook rc=1 на ноде при зелёном ручном `docker exec nginx nginx -t`;
+    #   post-deploy chain помечал УСПЕШНЫЙ деплой проекта как FAILED (fail-loud P0-3).
+    # · Root: `-T` — флаг `docker compose exec`; у голого `docker exec` его нет.
+    # · Fix: без -T в primary-ветке (stdin не подключается — tty не нужен), -T сохранён
+    #   в compose-fallback (там требуется в no-tty контексте).
+    # · Prevention: contract-тест на флаги exec в tests/gates.
     if docker container inspect nginx >/dev/null 2>&1; then
-        docker exec -T nginx "$@"
+        docker exec nginx "$@"
     else
         docker compose exec -T nginx "$@"
     fi

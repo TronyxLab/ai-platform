@@ -284,6 +284,11 @@ ignore = [
 "core/entrypoints/check_commit_msg.py" = ['print']
 "core/internal/bootstrap/converge/reconciler.py" = ['print']
 "core/internal/bootstrap/deploy/compose_preflight.py" = ['print']
+
+# P0 (DevPlan 017): bootstrap project-payload delivery — CLI stdout-контракт summary для
+# bootstrap.sh (per-project строки + delivered/skipped/failed, видимость оператору);
+# печать — stdout-контракт фазы (паттерн context_deployer.py, files/ruff_policy.md §2)
+"core/internal/deploy/project_payload_delivery.py" = ['print']
 "core/internal/bootstrap/deploy/secrets_validator.py" = ['print']
 "core/internal/bootstrap/discover_modules.py" = ['print']
 "core/internal/bootstrap/topo_sort.py" = ['print']
