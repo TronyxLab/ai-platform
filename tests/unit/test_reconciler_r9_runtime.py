@@ -601,3 +601,272 @@ def test_empty_node_green(tmp_path, caplog, node_yaml_with_modules, mock_modules
 
 
 # endregion QA_R4_T2D
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Phase E 017 (F-017) — name-fallback резолва + DISABLED-FLOW (compose down)
+# ═══════════════════════════════════════════════════════════════════
+
+
+def _e017_env(tmp_path, mod: str = "status-page", enabled: bool = True):
+    """node.yaml с одним модулем + modules dir с его compose-файлом (Phase E 017)."""
+    yaml_path = tmp_path / "node.yaml"
+    yaml_path.write_text(
+        f"context: test-context\nmodules:\n  - name: {mod}\n    enabled: {str(enabled).lower()}\nprojects: []\n",
+        encoding="utf-8",
+    )
+    mod_dir = tmp_path / "modules" / mod
+    mod_dir.mkdir(parents=True)
+    compose = mod_dir / "docker-compose.yml"
+    compose.write_text(f"version: '3'\nservices:\n  {mod}:\n    image: {mod}:latest\n", encoding="utf-8")
+    return str(yaml_path), str(tmp_path / "modules"), compose
+
+
+def _e017_config_json(mod: str = "status-page") -> str:
+    """docker compose config --format json: U-49 project=platform, сервис модуля с container_name."""
+    return json.dumps({
+        "name": "platform",
+        "services": {mod: {"name": mod, "container_name": mod, "image": f"{mod}:latest"}},
+    })
+
+
+def _e017_mock_run(
+    *,
+    label_out: str = "",
+    name_out: str = "",
+    diag_out: str = "",
+    config_json: str = "",
+    inspect_state: str = "running",
+    restart_policy: str = "unless-stopped",
+    compose_up_calls: list | None = None,
+    compose_down_calls: list | None = None,
+    ps_cmds: list | None = None,
+):
+    """Fake docker runner Phase E 017: label-miss → name-fallback; compose config JSON; down/up capture.
+
+    ## @purpose — Дистинкция каналов docker ps: label-фильтр (project=module) → label_out;
+    ##            name-фильтр (fallback) → name_out; label-колонка diag (unlabeled-guard) → diag_out.
+    ##            docker compose config → config_json (rc=0); compose down/up захватываются.
+    ## @invariants — 0 monkeypatch внутренних функций: патчится ТОЛЬКО subprocess.run (граница docker CLI).
+    """
+
+    def mock_run(cmd, *args, **kwargs):
+        cmd_str = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
+
+        def cp(rc: int = 0, out: str = "", err: str = ""):
+            return subprocess.CompletedProcess(args=cmd, returncode=rc, stdout=out, stderr=err)
+
+        if "docker info" in cmd_str:
+            return cp(0)
+        if "docker compose" in cmd_str and "config" in cmd_str:
+            return cp(0, config_json)
+        if "docker ps" in cmd_str:
+            if "{{.Label" in cmd_str:  # unlabeled diag (QA R4/T2.D)
+                return cp(0, diag_out)
+            if "--filter" in cmd_str:
+                if ps_cmds is not None:
+                    ps_cmds.append(list(cmd))
+                if "name=" in cmd_str:
+                    return cp(0, name_out)
+                return cp(0, label_out)
+            return cp(0, "")
+        if "docker compose" in cmd_str and "down" in cmd_str:
+            if compose_down_calls is not None:
+                compose_down_calls.append(list(cmd))
+            return cp(0)
+        if "docker compose" in cmd_str and "up" in cmd_str and "-d" in cmd_str:
+            if compose_up_calls is not None:
+                compose_up_calls.append(list(cmd))
+            return cp(0)
+        if "docker inspect" in cmd_str and "RestartPolicy.Name" in cmd_str:
+            return cp(0, restart_policy)
+        if "docker inspect" in cmd_str and "State.Status" in cmd_str:
+            return cp(0, inspect_state)
+        return cp(0)
+
+    return mock_run
+
+
+# 🧪 TRAP[TEST] · Phase E 017 (F-017) · POSITIVE · label-miss → name-fallback находит контейнер
+# · Scenario: U-49 деплой (все контейнеры project=platform) — label=com.docker.compose.project=<module>
+# ·   даёт 0 рядов; fallback берёт канонические имена из compose config и docker ps --filter name=<canonical>
+# · Last fail: 2026-08-27 (живая нода Phase E) — для каждого модуля «No running containers»/self-heal вслепую
+# · Remove if: R9 вернётся к label-only детекции ИЛИ механизм резолва контейнеров изменится
+@pytest.mark.usefixtures("reset_state")
+@ldd_trajectory
+def test_r9_fallback_name_detection_finds_container(tmp_path, caplog):
+    """Phase E 017: label-miss → name-fallback находит running-контейнер (контейнер виден R9)."""
+    caplog.set_level(logging.INFO)
+    logger.info("[IMP:9][test] E017 name-fallback — label-miss resolved via docker ps --filter name=")
+
+    node_yaml, modules_dir, _compose = _e017_env(tmp_path, enabled=True)
+    cooldown_file = tmp_path / ".converge_cooldown.json"
+    ps_cmds: list[list[str]] = []
+    compose_up_calls: list[list[str]] = []
+    compose_down_calls: list[list[str]] = []
+
+    with patch.object(
+        subprocess,
+        "run",
+        side_effect=_e017_mock_run(
+            label_out="",  # U-49: 0 рядов по label=project=status-page
+            name_out="status-page\n",
+            config_json=_e017_config_json(),
+            inspect_state="running",
+            ps_cmds=ps_cmds,
+            compose_up_calls=compose_up_calls,
+            compose_down_calls=compose_down_calls,
+        ),
+    ):
+        entry = reconciler.reconcile_runtime_state(
+            node_yaml_path=node_yaml,
+            modules_dir=modules_dir,
+            cooldown_file=str(cooldown_file),
+        )
+
+    assert entry["unit"] == "R9"
+    assert entry["status"] == "converged", f"fallback-детекция обязана видеть running-контейнер: {entry}"
+    assert compose_up_calls == [], "running-контейнер не требует heal"
+    assert compose_down_calls == [], "enabled-модуль не требует down"
+    name_filters = [flt for cmd in ps_cmds for flt in cmd if flt.startswith("name=") and "label=" not in flt]
+    assert name_filters, f"Phase E 017 FAIL: fallback name= фильтр не вызывался: {ps_cmds}"
+    assert any(flt == "name=status-page" for flt in name_filters), f"имя status-page не запрошено: {name_filters}"
+    logger.info("[IMP:9][test] E017 verified: label-miss → name-fallback нашёл контейнер (status=converged)")
+
+
+# 🧪 TRAP[TEST] · Phase E 017 (F-017) · REGRESSION · enabled-модуль самохил как раньше (через fallback)
+# · Scenario: label-miss + fallback находит exited-контейнер (unless-stopped) → self-heal compose up -d
+# · Last fail: 2026-08-27 (Phase E) — при label-miss прежний код говорил «No running containers»
+# · Remove if: R9 перестанет self-heal'ить exited-контейнеры enabled-модулей
+@pytest.mark.usefixtures("reset_state")
+@ldd_trajectory
+def test_r9_enabled_module_selfheal_regression(tmp_path, caplog):
+    """Phase E 017: enabled-модуль с exited-контейнером (найденным по имени) → compose up -d."""
+    caplog.set_level(logging.INFO)
+    logger.info("[IMP:9][test] E017 regression — enabled-модуль самохил через name-fallback")
+
+    node_yaml, modules_dir, _compose = _e017_env(tmp_path, enabled=True)
+    cooldown_file = tmp_path / ".converge_cooldown.json"
+    compose_up_calls: list[list[str]] = []
+    compose_down_calls: list[list[str]] = []
+    ps_cmds: list[list[str]] = []
+
+    with patch.object(
+        subprocess,
+        "run",
+        side_effect=_e017_mock_run(
+            label_out="",
+            name_out="status-page\n",
+            config_json=_e017_config_json(),
+            inspect_state="exited",
+            restart_policy="unless-stopped",
+            ps_cmds=ps_cmds,
+            compose_up_calls=compose_up_calls,
+            compose_down_calls=compose_down_calls,
+        ),
+    ):
+        entry = reconciler.reconcile_runtime_state(
+            node_yaml_path=node_yaml,
+            modules_dir=modules_dir,
+            cooldown_file=str(cooldown_file),
+        )
+
+    assert entry["unit"] == "R9"
+    assert entry["status"] == "mutated", f"exited-контейнер обязан быть вылечен: {entry}"
+    assert len(compose_up_calls) == 1, f"ровно один compose up -d: {compose_up_calls}"
+    up_cmd = compose_up_calls[0]
+    assert "up" in up_cmd and "-d" in up_cmd, f"up -d не вызван: {up_cmd}"
+    assert not any(tok == "-v" for tok in up_cmd), f"self-heal не должен трогать volumes: {up_cmd}"
+    assert compose_down_calls == [], "enabled-модуль не должен вызывать down"
+    logger.info("[IMP:9][test] E017 regression verified: enabled-модуль healed via fallback-detection")
+
+
+# 🧪 TRAP[TEST] · Phase E 017 (F-017) · POSITIVE · disabled-модуль с запущенным контейнером → down БЕЗ -v
+# · Scenario: status-page.enabled=false, контейнер жив (найден по имени) → compose down <service>
+# ·   с каноническим argv (--profile) и --timeout, БЕЗ -v (volumes не трогаются, O7/DD10)
+# · Last fail: 2026-08-27 (живая нода Phase E) — enabled:false НЕ останавливал работающий healthy-контейнер
+# · Remove if: R9 перестанет останавливать контейнеры disabled-модулей
+@pytest.mark.usefixtures("reset_state")
+@ldd_trajectory
+def test_r9_disabled_module_stops_running_container(tmp_path, caplog):
+    """Phase E 017: disabled-модуль с живым контейнером → docker compose down (без -v)."""
+    caplog.set_level(logging.INFO)
+    logger.info("[IMP:9][test] E017 disabled-flow — живой контейнер disabled-модуля останавливается")
+
+    node_yaml, modules_dir, _compose = _e017_env(tmp_path, enabled=False)
+    cooldown_file = tmp_path / ".converge_cooldown.json"
+    compose_down_calls: list[list[str]] = []
+    compose_up_calls: list[list[str]] = []
+
+    with patch.object(
+        subprocess,
+        "run",
+        side_effect=_e017_mock_run(
+            label_out="",
+            name_out="status-page\n",
+            config_json=_e017_config_json(),
+            inspect_state="running",
+            compose_down_calls=compose_down_calls,
+            compose_up_calls=compose_up_calls,
+        ),
+    ):
+        entry = reconciler.reconcile_runtime_state(
+            node_yaml_path=node_yaml,
+            modules_dir=modules_dir,
+            cooldown_file=str(cooldown_file),
+        )
+
+    assert entry["unit"] == "R9"
+    assert entry["status"] == "mutated", f"disabled-модуль с контейнером обязан дать mutated: {entry}"
+    assert compose_down_calls, "Phase E 017 FAIL: compose down не вызван для disabled-модуля"
+    for cmd in compose_down_calls:
+        assert "down" in cmd, f"команда не down: {cmd}"
+        assert not any(tok in {"-v", "--volumes"} for tok in cmd), (
+            f"Phase E 017 FAIL: volumes НЕ должны удаляться (O7/DD10): {cmd}"
+        )
+        assert "--profile" in cmd, f"канон build_compose_args требует --profile: {cmd}"
+        assert "--timeout" in cmd, f"C4 канон: compose down --timeout: {cmd}"
+        assert cmd[-1] == "status-page", f"сервисный путь down должен заканчиваться сервисом: {cmd}"
+    assert compose_up_calls == [], "disabled-модуль не должен лечиться (up)"
+    logger.info("[IMP:9][test] E017 disabled verified: compose down без -v, %d вызовов", len(compose_down_calls))
+
+
+# 🧪 TRAP[TEST] · Phase E 017 (F-017) · NEGATIVE · disabled-модуль без контейнеров → no-op
+# · Scenario: enabled:false, контейнеров нет (label И name-fallback пусты) → converged, 0 мутаций
+# · Last fail: N/A (preventive — идемпотентность disabled-flow после успешного down)
+# · Remove if: R9 начнёт что-то делать с disabled-модулями без контейнеров
+@pytest.mark.usefixtures("reset_state")
+@ldd_trajectory
+def test_r9_disabled_module_no_containers_noop(tmp_path, caplog):
+    """Phase E 017: disabled-модуль без контейнеров → no-op (converged, ни up ни down)."""
+    caplog.set_level(logging.INFO)
+    logger.info("[IMP:9][test] E017 disabled noop — disabled-модуль без контейнеров не мутирует")
+
+    node_yaml, modules_dir, _compose = _e017_env(tmp_path, enabled=False)
+    cooldown_file = tmp_path / ".converge_cooldown.json"
+    compose_down_calls: list[list[str]] = []
+    compose_up_calls: list[list[str]] = []
+
+    with patch.object(
+        subprocess,
+        "run",
+        side_effect=_e017_mock_run(
+            label_out="",
+            name_out="",  # контейнеров нет
+            config_json=_e017_config_json(),
+            diag_out="",  # и на ноде ничего unlabeled
+            compose_down_calls=compose_down_calls,
+            compose_up_calls=compose_up_calls,
+        ),
+    ):
+        entry = reconciler.reconcile_runtime_state(
+            node_yaml_path=node_yaml,
+            modules_dir=modules_dir,
+            cooldown_file=str(cooldown_file),
+        )
+
+    assert entry["unit"] == "R9"
+    assert entry["status"] == "converged", f"disabled-модуль без контейнеров обязан быть converged: {entry}"
+    assert compose_down_calls == [], "down не должен вызываться без контейнеров"
+    assert compose_up_calls == [], "up не должен вызываться для disabled-модуля"
+    logger.info("[IMP:9][test] E017 disabled noop verified: 0 мутаций, status=converged")

@@ -362,7 +362,8 @@ git pull; первым при подъёме находится AGENTS.md бли
 L2-оверрайды мониторинга (реестр без папки — ошибка, папка без реестра — норма);
 домен — авто `<project>.tronyx.ru` (wildcard) или личный (`ai-platform.yaml#needs.domain`);
 `make new-project` — единственный канал подключения. Multi-component (future): суффиксы
-`-web`/`-api`/`-bot`. Исключение: `ai-instructions` — отдельный инструмент платформы.
+`-web`/`-api`/`-bot`. Исключения (вне lifecycle `~/projects/`, реестр не ведётся): `ai-instructions`
+и `ai-project` — отдельные инструменты платформы.
 
 ### Контракт для работы в папке проекта
 

@@ -235,3 +235,79 @@ Evidence: до фиксa total_rules=0, после =17.
 ### Drill-C2 итоговый вердикт
 Восстановление БЕЗ ACME доказано канонически на sexy (download CLI <1s,
 serial identical); полный flow теперь покрыт contractом fail-loud.
+
+---
+
+## ФАЗА D — ТРИ КАНАЛА ДОСТАВКИ (07:45–09:00)
+
+| # | Проверка | Результат |
+|---|----------|-----------|
+| D1 | deploy-context re-run | ✅ rc0: 3 skipped healthy (идемпотентно) |
+| D2 | render-monitoring botanika | ✅ backward-compat ветка (нет monitoring-секции); треб. явный PROJECT_DIR |
+| D3 | project-list/status ×3 | ✅ found/healthy у всех |
+| D4 | deploy-project direct (dance-site) | ✅ DEPLOYED healthy 2.5s (нужен ПОЛНЫЙ PROJECT_DIR — UX-нюанс) |
+| D5 | CI-канал push | ⛔ BLOCKED: GitHub Billing org TronyxLab (известный внешний блокер с 011/014); канал receive при этом доказан D4/bootstrap |
+| D6 | project-sync-env ×3 | ✅ rc0 (плюс repair двух залетевших asi-group scaffold'ов) |
+| D7 | provision-llm | ✅ после F-10 резолвера: 1 key через loopback ноды |
+| D8 | rollback-контур | ✅ ручной rollback rc0×2 (F-11 fix), идемпотентен |
+
+### F-13 · 08:10 · Фаза D · P1
+- Симптом: пост-bootstrap audit-записи не пишутся (DEPLOYED остановились 03:47Z).
+- Root: R2 chmod 0664 root:adm vs writer ci-deploy → Permission denied.
+- Фикс: R2 ACL/group-channel (CI_DEPLOY_USER SoT), идемпотентен.
+- Ре-верификация: converge R2 converged; rollback пишет записи вновь.
+- Статус: fixed
+
+### F-14 · 08:30 · Фаза D · P1
+- Симптом: φ11 llm_provision всегда «Temporary failure in name resolution».
+- Root: _DEFAULT_BASE_URL=http://litellm:4000 нерезолвим с хоста ноды (docker DNS).
+- Фикс: resolve_base_url explicit→env→DNS-probe→loopback (29 тестов).
+- Статус: fixed
+
+### F-15 · 08:50 · Фаза D · P1
+- Симптом: ручной rollback FAILED при здоровом контейнере (bare retag + pull
+  локального тега из registry + env-file отсутствовал).
+- Фикс: compose-resolved retag + единый env-file args SoT + --pull never.
+- Ре-верификация: rc0×2 на ноде; второй прогон 0.5s.
+- Статус: fixed
+
+---
+
+## ФАЗА E — ВАРИАЦИИ КОНФИГУРАЦИИ + NODE-UPDATE (09:10–11:20)
+
+| # | Проверка | Результат |
+|---|----------|-----------|
+| E1 | healthcheck ноды | ✅ ALL MODULES HEALTHY (после F-16 NODE_NAME auto-detect); без него ловил log-collector вне node.yaml |
+| E2 | toggle status-page off/on | ✅ полный цикл: enabled:false → node-update φ12 остановил контейнер; обратно → up healthy |
+| E3 | overlays учёт в render | ✅ evidence: overlay-hash reload T9.14 в φ11, nginx_reload_hook Ok после F-05 |
+| E4 | make node-update ×3 | ✅ rc0 все; ключи только через env-file/prelude (в логах absent), config-sync живой |
+| E5 | converge сразу после node-update | ✅ прогнан каждый раз; R2-first-run mutated — non-fatal честно |
+| E6 | сетевая правда | ✅ канонические сети на месте (+NOTE-N6 про staging/test остатки прежних эпох) |
+
+### F-16 · 09:20 · Фаза E · P1
+- Симптом: make healthcheck НА НОДЕ перебирал все модули infra (log-collector FAIL)
+  без фильтра node.yaml.
+- Фикс: entrypoints/healthcheck.sh — автоэкспорт NODE_NAME через канон node_detect
+  (только если не задан; dev не тронут).
+- Статус: fixed
+
+### F-17 · 10:10 · Фаза E · P1
+- Симптом: R9 слеп (лейбл project=<module> ≠ канона U-49 project=platform);
+  disabled-flow отсутствовал.
+- Фикс: label primary + compose-canonical name fallback (shared интроспекция,
+  кеш); disabled → compose down сервисов БЕЗ -v через билдеры; cooldown не
+  маскирует stop (14+13 тестов).
+- Статус: fixed
+
+### F-18 · 10:40 · Фаза E · P1
+- Симптом: внутренний bootstrap/converge.sh (исполняемый НА НОДЕ через ssh-канал)
+  запускался с чистым env → R7/R8/R9 compose-introspection падали на
+  ${NGINX_OVERLAY_DIR:?} (класс F-015).
+- Фикс: self-env блок во внутреннем converge.sh (secrets.env source + NODE_NAME
+  detect + overlay export; fake-path запрещён) по образцу F-023/healthcheck.
+- Ре-верификация: R9 видит все контейнеры ноды; introspection успешна.
+- Статус: fixed
+
+### NOTE-N6 · сетевые артефакты прошлых эпох
+На ноде остались staging-*/test-* сети от предыдущих инсталляций (миграция
+/opt сохранялась). Не мешают; чистка — операторское решение после промоута.

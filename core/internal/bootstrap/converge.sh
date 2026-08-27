@@ -28,4 +28,26 @@ CORE_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 # · экспортировать PYTHONPATH="${ROOT}:${PYTHONPATH:-}".
 export PYTHONPATH="${CORE_DIR}/..:${PYTHONPATH:-}"
 
+# ⚠️ TRAP[BUG] · 2026-08-27 · P1 · F-015-класс на ноде: R7/R9 compose-introspection
+# (root-compose include nginx ${NGINX_OVERLAY_DIR:?required}) падала на чистом ssh-env —
+# disabled-flow/R9-fallback слепы. Self-env по канону self-sufficiency (F-023 план 012):
+# secrets.env + NODE_NAME auto-detect (node_detect) + NGINX_OVERLAY_DIR default.
+# Fake-путь НЕ создаётся: export только при непустом NODE_NAME; явный не перезаписывается.
+_CONVERGE_SECRETS_ENV="${SECRETS_ENV_FILE:-/var/lib/platform/run/secrets.env}"
+if [[ -f "$_CONVERGE_SECRETS_ENV" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "$_CONVERGE_SECRETS_ENV"
+    set +a
+    echo "[IMP:8][converge][self-env] Sourced ${_CONVERGE_SECRETS_ENV}" >&2
+fi
+if [[ -z "${NODE_NAME:-}" ]] && _CONV_NODE="$(python3 -m core.internal.shared.node_detect --detect-node-name 2>/dev/null)"; then
+    export NODE_NAME="$_CONV_NODE"
+    echo "[IMP:9][converge][self-env] Auto-detected NODE_NAME=${NODE_NAME}" >&2
+fi
+if [[ -n "${NODE_NAME:-}" ]]; then
+    export NGINX_OVERLAY_DIR="${NGINX_OVERLAY_DIR:-/opt/node-configs/${NODE_NAME}/overlays/nginx}"
+    echo "[IMP:8][converge][self-env] NGINX_OVERLAY_DIR=${NGINX_OVERLAY_DIR}" >&2
+fi
+
 exec "${CONVERGE_PYTHON:-python3}" "${SCRIPT_DIR}/converge.py" "$@"

@@ -145,6 +145,15 @@ def _get_existing_containers() -> set[str]:
 ## @purpose  Parse container names + project name from docker compose config --format json output.
 ##           Возвращает (container_names, project_name): project_name = config "name" — ФАКТИЧЕСКИЙ
 ##           compose project деплоя (basename dirname первого -f файла: root → "platform", модуль → имя модуля).
+## 📝 TRAP[DEBT] · 2026-08-27 · LO · Дубль compose-config интроспекции с
+## ·   compose_args.compose_defined_containers/services (Phase E 017) — приватный инлайн
+## ·   root-first/env-file/config-JSON здесь vs публичный helper (leaf, cache) для converge/R9
+## · Observed: converge/runtime не мог импортировать приватный _get_compose_services —
+## ·   добавлен compose_defined_containers/services (bootstrap/deploy/compose_args.py)
+## · Suspected: две реализации одного резолва — drift-акселератор (root-first порядок,
+## ·   env-file цепочка, container_name extraction)
+## · Impact: расхождение аргументов config-вызова между orphan-реконсиляцией и R9
+## · When: Phase E 017 (F-017) — name-fallback резолва контейнеров R9
 ## @io       ⇥ compose_path: str, module_name: str → ⎋ tuple[list[str], str] (container names, project name)
 ## @complexity 2 — subprocess call + JSON parse + iteration over services
 ## @invariants
