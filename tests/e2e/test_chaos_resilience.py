@@ -332,19 +332,24 @@ def _crash_and_heal(node: str, ssh: NodeSSHClient, *, container: str, heal_budge
     kill = ssh.ssh_exec(f"kill -9 {pid}", timeout=30)
     assert kill.exit_code == 0, f"kill -9 {pid} failed: {kill.stderr}"
 
+    # F-20 (017): на healthy самохилящейся ноде docker перезапускает контейнер быстрее
+    # первого опроса — статус-окно exited/restarting может не попасть в сэмпл.
+    # Доказательство инъекции = статус ИЛИ прирост .RestartCount (свойство убитого процесса,
+    # см TRAP[BUG] VR142 §6). Инвариант «proof до recovery-wait» сохранён.
+    def _injection_evidence() -> str | None:
+        st = ssh.ssh_read(f"docker inspect --format '{{{{.State.Status}}}}' {container}", timeout=20).stdout.strip()
+        if st in {"exited", "restarting"}:
+            return f"state={st}"
+        rc_now = int(
+            ssh.ssh_read(f"docker inspect --format '{{{{.RestartCount}}}}' {container}", timeout=20).stdout.strip()
+            or "0"
+        )
+        return f"restart_count_delta={rc_now - rc_before}" if rc_now > rc_before else None
+
     proof = assert_injection_landed(
-        lambda: (
-            st
-            if (
-                st := ssh.ssh_read(
-                    f"docker inspect --format '{{{{.State.Status}}}}' {container}", timeout=20
-                ).stdout.strip()
-            )
-            in {"exited", "restarting"}
-            else None
-        ),
+        _injection_evidence,
         timeout_s=30,
-        description=f"{container} state in (exited, restarting)",
+        description=f"{container} state or RestartCount delta",
         interval_s=1.0,
     )
     codes_during = probe_sites_local(ssh, urls)

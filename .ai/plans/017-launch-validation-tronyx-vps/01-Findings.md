@@ -337,3 +337,19 @@ NOTE: SEC-0018 остаётся верным — pre_restore_* в отдельн
 ### NOTE-N7 · S3-имена легаси
 Секреты ноды несут S3_ENDPOINT (канон S3_ENDPOINT_URL из platform-infra.yaml);
 модульный код принимает оба. Rev: сузить матрицу ноды до канона при след. ротации.
+
+---
+
+## ФАЗА G — RESILIENCE DRILLS (12:40–13:35)
+
+| # | Проверка | Результат |
+|---|----------|-----------|
+| G1 | Reboot → автоподъём | ✅ 25 контейнеров up автоматически, ALL MODULES HEALTHY, HTTPS 200 |
+| G2 | Chaos fast (T1–T9) | 🔄 запущен фоном, результат в следующем блоке |
+| G3 | Load-smoke web | ⛔→PARTIAL: locust отработал вход в прогон; падение на пост-run PromQL pull — известный design-блокер F-036 (prometheus loopback-only + AllowTcpForwarding=no), владелец-gate из 016 TASK-9. INFRASTRUCTURE BLOCKED |
+| G4 | e2e-verify sweep | ✅ PASS 3/3 endpoints HTTP 200 TLS ok |
+| G5 | test-node requires_node | ⛔ BLOCKED: test-VPS недоступна (ответ владельца §0.6) |
+
+### NOTE-N8 · load-test env
+make load-test требует locust в PATH: dev-конвенция PATH=$PWD/.venv/bin:$PATH
+(venv extra [load] установлен). Rev: рантайм-подсказка в таргете.
