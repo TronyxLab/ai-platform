@@ -165,15 +165,19 @@ def test_crash_postgres_data_integrity(requires_node: str, node_ssh: NodeSSHClie
     kill = ssh.ssh_exec(f"kill -9 {pid}", timeout=30)
     assert kill.exit_code == 0, f"kill -9 {pid} failed: {kill.stderr}"
 
+    def _pg_injection_evidence() -> str | None:
+        # F-20 (017): мгновенный рестарт docker может перепрыгнуть exited-окно —
+        # доказательство инъекции так же принимает прирост RestartCount.
+        st = ssh.ssh_read("docker inspect --format '{{.State.Status}}' postgres", timeout=20).stdout.strip()
+        if st == "exited":
+            return "state=exited"
+        rc_now = int(
+            ssh.ssh_read("docker inspect --format '{{.RestartCount}}' postgres", timeout=20).stdout.strip() or "0"
+        )
+        return f"restart_count_delta={rc_now - rc_before}" if rc_now > rc_before else None
+
     proof = assert_injection_landed(
-        lambda: (
-            state
-            if (
-                state := ssh.ssh_read("docker inspect --format '{{.State.Status}}' postgres", timeout=20).stdout.strip()
-            )
-            == "exited"
-            else None
-        ),
+        _pg_injection_evidence,
         timeout_s=30,
         description="postgres container state == exited",
         interval_s=1.0,
