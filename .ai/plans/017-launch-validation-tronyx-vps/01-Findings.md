@@ -392,3 +392,20 @@ NODE=tronyx-vps от голой ноды подняла сервер И заде
 no-op повторов ×2), каналы доставки/DR/TLS/reboot-самолечение верифицированы.
 Открытые хвосты (F-21×3 chaos-кейса, D5 CI-billing, G5 test-VPS) оформлены
 с точными хэндоффами выше. Промоут сознательно отложен до их закрытия.
+
+### F-22 · 14:00 · Фаза H-верификация · OPEN (детерминированный, для следующей волны)
+- Симптом: в СОСТАВЕ полного make check тесты
+  TestStatusPageMetrics::test_metrics_renders_tls_gauges/nan стабильно FAIL
+  («HELP platform_tls_days_left отсутствует»); соло и парный xdist с соседями —
+  GREEN ×N (63 passed). Зависимость от состава/порядка static_audit.
+- Гипотеза: кросс-тестовая мутация модульного состояния status-page app/collectors
+  (node_name binding/STATUS_METRICS_JSON) предшествующим тестом того же воркера;
+  финальная локализация: перехват списка тестов воркера до первого tls-кейса.
+- Evidence: /tmp/kilo/check_final{2,3,4}_*.log; тело body содержит backup/deploy
+  гейджи (binding живой), но data.tls пуст на момент чтения.
+- Влияние: НЕ блокирует прод (на ноде подтверждены реальные серии platform_tls_*,
+  Фаза C); гейт локальной зелени последнего батча не сходится только этим тестом.
+- Next steps (3 шага): (1) PYTEST_XDIST gw-лог: собрать первые ~40 тестов воркера
+  с tls-фейлом; (2) кандидаты из них с импортом app.py/status-page — проверить
+  setattr глобалов; (3) конвертировать в monkeypatch либо локальный reload внутри
+  TestStatusPageMetrics.setup.
