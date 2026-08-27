@@ -27,19 +27,19 @@ from core.internal.shared import verbs
 
 pytestmark = pytest.mark.static_audit
 
-_CANONICAL = ("ping", "exit", "status", "verify", "remove", "receive")
+_CANONICAL = ("ping", "exit", "status", "health", "verify", "remove", "receive")
 
 
 @ldd_trajectory
 # 🧪 TRAP[TEST] · 2026-08-02 · REGRESSION · is_verb exact-match канона (U-56)
-# · Scenario: все 6 CANONICAL_VERBS → True; не-verb и case-варианты → False
+# · Scenario: все 7 CANONICAL_VERBS → True; не-verb и case-варианты → False
 # · Last fail: N/A (preventive)
 # · Remove if: verb-словарь диспетчера заменён другой моделью
 def test_is_verb_positive_and_negative(caplog) -> None:
-    """is_verb: 6 канонических verb'ов → True; не-verb/case/None → False."""
+    """is_verb: 7 канонических verb'ов → True; не-verb/case/None → False."""
     for verb in _CANONICAL:
         assert verbs.is_verb(verb) is True, f"is_verb({verb!r}) must be True"
-    logger.critical("[IMP:9][verbs][is_verb] 6 canonical verbs → True")
+    logger.critical("[IMP:9][verbs][is_verb] 7 canonical verbs → True")
 
     for name in ("deploy", "Status", "RECEIVE", "", None, 42):
         assert verbs.is_verb(name) is False, f"is_verb({name!r}) must be False (exact-match)"
@@ -48,11 +48,11 @@ def test_is_verb_positive_and_negative(caplog) -> None:
 
 @ldd_trajectory
 # 🧪 TRAP[TEST] · 2026-08-12 · MERGED (W2 T2.1) · CANONICAL_VERBS закрытое множество (D1)
-# · Scenario: ровно 6 verb'ов; platform-deliver/platform-deploy отсутствуют; VERB_RESERVE == set
+# · Scenario: ровно 7 verb'ов; platform-deliver/platform-deploy отсутствуют; VERB_RESERVE == set
 # · Last fail: N/A (перенесено из test_shared_verbs.py — полнота словаря)
 # · Remove if: verb-множество расширяется архитектурным решением
 def test_canonical_verbs_set(caplog) -> None:
-    """CANONICAL_VERBS — закрытое множество из 6 verb'ов; VERB_RESERVE совпадает (D1)."""
+    """CANONICAL_VERBS — закрытое множество из 7 verb'ов; VERB_RESERVE совпадает (D1)."""
     assert verbs.CANONICAL_VERBS == _CANONICAL
     assert "platform-deliver" not in verbs.CANONICAL_VERBS
     assert "platform-deploy" not in verbs.CANONICAL_VERBS

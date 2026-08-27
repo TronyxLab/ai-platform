@@ -21,6 +21,7 @@
 import io
 import json
 import logging
+import subprocess
 import tarfile
 
 import pytest
@@ -45,6 +46,25 @@ def _orchestrator_factory(projects_base: str):
         return _RealDeployOrchestrator(*args, **kwargs)
 
     return _factory
+
+
+def _recording_docker_runner(records: list[list[str]], *, rc: int = 0, stdout: str = "", stderr: str = ""):
+    """DI docker_runner (W4d, health verb): fake-раннер docker_inspect — scripted CompletedProcess.
+
+    ## @purpose — _dispatch(docker_runner=) инжектит subprocess-канал docker_inspect
+    ##            (_DispatchContext.docker_runner) — 0 патчей subprocess.run/docker_ops;
+    ##            records собирает cmd-аргументы для assert'ов идентификатора контейнера.
+    """
+
+    class _FakeRunner:
+        def run(self, cmd: list[str], *, timeout: int | None = None, **kwargs):
+            # CommandRunner protocol-контракт (run(cmd, *, timeout)) — fake scripted,
+            # аргументы канала не нужны (см. _run_docker docker_ops, runner-ветка)
+            del timeout, kwargs
+            records.append(list(cmd))
+            return subprocess.CompletedProcess(args=cmd, returncode=rc, stdout=stdout, stderr=stderr)
+
+    return _FakeRunner()
 
 
 # T2.16a: _assert_imp9_logged консолидирован в gate_helpers.assert_ldd_imp9
@@ -447,6 +467,264 @@ def test_dispatch_verify_invalid_project_negative(capsys, caplog: pytest.LogCapt
 
 
 # endregion FUNC_test_dispatch_verify_invalid_project_negative
+
+
+# ── health verb — read-only docker inspect State.Health.Status (B3 fix-forward) ─────
+
+
+# region FUNC_test_dispatch_health_healthy
+## @purpose — dispatch health site-a → stdout "healthy", rc 0 (слово-контракт remote-probe).
+##            docker_inspect вызывается с identifier = project (service дефолт = project).
+# 🧪 TRAP[TEST] · 2026-08-27 · Regression · B3 fix-forward — health verb
+# · Regression: probe шёл raw `docker inspect` → ci-deploy forced-command → unknown verb exit 4
+# ·   → skip-health мёртв (deliver на каждом резюме bootstrap)
+# · Scenario: SSH_ORIGINAL_COMMAND="health site-a", docker_runner → rc 0 stdout "healthy"
+# ·   → rc 0, stdout == "healthy", docker_inspect identifier == "site-a"
+# · Last fail: N/A (новый verb)
+# · Remove if: health verb удаляется из диспетчера
+def test_dispatch_health_healthy(capsys, caplog: pytest.LogCaptureFixture) -> None:
+    """dispatch health <project> → 'healthy' + rc 0 (identifier = project)."""
+    caplog.set_level(logging.INFO)
+    calls: list[list[str]] = []
+
+    rc = _dispatch(
+        [],
+        env={"SSH_ORIGINAL_COMMAND": "health site-a"},
+        orchestrator_factory=_orchestrator_factory("/tmp/health-projects"),
+        docker_runner=_recording_docker_runner(calls, rc=0, stdout="healthy"),
+    )
+
+    out = capsys.readouterr().out.strip()
+    assert_ldd_imp9(caplog)
+    assert rc == 0
+    assert out == "healthy"
+    assert calls, "docker_inspect обязан быть вызван (docker_runner DI)"
+    assert calls[0][-1] == "site-a", f"identifier = project по дефолту, got {calls[0]!r}"
+
+
+# endregion FUNC_test_dispatch_health_healthy
+
+
+# region FUNC_test_dispatch_health_service_override
+## @purpose — dispatch health site-a web → docker_inspect identifier = "web" (service вторым
+##            токеном перекрывает дефолт = project).
+# 🧪 TRAP[TEST] · 2026-08-27 · Regression · B3 fix-forward — service override
+# · Scenario: "health site-a web" → docker_inspect("web"); stdout "unhealthy", rc 0
+# · Last fail: N/A (новый verb)
+# · Remove if: health-арность меняется
+def test_dispatch_health_service_override(capsys, caplog: pytest.LogCaptureFixture) -> None:
+    """dispatch health <project> <service> → docker_inspect(service) (override дефолта)."""
+    caplog.set_level(logging.INFO)
+    calls: list[list[str]] = []
+
+    rc = _dispatch(
+        [],
+        env={"SSH_ORIGINAL_COMMAND": "health site-a web"},
+        orchestrator_factory=_orchestrator_factory("/tmp/health-projects"),
+        docker_runner=_recording_docker_runner(calls, rc=0, stdout="unhealthy"),
+    )
+
+    out = capsys.readouterr().out.strip()
+    assert rc == 0
+    assert out == "unhealthy"
+    assert calls[0][-1] == "web", f"service вторым токеном → identifier web, got {calls[0]!r}"
+
+
+# endregion FUNC_test_dispatch_health_service_override
+
+
+# region FUNC_test_dispatch_health_states_parametrized
+## @purpose — rc=0 для starting|unhealthy: stdout слово, exit 0 (успешный запрос факта).
+# 🧪 TRAP[TEST] · 2026-08-27 · Regression · B3 fix-forward — слово-контракт rc 0
+# · Scenario: docker_runner stdout="starting"/"unhealthy" → stdout слово, rc 0
+# · Last fail: N/A (новый verb)
+# · Remove if: слово-контракт health меняется
+@pytest.mark.parametrize("status_word", ["starting", "unhealthy"])
+def test_dispatch_health_states_parametrized(status_word: str, capsys, caplog: pytest.LogCaptureFixture) -> None:
+    """health starting/unhealthy → слово в stdout + rc 0 (факт получен)."""
+    caplog.set_level(logging.INFO)
+    calls: list[list[str]] = []
+
+    rc = _dispatch(
+        [],
+        env={"SSH_ORIGINAL_COMMAND": "health site-a"},
+        orchestrator_factory=_orchestrator_factory("/tmp/health-projects"),
+        docker_runner=_recording_docker_runner(calls, rc=0, stdout=status_word),
+    )
+
+    out = capsys.readouterr().out.strip()
+    assert rc == 0, f"status={status_word}: успешный запрос факта → rc 0"
+    assert out == status_word
+
+
+# endregion FUNC_test_dispatch_health_states_parametrized
+
+
+# region FUNC_test_dispatch_health_missing
+## @purpose — docker inspect rc≠0 + "No such object" → stdout "missing", rc 0
+##            (контейнер отсутствует — честный факт, успешный запрос).
+# 🧪 TRAP[TEST] · 2026-08-27 · Regression · B3 fix-forward — missing контракт
+# · Scenario: docker_runner rc 1, stderr "Error: No such object: site-a" → stdout "missing", rc 0
+# · Last fail: N/A (новый verb)
+# · Remove if: missing-маппинг меняется
+def test_dispatch_health_missing(capsys, caplog: pytest.LogCaptureFixture) -> None:
+    """health: контейнер отсутствует (No such object) → 'missing' + rc 0."""
+    caplog.set_level(logging.INFO)
+    calls: list[list[str]] = []
+
+    rc = _dispatch(
+        [],
+        env={"SSH_ORIGINAL_COMMAND": "health site-a"},
+        orchestrator_factory=_orchestrator_factory("/tmp/health-projects"),
+        docker_runner=_recording_docker_runner(calls, rc=1, stderr="Error: No such object: site-a"),
+    )
+
+    out = capsys.readouterr().out.strip()
+    assert rc == 0, "missing — успешный запрос факта → rc 0 (контракт remote-probe)"
+    assert out == "missing"
+
+
+# endregion FUNC_test_dispatch_health_missing
+
+
+# region FUNC_test_dispatch_health_error
+## @purpose — docker inspect rc≠0 БЕЗ "No such object" (daemon недоступен/нет docker) →
+##            stdout "error", rc 1 (внутренняя ошибка инспекта — ЕДИНСТВЕННЫЙ rc=1).
+# 🧪 TRAP[TEST] · 2026-08-27 · Regression · B3 fix-forward — error контракт rc 1
+# · Scenario: docker_runner rc 1, stderr "Cannot connect to the Docker daemon" → "error", rc 1
+# · Last fail: N/A (новый verb)
+# · Remove if: error-маппинг меняется
+def test_dispatch_health_error(capsys, caplog: pytest.LogCaptureFixture) -> None:
+    """health: внутренняя ошибка инспекта → 'error' + rc 1."""
+    caplog.set_level(logging.INFO)
+    calls: list[list[str]] = []
+
+    rc = _dispatch(
+        [],
+        env={"SSH_ORIGINAL_COMMAND": "health site-a"},
+        orchestrator_factory=_orchestrator_factory("/tmp/health-projects"),
+        docker_runner=_recording_docker_runner(calls, rc=1, stderr="Cannot connect to the Docker daemon"),
+    )
+
+    out = capsys.readouterr().out.strip()
+    assert rc == 1, "внутренняя ошибка инспекта → rc 1 (контракт remote-probe)"
+    assert out == "error"
+
+
+# endregion FUNC_test_dispatch_health_error
+
+
+# region FUNC_test_dispatch_health_no_healthcheck_missing
+## @purpose — rc=0, но stdout не health-слово (""/"<no value>"/"none" — контейнер без
+##            healthcheck) → "missing" + rc 0 (нет healthy-факта).
+# 🧪 TRAP[TEST] · 2026-08-27 · Regression · B3 fix-forward — no-healthcheck
+# · Scenario: docker_runner rc 0, stdout "<no value>" → "missing", rc 0
+# · Last fail: N/A (новый verb)
+# · Remove if: no-healthcheck-маппинг меняется
+def test_dispatch_health_no_healthcheck_missing(capsys, caplog: pytest.LogCaptureFixture) -> None:
+    """health: контейнер без healthcheck (<no value>) → 'missing' + rc 0."""
+    caplog.set_level(logging.INFO)
+    calls: list[list[str]] = []
+
+    rc = _dispatch(
+        [],
+        env={"SSH_ORIGINAL_COMMAND": "health site-a"},
+        orchestrator_factory=_orchestrator_factory("/tmp/health-projects"),
+        docker_runner=_recording_docker_runner(calls, rc=0, stdout="<no value>"),
+    )
+
+    out = capsys.readouterr().out.strip()
+    assert rc == 0
+    assert out == "missing"
+
+
+# endregion FUNC_test_dispatch_health_no_healthcheck_missing
+
+
+# region FUNC_test_dispatch_health_no_project_negative
+## @purpose — R5 negative: health без project → JSON ERROR + rc 1 (fail-fast, паттерн verify).
+# 🧪 TRAP[TEST] · 2026-08-27 · NEGATIVE (R5) · health требует \<project\>
+# · Scenario: SSH_ORIGINAL_COMMAND="health" → rc 1, JSON {"status":"ERROR"}, runner НЕ вызван
+# · Last fail: N/A (новый verb)
+# · Remove if: health-контракт меняется
+def test_dispatch_health_no_project_negative(capsys, caplog: pytest.LogCaptureFixture) -> None:
+    """R5 negative: health без project → JSON ERROR + rc 1, docker_inspect НЕ вызывается."""
+    caplog.set_level(logging.INFO)
+    calls: list[list[str]] = []
+
+    rc = _dispatch(
+        [],
+        env={"SSH_ORIGINAL_COMMAND": "health"},
+        orchestrator_factory=_orchestrator_factory("/tmp/health-projects"),
+        docker_runner=_recording_docker_runner(calls, rc=0, stdout="healthy"),
+    )
+
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert calls == [], "health без project не должен вызывать docker_inspect"
+    assert json.loads(out)["status"] == "ERROR"
+    assert "health requires <project>" in out
+
+
+# endregion FUNC_test_dispatch_health_no_project_negative
+
+
+# region FUNC_test_dispatch_health_invalid_project_negative
+## @purpose — R5 negative (T9.7): health с path-traversal project → блок ДО handler'а
+##            (docker_inspect НЕ вызывается), JSON ERROR + rc 1 — тот же guard, что
+##            status/remove/receive (shell-injection через имя проекта исключён).
+# 🧪 TRAP[TEST] · 2026-08-27 · NEGATIVE (R5) · T9.7 — health валидирует project-name
+# · Scenario: SSH_ORIGINAL_COMMAND="health ../../etc" → rc 1, JSON ERROR, runner не вызван
+# · Last fail: N/A (новый verb — guard скопирован с status/remove)
+# · Remove if: health перестаёт валидировать project-name
+def test_dispatch_health_invalid_project_negative(capsys, caplog: pytest.LogCaptureFixture) -> None:
+    """R5 negative (T9.7): health с traversal-project → блок до handler'а, rc=1."""
+    caplog.set_level(logging.INFO)
+    calls: list[list[str]] = []
+
+    rc = _dispatch(
+        [],
+        env={"SSH_ORIGINAL_COMMAND": "health ../../etc"},
+        orchestrator_factory=_orchestrator_factory("/tmp/health-projects"),
+        docker_runner=_recording_docker_runner(calls, rc=0, stdout="healthy"),
+    )
+
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert calls == [], "T9.7: docker_inspect не вызывается для невалидного project-name"
+    assert "Invalid or reserved project name" in out
+
+
+# endregion FUNC_test_dispatch_health_invalid_project_negative
+
+
+# region FUNC_test_dispatch_raw_docker_inspect_still_unknown
+## @purpose — R5 negative (B3 fix-forward): raw `docker inspect` в SSH_ORIGINAL_COMMAND
+##            остаётся unknown verb → rc 4. Фикс реализован VERB'ОМ, а не whitelist'ом
+##            произвольных команд — forced-command security НЕ ослаблена.
+# 🧪 TRAP[TEST] · 2026-08-27 · NEGATIVE (R5) · raw docker inspect НЕ становится verb'ом
+# · Regression: pre-fix probe слал "docker inspect -f ..." → unknown verb exit 4 (skip-health мёртв)
+# · Scenario: SSH_ORIGINAL_COMMAND="docker inspect -f {{.State.Health.Status}} site-a" → rc 4
+# · Last fail: N/A (новый negative — фиксирует контракт security)
+# · Remove if: raw docker-команды станут допустимыми в dispatch (запрещено S7)
+def test_dispatch_raw_docker_inspect_still_unknown(capsys, caplog: pytest.LogCaptureFixture) -> None:
+    """R5 negative: raw docker inspect → unknown verb exit 4 (fix — verb, не whitelist)."""
+    caplog.set_level(logging.INFO)
+
+    rc = _dispatch(
+        [],
+        env={"SSH_ORIGINAL_COMMAND": "docker inspect -f '{{.State.Health.Status}}' site-a"},
+        orchestrator_factory=_orchestrator_factory("/tmp/health-projects"),
+    )
+
+    out = capsys.readouterr().out
+    assert rc == 4  # ConfigValidationError.exit_code — unknown verb (D2)
+    payload = json.loads(out)
+    assert payload["status"] == "ERROR"
+    assert "unknown verb" in payload["error"]
+
+
+# endregion FUNC_test_dispatch_raw_docker_inspect_still_unknown
 
 
 # ── TEST-05 (REF-0006, DevPlan 11 В2): параметризованные traversal-негативы receive/remove ──

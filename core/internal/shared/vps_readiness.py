@@ -87,6 +87,19 @@ _NODE_HOST_MAP_ENV = "NODE_HOST_MAP"
 _PROJECTS_CHECK_CMD = "test -d /opt/projects && test -w /opt/projects && echo OK || echo FAIL"
 # Обычная строка (НЕ f-string): {{.ServerVersion}} должен дойти до remote-шелла дословно
 _DOCKER_CHECK_CMD = "docker info --format '{{.ServerVersion}}' 2>/dev/null || echo FAIL"
+# 📝 TRAP[DEBT] · 2026-08-27 · MED · Docker-check шага 4 — false-PASS через forced-command
+# · Observed: при изучении SSH-канала для health-пробки (project_payload_delivery, B3) —
+# ·   ci-deploy authorized_keys forced-command-restricted (S7, users.py:654) → `ssh ci-deploy@host
+# ·   "docker info ..."` исполнит orchestrator_cli dispatch с SSH_ORIGINAL_COMMAND="docker info ..."
+# ·   → unknown verb → JSON-ошибка + exit 4; docker_out.strip() = JSON-ошибка ≠ "FAIL" → шаг
+# ·   проходит ложно («Docker OK: version <json-error>») — daemon реально не проверяется
+# · Suspected: needs verification на живой ноде (зависит от того, каким ключом фактически
+# ·   соединяется default_ssh_runner — agent/config ci_deploy_key vs personal key); шаг 3
+# ·   (test -d /opt/projects) при том же канале фейлится раньше — см. поведение pre-flight
+# · Impact: docker-готовность в pre-flight может подтверждаться без реальной проверки daemon
+# · When: реализация B3 health-пробки (2026-08-27) — тот же forced-command канал
+# · Fix-forward: read-only health/inspect verb в dispatch-реестре (orchestrator_cli) —
+# ·   единый канал и для pre-flight, и для skip-health пробки
 # R1: абсолютный путь к lib/ssh.sh — резолвится от __file__, не от cwd
 _SSH_LIB_PATH = str(Path(__file__).resolve().parent.parent.parent / "lib" / "ssh.sh")
 

@@ -252,7 +252,7 @@ def test_cli_subcommands_cover_verb_dictionary(caplog) -> None:
     parser = build_parser()
     cli_subcommands = set(parser._subparsers._group_actions[0].choices.keys())  # type: ignore[attr-defined]
 
-    # ВСЕ 6 verbs диспетчеризуются через реестр verb→handler (_VERB_HANDLERS, 170 W4-B3) —
+    # ВСЕ 7 verbs диспетчеризуются через реестр verb→handler (_VERB_HANDLERS, 170 W4-B3) —
     # интроспекция реестра надёжнее строкового анализа (dispatch — тонкий, маршрут = таблица)
     from core.internal.deploy.orchestrator_cli import _VERB_HANDLERS
 
@@ -366,7 +366,7 @@ def test_canonical_verbs_closed_set(caplog) -> None:
 
     # ▶ CANONICAL_VERBS → ◇ in? → ⎋ PASS|FAIL
 
-    ## @purpose — DevPlan 116 B1 T10: закрытое verb-множество (D1) — ровно 6 verbs.
+    ## @purpose — DevPlan 116 B1 T10: закрытое verb-множество (D1) — ровно 7 verbs.
     ## @io — caplog → ⎋ None
     ## @complexity — O(1)
     """
@@ -377,7 +377,7 @@ def test_canonical_verbs_closed_set(caplog) -> None:
     # · Remove if: verb-множество расширяется архитектурно
     caplog.set_level(logging.INFO)
 
-    assert CANONICAL_VERBS == ("ping", "exit", "status", "verify", "remove", "receive")
+    assert CANONICAL_VERBS == ("ping", "exit", "status", "health", "verify", "remove", "receive")
     assert "platform-deliver" not in CANONICAL_VERBS
     assert "platform-deploy" not in CANONICAL_VERBS
     assert "deploy" not in CANONICAL_VERBS, "deploy-фолбэк не может быть verb'ом (D2)"

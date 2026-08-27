@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: ssh-command-parser, parse-ssh-command, classify-verb, strip-prefixes, forced-command, verbs, dispatch
+# GREP_SUMMARY: ssh-command-parser, parse-ssh-command, classify-verb, strip-prefixes, forced-command, verbs, dispatch, health
 # STRUCTURE: ▶ parse_ssh_command(raw) → ◇ _strip_prefixes → ◇ classify_verb(cleaned) → ⊕ dict → ⎋
 #            ▶ CLI: python3 -m core.internal.deploy.ssh_command_parser parse|classify <command>
 # region MODULE_CONTRACT
@@ -99,7 +99,7 @@ def _strip_prefixes(raw: str) -> str:
 def classify_verb(cleaned: str) -> str:
     """Classify a cleaned SSH command string into a canonical verb (exact-match, D2).
 
-    ▶ ┌cleaned┐ → ◇ exact match (ping|exit|status|verify|remove|receive) → ⎋ verb
+    ▶ ┌cleaned┐ → ◇ exact match (ping|exit|status|health|verify|remove|receive) → ⎋ verb
     │           → ◇ prefix match (verb + " ") → ⎋ verb
     │           → ✗ unknown → raise ConfigValidationError
 
@@ -107,7 +107,7 @@ def classify_verb(cleaned: str) -> str:
     ##            NO default fallback: unrecognized input raises ConfigValidationError
     ##            (честные exit-коды B4, `deploy <project> <sha> [env]` удалён — D2).
     ## @io — ⇥ cleaned: str → ⎋ verb: str (one of CANONICAL_VERBS from shared/verbs.py)
-    ## @complexity — O(N) where N = len(CANONICAL_VERBS) (6)
+    ## @complexity — O(N) where N = len(CANONICAL_VERBS) (7)
     ## @invariants
     ##   - Exact match (bare verb) checked BEFORE prefix match — голый `status` → verb status (U-56)
     ##   - Prefix match: verb + " " (аргументы после пробела)
@@ -158,7 +158,8 @@ def parse_ssh_command(raw: str) -> ParsedSshCommand:
     ##   - Empty input → raises ConfigValidationError("empty command after stripping")
     ##   - args is None for ping/exit verbs, str for all others
     ##   - receive: args = "<project> [<sha>]" (два токена, D5 — версия из аргументов)
-    ##   - status/remove: args = "<project>"; verify: args = "<node>"
+    ##   - status/remove: args = "<project>"; health: args = "<project> [<service>]"
+    ##     (service опционален; дефолт service = project в handler'е); verify: args = "<node>"
     ##   - Unknown verb → ConfigValidationError propagates (никогда не deploy-фолбэк)
     ##   - IMP:9 log emitted on successful parse
     ##   - IMP:7 log emitted for each stripping step
@@ -184,7 +185,7 @@ def parse_ssh_command(raw: str) -> ParsedSshCommand:
         # receive <project> [<sha>] — два токена; версия (sha) из аргументов (D5)
         prefix = verb + " "
         args = cleaned[len(prefix) :].strip() if cleaned.startswith(prefix) else None
-    elif verb in {"status", "remove"} or verb == "verify":
+    elif verb in {"status", "remove", "health"} or verb == "verify":
         prefix = verb + " "
         args = cleaned[len(prefix) :].strip() if cleaned.startswith(prefix) else None
     else:  # pragma: no cover — CANONICAL_VERBS закрыто, unreachable

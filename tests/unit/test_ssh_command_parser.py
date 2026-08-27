@@ -133,6 +133,7 @@ def test_strip_plain_variants(raw: str, expected: str) -> None:
         ("exit", "exit"),
         ("remove project1", "remove"),
         ("status project1", "status"),
+        ("health project1", "health"),
         ("verify node1", "verify"),
         ("status", "status"),  # bare verb → verb, НЕ проект (U-56)
     ],
@@ -171,7 +172,7 @@ def test_classify_unknown() -> None:
 # · Last fail: N/A (new test)
 # · Remove if: verb-множество меняется
 def test_classify_all_canonical() -> None:
-    """Все 6 verb'ов классифицируются и в голой, и в prefix-форме."""
+    """Все 7 verb'ов классифицируются и в голой, и в prefix-форме."""
     from core.internal.shared.verbs import CANONICAL_VERBS
 
     for verb in CANONICAL_VERBS:
@@ -318,6 +319,28 @@ def test_parse_status() -> None:
 
 
 # endregion FUNC_test_parse_status
+
+
+# region FUNC_test_parse_health
+## @purpose — "health project1 [service]" → verb="health", args="project1 [service]"
+##            (service опционален — дефолт = project в handler'е, B3 fix-forward).
+# 🧪 TRAP[TEST] · Regression · B3 fix-forward — health verb (read-only docker inspect)
+# · Scenario: health my-project → verb=health, args="my-project";
+# ·   health my-project web → args="my-project web" (service вторым токеном)
+# · Last fail: N/A (new verb)
+# · Remove if: parse_ssh_command health handling меняется
+def test_parse_health() -> None:
+    """Health command extracts args (project [service])."""
+    result = parse_ssh_command("health my-project")
+    assert result["verb"] == "health"
+    assert result["args"] == "my-project"
+
+    with_service = parse_ssh_command("health my-project web")
+    assert with_service["verb"] == "health"
+    assert with_service["args"] == "my-project web"
+
+
+# endregion FUNC_test_parse_health
 
 
 # region FUNC_test_parse_verify

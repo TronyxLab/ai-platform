@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: orchestrator-cli, cli, dispatch, receive, deliver, deploy-many, status, remove, verify, ping, entrypoint, SSH_ORIGINAL_COMMAND, verb-registry, handlers
-# STRUCTURE: ▶ main() → argparse → thin dispatch ┌dispatch → _VERB_HANDLERS[verb] (реестр: ping|exit|status|verify|remove|receive) | deliver | deploy | deploy-many | rollback | status | remove┐ → sys.exit(0|1)
+# GREP_SUMMARY: orchestrator-cli, cli, dispatch, receive, deliver, deploy-many, status, remove, verify, ping, health, entrypoint, SSH_ORIGINAL_COMMAND, verb-registry, handlers
+# STRUCTURE: ▶ main() → argparse → thin dispatch ┌dispatch → _VERB_HANDLERS[verb] (реестр: ping|exit|status|health|verify|remove|receive) | deliver | deploy | deploy-many | rollback | status | remove | health┐ → sys.exit(0|1)
 """
-CLI entrypoint for DeployOrchestrator. Commands: dispatch, deliver, receive, deploy, deploy-many, rollback, status, remove.
+CLI entrypoint for DeployOrchestrator. Commands: dispatch, deliver, receive, deploy, deploy-many, rollback, status, remove, health.
 
 `dispatch` — VPS-side forced-command dispatcher (DevPlan 116 B1): reads SSH_ORIGINAL_COMMAND
   (фолбэк — CLI args), парсит через deploy/ssh_command_parser (T1, DevPlan 118 D3), маршрутизирует verb
   через реестр _VERB_HANDLERS (170 W4-B3, CANONICAL_VERBS из shared/verbs.py):
-  ping → "pong"; exit → 0; status → ProjectStatus JSON (exit 0/1); verify → мост на
-  core.internal.verify.domain_verifier + verify_contracts; remove → DeployOrchestrator.remove();
-  receive → tar из stdin + DeployOrchestrator.receive().
+  ping → "pong"; exit → 0; status → ProjectStatus JSON (exit 0/1); health → docker inspect
+  State.Health.Status (read-only слово-контракт: healthy|starting|unhealthy|missing|error);
+  verify → мост на core.internal.verify.domain_verifier + verify_contracts;
+  remove → DeployOrchestrator.remove(); receive → tar из stdin + DeployOrchestrator.receive().
 
 `deliver` — операторская сторона (T5): ассемблирует payload, доставляет через
   ForcedCommandChannel (remote_cmd "receive <project> <version>"), печатает JSON с VPS,
@@ -29,12 +30,14 @@ Usage:
 ## @purpose  CLI entrypoint for DeployOrchestrator. Replaces the shell deploy pipeline and provides
 ##           direct access to all orchestrator operations from command line.
 ##           Command `dispatch` — VPS-side forced-command dispatcher по SSH_ORIGINAL_COMMAND (DevPlan 116
-##           B1 T2, U-04): receive/status/verify/remove/ping/exit через реестр verb→handler
+##           B1 T2, U-04): receive/status/health/verify/remove/ping/exit через реестр verb→handler
 ##           (_VERB_HANDLERS, 170 W4-B3 — декомпозиция _dispatch 163 LOC).
 ##           Command `receive` — читает Payload из stdin (tar) + версию из аргументов (D5), вызывает
 ##           DeployOrchestrator.receive().
 ##           Command `deliver` — операторская доставка через ForcedCommandChannel (T5).
 ##           Command `deploy-many` — project_names + channel, делегирует DeployOrchestrator.deploy_many().
+##           Command `health` (main-alias) — read-only verb для операторского ручного вызова
+##           (`orchestrator_cli health --project <p> [--service <s>]`).
 ## @scope    Entrypoint for SSH forced-command (dispatch/receive), shell scripts (deploy-many), операторов (deliver).
 ## @invariants
 ##   1. dispatch: SSH_ORIGINAL_COMMAND читается из env; фолбэк — CLI args; пусто → JSON-ошибка + exit 1
@@ -45,9 +48,16 @@ Usage:
 ##   6. PlatformError → return e.exit_code (B4-контракт: sys.exit только в main())
 ##   7. Channel selection: --scp для SCPChannel, --forced-command для ForcedCommandChannel,
 ##      дефолт — LocalChannel при отсутствии host (D7, T6)
-##   8. 170 W4-B3: реестр _VERB_HANDLERS — ровно CANONICAL_VERBS (6); handler'ы приватные,
+##   8. 170 W4-B3: реестр _VERB_HANDLERS — ровно CANONICAL_VERBS (7); handler'ы приватные,
 ##      семантика 1:1 (dispatch-ветки вынесены из _dispatch); main() тонкий, DeployOrchestrator
 ##      создаётся лениво (не для dispatch/deliver)
+##   9. B3 fix-forward (health): read-only verb `health <project> [<service>]` — docker inspect
+##      State.Health.Status через shared/docker_ops.docker_inspect (тот же слой, что engine);
+##      stdout ровно ОДНО слово: healthy|starting|unhealthy|missing|error; rc=0 для
+##      healthy|starting|unhealthy|missing (успешный запрос факта!), rc=1 только при внутренней
+##      ошибке инспекта (daemon недоступен/нет docker/timeout). НЕ пишет audit-записей.
+##      Потребитель: project_payload_delivery B3-предпробка «уже live» (ci-deploy
+##      forced-command-restricted — произвольный docker inspect невозможен).
 ## @rationale DevPlan 089 T6.6: единый CLI entrypoint заменяет shell deploy pipeline.
 ##            DevPlan 116 B1 T2 (U-04): receive игнорировал SSH_ORIGINAL_COMMAND — CI-верификация
 ##            была фиктивна; dispatch диспетчеризует SSH_ORIGINAL_COMMAND (receive|status|verify|
@@ -59,6 +69,11 @@ Usage:
 ##                       CANONICAL_VERBS из shared/verbs.py); verify-блок → _handle_verify (мост на
 ##                       verify_contracts); _deliver → _handle_deliver; удалён мёртвый
 ##                       _VERIFY_DOMAINS_SH; DeployOrchestrator в main() — ленивый
+##           2026-08-27 | B3 fix-forward — +_handle_health (read-only verb: docker inspect
+##                       State.Health.Status через shared/docker_ops.docker_inspect; слово-контракт
+##                       stdout healthy|starting|unhealthy|missing|error, rc 0/1); +health в
+##                       _VERB_HANDLERS/parse-args; +main-alias `health --project [--service]`;
+##                       +docker_runner DI (W4d, _DispatchContext) — тесты 0 патчей
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -78,10 +93,14 @@ from core.internal.deploy.channels import DeliveryChannel, ForcedCommandChannel,
 from core.internal.deploy.orchestrator import DeployOrchestrator
 from core.internal.deploy.ssh_command_parser import parse_ssh_command
 from core.internal.shared.deploy_paths import platform_remote_base, projects_base
+from core.internal.shared.docker_ops import docker_inspect
 from core.internal.shared.exceptions import ConfigValidationError, PlatformError
 
 # T9.7 (L-10): валидация project_name в dispatch ДО маршрутизации (канон shared/project_registry)
 from core.internal.shared.project_registry import validate_project_name as _validate_project_name
+
+# W4d (160 T4.4): DI-протокол subprocess-канала — docker_runner для health verb (docker_inspect)
+from core.internal.shared.subprocess_io import CommandRunner
 
 # W1-A1 (план 170): timeout=600 литерал (verify-подвызов) → канон DEPLOY_TIMEOUT (SoT, 600)
 from core.internal.shared.timeouts import DEPLOY_TIMEOUT
@@ -105,6 +124,8 @@ class _DispatchContext:
     ## @complexity — O(1)
     ## @invariants
     ##   - runner=None-эквивалент = subprocess.run (verify-подвызов)
+    ##   - docker_runner=None-эквивалент = прямой subprocess (docker_inspect, W4d-канон) —
+    ##     health-verb; fake-раннер в тестах (0 патчей)
     ##   - purge — ТОЛЬКО для remove (main-путь передаёт args.purge; dispatch — False)
     """
 
@@ -112,6 +133,7 @@ class _DispatchContext:
     stdin_stream: BinaryIO | None = None
     orchestrator_factory: Callable[..., DeployOrchestrator] | None = None
     runner: Callable[..., subprocess.CompletedProcess[str]] = field(default=subprocess.run)
+    docker_runner: CommandRunner | None = None
     purge: bool = False
 
 
@@ -193,6 +215,15 @@ def build_parser() -> argparse.ArgumentParser:
     # ── status ──
     st = sub.add_parser("status", help="Get project status")
     st.add_argument("--project", required=True, help="Project name")
+
+    # ── health — read-only verb alias (B3 fix-forward): docker inspect State.Health.Status ──
+    he = sub.add_parser(
+        "health",
+        help="Container health status (read-only verb: docker inspect State.Health.Status; "
+        "stdout healthy|starting|unhealthy|missing|error)",
+    )
+    he.add_argument("--project", required=True, help="Project name")
+    he.add_argument("--service", default="", help="Docker Compose service name (default: project)")
 
     # ── remove ──
     rm = sub.add_parser("remove", help="Remove project containers")
@@ -327,6 +358,79 @@ def _handle_status(args: str, ctx: _DispatchContext) -> int:
 
 
 # endregion FUNC__handle_status
+
+
+# ── health verb (B3 fix-forward): read-only docker inspect State.Health.Status ──────
+# Слово-контракт remote-probe (project_payload_delivery _build_default_health_probe):
+# stdout ровно ОДНО слово; rc=0 для healthy|starting|unhealthy|missing (успешный запрос
+# факта), rc=1 только при внутренней ошибке инспекта (daemon недоступен/нет docker/timeout).
+_HEALTH_STATE_WORDS: frozenset[str] = frozenset({"healthy", "starting", "unhealthy"})
+# Docker CLI: контейнер отсутствует → "Error: No such object: <id>" (факт «missing» получен
+# успешно → rc=0); иной rc≠0 (daemon unreachable/нет docker) → внутренняя ошибка → rc=1.
+_DOCKER_NO_SUCH_OBJECT = "No such object"
+
+
+# region FUNC__handle_health
+## @purpose  Verb handler: health \<project\> [\<service\>] → read-only docker inspect
+##           State.Health.Status через shared/docker_ops.docker_inspect (ТОТ ЖЕ слой, что
+##           engine/healthcheck_poll — никаких новых subprocess-обёрток). Слово-контракт:
+##           healthy|starting|unhealthy|missing|error; rc=0 для всех кроме error (rc=1) —
+##           контракт remote-probe (B3 fix-forward, project_payload_delivery).
+##           Read-only гарантия: НЕ пишет audit-записей, НЕ мутирует ничего (только LDD-логи).
+## @io       ⇥ args: str ("project [service]"; service опционален, дефолт = project),
+##           ctx: _DispatchContext (docker_runner — W4d DI канал docker_inspect; None = прямой
+##           subprocess) → ⎋ int exit code
+## @complexity — O(1) — один docker inspect (argv, shell=False)
+## @invariants
+##   - project обязателен (первый токен) → иначе JSON ERROR + exit 1 (fail-fast, паттерн verify)
+##   - service = tokens[1] или project (дефолт) — контейнер проекта canonical-name
+##   - rc=0 И status ∈ {healthy, starting, unhealthy} → слово + exit 0
+##   - rc=0 И иной stdout (""/"<no value>"/"none" — контейнер без healthcheck) → "missing" + exit 0
+##   - rc≠0 + "No such object" в stderr → "missing" + exit 0 (контейнер отсутствует — факт получен)
+##   - rc≠0 + иное → "error" + exit 1 (внутренняя ошибка инспекта: daemon недоступен, нет docker)
+##   - Shell-injection исключён: docker_inspect строит argv-список (shell=False); project/service
+##     валидируются dispatch T9.7-блоком ДО handler'а (тот же паттерн, что status/remove)
+def _handle_health(args: str, ctx: _DispatchContext) -> int:
+    """Read-only verb: docker inspect State.Health.Status → слово-контракт (B3 fix-forward)."""
+    tokens = (args or "").split()
+    project = tokens[0] if tokens else ""
+    service = tokens[1] if len(tokens) > 1 else project
+    if not project:
+        print(json.dumps({"status": "ERROR", "error": "health requires <project>"}))
+        return 1
+
+    logger.info("[IMP:8][health][inspect] project=%s service=%s", project, service)
+    result = docker_inspect(service, format="{{.State.Health.Status}}", runner=ctx.docker_runner)
+    if result.returncode != 0:
+        stderr = result.stderr or ""
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode("utf-8", errors="replace")
+        if _DOCKER_NO_SUCH_OBJECT in stderr:
+            # Контейнер отсутствует — честный факт «missing» (успешный запрос, rc=0 по контракту)
+            logger.info("[IMP:7][health][missing] %s — container not found (rc=%d)", service, result.returncode)
+            print("missing")
+            return 0
+        logger.error(
+            "[IMP:10][health][error] %s — docker inspect failed (rc=%d): %.200s",
+            service,
+            result.returncode,
+            stderr.strip() or "no stderr",
+        )
+        print("error")
+        return 1
+
+    status = (result.stdout or "").strip()
+    if status in _HEALTH_STATE_WORDS:
+        logger.info("[IMP:9][health][ok] %s — status=%s", service, status)
+        print(status)
+        return 0
+    # rc=0, но нет health-факта (<no value>/none/пусто — контейнер без healthcheck) → "missing"
+    logger.info("[IMP:7][health][missing] %s — no health status (stdout=%r) — treated as missing", service, status)
+    print("missing")
+    return 0
+
+
+# endregion FUNC__handle_health
 
 
 # region FUNC__handle_remove
@@ -493,6 +597,7 @@ _VERB_HANDLERS: dict[str, Callable[[str, _DispatchContext], int]] = {
     "ping": _handle_ping,
     "exit": _handle_exit,
     "status": _handle_status,
+    "health": _handle_health,
     "verify": _handle_verify,
     "remove": _handle_remove,
     "receive": _handle_receive,
@@ -516,7 +621,9 @@ assert set(_VERB_HANDLERS) == set(CANONICAL_VERBS), (
 ##           stdin_stream: BinaryIO | None = None (DI — stdin receive-канал; None = sys.stdin.buffer),
 ##           orchestrator_factory: Callable[..., DeployOrchestrator] | None = None (DI — фабрика
 ##           для receive/status; None = DeployOrchestrator),
-##           run_cmd: Callable | None = None (DI — subprocess-канал verify; None = subprocess.run)
+##           run_cmd: Callable | None = None (DI — subprocess-канал verify; None = subprocess.run),
+##           docker_runner: CommandRunner | None = None (DI — subprocess-канал docker_inspect health;
+##           None = прямой subprocess, W4d)
 ##           → ⎋ int exit code
 ## @complexity — O(N) где N = tar entries для receive, иначе O(1)
 ## @invariants
@@ -527,7 +634,7 @@ assert set(_VERB_HANDLERS) == set(CANONICAL_VERBS), (
 ##   - DI-параметры (None → канонические os.environ/sys.stdin/DeployOrchestrator/subprocess.run) —
 ##     поведение по умолчанию неизменно; тесты передают fake-каналы (0 патчей, W-H)
 ##   - 170 W4-B3: verb ∉ _VERB_HANDLERS недостижим (parse_ssh_command — только CANONICAL_VERBS);
-##     ветки ping/exit/status/verify/remove/receive вынесены в handler'ы (реестр — единственный маршрут)
+##     ветки ping/exit/status/health/verify/remove/receive вынесены в handler'ы (реестр — единственный маршрут)
 def _dispatch(
     argv: list[str],
     *,
@@ -535,6 +642,7 @@ def _dispatch(
     stdin_stream: BinaryIO | None = None,
     orchestrator_factory: Callable[..., DeployOrchestrator] | None = None,
     run_cmd: Callable[..., subprocess.CompletedProcess[str]] | None = None,
+    docker_runner: CommandRunner | None = None,
 ) -> int:
     """Route SSH_ORIGINAL_COMMAND (or CLI fallback args) to the matching verb handler (реестр)."""
     source: Mapping[str, str] = os.environ if env is None else env
@@ -572,7 +680,8 @@ def _dispatch(
     # ── T9.7 (L-10): validate_project_name ДО маршрутизации для verbs, принимающих проект.
     # Инъекция `;`/`../` в project_name (SSH_ORIGINAL_COMMAND) отсекается здесь — проект
     # не должен влиять на path-резолв/команды. Канон — shared/project_registry (U-56).
-    if verb in {"status", "remove", "receive"}:
+    # health — read-only verb, но тот же guard: первый токен = project (паттерн status/remove).
+    if verb in {"status", "remove", "receive", "health"}:
         project_token = (args or "").split()[0] if (args or "").split() else ""
         if project_token and not _validate_project_name(project_token):
             logger.error("[IMP:10][dispatch][invalid_project] Invalid/reserved project name: %r (T9.7)", project_token)
@@ -585,6 +694,7 @@ def _dispatch(
         stdin_stream=stdin_stream,
         orchestrator_factory=orchestrator_factory,
         runner=runner,
+        docker_runner=docker_runner,
     )
     handler = _VERB_HANDLERS[verb]  # parse_ssh_command возвращает только CANONICAL_VERBS (unreachable иначе)
     # args: str | None (ping/exit — None) → "" (все handler'ы нормализуют args or "")
@@ -838,6 +948,11 @@ def main(argv: list[str] | None = None) -> int:
             return _handle_rollback(args, orchestrator)
         if args.command == "status":
             return _handle_status(args.project, _DispatchContext(orchestrator=orchestrator))
+        if args.command == "health":
+            # Read-only verb (B3 fix-forward): orchestrator в ctx не используется — единая
+            # сигнатура handler'а (args: str, ctx). --service опционален (дефолт = project).
+            health_args = f"{args.project} {args.service}".strip() if args.service else args.project
+            return _handle_health(health_args, _DispatchContext(orchestrator=orchestrator))
         if args.command == "remove":
             return _handle_remove(
                 args.project,

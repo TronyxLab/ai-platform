@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: project-payload-delivery, bootstrap, deliver, pending-projects, awaiting-deploy, no_local_source, context, operator-sources, ForcedCommandChannel, receive, exit-2, DevPlan-017
-# STRUCTURE: ▶ CLI --node/--node-yaml → ∋ resolve context (env → node.yaml contexts[0].name) + host + projects_root → ○ per-project: ◇ <base>/<context>/<name> dir? → ✎ deliver (orchestrator_cli deliver, in-process, 0 subprocess) → ⊕ DeliverySummary → ⎋ exit 0|2
+# GREP_SUMMARY: project-payload-delivery, bootstrap, deliver, pending-projects, awaiting-deploy, no_local_source, context, operator-sources, ForcedCommandChannel, receive, exit-2, DevPlan-017, health-probe, skip-health, already-live, B3, health-verb, docker-inspect, idempotent-bootstrap
+# STRUCTURE: ▶ CLI --node/--node-yaml → ∋ resolve context (env → node.yaml contexts[0].name) + host + projects_root → ○ per-project: ◇ <base>/<context>/<name> dir? → ◇ host? → ◇ health-probe (ssh `health <project>` verb, skip-health) → ✎ deliver (orchestrator_cli deliver, in-process, 0 subprocess) → ⊕ DeliverySummary → ⎋ exit 0|2
 # region MODULE_CONTRACT
 ## @purpose  Локальная фаза bootstrap (P0, DevPlan 017): доставка payload'ов проектов контекста
 ##           на только что забутстрапленную ноду. Реальные исходники проектов лежат на
@@ -13,6 +13,18 @@
 ##           receive на ноде идемпотентен и сам поднимает compose (compose up + healthcheck) —
 ##           предпроверка «уже здоров» не нужна. Критерий владельца: голая нода + ОДНА команда
 ##           make bootstrap-node завершается при ЖИВЫХ проектах контекста.
+##           B3 (идемпотентность, владелец): ПОВТОРНЫЙ bootstrap = no-op — проекты НЕ
+##           передеплоиваются без необходимости. Перед каждым deliver — health-предпробка
+##           «уже live» (ssh read-only dispatch-verb `health <project>` — docker inspect
+##           State.Health.Status на ноде через ТОТ ЖЕ канал, что deliver: host=extract_node_host,
+##           user=ci-deploy, key=~/.ssh/ci_deploy_key, SSH_OPTS из shared/ssh_opts.py):
+##           rc=0 && stdout.strip()=="healthy" → skipped(skip-health:healthy)
+##           [IMP:8] — полный receive (tar+snapshots+hooks ~2.5s/проект) НЕ выполняется.
+##           Пробка best-effort: ошибка/нет контейнера → not-live → deliver продолжается
+##           (безопасный fallback — поведение идентично отсутствию пробки).
+##           B3 fix-forward: ci-deploy authorized_keys forced-command-restricted (S7) — raw
+##           `docker inspect` невозможен (unknown verb → exit 4); read-only verb `health`
+##           (CANONICAL_VERBS, orchestrator_cli) — канонический канал предпробки.
 ## @scope    Вызывается из core/entrypoints/bootstrap.sh (тонкий фасад: только вызов + exit-код).
 ##           Модуль живёт в deploy-слое (core/internal/deploy/) — операторская delivery-логика,
 ##           import-linter independence-bootstrap-deploy (DevPlan 163): deploy → bootstrap запрещён,
@@ -20,7 +32,9 @@
 ##           get_project_entries() (single parser canon, DevPlan 116 B6), а не context_deployer.
 ##           Кросс-модульные зависимости: orchestrator_cli.main (соседний deploy-слой — легально),
 ##           shared/node_yaml (NodeYaml + ProjectEntry), node_resolver.extract_node_host,
-##           shared/deploy_paths.projects_base.
+##           shared/deploy_paths.projects_base, shared/ssh_opts.SSH_OPTS (канон SSH-флагов),
+##           shared/timeouts.SSH_READ_TIMEOUT (канон read-only probe timeout — lib/ssh.sh ssh_read 60s).
+##           remote_executor НЕ используется — он в bootstrap-слое (forbidden-deploy-bootstrap).
 ## @invariants
 ##   - 0 subprocess: deliver вызывается нативно через orchestrator_cli.main (публичный API) —
 ##     приватный _handle_deliver НЕ импортируется (гейт private-imports, allowlist пуст)
@@ -40,6 +54,15 @@
 ##     НЕ трогается — receive реально кладёт payload до того, как следующий deploy_context
 ##     доберётся до проекта; на ЭТОМ прогоне bootstrap проект остаётся awaiting_deploy до
 ##     нашей фазы, после неё — жив (compose up выполнил receive)
+##   - B3: health-предпробка «уже live» — ssh read-only verb `health <project>` (docker inspect
+##     State.Health.Status на ноде, stdout слово-контракт; НЕ raw docker-команда — ci-deploy
+##     forced-command-restricted, S7) — ТОЛЬКО для проектов, прошедших no_local_source +
+##     no_remote_host (иначе deliver всё равно недоступен); DI-шов health_probe_fn (тесты,
+##     None → _build_default_health_probe(host))
+##   - skip-health (skipped, detail "skip-health:healthy") — НЕ failure (как no_local_source);
+##     пробка ошиблась/raise → not-live → deliver продолжается (безопасный fallback)
+##   - 0 subprocess для бизнес-логики: единственный subprocess — ssh-транспорт пробки
+##     (канон ForcedCommandChannel — subprocess.run(["ssh", ...]), НЕ inline python3)
 ## @rationale Q: Почему модуль в deploy/, а не bootstrap/deploy/?
 ##            A: import-linter independence-bootstrap-deploy (DevPlan 163 W-D): единственные
 ##            контрактные точки bootstrap→deploy перечислены в .importlinter ignore_imports;
@@ -61,6 +84,17 @@
 ##            core/internal/deploy/: зависимость context_deployer заменена локальным
 ##            _resolve_context_projects (shared NodeYaml.get_project_entries); bootstrap.sh
 ##            вызывает python3 -m core.internal.deploy.project_payload_delivery
+## @changes  2026-08-27 | B3 (идемпотентность, владелец) — health-предпробка «уже live»:
+##            +health_probe_fn DI (deliver_pending_projects), +_build_default_health_probe
+##            (ssh docker inspect через канал deliver: SSH_OPTS + ci-deploy@host + -i
+##            ~/.ssh/ci_deploy_key; rc=0 && healthy → skipped(skip-health:healthy) [IMP:8]);
+##            каналы ssh-opts/timeouts подключены (shared SoT, remote_executor НЕ тронут —
+##            forbidden-deploy-bootstrap)
+## @changes  2026-08-27 | B3 fix-forward (forced-command security): probe переведён на
+##            read-only dispatch-verb `health <project>` (CANONICAL_VERBS — orchestrator_cli
+##            _handle_health, docker inspect State.Health.Status через shared/docker_ops);
+##            raw `docker inspect` под ci-deploy невозможен (S7: authorized_keys заперт в
+##            orchestrator_cli dispatch → unknown verb → exit 4)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -70,6 +104,8 @@ import contextlib
 import io
 import logging
 import os
+import shlex
+import subprocess
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -79,12 +115,18 @@ from pathlib import Path
 # deliver-канала (0 subprocess, приватные имена НЕ импортируются — гейт private-imports).
 # bootstrap НЕ импортируется (forbidden-deploy-bootstrap): резолв проектов контекста — на
 # каноническом shared-парсере NodeYaml.get_project_entries (single parser canon, DevPlan 116 B6).
+# remote_executor НЕ используется — bootstrap-слой (forbidden-deploy-bootstrap, .importlinter:79).
+# SSH-канал пробки: SSH_OPTS (shared SoT флагов — тот же, что ForcedCommandChannel deliver) +
+# SSH_READ_TIMEOUT (канон read-only probe 60s — lib/ssh.sh ssh_read), transport — subprocess
+# ["ssh", ...] (канон channels/forced.py; 0 inline python3).
 from core.internal.deploy import orchestrator_cli
 from core.internal.shared.deploy_paths import projects_base
 from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError, ConfigValidationError
 from core.internal.shared.node_resolver import extract_node_host, resolve_node_yaml
 from core.internal.shared.node_yaml import NodeYaml
 from core.internal.shared.node_yaml.projects import ProjectEntry
+from core.internal.shared.ssh_opts import SSH_OPTS
+from core.internal.shared.timeouts import SSH_READ_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +142,17 @@ _OUTCOME_FAILED = "failed"
 _REASON_NO_LOCAL_SOURCE = "no_local_source"
 _REASON_NO_CONTEXT = "no_context"
 _REASON_NO_REMOTE_HOST = "no_remote_host"
+_REASON_HEALTHY = "healthy"  # B3: контейнер проекта уже healthy на ноде (skip-health)
+_CHANNEL_SKIP_HEALTH = "skip-health"  # канал skip'а health-предпробки (detail: skip-health:healthy)
+
+# ── SSH-канал health-предпробки (тот же, что ForcedCommandChannel deliver, channels/forced.py:78-80) ──
+_SSH_USER = "ci-deploy"  # дефолт ForcedCommandChannel (payload.metadata.get("user", "ci-deploy"))
+_CI_DEPLOY_KEY = "~/.ssh/ci_deploy_key"  # дефолт ForcedCommandChannel (key_file default)
+# Read-only dispatch-verb `health <project>` (CANONICAL_VERBS, orchestrator_cli _handle_health) —
+# ЕДИНСТВЕННАЯ команда, разрешённая probe'у: ci-deploy authorized_keys forced-command-restricted
+# (S7, users.py:654) заперт в `orchestrator_cli dispatch` — raw `docker inspect` невозможен
+# (unknown verb → exit 4). Вербный канал вместо raw-команды — B3 fix-forward.
+_HEALTH_PROBE_CMD_FMT = "health {}"
 
 
 # region DATACLASS_ProjectDeliveryLine
@@ -312,18 +365,119 @@ def _build_default_deliver(host: str) -> Callable[[str, Path], tuple[bool, str]]
 # endregion FUNC__build_default_deliver
 
 
+# region FUNC__build_default_health_probe
+# 🧐 TRAP[DECISION] · 2026-08-27 · RESOLVED · Health-предпробка — read-only dispatch-verb
+# ·   `health <project>` (B3 fix-forward, см. @changes) вместо raw `docker inspect`
+# · Rejected (ранее): probe через dispatch-verb status (found/stub, НЕ healthy-семантика) /
+# ·   root-ключ (другой канал, чем deliver — нарушает «тем же ключом что orchestrator_cli») /
+# ·   shared-хелпер remote_executor (bootstrap-слой — forbidden-deploy-bootstrap).
+# · Reason: raw `docker inspect` НЕВОЗМОЖЕН под ci-deploy (S7: authorized_keys
+# ·   forced-command-restricted → sshd исполнит orchestrator_cli dispatch с
+# ·   SSH_ORIGINAL_COMMAND="docker inspect ..." → unknown verb → exit 4 → probe=False →
+# ·   deliver на каждом резюме bootstrap — skip-health мёртв). fix-forward: read-only verb
+# ·   `health` (docker inspect State.Health.Status на ноде) в CANONICAL_VERBS — probe шлёт
+# ·   `health <project>`, stdout слово-контракт (healthy → True; иное/ошибка → False).
+# · Rev: RESOLVED 2026-08-27 — verb `health` реализован (orchestrator_cli._handle_health),
+# ·   probe переведён на него; workaround-ветка удалена
+def _build_default_health_probe(host: str) -> Callable[[str], bool]:
+    """Фабрика дефолтной health-предпробки «уже live» (B3 идемпотентность, DevPlan 017).
+
+    ▶ ┌host┐ → ⎋ _probe(project_name) → ssh `health <project>` (read-only dispatch-verb) →
+    │      ◇ rc==0 && out=="healthy" → True → False (missing/starting/unhealthy/error)
+
+    ## @purpose  B3: повторный bootstrap = no-op. Перед полным deliver (~2.5s/проект: tar +
+    ##            snapshots + hooks) пробка проверяет, что контейнер проекта УЖЕ healthy на ноде
+    ##            (read-only verb `health <project>` — orchestrator_cli _handle_health, docker
+    ##            inspect State.Health.Status; stdout слово-контракт healthy|starting|unhealthy|
+    ##            missing|error) — rc=0 && status=healthy → SKIP.
+    ##            Тот же SSH-канал, что deliver (host из extract_node_host, user=ci-deploy,
+    ##            key=~/.ssh/ci_deploy_key, SSH_OPTS из shared/ssh_opts.py — SoT флагов;
+    ##            transport subprocess ["ssh", ...] — канон channels/forced.py, 0 inline python3).
+    ##            ci-deploy forced-command-restricted (S7): raw `docker inspect` невозможен —
+    ##            verb `health` — ЕДИНСТВЕННЫЙ канал предпробки (B3 fix-forward).
+    ##            Пробка best-effort: НИКОГДА не raise (сбой ssh/timeout → False → deliver
+    ##            продолжается; реальный SSH-сбой проявится в deliver естественно, IMP:10).
+    ## @io — ⇥ host: str (node.host из node.yaml) → ⎋ Callable[[str], bool] (True = healthy)
+    ## @complexity — O(1) — один ssh-вызов (timeout SSH_READ_TIMEOUT=60s, канон ssh_read)
+    ## @invariants
+    ##   - rc==0 И stdout.strip()=="healthy" — единственное условие True
+    ##   - stdout "starting"/"unhealthy"/"missing" (rc=0) → False (факт получен, но НЕ healthy)
+    ##   - rc≠0 (внутренняя ошибка verb/ssh) → IMP:7 + False (not-live, НЕ маскируется)
+    ##   - (OSError, TimeoutExpired) → IMP:7 + False (not-live, НЕ маскируется)
+    ##   - host пуст → False (до пробки недостижимо: no_remote_host skip раньше в цикле)
+    ##   - remote-команда строится через shlex.quote(project_name) — инъекция `;`/`../`
+    ##     не выполнится на ноде (тот же guard, что ForcedCommandChannel remote_cmd)
+    """
+
+    def _probe(project_name: str) -> bool:
+        if not host:
+            logger.info("[IMP:7][projects][probe] %s — no host, cannot probe (treated as not-live)", project_name)
+            return False
+        # T9.7 (L-8) паттерн: project_name через shlex.quote — инъекция `;`/`../` не выполнится
+        # на ноде (тот же guard, что ForcedCommandChannel remote_cmd, channels/forced.py:95).
+        # Вербная форма `health <project>`: SSH_ORIGINAL_COMMAND пройдёт через
+        # orchestrator_cli dispatch (forced-command) — НЕ raw docker-команда.
+        remote_cmd = _HEALTH_PROBE_CMD_FMT.format(shlex.quote(project_name))
+        argv = [
+            "ssh",
+            "-i",
+            str(Path(_CI_DEPLOY_KEY).expanduser()),
+            *SSH_OPTS,
+            f"{_SSH_USER}@{host}",
+            remote_cmd,
+        ]
+        try:
+            result = subprocess.run(argv, capture_output=True, text=True, timeout=SSH_READ_TIMEOUT, check=False)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            # ssh недоступен/таймаут — НЕ маскируем: not-live → deliver упадёт естественно (IMP:10)
+            logger.info("[IMP:7][projects][probe] %s — probe error (treated as not-live): %s", project_name, exc)
+            return False
+        if result.returncode != 0:
+            # Внутренняя ошибка verb/ssh (rc=1 health-контракта) → not-live (deliver продолжит;
+            # реальный SSH-сбой проявится в deliver естественно — НЕ маскируем)
+            logger.info(
+                "[IMP:7][projects][probe] %s — probe error (rc=%s) — treated as not-live",
+                project_name,
+                result.returncode,
+            )
+            return False
+        status = result.stdout.strip()
+        if status == "healthy":
+            logger.info("[IMP:9][projects][probe] %s — healthy on node (skip-health eligible)", project_name)
+            return True
+        logger.info(
+            "[IMP:7][projects][probe] %s — not healthy on node (status=%r) — proceeding to deliver",
+            project_name,
+            status,
+        )
+        return False
+
+    return _probe
+
+
+# endregion FUNC__build_default_health_probe
+
+
 # region FUNC_deliver_pending_projects
 ## @purpose  Основная логика фазы: resolve контекста + проектов + host → per-project доставка
 ##           payload'ов через deliver-канал. Возвращает DeliverySummary (никогда не raise).
+##           B3 (идемпотентность): перед deliver — health-предпробка «уже live» (skip-health).
 ## @io       ⇥ node_name: str, node_yaml_path: str, projects_root: str | None = None,
 ##              deliver_fn: Callable[[str, Path], tuple[bool, str]] | None = None (DI-шов —
-##              тесты передают fake; None = _build_default_deliver(host))
+##              тесты передают fake; None = _build_default_deliver(host)),
+##              health_probe_fn: Callable[[str], bool] | None = None (DI-шов — тесты передают
+##              fake; None = _build_default_health_probe(host); True = проект уже healthy →
+##              skipped(skip-health:healthy))
 ##           → ⎋ DeliverySummary
 ## @complexity — O(P * D) где P = проекты контекста, D = deliver lifecycle
 ## @invariants
 ##   - Контекст пуст → ВСЕ проекты skipped(no_context) [IMP:7] — фаза НЕ фейлит bootstrap
 ##   - Локальный каталог \\<base\\>/\\<context\\>/\\<name\\> отсутствует → skipped(no_local_source) [IMP:7]
 ##   - host пуст → проекты с локальным каталогом skipped(no_remote_host) [IMP:7]
+##   - B3: health_probe_fn(proj.name) == True → skipped(skip-health:healthy) [IMP:8] — полный
+##     receive НЕ выполняется; пробка — ТОЛЬКО после no_local_source/no_remote_host
+##   - Пробка raise/False/ошибка → НЕ failure: not-live → deliver продолжается (безопасный
+##     fallback — поведение идентично отсутствию пробки; реальный SSH-сбой → deliver IMP:10)
 ##   - Исключение deliver_fn → failed (per-project, остальные продолжаются) — fail-visible IMP:10
 ##   - НЕ мутирует node.yaml / overlay'и (только читает); доставка — на ноду через SSH
 # region FUNC_deliver_pending_projects_body
@@ -333,6 +487,7 @@ def deliver_pending_projects(
     projects_root: str | None = None,
     *,
     deliver_fn: Callable[[str, Path], tuple[bool, str]] | None = None,
+    health_probe_fn: Callable[[str], bool] | None = None,
 ) -> DeliverySummary:
     """Deliver pending project payloads to a freshly bootstrapped node (P0, DevPlan 017)."""
     summary = DeliverySummary()
@@ -371,6 +526,8 @@ def deliver_pending_projects(
     deliver: Callable[[str, Path], tuple[bool, str]] = (
         deliver_fn if deliver_fn is not None else _build_default_deliver(host)
     )
+    # B3: health-предпробка «уже live» — тот же host/канал, что deliver (None → default-фабрика).
+    probe: Callable[[str], bool] = health_probe_fn if health_probe_fn is not None else _build_default_health_probe(host)
 
     # ── 4. Per-project доставка (skipped ≠ failure; failed → exit 2) ──
     for proj in projects:
@@ -392,6 +549,23 @@ def deliver_pending_projects(
                 _REASON_NO_REMOTE_HOST,
             )
             summary.add(ProjectDeliveryLine(proj.name, _OUTCOME_SKIPPED, _REASON_NO_REMOTE_HOST))
+            continue
+
+        # ── 4.1 B3 предпробка «уже live»: healthy контейнер → skip-health (0 полного receive) ──
+        # best-effort: raise/False → not-live → deliver продолжается (реальный SSH-сбой
+        # проявится в deliver естественно — НЕ маскируем; здесь только решаем «skip или нет»)
+        try:
+            already_healthy = probe(proj.name)
+        except Exception as exc:  # noqa: EXC — best-effort: сбой пробки ≠ failure доставки; deliver покажет реальную причину; # ruff: ignore[BLE001]
+            logger.warning("[IMP:7][projects] %s — health probe raised (treated as not-live): %s", proj.name, exc)
+            already_healthy = False
+        if already_healthy:
+            logger.info(
+                "[IMP:8][projects] %s — skip-health (status=%s, already live on node)",
+                proj.name,
+                _REASON_HEALTHY,
+            )
+            summary.add(ProjectDeliveryLine(proj.name, _OUTCOME_SKIPPED, f"{_CHANNEL_SKIP_HEALTH}:{_REASON_HEALTHY}"))
             continue
 
         logger.info("[IMP:8][projects] Delivering %s from %s (host=%s)", proj.name, project_dir, host)
