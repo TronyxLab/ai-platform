@@ -255,7 +255,7 @@ class StatusPageHandler(http.server.BaseHTTPRequestHandler):
         # ── TLS bundle (017 C4): platform_tls_days_left / platform_tls_self_signed ──
         # Только если tls-секция непуста (отсутствие live-директорий → серия не эмитится).
         # Отсутствующие поля → NaN (консистентно стилю deploy_duration).
-        tls_section = metrics.get("tls", {})
+        tls_section = data.get("tls") or metrics.get("tls", {})
         if tls_section:
             lines.append("# HELP platform_tls_days_left Days until TLS certificate expiry (NaN = unknown)")
             lines.append("# TYPE platform_tls_days_left gauge")

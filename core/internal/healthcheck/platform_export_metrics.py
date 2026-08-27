@@ -424,7 +424,7 @@ def main(env: Mapping[str, str] | None = None) -> int:
     try:
         tls_section = _collect_tls_metrics(env, logger)
         logger.info("[IMP:9][coordinator][main] TLS section collected: %d domain(s)", len(tls_section))
-    except Exception as exc:  # noqa: EXC — best-effort fail-safe C4: tls никогда не валит export; # ruff: ignore[BLE001]
+    except Exception as exc:  # ruff: ignore[BLE001] # noqa: EXC — best-effort fail-safe: tls не валит export
         logger.error("[IMP:10][coordinator][main] TLS collection failed: %s", exc)
         tls_section = {}
 
