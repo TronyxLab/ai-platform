@@ -37,7 +37,13 @@ include ../../templates/module.mk
 # ТОЛЬКО для таргета restore (target-specific variable) — текст рецепта остаётся
 # каноническим $(COMPOSE_CMD) (контракт docker_sole_path D70). Профиль фильтруется
 # нативным env COMPOSE_PROFILES=postgres («no service selected» устранён).
-PLATFORM_ROOT := $(abspath $(MODULE_DIR)/../..)
+# ⚠️ TRAP[BUG] · 2026-08-27 · P1 · F-19: root-платформа на НАНОДЕ — на один уровень выше.
+# · Symptom: restore на ноде падал «open /opt/platform/core/docker-compose.yml: no such file»
+#   (stop-фаза clean-stop), dev-прогон зелёный.
+# · Root: MODULE_DIR=<platform>/core/modules/postgres → ../.. = <platform>/core;
+#   рут compose живёт на ТРИ уровня выше MODULE_DIR (dev-раскладка маскировала +1).
+#PLATFORM_ROOT := $(abspath $(MODULE_DIR)/../..)
+PLATFORM_ROOT := $(abspath $(MODULE_DIR)/../../..)
 # SEC-0018: pre_restore снапшоты — ВНЕ retry-скана (spool_retry сканирует только postgres/ и app-data/)
 PRE_RESTORE_DIR := /var/lib/platform/backup-spool/pre-restore
 
@@ -69,6 +75,15 @@ backup: ## pg_dump all databases to backup spool
 # трогается (COMPOSE_PROFILES=postgres в фазах ниже). Target-specific variable —
 # только для этого таргета; текст рецепта остаётся каноническим $(COMPOSE_CMD) (D70).
 restore: COMPOSE_FILE = $(PLATFORM_ROOT)/docker-compose.yml
+# F-19b (017): рутовый compose интерполирует весь граф → stop/up требуют secrets+overlay;
+# внутри restore_psql.sh self-env ноды, а clean-stop/up идут ТЕМ ЖЕ каноном выше (PHASE 2/3).
+restore: export BK_SCRIPTS := $(abspath $(MODULE_DIR)/../backup-cron/scripts)
+restore: ENV_FLAGS = $(shell test -f /var/lib/platform/run/secrets.env && printf '%s ' --env-file /var/lib/platform/run/secrets.env)
+# F-19f (017): pg_dumpall --clean содержит DROP ROLE <session-user> — postgre запретит
+# дроп своей роли подключения. Узкий фильтр потока: скипаешь только self-DROP,
+# всё остальное проходит как есть (ON_ERROR_STOP сохраняет громкость прочего).
+# F-19c (017): NGINX_OVERLAY_DIR fallback вычисляется ВНУТРИ shell-рецепта (set-env guard),
+# НЕ в make-расширении: валидный путь требует node_detect на ноде; fake-path запрещён.
 
 ## ── RESTORE RUNBOOK (docs-in-code, REF-0009 / DATA-504 ≡ FAIL-0803) ──
 ## Полная DR-процедура восстановления кластера из off-site бэкапа:
@@ -114,10 +129,23 @@ restore: ## Restore from dump file (owner only, requires DUMP_FILE=)
 	@# кластер не «полуживой» во время заливки (DATA-504: restore поверх живого кластера).
 	@# F-031: root-compose (COMPOSE_FILE override выше) + профиль — «no service selected» guard.
 	@echo "[IMP:7][postgres-make][restore] Stopping postgres (clean stop, WAL flush)"
-	COMPOSE_PROFILES=postgres $(COMPOSE_CMD) stop --timeout $(STOP_TIMEOUT)
+	@if [ -z "$${NGINX_OVERLAY_DIR:-}" ]; then \
+		ND=$$(PYTHONPATH=$(PLATFORM_ROOT) $${CONVERGE_PYTHON:-python3} -m core.internal.shared.node_detect --detect-node-name 2>/dev/null) \
+			&& export NGINX_OVERLAY_DIR="/opt/node-configs/$$ND/overlays/nginx" \
+			|| { echo "[IMP:10][postgres-make][restore] ABORT: cannot resolve NGINX_OVERLAY_DIR (node detect failed)" >&2; exit 1; }; \
+	fi; \
+	COMPOSE_PROFILES=postgres $(COMPOSE_CMD) $(ENV_FLAGS) stop --timeout $(STOP_TIMEOUT)
 	@# PHASE 3: fresh start + readiness wait — psql требует слушающий сервер.
 	@echo "[IMP:7][postgres-make][restore] Starting postgres for restore"
-	COMPOSE_PROFILES=postgres $(COMPOSE_CMD) up -d
+	@if [ -z "$${NGINX_OVERLAY_DIR:-}" ]; then \
+		ND=$$(PYTHONPATH=$(PLATFORM_ROOT) $${CONVERGE_PYTHON:-python3} -m core.internal.shared.node_detect --detect-node-name 2>/dev/null) \
+			&& export NGINX_OVERLAY_DIR="/opt/node-configs/$$ND/overlays/nginx"; \
+	fi; \
+	if [ -z "$${NGINX_OVERLAY_DIR:-}" ]; then \
+		ND=$$(PYTHONPATH=$(PLATFORM_ROOT) $${CONVERGE_PYTHON:-python3} -m core.internal.shared.node_detect --detect-node-name 2>/dev/null); \
+		export NGINX_OVERLAY_DIR="/opt/node-configs/$$ND/overlays/nginx"; \
+	fi; \
+	COMPOSE_PROFILES=postgres $(COMPOSE_CMD) $(ENV_FLAGS) up -d
 	@RETRY=30; until docker exec $(CONTAINER) sh -c 'pg_isready -U "$$POSTGRES_USER"' >/dev/null 2>&1; do \
 		RETRY=$$((RETRY-1)); \
 		if [ $$RETRY -le 0 ]; then \
@@ -125,16 +153,11 @@ restore: ## Restore from dump file (owner only, requires DUMP_FILE=)
 		fi; sleep 2; done
 	@# PHASE 4: заливка с fail-fast — ON_ERROR_STOP=1 прерывает на ПЕРВОЙ ошибке SQL
 	@# (раньше молча получали «Restore complete» над полу-смесью). pipefail: rc gunzip не теряется.
-	@if [[ "$(DUMP_FILE)" == *.gz ]]; then \
-		set -o pipefail; \
-		gunzip -c "$(DUMP_FILE)" | docker exec -i $(CONTAINER) sh -c 'psql -v ON_ERROR_STOP=1 -U "$$POSTGRES_USER" < /dev/stdin' \
-			|| { echo "[IMP:10][postgres-make][restore] FAIL: psql ON_ERROR_STOP aborted — cluster in PARTIAL state; inspect pre_restore_*.sql snapshot in $(PRE_RESTORE_DIR)/" >&2; exit 1; } \
-	else \
-		set -o pipefail; \
-		docker exec -i $(CONTAINER) sh -c 'psql -v ON_ERROR_STOP=1 -U "$$POSTGRES_USER" < /dev/stdin' < "$(DUMP_FILE)" \
-			|| { echo "[IMP:10][postgres-make][restore] FAIL: psql ON_ERROR_STOP aborted — cluster in PARTIAL state; inspect pre_restore_*.sql snapshot in $(PRE_RESTORE_DIR)/" >&2; exit 1; } \
-	fi
-	@echo "[IMP:9][postgres-make][restore] Restore complete from $(DUMP_FILE) — run make healthcheck to verify"
+	@# F-19 (017): единый заливочный канал — restore_psql.sh (decrypt→filter→psql -d postgres).
+	@set -o pipefail; \
+	bash $(BK_SCRIPTS)/restore_psql.sh "$(DUMP_FILE)" \
+		|| { RC=$$?; echo "[IMP:10][postgres-make][restore] FAIL rc=$$RC — cluster in PARTIAL state; inspect pre_restore_*.sql snapshot in $(PRE_RESTORE_DIR)/" >&2; exit $$RC; }
+@echo "[IMP:9][postgres-make][restore] Restore complete from $(DUMP_FILE) — run make healthcheck to verify"
 
 ## ── DR-порядок и стратегия чистоты (plan 012 T7 / F-032, owner-канон) ──
 ## Порядок DR: «postgres-only → restore → приложения» — восстановление выполняется на

@@ -311,3 +311,29 @@ serial identical); полный flow теперь покрыт contractом fail
 ### NOTE-N6 · сетевые артефакты прошлых эпох
 На ноде остались staging-*/test-* сети от предыдущих инсталляций (миграция
 /opt сохранялась). Не мешают; чистка — операторское решение после промоута.
+
+---
+
+## ФАЗА F — DR: БЭКАПЫ И RESTORE (11:00–12:30)
+
+| # | Проверка | Результат |
+|---|----------|-----------|
+| F1 | Полный цикл pg_dumpall→gzip→age→S3 | ✅ UPLOAD VERIFIED sha256 b09e3c1a…; sentinel lifecycle корректен |
+| F2 | Restore round-trip каноническим make restore DUMP_FILE=.age из S3 | ✅ «Restore complete» после F-19 серии (см. ниже); pre-restore snapshot работал каждый прогон |
+| F3 | age-key-backup off-node | ✅ s3://tronyx-vps-backup/age-key-backup/…enc private ACL, sha256 match |
+| F4 | Nightly cron + RPO | ✅ /etc/cron.d внутри контейнера: 01:30 retry · 03:00 dump · 03:30 app-data · 04:00 cleanup · 05:00 retention · hourly WAL; flock-guards |
+
+### F-19 (серия P1) · restore round-trip вскрыла 5 дефектов DR-канала
+1. PLATFORM_ROOT на один уровень выше на ноде (root-compose путь /opt/platform/core/docker-compose.yml отсутствовал).
+2. stop/up рутовым compose требуют секреты+NGINX_OVERLAY_DIR даже под профилем postgres (интерполяция всего графа).
+3. .age-артефакт скормлен psql сырьём → добавлен age_decrypt_stdout.py (plaintext В STDOUT, identity tmp+wipe).
+4. psql без -d postgres: DROP DATABASE «currently open» → admin-db подключение.
+5. pg_dumpall --clean содержит DROP ROLE <session-user> («cannot drop») → self-role фильтр потока.
+Финал: весь пайплайн вынесен в backup-cron/scripts/restore_psql.sh (manual round-trip GREEN ×2,
+make-путь «Restore complete»); Makefile использует его одной строкой (устранён класс
+make-context env расхождений). Evidence: логи прогонов restore в logs/make/.
+NOTE: SEC-0018 остаётся верным — pre_restore_* в отдельном каталоге вне retry-scan.
+
+### NOTE-N7 · S3-имена легаси
+Секреты ноды несут S3_ENDPOINT (канон S3_ENDPOINT_URL из platform-infra.yaml);
+модульный код принимает оба. Rev: сузить матрицу ноды до канона при след. ротации.
