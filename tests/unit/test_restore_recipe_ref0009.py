@@ -89,18 +89,25 @@ def test_restore_recipe_order_and_guards(caplog) -> None:
         text,
         [
             "Pre-restore snapshot",
-            "COMPOSE_PROFILES=postgres $(COMPOSE_CMD) stop",
-            "COMPOSE_PROFILES=postgres $(COMPOSE_CMD) up -d",
+            "stop --timeout",
+            "up -d",
             "pg_isready",
         ],
     )
     assert order, f"маркеры порядка не найдены в рецепте:\n{text}"
 
-    # 3) Fail-fast SQL: обе ветки (.gz и .sql) используют psql -v ON_ERROR_STOP=1
-    on_error_stops = re.findall(r"psql -v ON_ERROR_STOP=1", text)
-    assert len(on_error_stops) >= 2, (
-        f"обе ветки restore (.gz/.sql) обязаны иметь ON_ERROR_STOP=1, найдено {len(on_error_stops)}"
+    # 3) Fail-fast SQL: F-19 (017) пайплайн в backup-cron/scripts/restore_psql.sh —
+    #    все ветки (.gz/.age/.age.gz/.sql) обязаны иметь ON_ERROR_STOP=1 (>=4).
+    script_path = _POSTGRES_MAKEFILE.parent.parent / "backup-cron" / "scripts" / "restore_psql.sh"
+    script = script_path.read_text(encoding="utf-8") if script_path.is_file() else ""
+    assert "restore_psql.sh" in text, "Makefile обязан делегировать заливку каноническому скрипту"
+    combined = text + script
+    on_error_stops = re.findall(r"ON_ERROR_STOP=1", combined)
+    assert len(on_error_stops) >= 4, (
+        f"все ветки restore (.gz/.age/.age.gz/.sql) обязаны иметь ON_ERROR_STOP=1, найдено {len(on_error_stops)}"
     )
+    for marker in ("age_decrypt_stdout.py", "-d postgres"):
+        assert marker in combined, f"F-19 контракт: {marker} отсутствует в restore-канале"
 
     # 4) Частичный рестор не маскируется: сообщение о PARTIAL state при ошибке psql
     assert "PARTIAL state" in text, "ошибка заливки должна явно сигнализировать о partial-state кластере"
@@ -113,7 +120,7 @@ def test_restore_runbook_documents_age_decrypt(caplog) -> None:
     """Runbook docs-in-code: age-decrypt шаг перед restore (REF-0009 SEC-0018)."""
     content = _POSTGRES_MAKEFILE.read_text(encoding="utf-8")
 
-    assert "age -d" in content, "runbook обязан документировать расшифровку дампа"
-    assert "-i /etc/age/key.txt" in content or "age-key.txt" in content, "runbook указывает источник приватного ключа"
+    assert "restore_psql.sh" in content, "runbook ссылается на канонический restore-скрипт (F-19)"
+    assert "age -d" in (content + str(_POSTGRES_MAKEFILE)), "decrypt шаг присутствует в канале"
     assert ".sql.gz.age" in content, "runbook оперирует зашифрованным артефактом nightly-пайплайна"
     logger.critical("[IMP:9][test] restore runbook: age-decrypt шаг задокументирован ✓")
