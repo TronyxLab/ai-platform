@@ -51,7 +51,7 @@ if [ "${1:-}" = "--changed" ]; then
         # shellcheck disable=SC2086
         # намеренное word-splitting в список файлов (_CHANGED_PY)
         set -- $_CHANGED_PY
-        echo "[IMP:8][pyright-hook] changed-files scope: $(printf '%s' "${_CHANGED_PY}" | wc -l | tr -d ' ') .py file(s)" >&2
+        echo "[IMP:8][pyright-hook] changed-files scope: $(printf '%s\n' "${_CHANGED_PY}" | grep -c '') .py file(s)" >&2
     else
         echo "[IMP:8][pyright-hook] --changed: пустой changed-набор (clean checkout) — full-repo scan (false-green guard)" >&2
     fi

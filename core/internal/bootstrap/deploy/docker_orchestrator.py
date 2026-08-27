@@ -135,6 +135,9 @@ from core.internal.shared.docker_compose import (
 from core.internal.shared.docker_compose import (
     docker_compose_up as _shared_docker_compose_up,
 )
+from core.internal.shared.docker_compose import (
+    docker_prebuild_pull as _shared_docker_prebuild_pull,
+)
 
 # DevPlan 116 B5 T1: таймауты — единый реестр shared/timeouts.py (U-11, гейт timeout_literals)
 from core.internal.shared.timeouts import (
@@ -498,15 +501,17 @@ def _phase_observability(
 
 
 # region FUNC__phase_rebuild
-## @purpose  E1 rebuild phase: content-hash skip → docker compose build → save hash.
-##           Возвращает (ok, has_local_build): ok=False → deploy abort; has_local_build →
-##           флаг для --force-recreate в up-фазе.
+## @purpose  E1 rebuild phase: content-hash skip → pre-pull пинненных баз (F-03) → docker compose
+##           build → save hash. Возвращает (ok, has_local_build): ok=False → deploy abort;
+##           has_local_build → флаг для --force-recreate в up-фазе.
 ## @io       ⇥ module_name, module_dir, compose_file, compose_args
 ##           ⎋ tuple[bool, bool] — (success, has_local_build)
-## @complexity 3 — build: detection + content-hash skip + build/save
+## @complexity 3 — build: detection + content-hash skip + pre-pull + build/save
 ## @invariants
 ##   - hermes-agent исключён (свой workflow в _phase_hermes)
 ##   - Content-hash skip: source unchanged → только up --force-recreate
+##   - Pre-pull баз (docker_prebuild_pull) — перед каждым реальным build; best-effort:
+##     провал НЕ абортит сборку (build — арбитр, образ может быть в локальном кеше)
 ##   - Сбой build → False (deploy abort)
 def _phase_rebuild(
     module_name: str,
@@ -557,6 +562,20 @@ def _phase_rebuild(
                 return True, has_local_build
 
             logger.info("[IMP:7][_phase_rebuild][build] Rebuilding image for %s (build: detected)", module_name)
+
+            # ── F-03 (017-launch-validation P0): pre-pull пинненных баз ДО сборки ──
+            # BuildKit НЕ ретраит docker-pull внутри build — первый массовый пул базовых
+            # образов с docker.io на голой ноде транзиентно падает (троттлинг); pre-pull
+            # с retry 5/15/45 (docker_prebuild_pull) детерминизирует холодный bootstrap.
+            # Best-effort: провал pre-pull НЕ абортит сборку (база может быть уже в
+            # локальном кеше — build остаётся арбитром; fail-fast был бы регрессией).
+            if not _shared_docker_prebuild_pull(str(Path(module_dir) / module_name)):
+                logger.error(
+                    "[IMP:10][_phase_rebuild][prebuild_pull_fail] Pre-pull of base images failed for %s — build proceeds (may fail on pull)",
+                    module_name,
+                )
+            logger.info("[IMP:8][_phase_rebuild][prebuild_pull] Base-image pre-pull finished for %s", module_name)
+
             # T4.3 (DevPlan 116 B5): shared docker_compose_build — sole path (timeout BUILD_TIMEOUT)
             if not _shared_docker_compose_build(
                 str(Path(module_dir) / module_name),

@@ -44,6 +44,9 @@
 ## @changes  2026-08-25 | DevPlan meta-refactoring REF-0103 — +HEALTHCHECK_CMD_TIMEOUT (60),
 ##                      +DOCKER_AUTH_TIMEOUT (60), +LITELLM_REQUEST_TIMEOUT (120): только НОВЫЕ
 ##                      имена рядом с существующими (freeze P3 п.1 — rename запрещён)
+## @changes  2026-08-27 | F-03 (017-launch-validation P0) — +PREBUILD_PULL_ATTEMPTS (4),
+##                      +PREBUILD_PULL_BACKOFF_SECONDS ([5,15,45]): pre-pull пинненных баз
+##                      build-модулей (docker_prebuild_pull) — окно 65s на транзиентный троттлинг
 # endregion MODULE_CONTRACT
 
 # ── Docker domain ────────────────────────────────────────────────────────────
@@ -166,6 +169,12 @@ RETRY_COUNT = 2
 
 # База экспоненциального backoff state_machine (2**attempt: 2, 4, 8 — транзиентные ошибки шагов bootstrap)
 RETRY_BACKOFF_EXPONENTIAL_BASE = 2
+
+# Pre-pull пинненных баз build-модулей (F-03, 017-launch-validation P0): docker_prebuild_pull.
+# 3 ретрая (итого 4 попытки), задержки 5/15/45 — окно 65s покрывает транзиентный
+# троттлинг docker.io на голой ноде (buildkit не ретраит pull внутри сборки).
+PREBUILD_PULL_ATTEMPTS = 4
+PREBUILD_PULL_BACKOFF_SECONDS: list[int] = [5, 15, 45]
 
 # Таймаут curl Tor-proxy healthcheck (tor_proxy_check.py, DevPlan 118 E5 — MAX_TIME=30)
 TOR_PROXY_CURL_TIMEOUT = 30

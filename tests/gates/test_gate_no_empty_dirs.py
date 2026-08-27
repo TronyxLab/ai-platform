@@ -37,6 +37,11 @@ _SKIP_PARTS = {
     ".kilo",
     "load-results",
     ".worktrees",
+    # 2026-08-27: projects/ — gitignored операторская зона контекстов (~/projects
+    # канон живёт вне репо, но на dev-машинах scaffolder'ы создают projects/<ctx>/
+    # внутри дерева); внешний процесс может пересоздавать каталоги в этой зоне
+    # во время гейта (замечено live: projects/asi-faq ×3 за 40 мин).
+    "projects",
 }
 
 

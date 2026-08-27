@@ -16,6 +16,9 @@
 ## @changes 2026-08-16 | DevPlan 177 W3.1/W3.2 — +retry.py (40-й) +http_client.py (41-й); дедупликация 4 retry-циклов и 5 HTTP-клиентов
 ## @changes 2026-08-16 | DevPlan 003 B1 — +notifications.py (44-й); единый notifier-контракт
 ##           (Notification/envelope/escape/resolve_chat_id SoT/notify_event; telegram_notifier shim)
+## @changes 2026-08-27 | F-03 (017-launch-validation P0) — +dockerfile_bases.py (45-й); парсер
+##           внешних FROM-баз Dockerfile (two-pass stage-алиасы, digest-pin) — вход pre-pull
+##           docker_prebuild_pull (детерминизация холодного bootstrap build-модулей)
 # endregion MODULE_CONTRACT
 
 # core/internal/shared/ — инвентарь модулей
@@ -31,6 +34,7 @@
 | `crypto.py` | APR1/htpasswd хэширование (openssl passwd -apr1, детерминизм через salt) | `hash_apr1()`, `generate_htpasswd_entry()`, CLI `hash/entry [--salt]` | lib/secrets.sh, secrets_manager |
 | `docker_auth.py` | Единый Docker registry auth (заменяет 5 дублирующихся точек) | `docker_login()`, `ghcr_login()`, `configure_docker_auth()` | bootstrap registry-auth, phases.py |
 | `docker_compose.py` | Shared compose-операции: pull/build/up/healthcheck_poll | `docker_compose_pull()`, `docker_compose_build()`, `docker_compose_up()`, `healthcheck_poll()` | context_deployer, docker_orchestrator, DeployEngine |
+| `dockerfile_bases.py` | Парсер ВНЕШНИХ базовых образов из Dockerfile (FROM-строки, two-pass multi-stage алиасы, digest-pin детект; F-03 pre-pull) | `parse_pinned_bases()`, `module_base_images()` | docker_compose (docker_prebuild_pull), docker_orchestrator._phase_rebuild (build-модули status-page/backup-cron/hermes-agent) |
 | `docker_ops.py` | Единый слой docker-операций — ps/inspect/exec/stop/rm/tag/image/network/volume/stats/info/manifest + CLI `--shell` для shell-фасадов | `docker_ps()`, `ps_container_names()`, `docker_inspect()`, `docker_exec()`, `docker_stop()`, `docker_rm()`, `docker_tag()`, `docker_image_inspect(_many)()`, `docker_manifest_inspect(_raw)()`, `docker_network_inspect(_raw/_create)()`, `docker_volume_inspect()`, `docker_info()`, `docker_stats()` | deploy_engine, docker_orchestrator, observability, orphan_reconciler, converge/{vhosts,networks,volumes,runtime}, modules_healthcheck, docker_collector, deploy/orchestrator, provisioner, reconciler_projects, preflight, hermes_workflow, phases/docker, docker_registry_auth, state_store, security_posture, docker_compose (примитивы), lib/docker.sh (--shell фасад), gate docker_sole_path |
 | `env_facts.py` | Абстракция системных фактов окружения (is_root, which и др.; 7 модулей читали os.geteuid()/shutil.which() напрямую) | `EnvironmentFacts` (Protocol), `SystemEnvironmentFacts`, `default_env_facts()` | bootstrap/install_tor_proxy (root-guard), bootstrap/security_posture (root-guard), healthcheck/watchdog (which docker), bootstrap/tor_transport (which transport-bin), validate/validate_orchestrator (which ajv), deploy/verify_contracts |
 | `env_reader.py` | Чтение значений из env-файла для make-рецептов (last-match + export-строки + пусто при отсутствии) | `get_env_value()`, CLI `get VAR --file .env` | makefiles/helpers.mk (dev-certs/dev-metrics/provision-llm), makefiles/dev.mk (dev-hosts) |

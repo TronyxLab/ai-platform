@@ -11,12 +11,14 @@
 ##           путь пакета сохраняется как есть (path-preserving).
 ## @invariants
 ##   1. Полный прежний API: handle_hermes_agent + _shared_docker_compose_config/_shared_check_image_exists/
-##      _shared_docker_compose_build + BUILD_TIMEOUT + logger (имена-атрибуты пакета — unittest.patch цели)
+##      _shared_docker_compose_build/_shared_docker_prebuild_pull + BUILD_TIMEOUT + logger
+##      (имена-атрибуты пакета — unittest.patch цели)
 ##   2. DI-fallback БЕЗ циклических импортов: _shared_* читаются из модуль-глобала __init__ НА ВЫЗОВЕ
 ##      (wrapper handle_hermes_agent); подмодули — чистый DAG (import-linter acyclic-internal-domains)
 ##   3. Image resolution via `docker compose config --images` (single source of truth)
 ##   4. If ALL images exist in registry → returns True immediately (no build needed)
-##   5. Missing image → единственный docker compose build из source (BUILD_TIMEOUT)
+##   5. Missing image → pre-pull пинненных баз (F-03, best-effort) + единственный docker compose
+##      build из source (BUILD_TIMEOUT)
 ##   6. Failure to resolve images from compose config is fatal (return False)
 ##   7. Все docker compose вызовы — через shared/docker_compose.py (гейт docker_sole_path)
 ##   8. НЕТ L1 pull / GHCR org / bare-tag / docker_tag — L1 схлопнут в L2 (DevPlan 002)
@@ -34,6 +36,8 @@
 ##           flow = config --images → all found? True : compose build (один build call)
 ##           2026-08-22 | T3.7 simplify — hermes_workflow.py → пакет hermes_workflow/ (images.py, verify.py,
 ##           deploy.py, __main__.py); DI-fallback перенесён в wrapper __init__ (patch-compat, 0 циклов)
+##           2026-08-27 | F-03 (017-launch-validation P0) — prebuild_pull_fn DI-шов (fallback
+##           _shared_docker_prebuild_pull): pre-pull баз hermes Dockerfile ДО build fallback
 # 🧐 TRAP[DECISION] · 2026-08-22 · — · LDD-логи при split: FUNC-слот [handle_hermes_agent] сохранён
 # · в извлечённых helpers (images/verify) · Rejected: per-function слоты ([resolve_compose_images],
 # · [verify_images_present], [build_images_from_source]) · Reason: байт-в-байт траектория workflow-фазы +
@@ -49,6 +53,7 @@ from collections.abc import Callable
 from core.internal.shared.docker_compose import check_image_exists as _shared_check_image_exists
 from core.internal.shared.docker_compose import docker_compose_build as _shared_docker_compose_build
 from core.internal.shared.docker_compose import docker_compose_config as _shared_docker_compose_config
+from core.internal.shared.docker_compose import docker_prebuild_pull as _shared_docker_prebuild_pull
 from core.internal.shared.timeouts import BUILD_TIMEOUT
 
 from .deploy import handle_hermes_agent as _handle_hermes_agent_impl
@@ -66,7 +71,7 @@ logger = logging.getLogger(__name__)
 ## @complexity 2 — compose config --images + per-image check + conditional build
 ## @invariants
 ##   - Image resolution via compose config --images (single source of truth)
-##   - Missing image → единственный docker compose build из source
+##   - Missing image → pre-pull баз (F-03, best-effort) + единственный docker compose build из source
 ##   - Failure to resolve images from compose config is fatal (return False)
 ##   - If ALL images exist in registry, returns True immediately (no build needed)
 ## @rationale Q: Why wrapper instead of in-place fallback? A: T3.7 split — fallback обязан читать
@@ -77,9 +82,10 @@ logger = logging.getLogger(__name__)
 # · Rejected: прямой вызов _shared_*/GHCR_ORG (тест патчил модуль-глобалы monkeypatch.setattr)
 # · Reason: seam = тестируемость реального вызова; docker-объект удалён DevPlan 002 (L1 коллапс);
 # ·   _shared_* fallback читает модуль-глобал пакета на вызове (wrapper __init__) — unittest-patch
-# ·   (test_hermes_workflow) жив; T3.7: fallback вынесен в wrapper — patch-цели не изменились
+# ·   (test_hermes_workflow) жив; T3.7: fallback вынесен в wrapper — patch-цели не изменились;
+# ·   F-03 (2026-08-27): +prebuild_pull_fn — четвёртый DI-шов (fallback _shared_docker_prebuild_pull)
 # · Rev: при консолидации compose-примитивов в единый объект-канал — слить compose_config_fn/
-# ·   check_image_exists_fn/compose_build_fn в один DI-объект
+# ·   check_image_exists_fn/compose_build_fn/prebuild_pull_fn в один DI-объект
 def handle_hermes_agent(
     compose_args: list[str],
     module_dir: str,
@@ -89,6 +95,7 @@ def handle_hermes_agent(
     | None = None,  # DI: docker_compose_config (None → пакетный _shared_*)
     check_image_exists_fn: Callable[..., bool] | None = None,  # DI: check_image_exists (None → пакетный _shared_*)
     compose_build_fn: Callable[..., bool] | None = None,  # DI: docker_compose_build (None → пакетный _shared_*)
+    prebuild_pull_fn: Callable[..., bool] | None = None,  # DI: docker_prebuild_pull (None → пакетный _shared_*)
 ) -> bool:
     return _handle_hermes_agent_impl(
         compose_args,
@@ -99,6 +106,7 @@ def handle_hermes_agent(
         if check_image_exists_fn is not None
         else _shared_check_image_exists,
         compose_build_fn=compose_build_fn if compose_build_fn is not None else _shared_docker_compose_build,
+        prebuild_pull_fn=prebuild_pull_fn if prebuild_pull_fn is not None else _shared_docker_prebuild_pull,
     )
 
 

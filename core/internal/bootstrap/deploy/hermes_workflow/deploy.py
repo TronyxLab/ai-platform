@@ -14,10 +14,15 @@
 ##   3. все образы найдены → True (build не вызывается)
 ##   4. missing → единственный build из source (BUILD_TIMEOUT) → True/False
 ##   5. LDD-логи — байт-в-байт прежние (FUNC-слот [handle_hermes_agent] — единая workflow-траектория)
+##   6. missing → pre-pull пинненных баз hermes Dockerfile (docker_prebuild_pull, F-03) ДО build;
+##      best-effort: False ИЛИ exception НЕ абортят сборку — build остаётся арбитром (как _phase_rebuild)
 ## @rationale Q: Why impl с обязательными DI-аргументами? A: T3.7 — fallback _shared_* в подмодуле
 ##   потребовал бы self-import пакета (цикл, RED acyclic-internal-domains, 170 W10-B); обязательные
 ##   аргументы делают зависимость явной, wrapper __init__ — единственная точка fallback (TRAP[DI-SEAM]).
 ## @changes  2026-08-22 | T3.7 simplify — извлечено из hermes_workflow.py: impl + _resolve_compose_dir
+## @changes  2026-08-27 | F-03 (017-launch-validation P0) — prebuild_pull_fn DI-шов + pre-pull баз
+##           ДО build fallback (холодный bootstrap hermes упал на ноде первым — _phase_rebuild
+##           pre-pull не покрывал hermes_workflow, сборка идёт через compose_build_fn DI)
 # endregion MODULE_CONTRACT
 
 import logging
@@ -63,7 +68,8 @@ def _resolve_compose_dir(compose_args: list[str], module_dir: str, module_name: 
 ## @complexity 2 — compose config --images + per-image check + conditional build
 ## @invariants
 ##   - Image resolution via compose config --images (single source of truth)
-##   - Missing image → единственный docker compose build из source
+##   - Missing image → pre-pull баз (docker_prebuild_pull, F-03) ДО build; best-effort:
+##     False/exception → build proceeds (build — арбитр)
 ##   - Failure to resolve images from compose config is fatal (return False)
 ##   - If ALL images exist in registry, returns True immediately (no build needed)
 def handle_hermes_agent(
@@ -74,6 +80,7 @@ def handle_hermes_agent(
     compose_config_fn: Callable[..., subprocess.CompletedProcess[str]],
     check_image_exists_fn: Callable[..., bool],
     compose_build_fn: Callable[..., bool],
+    prebuild_pull_fn: Callable[..., bool],
 ) -> bool:
     logger.info("[IMP:7][handle_hermes_agent][start] Handling hermes-agent pre-deploy checks")
     compose_dir = _resolve_compose_dir(compose_args, module_dir, module_name)
@@ -82,6 +89,30 @@ def handle_hermes_agent(
         return False
     if verify_images_present(images, check_image_exists_fn):
         return True
+    # ── F-03 (017-launch-validation P0): pre-pull пинненных баз hermes Dockerfile ДО первого
+    #    compose build (fallback build-from-source). _phase_rebuild pre-pull НЕ покрывает hermes —
+    #    его сборка идёт этим workflow (compose_build_fn DI); при холодном bootstrap hermes упал
+    #    на ноде первым (BuildKit не ретраит pull). Best-effort, как в _phase_rebuild: False ИЛИ
+    #    exception НЕ абортят сборку — build остаётся арбитром (база может быть в локальном кеше).
+    hermes_module_dir = str(Path(module_dir) / module_name)
+    try:
+        pre_pull_ok = prebuild_pull_fn(hermes_module_dir)
+    # ruff: ignore[BLE001] — pre-pull best-effort: exception не должен ронять деплой (build — арбитр)
+    except Exception as exc:  # noqa: EXC — pre-pull best-effort: exception не должен ронять деплой
+        logger.warning(
+            "[IMP:7][handle_hermes_agent][prebuild_pull_exc] Pre-pull of base images raised for %s: %s — build proceeds (build is the arbiter)",
+            module_name,
+            exc,
+        )
+    else:
+        if not pre_pull_ok:
+            # docker_prebuild_pull сам логирует IMP:10 при исчерпании ретраев; здесь — мягкое
+            # продолжение (build — арбитр, fail-fast был бы регрессией холодного bootstrap).
+            logger.warning(
+                "[IMP:7][handle_hermes_agent][prebuild_pull_fail] Pre-pull of base images failed for %s — build proceeds (may fail on pull)",
+                module_name,
+            )
+        logger.info("[IMP:8][handle_hermes_agent][prebuild_pull] Base-image pre-pull finished for %s", module_name)
     return build_images_from_source(str(compose_dir), compose_args, compose_build_fn)
 
 

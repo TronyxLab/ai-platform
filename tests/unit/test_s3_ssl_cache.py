@@ -38,6 +38,40 @@ import s3_ssl_cache
 
 pytestmark = pytest.mark.static_audit
 
+
+# region FIXTURE_test_isolate_s3_env
+# 🧪 TRAP[TEST] · 2026-08-27 · xdist env-contamination class · S3_*/AWS_* изолируются per-test
+# · (sibling: test_secrets_validator/test_compose_preflight) — S3_BUCKET из worker-env давал False→True
+# · Remove if: s3_ssl_cache перестанет читать S3_*/AWS_* из os.environ
+@pytest.fixture(autouse=True, scope="function")
+def test_isolate_s3_env(monkeypatch):
+    """Isolate S3/AWS env for every test in this file (xdist worker-env contamination guard).
+
+    xdist-воркеры наследуют os.environ родительского процесса: S3_BUCKET/S3_PREFIX/креды,
+    заданные на dev-машине или в CI, протекают в тест → upload_cert с пустым bucket-аргументом
+    читает env и возвращает True вместо False (flake test_upload_cert_missing_s3_bucket,
+    2026-08-27, make check static_audit -n 12). Фикстура удаляет ВСЕ S3_*/AWS_* ключи
+    ДО каждого теста; monkeypatch auto-restore возвращает env после теста.
+    """
+    for var in (
+        "S3_BUCKET",
+        "S3_PREFIX",
+        "S3_ENDPOINT_URL",
+        "S3_ACCESS_KEY",
+        "S3_SECRET_KEY",
+        "S3_ENDPOINT",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_DEFAULT_REGION",
+        "AWS_PROFILE",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    logger.critical("[IMP:9][test] S3/AWS env isolated — %d ключей удалены", 10)
+
+
+# endregion FIXTURE_test_isolate_s3_env
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # region Tests: upload_cert
 # ═════════════════════════════════════════════════════════════════════════════
@@ -95,6 +129,45 @@ def test_upload_cert_missing_s3_bucket(caplog, tmp_path):
 
     assert result is False, "upload_cert should return False when S3_BUCKET not set"
     logger.critical("[IMP:9][test] upload_cert missing S3 bucket — returns False gracefully")
+
+
+# 🧪 TRAP[TEST] · 2026-08-27 · PROD-FIX (R5) · явный s3_bucket долетает до _upload_s3_file
+# · Regression: upload_cert резолвил s3_bucket (kwarg→env→sentinel), но НЕ передавал его в
+# ·   _upload_s3_file — хелпер перечитывал os.environ["S3_BUCKET"] (параметр bucket=, DevPlan 163
+# ·   W-H, существовал, но публичная функция его никогда не пробрасывала). Изолирующая фикстура
+# ·   test_isolate_s3_env вскрыла: явный bucket работал только если S3_BUCKET был в worker-env.
+# · Last fail: 2026-08-27 — test_upload_cert_success flake False (env-зависимая гонка, -n 12)
+# · Remove if: bucket-резолв станет неявным (env-only) или upload_cert получит s3_client DI
+@ldd_trajectory
+def test_upload_cert_propagates_bucket_to_helpers(caplog, tmp_path):
+    """R5: явный s3_bucket аргумент upload_cert долетает до _upload_s3_file (bucket= не теряется)."""
+    domain = "example.com"
+    live_dir = tmp_path / "live" / domain
+    live_dir.mkdir(parents=True)
+    (live_dir / "fullchain.pem").write_text("fullchain cert content")
+    (live_dir / "privkey.pem").write_text("private key content")
+
+    calls: list[tuple[str, dict]] = []
+
+    def _fake_upload(path, key, **kwargs):
+        calls.append((key, kwargs))
+        return True
+
+    with patch.object(s3_ssl_cache, "_upload_s3_file", side_effect=_fake_upload):
+        result = s3_ssl_cache.upload_cert(
+            domain,
+            cert_dir=str(tmp_path / "live"),
+            acme_home=str(tmp_path / "acme"),
+            s3_bucket="expected-bucket",
+        )
+
+    assert result is True, "upload_cert должен вернуть True при успешной выгрузке"
+    assert calls, "upload_cert обязан вызвать _upload_s3_file хотя бы раз"
+    for s3_key, kwargs in calls:
+        assert kwargs.get("bucket") == "expected-bucket", (
+            f"bucket не проброшен в _upload_s3_file для {s3_key}: {kwargs}"
+        )
+    logger.critical("[IMP:9][test] upload_cert пробрасывает bucket= в _upload_s3_file — R5 PROD-FIX 2026-08-27")
 
 
 # endregion Tests: upload_cert
@@ -156,7 +229,9 @@ def test_check_cert_hit(caplog, tmp_path):
 
     # Mock _download_s3_file to write a fake cert to the temp path
 
-    def mock_download(s3_key, local_dst):
+    def mock_download(s3_key, local_dst, **kwargs):
+        # 2026-08-27 PROD-FIX: check_cert обязан пробросить bucket= в _download_s3_file
+        assert kwargs.get("bucket") == "test-bucket", f"bucket не проброшен в _download_s3_file: {kwargs}"
         # Write a fake PEM so the temp file exists
         with Path(local_dst).open("w", encoding="utf-8") as f:
             f.write("fake pem content")
@@ -487,7 +562,9 @@ def test_download_cert_restores_all_artifacts(caplog, tmp_path):
     """download_cert() restores fullchain + privkey + chain + account.tar.gz (full path)."""
     acme_home = tmp_path / "acme"
 
-    def _fake_download(s3_key, local_dst):
+    def _fake_download(s3_key, local_dst, **kwargs):
+        # 2026-08-27 PROD-FIX: download_cert обязан пробросить bucket= в _download_s3_file
+        assert kwargs.get("bucket") == "test-bucket", f"bucket не проброшен в _download_s3_file: {kwargs}"
         if local_dst.endswith(".tar.gz"):
             buf = io.BytesIO()
             with tarfile.open(fileobj=buf, mode="w:gz", encoding="utf-8") as tar:

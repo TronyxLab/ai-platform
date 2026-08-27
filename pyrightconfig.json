@@ -13,7 +13,12 @@
     ".pytest_cache",
     "vendor",
     "**/__pycache__",
-    "**/node_modules"
+    "**/node_modules",
+    "**/.worktrees",
+    ".worktrees",
+    "projects",
+    "logs",
+    "load-results"
   ],
   "extraPaths": [],
   "reportMissingImports": "warning",

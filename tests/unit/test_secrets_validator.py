@@ -259,11 +259,24 @@ def test_check_env_requires_all_present(secrets_manifest_file, caplog, monkeypat
 ## @purpose  Required env var is not set — returns list with the missing var name
 ## @complexity 1
 # 🧪 TRAP[TEST] · Regression · Scenario: check_env_requires with missing env var → returns missing list
-# · Last fail: N/A · Remove if: check_env_requires behavior changed
+# · Last fail: 2026-08-27 · dev-машина: /var/lib/platform/run/secrets.env (default path deploy_paths,
+# ·   142 W2) существовал и содержал POSTGRES_PASSWORD; SECRETS_ENV_FILE не был изолирован →
+# ·   check_runtime_env читал реальный файл и считал var present → missing=[]
+# · Remove if: check_env_requires behavior changed
 @ldd_trajectory
-def test_check_env_requires_missing(secrets_manifest_file, caplog, monkeypatch):
-    """POSTGRES_PASSWORD not set — should return missing list with it."""
+def test_check_env_requires_missing(secrets_manifest_file, caplog, monkeypatch, tmp_path):
+    """POSTGRES_PASSWORD not set (env и secrets.env) — should return missing list with it.
+
+    Hermetic isolation: SECRETS_ENV_FILE указывает на пустой tmp-файл. Без этого
+    check_runtime_env читает default /var/lib/platform/run/secrets.env — на dev-машине
+    файл существует (остаток локального secrets-флоу) и содержит POSTGRES_PASSWORD,
+    из-за чего тест падал с missing=[] (2026-08-27). Тест должен зависеть только от
+    os.environ + управляемого tmp-файла, не от состояния машины.
+    """
     monkeypatch.delenv("POSTGRES_PASSWORD", raising=False)
+    empty_secrets_env = tmp_path / "secrets-empty.env"
+    empty_secrets_env.write_text("")  # существует, но не содержит POSTGRES_PASSWORD
+    monkeypatch.setenv("SECRETS_ENV_FILE", str(empty_secrets_env))
     missing = check_env_requires("postgres", str(secrets_manifest_file))
 
     logger.info("[IMP:9][test][check_env] Missing vars for postgres: %s", missing)
@@ -473,6 +486,59 @@ def test_get_module_severity_warn(tmp_path, caplog):
 
 
 # endregion FUNC_test_get_module_severity_warn
+
+
+# region FUNC_test_get_module_severity_normal
+## @purpose  module.yaml with severity: normal (D5-канон, module.schema.json enum ["critical","normal"])
+##           returns "normal" БЕЗ IMP:5-шума. Схема-дрейф 2026-08-27: runtime-словарь
+##           {critical|warn} не знал D5-значения → 13/16 module.yaml default'ились в warn.
+## @complexity 1
+# 🧪 TRAP[TEST] · Regression · Scenario: get_module_severity accepts D5-canonical 'normal'
+# · Last fail: 2026-08-27 · НАБЛЮДЕНИЕ: live bootstrap — Invalid severity 'normal' ×3
+# ·   (status-page, backup-cron, hermes-agent) → defaulting to warn (скрытое намерение автора)
+# · Remove if: get_module_severity behavior changed
+@ldd_trajectory
+def test_get_module_severity_normal(tmp_path, caplog):
+    """severity: normal (D5-канон) → returns 'normal' без IMP:5-предупреждения."""
+    yaml_file = tmp_path / "module.yaml"
+    yaml_file.write_text("name: status-page\ninstall_type: docker\nseverity: normal\n")
+
+    sev = get_module_severity(str(yaml_file))
+    logger.info("[IMP:9][test][severity] D5-normal value=%s", sev)
+    assert sev == "normal", f"Expected 'normal', got {sev!r}"
+    assert not any("[IMP:5]" in r.message for r in caplog.records), (
+        "D5-каноническое значение 'normal' не должно давать IMP:5-шум"
+    )
+
+
+# endregion FUNC_test_get_module_severity_normal
+
+
+# region FUNC_test_get_module_severity_invalid
+## @purpose  module.yaml с неизвестным severity (вне словаря critical|normal|warn) → default "warn"
+##           + IMP:5 warning. R5 negative: invalid-ветка — детектор схема-дрейфа — обязана
+##           ловить мусорные значения (падает, если валидацию уберут).
+## @complexity 1
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · get_module_severity invalid-ветка — схема-дрейф
+# · Last fail: 2026-08-27 · исходный вход: severity: normal считался invalid (легаси-словарь
+# ·   {critical|warn} не знал D5-значения); negative фиксирует, что НЕ-словарное значение
+# ·   по-прежнему падает в warn + warning (детектор жив)
+# · Remove if: get_module_severity перестанет валидировать severity
+@ldd_trajectory
+def test_get_module_severity_invalid(tmp_path, caplog):
+    """severity: bogus (вне словаря) → default 'warn' + IMP:5 Invalid severity warning."""
+    yaml_file = tmp_path / "module.yaml"
+    yaml_file.write_text("name: ghost\ninstall_type: docker\nseverity: bogus\n")
+
+    sev = get_module_severity(str(yaml_file))
+    logger.info("[IMP:9][test][severity] Invalid-value default=%s", sev)
+    assert sev == "warn", f"Expected default 'warn' for unknown severity, got {sev!r}"
+    invalid_msgs = [r.message for r in caplog.records if "Invalid severity" in r.message]
+    assert invalid_msgs, "R5 FAIL: invalid-severity detector missed unknown value 'bogus'"
+    assert "bogus" in invalid_msgs[0], f"Warning должен называть значение, got: {invalid_msgs[0]}"
+
+
+# endregion FUNC_test_get_module_severity_invalid
 
 
 # region FUNC_test_get_module_severity_default

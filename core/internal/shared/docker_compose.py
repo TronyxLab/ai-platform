@@ -35,8 +35,12 @@
 ##                        (0 monkeypatch в тестах; unittest.patch-совместимость сохранена)
 ##             2026-08-16 | DevPlan 177 W3.1 — retry_pull: retry-цикл → shared/retry.py
 ##                        (1:1 семантика; max_attempts default — RETRY_COUNT+1 из timeouts)
+##             2026-08-27 | F-03 (017-launch-validation P0) — +docker_prebuild_pull:
+##                        pre-pull пинненных баз build-модулей до первого build
+##                        (deterministic cold-cache bootstrap; buildkit не ретраит pull)
 # endregion MODULE_CONTRACT
 
+import functools
 import logging
 import os
 import pathlib
@@ -48,6 +52,7 @@ from typing import Protocol
 # DevPlan 128 W1: примитивы docker ps/inspect/exec — shared/docker_ops (единственный слой,
 # гейт docker_sole_path). Compose-домен остаётся здесь (свой compose-гейт).
 from core.internal.shared import docker_ops
+from core.internal.shared.dockerfile_bases import module_base_images as _module_base_images
 from core.internal.shared.retry import retry as _shared_retry
 from core.internal.shared.timeouts import (
     BUILD_TIMEOUT,
@@ -55,6 +60,8 @@ from core.internal.shared.timeouts import (
     DOCKER_CMD_TIMEOUT,
     HEALTHCHECK_POLL_TIMEOUT,
     IMAGE_CHECK_TIMEOUT,
+    PREBUILD_PULL_ATTEMPTS,
+    PREBUILD_PULL_BACKOFF_SECONDS,
     PULL_TIMEOUT,
     RETRY_BACKOFF_SECONDS,
     RETRY_COUNT,
@@ -706,6 +713,139 @@ def retry_pull(
 
 
 # endregion FUNC_retry_pull
+
+
+# region FUNC__docker_pull_ref
+def _docker_pull_ref(ref: str, timeout: int = PULL_TIMEOUT) -> bool:
+    """Pull a single base image ref via `docker pull` (non-fatal, bool-контракт).
+
+    ▶ ┌ref┐ → ◇ subprocess docker pull ref → ⊕ returncode==0 → ⎋ True
+    │                                                       → timeout/not-found/rc≠0 → ⎋ False
+
+    ## @purpose  Единая точка `docker pull <ref>` в compose-домене (для docker_prebuild_pull):
+    ##            capture_output+text, timeout=PULL_TIMEOUT (канон timeouts), non-fatal
+    ##            (TimeoutExpired/FileNotFoundError → False — контракт caller'а).
+    ## @io       ⇥ ref: str (name[:tag][@sha256:...]), timeout: int = PULL_TIMEOUT → ⎋ bool
+    ## @complexity O(1) + network I/O
+    ## @invariants
+    ##   - Никогда не raise (graceful канон run_subprocess check=False, 127/124 — caller severity)
+    ##   - Команда строго ["docker", "pull", ref] — без shell; гейт docker_sole_path: "pull" —
+    ##     не compose и не ps/inspect/exec токен → legal в shared/docker_compose.py
+    """
+    logger.info("[IMP:8][docker_pull_ref] Pulling base image: %s", ref)
+    try:
+        result = subprocess.run(
+            ["docker", "pull", ref],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+        logger.warning("[IMP:7][docker_pull_ref] Pull failed for %s: %s", ref, exc)
+        return False
+    if result.returncode == 0:
+        logger.info("[IMP:9][docker_pull_ref] Pulled base image: %s", ref)
+        return True
+    logger.warning(
+        "[IMP:7][docker_pull_ref] Pull failed (exit=%d) for %s: %s",
+        result.returncode,
+        ref,
+        result.stderr.strip()[:200],
+    )
+    return False
+
+
+# endregion FUNC__docker_pull_ref
+
+
+# region FUNC_docker_prebuild_pull
+def docker_prebuild_pull(
+    module_dir: str,
+    *,
+    sleep_fn: Callable[[float], None] | None = None,
+) -> bool:
+    """Pre-pull пинненных базовых образов Dockerfile модуля ДО первого docker compose build.
+
+    ▶ ┌module_dir┐ → ◇ module_base_images → [] → ⎋ True (no-op)
+    │                                  → refs → ○ for ref: retry(docker pull, 4 попытки, backoff 5/15/45)
+    │                                        → ◇ все ок? → ⎋ True · частично → ⚠️ IMP:7 → ⎋ True
+    │                                        → ◇ все исчерпаны → 🔴 IMP:10 → ⎋ False
+
+    ## @purpose  Детерминизация холодного bootstrap (F-03, 017-launch-validation P0): BuildKit НЕ
+    ##            ретраит docker-pull внутри сборки — первый массовый пул базовых образов с docker.io
+    ##            на голой ноде транзиентно падает (троттлинг хостера). Pre-pull с retry
+    ##            (PREBUILD_PULL_ATTEMPTS=4, backoff 5/15/45s — окно 65s) прогревает кеш ДО build.
+    ## @io       ⇥ module_dir: str (директория модуля, напр. <modules_dir>/status-page),
+    ##            sleep_fn: Callable[[float], None] | None (DI-шов ретрая — тесты; None = time.sleep)
+    ##           → ⎋ bool (True = все базы спулены ИЛИ нечего пулить; False = ВСЕ ретраи исчерпаны)
+    ## @complexity O(R * A) — R баз × A попыток с backoff
+    ## @invariants
+    ##   - Non-fatal контракт: docker pull сам не raise (bool); retry-цикл — shared/retry.py
+    ##     (result_mode: предикат retryable=lambda ok: not ok, последнее значение при исчерпании)
+    ##   - Частичный success (часть баз спулена) → True + warning [IMP:7] (мягкий проход —
+    ##     build остаётся арбитром; образ может быть уже в локальном кеше)
+    ##   - ВСЕ базы исчерпали попытки → False + error [IMP:10] (caller решает: build вероятно упадёт)
+    ##   - Нет Dockerfile/нет баз → True (no-op, не ошибка)
+    ##   - Логи [IMP:8][docker_prebuild_pull] на старт/этап, [IMP:9] успех, [IMP:10] исчерпание
+    ## @changes 2026-08-27 | F-03 (017-launch-validation P0) — Created
+    """
+    refs = _module_base_images(module_dir)
+    if not refs:
+        logger.info(
+            "[IMP:8][docker_prebuild_pull][no_bases] No pinned base images for %s — nothing to pre-pull",
+            module_dir,
+        )
+        return True
+
+    logger.info(
+        "[IMP:8][docker_prebuild_pull][start] Pre-pulling %d base image(s) for %s: %s",
+        len(refs),
+        module_dir,
+        refs,
+    )
+    pulled: list[str] = []
+    failed: list[str] = []
+    for ref in refs:
+        ok = _shared_retry(
+            functools.partial(_docker_pull_ref, ref),
+            attempts=PREBUILD_PULL_ATTEMPTS,
+            backoff_seconds=PREBUILD_PULL_BACKOFF_SECONDS,
+            retryable=lambda ok: not ok,
+            sleep_fn=sleep_fn,
+        )
+        if ok:
+            pulled.append(ref)
+            logger.info("[IMP:9][docker_prebuild_pull][pulled] %s", ref)
+        else:
+            failed.append(ref)
+            logger.error(
+                "[IMP:10][docker_prebuild_pull][exhausted] All %d attempts failed for base image %s",
+                PREBUILD_PULL_ATTEMPTS,
+                ref,
+            )
+
+    if failed:
+        if pulled:
+            logger.warning(
+                "[IMP:7][docker_prebuild_pull][partial] %d/%d base images pre-pulled; failed: %s",
+                len(pulled),
+                len(refs),
+                failed,
+            )
+            return True
+        logger.error(
+            "[IMP:10][docker_prebuild_pull][fail] Pre-pull failed for ALL %d base image(s): %s",
+            len(refs),
+            failed,
+        )
+        return False
+
+    logger.info("[IMP:9][docker_prebuild_pull][done] All %d base image(s) pre-pulled", len(refs))
+    return True
+
+
+# endregion FUNC_docker_prebuild_pull
 
 
 # region FUNC_check_image_exists

@@ -15,7 +15,8 @@
 ##      регистрацию в secrets-manifest.yaml (tier != removed). Возвращает list[str] violations.
 ##   2. check_runtime_env — manifest-driven: для секретов manifest, где consumers включает
 ##      module_name и tier ∈ {required, generated}, проверяет непустоту в os.environ ИЛИ
-##      SECRETS_ENV_FILE (default /run/platform/secrets.env). Возвращает list[str] missing.
+##      SECRETS_ENV_FILE (default /var/lib/platform/run/secrets.env — deploy_paths.run_base, 142 W2).
+##      Возвращает list[str] missing.
 ##   3. check_env_requires — единая точка: обе семантики, консолидированный вердикт (0 расхождений).
 ##   4. STRICT: secrets-manifest отсутствует/битый → check_runtime_env RAISE (FileNotFoundError/
 ##      ValueError), check_requires_presence → graceful (файл отсутствует = секрет не зарегистрирован).
@@ -254,7 +255,7 @@ def check_runtime_env(module_name: str, secrets_manifest_path: str) -> list[str]
     ##      ⚡ raise FileNotFoundError/ValueError if manifest missing/malformed (strict, DevPlan 116 T4)
     ## @complexity 2 — single YAML parse (delegated to shared iter_secrets) + linear pass over secrets list
     ## @invariants
-    ##   - Checks both os.environ and SECRETS_ENV_FILE (default /run/platform/secrets.env)
+    ##   - Checks both os.environ and SECRETS_ENV_FILE (default /var/lib/platform/run/secrets.env)
     ##   - Only secrets where consumers includes module_name AND tier ∈ {required, generated} are checked
     ##   - STRICT: manifest absent/malformed → RAISE (no graceful degradation — manifest always
     ##     delivered with core/; «gate зелёный, система врёт» устранён, invariant 7)

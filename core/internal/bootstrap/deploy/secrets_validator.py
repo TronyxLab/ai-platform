@@ -139,9 +139,21 @@ def validate_secret_charsets(secrets_manifest_path: str) -> tuple[int, list[str]
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-## @purpose  Read severity field from module.yaml (critical|warn, default warn)
-## @io       module_yaml_path (str) → str: "critical" or "warn"
+## @purpose  Read severity field from module.yaml. Словарь = D5-схема (module.schema.json):
+##           critical|normal — нормативный; warn — легаси-алиас shell-эпохи + runtime default.
+##           Возвращает значение КАК ЕСТЬ (без нормализации normal→warn): намерение автора
+##           сохраняется в метаданных, а бакетизация (critical vs non-critical) — в
+##           orchestrator_metrics.aggregate_severity (любое не-"critical" → warn-бакет).
+##           Схема-дрейф: 'normal' (13/16 module.yaml) ранее default'ился в warn + IMP:5-шум.
+## @io       module_yaml_path (str) → str: "critical" | "normal" | "warn" (default "warn")
 ## @complexity 1 — single YAML parse
+# 🧐 TRAP[DECISION] · 2026-08-27 · — · Словарь severity: runtime {critical|normal|warn} — суперсет D5-схемы
+# · Rejected: строго {critical|normal} (warn → invalid) — сломал бы test_get_module_severity_warn и
+# ·   исторический контракт "warn = runtime default" (missing/empty/file-not-found → warn)
+# · Reason: 'normal' — канонический D5 (schema enum, core/modules/AGENTS.md, 13/16 module.yaml);
+# ·   'warn' — легаси shell-алиас, сохраняется для backward-compat; явный 'warn' в module.yaml
+# ·   проходит runtime, но RED по схеме (двух-валидаторная дивергенция — осознанная)
+# · Rev: если D5-схема примет 'warn' ИЛИ все module.yaml мигрируют на 'normal' — сузить до {critical|normal}
 def get_module_severity(module_yaml_path: str) -> str:
     logger.info("[IMP:7][get_module_severity][start] Path=%s", module_yaml_path)
 
@@ -165,7 +177,9 @@ def get_module_severity(module_yaml_path: str) -> str:
         return "warn"
 
     severity: str = data.get("severity", "warn")
-    if severity not in {"critical", "warn"}:
+    # D5-канон: critical|normal (module.schema.json); warn — легаси-алиас (test_get_module_severity_warn).
+    # Неизвестное значение → warn + IMP:5 (детектор схема-дрейфа; R5 negative: test_get_module_severity_invalid).
+    if severity not in {"critical", "normal", "warn"}:
         logger.warning(
             "[IMP:5][get_module_severity][invalid] Invalid severity %r in %s — defaulting to warn",
             severity,

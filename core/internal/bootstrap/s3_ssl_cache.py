@@ -415,6 +415,7 @@ def upload_cert(
     ##   - Required files: fullchain.pem, privkey.pem (chain.pem optional)
     ##   - Account data: tar czf acme.sh domain dir → upload to S3
     ##   - Uses boto3 client with retries (max_attempts=3, mode='standard')
+    ##   - bucket propaged to helpers (2026-08-27 fix)
     ## @rationale Eliminates inline python3 heredoc in the shell s3-ssl-cache _s3_upload().
     ##           Direct os.environ access fixes credential propagation bug.
     """
@@ -452,20 +453,20 @@ def upload_cert(
     # Upload required files
     for name, path in required_files:
         s3_key = f"{s3_base}/{name}"
-        if not _upload_s3_file(path, s3_key):
+        if not _upload_s3_file(path, s3_key, bucket=s3_bucket):
             overall_success = False
 
     # Upload chain.pem if it exists (best-effort)
     chain_path = os.path.join(live_dir, "chain.pem")
     if os.path.isfile(chain_path):
-        if not _upload_s3_file(chain_path, f"{s3_base}/chain.pem"):
+        if not _upload_s3_file(chain_path, f"{s3_base}/chain.pem", bucket=s3_bucket):
             overall_success = False
     else:
         logger.info("[IMP:8][s3_ssl_cache] chain.pem not found for %s (expected for acme.sh) — skipping", domain)
 
     # Upload cert.pem if it exists (format, best-effort)
     cert_pem_path = os.path.join(live_dir, "cert.pem")
-    if os.path.isfile(cert_pem_path) and not _upload_s3_file(cert_pem_path, f"{s3_base}/cert.pem"):
+    if os.path.isfile(cert_pem_path) and not _upload_s3_file(cert_pem_path, f"{s3_base}/cert.pem", bucket=s3_bucket):
         overall_success = False
 
     # ⚠️ TRAP[BUG] · 2026-07-23 · G3 · acme.sh account data path uses <domain>_ecc/
@@ -479,7 +480,7 @@ def upload_cert(
                 tar_path = tmp_tar.name
             with tarfile.open(tar_path, "w:gz") as tar:
                 tar.add(acct_dir, arcname=Path(acct_dir).name)
-            if _upload_s3_file(tar_path, f"{s3_base}/account.tar.gz"):
+            if _upload_s3_file(tar_path, f"{s3_base}/account.tar.gz", bucket=s3_bucket):
                 logger.info("[IMP:9][s3_ssl_cache] Account data uploaded for %s", domain)
             else:
                 overall_success = False
@@ -524,15 +525,18 @@ def upload_cert(
 ##   - chain/account — optional, best-effort (не блокируют restore пары)
 # region FUNC__plw_body_download_cert_2
 ## @purpose  Тело try-блока (PLW0717 extraction из download_cert) — семантика except не меняется.
-## @io       ⇥ acme_home, domain, s3_base, tmp_account_path → ⎋ результат try-тела
+## @io       ⇥ acme_home, domain, s3_base, tmp_account_path, bucket: str|None (None=env) → ⎋ результат try-тела
+## @io       · bucket propaged to helpers (2026-08-27 fix)
 ## @complexity O(1) — извлечение управляющего потока
 def _plw_body_download_cert_2(
     acme_home: str,
     domain: str,
     s3_base: str,
     tmp_account_path: str,
+    *,
+    bucket: str | None = None,
 ) -> None:
-    if _download_s3_file(f"{s3_base}/account.tar.gz", tmp_account_path):
+    if _download_s3_file(f"{s3_base}/account.tar.gz", tmp_account_path, bucket=bucket):
         os.makedirs(acme_home, exist_ok=True)
         with tarfile.open(tmp_account_path, "r:gz") as tar:
             # filter="data" (PEP 706) — consistent with orchestrator.py and payload_deliverer.py
@@ -548,10 +552,18 @@ def _plw_body_download_cert_2(
 
 # region FUNC__plw_body_download_cert
 ## @purpose  Тело try-блока (PLW0717 extraction из download_cert) — семантика except не меняется.
-## @io       ⇥ domain, live_dir, s3_base, tmp_chain_path → ⎋ результат try-тела
+## @io       ⇥ domain, live_dir, s3_base, tmp_chain_path, bucket: str|None (None=env) → ⎋ результат try-тела
+## @io       · bucket propaged to helpers (2026-08-27 fix)
 ## @complexity O(1) — извлечение управляющего потока
-def _plw_body_download_cert(domain: str, live_dir: str, s3_base: str, tmp_chain_path: str) -> None:
-    if _download_s3_file(f"{s3_base}/chain.pem", tmp_chain_path):
+def _plw_body_download_cert(
+    domain: str,
+    live_dir: str,
+    s3_base: str,
+    tmp_chain_path: str,
+    *,
+    bucket: str | None = None,
+) -> None:
+    if _download_s3_file(f"{s3_base}/chain.pem", tmp_chain_path, bucket=bucket):
         dest_chain = os.path.join(live_dir, "chain.pem")
         with Path(tmp_chain_path).open("rb") as tf:
             _atomic_write(dest_chain, tf.read(), mode=0o644)
@@ -566,7 +578,9 @@ def _plw_body_download_cert(domain: str, live_dir: str, s3_base: str, tmp_chain_
 # region FUNC__restore_pair_body
 ## @purpose  Тело try-блока download_cert (C901-экстракция, REF-0008): скачать+валидировать
 ##           fullchain → privkey (обязателен) → pubkey-match → атомарный commit пары.
-## @io       ⇥ domain, live_dir, s3_base, tmp_fullchain_path, tmp_privkey_path → ⎋ bool (True = пара закоммичена)
+## @io       ⇥ domain, live_dir, s3_base, tmp_fullchain_path, tmp_privkey_path,
+##            bucket: str|None (None=env) → ⎋ bool (True = пара закоммичена)
+## @io       · bucket propaged to helpers (2026-08-27 fix)
 ## @complexity O(1) + 2 S3 download + 3 openssl subprocess
 def _restore_pair_body(
     domain: str,
@@ -574,9 +588,11 @@ def _restore_pair_body(
     s3_base: str,
     tmp_fullchain_path: str,
     tmp_privkey_path: str,
+    *,
+    bucket: str | None = None,
 ) -> bool:
     """Скачать и провалидировать пару cert+key; закоммитить только согласованную (REF-0008)."""
-    if not _download_s3_file(f"{s3_base}/fullchain.pem", tmp_fullchain_path):
+    if not _download_s3_file(f"{s3_base}/fullchain.pem", tmp_fullchain_path, bucket=bucket):
         logger.info("[IMP:8][s3_ssl_cache] No fullchain.pem in S3 for %s — cache miss", domain)
         return False
 
@@ -589,7 +605,7 @@ def _restore_pair_body(
         return False
 
     # REF-0008 (1): privkey обязателен — без него пара невосстановима (DR = TLS outage)
-    if not _download_s3_file(f"{s3_base}/privkey.pem", tmp_privkey_path):
+    if not _download_s3_file(f"{s3_base}/privkey.pem", tmp_privkey_path, bucket=bucket):
         logger.warning(
             "[IMP:7][s3_ssl_cache] privkey.pem missing in S3 for %s — refusing partial restore "
             "(cert without key cannot serve TLS)",
@@ -641,6 +657,7 @@ def download_cert(
     ##   - pair pubkey-match required (REF-0008): mismatched pair never committed to disk
     ##   - chain.pem: optional, best-effort download
     ##   - account.tar.gz: extracted to acme_home/, non-fatal on failure
+    ##   - bucket propaged to helpers (2026-08-27 fix)
     """
     if not s3_bucket:
         s3_bucket = os.environ.get("S3_BUCKET", platform_config.default_s3_bucket_sentinel())
@@ -661,7 +678,7 @@ def download_cert(
 
     restored = False
     try:
-        restored = _restore_pair_body(domain, live_dir, s3_base, tmp_fullchain_path, tmp_privkey_path)
+        restored = _restore_pair_body(domain, live_dir, s3_base, tmp_fullchain_path, tmp_privkey_path, bucket=s3_bucket)
     except (OSError, FileNotFoundError, PermissionError) as e:
         logger.warning("[IMP:7][s3_ssl_cache] Failed to restore cert pair for %s: %s", domain, e)
     finally:
@@ -675,7 +692,7 @@ def download_cert(
     with tempfile.NamedTemporaryFile(suffix=".pem", delete=False) as tmp_chain:
         tmp_chain_path = tmp_chain.name
     try:
-        _plw_body_download_cert(domain, live_dir, s3_base, tmp_chain_path)
+        _plw_body_download_cert(domain, live_dir, s3_base, tmp_chain_path, bucket=s3_bucket)
     except (OSError, FileNotFoundError, PermissionError) as e:
         logger.warning("[IMP:7][s3_ssl_cache] Failed to restore chain.pem for %s: %s", domain, e)
     finally:
@@ -687,7 +704,7 @@ def download_cert(
     with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as tmp_account:
         tmp_account_path = tmp_account.name
     try:
-        _plw_body_download_cert_2(acme_home, domain, s3_base, tmp_account_path)
+        _plw_body_download_cert_2(acme_home, domain, s3_base, tmp_account_path, bucket=s3_bucket)
     except (tarfile.TarError, OSError, FileNotFoundError) as e:
         logger.warning(
             "[IMP:7][s3_ssl_cache] Failed to restore account data for %s: %s",
@@ -715,16 +732,25 @@ def download_cert(
 ##   - Downloads fullchain.pem + privkey.pem to temp files, deletes after validation
 ##   - REF-0008: privkey missing/mismatching → False (cache считается невалидным)
 ##   - Non-fatal: returns False on any failure (S3 unavailable, cert expired, etc.)
+##   - bucket propaged to helpers (2026-08-27 fix)
 
 
 # region FUNC__check_pair_body
 ## @purpose  Тело try-блока check_cert (C901-экстракция, REF-0008): валидация fullchain +
 ##           обязательный privkey + pubkey-match кэша.
-## @io       ⇥ domain, s3_prefix, tmp_cert_path, tmp_key_path → ⎋ bool (True = валидная пара в S3)
+## @io       ⇥ domain, s3_prefix, tmp_cert_path, tmp_key_path, bucket: str|None (None=env) → ⎋ bool (True = валидная пара в S3)
+## @io       · bucket propaged to helpers (2026-08-27 fix)
 ## @complexity O(1) + 2 S3 download + 4 openssl subprocess
-def _check_pair_body(domain: str, s3_prefix: str, tmp_cert_path: str, tmp_key_path: str) -> bool:
+def _check_pair_body(
+    domain: str,
+    s3_prefix: str,
+    tmp_cert_path: str,
+    tmp_key_path: str,
+    *,
+    bucket: str | None = None,
+) -> bool:
     """Валидировать закэшированную пару: cert-валидность + privkey presence + pair-match."""
-    if not _download_s3_file(f"{s3_prefix}/{domain}/fullchain.pem", tmp_cert_path):
+    if not _download_s3_file(f"{s3_prefix}/{domain}/fullchain.pem", tmp_cert_path, bucket=bucket):
         logger.info("[IMP:8][s3_ssl_cache] No cert in S3 for %s — cache miss", domain)
         return False
 
@@ -734,7 +760,7 @@ def _check_pair_body(domain: str, s3_prefix: str, tmp_cert_path: str, tmp_key_pa
         return False
 
     # REF-0008: privkey обязателен и должен соответствовать сертификату
-    if not _download_s3_file(f"{s3_prefix}/{domain}/privkey.pem", tmp_key_path):
+    if not _download_s3_file(f"{s3_prefix}/{domain}/privkey.pem", tmp_key_path, bucket=bucket):
         logger.warning(
             "[IMP:7][s3_ssl_cache] Cached privkey.pem missing for %s — cache invalid "
             "(restore would fail on mandatory pair)",
@@ -782,7 +808,7 @@ def check_cert(
         tmp_key_path = tmp_key.name
 
     try:
-        return _check_pair_body(domain, s3_prefix, tmp_cert_path, tmp_key_path)
+        return _check_pair_body(domain, s3_prefix, tmp_cert_path, tmp_key_path, bucket=s3_bucket)
     finally:
         for tmp_path in (tmp_cert_path, tmp_key_path):
             if Path(tmp_path).exists():

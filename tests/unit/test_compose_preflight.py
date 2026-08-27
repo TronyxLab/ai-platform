@@ -432,12 +432,27 @@ class TestMainCLI:
         assert exit_code == 0
 
     def test_blocks_with_missing_secret(
-        self, caplog: pytest.LogCaptureFixture, sample_manifest: Path, monkeypatch: pytest.MonkeyPatch
+        self,
+        caplog: pytest.LogCaptureFixture,
+        sample_manifest: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
     ) -> None:
-        """Missing secrets block the compose up."""
+        """Missing secrets block the compose up.
+
+        Hermetic isolation (аналог test_secrets_validator.py::test_check_env_requires_missing):
+        SECRETS_ENV_FILE указывает на пустой tmp-файл. Без этого main() резолвит дефолтный
+        /var/lib/platform/run/secrets.env (deploy_paths.secrets_env_file) — на dev-машине файл
+        существует (58 ключей, incl POSTGRES_PASSWORD/LITELLM_MASTER_KEY) → check_secrets PASS
+        → rc=0 вместо 1 (2026-08-27, machine-state contamination).
+        """
         caplog.set_level(logging.INFO)
         monkeypatch.delenv("POSTGRES_PASSWORD", raising=False)
         monkeypatch.delenv("LITELLM_MASTER_KEY", raising=False)
+        # 🧪 TRAP[TEST] · 2026-08-27 · machine-state contamination: дефолтный secrets.env на dev-машине (58 ключей) ломал детерминизм missing-сценария → SECRETS_ENV_FILE замкнут на пустой tmp-файл
+        empty_secrets_env = tmp_path / "secrets-absent.env"
+        empty_secrets_env.write_text("")  # существует, но не содержит секретов
+        monkeypatch.setenv("SECRETS_ENV_FILE", str(empty_secrets_env))
 
         exit_code = main([
             "--manifest",

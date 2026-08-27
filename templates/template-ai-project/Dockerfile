@@ -14,14 +14,14 @@
 ## @rationale Минимум для деплоя бота (D9): никаких nginx/vite/вторых цепочек — CMD node dist/index.js
 # endregion MODULE_CONTRACT
 
-FROM node:22-alpine AS build
+FROM node:22.23.0-alpine@sha256:ab07539e0988b63558ff621f5fbe1077054c39d9809112974fb79993949d41cd AS build
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --no-audit --no-fund
 COPY . .
 RUN npm run build
 
-FROM node:22-alpine
+FROM node:22.23.0-alpine@sha256:ab07539e0988b63558ff621f5fbe1077054c39d9809112974fb79993949d41cd
 WORKDIR /app
 ENV NODE_ENV=production
 COPY package*.json ./
