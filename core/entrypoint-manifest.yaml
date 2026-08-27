@@ -1434,6 +1434,7 @@ gates:
   - test_project_context_valid
   test_gate_project_env.py:
   - test_project_env_missing_dir_fails
+  - test_project_env_unknown_network_fails
   - test_project_env_valid
   test_gate_provides_networks_parity.py:
   - test_missing_network_detected_negative

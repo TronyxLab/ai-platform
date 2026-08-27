@@ -36,13 +36,16 @@
 ##           2026-08-14 | DevPlan 170 W1-A2 — +cert_expiry_state_file/wal_archive_dir/backup_spool_dir/
 ##                      spool-набор (grafana/prometheus/loki/postgres-data)/bootstrap_state_dir/
 ##                      converge_cooldown_file/context_pull_ts_path/build_cache_dir
+##           2026-08-27 | F-11 (P1, rollback dance-site) — +compose_env_file_args/project_compose_env_args:
+##                      каноническая env-цепочка compose-вызовов deploy/rollback (secrets.env +
+##                      .env.platform), единый SoT для engine/flow, engine/lifecycle, rollback
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
 import logging
 import os
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -315,6 +318,60 @@ def secrets_env_file(env: Mapping[str, str] | None = None) -> Path:
 
 
 # endregion FUNC_secrets_env_file
+
+
+# region FUNC_compose_env_file_args
+## @purpose — Канонический helper `--env-file` аргументов docker compose (F-11): фильтрует
+##            только СУЩЕСТВУЮЩИЕ файлы и строит пары ["--env-file", PATH]. Единый SoT для
+##            env-цепочки compose-вызовов deploy/rollback-пути (engine/flow.up_atomic,
+##            engine/lifecycle.perform_rollback, rollback._rollback_compose config-resolve) —
+##            секреты ноды (secrets.env) и платформенные переменные (.env.platform) попадают
+##            в интерполяцию compose ОДИНАКОВО на всех путях.
+## @io       ⇥ env_files: Iterable[str | Path] | None (None/пусто → []) → ⎋ list[str]
+## @complexity — O(N) где N = число env-файлов (только stat-проверки, 0 I/O-чтения)
+## @invariants
+##   - Файл, отсутствующий на диске, НЕ включается (compose с несуществующим --env-file = error)
+##   - Порядок сохраняется: первый файл — первый --env-file (compose v2 merge в порядке указания)
+##   - Никогда не raise (Path.is_file() на отсутствующем пути → False)
+## @changes 2026-08-27 | F-11 (P1, rollback dance-site) — создан; дедуплицирует inline-логику
+##             build_compose_args (bootstrap/deploy) для проекта/движка
+def compose_env_file_args(env_files: Iterable[str | Path] | None = None) -> list[str]:
+    """Build docker compose --env-file args for EXISTING files (canonical env-chain helper, F-11).
+
+    ▶ ┌env_files┐ → ○ for p: ◇ is_file? → + ["--env-file", p] → ⎋ list[str]
+    """
+    args: list[str] = []
+    for item in env_files or []:
+        p = Path(str(item))
+        if not p.is_file():
+            logger.debug("[IMP:5][compose_env_file_args][skip] env-file not present: %s", p)
+            continue
+        args.extend(["--env-file", str(p)])
+        logger.info("[IMP:8][compose_env_file_args][add] env-file: %s", p)
+    return args
+
+
+# endregion FUNC_compose_env_file_args
+
+
+# region FUNC_project_compose_env_args
+## @purpose — `--env-file` набор ПРОЕКТНОГО compose-вызова (F-11): secrets.env ноды
+##            (секреты для интерполяции ${REDIS_PASSWORD} и т.п.) + project_dir/.env.platform
+##            (платформенные PLATFORM_* переменные). Единая точка для deploy/rollback-пути —
+##            ручной rollback получает ТОТ ЖЕ env-набор, что receive-deploy (критерий F-11).
+## @io       ⇥ project_dir: str | Path, env: Mapping[str, str] | None (DI; None = os.environ) → ⎋ list[str]
+## @complexity — O(1) — два stat + compose_env_file_args
+## @invariants
+##   - secrets.env резолвится через secrets_env_file() (SECRETS_ENV_FILE → /var/lib/platform/run/secrets.env)
+##   - .env.platform — канон L1 env-file-contract (verify_contracts.ENV_FILE_PLATFORM)
+##   - Отсутствующие файлы молча пропускаются (compose_env_file_args) — тесты/нода без секретов
+## @changes 2026-08-27 | F-11 (P1) — создан; консолидирует env-цепочку compose up/pull/config
+def project_compose_env_args(project_dir: str | Path, env: Mapping[str, str] | None = None) -> list[str]:
+    """Build --env-file args for a PROJECT compose invocation (secrets.env + .env.platform, F-11)."""
+    return compose_env_file_args([str(secrets_env_file(env)), str(Path(project_dir) / ".env.platform")])
+
+
+# endregion FUNC_project_compose_env_args
 
 
 # region FUNC_deploy_lock_path

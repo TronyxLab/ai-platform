@@ -1,10 +1,12 @@
-# GREP_SUMMARY: test-shared-audit-logger audit-logger write-audit-entry read-audit-log json-lines tmp-path
-# STRUCTURE: ┌tmp_path fixtures┐ → ○ test scenarios: create_file → json_valid → limit → empty → multiple → timestamp
+# GREP_SUMMARY: test-shared-audit-logger audit-logger write-audit-entry read-audit-log json-lines tmp-path permissions ensure-audit-writable setfacl fallback-0660
+# STRUCTURE: ┌tmp_path fixtures┐ → ○ test scenarios: create_file → json_valid → limit → empty → multiple → timestamp → perms (fallback 0660 / non-root skip / primary ACL)
 # region MODULE_CONTRACT
 ## @purpose  Unit tests for core/internal/shared/audit_logger.py
 ##           Verifies write_audit_entry() and read_audit_log() with JSON-lines format.
+##           P1 fix 2026-08-27: пермишены — ensure_audit_writable (fallback 0660 под euid=0
+##           без setfacl; non-root skip; primary setfacl ACL) вместо прежнего chmod 640.
 ## @scope    Tests: file creation, JSON validity, read limit, empty log, multiple entries,
-##           ISO8601 timestamp format with Z timezone.
+##           ISO8601 timestamp format with Z timezone, canonical permission convergence.
 ## @invariants
 ##   - All tests use tmp_path (no hardcoded paths)
 ##   - No Docker dependency (pure Python)
@@ -14,11 +16,15 @@
 
 import json
 import logging
+import os
 import re
+import subprocess
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
+import core.internal.shared.audit_logger as _audit_logger
 from core.internal.shared.audit_logger import read_audit_log, write_audit_entry
 
 pytestmark = pytest.mark.static_audit
@@ -493,23 +499,98 @@ def test_write_entry_multi_project(caplog: pytest.LogCaptureFixture, tmp_path: P
 
 
 # region FUNC_test_write_entry_permissions
-## @purpose — Пермишены: после первой записи файл имеет mode 640 (консолидация из deploy/audit_logger.py, D1).
-## @io — ⇥ caplog, tmp_path → ⎋ None
+## @purpose — Пермишены (P1 fix 2026-08-27): целевое состояние — владелец root + запись для
+##            главного писателя (ci-deploy). Fallback без setfacl (euid=0) → chmod 0660.
+##            Прежний контракт chmod 640 удалён — он был антагонистом converge R2.
+## @io — ⇥ caplog, tmp_path, monkeypatch → ⎋ None
 ## @complexity — O(1)
-def test_write_entry_permissions(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> None:
-    """Permissions: chmod 640 после первой записи (D1, consolidated)."""
+def test_write_entry_permissions_fallback_0660(
+    caplog: pytest.LogCaptureFixture, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Permissions: euid=0 + setfacl недоступен → ensure_audit_writable fallback (chmod 0660)."""
     caplog.set_level(logging.INFO)
 
-    # 🧪 TRAP[TEST] · Regression · permissions 640 (D1)
-    # · Scenario: первый write → os.chmod 0o640
-    # · Last fail: N/A
+    # 🧪 TRAP[TEST] · Regression · P1 fix 2026-08-27 — fallback-ветка: 0660 вместо прежнего 640
+    # · Scenario: первый write → ensure_audit_writable (fallback, без setfacl)
+    # · Last fail: N/A (новый целевой контракт)
+    # · Remove if: permissions policy changed
+
+    monkeypatch.setattr(_audit_logger.os, "geteuid", lambda: 0)  # симуляция root-ноды
+    monkeypatch.setattr(_audit_logger.shutil, "which", lambda _: None)  # setfacl недоступен
+
+    log_file = tmp_path / "audit.jsonl"
+    write_audit_entry("test:perm", "OK", "permissions check", log_file=str(log_file))
+    mode = log_file.stat().st_mode & 0o777
+    assert mode == 0o660, f"Expected mode 660 (fallback), got {oct(mode)}"
+    logger.info("[IMP:9][test][permissions] ✅ audit.jsonl mode = 660 (fallback без setfacl)")
+
+
+# endregion FUNC_test_write_entry_permissions
+
+
+# region FUNC_test_write_entry_permissions_nonroot_skip
+## @purpose — Non-root (dev/receive): ensure_audit_writable → "skip" — права НЕ трогаются
+##            (прежний chmod 640 удалён — он ломал ACL-mask/group-write на ноде).
+## @io — ⇥ caplog, tmp_path → ⎋ None
+## @complexity — O(1)
+def test_write_entry_permissions_nonroot_skip(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> None:
+    """Permissions: non-root → convergence skipped, файл сохраняет default mode (нет chmod 640)."""
+    caplog.set_level(logging.INFO)
+
+    # 🧪 TRAP[TEST] · Regression · P1 fix 2026-08-27 — non-root skip (реальный euid != 0 в тесте)
+    # · Scenario: первый write → ensure_audit_writable "skip" (владелец уже имеет доступ)
+    # · Last fail: N/A (новый целевой контракт)
     # · Remove if: permissions policy changed
 
     log_file = tmp_path / "audit.jsonl"
     write_audit_entry("test:perm", "OK", "permissions check", log_file=str(log_file))
     mode = log_file.stat().st_mode & 0o777
-    assert mode == 0o640, f"Expected mode 640, got {oct(mode)}"
-    logger.info("[IMP:9][test][permissions] ✅ audit.jsonl mode = 640")
+    current_umask = os.umask(0)
+    os.umask(current_umask)
+    expected = 0o666 & ~current_umask
+    assert mode == expected, f"Expected default mode {oct(expected)} (non-root skip, без chmod 640), got {oct(mode)}"
+    logger.info("[IMP:9][test][permissions] ✅ non-root: mode = %#o (skip, нет downgrade 640)", mode)
 
 
-# endregion FUNC_test_write_entry_permissions
+# endregion FUNC_test_write_entry_permissions_nonroot_skip
+
+
+# region FUNC_test_write_entry_permissions_primary_acl
+## @purpose — Primary-ветка (euid=0 + setfacl доступен): ensure_audit_writable выдаёт
+##            setfacl -m u:ci-deploy:rw,m::rw \\<file\\> + default ACL на dir.
+## @io — ⇥ caplog, tmp_path, monkeypatch → ⎋ None
+## @complexity — O(1)
+def test_write_entry_permissions_primary_acl(
+    caplog: pytest.LogCaptureFixture, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Permissions: euid=0 + setfacl доступен → ACL-ветка (setfacl -m/-d, без chgrp)."""
+    caplog.set_level(logging.INFO)
+
+    # 🧪 TRAP[TEST] · Regression · P1 fix 2026-08-27 — primary-ветка (setfacl)
+    # · Scenario: первый write → ensure_audit_writable (setfacl u:ci-deploy:rw + default ACL)
+    # · Last fail: N/A (новый целевой контракт)
+    # · Remove if: permissions policy changed
+
+    monkeypatch.setattr(_audit_logger.os, "geteuid", lambda: 0)  # симуляция root-ноды
+    monkeypatch.setattr(_audit_logger.shutil, "which", lambda _: "/usr/bin/setfacl")  # setfacl доступен
+
+    setfacl_called: list[list[str]] = []
+
+    def acl_mock(cmd, *args, **kwargs):
+        cmd_str = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
+        if "setfacl" in cmd_str:
+            setfacl_called.append(cmd)
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    log_file = tmp_path / "audit.jsonl"
+    with patch.object(subprocess, "run", side_effect=acl_mock):
+        write_audit_entry("test:perm", "OK", "permissions check", log_file=str(log_file))
+
+    assert len(setfacl_called) == 2, f"ожидались -m и -d setfacl, получено {setfacl_called}"
+    assert "u:ci-deploy:rw" in " ".join(setfacl_called[0])
+    assert setfacl_called[0][1] == "-m" and setfacl_called[1][1] == "-d"
+    logger.info("[IMP:9][test][permissions] ✅ primary: setfacl -m/-d применены (ACL u:ci-deploy:rw)")
+
+
+# endregion FUNC_test_write_entry_permissions_primary_acl

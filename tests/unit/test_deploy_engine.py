@@ -1,9 +1,10 @@
 """
-# GREP_SUMMARY: test_deploy_engine, deploy-engine, atomic-deploy, rollback, remove, status, healthcheck, snapshot, boundary-fixture, parametrize, no-call-args
+# GREP_SUMMARY: test_deploy_engine, deploy-engine, atomic-deploy, rollback, remove, status, healthcheck, snapshot, boundary-fixture, parametrize, no-call-args, F-11, pull-never, env-file
 # STRUCTURE: ▶ deploy_boundary fixture (7 патчей границы: subprocess.run + retry_pull + healthcheck_poll +
 #            compose_up + compose_ps + compose_images + compose_down — все unittest.patch, 167 D3) →
 #            ◇ parametrized deploy scenarios (success / first-deploy-fatal / rollback-ok / rollback-fail / pull-fail / up-fail) →
-#            ◇ remove/status/save-prev/snapshot/rollback unit tests → ⊕ assert observable ServiceDeployResult/StatusResult fields → ⎋ LDD IMP:9
+#            ◇ remove/status/save-prev/snapshot/rollback unit tests → ⊕ assert observable ServiceDeployResult/StatusResult fields →
+#            ◇ F-11: up_atomic pull_never→--pull never + env-file compose_args → ⎋ LDD IMP:9
 # region MODULE_CONTRACT
 ## @purpose  Unit tests for core/internal/deploy/deploy_engine.py — DeployEngine class with mocked Docker I/O boundary (D1, DevPlan 116 B10 T3).
 ## @scope    All Docker CLI operations mocked at the boundary (subprocess.run + shared docker-compose helpers);
@@ -338,6 +339,46 @@ def test_atomic_up_success(deploy_boundary, engine, caplog):
     )
     assert _print_ldd_trajectory(caplog)
     logger.critical("[IMP:9][test] _atomic_up — returns True with IMAGE_TAG env — OK")
+
+
+# 🧪 TRAP[TEST] · 2026-08-27 · F-11 · pull_never + env-file в финальном compose up
+# · Regression: F-11 (P1, rollback dance-site) — skip_pull пропускал только pre-pull;
+# ·   compose up ИМПЛИЦИТНО пуллил недостающий локальный тег из registry (doomed GHCR-pull)
+# · Scenario: up_atomic(pull_never=True) → flags=["--pull","never"]; env-файлы (secrets.env +
+# ·   .env.platform) → compose_args=["--env-file", ...]; pull_never=False (дефолт) → flags=None
+# · Last fail: up_atomic получал только IMAGE_TAG — без --pull never и без --env-file
+# · Remove if: compose up перестаёт быть финальным шагом развёртывания образа
+def test_up_atomic_pull_never_and_env_file_args(deploy_boundary, caplog, tmp_path, monkeypatch):
+    """up_atomic(pull_never=True) → --pull never + --env-file secrets.env/.env.platform; дефолт → без флага."""
+    caplog.set_level(logging.INFO)
+    b = deploy_boundary
+    up_kwargs: list[dict] = []
+    b.up.side_effect = lambda *_, **k: (up_kwargs.append(k), True)[1]
+
+    proj = tmp_path / "proj"
+    proj.mkdir(parents=True)
+    secrets = tmp_path / "run" / "secrets.env"
+    secrets.parent.mkdir(parents=True)
+    secrets.write_text("REDIS_PASSWORD=x\n", encoding="utf-8")
+    (proj / ".env.platform").write_text("PLATFORM_X=1\n", encoding="utf-8")
+    monkeypatch.setenv("SECRETS_ENV_FILE", str(secrets))
+
+    assert up_atomic(str(proj), "app", "previous-rollback", pull_never=True) is True
+    assert up_kwargs[0].get("flags") == ["--pull", "never"], (
+        f"F-11 FAIL: pull_never=True обязан давать --pull never, получено {up_kwargs[0].get('flags')}"
+    )
+    ca = up_kwargs[0].get("compose_args") or []
+    assert "--env-file" in ca and str(secrets) in ca and str(proj / ".env.platform") in ca, (
+        f"F-11 FAIL: env-цепочка (secrets.env + .env.platform) не передана: {ca}"
+    )
+
+    up_kwargs.clear()
+    assert up_atomic(str(proj), "app", "v1") is True
+    assert up_kwargs[0].get("flags") is None, (
+        f"F-11 FAIL: дефолтный up НЕ должен получать --pull never: {up_kwargs[0].get('flags')}"
+    )
+    assert _print_ldd_trajectory(caplog)
+    logger.critical("[IMP:9][test] up_atomic — pull_never→--pull never, env-file set — OK")
 
 
 # endregion deploy tests

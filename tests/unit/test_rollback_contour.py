@@ -1,18 +1,22 @@
 """
-# GREP_SUMMARY: test-rollback-contour, REF-0004, TEST-03, rollback, previous-image, ROLLED_BACK, double-rollback, require-healthy, BUG-0100, skip-pull, characterization
+# GREP_SUMMARY: test-rollback-contour, REF-0004, TEST-03, rollback, previous-image, ROLLED_BACK, double-rollback, require-healthy, BUG-0100, skip-pull, F-11, pull-never, env-file, compose-resolved-retag, characterization
 # STRUCTURE: ▶ history[require_healthy] → ▶ snapshot-anchor(previous_image до compose-up) →
 #            ▶ unhealthy-contour[ROLLED_BACK | FAILED+"Rollback failed"] → ▶ no-double-rollback(engine rollback_performed) →
-#            ▶ payload-restore-after-compose-only → ▶ manual-rollback characterization(DEPLOYED|FAILED) → ▶ engine[pull-fail≠FATAL · re-verify · skip_pull] → ⎋ LDD [IMP:9]
+#            ▶ payload-restore-after-compose-only → ▶ manual-rollback characterization(DEPLOYED|FAILED) → ▶ engine[pull-fail≠FATAL · re-verify · skip_pull] →
+#            ▶ F-11[compose-resolved re-tag · env-file+--pull never в up · 2-й rollback идемпотентен] → ⎋ LDD [IMP:9]
 # region MODULE_CONTRACT
 ## @purpose  TEST-03 (карточка REF-0004, DevPlan 11 В1): characterization + поведенческий набор
 ##           rollback-контурa DeployOrchestrator/DeployEngine/DeployHistory. Написан ДО правки
 ##           кода (инвариант 4 плана): новые контракты фиксируются RED против текущего кода,
 ##           characterization существующего поведения (manual rollback DEPLOYED/FAILED) — GREEN
-##           до и после.
+##           до и после. F-11 (2026-08-27): +секция G — re-tag на compose-resolved ref
+##           (docker compose config --images), env-chain (--env-file secrets.env + .env.platform)
+##           и --pull never в финальном compose up, идемпотентный повторный rollback.
 ## @scope    DeployHistory.latest_snapshot(require_healthy), DeployOrchestrator.deploy unhealthy-
 ##           ветка (ROLLED_BACK + один re-verify), RollbackMixin._rollback_deploy (payload только
 ##           после успешного compose-rollback), DeployEngine.deploy (BUG-0100 pull-fail при
-##           существующем деплое ≠ FATAL; skip_pull при rollback; rollback_verified).
+##           существующем деплое ≠ FATAL; skip_pull при rollback; rollback_verified),
+##           _rollback_compose (F-11: compose-resolved re-tag + env-file config).
 ## @invariants
 ##   - Native imports; tmp_path; DI-швы конструктора (167 D3) + boundary-патчи holder'ов engine/
 ##     (прецедент test_deploy_engine.deploy_boundary); 0 setattr-патчей production-модулей
@@ -614,6 +618,9 @@ def test_local_previous_image_no_registry_pull(tmp_path, monkeypatch, caplog) ->
         patch.object(orch, "_compose_rollback", None),  # форсируем реальный _rollback_compose
         patch("core.internal.deploy.rollback.DeployEngine", _FakeEngine),
         patch("core.internal.deploy.rollback.docker_ops.docker_tag", side_effect=lambda i, t: tag_calls.append((i, t))),
+        # F-11: _rollback_compose резолвит compose-ref через docker compose config --images;
+        # пустой stdout → fallback на bare-тег (историческое поведение F-025 сохранено)
+        patch("core.internal.deploy.rollback.docker_compose_config", return_value=_cp(stdout="")),
     ):
         ok = orch._rollback_compose(str(proj), "roll-proj", snapshot)
 
@@ -665,3 +672,164 @@ def test_lock_file_removed_on_release(tmp_path, caplog) -> None:
 
 
 # endregion FUNC_test_lock_file_removed_on_release
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# G. F-11 (P1, rollback dance-site): compose-resolved re-tag + pull-gate + env-chain
+# ════════════════════════════════════════════════════════════════════════════
+
+
+# region FUNC_test_rollback_compose_retags_to_compose_resolved_ref
+def test_rollback_compose_retags_to_compose_resolved_ref(tmp_path, monkeypatch, caplog) -> None:
+    """F-11: re-tag целится в compose-RESOLVED ref (не bare <service>:previous-rollback).
+
+    Bare-тег `dance-site:previous-rollback` НЕ совпадает с compose-резолвом
+    ${IMAGE_REGISTRY:-ghcr.io}/${ORG}/${PROJECT}:${IMAGE_TAG} → ghcr.io/...:previous-rollback —
+    compose up пуллил doomed ref из registry (rc=1). Разрешение через
+    docker compose config --images <service> при IMAGE_TAG=previous-rollback.
+    """
+    # 🧪 TRAP[TEST] · 2026-08-27 · REGRESSION · F-11 doomed pull при ручном rollback
+    # · Scenario: snapshot с compose_state.previous_image → _rollback_compose →
+    #             docker compose config --images dance-site (IMAGE_TAG=previous-rollback) →
+    #             docker_tag(prev → ghcr.io/tronyxlab/dance-site:previous-rollback) →
+    #             deploy(skip_pull=True)
+    # · Last fail: F-11 — docker_tag(prev → dance-site:previous-rollback) [bare] → compose up
+    #   пуллил ghcr.io/tronyxlab/dance-site:previous-rollback (тега нет в registry) → Up failed
+    #   (exit=1) → rollback FAILED, хотя engine-rollback восстановил healthy
+    # · Remove if: rollback перестаёт идти через локальный перетег предыдущего образа
+    caplog.set_level(logging.INFO)
+    proj = _write_project(tmp_path, "dance-site")
+    monkeypatch.setenv("PLATFORM_LOCK_DIR", str(tmp_path / "locks"))
+
+    tag_calls: list[tuple[str, str]] = []
+    deploy_calls: list[dict] = []
+
+    class _FakeEngine:
+        def __init__(self, *, projects_base: str) -> None:
+            self.projects_base = projects_base
+
+        def deploy(self, **kwargs):
+            deploy_calls.append(kwargs)
+
+            class _R:
+                success = True
+
+            return _R()
+
+    orch = _make_orch(tmp_path, monkeypatch, poller=_SeqPoller(["healthy"]))
+
+    snapshot = {
+        "snapshot_id": "snap-f11",
+        "compose_state": {"previous_image": "sha256:prevlocal"},
+    }
+    fake_cfg = subprocess.CompletedProcess(
+        args=[],
+        returncode=0,
+        stdout="ghcr.io/tronyxlab/dance-site:previous-rollback\n",
+        stderr="",
+    )
+
+    with (
+        patch.object(orch, "_compose_rollback", None),
+        patch("core.internal.deploy.rollback.DeployEngine", _FakeEngine),
+        patch("core.internal.deploy.rollback.docker_ops.docker_tag", side_effect=lambda i, t: tag_calls.append((i, t))),
+        patch("core.internal.deploy.rollback.docker_compose_config", return_value=fake_cfg),
+    ):
+        ok = orch._rollback_compose(str(proj), "dance-site", snapshot)
+
+    assert ok is True, "Rollback compose must succeed on local previous image"
+    assert tag_calls == [("sha256:prevlocal", "ghcr.io/tronyxlab/dance-site:previous-rollback")], (
+        f"F-11 FAIL: re-tag обязан целиться в compose-resolved ref, получено {tag_calls}"
+    )
+    assert len(deploy_calls) == 1 and deploy_calls[0].get("skip_pull") is True, (
+        f"F-11 FAIL: deploy обязан идти со skip_pull=True: {deploy_calls}"
+    )
+    logger.info("[IMP:9][test] rollback re-tag → compose-resolved ref; no doomed pull")
+
+
+# endregion FUNC_test_rollback_compose_retags_to_compose_resolved_ref
+
+
+# region FUNC_test_deploy_up_receives_env_file_args_and_pull_never
+def test_deploy_up_receives_env_file_args_and_pull_never(
+    engine_boundary, engine, caplog, tmp_path, monkeypatch
+) -> None:
+    """F-11 (a)+(b): rollback-путь (skip_pull=True) передаёт compose up --env-file secrets.env +
+    .env.platform (тот же env-набор, что продовый путь) И флаг --pull never (skip_pull доходит
+    до финальной команды compose, а не только до pre-pull)."""
+    # 🧪 TRAP[TEST] · 2026-08-27 · REGRESSION · F-11 env-chain + pull-gate в compose up
+    # · Scenario: engine.deploy(skip_pull=True) → up_atomic(pull_never=True) →
+    #             shared docker_compose_up(compose_args=[--env-file secrets.env, --env-file
+    #             .env.platform], flags=[--pull, never])
+    # · Last fail: F-11 — up получал только IMAGE_TAG (без env-file, без pull-флага) →
+    #   ${REDIS_PASSWORD} пуст (warning) + compose up пуллил недостающий локальный тег
+    # · Remove if: compose up перестаёт быть финальным шагом развёртывания образа
+    caplog.set_level(logging.INFO)
+    eng, proj_dir = engine
+    b = engine_boundary
+    b.images.return_value = _cp(stdout="sha256:local\n")
+    b.run.return_value = _cp(stdout="app:previous-rollback")
+
+    # env-файлы: secrets.env ноды (SECRETS_ENV_FILE) + .env.platform проекта
+    secrets = tmp_path / "run" / "secrets.env"
+    secrets.parent.mkdir(parents=True)
+    secrets.write_text("REDIS_PASSWORD=secret\n", encoding="utf-8")
+    (Path(proj_dir) / ".env.platform").write_text("PLATFORM_X=1\n", encoding="utf-8")
+    monkeypatch.setenv("SECRETS_ENV_FILE", str(secrets))
+
+    up_kwargs: list[dict] = []
+    b.up.side_effect = lambda *_a, **k: (up_kwargs.append(k), True)[1]
+
+    result = eng.deploy(
+        project="e-proj", ref="previous-rollback", service="app", project_dir=proj_dir, max_wait=2, skip_pull=True
+    )
+
+    assert result.success is True
+    assert up_kwargs, "up_atomic обязан вызвать shared docker_compose_up"
+    flags = up_kwargs[0].get("flags") or []
+    assert flags == ["--pull", "never"], (
+        f"F-11 FAIL: skip_pull обязан дойти до compose up как --pull never, получено {flags}"
+    )
+    ca = up_kwargs[0].get("compose_args") or []
+    assert "--env-file" in ca, f"F-11 FAIL: compose up обязан получать --env-file: {ca}"
+    assert str(secrets) in ca, f"F-11 FAIL: secrets.env отсутствует в env-цепочке: {ca}"
+    assert str(Path(proj_dir) / ".env.platform") in ca, f"F-11 FAIL: .env.platform отсутствует в env-цепочке: {ca}"
+    logger.info("[IMP:9][test] rollback up: env-file [secrets.env, .env.platform] + --pull never OK")
+
+
+# endregion FUNC_test_deploy_up_receives_env_file_args_and_pull_never
+
+
+# region FUNC_test_second_rollback_after_first_success_is_success
+def test_second_rollback_after_first_success_is_success(tmp_path, monkeypatch) -> None:
+    """F-11 критерий (c): второй ручной rollback поверх первого успешного = success (идемпотентность:
+    latest snapshot тот же, compose-rollback повторно применяет предыдущий образ)."""
+    # 🧪 TRAP[TEST] · 2026-08-27 · REGRESSION · F-11 idempotent repeat rollback
+    # · Scenario: snapshot → rollback() DEPLOYED → повторный rollback(тот же snapshot) DEPLOYED;
+    #             compose_rollback вызывается оба раза (recorder.calls == 2)
+    # · Last fail: F-11 — первый же rollback FAILED (doomed pull), повтор не достижим
+    # · Remove if: rollback перестаёт быть идемпотентным по snapshot
+    _write_project(tmp_path, "twice")
+    orch = _make_orch(
+        tmp_path,
+        monkeypatch,
+        poller=_SeqPoller(["healthy"]),
+        compose_rollback=(recorder := _RecorderRollback(result=True)),
+    )
+    snap_id = orch.deploy_history.create_snapshot(project="twice", version="v1", health_status="healthy")
+
+    first = orch.rollback("twice", snapshot_id=snap_id)
+    second = orch.rollback("twice", snapshot_id=snap_id)
+
+    assert first.status == DeployStatus.DEPLOYED, f"первый rollback обязан быть DEPLOYED: {first.status}"
+    assert second.status == DeployStatus.DEPLOYED, (
+        f"F-11 FAIL: второй rollback поверх первого успешного обязан быть DEPLOYED: {second.status} "
+        f"(error={second.error_info!r})"
+    )
+    assert len(recorder.calls) == 2, (
+        f"F-11 FAIL: compose-rollback обязан выполниться оба раза (идемпотентность): {len(recorder.calls)}"
+    )
+    logger.info("[IMP:9][test] второй rollback поверх первого — DEPLOYED (идемпотентность OK)")
+
+
+# endregion FUNC_test_second_rollback_after_first_success_is_success

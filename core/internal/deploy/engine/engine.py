@@ -26,8 +26,9 @@
 ##   10. No secrets/tokens в выводе — audit-логи в stderr
 ##   11. Единый snapshot-механизм — DeployHistory; rollback — через perform_rollback (docker tag + up --force-recreate)
 ##   12. deploy() — contextlib.chdir (восстановление cwd при ЛЮБОМ exit path), без дубля валидации
-##   13. skip_pull=True пропускает pull-шаг (rollback локально перетегированного образа —
-##       doomed GHCR-pull устранён, REF-0004)
+##   13. skip_pull=True пропускает pull-шаг И форсирует --pull never в compose up (F-11:
+##       локально перетегированный образ не должен ИМПЛИЦИТНО пуллиться compose up из registry —
+##       doomed GHCR-pull устранён, REF-0004 → F-11; флаг доведён до финальной команды)
 ## @rationale DevPlan 089 T7: DeployEngine вызывается из DeployOrchestrator, не standalone.
 ##           API deploy_compose() — публичный интерфейс; CLI argparse сохранён (backward compat).
 ## @changes 170 W4-B2 — extracted from deploy_engine.py
@@ -175,7 +176,9 @@ class DeployEngine:
             max_wait: Max seconds to wait for healthcheck.
             skip_pull: Skip the pull step (REF-0004): rollback re-tags previous image
                 locally (`<service>:previous-rollback`) — registry pull локального тега
-                обречён (~135s ретраев ×5) и не нужен, образ уже на ноде.
+                обречён (~135s ретраев ×5) и не нужен, образ уже на ноде. F-11: флаг
+                дополнительно форсирует `--pull never` в compose up (up_atomic pull_never) —
+                compose up не должен ИМПЛИЦИТНО пуллить недостающий локальный тег.
 
         Returns:
             ServiceDeployResult with status and rollback metadata.
@@ -250,7 +253,19 @@ class DeployEngine:
                 )
 
             # ── Atomic up ──
-            if not up_atomic(project_dir, service, ref):
+            # F-11 (P1): skip_pull обязан дойти ДО compose up (--pull never), а не только до
+            # pre-pull — иначе docker compose up сам ИМПЛИЦИТНО пуллит недостающий локальный
+            # тег (rollback перетегирует предыдущий образ под compose-resolved ref — см.
+            # rollback._rollback_compose; с пуллом обречён: тег в registry не существует).
+            #
+            # 🧐 TRAP[DECISION] · 2026-08-27 · — · pull-gate: флаг `docker compose up --pull never`
+            # · Rejected: env COMPOSE_PULL_POLICY=never (per-invocation env_override)
+            # · Reason: `up --pull <policy>` существует с compose v2.0.0 (docker-compose-plugin apt,
+            # ·   нода/CI ≥ v2.13), COMPOSE_PULL_POLICY — только с v2.13+ (pull_policy attr);
+            # ·   флаг виден в argv-команде (диагностика/тесты), env — неявен; оба per-invocation,
+            # ·   НО флаг совместим с более широким диапазоном установленных версий compose.
+            # · Rev: если платформа начнёт требовать compose < 2.0 — вернуться к --no-pull (v1)
+            if not up_atomic(project_dir, service, ref, pull_never=skip_pull):
                 if is_first_deploy:
                     handle_first_deploy(project, service, ref, "docker compose up failed on first deploy")
                 else:

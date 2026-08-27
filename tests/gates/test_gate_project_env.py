@@ -1,9 +1,10 @@
-# GREP_SUMMARY: gate project-env env-platform dotenv presence provides-profiles validation d2 fixture-driven not-skip C8
-# STRUCTURE: ▶ _scan_project_env(projects_dir) → list[str] issues → ▶ fixture-driven: test_project_env_valid (tmp_path project + .env.platform) → ▶ R4: test_project_env_missing_dir_fails → ⎋ PASS
+# GREP_SUMMARY: gate project-env env-platform dotenv presence provides-profiles networks-net-validation validation d2 fixture-driven not-skip C8 F-12
+# STRUCTURE: ▶ _load_platform_sets(provides+profiles+networks) → ▶ _scan_project_env(projects_dir) → list[str] issues → ▶ fixture-driven: test_project_env_valid (tmp_path + PLATFORM_*_NET) → ▶ F-12: test_project_env_unknown_network_fails → ▶ R4: test_project_env_missing_dir_fails → ⎋ PASS
 # region MODULE_CONTRACT
 ## @purpose  D3 gate — validate .env.platform presence and structural integrity for all projects.
 ##           Every project MUST have a .env.platform file (platform service descriptors).
-##           If present, the file must reference only provides that have matching profiles.
+##           If present, the file must reference only provides that have matching profiles,
+##           and network references (PLATFORM_*_NET) must name canonical platform networks.
 ## @scope    Scans a projects/ directory tree for ai-platform.yaml files, checks each sibling
 ##           .env.platform for existence and structural consistency with platform-env.yaml.
 ## @invariants
@@ -14,14 +15,26 @@
 ##   - .env.platform must contain valid KEY=VALUE pairs
 ##   - Service references (PLATFORM_<SERVICE>_*) must have a corresponding entry in
 ##     platform-env.yaml provides, and that provides must be in the profiles list
+##   - F-12: network references (PLATFORM_*_NET) are Docker-network variables, NOT service refs —
+##     valid iff the kebab-value names a canonical platform network (platform-env.yaml#networks,
+##     SoT core/platform-infra.yaml#networks); unknown network value → FAIL, no provides requirement
 ## @rationale  D3 enforcement gate: AC-D3-ENV requires make gate MODE=fast to check .env.platform
 ##             for all registered projects. C8 (AUDIT-5 DEAD-1): старый гейт всегда skip'ался
 ##             (projects/ не существует) — переведён на фикстуры (DevPlan C8 шаг 2).
+##             F-12 (P1): валидатор маппил суффикс `_NET` на сервис и требовал его presence
+##             в provides — но PLATFORM_BACKUP_NET/PLATFORM_OBSERVABILITY_NET это СЕТЕВЫЕ
+##             переменные (сети backup-net/observability-net — канон стека, DR-M4 2026-08-27).
+##             Сети читаются через py-SoT core.internal.shared.yaml_loader.load_platform_env()
+##             (потребители: provisioner, sync_env_defaults, generate_secrets_manifest) —
+##             единый источник вместо ручного парсинга platform-env.yaml#networks в гейте.
 ## @usecases
 ##   - make gate MODE=fast → validates fixture + (реальные проекты если есть)
 ## @changes — 2026-07-20 | Created per DevPlan 020 Task 5.2
 ##           — 2026-08-02 | DevPlan 119 C8 — fixture-driven (test_project_env_valid),
 ##             отсутствие projects/ → FAIL, 0 pytest.skip
+##           — 2026-08-27 | F-12 (P1) — PLATFORM_*_NET валидируется по каноническому множеству
+##             сетей (py-SoT yaml_loader.load_platform_env), не по provides; + negative-тест
+##             test_project_env_unknown_network_fails (MYSTERY_NET=unknown-net → RED)
 # endregion MODULE_CONTRACT
 
 import logging
@@ -33,6 +46,10 @@ from pathlib import Path
 import pytest
 import yaml
 
+# F-12: каноническое множество платформенных сетей читается через py-SoT yaml_loader
+# (единый типизированный читатель platform-env.yaml; потребители: provisioner,
+# sync_env_defaults, generate_secrets_manifest) — НЕ ручной парсинг #networks в гейте.
+from core.internal.shared.yaml_loader import load_platform_env
 from tests._conftest.ldd import ldd_trajectory
 from tests.helpers.gate_helpers import repo_root
 
@@ -43,47 +60,58 @@ _logger = logging.getLogger(__name__)
 
 # Regex to match PLATFORM_<SERVICE>_* variable names
 _PLATFORM_VAR_RE = re.compile(r"^PLATFORM_([A-Z][A-Z0-9_]+)_")
-# Extracted service names that are NOT actual services (networks, internal metadata, etc.)
-# These arise from variables like PLATFORM_NO_PROXY (→ 'no'), PLATFORM_*_NET (→ network names)
+# Extracted service names that are NOT actual services (internal metadata, etc.)
+# F-12: PLATFORM_*_NET переменные (→ 'proxy'/'hermes_agent'/'shared_cache'/'shared_db')
+# перехватываются сетевым путём ДО этого множества — валидируются по каноническим сетям;
+# здесь остаётся не-сетевая эксклюзия PLATFORM_NO_PROXY (→ 'no') + страховка для гипотетических
+# non-NET переменных с теми же сегментами (defense-in-depth, поведение не меняется)
 _NON_SERVICE_NAMES: set[str] = {
     "no",  # PLATFORM_NO_PROXY — exclusions list, not a service
-    "proxy",  # PLATFORM_PROXY_NET — Docker network, not a service
-    "hermes_agent",  # PLATFORM_HERMES_AGENT_NET — Docker network, not a service
-    "shared_cache",  # PLATFORM_SHARED_CACHE_NET — Docker network, not a service
-    "shared_db",  # PLATFORM_SHARED_DB_NET — Docker network, not a service
+    "proxy",  # legacy: PLATFORM_PROXY_NET — Docker network, not a service (F-12: сетевой путь)
+    "hermes_agent",  # legacy: PLATFORM_HERMES_AGENT_NET — Docker network (F-12: сетевой путь)
+    "shared_cache",  # legacy: PLATFORM_SHARED_CACHE_NET — Docker network (F-12: сетевой путь)
+    "shared_db",  # legacy: PLATFORM_SHARED_DB_NET — Docker network (F-12: сетевой путь)
 }
 
 
-# region FUNC_load_provides_profiles
-def _load_provides_profiles() -> tuple[set[str], set[str]]:
-    """Load provides keys and profiles list from platform-env.yaml.
+# region FUNC_load_platform_sets
+def _load_platform_sets() -> tuple[set[str], set[str], set[str]]:
+    """Load provides keys, profiles list, and canonical network names from platform-env.yaml.
 
-    ## @purpose — Provide the canonical set of known services (provides) and
-    ##            enabled profiles from the platform environment descriptor.
-    ## @io — ⎋ tuple(provides_keys: set[str], profile_names: set[str])
-    ## @complexity — O(P + R) where P = profiles, R = provides entries
+    ## @purpose — Provide the canonical sets used by the D3 gate: known services (provides),
+    ##            enabled profiles, and platform Docker networks (F-12).
+    ## @io — ⎋ tuple(provides_keys: set[str], profile_names: set[str], network_names: set[str])
+    ## @complexity — O(P + R + N) where P = profiles, R = provides entries, N = networks
+    ## @invariants
+    ##   - Missing platform-env.yaml → (∅, ∅, ∅) + warning (graceful, как было)
+    ##   - Сети читаются через py-SoT yaml_loader.load_platform_env (F-12) — единый
+    ##     типизированный источник platform-env.yaml#networks, НЕ ручной safe_load
+    ##   - provides/profiles читаются raw safe_load (yaml_loader PlatformEnv не несёт provides)
     """
     if not pathlib.Path(_PLATFORM_ENV_YAML).is_file():
         _logger.warning("[IMP:7][gate][env] platform-env.yaml not found at %s", _PLATFORM_ENV_YAML)
-        return set(), set()
+        return set(), set(), set()
 
     with pathlib.Path(_PLATFORM_ENV_YAML).open(encoding="utf-8") as f:
         data = yaml.safe_load(f)
 
-    if data is None:
-        return set(), set()
+    provides_keys: set[str] = set(data.get("provides", {}).keys()) if data else set()
+    profile_names: set[str] = set(data.get("profiles", [])) if data else set()
 
-    provides_keys: set[str] = set(data.get("provides", {}).keys())
-    profile_names: set[str] = set(data.get("profiles", []))
+    # F-12: канонические сети — через существующий py-SoT (load_platform_env), а не парсинг
+    # #networks в гейте (предпочтительный источник по задаче F-12; TRAP-альтернатива не нужна)
+    platform_env = load_platform_env(_PLATFORM_ENV_YAML)
+    network_names: set[str] = {network.name for network in platform_env.networks}
 
-    return provides_keys, profile_names
+    return provides_keys, profile_names, network_names
 
 
-# endregion FUNC_load_provides_profiles
+# endregion FUNC_load_platform_sets
 
 
 # region FUNC_scan_project_env
-## @purpose  Scan a projects/ directory for D3 .env.platform issues (presence + provides ⊆ profiles).
+## @purpose  Scan a projects/ directory for D3 .env.platform issues
+##           (presence + provides ⊆ profiles + F-12: _NET-сети ⊆ канонических сетей).
 ##           Возвращает список проблем; пусто = чисто.
 ## @io       ⇥ projects_dir: str — корень projects/ → ⎋ list[str] issues
 ## @complexity — O(N * M) где N = yaml files, M = avg lines in .env.platform
@@ -91,6 +119,7 @@ def _load_provides_profiles() -> tuple[set[str], set[str]]:
 ##   - Отсутствующий projects_dir → ОДНА issue «тестовое окружение не настроено» (R4: FAIL, не skip)
 ##   - Существующий projects_dir без yaml-файлов → пусто (vacuous clean)
 ##   - Missing .env.platform → issue; unknown/unprofiled service refs → issues
+##   - F-12: PLATFORM_*_NET → валид iff value ∈ network_names; unknown network value → issue
 def _scan_project_env(projects_dir: str) -> list[str]:
     """Return a list of D3 .env.platform issues (empty list = clean)."""
     if not pathlib.Path(projects_dir).is_dir():
@@ -104,11 +133,12 @@ def _scan_project_env(projects_dir: str) -> list[str]:
     if not yaml_files:
         return []  # проектов нет — валидировать нечего (vacuous clean)
 
-    provides_keys, profile_names = _load_provides_profiles()
+    provides_keys, profile_names, network_names = _load_platform_sets()
     _logger.info(
-        "[IMP:8][gate][env] platform-env.yaml: %d provides, %d profiles: %s",
+        "[IMP:8][gate][env] platform-env.yaml: %d provides, %d profiles, %d networks: %s",
         len(provides_keys),
         len(profile_names),
+        len(network_names),
         sorted(profile_names) if profile_names else "(empty)",
     )
 
@@ -133,8 +163,8 @@ def _scan_project_env(projects_dir: str) -> list[str]:
         _logger.info("[IMP:7][gate][env] %s/.env.platform: EXISTS", rel_project)
 
         # Parse .env.platform for PLATFORM_<SERVICE>_* variable names
-        if not provides_keys and not profile_names:
-            _logger.warning("[IMP:7][gate][env] Provides/profiles not loaded — skipping structural check")
+        if not provides_keys and not profile_names and not network_names:
+            _logger.warning("[IMP:7][gate][env] Provides/profiles/networks not loaded — skipping structural check")
             continue
 
         try:
@@ -152,14 +182,33 @@ def _scan_project_env(projects_dir: str) -> list[str]:
             if not line or line.startswith("#"):
                 continue
             match = _PLATFORM_VAR_RE.match(line)
-            if match:
-                service_name = match.group(1).lower()
-                if service_name in _NON_SERVICE_NAMES:
-                    _logger.debug(
-                        "[IMP:8][gate][env] Skipping non-service ref: %s → %s", line.split("=", 1)[0], service_name
+            if not match:
+                continue
+
+            # F-12: PLATFORM_*_NET — СЕТЕВЫЕ переменные (Docker-сети платформы), НЕ ссылки
+            # на сервисы provides. Валидны iff kebab-value имени входит в каноническое
+            # множество платформенных сетей (SoT: platform-env.yaml#networks ← py-SoT
+            # yaml_loader.load_platform_env). Требование provides НЕ применяется.
+            var_name = line.split("=", 1)[0].strip()
+            if var_name.endswith("_NET"):
+                net_value = line.split("=", 1)[1].strip() if "=" in line else ""
+                if net_value not in network_names:
+                    issues.append(
+                        f"{rel_project}/.env.platform: '{var_name}' references network '{net_value}' "
+                        f"which is not in platform-env.yaml networks ({sorted(network_names)})"
                     )
-                    continue
-                referenced_services.add(service_name)
+                    _logger.error("[IMP:9][gate][env] UNKNOWN NETWORK: %s → %s=%s", rel_project, var_name, net_value)
+                else:
+                    _logger.debug("[IMP:8][gate][env] VALID network ref: %s → %s", var_name, net_value)
+                continue
+
+            service_name = match.group(1).lower()
+            if service_name in _NON_SERVICE_NAMES:
+                _logger.debug(
+                    "[IMP:8][gate][env] Skipping non-service ref: %s → %s", line.split("=", 1)[0], service_name
+                )
+                continue
+            referenced_services.add(service_name)
 
         _logger.info(
             "[IMP:8][gate][env] %s: referenced services = %s",
@@ -193,17 +242,26 @@ def _scan_project_env(projects_dir: str) -> list[str]:
 @ldd_trajectory
 # 🧪 TRAP[TEST] · 2026-08-02 · REGRESSION · fixture-driven D3 env gate (C8)
 # · Scenario: DevPlan 119 C8 — валидный проект из tmp_path с .env.platform проходит (не skip);
+#   F-12 — PLATFORM_BACKUP_NET/PLATFORM_OBSERVABILITY_NET валидны БЕЗ сервисов backup/
+#   observability в provides (сетевые переменные, валидация по каноническим сетям);
 #   реальный projects/ (если есть) тоже валидируется
-# · Last fail: до C8 — тест всегда skip'ался (projects/ не существует)
+# · Last fail: до C8 — тест всегда skip'ался (projects/ не существует);
+#   до F-12 — fixture с _NET-переменными падал (UNKNOWN SERVICE 'backup'/'observability')
 # · Remove if: D3 .env.platform enforcement перенесён в другой механизм
 def test_project_env_valid(caplog, tmp_path) -> None:
     """Validate a VALID fixture project env (never skip) + реальный projects/ если присутствует."""
     # 1) Fixture-driven: валидный проект с .env.platform (без PLATFORM_<SERVICE>_* ссылок —
-    #    фикстура не зависит от platform-env.yaml provides/profiles)
+    #    фикстура не зависит от platform-env.yaml provides/profiles; F-12: _NET-переменные
+    #    валидны по каноническим сетям БЕЗ сервисов в provides)
     ctx_dir = tmp_path / "projects" / "testctx" / "testapp"
     ctx_dir.mkdir(parents=True)
     (ctx_dir / "ai-platform.yaml").write_text("project: testapp\nservice: testapp\n")
-    (ctx_dir / ".env.platform").write_text("# minimal env platform\nNODE_NAME=testnode\n")
+    (ctx_dir / ".env.platform").write_text(
+        "# minimal env platform\n"
+        "NODE_NAME=testnode\n"
+        "PLATFORM_BACKUP_NET=backup-net\n"
+        "PLATFORM_OBSERVABILITY_NET=observability-net\n"
+    )
 
     issues = _scan_project_env(str(tmp_path / "projects"))
     assert issues == [], f"D3 issues in VALID fixture project: {issues}"
@@ -224,6 +282,34 @@ def test_project_env_valid(caplog, tmp_path) -> None:
 
 
 # endregion FUNC_test_project_env_valid
+
+
+# region FUNC_test_project_env_unknown_network_fails
+@pytest.mark.gate
+@ldd_trajectory
+# 🧪 TRAP[TEST] · 2026-08-27 · NEGATIVE (F-12) · неизвестная сеть в PLATFORM_*_NET → RED
+# · Scenario: F-12 (P1) — _NET-переменные валидируются по каноническому множеству сетей;
+#   PLATFORM_MYSTERY_NET=unknown-net (нет в platform-env.yaml#networks) → FAIL-issue
+# · Last fail: до F-12 — валидатор маппил суффикс _NET на сервис и требовал его в provides
+#   (реальные PLATFORM_BACKUP_NET=backup-net → UNKNOWN SERVICE 'backup' на asi-group/*)
+# · Remove if: D3 .env.platform enforcement перенесён в другой механизм
+def test_project_env_unknown_network_fails(caplog, tmp_path) -> None:
+    """F-12 negative: _NET-переменная с неизвестной сетью (не в каноне) → FAIL-issue."""
+    ctx_dir = tmp_path / "projects" / "testctx" / "testapp"
+    ctx_dir.mkdir(parents=True)
+    (ctx_dir / "ai-platform.yaml").write_text("project: testapp\nservice: testapp\n")
+    (ctx_dir / ".env.platform").write_text(
+        "# minimal env platform\nNODE_NAME=testnode\nPLATFORM_MYSTERY_NET=unknown-net\n"
+    )
+
+    issues = _scan_project_env(str(tmp_path / "projects"))
+    assert len(issues) >= 1, "F-12 FAIL: неизвестная сеть должна давать FAIL-issue"
+    assert "unknown-net" in issues[0], f"ожидалось имя неизвестной сети в issue: {issues[0]}"
+    assert "not in platform-env.yaml networks" in issues[0], f"ожидался network-verdict: {issues[0]}"
+    _logger.info("[IMP:9][gate][env] Unknown network ref → явная issue (F-12 PASS)")
+
+
+# endregion FUNC_test_project_env_unknown_network_fails
 
 
 # region FUNC_test_project_env_missing_dir_fails

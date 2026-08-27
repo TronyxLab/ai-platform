@@ -18,8 +18,13 @@
 ##            ВНУТРИ key_provisioner.main() (CLI → env → secrets.env ноды, deploy_paths).
 ##            Эта цепочка закрывает F-020: deploy-context НЕ должен прокидывать env —
 ##            ключ приходит из файлового fallback на ноде.
+##            F-10 (P1): base_url резолвится ТАМ ЖЕ — key_provisioner.main() вызывает
+##            resolve_base_url(None) (explicit → env → _DEFAULT_BASE_URL с DNS-check →
+##            loopback-fallback). Subprocess без --base-url — правильный контракт: resolver
+##            в main() различает container-run (docker DNS резолвится) и host-run (loopback).
 ## @changes  2026-08-01 · DevPlan 117 G T58.5 — extracted from context_deployer.py
 ##           2026-08-26 · plan 012 T12 — F-020 chain doc (no behavior change)
+##           2026-08-27 · F-10 (P1) — base_url resolution documented at key_provisioner.main()
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations

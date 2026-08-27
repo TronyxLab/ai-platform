@@ -11,15 +11,20 @@
 ##   2. pull_images — 5 попыток, backoff [5,10,20,40,60] (~2 мин окно транзиентов, ночная сессия 141)
 ##   3. up_atomic — env_override={"IMAGE_TAG": ref}; shared = {**os.environ, **override} (D7)
 ##   4. wait_health — healthcheck_poll(project_name=service, timeout=max_wait, interval=2) == "healthy"
+##   5. F-11 (2026-08-27): up_atomic/pull_images получают compose_args=project_compose_env_args()
+##      (secrets.env + .env.platform для интерполяции — единая env-цепочка deploy/rollback);
+##      up_atomic pull_never=True → --pull never (skip_pull доходит до compose up, не только до pre-pull)
 ## @changes 170 W4-B2 — extracted from deploy_engine.py; 170 private-imports: приватные имена
 ##           шагов переименованы в публичные (U-07), единый holder `shared_docker_compose_up`
 ##           (без _-префикса) — lifecycle читает атрибут flow-модуля в рантайме
+## @changes 2026-08-27 | F-11 (P1, rollback dance-site) — env-file compose_args + pull_never
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
 import logging
 
+from core.internal.shared.deploy_paths import project_compose_env_args
 from core.internal.shared.docker_compose import (
     docker_compose_up as shared_docker_compose_up,
 )
@@ -41,6 +46,8 @@ logger = logging.getLogger(__name__)
 ## @invariants
 ##   - max_attempts=5; backoff_seconds=[5,10,20,40,60]; timeout=PULL_TIMEOUT (SoT)
 ##   - env_override={"IMAGE_TAG": ref} (контракт T5.1, проверяется тестом test_deploy_retry_pull_wiring)
+##   - compose_args=project_compose_env_args(project_dir) (F-11: тот же env-набор, что у up —
+##     интерполяция pull идентична deploy; отсутствующие файлы пропускаются)
 def pull_images(project_dir: str, service: str, ref: str) -> bool:
     """Pull image with retry (extracted from DeployEngine.deploy — 170 W4-B2)."""
     # ⚠️ TRAP[BUG] · 2026-08-06 · P1 · Ночная сессия 141 — first-deploy пул = FATAL при 15s ретраев
@@ -58,6 +65,7 @@ def pull_images(project_dir: str, service: str, ref: str) -> bool:
         timeout=PULL_TIMEOUT,
         service=service,
         env_override={"IMAGE_TAG": ref},
+        compose_args=project_compose_env_args(project_dir),
     )
 
 
@@ -66,17 +74,27 @@ def pull_images(project_dir: str, service: str, ref: str) -> bool:
 
 # region FUNC_up_atomic
 ## @purpose  Execute docker compose up -d for single service (тонкая обёртка над shared, T5.2).
-## @io       ⇥ project_dir: str, service: str, ref: str → ⎋ bool
+## @io       ⇥ project_dir: str, service: str, ref: str, pull_never: bool (F-11: skip_pull →
+##              --pull never — запрет ИМПЛИЦИТНОГО pull compose up для локально перетегированного
+##              образа; без этого skip_pull пропускал только явный pull-шаг, а compose up сам
+##              пуллил недостающий локальный тег из registry) → ⎋ bool
 ## @complexity — O(1) — делегирование в shared docker_compose_up
-## @invariants — env_override={"IMAGE_TAG": ref}; shared = {**os.environ, **override} (D7)
-def up_atomic(project_dir: str, service: str, ref: str) -> bool:
+## @invariants
+##   - env_override={"IMAGE_TAG": ref}; shared = {**os.environ, **override} (D7)
+##   - compose_args=project_compose_env_args(project_dir) (F-11: env-цепочка deploy/rollback едина —
+##     secrets.env + .env.platform для интерполяции)
+##   - pull_never=True → flags=["--pull", "never"] (compose v2, совместим с docker-compose-plugin
+##     apt — v2.13+; флаг предпочтительнее env COMPOSE_PULL_POLICY — см. TRAP[DECISION] engine.py)
+def up_atomic(project_dir: str, service: str, ref: str, *, pull_never: bool = False) -> bool:
     """Start service via docker compose up -d (extracted from DeployEngine._atomic_up — 170 W4-B2)."""
-    logger.info("[IMP:9][up] Atomic up: %s (IMAGE_TAG=%s)", service, ref)
+    logger.info("[IMP:9][up] Atomic up: %s (IMAGE_TAG=%s, pull_never=%s)", service, ref, pull_never)
     return shared_docker_compose_up(
         project_dir,
         timeout=COMPOSE_UP_TIMEOUT,
         service=service,
         env_override={"IMAGE_TAG": ref},
+        compose_args=project_compose_env_args(project_dir),
+        flags=["--pull", "never"] if pull_never else None,
     )
 
 

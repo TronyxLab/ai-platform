@@ -632,8 +632,9 @@ def _create_ci_deploy_user(ci_deploy_key: str | None, runner: CommandRunner, hu:
     """Create ci-deploy user (+platform group) and add forced-command SSH key."""
     # B20b (141 r2): ci-deploy в группу platform — пост-деплой чейн (receive) пишет
     # /opt/platform артефакты root:platform (catalog.json 664, prometheus-targets 2775).
-    # plan 012 T18 (F-024): + adm — audit.jsonl (640 root:adm, audit_logger) доступен
-    # ci-deploy-каналу записи аудита (иначе Permission denied, деплой без audit-следа).
+    # plan 012 T18 (F-024): + adm — чтение adm-логов (audit.jsonl). Писательский канал
+    # аудита с 2026-08-27 (P1 fix) — POSIX ACL/группа через ensure_audit_writable,
+    # НЕ adm-членство (прежнее 0664 root:adm ломалось chmod 640 от audit_logger).
     # create_user идемпотентен: существующий юзер получит группу через usermod -aG.
     hu.create_user("ci-deploy", ["docker", "platform", "adm"], runner=runner)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType] — namespace-DI helpers (object), W-H DevPlan 163
     logger.info("[IMP:9][phase:user_accounts] ci-deploy user created/verified (groups: docker, platform, adm)")

@@ -77,7 +77,13 @@ logger = logging.getLogger(__name__)
 # ── Канон прав замка (REF-0011): 0664 + владелец ci-deploy — root-bootstrap оставляет
 #    замок открытым для ci-deploy receive (раньше root-owned 0644 давал EACCES → no-lock).
 _LOCK_FILE_MODE = 0o664
-_CI_DEPLOY_USER = "ci-deploy"
+
+# ПУБЛИЧНЫЙ shared-канон имени deploy-writer'а (single source, P1 fix 2026-08-27):
+# потребители — file_lock (chown замков), shared/audit_logger (ensure_audit_writable),
+# converge/audit (R2 setfacl/chgrp/usermod target). Роль "ci" → "ci-deploy" (sudoers_generator
+# _ROLE_USERNAME_MAP) живёт в deploy-слое и НЕ импортируема из shared (инвариант слоёв) —
+# shared-слой держит имя напрямую здесь.
+CI_DEPLOY_USER = "ci-deploy"
 
 
 @dataclass
@@ -129,14 +135,14 @@ def ensure_ci_deploy_owner(path: Path) -> None:
     try:
         import pwd
 
-        pw = pwd.getpwnam(_CI_DEPLOY_USER)
+        pw = pwd.getpwnam(CI_DEPLOY_USER)
     except (ImportError, KeyError):
         return  # нет пользователя/модуля (dev-машина, не-Linux) — канон no-op
     try:
         st = path.stat()
         if st.st_uid != pw.pw_uid:
             os.chown(path, pw.pw_uid, pw.pw_gid)
-            logger.info("[IMP:7][FileLock][chown] chown %s -> %s:%s", path, _CI_DEPLOY_USER, _CI_DEPLOY_USER)
+            logger.info("[IMP:7][FileLock][chown] chown %s -> %s:%s", path, CI_DEPLOY_USER, CI_DEPLOY_USER)
     except OSError as e:
         logger.info("[IMP:7][FileLock][chown] chown %s skipped (non-fatal): %s", path, e)
 

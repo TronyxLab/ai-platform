@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: key_provisioner, idempotent, virtual-keys, LiteLLM, provision_all, CLI, persist, profile-rules, atomic-store
-# STRUCTURE: ▶ parse_args() → ◇ provision_all(master_key, base_url, policy_path) →
+# GREP_SUMMARY: key_provisioner, idempotent, virtual-keys, LiteLLM, provision_all, CLI, persist, profile-rules, atomic-store, resolve-base-url, loopback-fallback
+# STRUCTURE: ▶ resolve_base_url(explicit→env→DNS-check→loopback) → parse_args() →
+#            ◇ provision_all(master_key, base_url, policy_path) →
 #            ◇ load policy.yaml → ◇ discover consumers (projects + platform) →
 #            ◇ list_keys() ONCE (пагинация внутри) → ⊕ all_keys cache → ○ for each consumer:
 #            ┌─ ◇ resolve profile (explicit → rule → default) → ┌─ ◇ get profile config → ⊕ apply overrides →
@@ -37,6 +38,9 @@
 ##                      (plain open("w")+chmod-после удалён — нет world-readable окна)
 ##           2026-08-25 | REF-0104 — corrupt-store fail-fast + FileLock; list_keys ONCE;
 ##                      transport-error ≠ no-key; честный фазовый summary (failed ≠ skipped)
+##           2026-08-27 | F-10 (P1) — resolve_base_url: explicit → $LLM_BASE_URL/$LITELLM_BASE_URL →
+##                      default с DNS-check → loopback fallback (docker DNS "litellm" не резолвится
+##                      из host-процессов ноды/dev — φ11 llm_provision падал ConnectError)
 # endregion MODULE_CONTRACT
 
 import argparse
@@ -44,6 +48,7 @@ import json
 import logging
 import os
 import pathlib
+import socket
 import sys
 import tempfile
 from collections.abc import Mapping
@@ -91,7 +96,13 @@ logger = logging.getLogger(__name__)
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
+# F-10 (P1): docker DNS-имя по умолчанию — резолвится ТОЛЬКО внутри compose-сети.
+# Из host-процессов ноды/dev (φ11 registry_update llm_provision, deploy-context,
+# provision-llm.sh subprocess) "litellm" → gaierror → ConnectError. Резолв — resolve_base_url().
 _DEFAULT_BASE_URL: str = f"http://litellm:{PLATFORM_PORT_LITELLM}"
+# F-10: loopback-фасад для host-run (make provision-llm использует тот же explicit URL).
+# Порт — из SoT shared/platform_ports (НЕ литерал 4000 — гейт порт-parity).
+_LOOPBACK_BASE_URL: str = f"http://127.0.0.1:{PLATFORM_PORT_LITELLM}"
 _KEY_PREVIEW_LEN: int = 16  # сколько символов ключа показывать в логах (маскировка)
 _BUDGET_EPSILON: float = 0.001  # допустимое расхождение daily-бюджета (float-сравнение)
 _DEFAULT_POLICY_REL_PATH = pathlib.Path("core") / "internal" / "llm" / "policy.yaml"
@@ -100,6 +111,90 @@ _LOCK_TIMEOUT_SECONDS: float = 30.0  # ожидание store.lock при кон
 # DevPlan 16 T1.D (P0-5): зарезервированные ключи метаданных — профильная конфигурация НЕ
 # может затереть их в key_metadata (иначе lookup find_key_by_metadata(project=…) ломается)
 _RESERVED_METADATA_KEYS: frozenset[str] = frozenset({"project"})
+
+
+# region BASE_URL_RESOLUTION
+# region FUNC__extract_host
+## @purpose  Извлечение hostname из base_url (scheme- и path-агностично). Единая точка
+##           парсинга для resolve_base_url (DNS-check) и _ensure_local_proxy_neutral (NO_PROXY).
+## @io       ⇥ url: str → ⎋ str (hostname без порта)
+## @complexity O(1)
+def _extract_host(url: str) -> str:
+    """Extract hostname from a base URL (scheme/path-agnostic)."""
+    hostport = url.split("://", 1)[-1].split("/", 1)[0] if "://" in url else url.split(":", 1)[0]
+    return hostport.split(":", 1)[0]
+
+
+# endregion FUNC__extract_host
+
+
+# region FUNC_resolve_base_url
+## @purpose  F-10 (P1): честный резолв base_url для provisioning. Приоритет:
+##           explicit (CLI --base-url / программный вызов — контракт сохраняется) →
+##           env LLM_BASE_URL/LITELLM_BASE_URL (непустой) → _DEFAULT_BASE_URL
+##           ("http://litellm:PORT") с DNS-check: docker-hostname резолвится (compose-сеть)
+##           → дефолт; иначе (host-run ноды/dev: gaierror) → loopback
+##           "http://127.0.0.1:PORT" + [IMP:8] лог fallback.
+##           Фон: φ11 registry_update llm_provision и deploy-context запускают
+##           provision-llm.sh БЕЗ --base-url → argparse-дефолт упирался в docker DNS-имя,
+##           не резолвимое из host-процессов → ConnectError «Temporary failure in name
+##           resolution» → fail-soft done_with_warnings, virtual keys НЕ провижинились.
+## @io       ⇥ explicit: str | None → ⎋ str (резолвнутый base_url, всегда пригоден к connect)
+## @complexity O(1) + DNS-lookup (getaddrinfo без таймаута — localhost fail-fast, OK)
+## @invariants
+##   - explicit непустой → возвращается БЕЗ DNS-запроса (getaddrinfo не трогается)
+##   - env читается как «задан, если непуст» (пустая строка = отсутствует)
+##   - getaddrinfo вызывается ТОЛЬКО для хоста _DEFAULT_BASE_URL; gaierror → loopback
+## @rationale Q: почему не менять _DEFAULT_BASE_URL на loopback всегда? A: внутри compose-сети
+##            (bootstrap φ8, container-run) корректный адрес — docker DNS "litellm"; loopback
+##            сломал бы контейнерный путь. DNS-check честно различает два окружения.
+def resolve_base_url(explicit: str | None) -> str:
+    """Resolve the effective LiteLLM base URL for provisioning (F-10)."""
+    # 1. Explicit — CLI/программный контракт приоритетен (make provision-llm: 127.0.0.1)
+    if explicit:
+        logger.log(
+            logging.INFO,
+            "[IMP:8][resolve_base_url] Using explicit base_url: %s",
+            explicit,
+        )
+        return explicit
+
+    # 2. Env override (непустой): LLM_BASE_URL → LITELLM_BASE_URL
+    for env_name in ("LLM_BASE_URL", "LITELLM_BASE_URL"):
+        env_url = str(os.environ.get(env_name) or "")
+        if env_url:
+            logger.log(
+                logging.INFO,
+                "[IMP:8][resolve_base_url] Using $%s base_url: %s",
+                env_name,
+                env_url,
+            )
+            return env_url
+
+    # 3. Default "http://litellm:PORT" — резолвится ТОЛЬКО внутри compose-сети.
+    host = _extract_host(_DEFAULT_BASE_URL)
+    try:
+        _ = socket.getaddrinfo(host, None)  # DNS-liveness probe (F-10)
+    except OSError:
+        logger.log(
+            logging.INFO,
+            "[IMP:8][resolve_base_url] docker-hostname %r unresolvable — falling back to loopback %s",
+            host,
+            _LOOPBACK_BASE_URL,
+        )
+        return _LOOPBACK_BASE_URL
+    logger.log(
+        logging.INFO,
+        "[IMP:8][resolve_base_url] docker-hostname %r resolvable — keeping default %s",
+        host,
+        _DEFAULT_BASE_URL,
+    )
+    return _DEFAULT_BASE_URL
+
+
+# endregion FUNC_resolve_base_url
+# endregion BASE_URL_RESOLUTION
+
 
 # ── Project root resolution ──────────────────────────────────────────────────
 # _PROJECT_ROOT определён выше (self-bootstrap, W2 T2.10) — см. шапку модуля.
@@ -598,7 +693,7 @@ def key_config_matches(
 
 def provision_all(
     master_key: str,
-    base_url: str = _DEFAULT_BASE_URL,
+    base_url: str | None = None,
     policy_path: pathlib.Path | None = None,
     persist_path: pathlib.Path | None = None,
 ) -> dict[str, str]:
@@ -613,7 +708,8 @@ def provision_all(
     ##   6. Return {consumer_name: api_key}
     ## @io
     ##   - master_key: str — LITELLM_MASTER_KEY for Admin API auth
-    ##   - base_url: str — LiteLLM base URL
+    ##   - base_url: str | None — explicit LiteLLM base URL (None → resolve_base_url:
+    ##     $LLM_BASE_URL/$LITELLM_BASE_URL → _DEFAULT_BASE_URL с DNS-check → loopback; F-10)
     ##   - policy_path: Path | None — path to policy.yaml (default: project default)
     ##   - persist_path: Path | None — path to key store JSON
     ##   - ⎋ dict[str, str] — {consumer_name: api_key} for all provisioned projects
@@ -628,10 +724,13 @@ def provision_all(
     ##     структурно невозможны); любой терминальный failed → PlatformError (φ11 не done);
     ##     пустой токен листинга = not-found (стор пустым значением НЕ перезаписывается)
     """
+    # F-10: None → resolve_base_url (explicit → env → default с DNS-check → loopback).
+    # Явный str проходит as-is (CLI --base-url контракт, make provision-llm).
+    resolved_base_url = resolve_base_url(base_url)
     logger.log(
         logging.CRITICAL,
         "[IMP:9][provision_all] Starting key provisioning — base_url=%s",
-        base_url,
+        resolved_base_url,
     )
 
     # Step 1: Resolve policy path
@@ -653,7 +752,7 @@ def provision_all(
     )
 
     # Step 3: Create admin client
-    client = LiteLLMAdminClient(base_url=base_url, master_key=master_key)
+    client = LiteLLMAdminClient(base_url=resolved_base_url, master_key=master_key)
 
     # Step 4: Discover consumers
     projects = discover_projects()
@@ -994,11 +1093,7 @@ def _resolve_master_key(
 ##   - NO_PROXY добавляется setdefault-семантикой (существующий не затирается)
 def _ensure_local_proxy_neutral(base_url: str, no_proxy: str | None = None) -> None:
     local_hosts = {"127.0.0.1", "localhost", "::1", "litellm"}
-    host = (
-        base_url.split("://", 1)[-1].split("/", 1)[0].split(":", 1)[0]
-        if "://" in base_url
-        else base_url.split(":", 1)[0]
-    )
+    host = _extract_host(base_url)
     if host not in local_hosts:
         return
     current = no_proxy if no_proxy is not None else os.environ.get("NO_PROXY", "")
@@ -1026,7 +1121,7 @@ class CliArgs(argparse.Namespace):
     """
 
     master_key: str | None  # pyright: ignore[reportUninitializedInstanceVariable] — W11 argparse fills (без class-value дефолтов)
-    base_url: str  # pyright: ignore[reportUninitializedInstanceVariable] — W11 argparse fills (без class-value дефолтов)
+    base_url: str | None  # pyright: ignore[reportUninitializedInstanceVariable] — F-10: default=None, резолв в main()
     policy: str | None  # pyright: ignore[reportUninitializedInstanceVariable] — W11 argparse fills (без class-value дефолтов)
     persist: str | None  # pyright: ignore[reportUninitializedInstanceVariable] — W11 argparse fills (без class-value дефолтов)
 
@@ -1049,8 +1144,14 @@ def _parse_args(argv: list[str] | None = None) -> CliArgs:
     parser.add_argument(
         "--base-url",
         type=str,
-        default=os.environ.get("LITELLM_BASE_URL", _DEFAULT_BASE_URL),
-        help=f"LiteLLM base URL (default: $LITELLM_BASE_URL → {_DEFAULT_BASE_URL})",
+        # F-10: default=None — резолв в main() через resolve_base_url (explicit → env →
+        # default с DNS-check → loopback). Прежний argparse-default (env/_DEFAULT_BASE_URL)
+        # лишал resolver возможности различить «явно задано» и «дефолт».
+        default=None,
+        help=(
+            "LiteLLM base URL (default: $LLM_BASE_URL/$LITELLM_BASE_URL → "
+            f"{_DEFAULT_BASE_URL} с loopback-fallback, F-10)"
+        ),
     )
     parser.add_argument(
         "--policy",
@@ -1110,6 +1211,10 @@ def main(argv: list[str] | None = None) -> int:
     ## @complexity O(provision_all)
     """
     args = _parse_args(argv)
+
+    # F-10 (P1): резолв base_url ДО использования — explicit --base-url сохраняется,
+    # иначе env → default с DNS-check → loopback (φ11/deploy-context subprocess без --base-url).
+    args.base_url = resolve_base_url(args.base_url)
 
     # Resolve master key: CLI arg → env → secrets.env (plan 012 T12 F-020)
     master_key = _resolve_master_key(args.master_key)

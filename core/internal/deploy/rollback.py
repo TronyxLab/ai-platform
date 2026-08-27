@@ -24,6 +24,9 @@ LDD-логи и region-маркеры сохранены; DeployStatus/Orchestra
 ##      (б) manual rollback — из snapshot payload_dir (T9.8, L-6)
 ##   3. _rollback_compose — previous_image re-tag → docker compose deploy c skip_pull
 ##      (doomed GHCR-pull устранён — REF-0004; W1: docker tag через shared/docker_ops);
+##      F-11 (2026-08-27): re-tag на compose-RESOLVED ref (docker compose config --images
+##      при IMAGE_TAG=previous-rollback) + skip_pull → --pull never в compose up (engine);
+##      env-цепочка config/up — project_compose_env_args (secrets.env + .env.platform);
 ##      PlatformError/OSError/SubprocessError → False
 ##   4. _restore_payload_files — не-fatal: сбой restore НЕ блокирует compose-rollback
 ##   5. DeployStatus/OrchestratorDeployResult — единые типы статусов всех deploy-операций;
@@ -41,6 +44,11 @@ LDD-логи и region-маркеры сохранены; DeployStatus/Orchestra
 ## @changes 2026-08-22 | T3.1 — extracted from deploy/orchestrator.py (1:1, механический перенос)
 ## @changes 2026-08-24 | REF-0004 (DevPlan 11 В1) — skip_pull при previous-rollback; payload
 ##             restore только после успешного compose-rollback; поле rollback_verified (additive)
+## @changes 2026-08-27 | F-11 (P1, rollback dance-site) — re-tag на compose-resolved ref
+##             (docker compose config --images при IMAGE_TAG=previous-rollback) — bare-тег не
+##             совпадал с ${REGISTRY}/${ORG}/${PROJECT}:${IMAGE_TAG} → compose up пуллил doomed
+##             ref; skip_pull доведён до compose up (--pull never); env-цепочка
+##             project_compose_env_args для config/up
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -57,6 +65,8 @@ from typing import TYPE_CHECKING, cast
 
 from core.internal.deploy.deploy_engine import DeployEngine
 from core.internal.shared import docker_ops  # W1: docker tag примитив (гейт docker_sole_path)
+from core.internal.shared.deploy_paths import project_compose_env_args
+from core.internal.shared.docker_compose import docker_compose_config
 from core.internal.shared.exceptions import PlatformError
 
 if TYPE_CHECKING:
@@ -341,10 +351,16 @@ class RollbackMixin:
     # region FUNC__rollback_compose
     ## @purpose  Rollback compose to a previous snapshot state.
     ## @io       ⇥ project_dir: str, service: str, snapshot: dict[str, object] → ⎋ bool
-    ## @complexity — O(1) — single docker compose deploy of previous image
+    ## @complexity — O(1) — config-resolve (--images) + docker tag + docker compose deploy
     ## @invariants
     ##   - previous_image из compose_state re-tag → docker compose deploy (skip_pull — REF-0004:
     ##     образ уже локально перетегирован; registry-pull локального тега обречён ~135s ×5)
+    ##   - F-11 (2026-08-27): target re-tag = compose-RESOLVED ref (docker compose config --images
+    ##     при IMAGE_TAG=previous-rollback), НЕ bare `<service>:previous-rollback` — bare-тег не
+    ##     совпадает с ${REGISTRY}/${ORG}/${PROJECT}:${IMAGE_TAG} → compose up пуллил doomed ref;
+    ##     skip_pull доводится до compose up (--pull never, engine up_atomic pull_never)
+    ##   - compose config/env-chain: тот же env-набор (secrets.env + .env.platform) через
+    ##     project_compose_env_args (F-11) — интерполяция config/up идентична продовому пути
     ##   - PlatformError/OSError/SubprocessError → False (audit пишет FAILED в _rollback_deploy)
     def _rollback_compose(self, project_dir: str, service: str, snapshot: dict[str, object]) -> bool:
         """Rollback compose to a previous snapshot state.
@@ -367,7 +383,47 @@ class RollbackMixin:
 
             # Re-tag and restart (W1: docker tag — shared/docker_ops, non-fatal)
             if prev_image_id:
-                docker_ops.docker_tag(str(prev_image_id), f"{service}:previous-rollback")
+                # ⚠️ TRAP[BUG] · 2026-08-27 · P1 · F-11 — bare re-tag ≠ compose-resolved ref → doomed pull
+                # · Symptom: ручной rollback dance-site падал «Up failed (exit=1): ... Image
+                # ·   ghcr.io/tronyxlab/dance-site:previous-rollback Pulling» + REDIS_PASSWORD not set →
+                # ·   rollback FAILED, хотя внутренний engine-rollback восстановил контейнер healthy.
+                # · Root: (1) re-tag целился в bare `dance-site:previous-rollback`, а compose резолвит
+                # ·   `${IMAGE_REGISTRY:-ghcr.io}/${ORG}/${PROJECT}:${IMAGE_TAG}` → `ghcr.io/...:previous-rollback` —
+                # ·   тег НЕ существует локально → compose up ИМПЛИЦИТНО пуллил его из registry (тега там
+                # ·   нет по определению) → rc=1; skip_pull пропускал только явный pull-шаг (engine),
+                # ·   не up-пулл; (2) compose-интерполяция `${REDIS_PASSWORD}` шла без --env-file
+                # ·   secrets.env (ручной CLI от root без sourced секретов).
+                # · Fix: (1) target re-tag = compose-resolved ref (docker compose config --images при
+                # ·   IMAGE_TAG=previous-rollback) + skip_pull → `docker compose up --pull never`
+                # ·   (engine up_atomic pull_never) — registry НЕ трогается; (2) единая env-цепочка
+                # ·   project_compose_env_args (secrets.env + .env.platform) для config/up/pull.
+                # · Prevention: test_rollback_contour::test_rollback_compose_retags_to_compose_resolved_ref +
+                # ·   test_rollback_contour::test_deploy_up_receives_env_file_args_and_pull_never
+                target_ref = f"{service}:previous-rollback"
+                cfg = docker_compose_config(
+                    project_dir,
+                    flags=["--images", service],
+                    compose_args=project_compose_env_args(project_dir),
+                    env_override={"IMAGE_TAG": "previous-rollback"},
+                )
+                cfg_stdout = cfg.stdout
+                if isinstance(cfg_stdout, bytes):
+                    cfg_stdout = cfg_stdout.decode("utf-8", errors="replace")
+                resolved = [ln.strip() for ln in (cfg_stdout or "").splitlines() if ln.strip()]
+                if resolved:
+                    target_ref = resolved[0]
+                    logger.info(
+                        "[IMP:8][DeployOrchestrator][rollback_compose] Compose-resolved ref for "
+                        "IMAGE_TAG=previous-rollback: %s",
+                        target_ref,
+                    )
+                else:
+                    logger.warning(
+                        "[IMP:7][DeployOrchestrator][rollback_compose] compose config --images resolved no "
+                        "ref — fallback bare tag %s (compose up may pull)",
+                        target_ref,
+                    )
+                docker_ops.docker_tag(str(prev_image_id), target_ref)
             else:
                 logger.warning(
                     "[IMP:8][DeployOrchestrator][rollback_compose] Snapshot %s has no compose_state.previous_image "
@@ -383,8 +439,9 @@ class RollbackMixin:
             # ·   тег из registry (тег не существует там по определению).
             # · Fix: (1) якорь previous_image персистится в снапшот ДО compose-up;
             # ·   (2) skip_pull=True — локально перетегированный образ пуллить не нужно.
-            # · Prevention: test_rollback_contour::test_previous_rollback_ref_skips_pull +
-            # ·   test_deploy_persists_previous_image_anchor_in_snapshot
+            # · F-11 rider (2026-08-27): skip_pull оказался НЕДОСТАТОЧНЫМ — compose up сам
+            # ·   ИМПЛИЦИТНО пуллит недостающий локальный тег; закрыто TRAP[BUG] F-11 выше
+            # ·   (re-tag на compose-resolved ref + --pull never). Prevention: см. F-11-тесты.
             result = engine.deploy(
                 project=Path(project_dir).name,
                 ref="previous-rollback",

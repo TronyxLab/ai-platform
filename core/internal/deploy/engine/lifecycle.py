@@ -9,7 +9,8 @@
 ##           (test_deploy_engine: save_previous_image/perform_rollback/handle_first_deploy).
 ## @invariants
 ##   1. save_previous_image вызывается ДО pull (порядок критичен для rollback — T1)
-##   2. perform_rollback: re-tag предыдущего образа → docker compose up --force-recreate (T1)
+##   2. perform_rollback: re-tag предыдущего образа → docker compose up --force-recreate (T1);
+##      compose_args=project_compose_env_args (F-11: тот же env-набор, что up_atomic продового пути)
 ##   3. handle_first_deploy ВСЕГДА raise PlatformFatalError (exit 10, нет rollback — DevPlan 116 B4 T3.1)
 ## @rationale Единственный holder `shared_docker_compose_up` — engine/flow.py (используется и up_atomic,
 ##            и perform_rollback): lifecycle читает атрибут flow-модуля в рантайме, чтобы тест-патч
@@ -41,6 +42,7 @@ from core.internal.deploy.engine.results import ImageInfo
 # DevPlan 128 W1 (P2-5/D6): docker image inspect/tag примитивы — shared/docker_ops
 # (единственный слой, гейт docker_sole_path).
 from core.internal.shared import docker_ops
+from core.internal.shared.deploy_paths import project_compose_env_args
 from core.internal.shared.docker_compose import (
     docker_compose_images as _shared_docker_compose_images,
 )
@@ -109,11 +111,23 @@ def perform_rollback(project_dir: str, service: str, previous_image: ImageInfo |
     # Единственный holder shared_docker_compose_up — engine/flow.py (см. @rationale модуля):
     # читаем атрибут flow-модуля в рантайме, чтобы патч границы (test_deploy_engine) покрыл
     # и up_atomic (flow), и rollback (lifecycle) одним target'ом.
+    # F-11: compose_args=project_compose_env_args(project_dir) — внутренний rollback получает
+    # тот же env-набор (secrets.env + .env.platform), что и up_atomic продового пути.
+    #
+    # 📝 TRAP[DEBT] · 2026-08-27 · MED · perform_rollback не передаёт IMAGE_TAG → compose резолвит
+    # · Observed: при F-11-анализе — perform_rollback вызывает up БЕЗ env_override (IMAGE_TAG),
+    # ·   compose интерполирует ${IMAGE_TAG:-latest} → :latest, а НЕ точный тег previous_image.tag
+    # · Suspected: если RepoTags[0] running-образа ≠ :latest (CI пушит :latest вместе с :<sha>),
+    # ·   engine-rollback восстановит :latest (возможно НОВЫЙ образ), а не фактический предыдущий
+    # · Impact: внутренний rollback на up/health-fail может поднять не тот образ (fix-forward нарушен)
+    # · When: F-11 (rollback dance-site) — вне скоупа: контур _rollback_compose починен, здесь
+    # ·   поведение не менялось (в F-11 perform_rollback сработал и восстановил healthy)
     if not _flow.shared_docker_compose_up(
         project_dir,
         timeout=COMPOSE_UP_TIMEOUT,
         service=service,
         flags=["--force-recreate"],
+        compose_args=project_compose_env_args(project_dir),
     ):
         logger.error("[IMP:10][rollback] Rollback compose up FAILED for %s", service)
         return False

@@ -18,12 +18,16 @@
 ##   - All tests use tmp_path for temp files (no hardcoded paths)
 ##   - Each test includes LDD trajectory printing with IMP:9 check
 ## @changes — 2026-07-24 | Created (DevPlan 049 Phase 4)
+##           2026-08-27 | F-10 (P1) — resolve_base_url: negative (unresolvable→loopback),
+##                      env override, explicit wins, resolvable default, argparse default=None,
+##                      main() env-less subprocess e2e
 # endregion MODULE_CONTRACT
 
 import json
 import logging
 import os
 import pathlib
+import socket
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -958,3 +962,151 @@ def test_no_proxy_for_local_facades(tmp_path, monkeypatch, caplog):
     kp._ensure_local_proxy_neutral("http://api.remote.example:443")
     assert os.environ["NO_PROXY"] == "keep-me"
     logger.info("[IMP:9][test][proxy-neutral] loopback/litellm в NO_PROXY, remote не тронут (F-022)")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# F-10 (P1): resolve_base_url — explicit → env → default с DNS-check → loopback
+# ═══════════════════════════════════════════════════════════════════
+
+
+def _patch_getaddrinfo_unresolvable(monkeypatch) -> None:
+    """Make socket.getaddrinfo raise gaierror — docker DNS "litellm" недоступен с host."""
+
+    def _boom(host: str, *args: object, **kwargs: object) -> list[object]:
+        msg = f"Name or service not known: {host}"
+        raise socket.gaierror(msg)
+
+    monkeypatch.setattr(socket, "getaddrinfo", _boom)
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · F-10 (P1) · docker-hostname unresolvable → loopback fallback
+# · Scenario: socket.getaddrinfo('litellm') → gaierror (host-run ноды/dev), env пуст,
+#   explicit None → resolve_base_url возвращает http://127.0.0.1:4000 + [IMP:8] «unresolvable»
+# · Last fail: φ11 registry_update llm_provision — ConnectError «Temporary failure in name
+#   resolution» (fail-soft done_with_warnings), virtual keys НЕ провижинились автоматически
+# · Remove if: provisioning переедет в container-run (docker DNS всегда доступен)
+def test_resolve_base_url_unresolvable_default_loopback(monkeypatch, caplog):
+    """F-10 NEGATIVE: hostname не резолвится + нет env → loopback fallback."""
+    import core.internal.llm.key_provisioner as kp
+
+    caplog.set_level(logging.DEBUG)
+    monkeypatch.delenv("LLM_BASE_URL", raising=False)
+    monkeypatch.delenv("LITELLM_BASE_URL", raising=False)
+    _patch_getaddrinfo_unresolvable(monkeypatch)
+
+    resolved = kp.resolve_base_url(None)
+
+    assert resolved == "http://127.0.0.1:4000", f"loopback fallback ожидался, got {resolved!r}"
+    assert any("unresolvable" in r.message and "falling back to loopback" in r.message for r in caplog.records), (
+        "[IMP:8] лог fallback отсутствует — агент не увидит причину"
+    )
+    logger.critical("[IMP:9][test][resolve-base-url] unresolvable default → loopback %s (F-10)", resolved)
+    assert _print_ldd_trajectory(caplog), "No IMP:9 log in F-10 negative test"
+
+
+# 🧪 TRAP[TEST] · REGRESSION · F-10 · env override работает без DNS-запроса
+# · Scenario: LLM_BASE_URL/LITELLM_BASE_URL заданы → побеждают дефолт; getaddrinfo НЕ вызывается
+# · Last fail: F-10 — argparse-default игнорировал env после подстановки (env бейкался в default)
+# · Remove if: env-контракт base_url изменится
+def test_resolve_base_url_env_override(monkeypatch, caplog):
+    """F-10: $LLM_BASE_URL / $LITELLM_BASE_URL override без обращения к DNS."""
+    import core.internal.llm.key_provisioner as kp
+
+    caplog.set_level(logging.DEBUG)
+    monkeypatch.delenv("LLM_BASE_URL", raising=False)
+    monkeypatch.delenv("LITELLM_BASE_URL", raising=False)
+
+    with patch.object(socket, "getaddrinfo") as mock_gai:
+        monkeypatch.setenv("LLM_BASE_URL", "http://env-host:5000")
+        assert kp.resolve_base_url(None) == "http://env-host:5000"
+        monkeypatch.delenv("LLM_BASE_URL")
+        monkeypatch.setenv("LITELLM_BASE_URL", "http://env-litellm:6000")
+        assert kp.resolve_base_url(None) == "http://env-litellm:6000"
+        mock_gai.assert_not_called(), "env задан — DNS-проверка не нужна"
+    logger.critical("[IMP:9][test][resolve-base-url] env override wins без DNS (F-10)")
+    assert _print_ldd_trajectory(caplog), "No IMP:9 log in env override test"
+
+
+# 🧪 TRAP[TEST] · REGRESSION · F-10 · explicit --base-url контракт сохраняется
+# · Scenario: explicit URL перекрывает env и дефолт; getaddrinfo НЕ вызывается
+# · Last fail: F-10 — если бы explicit трактовался как дефолт, make provision-llm
+#   (127.0.0.1:4000) потерял бы свой контракт
+# · Remove if: CLI --base-url контракт изменится
+def test_resolve_base_url_explicit_wins(monkeypatch, caplog):
+    """F-10: explicit приоритетен над env/дефолтом, DNS не трогается."""
+    import core.internal.llm.key_provisioner as kp
+
+    caplog.set_level(logging.DEBUG)
+    monkeypatch.setenv("LLM_BASE_URL", "http://env-should-lose:5000")
+    with patch.object(socket, "getaddrinfo") as mock_gai:
+        assert kp.resolve_base_url("http://explicit:7777") == "http://explicit:7777"
+        mock_gai.assert_not_called()
+    logger.critical("[IMP:9][test][resolve-base-url] explicit wins over env (F-10)")
+    assert _print_ldd_trajectory(caplog), "No IMP:9 log in explicit test"
+
+
+# 🧪 TRAP[TEST] · REGRESSION · F-10 · resolvable docker DNS → дефолт сохраняется
+# · Scenario: getaddrinfo('litellm') успешен (container-run) → _DEFAULT_BASE_URL без fallback
+# · Last fail: F-10 — если бы fallback срабатывал всегда, container-run (bootstrap φ8) сломался бы
+# · Remove if: container-run provisioning исчезнет
+def test_resolve_base_url_resolvable_default_kept(monkeypatch, caplog):
+    """F-10: docker DNS резолвится (container-run) → дефолт http://litellm:PORT."""
+    import core.internal.llm.key_provisioner as kp
+
+    caplog.set_level(logging.DEBUG)
+    monkeypatch.delenv("LLM_BASE_URL", raising=False)
+    monkeypatch.delenv("LITELLM_BASE_URL", raising=False)
+    with patch.object(
+        socket, "getaddrinfo", return_value=[(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.5", 4000))]
+    ):
+        assert kp.resolve_base_url(None) == kp._DEFAULT_BASE_URL
+    logger.critical("[IMP:9][test][resolve-base-url] resolvable docker DNS → default kept (F-10)")
+    assert _print_ldd_trajectory(caplog), "No IMP:9 log in resolvable test"
+
+
+# 🧪 TRAP[TEST] · REGRESSION · F-10 · --base-url default=None (env больше не бейкается в argparse)
+# · Scenario: _parse_args([]) → base_url None (резолвится в main); явный флаг сохраняется
+# · Last fail: F-10 — argparse-default бейкал env/_DEFAULT_BASE_URL в parse-time, resolver
+#   не мог отличить «явно задано» от «дефолт» → fallback был недостижим
+# · Remove if: резолв base_url переедет из main() в другой слой
+def test_parse_args_base_url_default_none(monkeypatch, caplog):
+    """F-10: argparse default=None — резолв в main(); явный --base-url сохраняется."""
+    import core.internal.llm.key_provisioner as kp
+
+    caplog.set_level(logging.DEBUG)
+    monkeypatch.setenv("LITELLM_BASE_URL", "http://env-argparse:5000")
+    assert kp._parse_args([]).base_url is None, "argparse default должен быть None (F-10)"
+    assert kp._parse_args(["--base-url", "http://explicit:7777"]).base_url == "http://explicit:7777"
+    logger.critical("[IMP:9][test][parse-args] base_url default=None, explicit preserved (F-10)")
+    assert _print_ldd_trajectory(caplog), "No IMP:9 log in parse-args test"
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · F-10 · main() без --base-url (φ11/deploy-context subprocess)
+# · Scenario: provision-llm.sh вызывается БЕЗ --base-url (docker.py / llm_provision subprocess),
+#   hostname не резолвится → main() передаёт provision_all loopback-URL
+# · Last fail: F-10 — main() шёл с argparse-default http://litellm:4000 → ConnectError на host
+# · Remove if: subprocess-цепочки начнут прокидывать явный --base-url
+def test_main_resolves_base_url_for_env_less_subprocess(policy_yaml, tmp_path, monkeypatch, caplog):
+    """F-10 e2e: main() без --base-url + unresolvable → provision_all получает loopback."""
+    import core.internal.llm.key_provisioner as kp
+
+    caplog.set_level(logging.DEBUG)
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    monkeypatch.delenv("LLM_BASE_URL", raising=False)
+    monkeypatch.delenv("LITELLM_BASE_URL", raising=False)
+    _patch_getaddrinfo_unresolvable(monkeypatch)
+
+    with (
+        patch.object(kp, "_resolve_master_key", return_value="mk"),
+        patch.object(kp, "provision_all") as mock_prov,
+    ):
+        mock_prov.return_value = {}
+        rc = kp.main(["--master-key", "mk", "--persist", str(tmp_path / "keys.json")])
+
+    assert rc == 0
+    assert mock_prov.call_count == 1
+    assert mock_prov.call_args.kwargs["base_url"] == "http://127.0.0.1:4000", (
+        f"provision_all должен получить loopback, got {mock_prov.call_args.kwargs['base_url']!r}"
+    )
+    logger.critical("[IMP:9][test][main] env-less subprocess → loopback base_url (F-10)")
+    assert _print_ldd_trajectory(caplog), "No IMP:9 log in main() F-10 test"

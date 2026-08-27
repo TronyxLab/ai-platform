@@ -1,17 +1,31 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: converge-audit, reconcile-audit-log, r2, audit-log, adm-group, ci-deploy, symlink-attack
-# STRUCTURE: ▶ symlink check ┌log_dir + audit.jsonl┐ → ⚡ reconcile_ci_deploy_group ┌id -nG → usermod -aG adm┐ → ⚡ mkdir/chmod/chown 0750 root:adm → ⚡ stat verify 0664 root:adm → ⎋ drift entry {R2}
+# GREP_SUMMARY: converge-audit, reconcile-audit-log, r2, audit-log, ci-deploy, symlink-attack, setfacl, acl, ensure-audit-writable, fallback-0660, adm-group
+# STRUCTURE: ▶ symlink check ┌log_dir + audit.jsonl┐ → ⚡ reconcile_ci_deploy_group ┌id -nG → usermod -aG adm┐ → ⚡ mkdir/chmod/chown 0750 root:adm → ⚡ audit_permissions_status ┌acl | group | none┐ → ◇ converged | ⚡ ensure_audit_writable (setfacl primary / 0660 fallback) → ⎋ drift entry {R2}
 # region MODULE_CONTRACT
-## @purpose  R2 reconcile_audit_log — audit.jsonl 0664 root:adm + ci-deploy adm group.
+## @purpose  R2 reconcile_audit_log — audit.jsonl writable by root AND ci-deploy
+##           (POSIX ACL setfacl primary / chgrp ci-deploy + 0660 fallback) + ci-deploy adm group.
+##           P1 fix 2026-08-27: прежнее состояние 0664 root:adm БОРОЛОСЬ с runtime —
+##           receive/deploy (ci-deploy forced-command) терял запись после chmod 640 от
+##           audit_logger → постбутстрапный аудит молча пропадал. Целевое состояние вынесено
+##           в shared/audit_logger.ensure_audit_writable (единый SoT) — R2 и logger сходятся.
 ##           Извлечён из reconciler.py (B9 T2, U-31).
 ## @scope    converge/audit.py: reconcile_audit_log, reconcile_ci_deploy_group.
 ##           Вызывается оркестратором reconciler.py.
 ## @invariants
 ##   - Symlink на log_dir/audit.jsonl → FATAL (symlink attack prevention)
-##   - ci-deploy в adm группе (usermod -aG adm); пользователь не существует → INFO + skip
+##   - Целевое состояние файла (P1 fix): владелец root; PRIMARY — setfacl -m u:ci-deploy:rw,m::rw
+##     + default ACL на dir (ротации); FALLBACK без setfacl — chgrp ci-deploy + chmod 0660.
+##     Детект конвергентности — audit_permissions_status (acl|group), НЕ stat-mode 0664.
+##   - ci-deploy в adm группе (usermod -aG adm) — сохранено (чтение adm-логов); write-канал = ACL/группа
 ##   - dry_run/report_only → мутации не выполняются
 ## @rationale DevPlan 116 B9 D3: 8 доменов reconciler по модулям.
+##            P1 fix 2026-08-27 (D1 root cause): 0664 root:adm зависел от группового write через
+##            adm-членство и молча ломался при root-записи (audit_logger chmod 640 → mask/group r--).
+##            POSIX ACL — явный named-user write для ci-deploy, не зависящий от group-битов; graceful
+##            fallback 0660 — честный trade-off (TRAP[DECISION] в ensure_audit_writable).
 ## @changes  2026-08-01 · Extracted from reconciler.py (B9 T2)
+## @changes  2026-08-27 · P1 fix — целевое состояние ACL/0660 через shared ensure_audit_writable;
+##                      audit_permissions_status; CI_DEPLOY_USER из shared/file_lock (single source)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -29,6 +43,8 @@ from core.internal.bootstrap.converge.infra import (
 
 # R2-каноны констант — прямые импорты из shared SoT (pyright reportPrivateLocalImportUsage)
 from core.internal.shared.audit_logger import DEFAULT_LOG_FILE as AUDIT_LOG_FILE
+from core.internal.shared.audit_logger import audit_permissions_status, ensure_audit_writable
+from core.internal.shared.file_lock import CI_DEPLOY_USER
 from core.internal.shared.timeouts import FILE_OP_TIMEOUT
 
 logger = logging.getLogger(__name__)
@@ -38,11 +54,12 @@ logger = logging.getLogger(__name__)
 # R2 — reconcile_audit_log
 # ═══════════════════════════════════════════════════════════════════
 # region FUNC_reconcile_audit_log
-## @purpose  Ensure /var/log/platform/audit.jsonl exists with correct
-##           ownership (root:adm) and permissions (0664). Also ensures
-##           ci-deploy is in adm group for write access.
+## @purpose  Ensure /var/log/platform/audit.jsonl exists with the canonical writable state:
+##           owner root, write for root AND ci-deploy — POSIX ACL (setfacl) primary,
+##           chgrp ci-deploy + chmod 0660 graceful fallback (P1 fix 2026-08-27).
+##           Also ensures ci-deploy is in adm group (чтение adm-логов).
 ## @io       stdout/stderr: LDD logs [IMP:7-10]
-##           side-effect: mkdir, chmod, chown, usermod (via subprocess)
+##           side-effect: mkdir, chmod, chown, usermod, setfacl/chgrp (via subprocess)
 ## @param _core_dir   Path to core/ directory (unused in R2 but kept for API consistency)
 ## @param dry_run     If True, only report planned mutations
 ## @param report_only If True, skip mutations entirely
@@ -50,21 +67,23 @@ logger = logging.getLogger(__name__)
 ## @edge-cases
 ##   - audit.jsonl is a symlink → fail (symlink attack prevention)
 ##   - ci-deploy not in adm group → usermod -aG adm
-##   - File already correct → SKIP
+##   - File already converged (acl|group) → SKIP
+##   - setfacl недоступен на ноде → fallback 0660 (TRAP[DECISION] в ensure_audit_writable)
 def reconcile_audit_log(
     _core_dir: str,  # unused in R2, kept for API consistency
     dry_run: bool = False,
     report_only: bool = False,
 ) -> dict[str, str]:
-    """Reconcile audit.jsonl and ci-deploy adm group membership.
+    """Reconcile audit.jsonl writable state and ci-deploy adm group membership.
 
     Returns a drift entry dict with status: ok|skipped|mutated|warn|fail.
     """
     unit = "R2"
     logger.info(
-        "[IMP:8][converge][%s] START: reconcile_audit_log — ensuring %s 0664 root:adm",
+        "[IMP:8][converge][%s] START: reconcile_audit_log — ensuring %s writable by root + %s",
         unit,
         AUDIT_LOG_FILE,
+        CI_DEPLOY_USER,
     )
 
     log_dir = Path(AUDIT_LOG_DIR)
@@ -113,18 +132,38 @@ def reconcile_audit_log(
     # ── Ensure audit.jsonl exists ──
     if not audit_log.is_file():
         if dry_run or report_only:
-            logger.info("[IMP:9][converge][%s] WOULD create: %s 0664 root:adm", unit, AUDIT_LOG_FILE)
+            logger.info(
+                "[IMP:9][converge][%s] WOULD create: %s (writable by root + %s)",
+                unit,
+                AUDIT_LOG_FILE,
+                CI_DEPLOY_USER,
+            )
             report_add(unit, "mutated", f"File {AUDIT_LOG_FILE} would be created")
             set_exit(1)
         else:
-            logger.info("[IMP:8][converge][%s] Creating %s 0664 root:adm", unit, AUDIT_LOG_FILE)
-            # ruff: ignore[PLW0717] — try вложен в условный блок внутри функции — после-try чтение локалей неанализир...
+            logger.info(
+                "[IMP:8][converge][%s] Creating %s (writable by root + %s)",
+                unit,
+                AUDIT_LOG_FILE,
+                CI_DEPLOY_USER,
+            )
             try:
                 audit_log.touch(exist_ok=True)
-                _ = run_subprocess(["chmod", "0664", AUDIT_LOG_FILE], timeout=FILE_OP_TIMEOUT)
-                _ = run_subprocess(["chown", "root:adm", AUDIT_LOG_FILE], timeout=FILE_OP_TIMEOUT)
-                logger.info("[IMP:9][converge][%s] DONE: %s created 0664 root:adm", unit, AUDIT_LOG_FILE)
-                report_add(unit, "mutated", f"File {AUDIT_LOG_FILE} created")
+                # Единый SoT прав (shared ensure_audit_writable): setfacl primary / 0660 fallback.
+                # Default ACL на dir проставляется внутри — ротации наследуют запись для ci-deploy.
+                applied = ensure_audit_writable(AUDIT_LOG_FILE, CI_DEPLOY_USER)
+                logger.info(
+                    "[IMP:9][converge][%s] DONE: %s created, permissions → %s (writable by root + %s)",
+                    unit,
+                    AUDIT_LOG_FILE,
+                    applied,
+                    CI_DEPLOY_USER,
+                )
+                report_add(
+                    unit,
+                    "mutated",
+                    f"File {AUDIT_LOG_FILE} created (permissions {applied}, writable by root + {CI_DEPLOY_USER})",
+                )
                 set_exit(1)
             except OSError as exc:
                 logger.error("[IMP:10][converge][%s] touch failed for %s: %s", unit, AUDIT_LOG_FILE, exc)
@@ -132,45 +171,54 @@ def reconcile_audit_log(
                 set_exit(2)
                 return {"unit": unit, "status": "fail", "detail": f"touch failed: {exc}"}
     else:
-        # File exists — verify permissions via stat subprocess
-        mode_r = run_subprocess(
-            ["stat", "-c", "%a", AUDIT_LOG_FILE],
-            timeout=FILE_OP_TIMEOUT,
-        )
-        owner_r = run_subprocess(
-            ["stat", "-c", "%u:%g", AUDIT_LOG_FILE],
-            timeout=FILE_OP_TIMEOUT,
-        )
-        current_mode = mode_r.stdout.strip() if mode_r.returncode == 0 else "000"
-        current_owner = owner_r.stdout.strip() if owner_r.returncode == 0 else "0:0"
+        # File exists — verify canonical writable state via audit_permissions_status
+        # (НЕ stat-mode 0664: ACL-состояние не отражается в mode-битах — P1 fix 2026-08-27)
+        status = audit_permissions_status(AUDIT_LOG_FILE, CI_DEPLOY_USER)
 
-        if current_mode != "664" or current_owner != "0:4":
-            if dry_run or report_only:
-                logger.info(
-                    "[IMP:9][converge][%s] WOULD fix: %s mode=%s owner=%s",
-                    unit,
-                    AUDIT_LOG_FILE,
-                    current_mode,
-                    current_owner,
-                )
-                report_add(unit, "mutated", "audit.jsonl permissions would be fixed")
-                set_exit(1)
-            else:
-                logger.info(
-                    "[IMP:8][converge][%s] Fixing permissions: %s mode=%s owner=%s",
-                    unit,
-                    AUDIT_LOG_FILE,
-                    current_mode,
-                    current_owner,
-                )
-                _ = run_subprocess(["chmod", "0664", AUDIT_LOG_FILE], timeout=FILE_OP_TIMEOUT)
-                _ = run_subprocess(["chown", "root:adm", AUDIT_LOG_FILE], timeout=FILE_OP_TIMEOUT)
-                logger.info("[IMP:9][converge][%s] DONE: %s permissions corrected", unit, AUDIT_LOG_FILE)
-                report_add(unit, "mutated", "audit.jsonl permissions corrected to 0664 root:adm")
-                set_exit(1)
+        if status in {"acl", "group"}:
+            logger.info(
+                "[IMP:9][converge][%s] SKIP: %s already converged (%s) — writable by root + %s",
+                unit,
+                AUDIT_LOG_FILE,
+                status,
+                CI_DEPLOY_USER,
+            )
+            report_add(unit, "converged", f"audit.jsonl permissions correct ({status})")
+        elif dry_run or report_only:
+            logger.info(
+                "[IMP:9][converge][%s] WOULD fix: %s state=%s (target: acl|group, writable by root + %s)",
+                unit,
+                AUDIT_LOG_FILE,
+                status,
+                CI_DEPLOY_USER,
+            )
+            report_add(
+                unit,
+                "mutated",
+                f"audit.jsonl permissions would be corrected (state={status} → writable by root + {CI_DEPLOY_USER})",
+            )
+            set_exit(1)
         else:
-            logger.info("[IMP:9][converge][%s] SKIP: %s already 0664 root:adm (converged)", unit, AUDIT_LOG_FILE)
-            report_add(unit, "converged", "audit.jsonl permissions correct")
+            logger.info(
+                "[IMP:8][converge][%s] Fixing permissions: %s state=%s",
+                unit,
+                AUDIT_LOG_FILE,
+                status,
+            )
+            applied = ensure_audit_writable(AUDIT_LOG_FILE, CI_DEPLOY_USER)
+            logger.info(
+                "[IMP:9][converge][%s] DONE: %s permissions corrected → %s (writable by root + %s)",
+                unit,
+                AUDIT_LOG_FILE,
+                applied,
+                CI_DEPLOY_USER,
+            )
+            report_add(
+                unit,
+                "mutated",
+                f"audit.jsonl permissions corrected to {applied} (writable by root + {CI_DEPLOY_USER})",
+            )
+            set_exit(1)
 
     logger.info("[IMP:9][converge][%s] DONE: audit log reconciled", unit)
     return {
@@ -184,42 +232,53 @@ def reconcile_audit_log(
 
 
 # region FUNC_reconcile_ci_deploy_group
-## @purpose  Ensure ci-deploy user is in adm group (публичный — B9 T2)
+## @purpose  Ensure ci-deploy user is in adm group (публичный — B9 T2). Сохранено с прежнего
+##           R2: adm-членство даёт ci-deploy чтение adm-логов; write-канал аудита — ACL/группа
+##           (P1 fix 2026-08-27), поэтому adm-группа больше не является механизмом записи.
 def reconcile_ci_deploy_group(unit: str, dry_run: bool, report_only: bool) -> None:
     """Check and fix ci-deploy adm group membership.
 
     If ci-deploy user does not exist yet (pre-bootstrap), logs INFO and skips.
     """
     # Check if ci-deploy user exists
-    id_r = run_subprocess(["id", "-nG", "ci-deploy"], timeout=FILE_OP_TIMEOUT)
+    id_r = run_subprocess(["id", "-nG", CI_DEPLOY_USER], timeout=FILE_OP_TIMEOUT)
     if id_r.returncode != 0:
-        logger.info("[IMP:8][converge][%s] INFO: ci-deploy user does not exist yet — skipping group check", unit)
+        logger.info(
+            "[IMP:8][converge][%s] INFO: %s user does not exist yet — skipping group check",
+            unit,
+            CI_DEPLOY_USER,
+        )
         return
 
     groups = id_r.stdout.strip().split()
     if "adm" in groups:
-        logger.info("[IMP:7][converge][%s] OK: ci-deploy is already in adm group", unit)
+        logger.info("[IMP:7][converge][%s] OK: %s is already in adm group", unit, CI_DEPLOY_USER)
         return
 
     # ci-deploy exists but not in adm group
     if dry_run or report_only:
-        logger.info("[IMP:9][converge][%s] WOULD fix: ci-deploy not in adm group — usermod -aG adm", unit)
-        report_add(unit, "mutated", "ci-deploy would be added to adm group")
+        logger.info(
+            "[IMP:9][converge][%s] WOULD fix: %s not in adm group — usermod -aG adm",
+            unit,
+            CI_DEPLOY_USER,
+        )
+        report_add(unit, "mutated", f"{CI_DEPLOY_USER} would be added to adm group")
         set_exit(1)
     else:
-        logger.info("[IMP:9][converge][%s] Adding ci-deploy to adm group", unit)
-        usermod_r = run_subprocess(["usermod", "-aG", "adm", "ci-deploy"], timeout=FILE_OP_TIMEOUT)
+        logger.info("[IMP:9][converge][%s] Adding %s to adm group", unit, CI_DEPLOY_USER)
+        usermod_r = run_subprocess(["usermod", "-aG", "adm", CI_DEPLOY_USER], timeout=FILE_OP_TIMEOUT)
         if usermod_r.returncode == 0:
-            logger.info("[IMP:9][converge][%s] DONE: ci-deploy added to adm group", unit)
-            report_add(unit, "mutated", "ci-deploy added to adm group")
+            logger.info("[IMP:9][converge][%s] DONE: %s added to adm group", unit, CI_DEPLOY_USER)
+            report_add(unit, "mutated", f"{CI_DEPLOY_USER} added to adm group")
             set_exit(1)
         else:
             logger.warning(
-                "[IMP:8][converge][%s] WARN: usermod failed — ci-deploy may not have write access to audit.jsonl: %s",
+                "[IMP:8][converge][%s] WARN: usermod failed — %s may not read adm logs: %s",
                 unit,
+                CI_DEPLOY_USER,
                 usermod_r.stderr.strip(),
             )
-            report_add(unit, "warn", "usermod failed for ci-deploy → adm group")
+            report_add(unit, "warn", f"usermod failed for {CI_DEPLOY_USER} → adm group")
 
 
 # endregion FUNC_reconcile_ci_deploy_group
