@@ -31,6 +31,9 @@
 ##   2026-08-13 · DevPlan 160 E3 — root-факты flow-тестов через StateMachine(facts=...) /
 ##               precondition_check(facts=...) (0 os.geteuid-патчей × 4)
 ##   2026-08-13 · DevPlan 163 W-H — DI-перевод: 40 патчей (34 setattr + 6 setenv) → 23 setattr
+##   2026-08-27 · P0 — контракт ssl_provision_via_orchestrator = str-статус: flow-тесты
+##               monkeypatch-ят domains_helpers.ssl_provision_via_orchestrator → "converged"
+##               (тест-среда: реальный вызов падает на /etc/letsencrypt Permission denied)
 # endregion MODULE_CONTRACT
 """
 
@@ -53,6 +56,12 @@ sys.path.insert(0, str(_MODULE_DIR))
 # B9 T1: CLI-функции (build_parser/main/run_init_mode/run_update_mode) вынесены в lifecycle/cli.py
 import cli
 import state_machine as sm
+
+# P0 2026-08-27: ssl_provision_via_orchestrator контракт — str-статус
+# (provisioned|converged|skipped_import|error). Канонический domains-модуль патчится в
+# flow-тестах: φ7 (certs.py) и φ12 (docker.py) ссылаются на ЭТОТ ЖЕ модуль (helpers_domains),
+# поэтому один setattr покрывает обе фазы (тест-среда: реальный вызов падает на /etc/letsencrypt).
+from core.internal.bootstrap.lifecycle.helpers import domains as domains_helpers
 
 # Re-export for fixture cleanups
 MODULE = sm
@@ -373,10 +382,12 @@ def test_save_state(caplog, state_file):
 
 # 🧪 TRAP[TEST] · Regression · complete init flow runs all phases without error
 # · Scenario: Mock subprocess, setup init mode, run _run_init_mode → all 9 phases complete
+# · P0 2026-08-27: ssl_provision_via_orchestrator контракт — str-статус; мок "converged"
+# ·   (happy-path: тест-среда не выдаёт сертов — реальный вызов упал бы на /etc/letsencrypt)
 # · Last fail: N/A (new test)
 # · Remove if: init flow execution logic changes fundamentally
 @ldd_trajectory
-def test_init_flow_all_phases(caplog, state_file, mock_subprocess):
+def test_init_flow_all_phases(caplog, state_file, mock_subprocess, monkeypatch):
     """Init mode should run all phases without error (mocked subprocess).
 
     Note: env_vars (autouse) sets PLATFORM_OWNER_KEY and PLATFORM_CI_DEPLOY_KEY.
@@ -387,6 +398,9 @@ def test_init_flow_all_phases(caplog, state_file, mock_subprocess):
     167 D5 (DI-zero): FS-guard патчи (os.makedirs/os.path.isdir) УДАЛЕНЫ — helpers зафейканы
     (0 реальных os.makedirs в flow, probe 2026-08-14) + φ5     node_configs_dir через
     node_configs_remote(env): реальная tmp-папка вместо os.path.isdir-патча (/opt/node-configs).
+    P0 (2026-08-27): ssl_provision_via_orchestrator возвращает str-статус; в тест-среде
+    cert_orchestrator импортируется, но пишет в /etc/letsencrypt (Permission denied) → "error" →
+    φ7 вернула бы done_with_warnings. Happy-path: monkeypatch → "converged" (статус-успех).
     """
     secrets_env = Path(state_file).parent / "secrets.env"
     secrets_env.write_text("PLATFORM_MASTER_PASSWORD=test-password\nPLATFORM_MASTER_EMAIL=admin@test.local\n")
@@ -428,6 +442,12 @@ def test_init_flow_all_phases(caplog, state_file, mock_subprocess):
     )
     m.core_dir = str(Path(state_file).parent)
     m.setup_state(mode="init", node="test-node")
+
+    # P0 2026-08-27: ssl_provision_via_orchestrator — str-статус
+    # {provisioned|converged|skipped_import|error}. В тест-среде реальный вызов падает на
+    # /etc/letsencrypt (Permission denied) → "error" → φ7 вернула бы False (done_with_warnings).
+    # Happy-path: мок возвращает "converged" (успех — серты не наказываются повторным issuance).
+    monkeypatch.setattr(domains_helpers, "ssl_provision_via_orchestrator", lambda _core_dir, _node_yaml: "converged")
 
     exit_code = cli.run_init_mode(m)
     assert exit_code == 0
@@ -510,11 +530,18 @@ def test_phase_system_bootstrap_no_root(caplog, machine):
 
 # 🧪 TRAP[TEST] · Regression · complete update flow runs all phases without error
 # · Scenario: Mock subprocess, setup update mode, run _run_update_mode → all 5 phases complete
+# · P0 2026-08-27: ssl_provision_via_orchestrator контракт — str-статус; мок "converged"
+# ·   (happy-path: φ12 не уходит в done_with_warnings из-за реального /etc/letsencrypt)
 # · Last fail: N/A (new test)
 # · Remove if: update flow execution logic changes
 @ldd_trajectory
 def test_update_flow_all_phases(caplog, state_file, mock_subprocess, monkeypatch):
-    """Update mode should run all phases without error (mocked subprocess)."""
+    """Update mode should run all phases without error (mocked subprocess).
+
+    P0 (2026-08-27): ssl_provision_via_orchestrator возвращает str-статус; в тест-среде
+    cert_orchestrator импортируется, но пишет в /etc/letsencrypt (Permission denied) → "error" →
+    φ12 (deploy_update) вернула бы done_with_warnings. Happy-path: monkeypatch → "converged".
+    """
     # CORE_DIR env не ставится — m.core_dir покрывает (execute_phase: self.core_dir or env)
     # phase_node_config_update requires NODE_YAML to exist and be readable
     node_yaml_path = Path(state_file).parent / "node.yaml"
@@ -539,6 +566,11 @@ def test_update_flow_all_phases(caplog, state_file, mock_subprocess, monkeypatch
     m = sm.StateMachine(state_file_path=str(state_file), env=_flow_env(Path(state_file).parent))
     m.core_dir = str(Path(state_file).parent)
     m.setup_state(mode="update", node="test-node")
+
+    # P0 2026-08-27: ssl_provision_via_orchestrator — str-статус. В тест-среде реальный вызов
+    # падает на /etc/letsencrypt (Permission denied) → "error" → φ12 (deploy_update) вернула бы
+    # False (done_with_warnings). Happy-path: мок возвращает "converged" (успех).
+    monkeypatch.setattr(domains_helpers, "ssl_provision_via_orchestrator", lambda _core_dir, _node_yaml: "converged")
 
     exit_code = cli.run_update_mode(m)
     assert exit_code == 0
@@ -1023,6 +1055,8 @@ def test_bootstrapstate_round_trip(caplog):
 # · Scenario: phase_user_accounts возвращает False (non-fatal) → run_init_mode ставит done_with_warnings,
 #   done=False; повторный run_init_mode перевыполняет фазу (не SKIP)
 # · Last fail: WARN-фазы маскировались под done (execute_phase игнорировал результат)
+# · Updated: 2026-08-27 (drill C2) — φ2 с done_with_warnings-пререком φ1 БОЛЬШЕ НЕ блокируется
+#   (dependency {done, done_with_warnings}); WARN-перевыполнение самой фазы сохранено
 # · Remove if: WARN-семантика статусов изменена
 @ldd_trajectory
 def test_phase_with_warnings_not_done(caplog, state_file, mock_subprocess):
@@ -1032,6 +1066,9 @@ def test_phase_with_warnings_not_done(caplog, state_file, mock_subprocess):
     """
     secrets_env = Path(state_file).parent / "secrets.env"
     secrets_env.write_text("PLATFORM_MASTER_PASSWORD=test-password\nPLATFORM_MASTER_EMAIL=admin@test.local\n")
+    # drill C2: φ4 (secrets_provision) достижим только теперь, когда φ2 НЕ блокируется —
+    # manifest обязан быть доставлен (REF-0013 fail-fast, как в happy-path flow-тестах)
+    (Path(state_file).parent / "secrets-manifest.yaml").write_text("secrets: []\n")
     core_bootstrap_dir = Path(state_file).parent / "internal" / "bootstrap"
     core_bootstrap_dir.mkdir(parents=True, exist_ok=True)
     (core_bootstrap_dir / "node-lifecycle.sh").write_text("#!/bin/bash\necho ok\n")
@@ -1052,24 +1089,21 @@ def test_phase_with_warnings_not_done(caplog, state_file, mock_subprocess):
     m.core_dir = str(Path(state_file).parent)
     m.setup_state(mode="init", node="test-node")
 
-    # φ1 → done_with_warnings; φ2 (зависит от φ1) → PhaseDependencyError.
-    # 170 W5-C1: PhaseDependencyError/PhasePreconditionError — единый leaf exceptions.py
-    # (W10-design п.1), re-export из state_machine — script/pacakge импорты консистентны →
-    # run_init_mode ЛОВИТ и возвращает exit 1 (production-поведение; прежняя пропагация
-    # исключения была артефактом test-infra, см. комментарий ниже — удалён).
+    # drill C2 (2026-08-27): φ1 → done_with_warnings; φ2 (зависит от φ1) — dependency
+    # УДОВЛЕТВОРЕНА (НЕ PhaseDependencyError): warning-фаза перевыполняется САМА, но
+    # не блокирует downstream (раньше exit 1 + «requires prerequisite phase(s)»).
     rc = cli.run_init_mode(
         m,
         smoke_fn=lambda: True,
         audit_fn=lambda _, **__: None,
         notify_fn=lambda _: None,
     )
-    assert rc == 1, f"dependency error (φ2←φ1 done_with_warnings) → exit 1, got {rc}"
-    assert any("user_accounts" in r.message and "Dependency error" in r.message for r in caplog.records), (
-        "Должен быть [IMP:10] лог dependency error для φ2 (user_accounts)"
+    assert rc == 0, f"WARN-фазы non-fatal → exit 0 (drill C2: φ2 не блокируется), got {rc}"
+    assert not any("user_accounts" in r.message and "Dependency error" in r.message for r in caplog.records), (
+        "drill C2: done_with_warnings prereq обязан УДОВЛЕТВОРЯТЬ dependency (не блокировать φ2)"
     )
-    # state НЕ сохраняется (φ2 заблокирован dependency-check — до execute_phase)
 
-    # State сохранён ДО PhaseDependencyError — φ1 уже помечен done_with_warnings
+    # φ1 помечен done_with_warnings (state сохранён) — WARN-семантика D5 сохранена
     phi1 = m.state.steps[sm.BootstrapPhase.SYSTEM_BOOTSTRAP]
     assert phi1.status == "done_with_warnings", f"φ1 должен быть done_with_warnings, got {phi1.status}"
     assert getattr(phi1, "warnings", None), "done_with_warnings должен сохранять warnings в state"
@@ -1205,6 +1239,123 @@ class _FakeCompleted:
 
 
 # endregion Tests: WARN-семантика и честный current_step (волна 117 D5)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region Tests: Dependency satisfaction {done, done_with_warnings} (drill C2, 2026-08-27)
+# ═══════════════════════════════════════════════════════════════════
+# P1 2026-08-27 (drill C2): make node-update NODE=tronyx-vps rc=2 — φ11 registry_update
+# завершилась done_with_warnings (healthcheck-транзиент) → φ12 deploy_update
+# «requires prerequisite phase(s): registry_update» — dependency-гейт требовал СТРОГО
+# done, а done_with_warnings не признавался prerequisite'ом → одиночный некритичный
+# warning навсегда ломал цепочку update (до ручного сброса state).
+# Контракт платформы: warning-фазы перевыполняются САМА, но УДОВЛЕТВОРЯЮТ зависимости
+# последующих (идемпотентность bootstrap: частичный отказ «доводится» повторным прогоном).
+
+
+# 🧪 TRAP[TEST] · 2026-08-27 · Regression · drill C2 — prereq done_with_warnings УДОВЛЕТВОРЯЕТ dependency (init)
+# · Scenario: φ1 (system_bootstrap) = done_with_warnings → _missing_dependencies(φ2) пуст;
+#   execute_phase(φ2) НЕ raise PhaseDependencyError (раньше: гейт требовал СТРОГО done)
+# · Last fail: P1 2026-08-27 tronyx-vps node-update rc=2 — φ11 registry_update done_with_warnings
+#   → deploy_update «requires prerequisite phase(s): registry_update» (до ручного сброса state)
+# · Remove if: dependency-gate семантика изменена обратно на строгий done
+@ldd_trajectory
+def test_dependency_satisfied_prereq_done_with_warnings_init(caplog, state_file, mock_subprocess):
+    """init: prereq done_with_warnings → dependency удовлетворена (НЕ PhaseDependencyError)."""
+    m = sm.StateMachine(state_file_path=str(state_file))
+    m.setup_state(mode="init", node="test")
+    # φ1 = done_with_warnings (WARN-фаза: перевыполняется САМА, но удовлетворяет downstream)
+    m.state.steps[sm.BootstrapPhase.SYSTEM_BOOTSTRAP] = sm.StepState(
+        name=sm.BootstrapPhase.SYSTEM_BOOTSTRAP, status="done_with_warnings"
+    )
+    # Dependency-gate: missing deps для φ2 пуст
+    assert m._missing_dependencies(sm.BootstrapPhase.USER_ACCOUNTS) == [], (
+        "done_with_warnings prereq обязан удовлетворять dependency (drill C2)"
+    )
+    # execute_phase(φ2) НЕ должен raise PhaseDependencyError (precondition — mock_subprocess
+    # which-патч; фаза-заглушка True)
+    assert (
+        m.execute_phase(
+            sm.BootstrapPhase.USER_ACCOUNTS,
+            phase_func_override=lambda *_, **__: True,
+        )
+        is True
+    )
+    logger.critical("[IMP:9][test] init: prereq done_with_warnings удовлетворяет dependency — OK (drill C2)")
+
+
+# 🧪 TRAP[TEST] · 2026-08-27 · Regression · drill C2 — prereq done_with_warnings УДОВЛЕТВОРЯЕТ dependency (update)
+# · Scenario: φ9/φ11 = done_with_warnings → _missing_dependencies(φ12 deploy_update) пуст
+#   (реальный P1: registry_update done_with_warnings ломал node-update)
+# · Last fail: P1 2026-08-27 make node-update NODE=tronyx-vps rc=2
+# · Remove if: dependency-gate семантика изменена обратно на строгий done
+@ldd_trajectory
+def test_dependency_satisfied_prereq_done_with_warnings_update(caplog, state_file):
+    """update: φ9/φ11 done_with_warnings → φ12 dependency удовлетворена (P1 drill C2)."""
+    m = sm.StateMachine(state_file_path=str(state_file))
+    m.setup_state(mode="update", node="test")
+    for pv in (sm.BootstrapPhase.SECRETS_UPDATE, sm.BootstrapPhase.REGISTRY_UPDATE):
+        m.state.steps[pv] = sm.StepState(name=pv, status="done_with_warnings")
+    missing = m._missing_dependencies(sm.BootstrapPhase.DEPLOY_UPDATE)
+    assert missing == [], f"φ12 deps: {missing} — done_with_warnings prereq обязан удовлетворять dependency (drill C2)"
+    logger.critical("[IMP:9][test] update: φ11 done_with_warnings удовлетворяет φ12 dependency — OK (drill C2)")
+
+
+# 🧪 TRAP[TEST] · 2026-08-27 · NEGATIVE (R5) · drill C2 — failed prereq БЛОКИРУЕТ dependency
+# · Scenario: φ1 = failed → _missing_dependencies(φ2) = [system_bootstrap]; execute_phase(φ2)
+#   raise PhaseDependencyError (guard: незавершённые НЕ удовлетворяют)
+# · Last fail: N/A (новый guard-тест — регрессия невозможна)
+# · Remove if: failed-семантика зависимости изменена
+@ldd_trajectory
+def test_dependency_failed_prereq_still_blocks(caplog, state_file, mock_subprocess):
+    """failed prereq → dependency НЕ удовлетворена (guard против незавершённых)."""
+    m = sm.StateMachine(state_file_path=str(state_file))
+    m.setup_state(mode="init", node="test")
+    m.state.steps[sm.BootstrapPhase.SYSTEM_BOOTSTRAP] = sm.StepState(
+        name=sm.BootstrapPhase.SYSTEM_BOOTSTRAP, status="failed"
+    )
+    missing = m._missing_dependencies(sm.BootstrapPhase.USER_ACCOUNTS)
+    assert missing == [sm.BootstrapPhase.SYSTEM_BOOTSTRAP], f"failed prereq обязан блокировать: {missing}"
+    with pytest.raises(sm.PhaseDependencyError):
+        m.execute_phase(sm.BootstrapPhase.USER_ACCOUNTS, phase_func_override=lambda *_, **__: True)
+    logger.critical("[IMP:9][test] failed prereq блокирует dependency — OK (guard)")
+
+
+# 🧪 TRAP[TEST] · 2026-08-27 · Regression · drill C2 — статус-набор phase_satisfies_dependency (все статусы enum)
+# · Scenario: перечислены ВСЕ статусы StepState-статусов: done/done_with_warnings
+#   удовлетворяют; pending/failed/skipped/running — нет (dict и StepState формы)
+# · Last fail: N/A (нотация статус-набора — контракт предиката)
+# · Remove if: статус-набор dependency изменён
+@ldd_trajectory
+def test_phase_satisfies_dependency_status_set(caplog):
+    """Статус-набор {done, done_with_warnings} удовлетворяет dependency; остальные — нет."""
+    status_expectations = {
+        "done": True,
+        "done_with_warnings": True,
+        "pending": False,
+        "failed": False,
+        "skipped": False,
+        "running": False,
+    }
+    # StepState-форма
+    for status, expected in status_expectations.items():
+        assert sm.phase_satisfies_dependency(sm.StepState(name="x", status=status)) is expected, (
+            f"StepState status={status} → {expected}"
+        )
+    # dict-форма (state.json load)
+    for status, expected in status_expectations.items():
+        assert sm.phase_satisfies_dependency({"status": status}) is expected, f"dict status={status} → {expected}"
+    # legacy dict-форма: done:true без status → удовлетворяет (state.json до StepState);
+    # done:false → нет
+    assert sm.phase_satisfies_dependency({"done": True}) is True
+    assert sm.phase_satisfies_dependency({"done": False}) is False
+    # СТРОГОСТЬ phase_is_done сохранена: done_with_warnings НЕ done (re-run/exit-code/strict-init)
+    assert sm.phase_is_done(sm.StepState(name="x", status="done")) is True
+    assert sm.phase_is_done(sm.StepState(name="x", status="done_with_warnings")) is False
+    logger.critical("[IMP:9][test] status-set {done, done_with_warnings} — dependency contract — OK")
+
+
+# endregion Tests: Dependency satisfaction {done, done_with_warnings} (drill C2)
 
 
 # ═══════════════════════════════════════════════════════════════════

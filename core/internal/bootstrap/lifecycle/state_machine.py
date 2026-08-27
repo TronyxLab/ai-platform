@@ -29,7 +29,8 @@
 ##   11. Phase dependency graph enforces execution order: φ2 ← φ1, φ4 ← φ3, φ6 ← φ4, φ8 ← φ4+φ6+φ7
 ##   12. precondition_check() verifies intra-phase conditions BEFORE execution
 ##   13. Sub-step resume отсутствует — фазы выполняются целиком; идемпотентность через
-##       phase-статусы: done_with_warnings ≠ done → перевыполнение
+##       phase-статусы: done_with_warnings ≠ done → перевыполнение САМОЙ warn-фазы,
+##       НО dependency-gate удовлетворяется {done, done_with_warnings} (drill C2)
 ##   14. Зависимости: state_machine → phases (СТАТИЧЕСКИЙ импорт — реестр PHASE_DISPATCH,
 ##       план 170 W5-C3) → helpers; односторонняя (цикл phases↔state_machine устранён, B9 T1)
 ##   15. BootstrapState/StepState/load_state/save_state re-экспортируются из state_store —
@@ -49,6 +50,10 @@
 ##             (статический реестр PHASE_DISPATCH + PhaseContext + _call_with_retry) —
 ##             фаза-диспетчер ≤40 LOC; ретрай-цикл извлечён в helper (семантика 1:1).
 ## @changes  2026-07-22 | W4-E2 — Created from node-lifecycle.sh decomposition
+## @changes  2026-08-27 | drill C2 (P1) — dependency-gate: статус-набор удовлетворения
+##            зависимости = {done, done_with_warnings} В ОБОИХ режимах (init/update);
+##            phase_satisfies_dependency() — отдельный предикат; phase_is_done остаётся
+##            строгим (re-run/exit-code/strict-init T9); failed/pending/skipped НЕ удовлетворяют
 ## @changes  2026-08-13 | DevPlan 160 E3 — StateMachine/execute_phase +facts: EnvironmentFacts
 ##            (DI is_root/path_isfile для прекондишенов и facts-aware фаз)
 ##           2026-07-24 | W5.T5.3 — Added HC_DONE_MARKER check in healthcheck step
@@ -268,6 +273,14 @@ PHASE_STATUS_FAILED = "failed"
 PHASE_STATUS_SKIPPED = "skipped"
 PHASE_STATUS_RUNNING = "running"
 
+# ── Dependency-satisfaction status set (drill C2, 2026-08-27) ───────────────
+# Статус-набор УДОВЛЕТВОРЕНИЯ dependency-гейта: done ИЛИ done_with_warnings.
+# done_with_warnings-фаза перевыполняется САМА (phase_is_done strict — re-run/exit-code),
+# НО УДОВЛЕТВОРЯЕТ зависимости downstream: один некритичный warning не должен навсегда
+# рвать цепочку update (P1 2026-08-27: φ11 registry_update done_with_warnings → φ12
+# deploy_update «requires prerequisite phase(s): registry_update» до ручного сброса state).
+PHASE_STATUS_SATISFIES_DEPENDENCY = frozenset({PHASE_STATUS_DONE, PHASE_STATUS_DONE_WITH_WARNINGS})
+
 # Фазы, инвалидируемые content-hash'ом входов (T9.3, L-4/B-1): потребляют modules/services
 # из node.yaml. Прочие фазы (φ1-φ7, φ9-φ10) от node.yaml modules не зависят — их done не
 # сбрасывается hash'ом (легаси-совместимость + отсутствие лишних перевыполнений).
@@ -404,6 +417,9 @@ def phase_is_done(phase_state: StepState | dict[str, object] | None) -> bool:
 
     ## @purpose — Единая ПУБЛИЧНАЯ done-проверка для dict- и StepState-представлений (волна 117 D5).
     ##             done_with_warnings НЕ считается done — фаза с non-fatal issues перевыполняется.
+    ##             СТРОГАЯ done-семантика ДЛЯ re-run/exit-code (WARN-перевыполнение, strict-init T9,
+    ##             preflight all_done); для dependency-гейта downstream используйте
+    ##             phase_satisfies_dependency ({done, done_with_warnings}, drill C2).
     ## @io — ⇥ phase_state: StepState | dict → ⎋ bool
     ## @complexity — O(1)
     ## @invariants
@@ -417,6 +433,32 @@ def phase_is_done(phase_state: StepState | dict[str, object] | None) -> bool:
         # dict-форма (raw) может нести done:true без status
         return bool(phase_state.get("done", False)) and phase_state.get("status") in {None, PHASE_STATUS_DONE}
     return getattr(phase_state, "status", PHASE_STATUS_PENDING) == PHASE_STATUS_DONE
+
+
+def phase_satisfies_dependency(phase_state: StepState | dict[str, object] | None) -> bool:
+    """Return True if a phase state satisfies prerequisites of downstream phases.
+
+    ## @purpose — Dependency-gate предикат (drill C2 fix, 2026-08-27): статус-набор
+    ##             {done, done_with_warnings} УДОВЛЕТВОРЯЕТ dependency-gate В ОБОИХ режимах
+    ##             (init/update). Отличается от phase_is_done (строгий done — re-run/exit-code):
+    ##             done_with_warnings-фаза перевыполняется САМА, но НЕ блокирует downstream —
+    ##             иначе один некритичный warning навсегда рвёт цепочку update (P1: φ11
+    ##             registry_update done_with_warnings → φ12 deploy_update заблокирован).
+    ## @io — ⇥ phase_state: StepState | dict → ⎋ bool
+    ## @complexity — O(1)
+    ## @invariants
+    ##   - status ∈ {done, done_with_warnings} → True (dict и StepState, оба режима)
+    ##   - failed/pending/skipped/running → False (guard: незавершённые НЕ удовлетворяют)
+    ##   - legacy dict-форма (state.json до StepState): done:true без status → True
+    ##   - phase_is_done остаётся СТРОГИМ (done only) — WARN-перевыполнение + strict-init exit
+    """
+    if isinstance(phase_state, dict):
+        status = phase_state.get("status")
+        if status in PHASE_STATUS_SATISFIES_DEPENDENCY:
+            return True
+        # legacy dict-форма: done:true без status (state.json до StepState-миграции)
+        return bool(phase_state.get("done", False)) and status in {None, PHASE_STATUS_DONE}
+    return getattr(phase_state, "status", PHASE_STATUS_PENDING) in PHASE_STATUS_SATISFIES_DEPENDENCY
 
 
 # ── Constants ──────────────────────────────────────────────────────────────
@@ -713,7 +755,8 @@ class StateMachine:
             val_helpers=val_helpers,
         )
 
-        # Step 1: Check dependency graph (done_with_warnings НЕ считается done — волна 117 D5)
+        # Step 1: Check dependency graph (drill C2: {done, done_with_warnings} удовлетворяют —
+        # done_with_warnings перевыполняется САМА, но НЕ блокирует downstream)
         missing_deps = self._missing_dependencies(phase_value)
         if missing_deps:
             msg = (
@@ -796,19 +839,22 @@ class StateMachine:
     # endregion FUNC__resolve_phase_context
 
     # region FUNC__missing_dependencies
-    ## @purpose — Проверка dependency graph: список невыполненных prerequisite-фаз.
-    ## @io — ⇥ phase_value: str → ⎋ list[str] (пустой = все deps done)
+    ## @purpose — Проверка dependency graph: список неудовлетворённых prerequisite-фаз.
+    ## @io — ⇥ phase_value: str → ⎋ list[str] (пустой = все deps удовлетворены)
     ## @complexity — O(D) где D = число зависимостей фазы
     ## @invariants
-    ##   - done_with_warnings НЕ считается done (волна 117 D5) — WARN-фаза не удовлетворяет
-    ##     зависимость и блокирует downstream-фазы до успешного перевыполнения
+    ##   - Статус-набор удовлетворения зависимости = {done, done_with_warnings} (drill C2):
+    ##     WARN-фаза перевыполняется САМА (phase_is_done strict — re-run/exit-code), НО
+    ##     удовлетворяет downstream — иначе один warning навсегда рвёт цепочку update
+    ##   - failed/pending/skipped/running НЕ удовлетворяют (guard против незавершённых)
     def _missing_dependencies(self, phase_value: str) -> list[str]:
-        """Return prerequisite phases that are not done (dependency gate)."""
+        """Return prerequisite phases that are not satisfied (dependency gate)."""
         deps = _phase_dependency_graph.get(phase_value, set())
         missing: list[str] = []
         for dep in deps:
             phase_state = self.state.steps.get(dep, self._state_from_phase_key(dep))
-            if not phase_is_done(phase_state):
+            # 🧐 TRAP[DECISION] · 2026-08-27 · — · Dependency-gate {done, done_with_warnings} (drill C2): WARN-фаза удовлетворяет downstream, перевыполняется САМА · Rejected: расширять phase_is_done (сломало бы WARN-перевыполнение + strict-init exit-code) · Reason: отдельный предикат — единственная точка гейта · Rev: если WARN-фаза должна блокировать downstream — вернуть phase_is_done сюда
+            if not phase_satisfies_dependency(phase_state):
                 missing.append(dep)
         return missing
 

@@ -886,7 +886,8 @@ def _apply_policy_script(
 ## @complexity O(M * D + D_cert * T) where M = modules, D = deploy ops, D_cert = domains
 ## @invariants
 ##   - deploy-modules.sh is called with --skip-provision (provision done in registry_update)
-##   - SSL provision is via cert_orchestrator (unified entrypoint)
+##   - SSL provision is via cert_orchestrator (unified entrypoint); статус skipped_import/error →
+##     done_with_warnings (P0 2026-08-27 — тихий import-skip НЕ маскируется)
 ##   - Context deploy is incremental (only changed projects)
 def phase_deploy_update(core_dir: str, node_name: str, node_yaml: str) -> bool:
     """φ12: Deploy update — modules, SSL, context (UPDATE mode).
@@ -927,13 +928,24 @@ def phase_deploy_update(core_dir: str, node_name: str, node_yaml: str) -> bool:
         logger.warning("[IMP:7][phase:deploy_update] deploy-modules.sh not found at %s — skipping", deploy_script)
         non_fatal_issues = True
 
-    # ── 2. SSL provision via cert_orchestrator ──
+    # ── 2. SSL provision via cert_orchestrator (P0-честность: skipped-import ≠ done) ──
+    # Тот же контракт, что φ7 (domains.ssl_provision_via_orchestrator): "provisioned"/"converged"
+    # → успех; "skipped_import"/"error" → done_with_warnings (φ12 перевыполнится при следующем
+    # node-update — resume-семантика восстановления после полной доставки core).
     try:
-        helpers_domains.ssl_provision_via_orchestrator(core_dir, node_yaml)
-        logger.info("[IMP:9][phase:deploy_update] SSL certificates provisioned")
+        ssl_status = helpers_domains.ssl_provision_via_orchestrator(core_dir, node_yaml)
     except (OSError, PlatformError) as e:  # noqa: EXC — non-fatal: SSL is best-effort (S3 cache fallback)
         logger.warning("[IMP:7][phase:deploy_update] SSL provision failed (non-fatal): %s", e)
         non_fatal_issues = True
+    else:
+        if ssl_status in {"provisioned", "converged"}:
+            logger.info("[IMP:9][phase:deploy_update] SSL certificates provisioned")
+        else:
+            logger.warning(
+                "[IMP:7][phase:deploy_update] SSL provision incomplete (status=%s) — certificates NOT provisioned",
+                ssl_status,
+            )
+            non_fatal_issues = True
 
     # ── 3. Deploy context projects (incremental) ──
     try:

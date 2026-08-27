@@ -13,12 +13,15 @@
 ##           (inspect.getsource/AST запрещены по плану).
 ## @invariants
 ##   - phase_certificates(core_dir, node_name, node_yaml) → bool (True = φ7 complete)
-##   - ssl_provision_via_orchestrator(core_dir, node_yaml) → None (non-fatal)
+##   - ssl_provision_via_orchestrator(core_dir, node_yaml) → str
+##     (provisioned|converged|skipped_import|error; P0 2026-08-27 — тихий import-skip устранён)
 ##   - Missing node.yaml → ConfigNotFoundError (precondition)
-##   - ssl_provision with unresolvable domains → graceful return (no raise)
+##   - ssl_provision with unresolvable domains → graceful return (no raise, статус converged)
 ## @rationale  Grep-ассерты проверяли подстроки вместо поведения; native-тесты вызывают функции
 ##             с фейковым контекстом и ассертят результат делегирования (канон инварианта 2).
 ## @changes  2026-08-01 · Created (DevPlan 116 B10 T2)
+## @changes  2026-08-27 · P0 — контракт возврата ssl_provision_via_orchestrator: str-статус
+##           вместо None; +тесты skipped_import/converged/provisioned (импорт-скип НЕ тихий)
 # endregion MODULE_CONTRACT
 """
 
@@ -29,10 +32,17 @@ import pytest
 
 from core.internal.bootstrap.lifecycle import phases as phases_mod
 from core.internal.bootstrap.lifecycle.helpers import domains as domains_helpers
+from core.internal.shared import deploy_paths
 
 pytestmark = pytest.mark.static_audit
 
 logger = pytest.importorskip("logging").getLogger(__name__)
+
+
+def _default_ssl_provision(calls: list[tuple[str, str]], core_dir_arg: str, node_yaml_arg: str) -> str:
+    """Default ssl_provision fake: записывает вызов, возвращает "provisioned" (успех)."""
+    calls.append((str(core_dir_arg), str(node_yaml_arg)))
+    return "provisioned"
 
 
 def _certs_helpers(calls: list, *, ssl_provision=None, install_acme=None) -> SimpleNamespace:
@@ -43,7 +53,7 @@ def _certs_helpers(calls: list, *, ssl_provision=None, install_acme=None) -> Sim
         ssl_provision_via_orchestrator=(
             ssl_provision
             if ssl_provision is not None
-            else (lambda core_dir_arg, node_yaml_arg: calls.append((str(core_dir_arg), str(node_yaml_arg))))
+            else (lambda core_dir_arg, node_yaml_arg: _default_ssl_provision(calls, core_dir_arg, node_yaml_arg))
         ),
     )
 
@@ -184,19 +194,134 @@ def test_phase_certificates_missing_node_yaml_raises(tmp_path, caplog) -> None:
 # · Regression: non-fatal — missing context_deployer must not crash ssl_provision
 # · Last fail: N/A (native replacement for test_cert_backup_gap.py:566-582 grep)
 # · Remove if: graceful no-domains handling changes
-def test_ssl_provision_no_domains_non_fatal(tmp_path, caplog) -> None:
-    """ssl_provision_via_orchestrator(fake_core_dir, node_yaml) → None, no raise (extract_domains [])."""
+def test_ssl_provision_no_domains_converged(tmp_path, caplog) -> None:
+    """ssl_provision_via_orchestrator(fake_core_dir, node_yaml) → "converged", no raise (domains [])."""
     caplog.set_level(0)
     node_yaml = tmp_path / "node.yaml"
     node_yaml.write_text("projects: []\nmodules: []\n")
     fake_core_dir = tmp_path / "core-no-deployer"
     fake_core_dir.mkdir()
 
-    # context_deployer.py is absent in fake_core_dir → extract_domains returns [] → graceful return
+    # No domains extracted → nothing to issue → converged (успех, НЕ наказание повтором)
     result = domains_helpers.ssl_provision_via_orchestrator(str(fake_core_dir), str(node_yaml))
 
-    assert result is None, f"ssl_provision_via_orchestrator must return None (non-fatal), got {result!r}"
-    logger.critical("[IMP:9][test] ssl_provision no domains — graceful return (non-fatal)")
+    assert result == "converged", (
+        f"ssl_provision_via_orchestrator must return 'converged' on empty domains, got {result!r}"
+    )
+    logger.critical("[IMP:9][test] ssl_provision no domains — converged (graceful return)")
+
+
+# region Behavior: P0 (2026-08-27) — import-unavailable → честный статус (не тихий skip)
+
+
+# 🧪 TRAP[TEST] · 2026-08-27 · P0 · import-unavailable + серты НЕ на диске → skipped_import
+# · Scenario: cert_orchestrator not importable (холодный bootstrap, неполный core) + fullchain.pem
+# ·   отсутствует → helper обязан вернуть "skipped_import" (фаза → done_with_warnings → resume).
+# · Last fail: 2026-08-27 P0 на tronyx-vps — тихий skip → φ7 done при пустом S3-кеше
+# · Remove if: контракт статусов ssl_provision_via_orchestrator изменится
+def test_ssl_provision_import_unavailable_certs_missing_skipped_import(tmp_path, caplog, monkeypatch) -> None:
+    """orchestrate_certs=None + серты НЕ на диске → "skipped_import" + IMP:10 критический лог."""
+    caplog.set_level(0)
+    node_yaml = tmp_path / "node.yaml"
+    node_yaml.write_text("projects: []\nmodules: []\n")
+
+    monkeypatch.setattr(domains_helpers, "orchestrate_certs", None)
+    monkeypatch.setattr(domains_helpers, "extract_domains_for_context", lambda _yaml, _ctx: ["example.com"])
+    monkeypatch.setattr(deploy_paths, "letsencrypt_live", lambda: tmp_path)  # LE live → tmp (без сертов)
+
+    result = domains_helpers.ssl_provision_via_orchestrator(str(tmp_path), str(node_yaml))
+
+    assert result == "skipped_import", (
+        f"import-unavailable + certs-missing обязан давать 'skipped_import', got {result!r}"
+    )
+    # Импорт-скип НЕ тихий: IMP:10 фиксирует отказ (Anti-Illusion — реальный траекторный след)
+    assert any("[IMP:10]" in r.message for r in caplog.records), (
+        "P0 FAIL: import-скип обязан логироваться IMP:10 (не тихий WARN)"
+    )
+    logger.critical("[IMP:9][test] import-unavailable + certs-missing → skipped_import (IMP:10 logged)")
+
+
+# 🧪 TRAP[TEST] · 2026-08-27 · P0 · import-unavailable + серты НА диске → converged
+# · Scenario: orchestrate_certs недоступен, но acme.sh уже выдал fullchain.pem для всех доменов —
+# ·   считаем converged, НЕ наказываем повтором issuance (resume не перевыпускает готовое).
+# · Last fail: N/A (новое поведение — дисковая converged-проверка)
+# · Remove if: converged-семантика изменится
+def test_ssl_provision_import_unavailable_certs_present_converged(tmp_path, caplog, monkeypatch) -> None:
+    """orchestrate_certs=None + все fullchain.pem на диске → "converged" (без повторного issue)."""
+    caplog.set_level(0)
+    node_yaml = tmp_path / "node.yaml"
+    node_yaml.write_text("projects: []\nmodules: []\n")
+
+    # Серты уже на диске для всех доменов (LE live → tmp_path)
+    (tmp_path / "example.com").mkdir()
+    (tmp_path / "example.com" / "fullchain.pem").write_text("FAKE-CERT")
+
+    monkeypatch.setattr(domains_helpers, "orchestrate_certs", None)
+    monkeypatch.setattr(domains_helpers, "extract_domains_for_context", lambda _yaml, _ctx: ["example.com"])
+    monkeypatch.setattr(deploy_paths, "letsencrypt_live", lambda: tmp_path)
+
+    result = domains_helpers.ssl_provision_via_orchestrator(str(tmp_path), str(node_yaml))
+
+    assert result == "converged", f"import-unavailable + certs-present обязан давать 'converged', got {result!r}"
+    logger.critical("[IMP:9][test] import-unavailable + certs-present → converged (без повторного issue)")
+
+
+# 🧪 TRAP[TEST] · 2026-08-27 · P0 · import-unavailable + домены неопределимы → skipped_import
+# · Scenario: BOTH cert_orchestrator и context_deployer недоступны (совместный импорт-фейл при
+# ·   неполном core) → домены НЕЛЬЗЯ проверить → консервативно skipped_import (resume перевыполнит).
+# ·   Это точный сценарий P0 2026-08-27 (общий try-блок валил оба модуля).
+# · Last fail: 2026-08-27 P0 на tronyx-vps
+# · Remove if: контракт статусов изменится
+def test_ssl_provision_import_unavailable_domains_undeterminable_skipped_import(tmp_path, caplog, monkeypatch) -> None:
+    """orchestrate_certs=None + context_deployer=None (домены неопределимы) → "skipped_import"."""
+    caplog.set_level(0)
+    node_yaml = tmp_path / "node.yaml"
+    node_yaml.write_text("projects: []\nmodules: []\n")
+
+    monkeypatch.setattr(domains_helpers, "orchestrate_certs", None)
+    monkeypatch.setattr(domains_helpers, "extract_domains_for_context", None)  # домены неопределимы
+    monkeypatch.setattr(deploy_paths, "letsencrypt_live", lambda: tmp_path)
+
+    result = domains_helpers.ssl_provision_via_orchestrator(str(tmp_path), str(node_yaml))
+
+    assert result == "skipped_import", (
+        f"домены неопределимы → обязан 'skipped_import' (нельзя подтвердить converged), got {result!r}"
+    )
+    logger.critical("[IMP:9][test] import-unavailable + домены неопределимы → skipped_import (консервативно)")
+
+
+# 🧪 TRAP[TEST] · 2026-08-27 · Regression (c) · импорт доступен → прежнее поведение (issuance)
+# · Scenario: orchestrate_certs доступен → orchestrate_certs вызывается, статус "provisioned".
+# · Last fail: N/A (эталонное поведение — регрессионный щит для нового контракта)
+# · Remove if: orchestration-контракт изменится
+def test_ssl_provision_import_available_provisioned(tmp_path, caplog, monkeypatch) -> None:
+    """orchestrate_certs доступен → вызывается, возвращается "provisioned" (прежнее поведение)."""
+    caplog.set_level(0)
+    node_yaml = tmp_path / "node.yaml"
+    node_yaml.write_text("projects: []\nmodules: []\n")
+
+    calls: list[tuple] = []
+
+    class _FakeCertResult:
+        def to_dict(self) -> dict[str, object]:
+            return {"domains": {}, "summary": {"restored": 0, "issued": 1, "skipped": 0, "failed": 0}}
+
+    def _fake_orchestrate(domains, issue_cert_script, secrets_env, migrate_cron=False):
+        calls.append((list(domains), str(issue_cert_script)))
+        return _FakeCertResult()
+
+    monkeypatch.setattr(domains_helpers, "orchestrate_certs", _fake_orchestrate)
+    monkeypatch.setattr(domains_helpers, "extract_domains_for_context", lambda _yaml, _ctx: ["example.com"])
+
+    result = domains_helpers.ssl_provision_via_orchestrator(str(tmp_path), str(node_yaml))
+
+    assert result == "provisioned", f"импорт доступен → обязан 'provisioned', got {result!r}"
+    assert calls, "orchestrate_certs обязан вызываться при доступном импорте (regression c)"
+    assert calls[0][0] == ["example.com"], f"домены должны дойти до оркестратора, got {calls[0][0]}"
+    logger.critical("[IMP:9][test] import-available → provisioned (orchestrate_certs вызван)")
+
+
+# endregion Behavior: P0 (2026-08-27) — import-unavailable → честный статус
 
 
 # endregion Behavior: ssl_provision_via_orchestrator with fake context

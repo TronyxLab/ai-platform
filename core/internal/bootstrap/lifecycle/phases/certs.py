@@ -9,7 +9,11 @@
 ## @invariants
 ##   1. Phase is idempotent — safe to re-run on a provisioned node.
 ##   2. acme.sh installation is non-fatal (best-effort).
-##   3. SSL provision via helpers_domains.ssl_provision_via_orchestrator (unified entrypoint).
+##   3. SSL provision via helpers_domains.ssl_provision_via_orchestrator (unified entrypoint);
+##      фаза интерпретирует статус: provisioned|converged → done, skipped_import|error →
+##      done_with_warnings (P0 2026-08-27 — тихий import-skip НЕ маскируется).
+## @changes  2026-08-27 · P0 — фаза интерпретирует статус ssl_provision_via_orchestrator
+##           (skipped_import → False/done_with_warnings, converged → True)
 ## @rationale E3: phases.py 1080 LOC → доменные модули. certs-фазы — acme/ssl-домен.
 ## @changes  2026-08-02 · DevPlan 119 E3 — экстракция из lifecycle/phases.py
 # endregion MODULE_CONTRACT
@@ -158,14 +162,33 @@ def phase_certificates(
     except Exception as e:  # noqa: EXC — non-fatal: acme.sh is best-effort
         logger.warning("[IMP:7][phase:certificates] acme.sh installation failed (non-fatal): %s", e)
 
-    # ── 2. SSL provision via cert_orchestrator ──
+    # ── 2. SSL provision via cert_orchestrator (P0-честность: skipped-import ≠ done) ──
+    # Контракт ssl_provision_via_orchestrator: "provisioned"/"converged" → успех;
+    # "skipped_import"/"error" → done_with_warnings (фаза перевыполнится на резюме — это ровно
+    # семантика восстановления при импорт-скипе с непровижнеными сертами).
+    # ⚠️ TRAP[BUG] · 2026-08-27 · P0 · тихий import-skip маскировал отказ φ7
+    # · Symptom: cert_orchestrator not importable при холодном bootstrap → helper возвращал None →
+    # ·   здесь логировалось «SSL certificates provisioned for all domains» и фаза mark DONE —
+    # ·   провижининга НЕ БЫЛО (S3-кеш пуст = restore-first мёртв при DR).
+    # · Root: return None не различал «успех» и «тихий skip» — фаза не могла отличить.
+    # · Fix: helper возвращает статус; skipped_import (импорт недоступен + серты НЕ на диске) →
+    # ·   False → done_with_warnings → resume перевыполнит фазу после полной доставки core.
+    # · Prevention: фаза интерпретирует фактический статус, а не отсутствие исключения.
     try:
-        ssl_provision(core_dir, node_yaml)
-        logger.info("[IMP:9][phase:certificates] SSL certificates provisioned for all domains")
+        ssl_status = ssl_provision(core_dir, node_yaml)
     # ruff: ignore[BLE001] — SSL provision best-effort — S3/ACME API широкий спектр
     except Exception as e:  # noqa: EXC — non-fatal: SSL provisioning is best-effort (S3 cache fallback)
         logger.warning("[IMP:7][phase:certificates] SSL provision failed (non-fatal): %s", e)
         non_fatal_issues = True
+    else:
+        if ssl_status in {"provisioned", "converged"}:
+            logger.info("[IMP:9][phase:certificates] SSL certificates provisioned for all domains")
+        else:
+            logger.warning(
+                "[IMP:7][phase:certificates] SSL provision incomplete (status=%s) — certificates NOT provisioned",
+                ssl_status,
+            )
+            non_fatal_issues = True
 
     if non_fatal_issues:
         logger.info("[IMP:8][phase:certificates] Complete with non-fatal issues")

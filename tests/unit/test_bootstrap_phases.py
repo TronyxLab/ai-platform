@@ -917,7 +917,11 @@ def test_phase_certificates_acme_fail_ssl_ok_returns_true(caplog: pytest.LogCapt
 
     with (
         patch.object(certs_mod, "_install_acme", return_value=False),
-        patch.object(certs_mod.helpers_domains, "ssl_provision_via_orchestrator", return_value=None) as ssl_mock,
+        # P0 (2026-08-27): контракт статусов — успех = "provisioned"/"converged" (прежнее None
+        # маскировало import-skip; см. test_ssl_provision_import_unavailable_* в contract-файле)
+        patch.object(
+            certs_mod.helpers_domains, "ssl_provision_via_orchestrator", return_value="provisioned"
+        ) as ssl_mock,
     ):
         result = certs_mod.phase_certificates(str(tmp_path), "tronyx-vps", str(node_yaml))
 
@@ -953,6 +957,122 @@ def test_phase_certificates_ssl_fail_returns_false(caplog: pytest.LogCaptureFixt
         result = certs_mod.phase_certificates(str(tmp_path), "tronyx-vps", str(node_yaml))
 
     assert result is False, "B4: ssl-fail обязан давать False (done_with_warnings)"
+
+
+# region Tests: φ7 certificates — P0 (2026-08-27) import-unavailable → честный статус фазы
+
+
+# 🧪 TRAP[TEST] · 2026-08-27 · P0 · (a) import-unavailable + серты НЕ на диске → done_with_warnings
+# · Scenario: cert_orchestrator not importable (холодный bootstrap, неполный core) + fullchain.pem
+# ·   отсутствует → фаза обязана вернуть False (done_with_warnings → resume перевыполнит фазу).
+# · Last fail: 2026-08-27 P0 на tronyx-vps — φ7 печатала «SSL certificates provisioned for all
+# ·   domains» и mark DONE при НЕ выполненном провижининге (S3-кеш пуст = restore-first мёртв)
+# · Remove if: контракт статусов ssl_provision_via_orchestrator изменится
+@ldd_trajectory
+def test_phase_certificates_import_unavailable_certs_missing_warnings(
+    caplog: pytest.LogCaptureFixture, tmp_path: Path, monkeypatch
+) -> None:
+    """P0 (a): import-unavailable + certs-missing → фаза False (warnings-status, НЕ done)."""
+    from core.internal.bootstrap.lifecycle.helpers import domains as domains_helpers
+    from core.internal.bootstrap.lifecycle.phases import certs as certs_mod
+    from core.internal.shared import deploy_paths
+
+    caplog.set_level(logging.DEBUG)
+    node_yaml = tmp_path / "node.yaml"
+    node_yaml.write_text("projects: []\nmodules: []\n")
+
+    # Импорт недоступен (guarded-import дал None) + домены известны + сертов на диске НЕТ
+    monkeypatch.setattr(certs_mod, "_install_acme", lambda _core_dir: True)
+    monkeypatch.setattr(domains_helpers, "orchestrate_certs", None)
+    monkeypatch.setattr(domains_helpers, "extract_domains_for_context", lambda _yaml, _ctx: ["example.com"])
+    monkeypatch.setattr(deploy_paths, "letsencrypt_live", lambda: tmp_path)
+
+    result = certs_mod.phase_certificates(str(tmp_path), "tronyx-vps", str(node_yaml))
+
+    assert result is False, (
+        f"P0 FAIL: import-unavailable + certs-missing обязан давать False (done_with_warnings), got {result!r}"
+    )
+    messages = [r.message for r in caplog.records]
+    assert any("certificates NOT provisioned" in m for m in messages), (
+        "P0 FAIL: фаза обязана логировать «certificates NOT provisioned» (не «provisioned»)"
+    )
+
+
+# 🧪 TRAP[TEST] · 2026-08-27 · P0 · (b) import-unavailable + серты НА диске → success (converged)
+# · Scenario: orchestrate_certs недоступен, но acme.sh уже выдал fullchain.pem для всех доменов —
+# ·   фаза True (converged), НЕ наказывает повтором issuance и не блокирует деплой.
+# · Last fail: N/A (новое поведение — дисковая converged-проверка)
+# · Remove if: converged-семантика изменится
+@ldd_trajectory
+def test_phase_certificates_import_unavailable_certs_present_success(
+    caplog: pytest.LogCaptureFixture, tmp_path: Path, monkeypatch
+) -> None:
+    """P0 (b): import-unavailable + certs-present → фаза True (converged, без повторного issue)."""
+    from core.internal.bootstrap.lifecycle.helpers import domains as domains_helpers
+    from core.internal.bootstrap.lifecycle.phases import certs as certs_mod
+    from core.internal.shared import deploy_paths
+
+    caplog.set_level(logging.DEBUG)
+    node_yaml = tmp_path / "node.yaml"
+    node_yaml.write_text("projects: []\nmodules: []\n")
+
+    # Серты уже на диске для всех доменов (LE live → tmp_path)
+    (tmp_path / "example.com").mkdir()
+    (tmp_path / "example.com" / "fullchain.pem").write_text("FAKE-CERT")
+
+    monkeypatch.setattr(certs_mod, "_install_acme", lambda _core_dir: True)
+    monkeypatch.setattr(domains_helpers, "orchestrate_certs", None)
+    monkeypatch.setattr(domains_helpers, "extract_domains_for_context", lambda _yaml, _ctx: ["example.com"])
+    monkeypatch.setattr(deploy_paths, "letsencrypt_live", lambda: tmp_path)
+
+    result = certs_mod.phase_certificates(str(tmp_path), "tronyx-vps", str(node_yaml))
+
+    assert result is True, f"P0 FAIL: import-unavailable + certs-present обязан давать True (converged), got {result!r}"
+    messages = [r.message for r in caplog.records]
+    assert any("provisioned for all domains" in m for m in messages), (
+        "P0 FAIL: converged-путь обязан логировать успех фазы (IMP:9)"
+    )
+
+
+# 🧪 TRAP[TEST] · 2026-08-27 · Regression (c) · импорт доступен → прежнее поведение (issuance → done)
+# · Scenario: orchestrate_certs доступен и выдаёт серты → фаза True; тихий skip невозможен.
+# · Last fail: N/A (эталонное поведение — регрессионный щит для нового контракта)
+# · Remove if: orchestration-контракт изменится
+@ldd_trajectory
+def test_phase_certificates_import_available_previous_behavior(
+    caplog: pytest.LogCaptureFixture, tmp_path: Path, monkeypatch
+) -> None:
+    """P0 (c): импорт доступен → прежнее поведение: issuance выполняется, фаза True."""
+    from core.internal.bootstrap.lifecycle.helpers import domains as domains_helpers
+    from core.internal.bootstrap.lifecycle.phases import certs as certs_mod
+
+    caplog.set_level(logging.DEBUG)
+    node_yaml = tmp_path / "node.yaml"
+    node_yaml.write_text("projects: []\nmodules: []\n")
+
+    calls: list[tuple] = []
+
+    class _FakeCertResult:
+        def to_dict(self) -> dict[str, object]:
+            return {"domains": {}, "summary": {"restored": 0, "issued": 1, "skipped": 0, "failed": 0}}
+
+    def _fake_orchestrate(domains, issue_cert_script, secrets_env, migrate_cron=False):
+        calls.append((list(domains), str(issue_cert_script)))
+        return _FakeCertResult()
+
+    monkeypatch.setattr(certs_mod, "_install_acme", lambda _core_dir: True)
+    monkeypatch.setattr(domains_helpers, "orchestrate_certs", _fake_orchestrate)
+    monkeypatch.setattr(domains_helpers, "extract_domains_for_context", lambda _yaml, _ctx: ["example.com"])
+
+    result = certs_mod.phase_certificates(str(tmp_path), "tronyx-vps", str(node_yaml))
+
+    assert result is True, f"P0 regression (c) FAIL: импорт доступен → фаза True (issuance), got {result!r}"
+    assert calls and calls[0][0] == ["example.com"], (
+        f"P0 regression (c) FAIL: orchestrate_certs обязан вызываться с доменами, got {calls!r}"
+    )
+
+
+# endregion Tests: φ7 certificates — P0 (2026-08-27) import-unavailable → честный статус фазы
 
 
 # 🧪 TRAP[TEST] · NEGATIVE (R5) · _install_acme: proxy-чистая env (141 B4)

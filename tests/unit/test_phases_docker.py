@@ -18,6 +18,8 @@
 """
 
 import logging
+from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -96,6 +98,76 @@ def test_docker_phases_registry(caplog: pytest.LogCaptureFixture) -> None:
                 for p in params
             ), f"{name} содержит неожиданный параметр: {params}"
     logger.critical("[IMP:9][test] docker phases registry OK: %d фаз в phases/docker.py", len(_DOCKER_PHASES))
+
+
+# region Tests: φ12 deploy_update — SSL provision статус (P0 2026-08-27, тот же контракт, что φ7)
+
+
+def _deploy_update_ctx(tmp_path: Path) -> tuple[Path, Path]:
+    """Создать tmp core_dir (с deploy-modules.sh) + node.yaml для phase_deploy_update."""
+    core_dir = tmp_path / "core"
+    script_dir = core_dir / "internal" / "bootstrap"
+    script_dir.mkdir(parents=True)
+    (script_dir / "deploy-modules.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
+    node_yaml = tmp_path / "node.yaml"
+    node_yaml.write_text("projects: []\nmodules: []\n")
+    return core_dir, node_yaml
+
+
+# 🧪 TRAP[TEST] · 2026-08-27 · P0 · φ12: skipped_import → done_with_warnings (НЕ done)
+# · Scenario: cert_orchestrator not importable + серты НЕ на диске → helpers_domains возвращает
+# ·   "skipped_import" → φ12 обязана вернуть False (перевыполнится при следующем node-update).
+# · Last fail: 2026-08-27 P0 на tronyx-vps (тот же маскирующий контракт в φ7/φ12)
+# · Remove if: контракт статусов ssl_provision_via_orchestrator изменится
+@ldd_trajectory
+def test_phase_deploy_update_ssl_skipped_import_returns_false(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> None:
+    """φ12: ssl_provision status="skipped_import" → фаза False (done_with_warnings)."""
+    caplog.set_level(logging.DEBUG)
+    core_dir, node_yaml = _deploy_update_ctx(tmp_path)
+
+    with (
+        patch.object(docker_mod.helpers_subprocess, "run_subprocess"),
+        patch.object(docker_mod.helpers_domains, "import_deploy_context"),
+        patch.object(docker_mod.helpers_domains, "ssl_provision_via_orchestrator", return_value="skipped_import"),
+        patch.object(docker_mod, "_apply_policy_script", return_value=False),
+        patch.object(docker_mod, "_sweep_stale_hc_markers", return_value=0),
+    ):
+        result = docker_mod.phase_deploy_update(str(core_dir), "tronyx-vps", str(node_yaml))
+
+    assert result is False, f"P0 FAIL: φ12 skipped_import обязан давать False (done_with_warnings), got {result!r}"
+    messages = [r.message for r in caplog.records]
+    assert any("certificates NOT provisioned" in m for m in messages), (
+        "P0 FAIL: φ12 обязана логировать «certificates NOT provisioned» при skipped_import"
+    )
+
+
+# 🧪 TRAP[TEST] · 2026-08-27 · P0 · φ12: converged → success (серты на диске, не наказывать)
+# · Scenario: orchestrate_certs недоступен, но серты уже на диске → "converged" → φ12 True.
+# · Last fail: N/A (новое поведение — дисковая converged-проверка)
+# · Remove if: converged-семантика изменится
+@ldd_trajectory
+def test_phase_deploy_update_ssl_converged_returns_true(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> None:
+    """φ12: ssl_provision status="converged" → фаза True (серты уже на диске)."""
+    caplog.set_level(logging.DEBUG)
+    core_dir, node_yaml = _deploy_update_ctx(tmp_path)
+
+    with (
+        patch.object(docker_mod.helpers_subprocess, "run_subprocess"),
+        patch.object(docker_mod.helpers_domains, "import_deploy_context"),
+        patch.object(docker_mod.helpers_domains, "ssl_provision_via_orchestrator", return_value="converged"),
+        patch.object(docker_mod, "_apply_policy_script", return_value=False),
+        patch.object(docker_mod, "_sweep_stale_hc_markers", return_value=0),
+    ):
+        result = docker_mod.phase_deploy_update(str(core_dir), "tronyx-vps", str(node_yaml))
+
+    assert result is True, f"P0 FAIL: φ12 converged обязан давать True (серты на диске), got {result!r}"
+    messages = [r.message for r in caplog.records]
+    assert any("SSL certificates provisioned" in m for m in messages), (
+        "P0 FAIL: converged-путь φ12 обязан логировать успех SSL (IMP:9)"
+    )
+
+
+# endregion Tests: φ12 deploy_update — SSL provision статус (P0 2026-08-27)
 
 
 # 🧪 TRAP[TEST] · 2026-08-02 · R5 · E3 все фазы в registry (агрегатор)
