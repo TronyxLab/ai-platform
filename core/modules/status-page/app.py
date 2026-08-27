@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # pyright: reportImplicitRelativeImport=false
-# GREP_SUMMARY: status-page app.py live-status http.server node.yaml status-metrics.json jinja2 html json health refresh orchestrator collectors renderer disabled node-name
+# GREP_SUMMARY: status-page app.py live-status http.server node.yaml status-metrics.json jinja2 html json health refresh orchestrator collectors renderer disabled node-name metrics prometheus tls
 # STRUCTURE: ▶ Config → ▶ _jinja_env (once) → ▶ wrappers (get_all_checks/_render_html) → ▶ StatusPageHandler(do_GET|do_POST)
 #            → /: Jinja2 render → /health: binary verdict → /healthz: readiness_check → /status.json: JSON → /refresh: POST → ▶ main
 # region MODULE_CONTRACT
@@ -197,11 +197,12 @@ class StatusPageHandler(http.server.BaseHTTPRequestHandler):
         self._send_json(cast("dict[str, object]", cast(object, details)), status_code=200 if ok else 503)
 
     def _handle_metrics(self):
-        """Prometheus text-format metrics (170 W12 C5): deploy SLO + image sizes + backup freshness.
+        """Prometheus text-format metrics (170 W12 C5): deploy SLO + image sizes + backup freshness + TLS.
 
         ## @purpose  Scrape-endpoint для prometheus (observability-net): platform_deploy_success/
         ##           platform_deploy_duration_seconds (SLO burn-rate), platform_image_size_bytes
-        ##           (size-budget), platform_backup_last_postgres_age_seconds (backup-freshness).
+        ##           (size-budget), platform_backup_last_postgres_age_seconds (backup-freshness),
+        ##           platform_tls_days_left/platform_tls_self_signed (017 C4 — TLS-бандл алерты).
         ## @io       ⎋ text/plain; version=0.0.4 — Prometheus exposition format
         """
         data = get_all_checks()
@@ -250,6 +251,24 @@ class StatusPageHandler(http.server.BaseHTTPRequestHandler):
         )
         lines.append("# TYPE platform_backup_last_postgres_timestamp_seconds gauge")
         lines.append(f'platform_backup_last_postgres_timestamp_seconds{{node="{node_name}"}} {ts_s}')
+
+        # ── TLS bundle (017 C4): platform_tls_days_left / platform_tls_self_signed ──
+        # Только если tls-секция непуста (отсутствие live-директорий → серия не эмитится).
+        # Отсутствующие поля → NaN (консистентно стилю deploy_duration).
+        tls_section = metrics.get("tls", {})
+        if tls_section:
+            lines.append("# HELP platform_tls_days_left Days until TLS certificate expiry (NaN = unknown)")
+            lines.append("# TYPE platform_tls_days_left gauge")
+            lines.append("# HELP platform_tls_self_signed TLS certificate is self-signed (1=yes, 0=no, NaN=unknown)")
+            lines.append("# TYPE platform_tls_self_signed gauge")
+            for domain_raw, entry in tls_section.items():
+                domain = str(domain_raw).replace('"', '\\"')
+                days_left = entry.get("days_left")
+                days_val: str | float = "NaN" if not isinstance(days_left, int) else str(days_left)
+                lines.append(f'platform_tls_days_left{{node="{node_name}",domain="{domain}"}} {days_val}')
+                self_signed = entry.get("self_signed")
+                self_val: str = "1" if self_signed is True else ("0" if self_signed is False else "NaN")
+                lines.append(f'platform_tls_self_signed{{node="{node_name}",domain="{domain}"}} {self_val}')
 
         self._send("text/plain; version=0.0.4", ("\n".join(lines) + "\n").encode("utf-8"), 200, None)
 

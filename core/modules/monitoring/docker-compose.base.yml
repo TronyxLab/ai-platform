@@ -60,6 +60,10 @@ services:
         # 170 W12 C5: статический platform-alerts.yml → host rules dir (prometheus glob
         # подхватывает *-alerts.yml); idempotent copy (cp -f)
         cp -f /config/platform-alerts.yml /rules/platform-alerts.yml
+        # 017 C4-fix: bind-mount dir, автосозданный docker'ом, получает 0700 root —
+        # prometheus (user nobody) не может traverse → rule_files glob грузит НОЛЬ
+        # правил (латентная смерть всех алертов на холодных нодах). Фикс perms в init.
+        chmod 0755 /rules && chmod 0644 /rules/*.yml 2>/dev/null || true
         echo "[IMP:9][prometheus-config-init] prometheus.yml generated + platform-alerts.yml delivered"
     environment:
       LITELLM_MASTER_KEY: "${LITELLM_MASTER_KEY:-}"

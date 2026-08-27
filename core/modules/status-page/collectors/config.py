@@ -112,6 +112,7 @@ class MetricsData(TypedDict, total=False):
     host: dict[str, object]
     backup: dict[str, object]
     deploy: dict[str, object]  # 170 W12 C5: DeployStatus (last_deploy_at/success/duration_s/status)
+    tls: dict[str, dict[str, object]]  # 017 C4: {domain: {not_after, days_left, self_signed}}
     platform_services: list[object]
     errors: list[str]
 

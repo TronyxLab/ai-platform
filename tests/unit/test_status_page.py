@@ -1,4 +1,4 @@
-# GREP_SUMMARY: test-status-page app.py health html json anti-recursion headers timeout schema-version jinja2 memory swap os backup quick-nav progress-bar
+# GREP_SUMMARY: test-status-page app.py health html json anti-recursion headers timeout schema-version jinja2 memory swap os backup quick-nav progress-bar metrics prometheus tls
 # STRUCTURE: ▶ test_status_page_app_health_pass → ◇ mock node.yaml + status-metrics.json → ○ get_all_checks → assert PASS
 #            ▶ test_status_page_app_health_fail → ◇ mock unhealthy container → assert FAIL
 #            ▶ test_status_page_app_html_contains_vhosts → ◇ mock → assert HTML contains domain
@@ -7,6 +7,7 @@
 #            ▶ test_status_page_app_x_headers → ◇ HTML response → assert headers
 #            ▶ test_status_page_schema_version_check → ◇ wrong schema_version → assert warning
 #            ▶ test_status_page_jinja2_autoescape → ◇ XSS payload → assert escaped
+#            ▶ test_metrics_renders_tls_gauges (017 C4) → ◇ _handle_metrics (direct handler) → assert platform_tls_*
 #            ▶ test_htpasswd_generation tests (thin shell facade → secrets_manager.py htpasswd, DevPlan 102)
 #            ▶ 047: test_html_structure_has_memory/os/progress/nav/backup/no-cicd → assert new HTML fields
 # @file test_status_page.py
@@ -32,6 +33,7 @@
 #             | (_format_bytes/_compute_staleness/_load_status_metrics/_render_html) → публичные
 #             | renderer.format_bytes / collectors.compute_staleness / collectors.load_status_metrics /
 #             | renderer.render_html (top-10 private закрыты); фикс silent-noop mock_subprocess
+#   2026-08-27 | DevPlan 017 C4 | +TestStatusPageMetrics — /metrics TLS-гейджи (direct handler, server-free)
 # region MODULE_CONTRACT
 ## @purpose  Module-level tests for status-page and secrets.sh htpasswd generation
 ## @scope    Unit tests — no Docker, no HTTP server, no subprocess.run (mocked)
@@ -45,6 +47,7 @@
 # endregion MODULE_CONTRACT
 
 import http.client
+import io
 import json
 import logging
 import os
@@ -58,6 +61,7 @@ from unittest import mock
 
 import pytest
 
+from tests._conftest.ldd import _print_ldd_trajectory
 from tests.helpers.gate_helpers import assert_ldd_imp9
 
 # Module-specific path (tests/AGENTS.md §sys.path policy): core/modules/status-page.
@@ -923,6 +927,143 @@ class TestStatusPageNewFeatures:
         # Should not crash — returns PASS (empty = healthy)
         assert "status" in data
         assert data["status"] == "PASS"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# TESTS: app.py — /metrics Prometheus exposition (170 W12 C5 + 017 C4 TLS)
+# ═══════════════════════════════════════════════════════════════════
+
+
+class _FakeSocket:
+    """Минимальный request-объект для прямого инстансирования StatusPageHandler (server-free).
+
+    ## @purpose — Handler-тесты /metrics БЕЗ реального HTTP-сервера: BaseRequestHandler.__init__
+    ##            вызывает handle() → do_GET → _handle_metrics → _send в wfile. FakeSocket
+    ##            предоставляет makefile('rb') (request) / makefile('wb') (response BytesIO).
+    ## @io — ⇥ request bytes (GET /metrics) → ⎋ response bytes через .wfile
+    ## @complexity — O(1)
+    ## @invariants
+    ##   - Сервер НЕ запускается (инвариант «no HTTP server» соблюдён — W10-класс единственное исключение)
+    ##   - Полный путь do_GET → _handle_metrics → _send отрабатывает (не только метод-юнит)
+    """
+
+    def __init__(self) -> None:
+        self.wfile = io.BytesIO()
+
+    def makefile(self, mode: str, *_args: object, **_kwargs: object):
+        if "r" in mode:
+            return io.BytesIO(b"GET /metrics HTTP/1.1\r\nHost: test\r\n\r\n")
+        return self.wfile
+
+    def sendall(self, data: bytes) -> None:
+        self.wfile.write(data)
+
+    def close(self) -> None:
+        pass
+
+
+class TestStatusPageMetrics:
+    """017 C4: /metrics эмитит platform_tls_days_left / platform_tls_self_signed (TLS-бандл)."""
+
+    @staticmethod
+    def _render_metrics(app_module) -> str:
+        """GET /metrics через прямой инстанс StatusPageHandler (server-free, _FakeSocket)."""
+        conn = _FakeSocket()
+        app_module.StatusPageHandler(conn, ("127.0.0.1", 0), None)
+        return conn.wfile.getvalue().decode("utf-8")
+
+    # 🧪 TRAP[TEST] · C4 · Regression: /metrics рендерит TLS-гейджи из tls-секции
+    # · Scenario: status-metrics.json с tls{example.test: {days_left: 365, self_signed: true}} →
+    # ·   platform_tls_days_left{node,domain="example.test"} 365 + self_signed 1 + HELP/TYPE
+    # · Last fail: never (new feature, 017 C4)
+    # · Remove if: TLS-эмиссия удалена из _handle_metrics
+    def test_metrics_renders_tls_gauges(self, mock_node_yaml_no_vhosts, tmp_path, caplog, mock_subprocess):
+        """_handle_metrics: tls-секция → platform_tls_days_left / platform_tls_self_signed."""
+        caplog.set_level(0)
+
+        metrics_file = tmp_path / "metrics-tls.json"
+        metrics_file.write_text(
+            json.dumps({
+                "schema_version": 2,
+                "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "containers": [],
+                "tls": {
+                    "example.test": {"not_after": "2027-08-27T00:00:00Z", "days_left": 365, "self_signed": True},
+                },
+            }),
+            encoding="utf-8",
+        )
+        mock_subprocess.return_value = mock.Mock(returncode=0, stdout="200", stderr="")
+
+        app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(metrics_file))
+        body = self._render_metrics(app)
+
+        _print_ldd_trajectory(caplog)
+
+        assert "# HELP platform_tls_days_left" in body, "HELP platform_tls_days_left отсутствует"
+        assert "# TYPE platform_tls_days_left gauge" in body, "TYPE platform_tls_days_left отсутствует"
+        assert "# HELP platform_tls_self_signed" in body, "HELP platform_tls_self_signed отсутствует"
+        assert "# TYPE platform_tls_self_signed gauge" in body, "TYPE platform_tls_self_signed отсутствует"
+        assert 'platform_tls_days_left{node="test-node",domain="example.test"} 365' in body, (
+            f"days_left-гейдж отсутствует в: {body}"
+        )
+        assert 'platform_tls_self_signed{node="test-node",domain="example.test"} 1' in body, (
+            "self_signed-гейдж должен быть 1"
+        )
+        logger.info("[IMP:9][test_metrics] TLS gauges rendered: days_left + self_signed")
+
+    # 🧪 TRAP[TEST] · C4 · Regression: days_left отсутствует → NaN (стиль deploy_duration)
+    # · Scenario: tls-секция есть, но у домена нет days_left → platform_tls_days_left NaN
+    # · Last fail: never (new feature)
+    # · Remove if: NaN-семантика _handle_metrics изменена
+    def test_metrics_tls_days_left_nan_when_missing(self, mock_node_yaml_no_vhosts, tmp_path, caplog, mock_subprocess):
+        """_handle_metrics: отсутствующий days_left → NaN (консистентно deploy_duration)."""
+        caplog.set_level(0)
+
+        metrics_file = tmp_path / "metrics-tls-nan.json"
+        metrics_file.write_text(
+            json.dumps({
+                "schema_version": 2,
+                "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "containers": [],
+                "tls": {"example.test": {"not_after": "2027-08-27T00:00:00Z", "self_signed": False}},
+            }),
+            encoding="utf-8",
+        )
+        mock_subprocess.return_value = mock.Mock(returncode=0, stdout="200", stderr="")
+
+        app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(metrics_file))
+        body = self._render_metrics(app)
+
+        _print_ldd_trajectory(caplog)
+
+        assert 'platform_tls_days_left{node="test-node",domain="example.test"} NaN' in body, (
+            f"NaN-ветка days_left ожидалась: {body}"
+        )
+        assert 'platform_tls_self_signed{node="test-node",domain="example.test"} 0' in body
+        logger.info("[IMP:9][test_metrics] TLS NaN-ветка days_left OK")
+
+    # 🧪 TRAP[TEST] · C4 · Regression: tls-секции нет → серия не эмитится, /metrics жив
+    # · Scenario: status-metrics.json без tls-ключа → 0 строк platform_tls_*, deploy-серия остаётся
+    # · Last fail: never (new feature)
+    # · Remove if: «только если tls-секция непуста» контракт изменён
+    def test_metrics_no_tls_section_emits_nothing(
+        self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog, mock_subprocess
+    ):
+        """_handle_metrics: без tls-секции → нет platform_tls_* строк, без краха."""
+        caplog.set_level(0)
+
+        mock_subprocess.return_value = mock.Mock(returncode=0, stdout="200", stderr="")
+        app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass))
+        body = self._render_metrics(app)
+
+        _print_ldd_trajectory(caplog)
+
+        assert "platform_tls_days_left" not in body, "без tls-секции days_left-гейдж не должен эмититься"
+        assert "platform_tls_self_signed" not in body, "без tls-секции self_signed-гейдж не должен эмититься"
+        assert "# HELP platform_tls" not in body, "без tls-секции HELP не должен эмититься"
+        assert "platform_deploy_success" in body, "deploy-серия должна остаться (регрессия 170 W12 C5)"
+        logger.info("[IMP:9][test_metrics] Empty tls-section → no platform_tls_* emitted")
 
 
 # ═══════════════════════════════════════════════════════════════════

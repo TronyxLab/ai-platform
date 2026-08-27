@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: platform-export-metrics coordinator metrics-collector atomic-write cron status-metrics.json host-uptime backup docker-images-size memory swap uname os
+# GREP_SUMMARY: platform-export-metrics coordinator metrics-collector atomic-write cron status-metrics.json host-uptime backup docker-images-size memory swap uname os tls letsencrypt openssl x509
 # STRUCTURE: ▶ main() → NodeYaml → docker_collector → cert_collector → project_collector → host_collector
 #            → host_uptime → docker_images_size_gb → host_memory → host_uname → backup_collector
-#            → merge + errors[] + backup + platform_services
+#            → tls_collector (letsencrypt live dirs → openssl x509 → days_left/self_signed)
+#            → merge + errors[] + backup + platform_services + tls
 #            → json_writer.atomic_write(/var/lib/platform/run/status-metrics.json) → ⎋ exit 0
 # region MODULE_CONTRACT
 ## @purpose  Metrics export coordinator — collects data from all collectors, applies TTL cache,
-##           merges, writes atomically to status-metrics.json
+##           merges, writes atomically to status-metrics.json (incl. tls-секция, DevPlan 017 C4)
 ## @scope    Host-side cron export: runs every minute via platform-export-metrics.sh wrapper
 ## @invariants
 ##   - Runtime data (containers, disk) always fresh — no cache
@@ -17,13 +18,20 @@
 ##   - node.yaml path from env var NODE_YAML_PATH or /opt/node-configs/<NODE_NAME>/node.yaml
 ##   - Output: /var/lib/platform/run/status-metrics.json
 ##   - Total execution expected <15s (AC10-M)
+##   - tls-секция: пустая при отсутствии letsencrypt live dir; per-domain fail-safe (IMP:7 +
+##     skip) — сбой одного домена не валит export; openssl — системный бинар, 0 новых deps
 ## @rationale  Coordinator pattern (META Δ5) separates collection concerns into testable modules.
 ##             Graceful degradation (Δ13) ensures partial data + errors on any collector failure.
+##             DevPlan 017 C4 (owner): мониторинг видит TLS-бандл (expiry/self-signed алерты) —
+##             секция "tls" в status-metrics.json кормит platform_tls_* гейджи status-page /metrics.
+## @changes  2026-08-27 | DevPlan 017 C4 — +tls-секция (letsencrypt live dirs → openssl x509 →
+##           not_after/days_left/self_signed; fail-safe per-domain; LDD IMP:7/8/9/10)
 # endregion MODULE_CONTRACT
 
 import json
 import logging
 import os
+import subprocess
 import sys
 import time
 from collections.abc import Mapping
@@ -36,6 +44,9 @@ from core.internal.healthcheck.metrics.cache import CacheManager
 from core.internal.healthcheck.metrics.cert_collector import CertInfo
 from core.internal.healthcheck.metrics.docker_collector import ContainerInfo
 from core.internal.healthcheck.metrics.project_collector import ProjectInfo
+
+# 017 C4: резолвер /etc/letsencrypt/live (C7) — источник доменов tls-секции.
+from core.internal.shared.deploy_paths import letsencrypt_live as _letsencrypt_live
 
 # B3: канонический node-configs base — shared/deploy_paths (литерал /opt/node-configs удалён)
 from core.internal.shared.deploy_paths import node_configs_remote
@@ -107,6 +118,130 @@ def _get_cache_dir(env: Mapping[str, str] | None = None) -> str:
     """Get cache directory from env (или DI-дикта)."""
     source: Mapping[str, str] = os.environ if env is None else env
     return source.get("METRICS_CACHE_DIR", "/var/cache/platform/metrics")
+
+
+# region FUNC_collect_tls_metrics
+## @purpose  DevPlan 017 C4 (owner): мониторинг видит TLS-бандл — собирает секцию "tls"
+##           из каталога letsencrypt live (enumerate доменов → fullchain.pem → openssl x509).
+##           Домен = имя поддиректории live-каталога (там живут сертификаты — тот же источник).
+## @io       ⇥ env: Mapping[str, str] | None (DI: LETSENCRYPT_LIVE override, None = os.environ)
+##           ⇥ logger: logging.Logger (LDD-траектория)
+##           ⎋ dict[str, dict[str, object]] — {"tls": {domain: {not_after, days_left, self_signed}}}
+## @complexity  O(D) где D = число live-доменов; 1 openssl subprocess на домен
+## @invariants
+##   - НЕТ live-каталога / не директория → {} (пустая секция), НЕ исключение
+##   - Per-domain fail-safe: любой сбой (missing pem, openssl exit≠0, parse fail,
+##     FileNotFoundError) → log IMP:7 + skip домена — не валит весь export
+##   - openssl — системный бинар (канон: 0 новых зависимостей; cryptography остаётся
+##     в cert_collector для SAN/issuer-вью; tls-секция — alert-oriented вью 017 C4)
+##   - not_after парсится datetime.strptime("%b %d %H:%M:%S %Y %Z") и нормализуется в UTC
+##   - self_signed = issuer == subject (сравнение DN-строк openssl-вывода)
+## @rationale  Owner-спецификация C4 требует openssl-вывод (а не cryptography.x509 —
+##             cert_collector): issuer==subject требует issuer; openssl даёт enddate+subject+
+##             issuer одним вызовом; cert_collector читает node.yaml-домены, tls-секция —
+##             live-директории (работает и без node.yaml).
+def _collect_tls_metrics(
+    env: Mapping[str, str] | None = None,
+    logger: logging.Logger | None = None,
+) -> dict[str, dict[str, object]]:
+    """Collect TLS bundle state (expiry/self-signed) from letsencrypt live dir.
+
+    # ▶ letsencrypt_live() → ◇ is_dir? ✗ → {} → ○ for domain in sorted(live dirs)
+    #    → fullchain.pem → openssl x509 -enddate -subject -issuer → ⊕ parse → ∑ result[domain]
+    #    → ⎋ {domain: {not_after, days_left, self_signed}}
+    """
+    if logger is None:
+        logger = logging.getLogger(__name__)
+    live_dir = _letsencrypt_live(env)
+    if not live_dir.is_dir():
+        logger.warning("[IMP:8][tls][collect] letsencrypt live dir not found: %s — tls section empty", live_dir)
+        return {}
+
+    result: dict[str, dict[str, object]] = {}
+    domain_dirs = sorted(p for p in live_dir.iterdir() if p.is_dir())
+    for domain_dir in domain_dirs:
+        domain = domain_dir.name
+        fullchain = domain_dir / "fullchain.pem"
+        if not fullchain.is_file():
+            logger.warning("[IMP:7][tls][collect] skip domain=%s: fullchain.pem missing in %s", domain, domain_dir)
+            continue
+        try:
+            entry = _read_tls_entry(fullchain)
+        except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
+            logger.warning("[IMP:7][tls][collect] skip domain=%s: %s", domain, exc)
+            continue
+        result[domain] = entry
+        logger.info(
+            "[IMP:9][tls][collect] domain=%s not_after=%s days_left=%d self_signed=%s",
+            domain,
+            entry["not_after"],
+            entry["days_left"],
+            entry["self_signed"],
+        )
+    logger.info("[IMP:8][tls][collect] %d/%d domain(s) parsed from %s", len(result), len(domain_dirs), live_dir)
+    return result
+
+
+# endregion FUNC_collect_tls_metrics
+
+
+# region FUNC_read_tls_entry
+## @purpose  Парсит один fullchain.pem через openssl x509 (enddate/subject/issuer) в запись tls-секции.
+## @io       ⇥ pem_path: Path → ⎋ dict[str, object] {not_after, days_left, self_signed}
+## @complexity  O(1) — один subprocess + strptime
+## @invariants
+##   - openssl-вызов: ["openssl", "x509", "-noout", "-enddate", "-subject", "-issuer", "-in", pem]
+##   - Не-нулевой exit / отсутствие полей → ConfigParseError; parse-fail даты → ValueError (ловятся в _collect_tls_metrics)
+##   - notAfter → UTC-наивный (GMT) → replace(tzinfo=UTC) → iso "%Y-%m-%dT%H:%M:%SZ"
+##   - days_left = (not_after - now).days (может быть отрицательным — expired)
+##   - self_signed: DN-строки issuer == subject (нормализация пробелов вокруг '=' не нужна —
+##     оба поля в одинаковом openssl-формате)
+def _read_tls_entry(pem_path: Path) -> dict[str, object]:
+    """Run openssl x509 on a PEM file and return expiry/self-signed fields."""
+    # 🧐 TRAP[DECISION] · 2026-08-27 · — · openssl-команда tls-секции расширена флагом -issuer
+    # · Rejected: буквальная команда ТЗ-спеки 017 C4 без -issuer (self_signed=issuer==subject
+    # ·   невычислим без issuer); cryptography.x509 (cert_collector-путь) — другое вью
+    # · Reason: self_signed-поле требует issuer; -issuer — тот же один вызов openssl, 0 новых deps
+    # · Rev: если owner подтвердит cryptography-путь для tls-секции → перейти на x509-парсинг
+    proc = subprocess.run(
+        ["openssl", "x509", "-noout", "-enddate", "-subject", "-issuer", "-in", str(pem_path)],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    if proc.returncode != 0:
+        msg = f"openssl exit {proc.returncode}: {proc.stderr.strip() or proc.stdout.strip()}"
+        raise ConfigParseError(msg)
+
+    fields: dict[str, str] = {}
+    for line in proc.stdout.splitlines():
+        key, _, value = line.partition("=")
+        if key.strip():
+            fields[key.strip()] = value.strip()
+    not_after_raw = fields.get("notAfter")
+    subject = fields.get("subject")
+    issuer = fields.get("issuer")
+    if not not_after_raw or subject is None or issuer is None:
+        msg = "openssl output missing notAfter/subject/issuer"
+        raise ConfigParseError(msg)
+
+    # "Aug  1 06:00:00 2027 GMT" (двойной пробел у openssl) → нормализация пробелов → strptime.
+    # Спека 017 C4: datetime.strptime("%b %d %H:%M:%S %Y %Z") с таймзоной UTC — %Z=GMT даёт
+    # naive-дату, ниже replace(tzinfo=UTC) (ruff: ignore[DTZ007] — осознанный двухшаговый парс).
+    normalized = " ".join(not_after_raw.split())
+    parsed = datetime.strptime(normalized, "%b %d %H:%M:%S %Y %Z")  # ruff: ignore[DTZ007]
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    not_after_utc = parsed.astimezone(timezone.utc)
+    return {
+        "not_after": not_after_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "days_left": (not_after_utc - datetime.now(timezone.utc)).days,
+        "self_signed": subject == issuer,
+    }
+
+
+# endregion FUNC_read_tls_entry
 
 
 # region FUNC_main
@@ -283,6 +418,16 @@ def main(env: Mapping[str, str] | None = None) -> int:
         logger.warning("[IMP:8][coordinator][main] Deploy status collection failed: %s", exc)
         errors.append(f"deploy: {exc}")
 
+    # ── 7c. TLS bundle (letsencrypt live dirs → expiry/self-signed, DevPlan 017 C4) ──
+    # fail-safe: пустая секция при отсутствии live-каталога; per-domain skip; НЕ валит export
+    tls_section: dict[str, dict[str, object]] = {}
+    try:
+        tls_section = _collect_tls_metrics(env, logger)
+        logger.info("[IMP:9][coordinator][main] TLS section collected: %d domain(s)", len(tls_section))
+    except Exception as exc:  # noqa: EXC — best-effort fail-safe C4: tls никогда не валит export; # ruff: ignore[BLE001]
+        logger.error("[IMP:10][coordinator][main] TLS collection failed: %s", exc)
+        tls_section = {}
+
     # ── 8. Build final data ──
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     data: dict[str, object] = {
@@ -295,6 +440,7 @@ def main(env: Mapping[str, str] | None = None) -> int:
         "host": host,
         "backup": backup,
         "deploy": deploy,
+        "tls": tls_section,
         "platform_services": [],  # placeholder — filled in W3 by app.py live checks
         "errors": errors,
     }

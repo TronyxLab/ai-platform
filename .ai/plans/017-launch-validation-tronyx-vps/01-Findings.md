@@ -183,3 +183,55 @@ serve. Владельцу рекомендовано закрыть чужую �
 audit.jsonl Permission denied (ci-deploy пишет в root-owned
 /var/log/platform/audit.jsonl) — записи dropped. Требует chown/tmpfiles.d
 фикса ноды (закрыть в Фазе E или отдельным фикс-таском).
+
+---
+
+## ФАЗА C — TLS И КЕШ СЕРТИФИКАТОВ (06:10–07:40)
+
+C1: ✅ wildcard DNS-01 при bootstrap (LE issuer YE1; tronyx.ru+sexydancerostov.ru
+    бандлы в /etc/letsencrypt/live, botanika через wildcard SNI). Все 3 → HTTPS 200.
+C3: ✅ make verify-domains — ALL DOMAINS PASS (3/3 HTTP 200).
+C4: ✅ platform_tls_days_left/self_signed in status-metrics + status-page
+    /metrics + prometheus rules TLSCertExpiryWarning/Critical/SelfSigned
+    ACTIVE (17 rules loaded, серии по 3 доменам 66/69/89 дней).
+
+### F-06 · 06:12 · Фаза C · P0
+- Симптом: C2 cache-check → cache miss ×3; первичный φ7 напечатал
+  «cert_orchestrator not importable — skipping», фаза = success ЛОЖНО.
+- Root 1 (транзиент): guarded import упал в первом процессе (не воспроизводится
+  позже из любых cwd) — маскирование скипами недопустимо.
+- Root 2 (детерминизм): boto3 отсутствовал в python ноды после φ1 (частичная
+  установка на холодном прогоне) → upload/check degraded.
+- Фикс: (а) fail-loud контракт provisioned|converged|skipped_import|error +
+  done_with_warnings → резюм доводит (Coder, 48 тестов); (б) boto3 восстановлен
+  каноническим python_deps ensure (node-op); TRAP[DEBT] не записан — риск повторной
+  частичной установки закрыт тем же ensure при update-фазах.
+- Ре-верификация: кеш наполнен каноническим CLI ×3, check=Valid pair ×3.
+- Статус: fixed
+
+### F-07 · 06:50 · Фаза C · P1 (drill-находка)
+- Симптом: node-update RC=2 «deploy_update requires registry_update» — φ11
+  done_with_warnings не удовлетворял dependency-gate (warn ≠ done).
+- Фикс (Coder): PHASE_STATUS_SATISFIES_DEPENDENCY={done,done_with_warnings};
+  strict re-run сохранён. Drill продолжен корректно.
+- Статус: fixed
+
+### F-08b · 07:20 · Фаза C · P1
+- Симптом: drill C2 (destroys live+acme dirs) → в ходе окна восстановления
+  wildcard ПЕРЕВЫПУЩЕН заново через LE (serial сменился), тогда как sexy
+  домен восстановлен ИЗ КЕША байт-в-байт (SERIAL_IDENTICAL — канал S3 restore
+  доказан). Атрибутировать reissuance НЕ удалось: ни одного чужого ssh/лога/
+  процесса нет (последняя SSH-модель — все мои IP). Подозрение остаётся на
+  параллельную активность вне журнала (см. NOTE-N3).
+- Митиг.: кеш пере-выровнен с текущими сертами (upload ×3, check Valid).
+- Статус: fixed (канал восстановлен+доказан), аномалия задокументирована.
+
+### NOTE-N5 · алерты прометеуса молча мертвы на холодной ноде
+/opt/platform/prometheus-rules создавался docker'ом как 0700 root bind-dir →
+prometheus(nobody) не читает glob → 0 rules тихо. Фикс: chmod в prometheus-
+config-init step (repo edit), применён на ноде (reload через restart init-шага).
+Evidence: до фиксa total_rules=0, после =17.
+
+### Drill-C2 итоговый вердикт
+Восстановление БЕЗ ACME доказано канонически на sexy (download CLI <1s,
+serial identical); полный flow теперь покрыт contractом fail-loud.

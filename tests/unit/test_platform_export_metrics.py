@@ -1,4 +1,4 @@
-# GREP_SUMMARY: test-platform-export-metrics docker cert project host collector json-writer cache coordinator
+# GREP_SUMMARY: test-platform-export-metrics docker cert project host collector json-writer cache coordinator tls letsencrypt openssl x509
 # STRUCTURE: ▶ test_docker_collector_containers → ◇ mock subprocess.run (docker inspect + stats) → assert fields
 #            ▶ test_docker_collector_batch → ◇ one subprocess call for inspect all → assert
 #            ▶ test_cert_collector_wildcard → ◇ mock cryptography.x509 + SAN *.domain → assert domains[]
@@ -10,6 +10,7 @@
 #            ▶ test_json_writer_schema_version → ◇ assert schema_version: 2 in output
 #            ▶ test_coordinator_partial_failure → ◇ certs fail, docker OK → assert errors[] + partial data
 #            ▶ test_coordinator_empty_state → ◇ no docker, no certs → assert empty arrays + no crash
+#            ▶ test_tls_section_* (017 C4) → ◇ letsencrypt live dir + openssl x509 → assert tls-секция
 #            ▶ test_cache_ttl_hit → ◇ cache fresh → assert no recompute
 #            ▶ test_cache_ttl_miss → ◇ cache expired → assert recompute
 #            ▶ test_cache_mtime_invalidation → ◇ source mtime newer → assert cache miss
@@ -24,6 +25,8 @@
 #   - Test Honesty Rules: R1 (no pass-tests), R2 (no unfalsifiable asserts)
 # @rationale  Testing business logic directly avoids docker dependency while validating core behavior.
 # @changes 2026-07-23 | CREATED | META Δ14 — new test suite for metrics package
+# @changes 2026-08-27 | DevPlan 017 C4 — +TestTlsCollector (tls-секция: self-signed parse, missing-dir,
+#           openssl absent, per-domain skip, coordinator end-to-end)
 # region MODULE_CONTRACT
 ## @purpose  Unit tests for platform metrics export package
 ## @scope    Unit tests — no Docker, no HTTP server, mocked subprocess run, cryptography, shutil
@@ -37,6 +40,8 @@
 import contextlib
 import json
 import logging
+import shutil
+import subprocess
 import time
 from pathlib import Path
 from unittest import mock
@@ -46,8 +51,17 @@ import pytest
 # W4e (DevPlan 160 E2): main()/_get_* принимают env=Mapping (DI) — импорт на module level,
 # reload/importlib не требуется (координатор читает env только через env-параметр).
 # intentional-seam: приватный API тестируется напрямую по дизайну (unit-seam, T8.1)
-from core.internal.healthcheck.platform_export_metrics import _get_node_name, _get_node_yaml_path, main
+from core.internal.healthcheck.platform_export_metrics import (
+    _collect_tls_metrics,
+    _get_node_name,
+    _get_node_yaml_path,
+    main,
+)
 from tests._conftest.ldd import _print_ldd_trajectory
+
+# Реальный subprocess.run на момент импорта модуля (ДО fixture-патчей) — для диспетчера
+# openssl/docker в test_coordinator_writes_tls_section (tls-парсинг — реальный бинар).
+_REAL_SUBPROCESS_RUN = subprocess.run
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +107,28 @@ def mock_cache_dir(tmp_path: Path) -> str:
     cache_dir = tmp_path / "cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
     return str(cache_dir)
+
+
+@pytest.fixture
+def tls_live_dir(tmp_path: Path) -> Path:
+    """tmp letsencrypt live dir с ЗАКОММИЧЕННЫМ dummy-сертом (017 C4, tests/test_data/).
+
+    ## @purpose — Live-каталог для tls-тестов: домен-поддиректория example.test/fullchain.pem
+    ##            из tests/test_data/tls_example_test.crt (self-signed CN=example.test,
+    ##            validity 365d, сгенерирован openssl одноразово; key не хранится).
+    ## @io — ⎋ Path (letsencrypt live dir) — источник env LETSENCRYPT_LIVE для _collect_tls_metrics
+    ## @complexity — O(1) — копирование файла
+    ## @invariants
+    ##   - Коммиченный PEM-файл — БЕЗ сети, БЕЗ runtime-генерации (детерминированный тест)
+    ##   - Файл переиспользуется всеми tls-тестами (не мутируется)
+    """
+    live = tmp_path / "letsencrypt" / "live"
+    domain_dir = live / "example.test"
+    domain_dir.mkdir(parents=True, exist_ok=True)
+    crt = Path(__file__).resolve().parent.parent / "test_data" / "tls_example_test.crt"
+    assert crt.is_file(), f"закоммиченный тест-серт не найден: {crt}"
+    shutil.copy(crt, domain_dir / "fullchain.pem")
+    return live
 
 
 @pytest.fixture
@@ -818,6 +854,153 @@ class TestCoordinator:
         # graceful-degrade без ошибок (errors[] пуст).
         errors = data.get("errors", [])
         assert len(errors) == 0, f"Unexpected errors: {errors}"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# TESTS: tls-секция (017 C4 — owner: «мониторинг видит TLS-бандл»)
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestTlsCollector:
+    """017 C4: tls-секция — letsencrypt live dirs → openssl x509 → days_left/self_signed.
+
+    ## @purpose — Покрытие _collect_tls_metrics (fail-safe: пустая секция без live-каталога,
+    ##            per-domain skip, openssl-отсутствие) + end-to-end main() → status-metrics.json.
+    ## @invariants
+    ##   - Фикстура tls_live_dir: ЗАКОММИЧЕННЫЙ tests/test_data/tls_example_test.crt
+    ##     (self-signed CN=example.test, 365d) — без сети, без runtime-генерации
+    ##   - openssl — реальный системный бинар (не мокается в успешном сценарии)
+    ##   - Тест-честность: R1 (asserts есть), R2 (days_left > 360 — falsifiable при 365d-серте)
+    """
+
+    # 🧪 TRAP[TEST] · C4 · Regression: tls-секция парсит self-signed серт из live-каталога
+    # · Scenario: example.test/fullchain.pem (закоммиченный dummy-серт) → openssl x509 →
+    # ·   not_after ISO UTC, days_left > 360 (365d-валидность), self_signed True (issuer==subject)
+    # · Last fail: never (new feature, 017 C4)
+    # · Remove if: tls-секция удалена из platform_export_metrics
+    def test_tls_section_parses_self_signed_cert(self, tls_live_dir, caplog):
+        """_collect_tls_metrics возвращает {domain: {not_after, days_left, self_signed}}."""
+        caplog.set_level(0)
+
+        section = _collect_tls_metrics(env={"LETSENCRYPT_LIVE": str(tls_live_dir)})
+
+        _print_ldd_trajectory(caplog)
+
+        assert "example.test" in section, f"tls-секция должна содержать example.test: {section}"
+        entry = section["example.test"]
+        assert entry["self_signed"] is True, f"dummy-серт self-signed: {entry}"
+        assert isinstance(entry["days_left"], int), f"days_left должен быть int: {entry}"
+        assert entry["days_left"] > 360, f"365d-серт должен иметь >360 дней до истечения, got {entry['days_left']}"
+        assert "T" in entry["not_after"], f"not_after должен быть ISO 8601: {entry['not_after']}"
+        assert entry["not_after"].endswith("Z"), f"not_after должен быть UTC (Z-суффикс): {entry['not_after']}"
+        assert any("[IMP:9][tls][collect]" in r.message for r in caplog.records), "ожидался IMP:9 лог успешного домена"
+
+    # 🧪 TRAP[TEST] · C4 · Regression: отсутствующий live-каталог → пустая секция, не исключение
+    # · Scenario: LETSENCRYPT_LIVE указывает на несуществующий путь → {} + IMP:8 warning
+    # · Last fail: never (new feature)
+    # · Remove if: fail-safe контракт tls-секции изменён
+    def test_tls_section_missing_dir_empty(self, tmp_path, caplog):
+        """Нет live-каталога → {} (пустая секция), НЕ исключение (fail-safe C4)."""
+        caplog.set_level(0)
+
+        section = _collect_tls_metrics(env={"LETSENCRYPT_LIVE": str(tmp_path / "no-such-live")})
+
+        _print_ldd_trajectory(caplog)
+
+        assert section == {}, f"пустая секция ожидалась: {section}"
+        assert any("[IMP:8][tls][collect]" in r.message for r in caplog.records), (
+            "ожидался IMP:8 warning о пустой секции"
+        )
+
+    # 🧪 TRAP[TEST] · C4 · Regression: openssl отсутствует → per-domain skip, не валит export
+    # · Scenario: subprocess.run поднимает FileNotFoundError (openssl не установлен) →
+    # ·   домен пропускается с IMP:7, секция пуста, исключение НЕ пробрасывается
+    # · Last fail: never (new feature)
+    # · Remove if: fail-safe контракт tls-секции изменён
+    def test_tls_section_openssl_missing(self, tls_live_dir, caplog, monkeypatch):
+        """openssl-бинар недоступен → {} + IMP:7, без проброса исключения."""
+        caplog.set_level(0)
+
+        def _raise_missing(*args, **kwargs):
+            msg = "openssl binary not found"
+            raise FileNotFoundError(msg)
+
+        monkeypatch.setattr("core.internal.healthcheck.platform_export_metrics.subprocess.run", _raise_missing)
+
+        section = _collect_tls_metrics(env={"LETSENCRYPT_LIVE": str(tls_live_dir)})
+
+        _print_ldd_trajectory(caplog)
+
+        assert section == {}, f"при отсутствии openssl секция должна быть пуста: {section}"
+        assert any("[IMP:7][tls][collect]" in r.message for r in caplog.records), "ожидался IMP:7 skip-лог"
+
+    # 🧪 TRAP[TEST] · C4 · Regression: домен без fullchain.pem пропускается per-domain
+    # · Scenario: live-каталог содержит ok.example.test (серт) и bad.example.test (без pem) →
+    # ·   bad пропускается с IMP:7, ok парсится — секция не валится целиком
+    # · Last fail: never (new feature)
+    # · Remove if: per-domain fail-safe изменён
+    def test_tls_section_skips_domain_without_fullchain(self, tmp_path, caplog):
+        """Домен без fullchain.pem → skip с IMP:7, остальные домены парсятся."""
+        caplog.set_level(0)
+
+        live = tmp_path / "live"
+        (live / "ok.example.test").mkdir(parents=True)
+        (live / "bad.example.test").mkdir()
+        crt = Path(__file__).resolve().parent.parent / "test_data" / "tls_example_test.crt"
+        shutil.copy(crt, live / "ok.example.test" / "fullchain.pem")
+
+        section = _collect_tls_metrics(env={"LETSENCRYPT_LIVE": str(live)})
+
+        _print_ldd_trajectory(caplog)
+
+        assert "ok.example.test" in section, f"ok-домен должен быть распарсен: {section}"
+        assert "bad.example.test" not in section, "домен без pem должен быть пропущен"
+        assert any("[IMP:7][tls][collect] skip domain=bad.example.test" in r.message for r in caplog.records), (
+            "ожидался IMP:7 skip-лог для bad.example.test"
+        )
+
+    # 🧪 TRAP[TEST] · C4 · Regression: main() пишет tls-секцию в status-metrics.json (e2e)
+    # · Scenario: координатор с LETSENCRYPT_LIVE=fixture + docker-mock (openssl — реальный) →
+    # ·   status-metrics.json содержит tls.example.test.days_left > 360 / self_signed True
+    # · Last fail: never (new feature)
+    # · Remove if: tls-секция удалена из output main()
+    def test_coordinator_writes_tls_section(
+        self, mock_node_yaml_no_projects, tmp_path, caplog, mock_docker_subprocess, tls_live_dir
+    ):
+        """main() пишет tls-секцию в status-metrics.json (owner-критерий C4 end-to-end)."""
+        caplog.set_level(0)
+
+        metrics_file = tmp_path / "status-metrics-tls.json"
+        env = {
+            "STATUS_METRICS_JSON": str(metrics_file),
+            "NODE_YAML_PATH": mock_node_yaml_no_projects,
+            "NODE_NAME": "test-node",
+            "METRICS_CACHE_DIR": str(tmp_path / "cache"),
+            "LETSENCRYPT_LIVE": str(tls_live_dir),
+        }
+
+        # docker-команды мокаются (пустой вывод); openssl-команда — реальный бинар
+        # (mock_docker_subprocess патчит глобальный subprocess.run — диспетчеризуем по argv[0];
+        # реальная функция захвачена на module-import, ДО активации fixture-патча)
+        def _dispatch(cmd, *args, **kwargs):
+            if cmd and cmd[0] == "openssl":
+                return _REAL_SUBPROCESS_RUN(cmd, *args, **kwargs)
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        mock_docker_subprocess.side_effect = _dispatch
+
+        exit_code = main(env=env)
+
+        _print_ldd_trajectory(caplog)
+
+        assert exit_code == 0, f"координатор должен завершиться 0, got {exit_code}"
+        data = json.loads(metrics_file.read_text())
+        assert "tls" in data, "status-metrics.json должен содержать tls-секцию"
+        assert "example.test" in data["tls"], f"tls-секция должна содержать example.test: {data['tls']}"
+        assert data["tls"]["example.test"]["self_signed"] is True
+        assert data["tls"]["example.test"]["days_left"] > 360, (
+            f"days_left > 360 ожидался, got {data['tls']['example.test']['days_left']}"
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════

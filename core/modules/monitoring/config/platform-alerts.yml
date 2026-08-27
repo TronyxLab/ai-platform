@@ -1,10 +1,12 @@
-# GREP_SUMMARY: platform-alerts recording-rules deploy-slo burn-rate image-size-budget backup-freshness prometheus native multi-node RemoteNodeDown LokiCollectorStale infra-up PgbouncerFacadeDown RedisCacheDown LangfuseQueue MinioScrapeDown AlloyCollectorDown
-# STRUCTURE: ▶ groups → recording (deploy_success/duration rates) → deploy burn-rate alert → image-size budget alert → backup-freshness alert → multinode (RemoteNodeDown / LokiCollectorStale) → infra-up (REF-0010: pgbouncer/redis/langfuse-queue/minio/alloy)
+# GREP_SUMMARY: platform-alerts recording-rules deploy-slo burn-rate image-size-budget backup-freshness prometheus native multi-node RemoteNodeDown LokiCollectorStale infra-up PgbouncerFacadeDown RedisCacheDown LangfuseQueue MinioScrapeDown AlloyCollectorDown tls TLSCertExpiryWarning TLSCertExpiryCritical TLSCertSelfSigned
+# STRUCTURE: ▶ groups → recording (deploy_success/duration rates) → deploy burn-rate alert → image-size budget alert → backup-freshness alert → tls (TLSCertExpiryWarning/Critical + TLSCertSelfSigned) → multinode (RemoteNodeDown / LokiCollectorStale) → infra-up (REF-0010: pgbouncer/redis/langfuse-queue/minio/alloy)
 # region MODULE_CONTRACT
 ## @purpose  Платформенные native Prometheus rules (170 W12 C5, SLO-минимум): recording rules
 ##           deploy-success/duration + burn-rate alert + image-size budget alert + backup-freshness.
 ##           DevPlan 010 T3.4: multi-node группа — RemoteNodeDown (up{job="node-exporter"}==0,
 ##           for:5m) + LokiCollectorStale (Prometheus-based freshness коллектора).
+##           DevPlan 017 C4: TLS-группа — TLSCertExpiryWarning/Critical (platform_tls_days_left)
+##           + TLSCertSelfSigned (platform_tls_self_signed == 1).
 ## @scope    Копируется config-init'ом в ${PROMETHEUS_RULES_DIR} (host /opt/platform/prometheus-rules) —
 ##           prometheus rule_files glob "/opt/prometheus/rules/*-alerts.yml" подхватывает файл.
 ##           Метрики — status-page /metrics (scrape job status-page, observability-net) +
@@ -12,7 +14,9 @@
 ## @invariants
 ##   - Имена метрик = канон app.py _handle_metrics (platform_deploy_success,
 ##     platform_deploy_duration_seconds, platform_image_size_bytes,
-##     platform_backup_last_postgres_age_seconds)
+##     platform_backup_last_postgres_age_seconds, platform_tls_days_left,
+##     platform_tls_self_signed)
+##   - TLS-алерты: <21d warning, <7d critical, self_signed==1 critical (017 C4)
 ##   - Image-size budget: 5 GiB на образ (порог обсуждён 170 W12 C6; alert warning-уровня)
 ##   - Burn-rate: 5-минутное окно на 24h-период (multi-window не вводится — минимальный набор)
 ##   - T3.4: RemoteNodeDown использует job "node-exporter" (фактическое имя job'а из T3.3 —
@@ -25,12 +29,16 @@
 ##            T3.4: S2 §8 — риск availability при VPN-морганиях → RemoteNodeDown алерт
 ##            (restart policy); LokiCollectorStale — метрики-источника для log-based сегодня
 ##            нет, freshness коллектора наблюдаем через scrape Loki (distributor-счётчики).
+##            017 C4 (owner): мониторинг видит TLS-бандл — expiry-алерты (acme-недостижимость,
+##            протухший renewal) и self-signed-алерт (кривой/дев-серт на проде).
 ## @changes  2026-08-15 | DevPlan 170 W12 C5/C6 — Created
 ## @changes  2026-08-22 | DevPlan 010 T3.4 — +RemoteNodeDown/LokiCollectorStale (multi-node)
 ## @changes  2026-08-24 | REF-0010 — +группа platform-infra-up: PgBouncerFacadeDown /
 ##           RedisCacheDown / LangfuseQueue{RedisDown,Eviction,MemoryPressure} /
 ##           MinioScrapeDown / AlloyCollectorDown (экспортёр жив ≠ демон жив;
 ##           noeviction-дрейф детектится через evicted_keys)
+## @changes  2026-08-27 | DevPlan 017 C4 — +группа platform-tls-alerts: TLSCertExpiryWarning
+##           (<21d) / TLSCertExpiryCritical (<7d) / TLSCertSelfSigned (==1)
 # endregion MODULE_CONTRACT
 
 groups:
@@ -101,6 +109,63 @@ groups:
           description: >
             Last successful PostgreSQL backup is older than 25h or never recorded.
             Check backup-cron module logs.
+
+  # ── TLS bundle (DevPlan 017 C4, owner: «мониторинг видит TLS-бандл») ──────
+  # Источник — status-page /metrics (job status-page): platform_tls_days_left /
+  # platform_tls_self_signed, домены из /etc/letsencrypt/live (tls-секция
+  # status-metrics.json, platform_export_metrics.py). for-окна анти-флаппинг
+  # (scrape 30s; повторный scrape после reissue сбрасывает дни_left).
+  # NaN-значения (секция пуста / openssl-сбой) НЕ матчатся PromQL-сравнениями —
+  # алерты молчат при неизвестном состоянии (fail-safe контракт 017 C4).
+  # 🧐 TRAP[DECISION] · 2026-08-27 · — · runbook_url в tls-алертах не добавлен (соседи его не имеют)
+  # · Rejected: runbook_url из ТЗ-спеки 017 C4 (мёртвая ссылка — runbook-URL в репо нет)
+  # · Reason: docs-in-code (инвариант 12); description-аннотации = runbook; соседние правила без него
+  # · Rev: первый реальный runbook-URL (напр. ops-runbook) → добавить runbook_url во все правила файла
+  - name: "platform-tls-alerts"
+    interval: 5m
+    rules:
+      # ── TLSCertExpiryWarning (<21 дней — renewal-окно acme.sh) ──────────────
+      - alert: "TLSCertExpiryWarning"
+        expr: "platform_tls_days_left < 21"
+        for: "15m"
+        labels:
+          severity: "warning"
+          service: "platform-tls"
+        annotations:
+          summary: "TLS certificate expires soon: {{ $labels.domain }} ({{ $value }} days left)"
+          description: >
+            Certificate for {{ $labels.domain }} expires in less than 21 days —
+            acme.sh should have renewed it already. Check the renewal cron
+            (certs-providers DNS-01) and /etc/letsencrypt/live/{{ $labels.domain }}.
+
+      # ── TLSCertExpiryCritical (<7 дней — риск истечения до следующего renewal) ─
+      - alert: "TLSCertExpiryCritical"
+        expr: "platform_tls_days_left < 7"
+        for: "10m"
+        labels:
+          severity: "critical"
+          service: "platform-tls"
+        annotations:
+          summary: "TLS certificate expiring: {{ $labels.domain }} ({{ $value }} days left)"
+          description: >
+            Certificate for {{ $labels.domain }} expires in less than 7 days.
+            Immediate action required: manually reissue via acme.sh DNS-01 or fix
+            the renewal provider credentials before the node serves an expired cert.
+
+      # ── TLSCertSelfSigned (issuer == subject — не Let's Encrypt) ────────────
+      # self_signed==1 на проде = dev/кривой серт на публичном домене → критично.
+      - alert: "TLSCertSelfSigned"
+        expr: "platform_tls_self_signed == 1"
+        for: "10m"
+        labels:
+          severity: "critical"
+          service: "platform-tls"
+        annotations:
+          summary: "Self-signed TLS certificate in use: {{ $labels.domain }}"
+          description: >
+            Certificate for {{ $labels.domain }} is self-signed (issuer == subject).
+            Browsers will reject it — replace with a Let's Encrypt certificate via
+            the acme.sh DNS-01 flow (certs-providers.yaml).
 
   # ── Multi-node observability (DevPlan 010 T3.4) ───────────────────────────
   - name: "platform-multinode-alerts"
