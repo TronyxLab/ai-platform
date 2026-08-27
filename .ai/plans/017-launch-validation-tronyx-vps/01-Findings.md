@@ -353,3 +353,42 @@ NOTE: SEC-0018 остаётся верным — pre_restore_* в отдельн
 ### NOTE-N8 · load-test env
 make load-test требует locust в PATH: dev-конвенция PATH=$PWD/.venv/bin:$PATH
 (venv extra [load] установлен). Rev: рантайм-подсказка в таргете.
+
+### F-20 · 12:55 · Фаза G · P1
+- Симптом: crash-chaos кейсы «injection did NOT land» на самохилящейся ноде
+  (restart быстрее первого опроса predика state==exited).
+- Фикс: evidence расширен приростом .RestartCount (свойство убитого PID);
+  crash_litellm/crash_redis/crash_postgres(data-integrity 1900 rows preserved)
+  PASSED после фикса.
+- Статус: fixed
+
+### F-21 · 13:15 · Фаза G · OPEN (3 кейса, отдельные волны)
+- disk_pressure: ожидал PromQL ratio<0.2 за 150s — упирается в интервал оценки
+  алертов/scrape+F-36 дизайн; требует сверку rule-выражения и заполнителя диска.
+- oom_clickhouse: kernel-OOM не наступил за 90s — проверить memory limit модуля
+  clickhouse в root-compose vs ожидание теста.
+- watchdog_heals: docker 29 УДАЛИЛ --health-* из `docker update` (проверено на
+  ноде); тесту нужен иной канал инъекции нездоровья (engine API или внедрение
+  failing-probe через существующий CMD-SHELL).
+  Каждый кейс изолирован; инфраструктура drill'а доказана зелёными sibling'ами.
+- Статус: blocked (требуют по одной целевой подзадаче; вне бюджета этой сессии)
+
+---
+
+## ФАЗА H — RELEASE CHECKLIST И ВЕРДИКТ
+
+| Пункт | Статус |
+|-------|--------|
+| 1. E2E test-VPS | BLOCKED (§0.6 недоступна) |
+| 2. Chaos FULL (fast часть) | PARTIAL: 5/9 GREEN (F-20), 3 OPEN (F-21), fast-набор |
+| 3. CI-гейты локально | ✅ make check 20/20 финальный; agent-check PASS; check-manifests PASS; коммиты через pre-commit hooks |
+| 4. Деплой/промоут | ⏸ НЕ выполнен намеренно: гейт требует полностью зелёных B–G |
+| 5. Мониторинг пост-деплой | n/a (без деплоя); TLS-метрики+алерты подтверждены в C |
+
+## ИТОГОВЫЙ ВЕРДИКТ СЕССИИ
+КРИТЕРИЙ ВЛАДЕЛЬЦА ДОСТИГНУТ И ДОКАЗАН: одна команда make bootstrap-node
+NODE=tronyx-vps от голой ноды подняла сервер И задеплоила ВСЕ проекты контекста
+(delivered=3, healthy), идемпотентность подтверждена (skip-health ×N,
+no-op повторов ×2), каналы доставки/DR/TLS/reboot-самолечение верифицированы.
+Открытые хвосты (F-21×3 chaos-кейса, D5 CI-billing, G5 test-VPS) оформлены
+с точными хэндоффами выше. Промоут сознательно отложен до их закрытия.
