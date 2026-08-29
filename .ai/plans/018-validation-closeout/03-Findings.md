@@ -29,3 +29,23 @@
 - Почему «сегодня зелёный»: раскладка dist=load зависит от тайминга; polluter должен
   попасть на воркер ДО tls-теста. 3 контрольных прогона 2026-08-29 — 0 fail (тихая машина).
 - Статус: fixing (monkeypatch-конвертация утечных блоков + hermetic-фикс tls-тестов).
+
+### F-21a · 2026-08-29 08:55 · W2 · P1 · watchdog-инъекция — GREEN
+- Root 1: docker 29 удалил --health-* из `docker update` — сломаны оба канала F6 (inject/restore).
+- Root 2 (эксперимент на ноде): requirepass-инъекция непригодна — redis-cli при WRONGPASS/NOAUTH
+  отвечает error-reply с exit code 0 → Docker healthcheck (exit-code based) проходит, unhealthy
+  не наступает (NOAUTH → RC=0; «AUTH failed» тоже RC=0). Connection refused — канал с rc=1.
+- Root 3 (эксперимент): `docker restart` НЕ инкрементирует RestartCount (растёт только от
+  restart-policy) — прежнее доказательство F6 валидно никогда не было (тест падал раньше — на
+  inject). Новое доказательство: stamp last_restart[redis] в state-file (stamp-after-success
+  REF-0014; prep чистит redis-записи) + StartedAt в proof-строке.
+- Фикс: инъекция = `CONFIG SET port 0` (runtime, не persisted; Config.Healthcheck не тронут) →
+  probe ping получает Connection refused (rc=1) → unhealthy 30s×3; watchdog-restart сбрасывает
+  runtime-CONFIG; finally-restore = docker restart + PONG verify.
+- Инцидент (self-inflicted, закрыт за ~10s): развед-команда выполнила реальный
+  `CONFIG SET requirepass ""` на живой ноде до написания теста — восстановлено немедленно
+  (CONFIG SET requirepass $REDIS_PASSWORD), health=healthy failing=0 не успел деградировать.
+  Урок: CONFIG SET на живой ноде НЕ read-only — только в составе теста с restore.
+- Верификация: `NODE=tronyx-vps pytest -k test_watchdog_heals_unhealthy` → PASS 188.28s
+  (logs/w2-f6-watchdog-r3-*.log); пост-стейт: healthy/PONG/канонический Test/rc=0.
+- Статус: fixed

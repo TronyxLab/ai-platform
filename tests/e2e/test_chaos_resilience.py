@@ -526,11 +526,24 @@ def _watchdog_invoke_cmd() -> str:
 @pytest.mark.chaos
 @pytest.mark.requires_node
 def test_watchdog_heals_unhealthy(requires_node: str, node_ssh: NodeSSHClient, caplog) -> None:
-    """F6: сломать healthcheck redis (CMD-SHELL false + interval 5s) → unhealthy → ручной запуск
-    watchdog.py (пороги WATCHDOG_UNHEALTHY_MIN=1/COOLDOWN=0) → RestartCount+1 + запись в
-    state-file → вернуть канонический healthcheck → healthy ≤60s.
+    """F6: сломать ЗАВИСИМОСТЬ healthcheck redis (CONFIG SET port 0 — runtime-CONFIG, не
+    persisted) → probe `REDISCLI_AUTH=$REDIS_PASSWORD redis-cli -h 127.0.0.1 ping` получает
+    Connection refused (rc=1) → unhealthy при живом контейнере → ручной запуск watchdog.py
+    (пороги WATCHDOG_UNHEALTHY_MIN=1/COOLDOWN=0) → docker restart сбрасывает runtime-CONFIG
+    (порт 6379 возвращён) → RestartCount+1 + запись в state-file → healthy ≤60s
+    (Config.Healthcheck НЕ тронут).
 
-    # 🧪 TRAP[TEST] · Scenario: watchdog лечит unhealthy-but-alive (выше restart policy) · Last fail: VR 142 §6 (T12 через реальный cron ≥15 мин — удалён церемониал)
+    # 🧪 TRAP[TEST] · Scenario: watchdog лечит unhealthy-but-alive (выше restart policy) · Last fail: 2026-08-27 (F-21a, 018 W2) — docker 29 УДАЛИЛ --health-* из `docker update` (проверено на ноде): сломаны ОБА канала (inject L592 + _restore_healthcheck L574)
+    # · Root 1: docker 29 removal — engine больше не принимает --health-cmd/--health-interval
+    # ·   в `docker update`; тест-канал инъекции нездоровья переведён на предмет healthcheck'а:
+    # ·   redis-проба = REDISCLI_AUTH=$REDIS_PASSWORD ping → ломаем ЗАВИСИМОСТЬ probe'а
+    # ·   (TCP-listener: CONFIG SET port 0), не сам probe.
+    # · Root 2 (эксперимент 2026-08-29): requirepass-инъекция НЕПРИГОДНА — redis-cli при
+    # ·   WRONGPASS/NOAUTH отвечает error-reply с exit code 0 → Docker healthcheck (exit-code
+    # ·   based) проходит, unhealthy не наступает (проверено: NOAUTH → RC=0). Connection
+    # ·   refused — единственный канал с rc=1.
+    # · Restore: docker restart сбрасывает runtime-CONFIG (порт 6379); finally — restart как
+    # ·   канонический restore (RestartCount-доказательство захвачено до finally).
     # · Regression: watchdog (DevPlan 132 W1) рестартует контейнеры, пережившие restart policy
     # ·   в unhealthy; stamp-after-success (REF-0014); state персистентен (142 W2).
     # ·   Ручной вызов = та же run_watchdog()-ветка, что cron (расписание закрыто CI-gate
@@ -542,18 +555,27 @@ def test_watchdog_heals_unhealthy(requires_node: str, node_ssh: NodeSSHClient, c
     container = "redis"
     urls = _site_urls(requires_node)
     t0 = time.monotonic()
+    t0_epoch = time.time()  # для сравнения со stamp last_restart (epoch, не monotonic)
 
-    # ── prep: жив + healthcheck есть; сохранить канонический Healthcheck; сбросить бухгалтерию ──
+    # ── prep: жив + probe работает (PONG) + healthcheck есть (GUARD: зависимость — ping
+    #    по TCP); сбросить бухгалтерию watchdog ──
     pre = ssh.ssh_read(
         f"docker inspect --format '{{{{.State.Status}}}}/{{{{.State.Health.Status}}}}/{{{{.RestartCount}}}}' {container}",
         timeout=30,
     )
     pre_parts = pre.stdout.strip().split("/")
     assert pre_parts[0] == "running", f"F6 FAIL: {container} not running: {pre.stdout}"
+    assert pre_parts[1] == "healthy", f"F6 FAIL: {container} not healthy pre-injection: {pre.stdout}"
     hc_json = ssh.ssh_read(
         f"docker inspect --format '{{{{json .Config.Healthcheck}}}}' {container}", timeout=30
     ).stdout.strip()
     assert '"Test"' in hc_json, f"F6 FAIL: no healthcheck on {container}: {hc_json!r}"
+    assert "ping" in hc_json, (
+        f"F6 FAIL: GUARD — инъекция рассчитана на ping-пробу (ломаем TCP-зависимость), "
+        f"фактический Test: {hc_json!r} — подбери инъекцию под фактический probe"
+    )
+    probe_ok = ssh.ssh_exec(f"docker exec {container} sh -c 'REDISCLI_AUTH=$REDIS_PASSWORD redis-cli ping'", timeout=30)
+    assert "PONG" in probe_ok.stdout, f"F6 FAIL: probe baseline not PONG: {probe_ok.stdout} {probe_ok.stderr}"
     clean = ssh.ssh_exec(
         "python3 - <<'PYEOF'\n"
         "import json, os\n"
@@ -567,30 +589,32 @@ def test_watchdog_heals_unhealthy(requires_node: str, node_ssh: NodeSSHClient, c
         timeout=30,
     )
     assert "STATE_CLEANED" in clean.stdout, f"F6 prep FAIL: watchdog state clean: {clean.stderr}"
-    logger.info("[IMP:9][F6][prep] canonical healthcheck saved, watchdog state cleaned for redis")
+    logger.info("[IMP:9][F6][prep] probe baseline PONG, guard ok (ping-probe), watchdog state cleaned")
 
     restored = False
 
-    def _restore_healthcheck() -> None:
+    def _restore_runtime_listener() -> None:
+        """Restore: docker restart сбрасывает runtime-CONFIG (port 6379) — тот же механизм,
+        что watchdog-restart. Idempotent, безопасен и после основного restart.
+        RestartCount-доказательство захвачено в try-блоке ДО finally — не инвалидируется."""
         nonlocal restored
         if restored:
             return
-        hc = json.loads(hc_json)
-        flags = [f"--health-cmd '{json.dumps(hc['Test'])}'"]
-        if hc.get("Interval"):
-            flags.append(f"--health-interval {int(hc['Interval']) // 1_000_000_000}s")
-        if hc.get("Timeout"):
-            flags.append(f"--health-timeout {int(hc['Timeout']) // 1_000_000_000}s")
-        if hc.get("Retries"):
-            flags.append(f"--health-retries {hc['Retries']}")
-        res = ssh.ssh_exec(f"docker update {' '.join(flags)} {container}", timeout=60)
         restored = True
-        logger.info("[IMP:8][F6][restore] canonical healthcheck back (rc=%d)", res.exit_code)
+        ssh.ssh_exec(f"docker restart {container}", timeout=120)
+        verify = ssh.ssh_exec(
+            f"docker exec {container} sh -c 'REDISCLI_AUTH=$REDIS_PASSWORD redis-cli ping'", timeout=30
+        )
+        logger.info("[IMP:9][F6][restore] listener restored, probe PONG=%s", "PONG" in verify.stdout)
 
     try:
-        # ── inject: сломанный health-cmd + частый interval → быстрый unhealthy ──
+        # ── inject: CONFIG SET port 0 (runtime, не persisted; НЕ трогает Config.Healthcheck)
+        #    → probe Connection refused (rc=1) → unhealthy за interval 30s × retries 3.
+        #    (requirepass-инъекция непригодна: redis-cli error-reply → exit 0 — Root 2.) ──
         inject = ssh.ssh_exec(
-            f"docker update --health-cmd 'CMD-SHELL false' --health-interval 5s {container} && echo INJECT_OK",
+            f"docker exec {container} sh -c "
+            f"'REDISCLI_AUTH=$REDIS_PASSWORD redis-cli --no-auth-warning CONFIG SET port 0' "
+            f"&& echo INJECT_OK",
             timeout=60,
         )
         assert "INJECT_OK" in inject.stdout, f"F6 inject FAIL: {inject.stderr}"
@@ -605,8 +629,8 @@ def test_watchdog_heals_unhealthy(requires_node: str, node_ssh: NodeSSHClient, c
                 == "unhealthy"
                 else None
             ),
-            timeout_s=120,
-            description="redis health == unhealthy (broken health-cmd)",
+            timeout_s=240,
+            description="redis health == unhealthy (TCP-listener dependency broken)",
             interval_s=5.0,
         )
         codes_during = probe_sites_local(ssh, urls)
@@ -615,20 +639,32 @@ def test_watchdog_heals_unhealthy(requires_node: str, node_ssh: NodeSSHClient, c
         # ── recovery trigger: ручные проходы watchdog — та же команда, что в cron.d
         #    (flock+timeout+путь; python3-префикс вместо shebang-exec — устойчив к exec-bit).
         #    pass1 записывает unhealthy_since; при unhealthy ≥1 мин следующий проход рестартует.
-        #    Детекция — RestartCount (неопровержимое доказательство docker restart). ──
+        #    Детекция — stamp last_restart[redis] в state-file (stamp-after-success REF-0014,
+        #    ставится ТОЛЬКО после успешного docker restart; prep очистил redis-записи, поэтому
+        #    stamp в окне = рестарт ЭТОГО теста/реального cron — тот же watchdog-механизм).
+        #    ⚠️ RestartCount НЕ ГОДИТСЯ: `docker restart` не инкрементирует его (растёт только
+        #    от restart-policy; проверено на ноде 2026-08-29 — rc=0 при состоявшемся рестарте). ──
         def _watchdog_restarted() -> str | None:
-            rc_raw = ssh.ssh_read(
-                f"docker inspect --format '{{{{.RestartCount}}}}' {container}", timeout=20
+            stamp_raw = ssh.ssh_read(
+                f"python3 -c \"import json; s=json.load(open('{_WATCHDOG_STATE_FILE}')); "
+                f"print(float(s.get('last_restart',{{}}).get('redis', 0)))\"",
+                timeout=20,
             ).stdout.strip()
-            if int(rc_raw or "0") > int(pre_parts[2] or "0"):
-                return f"RestartCount {pre_parts[2]}→{rc_raw}"
+            try:
+                stamp = float(stamp_raw or "0")
+            except ValueError:
+                stamp = 0.0
+            if stamp > t0_epoch - 5:
+                started_raw = ssh.ssh_read(
+                    f"docker inspect --format '{{{{.State.StartedAt}}}}' {container}", timeout=20
+                ).stdout.strip()
+                return f"last_restart stamp={stamp:.0f} (window t0={t0_epoch:.0f}), StartedAt={started_raw}"
             ssh.ssh_exec(_watchdog_invoke_cmd(), timeout=60)
             return None
 
         restarted_proof = assert_injection_landed(
-            _watchdog_restarted, timeout_s=300, description="watchdog restarts redis", interval_s=15.0
+            _watchdog_restarted, timeout_s=300, description="watchdog restarts redis (state stamp)", interval_s=15.0
         )
-        _restore_healthcheck()
         ttr_to_restart = int(time.monotonic() - t0)
         logger.info(
             "[IMP:9][F6][recovery] watchdog restarted (%s), ttr_to_restart=%ss", restarted_proof, ttr_to_restart
@@ -660,7 +696,7 @@ def test_watchdog_heals_unhealthy(requires_node: str, node_ssh: NodeSSHClient, c
         try:
             assert restarted_proof, "F6 FAIL: watchdog did not restart redis within 300s"
             assert state_has_redis, "F6 FAIL: watchdog state-file missing redis entry"
-            assert healthy, "F6 FAIL: redis not healthy ≤60s after canonical healthcheck restore"
+            assert healthy, "F6 FAIL: redis not healthy ≤60s after watchdog restart (runtime CONFIG reset)"
             assert sites_ok(codes_during) and sites_ok(codes_after), (
                 f"F6 FAIL: sites during={codes_during} after={codes_after}"
             )
@@ -680,7 +716,7 @@ def test_watchdog_heals_unhealthy(requires_node: str, node_ssh: NodeSSHClient, c
             )
             raise
     finally:
-        _restore_healthcheck()
+        _restore_runtime_listener()
     assert_ldd_imp9_e2e(caplog)
 
 
