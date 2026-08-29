@@ -1,5 +1,5 @@
 # GREP_SUMMARY: practices-constants, EXCLUDED_DIRS, CODE_EXTENSIONS, canon, shared-constants, excluded-dirs, code-extensions
-# STRUCTURE: ┌единый канон констант практик┐ → ⊕ EXCLUDED_DIRS (12 каталогов-кэшей/артефактов) → ⊕ CODE_EXTENSIONS (6 код-суффиксов) → ⎋ импортируются maturity + check_project-пакет
+# STRUCTURE: ┌единый канон констант практик┐ → ⊕ EXCLUDED_DIRS (15 каталогов-кэшей/артефактов) → ⊕ CODE_EXTENSIONS (6 код-суффиксов) → ⎋ импортируются maturity + check_project-пакет
 # region MODULE_CONTRACT
 ## @purpose  Единый канон общих констант практик (DevPlan 170 W10-A): каталоги-исключения
 ##           (node_modules/.venv/dist/build/coverage/.next/__pycache__/.git/.pytest_cache/
@@ -26,6 +26,11 @@
 # · типизации исключается из сканов (семантически корректно) · Rev: консолидация maturity
 # · в пакет → перенос канона в тот пакет
 ## @changes  2026-08-15 · DevPlan 170 W10-A — создан (консолидация констант, research-A §2)
+## @changes  2026-08-29 · project-check резолюции (roadmap): +.doxygen (OUTPUT_DIRECTORY Doxygen —
+##           build-артефакт, класс dist/build), +legacy (замороженный снапшот старого репо —
+##           не живой код проекта), +.kilo (компилированный AI-framework конфиг; литерал
+##           "PRIVATE KEY" в тексте инструкций давал 8 ложных private-key срабатываний hygiene) —
+##           12 → 15 каталогов
 # endregion MODULE_CONTRACT
 
 # ── Директории, исключаемые из файловых проверок/подсчёта (библиотеки/кэши/артефакты) ──
@@ -42,6 +47,9 @@ EXCLUDED_DIRS: frozenset[str] = frozenset({
     ".pytest_cache",
     ".ruff_cache",
     ".mypy_cache",
+    ".doxygen",
+    "legacy",
+    ".kilo",
 })
 
 # ── Расширения файлов кода (НЕ библиотек) — py/ts/tsx/js/jsx/sh ──
