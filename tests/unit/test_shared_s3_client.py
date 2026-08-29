@@ -25,6 +25,14 @@ pytestmark = pytest.mark.static_audit
 logger = logging.getLogger(__name__)
 
 
+# 📝 TRAP[DEBT] · 2026-08-29 · LO · Прямые os.environ[...] записи в телах тестов без undo
+# · Observed: test_explicit_params_override_env / test_env_fallback_* пишут os.environ напрямую;
+# ·   monkeypatch-фикстура clean_env откатывает ТОЛЬКО свои delenv — прямые записи утекают
+# ·   в env xdist-воркера (S3_*/AWS_* после теста остаются). На F-22 (NODE_NAME) не влияет.
+# · Suspected: тот же класс, что F-22 root (test_ssl_s3_cache snapshot-баг, закрыт 018 W1);
+# ·   copy-paste паттерн до канона 139 W2.
+# · Impact: кросс-тестовое загрязнение S3_-чувствительных тестов других файлов того же воркера.
+# · When: 018 W1 — аудит env-писателей (F-22 localization)
 @pytest.fixture
 def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Очистить S3_*/AWS_* env для изоляции тестов."""

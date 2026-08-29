@@ -243,7 +243,10 @@ def test_get_s3_config_missing_credentials():
 @pytest.mark.static_audit
 # 🧪 TRAP[TEST] · 2026-07-21 · Scenario: --config-source ssl-cache → get_s3_config() called, get_backup_config() not
 # · Last fail: argparse error (fixed via sys.argv mock) · Remove if: upload.py config-source logic replaced
-def test_upload_config_source_ssl_cache_uses_s3_config():
+# · 018 W1 (F-22): прежний snapshot `get(k, "")` + finally `if v:` утекал unset S3-ключи
+# ·   (тот же класс, что NODE_NAME-утечка из test_get_backup_config_still_works) —
+# ·   конвертирован на monkeypatch.setenv (канон 139 W2).
+def test_upload_config_source_ssl_cache_uses_s3_config(monkeypatch: pytest.MonkeyPatch):
     """upload.py --config-source ssl-cache uses get_s3_config() instead of get_backup_config().
     The s3_key is used as-is (no prefix prepended). Tests by calling main with explicit argv.
     """
@@ -251,76 +254,68 @@ def test_upload_config_source_ssl_cache_uses_s3_config():
 
     from upload import main as upload_main
 
-    # Set up env vars for get_s3_config
+    # Set up env vars for get_s3_config (monkeypatch — авто-undo, 0 утечек)
     env_vars = {
         "S3_ACCESS_KEY": "ssl-cache-key",
         "S3_SECRET_KEY": "ssl-cache-secret",
         "S3_BUCKET": "ssl-cache-bucket",
     }
-    original_env = {}
+    for k, v in env_vars.items():
+        monkeypatch.setenv(k, v)
+
+    s3_config = _make_s3_config_dict(
+        aws_access_key_id="ssl-cache-key",
+        aws_secret_access_key="ssl-cache-secret",
+        bucket="ssl-cache-bucket",
+    )
+
+    # Create a fake file for upload
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix=".pem", delete=False, mode="w", encoding="utf-8") as f:
+        f.write("fake-cert-content")
+        local_file = f.name
+
     try:
-        for k, v in env_vars.items():
-            original_env[k] = os.environ.get(k, "")
-            os.environ[k] = v
+        # Call main with explicit argv including --config-source ssl-cache
+        # main() calls _parse_args() which parses sys.argv by default.
+        # We need to mock argv to pass --config-source ssl-cache.
+        test_argv = [
+            "upload.py",
+            "--config-source",
+            "ssl-cache",
+            local_file,
+            "platform/ssl-certs/test.domain/fullchain.pem",
+        ]
 
-        s3_config = _make_s3_config_dict(
-            aws_access_key_id="ssl-cache-key",
-            aws_secret_access_key="ssl-cache-secret",
-            bucket="ssl-cache-bucket",
-        )
-
-        # Create a fake file for upload
-        import tempfile
-
-        with tempfile.NamedTemporaryFile(suffix=".pem", delete=False, mode="w", encoding="utf-8") as f:
-            f.write("fake-cert-content")
-            local_file = f.name
-
-        try:
-            # Call main with explicit argv including --config-source ssl-cache
-            # main() calls _parse_args() which parses sys.argv by default.
-            # We need to mock argv to pass --config-source ssl-cache.
-            test_argv = [
-                "upload.py",
-                "--config-source",
-                "ssl-cache",
-                local_file,
-                "platform/ssl-certs/test.domain/fullchain.pem",
-            ]
-
+        with (
+            mock_patch("upload.get_s3_config", return_value=s3_config) as mock_s3,
+            mock_patch("upload.get_backup_config") as mock_backup,
+            mock_patch("upload.compute_sha256", return_value="fake-sha256"),
+            mock_patch("upload.sys.argv", test_argv),
+        ):
+            # Patch _init_client and _upload_and_verify to avoid boto3
+            fake_client = object()
             with (
-                mock_patch("upload.get_s3_config", return_value=s3_config) as mock_s3,
-                mock_patch("upload.get_backup_config") as mock_backup,
-                mock_patch("upload.compute_sha256", return_value="fake-sha256"),
-                mock_patch("upload.sys.argv", test_argv),
+                mock_patch("upload._init_client", return_value=fake_client),
+                mock_patch("upload._upload_and_verify", return_value=True),
+                mock_patch("upload._generate_report"),
             ):
-                # Patch _init_client and _upload_and_verify to avoid boto3
-                fake_client = object()
-                with (
-                    mock_patch("upload._init_client", return_value=fake_client),
-                    mock_patch("upload._upload_and_verify", return_value=True),
-                    mock_patch("upload._generate_report"),
-                ):
-                    upload_main()
+                upload_main()
 
-                    # Verify get_s3_config was called (not get_backup_config)
-                    mock_s3.assert_called_once()
-                    mock_backup.assert_not_called()
+                # Verify get_s3_config was called (not get_backup_config)
+                mock_s3.assert_called_once()
+                mock_backup.assert_not_called()
 
-                    logger.critical(
-                        "[IMP:9][test_upload_ssl_cache] ASSERT: get_s3_config() called, "
-                        "get_backup_config() NOT called — ssl-cache config source works"
-                    )
-        finally:
-            # DevPlan 118 E9: upload.py remove_spool_file() уже удалил файл после успеха —
-            # cleanup терпим к отсутствию (spool rm merged в Python)
-            with contextlib.suppress(FileNotFoundError):
-                pathlib.Path(local_file).unlink()
-
+                logger.critical(
+                    "[IMP:9][test_upload_ssl_cache] ASSERT: get_s3_config() called, "
+                    "get_backup_config() NOT called — ssl-cache config source works"
+                )
     finally:
-        for k, v in original_env.items():
-            if v:
-                os.environ[k] = v
+        # DevPlan 118 E9: upload.py remove_spool_file() уже удалил файл после успеха —
+        # cleanup терпим к отсутствию (spool rm merged в Python)
+        with contextlib.suppress(FileNotFoundError):
+            pathlib.Path(local_file).unlink()
 
 
 @pytest.mark.static_audit
@@ -404,8 +399,14 @@ def test_issue_cert_saves_to_s3_after_success():
 
 @pytest.mark.static_audit
 # 🧪 TRAP[TEST] · 2026-07-21 · Scenario: get_backup_config() backward compatible after refactoring
-# · Last fail: None (first run) · Remove if: get_backup_config() implementation changes
-def test_get_backup_config_still_works():
+# · Last fail: 2026-08-27 (F-22, 018 W1) — finally `if v:` НЕ удалял ключи, не установленные
+# ·   до теста → NODE_NAME="production-node" утекал в env xdist-воркера → reload app в
+# ·   _setup_app_env (test_status_page) подхватывал утечку → node-label "production-node"
+# ·   в platform_tls_* сериях → ложный FAIL TestStatusPageMetrics только в составе make check.
+# ·   Fix (018 W1): monkeypatch.setenv — авто-undo удаляет ключи, отсутствовавшие до теста
+# ·   (канон DevPlan 139 W2: env-мутации ТОЛЬКО через monkeypatch).
+# · Remove if: get_backup_config() implementation changes
+def test_get_backup_config_still_works(monkeypatch: pytest.MonkeyPatch):
     """get_backup_config() must still work (backward compatible) after S3Config extraction."""
     from backup_config import get_backup_config
 
@@ -417,33 +418,28 @@ def test_get_backup_config_still_works():
         "PLATFORM_CONTEXT": "corporate",
         "NODE_NAME": "production-node",
     }
-    original_env = {}
-    try:
-        for k, v in env_vars.items():
-            original_env[k] = os.environ.get(k, "")
-            os.environ[k] = v
+    # 018 W1 (F-22): monkeypatch.setenv — авто-undo при teardown (включая удаление ключей,
+    # которых не было до теста). Прежний snapshot `get(k, "")` + `if v:` LEAKAL unset-ключи.
+    for k, v in env_vars.items():
+        monkeypatch.setenv(k, v)
 
-        config = get_backup_config()
+    config = get_backup_config()
 
-        logger.info("[IMP:7][test_backward] BackupConfig: %s", config)
+    logger.info("[IMP:7][test_backward] BackupConfig: %s", config)
 
-        # S3 base fields
-        assert config["aws_access_key_id"] == "bk-compat-key"
-        assert config["bucket"] == "bk-compat-bucket"
+    # S3 base fields
+    assert config["aws_access_key_id"] == "bk-compat-key"
+    assert config["bucket"] == "bk-compat-bucket"
 
-        # Backup-specific fields
-        assert config["prefix"] == "custom/prefix"
-        assert config["context"] == "corporate"
-        assert config["node_name"] == "production-node"
+    # Backup-specific fields
+    assert config["prefix"] == "custom/prefix"
+    assert config["context"] == "corporate"
+    assert config["node_name"] == "production-node"
 
-        # Must have all 8 keys
-        assert len(config) == 8, f"BackupConfig must have 8 keys, got {len(config)}"
+    # Must have all 8 keys
+    assert len(config) == 8, f"BackupConfig must have 8 keys, got {len(config)}"
 
-        logger.critical("[IMP:9][test_backward] ASSERT: get_backup_config() backward compatible — 8 fields")
-    finally:
-        for k, v in original_env.items():
-            if v:
-                os.environ[k] = v
+    logger.critical("[IMP:9][test_backward] ASSERT: get_backup_config() backward compatible — 8 fields")
 
 
 @pytest.mark.static_audit

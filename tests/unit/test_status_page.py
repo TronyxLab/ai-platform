@@ -975,11 +975,17 @@ class TestStatusPageMetrics:
     # 🧪 TRAP[TEST] · C4 · Regression: /metrics рендерит TLS-гейджи из tls-секции
     # · Scenario: status-metrics.json с tls{example.test: {days_left: 365, self_signed: true}} →
     # ·   platform_tls_days_left{node,domain="example.test"} 365 + self_signed 1 + HELP/TYPE
-    # · Last fail: never (new feature, 017 C4)
+    # · Last fail: 2026-08-27 (F-22, 018 W1) — NODE_NAME="production-node" утекал в env
+    # ·   xdist-воркера (test_ssl_s3_cache snapshot-баг) → reload app подхватывал утечку →
+    # ·   label "production-node" вместо "test-node". 018 W1: polluter конвертирован на
+    # ·   monkeypatch + тест hermetic (delenv NODE_NAME — assert проверяет fallback "test-node").
     # · Remove if: TLS-эмиссия удалена из _handle_metrics
-    def test_metrics_renders_tls_gauges(self, mock_node_yaml_no_vhosts, tmp_path, caplog, mock_subprocess):
+    def test_metrics_renders_tls_gauges(self, mock_node_yaml_no_vhosts, tmp_path, caplog, mock_subprocess, monkeypatch):
         """_handle_metrics: tls-секция → platform_tls_days_left / platform_tls_self_signed."""
         caplog.set_level(0)
+        # 018 W1 (F-22): hermetic — node-label теста = fallback "test-node" (независимо от
+        # machine-state env). delenv ДО _setup_app_env: reload читает модульные константы.
+        monkeypatch.delenv("NODE_NAME", raising=False)
 
         metrics_file = tmp_path / "metrics-tls.json"
         metrics_file.write_text(
@@ -1014,11 +1020,16 @@ class TestStatusPageMetrics:
 
     # 🧪 TRAP[TEST] · C4 · Regression: days_left отсутствует → NaN (стиль deploy_duration)
     # · Scenario: tls-секция есть, но у домена нет days_left → platform_tls_days_left NaN
-    # · Last fail: never (new feature)
+    # · Last fail: 2026-08-27 (F-22, 018 W1) — тот же NODE_NAME-утечник, label-mismatch.
+    # ·   018 W1: hermetic delenv NODE_NAME (см. test_metrics_renders_tls_gauges).
     # · Remove if: NaN-семантика _handle_metrics изменена
-    def test_metrics_tls_days_left_nan_when_missing(self, mock_node_yaml_no_vhosts, tmp_path, caplog, mock_subprocess):
+    def test_metrics_tls_days_left_nan_when_missing(
+        self, mock_node_yaml_no_vhosts, tmp_path, caplog, mock_subprocess, monkeypatch
+    ):
         """_handle_metrics: отсутствующий days_left → NaN (консистентно deploy_duration)."""
         caplog.set_level(0)
+        # 018 W1 (F-22): hermetic — см. test_metrics_renders_tls_gauges
+        monkeypatch.delenv("NODE_NAME", raising=False)
 
         metrics_file = tmp_path / "metrics-tls-nan.json"
         metrics_file.write_text(
