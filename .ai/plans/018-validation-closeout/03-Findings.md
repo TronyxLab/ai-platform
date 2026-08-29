@@ -49,3 +49,18 @@
 - Верификация: `NODE=tronyx-vps pytest -k test_watchdog_heals_unhealthy` → PASS 188.28s
   (logs/w2-f6-watchdog-r3-*.log); пост-стейт: healthy/PONG/канонический Test/rc=0.
 - Статус: fixed
+
+### F-21b · 2026-08-29 09:20 · W3 · P1 · oom_clickhouse сайзинг — GREEN
+- Root-гипотеза ПОДТВЕРЖДЕНА: bomb 400×8MB≈2.98GiB был захардкожен под старый лимит 1GiB;
+  SoT-лимит 3G (docker inspect HostConfig.Memory=3221225472) → 2.98 < 3 → cgroup-OOM не наступал.
+- Фикс: (1) лимит из docker inspect на ноде; (2) bomb = 1.3×лимит динамически, 64MiB-чанки
+  (63 шт — меньше O(n²)-копирования bash); (3) pre-check assert (R4, не skip):
+  MemAvailable > лимит (3.81GiB > 3GiB ✅) И SwapTotal == 0 (MemorySwap=2×6GiB без swap-девайса —
+  иначе bomb ушёл бы в swap вместо OOM); (4) TTR пере-семантизирован: от OOM-доказательства,
+  не от старта теста (3GiB-инъекция занимает минуты — окно восстановления только про healthy).
+- Попутный факт: clickhouse State.OOMKilled=true при health=healthy/started 2026-08-27 — stale
+  флаг после старого OOM (docker не сбрасывает OOMKilled через policy-restart) — тест не
+  полагается на флаг (жертва — bomb-процесс, не init), не влияет.
+- Верификация: pytest -k test_oom_clickhouse_kernel_kill → PASS 76.10s
+  (logs/w3-f7-oom-*.log); пост-стейт healthy.
+- Статус: fixed

@@ -727,10 +727,15 @@ def test_watchdog_heals_unhealthy(requires_node: str, node_ssh: NodeSSHClient, c
 @pytest.mark.chaos
 @pytest.mark.requires_node
 def test_oom_clickhouse_kernel_kill(requires_node: str, node_ssh: NodeSSHClient, caplog) -> None:
-    """F7: memory-bomb внутри clickhouse cgroup (лимит 1GiB) → kernel OOM-kill жертвы по
-    cgroup-id → restart policy → up ≤120s.
+    """F7: memory-bomb внутри clickhouse cgroup (лимит — из docker inspect HostConfig.Memory,
+    НЕ из памяти) размером ≥1.3× лимита → kernel OOM-kill жертвы (bomb-процесс) по cgroup-id →
+    clickhouse-server не умирает → healthy сохраняется ≤120s.
 
-    # 🧪 TRAP[TEST] · Scenario: kernel-initiated kill (OOM) self-heal · Last fail: VR 142 §6 (T7 RED: victim искали по comm, не по cgroup-id)
+    # 🧪 TRAP[TEST] · Scenario: kernel-initiated kill (OOM) self-heal · Last fail: 2026-08-27 (F-21b, 018 W3) — bomb захардкожен 400×8MB≈2.98GiB под старый лимит 1GiB, а SoT-лимит поднят 1G→2G→3G (merge-инцидент v1.0.1) → 2.98GiB < 3GiB → cgroup-OOM не наступает за 90s
+    # · Root: сайзинг bomb'а из «памяти» вместо инспекции — дрейф SoT-лимита ломает тест
+    # ·   молча (OOM просто не наступает). Fix: лимит читается из docker inspect на ноде,
+    # ·   bomb = 1.3×лимит динамически (64MiB-чанки); headroom ноды — assert (R4, не skip):
+    # ·   MemAvailable > лимит И SwapTotal == 0 (MemorySwap=2× без swap-девайса — OOM на RAM).
     # · Regression: cgroup OOM убивает аллокатор (memcg-жертва); ядро называет жертву в
     # ·   journalctl -k по cgroup scope (docker-<id>.scope|docker/<id>) — comm=bash это
     # ·   процесс-жертва, не сервис; restart policy поднимает контейнер ≤120s.
@@ -743,12 +748,45 @@ def test_oom_clickhouse_kernel_kill(requires_node: str, node_ssh: NodeSSHClient,
     ch_short = ch_id[:12]
     logger.info("[IMP:9][F7][inject] memory-bomb in clickhouse cgroup (id=%s…)", ch_short)
 
+    # ── prep: headroom ноды — assert, НЕ skip (R4): MemAvailable > лимит (bomb упирается в
+    #    cgroup-лимит, нода должна вместить его) И SwapTotal == 0 (иначе memory+swap=2× —
+    #    bomb уйдёт в swap вместо OOM — сайзинг ломается) ──
+    pre = ssh.ssh_exec(
+        "LIMIT=$(docker inspect clickhouse --format '{{.HostConfig.Memory}}'); "
+        "AVAIL=$(free -b | awk 'NR==2 {print $7}'); "
+        "SWAP=$(free -b | awk 'NR==3 {print $2}'); "
+        'echo "LIMIT=$LIMIT AVAIL=$AVAIL SWAP=$SWAP"',
+        timeout=30,
+    )
+    m = re.search(r"LIMIT=(\d+) AVAIL=(\d+) SWAP=(\d+)", pre.stdout)
+    assert m, f"F7 FAIL: pre-check parse: {pre.stdout} {pre.stderr}"
+    limit_bytes, avail_bytes, swap_bytes = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    assert limit_bytes > 0, f"F7 FAIL: no memory limit on clickhouse (OOM impossible): {limit_bytes}"
+    assert avail_bytes > limit_bytes, (
+        f"F7 FAIL (R4, не skip): MemAvailable {avail_bytes} ≤ cgroup-лимит {limit_bytes} — "
+        f"bomb упрётся в нодовую память раньше cgroup-OOM; освободи память ноды"
+    )
+    assert swap_bytes == 0, (
+        f"F7 FAIL (R4, не skip): SwapTotal={swap_bytes} > 0 — cgroup memory+swap={limit_bytes * 2} "
+        f"(MemorySwap 2×), bomb уйдёт в swap вместо kernel-OOM; сайзинг требует пересчёта"
+    )
+    # bomb = 1.3× лимита, 64MiB-чанки (меньше итераций → меньше O(n²)-копирования в bash)
+    chunk_bytes = 64 * 1024 * 1024
+    n_chunks = limit_bytes * 13 // 10 // chunk_bytes + 1
+    logger.info(
+        "[IMP:9][F7][sizing] limit=%.2fGiB avail=%.2fGiB → bomb=%d×64MiB=%.2fGiB (1.3×)",
+        limit_bytes / 2**30,
+        avail_bytes / 2**30,
+        n_chunks,
+        n_chunks * chunk_bytes / 2**30,
+    )
+
     allocator = (
         "docker exec clickhouse bash -c "
-        '\'a=""; for i in $(seq 1 400); do a="$a$(head -c 8000000 /dev/zero | tr "\\0" "x")"; '
+        f'\'a=""; for i in $(seq 1 {n_chunks}); do a="$a$(head -c {chunk_bytes} /dev/zero | tr "\\0" "x")"; '
         "done; echo ALLOC_DONE'"
     )
-    ssh.ssh_exec(allocator, timeout=180)
+    ssh.ssh_exec(allocator, timeout=300)
 
     kernel_oom_pattern = rf"docker-{re.escape(ch_short)}\.scope|docker/{re.escape(ch_id)}|clickhouse"
 
@@ -763,17 +801,32 @@ def test_oom_clickhouse_kernel_kill(requires_node: str, node_ssh: NodeSSHClient,
     proof = assert_injection_landed(
         _oom_victim_named, timeout_s=90, description="kernel OOM report names cgroup victim"
     )
+    t_oom = time.monotonic()  # TTR — от OOM-доказательства (не от старта теста: инъекция
+    # 3GiB bomb занимает минуты и не входит в окно восстановления)
     ok, missing = wait_containers_healthy(ssh, timeout_s=120, containers=["clickhouse"])
-    ttr = int(time.monotonic() - t0)
+    ttr = int(time.monotonic() - t_oom)
     try:
         assert ok, f"F7 FAIL: clickhouse not recovered within 120s: {missing}"
-        assert ttr <= 120, f"F7 FAIL: TTR {ttr}s > 120s"
+        assert ttr <= 120, f"F7 FAIL: TTR {ttr}s > 120s (от OOM-доказательства)"
         capture_evidence(
-            ssh, _out_dir("F7"), "clickhouse", test_id="F7", verdict="PASS", ttr_s=ttr, injection_proof=proof[:160]
+            ssh,
+            _out_dir("F7"),
+            "clickhouse",
+            test_id="F7",
+            verdict="PASS",
+            ttr_s=ttr,
+            injection_proof=proof[:160],
+            extra={"total_s": int(time.monotonic() - t0)},
         )
     except AssertionError:
         capture_evidence(
-            ssh, _out_dir("F7"), "clickhouse", test_id="F7", verdict="FAIL", ttr_s=ttr, injection_proof=proof[:160]
+            ssh,
+            _out_dir("F7"),
+            "clickhouse",
+            test_id="F7",
+            verdict="FAIL",
+            ttr_s=ttr,
+            injection_proof=proof[:160],
         )
         raise
     assert_ldd_imp9_e2e(caplog)
