@@ -52,11 +52,13 @@ def test_generate_target_metrics_disabled(tmp_path: Path, caplog) -> None:
 
 
 # 🧪 TRAP[TEST] · Regression · Scenario: enabled → target JSON created
-# · Expect: {targets, labels{project,type,node,service}} schema
-# · Last fail: None (new test for DevPlan 117 G T54)
+# · Expect: file_sd список групп [{targets, labels{project,type,node,service}}]
+#   (018 W4 F-21c: одиночный объект = "cannot unmarshal object" в prometheus)
+# · Last fail: 2026-08-31 — W4 сменил формат payload на list-of-groups, тест читал старый
+# ·   single-object schema (`data["targets"]`) → TypeError
 # · Remove if: generate_prometheus_target schema changes
 def test_generate_target_created_schema(tmp_path: Path, caplog) -> None:
-    """Enabled → target JSON with correct schema."""
+    """Enabled → target JSON with correct file_sd list-of-groups schema."""
     caplog.set_level(0)
     config = _config()
 
@@ -68,11 +70,14 @@ def test_generate_target_created_schema(tmp_path: Path, caplog) -> None:
     assert target_file.exists()
 
     data = json.loads(target_file.read_text())
-    assert data["targets"] == ["myapp:9090"]
-    assert data["labels"]["project"] == "myapp"
-    assert data["labels"]["type"] == "backend"
-    assert data["labels"]["node"] == "tronyx-vps"
-    assert data["labels"]["service"] == "myapp"
+    assert isinstance(data, list), f"file_sd payload — список групп: {type(data)}"
+    assert len(data) == 1, f"одна группа на проект: {data}"
+    group = data[0]
+    assert group["targets"] == ["myapp:9090"]
+    assert group["labels"]["project"] == "myapp"
+    assert group["labels"]["type"] == "backend"
+    assert group["labels"]["node"] == "tronyx-vps"
+    assert group["labels"]["service"] == "myapp"
 
 
 # 🧪 TRAP[TEST] · Regression · Scenario: write failure (read-only dir)

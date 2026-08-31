@@ -94,3 +94,24 @@
 - Impact: постоянная алерт-сирена desensitize'ит оператора (alert fatigue).
 - When: 018 W4 — аудит honesty после F-21c фиксa. Fix: убрать alloy из шаблона ИЛИ
   деплоить alloy (решение владельца — модуль logging?).
+
+### NOTE-N7 · 2026-08-31 20:20 · W5 · P2 · легаси S3_ENDPOINT удалён из матрицы, DR-канал verified
+- Матрица node-configs/tronyx-vps/secrets/tronyx-vps.enc.yaml: sops-редакция, удалена ТОЛЬКО
+  строка S3_ENDPOINT (значение было https://s3.twcstorage.ru — bucket-virtual-host стиль, никогда
+  не читалось: читатели канонические S3_ENDPOINT_URL с дефолтом s3.timeweb.cloud из env_defaults).
+- Доставка (2 грабли, для следующих агентов):
+  1. `make core-deliver` = deliver_fallback — ПО ИНВАРИАНТУ не трогает /opt/node-configs
+     (core_deliverer.py deliver_fallback docstring). Матрицу везёт полный deliver() (фазы 2/3).
+     Лечится точечным rsync в ОБА dest: /opt/node-configs/<node>/secrets/ И /opt/node-configs/secrets/.
+  2. `make converge` НЕ запускает φ9 — гоняет только R1-R11 reconciler (φ9 — канал
+     bootstrap/node-update state machine). Перегенерация secrets.env на ноде: ssh → source
+     secrets.env (AGE-ключ из матрицы) → CORE_DIR+NODE_NAME+PYTHONPATH=/opt/platform →
+     lib/secrets.sh step_10_decrypt_secrets (тот же код-путь, что φ9). Без NODE_NAME — SKIP
+     (глоб-glob по base secrets/), без PYTHONPATH — ModuleNotFoundError core.
+- Верификация: secrets.env legacy=0, 5/5 канонических S3-ключей на месте; 55 записей записано,
+  proxies cleanup; backup on-node: UPLOAD VERIFIED sha256=9f019365…0733 (s3://tronyx-vps-backups).
+- Дрейф план↔код: root `make backup` игнорирует NODE (makefiles/modules.mk L85 — локальный
+  make -C); канон remote = `ssh node "cd /opt/platform && make backup"`. Секреты ноды вне git
+  (node-configs/ gitignored целиком) — коммита нет.
+- Статус: fixed
+

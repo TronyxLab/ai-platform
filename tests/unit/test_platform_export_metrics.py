@@ -40,7 +40,6 @@
 import contextlib
 import json
 import logging
-import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -111,24 +110,60 @@ def mock_cache_dir(tmp_path: Path) -> str:
 
 @pytest.fixture
 def tls_live_dir(tmp_path: Path) -> Path:
-    """tmp letsencrypt live dir с ЗАКОММИЧЕННЫМ dummy-сертом (017 C4, tests/test_data/).
+    """tmp letsencrypt live dir с RUNTIME-сгенерированным dummy-сертом (017 C4, 018 W7).
 
     ## @purpose — Live-каталог для tls-тестов: домен-поддиректория example.test/fullchain.pem
-    ##            из tests/test_data/tls_example_test.crt (self-signed CN=example.test,
-    ##            validity 365d, сгенерирован openssl одноразово; key не хранится).
+    ##            из _make_self_signed_pem() (self-signed CN=example.test, validity 365d).
     ## @io — ⎋ Path (letsencrypt live dir) — источник env LETSENCRYPT_LIVE для _collect_tls_metrics
-    ## @complexity — O(1) — копирование файла
+    ## @complexity — O(1) — in-process cryptography-генерация
     ## @invariants
-    ##   - Коммиченный PEM-файл — БЕЗ сети, БЕЗ runtime-генерации (детерминированный тест)
+    ##   - In-process генерация (cryptography) — БЕЗ сети, БЕЗ openssl-subprocess
+    ##   - Decay-proof: not_after = now+365d на каждый прогон (018 W7: закоммиченный
+    ##     tests/test_data/tls_example_test.crt выветрился до 360 дней за 5 суток —
+    ##     time-bomb fixture, `days_left > 360` стал ложным на стене)
     ##   - Файл переиспользуется всеми tls-тестами (не мутируется)
     """
     live = tmp_path / "letsencrypt" / "live"
     domain_dir = live / "example.test"
     domain_dir.mkdir(parents=True, exist_ok=True)
-    crt = Path(__file__).resolve().parent.parent / "test_data" / "tls_example_test.crt"
-    assert crt.is_file(), f"закоммиченный тест-серт не найден: {crt}"
-    shutil.copy(crt, domain_dir / "fullchain.pem")
+    (domain_dir / "fullchain.pem").write_bytes(_make_self_signed_pem("example.test", days=365))
     return live
+
+
+def _make_self_signed_pem(domain: str, days: int = 365) -> bytes:
+    """Runtime self-signed PEM (decay-proof fixture-серт, 018 W7).
+
+    ▶ rsa-key(2048) → x509.Builder(subject=issuer=CN=domain) → validity [now, now+days]
+    → ⊕ PEM bytes → ⎋ bytes
+
+    ## @io       ⇥ domain: str (CN/DNS), days: int (validity) · ⎋ PEM-encoded certificate bytes
+    ## @complexity O(1) — in-process, без сети и без openssl-subprocess
+    ## @rationale Закоммиченный серт — time-bomb: days_left убывает со стеной; генерация
+    ##            на месте держит days_left ≈ days относительно времени теста.
+    """
+    import datetime
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
+
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    subject = issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, domain)])
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cert = (
+        x509
+        .CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(issuer)
+        .public_key(private_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now)
+        .not_valid_after(now + datetime.timedelta(days=days))
+        .add_extension(x509.SubjectAlternativeName([x509.DNSName(domain)]), critical=False)
+        .sign(private_key, hashes.SHA256())
+    )
+    return cert.public_bytes(serialization.Encoding.PEM)
 
 
 @pytest.fixture
@@ -867,16 +902,17 @@ class TestTlsCollector:
     ## @purpose — Покрытие _collect_tls_metrics (fail-safe: пустая секция без live-каталога,
     ##            per-domain skip, openssl-отсутствие) + end-to-end main() → status-metrics.json.
     ## @invariants
-    ##   - Фикстура tls_live_dir: ЗАКОММИЧЕННЫЙ tests/test_data/tls_example_test.crt
-    ##     (self-signed CN=example.test, 365d) — без сети, без runtime-генерации
+    ##   - Фикстура tls_live_dir: RUNTIME-генерация _make_self_signed_pem() (decay-proof,
+    ##     018 W7 — коммиченный серт выветрился до 360 дней за 5 суток)
     ##   - openssl — реальный системный бинар (не мокается в успешном сценарии)
     ##   - Тест-честность: R1 (asserts есть), R2 (days_left > 360 — falsifiable при 365d-серте)
     """
 
     # 🧪 TRAP[TEST] · C4 · Regression: tls-секция парсит self-signed серт из live-каталога
-    # · Scenario: example.test/fullchain.pem (закоммиченный dummy-серт) → openssl x509 →
+    # · Scenario: example.test/fullchain.pem (runtime-серт) → openssl x509 →
     # ·   not_after ISO UTC, days_left > 360 (365d-валидность), self_signed True (issuer==subject)
-    # · Last fail: never (new feature, 017 C4)
+    # · Last fail: 2026-08-31 — коммиченный fixture-серт decayed до 360 дней (time-bomb),
+    # ·   `days_left > 360` стал ложным на стене → fixture переведён на runtime-генерацию
     # · Remove if: tls-секция удалена из platform_export_metrics
     def test_tls_section_parses_self_signed_cert(self, tls_live_dir, caplog):
         """_collect_tls_metrics возвращает {domain: {not_after, days_left, self_signed}}."""
@@ -946,8 +982,7 @@ class TestTlsCollector:
         live = tmp_path / "live"
         (live / "ok.example.test").mkdir(parents=True)
         (live / "bad.example.test").mkdir()
-        crt = Path(__file__).resolve().parent.parent / "test_data" / "tls_example_test.crt"
-        shutil.copy(crt, live / "ok.example.test" / "fullchain.pem")
+        (live / "ok.example.test" / "fullchain.pem").write_bytes(_make_self_signed_pem("ok.example.test"))
 
         section = _collect_tls_metrics(env={"LETSENCRYPT_LIVE": str(live)})
 
@@ -962,7 +997,7 @@ class TestTlsCollector:
     # 🧪 TRAP[TEST] · C4 · Regression: main() пишет tls-секцию в status-metrics.json (e2e)
     # · Scenario: координатор с LETSENCRYPT_LIVE=fixture + docker-mock (openssl — реальный) →
     # ·   status-metrics.json содержит tls.example.test.days_left > 360 / self_signed True
-    # · Last fail: never (new feature)
+    # · Last fail: 2026-08-31 — тот же fixture-decay, что у parse-теста (runtime-генерация фикстуры)
     # · Remove if: tls-секция удалена из output main()
     def test_coordinator_writes_tls_section(
         self, mock_node_yaml_no_projects, tmp_path, caplog, mock_docker_subprocess, tls_live_dir

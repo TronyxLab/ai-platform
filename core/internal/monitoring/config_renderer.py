@@ -700,7 +700,7 @@ def render_node_targets_if_placement(platform_root: Path, node_yaml_path: str | 
     try:
         modules_raw = ny.get_modules()
     # ruff: ignore[BLE001] — best-effort render step
-    except Exception as exc:  # noqa: EXC — modules unreadable → honesty-гейтинг недоступен
+    except Exception as exc:  # noqa: EXC — best-effort: modules unreadable → honesty-гейтинг недоступен
         logger.warning("[IMP:7][node_targets] node.yaml modules unreadable: %s", exc)
         modules_raw = []
     deployed: set[str] = set()
