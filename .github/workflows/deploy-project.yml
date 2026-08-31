@@ -113,11 +113,18 @@ jobs:
     # (BatchMode/StrictHostKeyChecking=accept-new/ServerAlive*) БЕЗ ConnectTimeout —
     # канон флагов проекта core/internal/shared/ssh_opts.py (гейт ssh_opts_sole_path d:
     # ConnectTimeout в CI → RED). Пути ключа детерминированы шагом Setup SSH key
-    # ($RUNNER_TEMP/deploy_key + $RUNNER_TEMP/known_hosts) — ${{ runner.temp }} == $RUNNER_TEMP
-    # по контракту GitHub Actions; step-output'ы ssh-key-path/ssh-known-hosts-path сохранены
-    # (обратная совместимость интерфейса шага).
+    # ($RUNNER_TEMP/deploy_key + $RUNNER_TEMP/known_hosts) — $RUNNER_TEMP раскрывается
+    # шеллом шага в момент использования (`ssh ${SSH_OPTS}` — bash-расширение).
+    # ⚠️ TRAP[BUG] · 2026-08-31 · P1 · job-level env с ${{ runner.temp }} = невалидный workflow
+    # · Symptom: все project-deploy ранфы в TronyxLab падали 0s «workflow file issue»
+    # ·   (Unrecognized named-value: 'runner' at line 120) — контекст `runner` недоступен
+    # ·   в job-level env (доступен только в step-level).
+    # · Root: T2.15 хойстинг использовал ${{ runner.temp }} в job-level env.
+    # · Fix: литеральный $RUNNER_TEMP (env-переменная раннера) — раскрывается bash'ом
+    # ·   внутри шага при `ssh ${SSH_OPTS}`; семантика идентична.
+    # · Prevention: change-check workflow-файлов гоняет actionlint (поймал бы named-value).
     env:
-      SSH_OPTS: "-i ${{ runner.temp }}/deploy_key -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o UserKnownHostsFile=${{ runner.temp }}/known_hosts"
+      SSH_OPTS: "-i $RUNNER_TEMP/deploy_key -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o UserKnownHostsFile=$RUNNER_TEMP/known_hosts"
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
