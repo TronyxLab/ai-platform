@@ -578,3 +578,77 @@ def test_module_aware_minimal_context_pass(caplog: pytest.LogCaptureFixture, tmp
 
 
 # endregion FUNC_test_module_aware_minimal_context_pass
+
+
+# ── launch-validation asi-team-vps (P0): reboot-путь — auto-detect ноды при пустом node_name ──
+# platform-secrets.service (systemd, ДО docker.service) запускает decrypt_secrets.py БЕЗ
+# NODE_NAME и NODE_CONFIGS_DIR → _node_name_from_context → "" → resolve_enabled_modules(node_name="")
+# обязана auto-detect единственную ноду в node-configs (иначе legacy fail-loud всех required∧sops
+# → exit 10 → docker.service не стартует).
+
+
+# region FUNC_test_resolve_enabled_modules_autodetect_single_node
+## @purpose  P0 reboot-фикс: пустое node_name (platform-secrets.service БЕЗ NODE_NAME) + node-configs
+##           с РОВНО ОДНОЙ нодой → resolve_enabled_modules возвращает enabled-модули этой ноды
+##           (НЕ None) — reboot-путь не падает в legacy fail-loud всех required∧sops.
+## @io       ⇥ caplog, tmp_path → ⎋ None (asserts enabled-set + IMP:8 auto-detect success лог)
+## @complexity O(1)
+@ldd_trajectory
+def test_resolve_enabled_modules_autodetect_single_node(
+    caplog: pytest.LogCaptureFixture, tmp_path: pathlib.Path
+) -> None:
+    """Empty node_name + single node in node-configs → its enabled modules (not None)."""
+    # 🧪 TRAP[TEST] · 2026-09-01 · REGRESSION · P0 reboot asi-team-vps platform-secrets.service
+    # · Scenario: systemd-юнит запускает decrypt_secrets.py БЕЗ NODE_NAME/NODE_CONFIGS_DIR;
+    # ·   node-configs содержит одну ноду → auto-detect обязан вернуть её enabled-модули
+    # · Last fail: resolve_enabled_modules("") → None → legacy fail-loud всех required∧sops →
+    # ·   decrypt exit 10 → platform-secrets.service failed → docker.service не стартует
+    # · Remove if: auto-detect из resolve_enabled_modules удалён (возврат к NODE_NAME-only)
+    node_configs_dir = tmp_path / "node-configs"
+    _write_node_yaml(
+        node_configs_dir,
+        "asi-team-vps",
+        [("nginx", True), ("platform-secrets", True), ("postgres", False), ("minio", False)],
+    )
+
+    env = {"NODE_CONFIGS_DIR": str(node_configs_dir)}
+    enabled = resolve_enabled_modules(node_name="", env=env)
+    assert enabled == {"nginx", "platform-secrets"}, f"auto-detected enabled modules, got {enabled}"
+    assert any("[IMP:8]" in r.message and "auto-detected node=asi-team-vps" in r.message for r in caplog.records), (
+        "IMP:8 auto-detect success log expected (semantic trace)"
+    )
+    logger.critical("[IMP:9][test] Auto-detect single node → enabled modules (reboot-путь починен)")
+
+
+# endregion FUNC_test_resolve_enabled_modules_autodetect_single_node
+
+
+# region FUNC_test_resolve_enabled_modules_autodetect_ambiguous_returns_none
+## @purpose  P0 reboot-фикс negative: пустое node_name + ДВЕ ноды в node-configs → auto-detect
+##           неоднозначен (NodeDetectionError) → resolve_enabled_modules возвращает None (легаси
+##           global) с WARN-логом, отличающим «нода не определима» от «node.yaml отсутствует».
+## @io       ⇥ caplog, tmp_path → ⎋ None (asserts None + WARN с причиной Multiple directories)
+## @complexity O(1)
+@ldd_trajectory
+def test_resolve_enabled_modules_autodetect_ambiguous_returns_none(
+    caplog: pytest.LogCaptureFixture, tmp_path: pathlib.Path
+) -> None:
+    """Empty node_name + two nodes → None (legacy) + WARN with the ambiguity reason."""
+    # 🧪 TRAP[TEST] · 2026-09-01 · REGRESSION · P0 reboot — многодозовая неоднозначность
+    # · Scenario: >1 ноды в node-configs — auto-detect обязан НЕ угадывать, а вернуть None (легаси)
+    # · Last fail: (нет — поведение зафиксировано контрактом, регрессия не наблюдалась)
+    # · Remove if: auto-detect из resolve_enabled_modules удалён (возврат к NODE_NAME-only)
+    node_configs_dir = tmp_path / "node-configs"
+    _write_node_yaml(node_configs_dir, "node-a", [("nginx", True)])
+    _write_node_yaml(node_configs_dir, "node-b", [("postgres", True)])
+
+    env = {"NODE_CONFIGS_DIR": str(node_configs_dir)}
+    enabled = resolve_enabled_modules(node_name="", env=env)
+    assert enabled is None, f"ambiguous auto-detect must fall back to legacy None, got {enabled}"
+    assert any("auto-detection failed" in r.message and "Multiple directories" in r.message for r in caplog.records), (
+        "WARN с причиной неоднозначности ожидается (нода не определима)"
+    )
+    logger.critical("[IMP:9][test] Ambiguous auto-detect → None (legacy) + WARN: fail-safe корректен")
+
+
+# endregion FUNC_test_resolve_enabled_modules_autodetect_ambiguous_returns_none
