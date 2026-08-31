@@ -6,7 +6,7 @@
 ##           AC1: No raw docker inspect State.Running in module healthcheck.sh
 ##           AC2: All Docker modules call check_docker_health for liveness
 ##           AC3: modules-healthcheck.sh calls check_docker_health, not raw docker inspect
-##           AC4: start_period values standardized to {5s, 15s, 30s, 60s}
+##           AC4: start_period values standardized to {5s, 15s, 30s, 60s, 180s}
 ##           AC5: clickhouse/redis/nginx/backup-cron deep mode uses exec_check/check_http
 ## @scope    5 static audit tests (no Docker required):
 ##           1. test_no_raw_docker_inspect_in_modules
@@ -22,6 +22,7 @@
 ##            AC6 (make healthcheck passes) requires Docker — local integration test.
 ##            AC7 (no State.Running) is covered by test_no_raw_docker_inspect_in_modules.
 ## @changes 2026-07-26 · DevPlan 083 — Initial implementation
+## @changes 2026-08-31 | cold-start race fix — start_period 180s (langfuse/litellm) добавлен в allowlist AC4/AC5
 # endregion MODULE_CONTRACT
 
 import logging
@@ -70,7 +71,9 @@ _EXEC_CHECK_MODULES: dict[str, str] = {
 }
 
 # Allowed start_period values
-_ALLOWED_START_PERIODS: set[str] = {"5s", "15s", "30s", "60s"}
+# 180s — cold-start race fix (2026-08-31): langfuse/litellm под amd64-эмуляцией / 7.8GB VPS
+# стартуют дольше 60s-окна — compose-гейт depends_on: service_healthy выстреливал раньше готовности.
+_ALLOWED_START_PERIODS: set[str] = {"5s", "15s", "30s", "60s", "180s"}
 
 
 def _read_module_healthcheck(module: str) -> str:
@@ -286,10 +289,13 @@ def test_modules_healthcheck_uses_lib(caplog: pytest.LogCaptureFixture) -> None:
 
 @pytest.mark.gate
 def test_start_period_standardized(caplog: pytest.LogCaptureFixture) -> None:
-    """AC5: All compose HEALTHCHECK start_period values are in {5s, 15s, 30s, 60s}.
+    """AC5: All compose HEALTHCHECK start_period values are in {5s, 15s, 30s, 60s, 180s}.
 
     DevPlan 083 §7 defines 3 standardized tiers (15s default, 30s DB, 60s litellm) + 5s (nginx).
-    Any value outside these is a drift violation.
+    180s — задокументированное исключение (2026-08-31): langfuse/litellm на холодном старте
+    (amd64-эмуляция / 7.8GB VPS) прогреваются дольше 60s — гейт зависимостей
+    depends_on: condition: service_healthy выстреливал раньше готовности (см. TRAP[DECISION]
+    в docker-compose.base.yml обоих модулей). Любое значение вне набора — дрейф.
     """
     # 🧪 TRAP[TEST] · Regression: all start_period values must be in {5s, 15s, 30s, 60s}
     # · Scenario: grep start_period in all docker-compose.base.yml, check values against allowed set

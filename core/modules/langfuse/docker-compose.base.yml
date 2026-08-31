@@ -16,6 +16,9 @@
 ##   - Cross-node DSN (DevPlan 010 T2.7): DATABASE_URL @${POSTGRES_HOST:-pgbouncer}:6432,
 ##     CLICKHOUSE_MIGRATION_URL @${CLICKHOUSE_HOST:-clickhouse}:${CLICKHOUSE_NATIVE_PORT:-9000};
 ##     single-node дефолты = Docker DNS (байт-идентично прежнему), worker наследует якорь
+##   - Cold-start детерминизм (2026-08-31, TRAP[BUG] P1): langfuse depends_on
+##     {clickhouse, pgbouncer}: condition service_healthy — миграции CH/PG запускаются
+##     только после readiness данных; worker сохраняет depends_on langfuse: service_healthy
 ##   - REF-0010 (2026-08-24): langfuse-redis — ЕДИНСТВЕННАЯ реальная очередь платформы
 ##     (web→redis→worker) → noeviction (backlog НЕ выбрасывается молча; переполнение =
 ##     громкая ошибка записи, не тихая потеря трейсов); maxmemory 96mb при лимите 128M
@@ -148,12 +151,28 @@ services:
         aliases:
           - langfuse
 
+    # Холодный старт детерминирован (2026-08-31): миграции CH/PG выполняются только после
+    # готовности данных. DATABASE_URL = pgbouncer:6432, CLICKHOUSE_MIGRATION_URL = clickhouse:9000
+    # (cross-node DSN параметризованы — DevPlan 010 T2.7, но имена сервисов в depends_on
+    # стабильны: clickhouse/pgbouncer — канонические сервисы shared-сетей).
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      pgbouncer:
+        condition: service_healthy
+    # ⚠️ TRAP[BUG] · 2026-08-31 · P1 · Холодный старт: langfuse crash на clickhouse-миграции · Root: нет readiness-зависимости · Fix: depends_on service_healthy
+    # · Symptom: make up (холодный) — "Applying clickhouse migrations failed: dial tcp :9000 connection refused" → exit → restart #2 OK
+    # · Root: langfuse и clickhouse стартуют параллельно (только network attach); на медленных хостах CH не слушает :9000 к моменту миграций
+    # · Fix: depends_on {clickhouse, pgbouncer}: condition service_healthy — детерминированный порядок
+    # · Prevention: холодный down→up в верификации стека; VPS cold bootstrap прогоняет тот же путь
+
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O- http://$$(ip addr show eth0 | grep 'inet ' | awk '{print $$2}' | cut -d/ -f1):3000/api/public/health"]
       interval: 15s
       timeout: 10s
       retries: 3
-      start_period: 15s  # 40→15s: Langfuse starts in 5-10s (standardized per DevPlan 083)
+      # 🧐 TRAP[DECISION] · 2026-08-31 · — · langfuse start_period 60s→180s — холодный старт медленнее гейта зависимостей (amd64-эмуляция / 7.8GB VPS) · Rejected: снимать condition: service_healthy — теряет fail-fast деплоя · Reason: гонка воспроизведена на make up, контейнеры здоровы через ~3 мин · Rev: если 180s не хватит на VPS-холодном старте — профилировать прогрев langfuse
+      start_period: 180s  # 15→180s: cold-start race (2026-08-31) — amd64-эмуляция / 7.8GB VPS
   # endregion service:langfuse
 
   # ── Langfuse Worker (v4: владеет очередями ingestion, отдельный образ) ─────

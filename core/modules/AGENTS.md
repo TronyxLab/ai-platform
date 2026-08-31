@@ -198,7 +198,7 @@ include ../../templates/module.mk
 | interval | 15-30s | backup-cron 60s (cron-демон, частый проб неинформативен) |
 | timeout | 5-10s | — |
 | retries | 3 | — |
-| start_period | 15s | nginx 5s (быстрый старт), minio 30s (server+heals), litellm 60s (Prisma migrate) |
+| start_period | 15s | nginx 5s (быстрый старт), minio 30s (server+heals), litellm/langfuse 180s (cold-start race 2026-08-31: amd64-эмуляция / 7.8GB VPS — прогрев дольше 60s, гейт depends_on: service_healthy выстреливал раньше готовности) |
 
 - **Liveness-only** (loki/exporters/cadvisor/alloy/backup-cron — проб бинарного `--version`/`pgrep`):
   допустимы с комментарием «readiness внешний через Prometheus up{} + alert-rules».

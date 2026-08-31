@@ -149,7 +149,8 @@ services:
       interval: 15s
       timeout: 10s
       retries: 3          # 5→3: standardized per DevPlan 083 (3 retries × 15s = 45s after start_period)
-      start_period: 60s   # 120→60s: standardized per DevPlan 083
+      # 🧐 TRAP[DECISION] · 2026-08-31 · — · litellm start_period 60s→180s — холодный старт медленнее гейта зависимостей: 7 подряд fails с urllib-таймаутами при прогреве, затем 4×exit=0 → healthy (amd64-эмуляция / 7.8GB VPS) · Rejected: снимать condition: service_healthy — теряет fail-fast деплоя · Reason: гонка воспроизведена на make up, контейнеры здоровы через ~3 мин · Rev: если 180s не хватит на VPS-холодном старте — профилировать прогрев litellm
+      start_period: 180s   # 60→180s: cold-start race (2026-08-31) — amd64-эмуляция / 7.8GB VPS
   # endregion service:litellm
 
 networks:
