@@ -727,20 +727,168 @@ def test_dispatch_raw_docker_inspect_still_unknown(capsys, caplog: pytest.LogCap
 # endregion FUNC_test_dispatch_raw_docker_inspect_still_unknown
 
 
+# ── rollback verb (D8 launch-validation) — snapshot-based откат через forced-command ─────
+
+
+# region FUNC_test_dispatch_rollback_routes_latest
+## @purpose — dispatch `rollback <project>` → маршрут в rollback-handler (_VERB_HANDLERS),
+##            orchestrator.rollback(project_name, snapshot_id=None) — latest snapshot.
+##            DI (W-H): orchestrator_factory c фейком-рекордером (0 патчей); PLATFORM_LOCK_DIR →
+##            tmp_path (детерминированный writable lock, никакого /var/lock на dev).
+# 🧪 TRAP[TEST] · 2026-09-01 · D8 launch-validation · rollback маршрутизируется (dispatch)
+# · Regression: ssh ci-deploy@host 'rollback roadmap' → "unknown verb in SSH command" (exit 4)
+# · Scenario: SSH_ORIGINAL_COMMAND="rollback testproj" → rc 0, orchestrator.rollback("testproj", None),
+# ·   stdout JSON {"status":"DEPLOYED"} (честный assert, R1)
+# · Last fail: — rollback отсутствовал в CANONICAL_VERBS/_VERB_HANDLERS (dispatch-недостижим)
+# · Remove if: rollback-verb удаляется из диспетчера
+def test_dispatch_rollback_routes_latest(capsys, tmp_path, caplog: pytest.LogCaptureFixture, monkeypatch) -> None:
+    """dispatch rollback <project> → rollback-handler → orchestrator.rollback(latest)."""
+    caplog.set_level(logging.INFO)
+    monkeypatch.setenv("PLATFORM_LOCK_DIR", str(tmp_path))
+    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    class _RecordingOrch:
+        def rollback(self, *args, **kwargs):
+            calls.append((args, kwargs))
+            return type(
+                "R",
+                (),
+                {
+                    "is_success": lambda _: True,
+                    "to_dict": lambda _: {
+                        "status": "DEPLOYED",
+                        "project": kwargs.get("project_name"),
+                        "snapshot_id": kwargs.get("snapshot_id"),
+                    },
+                },
+            )()
+
+    def _factory(*args, **kwargs):
+        return _RecordingOrch()
+
+    rc = _dispatch(
+        [],
+        env={"SSH_ORIGINAL_COMMAND": "rollback testproj"},
+        orchestrator_factory=_factory,
+    )
+
+    out = capsys.readouterr().out
+    assert_ldd_imp9(caplog)
+    assert rc == 0
+    assert calls, "rollback handler должен вызывать orchestrator.rollback"
+    assert calls[0][0] == (), f"rollback вызывается keyword-аргументами (паттерн main-CLI), got {calls[0]}"
+    assert calls[0][1] == {"project_name": "testproj", "snapshot_id": None}, f"latest snapshot (None), got {calls[0]}"
+    payload = json.loads(out)
+    assert payload["status"] == "DEPLOYED"
+
+
+# endregion FUNC_test_dispatch_rollback_routes_latest
+
+
+# region FUNC_test_dispatch_rollback_snapshot_id
+## @purpose — dispatch `rollback <project> <snapshot-id>` → snapshot_id передаётся в
+##            orchestrator.rollback (второй токен, positional-формат как status/remove).
+# 🧪 TRAP[TEST] · 2026-09-01 · D8 launch-validation · snapshot-id второй токен
+# · Scenario: SSH_ORIGINAL_COMMAND="rollback testproj snap-123" → orchestrator.rollback("testproj", "snap-123")
+# · Last fail: — rollback не существовал как verb
+# · Remove if: rollback-арность меняется
+def test_dispatch_rollback_snapshot_id(capsys, tmp_path, caplog: pytest.LogCaptureFixture, monkeypatch) -> None:
+    """dispatch rollback <project> <snapshot-id> → snapshot_id пробрасывается в orchestrator."""
+    caplog.set_level(logging.INFO)
+    monkeypatch.setenv("PLATFORM_LOCK_DIR", str(tmp_path))
+    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    class _RecordingOrch:
+        def rollback(self, *args, **kwargs):
+            calls.append((args, kwargs))
+            return type(
+                "R",
+                (),
+                {
+                    "is_success": lambda _: True,
+                    "to_dict": lambda _: {
+                        "status": "DEPLOYED",
+                        "project": kwargs.get("project_name"),
+                        "snapshot_id": kwargs.get("snapshot_id"),
+                    },
+                },
+            )()
+
+    def _factory(*args, **kwargs):
+        return _RecordingOrch()
+
+    rc = _dispatch(
+        [],
+        env={"SSH_ORIGINAL_COMMAND": "rollback testproj snap-123"},
+        orchestrator_factory=_factory,
+    )
+
+    out = capsys.readouterr().out
+    assert_ldd_imp9(caplog)
+    assert rc == 0
+    assert calls, "rollback handler должен вызывать orchestrator.rollback"
+    assert calls[0][0] == (), f"rollback вызывается keyword-аргументами, got {calls[0]}"
+    assert calls[0][1] == {"project_name": "testproj", "snapshot_id": "snap-123"}, (
+        f"snapshot-id проброс, got {calls[0]}"
+    )
+    payload = json.loads(out)
+    assert payload["snapshot_id"] == "snap-123"
+
+
+# endregion FUNC_test_dispatch_rollback_snapshot_id
+
+
+# region FUNC_test_dispatch_rollback_no_project_negative
+## @purpose — R5 negative (D8): rollback без project → JSON ERROR + rc 1 (fail-fast, паттерн
+##            health/verify), orchestrator НЕ вызывается (никаких rollback-мутаций).
+# 🧪 TRAP[TEST] · 2026-09-01 · NEGATIVE (R5) · D8 — rollback требует \<project\>
+# · Scenario: SSH_ORIGINAL_COMMAND="rollback" → rc 1, JSON {"status":"ERROR"},
+# ·   "rollback requires \<project\>", recorder пуст
+# · Last fail: N/A (new verb)
+# · Remove if: rollback-контракт меняется
+def test_dispatch_rollback_no_project_negative(capsys, caplog: pytest.LogCaptureFixture) -> None:
+    """R5 negative: rollback без project → JSON ERROR + rc 1, orchestrator НЕ вызывается."""
+    caplog.set_level(logging.INFO)
+    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    class _RecordingOrch:
+        _MSG_ROLLBACK = "rollback не должен вызываться без project"
+
+        def rollback(self, *args, **kwargs):
+            calls.append((args, kwargs))
+            raise AssertionError(self._MSG_ROLLBACK)
+
+    def _factory(*args, **kwargs):
+        return _RecordingOrch()
+
+    rc = _dispatch([], env={"SSH_ORIGINAL_COMMAND": "rollback"}, orchestrator_factory=_factory)
+
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert calls == [], "rollback без project не должен вызывать orchestrator"
+    payload = json.loads(out)
+    assert payload["status"] == "ERROR"
+    assert "rollback requires <project>" in out
+
+
+# endregion FUNC_test_dispatch_rollback_no_project_negative
+
+
 # ── TEST-05 (REF-0006, DevPlan 11 В2): параметризованные traversal-негативы receive/remove ──
 
 
 # region FUNC_test_dispatch_traversal_negatives_receive_remove
-## @purpose — TEST-05 (карточка REF-0006): негативы receive/remove через _dispatch с
+## @purpose — TEST-05 (карточка REF-0006): негативы receive/remove/rollback через _dispatch с
 ##            path-traversal/невалидными project-name. T9.7-валидация отсекает инъекцию
-##            ДО handler'а: orchestrator НЕ вызывается (никаких remove/deploy мутаций),
+##            ДО handler'а: orchestrator НЕ вызывается (никаких remove/rollback/deploy мутаций),
 ##            JSON ERROR + rc 1.
 # 🧪 TRAP[TEST] · 2026-08-25 · NEGATIVE (R5) · TEST-05 — receive/remove traversal через dispatch
 # · Last fail: карточка REF-0006 — «TEST-05 (нет негативов receive/remove)»; T9.7 покрывал
 #   только status-семантику косвенно, явных параметризованных негативов канал не имел
-# · Scenario: SSH_ORIGINAL_COMMAND="receive ../../etc sha" / "remove ../evil" → rc 1,
-#   JSON {"status":"ERROR","error":"Invalid or reserved project name: ..."}, recorder пуст
-# · Remove if: dispatch перестаёт валидировать project-name для receive/remove
+# · Scenario: SSH_ORIGINAL_COMMAND="receive ../../etc sha" / "remove ../evil" /
+#   "rollback ../evil" (D8) → rc 1, JSON {"status":"ERROR","error":"Invalid or reserved project name: ..."},
+#   recorder пуст
+# · Remove if: dispatch перестаёт валидировать project-name для receive/remove/rollback
 @pytest.mark.parametrize(
     ("verb", "bad_project"),
     [
@@ -752,6 +900,9 @@ def test_dispatch_raw_docker_inspect_still_unknown(capsys, caplog: pytest.LogCap
         ("remove", "proj/../../victim"),
         ("remove", "/opt/projects/victim"),
         ("remove", "-rf"),
+        ("rollback", "../evil"),
+        ("rollback", "/opt/projects/victim"),
+        ("rollback", "-rf"),
     ],
     ids=[
         "receive-dotdot-abs",
@@ -762,6 +913,9 @@ def test_dispatch_raw_docker_inspect_still_unknown(capsys, caplog: pytest.LogCap
         "remove-nested-traversal",
         "remove-absolute-path",
         "remove-flag-injection",
+        "rollback-dotdot",
+        "rollback-absolute-path",
+        "rollback-flag-injection",
     ],
 )
 def test_dispatch_traversal_negatives_receive_remove(
@@ -770,15 +924,16 @@ def test_dispatch_traversal_negatives_receive_remove(
     capsys: pytest.CaptureFixture[str],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """receive/remove с traversal-проектом → rc 1, JSON ERROR, orchestrator НЕ вызывается."""
+    """receive/remove/rollback с traversal-проектом → rc 1, JSON ERROR, orchestrator НЕ вызывается."""
     caplog.set_level(logging.INFO)
     calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
 
     class _RecordingOrch:
-        """Recorder: любое обращение к remove/receive = нарушение валидации (тест RED)."""
+        """Recorder: любое обращение к remove/receive/rollback = нарушение валидации (тест RED)."""
 
         _MSG_REMOVE = "remove не должен вызываться для невалидного project-name"
         _MSG_RECEIVE = "receive не должен вызываться для невалидного project-name"
+        _MSG_ROLLBACK = "rollback не должен вызываться для невалидного project-name"
 
         def remove(self, *args, **kwargs):
             calls.append((args, kwargs))
@@ -787,6 +942,10 @@ def test_dispatch_traversal_negatives_receive_remove(
         def receive(self, *args, **kwargs):
             calls.append((args, kwargs))
             raise AssertionError(self._MSG_RECEIVE)
+
+        def rollback(self, *args, **kwargs):
+            calls.append((args, kwargs))
+            raise AssertionError(self._MSG_ROLLBACK)
 
     def _factory(*args, **kwargs):
         return _RecordingOrch()

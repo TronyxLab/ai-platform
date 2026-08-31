@@ -34,6 +34,7 @@
 ##             2026-08-02 | DevPlan 118 D3 — перенесён shared/ → deploy/ (рядом с потребителем orchestrator_cli)
 ##             2026-08-13 | DevPlan 164 W3-1 — deploy.sh удалён: _deploy_script_path и path-strip
 ##                         удалены; _strip_prefixes = trim-only; config-параметр удалён
+##             2026-09-01 | launch-validation D8 — +rollback в args-extraction (rollback <project> [<snapshot-id>])
 # endregion MODULE_CONTRACT
 
 import json
@@ -99,7 +100,7 @@ def _strip_prefixes(raw: str) -> str:
 def classify_verb(cleaned: str) -> str:
     """Classify a cleaned SSH command string into a canonical verb (exact-match, D2).
 
-    ▶ ┌cleaned┐ → ◇ exact match (ping|exit|status|health|verify|remove|receive) → ⎋ verb
+    ▶ ┌cleaned┐ → ◇ exact match (ping|exit|status|health|verify|remove|receive|rollback) → ⎋ verb
     │           → ◇ prefix match (verb + " ") → ⎋ verb
     │           → ✗ unknown → raise ConfigValidationError
 
@@ -107,7 +108,7 @@ def classify_verb(cleaned: str) -> str:
     ##            NO default fallback: unrecognized input raises ConfigValidationError
     ##            (честные exit-коды B4, `deploy <project> <sha> [env]` удалён — D2).
     ## @io — ⇥ cleaned: str → ⎋ verb: str (one of CANONICAL_VERBS from shared/verbs.py)
-    ## @complexity — O(N) where N = len(CANONICAL_VERBS) (7)
+    ## @complexity — O(N) where N = len(CANONICAL_VERBS) (8)
     ## @invariants
     ##   - Exact match (bare verb) checked BEFORE prefix match — голый `status` → verb status (U-56)
     ##   - Prefix match: verb + " " (аргументы после пробела)
@@ -159,7 +160,9 @@ def parse_ssh_command(raw: str) -> ParsedSshCommand:
     ##   - args is None for ping/exit verbs, str for all others
     ##   - receive: args = "<project> [<sha>]" (два токена, D5 — версия из аргументов)
     ##   - status/remove: args = "<project>"; health: args = "<project> [<service>]"
-    ##     (service опционален; дефолт service = project в handler'е); verify: args = "<node>"
+    ##     (service опционален; дефолт service = project в handler'е); verify: args = "<node>";
+    ##     rollback: args = "<project> [<snapshot-id>]" (snapshot опционален — дефолт latest,
+    ##     launch-validation D8)
     ##   - Unknown verb → ConfigValidationError propagates (никогда не deploy-фолбэк)
     ##   - IMP:9 log emitted on successful parse
     ##   - IMP:7 log emitted for each stripping step
@@ -185,7 +188,9 @@ def parse_ssh_command(raw: str) -> ParsedSshCommand:
         # receive <project> [<sha>] — два токена; версия (sha) из аргументов (D5)
         prefix = verb + " "
         args = cleaned[len(prefix) :].strip() if cleaned.startswith(prefix) else None
-    elif verb in {"status", "remove", "health"} or verb == "verify":
+    elif verb in {"status", "remove", "health", "rollback"} or verb == "verify":
+        # status/remove: "<project>"; health: "<project> [<service>]"; verify: "<node> [<project>]";
+        # rollback (D8): "<project> [<snapshot-id>]" — positional, как status/remove
         prefix = verb + " "
         args = cleaned[len(prefix) :].strip() if cleaned.startswith(prefix) else None
     else:  # pragma: no cover — CANONICAL_VERBS закрыто, unreachable
