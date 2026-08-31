@@ -24,6 +24,7 @@ import logging
 import os
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 from core.internal.bootstrap.lifecycle import cli
 from tests._conftest.ldd import ldd_trajectory
@@ -279,3 +280,147 @@ def test_forced_command_smoke_fail_branches(caplog, tmp_path, monkeypatch) -> No
 
 
 # endregion Tests: _forced_command_smoke
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region Tests: re-exec на Python 3.14 (P0 F-01, 2026-08-31)
+# ═══════════════════════════════════════════════════════════════════
+
+
+class _FakeSMRunPhases:
+    """Минимальный fake для _run_phases re-exec wiring (фазы НЕ выполняются)."""
+
+    def __init__(self) -> None:
+        self.executed: list[str] = []
+        self.state = SimpleNamespace(steps={}, errors=[], warnings=[], mode="init")
+        self.core_dir: str | None = None
+
+    def phase_needs_rerun(self, _phase: str) -> bool:
+        return False
+
+    def execute_phase(self, phase_value: str) -> bool:
+        self.executed.append(phase_value)
+        return True
+
+    def save(self) -> None:
+        return None
+
+
+def _stale_interpreter_ctx(monkeypatch, tmp_path, target_version: str | None) -> str:
+    """Старый интерпретатор (< 3.14) + (опционально) целевой python в tmp: вернуть путь цели."""
+    monkeypatch.delenv(cli._REEXEC_MARKER_ENV, raising=False)
+    cli._reexec_probe_cache.clear()
+    monkeypatch.setattr(cli.sys, "version_info", (3, 12, 0, "final", 0))
+    target = tmp_path / "python3.14"
+    if target_version is not None:
+        target.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        target.chmod(0o755)
+        fake = subprocess.CompletedProcess(args=[], returncode=0, stdout=f"Python {target_version}\n", stderr="")
+        monkeypatch.setattr(cli.subprocess, "run", lambda *_a, **_k: fake)
+    monkeypatch.setattr(cli, "_REEXEC_PYTHON_TARGET", str(target))
+    return str(target)
+
+
+# 🧪 TRAP[TEST] · 2026-08-31 · guard (F-01) · современный интерпретатор (>= 3.14) → НЕ re-exec
+# · Scenario: dev/CI/тесты на Python 3.14 — версия-гейт возвращает None ДО проверок файловой
+# ·   системы: никакой os.execv из тестов (test-safety инвариант _should_reexec_python)
+# · Last fail: N/A (guard — P0 F-01)
+# · Remove if: механика re-exec (F-01) изменится
+@ldd_trajectory
+def test_should_reexec_python_modern_interpreter_none(caplog) -> None:
+    """На Python >= 3.14 _should_reexec_python() → None (тесты/CI никогда не re-exec'ятся)."""
+    caplog.set_level(logging.INFO)
+    cli._reexec_probe_cache.clear()
+
+    assert cli._should_reexec_python() is None, (
+        "test-safety: интерпретатор >= 3.14 обязан давать None (иначе os.execv убьёт тест-процесс)"
+    )
+    logger.critical("[IMP:9][test] _should_reexec_python → None на >=3.14 (test-safe) — OK (F-01)")
+
+
+# 🧪 TRAP[TEST] · 2026-08-31 · guard (F-01) · env-маркер отключает re-exec (loop-guard)
+# · Scenario: BOOTSTRAP_PYTHON_REEXEC установлен (после первого execv) → None, даже если
+# ·   интерпретатор старый и целевой python существует — защита от бесконечного re-exec loop
+# · Last fail: N/A (guard — P0 F-01)
+# · Remove if: механика re-exec (F-01) изменится
+def test_should_reexec_python_marker_disables(monkeypatch, tmp_path) -> None:
+    """Маркер BOOTSTRAP_PYTHON_REEXEC → None (loop-guard: один re-exec за запуск)."""
+    _stale_interpreter_ctx(monkeypatch, tmp_path, target_version="3.14.6")
+    monkeypatch.setenv(cli._REEXEC_MARKER_ENV, "1")
+
+    assert cli._should_reexec_python() is None, (
+        "loop-guard: маркер обязан блокировать повторный re-exec, даже при старом интерпретаторе"
+    )
+    logger.critical("[IMP:9][test] re-exec marker → None (loop-guard) — OK (F-01)")
+
+
+# 🧪 TRAP[TEST] · 2026-08-31 · behavior (F-01) · старый интерпретатор + нет цели → None
+# · Scenario: голый узел ДО φ1 — /usr/local/bin/python3 ещё не установлен (python_deps не бежал)
+# ·   → re-exec невозможен, φ1 обязан выполниться текущим (3.12) интерпретатором
+# · Last fail: 2026-08-31 P0 cold bootstrap asi-team-vps
+# · Remove if: механика re-exec (F-01) изменится
+def test_should_reexec_python_stale_no_target_none(monkeypatch, tmp_path) -> None:
+    """Старый интерпретатор + целевой python ОТСУТСТВУЕТ → None (φ1 ставит его сам)."""
+    _stale_interpreter_ctx(monkeypatch, tmp_path, target_version=None)
+
+    assert cli._should_reexec_python() is None, "до установки 3.14 (φ1) re-exec невозможен — целевой файл отсутствует"
+    logger.critical("[IMP:9][test] stale interpreter + no target → None (φ1 ставит 3.14) — OK (F-01)")
+
+
+# 🧪 TRAP[TEST] · 2026-08-31 · behavior (F-01) · старый интерпретатор + цель 3.14 → путь
+# · Scenario: ПОСЛЕ φ1 python_deps поставил 3.14 (цель отдаёт 3.14.x) → re-exec возвращает
+# ·   путь цели — _run_phases перезапустит lifecycle на 3.14 (pydantic доступен)
+# · Last fail: 2026-08-31 P0 cold bootstrap asi-team-vps
+# · Remove if: механика re-exec (F-01) изменится
+def test_should_reexec_python_stale_target_314_returns_path(monkeypatch, tmp_path) -> None:
+    """Старый интерпретатор + целевой python = 3.14 → возвращается путь цели."""
+    target = _stale_interpreter_ctx(monkeypatch, tmp_path, target_version="3.14.6")
+
+    result = cli._should_reexec_python()
+
+    assert result == target, f"цель 3.14 доступна → re-exec на {target}, got {result!r}"
+    logger.critical("[IMP:9][test] stale interpreter + target 3.14 → re-exec path — OK (F-01)")
+
+
+# 🧪 TRAP[TEST] · 2026-08-31 · behavior (F-01) · цель НЕ 3.14 → None (probe-guard)
+# · Scenario: /usr/local/bin/python3 существует, но отдаёт НЕ 3.14 (случайный/иной python) →
+# ·   re-exec НЕ триггерится (версия-проуба цели — честная проверка, не только isfile)
+# · Last fail: N/A (probe-guard — P0 F-01)
+# · Remove if: механика re-exec (F-01) изменится
+def test_should_reexec_python_target_not_314_none(monkeypatch, tmp_path) -> None:
+    """Целевой python отдаёт 3.12 → None (re-exec ТОЛЬКО на genuine 3.14 от python_deps)."""
+    _stale_interpreter_ctx(monkeypatch, tmp_path, target_version="3.12.5")
+
+    assert cli._should_reexec_python() is None, (
+        "probe-guard: цель обязана отдавать 3.14 (иначе loop-риск на случайный python)"
+    )
+    logger.critical("[IMP:9][test] target not-3.14 → None (probe-guard) — OK (F-01)")
+
+
+# 🧪 TRAP[TEST] · 2026-08-31 · P0 (F-01) · wiring: _run_phases re-exec'ит ДО выполнения фаз
+# · Scenario: _should_reexec_python возвращает цель (после φ1) → _run_phases вызывает
+# ·   _reexec_lifecycle(target) и НЕ выполняет φ2..φ8 текущим (3.12) интерпретатором
+# · Last fail: 2026-08-31 P0 cold bootstrap asi-team-vps
+# · Remove if: механика re-exec (F-01) изменится
+@ldd_trajectory
+def test_run_phases_reexec_wiring(caplog, monkeypatch) -> None:
+    """_run_phases: re-exec target доступен → _reexec_lifecycle(target), фазы НЕ выполняются."""
+    caplog.set_level(logging.INFO)
+    reexec_calls: list[str] = []
+    monkeypatch.setattr(cli, "_should_reexec_python", lambda: "/usr/local/bin/python3")
+    monkeypatch.setattr(cli, "_reexec_lifecycle", lambda target: reexec_calls.append(target) or 0)
+
+    fake_sm = _FakeSMRunPhases()
+    exit_code = cli._run_phases(fake_sm, ["system_bootstrap", "user_accounts"], mode_label="init")
+
+    assert reexec_calls == ["/usr/local/bin/python3"], (
+        f"re-exec обязан вызваться с целевым интерпретатором, got {reexec_calls}"
+    )
+    assert exit_code == 0, "exit-код re-exec (возврат _reexec_lifecycle) должен пробрасываться"
+    assert fake_sm.executed == [], (
+        "фазы НЕ должны выполняться до re-exec (текущий 3.12 не исполняет φ2..φ8 без pydantic)"
+    )
+    logger.critical("[IMP:9][test] _run_phases re-exec wiring: _reexec_lifecycle(target) — OK (F-01)")
+
+
+# endregion Tests: re-exec на Python 3.14 (P0 F-01, 2026-08-31)

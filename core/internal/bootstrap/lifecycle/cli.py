@@ -32,6 +32,10 @@
 ##           CLI-args, таблица пар), _recover_corrupt_state (B26-аудит + unlink + recreate),
 ##           _run_single_phase, _reset_state, _validate_init_env; run_init/run_update ~90%
 ##           дубль → _run_phases(sm, phases, post_hooks) (реализация дедуплицирована)
+## @changes  2026-08-31 · P0 (F-01, asi-team-vps cold bootstrap) — re-exec lifecycle на
+##           Python 3.14 после φ1 (python_deps): _should_reexec_python/_reexec_lifecycle +
+##           pre-phase проверка в _run_phases; системный 3.12 без pydantic больше не выполняет
+##           φ2..φ8 (module-level pydantic-импорты замораживали extract_domains_for_context=None)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -81,6 +85,17 @@ logger = logging.getLogger(__name__)
 _DISK_WARN_PCT: float = 90.0  # порог предупреждения заполнения диска (%)
 
 DEFAULT_STATE_FILE = "/var/lib/platform/.bootstrap/state.json"
+
+# ── P0 (F-01, 2026-08-31): re-exec lifecycle на Python 3.14 после установки python_deps ──
+# Голая нода: системный python3 = 3.12 БЕЗ pydantic. φ1 (system_bootstrap) через python_deps.py
+# ensure ставит 3.14 (deadsnakes) + платформенные deps и создаёт /usr/local/bin/python3 →
+# /usr/bin/python3.14 (PATH-порядок). Текущий процесс cli.py остаётся на 3.12 — module-level
+# импорты deploy-цепочки (pydantic) замораживали extract_domains_for_context=None (F-01 P0).
+# Re-exec через os.execv (тот же PID → exit-код пробрасывается в node-lifecycle.sh); done-фазы
+# (в т.ч. φ1) лежат в state.json — новый процесс скипает их (resume-семантика state_machine).
+_REEXEC_PYTHON_TARGET = "/usr/local/bin/python3"  # канонический интерпретатор после python_deps (SoT: python_deps.py)
+_REEXEC_MIN_VERSION = (3, 14)  # целевая версия (deadsnakes; python_deps.py — SoT версии)
+_REEXEC_MARKER_ENV = "BOOTSTRAP_PYTHON_REEXEC"  # loop-guard: маркер ставится перед execv
 
 
 # region CLASS_CliArgs
@@ -821,6 +836,89 @@ def run_update_mode(
 # endregion FUNC_run_update_mode
 
 
+# region FUNC__should_reexec_python
+## @purpose  Решение о re-exec на целевой интерпретатор (P0 F-01): текущий python СТАРШЕ 3.14
+##           (системный 3.12 голой ноды), /usr/local/bin/python3 установлен python_deps (φ1)
+##           и реально отдаёт 3.14 — вернуть путь для os.execv; иначе None (продолжать текущим).
+## @io       ⇥ — → ⎋ str | None (путь целевого интерпретатора или None)
+## @complexity O(1) + 1 subprocess-probe (один раз на процесс — кэш по пути)
+## @invariants
+##   - Версия-гейт sys.version_info >= (3, 14) → None (dev/CI/тесты на 3.14 — никогда не re-exec)
+##   - Маркер _REEXEC_MARKER_ENV установлен → None (loop-guard: один re-exec за запуск)
+##   - Целевой python обязан ОТДАВАТЬ 3.14 (subprocess-probe, кэш в _reexec_probe_cache):
+##     случайный /usr/local/bin/python3 иной версии НЕ триггерит re-exec
+##   - realpath-совпадение с sys.executable → None (уже на целевом)
+##   - Тест-безопасность: venv 3.14 (dev/CI) и машины без /usr/local/bin/python3 — всегда None
+_reexec_probe_cache: dict[str, str] = {}  # target path → version (subprocess-probe, один раз)
+
+
+def _should_reexec_python() -> str | None:
+    """Return the upgraded interpreter path when re-exec is warranted, else None (P0 F-01)."""
+    if os.environ.get(_REEXEC_MARKER_ENV):
+        return None
+    if sys.version_info >= _REEXEC_MIN_VERSION:
+        return None
+    if not os.path.isfile(_REEXEC_PYTHON_TARGET):
+        return None
+    # Версия-проуба цели (кэш): re-exec ТОЛЬКО на genuine 3.14 (python_deps-артефакт).
+    if _REEXEC_PYTHON_TARGET not in _reexec_probe_cache:
+        try:
+            probe = subprocess.run(
+                [_REEXEC_PYTHON_TARGET, "--version"],
+                capture_output=True,
+                text=True,
+                timeout=SYSTEM_CMD_TIMEOUT,
+                check=False,
+            )
+            _reexec_probe_cache[_REEXEC_PYTHON_TARGET] = probe.stdout.strip() or probe.stderr.strip()
+        except (OSError, subprocess.TimeoutExpired) as e:
+            logger.warning("[IMP:7][reexec] Interpreter probe failed (non-fatal): %s", e)
+            _reexec_probe_cache[_REEXEC_PYTHON_TARGET] = ""
+    target_version = _reexec_probe_cache[_REEXEC_PYTHON_TARGET]
+    # Формат `python3.14 --version`: "Python 3.14.6" — префикс "Python {major}.{minor}"
+    # (версия-проуба обязана совпасть с каноническим артефактом python_deps, SoT: python_deps.py)
+    if not target_version.startswith(f"Python {_REEXEC_MIN_VERSION[0]}.{_REEXEC_MIN_VERSION[1]}"):
+        return None
+    try:
+        same = Path(_REEXEC_PYTHON_TARGET).samefile(sys.executable)
+    except OSError:
+        same = os.path.realpath(_REEXEC_PYTHON_TARGET) == os.path.realpath(sys.executable)
+    if same:
+        return None
+    return _REEXEC_PYTHON_TARGET
+
+
+# endregion FUNC__should_reexec_python
+
+
+# region FUNC__reexec_lifecycle
+## @purpose  Re-exec текущего процесса на целевой интерпретатор (P0 F-01). os.execv заменяет
+##           процесс cli.py — функция НЕ возвращается (int для типизации). Состояние фаз уже
+##           в state.json (done-фазы скипаются новым процессом — resume-семантика state_machine);
+##           идемпотентность сохранена: второй прогон на 3.14 — no-op для done-фаз.
+## @io       ⇥ target: str — путь интерпретатора → ⎋ int (unreachable; execv не возвращается)
+## @complexity O(1) — env-marker + os.execv
+## @invariants
+##   - Маркер _REEXEC_MARKER_ENV ставится ДО execv (loop-guard)
+##   - argv = [target, *sys.argv[1:]] — сохраняет ВСЕ CLI-аргументы (--mode/--node-*/--owner-key...)
+##   - state.json НЕ трогается (continuation через done-skip — главный инвариант идемпотентности)
+def _reexec_lifecycle(target: str) -> int:
+    """Re-exec the lifecycle CLI on the upgraded interpreter (os.execv — never returns)."""
+    os.environ[_REEXEC_MARKER_ENV] = "1"
+    logger.critical(
+        "[IMP:10][reexec] Switching lifecycle interpreter to %s (current %s < %s) — "
+        "resuming from state.json (done phases skipped)",
+        target,
+        sys.executable,
+        ".".join(str(v) for v in _REEXEC_MIN_VERSION),
+    )
+    os.execv(target, [target, *sys.argv[1:]])  # ruff: ignore[S606] — осознанный exec без shell (re-exec, фиксированный путь, 0 инъекции)
+    return 1  # pragma: no cover — execv никогда не возвращается
+
+
+# endregion FUNC__reexec_lifecycle
+
+
 # region FUNC__run_phases
 ## @purpose — Общий runner фаз init/update (W5-C2: run_init_mode/run_update_mode ~90% дубль,
 ##            research-A §4). Семантика 1:1 с pre-refactor: done/skip-проверка (dict + StepState,
@@ -860,6 +958,14 @@ def _run_phases(
     total = len(phases)
     for i, phase in enumerate(phases, 1):
         logger.info("[IMP:9][run_%s] Phase %d/%d: %s", mode_label, i, total, phase)
+
+        # ── P0 (F-01, 2026-08-31): re-exec на Python 3.14, если текущий интерпретатор устарел ──
+        # Срабатывает ДО любой pending-фазы: после φ1 (который через python_deps ставит 3.14) —
+        # перед φ2; при resume/update — перед первой незавершённой фазой. done-фазы (в т.ч. φ1)
+        # уже в state.json — новый процесс скипает их (resume-семантика state_machine, идемпотентно).
+        reexec_target = _should_reexec_python()
+        if reexec_target is not None:
+            return _reexec_lifecycle(reexec_target)
 
         # ── Check if already done ──
         phase_state = sm.state.steps.get(phase)

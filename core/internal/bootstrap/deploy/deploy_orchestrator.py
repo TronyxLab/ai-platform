@@ -36,6 +36,9 @@
 ## @changes   2026-08-25 · REF-0110 (meta-refactoring S-пакет) — kahn-линеаризация и для sequential
 ##            (порядок node.yaml больше не авторитетен); topo-failure → fail-fast ConfigValidationError
 ##            (без деградации в unordered fallback); critical-failure → abort remaining
+## @changes   2026-08-31 · P0 (F-01, asi-team-vps cold bootstrap) — config_renderer → lazy import
+##            в _render_litellm_config (module-level pydantic-цепочка ломала импорт context_deployer
+##            на системном python3 3.12; единственное использование — строка 1444)
 ## @modulemap
 ##   ModuleDeployResult [W:1] — dataclass: deployed, failed, crit_count, warn_count, exit_code
 ##   ModuleLists [W:1] — dataclass: all_names, enabled_names, overlays
@@ -120,7 +123,11 @@ from core.internal.bootstrap.deploy.orchestrator_metrics import (
 from core.internal.bootstrap.deploy.orchestrator_metrics import (
     status_metrics_json as _metrics_status_metrics_json,
 )
-from core.internal.llm import config_renderer
+
+# P0 (F-01, 2026-08-31): config_renderer импортируется ЛЕНИВО внутри _render_litellm_config —
+# module-level import тянул pydantic-цепочку (llm/__init__ → policy_schema → pydantic) в
+# import deploy_orchestrator → context_deployer → domains.py: на голой ноде системный python3
+# (3.12, до φ1) не имеет pydantic → ImportError замораживал extract_domains_for_context=None.
 from core.internal.shared import deploy_paths  # 142 W2: status-metrics.json → persistent run
 from core.internal.shared.compose_files import resolve_compose_file  # plan 012 T10: публичный резолвер
 from core.internal.shared.compose_profiles import load_profiles as compose_profiles_load_profiles  # plan 012 T10
@@ -1441,6 +1448,13 @@ def _render_litellm_config(core_dir: str) -> None:
         _metrics_render_llm_summary(core_dir, str(policy_path), str(output_path)),
     )
     try:
+        # P0 (F-01, 2026-08-31): lazy import в точке использования — module-level
+        # `from core.internal.llm import config_renderer` делал pydantic обязательным для
+        # ЛЮБОГО импорта deploy_orchestrator (→ context_deployer → domains.py), ломая
+        # bootstrap на системном python3 3.12 без pydantic. Единственное использование —
+        # здесь; pydantic нужен только при реальном рендере (3.14-рантайм после φ1).
+        from core.internal.llm import config_renderer
+
         config_renderer.render_to_file(policy_path, output_path)
         logger.info("[IMP:9][_render_litellm_config][done] litellm-config.yml rendered")
     # ruff: ignore[BLE001] — DEPLOY_BEST_EFFORT: широкий спектр helper-API (git/yaml/jinja/subprocess/docker)

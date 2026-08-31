@@ -324,4 +324,45 @@ def test_ssl_provision_import_available_provisioned(tmp_path, caplog, monkeypatc
 # endregion Behavior: P0 (2026-08-27) — import-unavailable → честный статус
 
 
+# region Behavior: P0 (2026-08-31, F-01) — extractor-unavailable ≠ converged (домены неопределимы)
+
+
+# 🧪 TRAP[TEST] · 2026-08-31 · P0 (F-01) · экстрактор недоступен + orchestrate доступен → skipped_import
+# · Scenario: cert_orchestrator импортировался, но context_deployer НЕ импортировался
+# ·   (ModuleNotFoundError: pydantic на системном python3 3.12 голой ноды) → домены НЕОПРЕДЕЛИМЫ.
+# ·   ДО фикса это давало "converged" → φ7 «SSL certificates provisioned» (done) при НЕвыпущенных
+# ·   сертах → nginx crash-loop «cannot load certificate» (bootstrap exit 2, asi-team-vps).
+# · Last fail: 2026-08-31 P0 cold bootstrap asi-team-vps
+# · Remove if: контракт статусов ssl_provision_via_orchestrator изменится
+def test_ssl_provision_extractor_unavailable_skipped_import_not_converged(tmp_path, caplog, monkeypatch) -> None:
+    """orchestrate_certs доступен + extract_domains_for_context=None → "skipped_import", НЕ "converged"."""
+    caplog.set_level(0)
+    node_yaml = tmp_path / "node.yaml"
+    node_yaml.write_text("projects: []\nmodules: []\n")
+
+    orchestrate_calls: list[tuple] = []
+
+    def _fake_orchestrate(*args, **kwargs):
+        orchestrate_calls.append((args, kwargs))
+        return object()  # never reached — extractor unavailable → skipped_import ДО вызова
+
+    monkeypatch.setattr(domains_helpers, "orchestrate_certs", _fake_orchestrate)
+    monkeypatch.setattr(domains_helpers, "extract_domains_for_context", None)  # экстрактор недоступен
+
+    result = domains_helpers.ssl_provision_via_orchestrator(str(tmp_path), str(node_yaml))
+
+    assert result == "skipped_import", (
+        f"экстрактор недоступен → обязан 'skipped_import' (не 'converged' — ложный success φ7), got {result!r}"
+    )
+    assert not orchestrate_calls, "orchestrate_certs НЕ должен вызываться при недоступном экстракторе"
+    # Импорт-скип НЕ тихий: IMP:10 фиксирует неопределимость доменов (Anti-Illusion, R1)
+    assert any("[IMP:10]" in r.message for r in caplog.records), (
+        "P0 FAIL: недоступный экстрактор обязан логироваться IMP:10 (не тихий skip)"
+    )
+    logger.critical("[IMP:9][test] extractor-unavailable → skipped_import (НЕ converged) — φ7 не рапортует done")
+
+
+# endregion Behavior: P0 (2026-08-31, F-01) — extractor-unavailable ≠ converged (домены неопределимы)
+
+
 # endregion Behavior: ssl_provision_via_orchestrator with fake context
