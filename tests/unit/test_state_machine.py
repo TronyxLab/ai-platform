@@ -1744,7 +1744,8 @@ def test_update_best_effort_preserved(caplog):
 
 # 🧪 TRAP[TEST] · REGRESSION · plan 012 T17 · report печатает summary (модули/TLS/projects/next)
 # · Scenario: init-mode завершился → post_bootstrap_report выводит BOOTSTRAP REPORT с
-#   deployed/failed, TLS-статусом, awaiting projects и 3 next commands; не влияет на exit
+#   deployed/failed, TLS-статусом, awaiting projects и 3 next commands; не влияет на exit.
+#   T17-fix: docker-проба и projects_base — DI-фейки (0 реальных docker-вызовов в unit-тесте).
 # · Last fail: N/A (new step — plan 012 T17)
 # · Remove if: report step удалён/перенесён
 def test_post_bootstrap_report_emits_summary(caplog, state_file, tmp_path, monkeypatch):
@@ -1770,18 +1771,28 @@ def test_post_bootstrap_report_emits_summary(caplog, state_file, tmp_path, monke
     monkeypatch.setenv("NODE_NAME", "test-node")
 
     with caplog.at_level(logging.INFO):
-        lifecycle_cli.post_bootstrap_report(sm)
+        lifecycle_cli.post_bootstrap_report(
+            sm,
+            # T17-fix DI: tmp_path base + fake docker probe — без реального docker/субпроцессов
+            projects_base=str(tmp_path / "projects"),
+            docker_check_fn=lambda _name: False,
+        )
 
     combined = "\n".join(r.getMessage() for r in caplog.records)
     assert "BOOTSTRAP REPORT" in combined, "report шапка отсутствует"
     assert "Next commands" in combined, "нет секции next commands"
     assert "make e2e-verify NODE=test-node" in combined, "нет e2e-verify suggestion"
     assert "app-one" in combined, "awaiting project отсутствует"
+    assert "Projects deployed: 0/1" in combined, "deployed-строка (N/M) отсутствует"
     assert "postgres: failed to pull" in combined, "failed-список отсутствует"
 
     # JSON-вариант
     monkeypatch.setenv("REPORT_JSON", "1")
-    lifecycle_cli.post_bootstrap_report(sm)
+    lifecycle_cli.post_bootstrap_report(
+        sm,
+        projects_base=str(tmp_path / "projects"),
+        docker_check_fn=lambda _name: False,
+    )
     logger.info("[IMP:9][test][T17] report summary + JSON PASS")
 
 

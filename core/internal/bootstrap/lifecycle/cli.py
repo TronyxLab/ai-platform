@@ -61,10 +61,14 @@ from core.internal.bootstrap.lifecycle.state_machine import (
     StepState,
     phase_is_done,
 )
+
+# T17-fix: честная awaiting-классификация — docker ps ТОЛЬКО через канонический sole-path
+# (гейт docker_sole_path, allowlist пуст; прямые subprocess-вызовы docker запрещены).
+from core.internal.shared import docker_ops
 from core.internal.shared.audit_logger import write_audit_entry
 
 # B3: канонический platform base — shared/deploy_paths (литерал /opt/platform удалён)
-from core.internal.shared.deploy_paths import platform_remote_base
+from core.internal.shared.deploy_paths import DEFAULT_PROJECTS_BASE, platform_remote_base
 from core.internal.shared.exceptions import PlatformError, PlatformFatalError
 
 # W1-A1 (план 170): литералы таймаутов lifecycle-cli → канон SoT (AMBER-зачистка research-D §D1).
@@ -72,6 +76,7 @@ from core.internal.shared.exceptions import PlatformError, PlatformFatalError
 # LIFECYCLE_CMD_TIMEOUT; 60 (preflight --parse-warnings) → SYSTEM_CMD_TIMEOUT.
 from core.internal.shared.timeouts import (
     CONVERGE_DOCKER_TIMEOUT,
+    DOCKER_CMD_TIMEOUT,
     LIFECYCLE_CMD_TIMEOUT,
     SYSTEM_CMD_TIMEOUT,
 )
@@ -664,19 +669,179 @@ def _final_verification_pass(core_dir: str) -> None:
 # endregion FUNC_final_verification_pass
 
 
+# region FUNC__is_stale_phase_message
+## @purpose  Stale-детектор записей state.errors/warnings (plan 012 T17-fix): сообщение вида
+##           "Phase <phase> failed: ..." / "Phase <phase> completed with non-fatal issues ..."
+##           ассоциируется с фазой; если фаза СЕЙЧАС done (успешно перевыполнена в этом или
+##           прошлом прогоне) — запись stale (ошибка прошлого run) и не показывается в отчёте.
+## @io       ⇥ msg: str, done_phases: set[str] → ⎋ bool (True = stale)
+## @complexity O(1)
+## @invariants
+##   - Матч ТОЛЬКО по каноническому префиксу "Phase <name>" (единый формат писателей:
+##     _audit_failed / _mark_phase_with_warnings) — детерминированный, без ложных срабатываний
+##   - Записи БЕЗ фазового префикса (легаси/внешние) НИКОГДА не считаются stale (показываются)
+##   - done_phases — множество фаз со статусом done (phase_is_done; done_with_warnings ≠ done)
+def _is_stale_phase_message(msg: str, done_phases: set[str]) -> bool:
+    """Return True if a state error/warning references a phase that is currently done (T17-fix)."""
+    if not msg.startswith("Phase "):
+        return False
+    # "Phase <phase> failed: ..." / "Phase <phase> completed with non-fatal issues ..." →
+    # первый токен после префикса = имя фазы (snake_case ключи steps — без пробелов).
+    phase = msg[len("Phase ") :].split(" ", 1)[0]
+    return phase in done_phases
+
+
+# endregion FUNC__is_stale_phase_message
+
+
+# region FUNC__prune_phase_records
+## @purpose  Удалить stale-записи state.errors/warnings для фазы, успешно перевыполненной
+##           (plan 012 T17-fix, mark-done prune). state.errors АККУМУЛИРУЕТ ошибки прошлых
+##           прогонов: run N failed → "Phase X failed: ..." в state; run N+1 фаза X успешна →
+##           запись stale для ЛЮБОГО потребителя (отчёт, write_audit_log, Telegram).
+## @io       ⇥ sm: StateMachine, phase: str → ⎋ None (мутирует sm.state.errors/warnings)
+## @complexity O(E + W) — фильтрация списков
+## @invariants
+##   - Удаляются ТОЛЬКО записи с префиксом "Phase {phase}" (детерминированный матч)
+##   - Структура state.json НЕ меняется (errors/warnings остаются list[str]) — back-compatible
+##     со старыми файлами на нодах; конверсия в (phase, message)-кортежи отклонена
+##   - Записи без фазового префикса сохраняются (легаси/внешние)
+##   - Вызывается из _mark_phase_success ДО sm.save() — чистка персистится атомарно
+## @rationale  Q: Почему чистка в mark-done, а не полный сброс errors при успехе run?
+##   A: Полный сброс маскировал бы «недовыполненные» фазы (failed/pending) с их текущими
+##   ошибками; прицельная чистка по фазе сохраняет честный остаток для ещё-не-выполненных фаз.
+def _prune_phase_records(sm: StateMachine, phase: str) -> None:
+    """Remove stale errors/warnings for a phase that just completed successfully (T17-fix)."""
+    prefix = f"Phase {phase}"
+    sm.state.errors = [e for e in sm.state.errors if not e.startswith(prefix)]
+    sm.state.warnings = [w for w in sm.state.warnings if not w.startswith(prefix)]
+    logger.info(
+        "[IMP:8][report][prune] Stale records for phase %s removed (errors=%d warnings=%d)",
+        phase,
+        len(sm.state.errors),
+        len(sm.state.warnings),
+    )
+
+
+# endregion FUNC__prune_phase_records
+
+
+# region FUNC__docker_container_live
+## @purpose  Best-effort docker-проба контейнера проекта на ноде (plan 012 T17-fix):
+##           docker ps --filter name=⟨project⟩ через канонический sole-path docker_ops.
+##           Используется для честной классификации "Awaiting project deploy".
+## @io       ⇥ project_name: str, timeout: int = DOCKER_CMD_TIMEOUT → ⎋ bool (live) |
+##              False (нет контейнера) | None (docker недоступен/ошибка/таймаут)
+## @complexity O(1) — 1 docker ps subprocess
+## @invariants
+##   - Never raise: docker отсутствует/ошибка/таймаут → None (best-effort контракт отчёта)
+##   - Docker CLI ТОЛЬКО через shared/docker_ops (гейт docker_sole_path, allowlist пуст)
+##   - Timeout из SoT shared/timeouts (DOCKER_CMD_TIMEOUT) — никаких литералов
+def _docker_container_live(project_name: str, *, timeout: int = DOCKER_CMD_TIMEOUT) -> bool | None:
+    """Best-effort docker probe: any container matching project running on the node (T17-fix)."""
+    try:
+        result = docker_ops.docker_ps(filters=[f"name={project_name}"], format="{{.Names}}", timeout=timeout)
+    # ruff: ignore[BLE001] — best-effort (DI-fake может raise; никогда не raise)
+    except Exception as exc:  # noqa: EXC — best-effort контракт отчёта
+        logger.warning("[IMP:7][report][docker] probe failed for %s: %s", project_name, exc)
+        return None
+    if result.returncode != 0:
+        logger.warning(
+            "[IMP:7][report][docker] docker ps failed (rc=%d) for %s — docker unavailable",
+            result.returncode,
+            project_name,
+        )
+        return None
+    return bool((result.stdout or "").strip())
+
+
+# endregion FUNC__docker_container_live
+
+
+# region FUNC__classify_projects
+## @purpose  Честная классификация проектов node.yaml на deployed/awaiting (plan 012 T17-fix):
+##           deployed = /opt/projects/⟨name⟩/docker-compose.yml существует ИЛИ live-контейнер
+##           (docker ps); иначе awaiting (реально ожидает деплоя). Docker недоступен →
+##           docker-факт unknown, compose-факт остаётся, флаг unavailable поднимается.
+## @io       ⇥ project_names: list[str], projects_base: str = deploy_paths.DEFAULT_PROJECTS_BASE (DI: tmp_path),
+##              docker_check_fn: Callable[[str], bool | None] | None = None
+##              (DI: fake-пробер без реального docker; None = _docker_container_live)
+##           → ⎋ (deployed: list[str], awaiting: list[str], docker_unavailable: bool)
+## @complexity O(P) + O(P) docker-проб
+## @invariants
+##   - Порядок проверки детерминирован: compose-файл (без docker) → docker-проба
+##   - docker_check_fn вернул None → docker_unavailable=True (не raise)
+##   - Пустой project_names → ([], [], False) без docker-вызовов
+##   - Never raise — любое исключение пробы → WARN + None (best-effort контракт отчёта)
+def _classify_projects(
+    project_names: list[str],
+    *,
+    projects_base: str = DEFAULT_PROJECTS_BASE,
+    docker_check_fn: Callable[[str], bool | None] | None = None,
+) -> tuple[list[str], list[str], bool]:
+    """Classify projects as deployed/awaiting on the node (T17-fix honest report)."""
+    check = _docker_container_live if docker_check_fn is None else docker_check_fn
+    base = Path(projects_base)
+    deployed: list[str] = []
+    awaiting: list[str] = []
+    docker_unavailable = False
+    for name in project_names:
+        if (base / name / "docker-compose.yml").is_file():
+            deployed.append(name)
+            continue
+        try:
+            live = check(name)
+        # ruff: ignore[BLE001] — best-effort (DI-fake может raise; никогда не raise)
+        except Exception as exc:  # noqa: EXC — best-effort контракт отчёта
+            logger.warning("[IMP:7][report][probe] probe failed for %s: %s", name, exc)
+            live = None
+        if live is None:
+            docker_unavailable = True
+            awaiting.append(name)
+        elif live:
+            deployed.append(name)
+        else:
+            awaiting.append(name)
+    logger.info(
+        "[IMP:9][report][projects] classified: deployed=%d awaiting=%d docker_unavailable=%s",
+        len(deployed),
+        len(awaiting),
+        docker_unavailable,
+    )
+    return deployed, awaiting, docker_unavailable
+
+
+# endregion FUNC__classify_projects
+
+
 # region FUNC_post_bootstrap_report
 ## @purpose  plan 012 T17: post-bootstrap report step — после φ8.5 печатается финальный
 ##           отчёт (IMP:9): модули deployed/failed, TLS-статус, проекты awaiting_deploy,
 ##           LLM keys, 3 suggested next commands. JSON-вариант под флагом REPORT_JSON=1.
 ##           Не влияет на exit-code (non-blocking контракт post_hook).
-## @io       ⇥ sm: StateMachine → ⎋ None
-## @complexity O(P + E) — P проекты node.yaml, E ошибки state
+## @io       ⇥ sm: StateMachine,
+##              projects_base: str = deploy_paths.DEFAULT_PROJECTS_BASE (DI: tmp_path в тестах),
+##              docker_check_fn: Callable[[str], bool | None] | None = None
+##              (DI: fake-пробер контейнеров без реального docker; None = _docker_container_live)
+##           → ⎋ None
+## @complexity O(P + E + D) — P проекты node.yaml, E ошибки state, D docker-пробы (per-project)
 ## @invariants
 ##   - Только init-режим (post_hook run_init_mode) — update-режим НЕ печатает (φ12/φ13)
 ##   - Никогда не raise — сбой чтения node.yaml → секция "awaiting_projects: (unavailable)"
+##   - Stale-фильтр (T17-fix): ошибки/варнинги state, ассоциированные с фазами, которые
+##     СЕЙЧАС done, НЕ показываются (аккумуляция state.errors между прогонами устранена) —
+##     back-compatible, структура state.json не меняется (list[str] сохранён)
+##   - Awaiting-классификация (T17-fix): проект = deployed если на ноде есть
+##     /opt/projects/⟨name⟩/docker-compose.yml ИЛИ live-контейнер (docker ps best-effort);
+##     docker недоступен → "(unavailable)" (по образцу best-effort контракта, никогда не raise)
 ##   - Не влияет на exit-code (исключение из report → WARN-лог, exit 0 сохранён)
 ##   - JSON (REPORT_JSON=1) — machine-readable, тот же контент
-def post_bootstrap_report(sm: StateMachine) -> None:
+def post_bootstrap_report(
+    sm: StateMachine,
+    *,
+    projects_base: str = DEFAULT_PROJECTS_BASE,
+    docker_check_fn: Callable[[str], bool | None] | None = None,
+) -> None:
     """Print the post-bootstrap summary report (plan 012 T17)."""
     # node_yaml/node_name — PhaseContext-поля (не атрибуты StateMachine); читаем из env
     # (NODE_YAML/NODE_NAME устанавливаются node-lifecycle.sh перед вызовом).
@@ -684,20 +849,48 @@ def post_bootstrap_report(sm: StateMachine) -> None:
     node_name = os.environ.get("NODE_NAME", "")
 
     # ── Deployed/failed: фазы + ошибки state ──
+    # T17-fix: stale-фильтр — ошибки/варнинги фаз, которые СЕЙЧАС done (успешно перевыполнены),
+    # не показываются. Аккумуляция state.errors между прогонами (run N failed → run N+1 успешен
+    # → фаза done → её старая ошибка stale; live-кейс: "Phase deploy_services failed ... exit=10"
+    # из run 1 при 9/9 успешных фазах в run 3) устранена.
     deployed_phases = [p for p in sm.state.steps if phase_is_done(sm.state.steps.get(p))]
-    failed_msgs = list(sm.state.errors or [])
-    warning_count = len(sm.state.warnings or [])
+    done_phases = set(deployed_phases)
+    failed_msgs = [m for m in (sm.state.errors or []) if not _is_stale_phase_message(m, done_phases)]
+    warning_msgs = [w for w in (sm.state.warnings or []) if not _is_stale_phase_message(w, done_phases)]
+    warning_count = len(warning_msgs)
 
-    # ── Projects awaiting deploy (node.yaml#projects без deploy-статуса — отчётный список) ──
-    awaiting: list[str] = []
-    if node_yaml and Path(node_yaml).is_file():
+    # ── Projects awaiting deploy (честный статус на ноде, T17-fix) ──
+    # Классификация: deployed = /opt/projects/⟨name⟩/docker-compose.yml есть ИЛИ live-контейнер;
+    # иначе awaiting. Docker недоступен → "(unavailable)" по образцу best-effort контракта.
+    project_names: list[str] = []
+    projects_known = bool(node_yaml) and Path(node_yaml).is_file()
+    if projects_known:
         try:
             from core.internal.shared.node_yaml import NodeYaml
 
-            awaiting = [p.name for p in NodeYaml(node_yaml).get_project_entries() if p.name]
+            project_names = [p.name for p in NodeYaml(node_yaml).get_project_entries() if p.name]
         # ruff: ignore[BLE001] — report best-effort (T17 контракт: никогда не роняет bootstrap)
         except Exception as exc:  # noqa: EXC001 — report best-effort, non-blocking (T17 контракт)
             logger.warning("[IMP:7][report] node.yaml projects unreadable: %s", exc)
+            projects_known = False
+    deployed_projects, awaiting_projects, docker_unavailable = _classify_projects(
+        project_names,
+        projects_base=projects_base,
+        docker_check_fn=docker_check_fn,
+    )
+
+    if not projects_known:
+        awaiting_line = "(unavailable)"
+        deployed_line = "Projects deployed: (unavailable)"
+    elif not project_names:
+        awaiting_line = "(none)"
+        deployed_line = "Projects deployed: 0/0 (no projects in node.yaml)"
+    else:
+        awaiting_line = ", ".join(awaiting_projects) if awaiting_projects else "(none)"
+        live_label = ", ".join(deployed_projects) if deployed_projects else "(none)"
+        if docker_unavailable:
+            live_label += " — docker unavailable"
+        deployed_line = f"Projects deployed: {len(deployed_projects)}/{len(project_names)} (live: {live_label})"
 
     report_lines = [
         "──────────────────────────────────────────────",
@@ -705,7 +898,8 @@ def post_bootstrap_report(sm: StateMachine) -> None:
         f"  Node: {node_name or '(unknown)'}",
         f"  Phases done: {len(deployed_phases)}",
         f"  TLS: {'certificates phase done' if 'certificates' in sm.state.steps else 'see logs (φ7)'}",
-        f"  Awaiting project deploy: {', '.join(awaiting) if awaiting else '(none)'}",
+        f"  Awaiting project deploy: {awaiting_line}",
+        f"  {deployed_line}",
         "  LLM keys: provisioned in φ8/φ12 (make provision-llm для ручного повтора)",
         f"  Warnings: {warning_count}",
         f"  Failed: {', '.join(failed_msgs) if failed_msgs else '(none)'}",
@@ -721,7 +915,11 @@ def post_bootstrap_report(sm: StateMachine) -> None:
             "node": node_name,
             "phases_done": len(deployed_phases),
             "tls_phase_done": "certificates" in sm.state.steps,
-            "awaiting_projects": awaiting,
+            "awaiting_projects": awaiting_projects,
+            "deployed_projects": deployed_projects,
+            "projects_total": len(project_names),
+            "projects_unavailable": not projects_known,
+            "docker_available": not docker_unavailable,
             "warnings": warning_count,
             "failed": failed_msgs,
             "next_commands": [
@@ -1007,6 +1205,17 @@ def _audit_failed(
 ##   - current_step = 1-based индекс последней успешно завершённой фазы (0 = not started)
 def _mark_phase_success(sm: StateMachine, phase: str, current_index: int) -> None:
     """Mark a phase done + advance current_step (волна 117 D5 — честный current_step)."""
+    # ⚠️ TRAP[BUG] · 2026-09-01 · HI · stale state.errors/warnings между прогонами bootstrap
+    # · Symptom: run N упал в φ8 deploy_services ("Phase deploy_services failed: ... exit=10"
+    #   в state.errors); run N+1 прошёл 9/9 успешно — отчёт всё ещё показывал
+    #   "Failed: Phase deploy_services failed ..." и "Warnings: 1" (аккумулятор).
+    # · Root: state.errors/warnings АККУМУЛИРУЮТ записи прошлых прогонов; при успешном
+    #   перевыполнении фазы её старая ошибка не чистилась ни в state, ни в отчёте.
+    # · Fix: (1) _prune_phase_records здесь (mark done) — state честен для ЛЮБОГО потребителя;
+    #   (2) report-side stale-фильтр по done-фазам (post_bootstrap_report) — страховка для
+    #   legacy state.json. Структура list[str] сохранена — back-compatible.
+    # · Prevention: отчёт/аудит читают state.errors с учётом done-статуса фазы записи.
+    _prune_phase_records(sm, phase)
     entry = sm.state.steps.get(phase)
     if isinstance(entry, dict):
         entry["done"] = True
