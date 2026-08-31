@@ -68,4 +68,20 @@ $END_ARTIFACT_CONTRACT
 
 ## Находки
 
-(заполняется по мере работы)
+### F-01 · 2026-08-31 19:40 · фаза B · P0
+- Симптом: `make secrets-unlock NODE=asi-team-vps` → exit 10 (PlatformFatalError), fail-loud:
+  POSTGRES_USER, MINIO_ROOT_USER, HERMES_DASHBOARD_PASSWORD, GF_SECURITY_ADMIN_PASSWORD,
+  AGE_SECRET_KEY, TELEGRAM_BOT_TOKEN, WEBNAMES_API_KEY — «refusing to write partial secrets.env».
+- Ожидалось / получено: расшифровка 14 ключей enc.yaml прошла, но fail-loud требует ещё 7.
+- Гипотеза причины: `apply_ci_default_injection` (decrypt_secrets.py) fail-loud на ВСЕ
+  required+sops ключи реестра secret-definitions.yaml БЕЗ учёта enabled-модулей node.yaml.
+  asi-team-vps — минимальный контекст (nginx + platform-secrets + logging + status-page):
+  consumers 6 из 7 ключей (postgres/minio/hermes/monitoring) НЕ включены; AGE_SECRET_KEY —
+  protected env-переменная (LIFECYCLE_PROTECTED), приходит из env, никогда не в enc.yaml
+  (курица-яйцо: им же шифруется enc.yaml). tронyx-vps enc.yaml тоже не содержит эти ключи
+  (его формат — nested data:, перешифрован основной моделью 2026-08-31 16:59).
+  Второй слой: `verify_required_sops_secrets` (helpers/secrets.py) — та же глобальная
+  проверка, сработает после fix decrypt (φ4 postcondition).
+- Фикс: module-aware fail-loud — учитывать enabled-модули node.yaml (consumers ∩ enabled).
+- Статус: in-progress
+- Evidence: `/tmp/secrets_unlock_*.log`; grep secret-definitions.yaml (7 ключей required+sops)
