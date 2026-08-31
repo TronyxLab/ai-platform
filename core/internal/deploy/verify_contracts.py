@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: verify-contracts, K3, VPS, L1, L2, L3, secrets-in-compose, ports-published, healthcheck-present, external-networks, env-file-contract, platform-labels, limits-present, privileged, cap-add, devices, dangerous-volumes, socket-mount, host-binds, named-volumes, host-mode-keys, network-mode-host, pid, userns, sysctls, l1_only, compose-config-valid, drift-practices, build-check, PRACTICES-BLOCK, audit, allowlist
-# STRUCTURE: ▶ verify_project_contracts(project_dir) → load_manifest (canon: allowed_external_networks) → read practices.lock (state) → resolve compose → 12×L1 статика (secrets/ports/healthcheck/networks/env-file/labels/limits/privileged/cap-add/devices/volumes/host-modes) → ◇ l1_only? → 3×L2 (compose config / drift-version / build-check) → ⊕ severity (L1: block; l1_only: parse-fail block; L2/L3: block|active-full else warn) → ⊕ VerifyReport → audit_logger (event=verify_contracts) → ⎋ has_blocking/has_warnings/format_for_ssh
+# GREP_SUMMARY: verify-contracts, K3, VPS, L1, L2, L3, secrets-in-compose, ports-published, healthcheck-present, external-networks, env-file-contract, platform-labels, limits-present, privileged, cap-add, devices, dangerous-volumes, socket-mount, host-binds, named-volumes, host-mode-keys, network-mode-host, pid, userns, sysctls, l1_only, compose-config-valid, drift-practices, build-check, PRACTICES-BLOCK, audit, allowlist, service-network-coverage, env-var-unresolved, db-consumed-not-declared, compose-service-contract, shared-analyzer
+# STRUCTURE: ▶ verify_project_contracts(project_dir) → load_manifest (canon: allowed_external_networks) → read practices.lock (state) → resolve compose → 16×L1 статика (secrets/ports/healthcheck/networks/env-file/labels/limits/privileged/cap-add/devices/volumes/host-modes/service-contracts[coverage/env-unresolved/db-needs]) → ◇ l1_only? → 3×L2 (compose config / drift-version / build-check) → ⊕ severity (L1: block; l1_only: parse-fail block; L2/L3: block|active-full else warn) → ⊕ VerifyReport → audit_logger (event=verify_contracts) → ⎋ has_blocking/has_warnings/format_for_ssh
 # region MODULE_CONTRACT
 ## @purpose  Контракт-проверки проекта на VPS (DevPlan 137 W4, K3-канал — расширение verify
 ##           verb forced-command диспетчера): 13 контрактов по таблице §5 W4 + limits-present
@@ -22,7 +22,8 @@
 ## @invariants
 ##   - L1 (secrets-in-compose/ports-published/healthcheck-present/external-networks/
 ##     env-file-contract/platform-labels/limits-present/privileged/cap-add/devices/
-##     dangerous-volumes/host-mode-keys) — БЛОК всегда;
+##     dangerous-volumes/host-mode-keys/service-network-coverage/env-var-unresolved/
+##     db-consumed-not-declared) — БЛОК всегда;
 ##     L2/L3 — блок только в active-full
 ##   - privileged/cap_add/devices (176 A.1, C1): проектам привилегии запрещены ПОЛНОСТЬЮ —
 ##     privileged truthy, ЛЮБОЙ cap_add/devices ключ (в т.ч. пустой список) → violation;
@@ -68,6 +69,9 @@
 ##           абсолютные host-binds вне минимального allowlist, named-volumes requirement) +
 ##           host-mode-keys (network_mode:host/pid/userns_mode/cgroup/sysctls); l1_only:
 ##           compose-config-valid parse-fail → БЛОК (сломанный YAML не проходит pre-deploy гейт)
+## @changes  2026-08-31 · Plan 019 TASK-4 — +L1 service-network-coverage/env-var-unresolved/
+##           db-consumed-not-declared (shared-анализатор compose_service_contract, K3-рубеж;
+##           dual-mechanism ban §1.10 — K1 project-check использует тот же модуль, TASK-5)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -89,9 +93,20 @@ from core.internal.practices.generators import PracticesLock, read_lock
 from core.internal.practices.manifest import load_manifest
 from core.internal.shared.audit_logger import DEFAULT_LOG_FILE, write_audit_entry
 from core.internal.shared.compose_files import PROJECT_OVERRIDE_FILENAMES, resolve_compose_file
+from core.internal.shared.compose_service_contract import (
+    RULE_DB_CONSUMED_NOT_DECLARED,
+    RULE_ENV_VAR_UNRESOLVED,
+    RULE_SERVICE_NETWORK_COVERAGE,
+    ServiceContractInput,
+    analyze_service_contracts,
+    load_env_keys,
+    load_provides,
+)
 from core.internal.shared.contracts import EXIT_GENERIC, EXIT_OK
 from core.internal.shared.env_facts import EnvironmentFacts, default_env_facts
 from core.internal.shared.exceptions import ConfigValidationError, PlatformError
+from core.internal.shared.project_yaml import get_needs, load_project_yaml
+from core.internal.shared.yaml_loader import load_secret_definitions
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +127,14 @@ ENV_FILE_PLATFORM: str = ".env.platform"
 
 # ── Префикс платформенных labels (L1 platform-labels): platform.type/platform.domain/... ──
 _PLATFORM_LABEL_PREFIX: str = "platform."
+
+# ── Plan 019 TASK-4: новые L1 contract-id (shared-анализатор compose_service_contract,
+# K3-рубеж). Единственный источник имён — константы анализатора (dual-mechanism ban §1.10). ──
+_NEW_SERVICE_CONTRACT_RULES: tuple[str, ...] = (
+    RULE_SERVICE_NETWORK_COVERAGE,
+    RULE_ENV_VAR_UNRESOLVED,
+    RULE_DB_CONSUMED_NOT_DECLARED,
+)
 
 # ── Docker-команды (таймауты) ──
 _COMPOSE_CONFIG_TIMEOUT: int = 30
@@ -322,6 +345,19 @@ def verify_project_contracts(
 
     raw: list[_RawFinding] = []
     compose_path = resolve_compose_file(project_dir)
+    # Plan 019 TASK-4 (K3-рубеж): SoT provides (platform-infra.yaml, provides-секция) загружается ОДИН
+    # раз на прогон — мульти-compose скан (T1.E) не перечитывает YAML на каждый файл.
+    # Отсутствие SoT (не должно случаться на VPS — core доставляется целиком) → skip чека
+    # с warning, а не crash деплой-гейта.
+    try:
+        provides = load_provides()
+    except FileNotFoundError as exc:
+        logger.warning(
+            "[IMP:7][verify_contracts][service-contracts] %s — service-contract checks skipped "
+            "(SoT platform-infra.yaml обязателен на VPS)",
+            exc,
+        )
+        provides = {}
     # DevPlan 16 T1.E (P1-11): мульти-compose — сканируем ВСЕ существующие файлы проекта
     # (канон + override-слой): override может нести security_opt/devices/gpus, невидимые
     # single-file сканом. Findings агрегируются с именем файла в сообщении.
@@ -375,6 +411,10 @@ def verify_project_contracts(
         # REF-0006 (DevPlan 11 В2): volumes/socket/host-binds + host-mode-ключи
         raw.extend(_tagged(_check_dangerous_volumes(services)))
         raw.extend(_tagged(_check_host_mode_keys(services)))
+        # Plan 019 TASK-4 (K3-рубеж): service-contracts через shared-анализатор
+        # (service-network-coverage / env-var-unresolved / db-consumed-not-declared) —
+        # СТАТИЧЕСКИЕ: исполняются и в l1_only (pre-deploy/pre-apply гейты) автоматически
+        raw.extend(_tagged(_check_service_contracts(project_dir, data, provides)))
 
     # DevPlan 16 T1.E (P0-6 / P1-9): unmanaged-проект на pre-deploy гейте блокируется:
     # l1_only + lock отсутствует → L1-finding (SEVERITY_BLOCK через _severity_for).
@@ -1173,6 +1213,99 @@ def _check_host_mode_keys(services: dict[str, object]) -> list[_RawFinding]:
 
 
 # endregion CONTRACT_host_mode_keys
+
+
+# region CONTRACT_service_contracts
+## @purpose  L1 service-contracts (Plan 019 TASK-4, K3-рубеж): потребление платформенных
+##           сервисов через shared-анализатор compose_service_contract (ЕДИНСТВЕННЫЙ механизм —
+##           dual-mechanism ban §1.10: K1 project-check использует тот же модуль, TASK-5).
+##           Три правила: service-network-coverage (networks(svc) ∩ provides.networks(SoT) ≠ ∅ —
+##           pgbouncer/litellm недостижимы без сетей провайдера, инцидент пилотов asi-group F1-F3),
+##           env-var-unresolved (каждый ${VAR} без дефолта ∈ .env.platform ∪ secret-definitions),
+##           db-consumed-not-declared (PLATFORM_POSTGRES_* потребление ⇔ needs.database —
+##           класс ***-DSN roadmap, F6/F8). СТАТИЧЕСКИЕ — исполняются и в l1_only
+##           (pre-deploy/pre-apply гейты) автоматически.
+## @io       ⇥ project_dir: Path (источник .env.platform/ai-platform.yaml),
+##           data: dict (parsed compose-файл), provides: dict (SoT platform-infra.yaml,
+##           provides-секция — загружается ОДИН раз на прогон в verify_project_contracts)
+##           → ⎋ list[_RawFinding] (contract_id = rule анализатора, klass=KLASS_L1)
+## @complexity O(S * R * P) где S = сервисы, R = env-ссылки, P = provides-записи
+## @invariants
+##   - contract_id каждого finding = rule-имя анализатора (RULE_* константы)
+##   - secret_names из core/secret-definitions.yaml (Path(__file__).parents[2]/... — core/;
+##     на VPS /opt/platform/core/... — та же относительная структура); missing → [] + warning
+##     (fail-closed: нераспознанные ${SECRET} остаются env-var-unresolved)
+##   - needs_database: ai-platform.yaml needs.database truthy и str(v).lower() != "false"
+##   - provides пуст (SoT недоступен) → coverage-правило молчит, env/db-правила работают
+def _check_service_contracts(
+    project_dir: Path, data: dict[str, object], provides: dict[str, object]
+) -> list[_RawFinding]:
+    """L1: compose service contracts via shared analyzer (coverage/env-resolution/db-needs)."""
+    if not provides:
+        logger.info("[IMP:7][verify_contracts][service-contracts] provides SoT empty — coverage rule skipped")
+    env_keys = load_env_keys(project_dir / ".env.platform")
+    secret_names = _load_secret_names()
+    needs_database = _needs_database_declared(project_dir)
+    inp = ServiceContractInput(
+        compose=data,
+        env_keys=env_keys,
+        secret_names=secret_names,
+        needs_database=needs_database,
+        provides=provides,
+    )
+    violations = analyze_service_contracts(inp)
+    findings = [_RawFinding(v.rule, KLASS_L1, f"service '{v.service}': {v.message}") for v in violations]
+    rule_ids = sorted({f.contract_id for f in findings}) or ["(none)"]
+    logger.info(
+        "[IMP:9][verify_contracts][service-contracts] project=%s rules=%s violations=%d (%s)",
+        project_dir.name,
+        ",".join(_NEW_SERVICE_CONTRACT_RULES),
+        len(findings),
+        ",".join(rule_ids),
+    )
+    return findings
+
+
+# endregion CONTRACT_service_contracts
+
+
+# region FUNC__load_secret_names
+## @purpose  Имена секретов из core/secret-definitions.yaml (SoT) для env-var-unresolved резолва
+##           (env-интерполяция деплоя идёт из secrets.env — имена ключей = записи SoT, F-11).
+##           Путь: parents[2]/secret-definitions.yaml от verify_contracts.py = core/ (на VPS
+##           /opt/platform/core/... — та же относительная структура). Missing → [] + warning
+##           (семантика load_secret_definitions) — fail-closed: нераспознанные ${SECRET}
+##           останутся env-var-unresolved violations.
+## @io       ⎋ frozenset[str]
+## @complexity O(N) где N = секреты SoT
+def _load_secret_names() -> frozenset[str]:
+    """Load secret-definitions.yaml names (core/) for env-resolution (missing → empty + warning)."""
+    secret_defs_path = Path(__file__).resolve().parents[2] / "secret-definitions.yaml"
+    definitions = load_secret_definitions(secret_defs_path)
+    names = {str(entry.get("name", "")) for entry in definitions if isinstance(entry, dict) and entry.get("name")}
+    logger.info("[IMP:8][verify_contracts][service-contracts] %d secret name(s) from %s", len(names), secret_defs_path)
+    return frozenset(names)
+
+
+# endregion FUNC__load_secret_names
+
+
+# region FUNC__needs_database_declared
+## @purpose  needs.database объявлен в ai-platform.yaml проекта: truthy И str(v).lower() != "false"
+##           (YAML-ловушка: needs: {database: false} — bare false не должен считаться declared).
+##           Единый reader project_yaml.load_project_yaml + get_needs (0 yaml.safe_load вне shared).
+## @io       ⇥ project_dir: Path → ⎋ bool
+## @complexity O(1)
+def _needs_database_declared(project_dir: Path) -> bool:
+    """True если ai-platform.yaml needs.database объявлен (truthy, ≠ 'false')."""
+    manifest_data = load_project_yaml(project_dir)
+    database = get_needs(manifest_data).get("database")
+    if not database:
+        return False
+    return str(database).lower() != "false"
+
+
+# endregion FUNC__needs_database_declared
 
 
 # region CONTRACT_top_level_volumes

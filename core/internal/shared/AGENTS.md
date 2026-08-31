@@ -19,6 +19,10 @@
 ## @changes 2026-08-27 | F-03 (017-launch-validation P0) — +dockerfile_bases.py (45-й); парсер
 ##           внешних FROM-баз Dockerfile (two-pass stage-алиасы, digest-pin) — вход pre-pull
 ##           docker_prebuild_pull (детерминизация холодного bootstrap build-модулей)
+## @changes 2026-08-31 | Plan 019 TASK-4 — +compose_service_contract.py (46-й); dual-consumer
+##           статанализатор (K3 verify_contracts + K1 compose-service-networks); дедупликация
+##           инцидент-класса «потребляемый сервис без сети провайдера / ${VAR} без резолва /
+##           DSN без needs.database» — одно правило, два канала (запрет дублирования)
 # endregion MODULE_CONTRACT
 
 # core/internal/shared/ — инвентарь модулей
@@ -30,6 +34,7 @@
 | `audit_logger.py` | Единый JSON-lines audit логгер — ЕДИНСТВЕННЫЙ writer. Расширенная схема ts/tag/status/msg + extra (operation/project/channel/result/duration_s/snapshot_id) | `write_audit_entry(tag, status, msg, **extra)`, `read_audit_log()`, CLI `write/read --log-file` | context_deployer, deploy_orchestrator (DeployAuditLogger adapter), lifecycle/helpers/reporting, scaffold/vhost_renderer, lib/audit.sh |
 | `content_hash.py` | SHA256 content-hash для идемпотентности (CLI: `python3 -m ...content_hash compute --files`); state_machine перешёл на phase-level `_phase_input_hash` (аудит 2026-08-22) | `compute_content_hash()` | tests, CLI-потребители |
 | `compose_profiles.py` | Единый loader COMPOSE_PROFILES (заменяет чтение platform-env.yaml в scaffold_helpers + platform_config в docker_orchestrator; SoT platform-infra.yaml) | `load_profiles()` | scaffold_helpers, docker_orchestrator, gate profiles_parity |
+| `compose_service_contract.py` | Единый статический анализатор compose-service контрактов (план 019 TASK-4/TASK-5, dual-consumer K1+K3): сеть провайдера для потребляемого PLATFORM_* (SoT provides), резолв ${VAR} из env-файлов деплоя, PLATFORM_POSTGRES_DSN ⇔ needs.database | `analyze_service_contracts(ServiceContractInput) → tuple[ServiceContractViolation,...]`, `load_env_keys()`, `load_provides()` | verify_contracts (K3, +3 L1-чека), check_project/checks/compose.py (K1, compose-service-networks) |
 | `contracts.py` | Контракт операционных политик — DEPLOY_BEST_EFFORT (best-effort) + machine-readable exit-коды | `DEPLOY_BEST_EFFORT`, `EXIT_OK/GENERIC/CONFIG_NOT_FOUND/CONFIG_PARSE/CONFIG_VALIDATION/FATAL` | deploy_orchestrator, гейты B4 (broad-except-allowlist, exit-codes-documented) |
 | `crypto.py` | APR1/htpasswd хэширование (openssl passwd -apr1, детерминизм через salt) | `hash_apr1()`, `generate_htpasswd_entry()`, CLI `hash/entry [--salt]` | lib/secrets.sh, secrets_manager |
 | `docker_auth.py` | Единый Docker registry auth (заменяет 5 дублирующихся точек) | `docker_login()`, `ghcr_login()`, `configure_docker_auth()` | bootstrap registry-auth, phases.py |

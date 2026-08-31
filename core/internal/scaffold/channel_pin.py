@@ -26,7 +26,11 @@
 # Full commit SHA платформы (main snapshot), содержащий актуальный харденинг deploy-project.yml.
 # 2026-08-26: re-pin 77c8221 → 4e623c1 — post-audit волна 2 изменила deploy-project.yml
 # (4e623c1, 2026-08-26); freshness-гейт G6 корректно RED'ил устаревший пин — это его работа.
-DEPLOY_CHANNEL_PIN = "4e623c1234053302920c0c84cfab4f30bbdb8fab"
+# 2026-08-31: re-pin 4e623c1 → 2419325 — DevPlan 18 W7 изменил deploy-project.yml;
+# freshness-гейт корректно RED'ил устаревший пин — это его работа.
+DEPLOY_CHANNEL_PIN = "24193251b0fb6f4acda0c29350cc42b3b5ba48a4"
 
 # Честный комментарий-снапшот (формат фиксируется freshness-гейтом: 'main snapshot YYYY-MM-DD …').
-PIN_COMMENT = "main snapshot 2026-08-26 — merge DevPlan 16 (P0/P1 fixes: stdin-prelude CI, inputs env-indirect)"
+PIN_COMMENT = (
+    "main snapshot 2026-08-31 — merge DevPlan 18 W7 (deploy-project.yml: job-level env without runner context)"
+)

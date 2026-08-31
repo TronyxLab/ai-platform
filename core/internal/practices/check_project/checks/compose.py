@@ -1,12 +1,15 @@
-# GREP_SUMMARY: check-project-compose-checks, compose-config, restart-policies, unless-stopped, init-container, restart-justification, stateful-volumes
-# STRUCTURE: ▶ compose-config (docker compose config --quiet; no compose file → PASS) → ⊕ restart-policies (yaml.safe_load → per-service restart: init → "no"; long-running → unless-stopped|always+обоснование) → ⎋ CheckResult
+# GREP_SUMMARY: check-project-compose-checks, compose-config, restart-policies, compose-service-networks, service-network-coverage, env-var-unresolved, db-consumed-not-declared, unless-stopped, init-container, restart-justification, stateful-volumes
+# STRUCTURE: ▶ compose-config (docker compose config --quiet; no compose file → PASS) → ⊕ restart-policies (yaml.safe_load → per-service restart: init → "no"; long-running → unless-stopped|always+обоснование) → ⊕ compose-service-networks (shared-анализатор compose_service_contract: coverage/unresolved/db-declared → FAIL) → ⎋ CheckResult
 # region MODULE_CONTRACT
 ## @purpose  Compose-специфичные handler-и K1-канала (DevPlan 137 §2.1A, 164 W1-4/S2 для
 ##           проектов, 170 W10-A декомпозиция): compose-config (docker compose config --quiet,
-##           L2: warning в baseline, блок в active-full; docker missing → WARN) и
+##           L2: warning в baseline, блок в active-full; docker missing → WARN),
 ##           restart-policies (канон W1-4: long-running — restart: unless-stopped, always —
 ##           только с обоснованием stateful-volumes/комментарий-маркеры; init-контейнеры —
-##           restart: "no"; baseline L2).
+##           restart: "no"; baseline L2) и compose-service-networks (план 019 TASK-5:
+##           L1-зеркало K3-чеков verify_contracts — сеть провайдера для потребляемого
+##           PLATFORM_*-сервиса, резолв ${VAR} из env-файлов деплоя, PLATFORM_POSTGRES_DSN ⇔
+##           needs.database; shared-анализатор core/internal/shared/compose_service_contract.py).
 ## @scope    Потребители: checks/__init__.py (реестр), runner (через _run_check). DI-канал
 ##           facts: EnvironmentFacts (which docker).
 ## @invariants
@@ -16,14 +19,22 @@
 ##   - init-детекция — эвристика по имени (TRAP[DECISION] W1-4: зависит depends_on-анализ
 ##     переусложнён для baseline L2); allowlist «always» — stateful (volumes) или комментарий
 ##   - compose unparseable → WARN (не блок) — pyyaml/синтаксис, не качество проекта
-## @rationale Группировка 2 compose-проверок: общий домен (compose-файлы, yaml-семантика)
+##   - compose-service-networks: ЕДИНСТВЕННАЯ семантика с K3 (один анализатор — dual-consumer,
+##     запрет дублирования правил); L1-класс → блок всегда; no compose → PASS;
+##     unparseable → WARN; secret_names из core/secret-definitions.yaml (missing → [] —
+##     fail-closed на ${SECRET}-ссылки приемлем: файл всегда доставляется с core/)
+## @rationale Группировка 3 compose-проверок: общий домен (compose-файлы, yaml-семантика)
 ##            отделён от tool/file-проверок (research-A §2: checks/compose.py).
 ## @changes  2026-08-15 · DevPlan 170 W10-A — создан (выделен из check_project.py:448-466,
 ##           875-1040)
+##           2026-08-31 · Plan 019 TASK-5 — +compose-service-networks (K1-зеркало K3,
+##           shared-анализатор compose_service_contract; инцидент пилотов asi-group:
+##           DATABASE_URL=${DATABASE_URL} без сетей провайдеров)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
+import logging
 import time
 from pathlib import Path
 
@@ -32,6 +43,8 @@ from core.internal.practices.check_project.models import CheckResult
 from core.internal.practices.manifest import PracticeCheck
 from core.internal.shared.compose_files import PROJECT_COMPOSE_FILENAMES, resolve_compose_file
 from core.internal.shared.env_facts import EnvironmentFacts, default_env_facts
+
+logger = logging.getLogger(__name__)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -225,3 +238,92 @@ def check_restart_policies(
 
 
 # endregion CHECK_restart_policies
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region CHECK_compose_service_networks
+## @purpose  K1-зеркало K3-чеков service-contract (план 019 TASK-5): делегирование в
+##           ЕДИНСТВЕННЫЙ статический анализатор core/internal/shared/compose_service_contract.py
+##           (dual-consumer: K1 local/ci + K3 verify_contracts — запрет дублирования правил).
+##           Правила: service-network-coverage (потребляемый PLATFORM_<SVC>_* без сети
+##           провайдера из SoT platform-infra.yaml (поле provides), env-var-unresolved
+##           (${VAR} без дефолта вне env-файлов деплоя: .env.platform + secrets.env),
+##           db-consumed-not-declared (PLATFORM_POSTGRES_DSN ⇔ needs.database).
+## @io       ⇥ check, project_dir, fix (unused), facts (unused) → ⎋ CheckResult
+##           ⚡ failures analyzer → FAIL (L1 — блок всегда); no compose → PASS; unparseable → WARN
+## @complexity O(S * V) — сервисы × переменные (анализатор); I/O: compose + .env.platform +
+##             ai-platform.yaml + platform-infra.yaml + secret-definitions.yaml
+## @invariants
+##   - Анализатор НЕ дублируется — единственный импорт (semantic dedup, план 019 TASK-4/TASK-5)
+##   - L1-класс: FAIL блокирует при любом уровне практик (exec select: l1 bypass)
+##   - provides/secret-definitions — платформенные SoT (всегда с core); missing → fail-fast/
+##     [] соответственно (семантика load_provides/load_secret_definitions)
+def check_compose_service_networks(
+    check: PracticeCheck,
+    project_dir: Path,
+    *,
+    fix: bool,  # ruff: ignore[ARG001]
+    facts: EnvironmentFacts | None = None,  # ruff: ignore[ARG001]
+) -> CheckResult:
+    """compose-service-networks (L1): сеть провайдера + резолв ${VAR} + needs.database."""
+
+    start = time.monotonic()
+    compose_path = resolve_compose_file(project_dir)
+    if compose_path is None:
+        return CheckResult(check.id, "PASS", "no compose file", 0.0)
+
+    import yaml
+
+    try:
+        data = yaml.safe_load(compose_path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        return CheckResult(check.id, "WARN", f"compose unparseable: {tail(str(exc))}", time.monotonic() - start)
+
+    from core.internal.shared.compose_service_contract import (
+        ServiceContractInput,
+        analyze_service_contracts,
+        load_env_keys,
+        load_provides,
+    )
+    from core.internal.shared.project_yaml import get_needs, load_project_yaml
+    from core.internal.shared.yaml_loader import load_secret_definitions
+
+    # core/ корень: checks/ → check_project/ → practices/ → internal/ → core/
+    core_root = Path(__file__).resolve().parents[4]
+    secret_defs = load_secret_definitions(core_root / "secret-definitions.yaml")
+    secret_names = frozenset(
+        str(entry.get("name")) for entry in secret_defs if isinstance(entry, dict) and entry.get("name")
+    )
+
+    ai_data = load_project_yaml(project_dir)
+    db_val = get_needs(ai_data).get("database")
+    needs_database = bool(db_val) and str(db_val).lower() != "false"
+
+    violations = analyze_service_contracts(
+        ServiceContractInput(
+            compose=data,
+            env_keys=load_env_keys(project_dir / ".env.platform"),
+            secret_names=secret_names,
+            needs_database=needs_database,
+            provides=load_provides(),
+        )
+    )
+
+    if violations:
+        rules = sorted({v.rule for v in violations})
+        detail = f"{violations[0].rule}: {violations[0].service}: {violations[0].message}"
+        if len(violations) > 1:
+            detail += f" (+{len(violations) - 1} more; rules: {', '.join(rules)})"
+        msg = f"service-contract: {detail}"
+        logger.info(
+            "[IMP:9][compose_service_networks][verdict] FAIL %s — %d violation(s): rules=%s",
+            check.id,
+            len(violations),
+            ",".join(rules),
+        )
+        return CheckResult(check.id, "FAIL", msg, time.monotonic() - start)
+    logger.info("[IMP:9][compose_service_networks][verdict] PASS %s — service contracts compliant", check.id)
+    return CheckResult(check.id, "PASS", "service contracts compliant", time.monotonic() - start)
+
+
+# endregion CHECK_compose_service_networks

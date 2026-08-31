@@ -20,6 +20,9 @@
 ## @changes  2026-07-30 · Wave 4a — extracted from project_adopter.py + add-project.sh
 ## @changes  2026-08-16 · План 175 W4.1 — gen_project_makefile: таргет project-fix УДАЛЁН из шаблона
 ##                      Makefile проекта (глагол удалён с платформы; alias: project-check --fix)
+## @changes  2026-08-31 · DevPlan 019 TASK-8 — gen_ai_platform_yaml: monitoring-ветка для
+##                      ptype=ai-project (metrics 8787/7d — kernel /metrics на HEALTH_PORT);
+##                      needs.database default=name для ai-project (боты ВСЕГДА в Postgres)
 # endregion MODULE_CONTRACT
 
 # 🧐 TRAP[DECISION] · 2026-07-30 · — · Shared functions extracted — adopter uses minimal monitoring, scaffolder uses full
@@ -93,10 +96,11 @@ def load_compose_profiles_from_platform_env() -> str:
 # region FUNC_gen_ai_platform_yaml
 ## @purpose  Generate ai-platform.yaml for a project (shared between new-project + adopt).
 ## @param name         Project name
-## @param ptype        Project type: frontend, backend
+## @param ptype        Project type: frontend, backend, ai-project
 ## @param node         Target node (default: _DEFAULT_NODE)
 ## @param domain       Domain (needs.domain; empty → False)
-## @param database     Database name (optional)
+## @param database     Database name (optional; default=name for ai-project — боты всегда
+##                     хранят kernel-стейт в Postgres; подавляется явным "false")
 ## @param mode         Deployment mode: "dev" enables staging
 ## @param output_path  Where to write the YAML file
 ## @param minimal      If True, generate minimal yaml (adopter mode — no DB/LLM monitoring)
@@ -104,7 +108,7 @@ def load_compose_profiles_from_platform_env() -> str:
 ## @complexity O(1)
 ## @invariants
 ##   - Overwrites existing file (caller decides idempotency)
-##   - Full monitoring config depends on project type (frontend/backend)
+##   - Full monitoring config depends on project type (frontend/backend/ai-project)
 ##   - Minimal mode: only name, type, target_node, needs, basic monitoring
 def gen_ai_platform_yaml(
     name: str,
@@ -159,6 +163,13 @@ def gen_ai_platform_yaml(
             "domain": domain if domain else False,
             "expose": bool(domain),
         }
+        # DevPlan 019 TASK-8 (F15): ai-project — боты ВСЕГДА хранят kernel-стейт в Postgres
+        # (kernel-контракт W3) → needs.database default = имя проекта. Переопределяется явным
+        # --database=<db>; явный "false" продолжает подавлять (normalization ниже).
+        # Реализовано ДО существующего database-блока (дефолт участвует в той же нормализации).
+        if ptype == "ai-project" and not database:
+            database = name
+            logger.info("[IMP:8][helpers][gen_yaml] ai-project: needs.database default=name (%s)", name)
         # DevPlan 123 T6: database приходит из argparse --database (project_scaffolder, default "")
         # — shell-строка, типизированного accessor'а project_yaml для него нет (проверено: shared/
         # project_yaml.py get_* не покрывает database). Нормализуем сравнение: bool False →
@@ -167,13 +178,22 @@ def gen_ai_platform_yaml(
             data["needs"]["database"] = database
 
         # Monitoring per type (DevPlan 141 Q2 — порты = реальные порты сервисов):
-        # frontend → nginx слушает 80; backend → FastAPI слушает 8000.
+        # frontend → nginx слушает 80; backend → FastAPI слушает 8000;
+        # ai-project → kernel отдаёт /metrics на HEALTH_PORT 8787 (прецедент W3 AGENTS.md шаблона).
         mon_config: dict[str, object]
         if ptype == "frontend":
             mon_config = {
                 "metrics": False,
                 "metrics_port": 80,
                 "logs_retention": "3d",
+                "alerting": False,
+                "dashboard": False,
+            }
+        elif ptype == "ai-project":
+            mon_config = {
+                "metrics": True,
+                "metrics_port": 8787,
+                "logs_retention": "7d",
                 "alerting": False,
                 "dashboard": False,
             }

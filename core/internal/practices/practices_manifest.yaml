@@ -21,6 +21,9 @@
 ## @changes  2026-08-05 · DevPlan 137 W1 — создан (канон §2.1, pins latest 2026-08-05)
 ##           2026-08-14 · DevPlan 164 W5-1 — добавлены docs-in-code/restart-policies (baseline),
 ##           transition-traces-ban/agent-check (full) — переносимые правила из portable-rules.md
+##           2026-08-31 · Plan 019 TASK-5 — +compose-service-networks (L1, local/ci):
+##           K1-зеркало K3-чеков service-network-coverage/env-var-unresolved/
+##           db-consumed-not-declared (shared-анализатор, инцидент пилотов asi-group)
 # endregion MODULE_CONTRACT
 
 version: 1
@@ -179,6 +182,13 @@ checks:
     channel: [verify]
     class: L1
     auto_fix: false
+    timeout_sec: 5
+  - id: compose-service-networks  # L1-зеркало K3-чеков verify_contracts (план 019 TASK-5):
+    level: baseline               #   service-network-coverage + env-var-unresolved +
+    languages: [all]              #   db-consumed-not-declared (shared-анализатор
+    channel: [local, ci]          #   compose_service_contract; инцидент пилотов 019:
+    class: L1                     #   DATABASE_URL=${DATABASE_URL} + proxy-net only)
+    auto_fix: false               # сети/DSN — осознанное решение, не автофикс
     timeout_sec: 5
   - id: transition-traces-ban  # S4-аналог: legacy/deprecated/transition-следы вне allowlist — RED
     level: full                # (164 W5-1; allowlist: переходные следы репозитория проекта)

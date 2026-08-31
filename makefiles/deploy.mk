@@ -1,7 +1,7 @@
-# GREP_SUMMARY: deploy.mk, deploy, deploy-project, context-promote, hermes-build-context, hermes-push-l2, verify-domains, __deploy_via_deliver, node-resolver, deliver
-# STRUCTURE: ┌variables┐ → ◇ deploy → ⚙️ define __deploy_via_deliver (единый NODE→host+deliver) → ◇ deploy-project → ◇ context-promote → ◇ hermes build/push → ◇ verify-domains
+# GREP_SUMMARY: deploy.mk, deploy, deploy-project, context-promote, hermes-build-context, hermes-push-l2, verify-domains, parity-db, __deploy_via_deliver, node-resolver, deliver
+# STRUCTURE: ┌variables┐ → ◇ deploy → ⚙️ define __deploy_via_deliver (единый NODE→host+deliver) → ◇ deploy-project → ◇ context-promote → ◇ hermes build/push → ◇ verify-domains → ◇ parity-db
 # region MODULE_CONTRACT
-## @purpose  Deployment targets — deploy, deploy-project, context-promote, hermes builds, verify-domains
+## @purpose  Deployment targets — deploy, deploy-project, context-promote, hermes builds, verify-domains, parity-db
 ## @scope    Included from root Makefile; delegates to core/entrypoints/
 ## @invariants
 ##   - deploy uses git push → CI (never direct SSH)
@@ -10,6 +10,10 @@
 ##   - __deploy_via_deliver — единственный источник «NODE→host resolve + orchestrator_cli deliver»
 ##   - context-promote copies to context org
 ##   - verify-domains (бывш. verify) — HTTPS-верификация доменов; VPS-verb verify НЕ трогается (План 175 W4.3)
+##   - parity-db (DevPlan 019 TASK-6, AC5): create/drop временной parity-БД через привилегированный
+##     путь (ssh → docker exec postgres psql); проектные роли НЕ получают CREATEDB (изоляция канона);
+##     create stdout = РОВНО одна DSN-строка (машиночитаемый контракт); PLATFORM_ROOT экспортируется
+##     (канон remote-таргетов — TRAP[BUG] bootstrap.mk PLATFORM_ROOT)
 ##   - hermes: единый образ hermes-agent-context (L1→L2 коллапс DevPlan 002) — только
 ##     hermes-build-context + hermes-push-l2; hermes-build-platform/hermes-push-l1 удалены
 ## @rationale Makefile include-split W4-E4: deployment targets isolated from bootstrap/CI;
@@ -19,9 +23,10 @@
 ## @changes 2026-08-16 | План 175 W4.3 — verify переименован в verify-domains
 ## @changes 2026-08-16 | DevPlan 002 W3 T3.1 — hermes-build-platform/hermes-push-l1/GHCR_OWNER удалены
 ##            (L1 коллапс); hermes-build-context → прямой вызов python3 (без build.sh)
+## @changes 2026-08-31 | DevPlan 019 TASK-6 — +parity-db (AC5): привилегированный parity-DB путь
 # endregion MODULE_CONTRACT
 
-.PHONY: deploy deploy-project context-promote hermes-build-context hermes-push-l2 verify-domains
+.PHONY: deploy deploy-project context-promote hermes-build-context hermes-push-l2 verify-domains parity-db
 
 ## deploy: Deploy project via git push → CI pipeline
 ##   Usage: make deploy PROJECT=<dir> [NODE=<node>] [LAUNCH=1]
@@ -174,3 +179,15 @@ verify-domains:
 	@if [ -z "$(NODE)" ]; then echo "[IMP:9][make][verify-domains] ERROR: NODE not set — usage: make verify-domains NODE=<node> [PROJECT=<name>]" >&2; exit 1; fi
 	@echo "[IMP:7][make][verify-domains] Running post-deploy verification for NODE=$(NODE) PROJECT=$(PROJECT)"
 	@PLATFORM_ROOT="$(_platform_root)" bash $(_platform_root)/core/entrypoints/verify.sh "$(NODE)" "$(PROJECT)"
+
+## parity-db: Create/drop temporary parity database via privileged path (Plan 019 TASK-6, AC5)
+##   Usage: make parity-db ACTION=<create|drop> PROJECT=<name> NODE=<node>
+##   create: stdout = single DSN line (postgresql://parity_<project>_user:<pw>@pgbouncer:6432/parity_<project>), exit 0; idempotent (repeat create → ALTER ROLE + DSN re-print)
+##   drop: DROP DATABASE IF EXISTS ... WITH (FORCE) + DROP ROLE IF EXISTS (absence is not an error)
+##   Project roles NEVER get CREATEDB (isolation canon) — privileged docker exec postgres psql on the node
+parity-db:
+	@echo "[IMP:7][make][parity-db] ACTION=$(ACTION) PROJECT=$(PROJECT) NODE=$(NODE)..." 1>&2
+	@if [ -z "$(ACTION)" ] || [ -z "$(PROJECT)" ] || [ -z "$(NODE)" ]; then \
+		echo "[IMP:10][make][parity-db] ERROR: ACTION, PROJECT, NODE are required — usage: make parity-db ACTION=<create|drop> PROJECT=<name> NODE=<node>" >&2; exit 1; fi
+	@PLATFORM_ROOT="$(_platform_root)" $(_platform_root)/core/entrypoints/parity-db.sh --action "$(ACTION)" --project "$(PROJECT)" --node "$(NODE)"
+	@echo "[IMP:9][make][parity-db] Done (exit code propagated)"

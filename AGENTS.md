@@ -126,6 +126,7 @@
 | ✅ | `new-context` | Создание контекста деплоя |
 | ✅ | `new-project` | Создание проекта из шаблона |
 | ✅ | `node-update` | Обновление provisioned ноды |
+| ✅ | `parity-db` | Create/drop temporary parity database via privileged path (Plan 019 TASK-6, AC5) |
 | ✅ | `project-check` | Проверка практик проекта (K1) |
 | ✅ | `project-list` | Список проектов |
 | ✅ | `project-set-practices` | Установка уровня практик (baseline|full|auto) |

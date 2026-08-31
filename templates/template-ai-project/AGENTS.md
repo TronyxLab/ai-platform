@@ -46,6 +46,17 @@
   ничего значимого в памяти процесса.
 - **Конфиг/контент** — на volume, hot-reload, образ неизменяем (бриф §7); тексты — только
   `t()` из `content/` (R6), русский по умолчанию.
+- **env-контракт compose** (план 019 TASK-1): `DATABASE_URL` — маппинг переменной
+  `PLATFORM_POSTGRES_DSN` из `.env.platform` (GENERATED; роль/БД провижинит хук postgres
+  из `needs.database`); `LLM_BASE_URL` — маппинг `PLATFORM_LITELLM_URL`
+  (fallback `http://litellm:4000`). Литеральный `DATABASE_URL` (без PLATFORM_-источника)
+  в compose запрещён — переменной нет в `.env.platform`, интерполяция даёт пустую строку
+  (инцидент пилотов asi-group, план 019 F3).
+- **Сети compose** — own-net + `proxy-net` (ingress/TLS) + `shared-db-net` (pgbouncer:6432) +
+  `hermes-agent-net` (litellm:4000), все external, имена фиксированы (SoT
+  platform-infra.yaml#provides, DR-M4). `shared-cache-net` НЕ подключается — redis бот не
+  потребляет (least privilege). Гейт `service-network-coverage` (K1/K3) блокирует деплой
+  compose, потребляющего платформенный сервис без сети провайдера.
 
 ## Запреты (ломаются гейтами)
 

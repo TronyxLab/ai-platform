@@ -96,6 +96,21 @@ deploy:
   signature: make context-promote CONTEXT=<context>
   operation_ru: Промоут платформы в контекст
   description: Promote platform to a context org (copy + CI + auto-deploy + auto org-secrets provisioning via org_secrets_provisioner.py)
+- make_target: parity-db
+  visibility: public
+  mechanism: ssh+psql
+  delegates_to: core/entrypoints/parity-db.sh → python3 -m core.internal.deploy.parity_db
+    (ssh root@<node> → docker exec postgres psql -U postgres; привилегированный путь,
+    DevPlan 019 TASK-6)
+  signature: make parity-db ACTION=<create|drop> PROJECT=<name> NODE=<node>
+  operation_ru: Create/drop temporary parity database via privileged path (Plan 019 TASK-6, AC5)
+  description: 'Temporary parity-БД для PG-parity прогонов ai-project: create/drop БД
+    "parity_<project>" + роли "parity_<project>_user" через привилегированный путь
+    (docker exec postgres psql на НОДЕ) — проектные роли БЕЗ CREATEDB (изоляция канона,
+    TRAP[BUSINESS] 019). create: stdout = одна DSN-строка
+    (postgresql://parity_<project>_user:<pw>@pgbouncer:6432/parity_<project>), idempotent
+    (повторный create → ALTER ROLE + DSN re-print); drop: DROP DATABASE IF EXISTS ...
+    WITH (FORCE) + DROP ROLE IF EXISTS (отсутствие — не ошибка)'
 build:
 - make_target: hermes-build-context
   visibility: public
@@ -949,6 +964,7 @@ allowed_verbs:
 - new-context
 - new-project
 - node-update
+- parity-db
 - project-check
 - project-list
 - project-set-practices
@@ -1485,6 +1501,11 @@ gates:
   - converge_reconcile_flag
   - makefile_deploy_node_flag
   - vps_readiness_sourceable
+  test_gate_service_network_coverage.py:
+  - db_consumed_without_needs_blocks
+  - env_var_unresolved_blocks
+  - network_coverage_blocks_db_without_shared_db_net
+  - network_coverage_passes_canonical_compose
   test_gate_shared_db_seam.py:
   - test_hook_entry_missing_args_returns_zero
   - test_hook_wrapper_delegates_to_python_impl
@@ -1564,6 +1585,8 @@ gates:
   - test_legitimate_ops_entries_present
   - test_no_dangerous_privesc_patterns_in_setup_node
   - test_sudoers_generator_make_only
+  test_gate_template_ai_project_networks.py:
+  - test_template_ai_project_declares_provider_networks
   test_gate_template_drift.py:
   - test_all_templates_resolvable
   test_gate_template_manifest_coverage.py:

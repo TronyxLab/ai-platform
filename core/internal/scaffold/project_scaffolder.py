@@ -25,6 +25,9 @@
 ##           CALLS: scaffold_helpers.py, template_engine.py (render_directory_in_place), gen_env_platform.py
 ##           DP-092 Wave 4b
 ## @changes  2026-07-30 · Wave 4b — full Strangler-Fig from add-project.sh
+## @changes  2026-08-31 · DevPlan 019 TASK-8 — choices += ai-project (F13): канал make new-project
+##                      легализован для template-ai-project (AC6, hard-prerequisite W7 T0);
+##                      help-строка и ERROR-сообщение валидации приведены к новому словарю
 # endregion MODULE_CONTRACT
 
 # 🧐 TRAP[DECISION] · 2026-07-21 · — · Org-aware path verified — no changes needed for T2
@@ -658,7 +661,7 @@ def main(argv: list[str] | None = None, config: AppConfig | None = None) -> int:
 
     parser = argparse.ArgumentParser(description="Create a new project from a template.")
     parser.add_argument("--name", required=True, help="Project name (alphanumeric, hyphens, underscores)")
-    parser.add_argument("--template", required=True, help="Template: frontend | backend")
+    parser.add_argument("--template", required=True, help="Template: frontend | backend | ai-project")
     parser.add_argument("--org", default="", help=f"Organization name (default: {cfg.platform_org})")
     parser.add_argument("--node", default="", help=f"Target node name (default: {cfg.platform_default_node})")
     parser.add_argument("--domain", default="", help="Domain for nginx vhost (auto: NAME.PLATFORM_DOMAIN)")
@@ -674,10 +677,10 @@ def main(argv: list[str] | None = None, config: AppConfig | None = None) -> int:
     org = args.org or cfg.platform_org
     node = args.node or cfg.platform_default_node
 
-    # Validate
-    if args.template not in {"frontend", "backend"}:
+    # Validate (DevPlan 019 TASK-8: choices += ai-project — канал template-ai-project легален)
+    if args.template not in {"frontend", "backend", "ai-project"}:
         logger.info("[IMP:10][scaffold][main] Invalid template: %s", args.template)
-        print(f"ERROR: Invalid template type: '{args.template}'. Must be: frontend | backend")
+        print(f"ERROR: Invalid template type: '{args.template}'. Must be: frontend | backend | ai-project")
         return 1
 
     # ⚠️ TRAP[BUG] · 2026-08-01 · P2 · Old strip-check accepted leading '-'/'_' project names
@@ -763,6 +766,15 @@ def main(argv: list[str] | None = None, config: AppConfig | None = None) -> int:
     gen_env_platform(str(project_dir), args.name, domain, args.dry_run)
 
     # Step 5: Generate Makefile + AGENTS.md + AI-PLATFORM.md
+    # 📝 TRAP[DEBT] · 2026-08-31 · LO · --dry-run НЕ полностью сухой: Step 5 генераторы
+    # (gen_project_makefile/gen_project_agents/gen_project_platform_md) вызываются безусловно
+    # · Observed: help "--dry-run: Show plan without creating files", но Step 5 пишет
+    #   Makefile/AGENTS.md/AI-PLATFORM.md в project_dir (генераторы не принимают dry_run)
+    # · Suspected: неполная имплементация dry-run при Strangler-миграции add-project.sh —
+    #   остальные шаги (copy/render/env/practices/instructions/git/github/vhost) dry-run-aware
+    # · Impact: тесты/операторы, полагающиеся на сухость --dry-run, получают неожиданные файлы;
+    #   test_scaffold_ai_project обходит это безопасной остановкой на confirm
+    # · When: DevPlan 019 TASK-8 — анализ потока main() для дизайна теста choices-валидации
     from core.internal.scaffold.scaffold_helpers import (
         gen_project_agents,
         gen_project_makefile,

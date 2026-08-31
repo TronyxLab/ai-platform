@@ -92,6 +92,16 @@ Unit docker.service could not be found.
 | `docker compose --env-file .env.platform config` (оба пилота) | валиден; DSN интерполирован |
 | Collateral: workflow-пины перепинены 4e623c1→14e560a (fix(018) изменил deploy-project.yml 2026-08-31; гейт test_gate_workflow_sha_pins) | Done |
 
+### Финальная верификация (после коммитов 92009e1 + e938260)
+
+| Проверка | Результат |
+|----------|-----------|
+| `make check` (полный батч, all markers) | **All checks PASS** (включая manifests_up_to_date после коммита) |
+| `make agent-check` | **clean=True** (blocking=0; advisory C901 — чужой файл параллельной сессии 020) |
+| `pre-commit run --all-files` | 23 Passed / 0 Failed |
+| `doxygen Doxyfile` | 0 warnings |
+| `test_secrets_env_parser_benchmark` (solo, после xdist-флака 53ms>50ms) | PASS 2/2 — тайминг-флак под нагрузкой, не регрессия |
+
 ## Отклонения от плана (зафиксированы)
 
 1. **$TEST_SPEC пути** `tests/unit/deploy/…`, `tests/unit/scaffold/…`, `tests/unit/practices/…` —

@@ -234,6 +234,26 @@ templates:
       PLATFORM_DOMAIN:
         required: false
 
+  # DevPlan 019 TASK-8 (F14): template-ai-project — регистрация канала make new-project
+  # (W7 §3.6 ai-project: 4 будущих проекта ботов). consumer честный — текущий Python-путь
+  # рендера (project_scaffolder.render_project_template → template_engine.render_directory_in_place).
+  - template: ../../templates/template-ai-project/
+    output: null
+    type: directory
+    recursive: true
+    consumer: core/internal/scaffold/project_scaffolder.py:render_project_template()
+    vars:
+      PROJECT_NAME:
+        required: true
+      ORG_NAME:
+        required: true
+      DOMAIN:
+        required: false
+      NODE_NAME:
+        required: true
+      PLATFORM_DOMAIN:
+        required: false
+
   - template: ../../templates/template-context/
     output: null
     type: directory
