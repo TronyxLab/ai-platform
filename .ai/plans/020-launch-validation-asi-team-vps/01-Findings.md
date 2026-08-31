@@ -113,6 +113,15 @@ $END_ARTIFACT_CONTRACT
 - Ре-верификация: `make check` rc=0; new unit-тесты dir traversal (ACL `u:ci-deploy:--x` primary /
   chgrp ci-deploy + chmod 0710 fallback); R2-тесты обновлены на 3 setfacl / 2 chgrp+2 chmod.
 
+### F-08 · 2026-09-01 01:25 · фаза E · NOTE
+- Симптом: converge НЕ останавливает контейнер выключенного модуля (logging enabled=false →
+  converge → loki всё ещё Up). Converge — detect-only reconcile, down/up управляет deploy-modules.
+- Ожидалось / получено: E2 «вкл/выкл → converge → healthy». Получено: converge уважает enabled
+  (не реконсилит disabled в orphan), но не делает down уже запущенного контейнера.
+- Гипотеза: это ожидаемая семантика (converge ≠ deploy; down выключенного модуля — deploy-modules
+  strict-init). Полнота инвентаря корректна (нет bare off; tor.enabled:false — валидный bool).
+- Статус: NOTE (не баг; задокументировано)
+
 ### F-06 · 2026-09-01 00:40 · фаза B · P2
 - Симптом: converge R7 ложный drift-warning «1 named volume(s) missing: ['loki-data']»,
   хотя volume существует как `platform_loki-data` (docker volume ls).
