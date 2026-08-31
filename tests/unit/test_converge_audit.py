@@ -289,13 +289,14 @@ def test_reconcile_audit_log_ci_deploy_group(tmp_path, monkeypatch, caplog):
 
 # region FUNC_test_reconcile_audit_log_primary_acl_branch
 ## 🧪 TRAP[TEST] · R2 setfacl primary · Scenario: setfacl доступен + euid=0, файл 0644 → ACL
-## · Regression: P1 fix 2026-08-27 — ensure_audit_writable primary-ветка (setfacl -m u:ci-deploy:rw,m::rw)
+## · Regression: P1 fix 2026-08-27 — ensure_audit_writable primary-ветка (setfacl -m u:ci-deploy:rw,m::rw);
+## ·   P1 fix 2026-09-01 (F-07) — + access ACL traversal u:ci-deploy:--x на КАТАЛОГ
 ## · Last fail: никогда (новый целевой контракт)
 ## · Remove if: primary-ветка заменена на иной механизм записи
 @pytest.mark.usefixtures("reset_state")
 @ldd_trajectory
 def test_reconcile_audit_log_primary_acl_branch(tmp_path, monkeypatch, caplog):
-    """R2: setfacl available + euid=0 + non-converged file → setfacl -m/-d applied (primary)."""
+    """R2: setfacl available + euid=0 + non-converged file → setfacl -m/-d/-m(dir traversal) applied (primary)."""
     caplog.set_level(logging.INFO)
 
     log_dir = tmp_path / "var" / "log" / "platform"
@@ -340,26 +341,32 @@ def test_reconcile_audit_log_primary_acl_branch(tmp_path, monkeypatch, caplog):
     mutated = [d for d in infra.drifts if d["status"] == "mutated"]
     assert any("acl" in d["detail"] for d in mutated), f"drift detail: {infra.drifts}"
     # primary: setfacl -m u:ci-deploy:rw,m::rw <file> + setfacl -d (default ACL на dir)
-    assert len(setfacl_called) == 2, f"ожидались -m и -d setfacl, получено {setfacl_called}"
+    #          + setfacl -m u:ci-deploy:--x <dir> (access ACL traversal, P1 fix 2026-09-01 F-07)
+    assert len(setfacl_called) == 3, f"ожидались -m(файл) -d(dir) -m(dir traversal), получено {setfacl_called}"
     assert "u:ci-deploy:rw" in " ".join(setfacl_called[0])
     assert setfacl_called[0][1] == "-m" and setfacl_called[1][1] == "-d"
+    assert setfacl_called[2][1] == "-m"
+    assert "u:ci-deploy:--x" in " ".join(setfacl_called[2]), f"dir traversal --x обязателен: {setfacl_called[2]}"
+    assert setfacl_called[2][-1] == str(log_dir), f"traversal-ACL должен целиться в dir: {setfacl_called[2]}"
     # fallback НЕ задействован
     assert not chgrp_called, "primary-ветка не должна вызывать chgrp"
-    logger.info("[IMP:9][test] R2 primary ACL: setfacl -m/-d корректно применены")
+    logger.info("[IMP:9][test] R2 primary ACL: setfacl -m/-d/-m(dir traversal) корректно применены")
 
 
 # endregion FUNC_test_reconcile_audit_log_primary_acl_branch
 
 
 # region FUNC_test_reconcile_audit_log_fallback_group_branch
-## 🧪 TRAP[TEST] · R2 fallback group · Scenario: setfacl НЕ доступен + euid=0 → chgrp ci-deploy + chmod 0660
-## · Regression: P1 fix 2026-08-27 — graceful fallback (honest trade-off, TRAP[DECISION])
+## 🧪 TRAP[TEST] · R2 fallback group · Scenario: setfacl НЕ доступен + euid=0 → chgrp ci-deploy + chmod 0660 (файл)
+##   + chgrp ci-deploy + chmod 0710 (КАТАЛОГ — traversal, P1 fix 2026-09-01 F-07)
+## · Regression: P1 fix 2026-08-27 — graceful fallback (honest trade-off, TRAP[DECISION]);
+## ·   P1 fix 2026-09-01 — dir traversal fallback (chgrp + 0710, group --x other ---)
 ## · Last fail: никогда (новый целевой контракт)
 ## · Remove if: fallback-ветка заменена на иной механизм записи
 @pytest.mark.usefixtures("reset_state")
 @ldd_trajectory
 def test_reconcile_audit_log_fallback_group_branch(tmp_path, monkeypatch, caplog):
-    """R2: setfacl НЕ доступен + euid=0 + non-converged file → chgrp ci-deploy + chmod 0660."""
+    """R2: setfacl НЕ доступен + euid=0 + non-converged file → chgrp ci-deploy + chmod 0660 (file) / 0710 (dir)."""
     caplog.set_level(logging.INFO)
 
     log_dir = tmp_path / "var" / "log" / "platform"
@@ -402,10 +409,17 @@ def test_reconcile_audit_log_fallback_group_branch(tmp_path, monkeypatch, caplog
     assert infra.has_warnings, "мутация (set_exit(1)) должна выставить has_warnings"
     mutated = [d for d in infra.drifts if d["status"] == "mutated"]
     assert any("group" in d["detail"] for d in mutated), f"drift detail: {infra.drifts}"
-    assert len(chgrp_called) == 1, f"fallback обязан вызвать chgrp ci-deploy, получено {chgrp_called}"
-    assert "ci-deploy" in chgrp_called[0]
-    assert len(chmod_called) == 1 and "0660" in chmod_called[0]
-    logger.info("[IMP:9][test] R2 fallback: chgrp ci-deploy + chmod 0660 корректно применены")
+    # fallback: chgrp ci-deploy на ФАЙЛ + КАТАЛОГ (P1 fix 2026-09-01 F-07: dir traversal),
+    #           chmod 0660 на файл + 0710 на каталог (group --x other ---, traversal-only)
+    assert len(chgrp_called) == 2, f"fallback обязан вызвать chgrp ci-deploy (file + dir), получено {chgrp_called}"
+    assert chgrp_called[0] == ["chgrp", "ci-deploy", str(log_dir / "audit.log")], f"chgrp файла: {chgrp_called}"
+    assert chgrp_called[1] == ["chgrp", "ci-deploy", str(log_dir)], f"chgrp каталога обязателен: {chgrp_called}"
+    assert len(chmod_called) == 2, f"fallback обязан вызвать chmod 0660 (file) + 0710 (dir), получено {chmod_called}"
+    assert chmod_called[0] == ["chmod", "0710", str(log_dir)], (
+        f"dir chmod 0710 (traversal-only) обязателен: {chmod_called}"
+    )
+    assert chmod_called[1] == ["chmod", "0660", str(log_dir / "audit.log")], f"file chmod 0660 сохранён: {chmod_called}"
+    logger.info("[IMP:9][test] R2 fallback: chgrp ci-deploy + chmod 0660 (file) / 0710 (dir) корректно применены")
 
 
 # endregion FUNC_test_reconcile_audit_log_fallback_group_branch

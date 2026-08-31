@@ -98,6 +98,21 @@ $END_ARTIFACT_CONTRACT
 - Статус: fixed
 - Ре-верификация: make check rc=0; φ7 теперь реально выпускает wildcard asiteam.ru (SAN *.asiteam.ru).
 
+### F-07 · 2026-09-01 01:10 · фаза D · P1
+- Симптом: «Cannot write to /var/log/platform/audit.jsonl: [Errno 13] Permission denied — audit entry
+  dropped» при deploy/rollback через ci-deploy (forced-command receive).
+- Ожидалось / получено: audit-трейл должен писаться всеми потоками (root + ci-deploy). Получено:
+  каталог /var/log/platform = drwx------ root:root (700), файл audit.jsonl = root:ci-deploy 0660.
+  ci-deploy не имеет traversal на каталог (нет +x) → не может открыть файл → запись дропается.
+- Гипотеза причины: `ensure_audit_writable` (audit_logger.py) чинит ФАЙЛ (chgrp ci-deploy + chmod 0660),
+  но НЕ КАТАЛОГ /var/log/platform (создан mkdir -p под umask 077 → 700 root). ci-deploy-поток
+  (receive) теряет audit-записи.
+- Фикс: ensure_audit_writable должен давать ci-deploy traversal на каталог (setfacl u:ci-deploy:--x
+  или chmod 0710/chgrp ci-deploy на каталог) при root-записи.
+- Статус: fixed
+- Ре-верификация: `make check` rc=0; new unit-тесты dir traversal (ACL `u:ci-deploy:--x` primary /
+  chgrp ci-deploy + chmod 0710 fallback); R2-тесты обновлены на 3 setfacl / 2 chgrp+2 chmod.
+
 ### F-06 · 2026-09-01 00:40 · фаза B · P2
 - Симптом: converge R7 ложный drift-warning «1 named volume(s) missing: ['loki-data']»,
   хотя volume существует как `platform_loki-data` (docker volume ls).
