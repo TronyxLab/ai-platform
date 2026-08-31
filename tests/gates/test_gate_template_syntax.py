@@ -8,7 +8,11 @@
 ##   - ${[A-Z_]+} patterns are FORBIDDEN except in compose files (runtime vars like ${IMAGE_REGISTRY})
 ##   - {{[A-Z][A-Z0-9_]*}} is the only allowed placeholder syntax
 ##   - compose files may contain ${VAR:-default} for runtime Docker Compose variables
-## @rationale Part of template unification — one syntax to rule them all
+##   - docs-файлы (README.md, AGENTS.md) — документация, НЕ template-файлы: ${VAR}-ссылки на
+##     env-контракт (.env.platform) допустимы для справки, не как placeholder шаблонизатора
+## @rationale Part of template unification — one syntax to rule them all;
+##            AGENTS.md/README.md документируют env-контракт (.env.platform), а не рендерятся
+##            шаблонизатором — ${VAR}-ссылки в них справочные, не placeholder'ы
 ## @usecases make gate MODE=fast runs this automatically via @pytest.mark.gate
 # endregion MODULE_CONTRACT
 
@@ -118,12 +122,14 @@ def _is_dual_role_file(display_path: str) -> bool:
     return "modules/nginx/" in display_path
 
 
-def _is_readme_documentation(display_path: str) -> bool:
-    """Check if a file is README documentation (not a template file per se).
+def _is_docs_file(display_path: str) -> bool:
+    """Check if a file is documentation (README.md or AGENTS.md), not a template file per se.
 
-    README files may document variable names for reference purposes.
+    Docs-файлы документируют env-контракт и могут ссылаться на переменные (${VAR})
+    для справки — это НЕ placeholder шаблонизатора. README.md — reference-документация
+    имён переменных; AGENTS.md — контракт scaffold-проектов (env-контракт .env.platform).
     """
-    return "README.md" in display_path
+    return "README.md" in display_path or "AGENTS.md" in display_path
 
 
 def _check_file(filepath: str, display_path: str, errors: list[str], *, is_dual_role: bool = False) -> None:
@@ -145,7 +151,7 @@ def _check_file(filepath: str, display_path: str, errors: list[str], *, is_dual_
 
     is_compose = str(filepath).endswith("docker-compose.yml")
     is_nginx_dual = _is_dual_role_file(display_path)
-    is_readme = _is_readme_documentation(display_path)
+    is_docs = _is_docs_file(display_path)
     try:
         with pathlib.Path(filepath).open(encoding="utf-8", errors="replace") as f:
             lines = f.readlines()
@@ -156,16 +162,17 @@ def _check_file(filepath: str, display_path: str, errors: list[str], *, is_dual_
     for line_no, line in enumerate(lines, 1):
         stripped = line.rstrip("\n")
 
-        # Check for __VAR__ syntax (skip README docs that reference old syntax)
-        if not is_readme:
+        # Check for __VAR__ syntax (skip docs that reference old syntax)
+        if not is_docs:
             old_matches = LEGACY_DOUBLE_UNDERSCORE.findall(stripped)
             if old_matches:
                 errors.append(
                     f"LEGACY_SYNTAX: {display_path}:{line_no}: found __VAR__ syntax: {', '.join(old_matches)}"
                 )
 
-        # Check for ${VAR} — but allow in compose files (runtime vars) and nginx dual-role files
-        if not is_compose and not is_dual_role and not is_nginx_dual:
+        # Check for ${VAR} — but allow in compose files (runtime vars), nginx dual-role files,
+        # and docs (README.md/AGENTS.md document env-contract, not template placeholders)
+        if not is_compose and not is_dual_role and not is_nginx_dual and not is_docs:
             dollar_matches = re.findall(r"\$\{[A-Z_]+[^}]*\}", stripped)
             if dollar_matches:
                 errors.append(

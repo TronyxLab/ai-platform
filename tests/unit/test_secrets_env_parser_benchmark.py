@@ -1,5 +1,5 @@
 # GREP_SUMMARY: benchmark secrets_env_parser parse performance 1000-vars 50ms 100ms-ci-gate DevPlan-086
-# STRUCTURE: ▶ ┌_generate_1000_vars(num) → str┐ → ○ _write_tempfile → ⚡ time perf_counter parse() → ◇ <50ms? → ⎋ PASS/FAIL
+# STRUCTURE: ▶ ┌_generate_1000_vars(num) → str┐ → ○ _write_tempfile → ⚡ best-of-3 perf_counter parse() → ⊕ min → ◇ <50ms? → ⎋ PASS/FAIL
 # region MODULE_CONTRACT
 ## @purpose  Performance benchmark for secrets_env_parser.parse() with >1000 variables.
 ##           Verifies that parse() completes in under 50ms (CI gate threshold: 100ms).
@@ -11,6 +11,7 @@
 ## @invariants
 ##   - Generates exactly 1000 variables (mixed: quoted, unquoted, export prefix, empty)
 ##   - Parse must complete in <50ms (CI gate threshold: <100ms — includes CI overhead)
+##   - Timing: best-of-3 (min of 3 runs) — stable against xdist CPU noise, still catches regressions
 ##   - Benchmark timing is printed to stdout for CI dashboard consumption
 ##   - Uses @pytest.mark.benchmark for CI gate filtering
 ##   - Does NOT use pytest-benchmark plugin — uses time.perf_counter() for zero-dependency
@@ -19,6 +20,8 @@
 ##            would silently degrade all consumers. This benchmark catches such regressions
 ##            before they reach production. The CI gate threshold (100ms) is double the
 ##            development threshold (50ms) to account for CI runner variability.
+##            Timing uses best-of-3 (min): a real regression slows ALL runs (min grows),
+##            while scheduler noise under xdist slows only individual runs (min stays stable).
 # endregion MODULE_CONTRACT
 
 import logging
@@ -34,13 +37,14 @@ logger = logging.getLogger(__name__)
 # ── Constants ───────────────────────────────────────────────────────────────
 
 # Performance thresholds
-# 📝 TRAP[DEBT] · 2026-08-26 · LO · DEV_THRESHOLD_MS=50 флакает под xdist-нагрузкой
-# (51ms при параллельном make check на dev-машине; standalone 0.23s, CI_THRESHOLD=100).
-# Observed: plan 012 волны 3-4 прогоны — 2 ложных FAIL за 5 прогонов (1-2ms сверх порога).
-# Suspected: CPU-конкуренция xdist-воркеров на dev; не регрессия парсера (мой код не тронут).
-# Impact: ложный RED make check на dev при высокой нагрузке.
-# When: plan 012 wave 3-4 verification. Rev: if флак повторится >2 раз/нед — поднять DEV
-# порог до CI_THRESHOLD или изолировать бенчмарк от xdist (single-process маркер).
+# ⚠️ TRAP[BUG] · 2026-08-31 · P2 · Бенчмарк parse() флакал под xdist-нагрузкой · Root: single-shot
+# · измерение ловит шум планировщика, не регрессию · Fix: best-of-3 (min из 3 прогонов)
+# · Symptom: 111.66ms > 50ms порога в полном make check; изолированно ~5ms (ложный RED)
+# · Root: single-shot time.perf_counter() под CPU-конкуренцией xdist-воркеров; TRAP[DEBT]
+# ·   2026-08-26 предсказал флак (2 ложных FAIL за 5 прогонов plan 012) и задал Rev-условие
+# · Fix: best-of-3 min — реальная регрессия замедляет все 3 прогона (ловится), шум — отдельные
+# · Prevention: min-of-N для всех perf-бенчмарков в тестах; Rev: если min-of-3 начнёт флакать —
+# ·   изолировать бенчмарк от xdist (single-process маркер)
 DEV_THRESHOLD_MS: float = 50.0  # Development threshold (fast local machine)
 CI_THRESHOLD_MS: float = 100.0  # CI gate threshold (accounting for runner variability)
 NUM_VARIABLES: int = 1000  # Number of variables to generate
@@ -127,7 +131,7 @@ def large_secrets_env_content() -> str:
 
 # region FUNC_test_parse_benchmark_1000_vars
 
-## @purpose — Time secrets_env_parser.parse() with 1000 variables.
+## @purpose — Time secrets_env_parser.parse() with 1000 variables (best-of-3 min).
 ##            Assert completion in <50ms (dev) / <100ms (CI gate).
 
 # 🧪 TRAP[TEST] · 2026-07-30 · benchmark/secrets-parser · REGRESSION(086)
@@ -145,9 +149,10 @@ def test_parse_benchmark_1000_vars(
     """Benchmark secrets_env_parser.parse() with 1000 variables.
 
     ## @purpose — Generate secrets.env with 1000 variables, time parse() via
-    ##            time.perf_counter(), assert completion within thresholds.
-    ##            Development threshold: <50ms. CI gate threshold: <100ms.
-    ##            Benchmark timing printed to stdout for CI dashboard.
+    ##            best-of-3 (min of 3 timed runs, time.perf_counter()), assert
+    ##            completion within thresholds. Development threshold: <50ms.
+    ##            CI gate threshold: <100ms. Best-of-3 min is stable against
+    ##            xdist CPU noise while still catching real regressions.
     ## @io — ⎋ None (assert-based pass/fail)
     ## @complexity — O(N) where N = 1000 lines, expected < 0.05ms/line
     """
@@ -171,14 +176,33 @@ def test_parse_benchmark_1000_vars(
     warmup = parse(str(env_file))
     logger.info("[IMP:7][benchmark] Warm-up parse returned %d entries", len(warmup))
 
-    # ── Step 3: Timed parse ──
-    # Use time.perf_counter() for high-precision timing
-    start_time = time.perf_counter()
-    result = parse(str(env_file))
-    end_time = time.perf_counter()
+    # ── Step 3: Timed parse — best-of-3 (min) ──
+    # Single-shot time.perf_counter() catches scheduler noise from xdist workers,
+    # not regressions. Best-of-3: a real regression (e.g., O(N²)) slows ALL runs →
+    # min grows and is caught; scheduler noise slows only individual runs → min stable.
+    # Thresholds unchanged (50ms dev / 100ms CI). Correctness (Step 4) runs on the
+    # last run's result — all runs parse the same file, any run is representative.
+    runs_ms: list[float] = []
+    run_results: list[dict[str, str]] = []
+    for run_idx in range(3):
+        start_time = time.perf_counter()
+        run_results.append(parse(str(env_file)))
+        end_time = time.perf_counter()
+        runs_ms.append((end_time - start_time) * 1000.0)
+        logger.info(
+            "[IMP:8][benchmark] Timed run %d/3: %.3f ms",
+            run_idx + 1,
+            runs_ms[-1],
+        )
 
-    elapsed_ms = (end_time - start_time) * 1000.0
-    elapsed_us = (end_time - start_time) * 1_000_000.0
+    elapsed_ms = min(runs_ms)
+    elapsed_us = elapsed_ms * 1000.0
+    result = run_results[-1]  # correctness checks below use the last run's result
+    logger.info(
+        "[IMP:8][benchmark] Best-of-3: selected min %.3f ms (all runs: %s)",
+        elapsed_ms,
+        ", ".join(f"{r:.3f}" for r in runs_ms),
+    )
 
     # ── Step 4: Verify correctness of parsed data ──
     assert len(result) >= NUM_VARIABLES, f"parse() returned {len(result)} entries, expected >= {NUM_VARIABLES}"
