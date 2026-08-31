@@ -48,6 +48,11 @@ before exec'ing cron in foreground.
           no orphan/zombie risk. subprocess would make cron a child of python
           (PID 1 = python), breaking signal forwarding and healthcheck semantics.
 @changes 2026-08-08 | DevPlan 143 W1B — created
+@changes 2026-08-31 | 018 W7 F-23 — mkdir /run/lock перед exec cron: все cron-задачи
+          (flock-guarded) на tronyx-vps падали мгновенно ("cannot open lock file")
+          — /run/lock отсутствует в debian:bookworm-slim без systemd; ночные
+          бэкапы/retention/WAL-sync не выполнялись НИ РАЗУ с бутстрапа (RPO 24ч
+          фиктивен). Fix: entrypoint гарантирует директору flock-локов.
 """
 # endregion MODULE_CONTRACT
 
@@ -59,6 +64,9 @@ logger = logging.getLogger(__name__)
 
 # Canonical target for env dump (Debian cron reads this at daemon start).
 _ENV_FILE_PATH = "/etc/environment"
+# flock lock dir — cron-задачи в /etc/cron.d/platform-backup все flock-guarded.
+# debian:bookworm-slim без systemd НЕ создаёт /run/lock → flock падает мгновенно.
+_LOCK_DIR = "/run/lock"
 # exec target — PID 1 becomes cron (foreground, no daemonize).
 _CRON_ARGV = ["cron", "-f"]
 
@@ -169,9 +177,23 @@ def main() -> int:
 
     """
     count = write_env_file(dict(os.environ), _ENV_FILE_PATH)
+    # ⚠️ TRAP[BUG] · 2026-08-31 · P1 · ночные бэкапы fail-closed: flock без /run/lock
+    # · Symptom: /var/log/platform/backup/*.log содержат ТОЛЬКО "flock: cannot open
+    # ·   lock file /run/lock/platform-*.lock: No such file or directory" — каждая
+    # ·   cron-задача (dump/app-data/cleanup/retention/wal-sync/spool-retry) умирала
+    # ·   мгновенно, nightly uploads отсутствовали (017 §5 класс: RPO фиктивен).
+    # · Root: debian:bookworm-slim без systemd не создаёт /run/lock; cron-задачи
+    # ·   guard'ятся `flock -n /run/lock/*.lock` → flock(2) ENOENT → job не стартует.
+    # ·   Manual `docker exec ... backup-postgres.sh` работал (flock-обёртка — только в cron).
+    # · Fix: entrypoint mkdir -p /run/lock до exec cron (runtime-гарантия при любом
+    # ·   деплое/пересоздании, не зависит от base-image обновлений).
+    # · Prevention: startup-prereq canon — PID-1 entrypoint обязан создавать runtime-каталоги,
+    # ·   от которых зависят его child-процессы (проверялось бы pre-flight на ноде).
+    Path(_LOCK_DIR).mkdir(exist_ok=True, parents=True)
     logger.info(
-        "[IMP:9][backup-cron-entrypoint][main] env dumped (%d lines), exec'ing cron -f as PID 1",
+        "[IMP:9][backup-cron-entrypoint][main] env dumped (%d lines), lock dir %s ready, exec'ing cron -f as PID 1",
         count,
+        _LOCK_DIR,
     )
     # execvp replaces the process image — PID 1 becomes cron.
     # If execvp returns, it raised OSError (e.g. cron binary missing).

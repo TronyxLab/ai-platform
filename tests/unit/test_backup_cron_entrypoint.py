@@ -155,3 +155,37 @@ def test_cron_argv_constant(caplog) -> None:
 # Prevent os.execvp from being called during import/test (safety — main() is never
 # invoked in unit tests, but guard against accidental import side-effects).
 _ = os
+
+
+# region main_lock_dir
+
+
+# 🧪 TRAP[TEST] · Regression (R5) · F-23 018 W7: entrypoint создаёт /run/lock до exec cron
+# · Scenario: main() с подменёнными путями (tmp_path) и mock os.execvp → lock-dir существует
+# ·   ПОСЛЕ main() (главный триггер бага: flock -n /run/lock/*.lock падал ENOENT — все
+# ·   nightly-задачи fail-closed, RPO фиктивен)
+# · Last fail: 2026-08-31 tronyx-vps — /var/log/platform/backup/*.log только flock-ошибки
+# · Remove if: cron-задачи перестанут использовать flock или entrypoint переписан
+def test_main_creates_lock_dir_before_exec(tmp_path: Path, monkeypatch, caplog) -> None:
+    """main(): mkdir lock-dir precedes execvp — flock-ready environment for cron jobs."""
+    caplog.set_level(logging.INFO)
+    import entrypoint as ep
+
+    env_file = tmp_path / "environment"
+    lock_dir = tmp_path / "lock"
+    monkeypatch.setattr(ep, "_ENV_FILE_PATH", str(env_file))
+    monkeypatch.setattr(ep, "_LOCK_DIR", str(lock_dir))
+    exec_calls: list[tuple[str, list[str]]] = []
+    monkeypatch.setattr(ep.os, "execvp", lambda cmd, argv: exec_calls.append((cmd, list(argv))))
+
+    ep.main()
+
+    assert lock_dir.is_dir(), f"lock dir должен существовать после main(): {lock_dir}"
+    assert env_file.is_file(), f"env file должен быть записан: {env_file}"
+    assert exec_calls == [("cron", ["cron", "-f"])], f"exec-таргет неизменен: {exec_calls}"
+    assert any("[IMP:9][backup-cron-entrypoint][main]" in r.message for r in caplog.records), (
+        "ожидался IMP:9 лог main()"
+    )
+
+
+# endregion main_lock_dir
