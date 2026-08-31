@@ -448,6 +448,10 @@ def test_init_flow_all_phases(caplog, state_file, mock_subprocess, monkeypatch):
     # /etc/letsencrypt (Permission denied) → "error" → φ7 вернула бы False (done_with_warnings).
     # Happy-path: мок возвращает "converged" (успех — серты не наказываются повторным issuance).
     monkeypatch.setattr(domains_helpers, "ssl_provision_via_orchestrator", lambda _core_dir, _node_yaml: "converged")
+    # strict-семантика INIT (2026-09-01): import_deploy_context патчится no-op — тест-среда
+    # (node.yaml без contexts[]) не может реально задеплоить проекты; strict-семантика покрыта
+    # отдельно (test_domains_import_deploy_context.py + passthrough-тесты φ8/φ12).
+    monkeypatch.setattr(domains_helpers, "import_deploy_context", lambda *_args, **_kwargs: None)
 
     exit_code = cli.run_init_mode(m)
     assert exit_code == 0
@@ -763,7 +767,7 @@ def test_tor_conditional_skip(caplog, machine):
 # · Last fail: N/A (new test)
 # · Remove if: TOR conditional logic changes
 @ldd_trajectory
-def test_tor_conditional_runs(caplog, state_file, mock_subprocess):
+def test_tor_conditional_runs(caplog, state_file, mock_subprocess, monkeypatch):
     """Init flow runs phases with TOR_ENABLED=true (env-дикт через StateMachine(env=)).
 
     167 D5 (DI-zero): FS-guard патчи УДАЛЕНЫ — helpers зафейканы (0 реальных os.makedirs)
@@ -805,6 +809,11 @@ def test_tor_conditional_runs(caplog, state_file, mock_subprocess):
     )
     m.core_dir = str(Path(state_file).parent)
     m.setup_state(mode="init", node="test-node")
+
+    # strict-семантика INIT (2026-09-01): real import_deploy_context в тест-среде
+    # (node.yaml без contexts[]) вернул бы failed=1 → PlatformFatalError. Flow-тест —
+    # про TOR-ветвление, не про деплой контекста (покрыт test_domains_import_deploy_context.py).
+    monkeypatch.setattr(domains_helpers, "import_deploy_context", lambda *_args, **_kwargs: None)
 
     exit_code = cli.run_init_mode(m)
     assert exit_code == 0
@@ -1059,7 +1068,7 @@ def test_bootstrapstate_round_trip(caplog):
 #   (dependency {done, done_with_warnings}); WARN-перевыполнение самой фазы сохранено
 # · Remove if: WARN-семантика статусов изменена
 @ldd_trajectory
-def test_phase_with_warnings_not_done(caplog, state_file, mock_subprocess):
+def test_phase_with_warnings_not_done(caplog, state_file, mock_subprocess, monkeypatch):
     """Фаза, вернувшая False, получает done_with_warnings и перевыполняется (D5).
 
     167 D5 (DI-zero): os.makedirs FS-guard УДАЛЁН — helpers зафейканы, 0 реальных вызовов.
@@ -1088,6 +1097,10 @@ def test_phase_with_warnings_not_done(caplog, state_file, mock_subprocess):
     )
     m.core_dir = str(Path(state_file).parent)
     m.setup_state(mode="init", node="test-node")
+
+    # strict-семантика INIT (2026-09-01): real import_deploy_context в тест-среде вернул бы
+    # failed=1 → PlatformFatalError; тест — про WARN-семантику φ1, не про деплой контекста.
+    monkeypatch.setattr(domains_helpers, "import_deploy_context", lambda *_args, **_kwargs: None)
 
     # drill C2 (2026-08-27): φ1 → done_with_warnings; φ2 (зависит от φ1) — dependency
     # УДОВЛЕТВОРЕНА (НЕ PhaseDependencyError): warning-фаза перевыполняется САМА, но
@@ -1644,6 +1657,11 @@ def test_init_strict_exit_on_failed(caplog, state_file, mock_subprocess, monkeyp
         return real_run(cmd, **kwargs)
 
     monkeypatch.setattr(dph.helpers_subprocess, "run_subprocess", _strict_fail)
+    # strict-семантика INIT (2026-09-01): real import_deploy_context в тест-среде вернул бы
+    # failed=1 → PlatformFatalError и сломал resumable-ветку (rc2 должен быть 0). Деплой
+    # контекста — не предмет этого теста (F-015b про модули); strict-семантика покрыта
+    # test_domains_import_deploy_context.py.
+    monkeypatch.setattr(domains_helpers, "import_deploy_context", lambda *_args, **_kwargs: None)
 
     m = sm.StateMachine(
         state_file_path=str(state_file),

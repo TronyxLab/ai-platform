@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: converge-volumes, reconcile-volumes, r7, named-volumes, detect-only, o7, docker-compose-config
-# STRUCTURE: ▶ docker info → ◇ parse modules → ○ for each compose: ⚡ docker_compose_config --format json → ⊕ extract_named_volumes (type=volume) → ◇ docker volume inspect? → ⎋ drift entry {R7} (detect-only, O7)
+# STRUCTURE: ▶ docker info → ◇ parse modules → ○ for each compose: ⚡ docker_compose_config --format json → ⊕ extract_named_volumes (type=volume) → ◇ inspect({project}_{name}|голое) (R7 prefix-aware, O7) → ⎋ drift entry {R7} (detect-only, O7)
 # region MODULE_CONTRACT
 ## @purpose  R7 reconcile_volumes — detect-only named volume check (O7 invariant: NEVER creates).
 ##           Извлечён из reconciler.py (B9 T2, U-31).
@@ -10,8 +10,11 @@
 ##   - O7: detect-only — docker volume create НИКОГДА не вызывается
 ##   - Bind mounts (type=bind) исключаются из проверки
 ##   - docker compose config — через shared/docker_compose.docker_compose_config (sole path, B5 T6)
+##   - R7 prefix-aware (2026-08-31): volume присутствует при inspect-успехе голого имени ИЛИ
+##     {project}_{name} (project из compose config "name") — compose-канон нейминга реальных volumes
 ## @rationale DevPlan 116 B9 D3: 8 доменов reconciler по модулям.
 ## @changes  2026-08-01 · Extracted from reconciler.py (B9 T2)
+## @changes  2026-08-31 | Холодный bootstrap: prefix-aware volume detection ({project}_{name} OR голое имя)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -133,6 +136,25 @@ def extract_named_volumes(compose_json: dict[str, object]) -> list[str]:
 # endregion FUNC_extract_named_volumes
 
 
+# region FUNC__volume_inspect_bare_or_prefixed
+## @purpose  R7 prefix-aware detection (холодный bootstrap 2026-08-31): volume присутствует,
+##           если docker volume inspect успешен для голого имени ИЛИ для {project}_{name}
+##           (compose-канон нейминга реальных volumes на ноде, напр. platform_wal-archive).
+## @io       ⇥ project: str (compose project name из config "name"; "" = без префикса),
+##           vol_name: str, timeout: int → ⎋ bool (True = volume существует)
+## @complexity O(2) — до двух docker volume inspect
+## @invariants — O7: detect-only, НИКОГДА docker volume create
+def _volume_inspect_bare_or_prefixed(project: str, vol_name: str, *, timeout: int) -> bool:
+    """True если volume существует под голым именем или под префиксом compose-проекта."""
+    # ⚠️ TRAP[BUG] · 2026-08-31 · HI · R7 false-positive «N named volume(s) missing» по построению · Root: inspect(голое compose-source имя) при реальных {project}_{name} volumes всегда rc≠0 → WARN навсегда · Fix: prefix-aware inspect ({project}_{name} OR голое) · Prevention: prefix-проверка ДО WARN
+    if docker_ops.docker_volume_inspect(vol_name, timeout=timeout):
+        return True
+    return bool(project) and docker_ops.docker_volume_inspect(f"{project}_{vol_name}", timeout=timeout)
+
+
+# endregion FUNC__volume_inspect_bare_or_prefixed
+
+
 # region FUNC_reconcile_volumes
 ## @purpose  Detect-only volume reconciliation (O7 invariant). Reads node.yaml
 ##           to find docker modules, inspects compose config for named volumes,
@@ -150,6 +172,8 @@ def extract_named_volumes(compose_json: dict[str, object]) -> list[str]:
 ##   - Docker daemon unavailable → status=fail, no further checks
 ##   - Module without canonical compose file (shared/compose_files) → skipped (not a docker module)
 ##   - All volumes exist → status=converged
+##   - Volumes с префиксом compose-проекта ({project}_{name}) считаются присутствующими
+##     (R7 prefix-aware, холодный bootstrap 2026-08-31)
 ##   - One or more volumes missing → status=warn, never create
 ##   - Bind mounts (type=bind) → excluded from inspection
 def reconcile_volumes(
@@ -252,11 +276,21 @@ def reconcile_volumes(
             logger.info("[IMP:7][converge][%s] No named volumes in %s", unit, mod_name)
             continue
 
-        logger.info("[IMP:7][converge][%s] Named volumes in %s: %s", unit, mod_name, named_volumes)
+        # R7 prefix-aware (холодный bootstrap 2026-08-31): compose-config source-имена голые
+        # (wal-archive), реальные volumes на ноде — {project}_{name} (platform_wal-archive).
+        # Project name канонически из docker compose config --format json top-level "name".
+        project_name = cast(str, compose_json.get("name", "") or "")
+        logger.info(
+            "[IMP:7][converge][%s] Named volumes in %s: %s (project=%s)",
+            unit,
+            mod_name,
+            named_volumes,
+            project_name or "<none>",
+        )
 
         for vol_name in named_volumes:
             # W1: docker volume inspect — shared/docker_ops (detect-only, O7)
-            if not docker_ops.docker_volume_inspect(vol_name, timeout=DOCKER_TIMEOUT):
+            if not _volume_inspect_bare_or_prefixed(project_name, vol_name, timeout=DOCKER_TIMEOUT):
                 logger.warning(
                     "[IMP:9][converge][%s] VOLUME MISSING: %s (module: %s) — detect-only, NOT creating (O7)",
                     unit,

@@ -21,6 +21,10 @@
 ##           provisioned|converged|skipped_import|error; import-скип → IMP:10 + skipped_import;
 ##           converged-проверка по диску (fullchain.pem, letsencrypt_live()); per-module
 ##           guarded-импорты с _import_fail_ctx (частичная причина ImportError)
+## @changes  2026-09-01 · strict-семантика деплоя контекста в INIT: import_deploy_context +strict.
+##           φ8 (bootstrap INIT) — failed≠∅/исключение → IMP:10 + PlatformFatalError → фаза
+##           failed в state.json (resumable, повтор доводит). φ12 (UPDATE) — strict=False,
+##           best-effort сохранён (DEPLOY_BEST_EFFORT, D2 — WARN→0).
 ## @rationale Strangler-Fig: извлечение I/O из state_machine-монолита (DevPlan 116 B9 D1).
 ##           T3.5: скрытое runtime-ребро lifecycle→deploy через importlib становится
 ##           статическим (ARCH-303/DEP-0018); двойная идентичность модуля (dotted + shadow
@@ -40,6 +44,7 @@ from pathlib import Path
 
 # 142 W2: secrets.env → persistent /var/lib/platform/run (резолвер shared/deploy_paths)
 from core.internal.shared import deploy_paths
+from core.internal.shared.exceptions import PlatformFatalError
 
 logger = logging.getLogger(__name__)
 
@@ -96,26 +101,91 @@ except ImportError:
     _import_fail_ctx("context_deployer")
 
 
+# region FUNC__failed_project_names
+## @purpose  Извлечь имена failed-проектов из deploy_context-результата (duck-typed:
+##           .results[] с .status == "failed" → .name). Носитель failed-имён после агрегации
+##           _step_deploy_projects + _step_vhosts (синтетическая запись "<vhost-render>").
+## @io       ⇥ result: object (ContextDeployResult) → ⎋ list[str] (имена failed; [] если нет)
+## @complexity O(R) — R = число проектов в result.results
+## @invariants
+##   - result без .results (None/не-list) → [] (деградация безопасна — strict-фейл всё
+##     равно сработает по result.failed счётчику, без перечня имён)
+def _failed_project_names(result: object) -> list[str]:
+    """Return failed project names from a deploy_context result (duck-typed)."""
+    results = getattr(result, "results", None)
+    if not isinstance(results, list):
+        return []
+    names: list[str] = []
+    for entry in results:
+        if getattr(entry, "status", "") == "failed":
+            name = getattr(entry, "name", None)
+            if isinstance(name, str) and name:
+                names.append(name)
+    return names
+
+
+# endregion FUNC__failed_project_names
+
+
 # region FUNC_import_deploy_context
-## @purpose  Run context_deployer.deploy_context() (нормальный импорт, T3.5). Non-fatal.
-## @io       ⇥ core_dir: str, node_name: str, node_yaml: str → ⎋ None (non-fatal)
+## @purpose  Run context_deployer.deploy_context() (нормальный импорт, T3.5). Non-fatal по
+##           умолчанию (best-effort, DEPLOY_BEST_EFFORT — D2). strict=True (INIT, φ8):
+##           result.failed≠0 ИЛИ исключение → IMP:10 + PlatformFatalError — критерий
+##           приёмо-сдаточной валидации «конец bootstrap = все проекты контекста live».
+## @io       ⇥ core_dir: str, node_name: str, node_yaml: str, strict: bool = False
+##           → ⎋ None (strict=False, non-fatal) | raises PlatformFatalError (strict=True)
 ## @complexity O(D * P) where D = domains, P = projects
-def import_deploy_context(core_dir: str, node_name: str, node_yaml: str) -> None:
-    """Run context_deployer.deploy_context() via normal import (T3.5) — best-effort."""
+## @invariants
+##   - strict=False: текущее поведение — сбой/исключение → WARN (non-fatal, DEPLOY_BEST_EFFORT)
+##   - strict=True: result.failed≠0 → IMP:10 с перечнем failed-имён + PlatformFatalError
+##   - strict=True: исключение из deploy_context → IMP:10 + PlatformFatalError (from e)
+##   - deploy_context None (guarded-import) → WARN skip в ОБА режимах (импорт-скип НЕ fatal,
+##     канон T3.5/DEPLOY_BEST_EFFORT; _import_fail_ctx уже зафиксировал причину на импорте)
+## 🧐 TRAP[DECISION] · 2026-09-01 · — · INIT strict / UPDATE best-effort: φ8 strict=True, φ12 — False
+## · Rejected: всегда-fatal — ломает φ12 DEPLOY_BEST_EFFORT контракт (D2, WARN→0)
+## · Reason: критерий «конец bootstrap = все проекты live» (failed≠∅ = недоведённая нода)
+## · Rev: если в init появятся легитимные failed (stub-only проекты) — переработать
+## ·   классификацию failed vs skipped (awaiting_deploy ≠ failed)
+def import_deploy_context(
+    core_dir: str,
+    node_name: str,
+    node_yaml: str,
+    *,
+    strict: bool = False,
+) -> None:
+    """Run context_deployer.deploy_context() via normal import (T3.5) — best-effort unless strict."""
     if deploy_context is None:
         logger.warning("[IMP:7][deploy_context] context_deployer not importable — skipping (best-effort)")
         return
     try:
         result = deploy_context(core_dir, node_name, node_yaml)
+    except Exception as e:  # noqa: EXC — non-fatal by default: deploy_context is best-effort
+        # BLE001 не срабатывает: strict-ветка re-raise'ит (raise ... from e) — except не blind.
+        if strict:
+            logger.critical("[IMP:10][deploy_context] deploy_context failed (strict): %s", e)
+            msg = f"Context deploy failed (strict, INIT): {e}"
+            raise PlatformFatalError(msg) from e
+        logger.warning("[IMP:7][deploy_context] deploy_context failed (non-fatal): %s", e)
+    else:
+        failed_count = result.failed if result else 0
         logger.info(
             "[IMP:9][deploy_context] Complete: deployed=%d skipped=%d failed=%d",
             result.deployed if result else 0,
             result.skipped if result else 0,
-            result.failed if result else 0,
+            failed_count,
         )
-    # ruff: ignore[BLE001] — deploy_context runtime-ошибки произвольного модуля (best-effort)
-    except Exception as e:  # noqa: EXC — non-fatal: deploy_context is best-effort
-        logger.warning("[IMP:7][deploy_context] deploy_context failed (non-fatal): %s", e)
+        if strict and failed_count:
+            failed_names = _failed_project_names(result)
+            logger.critical(
+                "[IMP:10][deploy_context] STRICT FAIL (INIT): context deploy failed=%d: %s",
+                failed_count,
+                ", ".join(failed_names) or "<names unavailable>",
+            )
+            msg = (
+                f"Context deploy failed (strict, INIT): {failed_count} project(s) failed: "
+                f"{', '.join(failed_names) or '<names unavailable>'}"
+            )
+            raise PlatformFatalError(msg)
 
 
 # endregion FUNC_import_deploy_context

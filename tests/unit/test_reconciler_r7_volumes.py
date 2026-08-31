@@ -289,3 +289,151 @@ def test_reconcile_volumes_bind_mount_excluded(tmp_path, caplog, node_yaml_with_
 
 
 # endregion FUNC_test_reconcile_volumes_bind_mount_excluded
+
+
+# ═══════════════════════════════════════════════════════════════════
+# R7 prefix-aware (холодный bootstrap 2026-08-31 — false-positive WARN инцидент)
+# ═══════════════════════════════════════════════════════════════════
+
+
+def _prefixed_compose_config_json() -> str:
+    """Compose config JSON с top-level "name"="platform" и named volume wal-archive."""
+    return json.dumps({
+        "name": "platform",
+        "services": {
+            "postgres": {"volumes": [{"type": "volume", "source": "wal-archive", "target": "/wal"}]},
+        },
+        "volumes": {"wal-archive": {"name": "platform_wal-archive"}},
+    })
+
+
+# region FUNC_test_reconcile_volumes_prefixed_found
+## 🧪 TRAP[TEST] · R7 prefixed volume found · Scenario: compose config "name"="platform",
+## ·   inspect(wal-archive)=rc1, inspect(platform_wal-archive)=rc0 → converged (NOT missing)
+## · Regression: R7 prefix-aware detection (холодный bootstrap 2026-08-31)
+## · Last fail: 2026-08-31 — «12 named volume(s) missing» на живой ноде (platform_wal-archive)
+## · Remove if: R7 prefix-aware detection logic changes
+@pytest.mark.usefixtures("reset_state")
+@ldd_trajectory
+def test_reconcile_volumes_prefixed_found(tmp_path, caplog, node_yaml_with_modules, mock_modules_dir):
+    """R7: volume найден по префиксу {project}_{name} → converged (NOT missing)."""
+    caplog.set_level(logging.INFO)
+    logger.info("[IMP:9][test] R7 prefix-found — platform_wal-archive exists → converged")
+
+    infra.core_dir = str(Path(mock_modules_dir).parent)
+    inspect_calls = []
+
+    def mock_run(cmd, *args, **kwargs):
+        cmd_str = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
+        if "docker info" in cmd_str:
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+        if "docker compose" in cmd_str and "config --format json" in cmd_str:
+            return subprocess.CompletedProcess(
+                args=cmd, returncode=0, stdout=_prefixed_compose_config_json(), stderr=""
+            )
+        if "volume inspect" in cmd_str:
+            inspect_calls.append(list(cmd))
+            vol = cmd[-1]
+            if vol == "wal-archive":
+                return subprocess.CompletedProcess(args=cmd, returncode=1, stdout="", stderr="No such volume")
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout='[{"Name": "x"}]', stderr="")
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    with patch.object(subprocess, "run", side_effect=mock_run):
+        entry = reconciler.reconcile_volumes(node_yaml_with_modules)
+
+    assert entry["unit"] == "R7"
+    assert entry["status"] == "converged", f"R7 FAIL: префиксованный volume обязан считаться присутствующим: {entry}"
+    names = [c[-1] for c in inspect_calls]
+    assert "wal-archive" in names and "platform_wal-archive" in names, f"inspect должен покрыть оба имени: {names}"
+
+
+# endregion FUNC_test_reconcile_volumes_prefixed_found
+
+
+# region FUNC_test_reconcile_volumes_bare_name_present
+## 🧪 TRAP[TEST] · R7 bare name present · Scenario: inspect(голое имя)=rc0 → converged
+## ·   (prefix не требуется — голое имя присутствует)
+## · Regression: R7 prefix-aware detection не ломает существующий bare-name путь
+## · Last fail: N/A (new test)
+## · Remove if: R7 detection logic changes
+@pytest.mark.usefixtures("reset_state")
+@ldd_trajectory
+def test_reconcile_volumes_bare_name_present(tmp_path, caplog, node_yaml_with_modules, mock_modules_dir):
+    """R7: volume существует под голым именем → converged (prefix не нужен)."""
+    caplog.set_level(logging.INFO)
+    logger.info("[IMP:9][test] R7 bare-name present → converged")
+
+    infra.core_dir = str(Path(mock_modules_dir).parent)
+    inspect_calls = []
+
+    def mock_run(cmd, *args, **kwargs):
+        cmd_str = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
+        if "docker info" in cmd_str:
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+        if "docker compose" in cmd_str and "config --format json" in cmd_str:
+            return subprocess.CompletedProcess(
+                args=cmd, returncode=0, stdout=_prefixed_compose_config_json(), stderr=""
+            )
+        if "volume inspect" in cmd_str:
+            inspect_calls.append(list(cmd))
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout='[{"Name": "wal-archive"}]', stderr="")
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    with patch.object(subprocess, "run", side_effect=mock_run):
+        entry = reconciler.reconcile_volumes(node_yaml_with_modules)
+
+    assert entry["unit"] == "R7"
+    assert entry["status"] == "converged", f"R7 FAIL: голое имя присутствует → converged: {entry}"
+    names = [c[-1] for c in inspect_calls]
+    assert "wal-archive" in names, f"inspect обязан проверить голое имя: {names}"
+
+
+# endregion FUNC_test_reconcile_volumes_bare_name_present
+
+
+# region FUNC_test_reconcile_volumes_both_missing
+## 🧪 TRAP[TEST] · R7 both missing · Scenario: inspect(wal-archive)=rc1 И
+## ·   inspect(platform_wal-archive)=rc1 → status=warn, volume в missing (detect-only)
+## · Regression: R7 prefix-aware detection — оба отсутствуют → по-прежнему missing
+## · Last fail: N/A (new test)
+## · Remove if: R7 detection logic changes
+@pytest.mark.usefixtures("reset_state")
+@ldd_trajectory
+def test_reconcile_volumes_both_missing(tmp_path, caplog, node_yaml_with_modules, mock_modules_dir):
+    """R7: голое И префиксованное имена отсутствуют → warn + missing (O7 detect-only)."""
+    caplog.set_level(logging.INFO)
+    logger.info("[IMP:9][test] R7 both-missing — warn, never create (O7)")
+
+    infra.core_dir = str(Path(mock_modules_dir).parent)
+    inspect_calls = []
+
+    def mock_run(cmd, *args, **kwargs):
+        cmd_str = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
+        if "docker info" in cmd_str:
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+        if "docker compose" in cmd_str and "config --format json" in cmd_str:
+            return subprocess.CompletedProcess(
+                args=cmd, returncode=0, stdout=_prefixed_compose_config_json(), stderr=""
+            )
+        if "volume inspect" in cmd_str:
+            inspect_calls.append(list(cmd))
+            return subprocess.CompletedProcess(args=cmd, returncode=1, stdout="", stderr="No such volume")
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    with patch.object(subprocess, "run", side_effect=mock_run):
+        entry = reconciler.reconcile_volumes(node_yaml_with_modules)
+
+    assert entry["unit"] == "R7"
+    assert entry["status"] == "warn", f"R7 FAIL: оба имени отсутствуют → warn: {entry}"
+    assert "missing" in entry["detail"], f"detail обязан сигнализировать missing: {entry}"
+    # Имена отсутствующих volumes — в LDD-логах (detail оркестратора — только счётчик)
+    assert any("VOLUME MISSING: wal-archive" in r.message for r in caplog.records), (
+        "wal-archive обязан быть в VOLUME MISSING логе (detect-only, O7)"
+    )
+    names = [c[-1] for c in inspect_calls]
+    assert "wal-archive" in names and "platform_wal-archive" in names, f"inspect обязан проверить оба имени: {names}"
+    assert not infra.has_errors, "Missing volumes should be warning, not error"
+
+
+# endregion FUNC_test_reconcile_volumes_both_missing

@@ -147,15 +147,17 @@ def phase_registry_auth(
 ## @io      ⇥ core_dir, node_name, node_yaml → ⎋ bool
 ## @complexity O(M * D) where M = modules, D = deploy operations per module
 ## @invariants
-##   - deploy-modules.sh is FATAL (core service deployment)
-##   - deploy_context is non-fatal (projects are best-effort)
+##   - deploy-modules.sh is FATAL (core service deployment) — strict-init (T9)
+##   - deploy_context: INIT — strict (failed≠∅/исключение → PlatformFatalError → фаза failed
+##     в state.json, resumable — критерий «конец bootstrap = все проекты live»); UPDATE
+##     (φ12) сохраняет best-effort (DEPLOY_BEST_EFFORT, D2)
 ##   - INIT: deploy-modules.sh БЕЗ --skip-provision (встроенный provision networks/volumes —
 ##     v1.0.1 TRAP[BUG]: φ3 сети не создаёт, external-сети на свежей ноде отсутствовали)
 def phase_deploy_services(core_dir: str, node_name: str, node_yaml: str) -> bool:
     """φ8: Deploy services — modules + context projects.
 
     Pre-check: node.yaml exists, core_dir exists.
-    Execute: deploy-modules.sh (docker + system) → deploy context projects.
+    Execute: deploy-modules.sh (docker + system) → deploy context projects (strict).
     Post-check: subprocess exit codes.
     """
     if not node_yaml or not os.path.isfile(node_yaml):
@@ -201,11 +203,16 @@ def phase_deploy_services(core_dir: str, node_name: str, node_yaml: str) -> bool
         logger.warning("[IMP:7][phase:deploy_services] deploy-modules.sh not found at %s — skipping", deploy_script)
         non_fatal_issues = True
 
-    # ── 2. Deploy context projects ──
+    # ── 2. Deploy context projects (strict в INIT: критерий «конец bootstrap = все проекты live») ──
     try:
-        helpers_domains.import_deploy_context(core_dir, node_name, node_yaml)
+        helpers_domains.import_deploy_context(core_dir, node_name, node_yaml, strict=True)
         logger.info("[IMP:9][phase:deploy_services] Context projects deployed")
-    except (OSError, PlatformError) as e:  # noqa: EXC — non-fatal: context deploy is best-effort
+    except PlatformFatalError:
+        # strict-init (T9, критерий приёмо-сдаточной валидации): failed-проекты/vhost в INIT →
+        # PlatformFatalError → фаза failed в state.json (resumable — повтор доводит) + exit 10.
+        # НЕ глотать: _run_phases помечает фазу failed, bootstrap завершается ненулевым кодом.
+        raise
+    except (OSError, PlatformError) as e:  # noqa: EXC — non-fatal: context deploy is best-effort (UPDATE path)
         logger.warning("[IMP:7][phase:deploy_services] Context deploy failed (non-fatal): %s", e)
         non_fatal_issues = True
 
@@ -888,7 +895,8 @@ def _apply_policy_script(
 ##   - deploy-modules.sh is called with --skip-provision (provision done in registry_update)
 ##   - SSL provision is via cert_orchestrator (unified entrypoint); статус skipped_import/error →
 ##     done_with_warnings (P0 2026-08-27 — тихий import-skip НЕ маскируется)
-##   - Context deploy is incremental (only changed projects)
+##   - Context deploy is incremental (only changed projects); best-effort (DEPLOY_BEST_EFFORT,
+##     D2 — strict=False): failed-проекты → WARN→0, в отличие от φ8 (INIT, strict=True)
 def phase_deploy_update(core_dir: str, node_name: str, node_yaml: str) -> bool:
     """φ12: Deploy update — modules, SSL, context (UPDATE mode).
 
@@ -947,9 +955,10 @@ def phase_deploy_update(core_dir: str, node_name: str, node_yaml: str) -> bool:
             )
             non_fatal_issues = True
 
-    # ── 3. Deploy context projects (incremental) ──
+    # ── 3. Deploy context projects (incremental, best-effort: DEPLOY_BEST_EFFORT D2) ──
+    # strict=False явно: UPDATE сохраняет WARN→0 контракт (D2) — в отличие от φ8 (INIT, strict).
     try:
-        helpers_domains.import_deploy_context(core_dir, node_name, node_yaml)
+        helpers_domains.import_deploy_context(core_dir, node_name, node_yaml, strict=False)
         logger.info("[IMP:9][phase:deploy_update] Context projects deployed incrementally")
     except (OSError, PlatformError) as e:  # noqa: EXC — non-fatal (best-effort: DEPLOY_BEST_EFFORT policy)
         logger.warning("[IMP:7][phase:deploy_update] Context deploy failed (non-fatal): %s", e)

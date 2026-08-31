@@ -18,6 +18,7 @@
 """
 
 import logging
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -659,3 +660,232 @@ def test_deploy_gate_uses_single_shot_by_default(caplog, tmp_path):
 
 
 # endregion FUNC_test_cold_skip_gate_single_shot
+
+
+# ═══════════════════════════════════════════════════════════════════
+# _step_vhosts tests (холодный bootstrap R6 — rc-capture + retry + файл-верификация)
+# ═══════════════════════════════════════════════════════════════════
+
+
+class _VhostRunner:
+    """Scripted CommandRunner для _step_vhosts: rc-последовательность + stderr.
+
+    ## @purpose — DI-канал runner (W4b): _step_vhosts вызывает runner.run(cmd, timeout=60,
+    ##            check=False) — fake возвращает CompletedProcess по заданной rc-последовательности.
+    ## @io — ⇥ rc_sequence: list[int], stderr: str → ⎋ CompletedProcess (scripted)
+    ## @complexity — O(1)
+    """
+
+    def __init__(self, rc_sequence: list[int], stderr: str = "") -> None:
+        self.calls = 0
+        self._rcs = list(rc_sequence)
+        self._stderr = stderr
+
+    def run(self, cmd, *, timeout=60, check=False, non_fatal=False, fatal_rc=()):  # ruff: ignore[ARG002]
+        self.calls += 1
+        rc = self._rcs.pop(0) if self._rcs else 0
+        return subprocess.CompletedProcess(list(cmd), rc, "", self._stderr)
+
+
+class _VhostFacts:
+    """EnvironmentFacts-fake для _step_vhosts: add-vhost.sh существует (или нет), остальное — нет.
+
+    ## @purpose — path_isfile(path) → True ТОЛЬКО для internal/scaffold/add-vhost.sh при
+    ##            script_exists=True; domain_verifier.py/cert-paths — False (другие шаги skip).
+    ## @complexity — O(1)
+    """
+
+    def __init__(self, script_exists: bool = True) -> None:
+        self._script_exists = script_exists
+
+    def path_isfile(self, path) -> bool:
+        return self._script_exists and str(path).endswith("internal/scaffold/add-vhost.sh")
+
+
+# region FUNC_test_step_vhosts_rc_fail_twice_returns_false
+## @purpose — R6 (холодный bootstrap): rc!=0 дважды → _step_vhosts возвращает False
+##            (retry исчерпан) + IMP:10 лог; success-лог «Vhosts rendered» ОТСУТСТВУЕТ.
+## @io — ⇥ caplog, tmp_path, monkeypatch → ⎋ None (asserts bool + logs)
+## @complexity — O(1)
+## @invariants
+##   - Ровно 2 вызова runner.run (первый + ОДИН retry)
+##   - False = неуспех-пропагация по паттерну шага (deploy_context → result.failed)
+# 🧪 TRAP[TEST] · Regression · _step_vhosts rc!=0 дважды → False (R6 инцидент)
+# · Scenario: add-vhost.sh --render-all rc=1 дважды (retry исчерпан) → return False,
+# ·   IMP:10 лог, «Vhosts rendered» (ложный success) отсутствует
+# · Last fail: 2026-08-31 холодный bootstrap — render ТИХО падал (rc!=0 не проверялся),
+# ·   deploy отчитывался успехом, converge R6 FAIL ×3 (vhost not found)
+# · Remove if: vhost render перестаёт репортить неуспех через возврат шага
+def test_step_vhosts_rc_fail_twice_returns_false(caplog, tmp_path, monkeypatch) -> None:
+    """_step_vhosts rc!=0 дважды → False + IMP:10, без ложного success-лога."""
+    monkeypatch.setenv("NODE_CONFIGS_DIR", str(tmp_path / "node-configs"))
+    caplog.set_level(logging.DEBUG)
+    runner = _VhostRunner([1, 1], stderr="render exploded")
+    ok = cd._step_vhosts(str(tmp_path / "core"), "test-node", runner=runner, facts=_VhostFacts())
+    assert ok is False
+    assert runner.calls == 2, "rc!=0 → ровно ОДИН retry (2 вызова)"
+    msgs = [r.message for r in caplog.records]
+    assert any("IMP:10" in m and "Vhost render FAILED" in m for m in msgs), "IMP:10 при исчерпанном retry"
+    assert not any("Vhosts rendered" in m for m in msgs), "ложный success-лог запрещён (R6)"
+    for record in list(caplog.records):
+        if "[IMP:" in record.message:
+            logger.info("%s", record.message)
+    logger.info("[IMP:9][test] _step_vhosts rc!=0 дважды → False — R6 propagation OK")
+
+
+# endregion FUNC_test_step_vhosts_rc_fail_twice_returns_false
+
+
+# region FUNC_test_step_vhosts_rc_ok_no_files_returns_false
+## @purpose — R6: rc==0 но в overlays/nginx нет ни одного *.conf → тот же неуспех-путь
+##            (retry → IMP:10 + False). «Лог success без файлов на диске» невозможен.
+## @io — ⇥ caplog, tmp_path, monkeypatch → ⎋ None (asserts bool + calls)
+## @complexity — O(1)
+## @invariants — rc==0 без файлов = неуспех (не маскируется success-логом)
+# 🧪 TRAP[TEST] · Regression · _step_vhosts rc==0 без файлов → False (R6 файл-верификация)
+# · Scenario: render-all rc=0 дважды, overlay_dir пуст/отсутствует → return False + IMP:10
+# · Last fail: 2026-08-31 — rc!=0 не проверялся; здесь граничный случай «успех без файлов»
+# · Remove if: файл-верификация vhost-рендера убирается
+def test_step_vhosts_rc_ok_no_files_returns_false(caplog, tmp_path, monkeypatch) -> None:
+    """_step_vhosts rc==0 но без *.conf на диске → False (пустой overlay = неуспех)."""
+    monkeypatch.setenv("NODE_CONFIGS_DIR", str(tmp_path / "node-configs"))
+    caplog.set_level(logging.DEBUG)
+    runner = _VhostRunner([0, 0])
+    ok = cd._step_vhosts(str(tmp_path / "core"), "test-node", runner=runner, facts=_VhostFacts())
+    assert ok is False
+    assert runner.calls == 2, "rc==0 без файлов → retry тоже выполняется"
+    msgs = [r.message for r in caplog.records]
+    assert any("IMP:10" in m and "Vhost render FAILED" in m for m in msgs)
+    assert any("no *.conf" in m for m in msgs), "причина — отсутствие .conf в overlay"
+    for record in list(caplog.records):
+        if "[IMP:" in record.message:
+            logger.info("%s", record.message)
+    logger.info("[IMP:9][test] _step_vhosts rc==0 без файлов → False — overlay-guard OK")
+
+
+# endregion FUNC_test_step_vhosts_rc_ok_no_files_returns_false
+
+
+# region FUNC_test_step_vhosts_rc_fail_then_ok_returns_true
+## @purpose — R6 transient: первый rc!=0 → retry успешен (rc=0 + файлы на диске) → True.
+## @io — ⇥ caplog, tmp_path, monkeypatch → ⎋ None (asserts True + 2 вызова)
+## @complexity — O(1)
+## @invariants — Транзиентный отказ переживается одним retry
+# 🧪 TRAP[TEST] · Regression · _step_vhosts rc!=0 → retry rc=0 + файлы → True
+# · Scenario: первый запуск rc=1 (transient), второй rc=0; .conf существует → True
+# · Last fail: N/A (new test)
+# · Remove if: retry-логика vhost-рендера меняется
+def test_step_vhosts_rc_fail_then_ok_returns_true(caplog, tmp_path, monkeypatch) -> None:
+    """_step_vhosts: transient rc!=0 переживается retry'ем (rc=0 + файл) → True."""
+    monkeypatch.setenv("NODE_CONFIGS_DIR", str(tmp_path / "node-configs"))
+    caplog.set_level(logging.DEBUG)
+    overlay = tmp_path / "node-configs" / "test-node" / "overlays" / "nginx"
+    overlay.mkdir(parents=True)
+    (overlay / "webapp.example.com.conf").write_text("# GENERATED by vhost_renderer.py\n", encoding="utf-8")
+    runner = _VhostRunner([1, 0])
+    ok = cd._step_vhosts(str(tmp_path / "core"), "test-node", runner=runner, facts=_VhostFacts())
+    assert ok is True
+    assert runner.calls == 2, "rc!=0 → retry выполнен"
+    for record in list(caplog.records):
+        if "[IMP:" in record.message:
+            logger.info("%s", record.message)
+    logger.info("[IMP:9][test] _step_vhosts transient rc!=0 → retry rc=0 + файл → True")
+
+
+# endregion FUNC_test_step_vhosts_rc_fail_then_ok_returns_true
+
+
+# region FUNC_test_step_vhosts_rc_ok_with_files_returns_true
+## @purpose — R6 happy path: rc=0 + ≥1 *.conf в overlay → True + IMP:9 «Vhosts rendered (N .conf)».
+## @io — ⇥ caplog, tmp_path, monkeypatch → ⎋ None (asserts True + count-лог)
+## @complexity — O(1)
+## @invariants — success-лог несёт факт (число отрендеренных .conf)
+# 🧪 TRAP[TEST] · Regression · _step_vhosts rc=0 + файлы → True (happy path)
+# · Scenario: render-all rc=0, overlay содержит webapp.example.com.conf → True, 1 вызов
+# · Last fail: N/A (new test)
+# · Remove if: success-критерий vhost-рендера меняется
+@ldd_trajectory
+def test_step_vhosts_rc_ok_with_files_returns_true(caplog, tmp_path, monkeypatch) -> None:
+    """_step_vhosts: rc=0 с файлами на диске → True, IMP:9 с числом .conf."""
+    monkeypatch.setenv("NODE_CONFIGS_DIR", str(tmp_path / "node-configs"))
+    overlay = tmp_path / "node-configs" / "test-node" / "overlays" / "nginx"
+    overlay.mkdir(parents=True)
+    (overlay / "webapp.example.com.conf").write_text("# GENERATED by vhost_renderer.py\n", encoding="utf-8")
+    runner = _VhostRunner([0])
+    ok = cd._step_vhosts(str(tmp_path / "core"), "test-node", runner=runner, facts=_VhostFacts())
+    assert ok is True
+    assert runner.calls == 1, "rc=0 с файлами → без retry"
+    assert any("Vhosts rendered for node=test-node (1 .conf" in r.message for r in caplog.records)
+    logger.critical("[IMP:9][test] _step_vhosts rc=0 + файлы → True — count-лог OK")
+
+
+# endregion FUNC_test_step_vhosts_rc_ok_with_files_returns_true
+
+
+# region FUNC_test_step_vhosts_script_missing_returns_true
+## @purpose — Отсутствие add-vhost.sh → skip (True), НЕ неуспех: рендерить нечего.
+## @io — ⇥ caplog, tmp_path → ⎋ None (asserts True + 0 subprocess-вызовов)
+## @complexity — O(1)
+# 🧪 TRAP[TEST] · Regression · _step_vhosts script missing → True (skip)
+# · Scenario: facts.path_isfile(add-vhost.sh)=False → skip, runner не вызывается
+# · Last fail: N/A (new test)
+# · Remove if: skip-семантика отсутствия скрипта меняется
+def test_step_vhosts_script_missing_returns_true(caplog, tmp_path) -> None:
+    """_step_vhosts без add-vhost.sh → True (skip — нечего рендерить, не неуспех)."""
+    caplog.set_level(logging.DEBUG)
+    runner = _VhostRunner([0])
+    ok = cd._step_vhosts(str(tmp_path / "core"), "test-node", runner=runner, facts=_VhostFacts(script_exists=False))
+    assert ok is True
+    assert runner.calls == 0, "script отсутствует → subprocess не вызывается"
+    for record in list(caplog.records):
+        if "[IMP:" in record.message:
+            logger.info("%s", record.message)
+    logger.info("[IMP:9][test] _step_vhosts script missing → True (skip)")
+
+
+# endregion FUNC_test_step_vhosts_script_missing_returns_true
+
+
+# region FUNC_test_deploy_context_vhost_failure_sets_failed
+## @purpose — Интеграция R6: неуспех _step_vhosts (rc!=0 дважды) агрегируется в
+##            ContextDeployResult.failed (паттерн _step_deploy_projects — канонический add()).
+##            Exit deploy-context = 1 → фаза не отчитывается успехом.
+## @io — ⇥ caplog, tmp_path, monkeypatch → ⎋ None (asserts result.failed == 1)
+## @complexity — O(1)
+## @invariants
+##   - vhost-неуспех НЕ маскируется: result.failed == 1 при успешных проектах (0)
+##   - В results появляется failed-запись с channel="render"
+# 🧪 TRAP[TEST] · Regression · deploy_context vhost failure → result.failed=1
+# · Scenario: _step_vhosts rc=1 дважды → deploy_context добавляет failed-запись →
+# ·   result.failed == 1 (CLI exit 1 — деплой-фаза не отчитывается успехом)
+# · Last fail: 2026-08-31 — bootstrap отчитывался успехом при ТИХОМ падении рендера
+# · Remove if: пропагация vhost-неуспеха в result.failed меняется
+def test_deploy_context_vhost_failure_sets_failed(caplog, tmp_path, monkeypatch) -> None:
+    """deploy_context: vhost render rc!=0 дважды → result.failed == 1 (exit ≠ 0)."""
+    monkeypatch.delenv("CONTEXT", raising=False)
+    monkeypatch.setenv("NODE_CONFIGS_DIR", str(tmp_path / "node-configs"))
+    caplog.set_level(logging.DEBUG)
+    yaml_path = tmp_path / "node.yaml"
+    yaml_path.write_text("node:\n  name: test-node\ncontexts:\n  - name: test-ctx\n", encoding="utf-8")
+    runner = _VhostRunner([1, 1], stderr="render exploded")
+    result = cd.deploy_context(
+        core_dir=str(tmp_path / "core"),
+        node_name="test-node",
+        node_yaml=str(yaml_path),
+        context="test-ctx",  # explicit arg приоритетен (E7: _resolve_context не читает env)
+        runner=runner,
+        facts=_VhostFacts(),
+        deploy_projects_fn=_noop_deploy_projects,
+        nginx_reload_fn=lambda: None,
+    )
+    assert result.failed == 1, f"vhost-неуспех обязан дать failed=1: {result.to_dict()}"
+    assert any(r.status == "failed" and r.channel == "render" for r in result.results), (
+        "в results обязана быть failed-запись vhost-рендера (паттерн _step_deploy_projects)"
+    )
+    for record in list(caplog.records):
+        if "[IMP:" in record.message:
+            logger.info("%s", record.message)
+    logger.info("[IMP:9][test] deploy_context vhost failure → result.failed=1 — exit≠0 OK")
+
+
+# endregion FUNC_test_deploy_context_vhost_failure_sets_failed

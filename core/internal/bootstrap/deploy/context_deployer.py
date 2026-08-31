@@ -18,7 +18,9 @@
 ##   5. Non-fatal: failure of one project does NOT block others
 ##   6. Audit: each deploy recorded in /var/log/platform/audit.jsonl (единый файл, D1 — shared/audit_logger)
 ##   7. One node = one context (CONTEXT from node.yaml or CLI --context)
-##   8. All sub-steps non-fatal (D6): шаг не блокирует последующие
+##   8. Sub-steps non-fatal (D6): шаг не блокирует последующие; НО _step_vhosts НЕуспех после
+##      retry агрегируется в ContextDeployResult.failed (exit deploy-context ≠ 0) — «лог success
+##      без файлов на диске» исключён (холодный bootstrap R6-инцидент, 2026-08-31)
 ##   9. E1 (160): DI-параметры runner/facts/certs_fn/cert_validity_fn/deploy_projects_fn/
 ##      health_fn/audit_fn/deploy_impl/nginx_reload_fn/stub_detector_fn/healthcheck_poll_fn
 ##      (None = реальные вызовы; поведение/exit-коды/идемпотентность НЕ изменены)
@@ -905,10 +907,12 @@ def _resolve_context(context: str, node_yaml: str, *, facts: EnvironmentFacts | 
 ##      удалён; ImportError при отсутствии cert_orchestrator.py — loud, не silent); волна 117 D3 —
 ##      skip, если все домены имеют валидные сертификаты (≥30 дней, LE через shared/ssl_certs)
 ##   3. Project deploy via deploy_context_projects()
-##   4. Vhost render via subprocess add-vhost.sh --render-all (non-fatal)
+##   4. Vhost render via subprocess add-vhost.sh --render-all; rc-capture + ОДИН retry +
+##      файл-верификация (≥1 *.conf в overlays/nginx) — НЕуспех после retry → result.failed
 ##   5. Nginx reload via docker exec (non-fatal) — shared/docker_compose.nginx_reload (D6)
 ##   6. Verify via verify-domains.sh (non-fatal)
-##   7. All sub-steps are non-fatal — failure in one does NOT block others
+##   7. Sub-steps non-fatal (D6) — шаг не блокирует последующие; vhost-исключение: _step_vhosts
+##      НЕуспех агрегируется в result.failed (деплой-фаза не отчитывается успехом при пустом overlay)
 ##   8. Каждый шаг — отдельный метод с typed-контрактом (D6); оркестратор не содержит бизнес-логики
 ## @changes 2026-08-13 | E1 (160): +runner/facts/certs_fn/cert_validity_fn/deploy_projects_fn/nginx_reload_fn DI
 def deploy_context(
@@ -960,7 +964,9 @@ def deploy_context(
     project_results = _step_deploy_projects(node_yaml, context, deploy_projects_fn=deploy_projects_fn)
 
     # ── Step 4: Render vhosts (typed-шаг D6) ──
-    _step_vhosts(core_dir, node_name, runner=runner, facts=facts)
+    # Холодный bootstrap R6: rc-capture + retry + файл-верификация внутри шага; False →
+    # агрегация в result.failed (деплой-фаза не отчитывается успехом при пустом overlay).
+    vhosts_ok = _step_vhosts(core_dir, node_name, runner=runner, facts=facts)
 
     # ── Step 5: Reload nginx (typed-шаг D6, shared/docker_compose.nginx_reload) ──
     _step_nginx_reload(nginx_reload_fn=nginx_reload_fn)
@@ -972,6 +978,19 @@ def deploy_context(
     result = ContextDeployResult()
     for r in project_results:
         result.add(r)
+    if not vhosts_ok:
+        # Паттерн неуспеха = _step_deploy_projects: failed-запись через канонический add()
+        # → result.failed → exit deploy-context ≠ 0 (фаза не отчитывается успехом).
+        result.add(
+            ProjectDeployResult(
+                name="<vhost-render>",
+                status="failed",
+                channel="render",
+                health="unknown",
+                error="add-vhost.sh --render-all failed or produced no vhost configs (see IMP:10 log)",
+            )
+        )
+        logger.error("[IMP:10][deploy_context] Vhost render failed — deploy-context reports failure (exit≠0)")
     logger.info(
         "[IMP:9][deploy_context] Complete (context=%s): deployed=%d skipped=%d failed=%d",
         context,
@@ -1073,48 +1092,94 @@ def _step_deploy_projects(
 # endregion FUNC__step_deploy_projects
 
 
+# region FUNC__tail_output
+## @purpose — Диагностический tail вывода subprocess (последние N непустых строк) для IMP:10.
+## @io — ⇥ output: str | bytes, limit: int = 5 → ⎋ str (joined tail)
+## @complexity — O(L) где L = строк вывода
+def _tail_output(output: str | bytes, limit: int = 5) -> str:
+    """Last `limit` non-empty lines of subprocess output, joined (diagnostic tail)."""
+    if isinstance(output, bytes):
+        output = output.decode("utf-8", errors="replace")
+    lines = [line.strip() for line in (output or "").splitlines() if line.strip()]
+    return " | ".join(lines[-limit:])
+
+
+# endregion FUNC__tail_output
+
+
 # region FUNC__step_vhosts
-## @purpose — Typed-шаг D6: рендер vhost-конфигов nginx (non-fatal).
+## @purpose — Typed-шаг D6: рендер vhost-конфигов nginx. НЕуспех после retry пропагируется
+##            в ContextDeployResult.failed (exit deploy-context ≠ 0) — «лог success без файлов
+##            на диске» исключён (холодный bootstrap R6-инцидент: render-all ТИХО падал,
+##            exposed-проекты оставались без vhost, converge R6 FAIL ×3).
 ## @io — ⇥ core_dir: str, node_name: str, runner: CommandRunner | None,
-##       facts: EnvironmentFacts | None → ⎋ None (side-effect: vhost конфиги)
+##       facts: EnvironmentFacts | None → ⎋ bool (True = отрендерено ≥1 .conf; False = неуспех)
 ## @complexity — O(V) где V = vhost'ов
 ## @invariants
-##   - Вызывает add-vhost.sh --render-all --node (subprocess, 60s timeout)
-##   - Non-fatal: отсутствие скрипта/ошибка → WARN
+##   - Вызывает add-vhost.sh --render-all --node (subprocess, 60s timeout), rc/stdout/stderr захватываются
+##   - rc!=0 → ОДИН retry; второй rc!=0 → IMP:10 + return False
+##   - rc==0 → верификация ≥1 *.conf в {node_configs_dir}/⟨node⟩/overlays/nginx; пусто → тот же
+##     неуспех-путь (retry → IMP:10 + False)
+##   - Отсутствие скрипта → True (нечего рендерить — skip не является неуспехом)
 ## @changes 2026-08-13 | E1 (160): +runner/facts DI (subprocess + os.path.isfile)
+## @changes 2026-08-31 | Холодный bootstrap: rc-capture + tail + retry + файл-верификация + bool-пропагация
 def _step_vhosts(
     core_dir: str,
     node_name: str,
     *,
     runner: CommandRunner | None = None,
     facts: EnvironmentFacts | None = None,
-) -> None:
-    """Vhost render step (D6) — generate nginx vhost configs."""
+) -> bool:
+    """Vhost render step (D6) — generate nginx vhost configs; False after retry = phase failure."""
     vhost_script = os.path.join(core_dir, "internal", "scaffold", "add-vhost.sh")
-    if not (facts or default_env_facts()).path_isfile(vhost_script):
+    facts_obj = facts or default_env_facts()
+    if not facts_obj.path_isfile(vhost_script):
         logger.info("[IMP:7][_step_vhosts] add-vhost.sh not found — skipping vhost render")
-        return
+        return True
     node_configs_dir = os.environ.get("NODE_CONFIGS_DIR", str(deploy_paths.node_configs_remote()))
-    try:
-        if runner is None:
-            _ = subprocess.run(
-                ["bash", vhost_script, "--render-all", "--node", node_name, "--node-configs-dir", node_configs_dir],
-                capture_output=True,
-                text=True,
-                timeout=60,
-                check=False,
+    overlay_dir = pathlib.Path(node_configs_dir) / node_name / "overlays" / "nginx"
+    cmd = ["bash", vhost_script, "--render-all", "--node", node_name, "--node-configs-dir", node_configs_dir]
+    # rc-capture + stderr/stdout tail + ОДИН retry (транзиентный отказ холодного bootstrap);
+    # второй rc!=0 или rc==0 без файлов → IMP:10 + False — фаза НЕ отчитывается успехом.
+    last_err = ""
+    for attempt in (1, 2):
+        try:
+            if runner is None:
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=60, check=False)
+            else:
+                result = runner.run(cmd, timeout=60, check=False)
+        # REF-0103: +subprocess.SubprocessError — TimeoutExpired (timeout=60). Таймаут = рендер
+        # не завершился → неуспех-путь (retry → IMP:10), а не WARN-маскировка пустого overlay.
+        except (subprocess.CalledProcessError, subprocess.SubprocessError, OSError) as e:
+            last_err = str(e)
+            logger.warning("[IMP:7][_step_vhosts] Vhost render attempt %d failed: %s", attempt, e)
+            continue
+        if result.returncode != 0:
+            last_err = _tail_output(result.stderr or result.stdout)
+            logger.warning(
+                "[IMP:7][_step_vhosts] Vhost render attempt %d failed (rc=%d): %s",
+                attempt,
+                result.returncode,
+                last_err,
             )
-        else:
-            _ = runner.run(
-                ["bash", vhost_script, "--render-all", "--node", node_name, "--node-configs-dir", node_configs_dir],
-                timeout=60,
-                check=False,
+            continue
+        rendered = list(overlay_dir.glob("*.conf"))
+        if rendered:
+            logger.info(
+                "[IMP:9][_step_vhosts] Vhosts rendered for node=%s (%d .conf in %s)",
+                node_name,
+                len(rendered),
+                overlay_dir,
             )
-        logger.info("[IMP:9][_step_vhosts] Vhosts rendered for node=%s", node_name)
-    # REF-0103: +subprocess.SubprocessError — TimeoutExpired (timeout=60) вне кортежа ронял
-    # deploy-context после N деплоев вместо non-fatal WARN
-    except (subprocess.CalledProcessError, subprocess.SubprocessError, OSError) as e:
-        logger.warning("[IMP:7][_step_vhosts] Vhost render failed (non-fatal): %s", e)
+            return True
+        last_err = f"rc=0 but no *.conf rendered in {overlay_dir}"
+        logger.warning("[IMP:7][_step_vhosts] Vhost render attempt %d: %s", attempt, last_err)
+    logger.error(
+        "[IMP:10][_step_vhosts] Vhost render FAILED after retry for node=%s: %s",
+        node_name,
+        last_err,
+    )
+    return False
 
 
 # endregion FUNC__step_vhosts

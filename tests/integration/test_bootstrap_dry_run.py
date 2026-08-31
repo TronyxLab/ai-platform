@@ -26,6 +26,9 @@
 ## @changes 2026-07-30 | Created per DevPlan T14 — 8 integration tests for 14-phase bootstrap
 ##           2026-08-01 | Волна 117 D5 — grouped-phase tests (skip_already_done, skip_unchanged)
 ##           и MIGRATION_MAP удалены вместе с execute_grouped_phase (мёртвый код)
+##           2026-09-01 | strict-семантика INIT (φ8): test_init_mode_14_phases_dry_run патчит
+##           import_deploy_context no-op — тест-среда не деплоит проекты; strict-fatal покрыт
+##           в tests/unit/test_domains_import_deploy_context.py (не дублируется)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -39,6 +42,7 @@ from unittest.mock import patch
 import pytest
 from _conftest.ldd import _print_ldd_trajectory
 
+from core.internal.bootstrap.lifecycle.helpers import domains as domains_helpers
 from core.internal.bootstrap.lifecycle.state_machine import (
     BootstrapPhase,
     PhaseDependencyError,
@@ -416,14 +420,23 @@ def _mark_phase_done(sm: StateMachine, phase_value: str) -> None:
 def test_init_mode_14_phases_dry_run(
     caplog: pytest.LogCaptureFixture,
     machine: StateMachine,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Simulate all 9 INIT phases (φ1-φ8.5) in dry-run mode with mocked system calls."""
     # 🧪 TRAP[TEST] · 2026-07-30 · Regression: INIT 14-phase pipeline dry-run
     # · Scenario: Execute φ1→φ8.5 with all deps satisfied, all mocks active
     # · Last fail: N/A (first implementation)
+    # · Updated: 2026-09-01 — strict-семантика INIT (φ8): import_deploy_context патчится no-op
+    # ·   (тест-среда не может реально задеплоить проекты); strict-fatal покрыт отдельно
+    # ·   в tests/unit/test_domains_import_deploy_context.py — здесь тест про 14-фазный прогон.
     # · Remove if: DevPlan removes INIT mode or renames phases
 
     caplog.set_level(logging.DEBUG)
+
+    # strict-семантика INIT (2026-09-01): real import_deploy_context в тест-среде вернул бы
+    # failed=1 → PlatformFatalError (φ8, strict=True). Dry-run тест — про полный 14-фазный
+    # прогон, не про деплой контекста (strict-fatal покрыт test_domains_import_deploy_context.py).
+    monkeypatch.setattr(domains_helpers, "import_deploy_context", lambda *_args, **_kwargs: None)
 
     # ── Define the INIT phase execution order based on dependency graph ──
     init_phases_order: list[str] = [
