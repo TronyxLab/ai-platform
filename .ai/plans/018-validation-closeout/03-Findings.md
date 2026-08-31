@@ -115,3 +115,32 @@
   (node-configs/ gitignored целиком) — коммита нет.
 - Статус: fixed
 
+
+### F-23 · 2026-08-31 21:40 · W7 §5 · P1 · nightly-бэкапы НИКОГДА не работали — flock без /run/lock
+- Symptom: /var/log/platform/backup/*.log (внутри backup-cron) содержат ТОЛЬКО "flock: cannot
+  open lock file /run/lock/platform-*.lock" — каждая cron-задача (dump 03:00, app-data, cleanup,
+  retention, wal-sync hourly, spool-retry 01:30) умирала мгновенно с бутстрапа ноды (26.08).
+- Root: debian:bookworm-slim без systemd НЕ создаёт /run/lock; все job'ы flock-guarded →
+  flock(2) ENOENT. Ручной `docker exec backup-postgres.sh` flock-обёртку минует → работал
+  и маскировал регрессию. 017 §5-класс: fail-closed SKIP = RPO 24ч фиктивен.
+- Fix: entrypoint.py (PID-1) mkdir -p /run/lock перед exec cron (commit d8d885a, R5-тест).
+- Попутный инцидент (self-inflicted, закрыт): re-decrypt secrets.env (W5) затёр autogen-ключи
+  бутстрапа (REDIS_PASSWORD, ENCRYPTION_KEY — source: autogen, в матрице отсутствовали) →
+  ensure пересоздал их НОВЫМИ значениями ≠ работающий стек → оригиналы восстановлены из env
+  работающих контейнеров (redis/langfuse), персистнуты в sops-матрицу ноды (оба dest),
+  secrets.env.bak-f23 на ноде. Урок: decrypt ЗАМЕНЯЕТ файл — autogen-класс ключей живёт
+  только в secrets.env; после ручного decrypt обязан идти ensure-шаг.
+- Deploy канала: docker_orchestrator --action deploy --module-name backup-cron (нужны env
+  NGINX_OVERLAY_DIR=/opt/node-configs/<n>/overlays/nginx + secrets-env; root-compose интерполяция).
+- Верификация: новый контейнер /run/lock есть; flock-smoke spool-retry → UPLOAD OK (дамп
+  27.08 ушёл в S3, REF-0009 закрыт); healthcheck ALL MODULES HEALTHY; коммит d8d885a.
+
+### F-24 · 2026-08-31 21:45 · W7 · P2 · e2e-verify транзиентные TLS-флаки пост-reboot + F9 false-fail
+- e2e-verify: два прогона подряд падали на РАЗНЫХ endpoint'ах (botanika s_client exit 1, затем
+  sexydancerostov curl exit 35) в первые минуты после N1 reboot; 24×curl + 10×s_client локально
+  — 0 фейлов; третий прогон 3/3 PASS. Класс: пост-reboot транзиент канала оператор↔нода.
+- F9 (chaos fast run1) false-fail: recovery-критерий `tail -4` обрезал маркер "Privoxy → Tor
+  forward: working" — чекер стал проходить ВСЕ стадии (telegram-токен починен владельцем,
+  было 404 в эпоху написания теста) → вывод вырос до 6 строк. tor бутстрапнулся за 2s
+  (notices.log). Fix: полный вывод без tail (TRAP[BUG] в _channel_recovered); F9 re-run
+  PASS 28.5s; полный fast 9/9 GREEN.

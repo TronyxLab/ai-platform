@@ -956,7 +956,7 @@ def test_tor_channel_fails_loud(requires_node: str, node_ssh: NodeSSHClient, cap
     БЕЗ telegram-stage токена: recovery-критерий = privoxy-стадия (токен 404 — pre-existing
     Debt Intake, канал доставки не зависит от валидности токена).
 
-    # 🧪 TRAP[TEST] · Scenario: telegram-канал отказывает ГРОМКО (не silent) · Last fail: T5-era: cron-alignment sleep'ы (+10 мин) и токен-зависимость удалены (DevPlan 013 §8 Debt Intake)
+    # 🧪 TRAP[TEST] · Scenario: telegram-канал отказывает ГРОМКО (не silent) · Last fail: 2026-08-31 — recovery-окно не сходилось: чекер стал проходить ВСЕ стадии (telegram-токен починен) → tail -4 обрезал маркер privoxy-стадии; полный вывод без tail (TRAP[BUG] в _channel_recovered)
     # · Regression: notify-канал нода→Telegram ходит через privoxy→tor; обрыв транспорта даёт
     # ·   DELIVERY FAILED с URLError (соединение с proxy), НЕ HTTP 404 (ответ API сквозь канал).
     # · Remove if: notify-канал перестанет использовать tor/privoxy транспорт
@@ -1006,9 +1006,17 @@ def test_tor_channel_fails_loud(requires_node: str, node_ssh: NodeSSHClient, cap
     assert start.exit_code == 0, f"start tor/privoxy failed: {start.stderr}"
 
     def _channel_recovered() -> str | None:
+        # ⚠️ TRAP[BUG] · 2026-08-31 · P2 · recovery-proof: tail -4 обрезал маркер при
+        # ·   ПОЛНОМ успехе чекера · Root: критерий писался под эпоху невалидного
+        # ·   telegram-токена (404 — Debt Intake) — чекер печатал ≤4 строк, маркер privoxy
+        # ·   попадал в окно tail. Токен починили → чекер проходит ВСЕ стадии (6 строк) →
+        # ·   "Privoxy → Tor forward: working" (строка 2) обрезалась tail -4 → условие
+        # ·   никогда не срабатывало → recovery не сходился за 180s при живом tor
+        # ·   (bootstrapped за 2s: notices.log 20:40:27). Fix: полный вывод без tail.
+        # · Prevention: маркер-критерий не должен зависеть от окна хвоста вывода.
         chk = ssh.ssh_exec(
             "cd /opt/platform && TELEGRAM_PROXY_URL=http://127.0.0.1:8118 "
-            "python3 -m core.internal.healthcheck.tor_proxy_check 2>&1 | tail -4; echo EXIT=${PIPESTATUS[0]}",
+            "python3 -m core.internal.healthcheck.tor_proxy_check 2>&1; echo EXIT=$?",
             timeout=120,
         )
         svc = ssh.ssh_read("systemctl is-active tor@default.service privoxy.service | tr '\\n' ' '", timeout=30)
