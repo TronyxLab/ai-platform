@@ -115,3 +115,94 @@ def test_execstart_references_decrypt_secrets(caplog: pytest.LogCaptureFixture) 
         "/opt/platform/core/internal/secrets/decrypt_secrets.py (W1.3 contract)"
     )
     logger.info("[IMP:9][ps-unit] PASS: ExecStart targets decrypt_secrets.py")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Test 3: ExecStartPost ensure autogen secrets (launch-validation P0 reboot fix)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.static_audit
+@ldd_trajectory
+def test_execstartpost_ensure_autogen_secrets(caplog: pytest.LogCaptureFixture) -> None:
+    """Reboot path: secrets_manager ensure runs AFTER decrypt (ExecStartPost).
+
+    ## @purpose — P0 reboot-фикс (launch-validation asi-team-vps): reboot-путь юнита вызывал
+    ##            ТОЛЬКО decrypt → tier=generated/source=autogen секреты (ENCRYPTION_KEY,
+    ##            LITELLM_MASTER_KEY, NEXTAUTH_SECRET, REDIS_PASSWORD, SALT, LANGFUSE_*,
+    ##            API_SERVER_KEY) терялись из secrets.env → compose ${ENCRYPTION_KEY:?} падал
+    ##            (deploy-modules.sh exit 10). Юнит обязан воспроизводить φ4 (decrypt + ensure):
+    ##            ExecStartPost вызывает secrets_manager ensure после успешного decrypt.
+    ## @io — ⇥ caplog → ⎋ None (asserts ExecStartPost ordering + manifest/script paths)
+    ## @complexity — O(1) — single file parse + path checks
+    ## @scenario — P0: reboot → decrypt (sops + ci_default) → ensure (autogen missing) → полный secrets.env
+    ## @invariants
+    ##   - ExecStart (decrypt) предшествует ExecStartPost (ensure) — порядок φ4 (ВАЖНО #1)
+    ##   - Ensure вызывается как модуль (python3 -m core.internal.bootstrap.lifecycle.secrets_manager)
+    ##   - --manifest указывает на доставленный с core/ GENERATED secrets-manifest.yaml
+    ##   - --secrets-env совпадает с Environment=SECRETS_ENV_FILE юнита
+    """
+    # 🧪 TRAP[TEST] · REGRESSION · P0 reboot asi-team-vps autogen secrets loss
+    # · Scenario: reboot → platform-secrets → ТОЛЬКО decrypt → secrets.env=16 ключей →
+    # ·   compose ${ENCRYPTION_KEY:?} fails → deploy-modules.sh exit 10
+    # · Last fail: 2026-08-31 (asi-team-vps: φ8 deploy_services "ENCRYPTION_KEY is missing a value")
+    # · Remove if: reboot-путь перестаёт полагаться на platform-secrets.service (другой механизм)
+    logger.info("[IMP:7][ps-unit] Checking ExecStartPost ensure in: %s", SERVICE_PATH)
+
+    content = _read_service()
+    lines = [ln.strip() for ln in content.splitlines()]
+
+    # ── ExecStart (decrypt) ДО ExecStartPost (ensure) — systemd гарантирует порядок, статика фиксирует ──
+    execstart_idx = next(
+        (i for i, ln in enumerate(lines) if ln.startswith("ExecStart=")),
+        None,
+    )
+    assert execstart_idx is not None, "[IMP:9][ps-unit] FAIL: ExecStart not found in unit"
+    ensure_lines = [
+        (i, ln) for i, ln in enumerate(lines) if ln.startswith("ExecStartPost=") and "secrets_manager ensure" in ln
+    ]
+    assert len(ensure_lines) == 1, (
+        f"[IMP:9][ps-unit] FAIL: expected exactly 1 ExecStartPost invoking 'secrets_manager ensure', "
+        f"got {len(ensure_lines)}"
+    )
+    ensure_idx, ensure_line = ensure_lines[0]
+    assert execstart_idx < ensure_idx, (
+        f"[IMP:9][ps-unit] FAIL: ensure ExecStartPost (line {ensure_idx}) must come AFTER decrypt "
+        f"ExecStart (line {execstart_idx}) — decrypt ДО ensure (P0 order)"
+    )
+    logger.info(
+        "[IMP:8][ps-unit] Ordering OK: decrypt ExecStart (line %d) < ensure ExecStartPost (line %d)",
+        execstart_idx,
+        ensure_idx,
+    )
+
+    # ── Ensure invocation shape: python3 -m core.internal.bootstrap.lifecycle.secrets_manager ensure ──
+    ensure_cmd = ensure_line.split("=", 1)[1]  # strip "ExecStartPost=" directive prefix
+    assert ensure_cmd.startswith("python3 -m core.internal.bootstrap.lifecycle.secrets_manager ensure "), (
+        f"[IMP:9][ps-unit] FAIL: ensure line must use the canonical module invocation, got: {ensure_line}"
+    )
+    assert "--manifest /opt/platform/core/secrets-manifest.yaml" in ensure_line, (
+        f"[IMP:9][ps-unit] FAIL: ensure line missing --manifest: {ensure_line}"
+    )
+    assert "--secrets-env /var/lib/platform/run/secrets.env" in ensure_line, (
+        f"[IMP:9][ps-unit] FAIL: ensure line missing --secrets-env (must match SECRETS_ENV_FILE): {ensure_line}"
+    )
+    assert "Environment=SECRETS_ENV_FILE=/var/lib/platform/run/secrets.env" in content, (
+        "[IMP:9][ps-unit] FAIL: unit must declare SECRETS_ENV_FILE=/var/lib/platform/run/secrets.env "
+        "(decrypt и ensure пишут ОДИН файл)"
+    )
+    logger.info("[IMP:8][ps-unit] ensure line = %s", ensure_line)
+
+    # ── Mapped repo paths must exist (manifest + module deliver with core/) ──
+    manifest_arg = ensure_cmd.split("--manifest ", 1)[1].split(" ", 1)[0]
+    assert manifest_arg.startswith("/opt/platform/core/"), (
+        f"[IMP:9][ps-unit] FAIL: --manifest must be under /opt/platform/core/: {manifest_arg}"
+    )
+    mapped_manifest = Path(PLATFORM_ROOT) / manifest_arg.replace("/opt/platform/core/", "core/", 1)
+    assert mapped_manifest.is_file(), (
+        f"[IMP:9][ps-unit] FAIL: --manifest mapped repo path does not exist: {mapped_manifest}"
+    )
+    mapped_module = Path(PLATFORM_ROOT) / "core" / "internal" / "bootstrap" / "lifecycle" / "secrets_manager.py"
+    assert mapped_module.is_file(), f"[IMP:9][ps-unit] FAIL: secrets_manager module missing: {mapped_module}"
+
+    logger.info("[IMP:9][ps-unit] PASS: ExecStartPost ensure autogen secrets (post-decrypt, P0)")
