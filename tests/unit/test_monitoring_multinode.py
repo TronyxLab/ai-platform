@@ -93,7 +93,9 @@ _EXPECTED_SINGLE_NODE = {
 
 
 def _read_json(path: Path) -> dict:
-    return json.loads(path.read_text(encoding="utf-8"))
+    """file_sd формат — СПИСОК групп (018 W4, prometheus []*targetgroup.Group); тестам нужен контент группы."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return data[0] if isinstance(data, list) else data
 
 
 # 🧪 TRAP[TEST] · Regression · Scenario: 3-node S3 render (DevPlan 010 T3.3)
@@ -157,6 +159,31 @@ def test_single_node_fallback_identical_to_static(tmp_path: Path, caplog) -> Non
         assert data == expected, f"{file_name}: single-node fallback не совпадает со статикой"
 
     logger.info("[IMP:9][test_multinode] Single-node fallback byte-identical to static set")
+
+
+# 🧪 TRAP[TEST] · REGRESSION · 018 W4 (F-21c) · honesty-гейтинг single-node fallback (REF-0010)
+# · Scenario: deployed_modules без minio → minio.json targets=[] (up-серии нет → алерт молчит);
+# ·   all-nodes job (node-exporter) присутствует всегда
+# · Last fail: 2026-08-29 — full-набор fallback создал minio:9000 target на ноде без minio →
+# ·   MinioScrapeDown pending (ложная сирена; honesty-контракт REF-0010 нарушен)
+# · Remove if: honesty-гейтинг required_module отменён (fallback снова полный)
+@ldd_trajectory
+def test_single_node_fallback_honesty_gating(tmp_path: Path, caplog) -> None:
+    """deployed_modules без minio → minio.json targets=[]; all-nodes job не фильтруется."""
+    caplog.set_level(0)
+
+    deployed = frozenset({"postgres", "redis", "nginx", "langfuse"})
+    result = generate_node_targets(None, tmp_path, deployed_modules=deployed)
+
+    assert result.status == "created"
+    minio_data = _read_json(tmp_path / "nodes" / "minio.json")
+    assert minio_data["targets"] == [], f"absent module → targets=[] (honesty REF-0010): {minio_data}"
+    ne_data = _read_json(tmp_path / "nodes" / "node-exporter.json")
+    assert ne_data["targets"] == ["node-exporter:9100"], f"all-nodes job не фильтруется: {ne_data}"
+    pg_data = _read_json(tmp_path / "nodes" / "postgres-exporter.json")
+    assert pg_data["targets"] == ["postgres-exporter:9187"], f"включённый модуль → target: {pg_data}"
+
+    logger.info("[IMP:9][test_multinode] Honesty gating: absent module → [], all-nodes/job включённых — target")
 
 
 # 🧪 TRAP[TEST] · Regression · Scenario: idempotency (DevPlan 010 T3.3 «рендер идемпотентен»)

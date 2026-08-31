@@ -523,12 +523,16 @@ def test_node_targets_rendered_when_placement(tmp_path, monkeypatch, caplog) -> 
     logger.info("[IMP:9][node_targets][assert] file_sd nodes/*.json отрендерены из placement")
 
 
-# 🧪 TRAP[TEST] · REGRESSION · DevPlan 16 T2.A · single-node → skip, 0 файлов
-# · Scenario: NODE_YAML есть, но placement.yaml отсутствует → IMP:8 skip, nodes/ не создаётся
-#   (байт-совместимость легаси: single-node не начинает писать file_sd внезапно)
-# · Last fail: N/A — контракт плана (single-node путь байт-идентичен)
-# · Remove if: single-node fallback-рендер станет каноном
-def test_single_node_skips_node_targets(tmp_path, monkeypatch, caplog) -> None:
+# 🧪 TRAP[TEST] · REGRESSION · 018 W4 (F-21c) · single-node → fallback Docker-DNS targets
+# · Scenario: NODE_YAML есть, но placement.yaml отсутствует → generate_node_targets(None)
+# ·   пишет fallback node-exporter.json с локальным Docker-DNS target'ом (байт-паритет
+# ·   прежней статике 010 T3.3) — НЕ skip.
+# · Last fail: 2026-08-29 (F-21c) — прежний wiring skipал single-node → nodes/*.json не
+# ·   писались → node-exporter/cadvisor/exporters ВЫПАЛИ из скрейпа молча (prometheus
+# ·   targets: нет node-exporter job'а; node_filesystem_* пуст в PromQL при живом exporter'е)
+# · Remove if: node targets снова станут статикой в prometheus.yml.tmpl
+def test_single_node_writes_fallback_node_targets(tmp_path, monkeypatch, caplog) -> None:
+    import json as _json
     import logging as _logging
 
     caplog.set_level(_logging.INFO)
@@ -539,7 +543,20 @@ def test_single_node_skips_node_targets(tmp_path, monkeypatch, caplog) -> None:
 
     mcr.render_node_targets_if_placement(platform_root)
 
-    assert not (platform_root / "prometheus-targets" / "nodes").exists(), (
-        "single-node обязан пропустить рендер (байт-совместимость)"
+    nodes_dir = platform_root / "prometheus-targets" / "nodes"
+    assert nodes_dir.is_dir(), f"single-node обязан писать fallback targets: {nodes_dir}"
+    ne = _json.loads((nodes_dir / "node-exporter.json").read_text())
+    # 018 W4 (F-21c): file_sd формат — СПИСОК групп (prometheus []*targetgroup.Group);
+    # одиночный объект = "cannot unmarshal object" молча пустой job
+    assert isinstance(ne, list) and ne, f"file_sd JSON обязан быть списком групп: {ne!r}"
+    ne_targets = [t for g in ne for t in g.get("targets", [])] if isinstance(ne[0], dict) else ne
+    assert any("node-exporter:9100" in str(t) for t in ne_targets), (
+        f"fallback node-exporter target (Docker-DNS, паритет статике): {ne}"
     )
-    assert "[IMP:8]" in caplog.text and "single-node" in caplog.text
+    assert "[IMP:9]" in caplog.text and "single-node" in caplog.text
+
+    # 018 W4 (класс NOTE-N5): prometheus(nobody) обязан читать file_sd — others-read
+    import stat as _stat
+
+    mode = (nodes_dir / "node-exporter.json").stat().st_mode
+    assert mode & _stat.S_IROTH, f"file_sd файл должен быть others-readable (umask-077-рендер давал 0600): {oct(mode)}"

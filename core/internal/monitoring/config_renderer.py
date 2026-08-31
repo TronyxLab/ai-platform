@@ -640,21 +640,39 @@ def _render_step(step_name: str, fn: Callable[..., object], *args: object) -> No
 # Канонический набор render-шагов (порядок DevPlan 138 §4.3) — module-level для DI (167 D3):
 # render_steps=None в run_monitoring_reconfig → этот словарь; тесты передают fake-шаги.
 # region FUNC_render_node_targets_if_placement
-## @purpose  Wiring node-targets (DevPlan 16 T2.A / P1-2): при multi-node placement рендерит
-##           file_sd нодовые таргеты через generate_node_targets — закрывает мёртвый DI-seam
-##           (generate_node_targets имел 0 production-вызовов → nodes/*.json не писались,
-##           RemoteNodeDown/LokiCollectorStale не работали; клейм 010 «Наблюдаемость ✅»
-##           был DI-seam без wiring). Single-node (placement отсутствует) → skip IMP:8 —
-##           поведение байт-совместимо с легаси.
+## @purpose  Wiring node-targets (DevPlan 16 T2.A / P1-2): multi-node placement рендерит
+##           file_sd нодовые таргеты через generate_node_targets; single-node — fallback
+##           Docker-DNS target'ы (тот же генератор, nodes=None). 018 W4 (F-21c): прежний
+##           wiring SKIPАЛ single-node → nodes/*.json не писались → после миграции шаблона
+##           010 T3.3 на file_sd job'ы node-exporter/cadvisor/exporters ВЫПАЛИ из скрейпа
+##           молча на single-node нодах (RemoteNodeDown/LokiCollectorStale/инфра-дашборды
+##           мертвы). Контракт шаблона («single-node: рендерер пишет fallback») теперь
+##           закрыт wiring'ом.
 ## @io       ⇥ platform_root: Path (родитель prometheus-targets/) → ⎋ None (non-fatal)
 ## @complexity O(N × J) — resolve_node_modules на ноду + рендер jobs
 ## @invariants
 ##   - Источник топологии: env NODE_YAML → context → shared/placement резолвер
 ##     placement_node_relative_path (единый путь с deploy_orchestrator/modules_healthcheck)
-##   - NODE_YAML недоступен / placement.yaml отсутствует → IMP:8 skip, 0 файлов
+##   - NODE_YAML недоступен → IMP:8 skip, 0 файлов (dev/no-context запуск)
+##   - Single-node (нет context ИЛИ нет placement.yaml) → fallback Docker-DNS target'ы
+##     (байт-паритет прежней статике prometheus.yml.tmpl — контракт 010 T3.3)
 ##   - Non-fatal по контракту render-шагов: OSError → WARN, деплой не блокируется
-def render_node_targets_if_placement(platform_root: Path) -> None:
-    """Render multi-node file_sd targets from placement (no-op on single-node)."""
+# ⚠️ TRAP[BUG] · 2026-08-29 · P1 · single-node node-jobs молча выпали из скрейпа
+# · Symptom: F8 disk-pressure — PromQL node_filesystem_*{mountpoint='/'} пуст в prometheus
+# ·   при живых сериях в node-exporter /metrics (targets: только alloy/clickhouse/litellm/
+# ·   loki/prometheus/status-page — НЕТ node-exporter/cadvisor/exporters)
+# · Root: 010 T3.3 мигрировал node jobs static→file_sd в шаблоне, а wiring (16 T2.A)
+# ·   skipал single-node → /prometheus-targets/nodes/*.json никогда не писались
+# · Fix: single-node путь вызывает generate_node_targets(None) — fallback Docker-DNS
+# ·   target'ы (функция имела fallback с 010, но 0 production-вызовов — DI-seam)
+# · Prevention: контракт шаблона и wiring проверяются одним тестом (fallback на single-node)
+def render_node_targets_if_placement(platform_root: Path, node_yaml_path: str | None = None) -> None:
+    """Render file_sd node targets: multi-node — из placement; single-node — fallback
+    Docker-DNS target'ы (nodes=None); node.yaml недоступен — no-op (dev).
+
+    ## @io  ⇥ node_yaml_path: str | None — DI-переопределение (converge R11 передаёт
+    ##      резолвленный путь явно; None → env NODE_YAML — контракт render-цепочки).
+    """
     from core.internal.monitoring.prometheus_targets import NodeInfo, generate_node_targets
     from core.internal.shared.node_yaml import NodeYaml  # лениво: прямой запуск скрипта (sys.path bootstrap выше)
     from core.internal.shared.placement import (
@@ -663,39 +681,67 @@ def render_node_targets_if_placement(platform_root: Path) -> None:
         resolve_node_modules,
     )
 
-    node_yaml = os.environ.get("NODE_YAML", "")
+    node_yaml = node_yaml_path or os.environ.get("NODE_YAML", "")
     if not node_yaml or not Path(node_yaml).is_file():
-        logger.info("[IMP:8][node_targets][skip] NODE_YAML недоступен — single-node канон, no-op")
+        logger.info("[IMP:8][node_targets][skip] NODE_YAML недоступен — контекст ноды не резолвится, no-op")
         return
     try:
-        context = NodeYaml(node_yaml).get_context()
+        ny = NodeYaml(node_yaml)
+        context = ny.get_context()
     # ruff: ignore[BLE001] — best-effort render step (non-fatal контракт; dev_hosts.py:631 прецедент)
     except Exception as exc:  # noqa: EXC — best-effort render step: WARN + continue
         logger.warning("[IMP:7][node_targets][skip] node.yaml unreadable (%s): %s", node_yaml, exc)
         return
-    if not context:
-        logger.info("[IMP:8][node_targets][skip] нет context в %s — single-node", node_yaml)
-        return
-    placement_path = placement_node_relative_path(node_yaml, context)
-    placement = load_placement(placement_path)
-    if placement is None:
-        logger.info("[IMP:8][node_targets][skip] нет placement.yaml at %s — single-node", placement_path)
+
+    output_dir = Path(platform_root) / DEFAULT_PROMETHEUS_TARGETS_DIR
+
+    # Включённые модули ноды (honesty-гейтинг REF-0010, 018 W4): dict-entries {name, enabled}
+    # И bare-string (D4 compat) — включённые имена для required_module-фильтра fallback'а.
+    try:
+        modules_raw = ny.get_modules()
+    # ruff: ignore[BLE001] — best-effort render step
+    except Exception as exc:  # noqa: EXC — modules unreadable → honesty-гейтинг недоступен
+        logger.warning("[IMP:7][node_targets] node.yaml modules unreadable: %s", exc)
+        modules_raw = []
+    deployed: set[str] = set()
+    for entry in modules_raw:
+        if isinstance(entry, dict):
+            if entry.get("enabled", True):
+                name = entry.get("name")
+                if name:
+                    deployed.add(str(name))
+        elif isinstance(entry, str):
+            deployed.add(entry)
+
+    placement = load_placement(placement_node_relative_path(node_yaml, context)) if context else None
+    if placement is not None:
+        nodes = [
+            NodeInfo(
+                name=node_name,
+                host=host,
+                modules=tuple(sorted(resolve_node_modules(placement, node_name))),
+            )
+            for node_name, host in sorted(placement.nodes.items())
+        ]
+        result = generate_node_targets(nodes, output_dir)
+        logger.info(
+            "[IMP:9][node_targets][done] placement=%s nodes=%d → %s/nodes/ (result=%s)",
+            placement_node_relative_path(node_yaml, context),
+            len(nodes),
+            output_dir,
+            result.status,
+        )
         return
 
-    nodes = [
-        NodeInfo(
-            name=node_name,
-            host=host,
-            modules=tuple(sorted(resolve_node_modules(placement, node_name))),
-        )
-        for node_name, host in sorted(placement.nodes.items())
-    ]
-    output_dir = Path(platform_root) / DEFAULT_PROMETHEUS_TARGETS_DIR
-    result = generate_node_targets(nodes, output_dir)
+    # ── Single-node (нет context ИЛИ нет placement.yaml) → fallback Docker-DNS target'ы
+    #    с honesty-гейтингом по включённым модулям ноды (minio выключен → targets=[] —
+    #    алерт молчит; прежний full-набор давал MinioScrapeDown на ноде без minio).
+    #    Контракт 010 T3.3: «single-node: рендерер пишет fallback — байт-паритет прежней
+    #    статике». Прежний wiring skipал (TRAP[BUG] выше) — job'ы выпадали из скрейпа. ──
+    result = generate_node_targets(None, output_dir, deployed_modules=frozenset(deployed))
     logger.info(
-        "[IMP:9][node_targets][done] placement=%s nodes=%d → %s/nodes/ (result=%s)",
-        placement_path,
-        len(nodes),
+        "[IMP:9][node_targets][single-node] fallback targets (deployed=%d) → %s/nodes/ (result=%s)",
+        len(deployed),
         output_dir,
         result.status,
     )

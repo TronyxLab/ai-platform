@@ -64,3 +64,33 @@
 - Верификация: pytest -k test_oom_clickhouse_kernel_kill → PASS 76.10s
   (logs/w3-f7-oom-*.log); пост-стейт healthy.
 - Статус: fixed
+
+### F-21c · 2026-08-29 10:20 · W4 · P1 · disk_pressure — 4 слоя root-cause, data-path восстановлен
+- Гипотеза 1 (rootfs невидим) ОТВЕРГНУТА: node-exporter /metrics отдаёт mountpoint="/" серии.
+- Слой 1 (главный): 010 T3.3 мигрировал node jobs static→file_sd в шаблоне, а wiring
+  (16 T2.A) SKIPал single-node (нет placement.yaml) → /opt/platform/prometheus-targets/nodes/
+  никогда не писались → job'ы node-exporter/cadvisor/exporters ОТСУТСТВОВАЛИ в targets с
+  бутстрапа (RemoteNodeDown/инфра-дашборды мертвы на single-node — клейм 010 без wiring).
+- Слой 2 (пермы): рендер под root с umask 077 → файлы 0600, nodes/ 0700 → prometheus(nobody)
+  Permission denied (класс NOTE-N5). Фикс: безусловная нормализация 0644/02775 в генераторе
+  (chmod и при byte-skip — лечит легаси-файлы).
+- Слой 3 (формат): file_sd требует СПИСОК групп []*targetgroup.Group, генератор писал
+  одиночный объект → «json: cannot unmarshal object» (проектные target'ы — тот же баг).
+  Фикс: json.dumps([payload]).
+- Слой 4 (honesty): full-набор fallback создал minio:9000 target на ноде без minio →
+  MinioScrapeDown pending (нарушение REF-0010). Фикс: deployed_modules-гейтинг
+  (node.yaml enabled-модули; absent → targets=[], алерт молчит).
+- Новый R11 converge-юнит (node-level канал): идемпотентный рендер таргетов на каждом
+  converge (multi-node placement | single-node fallback); dry-run skip; честный
+  post-condition (sentinel node-exporter.json отсутствует → warn+exit1, не converged).
+- Верификация: targets: node-exporter/cadvisor/exports UP; ratio-запрос = 0.7365;
+  F8 PASS 94.37s (logs/w4-f8-disk-*.log). MinioScrapeDown resolve (targets нет).
+- Статус: fixed
+
+### TRAP[DEBT] · 2026-08-29 · LO · AlloyCollectorDown firing — static target без контейнера
+- Observed: prometheus.yml.tmpl содержит static job alloy (all-nodes), контейнер alloy на
+  tronyx-vps отсутствует → AlloyCollectorDown firing постоянно (pre-T3.3 наследие шаблона).
+- Suspected: тот же honesty-класс REF-0010 — static target для не-деплоенного модуля.
+- Impact: постоянная алерт-сирена desensitize'ит оператора (alert fatigue).
+- When: 018 W4 — аудит honesty после F-21c фиксa. Fix: убрать alloy из шаблона ИЛИ
+  деплоить alloy (решение владельца — модуль logging?).

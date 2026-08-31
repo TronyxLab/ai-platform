@@ -38,6 +38,13 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+# ── Канон пермов file_sd (018 W4, F-21c; класс NOTE-N5 017: prometheus(nobody) читатель) ──
+# Рендер выполняется root (converge/core-deliver) — umask 077 даёт 0600/0700, prometheus
+# (uid 65534) получает Permission denied и МОЛЧА теряет job'ы. Нормализация безусловная
+# (даже при byte-skip) — лечит уже созданные файлы без ручного chmod.
+_TARGET_FILE_MODE = 0o644  # root:platform (setgid-каталог), others-read — никто не читает содержимое секретов
+_TARGETS_SUBDIR_MODE = 0o2775  # setgid + group-writable (канон bootstrap: users.py 2775)
+
 # Dual-import pattern (monitoring_config_renderer L43-52): core.* path under pytest/python3 -m,
 # parent-dir bootstrap for direct-script invocation.
 try:
@@ -216,7 +223,7 @@ def generate_prometheus_target(
     targets_dir.mkdir(parents=True, exist_ok=True)
 
     target_file = targets_dir / f"{config.project_name}.json"
-    target = {
+    target: dict[str, object] = {
         "targets": [f"{config.project_name}:{port}"],
         "labels": {
             "project": config.project_name,
@@ -225,9 +232,14 @@ def generate_prometheus_target(
             "service": config.project_name,
         },
     }
+    # 018 W4 (F-21c): file_sd формат — СПИСОК групп []*targetgroup.Group; одиночный объект
+    # = "json: cannot unmarshal object" в prometheus (проверено на ноде 2026-08-29).
+    # dict-значения инвариантны: аннотация на target (не на list-обёртку).
+    target_payload = [target]
 
     try:
-        target_file.write_text(json.dumps(target, indent=2), encoding="utf-8")
+        target_file.write_text(json.dumps(target_payload, indent=2), encoding="utf-8")
+        Path(target_file).chmod(_TARGET_FILE_MODE)
         logger.info("[IMP:9][prometheus] Prometheus target file generated: %s (port=%d)", target_file, port)
         return RenderResult(
             component="prometheus",
@@ -245,26 +257,32 @@ def generate_prometheus_target(
 
 # region FUNC__write_target_file_if_changed
 def _write_target_file_if_changed(path: Path, payload: dict[str, object]) -> bool:
-    """Write target JSON only when content differs (DevPlan 010 T3.3 idempotency).
+    """Write target JSON only when content differs; chmod ALWAYS (018 W4 perm normalization).
 
     ## @purpose  Идемпотентная запись file_sd target-файла: байт-идентичное содержимое →
     ##            skip (noop), иначе перезапись. Возвращает True при записи.
     ## @io       ⇥ path: Path — целевой JSON-файл
     ##           ⇥ payload: dict — {targets, labels}
-    ##           ⎋ bool — True если файл записан, False если содержимое не изменилось
+    ##           ⎋ bool — True если СОДЕРЖИМОЕ записано, False если байт-идентично (skip)
     ## @raises   OSError — пробрасывается вызывающему (RenderResult "failed")
     ## @complexity O(P) где P = размер содержимого
     ## @invariants
-    ##   - Повторный рендер тех же данных → False (файл не трогается, нет mtime churn)
+    ##   - Повторный рендер тех же данных → False по содержимому (skip записи);
+    ##     пермы нормализуются ВСЕГДА (0644 — прометей(nobody) читатель, 018 W4)
     ##   - Пустые target'ы ([] — сервис/нода ушла) записываются — stale target'ы не застревают
+    ##   - Формат файла — СПИСОК групп [payload] (prometheus file_sd: []*targetgroup.Group;
+    ##     одиночный объект = unmarshal-error, 018 W4 F-21c)
     """
-    content = json.dumps(payload, indent=2)
-    if path.exists() and path.read_text(encoding="utf-8") == content:
-        logger.info("[IMP:8][prometheus] %s unchanged — skip (idempotent)", path.name)
-        return False
-    path.write_text(content, encoding="utf-8")
-    logger.info("[IMP:9][prometheus] Node target file %s written", path.name)
-    return True
+    content = json.dumps([payload], indent=2)
+    changed = not (path.exists() and path.read_text(encoding="utf-8") == content)
+    if changed:
+        path.write_text(content, encoding="utf-8")
+    # 018 W4: пермы нормализуются БЕЗУСЛОВНО (byte-skip не должен сохранять 0600-легаси —
+    # prometheus(nobody) с umask-077-рендера получал Permission denied молча)
+    Path(path).chmod(_TARGET_FILE_MODE)
+    if changed:
+        logger.info("[IMP:9][prometheus] Node target file %s written", path.name)
+    return changed
 
 
 # endregion FUNC__write_target_file_if_changed
@@ -274,6 +292,7 @@ def _write_target_file_if_changed(path: Path, payload: dict[str, object]) -> boo
 def generate_node_targets(
     nodes: list[NodeInfo] | None,
     output_dir: Path,
+    deployed_modules: frozenset[str] | None = None,
 ) -> RenderResult:
     """Render Prometheus file_sd node targets for multi-node placement (DevPlan 010 T3.3).
 
@@ -290,6 +309,10 @@ def generate_node_targets(
     ##           None/[] → single-node fallback (статический набор Docker-DNS target'ов)
     ##           ⇥ output_dir: Path — prometheus-targets каталог (родитель nodes/); на VPS
     ##           = ${PROMETHEUS_TARGETS_DIR} (platform_root/prometheus-targets), mount :112
+    ##           ⇥ deployed_modules: frozenset[str] | None — включённые модули ноды
+    ##           (single-node fallback только): None → полный легаси-набор; набор →
+    ##           honesty-гейтинг REF-0010 (required_module не включён → targets=[] —
+    ##           up-серии нет, алерт молчит; 018 W4: MinioScrapeDown на ноде без minio)
     ##           ⎋ RenderResult — "created" (≥1 файл записан) / "noop" (все байт-идентичны) /
     ##           "failed" (OSError)
     ## @complexity O(J × N) где J = 8 jobs, N = число нод
@@ -310,11 +333,21 @@ def generate_node_targets(
     """
     nodes_dir = output_dir / "nodes"
     nodes_dir.mkdir(parents=True, exist_ok=True)
+    Path(nodes_dir).chmod(_TARGETS_SUBDIR_MODE)  # 018 W4: umask-077 mkdir даёт 0700 — nobody не читает
 
     # ── Вход: single-node (нет placement-данных) → статический Docker-DNS набор ──
     if not nodes:
-        logger.info("[IMP:8][prometheus] No node placement data — writing single-node fallback targets")
-        entries: dict[str, list[str]] = {job.file_name: [job.local_target] for job in _NODE_TARGET_JOBS}
+        # 018 W4: honesty-гейтинг REF-0010 — модуль не включён → targets=[] (up-серии нет,
+        # алерт молчит). deployed_modules=None → полный легаси-набор (back-compat прямых вызовов).
+        mods = frozenset(deployed_modules) if deployed_modules is not None else None
+        entries: dict[str, list[str]] = {}
+        for job in _NODE_TARGET_JOBS:
+            gated_off = mods is not None and job.required_module is not None and job.required_module not in mods
+            entries[job.file_name] = [] if gated_off else [job.local_target]
+        logger.info(
+            "[IMP:8][prometheus] No node placement data — single-node fallback targets (deployed_modules=%s)",
+            "None(legacy-full)" if mods is None else sorted(mods),
+        )
     else:
         logger.info("[IMP:9][prometheus] Rendering node targets for %d node(s)", len(nodes))
         entries = {}

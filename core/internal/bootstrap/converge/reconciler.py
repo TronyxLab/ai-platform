@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: reconciler, converge, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, reconcile-perms, reconcile-audit-log, reconcile-projects, reconcile-networks, detect-hosts-drift, verify-vhosts, reconcile-volumes, reconcile-sudoers, reconcile-runtime, reconcile-prometheus-tsdb, orchestrator, exit-code, json-report, data-driven, unit-actions
-# STRUCTURE: ▶ argparse ┌--node-yaml --node-name --core-dir --templates-dir --modules-dir --dry-run --report-only --units┐ → ▶ data-driven unit dispatch ┌_unit_actions R1→R10: (unit_id, action)┐ → ○ for loop ∋ unit: ◇ infra.unit_enabled? → action() | ⎋ SKIP log → ⊕ aggregate exit_code {0,1,2} → ⎋ JSON report stdout
+# STRUCTURE: ▶ argparse ┌--node-yaml --node-name --core-dir --templates-dir --modules-dir --dry-run --report-only --units┐ → ▶ data-driven unit dispatch ┌_unit_actions R1→R11: (unit_id, action)┐ → ○ for loop ∋ unit: ◇ infra.unit_enabled? → action() | ⎋ SKIP log → ⊕ aggregate exit_code {0,1,2} → ⎋ JSON report stdout
 # region MODULE_CONTRACT
 ## @purpose  Оркестратор desired-state reconciler (R1-R9) — депеширует доменным модулям
 ##           converge/ пакета (perms/audit/projects/networks/vhosts/volumes/sudoers/runtime).
@@ -48,6 +48,7 @@ from typing import Protocol, cast
 from core.internal.bootstrap.converge import infra
 from core.internal.bootstrap.converge.audit import reconcile_audit_log
 from core.internal.bootstrap.converge.networks import reconcile_networks
+from core.internal.bootstrap.converge.node_targets import reconcile_prometheus_node_targets
 from core.internal.bootstrap.converge.perms import reconcile_perms
 from core.internal.bootstrap.converge.projects import reconcile_projects
 from core.internal.bootstrap.converge.prometheus_tsdb import reconcile_prometheus_tsdb
@@ -199,7 +200,7 @@ def main() -> int:
 
     # ── Dispatch R-units with --units filter (data-driven: unit_id → action, T2.17) ──
     # Предикат (infra.unit_enabled) и SKIP-лог единообразны для всех юнитов; различается
-    # только action (сигнатуры доменных функций). Порядок R1→R10 — канонический.
+    # только action (сигнатуры доменных функций). Порядок R1→R11 — канонический.
     # Действия возвращают разные типы (dict-отчёты/None) — результат игнорируется
     # (вердикты пишут доменные функции сами); Callable[[], object] — честная верхняя граница.
     unit_actions: list[tuple[str, Callable[[], object]]] = [
@@ -240,6 +241,15 @@ def main() -> int:
             "R10",
             lambda: reconcile_prometheus_tsdb(
                 infra.node_yaml_path, dry_run=infra.dry_run, report_only=infra.report_only
+            ),
+        ),
+        # R11: reconcile_prometheus_node_targets (018 W4, F-21c) — file_sd nodes/*.json:
+        # multi-node placement | single-node fallback. Регрессия: wiring skipал single-node
+        # → node-exporter/cadvisor/exporters выпали из скрейпа молча. Идемпотентно.
+        (
+            "R11",
+            lambda: reconcile_prometheus_node_targets(
+                infra.node_yaml_path, infra.core_dir, dry_run=infra.dry_run, report_only=infra.report_only
             ),
         ),
     ]

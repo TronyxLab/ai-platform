@@ -137,6 +137,9 @@ def test_run_monitoring_reconfig_all_steps(tmp_path, caplog) -> None:
     prometheus_target = platform_root / "prometheus-targets" / "test-app.json"
     assert prometheus_target.is_file(), f"Prometheus target artifact missing: {prometheus_target}"
     target_data = json.loads(prometheus_target.read_text(encoding="utf-8"))
+    # 018 W4 (F-21c): file_sd формат — список групп (prometheus []*targetgroup.Group)
+    if isinstance(target_data, list):
+        target_data = target_data[0]
     assert target_data["targets"] == ["test-app:9090"], f"Prometheus target mismatch: {target_data['targets']}"
     assert target_data["labels"]["project"] == "test-app"
     assert target_data["labels"]["node"] == "test-node"
