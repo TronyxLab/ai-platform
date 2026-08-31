@@ -1,6 +1,6 @@
 # 🧪 TRAP[TEST] · REF-0013 · postcondition: parsed ⊇ {required ∧ source=sops} (DATA-1006)
-# GREP_SUMMARY: test-secrets-postcondition, required-sops, data-1006, verifier, ensure-secrets-exist, manifest-drift, fail-fast
-# STRUCTURE: ▶ verify_required_sops_secrets → ◇ enc отсутствует → ⎋ skip (autogen-only) → ◇ required∧sops ⊆ parsed∪environ ⎋ OK | ✗ ⚡ConfigValidationError (имена в сообщении) → ▶ integration ensure_secrets_exist → ⎋
+# GREP_SUMMARY: test-secrets-postcondition, required-sops, data-1006, verifier, ensure-secrets-exist, manifest-drift, fail-fast, module-aware, minimal-context
+# STRUCTURE: ▶ verify_required_sops_secrets → ◇ enc отсутствует → ⎋ skip (autogen-only) → ◇ required∧sops ⊆ parsed∪environ ⎋ OK | ✗ ⚡ConfigValidationError (имена в сообщении) → ▶ module-aware (enabled_modules) → ⎋ skip disabled-consumers / fail enabled → ▶ integration ensure_secrets_exist → ⎋
 # region MODULE_CONTRACT
 ## @purpose  Unit tests for the REF-0013/DATA-1006 postcondition-verifier in
 ##           core/internal/bootstrap/lifecycle/helpers/secrets.py: после decrypt+autogen каждый
@@ -54,10 +54,30 @@ def _write_manifest_at(core_dir: Path, names: list[str]) -> Path:
     return manifest
 
 
+def _write_manifest_with_consumers_at(core_dir: Path, entries: list[tuple[str, list[str]]]) -> Path:
+    """Write secrets-manifest.yaml with per-secret consumers (module-aware fixtures)."""
+    lines = ["secrets:"]
+    for name, consumers in entries:
+        lines.append(f"  - name: {name}")
+        lines.append("    tier: required")
+        lines.append("    source: sops")
+        lines.append(f"    consumers: {consumers}")
+    manifest = core_dir / "secrets-manifest.yaml"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return manifest
+
+
 @pytest.fixture(autouse=True)
 def _clean_target_environ(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Удаление целевых переменных из os.environ — детерминированный verifier."""
-    for var in ("POSTGRES_PASSWORD", "CLICKHOUSE_PASSWORD", "GHCR_PULL_TOKEN"):
+    """Удаление целевых переменных из os.environ — детерминированный verifier.
+
+    POSTGRES_USER добавлен 2026-08-31 (launch-validation asi-team-vps P0): gitignored
+    локальный core/modules/hermes-agent/.env (полный smoke-env) инжектится в os.environ
+    на import через _conftest/e2e.py early-dotenv-load → POSTGRES_USER=postgres попадал
+    в os.environ и закрывал postcondition-verifier ложно-положительно.
+    """
+    for var in ("POSTGRES_PASSWORD", "POSTGRES_USER", "CLICKHOUSE_PASSWORD", "GHCR_PULL_TOKEN"):
         monkeypatch.delenv(var, raising=False)
 
 
@@ -190,6 +210,97 @@ def test_verifier_trivially_ok_without_required_entries(caplog: pytest.LogCaptur
 
 
 # endregion FUNC_test_verifier_trivially_ok_without_required_entries
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Tests: module-aware postcondition (launch-validation asi-team-vps P0)
+# ═══════════════════════════════════════════════════════════════════
+
+
+# region FUNC_test_verifier_module_aware_skips_disabled_module_secrets
+## @purpose  P0-фикс: enabled_modules={"nginx"} — POSTGRES_USER (consumer [postgres]) и
+##           MINIO_ROOT_USER (consumer [minio]) НЕ требуются (модули disabled); только
+##           PLATFORM_MASTER_PASSWORD (consumer [nginx]) обязателен → verifier pass.
+## @io       ⇥ caplog, tmp_path → ⎋ None (asserts no-raise + IMP:9 OK)
+@ldd_trajectory
+def test_verifier_module_aware_skips_disabled_module_secrets(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> None:
+    """Module-aware: secrets of disabled modules are NOT required by the postcondition."""
+    # 🧪 TRAP[TEST] · 2026-08-31 · REGRESSION · P0 asi-team-vps module-aware postcondition
+    # · Scenario: minimal context — POSTGRES_USER/MINIO_ROOT_USER не потребляются enabled-модулями
+    #             → их отсутствие не блокирует; PLATFORM_MASTER_PASSWORD (nginx) присутствует
+    # · Last fail: verify_required_sops_secrets глобально требовал ВСЕ required∧sops — холодный
+    #              bootstrap минимального контекста блокировался (exit 10)
+    # · Remove if: postcondition вернётся к глобальной проверке без module-aware фильтра
+    core_dir = tmp_path / "core"
+    _write_manifest_with_consumers_at(
+        core_dir,
+        [
+            ("POSTGRES_USER", ["postgres", "service-exporters"]),
+            ("MINIO_ROOT_USER", ["minio"]),
+            ("PLATFORM_MASTER_PASSWORD", ["nginx"]),
+        ],
+    )
+    env_file = tmp_path / "secrets.env"
+    env_file.write_text("PLATFORM_MASTER_PASSWORD='ok-value'\n", encoding="utf-8")
+    enc_file = tmp_path / "node.enc.yaml"
+    enc_file.write_text("dummy: encrypted\n", encoding="utf-8")
+
+    helpers_secrets.verify_required_sops_secrets(
+        manifest_path=str(core_dir / "secrets-manifest.yaml"),
+        secrets_env=str(env_file),
+        enc_file=str(enc_file),
+        enabled_modules={"nginx"},
+    )
+    assert any("[IMP:9]" in r.message and "Postcondition OK" in r.message for r in caplog.records), (
+        "Missing IMP:9 postcondition-OK log (module-aware skip must not weaken the pass)"
+    )
+    logger.info("[IMP:9][test_verifier_module_aware_skips_disabled_module_secrets] PASS")
+
+
+# endregion FUNC_test_verifier_module_aware_skips_disabled_module_secrets
+
+
+# region FUNC_test_verifier_module_aware_fails_on_enabled_consumer_missing
+## @purpose  P0-фикс negative: enabled_modules={"nginx","postgres"} и POSTGRES_USER отсутствует →
+##           module-aware verifier ВСЁ РАВНО fail-loud (consumer postgres enabled) — фильтр не
+##           ослабляет контракт для реально потребляемых секретов.
+## @io       ⇥ caplog, tmp_path → ⎋ None (asserts ConfigValidationError с именем)
+@ldd_trajectory
+def test_verifier_module_aware_fails_on_enabled_consumer_missing(
+    caplog: pytest.LogCaptureFixture, tmp_path: Path
+) -> None:
+    """Module-aware does NOT weaken fail-loud for secrets of enabled consumer modules."""
+    # 🧪 TRAP[TEST] · 2026-08-31 · REGRESSION · P0 asi-team-vps module-aware не ослабляет fail-loud
+    # · Scenario: POSTGRES_USER consumer postgres enabled, отсутствует в secrets.env → FATAL
+    # · Last fail: N/A (negative-пара к module-aware skip — Test Honesty R5 anti-survivorship)
+    # · Remove if: module-aware фильтр удалён
+    core_dir = tmp_path / "core"
+    _write_manifest_with_consumers_at(
+        core_dir,
+        [
+            ("POSTGRES_USER", ["postgres"]),
+            ("MINIO_ROOT_USER", ["minio"]),
+        ],
+    )
+    env_file = tmp_path / "secrets.env"
+    env_file.write_text("UNRELATED='x'\n", encoding="utf-8")
+    enc_file = tmp_path / "node.enc.yaml"
+    enc_file.write_text("dummy: encrypted\n", encoding="utf-8")
+
+    with pytest.raises(ConfigValidationError, match="POSTGRES_USER"):
+        helpers_secrets.verify_required_sops_secrets(
+            manifest_path=str(core_dir / "secrets-manifest.yaml"),
+            secrets_env=str(env_file),
+            enc_file=str(enc_file),
+            enabled_modules={"nginx", "postgres"},
+        )
+    assert any("[IMP:10]" in r.message and "POSTCONDITION FAILED" in r.message for r in caplog.records), (
+        "Missing IMP:10 POSTCONDITION FAILED log for enabled-consumer missing secret"
+    )
+    logger.info("[IMP:9][test_verifier_module_aware_fails_on_enabled_consumer_missing] PASS")
+
+
+# endregion FUNC_test_verifier_module_aware_fails_on_enabled_consumer_missing
 
 
 # ═══════════════════════════════════════════════════════════════════
