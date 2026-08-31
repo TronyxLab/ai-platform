@@ -98,6 +98,20 @@ $END_ARTIFACT_CONTRACT
 - Статус: fixed
 - Ре-верификация: make check rc=0; φ7 теперь реально выпускает wildcard asiteam.ru (SAN *.asiteam.ru).
 
+### F-05 · 2026-09-01 00:30 · фаза B/C · P2
+- Симптом: S3 SSL-кеш сертов падает: upload `InvalidAccessKeyId` (PutObject), HeadObject 403 Forbidden.
+  Бакет `platform-asi-certs`, endpoint `https://s3.timeweb.cloud`, region `ru-1`.
+- Ожидалось / получено: wildcard asiteam.ru выпущен локально (ACME), но НЕ кешируется в S3
+  (restore-first при DR мёртв). converge_services done_with_warnings.
+- Гипотеза причины: S3_ACCESS_KEY/S3_SECRET_KEY в enc.yaml asi-контура невалидны для
+  s3.timeweb.cloud (либо ключ чужого аккаунта/региона, либо bucket отсутствует). Data-issue,
+  не код. Влияние: фаза C2 (cache drill) — кеш пуст → по правилу C2 live-серты НЕ трогать.
+- Фикс: НЕ чиню код — внешняя инфраструктура (S3-креды). Требует владельца (перевыпустить
+  S3-ключи/проверить bucket). Блокирует C2 cache drill.
+- Статус: **blocked** (внешние S3-креды; платформенный канал кеша корректно деградирует —
+  ACME fallback работает)
+- Evidence: `/tmp/bootstrap_B2_retry4.log` (S3 upload/HeadObject ошибки)
+
 ### F-03 · 2026-08-31 23:50 · фаза B · P0
 - Симптом: φ8 deploy_services precondition «Docker daemon not running»; docker.service inactive,
   docker.socket trigger-limit-hit; platform-secrets.service failed (exit 10).
@@ -135,20 +149,3 @@ $END_ARTIFACT_CONTRACT
 - Статус: **fixed**
 - Ре-верификация: make check rc=0 ALL PASS (20/20 checks, contract 305, static_audit 5306);
   make check MARKER=check-manifests GREEN.
-- Симптом: `make bootstrap-node NODE=asi-team-vps` exit 2. roadmap DEPLOYED+healthy, но nginx
-  deploy-hook FAILED → nginx в restart-loop: `cannot load certificate /etc/letsencrypt/live/asiteam.ru/fullchain.pem`.
-- Ожидалось / получено: φ7 certificates должна выпустить wildcard asiteam.ru + roadmap.asiteam.ru.
-  Получено: φ7 ложно «certificates provisioned» (лог), /etc/letsencrypt/live/ ПУСТ.
-- Гипотеза причины (двухслойная):
-  1. module-level pydantic-цепочка: node-lifecycle.sh запускает cli.py на системном python3 (3.12, без pydantic);
-     domains.py guarded-import context_deployer → deploy/__init__ → deploy_orchestrator:123
-     `from core.internal.llm import config_renderer` → llm/__init__ → policy_schema → pydantic
-     → ImportError на 3.12 → `extract_domains_for_context=None` заморожен на весь процесс.
-  2. ssl_provision_via_orchestrator при extract_domains_for_context=None возвращал [] доменов →
-     `if not domains: return "converged"` → φ7 ложный success (контракт skipped_import нарушен).
-- Фикс (коммит 379fd01): (A) ssl_provision_via_orchestrator проверяет extract_domains_for_context
-  is None → "skipped_import" (не converged); (B1) re-exec lifecycle на /usr/local/bin/python3 (3.14)
-  после φ1; (B2) lazy-import config_renderer в deploy_orchestrator (единственный pydantic-путь).
-  +5 unit-тестов (test_phase_certificates_contract, test_lifecycle_cli_w5).
-- Статус: fixed
-- Ре-верификация: make check rc=0 ALL PASS; check-manifests GREEN.
