@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: project_lister list projects offline table json ssh-status node-yaml
+# GREP_SUMMARY: project_lister list projects offline table json ssh-status node-yaml find-project-node ambiguity
 # STRUCTURE: ▶ parse_args → ◇ find_node_yaml_files → ⚡ list_projects_offline (⌀ NodeYaml.get_projects → ⊕ table|json) → ◇ find_project_node → ⚡ get_status_via_ssh (ssh_read wrapper) → ⎋ main dispatch
 # region MODULE_CONTRACT
 ## @purpose  Python Strangler-Fig migration of project-list.sh (403 LOC shell, 7 inline python3).
@@ -13,6 +13,8 @@
 ##   - Never modifies state (read-only: OBSERVE phase)
 ##   - 0 inline python3 blocks — pure Python
 ##   - JSON output is valid JSON array
+##   - find_project_node: проект в >1 node.yaml на РАЗНЫХ узлах → ProjectAmbiguityError
+##     (fail-fast, NODE=⟨node⟩); все совпадения на одном узле → первый (прежнее поведение)
 ## @rationale Completes Strangler-Fig for project-list: removes 7 inline python3 blocks.
 ##            NodeYaml.get_projects() covers 90% of logic. Simplest wave — warm-up.
 ## @links    CALLED_BY: project-list.sh (facade)
@@ -22,7 +24,15 @@
 ##           2026-08-02 · DevPlan 118 C11 — timeout=10 → SSH_READ_TIMEOUT (единый канон)
 ##           2026-08-27 · DevPlan 015 F-11 — scan-root → NODE_CONFIGS_DIR (env) → repo/node-configs;
 ##                      find_node_yaml_files: `*/node.yaml` ∪ backward-compat `*/node-configs/*/node.yaml`
+##           2026-09-01 · FIX — дизамбигуация find_project_node: silent first-match → fail-fast
+##                      ProjectAmbiguityError при разных узлах (make project-status NAME=x без NODE);
+##                      общий helper ensure_same_node_or_raise (проект_remover делит его)
 # endregion MODULE_CONTRACT
+
+# ⚠️ TRAP[BUG] · 2026-09-01 · MED · Silent wrong-node resolution: проект в >1 node.yaml → молча
+# · первый host (test-node/localhost) вместо цели → SSH fail · Root: find_project_node возвращал
+# · первый match, узлы не сравнивались · Fix: ensure_same_node_or_raise — разные узлы →
+# · ProjectAmbiguityError (перечень кандидатов + NODE=⟨node⟩) · Prevention: тест 2 node.yaml разных узлов
 
 from __future__ import annotations
 
@@ -35,6 +45,9 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import ClassVar, cast
+
+# FIX (дизамбигуация): PlatformError-база для ProjectAmbiguityError (проект в нескольких node.yaml).
+from core.internal.shared.exceptions import PlatformError
 
 # DevPlan 118 C11: SSH-таймаут — единый канон shared/timeouts.SSH_READ_TIMEOUT (литерал 10 удалён).
 from core.internal.shared.timeouts import SSH_READ_TIMEOUT
@@ -59,6 +72,60 @@ _DEFAULT_SSH_HOST = os.environ.get("DEFAULT_SSH_HOST", "")
 #   Calling via subprocess preserves the facade contract and timeout handling.
 #   In tests, the ssh runner is injected as a callable (DI over Mocks).
 # · Rev: if subprocess overhead becomes problematic → extract Python SSH runner from lib/ssh.sh
+
+
+# region CLS_ProjectAmbiguityError
+## @purpose  Проект найден в НЕСКОЛЬКИХ node.yaml на РАЗНЫХ узлах — молчаливый выбор первого
+##           файла запрещён (silent wrong-node resolution → SSH/операция к неверному host).
+##           Пользователь обязан указать NODE=⟨node⟩. exit_code=1 (generic error,
+##           контракт exit-кодов core/AGENTS.md: 1 = PlatformError base).
+## @io       carries project + candidates [(node_name, host, node_yaml_path)] →
+##           человекочитаемое многострочное сообщение (перечень + подсказка NODE)
+## @complexity O(C) — форматирование перечня кандидатов
+## @invariants
+##   - exit_code=1 (generic error, НЕ idempotent-skip)
+##   - candidates — в порядке обнаружения (порядок обхода node.yaml)
+class ProjectAmbiguityError(PlatformError):
+    """Project matched in multiple node.yaml files on DIFFERENT nodes — NODE required."""
+
+    exit_code: int = 1  # generic error (контракт exit-кодов core/AGENTS.md)
+
+    def __init__(self, project: str, candidates: list[tuple[str, str, str]]) -> None:
+        """Build readable multi-line message: candidate list (file+host) + NODE hint."""
+        self.project = project
+        self.candidates = candidates
+        lines = [f"Project '{project}' found in multiple node.yaml files on DIFFERENT nodes:"]
+        for node_name, host, ny_path in candidates:
+            lines.append(f"  - node '{node_name}' (host={host or '<unknown>'}) → {ny_path}")
+        lines.append("Refusing to pick one silently. Specify the target node: NODE=⟨node⟩")
+        super().__init__("\n".join(lines))
+
+
+# endregion CLS_ProjectAmbiguityError
+
+
+# region FUNC_ensure_same_node_or_raise
+## @purpose  Единое правило дизамбигуации find-паттерна (ОБЩИЙ для project_lister и
+##           project_remover — оба молча брали первый match): ВСЕ совпадения проекта обязаны
+##           лежать на ОДНОМ узле (идентичная пара node_name+host). Разные узлы →
+##           ProjectAmbiguityError (fail-fast). Совпадения на одном узле (dual-path/context-
+##           дубли) → no-op — caller берёт matches[0] (прежнее поведение сохранено).
+## @param project  Project name (для сообщения об ошибке)
+## @param matches  [(node_name, host, node_yaml_path), ...] в порядке обнаружения
+## @io       ⇥ project, matches → ⎋ None (raise при разных узлах)
+## @complexity O(m) — сравнение identity-множества пар (node, host)
+## @invariants
+##   - len(matches) ≤ 1 → no-op (нет дизамбигуации)
+##   - единственная identity-пара → no-op (один узел — использовать его)
+def ensure_same_node_or_raise(project: str, matches: list[tuple[str, str, str]]) -> None:
+    """Raise ProjectAmbiguityError when project matches span different (node, host) pairs."""
+    identities = {(node_name, host) for node_name, host, _ in matches}
+    if len(identities) <= 1:
+        return  # 0 совпадений (no-op) или единственная identity-пара (один узел — caller берёт matches[0])
+    raise ProjectAmbiguityError(project, matches)
+
+
+# endregion FUNC_ensure_same_node_or_raise
 
 
 # region FUNC__shared_ssh_read
@@ -198,7 +265,7 @@ def list_projects_offline(
     all_projects: list[dict[str, object]] = []
 
     for ny in yaml_files:
-        # Derive node name from path: .../node-configs/<node>/node.yaml
+        # Derive node name from path: .../node-configs/⟨node⟩/node.yaml
         node_name = ny.parent.name
         node_host = ""
 
@@ -254,10 +321,15 @@ def list_projects_offline(
 
 # region FUNC_find_project_node
 ## @purpose  Find the node.yaml containing a specific project, and extract SSH host.
+##           FIX (дизамбигуация): при совпадениях в НЕСКОЛЬКИХ node.yaml на РАЗНЫХ узлах —
+##           НЕ брать первый молча: ensure_same_node_or_raise → ProjectAmbiguityError
+##           (fail-fast, перечень кандидатов + NODE=⟨node⟩). Все совпадения на ОДНОМ узле —
+##           использовать его (прежнее поведение).
 ## @param name           Project name to search for
 ## @param projects_root  Base directory
 ## @param node_filter    Optional node filter
 ## @return  (node_yaml_path: Path | None, ssh_host: str) — None if not found
+## @raises  ProjectAmbiguityError — проект найден в >1 node.yaml на разных узлах
 ## @complexity O(p+f)
 def find_project_node(
     name: str,
@@ -273,6 +345,8 @@ def find_project_node(
     ## @invariants
     ##   - Returns (None, "") if project not found
     ##   - Returns host="" if node.yaml has no node.host
+    ##   - >1 совпадения на РАЗНЫХ узлах → ProjectAmbiguityError (fail-fast, NODE обязателен)
+    ##   - Все совпадения на ОДНОМ узле → первый (прежнее поведение)
     """
     logger.info("[IMP:7][list][find_node] Searching for project '%s' in node.yaml files", name)
 
@@ -284,6 +358,10 @@ def find_project_node(
         return None, ""
 
     yaml_files = find_node_yaml_files(projects_root, node_filter)
+
+    # FIX (дизамбигуация): собираем ВСЕ совпадения, а не возвращаем первое.
+    # matches: (node_name, host, node_yaml_path) — в порядке обхода yaml_files.
+    matches: list[tuple[str, str, str]] = []
 
     for ny in yaml_files:
         result = subprocess.run(
@@ -319,11 +397,23 @@ def find_project_node(
                 check=False,
             )
             ssh_host = host_result.stdout.strip() if host_result.returncode == 0 else ""
-            logger.info("[IMP:7][list][find_node] Found project '%s' in: %s host=%s", name, ny, ssh_host or "<unknown>")
-            return ny, ssh_host
+            matches.append((ny.parent.name, ssh_host, str(ny)))
+            logger.info("[IMP:7][list][find_node] Project '%s' found in: %s host=%s", name, ny, ssh_host or "<unknown>")
 
-    logger.info("[IMP:8][list][find_node] Project '%s' not found in any node.yaml", name)
-    return None, ""
+    if not matches:
+        logger.info("[IMP:8][list][find_node] Project '%s' not found in any node.yaml", name)
+        return None, ""
+
+    # Единое правило дизамбигуации (общее с project_remover): разные узлы → fail-fast.
+    ensure_same_node_or_raise(name, matches)
+    first_node, first_host, first_path = matches[0]
+    logger.info(
+        "[IMP:9][list][find_node] Resolved project '%s' → node '%s' host=%s (single node)",
+        name,
+        first_node,
+        first_host or "<unknown>",
+    )
+    return Path(first_path), first_host
 
 
 # endregion FUNC_find_project_node
@@ -533,14 +623,22 @@ def main(argv: list[str] | None = None) -> int:
         if not args.project_name:
             logger.info("[IMP:10][list][main] FAIL-FAST: --status requires --name <project>")
             print("ERROR: --status requires --name <project>")
-            print("Usage: project-list.sh --status --name <project> [--node <node>]")
+            print("Usage: project-list.sh --status --name <project> [--node ⟨node⟩]")
             return 1
 
-        node_yaml_path, ssh_host = find_project_node(
-            name=args.project_name,
-            projects_root=scan_root,
-            node_filter=args.node_name,
-        )
+        try:
+            node_yaml_path, ssh_host = find_project_node(
+                name=args.project_name,
+                projects_root=scan_root,
+                node_filter=args.node_name,
+            )
+        except ProjectAmbiguityError as exc:
+            logger.info(
+                "[IMP:10][list][main] FAIL-FAST: project '%s' matches multiple nodes — NODE required",
+                args.project_name,
+            )
+            print(str(exc))
+            return exc.exit_code
         if node_yaml_path is None:
             print(f"ERROR: Project '{args.project_name}' not found in node.yaml")
             print("  Register it first or check --name spelling")

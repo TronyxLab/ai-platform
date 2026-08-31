@@ -26,6 +26,7 @@ from core.internal.bootstrap.firewall import parse_ufw_status
 from ._shared import STATUS_FAIL, STATUS_PASS, STATUS_WARN, CheckResult
 from .apt_security import (
     APT_CHECK_BIN,
+    APT_GET_SIM_CMD,
     AUTO_UPDATES_FILE,
     UNATTENDED_FILE,
     check_pending_security_updates,
@@ -67,6 +68,7 @@ from .sshd_policy import (
 
 __all__ = [
     "APT_CHECK_BIN",
+    "APT_GET_SIM_CMD",
     "AUTHORIZED_KEYS_MODE",
     "AUTO_UPDATES_FILE",
     "CI_DEPLOY_AUTHORIZED_KEYS",

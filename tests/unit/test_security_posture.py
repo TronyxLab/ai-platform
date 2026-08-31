@@ -184,11 +184,50 @@ class TestS2:
         assert result.status == security_posture.STATUS_WARN
         assert "2 security updates pending" in result.message
 
-    def test_warn_apt_check_unavailable(self, fake_probe):
+    def test_warn_apt_get_fallback_security_pending(self, fake_probe):
+        """Ubuntu 24.04: apt-check отсутствует (rc=127), apt-get -s dist-upgrade отрабатывает → S2 по новому источнику."""
+        # 🧪 TRAP[TEST] · 2026-09-01 · Regression: Ubuntu 24.04 удалил /usr/lib/update-notifier/apt-check
+        # · Scenario: S2 WARN «apt-check unavailable» на свежей ноде — оценка недоступна несмотря на
+        # ·   работоспособный apt-get dry-run; fallback обязан считать ^Inst / origin -security
+        # · Last fail: make check-security на Ubuntu 24.04 — S2 WARN rc=127 (файл отсутствует на ноде)
+        # · Remove if: S2 fallback отменён
         fake_probe["/usr/lib/update-notifier/apt-check"] = FakeResult(127, "not found")
+        fake_probe["apt-get"] = FakeResult(
+            0,
+            "Reading package lists... Done\n"
+            "Inst libc6 [2.39-0ubuntu8.3] (2.39-0ubuntu8.4 Ubuntu:24.04/noble-updates [amd64])\n"
+            "Inst libssl3 [3.0.13-0ubuntu3.2] (3.0.13-0ubuntu3.3 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64])\n",
+        )
         result = security_posture.check_pending_security_updates(probe=fake_probe)
         assert result.status == security_posture.STATUS_WARN
-        assert "apt-check unavailable" in result.message
+        assert "1 security updates pending" in result.message
+
+    # 🧪 TRAP[TEST] · 2026-09-01 · Regression: fallback PASS — apt-check отсутствует (24.04),
+    # · apt-get -s без security-обновлений → PASS по новому источнику (не WARN) · Last fail: N/A
+    # · (guard: fallback обязан корректно считать total/non-security) · Remove if: S2 fallback отменён
+    def test_positive_apt_get_fallback_none_pending(self, fake_probe):
+        """apt-check отсутствует, apt-get -s без security-обновлений → PASS (по новому источнику)."""
+        fake_probe["/usr/lib/update-notifier/apt-check"] = FakeResult(127, "not found")
+        fake_probe["apt-get"] = FakeResult(
+            0,
+            "Inst curl [8.5.0-2ubuntu10.1] (8.5.0-2ubuntu10.2 Ubuntu:24.04/noble-updates [amd64])\n",
+        )
+        result = security_posture.check_pending_security_updates(probe=fake_probe)
+        assert result.status == security_posture.STATUS_PASS
+        assert "no pending security updates" in result.message
+        assert "total pending: 1" in result.message
+
+    # 🧪 TRAP[TEST] · 2026-09-01 · Regression: оба источника недоступны → WARN (НЕ FAIL) — оценка
+    # · недоступна ≠ небезопасно (graceful, семантика S2 сохранена) · Last fail: N/A (замена
+    # · test_warn_apt_check_unavailable — он кодировал pre-fix поведение «apt-check один → WARN»)
+    # · Remove if: S2 graceful-fallback политика отменена
+    def test_warn_both_sources_unavailable(self, fake_probe):
+        """Оба источника (apt-check + apt-get -s) недоступны → WARN (cannot assess ≠ небезопасно, НЕ FAIL)."""
+        fake_probe["/usr/lib/update-notifier/apt-check"] = FakeResult(127, "not found")
+        fake_probe["apt-get"] = FakeResult(1, "", stderr="E: dpkg was interrupted")
+        result = security_posture.check_pending_security_updates(probe=fake_probe)
+        assert result.status == security_posture.STATUS_WARN
+        assert "cannot assess" in result.message
 
 
 # endregion Tests: S2

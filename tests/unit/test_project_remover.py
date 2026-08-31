@@ -172,3 +172,36 @@ def test_find_project_not_found(tmp_path: pathlib.Path, caplog) -> None:
     logger.info("[IMP:9][test][remover] test_find_project_not_found")
     result = find_project_in_node_yaml(name="nonexistent", projects_root=tmp_path)
     assert result == {}, f"Expected empty dict for missing project, got {result}"
+
+
+# 🧪 TRAP[TEST] · 2026-09-01 · Regression: FIX silent wrong-node resolution (общий helper с
+# · project_lister) · Scenario: проект tronyx-site в ctx-a/node-configs/test-node/node.yaml
+# · (host=localhost) И ctx-b/node-configs/tronyx-vps/node.yaml (host=203.0.113.10) —
+# · remove-project без NODE молча unregister'ил первый + compose down на неверном узле · Last fail:
+# · make remove-project NAME=tronyx-site (без NODE) — первый match · Remove if: дизамбигуация отменена
+@ldd_trajectory
+def test_find_project_ambiguous_different_nodes(tmp_path: pathlib.Path, caplog) -> None:
+    """2 node.yaml с одним проектом на РАЗНЫХ hosts → ProjectAmbiguityError (NODE обязателен)."""
+    from core.internal.scaffold.project_lister import ProjectAmbiguityError
+
+    for context, node, host in (
+        ("ctx-a", "test-node", "localhost"),
+        ("ctx-b", "tronyx-vps", "203.0.113.10"),
+    ):
+        node_config_dir = tmp_path / context / "node-configs" / node
+        node_config_dir.mkdir(parents=True, exist_ok=True)
+        data = {
+            "node": {"name": node, "host": host},
+            "projects": [{"name": "tronyx-site", "type": "backend", "repo": "org/tronyx-site"}],
+        }
+        with (node_config_dir / "node.yaml").open("w", encoding="utf-8") as f:
+            yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+        logger.info("[IMP:8][test][remover] Wrote %s/node-configs/%s/node.yaml (host=%s)", context, node, host)
+
+    logger.info("[IMP:9][test][remover] test_find_project_ambiguous — 2 nodes, different hosts")
+    with pytest.raises(ProjectAmbiguityError) as excinfo:
+        find_project_in_node_yaml(name="tronyx-site", projects_root=tmp_path)
+    msg = str(excinfo.value)
+    assert "node-configs/test-node/node.yaml" in msg, f"Missing test-node candidate: {msg}"
+    assert "node-configs/tronyx-vps/node.yaml" in msg, f"Missing tronyx-vps candidate: {msg}"
+    assert "NODE=<node>" in msg, f"Missing NODE=<node> hint: {msg}"

@@ -45,17 +45,29 @@ from core.internal.scaffold.project_lister import (
 )
 
 
-def _write_node_yaml(base_dir: pathlib.Path, node_name: str, projects: list[dict]) -> pathlib.Path:
-    node_config_dir = base_dir / "test-context" / "node-configs" / node_name
+def _write_node_yaml(
+    base_dir: pathlib.Path,
+    node_name: str,
+    projects: list[dict],
+    *,
+    host: str = "192.168.1.1",
+    context: str = "test-context",
+) -> pathlib.Path:
+    """Write <context>/node-configs/<node>/node.yaml with given projects.
+
+    host/context — keyword-only (backward-compat: существующие фикстуры не меняются);
+    разные host нужны для дизамбигуационных тестов (test_find_project_node_*).
+    """
+    node_config_dir = base_dir / context / "node-configs" / node_name
     node_config_dir.mkdir(parents=True, exist_ok=True)
     node_yaml = node_config_dir / "node.yaml"
     data: dict = {
-        "node": {"name": node_name, "host": "192.168.1.1"},
+        "node": {"name": node_name, "host": host},
         "projects": projects,
     }
     with pathlib.Path(node_yaml).open("w", encoding="utf-8") as f:
         yaml.dump(data, f, default_flow_style=False, sort_keys=False)
-    logger.info("[IMP:8][fixture][node_yaml] Created %s with %d projects", node_yaml, len(projects))
+    logger.info("[IMP:8][fixture][node_yaml] Created %s with %d projects (host=%s)", node_yaml, len(projects), host)
     return node_yaml
 
 
@@ -222,6 +234,66 @@ def test_find_project_node_found(single_node_yaml: pathlib.Path, caplog) -> None
     assert node_yaml_path is not None, "Expected to find node.yaml for 'myapp'"
     assert ssh_host, "Expected non-empty SSH host"
     assert "test-context" in str(node_yaml_path), f"Expected path containing test-context, got {node_yaml_path}"
+
+
+# 🧪 TRAP[TEST] · 2026-09-01 · Regression: FIX silent wrong-node resolution · Scenario: проект
+# · tronyx-site в node-configs/test-node/node.yaml (host=localhost) И node-configs/tronyx-vps/node.yaml
+# · (host=203.0.113.10) — make project-status NAME=tronyx-site без NODE молча брал первый (test-node)
+# · → SSH fail · Last fail: make project-status NAME=tronyx-site (без NODE) — SSH к localhost · Remove if:
+# · дизамбигуация отменена / find_project_node возвращает иной контракт
+@ldd_trajectory
+def test_find_project_node_ambiguous_different_nodes(tmp_path: pathlib.Path, caplog) -> None:
+    """2 node.yaml с одним проектом на РАЗНЫХ hosts → ProjectAmbiguityError с обоими кандидатами."""
+    from core.internal.scaffold.project_lister import ProjectAmbiguityError
+
+    _write_node_yaml(
+        tmp_path,
+        "test-node",
+        [{"name": "tronyx-site", "type": "backend", "repo": "org/tronyx-site"}],
+        host="localhost",
+    )
+    _write_node_yaml(
+        tmp_path,
+        "tronyx-vps",
+        [{"name": "tronyx-site", "type": "backend", "repo": "org/tronyx-site"}],
+        host="203.0.113.10",
+    )
+    logger.info("[IMP:9][test][lister] test_find_project_node_ambiguous — 2 nodes, different hosts")
+    with pytest.raises(ProjectAmbiguityError) as excinfo:
+        find_project_node(name="tronyx-site", projects_root=tmp_path)
+    msg = str(excinfo.value)
+    # Оба кандидата (файл + host) обязаны попасть в сообщение + подсказка NODE
+    assert "node-configs/test-node/node.yaml" in msg, f"Missing test-node candidate: {msg}"
+    assert "node-configs/tronyx-vps/node.yaml" in msg, f"Missing tronyx-vps candidate: {msg}"
+    assert "localhost" in msg, f"Missing test-node host in message: {msg}"
+    assert "203.0.113.10" in msg, f"Missing tronyx-vps host in message: {msg}"
+    assert "NODE=<node>" in msg, f"Missing NODE=<node> hint: {msg}"
+
+
+# 🧪 TRAP[TEST] · 2026-09-01 · Regression: same-node rule FIX — dual-path/context-дубли node.yaml
+# · Scenario: проект зарегистрирован в ctx-a И ctx-b на ОДНОМ узле (одинаковые name+host) — обязан
+# ·   резолвиться в первый (прежнее поведение), НЕ поднимать ложную дизамбигуацию · Last fail: N/A
+# ·   (guard против over-eager ambiguity) · Remove if: same-node правило отменено
+@ldd_trajectory
+def test_find_project_node_same_node_multiple_files(tmp_path: pathlib.Path, caplog) -> None:
+    """2 node.yaml с одним проектом на ОДНОМ узле (одинаковые name+host) → узел выбран (первый)."""
+    _write_node_yaml(
+        tmp_path,
+        "tronyx-vps",
+        [{"name": "myapp", "type": "backend", "repo": "org/myapp"}],
+        context="ctx-a",
+    )
+    _write_node_yaml(
+        tmp_path,
+        "tronyx-vps",
+        [{"name": "myapp", "type": "backend", "repo": "org/myapp"}],
+        context="ctx-b",
+    )
+    logger.info("[IMP:9][test][lister] test_find_project_node_same_node — 2 files, same node identity")
+    node_yaml_path, ssh_host = find_project_node(name="myapp", projects_root=tmp_path)
+    assert node_yaml_path is not None, "Expected resolution to a node.yaml (same-node rule)"
+    assert ssh_host == "192.168.1.1", f"Expected host 192.168.1.1, got {ssh_host}"
+    assert "ctx-a" in str(node_yaml_path), f"Expected first match (ctx-a), got {node_yaml_path}"
 
 
 # 🧪 TRAP[TEST] · 2026-08-27 · F-11 (P2) · scan-root NODE_CONFIGS_DIR-layout → ≥1 node.yaml

@@ -23,7 +23,15 @@
 ## @changes  2026-08-22 · T2.10 — remove_vhost делегирует vhost_renderer.remove_vhost
 ##           (GENERATED-заголовочный lookup + аудит vhost:remove); exact-path fallback
 ##           <domain>.conf сохраняет disk-поведение 1:1; +project_name параметр
+## @changes  2026-09-01 · FIX — дизамбигуация find_project_in_node_yaml: silent first-match →
+##           fail-fast ProjectAmbiguityError при разных узлах (общий helper с project_lister);
+##           все совпадения на одном узле → первый (прежнее поведение)
 # endregion MODULE_CONTRACT
+
+# ⚠️ TRAP[BUG] · 2026-09-01 · MED · Silent wrong-node resolution: проект в >1 node.yaml → молча
+# · первый (unregister + compose down на неверном узле) · Root: find_project_in_node_yaml возвращал
+# · первый match без сравнения узлов · Fix: ensure_same_node_or_raise (общий с project_lister) —
+# · разные узлы → ProjectAmbiguityError + NODE=⟨node⟩ · Prevention: тест 2 node.yaml разных узлов
 
 # 💼 TRAP[BUSINESS] · 2026-07-17 · HI · remove = disconnect, данные не удаляются автоматически
 # · Source: owner
@@ -44,6 +52,8 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import ClassVar, Protocol, TypedDict, cast
+
+from core.internal.scaffold.project_lister import ProjectAmbiguityError, ensure_same_node_or_raise
 
 # Таймауты — единый канон shared/timeouts.py.
 from core.internal.shared.timeouts import COMPOSE_UP_TIMEOUT, DOCKER_STOP_TIMEOUT, SSH_READ_TIMEOUT
@@ -85,11 +95,16 @@ _DEFAULT_PROJECTS_ROOT = os.environ.get(
 ## @purpose  Locate the node.yaml that contains the project.
 ##           If --node provided, search only that node's config.
 ##           Otherwise search all node-configs/*/node.yaml.
+##           FIX (дизамбигуация, общее с project_lister): при совпадениях в НЕСКОЛЬКИХ node.yaml
+##           на РАЗНЫХ узлах — НЕ брать первый молча (silent wrong-node unregister/compose-down):
+##           ensure_same_node_or_raise → ProjectAmbiguityError (fail-fast, NODE=⟨node⟩).
+##           Все совпадения на ОДНОМ узле → первый (прежнее поведение).
 ## @param name           Project name
 ## @param projects_root  Base directory
 ## @param node_filter    Optional node name
 ## @return   dict with keys: node_yaml(str), project_entry(dict), domain(str), host(str), org(str), node_configs_dir(str)
 ##           or empty dict if not found
+## @raises   ProjectAmbiguityError — проект найден в >1 node.yaml на разных узлах
 ## @complexity O(n·m) where n = node.yaml files, m = projects per file
 def find_project_in_node_yaml(
     name: str,
@@ -105,6 +120,8 @@ def find_project_in_node_yaml(
     ## @invariants
     ##   - Returns {} if project not found (caller handles idempotent exit)
     ##   - Uses NodeYaml API, not subprocess yq
+    ##   - >1 совпадения на РАЗНЫХ узлах → ProjectAmbiguityError (fail-fast, NODE обязателен)
+    ##   - Все совпадения на ОДНОМ узле → первый (прежнее поведение)
     """
     logger.info("[IMP:7][remove][find] Searching for project '%s' in node.yaml files", name)
 
@@ -118,6 +135,12 @@ def find_project_in_node_yaml(
         yaml_files = sorted(projects_root.glob(broader))
 
     logger.info("[IMP:7][remove][find] Found %d node.yaml file(s) to search", len(yaml_files))
+
+    # FIX (дизамбигуация): собираем ВСЕ совпадения; info-dict — первый найденный
+    # (single/same-node rule), matches — для ensure_same_node_or_raise.
+    # matches: (node_name, host, node_yaml_path).
+    matches: list[tuple[str, str, str]] = []
+    found: dict[str, object] = {}
 
     for ny in yaml_files:
         logger.info("[IMP:6][remove][find] Checking: %s", ny)
@@ -140,30 +163,36 @@ def find_project_in_node_yaml(
             # (rg "node\._data" core/ → 0). node.get("node.host", default="") — НЕ get_node_info().fqdn
             # (тот читает node.fqdn, а в образцах только node.host — не эквивалентно).
             node_host = node.get("node.host", default="")
-            node_configs_dir = str(ny.parent.parent)  # .../node-configs/<node>/node.yaml → .../node-configs/
+            node_configs_dir = str(ny.parent.parent)  # .../node-configs/⟨node⟩/node.yaml → .../node-configs/
 
-            logger.info("[IMP:7][remove][find] Found project '%s' in: %s", name, ny)
-            logger.info(
-                "[IMP:8][remove][find]   domain=%s host=%s org=%s",
-                domain or "<none>",
-                node_host or "<unknown>",
-                org or "unknown",
-            )
-
-            return {
-                "node_yaml": str(ny),
-                "project_entry": project,
-                "domain": domain,
-                "host": node_host,
-                "org": org,
-                "node_configs_dir": node_configs_dir,
-            }
+            matches.append((ny.parent.name, node_host, str(ny)))
+            if not found:
+                found = {
+                    "node_yaml": str(ny),
+                    "project_entry": project,
+                    "domain": domain,
+                    "host": node_host,
+                    "org": org,
+                    "node_configs_dir": node_configs_dir,
+                }
+                logger.info("[IMP:7][remove][find] Found project '%s' in: %s", name, ny)
+                logger.info(
+                    "[IMP:8][remove][find]   domain=%s host=%s org=%s",
+                    domain or "<none>",
+                    node_host or "<unknown>",
+                    org or "unknown",
+                )
         except (ImportError, ValueError, OSError) as exc:
             logger.info("[IMP:8][remove][find] Error reading %s: %s", ny, exc)
             continue
 
-    logger.info("[IMP:8][remove][find] Project '%s' not found in any node.yaml", name)
-    return {}  # контракт: {} if project not found (caller handles idempotent exit)
+    if not matches:
+        logger.info("[IMP:8][remove][find] Project '%s' not found in any node.yaml", name)
+        return {}  # контракт: {} if project not found (caller handles idempotent exit)
+
+    # Единое правило дизамбигуации (общее с project_lister): разные узлы → fail-fast.
+    ensure_same_node_or_raise(name, matches)
+    return found
 
 
 # endregion FUNC_find_project_in_node_yaml
@@ -473,11 +502,16 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     # ── Find project in node.yaml ──
-    project_info = find_project_in_node_yaml(
-        name=args.name,
-        projects_root=Path(args.projects_root),
-        node_filter=args.node_name,
-    )
+    try:
+        project_info = find_project_in_node_yaml(
+            name=args.name,
+            projects_root=Path(args.projects_root),
+            node_filter=args.node_name,
+        )
+    except ProjectAmbiguityError as exc:
+        logger.info("[IMP:10][remove][main] FAIL-FAST: project '%s' matches multiple nodes — NODE required", args.name)
+        print(str(exc))
+        return exc.exit_code
 
     if not project_info:
         logger.info(
