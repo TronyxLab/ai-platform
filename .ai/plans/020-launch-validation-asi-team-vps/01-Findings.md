@@ -78,15 +78,27 @@ $END_ARTIFACT_CONTRACT
   asi-team-vps — минимальный контекст (nginx + platform-secrets + logging + status-page):
   consumers 6 из 7 ключей (postgres/minio/hermes/monitoring) НЕ включены; AGE_SECRET_KEY —
   protected env-переменная (LIFECYCLE_PROTECTED), приходит из env, никогда не в enc.yaml
-  (курица-яйцо: им же шифруется enc.yaml). tронyx-vps enc.yaml тоже не содержит эти ключи
-  (его формат — nested data:, перешифрован основной моделью 2026-08-31 16:59).
-  Второй слой: `verify_required_sops_secrets` (helpers/secrets.py) — та же глобальная
-  проверка, сработает после fix decrypt (φ4 postcondition).
-- Фикс: module-aware fail-loud — учитывать enabled-модули node.yaml (consumers ∩ enabled).
+  (курица-яйцо: им же шифруется enc.yaml).
+- Фикс: module-aware fail-loud (consumers ∩ enabled-модули) + AGE_SECRET_KEY source sops→provisioner.
 - Статус: **fixed** (коммиты 96b42c3 + 9b8a6af)
 - Ре-верификация: `make secrets-unlock NODE=asi-team-vps` → exit 0 (module-aware: 4 enabled модуля,
-  SKIP fail-loud для 6 ключей невключённых модулей; AGE_SECRET_KEY source sops→provisioner);
-  `make check` → rc=0 ALL PASS. Coder-субагент: новый shared-резолвер
-  `core/internal/shared/enabled_modules.py` + модуль-aware в apply_ci_default_injection +
-  verify_required_sops_secrets + 4 новых unit-теста.
-- Evidence: `/tmp/secrets_unlock_B1_*.log`; grep secret-definitions.yaml (AGE_SECRET_KEY provisioner)
+  SKIP fail-loud для 6 ключей); `make check` → rc=0 ALL PASS.
+
+### F-02 · 2026-08-31 20:30 · фаза B · P0
+- Симптом: `make bootstrap-node NODE=asi-team-vps` exit 2. roadmap DEPLOYED+healthy, но nginx
+  deploy-hook FAILED → nginx в restart-loop: `cannot load certificate /etc/letsencrypt/live/asiteam.ru/fullchain.pem`.
+- Ожидалось / получено: φ7 certificates должна выпустить wildcard asiteam.ru + roadmap.asiteam.ru.
+  Получено: φ7 ложно «certificates provisioned» (лог), /etc/letsencrypt/live/ ПУСТ.
+- Гипотеза причины (двухслойная):
+  1. module-level pydantic-цепочка: node-lifecycle.sh запускает cli.py на системном python3 (3.12, без pydantic);
+     domains.py guarded-import context_deployer → deploy/__init__ → deploy_orchestrator:123
+     `from core.internal.llm import config_renderer` → llm/__init__ → policy_schema → pydantic
+     → ImportError на 3.12 → `extract_domains_for_context=None` заморожен на весь процесс.
+  2. ssl_provision_via_orchestrator при extract_domains_for_context=None возвращал [] доменов →
+     `if not domains: return "converged"` → φ7 ложный success (контракт skipped_import нарушен).
+- Фикс (коммит 379fd01): (A) ssl_provision_via_orchestrator проверяет extract_domains_for_context
+  is None → "skipped_import" (не converged); (B1) re-exec lifecycle на /usr/local/bin/python3 (3.14)
+  после φ1; (B2) lazy-import config_renderer в deploy_orchestrator (единственный pydantic-путь).
+  +5 unit-тестов (test_phase_certificates_contract, test_lifecycle_cli_w5).
+- Статус: fixed
+- Ре-верификация: make check rc=0 ALL PASS; check-manifests GREEN.
