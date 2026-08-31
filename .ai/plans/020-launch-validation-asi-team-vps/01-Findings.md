@@ -194,3 +194,24 @@ $END_ARTIFACT_CONTRACT
 - Статус: **fixed**
 - Ре-верификация: make check rc=0 ALL PASS (20/20 checks, contract 305, static_audit 5306);
   make check MARKER=check-manifests GREEN.
+
+### F-10 · 2026-09-01 01:40 · фаза G · P2
+- Симптом: `https://asiteam.ru/` (platform domain) → HTTP/2 PROTOCOL_ERROR (curl 000, RemoteDisconnected),
+  `https://roadmap.asiteam.ru/` → 200. web-сценарий load-test бьёт в `{domain}`=asiteam.ru → fail.
+- Ожидалось / получено: platform domain должен иметь default vhost. Получено: минимальный контекст
+  без платформенного default vhost (только login/roadmap subdomains) → nginx закрывает.
+- Гипотеза: конфигурация контекста. G3 load-smoke частично BLOCKED: locust отработал (с explicit
+  LOAD_ENDPOINT_WEB), но отчёт требует Prometheus (monitoring НЕ включён) → Prometheus недоступен.
+- Статус: P2 (не блокирует критерий). G2 chaos = BLOCKED (test-VPS недоступна + нет postgres/redis/
+  litellm/clickhouse). G3 load-smoke = BLOCKED (monitoring не включён). G5 test-node = BLOCKED (test-VPS).
+- Evidence: curl asiteam.ru → 000; curl roadmap.asiteam.ru → 200; load-test → Prometheus timed out
+
+## Итоги фаз G (resilience)
+
+| # | Действие | Результат |
+|---|----------|-----------|
+| G1 | Reboot → автоподъём → самолечение | ✅ 5/5 healthy, docker+platform-secrets active, autogen 11 секретов (F-03/F-04 фиксы подтверждены) |
+| G2 | Chaos drills | BLOCKED (test-VPS недоступна; минимальный контекст без postgres/redis/litellm/clickhouse) |
+| G3 | Load-smoke | BLOCKED (monitoring/Prometheus не включён) |
+| G4 | e2e-verify (HTTP+TLS sweep) | ✅ 2 endpoints green (roadmap 200, login 404 by-design) |
+| G5 | test-node (requires_node) | BLOCKED (test-VPS недоступна, §0a Q4) |
