@@ -14,6 +14,9 @@
 ## @rationale Отчёт фиксирует «правду момента»: TASK-7 требует живой ноды, её нет —
 ##            молчаливый пропуск хуже честного BLOCKED (анти-луп, R4).
 ## @changes  2026-08-31 · Plan 019 — создан
+## @changes  2026-08-31 · QA F-1/F-2/DRIFT-1/2 — правки: TASK-8 смоук-доказательство,
+##            отклонение №6 (ai-instructions --template gap), stale-ссылки 92009e1+67cd84e
+##            и 4e623c1→2419325 (фактический пин channel_pin.py)
 # endregion MODULE_CONTRACT
 
 # StatusReport — Plan 019: asi-group pilot integration
@@ -40,7 +43,7 @@
 | TASK-4: compose_service_contract.py + 3 L1-чека в verify_contracts.py + gate-тесты | ✅ done | `core/internal/shared/compose_service_contract.py` (RULE_* ×3, `ServiceContractInput`, `analyze_service_contracts`, `load_env_keys`, `load_provides` — реюс `compose_profiles.resolve_infra_path`); verify_contracts +3 L1 (contract_id=rule, KLASS_L1); gates: `test_gate_service_network_coverage` 4/4 + `test_gate_template_ai_project_networks` 1/1; регрессы: test_verify_contracts 50/50, test_on_project_deploy 20/20 |
 | TASK-5: K1-зеркало (compose-service-networks) | ✅ done | practices_manifest.yaml entry (L1, baseline, local/ci); handler `check_compose_service_networks` в checks/compose.py (делегирует в ЕДИНСТВЕННЫЙ анализатор — dual-consumer); реестр 18→19; `tests/unit/test_check_compose_networks.py` 4/4 (R5-негатив: точный инцидентный вход `${DATABASE_URL}`) |
 | TASK-6: verb parity-db | ✅ done | `core/internal/deploy/parity_db.py` (DI runner/resolve_host, ssh root@host → docker exec postgres psql, idempotent create/drop, DSN 1 строка stdout, пароль не в логах) + `core/entrypoints/parity-db.sh` + `makefiles/deploy.mk` target + generated-каскад (entrypoint-manifest allowed_verbs idx 42, glossary AGENTS.md:129, canon_table core/AGENTS.md:28) + `tests/unit/test_parity_db.py` 5/5 |
-| TASK-8: легализация template-ai-project в scaffold-канале | ✅ done | choices {frontend, backend, ai-project}; gen_ai_platform_yaml: monitoring-ветка ai-project + needs.database default=name; template-manifest entry (consumer честный); `tests/unit/test_scaffold_ai_project.py` 3/3; templates-check exit 0; регрессы test_project_scaffolder 13/13 |
+| TASK-8: легализация template-ai-project в scaffold-канале | ✅ done | choices {frontend, backend, ai-project}; gen_ai_platform_yaml: monitoring-ветка ai-project + needs.database default=name; template-manifest entry (consumer честный); `tests/unit/test_scaffold_ai_project.py` 3/3; templates-check exit 0; регрессы test_project_scaffolder 13/13; **E2E-смоук AC6 (QA F-2, 2026-08-31)**: `python3 -m core.internal.scaffold.project_scaffolder --name w7-smoke --template ai-project --projects-root <tmp> --node asi-team-vps` (CI_MODE=1, без --dry-run) → полный ai-platform.yaml (name=w7-smoke, needs.database=w7-smoke, monitoring metrics 8787/7d, quality=auto), compose 4 сети + DATABASE_URL=${PLATFORM_POSTGRES_DSN}, practices.lock (baseline/auto) + AI-PLATFORM.md + .env.platform (DSN w7-smoke_db); сгенерированный compose проходит shared-анализатор (0 violations, реальные SoT provides + env-ключи) — артефакты AC6 подтверждены; main() exit=1 на шаге 5b ai-instructions sync → Отклонение №6 |
 | TASK-7: редеплой пилотов на ноду | ⛔ BLOCKED | нода asi-team-vps **голая** (доказательства ниже); редеплой невозможен до bootstrap |
 
 ## ⛔ TASK-7 BLOCKED — доказательства (read-only SSH, 2026-08-31)
@@ -90,9 +93,9 @@ Unit docker.service could not be found.
 | `pre-commit run --all-files` | 23 Passed / 0 Failed |
 | `doxygen Doxyfile` | 0 warnings (DevPlan 097) |
 | `docker compose --env-file .env.platform config` (оба пилота) | валиден; DSN интерполирован |
-| Collateral: workflow-пины перепинены 4e623c1→14e560a (fix(018) изменил deploy-project.yml 2026-08-31; гейт test_gate_workflow_sha_pins) | Done |
+| Collateral: workflow-пины перепинены 4e623c1→2419325 (fix(018) W7 D5 изменил deploy-project.yml 2026-08-31; гейт test_gate_workflow_sha_pins) | Done |
 
-### Финальная верификация (после коммитов 92009e1 + e938260)
+### Финальная верификация (после коммитов 92009e1 + 67cd84e)
 
 | Проверка | Результат |
 |----------|-----------|
@@ -112,9 +115,19 @@ Unit docker.service could not be found.
    План-запись `database: true` — сокращение «флаг объявлен».
 3. **managers-bot compose service** переименован `asi-managers` → `managers-bot` (контракт
    U-37 service=project_name; без этого deploy managers-bot падал на pull/up). Image не менялся.
-4. **Точечный репин workflow-пинов** (collateral): pre-existing дрейф от fix(018), repair по
-   рецепту гейта.
+4. **Точечный репин workflow-пинов** (collateral): pre-existing дрейф от fix(018) W7
+   (4e623c1→2419325, фактический пин channel_pin.py), repair по рецепту гейта.
 5. TASK-7 — BLOCKED, не partial (факты выше).
+6. **E2E-смоук AC6 (QA F-2): main() exit=1 на шаге 5b** — `scaffold_instructions` (DevPlan 001
+   T5.2) гоняет `ai-instructions sync --template ai-project`, а компилятор (vendor/ai_instructions)
+   принимает ТОЛЬКО {all, backend, frontend} → «invalid choice: 'ai-project'». Все AC6-артефакты
+   (ai-platform.yaml, compose, practices.lock, AI-PLATFORM.md, .env.platform) сгенерированы ДО
+   этого шага и верифицированы (0 violations анализатора на сгенерированном compose) — канал
+   скаффолда легален, W7 T0 разблокирован на уровне артефактов. Полный exit 0 требует добавления
+   ai-project в choices `--template` компилятора (правильный фикс — vendor/ai_instructions или
+   passthrough-режим; вне скоупа 019, зафиксирован как debt). Смоук-попытка честно зафиксирована:
+   unit 3/3 + templates-check + smoke (артефакты) — цепочка scaffold→practices.lock→AI-PLATFORM.md
+   для ptype=ai-project впервые прогнана end-to-end.
 
 ## Выводы
 
