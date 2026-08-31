@@ -65,7 +65,7 @@ dev = [
     "python-dotenv>=1.0.0",  # только тесты (tests/_conftest/e2e.py, tests/test_env_contract.py) — dev extra (D4)
     "requests>=2.31.0",  # только тесты (tests/test_smoke_*) — dev extra (D4)
     "urllib3>=2.0",  # DevPlan 163 W-D: tests/test_smoke_nginx.py:435 импортирует напрямую (DEP003)
-    "ruff==0.16.2",  # DevPlan 163 M3: пин 0.16.2 (проверен: 0.16.2 существует, uv dry-run 2026-08-13)
+    "ruff==0.16.5",  # DevPlan 163 M3: пин 0.16.2 (проверен: 0.16.2 существует, uv dry-run 2026-08-13)
     "types-pyyaml>=6.0.12",
     "vulture>=2.16",  # DevPlan 163 W-D D4 (advisory dead-code, whitelist в static-пакете)
 ]
