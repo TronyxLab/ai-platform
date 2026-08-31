@@ -122,7 +122,15 @@ $END_ARTIFACT_CONTRACT
   strict-init). Полнота инвентаря корректна (нет bare off; tor.enabled:false — валидный bool).
 - Статус: NOTE (не баг; задокументировано)
 
-### F-06 · 2026-09-01 00:40 · фаза B · P2
+### F-09 · 2026-09-01 01:35 · фаза F · BLOCKED
+- Симптом: фаза F (DR бэкап/restore/RPO) неприменима к минимальному контексту asi-team-vps.
+- Ожидалось / получено: backup-cron (pg_dumpall→S3), restore round-trip, nightly RPO. Получено:
+  backup-cron модуль НЕ включён (node.yaml: nginx+secrets+logging+status-page), postgres НЕ включён
+  (нет pg_dumpall источника). Нет канала бэкапа.
+- Гипотеза: F1/F2/F4 = BLOCKED по конфигурации (минимальный контекст без postgres/backup-cron).
+  F3 (age-key-backup) — выполнен dry-run (sops encrypt OK, --no-upload).
+- Статус: **blocked** (конфигурация контекста; не инфраструктурный сбой). F3 ✅ dry-run.
+- Evidence: `grep backup-cron node.yaml` = 0; `make age-key-backup ARGS="--dry-run --no-upload"` exit 0
 - Симптом: converge R7 ложный drift-warning «1 named volume(s) missing: ['loki-data']»,
   хотя volume существует как `platform_loki-data` (docker volume ls).
 - Ожидалось / получено: R7 должен видеть volume. Получено: compose config отдаёт source
