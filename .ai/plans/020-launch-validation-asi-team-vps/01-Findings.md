@@ -83,5 +83,10 @@ $END_ARTIFACT_CONTRACT
   Второй слой: `verify_required_sops_secrets` (helpers/secrets.py) — та же глобальная
   проверка, сработает после fix decrypt (φ4 postcondition).
 - Фикс: module-aware fail-loud — учитывать enabled-модули node.yaml (consumers ∩ enabled).
-- Статус: in-progress
-- Evidence: `/tmp/secrets_unlock_*.log`; grep secret-definitions.yaml (7 ключей required+sops)
+- Статус: **fixed** (коммиты 96b42c3 + 9b8a6af)
+- Ре-верификация: `make secrets-unlock NODE=asi-team-vps` → exit 0 (module-aware: 4 enabled модуля,
+  SKIP fail-loud для 6 ключей невключённых модулей; AGE_SECRET_KEY source sops→provisioner);
+  `make check` → rc=0 ALL PASS. Coder-субагент: новый shared-резолвер
+  `core/internal/shared/enabled_modules.py` + модуль-aware в apply_ci_default_injection +
+  verify_required_sops_secrets + 4 новых unit-теста.
+- Evidence: `/tmp/secrets_unlock_B1_*.log`; grep secret-definitions.yaml (AGE_SECRET_KEY provisioner)
