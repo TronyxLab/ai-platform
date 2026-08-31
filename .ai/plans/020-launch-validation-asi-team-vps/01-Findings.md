@@ -98,6 +98,19 @@ $END_ARTIFACT_CONTRACT
 - Статус: fixed
 - Ре-верификация: make check rc=0; φ7 теперь реально выпускает wildcard asiteam.ru (SAN *.asiteam.ru).
 
+### F-06 · 2026-09-01 00:40 · фаза B · P2
+- Симптом: converge R7 ложный drift-warning «1 named volume(s) missing: ['loki-data']»,
+  хотя volume существует как `platform_loki-data` (docker volume ls).
+- Ожидалось / получено: R7 должен видеть volume. Получено: compose config отдаёт source
+  `loki-data` (без префикса), project name `platform` (auto-derive от директории, root compose
+  без `name:`), docker создал `platform_loki-data`. R7 `docker volume inspect loki-data` → not found.
+- Гипотеза причины: R7 (`converge/volumes.py`) не учитывает compose project name при inspect
+  named volumes. Влияние: ложный warn (converge done_with_warnings, non-fatal). Не блокирует критерий.
+- Фикс: R7 должен проверять volume с project-name префиксом (или использовать `docker compose
+  config` canonical name). Не блокирует bootstrap (non-fatal drift) — фикс опционален.
+- Статус: NOTE (P2, non-blocking; задокументировано для follow-up)
+- Evidence: `docker volume ls` → platform_loki-data; converge R7 warn loki-data
+
 ### F-05 · 2026-09-01 00:30 · фаза B/C · P2
 - Симптом: S3 SSL-кеш сертов падает: upload `InvalidAccessKeyId` (PutObject), HeadObject 403 Forbidden.
   Бакет `platform-asi-certs`, endpoint `https://s3.timeweb.cloud`, region `ru-1`.
