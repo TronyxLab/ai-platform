@@ -53,6 +53,8 @@
 ##   _build_compose_args [W:2] — build docker compose arg list from env-files, overlay, --profile
 ##   deploy_docker_module [W:5] — deploy single docker module: build (if build:) + compose up -d
 ##   _cleanup_stale_container [W:1] — hermes-agent stale container cleanup
+##   _read_init_services [W:1] — read declarative module.yaml#deploy.init_services (D8/P19)
+##   _recreate_init_services [W:2] — force-recreate one-shot init-сервисов после up -d (D8/P19)
 ##   main [W:2] — CLI entry point with argparse
 ## @usecases
 ##   - deploy-modules.sh → docker_orchestrator.py --action deploy --module-name postgres ...
@@ -332,7 +334,7 @@ def _handle_hermes_agent(compose_args: list[str], module_dir: str, module_name: 
 ##           DevPlan 119 E1: монолит (195 LOC, CC=25) разбит на фазы с dispatch-таблицей
 ##           PHASES (hermes → hermes_workflow, observability → observability.py, rebuild/up → локально).
 ##           Оркестратор: resolve compose → build args → dispatch спец-фаз → orphan reconcile →
-##           nginx overlay → rebuild → up.
+##           nginx overlay → rebuild → up → init-service force-recreate (D8/P19).
 ## @io       ⇥ module_name: str, overlay_dir: str | None, secrets_env_file: str | None,
 ##           platform_root: str | None, modules_dir: str | None
 ##           ⎋ bool: True if deploy succeeded
@@ -345,6 +347,9 @@ def _handle_hermes_agent(compose_args: list[str], module_dir: str, module_name: 
 ##   - Modules with build: section (except hermes-agent) get `docker compose build` before up -d
 ##     to pick up source changes from core-deploy rsync (docker compose up -d is no-op for
 ##     already-running containers with unchanged config)
+##   - One-shot init-сервисы (module.yaml#deploy.init_services) force-recreate ПОСЛЕ up -d (D8/P19):
+##     exited one-shot контейнер не пересоздаётся при изменении смонтированного шаблона — та же
+##     механика, что --force-recreate для build-модулей (stale generated-конфиг недопустим)
 ## @rationale Q: Why phase dispatch? A: E1 (DevPlan 119, AUDIT-2 M7) — deploy_docker_module CC=25,
 ##   13 if-веток. Разбиение по фазам + PHASES-таблица снижает CC до ≤10 и даёт изолированные
 ##   тесты фаз (test_phase_hermes_build / test_deploy_docker_module_phases_negative).
@@ -354,6 +359,9 @@ def _handle_hermes_agent(compose_args: list[str], module_dir: str, module_name: 
 ##            2026-08-14 · DevPlan 167 D3 — +orphan_reconciler_impl (DI-объект, 0 monkeypatch в тестах)
 ##            2026-08-26 · Plan 012 T8 (F-015a) — ensure_nginx_overlay_env: безусловный экспорт
 ##            NGINX_OVERLAY_DIR для любого модуля до первого compose-вызова
+##            2026-09-01 · D8/P19 — после up -d: force-recreate декларированных one-shot init-сервисов
+##            (module.yaml#deploy.init_services, monitoring: prometheus-config-init) с ТЕМ ЖЕ собранным
+##            env (compose_args) — exited init-контейнер не пересоздаётся при изменении шаблона
 def deploy_docker_module(
     module_name: str,
     overlay_dir: str | None = None,
@@ -443,12 +451,22 @@ def deploy_docker_module(
         return False
 
     # ── PHASE: compose up -d ──
-    return _phase_up(
+    up_ok = _phase_up(
         module_name=module_name,
         module_dir=module_dir,
         compose_args=compose_args,
         has_local_build=has_local_build,
     )
+    if not up_ok:
+        return False
+
+    # ── PHASE: init-service force-recreate (D8/P19) ──
+    # One-shot init-контейнеры (exited, restart:"no") НЕ пересоздаются `docker compose up -d` при
+    # изменении смонтированного шаблона → generated-конфиг (named volume) остаётся stale. Механика:
+    # декларативное deploy.init_services в module.yaml + force-recreate ПОСЛЕ up -d с ТЕМ ЖЕ
+    # собранным env (compose_args, B23) — ручной compose-вызов с ноды невозможен (интерполяция
+    # ${NGINX_OVERLAY_DIR:?}/секретов требует env-ассемблинга deploy_docker_module).
+    return _recreate_init_services(str(Path(module_dir) / module_name), compose_args)
 
 
 # endregion FUNC_deploy_docker_module
@@ -667,6 +685,98 @@ def _phase_up(
 
 
 # endregion FUNC__phase_up
+
+
+# region FUNC__read_init_services
+## @purpose  Read declarative deploy.init_services from module.yaml — one-shot init-сервисы модуля
+##           (D8/P19), которым нужен --force-recreate после compose up -d. Graceful-контракт:
+##           отсутствие module.yaml/поля/битый YAML → [] (механика не ломает модули без init-сервисов).
+## @io       ⇥ module_dir: str (директория модуля) → ⎋ list[str] (имена init-сервисов)
+## @complexity O(1) — один yaml.safe_load
+## @invariants
+##   - Поле: module.yaml#deploy.init_services (list[str]); отсутствует → [] (backward-compat)
+##   - Битый YAML → warning + [] (non-fatal — прежний деплой-путь сохраняется)
+##   - Не-str элементы списка отбрасываются (schema-валидация ловит на validate-modules)
+def _read_init_services(module_dir: str) -> list[str]:
+    module_yaml = Path(module_dir) / "module.yaml"
+    if not module_yaml.is_file():
+        return []
+    try:
+        data = yaml.safe_load(module_yaml.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError as exc:
+        logger.warning("[IMP:7][_read_init_services][yaml] Cannot parse %s: %s", module_yaml, exc)
+        return []
+    if not isinstance(data, dict):
+        return []
+    deploy_cfg = data.get("deploy")
+    if not isinstance(deploy_cfg, dict):
+        return []
+    init_services = deploy_cfg.get("init_services")
+    if not isinstance(init_services, list):
+        return []
+    services = [str(svc) for svc in init_services if isinstance(svc, str) and svc]
+    logger.info(
+        "[IMP:8][_read_init_services][found] %d init service(s) for %s: %s",
+        len(services),
+        Path(module_dir).name,
+        services,
+    )
+    return services
+
+
+# endregion FUNC__read_init_services
+
+
+# region FUNC__recreate_init_services
+## @purpose  Force-recreate one-shot init-сервисов модуля (D8/P19): ПОСЛЕ успешного compose up -d
+##           перезапускает декларированные init-сервисы с --force-recreate и ТЕМ ЖЕ собранным env
+##           (compose_args) — ручной compose-вызов с ноды невозможен (интерполяция
+##           ${NGINX_OVERLAY_DIR:?}/секретов требует env-ассемблинга deploy_docker_module, B23).
+##           Без force-recreate exited one-shot контейнер не пересоздаётся при изменении
+##           смонтированного шаблона → generated-конфиг (named volume) остаётся stale.
+## @io       ⇥ module_dir: str (директория модуля), compose_args: list[str] (собранный env)
+##           ⎋ bool: True если нет init-сервисов ИЛИ все force-recreate успешны
+## @complexity O(S) — S init-сервисов × docker compose up -d --force-recreate
+## @invariants
+##   - СТРОГО после _phase_up (только успешный деплой доходит до init-рекреации)
+##   - Переиспользует shared docker_compose_up (service+flags) — docker_sole_path соблюдён
+##   - Провал force-recreate → False (deploy FAILED) — stale config хуже деплой-ошибки
+##   - compose_args несёт --profile module (init-сервисы под профилем) + --env-file список
+def _recreate_init_services(module_dir: str, compose_args: list[str]) -> bool:
+    init_services = _read_init_services(module_dir)
+    if not init_services:
+        return True
+    # ⚠️ TRAP[BUG] · 2026-09-01 · P1 · one-shot init-контейнер не пересоздаётся при изменении шаблона
+    # · Symptom: prometheus-config-init (exited, restart:"no") — `docker compose up -d` НЕ пересоздаёт
+    # ·   exited one-shot контейнер при изменении смонтированного шаблона → generated prometheus.yml
+    # ·   (volume prometheus-config-gen) остаётся со СТАРЫМ шаблоном (static status-page job → вечный
+    # ·   DOWN-таргет; live-нода tronyx-vps, E2 валидация).
+    # · Root: P19-класс бага — конфиг-монтаж без --force-recreate; compose детектит изменение
+    # ·   конфига только для RUNNING контейнеров, exited one-shot не входит в up-diff.
+    # · Fix: декларативное deploy.init_services в module.yaml + generic force-recreate ПОСЛЕ up -d
+    # ·   с тем же собранным env (compose_args, B23) — ручной `compose up --force-recreate <init>`
+    # ·   с ноды падал на интерполяции (NGINX_OVERLAY_DIR/S3_ACCESS_KEY required, env собирает deploy).
+    # · Prevention: init-сервисы декларируются в module.yaml (deploy.init_services); рекреация —
+    # ·   часть deploy-пути docker-модулей; гейт restart-policies требует restart:"no" для init.
+    # · Rev: prometheus читает --config.file при СТАРТЕ (без --web.enable-lifecycle) — init-рекреация
+    # ·   гарантирует свежий generated-конфиг в volume; применение требует рестарта/пересоздания
+    # ·   самого prometheus (покрывается следующим up/restart циклом модуля или converge).
+    for svc in init_services:
+        logger.info("[IMP:8][_recreate_init_services][recreate] Force-recreating init service: %s", svc)
+        if not _shared_docker_compose_up(
+            module_dir,
+            timeout=COMPOSE_UP_TIMEOUT,
+            compose_args=compose_args,
+            service=svc,
+            flags=["--force-recreate"],
+        ):
+            logger.error("[IMP:10][_recreate_init_services][fail] Force-recreate failed for init service %s", svc)
+            return False
+        logger.info("[IMP:9][_recreate_init_services][done] Init service recreated: %s", svc)
+    return True
+
+
+# endregion FUNC__recreate_init_services
 
 
 # region PHASES_DISPATCH

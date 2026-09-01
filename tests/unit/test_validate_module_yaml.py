@@ -104,6 +104,18 @@ def tmp_schema(tmp_path: pathlib.Path) -> pathlib.Path:
                 },
             },
             "restart": {"type": "string", "enum": ["always", "unless-stopped", "no", "on-failure"]},
+            "deploy": {
+                "type": "object",
+                "properties": {
+                    "init_services": {
+                        "type": "array",
+                        "items": {"type": "string", "minLength": 1},
+                        "minItems": 1,
+                        "uniqueItems": True,
+                    }
+                },
+                "additionalProperties": False,
+            },
         },
         "additionalProperties": True,
     }
@@ -291,6 +303,54 @@ class TestValidateSchema:
         errors = validate_schema(module, tmp_schema)
         logger.info("[IMP:9][test] restart accepted: errors=%s", errors)
         assert not errors
+        assert _ldd_ok(caplog)
+
+    # 🧪 TRAP[TEST] · Regression · D8/P19 — deploy.init_services (one-shot init) — декларация валидна
+    # · Last fail: N/A (new schema field) · Remove if: deploy.init_services поле удалено из schema
+    def test_deploy_init_services_accepted(self, tmp_path, tmp_schema, caplog):
+        """deploy.init_services (list[str]) — валидно по D5 schema (D8/P19 one-shot init)."""
+        data = {
+            "name": "test",
+            "install_type": "docker",
+            "description": "test",
+            "deploy": {"init_services": ["prometheus-config-init"]},
+        }
+        module = load_module(_create_module(tmp_path, data))
+        errors = validate_schema(module, tmp_schema)
+        logger.info("[IMP:9][test] deploy.init_services accepted: errors=%s", errors)
+        assert not errors
+        assert _ldd_ok(caplog)
+
+    # 🧪 TRAP[TEST] · NEGATIVE (R5) · D8/P19 — deploy.init_services с не-str элементом → violation
+    # · Last fail: N/A (schema guard) · Remove if: init_services перестанет валидироваться как list[str]
+    def test_deploy_init_services_wrong_type_rejected(self, tmp_path, tmp_schema, caplog):
+        """deploy.init_services с не-string элементом → schema violation."""
+        data = {
+            "name": "test",
+            "install_type": "docker",
+            "description": "test",
+            "deploy": {"init_services": ["svc", 42]},
+        }
+        module = load_module(_create_module(tmp_path, data))
+        errors = validate_schema(module, tmp_schema)
+        logger.info("[IMP:9][test] wrong init_services type rejected: errors=%s", errors)
+        assert len(errors) >= 1
+        assert _ldd_ok(caplog)
+
+    # 🧪 TRAP[TEST] · NEGATIVE (R5) · D8/P19 — deploy с неизвестным ключом → violation
+    # · Last fail: N/A (schema guard) · Remove if: deploy перестанет быть closed-namespace
+    def test_deploy_unknown_key_rejected(self, tmp_path, tmp_schema, caplog):
+        """deploy с неизвестным ключом (additionalProperties: false) → schema violation."""
+        data = {
+            "name": "test",
+            "install_type": "docker",
+            "description": "test",
+            "deploy": {"init_services": ["svc"], "unknown_key": True},
+        }
+        module = load_module(_create_module(tmp_path, data))
+        errors = validate_schema(module, tmp_schema)
+        logger.info("[IMP:9][test] unknown deploy key rejected: errors=%s", errors)
+        assert len(errors) >= 1
         assert _ldd_ok(caplog)
 
 

@@ -113,6 +113,20 @@
     "hooks": {
       "type": "object",
       "description": "Lifecycle hooks (on_project_deploy, on_project_remove) — paths относительно module-dir"
+    },
+    "deploy": {
+      "type": "object",
+      "description": "Deploy-поведение модуля — generic-механика docker_orchestrator (D8/P19): один объект на модуль, отсутствие = legacy-деплой без init-рекреации.",
+      "properties": {
+        "init_services": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "One-shot init-сервисы модуля (restart: \"no\", condition: service_completed_successfully у зависимых): docker compose up -d НЕ пересоздаёт exited one-shot контейнер при изменении смонтированного шаблона → stale generated-конфиг (P19-класс). deploy_docker_module выполняет force-recreate после up -d с тем же собранным env."
+        }
+      },
+      "additionalProperties": false
     }
   },
   "$comment": "TRAP[DECISION] 2026-08-26: свойство systemd удалено из properties (AI-0030, DevPlan 17 T4.4) — инсталлер держит UNIT_NAME hardcode, RequiredBy живёт в .unit-файле; schema-обещание было мёртвым. Rejected: реализовать per-module systemd-конфиг (неиспользуемая поверхность). Rev: понадобится per-module systemd-конфиг — вернуть свойство + реализацию.",

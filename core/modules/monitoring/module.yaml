@@ -47,3 +47,12 @@ env_shared:
   NO_PROXY: "${NO_PROXY}"
   HTTP_PROXY: "${HTTP_PROXY}"
   HTTPS_PROXY: "${HTTPS_PROXY}"
+
+# D8/P19 (2026-09-01): prometheus-config-init — one-shot init (exited, restart:"no"); `docker compose
+# up -d` НЕ пересоздаёт его при изменении смонтированного шаблона prometheus.yml.tmpl → generated
+# prometheus.yml (volume prometheus-config-gen) остаётся stale (static status-page job → вечный
+# DOWN-таргет, E2 на tronyx-vps). deploy_docker_module выполняет force-recreate декларированных
+# init-сервисов ПОСЛЕ up -d с тем же собранным env (generic-механика, см. docker_orchestrator).
+deploy:
+  init_services:
+    - prometheus-config-init

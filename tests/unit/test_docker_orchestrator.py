@@ -1,6 +1,6 @@
 """
-# GREP_SUMMARY: test-docker-orchestrator, deploy-docker, pre-pull, image-check, wait-readiness, healthcheck, compose-up
-# STRUCTURE: ▶ mock subprocess.run → ◇ test_check_image_exists [found|not_found] → ◇ test_resolve_compose_file [found|missing] → ◇ test_deploy_docker_module [basic|hermes|orphan] → ◇ test_wait_for_readiness [pass|timeout] → ◇ test_run_healthcheck [pass|fail] → ◇ test_prunner_pull_images [skip-build|pull] → ◇ test_pre_pull_images [single] → ◇ test_deploy_docker_group [single] → ⎋ LDD trajectory assert
+# GREP_SUMMARY: test-docker-orchestrator, deploy-docker, pre-pull, image-check, wait-readiness, healthcheck, compose-up, init-services, force-recreate
+# STRUCTURE: ▶ mock subprocess.run → ◇ test_check_image_exists [found|not_found] → ◇ test_resolve_compose_file [found|missing] → ◇ test_deploy_docker_module [basic|hermes|orphan] → ◇ test_init_services [force-recreate|no-init|read] → ◇ test_wait_for_readiness [pass|timeout] → ◇ test_run_healthcheck [pass|fail] → ◇ test_prunner_pull_images [skip-build|pull] → ◇ test_pre_pull_images [single] → ◇ test_deploy_docker_group [single] → ⎋ LDD trajectory assert
 # region MODULE_CONTRACT
 ## @purpose  Unit tests for docker_orchestrator.py — mock subprocess.run for docker CLI calls
 ## @scope    Tests all public and internal functions except parallel forking paths (which
@@ -26,6 +26,7 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
+import yaml
 
 # ── System path for import ──
 sys.path.insert(
@@ -647,6 +648,100 @@ def test_pre_pull_images_single(mock_subprocess, module_dir):
 
 
 # endregion TEST_pre_pull_images
+
+
+# ────────────────────────────────────────────────────────────
+# region TEST_init_services (D8/P19: one-shot init force-recreate)
+# ────────────────────────────────────────────────────────────
+
+
+def _write_module_yaml(mod_dir: Path, init_services: list[str] | None) -> None:
+    """Write module.yaml with optional deploy.init_services (D8/P19 декларация).
+
+    ## @purpose — Минимальный module.yaml для deploy_docker_module-тестов: init_services=None
+    ##            → deploy-ключ отсутствует (legacy-модуль без init-рекреации).
+    ## @io — ⇥ mod_dir: Path (директория модуля), init_services: list[str] | None → ⎋ None
+    ## @complexity — O(1)
+    """
+    data = {"name": mod_dir.name, "install_type": "docker", "description": "test"}
+    if init_services is not None:
+        data["deploy"] = {"init_services": init_services}
+    (mod_dir / "module.yaml").write_text(yaml.dump(data), encoding="utf-8")
+
+
+# 🧪 TRAP[TEST] · Regression · D8/P19 — init-сервис force-recreate после up -d
+# · Last fail: tronyx-vps φ12 deploy-update — generated prometheus.yml stale (static status-page
+# ·   job → вечный DOWN-таргет); ручной compose up --force-recreate падал на интерполяции.
+# · Remove if: one-shot init-сервисы перестанут требовать force-recreate при изменении шаблона
+def test_deploy_docker_module_recreates_init_services(mock_subprocess, module_dir):
+    """deploy_docker_module force-recreates declarative init services after up -d (D8/P19)."""
+    _write_module_yaml(Path(module_dir) / "test_mod", ["prometheus-config-init"])
+
+    result = dorch.deploy_docker_module(module_name="test_mod", modules_dir=module_dir)
+
+    assert result is True
+    recreate_calls = [
+        c
+        for c in mock_subprocess.call_args_list
+        if isinstance(c.args[0], list)
+        and "up" in c.args[0]
+        and "-d" in c.args[0]
+        and "--force-recreate" in c.args[0]
+        and "prometheus-config-init" in c.args[0]
+    ]
+    assert len(recreate_calls) == 1, f"init force-recreate not found: {mock_subprocess.call_args_list}"
+    args = recreate_calls[0].args[0]
+    # Тот же собранный env (compose_args): --profile module для профилированного init-сервиса
+    assert "--profile" in args and "test_mod" in args
+    # docker compose ... up -d --force-recreate <init-service> — сервис последним аргументом
+    assert args[-1] == "prometheus-config-init"
+    logger.info("[IMP:9][test] init service force-recreate executed after up -d (D8/P19)")
+
+
+# 🧪 TRAP[TEST] · Regression · D8/P19 — модуль без init_services НЕ получает --force-recreate
+# · Last fail: N/A (guard — механизм не должен регрессировать остальные модули)
+# · Remove if: generic init-recreation механика удалена
+def test_deploy_docker_module_no_init_services_no_force_recreate(mock_subprocess, module_dir):
+    """Модуль без deploy.init_services (или без module.yaml) → 0 вызовов --force-recreate."""
+    result = dorch.deploy_docker_module(module_name="test_mod", modules_dir=module_dir)
+
+    assert result is True
+    force_calls = [
+        c for c in mock_subprocess.call_args_list if isinstance(c.args[0], list) and "--force-recreate" in c.args[0]
+    ]
+    assert len(force_calls) == 0, f"unexpected --force-recreate calls: {force_calls}"
+    logger.info("[IMP:9][test] module without init_services — no force-recreate (guard OK)")
+
+
+# 🧪 TRAP[TEST] · Regression · _read_init_services — декларативное чтение + graceful fallback
+# · Last fail: N/A (unit seam) · Remove if: _read_init_services удалена/переименована
+def test_read_init_services_graceful(tmp_path):
+    """_read_init_services: [svc] из module.yaml; [] при отсутствии/битом YAML/не-str элементах."""
+    mod_dir = tmp_path / "mod"
+    mod_dir.mkdir()
+
+    # Нет module.yaml → []
+    assert dorch._read_init_services(str(mod_dir)) == []
+
+    # Декларированные init-сервисы → list[str]
+    _write_module_yaml(mod_dir, ["svc-a", "svc-b"])
+    assert dorch._read_init_services(str(mod_dir)) == ["svc-a", "svc-b"]
+
+    # Без deploy-ключа → []
+    _write_module_yaml(mod_dir, None)
+    assert dorch._read_init_services(str(mod_dir)) == []
+
+    # Не-str элементы отбрасываются
+    _write_module_yaml(mod_dir, ["ok", 42])
+    assert dorch._read_init_services(str(mod_dir)) == ["ok"]
+
+    # Битый YAML → [] (non-fatal, прежний деплой-путь сохраняется)
+    (mod_dir / "module.yaml").write_text("::: not yaml :::\n", encoding="utf-8")
+    assert dorch._read_init_services(str(mod_dir)) == []
+    logger.info("[IMP:9][test] _read_init_services graceful fallback verified")
+
+
+# endregion TEST_init_services
 
 
 # ────────────────────────────────────────────────────────────
