@@ -141,6 +141,8 @@ def _sync_impl(args: argparse.Namespace) -> int:
         skipped,
     )
     return 0
+
+
 # endregion FUNC_sync_impl
 
 
@@ -155,6 +157,8 @@ def _cmd_sync(args: argparse.Namespace) -> int:
     except _CAUGHT as exc:
         logger.error("[IMP:10][SYNC][FAIL] %s: %s", type(exc).__name__, exc)
         return 1
+
+
 # endregion FUNC_cmd_sync
 
 
@@ -169,6 +173,8 @@ def _cmd_watch(args: argparse.Namespace) -> int:
     canon_dir = resolve_canon(config, args.canon_path, consumer_root)
     watch(config, consumer_root, canon_dir)
     return 0
+
+
 # endregion FUNC_cmd_watch
 
 
@@ -189,6 +195,8 @@ def _cmd_pack(args: argparse.Namespace) -> int:
         logger.warning("[IMP:5][PACK][WARN] %s", w)
     pack(config, effective, canon_version, Path(args.out))
     return 0
+
+
 # endregion FUNC_cmd_pack
 
 
@@ -203,6 +211,8 @@ def _cmd_check(args: argparse.Namespace) -> int:
     for message in messages:
         logger.error("[IMP:7][CHECK][DRIFT] %s", message)
     return 0 if ok else 1
+
+
 # endregion FUNC_cmd_check
 
 
@@ -233,7 +243,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_sync = sub.add_parser("sync", parents=[common], help="compile canon + consumer .ai into .kilo/ outputs")
     p_sync.add_argument("--project-dir", default=None, help="operate on a project directory (project mode)")
-    p_sync.add_argument("--template", choices=["all", "backend", "frontend"], default=None)
+    p_sync.add_argument("--template", choices=["all", "backend", "frontend", "ai-project"], default=None)
     p_sync.add_argument("--no-hermes", action="store_true", help="disable hermes profile emission")
 
     sub.add_parser("watch", parents=[common], help="watch canon + consumer trees and rebuild on change")
@@ -274,4 +284,6 @@ def main(argv: list[str] | None = None) -> int:
         logger.error("[IMP:10][CLI][FAIL] %s: %s", type(exc).__name__, exc)
         return 1
     return 0
+
+
 # endregion FUNC_main

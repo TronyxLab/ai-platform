@@ -11,7 +11,7 @@
 ##   - Повторный прогон на неизменённом дереве — no-op (детерминизм, hash-сверка lock)
 ##   - CANON_PATH=<dir> — dev-оверрайд резолва канона (локальное дерево вместо pin-cache/clone)
 ##   - PROJECT=<dir> — проектный режим: эмиссия в <dir>/.kilo, hermes выключен,
-##     TEMPLATE=all|backend|frontend — фильтр наследования по @language/@stack
+##     TEMPLATE=all|backend|frontend|ai-project — фильтр наследования по @language/@stack
 ## @rationale Регистрация глагола в entrypoint-manifest (namelint/allowed_verbs) —
 ##   единый фасад make (инвариант 1); тонкий фасад над Python CLI (языковая политика)
 # endregion MODULE_CONTRACT
@@ -20,7 +20,7 @@
 # Пересборка инструкций: канон + .ai/ потребителя → .kilo/ + hermes platform-профиль
 # + ai-instructions.lock. Параметры:
 #   PROJECT=<dir>   проектный режим (эмиссия в <dir>/.kilo/, hermes off)
-#   TEMPLATE=...    all|backend|frontend — фильтр наследования (с PROJECT)
+#   TEMPLATE=...    all|backend|frontend|ai-project — фильтр наследования (с PROJECT)
 #   CANON_PATH=<dir> dev-оверрайд локального дерева канона
 .PHONY: ai-instructions-sync
 ai-instructions-sync:

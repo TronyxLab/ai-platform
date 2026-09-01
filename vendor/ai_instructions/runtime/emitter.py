@@ -86,18 +86,23 @@ def _filter_entries(
     project_mode: bool,
     template: str | None,
 ) -> dict[str, Entry]:
-    """Apply project-mode template filtering (backend/frontend); identity otherwise."""
+    """Apply project-mode template filtering (backend/frontend/ai-project); identity otherwise."""
+    # 🧐 TRAP[DECISION] · 2026-09-01 · — · ai-project filter = @language: typescript (без react)
+    # · Rejected: passthrough-режим (ai-project → "all"/identity, фильтрации нет) — вариант
+    #   из StatusReport 019 §Отклонение №6 · Reason: ai-project — TypeScript/Node.js-бот
+    #   (kernel @ai-project/*), паритет practices LANGUAGE_FOR_TYPE (frontend → typescript+react;
+    #   ai-project → typescript, react-стек-требование не нужен) · Rev: канон заведёт
+    #   @language/@stack директивы для ai-project — сверить фильтр с фактическими директивами
     if not project_mode or template is None or template == "all":
         return dict(effective)
     out: dict[str, Entry] = {}
     for eid, entry in effective.items():
         d = entry.directives
         has_ls = "language" in d or "stack" in d
-        if template == "backend":
-            if has_ls and d.get("language") != "python":
-                continue
-        elif (
-            template == "frontend" and has_ls and not (d.get("stack") == "react" and d.get("language") == "typescript")
+        if has_ls and (
+            (template == "backend" and d.get("language") != "python")
+            or (template == "frontend" and not (d.get("stack") == "react" and d.get("language") == "typescript"))
+            or (template == "ai-project" and d.get("language") != "typescript")
         ):
             continue
         out[eid] = entry

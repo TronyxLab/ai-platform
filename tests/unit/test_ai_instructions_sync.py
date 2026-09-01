@@ -101,6 +101,17 @@ def _write_canon(root: Path) -> Path:
         "# React rule\n",
         encoding="utf-8",
     )
+    (rules / "typescript-rule.md").write_text(
+        "# region MODULE_CONTRACT\n"
+        "## @purpose  TypeScript backend/bot rule (ai-project, без react)\n"
+        "## @scope    ai-project\n"
+        "## @invariants\n"
+        "##   - @protected  true\n"
+        "##   - @language typescript\n"
+        "# endregion MODULE_CONTRACT\n\n"
+        "# TypeScript rule\n",
+        encoding="utf-8",
+    )
     roles = root / "roles"
     (roles / "coder" / "role.md").parent.mkdir(parents=True)
     (roles / "coder" / "role.md").write_text(
@@ -288,6 +299,46 @@ def test_project_filter_language_stack(tmp_path, monkeypatch, caplog):
 
 
 # endregion TEST_project_filter
+
+
+# region TEST_project_filter_ai_project
+def test_project_filter_ai_project(tmp_path, monkeypatch, caplog):
+    # 🧪 TRAP[TEST] · Regression: Отклонение №6 (019) — ai-project фильтр · Scenario:
+    # --template ai-project включает @language typescript (вкл. react+typescript) и без-директив
+    # правила, исключает @language python · Last fail: N/A — choices {all, backend, frontend}
+    # физически отвергал ai-project («invalid choice») · Remove if: ai-project-фильтр семантика
+    # меняется (TRAP[DECISION] в vendor emitter._filter_entries)
+    caplog.set_level(logging.INFO, logger="ai_instructions")
+    from ai_instructions.runtime.cli import main as cli_main
+
+    canon = _write_canon(tmp_path / "canon")
+    project = tmp_path / "project"
+    monkeypatch.chdir(tmp_path)
+    pins = _make_pins(tmp_path)
+    rc = cli_main([
+        "sync",
+        "--canon-path",
+        str(canon),
+        "--config",
+        str(pins),
+        "--project-dir",
+        str(project),
+        "--template",
+        "ai-project",
+    ])
+    found = _print_ldd(caplog, "SYNC")
+    assert rc == 0
+    assert found
+    rules = {p.name for p in (project / ".kilo" / "rules").glob("*.md")}
+    assert "typescript-rule.md" in rules, "ai-project: @language typescript включён"
+    assert "react-rule.md" in rules, "ai-project: react+typescript (@language typescript) включён"
+    assert "python-rule.md" not in rules, "ai-project: @language python исключён"
+    assert "constitution.md" in rules, "без директив — включён всегда"
+    assert "fail-fast.md" in rules
+    assert (project / ".kilo" / "skills" / "superposition" / "SKILL.md").is_file()
+
+
+# endregion TEST_project_filter_ai_project
 
 
 # region TEST_manage_config
