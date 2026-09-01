@@ -43,7 +43,11 @@ while [[ $# -gt 0 ]]; do case "$1" in
     -*) echo "[IMP:10][node-lifecycle][args] ERROR: Unknown: $1" >&2; exit 1 ;;
     *) break ;;
 esac; done
-[[ -z "${AGE_SECRET_KEY:-}" && -n "${SOPS_AGE_KEY:-}" ]] && export AGE_SECRET_KEY="$SOPS_AGE_KEY" && echo "[IMP:8][node-lifecycle][args] AGE_SECRET_KEY from SOPS_AGE_KEY" >&2
+ [[ -z "${AGE_SECRET_KEY:-}" && -n "${SOPS_AGE_KEY:-}" ]] && export AGE_SECRET_KEY="$SOPS_AGE_KEY" && echo "[IMP:8][node-lifecycle][args] AGE_SECRET_KEY from SOPS_AGE_KEY" >&2
+# φ4-диагностика (022-launch-validation): digest AGE-ключа на входе node-lifecycle (НЕ содержимое).
+if [ -n "${AGE_SECRET_KEY:-}" ]; then
+    printf '%s' "${AGE_SECRET_KEY}" | shasum -a 256 2>/dev/null | { read -r _d _; echo "[IMP:8][node-lifecycle][diag] shell-entry AGE_SECRET_KEY len=${#AGE_SECRET_KEY} sha256=${_d:0:16}" >&2; }
+fi
 source "${SCRIPT_DIR}/../../lib/paths.sh"; CORE_DIR="${PATHS_CORE_DIR}"
 source "${CORE_DIR}/lib/logging.sh"; source "${CORE_DIR}/lib/secrets.sh"
 # 117 D16: step_start/step_done/step_skip/step_warn мёртвые — удалены (secrets.sh имеет stub с guard declare -f)
