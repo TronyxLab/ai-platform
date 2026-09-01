@@ -1,10 +1,11 @@
-# GREP_SUMMARY: test context_initializer scaffold context hermes-agent node-configs skeleton idempotent registration
-# STRUCTURE: ┌fixture setup┐ → ○ 8 tests → ⊕ LDD trajectory (IMP:9) → ⚡ anti-loop counter
+# GREP_SUMMARY: test context_initializer scaffold context overlay platform node-configs skeleton idempotent registration
+# STRUCTURE: ┌fixture setup┐ → ○ 11 tests (nested layout + single overlay repo) → ⊕ LDD trajectory (IMP:9) → ⚡ anti-loop counter
 # region MODULE_CONTRACT
-## @purpose  Unit-тесты context_initializer.py: создание директорий, skeleton node.yaml,
-##           идемпотентность, graceful degradation при отсутствии org, регистрация в platform node.yaml.
-##           LDD IMP:9 + Anti-Loop + R1-R5.
-## @scope    Tests under tests/ (unit, no Docker). DI over Mocks для gh subprocess и context_registry.
+## @purpose  Unit-тесты context_initializer.py: вложенный overlay-layout (platform/{node-configs,
+##           modules/hermes-agent,projects} — DevPlan 022 TASK-2), skeleton node.yaml с repos.core,
+##           один GitHub overlay-репо (<org>/<ctx>-overlay), идемпотентность, graceful degradation
+##           при отсутствии gh, регистрация в platform node.yaml. LDD IMP:9 + Anti-Loop + R1-R5.
+## @scope    Tests under tests/ (unit, no Docker). DI over Mocks для gh/git subprocess и context_registry.
 ## @invariants
 ##   - Все тесты используют tmp_path (R1: No hardcoded paths)
 ##   - gh_runner и git_runner внедряются как callable (DI)
@@ -12,7 +13,9 @@
 ##     test_register_in_platform_yaml — реальный путь записи в YAML + idempotency)
 ##   - Все тесты с @ldd_trajectory декоратором
 ##   - R1-R5 compliance
-## @rationale AC4: 5 unit-тестов на context_initializer.py согласно DevPlan 092 §4.
+##   - DevPlan 022 TASK-2: сестринские hermes-agent/ + node-configs/ НЕ создаются;
+##     ровно один gh repo create <ctx>-overlay; skeleton repos.core = overlay URL
+## @rationale AC2 (DevPlan 022): new-context порождает вложенную структуру + один overlay-репо.
 ## ⚠️ TRAP[DECISION] · 2026-07-31 · MED · Дедупликация: unit-версия тестов удалена (import file mismatch)
 ## · Rejected: оставить tests/unit/test_context_initializer.py (риск: pytest import file mismatch —
 ##   одинаковый basename с tests/test_context_initializer.py ломает collection всего сьюта)
@@ -21,6 +24,8 @@
 ## · Rev: если unit-директория вернётся к полному покрытию — ресинхронизировать inventory.
 ## @changes 2026-07-31 · DevPlan 092 AC4 — initial implementation
 ## @changes 2026-07-31 · Dedup fix — test_register_in_platform_yaml перенесён из tests/unit/
+## @changes 2026-09-01 · DevPlan 022 TASK-2 — nested layout, один overlay-репо, skeleton repos.core,
+##           main() glob-резолв */platform/node-configs/<node>/node.yaml
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -40,35 +45,61 @@ from core.internal.scaffold.context_initializer import (
     create_dirs,
     create_skeleton_node_yaml,
     gh_repo_create,
+    main,
     register_in_platform_yaml,
+    report_summary,
     validate_name,
 )
 
 
 @ldd_trajectory
-def test_create_dirs(tmp_path: pathlib.Path, caplog) -> None:
+def test_create_dirs_nested_layout(tmp_path: pathlib.Path, caplog) -> None:
+    """DevPlan 022 TASK-2: вложенный overlay-layout вместо сестринских каталогов.
+
+    ## @purpose — AC2: create_dirs создаёт platform/{node-configs,modules/hermes-agent,projects};
+    ##            сестринские hermes-agent/ и node-configs/ НЕ создаются.
+    ## @io — ⇥ tmp_path, caplog → ⎋ None (asserts)
+    """
     context_dir = tmp_path / "test-context"
-    logger.info("[IMP:9][test][context] test_create_dirs — creating %s", context_dir)
+    logger.info("[IMP:9][test][context] test_create_dirs_nested_layout — creating %s", context_dir)
     create_dirs(context_dir)
     assert context_dir.exists(), f"Context dir not created: {context_dir}"
-    assert (context_dir / "hermes-agent").exists(), "hermes-agent/ not created"
-    assert (context_dir / "node-configs").exists(), "node-configs/ not created"
-    assert (context_dir / "hermes-agent").is_dir(), "hermes-agent/ is not a directory"
-    assert (context_dir / "node-configs").is_dir(), "node-configs/ is not a directory"
+    assert (context_dir / "platform" / "node-configs").exists(), "platform/node-configs/ not created"
+    assert (context_dir / "platform" / "modules" / "hermes-agent").exists(), (
+        "platform/modules/hermes-agent/ not created"
+    )
+    assert (context_dir / "platform" / "projects").exists(), "platform/projects/ not created"
+    assert (context_dir / "platform" / "node-configs").is_dir(), "platform/node-configs/ is not a directory"
+    assert (context_dir / "platform" / "modules" / "hermes-agent").is_dir(), (
+        "platform/modules/hermes-agent/ is not a directory"
+    )
+    # Negative (R5): сестринский legacy-layout не создаётся
+    assert not (context_dir / "hermes-agent").exists(), "sibling hermes-agent/ must NOT be created"
+    assert not (context_dir / "node-configs").exists(), "sibling node-configs/ must NOT be created"
 
 
 @ldd_trajectory
-def test_create_skeleton_node_yaml(tmp_path: pathlib.Path, caplog) -> None:
-    skeleton_path = tmp_path / "node-configs" / "tronyx-vps" / "node.yaml"
+def test_create_skeleton_node_yaml_nested_path(tmp_path: pathlib.Path, caplog) -> None:
+    """DevPlan 022 TASK-2: skeleton в platform/node-configs/<node>/node.yaml + repos.core = overlay.
+
+    ## @purpose — AC2: шаблон содержит секцию repos.core → <org>/<ctx>-overlay.git.
+    ## @io — ⇥ tmp_path, caplog → ⎋ None (asserts)
+    """
+    skeleton_path = tmp_path / "platform" / "node-configs" / "tronyx-vps" / "node.yaml"
     context_name = "test-ctx"
-    logger.info("[IMP:9][test][context] test_create_skeleton_node_yaml — %s", skeleton_path)
-    create_skeleton_node_yaml(skeleton_path, context_name)
+    logger.info("[IMP:9][test][context] test_create_skeleton_node_yaml_nested_path — %s", skeleton_path)
+    create_skeleton_node_yaml(skeleton_path, context_name, "test-org")
     assert skeleton_path.exists(), f"Skeleton node.yaml not created: {skeleton_path}"
     content = skeleton_path.read_text()
     assert "GREP_SUMMARY:" in content, "Missing GREP_SUMMARY in skeleton"
     assert "STRUCTURE:" in content, "Missing STRUCTURE in skeleton"
     # contexts[] canon (DevPlan 116 B6 T1.4): `context:` поле заменено на contexts:[0].name
     assert f"contexts:\n  - name: {context_name}" in content, f"Missing 'contexts[0].name: {context_name}' in skeleton"
+    # DevPlan 022 TASK-2: repos.core = единственный overlay-репо контекста
+    assert "repos:" in content, "Missing 'repos:' section in skeleton"
+    assert f"core: https://github.com/test-org/{context_name}-overlay.git" in content, (
+        f"Missing repos.core overlay URL for '{context_name}' in skeleton"
+    )
     assert "node:" in content, "Missing 'node:' section"
     assert "modules:" in content, "Missing 'modules:' section"
     assert "projects:" in content, "Missing 'projects:' section"
@@ -86,20 +117,20 @@ def test_existing_context_idempotent(tmp_path: pathlib.Path, caplog) -> None:
 
 
 @ldd_trajectory
-def test_gh_repo_create_mocked(tmp_path: pathlib.Path, caplog) -> None:
+def test_gh_repo_create_gh_not_found(tmp_path: pathlib.Path, caplog) -> None:
     def gh_not_found(cmd: list[str]) -> tuple[int, str, str]:
         return -1, "", "gh: command not found"
 
-    logger.info("[IMP:9][test][context] test_gh_repo_create_mocked — gh not found")
-    node_repo, agent_repo, warnings = gh_repo_create(
+    logger.info("[IMP:9][test][context] test_gh_repo_create_gh_not_found — gh not found")
+    overlay_repo, reserved, warnings = gh_repo_create(
         org="test-org",
         ctx="test-ctx",
         skip=False,
         context_dir=tmp_path,
         gh_runner=gh_not_found,
     )
-    assert node_repo is None, f"Expected None node_repo, got {node_repo}"
-    assert agent_repo is None, f"Expected None agent_repo, got {agent_repo}"
+    assert overlay_repo is None, f"Expected None overlay_repo, got {overlay_repo}"
+    assert reserved is None, f"Expected None reserved slot, got {reserved}"
     assert warnings >= 1, f"Expected at least 1 warning, got {warnings}"
 
 
@@ -112,7 +143,7 @@ def test_gh_repo_create_skip_flag(tmp_path: pathlib.Path, caplog) -> None:
         return 0, "ok", ""
 
     logger.info("[IMP:9][test][context] test_gh_repo_create_skip_flag — skip")
-    node_repo, agent_repo, warnings = gh_repo_create(
+    overlay_repo, reserved, warnings = gh_repo_create(
         org="test-org",
         ctx="test-ctx",
         skip=True,
@@ -120,9 +151,56 @@ def test_gh_repo_create_skip_flag(tmp_path: pathlib.Path, caplog) -> None:
         gh_runner=counting_gh_runner,
     )
     assert call_count[0] == 0, f"gh_runner called {call_count[0]} times despite skip=True"
-    assert node_repo is None
-    assert agent_repo is None
+    assert overlay_repo is None
+    assert reserved is None
     assert warnings == 0, f"Expected 0 warnings with skip, got {warnings}"
+
+
+@ldd_trajectory
+def test_gh_repo_create_single_overlay_repo(tmp_path: pathlib.Path, caplog) -> None:
+    """DevPlan 022 TASK-2: РОВНО ОДИН gh repo create <ctx>-overlay; git push — на platform/.
+
+    ## @purpose — AC2/D3: один приватный overlay-репо вместо двух сестринских;
+    ##            _git_init_and_push выполняется на context_dir/platform; return (repo, None, warnings).
+    ## @io — ⇥ tmp_path, caplog → ⎋ None (asserts)
+    """
+    context_dir = tmp_path / "test-ctx"
+    gh_cmds: list[list[str]] = []
+    git_cmds: list[tuple[list[str], str]] = []
+
+    def fake_gh(cmd: list[str]) -> tuple[int, str, str]:
+        gh_cmds.append(cmd)
+        return 0, "ok", ""
+
+    def fake_git(cmd: list[str], cwd: pathlib.Path) -> tuple[int, str, str]:
+        git_cmds.append((cmd, str(cwd)))
+        return 0, "ok", ""
+
+    logger.info("[IMP:9][test][context] test_gh_repo_create_single_overlay_repo — one overlay repo")
+    overlay_repo, reserved, warnings = gh_repo_create(
+        org="test-org",
+        ctx="test-ctx",
+        skip=False,
+        context_dir=context_dir,
+        gh_runner=fake_gh,
+        git_runner=fake_git,
+    )
+
+    create_cmds = [c for c in gh_cmds if c[:3] == ["gh", "repo", "create"]]
+    assert len(create_cmds) == 1, f"Expected exactly 1 'gh repo create', got {len(create_cmds)}: {create_cmds}"
+    assert create_cmds[0][3] == "test-org/test-ctx-overlay", f"Wrong repo slug: {create_cmds[0][3]}"
+    assert "--private" in create_cmds[0], "Overlay repo must be private"
+    assert "Context overlay for 'test-ctx'" in create_cmds[0], "Missing overlay description"
+    assert overlay_repo == "test-org/test-ctx-overlay"
+    assert reserved is None, "Reserved slot (legacy hermes_agent_repo) must be None"
+    assert warnings == 0, f"Expected 0 warnings, got {warnings}"
+
+    # Git init+push — на ВЕСЬ overlay (context_dir/platform), не на сестринские каталоги
+    assert git_cmds, "Expected git init+push calls on platform/"
+    git_dirs = {cwd for _, cwd in git_cmds}
+    assert git_dirs == {str(context_dir / "platform")}, f"git must run only on platform/, got {git_dirs}"
+    push_cmds = [c for c, _ in git_cmds if c[:2] == ["git", "push"]]
+    assert len(push_cmds) == 1, f"Expected exactly 1 git push, got {len(push_cmds)}"
 
 
 @ldd_trajectory
@@ -204,6 +282,103 @@ def test_register_in_platform_yaml(tmp_path: pathlib.Path, caplog) -> None:
     assert rc2 == 0, f"Expected idempotent register rc 0, got {rc2}"
     data2 = yaml.safe_load(platform_yaml.read_text())
     assert len(data2.get("contexts", [])) == 1, "Re-register must not duplicate the context entry"
+
+
+@ldd_trajectory
+def test_report_summary_nested_paths(tmp_path: pathlib.Path, caplog, capsys) -> None:
+    """DevPlan 022 TASK-2: summary печатает вложенные platform/...-пути.
+
+    ## @purpose — AC2: печатаемые пути отражают канонический nested layout.
+    ## @io — ⇥ tmp_path, caplog, capsys → ⎋ None (asserts)
+    """
+    context_dir = tmp_path / "test-ctx"
+    logger.info("[IMP:9][test][context] test_report_summary_nested_paths")
+    report_summary(
+        ctx_name="test-ctx",
+        context_dir=context_dir,
+        warnings=0,
+        platform_yaml="/tmp/platform-node.yaml",
+        node_cfg_repo="test-org/test-ctx-overlay",
+        hermes_agent_repo=None,
+        node="tronyx-vps",
+    )
+    out = capsys.readouterr().out
+    assert f"{context_dir}/platform/" in out, "Missing platform/ path in summary"
+    assert f"{context_dir}/platform/node-configs/" in out, "Missing platform/node-configs/ path in summary"
+    assert f"{context_dir}/platform/modules/hermes-agent/" in out, (
+        "Missing platform/modules/hermes-agent/ path in summary"
+    )
+    assert f"{context_dir}/platform/projects/" in out, "Missing platform/projects/ path in summary"
+    assert f"{context_dir}/platform/node-configs/tronyx-vps/node.yaml (skeleton)" in out, (
+        "Missing nested skeleton path in summary"
+    )
+    assert "test-org/test-ctx-overlay" in out, "Missing overlay repo in summary"
+    # Negative (R5): сестринские legacy-пути не печатаются
+    assert f"{context_dir}/hermes-agent/" not in out.replace(f"{context_dir}/platform/modules/hermes-agent/", ""), (
+        "Legacy sibling hermes-agent/ path must not be printed"
+    )
+    assert f"{context_dir}/node-configs/" not in out.replace(f"{context_dir}/platform/node-configs/", "").replace(
+        f"{context_dir}/platform/node-configs/tronyx-vps/node.yaml (skeleton)", ""
+    ), "Legacy sibling node-configs/ path must not be printed"
+
+
+@ldd_trajectory
+def test_main_resolves_platform_node_yaml_nested(tmp_path: pathlib.Path, caplog) -> None:
+    """DevPlan 022 TASK-2: main() резолвит platform node.yaml по новому glob.
+
+    ## @purpose — AC2: search_dirs находит */platform/node-configs/<node>/node.yaml;
+    ##            регистрация идёт в СУЩЕСТВУЮЩИЙ overlay node.yaml (свежий skeleton
+    ##            не затирает — TRAP[DECISION] preference overlay > fixture > skeleton).
+    ##            Падал бы на старом коде: старый glob */node-configs/<node>/node.yaml
+    ##            не видит вложенный путь → «Could not resolve platform node.yaml» (rc 1).
+    ## @io — ⇥ tmp_path, caplog → ⎋ None (asserts)
+    """
+    projects_dir = tmp_path / "projects"
+    existing_yaml = projects_dir / "ctx-a" / "platform" / "node-configs" / "test-node" / "node.yaml"
+    existing_yaml.parent.mkdir(parents=True)
+    existing_yaml.write_text(
+        yaml.dump(
+            {"node": {"name": "test-node", "host": "127.0.0.1"}, "contexts": [], "modules": [], "projects": []},
+            default_flow_style=False,
+            sort_keys=False,
+        )
+    )
+
+    logger.info("[IMP:9][test][context] test_main_resolves_platform_node_yaml_nested — full main() flow")
+    rc = main([
+        "new-ctx",
+        "--projects-dir",
+        str(projects_dir),
+        "--node",
+        "test-node",
+        "--org",
+        "test-org",
+        "--skip-gh-repo",
+    ])
+    assert rc == 0, f"Expected main() rc 0, got {rc}"
+
+    # Skeleton создан по вложенному пути с repos.core = overlay URL
+    skeleton = projects_dir / "new-ctx" / "platform" / "node-configs" / "test-node" / "node.yaml"
+    assert skeleton.exists(), f"Skeleton not created at nested path: {skeleton}"
+    skeleton_content = skeleton.read_text()
+    assert "core: https://github.com/test-org/new-ctx-overlay.git" in skeleton_content, (
+        "Skeleton repos.core must point to overlay repo"
+    )
+
+    # Регистрация — в СУЩЕСТВУЮЩИЙ overlay node.yaml (не в свежий skeleton)
+    data = yaml.safe_load(existing_yaml.read_text())
+    contexts = data.get("contexts", [])
+    names = [c.get("name") for c in contexts]
+    assert "new-ctx" in names, f"new-ctx must be registered in existing overlay node.yaml, got {names}"
+    entry = next(c for c in contexts if c.get("name") == "new-ctx")
+    # NodeYaml.add_context контракт: пустая строка → ключ не пишется (None при чтении)
+    assert not entry.get("node_configs_repo"), "Expected no node_configs_repo with --skip-gh-repo"
+
+    # Свежий skeleton остался нетронутым (регистрация не перезаписала его contexts[])
+    skeleton_data = yaml.safe_load(skeleton_content)
+    assert [c.get("name") for c in skeleton_data.get("contexts", [])] == ["new-ctx"], (
+        "Skeleton contexts[] must keep only its own context"
+    )
 
 
 # GUARD-PRESERVE (168): единственное покрытие validate_name (fail-fast ConfigValidationError exit 4 на невалидном имени) — negative-ветка без позитивной пары в файле

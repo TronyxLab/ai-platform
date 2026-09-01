@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: context_initializer scaffold context hermes-agent node-configs gh-repo registration idempotent skeleton
-# STRUCTURE: ▶ validate_name → ⚡ check_idempotent ─┬─ create_dirs ─┬─ create_skeleton_node_yaml ── gh_repo_create ── register_in_platform_yaml ── report_summary
+# GREP_SUMMARY: context_initializer scaffold context overlay platform node-configs gh-repo registration idempotent skeleton
+# STRUCTURE: ▶ validate_name → ⚡ check_idempotent ─┬─ create_dirs(platform/{node-configs,modules/hermes-agent,projects}) ─┬─ create_skeleton_node_yaml ── gh_repo_create(<ctx>-overlay) ── register_in_platform_yaml ── report_summary
 # region MODULE_CONTRACT
 ## @purpose  Python Strangler-Fig migration of context-init.sh (364 LOC shell).
-##           Scaffolds a new deployment context: directory structure, skeleton node.yaml,
-##           GitHub repos, and registration in platform node.yaml.
+##           Scaffolds a new deployment context: nested overlay directory structure
+##           (platform/{node-configs,modules/hermes-agent,projects}), skeleton node.yaml,
+##           ONE GitHub overlay repo (<org>/<ctx>-overlay), and registration in platform node.yaml.
 ## @scope    Developer machine only (local scaffold) — no SSH, no VPS operations.
 ##           Called from context-init.sh facade.
 ## @invariants
 ##   - Idempotent: if ~/projects/<name>/ exists → SKIP (exit 0)
-##   - Skeleton node.yaml preserves GREP_SUMMARY/STRUCTURE semantic markup
+##   - Canonical layout (DevPlan 022): весь overlay — под <ctx>/platform/; сестринские
+##     hermes-agent/ + node-configs/ НЕ создаются
+##   - Один GitHub-репо <org>/<ctx>-overlay (private); <ctx>-node-configs / <ctx>-hermes-agent
+##     упразднены как отдельные репо (DevPlan 022 D3/D6)
+##   - Skeleton node.yaml preserves GREP_SUMMARY/STRUCTURE semantic markup;
+##     repos.core = https://github.com/<org>/<ctx>-overlay.git
 ##   - GitHub repo creation is optional (--skip-gh-repo flag)
 ##   - Registration delegates to context_registry.py (105 LOC, stable)
 ##   - All steps are independent — continues on non-fatal gh failures
@@ -18,14 +24,25 @@
 ##            context_registry.py already exists — delegates, doesn't reimplement.
 ## @links    CALLED_BY: context-init.sh (facade)
 ##           CALLS: context_registry.register_context()
-##           DP-092 Wave 2
+##           DP-092 Wave 2; DevPlan 022 TASK-2 (nested layout + single overlay repo)
 ## @changes  2026-07-30 · Wave 2 — initial implementation
+## @changes  2026-09-01 · DevPlan 022 TASK-2 — nested platform/ layout, single <ctx>-overlay repo,
+##           skeleton repos.core, glob */platform/node-configs/<node>/node.yaml
 # endregion MODULE_CONTRACT
 
 # 🧐 TRAP[DECISION] · 2026-07-21 · — · secrets-init called at bootstrap, not context-init
 # · Rejected: calling secrets-init.sh from context_initializer.py
 # · Reason: PLATFORM_MASTER_PASSWORD not available at scaffold time
 # · Rev: if context-init gains access to PLATFORM_MASTER_PASSWORD → call secrets-init.sh here
+
+# 🧐 TRAP[DECISION] · 2026-09-01 · — · platform-yaml resolve preference: overlay > source fixture > fresh skeleton
+# · Rejected: naive matches[0] по первому паттерну — свежий skeleton (теперь
+#   platform/node-configs/<node>/node.yaml) попадает в тот же glob и может затереть
+#   регистрацию существующего контекстного node.yaml (glob-порядок недетерминирован)
+# · Reason: канон = overlay (DevPlan 022 §1.4); source-копия ai-platform/node-configs —
+#   dev/test-фикстура; свежий skeleton — последний fallback (регистрация в него — no-op,
+#   contexts[] уже содержит контекст из шаблона)
+# · Rev: если реестр contexts[] переедет из per-node node.yaml в context.yaml — хелпер упразднить
 
 from __future__ import annotations
 
@@ -60,6 +77,10 @@ _SKELETON_TEMPLATE = """# GREP_SUMMARY: {context_name} node context declarative 
 # Deployment context this node belongs to (contexts[] canon — invariant 3, DevPlan 116 B6)
 contexts:
   - name: {context_name}
+
+# --- Context overlay repo (DevPlan 022: единственный overlay-репо контекста) ---
+repos:
+  core: https://github.com/{org}/{context_name}-overlay.git
 
 # --- Node definition (MUST EDIT) ---
 node:
@@ -133,30 +154,42 @@ def check_idempotent(context_dir: Path) -> bool:
 
 
 # region FUNC_create_dirs
-## @purpose  Create context directory structure: hermes-agent/ + node-configs/
+## @purpose  Create nested context overlay structure: platform/{node-configs,modules/hermes-agent,projects}
 ## @param context_dir  Path to the new context directory
 ## @io        stdout: created directory messages; side-effect: mkdir -p
 ## @complexity O(1)
+## @invariants  Канонический layout (DevPlan 022 TASK-2): весь overlay под platform/;
+##              сестринские hermes-agent/ + node-configs/ НЕ создаются.
 def create_dirs(context_dir: Path) -> None:
-    """Create the context directory structure.
+    """Create the nested context overlay directory structure.
 
-    ## @purpose  Mirror of _create_dirs from context-init.sh:129-143.
-    ## @io        ⇥ context_dir → ⎋ None (creates dirs)
+    ## @purpose  DevPlan 022 TASK-2: nested layout вместо сестринских каталогов.
+    ## @io        ⇥ context_dir → ⎋ None (creates platform/{node-configs,modules/hermes-agent,projects})
     """
-    logger.info("[IMP:7][context][create] Creating context directory structure under %s", context_dir)
+    logger.info("[IMP:7][context][create] Creating context overlay structure under %s", context_dir)
 
-    hermes_dir = context_dir / "hermes-agent"
-    hermes_dir.mkdir(parents=True, exist_ok=False)
-    logger.info("[IMP:8][context][create] Created: %s/", hermes_dir)
+    platform_dir = context_dir / "platform"
+    platform_dir.mkdir(parents=True, exist_ok=False)
+    logger.info("[IMP:8][context][create] Created: %s/", platform_dir)
 
-    node_configs_dir = context_dir / "node-configs"
+    node_configs_dir = platform_dir / "node-configs"
     node_configs_dir.mkdir(parents=True, exist_ok=False)
     logger.info("[IMP:8][context][create] Created: %s/", node_configs_dir)
 
-    logger.info("[IMP:9][context][create] Context directory structure created: %s", context_dir)
+    hermes_dir = platform_dir / "modules" / "hermes-agent"
+    hermes_dir.mkdir(parents=True, exist_ok=False)
+    logger.info("[IMP:8][context][create] Created: %s/", hermes_dir)
+
+    projects_dir = platform_dir / "projects"
+    projects_dir.mkdir(parents=True, exist_ok=False)
+    logger.info("[IMP:8][context][create] Created: %s/", projects_dir)
+
+    logger.info("[IMP:9][context][create] Context overlay structure created: %s", platform_dir)
     print(f"  ✅ Created: {context_dir}/")
-    print(f"  ✅ Created: {hermes_dir}/")
+    print(f"  ✅ Created: {platform_dir}/")
     print(f"  ✅ Created: {node_configs_dir}/")
+    print(f"  ✅ Created: {hermes_dir}/")
+    print(f"  ✅ Created: {projects_dir}/")
 
 
 # endregion FUNC_create_dirs
@@ -164,22 +197,31 @@ def create_dirs(context_dir: Path) -> None:
 
 # region FUNC_create_skeleton_node_yaml
 ## @purpose  Generate a skeleton node.yaml file with GREP_SUMMARY/STRUCTURE markup preserved
-## @param path          Target path for node.yaml
+## @param path          Target path for node.yaml (canon: platform/node-configs/<node>/node.yaml)
 ## @param context_name  Context name for placeholder substitution
+## @param org           GitHub org for repos.core URL (<org>/<ctx>-overlay.git)
 ## @io        stdout: created/edited message; side-effect: writes file
 ## @complexity O(1)
-def create_skeleton_node_yaml(path: Path, context_name: str) -> None:
+## @invariants  org обязателен (fail-fast): пустой org дал бы malformed URL
+##              https://github.com//<ctx>-overlay.git в skeleton.
+def create_skeleton_node_yaml(path: Path, context_name: str, org: str) -> None:
     """Create skeleton node.yaml for the new context.
 
-    ## @purpose  Mirror of _create_skeleton_node_yaml from context-init.sh:151-190.
+    ## @purpose  DevPlan 022 TASK-2: skeleton с repos.core = <org>/<ctx>-overlay.git.
     ##           Preserves GREP_SUMMARY/STRUCTURE comments per R7 (semantic markup).
-    ## @io        ⇥ path, context_name → ⎋ None (writes file)
+    ## @io        ⇥ path, context_name, org → ⎋ None (writes file)
     ## @invariants  Overwrites existing skeleton (not idempotent in this function —
     ##              check_idempotent prevents calling this if context dir exists)
     """
+    if not org:
+        from core.internal.shared.exceptions import ConfigValidationError
+
+        msg = f"org is required for skeleton repos.core URL (context '{context_name}')"
+        raise ConfigValidationError(msg)
+
     logger.info("[IMP:8][context][skeleton] Creating skeleton node.yaml")
 
-    skeleton_content = _SKELETON_TEMPLATE.format(context_name=context_name)
+    skeleton_content = _SKELETON_TEMPLATE.format(context_name=context_name, org=org)
 
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(skeleton_content, encoding="utf-8")
@@ -193,15 +235,21 @@ def create_skeleton_node_yaml(path: Path, context_name: str) -> None:
 
 
 # region FUNC_gh_repo_create
-## @purpose  Create GitHub repos for node-configs and hermes-agent (optional).
+## @purpose  Create the single context overlay GitHub repo (optional).
 ## @param org          GitHub org/username
 ## @param ctx          Context name
 ## @param skip         Skip repo creation flag
-## @param context_dir  Path to context directory (for git init)
+## @param context_dir  Path to context directory (git init+push on context_dir/platform)
 ## @param gh_runner    Injectable gh CLI callable (for testing)
-## @return   (node_cfg_repo: str | None, hermes_agent_repo: str | None, warnings: int)
+## @param git_runner   Injectable git callable (DI test seam; None → subprocess)
+## @return   (overlay_repo: str | None, reserved: None, warnings: int)
+##           Второй элемент зарезервирован под прежний контракт (hermes_agent_repo) —
+##           всегда None с DevPlan 022 (репо <ctx>-hermes-agent упразднён).
 ## @complexity O(1) — subprocess calls
 ## @invariants
+##   - РОВНО ОДИН репо: <org>/<ctx>-overlay (private) — DevPlan 022 D3/D6;
+##     <ctx>-node-configs / <ctx>-hermes-agent упразднены
+##   - Git init+push выполняется на context_dir/platform (весь overlay — один репо)
 ##   - Graceful degradation: gh not found → warn, continue (not fail)
 ##   - gh not authenticated → warn, continue
 ##   - Repo exists → treat as success (reuse)
@@ -211,16 +259,16 @@ def gh_repo_create(
     skip: bool = False,
     context_dir: Path | None = None,
     gh_runner: Callable[[list[str]], tuple[int, str, str]] | None = None,
-) -> tuple[str | None, str | None, int]:
-    """Create GitHub repos for node-configs and hermes-agent.
+    git_runner: Callable[[list[str], Path], tuple[int, str, str]] | None = None,
+) -> tuple[str | None, None, int]:
+    """Create the single context overlay GitHub repo.
 
-    ## @purpose  Mirror of _gh_repo_create from context-init.sh:193-264.
-    ## @io        ⇥ org, ctx, skip, context_dir, gh_runner → ⎋ (node_repo, agent_repo, warnings)
+    ## @purpose  DevPlan 022 TASK-2: один overlay-репо вместо двух сестринских.
+    ## @io        ⇥ org, ctx, skip, context_dir, gh_runner → ⎋ (overlay_repo, None, warnings)
     ## @complexity O(1)
     """
     warnings = 0
-    node_repo = f"{org}/{ctx}-node-configs"
-    agent_repo = f"{org}/{ctx}-hermes-agent"
+    overlay_repo = f"{org}/{ctx}-overlay"
 
     if skip:
         logger.info("[IMP:7][context][gh] SKIP: GitHub repo creation disabled")
@@ -256,57 +304,34 @@ def gh_repo_create(
         print("  ⚠️  gh not authenticated — skip GitHub repo creation")
         return None, None, 1
 
-    created_node_repo: str | None = None
-    created_agent_repo: str | None = None
+    created_overlay_repo: str | None = None
 
-    # Create node-configs repo
-    logger.info("[IMP:8][context][gh] Creating repo: %s", node_repo)
+    # Create the single overlay repo
+    logger.info("[IMP:8][context][gh] Creating repo: %s", overlay_repo)
     rc, stdout, stderr = gh_runner([
         "gh",
         "repo",
         "create",
-        node_repo,
+        overlay_repo,
         "--private",
         "--description",
-        f"Node configurations for context '{ctx}'",
+        f"Context overlay for '{ctx}'",
     ])
     if rc == 0:
-        created_node_repo = node_repo
-        logger.info("[IMP:9][context][gh] Created GitHub repo: %s", node_repo)
-        print(f"  ✅ Created GitHub repo: {node_repo} (private)")
-        # Git init + push in node-configs
+        created_overlay_repo = overlay_repo
+        logger.info("[IMP:9][context][gh] Created GitHub repo: %s", overlay_repo)
+        print(f"  ✅ Created GitHub repo: {overlay_repo} (private)")
+        # Git init + push of the whole overlay (context_dir/platform)
         if context_dir:
-            _git_init_and_push(context_dir / "node-configs", node_repo, ctx)
+            _git_init_and_push(context_dir / "platform", overlay_repo, ctx, git_runner=git_runner)
     elif "already exists" in (stdout + stderr).lower():
-        logger.info("[IMP:9][context][gh] Repo already exists: %s", node_repo)
-        created_node_repo = node_repo
+        logger.info("[IMP:9][context][gh] Repo already exists: %s", overlay_repo)
+        created_overlay_repo = overlay_repo
     else:
-        logger.info("[IMP:9][context][gh] WARNING: Failed to create %s: %s", node_repo, stderr.strip())
+        logger.info("[IMP:9][context][gh] WARNING: Failed to create %s: %s", overlay_repo, stderr.strip())
         warnings += 1
 
-    # Create hermes-agent repo
-    logger.info("[IMP:8][context][gh] Creating repo: %s", agent_repo)
-    rc, stdout, stderr = gh_runner([
-        "gh",
-        "repo",
-        "create",
-        agent_repo,
-        "--private",
-        "--description",
-        f"Hermes-agent overlay for context '{ctx}'",
-    ])
-    if rc == 0:
-        created_agent_repo = agent_repo
-        logger.info("[IMP:9][context][gh] Created GitHub repo: %s", agent_repo)
-        print(f"  ✅ Created GitHub repo: {agent_repo} (private)")
-    elif "already exists" in (stdout + stderr).lower():
-        logger.info("[IMP:9][context][gh] Repo already exists: %s", agent_repo)
-        created_agent_repo = agent_repo
-    else:
-        logger.info("[IMP:9][context][gh] WARNING: Failed to create %s: %s", agent_repo, stderr.strip())
-        warnings += 1
-
-    return created_node_repo, created_agent_repo, warnings
+    return created_overlay_repo, None, warnings
 
 
 def _git_init_and_push(
@@ -421,8 +446,9 @@ def register_in_platform_yaml(
 ## @param context_dir          Path to context directory
 ## @param warnings             Warning count
 ## @param platform_yaml        Path to platform node.yaml (for display)
-## @param node_cfg_repo        Node configs repo URL (optional)
-## @param hermes_agent_repo    Hermes agent repo URL (optional)
+## @param node_cfg_repo        Overlay repo URL (optional)
+## @param hermes_agent_repo    Reserved (legacy contract) — always None since DevPlan 022
+## @param node                 Node name for skeleton path display (optional)
 ## @io        stdout: formatted summary table
 ## @complexity O(1)
 def report_summary(
@@ -432,12 +458,18 @@ def report_summary(
     platform_yaml: str,
     node_cfg_repo: str | None = None,
     hermes_agent_repo: str | None = None,
+    node: str | None = None,
 ) -> None:
-    """Print context init summary.
+    """Print context init summary (nested overlay paths, DevPlan 022 TASK-2).
 
-    ## @purpose  Mirror of _report_summary from context-init.sh:298-322.
+    ## @purpose  Mirror of _report_summary from context-init.sh:298-322 — paths nested.
     ## @io        ⇥ ... → ⎋ stdout
     """
+    skeleton_display = (
+        f"{context_dir}/platform/node-configs/{node}/node.yaml (skeleton)"
+        if node
+        else f"{context_dir}/platform/node-configs/ (skeleton node.yaml)"
+    )
     print()
     print("┌─ Context Init Summary ─────────────────────────────────┐")
     print(f"│ Context:     {ctx_name}")
@@ -446,9 +478,11 @@ def report_summary(
     print("│")
     print("│ Created:")
     print(f"│   ✅ {context_dir}/")
-    print(f"│   ✅ {context_dir}/hermes-agent/")
-    print(f"│   ✅ {context_dir}/node-configs/")
-    print(f"│   ✅ {context_dir}/node-configs/node.yaml (skeleton)")
+    print(f"│   ✅ {context_dir}/platform/")
+    print(f"│   ✅ {context_dir}/platform/node-configs/")
+    print(f"│   ✅ {context_dir}/platform/modules/hermes-agent/")
+    print(f"│   ✅ {context_dir}/platform/projects/")
+    print(f"│   ✅ {skeleton_display}")
     if node_cfg_repo:
         print(f"│   ✅ GitHub: {node_cfg_repo}")
     if hermes_agent_repo:
@@ -461,6 +495,36 @@ def report_summary(
 
 
 # endregion FUNC_report_summary
+
+
+## @purpose  Resolve the platform node.yaml to register a scaffolded context in.
+## @param projects_dir  Projects base directory
+## @param node          Node name for resolution
+## @param fallback      Fresh-skeleton path — last-resort registration target
+## @io        ⎋ str — resolved path ("" if nothing found and no fallback)
+## @complexity O(glob)
+## @invariants  Preference (TRAP[DECISION] 2026-09-01): существующий overlay node.yaml
+##              (pattern 1, свежий skeleton исключён) → source-фикстура ai-platform/node-configs
+##              (pattern 2, dev/test) → свежий skeleton (fallback; contexts[] уже содержит
+##              контекст — регистрация no-op). Канон = overlay (DevPlan 022 §1.4).
+def _resolve_platform_node_yaml(projects_dir: Path, node: str, fallback: str = "") -> str:
+    """Resolve platform node.yaml via glob (nested overlay pattern first).
+
+    ## @purpose  DevPlan 022 TASK-2: pattern 1 = */platform/node-configs/<node>/node.yaml;
+    ##           pattern 2 (ai-platform source fixture) сохранён.
+    ## @io        ⇥ projects_dir, node, fallback → ⎋ str path
+    """
+    search_patterns = [
+        projects_dir / "*" / "platform" / "node-configs" / node / "node.yaml",
+        projects_dir / "ai-platform" / "node-configs" / node / "node.yaml",
+    ]
+    for pattern in search_patterns:
+        matches = list(projects_dir.glob(str(pattern.relative_to(projects_dir))))
+        # Свежий skeleton не затирает регистрацию существующих контекстов (TRAP[DECISION]).
+        non_skeleton = [m for m in matches if str(m) != fallback]
+        if non_skeleton:
+            return str(non_skeleton[0])
+    return fallback
 
 
 # region FUNC_main
@@ -528,8 +592,8 @@ def main(argv: list[str] | None = None) -> int:
 
         create_dirs(context_dir)
 
-        skeleton_path = context_dir / "node-configs" / "node.yaml"
-        create_skeleton_node_yaml(skeleton_path, context_name)
+        skeleton_path = context_dir / "platform" / "node-configs" / args.node / "node.yaml"
+        create_skeleton_node_yaml(skeleton_path, context_name, args.org)
 
         description = args.description or ""
         gh_org = args.org
@@ -543,19 +607,9 @@ def main(argv: list[str] | None = None) -> int:
         # Resolve platform node.yaml path
         platform_yaml = args.node_yaml
         if not platform_yaml:
-            # Try to resolve via node-resolver
-            from pathlib import Path as _Path
-
-            # Search for node.yaml in PROJECTS_BASE (common pattern)
-            search_dirs = [
-                _Path(args.projects_dir) / "*" / "node-configs" / args.node / "node.yaml",
-                _Path(args.projects_dir) / "ai-platform" / "node-configs" / args.node / "node.yaml",
-            ]
-            for pattern in search_dirs:
-                matches = list(_Path(args.projects_dir).glob(str(pattern.relative_to(args.projects_dir))))
-                if matches:
-                    platform_yaml = str(matches[0])
-                    break
+            # Preference: existing overlay node.yaml → ai-platform source fixture →
+            # fresh skeleton (fallback; см. TRAP[DECISION] у _resolve_platform_node_yaml)
+            platform_yaml = _resolve_platform_node_yaml(Path(args.projects_dir), args.node, fallback=str(skeleton_path))
 
         if not platform_yaml or not Path(platform_yaml).exists():
             logger.info("[IMP:10][context][main] FATAL: Could not resolve platform node.yaml")
@@ -582,6 +636,7 @@ def main(argv: list[str] | None = None) -> int:
             platform_yaml=platform_yaml,
             node_cfg_repo=node_cfg_repo,
             hermes_agent_repo=hermes_agent_repo,
+            node=args.node,
         )
 
         elapsed = time.time() - start_time
