@@ -216,11 +216,13 @@ KMS-компрометация → отдельный KMS-ключ + ротац�
 ### 5. Completion status (операционные долги)
 
 - `/etc/age/key.txt` plaintext — закрыто: persist удалён из φ4, канон env → tmpfs decrypt-only.
-- Off-node encrypted backup матрицы — закрыто кодом: `AGE_RECIPIENT` в secret-definitions +
-  release-checklist шаг (QA C6); фактическое заведение ключа оператором в sops-матрицу prod —
-  Track O (Debt `DR-offnode-backup`, Rev 2026-08-31, закрывается после заведения).
-- DR-drill на test-VPS — **Debt** (`DR-drill`, Rev 2026-08-31).
-- `make age-key-backup` — отложена до drill'а.
+- Off-node encrypted backup матрицы — **CLOSED 2026-09-01** (`DR-offnode-backup`): `AGE_RECIPIENT`
+  в secret-definitions + release-checklist шаг (QA C6); ключ заведён в sops-матрицу prod,
+  верифицирован F3 `make age-key-backup` PASS (tronyx-vps + asi-team-vps).
+- DR-drill на test-VPS — **DISMISSED 2026-09-01** (`DR-drill`): test-VPS не нужна
+  (вердикт владельца 2026-09-01); компенсация — prod-validated evidence (chaos fast+night,
+  e2e-verify, reboot) прогонов 017/018/020.
+- `make age-key-backup` — выполнен: F3 PASS (tronyx-vps + asi-team-vps).
 
 ---
 

@@ -156,7 +156,7 @@ services:
     # ⚠️ TRAP[BUG] · 2026-08-31 · P1 · Холодный старт: langfuse crash на clickhouse-миграции (гонка readiness) · Root: parallel start без ожидания готовности CH · Fix: start_period 180s + module.yaml#depends_on (порядок деплоя) · Prevention: см. ниже
     # · Symptom: холодный start — "Applying clickhouse migrations failed: dial tcp :9000 connection refused" → exit → restart #2 OK (на эмуляции amd64/медленных VPS)
     # · Root: langfuse и clickhouse стартуют параллельно; канон межмодульной зависимости — module.yaml#depends_on + deploy-порядок, НЕ compose depends_on
-    # · Fix: (1) start_period 180s; (2) compose-level cross-module depends_on {clickhouse,pgbouncer} ПОПЫТКА ОТКАЧЕНА: per-module interpolation dry-run (D8) на ноде = "depends on undefined service" — bootstrap exit 10 (репорт: .ai/plans/020-acceptance-validation/); порядок обеспечивает module.yaml#depends_on + sequential deploy (clickhouse раньше langfuse в node.yaml#modules)
+    # · Fix: (1) start_period 180s; (2) compose-level cross-module depends_on {clickhouse,pgbouncer} ПОПЫТКА ОТКАЧЕНА: per-module interpolation dry-run (D8) на ноде = "depends on undefined service" — bootstrap exit 10 (репорт: план 020-acceptance-validation, git history); порядок обеспечивает module.yaml#depends_on + sequential deploy (clickhouse раньше langfuse в node.yaml#modules)
     # · Prevention: cold-start гонки между МОДУЛЯМИ решаются ТОЛЬКО на уровне оркестрации (module.yaml#depends_on / deploy_orchestrator), не в compose; Rev: если restart-recovery langfuse окажется недостаточным на VPS cold bootstrap — readiness-wait зависимостей в deploy_orchestrator (Option B)
 
     healthcheck:
