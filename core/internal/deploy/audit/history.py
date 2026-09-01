@@ -1,7 +1,7 @@
 """
 DeployHistory — snapshot-based deploy history storage for rollback support.
 """
-# GREP_SUMMARY: deploy-history, snapshots, rollback, storage, json, retention, file-lock, audit-package, 170-W4-B3
+# GREP_SUMMARY: deploy-history, snapshots, rollback, storage, json, retention, file-lock, audit-package, rollback-fact, 170-W4-B3
 # STRUCTURE: ▶ DeployHistory.__init__(projects_base) → create_snapshot(project, version, compose_state, health_status, payload_hash)
 #            → ○ write JSON to /opt/projects/<name>/.deploy-snapshots/<snapshot_id>.json → ○ prune to keep last 10 → ○ read_snapshot(snapshot_id)
 #            → ○ list_snapshots(project) → rollback(project, snapshot_id) → ⎋ snapshot data
@@ -17,7 +17,9 @@ DeployHistory — snapshot-based deploy history storage for rollback support.
 ##   2. Snapshot format: { project, version, timestamp, compose_state, health_status, payload_hash,
 ##      payload_dir } — payload_dir (T9.8): пред-деплойные payload-файлы для rollback;
 ##      compose_state.previous_image (REF-0004, additive): docker image ID предыдущего релиза —
-##      якорь compose-rollback (re-tag → deploy без doomed-pull из registry)
+##      якорь compose-rollback (re-tag → deploy без doomed-pull из registry);
+##      rollback/rollback_from_snapshot (D8, 2026-09-01, additive): rollback-факт внешнего/ручного
+##      отката — `status` CLI показывает last_deploy с rollback=True вместо врущей записи
 ##   3. Retention: keep last 10 snapshots (prune on create, под deploy lock — T9.10)
 ##   4. File lock: platform_lock_path (shared/file_lock, T9.1): PLATFORM_LOCK_DIR env → иначе
 ##      /var/lock/platform-deploy-{project}.lock; reentrant (deploy() уже держит тот же замок)
@@ -32,6 +34,9 @@ DeployHistory — snapshot-based deploy history storage for rollback support.
 ## @changes 2026-07-30 | DevPlan 089 T6.5 — Created
 ## @changes 2026-08-05 | DevPlan 136 W9 T9.8/T9.10 — payload_dir; атомарная запись; flock-прин
 ## @changes 2026-08-15 | 170 W4-B3 — moved to deploy/audit/history.py (1:1, фасад deploy_history.py сохранён)
+## @changes 2026-09-01 | D8 (внешний rollback) — create_snapshot(+rollback, +rollback_from_snapshot):
+##             additive ключи rollback-факта (wire-freeze сохранён — потребители с фикс. схемой
+##             игнорируют неизвестные поля)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -148,6 +153,8 @@ class DeployHistory:
         health_status: str = "",
         payload_hash: str = "",
         payload_backup_dir: str | None = None,
+        rollback: bool = False,
+        rollback_from_snapshot: str = "",
     ) -> str:
         """Create a deploy snapshot.
 
@@ -159,6 +166,9 @@ class DeployHistory:
             payload_hash: SHA256 hash of deployed payload.
             payload_backup_dir: Optional dir with the PREVIOUS payload files (captured before
                 overwrite — T9.8). Copies persisted into payload/<snapshot_id>/ for rollback.
+            rollback: D8 (2026-09-01) — снапшот помечается как rollback-факт (внешний/ручной
+                rollback). `status` CLI показывает last_deploy с rollback=True — история не врёт.
+            rollback_from_snapshot: D8 — snapshot_id источника отката (traceability).
 
         Returns:
             Snapshot ID (ISO8601 timestamp).
@@ -174,6 +184,12 @@ class DeployHistory:
             "health_status": health_status,
             "payload_hash": payload_hash,
         }
+        # D8 (2026-09-01): rollback-факт — additive ключи (wire-freeze: потребители с фикс.
+        # схемой игнорируют неизвестные поля; list/status читают dict как есть).
+        if rollback:
+            snapshot["rollback"] = True
+        if rollback_from_snapshot:
+            snapshot["rollback_from_snapshot"] = rollback_from_snapshot
 
         # Ensure snapshot dir exists
         snap_dir = self._snapshot_dir(project)

@@ -1,9 +1,10 @@
 """
-# GREP_SUMMARY: test-rollback-contour, REF-0004, TEST-03, rollback, previous-image, ROLLED_BACK, double-rollback, require-healthy, BUG-0100, skip-pull, F-11, pull-never, env-file, compose-resolved-retag, characterization
+# GREP_SUMMARY: test-rollback-contour, REF-0004, TEST-03, rollback, previous-image, ROLLED_BACK, double-rollback, require-healthy, BUG-0100, skip-pull, F-11, pull-never, env-file, compose-resolved-retag, D8, rollback-fact, fail-fast-anchor, characterization
 # STRUCTURE: ▶ history[require_healthy] → ▶ snapshot-anchor(previous_image до compose-up) →
 #            ▶ unhealthy-contour[ROLLED_BACK | FAILED+"Rollback failed"] → ▶ no-double-rollback(engine rollback_performed) →
 #            ▶ payload-restore-after-compose-only → ▶ manual-rollback characterization(DEPLOYED|FAILED) → ▶ engine[pull-fail≠FATAL · re-verify · skip_pull] →
-#            ▶ F-11[compose-resolved re-tag · env-file+--pull never в up · 2-й rollback идемпотентен] → ⎋ LDD [IMP:9]
+#            ▶ F-11[compose-resolved re-tag · env-file+--pull never в up · 2-й rollback идемпотентен] →
+#            ▶ D8[fail-fast без якоря · docker tag ДО up (результат обязателен) · история rollback=True] → ⎋ LDD [IMP:9]
 # region MODULE_CONTRACT
 ## @purpose  TEST-03 (карточка REF-0004, DevPlan 11 В1): characterization + поведенческий набор
 ##           rollback-контурa DeployOrchestrator/DeployEngine/DeployHistory. Написан ДО правки
@@ -12,6 +13,10 @@
 ##           до и после. F-11 (2026-08-27): +секция G — re-tag на compose-resolved ref
 ##           (docker compose config --images), env-chain (--env-file secrets.env + .env.platform)
 ##           и --pull never в финальном compose up, идемпотентный повторный rollback.
+##           D8 (2026-09-01): +секция H — внешний rollback без previous_image-якоря → честный
+##           fail-fast ДО engine.deploy (doomed «No such image: ...:previous-rollback» + маскирующий
+##           внутренний atomic_up-rollback); docker tag ДО compose up (результат обязателен);
+##           успешный rollback пишет снапшот-факт (rollback=True — `status` CLI не врёт).
 ## @scope    DeployHistory.latest_snapshot(require_healthy), DeployOrchestrator.deploy unhealthy-
 ##           ветка (ROLLED_BACK + один re-verify), RollbackMixin._rollback_deploy (payload только
 ##           после успешного compose-rollback), DeployEngine.deploy (BUG-0100 pull-fail при
@@ -617,7 +622,12 @@ def test_local_previous_image_no_registry_pull(tmp_path, monkeypatch, caplog) ->
     with (
         patch.object(orch, "_compose_rollback", None),  # форсируем реальный _rollback_compose
         patch("core.internal.deploy.rollback.DeployEngine", _FakeEngine),
-        patch("core.internal.deploy.rollback.docker_ops.docker_tag", side_effect=lambda i, t: tag_calls.append((i, t))),
+        # D8 (2026-09-01): docker_tag возвращает bool — rollback идёт дальше ТОЛЬКО при успехе
+        # (результат tag'а обязателен; None/False → честный FAIL до compose up)
+        patch(
+            "core.internal.deploy.rollback.docker_ops.docker_tag",
+            side_effect=lambda i, t: (tag_calls.append((i, t)), True)[1],
+        ),
         # F-11: _rollback_compose резолвит compose-ref через docker compose config --images;
         # пустой stdout → fallback на bare-тег (историческое поведение F-025 сохранено)
         patch("core.internal.deploy.rollback.docker_compose_config", return_value=_cp(stdout="")),
@@ -732,7 +742,11 @@ def test_rollback_compose_retags_to_compose_resolved_ref(tmp_path, monkeypatch, 
     with (
         patch.object(orch, "_compose_rollback", None),
         patch("core.internal.deploy.rollback.DeployEngine", _FakeEngine),
-        patch("core.internal.deploy.rollback.docker_ops.docker_tag", side_effect=lambda i, t: tag_calls.append((i, t))),
+        # D8 (2026-09-01): docker_tag возвращает bool — успех tag'а обязателен до deploy
+        patch(
+            "core.internal.deploy.rollback.docker_ops.docker_tag",
+            side_effect=lambda i, t: (tag_calls.append((i, t)), True)[1],
+        ),
         patch("core.internal.deploy.rollback.docker_compose_config", return_value=fake_cfg),
     ):
         ok = orch._rollback_compose(str(proj), "dance-site", snapshot)
@@ -833,3 +847,207 @@ def test_second_rollback_after_first_success_is_success(tmp_path, monkeypatch) -
 
 
 # endregion FUNC_test_second_rollback_after_first_success_is_success
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# H. D8 (2026-09-01): внешний rollback — docker tag ДО compose up, честный fail-fast
+#    без якоря, история ROLLED_BACK-факт
+# ════════════════════════════════════════════════════════════════════════════
+
+
+# region FUNC_test_rollback_compose_fails_fast_without_previous_image_anchor
+def test_rollback_compose_fails_fast_without_previous_image_anchor(tmp_path, monkeypatch, caplog) -> None:
+    """D8: снапшот без compose_state.previous_image → честный fail-fast ДО engine.deploy —
+    «No such image: ...:previous-rollback» сценарий невозможен (deploy не вызывается)."""
+    # 🧪 TRAP[TEST] · 2026-09-01 · REGRESSION · D8 внешний rollback doomed compose up
+    # · Scenario: rollback на снапшот без previous_image → engine.deploy НЕ вызывается,
+    #             возврат False + IMP:10-лог (отсутствие якоря — честный FAIL, не silent)
+    # · Last fail: D8 — docker_tag пропущен (пустой якорь) → engine.deploy(ref="previous-rollback")
+    #   → compose up «No such image: ghcr.io/tronyxlab/tronyx-site:previous-rollback» → up-fail →
+    #   внутренний atomic_up-rollback восстановил контейнер, но вердикт FAILED + история не тронута
+    # · Remove if: rollback перестаёт требовать previous_image-якорь в снапшоте
+    caplog.set_level(logging.INFO)
+    proj = _write_project(tmp_path, "anchorless")
+    monkeypatch.setenv("PLATFORM_LOCK_DIR", str(tmp_path / "locks"))
+
+    deploy_calls: list[dict[str, object]] = []
+
+    class _FakeEngine:
+        def __init__(self, *, projects_base: str) -> None:
+            self.projects_base = projects_base
+
+        def deploy(self, **kwargs):
+            deploy_calls.append(kwargs)
+            msg = "D8 FAIL: engine.deploy не должен вызываться без previous_image-якоря"
+            raise AssertionError(msg)
+
+    orch = _make_orch(tmp_path, monkeypatch, poller=_SeqPoller(["healthy"]))
+    snapshot = {"snapshot_id": "snap-no-anchor", "compose_state": {}}
+
+    with (
+        patch.object(orch, "_compose_rollback", None),
+        patch("core.internal.deploy.rollback.DeployEngine", _FakeEngine),
+    ):
+        ok = orch._rollback_compose(str(proj), "anchorless", snapshot)
+
+    assert ok is False, "rollback без якоря обязан честно FAIL"
+    assert deploy_calls == [], f"D8 FAIL: engine.deploy НЕ должен вызываться: {deploy_calls}"
+    errs = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert errs, "отсутствие якоря обязано логироваться ERROR (IMP:10), не silent"
+    logger.info("[IMP:9][test] rollback без якоря → честный fail-fast, deploy не вызывается")
+
+
+# endregion FUNC_test_rollback_compose_fails_fast_without_previous_image_anchor
+
+
+# region FUNC_test_rollback_compose_tags_previous_image_before_up_and_skips_pull
+def test_rollback_compose_tags_previous_image_before_up_and_skips_pull(tmp_path, monkeypatch, caplog) -> None:
+    """D8: docker tag previous_image → compose-resolved ref вызывается ДО compose up; up
+    получает skip_pull=True (--pull never) — голое от pull окружение не тянет registry."""
+    # 🧪 TRAP[TEST] · 2026-09-01 · REGRESSION · D8 «No such image» сценарий (fake-runner без образов)
+    # · Scenario: fake runner с НУЛЁМ локальных образов → rollback ВСЁ РАВНО проходит:
+    #             docker_tag(prev → compose-resolved ref) ДО deploy(skip_pull=True, ref=previous-rollback)
+    # · Last fail: D8 — тег не создавался → up «No such image: ...:previous-rollback» → FAILED
+    # · Remove if: rollback перестаёт идти через локальный перетег предыдущего образа
+    caplog.set_level(logging.INFO)
+    proj = _write_project(tmp_path, "bare-pull")
+    monkeypatch.setenv("PLATFORM_LOCK_DIR", str(tmp_path / "locks"))
+
+    order: list[str] = []
+    tag_calls: list[tuple[str, str]] = []
+    deploy_calls: list[dict[str, object]] = []
+
+    class _FakeEngine:
+        def __init__(self, *, projects_base: str) -> None:
+            self.projects_base = projects_base
+
+        def deploy(self, **kwargs):
+            deploy_calls.append(kwargs)
+            order.append("deploy")
+
+            class _R:
+                success = True
+
+            return _R()
+
+    def _fake_tag(image: str, tag: str) -> bool:
+        tag_calls.append((image, tag))
+        order.append("tag")
+        return True
+
+    orch = _make_orch(tmp_path, monkeypatch, poller=_SeqPoller(["healthy"]))
+    snapshot = {"snapshot_id": "snap-d8", "compose_state": {"previous_image": "sha256:previmage"}}
+    fake_cfg = subprocess.CompletedProcess(
+        args=[], returncode=0, stdout="ghcr.io/tronyxlab/bare-pull:previous-rollback\n", stderr=""
+    )
+
+    with (
+        patch.object(orch, "_compose_rollback", None),
+        patch("core.internal.deploy.rollback.DeployEngine", _FakeEngine),
+        patch("core.internal.deploy.rollback.docker_ops.docker_tag", side_effect=_fake_tag),
+        patch("core.internal.deploy.rollback.docker_compose_config", return_value=fake_cfg),
+    ):
+        ok = orch._rollback_compose(str(proj), "bare-pull", snapshot)
+
+    assert ok is True, "rollback с якорем обязан пройти tag+up (голое от pull окружение)"
+    assert tag_calls == [("sha256:previmage", "ghcr.io/tronyxlab/bare-pull:previous-rollback")], (
+        f"D8 FAIL: docker tag должен целиться в compose-resolved ref: {tag_calls}"
+    )
+    assert order == ["tag", "deploy"], f"D8 FAIL: docker tag обязан идти ДО compose up: {order}"
+    assert len(deploy_calls) == 1 and deploy_calls[0].get("skip_pull") is True, (
+        f"D8 FAIL: up обязан идти со skip_pull=True (--pull never): {deploy_calls}"
+    )
+    assert deploy_calls[0].get("ref") == "previous-rollback"
+    logger.info("[IMP:9][test] docker tag ДО compose up; up с skip_pull (--pull never)")
+
+
+# endregion FUNC_test_rollback_compose_tags_previous_image_before_up_and_skips_pull
+
+
+# region FUNC_test_rollback_compose_fails_when_docker_tag_fails
+def test_rollback_compose_fails_when_docker_tag_fails(tmp_path, monkeypatch, caplog) -> None:
+    """D8 rider: docker tag вернул False (образ не локальный/pruned) → честный FAIL ДО
+    compose up — «No such image» сценарий невозможен, engine.deploy не вызывается."""
+    caplog.set_level(logging.INFO)
+    proj = _write_project(tmp_path, "tagfail")
+    monkeypatch.setenv("PLATFORM_LOCK_DIR", str(tmp_path / "locks"))
+    deploy_calls: list[dict[str, object]] = []
+
+    class _FakeEngine:
+        def __init__(self, *, projects_base: str) -> None:
+            self.projects_base = projects_base
+
+        def deploy(self, **kwargs):
+            deploy_calls.append(kwargs)
+            msg = "deploy не должен вызываться при сбое docker tag"
+            raise AssertionError(msg)
+
+    orch = _make_orch(tmp_path, monkeypatch, poller=_SeqPoller(["healthy"]))
+    snapshot = {"snapshot_id": "snap-tagfail", "compose_state": {"previous_image": "sha256:gone"}}
+    fake_cfg = subprocess.CompletedProcess(
+        args=[], returncode=0, stdout="ghcr.io/tronyxlab/tagfail:previous-rollback\n", stderr=""
+    )
+
+    with (
+        patch.object(orch, "_compose_rollback", None),
+        patch("core.internal.deploy.rollback.DeployEngine", _FakeEngine),
+        patch("core.internal.deploy.rollback.docker_ops.docker_tag", return_value=False),
+        patch("core.internal.deploy.rollback.docker_compose_config", return_value=fake_cfg),
+    ):
+        ok = orch._rollback_compose(str(proj), "tagfail", snapshot)
+
+    assert ok is False, "сбой docker tag = честный FAIL"
+    assert deploy_calls == [], f"D8 FAIL: deploy не вызывается при сбое tag: {deploy_calls}"
+    errs = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert errs, "сбой tag обязан логироваться ERROR"
+    logger.info("[IMP:9][test] docker tag fail → честный FAIL до compose up")
+
+
+# endregion FUNC_test_rollback_compose_fails_when_docker_tag_fails
+
+
+# region FUNC_test_rollback_writes_history_snapshot_with_rollback_fact
+def test_rollback_writes_history_snapshot_with_rollback_fact(tmp_path, monkeypatch, caplog) -> None:
+    """D8: после успешного внешнего rollback история обновляется — новый снапшот с
+    rollback=True + health=healthy + якорь previous_image; `status` CLI (latest_snapshot)
+    показывает факт rollback вместо врущей записи неудачного деплоя."""
+    caplog.set_level(logging.INFO)
+    _write_project(tmp_path, "hist")
+    orch = _make_orch(
+        tmp_path,
+        monkeypatch,
+        poller=_SeqPoller(["healthy"]),
+        compose_rollback=_RecorderRollback(result=True),
+    )
+    snap_id = orch.deploy_history.create_snapshot(
+        project="hist",
+        version="v2-bad",
+        health_status="unhealthy",
+        compose_state={"previous_image": "sha256:good-image"},
+    )
+    # Snapshot IDs — second-точность (filename-sort latest_snapshot): реальный rollback идёт
+    # минимум через секунду после деплоя; здесь — детерминированный зазор (rollback-факт
+    # обязан стать latest — именно его показывает `status` CLI).
+    time.sleep(1.05)
+
+    result = orch.rollback("hist", snapshot_id=snap_id)
+
+    assert result.status == DeployStatus.DEPLOYED, "ручной rollback успешен → DEPLOYED (rc=0 контракт CLI)"
+    latest = orch.deploy_history.latest_snapshot("hist")
+    assert latest is not None
+    assert latest.get("rollback") is True, f"D8 FAIL: история обязана нести rollback-факт: {latest}"
+    assert latest.get("health_status") == "healthy", "rollback-снапшот = восстановленное (healthy) состояние"
+    cs = latest.get("compose_state")
+    assert isinstance(cs, dict) and cs.get("previous_image") == "sha256:good-image", (
+        "rollback-снапшот сохраняет якорь для следующего отката"
+    )
+    assert latest.get("rollback_from_snapshot") == snap_id
+    assert latest.get("snapshot_id") != snap_id, "rollback обязан писать НОВЫЙ снапшот, не перезаписывать источник"
+    rows = _audit_rows(tmp_path / "audit.log")
+    assert any(r.get("operation") == "rollback" and r.get("result") == "DEPLOYED" for r in rows), (
+        f"audit-row rollback/DEPLOYED отсутствует: {rows}"
+    )
+    logger.info("[IMP:9][test] rollback → история: rollback=True снапшот (status CLI показывает факт)")
+
+
+# endregion FUNC_test_rollback_writes_history_snapshot_with_rollback_fact

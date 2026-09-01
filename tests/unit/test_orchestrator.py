@@ -329,10 +329,22 @@ class TestDeployOrchestrator:
             version="v1",
         )
 
-        # Rollback — with _rollback_compose mocked True → DEPLOYED (orchestration complete)
+        # Rollback — compose_rollback DI True → DEPLOYED (orchestration complete). D8 (2026-09-01):
+        # успешный rollback пишет НОВЫЙ rollback-факт снапшот (rollback=True) — result.snapshot_id
+        # указывает на него (история/status CLI не врут), а не на источник отката.
         result = orchestrator.rollback("test-project", snapshot_id=snap_id)
         assert result.status in {DeployStatus.DEPLOYED, DeployStatus.FAILED}
-        if result.snapshot_id:
+        if result.status == DeployStatus.DEPLOYED:
+            assert result.snapshot_id is not None and result.snapshot_id != snap_id, (
+                f"D8 FAIL: успешный rollback обязан писать НОВЫЙ rollback-факт снапшот: {result.snapshot_id!r}"
+            )
+            # Детерминированное чтение по ID (latest_snapshot — filename-sort с second-точностью
+            # ID: два снапшота в одну секунду сортируются по случайному hex-суффиксу).
+            fact = orchestrator.deploy_history.read_snapshot("test-project", result.snapshot_id)
+            assert fact is not None and fact.get("rollback") is True, (
+                f"D8 FAIL: история обязана нести rollback-факт (rollback=True): {fact}"
+            )
+        elif result.snapshot_id:
             assert result.snapshot_id == snap_id
 
     # endregion FUNC_test_rollback_with_snapshot
