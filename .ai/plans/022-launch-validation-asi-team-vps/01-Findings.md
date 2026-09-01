@@ -154,7 +154,10 @@ $ARTIFACT_CONTRACT
   - E4: ✅ node-update ×2 rc=0 (ключи через stdin-prelude, вне argv/логов)
   - E5: ✅ converge после node-update: FULLY CONVERGED (до первого git-push проектов)
   - E6: ✅ сетевая правда: roadmap → proxy-net + roadmap-net; proxy-net: nginx/roadmap/status-page. NOTE: staging-*/test-* docker-сети — физический мусор тест-прогонов (контейнеров нет), prune-кандидат, не блокер
-- [ ] Фаза F: DR (F1/F2/F4 by-design BLOCKED: нет postgres в контексте; F3 age-key-backup)
+- [x] Фаза F: DR (F1/F2/F4 by-design BLOCKED: нет postgres в контексте; F3 age-key-backup)
+  - F1/F2: BLOCKED by-design — postgres/backup-cron не в node.yaml минимального контура (stateful-модулей нет: pg_dumpall/WAL неприменим; ручная подмена роли = out-of-scope)
+  - F3: ✅ age-key-backup rc=0 — ключ зашифрован AGE_RECIPIENT (len=62 из матрицы) и загружен в tronyx-vps-backups (sha256 verified, endpoint s3.timeweb.cloud)
+  - F4: AGE_RECIPIENT непуст в матрице ноды ✅; nightly-cron/backup-cron отсутствуют (модуль off) → RPO-цепочка N/A для stateless-контура; при добавлении backup-cron chain сходится (секреты матрицы готовы)
 - [ ] Фаза G: reboot → chaos (fast+night) → load-smoke → e2e-verify → test-node BLOCKED
 - [ ] Фаза H: Release checklist → ПРОМОУТ вербикт → 02-VerificationReport.md
 
