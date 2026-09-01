@@ -33,11 +33,11 @@ $ARTIFACT_CONTRACT
 
 ## PROGRESS-чеклист фаз
 - [x] §0  Ворктри/parity/hooks — DONE (симлинки node-configs/.venv/.env/hermes-env, pre-commit install)
-- [ ] Фаза A: make check / agent-check / check-manifests / локальный стек / test_journal
+- [x] Фаза A: make check / agent-check / check-manifests / локальный стек / test_journal
   - A1 make check: FAIL(1) → F-01 фикс → RE-VERIFY rc=0 GREEN ✅
   - A2 agent-check: exit 0 (0 blocking, 0 advisory) ✅
   - A3 check-manifests: GREEN ✅
-  - A4 локальный стек: pending
+  - A4 локальный стек: up → status 23/23 healthy → healthcheck ALL MODULES HEALTHY → down ✅ (F-02 volume-инцидент по пути)
   - A5 test_journal: prior run main 07:38 — 5763 pass/1 fail (тот же F-01 doxygen) — подтверждена регрессия на main
 
 ## Находки (F-NN · дата · фаза · severity)
@@ -50,6 +50,15 @@ $ARTIFACT_CONTRACT
 - Ре-верификация: `doxygen Doxyfile` → 0 warnings; `make check MARKER=doxygen-check` GREEN; `make check` полный батч rc=0; `make agent-check` exit 0.
 - Статус: fixed
 - Evidence: /tmp/doxy_wk.log, /tmp/doxy_fix.log, /tmp/cmd_1788237909_63481.log (до), /tmp/cmd_1788238461_90191.log (после, rc=0)
+
+### F-02 · 2026-09-01 · Фаза A · P2 (окружение, не код)
+- Симптом: `make up` rc=1 — postgres restart-loop: entrypoint-сканер нашёл data-dir `18.corrupt.bak/docker` в volume `launch-validation-asi-team-vps_postgres-data` (данные прошлой валидации 020, WAL бит: «invalid checkpoint record» PANIC). Каскад: langfuse миграции падают (pgbouncer недоступен).
+- Ожидалось / получено: чистый локальный стек healthy / postgres PANIC-loop.
+- Гипотеза причины: volume dev-стека ворктри несёт повреждённые данные эпохи 020 (переименование в .bak не завершили, свежий init заблокирован защитой docker-library/postgres#37).
+- Фикс: tar-бэкап битых данных (15.3MB → /var/folders/.../kilo/pg18-corrupt-data-bak.tar.gz, rollback возможен) → удаление data-dir из volume → fresh init.
+- Ре-верификация: make up rc=0; make status 23/23 healthy; make healthcheck ALL MODULES HEALTHY; make down rc=0 (volumes preserved).
+- Статус: fixed (окружение ворктри; код платформы не задет — никаких изменений репо)
+- Evidence: /tmp/cmd_1788238633_1473.log, /tmp/cmd_1788238964_11169.log, tar-бэкап в $TMPDIR/kilo/
 
 - [ ] Фаза B: secrets-unlock → холодный bootstrap → идемпотентность → converge → check-security → sanity
 - [ ] Фаза C: TLS wildcard → cache drill → verify-domains → мониторинг TLS
