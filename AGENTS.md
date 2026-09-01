@@ -388,6 +388,13 @@ git-клон репозитория `<org>/<ctx>-overlay` (создаётся `m
 `<context>/hermes-agent/`) и symlink-хаки — legacy, в канон не входят. Source-копия
 `ai-platform/node-configs/` в исходнике — dev/test-фикстуры, канон = overlay.
 
+**VPS-доступ к приватному overlay** (DevPlan 024): read-only deploy key + SSH-алиас
+`github.com-overlay` — `repos.core = git@github.com-overlay:<org>/<ctx>-overlay.git`.
+Приватный ключ живёт ТОЛЬКО на ноде (`~/.ssh/id_ed25519_github_overlay`) + dev-копия в
+`~/projects/<ctx>/.secrets/` (0600, вне platform/-репо). `make new-context` провижинит
+repo-side автоматически (`provision_deploy_key`); node-side установка — runbook
+`core/internal/bootstrap/AGENTS.md` §«VPS-доступ к приватному overlay (deploy key)».
+
 **Почему одна папка (слияние `node-configs/` + `platform/`):** фактические раскладки
 контекстов дрейфовали (DevPlan 022 §1.1) —
 

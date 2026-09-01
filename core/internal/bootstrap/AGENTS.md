@@ -240,6 +240,33 @@ mirrors из daemon.json (mirror.gcr.io даёт 404 на docker.io-пулах);
 checksum-сверка); chaos-сьют T1-T12 — только test-node
 (`PYTEST_NO_ESCALATION=1 pytest tests/e2e/test_chaos_resilience.py -m chaos`).
 
+## Runbook: VPS-доступ к приватному overlay (deploy key)
+
+Канон доступа (DevPlan 022 TASK-5; DevPlan 024 TASK-3): приватный `<ctx>-overlay` клонируется
+нодой по **read-only deploy key + SSH-алиасу** `github.com-overlay` —
+`repos.core = git@github.com-overlay:<org>/<ctx>-overlay.git`. Приватный ключ живёт ТОЛЬКО
+на ноде (`~/.ssh/id_ed25519_github_overlay`); dev-копия — `~/projects/<ctx>/.secrets/` (0600,
+вне platform/-репо — каталог контекста не git-репо). `make new-context` провижинит repo-side
+автоматически (`context_initializer.provision_deploy_key`: keygen + `gh repo deploy-key add`);
+node-side шаги ниже — ручные (fresh-context-first: нода может не существовать в момент scaffold).
+
+1. **Keypair** (scaffold уже создал → пропустить): `ssh-keygen -t ed25519 -N "" -q -C "overlay-deploy-<ctx>" -f ~/projects/<ctx>/.secrets/<ctx>-overlay-deploy-key`
+2. **Repo-side (read-only):** `gh repo deploy-key add ~/projects/<ctx>/.secrets/<ctx>-overlay-deploy-key.pub --repo <org>/<ctx>-overlay --title "vps-<ctx>-readonly"` — БЕЗ `--allow-write`; ответ «already exists» = reuse (безопасно).
+3. **Доставка на ноду:** `scp ~/projects/<ctx>/.secrets/<ctx>-overlay-deploy-key <node>:~/.ssh/id_ed25519_github_overlay && ssh <node> chmod 600 ~/.ssh/id_ed25519_github_overlay` (приватный ключ НИКОГДА не через git).
+4. **SSH-алиас на ноде** (`~/.ssh/config`):
+   ```
+   Host github.com-overlay
+     HostName github.com
+     IdentityFile ~/.ssh/id_ed25519_github_overlay
+     IdentitiesOnly yes
+   ```
+5. **Верификация с ноды:** `git ls-remote git@github.com-overlay:<org>/<ctx>-overlay.git` → список refs = доступен; после — `ensure_context_repo` клонирует без ручных шагов.
+
+**Ретро-контексты (созданы до DevPlan 024, напр. tronyx-lab) и skip-gh-case:** ключа в
+`~/projects/<ctx>/.secrets/` нет — выполнить шаги 1-2 вручную (идемпотентно: дубликат
+deploy key = «already exists»). Skeleton `repos.core` уже SSH-алиасный → после шагов 3-4
+клон работает. Ротация: новый keypair → шаг 2 → шаг 3 → удалить старый ключ из repo deploy keys.
+
 ## Cross-references
 
 | Файл | Назначение |

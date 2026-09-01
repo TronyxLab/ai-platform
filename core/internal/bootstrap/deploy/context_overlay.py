@@ -247,6 +247,9 @@ def _pull_with_cache(context_path: str) -> int:
 #   unauthenticated HTTPS; приватный overlay требует auth, deploy key scoped на один репо,
 #   приватный ключ живёт ТОЛЬКО на ноде (~/.ssh/id_ed25519_github_overlay, вне git) ·
 # · Rev: если появится >1 приватный git-канал с ноды — вынести в общий git credential helper
+# · Runbook установки ключа/алиаса на ноде: core/internal/bootstrap/AGENTS.md —
+#   «VPS-доступ к приватному overlay (deploy key)» (DevPlan 024 TASK-3; repo-side автоматизирован
+#   в scaffold context_initializer.provision_deploy_key)
 def _clone_context_repo(node_yaml_path: str, context_path: str) -> int:
     """Clone context overlay repo from repos.core URL.
 
