@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: context_initializer scaffold context overlay platform node-configs gh-repo registration idempotent skeleton
-# STRUCTURE: ▶ validate_name → ⚡ check_idempotent ─┬─ create_dirs(platform/{node-configs,modules/hermes-agent,projects}) ─┬─ create_skeleton_node_yaml ── gh_repo_create(<ctx>-overlay) ── register_in_platform_yaml ── report_summary
+# GREP_SUMMARY: context_initializer scaffold context overlay platform node-configs gh-repo deploy-key registration idempotent skeleton
+# STRUCTURE: ▶ validate_name → ⚡ check_idempotent ─┬─ create_dirs(platform/{node-configs,modules/hermes-agent,projects}) ─┬─ create_skeleton_node_yaml ── gh_repo_create(<ctx>-overlay) ──◇ provision_deploy_key(read-only) ── register_in_platform_yaml ── report_summary(+node-side install runbook)
 # region MODULE_CONTRACT
 ## @purpose  Python Strangler-Fig migration of context-init.sh (364 LOC shell).
 ##           Scaffolds a new deployment context: nested overlay directory structure
 ##           (platform/{node-configs,modules/hermes-agent,projects}), skeleton node.yaml,
-##           ONE GitHub overlay repo (`<org>/<ctx>-overlay`), and registration in platform node.yaml.
+##           ONE GitHub overlay repo (`<org>/<ctx>-overlay`) with read-only deploy key,
+##           and registration in platform node.yaml.
 ## @scope    Developer machine only (local scaffold) — no SSH, no VPS operations.
 ##           Called from context-init.sh facade.
 ## @invariants
@@ -15,7 +16,12 @@
 ##   - Один GitHub-репо `<org>/<ctx>-overlay` (private); `<ctx>-node-configs` / `<ctx>-hermes-agent`
 ##     упразднены как отдельные репо (DevPlan 022 D3/D6)
 ##   - Skeleton node.yaml preserves GREP_SUMMARY/STRUCTURE semantic markup;
-##     repos.core = `https://github.com/<org>/<ctx>-overlay.git`
+##     repos.core = SSH-алиасный URL `git@github.com-overlay:<org>/<ctx>-overlay.git`
+##     (DevPlan 024 D2; SSH-алиас `github.com-overlay` ставится на ноде по runbook
+##     core/internal/bootstrap/AGENTS.md — VPS-доступ к приватному overlay)
+##   - Deploy key (DevPlan 024 D2): read-only (`gh repo deploy-key add` БЕЗ --allow-write);
+##     keypair в `<ctx>/.secrets/` (0600/0644, вне platform/-репо); repo-side автоматизирован,
+##     node-side — ручной шаг по runbook (печатается в summary)
 ##   - GitHub repo creation is optional (--skip-gh-repo flag)
 ##   - Registration delegates to context_registry.py (105 LOC, stable)
 ##   - All steps are independent — continues on non-fatal gh failures
@@ -24,7 +30,11 @@
 ##            context_registry.py already exists — delegates, doesn't reimplement.
 ## @links    CALLED_BY: context-init.sh (facade)
 ##           CALLS: context_registry.register_context()
-##           DP-092 Wave 2; DevPlan 022 TASK-2 (nested layout + single overlay repo)
+##           DP-092 Wave 2; DevPlan 022 TASK-2 (nested layout + single overlay repo);
+##           DevPlan 024 TASK-2 (deploy key + SSH-алиасный repos.core)
+## @changes  2026-09-01 · DevPlan 024 TASK-2 — provision_deploy_key (read-only deploy key,
+##           `<ctx>/.secrets/`), skeleton repos.core → git@github.com-overlay:,
+##           node-side install-инструкция в summary
 ## @changes  2026-07-30 · Wave 2 — initial implementation
 ## @changes  2026-09-01 · DevPlan 022 TASK-2 — nested platform/ layout, single `<ctx>-overlay` repo,
 ##           skeleton repos.core, glob `*/platform/node-configs/<node>/node.yaml`
@@ -78,9 +88,9 @@ _SKELETON_TEMPLATE = """# GREP_SUMMARY: {context_name} node context declarative 
 contexts:
   - name: {context_name}
 
-# --- Context overlay repo (DevPlan 022: единственный overlay-репо контекста) ---
+# --- Context overlay repo (DevPlan 022: единственный overlay-репо контекста; 024: SSH-алиас) ---
 repos:
-  core: https://github.com/{org}/{context_name}-overlay.git
+  core: git@github.com-overlay:{org}/{context_name}-overlay.git
 
 # --- Node definition (MUST EDIT) ---
 node:
@@ -203,11 +213,12 @@ def create_dirs(context_dir: Path) -> None:
 ## @io        stdout: created/edited message; side-effect: writes file
 ## @complexity O(1)
 ## @invariants  org обязателен (fail-fast): пустой org дал бы malformed URL
-##              `https://github.com//<ctx>-overlay.git` в skeleton.
+##              `git@github.com-overlay://<ctx>-overlay.git` в skeleton.
 def create_skeleton_node_yaml(path: Path, context_name: str, org: str) -> None:
     """Create skeleton node.yaml for the new context.
 
-    ## @purpose  DevPlan 022 TASK-2: skeleton с repos.core = `<org>/<ctx>-overlay.git`.
+    ## @purpose  DevPlan 022 TASK-2: skeleton с repos.core; DevPlan 024 TASK-2:
+    ##           repos.core = SSH-алиасный URL `git@github.com-overlay:<org>/<ctx>-overlay.git`.
     ##           Preserves GREP_SUMMARY/STRUCTURE comments per R7 (semantic markup).
     ## @io        ⇥ path, context_name, org → ⎋ None (writes file)
     ## @invariants  Overwrites existing skeleton (not idempotent in this function —
@@ -234,6 +245,147 @@ def create_skeleton_node_yaml(path: Path, context_name: str, org: str) -> None:
 # endregion FUNC_create_skeleton_node_yaml
 
 
+# region FUNC__default_subprocess_runner
+def _default_subprocess_runner(cmd: list[str]) -> tuple[int, str, str]:
+    """Execute a CLI command via subprocess (default DI runner: gh / ssh-keygen).
+
+    ## @purpose  Общий дефолт gh_runner/keygen_runner (024 TASK-2: extracted из gh_repo_create
+    ##            для переиспользования в provision_deploy_key).
+    ## @io        ⇥ cmd → ⎋ (returncode, stdout, stderr); FileNotFoundError → (-1, "", "<bin>: command not found")
+    """
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    except FileNotFoundError:
+        return -1, "", f"{cmd[0]}: command not found"
+    else:
+        return result.returncode, result.stdout, result.stderr
+
+
+# endregion FUNC__default_subprocess_runner
+
+
+# region FUNC_provision_deploy_key
+## @purpose  Provision read-only deploy key for VPS access to the private `<ctx>`-overlay repo
+##           (DevPlan 024 TASK-2, D2/D3).
+## @param org           GitHub org/username
+## @param ctx           Context name
+## @param context_dir   Context directory — keypair lands in `<context_dir>/.secrets/` (ВНЕ platform/-репо)
+## @param gh_runner     Injectable gh CLI callable (DI test seam)
+## @param keygen_runner Injectable ssh-keygen callable (DI test seam; None → subprocess)
+## @return   (pub_key_path | None, warnings: int)
+## @complexity O(1) — subprocess calls (ssh-keygen, gh)
+## @invariants
+##   - Read-only: `gh repo deploy-key add` БЕЗ `--allow-write` (D2)
+##   - Keypair: `<context_dir>/.secrets/<ctx>-overlay-deploy-key` — 0600 приватный / 0644 pub;
+##     каталог контекста НЕ git-репо (репо — только platform/) → риск коммита исключён геометрией (D3)
+##   - Idempotent: приватный ключ существует → keygen SKIP, pub переиспользуется в add
+##   - Graceful (D2): gh недоступен/не авторизован → warn + warnings+1, БЕЗ keygen, continue
+##     (fresh-context-first: нода может не существовать в момент scaffold — node-side установка
+##     НЕ автоматизируется, печатается в summary по runbook bootstrap/AGENTS.md)
+##   - Дубликат в repo → «already exists» = success (паттерн reuse gh_repo_create)
+def provision_deploy_key(
+    org: str,
+    ctx: str,
+    context_dir: Path,
+    *,
+    gh_runner: Callable[[list[str]], tuple[int, str, str]] | None = None,
+    keygen_runner: Callable[[list[str]], tuple[int, str, str]] | None = None,
+) -> tuple[str | None, int]:
+    """Provision a read-only deploy key for the context overlay repo.
+
+    ## @purpose  DevPlan 024 TASK-2: ssh-keygen ed25519 → `gh repo deploy-key add` (read-only)
+    ##            → путь pub-ключа для summary. Возвращает (path | None, warnings).
+    ## @io        ⇥ org, ctx, context_dir, gh_runner, keygen_runner → ⎋ (pub_path | None, warnings)
+    ## @complexity O(1)
+    """
+    warnings = 0
+    overlay_repo = f"{org}/{ctx}-overlay"
+    if gh_runner is None:
+        gh_runner = _default_subprocess_runner
+    if keygen_runner is None:
+        keygen_runner = _default_subprocess_runner
+
+    # Graceful guard: без gh (недоступен/не авторизован) провижининг невозможен —
+    # keygen НЕ вызывается, node-side runbook печатается в report_summary (D2).
+    rc, _, _ = gh_runner(["gh", "--version"])
+    if rc != 0:
+        logger.info("[IMP:9][context][deploy-key] WARNING: gh CLI not found — deploy key NOT provisioned")
+        print("  ⚠️  gh CLI not found — deploy key not provisioned (install manually, see summary)")
+        return None, 1
+    rc, _, _ = gh_runner(["gh", "auth", "status"])
+    if rc != 0:
+        logger.info("[IMP:9][context][deploy-key] WARNING: gh CLI not authenticated — deploy key NOT provisioned")
+        print("  ⚠️  gh not authenticated — deploy key not provisioned (install manually, see summary)")
+        return None, 1
+
+    secrets_dir = context_dir / ".secrets"
+    key_path = secrets_dir / f"{ctx}-overlay-deploy-key"
+    pub_path = secrets_dir / f"{ctx}-overlay-deploy-key.pub"
+
+    # Keypair (идемпотентно: существующий ключ переиспользуется)
+    if key_path.exists():
+        logger.info("[IMP:8][context][deploy-key] Keypair already exists — reuse: %s", key_path)
+    else:
+        logger.info("[IMP:8][context][deploy-key] Generating ed25519 keypair: %s", key_path)
+        rc, _, stderr = keygen_runner([
+            "ssh-keygen",
+            "-t",
+            "ed25519",
+            "-N",
+            "",
+            "-q",
+            "-C",
+            f"overlay-deploy-{ctx}",
+            "-f",
+            str(key_path),
+        ])
+        if rc != 0:
+            logger.info("[IMP:9][context][deploy-key] WARNING: ssh-keygen failed: %s", stderr.strip())
+            print("  ⚠️  ssh-keygen failed — deploy key not provisioned (see summary runbook)")
+            return None, 1
+
+    if not pub_path.exists():
+        logger.info("[IMP:9][context][deploy-key] WARNING: pub key missing after keygen: %s", pub_path)
+        print("  ⚠️  deploy key .pub missing — deploy key not provisioned (see summary runbook)")
+        return None, 1
+
+    # Канонические права: приватный 0600 / pub 0644 (применяется и к reuse-ветке)
+    key_path.chmod(0o600)
+    pub_path.chmod(0o644)
+
+    # Repo-side: read-only deploy key (БЕЗ --allow-write); дубликат = success (reuse)
+    rc, stdout, stderr = gh_runner([
+        "gh",
+        "repo",
+        "deploy-key",
+        "add",
+        str(pub_path),
+        "--repo",
+        overlay_repo,
+        "--title",
+        f"vps-{ctx}-readonly",
+    ])
+    if rc == 0:
+        logger.info("[IMP:9][context][deploy-key] Read-only deploy key added to %s: %s", overlay_repo, pub_path)
+        print(f"  ✅ Deploy key (read-only) added to {overlay_repo}: {pub_path}")
+    elif "already exists" in (stdout + stderr).lower():
+        logger.info("[IMP:9][context][deploy-key] Deploy key already exists in %s — reuse", overlay_repo)
+        print(f"  ✅ Deploy key already exists in {overlay_repo} (reuse)")
+    else:
+        logger.info(
+            "[IMP:9][context][deploy-key] WARNING: deploy-key add failed for %s: %s",
+            overlay_repo,
+            stderr.strip(),
+        )
+        print(f"  ⚠️  Failed to add deploy key to {overlay_repo}: {stderr.strip()}")
+        warnings += 1
+
+    return str(pub_path), warnings
+
+
+# endregion FUNC_provision_deploy_key
+
+
 # region FUNC_gh_repo_create
 ## @purpose  Create the single context overlay GitHub repo (optional).
 ## @param org          GitHub org/username
@@ -242,6 +394,7 @@ def create_skeleton_node_yaml(path: Path, context_name: str, org: str) -> None:
 ## @param context_dir  Path to context directory (git init+push on context_dir/platform)
 ## @param gh_runner    Injectable gh CLI callable (for testing)
 ## @param git_runner   Injectable git callable (DI test seam; None → subprocess)
+## @param keygen_runner Injectable ssh-keygen callable for provision_deploy_key (DI test seam; None → subprocess)
 ## @return   (overlay_repo: str | None, reserved: None, warnings: int)
 ##           Второй элемент зарезервирован под прежний контракт (hermes_agent_repo) —
 ##           всегда None с DevPlan 022 (репо `<ctx>-hermes-agent` упразднён).
@@ -250,15 +403,17 @@ def create_skeleton_node_yaml(path: Path, context_name: str, org: str) -> None:
 ##   - РОВНО ОДИН репо: `<org>/<ctx>-overlay` (private) — DevPlan 022 D3/D6;
 ##     `<ctx>-node-configs` / `<ctx>-hermes-agent` упразднены
 ##   - Git init+push выполняется на context_dir/platform (весь overlay — один репо)
-# 📝 TRAP[DEBT] · 2026-09-01 · MED · scaffold не провижинит deploy key для VPS-клона приватного overlay
-# · Observed: миграция tronyx-lab (022 TASK-5) — приватный `<ctx>-overlay` недоступен с VPS по
-#   unauthenticated HTTPS (нужен read-only deploy key + SSH-алиас в repos.core, см.
-#   TRAP[DECISION] в deploy/context_overlay.py); skeleton здесь пишет HTTPS-URL в repos.core
-# · Suspected: new-context должен генерировать deploy key (gh repo deploy-key add) и
-#   SSH-алиасный repos.core — иначе первый деплой проекта контекста упадёт на clone
-# · Impact: новый контекст = ручной шаг deploy key после scaffold
-# · When: обнаружено при миграции tronyx-lab (DevPlan 022 TASK-5, вне скоупа плана)
-# · Rev: первый new-context после 022 → добавить deploy-key шаг в gh_repo_create + тест
+# 🧐 TRAP[DECISION] · 2026-09-01 · — · Node-side доставка deploy key — РУЧНОЙ шаг по runbook (DevPlan 024 D2/D3)
+# · Rejected: (1) SSH-install на scaffold — нода может не существовать/не быть забутстраплена
+#   (fresh-context-first: контекст создаётся раньше ноды); scaffold получил бы SSH-зависимость
+#   и новые failure-моды; (2) sops-канал `OVERLAY_DEPLOY_KEY` (secret-definitions.yaml + φ5) —
+#   touch SoT-манифеста секретов и его гейтов
+# · Reason: scaffold автоматизирует ТОЛЬКО repo-side (keygen + gh repo deploy-key add +
+#   SSH-алиасный URL); ключ нужен на ноде к моменту первого deploy-context/ensure_context_repo,
+#   а не к моменту scaffold; node-side install-инструкция печатается в report_summary,
+#   канон — runbook core/internal/bootstrap/AGENTS.md («VPS-доступ к приватному overlay»)
+# · Rev: второй контекст / следующий fresh-node bootstrap → автоматизация sops-каналом
+#   (secret-definitions.yaml + φ5 secrets_provision)
 ##   - Graceful degradation: gh not found → warn, continue (not fail)
 ##   - gh not authenticated → warn, continue
 ##   - Repo exists → treat as success (reuse)
@@ -269,10 +424,13 @@ def gh_repo_create(
     context_dir: Path | None = None,
     gh_runner: Callable[[list[str]], tuple[int, str, str]] | None = None,
     git_runner: Callable[[list[str], Path], tuple[int, str, str]] | None = None,
+    keygen_runner: Callable[[list[str]], tuple[int, str, str]] | None = None,
 ) -> tuple[str | None, None, int]:
     """Create the single context overlay GitHub repo.
 
-    ## @purpose  DevPlan 022 TASK-2: один overlay-репо вместо двух сестринских.
+    ## @purpose  DevPlan 022 TASK-2: один overlay-репо вместо двух сестринских;
+    ##            DevPlan 024 TASK-2: после подтверждения репо — provision_deploy_key
+    ##            (read-only deploy key, до _git_init_and_push).
     ## @io        ⇥ org, ctx, skip, context_dir, gh_runner → ⎋ (overlay_repo, None, warnings)
     ## @complexity O(1)
     """
@@ -287,17 +445,7 @@ def gh_repo_create(
 
     # Default gh runner: subprocess
     if gh_runner is None:
-
-        def _default_gh_runner(cmd: list[str]) -> tuple[int, str, str]:
-            """Execute gh CLI command."""
-            try:
-                result = subprocess.run(cmd, capture_output=True, text=True, check=False)
-            except FileNotFoundError:
-                return -1, "", "gh: command not found"
-            else:
-                return result.returncode, result.stdout, result.stderr
-
-        gh_runner = _default_gh_runner
+        gh_runner = _default_subprocess_runner
 
     # Check gh availability
     rc, _, _ = gh_runner(["gh", "--version"])
@@ -330,15 +478,23 @@ def gh_repo_create(
         created_overlay_repo = overlay_repo
         logger.info("[IMP:9][context][gh] Created GitHub repo: %s", overlay_repo)
         print(f"  ✅ Created GitHub repo: {overlay_repo} (private)")
-        # Git init + push of the whole overlay (context_dir/platform)
-        if context_dir:
-            _git_init_and_push(context_dir / "platform", overlay_repo, ctx, git_runner=git_runner)
     elif "already exists" in (stdout + stderr).lower():
         logger.info("[IMP:9][context][gh] Repo already exists: %s", overlay_repo)
         created_overlay_repo = overlay_repo
     else:
         logger.info("[IMP:9][context][gh] WARNING: Failed to create %s: %s", overlay_repo, stderr.strip())
         warnings += 1
+
+    # Deploy key — после подтверждения репо (created | already exists), до git init+push
+    # (DevPlan 024 TASK-2). Graceful: провижининг не влияет на остальные шаги.
+    if created_overlay_repo and context_dir:
+        _key_path, key_warnings = provision_deploy_key(
+            org, ctx, context_dir, gh_runner=gh_runner, keygen_runner=keygen_runner
+        )
+        warnings += key_warnings
+        if created_overlay_repo and rc == 0:
+            # Git init + push of the whole overlay (context_dir/platform)
+            _git_init_and_push(context_dir / "platform", overlay_repo, ctx, git_runner=git_runner)
 
     return created_overlay_repo, None, warnings
 
@@ -458,8 +614,11 @@ def register_in_platform_yaml(
 ## @param node_cfg_repo        Overlay repo URL (optional)
 ## @param hermes_agent_repo    Reserved (legacy contract) — always None since DevPlan 022
 ## @param node                 Node name for skeleton path display (optional)
+## @param deploy_key_pub       Path to provisioned deploy key .pub (optional; DevPlan 024 TASK-2)
 ## @io        stdout: formatted summary table
 ## @complexity O(1)
+## @invariants  deploy_key_pub set → печатается строка Deploy key + node-side install-инструкция
+##              (runbook core/internal/bootstrap/AGENTS.md) + предупреждение «не коммитить» (D3)
 def report_summary(
     ctx_name: str,
     context_dir: Path,
@@ -468,8 +627,9 @@ def report_summary(
     node_cfg_repo: str | None = None,
     hermes_agent_repo: str | None = None,
     node: str | None = None,
+    deploy_key_pub: str | None = None,
 ) -> None:
-    """Print context init summary (nested overlay paths, DevPlan 022 TASK-2).
+    """Print context init summary (nested overlay paths, DevPlan 022 TASK-2; deploy key, 024).
 
     ## @purpose  Mirror of _report_summary from context-init.sh:298-322 — paths nested.
     ## @io        ⇥ ... → ⎋ stdout
@@ -496,7 +656,21 @@ def report_summary(
         print(f"│   ✅ GitHub: {node_cfg_repo}")
     if hermes_agent_repo:
         print(f"│   ✅ GitHub: {hermes_agent_repo}")
+    if deploy_key_pub:
+        print(f"│   ✅ Deploy key: {deploy_key_pub} → {node_cfg_repo} (read-only)")
     print(f"│   ✅ Registered in: {platform_yaml}")
+    if deploy_key_pub:
+        print("│")
+        print("│ Node-side install (runbook: core/internal/bootstrap/AGENTS.md):")
+        print(f"│   1. scp {deploy_key_pub.removesuffix('.pub')} <node>:~/.ssh/id_ed25519_github_overlay")
+        print("│   2. ssh <node> chmod 600 ~/.ssh/id_ed25519_github_overlay")
+        print("│   3. ~/.ssh/config on node:")
+        print("│        Host github.com-overlay")
+        print("│          HostName github.com")
+        print("│          IdentityFile ~/.ssh/id_ed25519_github_overlay")
+        print("│          IdentitiesOnly yes")
+        print("│   4. Verify: git ls-remote git@github.com-overlay:<org>/<ctx>-overlay.git")
+        print("│ ⚠️  NEVER commit the private key (context .secrets/ is OUTSIDE the platform/ git repo)")
     print("└────────────────────────────────────────────────────────┘")
     print()
 
@@ -637,6 +811,14 @@ def main(argv: list[str] | None = None) -> int:
         if reg_rc != 0:
             return reg_rc
 
+        # Deploy key .pub — по файловой конвенции provision_deploy_key (DevPlan 024 D3):
+        # файл существует ⇔ провижининг состоялся (gh-fail/skip-ветки keygen не создают).
+        deploy_key_pub: str | None = None
+        if context_dir:
+            expected_pub = context_dir / ".secrets" / f"{context_name}-overlay-deploy-key.pub"
+            if expected_pub.exists():
+                deploy_key_pub = str(expected_pub)
+
         total_warnings = gh_warnings
         report_summary(
             ctx_name=context_name,
@@ -646,6 +828,7 @@ def main(argv: list[str] | None = None) -> int:
             node_cfg_repo=node_cfg_repo,
             hermes_agent_repo=hermes_agent_repo,
             node=args.node,
+            deploy_key_pub=deploy_key_pub,
         )
 
         elapsed = time.time() - start_time

@@ -1,5 +1,5 @@
-# GREP_SUMMARY: test-node-resolver node_resolver.py W2 resolve_node_yaml extract_node_host env NODE_NAME 3-path-search CLI exit-contract LDD IMP:9
-# STRUCTURE: ▶ 15 tests → ○ resolve (env PLATFORM_ROOT/HOME/NODE_NAME, explicit platform_root, not-found, idempotent)
+# GREP_SUMMARY: test-node-resolver node_resolver.py W2 resolve_node_yaml extract_node_host env NODE_NAME 4-path-search platform-node-configs overlay-wins legacy-warn CLI exit-contract LDD IMP:9
+# STRUCTURE: ▶ 20 tests → ○ resolve (env PLATFORM_ROOT/HOME/NODE_NAME, explicit platform_root, platform-overlay-wins, legacy-warn, group-order, not-found, idempotent)
 #            → ○ extract host (present/missing/bool-normalized/file-missing) → ○ CLI (resolve/host exit 0|1, stdout one-line, idempotent) → ⎋ PASS
 
 # region MODULE_CONTRACT [DOMAIN(TESTING):3; CONCEPT(NODE-RESOLVER-PYTHON):3; TECH(PYTEST):2]
@@ -104,6 +104,129 @@ def test_resolve_by_home_projects_glob(
 
 
 # endregion FUNC_test_resolve_by_home_projects_glob
+
+
+# region FUNC_test_platform_overlay_wins_over_legacy_fixture
+# 🧪 TRAP[TEST] · 2026-09-01 · REGRESSION · DevPlan 024 TASK-1: platform-overlay glob бьёт legacy-фикстуру
+# · Scenario: legacy ~/projects/legacy-fixture/node-configs/N/ + overlay ~/projects/<ctx>/platform/node-configs/N/
+#             → резолв = platform-путь, БЕЗ legacy WARN
+# · Last fail: 2026-09-01 — старый glob platform-путь не находил (анти-survivorship: падает на старом коде,
+#   sorted legacy-glob возвращал 'legacy-fixture' < '<ctx>')
+# · Remove if: порядок кандидатов резолва изменён (platform-glob удалён/перенесён)
+def test_platform_overlay_wins_over_legacy_fixture(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    caplog.set_level(logging.INFO)
+    node = "overlay-wins-024"
+    legacy_yaml = tmp_path / "projects" / "legacy-fixture" / "node-configs" / node / "node.yaml"
+    overlay_yaml = tmp_path / "projects" / "test-ctx" / "platform" / "node-configs" / node / "node.yaml"
+    for p in (legacy_yaml, overlay_yaml):
+        p.parent.mkdir(parents=True)
+        p.write_text("node:\n  host: 10.0.0.1\n")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("PLATFORM_ROOT", raising=False)
+    monkeypatch.delenv("PLATFORM_REMOTE_BASE", raising=False)
+
+    resolved = node_resolver.resolve_node_yaml(node)
+
+    assert resolved == str(overlay_yaml), resolved
+    # Overlay-канон найден → миграционный WARN НЕ эмитится
+    assert not any("legacy-fallback" in r.message for r in caplog.records), caplog.text
+    assert_ldd_imp9(caplog)
+
+
+# endregion FUNC_test_platform_overlay_wins_over_legacy_fixture
+
+
+# region FUNC_test_legacy_glob_fallback_with_warn
+# 🧪 TRAP[TEST] · 2026-09-01 · SCENARIO · DevPlan 024 TASK-1: legacy-резолв → [IMP:7] WARN (миграционный сигнал)
+# · Scenario: только legacy-матч → резолв = legacy-путь + WARN legacy-fallback (видимость долга asi-group)
+# · Last fail: N/A (preventive — WARN-сигнал добавлен 024 TASK-1)
+# · Remove if: legacy sibling-glob удалён (после миграции asi-group — Rev TRAP[BUG] resolve.py)
+def test_legacy_glob_fallback_with_warn(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    caplog.set_level(logging.INFO)
+    node = "legacy-warn-024"
+    legacy_yaml = tmp_path / "projects" / "ctx-legacy" / "node-configs" / node / "node.yaml"
+    legacy_yaml.parent.mkdir(parents=True)
+    legacy_yaml.write_text("node:\n  host: 10.0.0.1\n")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("PLATFORM_ROOT", raising=False)
+    monkeypatch.delenv("PLATFORM_REMOTE_BASE", raising=False)
+
+    resolved = node_resolver.resolve_node_yaml(node)
+
+    assert resolved == str(legacy_yaml), resolved
+    warn_records = [r for r in caplog.records if "legacy-fallback" in r.message and "[IMP:7]" in r.message]
+    assert warn_records, f"Expected [IMP:7] legacy-fallback WARN, got: {caplog.text}"
+    assert_ldd_imp9(caplog)
+
+
+# endregion FUNC_test_legacy_glob_fallback_with_warn
+
+
+# region FUNC_test_explicit_config_dir_still_first
+# 🧪 TRAP[TEST] · 2026-09-01 · REGRESSION · DevPlan 024 TASK-1 (D1): explicit config_dir (Path 1) — ПЕРВЫЙ
+# · Scenario: env PLATFORM_ROOT=<tmp> + overlay-матч в fake HOME → резолв = Path 1
+#             (контракт e2e conftest Path 1 сохранён)
+# · Last fail: N/A (preventive — порядок Path 1 не менялся)
+# · Remove if: platform-glob поднят выше explicit config_dir (ломает e2e-контракт)
+def test_explicit_config_dir_still_first(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    caplog.set_level(logging.INFO)
+    node = "explicit-first-024"
+    platform_root = tmp_path / "platform"
+    node_yaml = _make_node_yaml(platform_root, node)
+    overlay_yaml = tmp_path / "projects" / "some-ctx" / "platform" / "node-configs" / node / "node.yaml"
+    overlay_yaml.parent.mkdir(parents=True)
+    overlay_yaml.write_text("node:\n  host: 10.0.0.9\n")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("PLATFORM_ROOT", raising=False)
+    monkeypatch.delenv("PLATFORM_REMOTE_BASE", raising=False)
+
+    resolved = node_resolver.resolve_node_yaml(node, env={"PLATFORM_ROOT": str(platform_root)})
+
+    assert resolved == str(node_yaml), resolved
+    assert_ldd_imp9(caplog)
+
+
+# endregion FUNC_test_explicit_config_dir_still_first
+
+
+# region FUNC_test_platform_group_beats_legacy_group
+# 🧪 TRAP[TEST] · 2026-09-01 · SCENARIO · DevPlan 024 TASK-1 (D1): групповой порядок детерминирован
+# · Scenario: ≥2 platform-матчей (aaa, zzz) + ≥2 legacy-матчей (aaa, zzz) → победитель из
+#             platform-группы (первый в sorted), legacy-пути не выигрывают ни при каком раскладе
+# · Last fail: N/A (preventive — групповой порядок канона 024)
+# · Remove if: группировка кандидатов изменена (interleaved порядок)
+def test_platform_group_beats_legacy_group(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    caplog.set_level(logging.INFO)
+    node = "group-order-024"
+    overlay_a = tmp_path / "projects" / "aaa" / "platform" / "node-configs" / node / "node.yaml"
+    overlay_z = tmp_path / "projects" / "zzz" / "platform" / "node-configs" / node / "node.yaml"
+    legacy_a = tmp_path / "projects" / "aaa" / "node-configs" / node / "node.yaml"
+    legacy_z = tmp_path / "projects" / "zzz" / "node-configs" / node / "node.yaml"
+    for p in (overlay_a, overlay_z, legacy_a, legacy_z):
+        p.parent.mkdir(parents=True)
+        p.write_text("node:\n  host: 10.0.0.1\n")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("PLATFORM_ROOT", raising=False)
+    monkeypatch.delenv("PLATFORM_REMOTE_BASE", raising=False)
+
+    resolved = node_resolver.resolve_node_yaml(node)
+
+    assert resolved == str(overlay_a), resolved
+    assert resolved != str(legacy_a) and resolved != str(legacy_z), "Legacy group must not win"
+    assert resolved != str(overlay_z), "Winner must be first of sorted platform group"
+    assert not any("legacy-fallback" in r.message for r in caplog.records), caplog.text
+    assert_ldd_imp9(caplog)
+
+
+# endregion FUNC_test_platform_group_beats_legacy_group
 
 
 # region FUNC_test_resolve_by_node_env
