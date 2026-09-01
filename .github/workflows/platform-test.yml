@@ -128,9 +128,13 @@ jobs:
       # C-4 (DevPlan 136 W11 T11.6): слепой `|| true` УБРАН — fetch-провал не маскируется.
       # Явная семантика: fetch успешен → baseline актуален; fetch упал → rev-parse fallback
       # (stale ref) с ::warning::; ref отсутствует → ::warning:: (inventory-diff тесты пропустятся).
+      # ⚠️ TRAP[BUG] · 2026-09-01 · P1 · --depth=1 на baseline-fetch делал HEAD shallow-границей →
+      # · git log -1 -- <path> возвращал HEAD как last-touch любого файла → ложный stale-pin
+      # · (G6 workflow-sha-pins RED на каждом push; Symptom: CI last-touch=HEAD при локальном
+      # · полном клоне = реальный last-touch). Fix: фул-феч (checkout уже full-depth).
       - name: Fetch origin/main for inventory baseline
         run: |
-          if git fetch origin main:refs/remotes/origin/main --depth=1 2>&1; then
+          if git fetch origin main:refs/remotes/origin/main 2>&1; then
             echo "[IMP:8][baseline] origin/main fetched for inventory baseline"
           elif git rev-parse --verify refs/remotes/origin/main >/dev/null 2>&1; then
             echo "::warning::[IMP:8][baseline] origin/main fetch FAILED — using stale existing baseline ref"
