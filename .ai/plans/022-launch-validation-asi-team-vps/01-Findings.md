@@ -70,6 +70,16 @@ $ARTIFACT_CONTRACT
 - ⚠️ SEC-note: при диагностике одноразовый вывод awk напечатал 3-строчный ключ-файл владельца в session output (локальный терминал). Ключ не попал в git/логи репо. Рекомендация владельцу: ротация asi-AGE-ключа после закрытия валидации (вне скоупа сессии).
 - Evidence: logs/make/20260901-084454-bootstrap...log (FATAL + sops fail); core/internal/shared/node_detect.py Check 1/2 + TRAP[BUG] 2026-09-01
 
+### F-06 · 2026-09-01 · Фаза B · P1 (окружение оператора + трассировка)
+- Симптом: после F-05 фикса bootstrap продолжал падать на φ4: sops «no identity matched», нодный CLI-entry получал len=74 sha256=f329c89c (= tronyx master key из ~/.config/age/keys.txt), хотя prelude строился с asi (d638a9ad digest в dry-run).
+- Ожидалось / получено: prelude с asi-ключом / live-прогон background_process доставлял tronyx-ключ.
+- Гипотеза причины (подтверждена digest-трассировкой): сессионная env содержит AGE_SECRET_KEY=tronyx (унаследована от интерактивного шелла; session-env Assignment перекрыт/потерян при передаче команды в background_process — вложенные кавычки "$(cat "$HOME/...")" внутри command string ломались при оборачивании в sh -c; без assignment env-значение tronyx шло в node_detect → Check1 (после F-04 частичного обхода) — в ранних прогонах Check1-приоритет давал tronyx).
+- Фикс: (1) digest-трассировка на трёх границах (prelude, node-lifecycle shell-entry, CLI-entry) — позволит безошибочно сверять байты ключа; (2) операционно — runner-скрипт в /tmp (bash export + exec make), убирающий проблему передачи env через command string.
+- Ре-верификация: runner-прогон 151610: shell-entry=a442edad (asi) → CLI entry=a442edad → φ4 SUCCESS (638 bytes, 27 ключей, 2 ci_default) → φ5/φ6 (registry auth) → **φ7 certificates complete (wildcard DNS-01 regru)** → φ8: roadmap DELIVERED + healthy → **Bootstrap complete**.
+- Статус: fixed
+- Evidence: digest-сравнения: asi=d638a9ad (dry-run), tronyx=704eae69 (live-фейл); logs/make/20260901-151610-bootstrap...log (полный success)
+- Коммиты диагностики: 41ddd6c (decrypt len), 3358f98 (prelude digest), 9852633+081ffe6 (CLI-entry digest), fc515c1 (shell-entry digest)
+
 ### F-01 · 2026-09-01 · Фаза A · P1
 - Симптом: `make check` rc=2 — doxygen-check FAIL: 1 warning «core/internal/bootstrap/AGENTS.md:247: unable to resolve reference to '/Users/tronyx/projects/AGENTS.md' for \ref command».
 - Ожидалось / получено: zero-warnings invariant (DevPlan 097) / 1 warning, гейт красный. Регрессия существует и на main (test_journal 07:38: 5763 pass / 1 fail — тот же doxygen).
