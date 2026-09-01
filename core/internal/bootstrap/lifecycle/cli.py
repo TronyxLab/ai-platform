@@ -36,6 +36,9 @@
 ##           Python 3.14 после φ1 (python_deps): _should_reexec_python/_reexec_lifecycle +
 ##           pre-phase проверка в _run_phases; системный 3.12 без pydantic больше не выполняет
 ##           φ2..φ8 (module-level pydantic-импорты замораживали extract_domains_for_context=None)
+## @changes  2026-09-01 · P0 (F-01 fix, asi-team-vps cold bootstrap) — re-exec argv fix:
+##           +_reexec_argv (argv[0] восстановлен: file-путь/-m spec; [target, *sys.argv[1:]]
+##           давал интерпретатору "--mode" как СВОЙ опцион — "Unknown option: --mode", φ2 died)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -1089,28 +1092,62 @@ def _should_reexec_python() -> str | None:
 # endregion FUNC__should_reexec_python
 
 
+# region FUNC__reexec_argv
+## @purpose  Построение argv для re-exec (P0 F-01 fix, 2026-09-01): восстанавливает argv[0],
+##           который _reexec_lifecycle терял — голый [target, *sys.argv[1:]] отдавал
+##           интерпретатору "--mode" как СВОЙ опцион ("Unknown option: --mode", φ1 complete →
+##           φ2 died, cold bootstrap asi-team-vps). File-запуск (канон node-lifecycle.sh:50
+##           `python3 cli.py --mode ...`) → argv[1] = abs-путь скрипта; package-запуск
+##           (`python3 -m core.internal.bootstrap.lifecycle.cli`) → ["-m", "<pkg>.cli"].
+## @io       ⇥ target: str — путь интерпретатора (осознанный, фиксированный — 0 инъекции)
+##           → ⎋ list[str] полный argv для os.execv (argv[0]=target + script/-m spec + CLI-args)
+## @complexity O(1) — getattr + os.path.abspath (чистая функция, unit-тест без execv-guard)
+## @invariants
+##   - __main__.__package__ непустой (getattr default "") → package-режим: argv[1:3] = ["-m", f"{pkg}.cli"]
+##   - иначе → file-режим: argv[1] = os.path.abspath(sys.argv[0]) (канон _delegate, node-lifecycle.sh)
+##   - sys.argv[1:] пробрасывается байт-в-байт (--mode/--node-*/--owner-key...)
+##   - Чистая функция: os.execv НЕ вызывается (тестируется без подмены процесса)
+def _reexec_argv(target: str) -> list[str]:
+    """Build os.execv argv preserving argv[0] (file- or -m-mode) — P0 F-01 fix."""
+    main_pkg = getattr(sys.modules.get("__main__"), "__package__", "") or ""
+    if main_pkg:
+        argv = [target, "-m", f"{main_pkg}.cli", *sys.argv[1:]]
+    else:
+        # осознанный abspath (НЕ Path.resolve): argv[0] = путь запуска как есть, resolve
+        # резолвил бы symlink и менял бы путь, которым был вызван скрипт (канон _delegate)
+        argv = [target, os.path.abspath(sys.argv[0]), *sys.argv[1:]]  # ruff: ignore[PTH100] — осознанный abspath: argv[0] = путь запуска (resolve резолвил бы symlink, канон _delegate)
+    logger.info("[IMP:9][reexec] Built re-exec argv: %s", argv)
+    return argv
+
+
+# endregion FUNC__reexec_argv
+
+
 # region FUNC__reexec_lifecycle
 ## @purpose  Re-exec текущего процесса на целевой интерпретатор (P0 F-01). os.execv заменяет
 ##           процесс cli.py — функция НЕ возвращается (int для типизации). Состояние фаз уже
 ##           в state.json (done-фазы скипаются новым процессом — resume-семантика state_machine);
 ##           идемпотентность сохранена: второй прогон на 3.14 — no-op для done-фаз.
 ## @io       ⇥ target: str — путь интерпретатора → ⎋ int (unreachable; execv не возвращается)
-## @complexity O(1) — env-marker + os.execv
+## @complexity O(1) — env-marker + argv-build + os.execv
 ## @invariants
 ##   - Маркер _REEXEC_MARKER_ENV ставится ДО execv (loop-guard)
-##   - argv = [target, *sys.argv[1:]] — сохраняет ВСЕ CLI-аргументы (--mode/--node-*/--owner-key...)
+##   - argv строится _reexec_argv (argv[0] восстановлен: file-путь или -m spec — иначе
+##     интерпретатор парсит --mode как СВОЙ опцион: "Unknown option: --mode", F-01 P0)
 ##   - state.json НЕ трогается (continuation через done-skip — главный инвариант идемпотентности)
 def _reexec_lifecycle(target: str) -> int:
     """Re-exec the lifecycle CLI on the upgraded interpreter (os.execv — never returns)."""
     os.environ[_REEXEC_MARKER_ENV] = "1"
+    reexec_argv = _reexec_argv(target)
     logger.critical(
         "[IMP:10][reexec] Switching lifecycle interpreter to %s (current %s < %s) — "
-        "resuming from state.json (done phases skipped)",
+        "resuming from state.json (done phases skipped); argv=%s",
         target,
         sys.executable,
         ".".join(str(v) for v in _REEXEC_MIN_VERSION),
+        reexec_argv,
     )
-    os.execv(target, [target, *sys.argv[1:]])  # ruff: ignore[S606] — осознанный exec без shell (re-exec, фиксированный путь, 0 инъекции)
+    os.execv(target, reexec_argv)  # ruff: ignore[S606] — осознанный exec без shell (re-exec, фиксированный путь, 0 инъекции)
     return 1  # pragma: no cover — execv никогда не возвращается
 
 
