@@ -39,6 +39,13 @@ $ARTIFACT_CONTRACT
   - A3 check-manifests: GREEN ✅
   - A4 локальный стек: up → status 23/23 healthy → healthcheck ALL MODULES HEALTHY → down ✅ (F-02 volume-инцидент по пути)
   - A5 test_journal: prior run main 07:38 — 5763 pass/1 fail (тот же F-01 doxygen) — подтверждена регрессия на main
+- [x] Фаза B: secrets-unlock → холодный bootstrap → идемпотентность → converge → check-security → sanity
+  - B1 secrets-unlock: PASS после устранения F-04/F-05/F-06 (AGE-ключ asi через runner / явный env)
+  - B2 холодный bootstrap: ✅ **КРИТЕРИЙ ДОСТИГНУТ: `make bootstrap-node NODE=asi-team-vps` одной командой = сервер healthy + roadmap DEPLOYED+healthy** (φ1-φ8.5; roadmap snapshot 20260901T122242-81b31929, healthcheck healthy; φ7 wildcard *.asiteam.ru через regru DNS-01)
+  - B3 идемпотентность: ✅ 8/9 фаз «already done — skipping»; roadmap re-deliver 2.8s (vs 14.1s cold); bootstrap complete rc=0
+  - B4: ✅ converge FULLY CONVERGED; check-security WARN-only (S2: 22 security updates pending — свежая нода, unattended-upgrades active; NOTE не блокер)
+  - B5: ✅ project-list (roadmap); project-status NAME=roadmap: Up (healthy)
+  - NOTE: verb использует NAME= (не PROJECT=) для project-status — TASK-шаблон неточен, не баг
 
 ## Находки (F-NN · дата · фаза · severity)
 
