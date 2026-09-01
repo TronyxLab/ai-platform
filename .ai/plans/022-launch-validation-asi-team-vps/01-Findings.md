@@ -32,8 +32,25 @@ $ARTIFACT_CONTRACT
 - [ ] make healthcheck NODE=... с операторской машины = fail-loud по контракту (F-016) → для ноды: converge + e2e-verify (не баг, зафиксировать в отчёте).
 
 ## PROGRESS-чеклист фаз
-- [ ] §0  Ворктри/parity/hooks — DONE (симлинки node-configs/.venv/.env/hermes-env, pre-commit install)
+- [x] §0  Ворктри/parity/hooks — DONE (симлинки node-configs/.venv/.env/hermes-env, pre-commit install)
 - [ ] Фаза A: make check / agent-check / check-manifests / локальный стек / test_journal
+  - A1 make check: FAIL(1) → F-01 фикс → RE-VERIFY rc=0 GREEN ✅
+  - A2 agent-check: exit 0 (0 blocking, 0 advisory) ✅
+  - A3 check-manifests: GREEN ✅
+  - A4 локальный стек: pending
+  - A5 test_journal: prior run main 07:38 — 5763 pass/1 fail (тот же F-01 doxygen) — подтверждена регрессия на main
+
+## Находки (F-NN · дата · фаза · severity)
+
+### F-01 · 2026-09-01 · Фаза A · P1
+- Симптом: `make check` rc=2 — doxygen-check FAIL: 1 warning «core/internal/bootstrap/AGENTS.md:247: unable to resolve reference to '/Users/tronyx/projects/AGENTS.md' for \ref command».
+- Ожидалось / получено: zero-warnings invariant (DevPlan 097) / 1 warning, гейт красный. Регрессия существует и на main (test_journal 07:38: 5763 pass / 1 fail — тот же doxygen).
+- Гипотеза причины: doxygen резолвит markdown-ссылки от CWD (корень репо), а не от расположения файла; ссылка `](../../AGENTS.md)` уходит за пределы репо. Нарушена конвенция репо (пути md-ссылок от корня, как в core/AGENTS.md: `](modules/AGENTS.md)`).
+- Фикс (Coder-субагент + main-сессия): core/internal/bootstrap/AGENTS.md:247 `](../../AGENTS.md)` → `](core/AGENTS.md)`; :249 `](../../entrypoint-manifest.yaml)` → `](core/entrypoint-manifest.yaml)` (консистентность конвенции; doxygen .yaml не валидирует, но тот же класс дефекта).
+- Ре-верификация: `doxygen Doxyfile` → 0 warnings; `make check MARKER=doxygen-check` GREEN; `make check` полный батч rc=0; `make agent-check` exit 0.
+- Статус: fixed
+- Evidence: /tmp/doxy_wk.log, /tmp/doxy_fix.log, /tmp/cmd_1788237909_63481.log (до), /tmp/cmd_1788238461_90191.log (после, rc=0)
+
 - [ ] Фаза B: secrets-unlock → холодный bootstrap → идемпотентность → converge → check-security → sanity
 - [ ] Фаза C: TLS wildcard → cache drill → verify-domains → мониторинг TLS
 - [ ] Фаза D: deploy-context → render-vhosts/monitoring → project-list/status → deploy-project → CI-канал → sync-env → provision-llm → rollback

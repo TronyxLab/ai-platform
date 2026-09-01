@@ -244,9 +244,9 @@ checksum-сверка); chaos-сьют T1-T12 — только test-node
 
 | Файл | Назначение |
 |------|-----------|
-| [`../../../core/AGENTS.md`](../../AGENTS.md) | Канонические операции, структура слоёв |
+| [`core/AGENTS.md`](core/AGENTS.md) | Канонические операции, структура слоёв |
 | `../../../AGENTS.md` (root) | Архитектурные инварианты, модель деплоя, dual delivery |
-| [`../../entrypoint-manifest.yaml`](../../entrypoint-manifest.yaml) | YAML-реестр операций (bootstrap-node в секции bootstrap) |
+| [`core/entrypoint-manifest.yaml`](core/entrypoint-manifest.yaml) | YAML-реестр операций (bootstrap-node в секции bootstrap) |
 | `core/AGENTS.md` §«DR мастер-ключа AGE» | AGE master key DR (цепочка детекции, off-node backup, restore) |
 | `lifecycle/state_machine.py` | 14 фаз, dependency graph, precondition_check |
 | `lifecycle/phases/system.py` | φ1 timezone, zram |
