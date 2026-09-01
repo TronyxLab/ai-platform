@@ -49,7 +49,10 @@ ALLOWLIST: dict[str, int] = {
     # 750 → 800 (DevPlan 16 T2.D, 2026-08-25): P1-16 неинтерактивная деградация —
     # _prompt_yes_no (TTY-guard, NonInteractiveBlocked состояние+rollback-hint) + --yes.
     # Осознанное решение владельца лимита; вынос промпт-машины/шаблона — при touch сверх 800.
-    "core/internal/scaffold/project_adopter.py": 800,
+    # 800 → 830 (DevPlan 019, 2026-09-01): adopt-путь ai-project — _detect_project_type принимает
+    # ai-project (yaml#type) + единая эвристика _guess_project_type_from_dirs (frontend→ai-project→backend)
+    # для yaml-gen и instructions sync; +15 LOC чистого детектора (конвенционные папки/package.json).
+    "core/internal/scaffold/project_adopter.py": 830,
 }
 
 # Test giants (DevPlan 172 W3.3, Brief H1/H10): лимиты = текущий размер + headroom 5-8%.

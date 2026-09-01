@@ -183,7 +183,7 @@ class ProjectAdopter:
     # endregion FUNC__prompt_yes_no
 
     # region FUNC_generate_minimal_ai_platform_yaml
-    ## @purpose  Generate minimal ai-platform.yaml (auto-type-detect frontend/backend; exists → "exists"). · ⇥ None → ⎋ str "generated"|"exists" · @complexity O(1) · Не перезаписывает существующий yaml; делегирует scaffold_helpers.gen_ai_platform_yaml
+    ## @purpose  Generate minimal ai-platform.yaml (auto-type-detect frontend/ai-project/backend; exists → "exists"). · ⇥ None → ⎋ str "generated"|"exists" · @complexity O(1) · Не перезаписывает существующий yaml; делегирует scaffold_helpers.gen_ai_platform_yaml
     def generate_minimal_ai_platform_yaml(self) -> str:
         """Generate minimal ai-platform.yaml if not present."""
         if self.yaml_file.exists():
@@ -192,12 +192,8 @@ class ProjectAdopter:
 
         logger.info("[IMP:7][%s][gen_yaml] No ai-platform.yaml found — generating minimal", self._log_prefix)
 
-        # Auto-detect project type
-        type_guess = "backend"
-        if (self.project_dir / "src" / "index.html").exists() or (self.project_dir / "frontend").is_dir():
-            type_guess = "frontend"
-
-        logger.info("[IMP:7][%s][gen_yaml] Guessed project type: %s", self._log_prefix, type_guess)
+        # Auto-detect project type (единая эвристика — _guess_project_type_from_dirs, DevPlan 019)
+        type_guess = self._guess_project_type_from_dirs()
 
         # Delegate to scaffold_helpers (DP-092 Wave 4a)
         from core.internal.scaffold.scaffold_helpers import gen_ai_platform_yaml
@@ -641,11 +637,11 @@ jobs:
             result.changes.append("⚠️  Project instructions sync FAILED — .kilo/ может отсутствовать")
 
     def _detect_project_type(self) -> str:
-        """Determine template level for instructions sync: ai-platform.yaml#type → backend|frontend.
+        """Determine template level for instructions sync: ai-platform.yaml#type → backend|frontend|ai-project.
 
         ## @purpose  У adopt нет template-параметра — тип выводится из ai-platform.yaml
-        ##           (поле type) с fallback на эвристику каталогов (как generate_minimal_ai_platform_yaml).
-        ## @io        ⎋ str — "backend" | "frontend"
+        ##           (поле type) с fallback на эвристику каталогов (_guess_project_type_from_dirs).
+        ## @io        ⎋ str — "backend" | "frontend" | "ai-project"
         """
         ptype = ""
         try:
@@ -658,12 +654,35 @@ jobs:
         # ruff: ignore[BLE001] — деградация на эвристику каталогов (best-effort)
         except Exception:  # noqa: EXC — best-effort: ai-platform.yaml unreadable, тип угадывается
             logger.info("[IMP:6][%s][adopt] ai-platform.yaml unreadable — type guessed", self._log_prefix)
-        if ptype in {"backend", "frontend"}:
+        if ptype in {"backend", "frontend", "ai-project"}:
             logger.info("[IMP:7][%s][adopt] Project type from ai-platform.yaml: %s", self._log_prefix, ptype)
             return ptype
-        ptype = "frontend" if (self.project_dir / "src" / "index.html").exists() else "backend"
+        ptype = self._guess_project_type_from_dirs()
         logger.info("[IMP:7][%s][adopt] Project type guessed: %s", self._log_prefix, ptype)
         return ptype
+
+    def _guess_project_type_from_dirs(self) -> str:
+        """Directory-heuristic adopt-типа: frontend → ai-project → backend (единая точка yaml-gen + sync).
+        ai-project = kernel-бот @ai-project/* (template-ai-project W3 D9): конвенционные папки
+        src/{capabilities,entrypoints,roles} (validateStartup conventionDirs) или пакет @ai-project/
+        в package.json — самый специфичный маркер (DevPlan 019).
+
+        ## @purpose  Единый fallback-детектор типа для adopt без template-параметра (Drift-prevention:
+        ##           generate_minimal_ai_platform_yaml и _detect_project_type используют одну эвристику).
+        ## @io        ⎋ str — "backend" | "frontend" | "ai-project" · @complexity O(P) — чтение package.json
+        """
+        if (self.project_dir / "src" / "index.html").exists() or (self.project_dir / "frontend").is_dir():
+            return "frontend"
+        if any((self.project_dir / "src" / d).is_dir() for d in ("capabilities", "entrypoints", "roles")):
+            return "ai-project"
+        pkg = self.project_dir / "package.json"
+        if pkg.is_file():
+            try:
+                if '"@ai-project/' in pkg.read_text(encoding="utf-8"):
+                    return "ai-project"
+            except OSError:
+                logger.info("[IMP:6][%s][adopt] package.json unreadable — type guessed", self._log_prefix)
+        return "backend"
 
     def _resolve_node_yaml_path(self) -> Path | None:
         """Resolve node.yaml path via canonical NodeYaml.resolve (DevPlan 116 B6 T8.1).
