@@ -147,7 +147,13 @@ $ARTIFACT_CONTRACT
   - D6 sync-env: ✅ rc=0; фантомные hostname/services найдены → F-09 фикс (provides filter по enabled node.yaml)
   - D7 provision-llm: **BLOCKED by-design** — litellm не в node.yaml минимального контура, Admin API connection refused; fail-loud поведение корректно (R4: NO_SERVICE = FAIL, не skip)
   - D8 rollback: ✅ orchestrator_cli rollback --project roadmap → snapshot 20260901T134249 → Up (healthy), аудит tag deploy:rollback, внешний HTTPS 200; ROLLED_BACK → re-verify cycle OK
-- [ ] Фаза E: все модули healthy → вкл/выкл → overlays → node-update → converge → сети
+- [x] Фаза E: все модули healthy → вкл/выкл → overlays → node-update → converge → сети
+  - E1: ✅ активные модули healthy (nginx, nginx-prometheus-exporter, loki, status-page, roadmap); docker exec nginx nginx -t → syntax ok
+  - E2: ✅ вкл/выкл status-page: enabled:false → node-update rc=0 → контейнер исчез; enabled:true → rc=0 → Up (healthy)
+  - E3: ✅ overlays (login.asiteam.ru.conf, nginx.conf, roadmap.asiteam.ru.conf) применены в /etc/nginx/conf.d/overlay; nginx -t successful
+  - E4: ✅ node-update ×2 rc=0 (ключи через stdin-prelude, вне argv/логов)
+  - E5: ✅ converge после node-update: FULLY CONVERGED (до первого git-push проектов)
+  - E6: ✅ сетевая правда: roadmap → proxy-net + roadmap-net; proxy-net: nginx/roadmap/status-page. NOTE: staging-*/test-* docker-сети — физический мусор тест-прогонов (контейнеров нет), prune-кандидат, не блокер
 - [ ] Фаза F: DR (F1/F2/F4 by-design BLOCKED: нет postgres в контексте; F3 age-key-backup)
 - [ ] Фаза G: reboot → chaos (fast+night) → load-smoke → e2e-verify → test-node BLOCKED
 - [ ] Фаза H: Release checklist → ПРОМОУТ вербикт → 02-VerificationReport.md
