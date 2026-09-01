@@ -49,7 +49,16 @@ build_ssh_cmd() { python3 -m core.internal.shared.ssh_cmd_builder init "$@"; }
 ## QA C5 (DevPlan 14 T1.4): значения подаются через STDIN (bash builtin printf → pipe),
 ## НЕ позиционным argv python-процесса — /proc/<pid>/cmdline не содержит секретов.
 build_init_secret_prelude() {
-    printf '%s\n%s\n%s\n' "${1:-}" "${2:-}" "${3:-}" | python3 -m core.internal.shared.ssh_cmd_builder init-secrets
+    local _prelude
+    _prelude="$(printf '%s\n%s\n%s\n' "${1:-}" "${2:-}" "${3:-}" | python3 -m core.internal.shared.ssh_cmd_builder init-secrets)" || return $?
+    # φ4-диагностика (022-launch-validation): digest prelude (НЕ содержимое) — сверка
+    # байтов prelude при ре-запусках без раскрытия ключей (секреты не доходят до логов).
+    if [ -n "${_prelude}" ]; then
+        printf '%s' "${_prelude}" | shasum -a 256 | {
+            read -r _d _; echo "[IMP:8][build_init_secret_prelude][diag] prelude digest=${_d} len=${#_prelude}"
+        } >&2
+    fi
+    printf '%s' "${_prelude}"
 }
 # endregion FUNC_build_init_secret_prelude
 
