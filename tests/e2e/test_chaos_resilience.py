@@ -1405,22 +1405,25 @@ def test_docker_daemon_restart_containers_kept(requires_node: str, node_ssh: Nod
     urls = _site_urls(requires_node)
     baseline = snapshot_running_containers(ssh)
 
-    def _started_at_map() -> dict[str, str]:
+    def _started_at_map(containers: list[str]) -> dict[str, str]:
+        # DevPlan 022 G2: список контейнеров динамический (baseline running-набор), НЕ
+        # hardcoded postgres/nginx/litellm/clickhouse — минимальные контуры валидны.
+        names = " ".join(containers)
         res = ssh.ssh_read(
-            'for c in postgres nginx litellm clickhouse; do echo -n "$c "; '
+            f'for c in {names}; do echo -n "$c "; '
             "docker inspect --format '{{.State.StartedAt}}' $c; done",
             timeout=30,
         )
         return dict(line.split() for line in res.stdout.strip().splitlines() if line.strip())
 
-    started_before = _started_at_map()
+    started_before = _started_at_map(sorted(baseline))
     t0 = time.monotonic()
     logger.info("[IMP:9][N3][inject] systemctl restart docker")
     inject = ssh.ssh_exec("systemctl restart docker", timeout=300)
     assert inject.exit_code == 0, f"restart docker failed: {inject.stderr}"
 
     ok, missing = wait_containers_healthy(ssh, timeout_s=240, containers=baseline)
-    started_after = _started_at_map()
+    started_after = _started_at_map(sorted(baseline))
     no_recreate = all(started_after.get(c) == v for c, v in started_before.items())
     sites_flag, codes = wait_sites_up(ssh, urls, timeout_s=120)
     ttr = int(time.monotonic() - t0)
