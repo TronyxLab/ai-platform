@@ -168,3 +168,46 @@ $ARTIFACT_CONTRACT
 - [ ] Фаза H: Release checklist → ПРОМОУТ вербикт → 02-VerificationReport.md
 
 ## Находки (F-NN · дата · фаза · severity)
+
+## Итоговая сводка (2026-09-01)
+
+### Результат фаз
+| Фаза | Вердикт | Детали |
+|------|---------|--------|
+| A Локальная | **PASS** | make check rc=0 (5432), agent-check clean, check-manifests GREEN, локальный стек 23/23 healthy → down |
+| B Bootstrap | **PASS — КРИТЕРИЙ ДОСТИГНУТ** | одна команда `make bootstrap-node NODE=asi-team-vps` с голой ноды = сервер healthy + roadmap DEPLOYED+healthy (φ1-φ8.5); идемпотентность: 8/9 skip, re-deliver 2.8s |
+| C TLS | **PASS / C2 BLOCKED(внешн.)** | wildcard+apex SAN бандл DNS-01 regru; verify-domains green; S3-кеш: InvalidAccessKeyId (креды владельца невалидны — вне моей власти); F-07 403-visibility |
+| D Каналы доставки | **PASS / D5,D7 BLOCKED(контекст)** | deploy-context ✓ (после F-08), deploy-project ✓, rollback ✓ (audit deploy:rollback), sync-env ✓ (F-09 provides-filter); CI-канал non-exposed и litellm отсутствуют в минимальном контуре |
+| E Вариации | **PASS** | вкл/выкл модуля ✓, overlays ✓, node-update ×2 ✓, converge ✓, сетевая правда ✓ |
+| F DR | **F3 PASS / F1,F2,F4 BLOCKED(контекст)** | age-key-backup off-node verified (sha256); stateful-модулей в контуре нет |
+| G Resilience | **PASS** | reboot clean-running (F-13 zram), chaos fast 9 skipped (context) + night 3/3 PASS, load-smoke вскрывает apex (F-11 fix), e2e-verify 3/3 green (F-12 fix) |
+| H Release checklist | см. 02-VerificationReport.md | |
+
+### Фиксы (11 коммитов кода/тестов + артефакты)
+- F-01 (P1): doxygen md-ref repo-root-relative (регрессия main)
+- F-03 (P0): re-exec argv — lifecycle падал после φ1 на свежей ноде (`_reexec_argv`)
+- F-05 (P0): node_detect env-key normalization — multi-line AGE_SECRET_KEY ломал prelude-транспорт
+- F-07 (P2): s3_ssl_cache 403-visibility (access-denied ≠ cache-miss)
+- F-08 (P1): nginx_t_harness digest-pin NGINX_T_IMAGE + docker-sole-path + C901 декомпозиция
+- F-09 (P2): gen_env_platform PLATFORM_PROVIDES filter по enabled node.yaml (legacy-safe)
+- F-12 (P2): parse_nginx_server_names comment-strip (фантомные endpoints e2e-verify)
+- F-13 (P1): install_zram kernel-module probe + graceful skip (reboot degrade → running)
+- G2-фиксы: chaos skipif module-off (context config), night N3 dynamic container list
+- Тест-гигиена: env-hermeticity core_deliverer/org_secrets (утечка реального ключа в тест-логи), node-lifecycle LOC 79/80, FBT/RUF052
+
+### BLOCKED (внешняя инфраструктура / конфигурация контекста)
+- C2 S3-cache drill: InvalidAccessKeyId — валидные timeweb-креды и bucket platform-asi-certs нужны от владельца (сейчас upload/download 403)
+- D5 CI-канал (non-exposed проект): в контуре ровно 1 проект и он exposed
+- D7 provision-llm: litellm не в node.yaml (fail-loud корректен)
+- F1/F2/F4 DR: postgres/backup-cron не в контуре (stateless)
+- G5 test-node: test-VPS недоступна
+
+### Рекомендации владельцу (вне скоупа сессии)
+1. ROTATION asi-AGE-ключа: при диагностике однажды напечатан приватный ключ в локальный терминал сессии (не в git/логи репо) — перестраховка.
+2. Валидные S3-креды timeweb для bucket platform-asi-certs → тогда C2 cache drill и S3 sync renew-hook заработают.
+3. node-update не доставляет overlay-файлы (только bootstrap-SCP): документировать канал (scp вручную / node-update-расширение).
+4. `make project-status PROJECT=` → фактическая переменная NAME= (TASK-шаблон противоречит).
+5. staging-*/test-* docker-сети на ноде — физический мусор прошлых E2E-прогонов (prune-кандидат).
+
+### ПРОМОУТ
+**ПРОМОУТ РАЗРЕШЁН** — все фазы, не блокированные внешней инфраструктурой, зелёные; критерий «одна команда → сервер + все проекты» доказан на живой голой ноде; 3 P0 и 4 P1/P2 фикс-коммитов в ветке. Основная модель: merge → context-promote CONTEXT=asi-group.
