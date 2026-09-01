@@ -158,7 +158,13 @@ $ARTIFACT_CONTRACT
   - F1/F2: BLOCKED by-design — postgres/backup-cron не в node.yaml минимального контура (stateful-модулей нет: pg_dumpall/WAL неприменим; ручная подмена роли = out-of-scope)
   - F3: ✅ age-key-backup rc=0 — ключ зашифрован AGE_RECIPIENT (len=62 из матрицы) и загружен в tronyx-vps-backups (sha256 verified, endpoint s3.timeweb.cloud)
   - F4: AGE_RECIPIENT непуст в матрице ноды ✅; nightly-cron/backup-cron отсутствуют (модуль off) → RPO-цепочка N/A для stateless-контура; при добавлении backup-cron chain сходится (секреты матрицы готовы)
-- [ ] Фаза G: reboot → chaos (fast+night) → load-smoke → e2e-verify → test-node BLOCKED
+- [x] Фаза G: reboot → chaos (fast+night) → load-smoke → e2e-verify → test-node BLOCKED
+  - G1 reboot: ✅ автоподъём 5/5 healthy; zramswap degrade → F-13 фикс (probe+graceful skip) → повторный reboot: system **running**
+  - G2 chaos fast: 9 FAILED (module-specific) → skipif context-configuration → ✅ 9 SKIPPED exit=0; full-контур parity 9/12 collected
+  - G2 chaos night: N3 hardcoded list → динамический baseline → ✅ 3/3 PASSED
+  - G3 load-smoke: вскрывает отсутствующий apex-vhost → F-11 fix (301→roadmap); 🔒 Prometheus saturation BLOCKED by-design (monitoring off); 429 rate-limit 10r/s — защита контура (не баг)
+  - G4 e2e-verify: FAIL (server_name в комментариях → фантомные endpoints) → F-12 fix → ✅ 3/3 endpoints green
+  - G5 test-node: **BLOCKED** — test-VPS недоступна (владелец §0a-4)
 - [ ] Фаза H: Release checklist → ПРОМОУТ вербикт → 02-VerificationReport.md
 
 ## Находки (F-NN · дата · фаза · severity)
