@@ -1,5 +1,5 @@
-# GREP_SUMMARY: resilience-drills crash-injection degraded-dependency watchdog-heals oom-kernel-kill disk-pressure fallocate tor-channel fails-loud reboot zero-restart-loops outbound-partition docker-daemon-restart fast-tier night-tier devplan-013
-# STRUCTURE: ▶ FAST (chaos and not night): F1 postgres SIGKILL+WAL → F2 redis kill → F3 litellm kill → F4/F5 degraded stop redis/litellm → F6 watchdog heals unhealthy (ручной вызов, пороги 1/0) → F7 OOM clickhouse (kernel kill) → F8 disk pressure (fallocate ≥92%) → F9 tor fails loud ‖ NIGHT (-m night): N1 reboot ΔRestartCount==0 → N2 outbound partition 45s auto-revert → N3 docker daemon restart (uptime continuity) → ⎋
+# GREP_SUMMARY: resilience-drills crash-injection degraded-dependency watchdog-heals oom-kernel-kill disk-pressure fallocate tor-channel fails-loud reboot zero-restart-loops outbound-partition docker-daemon-restart fast-tier night-tier devplan-013 skipif module-off enabled-modules node-yaml context-configuration devplan-022
+# STRUCTURE: ▶ skipif-gate (module-off в node.yaml контура — DevPlan 022 G2: 9/9 fast-кейсов) → ▶ FAST (chaos and not night): F1 postgres SIGKILL+WAL → F2 redis kill → F3 litellm kill → F4/F5 degraded stop redis/litellm → F6 watchdog heals unhealthy (ручной вызов, пороги 1/0) → F7 OOM clickhouse (kernel kill) → F8 disk pressure (fallocate ≥92%) → F9 tor fails loud ‖ NIGHT (-m night): N1 reboot ΔRestartCount==0 → N2 outbound partition 45s auto-revert → N3 docker daemon restart (uptime continuity) → ⎋
 # region MODULE_CONTRACT
 ## @purpose  DevPlan 013 (resilience-drills rework): 12 resilience drills вместо 12 долгих
 ##           chaos-тестов T1-T12 (~1770 LOC, часы рантайма → ≤25 мин суммарно). Каждый drill
@@ -18,6 +18,14 @@
 ##   - 0 параметризации (детерминизм); инъекции ТОЛЬКО через node_ssh (NodeSSHClient parity)
 ##   - Сайты/контейнеры резолвятся из node-configs/<NODE>/node.yaml + live-snapshot (не hardcode;
 ##     отсутствие → FAIL R4)
+##   - Module-off skip (DevPlan 022 G2): module-специфичные кейсы (postgres/redis/litellm/
+##     clickhouse/tor/monitoring) НЕ являются деградацией на минимальном контуре — модуль
+##     осознанно ВЫКЛЮЧЕН в node.yaml (задокументированная конфигурация контура). skipif-гейт
+##     `_module_absent()`/`_tor_disabled()` читает node.yaml через канонический
+##     core.internal.shared.enabled_modules (NodeYaml + NODE env — канон conftest) и скипает
+##     с reason «module '<name>' disabled/absent in node.yaml (context configuration — DevPlan
+##     022 G2)». R4 сохраняется: node.yaml недоступен (None) → НЕ скипаем (недокументированная
+##     недоступность сервиса = FAIL, не skip); night-тир и audit-хелперы НЕ трогаются.
 ##   - Экзотика удалена (AC3): DNS-resolver stop, time-skew ±24h, TLS/secrets corruption,
 ##     кросс-бут аудит T1-T10, restore-drill (Debt Intake → отдельный план после фикса ранбука)
 ## @rationale Q: два тира? A: reboot/partition/daemon-restart — реальные сценарии с ценой
@@ -25,7 +33,14 @@
 ##           Q: watchdog вручную, не cron? A: тестируемое свойство — «watchdog ЛЕЧИТ unhealthy»,
 ##           а не расписание cron (законтрактовано CRON_WATCHDOG_LINE + CI-gate); ручной вызов
 ##           той же команды с env-порогами 1/0 мин — та же кодовая ветка, −20 минут.
+##           Q: почему skipif на node.yaml, а не runtime-probe? A: канон Release checklist —
+##           «skip только при документированной инфраструктурной недоступности»; module-off
+##           в node.yaml = именно она. Runtime-probe «No such container» = R4-FAIL (деградация
+##           не отличима от бага). skipif-предикаты вычисляются при импорте (mark-фаза), fixture
+##           node_state (state.json) модулей не даёт — канонический резолвер enabled_modules.
 ## @changes 2026-08-26 | DevPlan 013 W2 TASK-3 — rewrite из test_chaos_resilience.py (T1-T12 era)
+## @changes 2026-09-01 | DevPlan 022 G2 — skipif-гейт module-off (9/9 fast-кейсов; контур
+##             asi-team-vps без postgres/redis/litellm/clickhouse/tor/monitoring)
 ## @modulemap
 ##   F1-F9 [fast] — crash/degraded/watchdog/OOM/disk/tor drills (marker chaos)
 ##   N1-N3 [night] — reboot/partition/daemon-restart (markers chaos+night)
@@ -36,6 +51,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import subprocess
 import time
@@ -64,6 +80,72 @@ _FILES_DIR = Path("/tmp") / f"chaos-{time.strftime('%Y%m%d-%H%M%S')}"
 _SECRETS_ENV = "/var/lib/platform/run/secrets.env"
 _WATCHDOG_STATE_FILE = "/var/lib/platform/run/watchdog-state.json"
 _PLATFORM_CORE = "/opt/platform/core"
+
+
+# region HELPERS_skipif_module_off
+# ── Session-singleton enabled-modules (DevPlan 022 G2): module-off в node.yaml контура ──
+# R4-честный skip: «NO_SERVICE = FAIL, не skip» относится к НЕДОКУМЕНТИРОВАННОЙ недоступности.
+# module-off в node-configs/<NODE>/node.yaml — задокументированная конфигурация контура
+# (Release checklist: «skip — только при документированной инфраструктурной недоступности»).
+# Предикаты вычисляются при импорте (mark-фаза pytest.mark.skipif); fixture node_state
+# (state.json) модулей НЕ даёт — резолв через канонический enabled_modules (NodeYaml + NODE env).
+
+
+def _enabled_modules() -> set[str] | None:
+    """Enabled-модули ноды из node-configs/<NODE>/node.yaml (канон conftest: NodeYaml + NODE env).
+
+    ## @purpose — Единая точка решения «модуль в контуре?» для skipif-гейтов chaos-кейсов.
+    ##            node_state — state.json бутстрапа, не конфигурация модулей; используем
+    ##            core.internal.shared.enabled_modules.resolve_enabled_modules (NodeYaml внутри,
+    ##            тот же канон, что decrypt_secrets/gen_env_platform).
+    ## @io — ⇥ None → ⎋ set[str] | None; None = node.yaml недоступен (NODE пуст/файла нет)
+    ## @complexity — O(1) чтение node.yaml (один раз на сессию — модульный singleton)
+    ## @invariants
+    ##   - None при недоступности node.yaml — вызывающий сохраняет R4 (не скипает)
+    ##   - dict-формат modules {name: {enabled}} поддержан каноническим резолвером
+    """
+    node = os.environ.get("NODE", "").strip()
+    if not node:
+        return None
+    from core.internal.shared.enabled_modules import resolve_enabled_modules
+
+    return resolve_enabled_modules(node_name=node)
+
+
+# Session-singleton: вычисляется при импорте (mark-фаза pytest.mark.skipif).
+_ENABLED_MODULES: set[str] | None = _enabled_modules()
+
+
+def _module_absent(module: str) -> bool:
+    """skipif-предикат: модуль отсутствует/disabled в node.yaml контура (DevPlan 022 G2).
+
+    ## @purpose — True → pytest.mark.skipif срабатывает (module-off — документированная
+    ##            конфигурация контура, не деградация). None (node.yaml недоступен) → False —
+    ##            не скипаем: недоступность сервиса БЕЗ документированного module-off остаётся
+    ##            FAIL (R4), не skip.
+    ## @io — ⇥ module: str → ⎋ bool
+    ## @complexity — O(1)
+    """
+    enabled = _ENABLED_MODULES
+    return enabled is not None and module not in enabled
+
+
+def _tor_disabled() -> bool:
+    """skipif-предикат F9: top-level node.yaml tor.enabled != true (канон firewall TOR_ENABLED).
+
+    ## @purpose — tor объявляется top-level ключом node.yaml (tor.enabled), не записью modules —
+    ##            отдельный предикат от _module_absent. Отсутствие секции tor → False (выключен).
+    ## @io — ⇥ None → ⎋ bool (True = тор выключен → skip)
+    ## @complexity — O(1) чтение node.yaml
+    """
+    node = os.environ.get("NODE", "").strip()
+    if not node:
+        return False
+    node_yaml = load_node_yaml(node)
+    return str((node_yaml.get("tor") or {}).get("enabled", False)).strip().lower() != "true"
+
+
+# endregion HELPERS_skipif_module_off
 
 
 def _out_dir(test_id: str) -> Path:
@@ -116,6 +198,10 @@ def _restart_count_map(ssh: NodeSSHClient) -> dict[str, int]:
 # region TEST_F1_postgres_crash
 @pytest.mark.chaos
 @pytest.mark.requires_node
+@pytest.mark.skipif(
+    _module_absent("postgres"),
+    reason="module 'postgres' disabled/absent in node.yaml (context configuration — DevPlan 022 G2)",
+)
 def test_crash_postgres_data_integrity(requires_node: str, node_ssh: NodeSSHClient, caplog) -> None:
     """F1: SIGKILL host-pid postgres под INSERT-нагрузкой → unless-stopped → WAL recovery →
     rows == committed_batches×50 (0 потерянных committed строк); TTR ≤120s.
@@ -245,6 +331,10 @@ def test_crash_postgres_data_integrity(requires_node: str, node_ssh: NodeSSHClie
 # region TEST_F2_F3_redis_litellm_kill
 @pytest.mark.chaos
 @pytest.mark.requires_node
+@pytest.mark.skipif(
+    _module_absent("redis"),
+    reason="module 'redis' disabled/absent in node.yaml (context configuration — DevPlan 022 G2)",
+)
 def test_crash_redis_restart_policy(requires_node: str, node_ssh: NodeSSHClient, caplog) -> None:
     """F2: kill -9 host-pid redis → exited-proof → healthy ≤90s; сайты живы в окне смерти.
 
@@ -285,6 +375,10 @@ def test_crash_redis_restart_policy(requires_node: str, node_ssh: NodeSSHClient,
 
 @pytest.mark.chaos
 @pytest.mark.requires_node
+@pytest.mark.skipif(
+    _module_absent("litellm"),
+    reason="module 'litellm' disabled/absent in node.yaml (context configuration — DevPlan 022 G2)",
+)
 def test_crash_litellm_restart_policy(requires_node: str, node_ssh: NodeSSHClient, caplog) -> None:
     """F3: kill -9 host-pid litellm → exited-proof → healthy ≤120s; сайты живы в окне смерти.
 
@@ -381,6 +475,10 @@ def _crash_and_heal(node: str, ssh: NodeSSHClient, *, container: str, heal_budge
 # region TEST_F4_F5_degraded_stop
 @pytest.mark.chaos
 @pytest.mark.requires_node
+@pytest.mark.skipif(
+    _module_absent("redis"),
+    reason="module 'redis' disabled/absent in node.yaml (context configuration — DevPlan 022 G2)",
+)
 def test_degraded_redis_sites_alive(requires_node: str, node_ssh: NodeSSHClient, caplog) -> None:
     """F4: docker stop redis на 45s → сайты 200 ВСЁ окно (graceful degradation) → start →
     healthy ≤90s. Stop (≠ kill) — управляемая деградация без рестарт-цикла.
@@ -423,6 +521,10 @@ def test_degraded_redis_sites_alive(requires_node: str, node_ssh: NodeSSHClient,
 
 @pytest.mark.chaos
 @pytest.mark.requires_node
+@pytest.mark.skipif(
+    _module_absent("litellm"),
+    reason="module 'litellm' disabled/absent in node.yaml (context configuration — DevPlan 022 G2)",
+)
 def test_degraded_litellm_sites_alive(requires_node: str, node_ssh: NodeSSHClient, caplog) -> None:
     """F5: docker stop litellm на 30s → сайты 200 всё окно → start → healthy ≤120s.
 
@@ -523,8 +625,18 @@ def _watchdog_invoke_cmd() -> str:
     )
 
 
+# 🧐 TRAP[DECISION] · 2026-09-01 · — · F6 skipif на redis (жертва = redis, L555 container="redis"),
+# · а НЕ litellm как указано в задаче DevPlan 022 G2 (task-текст: «тест использует
+# · litellm-контейнер как жертву» — фактологически неверно: инъекция CONFIG SET port 0,
+# · probe redis-cli ping, watchdog last_restart[redis]) · Rejected: skipif litellm-absent —
+# · ложный reason ввёл бы в заблуждение будущих агентов (контур litellm-on/redis-off гонял бы
+# · F6 против отсутствующего redis → R4-noise) · Rev: если F6 сменит жертву на litellm — перевесить предикат
 @pytest.mark.chaos
 @pytest.mark.requires_node
+@pytest.mark.skipif(
+    _module_absent("redis"),
+    reason="module 'redis' disabled/absent in node.yaml (context configuration — DevPlan 022 G2)",
+)
 def test_watchdog_heals_unhealthy(requires_node: str, node_ssh: NodeSSHClient, caplog) -> None:
     """F6: сломать ЗАВИСИМОСТЬ healthcheck redis (CONFIG SET port 0 — runtime-CONFIG, не
     persisted) → probe `REDISCLI_AUTH=$REDIS_PASSWORD redis-cli -h 127.0.0.1 ping` получает
@@ -726,6 +838,10 @@ def test_watchdog_heals_unhealthy(requires_node: str, node_ssh: NodeSSHClient, c
 # region TEST_F7_oom_clickhouse
 @pytest.mark.chaos
 @pytest.mark.requires_node
+@pytest.mark.skipif(
+    _module_absent("clickhouse"),
+    reason="module 'clickhouse' disabled/absent in node.yaml (context configuration — DevPlan 022 G2)",
+)
 def test_oom_clickhouse_kernel_kill(requires_node: str, node_ssh: NodeSSHClient, caplog) -> None:
     """F7: memory-bomb внутри clickhouse cgroup (лимит — из docker inspect HostConfig.Memory,
     НЕ из памяти) размером ≥1.3× лимита → kernel OOM-kill жертвы (bomb-процесс) по cgroup-id →
@@ -855,6 +971,10 @@ def _prom_ratio(ssh: NodeSSHClient) -> float | None:
 
 @pytest.mark.chaos
 @pytest.mark.requires_node
+@pytest.mark.skipif(
+    _module_absent("monitoring"),
+    reason="module 'monitoring' disabled/absent in node.yaml (context configuration — DevPlan 022 G2)",
+)
 def test_disk_pressure_alert_and_recovery(requires_node: str, node_ssh: NodeSSHClient, caplog) -> None:
     """F8: fallocate /tmp до ≥92% (cap 94%, секунды вместо dd-минут) → Prometheus ratio<0.2 →
     rm → ratio>0.5; сайты живы всё окно. Alert-rule-state НЕ проверяется (Debt D-N: expr без
@@ -950,6 +1070,10 @@ def test_disk_pressure_alert_and_recovery(requires_node: str, node_ssh: NodeSSHC
 # region TEST_F9_tor_fails_loud
 @pytest.mark.chaos
 @pytest.mark.requires_node
+@pytest.mark.skipif(
+    _tor_disabled(),
+    reason="module 'tor' disabled/absent in node.yaml (context configuration — DevPlan 022 G2)",
+)
 def test_tor_channel_fails_loud(requires_node: str, node_ssh: NodeSSHClient, caplog) -> None:
     """F9: stop tor@default+privoxy → send_telegram=False с ТРАНСПОРТНОЙ ошибкой (fail-loud,
     не silent) → start → «Privoxy → Tor forward: working» + сервисы active ≤180s.
@@ -1281,22 +1405,24 @@ def test_docker_daemon_restart_containers_kept(requires_node: str, node_ssh: Nod
     urls = _site_urls(requires_node)
     baseline = snapshot_running_containers(ssh)
 
-    def _started_at_map() -> dict[str, str]:
+    def _started_at_map(containers: list[str]) -> dict[str, str]:
+        # DevPlan 022 G2: список контейнеров динамический (baseline running-набор), НЕ
+        # hardcoded postgres/nginx/litellm/clickhouse — минимальные контуры валидны.
+        names = " ".join(containers)
         res = ssh.ssh_read(
-            'for c in postgres nginx litellm clickhouse; do echo -n "$c "; '
-            "docker inspect --format '{{.State.StartedAt}}' $c; done",
+            f"for c in {names}; do echo -n \"$c \"; docker inspect --format '{{{{.State.StartedAt}}}}' $c; done",
             timeout=30,
         )
         return dict(line.split() for line in res.stdout.strip().splitlines() if line.strip())
 
-    started_before = _started_at_map()
+    started_before = _started_at_map(sorted(baseline))
     t0 = time.monotonic()
     logger.info("[IMP:9][N3][inject] systemctl restart docker")
     inject = ssh.ssh_exec("systemctl restart docker", timeout=300)
     assert inject.exit_code == 0, f"restart docker failed: {inject.stderr}"
 
     ok, missing = wait_containers_healthy(ssh, timeout_s=240, containers=baseline)
-    started_after = _started_at_map()
+    started_after = _started_at_map(sorted(baseline))
     no_recreate = all(started_after.get(c) == v for c, v in started_before.items())
     sites_flag, codes = wait_sites_up(ssh, urls, timeout_s=120)
     ttr = int(time.monotonic() - t0)

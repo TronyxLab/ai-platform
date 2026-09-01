@@ -1,5 +1,5 @@
-# GREP_SUMMARY: test-helpers-system-w9, T9.12, ensure-sops, shutil-which, no-redownload, T9.13, journald, active-line, commented, idempotent, zram, swappiness, prune-cron, retry, backoff, purge-cruft, purge-provider-repos, fstab, fstrim, DevPlan-162, DevPlan-164, DI, runner-param, path-param
-# STRUCTURE: ▶ FakeCommandRunner ┌recording run() + scriptable rc┐ → test_*_sops_no_redownload ┌which → path┐ → ensure_sops(which=) → 0 subprocess │ ▶ test_*_journald_commented ┌#Storage=persistent┐ → active-check False → append активной строки │ ▶ test_*_journald_active → no-op (без записи) │ ▶ test_install_zram_* ┌zramswap+sysctl paths (DI params)┐ │ ▶ test_install_cron_prune_* ┌cron_file path param┐ │ ▶ test_run_with_retry_* ┌runner fake┐ │ ▶ test_purge_cruft_* ┌runner fake dpkg-gate┐ │ ▶ test_purge_provider_repos_* ┌sources_dir path param┐ │ ▶ test_*_fstab* ┌normalize + ensure (fstab_path param)┐
+# GREP_SUMMARY: test-helpers-system-w9, T9.12, ensure-sops, shutil-which, no-redownload, T9.13, journald, active-line, commented, idempotent, zram, swappiness, zram-probe, graceful-skip, kernel-module, zramswap-disable, prune-cron, retry, backoff, purge-cruft, purge-provider-repos, fstab, fstrim, DevPlan-162, DevPlan-164, 022, DI, runner-param, path-param
+# STRUCTURE: ▶ FakeCommandRunner ┌recording run() + scriptable rc┐ → test_*_sops_no_redownload ┌which → path┐ → ensure_sops(which=) → 0 subprocess │ ▶ test_*_journald_commented ┌#Storage=persistent┐ → active-check False → append активной строки │ ▶ test_*_journald_active → no-op (без записи) │ ▶ test_install_zram_* ┌modinfo-probe → skip|zramswap+sysctl paths (DI params)┐ │ ▶ test_install_cron_prune_* ┌cron_file path param┐ │ ▶ test_run_with_retry_* ┌runner fake┐ │ ▶ test_purge_cruft_* ┌runner fake dpkg-gate┐ │ ▶ test_purge_provider_repos_* ┌sources_dir path param┐ │ ▶ test_*_fstab* ┌normalize + ensure (fstab_path param)┐
 # region MODULE_CONTRACT
 ## @purpose  Regression-тесты T9.12 (B-4) и T9.13 (B-8) DevPlan 136 W9: helpers/system.py —
 ##           ensure_sops через shutil.which (повторный φ1 БЕЗ re-download) и journald
@@ -14,6 +14,8 @@
 ##   - sops в PATH → 0 скачиваний (R5-negative: command -v через exec ВСЕГДА падал → re-download)
 ##   - Комментированная Storage=строка не считается настроенной (R5-negative на вход B-8)
 ##   - zram/prune: content-match no-op (повторный вызов = 0 записей), атомарность 0644
+##   - zram (022 G1): modinfo-probe первый вызов; probe-fail → skip (True, 0 apt, 0 конфигов);
+##     probe-fail + пакет установлен → systemctl disable zramswap.service (не remove); probe-ok → 1:1
 ##   - retry: attempts/backoff контракт (успех на 2-й, raise после 3)
 ##   - purge: только installed пакеты (dpkg-gate), sysstat/docker-buildx НЕ в списке
 ##   - purge_provider_repos: только timeweb-* файлы; чужое sources не трогается
@@ -26,6 +28,9 @@
 ## @changes  2026-08-13 · DevPlan 163 W-H — DI-перевод: FakeCommandRunner + path/runner параметры
 ##            (29 патча → 0; production DI: helpers/system.py +security_updates.py)
 ## @changes  2026-08-13 · DevPlan 164 — +purge_provider_repos (W0-3.2), +fstab (W0-3.4)
+## @changes  2026-09-01 · 022 G1 (reboot-drill asi-team-vps) — +zram probe-тесты: probe-fail →
+##           graceful skip (пакет НЕ ставится, конфиги НЕ пишутся); probe-fail + пакет установлен
+##           → systemctl disable zramswap.service (re-идемпотентность); probe-ok → прежний путь 1:1
 # endregion MODULE_CONTRACT
 
 import logging
@@ -230,6 +235,114 @@ def test_install_zram_write_failure_returns_false(caplog: pytest.LogCaptureFixtu
     finally:
         ro_dir.chmod(0o700)  # cleanup для tmp_path (pytest удаляет дерево)
     logger.critical("[IMP:9][test] install_zram failure → False (non-fatal) — OK (W4-1)")
+
+
+# 🧪 TRAP[TEST] · 2026-09-01 · REGRESSION (R5 negative) · 022 G1 — probe-fail → graceful skip
+# · Scenario: modinfo probe rc=1 (модуль zram отсутствует на ядре) + zram-tools НЕ установлен →
+# ·   install_zram() True (skip — НЕ failure); пакет НЕ ставится (0 apt-get), конфиги НЕ пишутся,
+# ·   disable не вызывается (пакет не установлен); лог «kernel module zram not available»
+# · Last fail: 2026-09-01 — reboot-drill G1 (022): zram-tools ставился безусловно, zramswap.service
+# ·   FAILED на каждый boot на Timeweb-ядре 6.8.0-138-generic (linux-modules без modules-extra)
+# · Remove if: probe-семантика install_zram меняется
+@ldd_trajectory
+def test_install_zram_skip_when_kernel_module_missing(
+    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+) -> None:
+    """022 G1: модуль zram недоступен + пакет не установлен → graceful skip (True, 0 apt)."""
+    caplog.set_level(logging.INFO)
+    default_file = tmp_path / "zramswap"
+    sysctl_file = tmp_path / "90-platform-zram.conf"
+
+    def _rc(cmd, _idx):
+        if cmd[0] == "modinfo":
+            return 1  # модуль zram недоступен (probe-fail)
+        if cmd[:2] == ["dpkg", "-s"]:
+            return 1  # zram-tools НЕ установлен
+        return 0
+
+    fake = FakeCommandRunner(rc_fn=_rc)
+
+    assert sys_helpers.install_zram(str(default_file), str(sysctl_file), runner=fake) is True
+    assert not any(c[0] == "apt-get" for c in fake.calls), "пакет НЕ ставится при недоступном модуле"
+    assert not default_file.exists() and not sysctl_file.exists(), "конфиги НЕ пишутся при skip"
+    assert not any(c[:2] == ["systemctl", "disable"] for c in fake.calls), "нет disable (пакет не установлен)"
+    assert "kernel module zram not available" in caplog.text, "skip-лог с причиной (022 G1)"
+    assert "zram skipped" in caplog.text, "graceful skip маркер в логе"
+    logger.critical("[IMP:9][test] install_zram graceful skip on missing module — OK (022 G1)")
+
+
+# 🧪 TRAP[TEST] · 2026-09-01 · REGRESSION (R5 negative) · 022 G1 — probe-fail + пакет установлен → disable
+# · Scenario: modinfo rc=1 + zram-tools УЖЕ установлен (dpkg rc=0, прошлый bootstrap) →
+# ·   systemctl disable zramswap.service (ровно 1 вызов), НЕ apt remove; конфиги НЕ пишутся;
+# ·   True; повторный вызов идемпотентен (тот же disable-путь, снова True)
+# · Last fail: 2026-09-01 — reboot-drill G1 (022): установленный zram-tools продолжал
+# ·   FAILED-цикл zramswap.service на каждый reboot (systemctl degraded)
+# · Remove if: re-идемпотентность disable-семантики меняется
+@ldd_trajectory
+def test_install_zram_disables_service_when_module_missing_and_installed(
+    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+) -> None:
+    """022 G1: probe-fail + zram-tools установлен → disable zramswap.service (не remove)."""
+    caplog.set_level(logging.INFO)
+    default_file = tmp_path / "zramswap"
+    sysctl_file = tmp_path / "90-platform-zram.conf"
+    fake = FakeCommandRunner(rc_fn=lambda cmd, _: 1 if cmd[0] == "modinfo" else 0)
+
+    assert sys_helpers.install_zram(str(default_file), str(sysctl_file), runner=fake) is True
+    disable_calls = [c for c in fake.calls if c[:2] == ["systemctl", "disable"]]
+    assert len(disable_calls) == 1, f"ровно один disable zramswap.service, got {fake.calls}"
+    assert disable_calls[0][2] == sys_helpers.ZRAM_SERVICE, f"disable {sys_helpers.ZRAM_SERVICE}"
+    assert not any(c[0] == "apt-get" for c in fake.calls), "повторный apt install НЕ вызывается"
+    assert not default_file.exists(), "конфиги НЕ пишутся при skip"
+    assert "zramswap.service disabled" in caplog.text
+
+    # re-идемпотентность: повторный вызов на той же ноде → тот же disable-путь, True
+    assert sys_helpers.install_zram(str(default_file), str(sysctl_file), runner=fake) is True
+    logger.critical("[IMP:9][test] install_zram disables zramswap when module missing — OK (022 G1)")
+
+
+# 🧪 TRAP[TEST] · 2026-09-01 · REGRESSION · 022 G1 — probe-ok → прежний путь 1:1
+# · Scenario: modinfo probe rc=0 (модуль доступен) + zram-tools НЕ установлен → прежний путь:
+# ·   apt-get update/install zram-tools + конфиги (ALGO=zstd/SIZE=4096/PRIORITY=100/swappiness=100);
+# ·   probe выполняется ПЕРВЫМ вызовом; True
+# · Last fail: N/A (новый тест 022 G1 — probe-ok ветка 1:1)
+# · Remove if: probe-ok путь install_zram меняется
+@ldd_trajectory
+def test_install_zram_probe_ok_old_path_installs_package(
+    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+) -> None:
+    """022 G1: probe-ok → прежний путь (apt install + конфиги) без изменений (1:1)."""
+    caplog.set_level(logging.INFO)
+    default_file = tmp_path / "zramswap"
+    sysctl_file = tmp_path / "90-platform-zram.conf"
+    dpkg_seen = {"n": 0}
+
+    def _rc(cmd, _idx):
+        if cmd[0] == "modinfo":
+            return 0  # probe-ok: модуль zram доступен
+        if cmd[:2] == ["dpkg", "-s"]:
+            dpkg_seen["n"] += 1
+            # Два gate-вызова (install_zram → install_apt_packages) должны дать «not installed»,
+            # чтобы пакет попал в to_install; verify после install (3-й dpkg) → rc 0 (check=True)
+            return 1 if dpkg_seen["n"] <= 2 else 0
+        return 0
+
+    fake = FakeCommandRunner(rc_fn=_rc)
+
+    assert sys_helpers.install_zram(str(default_file), str(sysctl_file), runner=fake) is True
+    assert fake.calls[0][0] == "modinfo", f"probe выполняется первым (022 G1), got {fake.calls}"
+    apt_calls = [c for c in fake.calls if c[0] == "apt-get"]
+    assert any(c[1] == "install" and sys_helpers.ZRAM_PACKAGE in c for c in apt_calls), (
+        f"apt install {sys_helpers.ZRAM_PACKAGE}, got {apt_calls}"
+    )
+    content = default_file.read_text()
+    assert "ALGO=zstd" in content and "SIZE=4096" in content and "PRIORITY=100" in content
+    assert "vm.swappiness=100" in sysctl_file.read_text()
+    assert default_file.stat().st_mode & 0o777 == 0o644
+    logger.critical("[IMP:9][test] install_zram probe-ok → old path (apt+configs) — OK (022 G1)")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -471,7 +584,7 @@ def test_purge_provider_repos_noop_without_provider(caplog: pytest.LogCaptureFix
     logger.critical("[IMP:9][test] purge_provider_repos no-op without provider repos — OK (W0-3.2)")
 
 
-# endregion
+# endregion Tests: purge_provider_repos (DevPlan 164 W0-3.2)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -556,4 +669,4 @@ def test_ensure_fstab_policy_noop_when_canonical(caplog: pytest.LogCaptureFixtur
     logger.critical("[IMP:9][test] ensure_fstab_policy no-op canonical — OK (W0-3.4)")
 
 
-# endregion
+# endregion Tests: fstab policy (DevPlan 164 W0-3.4)

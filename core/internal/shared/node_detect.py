@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: node-detect, detect-age-key, auto-detect-node-name, AGE_SECRET_KEY, SOPS_AGE_KEY, AGE_SECRET_KEY_FILE, default-key-files, node-configs, NodeDetectionError, shared, cli
-# STRUCTURE: ▶ detect_age_key → ◇ AGE_SECRET_KEY env? → ◇ SOPS_AGE_KEY env? → ◇ AGE_SECRET_KEY_FILE? → ◇ default key file (~/.config/age/keys.txt)? → ◇ /etc/age/key.txt (restore-first fallback)? → ⊕ masked log → ⎋ str|None ── ▶ auto_detect_node_name → ∋ scan node-configs/*/ (skip scripts|secrets) → ◇ count==1? → ⎋ name | ✗ NodeDetectionError ── ▶ CLI → ◇ --detect-age-key | --detect-node-name → ⎋ exit 0|3|1 (3 = key absent)
+# STRUCTURE: ▶ detect_age_key → ⊕ canonicalize env (first AGE-SECRET-KEY- line, comment-scan) → ◇ AGE_SECRET_KEY env? → ◇ SOPS_AGE_KEY env? → ◇ AGE_SECRET_KEY_FILE? → ◇ default key file (~/.config/age/keys.txt)? → ◇ /etc/age/key.txt (restore-first fallback)? → ⊕ masked log → ⎋ str|None ── ▶ auto_detect_node_name → ∋ scan node-configs/*/ (skip scripts|secrets) → ◇ count==1? → ⎋ name | ✗ NodeDetectionError ── ▶ CLI → ◇ --detect-age-key | --detect-node-name → ⎋ exit 0|3|1 (3 = key absent)
 # region MODULE_CONTRACT
 ## @purpose  Canonical single-source-of-truth for AGE secret key detection and node name
 ##           auto-detection. Consolidates duplicate shell implementations from
@@ -33,6 +33,12 @@
 ##   8. Exit 3 (not 1) for "key absent" — lets shell callers distinguish "module/python3 missing"
 ##      (FATAL, exit 1/127) from "ran fine, no key" (non-fatal) WITHOUT inline python3 probes
 ##      (language policy — check-no-new-inline-python3 hook, TRAP[DECISION] at exit-3 site)
+##   9. Env checks (Check 1 AGE_SECRET_KEY / Check 2 SOPS_AGE_KEY) нормализуют значение через
+##      _canonical_age_key() — тот же comment-scan канон, что у файловых чеков (3/4/5):
+##      multi-line env (operator `AGE_SECRET_KEY="$(cat age-key.txt)"`) → первая строка
+##      с AGE-SECRET-KEY- префиксом; неканонический env (comment-only) → IMP:8 WARN +
+##      fallthrough к следующему звену цепочки (НЕ return). ⚠️ TRAP[BUG] 2026-09-01
+##      (P0, asi-team-vps bootstrap φ4 — multi-line env сломал ssh-stdin secret transport)
 ## @rationale DevPlan 104 P1/P2/P3: two copies of detect_age_key (bootstrap.sh + node-update.sh)
 ##            and two of auto_detect_node_name (bootstrap.sh + converge.sh) violated
 ##            single-source-of-truth. age_key.py (DevPlan 078) reduced to compat-re-export shim;
@@ -46,6 +52,9 @@
 ## @changes  2026-08-06 | DevPlan 140 W4 — Check 5 (/etc/age/key.txt) → restore-first fallback
 ##            (не канон): persist удалён из phases/secrets.py; путь через модульную константу
 ##            _ETC_AGE_KEY_FILE (тестируемость, monkeypatch на tmp_path в unit-тестах)
+## @changes  2026-09-01 | P0 fix (asi-team-vps bootstrap φ4) — env-чеки (Check 1/2) нормализуют
+##            multi-line AGE ключ через _canonical_age_key() (первая AGE-SECRET-KEY- строка;
+##            неканон → IMP:8 WARN + fallthrough) — зеркалит comment-scan файловых чеков
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -101,6 +110,11 @@ class NodeDetectionError(Exception):
 ##     не меняется. EnvironmentFacts не подходит: detect_age_key не использует is_root/which/path_isfile.
 ##   - REF-0007 (FAIL-0601): env-значение, ПЕРЕКРЫВАЮЩЕЕ другой (файловый) источник с ДРУГИМ
 ##     значением → WARN оператору (`unset AGE_SECRET_KEY` — канон core/AGENTS.md §Hook-окружение)
+##   - Env-чеки (Check 1/2) нормализуют значение через _canonical_age_key() — тот же
+##     comment-scan канон, что у файловых чеков (3/4/5): multi-line env (operator
+##     `$(cat age-key.txt)`) → первая AGE-SECRET-KEY- строка; неканонический env
+##     (comment-only/без префикса) → IMP:8 WARN + fallthrough к следующему звену (не return).
+##     ⚠️ TRAP[BUG] 2026-09-01 (P0, asi-team-vps φ4): multi-line env ломал ssh-stdin transport
 _KEY_MASK_LEN: int = 8  # сколько символов ключа показывать в маске
 
 
@@ -112,21 +126,35 @@ def detect_age_key(
 ) -> str | None:
     """Detect AGE secret key from env chain.
 
-    ▶ ◇ AGE_SECRET_KEY env? → ◇ SOPS_AGE_KEY env? → ◇ AGE_SECRET_KEY_FILE? → ◇ ~/.config/age/keys.txt? → ◇ /etc/age/key.txt (restore-first fallback)? → ⎋ str | None
+    ▶ ⊕ canonicalize env (first AGE-SECRET-KEY- line, comment-scan) → ◇ AGE_SECRET_KEY env? → ◇ SOPS_AGE_KEY env? → ◇ AGE_SECRET_KEY_FILE? → ◇ ~/.config/age/keys.txt? → ◇ /etc/age/key.txt (restore-first fallback)? → ⎋ str | None
     """
     source: Mapping[str, str] = os.environ if env is None else env
 
     # ── Check 1: AGE_SECRET_KEY env ──
-    # Returns key in canonical AGE-SECRET-KEY-xxxxxxxx… format (with prefix)
-    key = source.get("AGE_SECRET_KEY", "")
-    if key:
+    # Returns key in canonical AGE-SECRET-KEY-xxxxxxxx… format (with prefix).
+    # ⚠️ TRAP[BUG] · 2026-09-01 · P0 · Multi-line env AGE key broke ssh-stdin secret transport
+    # · Symptom: `AGE_SECRET_KEY="$(cat ~/.ssh/age-key-asi.txt)"` → 3-line age-keygen value
+    # ·   (2 comment-строки + ключ) → build_init_secret_prelude printf_q → ssh-stdin (фиксированный
+    # ·   построчный протокол, 3 слота) → remote «FATAL: stdin secret transport: unexpected extra
+    # ·   non-empty line(s) [4] beyond expected 3» → AGE_SECRET_KEY пуст на ноде →
+    # ·   step_10_decrypt_secrets sops «no identity matched any of the recipients» → φ4 FAILED
+    # · Root: env-чеки (Check 1/2) возвращали multi-line env-значение КАК ЕСТЬ — нормализовали
+    # ·   только ФАЙЛОВЫЕ чеки (3/4/5) через comment-scan (аналогичный TRAP[BUG] 2026-08-12,
+    # ·   DevPlan 154 W5: readline без фильтра возвращал комментарий)
+    # · Fix: _canonical_age_key() — первая строка с префиксом AGE-SECRET-KEY- побеждает
+    # ·   (тот же канон); неканонический env → IMP:8 WARN + fallthrough к следующему звену
+    # · Prevention: env-нормализация зеркалит файловый comment-scan канон; multi-line env =
+    # ·   операторская ошибка, которую нормализует ЦЕПОЧКА (stdin-транспорт НЕ трогаем —
+    # ·   фиксированный протокол остаётся инвариантом ssh_cmd_builder)
+    key = _canonical_age_key(source.get("AGE_SECRET_KEY", ""))
+    if key is not None:
         _warn_env_over_file(key, source, home_dir=home_dir, etc_key_file=etc_key_file)
         _log_masked("AGE_SECRET_KEY", key, "environment")
         return key
 
     # ── Check 2: SOPS_AGE_KEY env (deprecated fallback, same canonical format) ──
-    key = source.get("SOPS_AGE_KEY", "")
-    if key:
+    key = _canonical_age_key(source.get("SOPS_AGE_KEY", ""))
+    if key is not None:
         _warn_env_over_file(key, source, home_dir=home_dir, etc_key_file=etc_key_file)
         _log_masked("AGE_SECRET_KEY", key, "SOPS_AGE_KEY env fallback")
         return key
@@ -212,6 +240,43 @@ def _log_masked(key_name: str, key_value: str, source: str) -> None:
 
 
 # endregion FUNC__log_masked
+
+
+# region FUNC__canonical_age_key
+## @purpose — Normalize an AGE key env value to canonical single-line AGE-SECRET-KEY-xxxxxxxx…
+##            form. Операторская ошибка: `AGE_SECRET_KEY="$(cat age-key.txt)"` инжектит
+##            3-строчный age-keygen файл (2 комментария + ключ) в env-переменную — ssh-stdin
+##            secret transport (build_init_secret_prelude → printf_q) читает stdin ПО СТРОКАМ
+##            (фиксированный порядок 3 значений) и multi-line значение разваливает протокол.
+##            Тот же comment-scan канон, что у файловых чеков (3/4/5) — первая строка
+##            с AGE-SECRET-KEY- префиксом побеждает, хвост-комментарий отбрасывается.
+## @io       ⇥ value: str → ⎋ str | None (None = empty/whitespace или нет canonical-строки)
+## @complexity — O(n) — n = количество строк в value
+## @invariants
+##   - Single-line значение с префиксом AGE-SECRET-KEY- → КАК ЕСТЬ (строку не менять — канон)
+##   - Multi-line / без префикса → первая строка, чей strip().startswith("AGE-SECRET-KEY-"),
+##     без комментария-хвоста (split()[0] — ключ не содержит пробелов)
+##   - Нет canonical-строки → None (fallthrough к следующему звену цепочки) + IMP:8 warning
+def _canonical_age_key(value: str) -> str | None:
+    """Return canonical single-line AGE key from a possibly multi-line env value."""
+    if not value or not value.strip():
+        return None
+    if value.startswith("AGE-SECRET-KEY-") and not any(ch in value for ch in ("\n", "\r")):
+        return value
+    key_line = next(
+        (line.strip() for line in value.splitlines() if line.strip().startswith("AGE-SECRET-KEY-")),
+        None,
+    )
+    if key_line is None:
+        logger.warning(
+            "[IMP:8][node_detect] AGE_SECRET_KEY/SOPS_AGE_KEY env value is not canonical "
+            "AGE-SECRET-KEY-… (multi-line/comment-only) — normalized/skipped"
+        )
+        return None
+    return key_line.split()[0]
+
+
+# endregion FUNC__canonical_age_key
 
 
 # region FUNC__first_age_key_line

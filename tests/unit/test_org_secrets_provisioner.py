@@ -60,7 +60,7 @@ def test_resolve_secret_values_sources(tmp_path, monkeypatch) -> None:
     ssh_dir.mkdir(parents=True)
     (ssh_dir / "tronyx-vps-ci").write_text("PRIVATE-KEY-CONTENT")
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("AGE_SECRET_KEY", "AGE-SECRET-TEST")
+    monkeypatch.setenv("AGE_SECRET_KEY", "AGE-SECRET-KEY-TEST")
 
     values = resolve_secret_values(
         "tronyx-lab",
@@ -73,7 +73,7 @@ def test_resolve_secret_values_sources(tmp_path, monkeypatch) -> None:
     import base64 as _b64
 
     assert values["VPS_SSH_KEY"] == _b64.b64encode(b"PRIVATE-KEY-CONTENT").decode("ascii")
-    assert values["AGE_SECRET_KEY"] == "AGE-SECRET-TEST"
+    assert values["AGE_SECRET_KEY"] == "AGE-SECRET-KEY-TEST"
     assert values["TELEGRAM_BOT_TOKEN"] == "tg-token"
     assert values["TELEGRAM_CHAT_ID_CRITICAL"] == "crit-chat"
     assert "TELEGRAM_CHAT_ID_WARNING" not in values
@@ -138,7 +138,7 @@ def test_ensure_context_secrets_run_fn_commands(tmp_path, monkeypatch) -> None:
 
 def test_ensure_context_secrets_gh_failure(tmp_path, monkeypatch) -> None:
     _write_node_config(tmp_path, "tronyx-vps", "9.9.9.9", ["tronyx-lab"])
-    monkeypatch.setenv("AGE_SECRET_KEY", "age")
+    monkeypatch.setenv("AGE_SECRET_KEY", "AGE-SECRET-KEY-age")
 
     ok = ensure_context_secrets(
         "TronyxLab",
@@ -160,6 +160,24 @@ def test_ensure_context_secrets_nothing_to_configure(tmp_path) -> None:
     )
     assert ok is True
     logger.info("[IMP:9][test_org_secrets] nothing-to-configure PASS")
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_env(monkeypatch, tmp_path) -> None:
+    """Hermeticity: реальные секреты оператора недостижимы (022-launch-validation).
+
+    Причина: тест кладёт НЕканонический fake-ключ (AGE-SECRET-TEST) —
+    _canonical_age_key() отвергает его, и detect_age_key() падает в реальный
+    ~/.config/age/keys.txt → real-ключ оператора попадал в values (утёк).
+    Изоляция: delenv env-звеньев + HOME→tmp_path (default-file probe недостижим) +
+    _ETC_AGE_KEY_FILE→tmp_path (restore-first) + _DEFAULT_ENV_FILE→tmp_path
+    (dotenv-чтение не тянет реальный .env платформы).
+    """
+    for var in ("AGE_SECRET_KEY", "SOPS_AGE_KEY", "AGE_SECRET_KEY_FILE"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr("core.internal.shared.node_detect._ETC_AGE_KEY_FILE", str(tmp_path / "etc-age-key.txt"))
+    monkeypatch.setattr("core.internal.deploy.org_secrets_provisioner._DEFAULT_ENV_FILE", tmp_path / "no-platform-env")
 
 
 @pytest.fixture(autouse=True)

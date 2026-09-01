@@ -23,6 +23,7 @@
 import logging
 import os
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -421,6 +422,66 @@ def test_run_phases_reexec_wiring(caplog, monkeypatch) -> None:
         "фазы НЕ должны выполняться до re-exec (текущий 3.12 не исполняет φ2..φ8 без pydantic)"
     )
     logger.critical("[IMP:9][test] _run_phases re-exec wiring: _reexec_lifecycle(target) — OK (F-01)")
+
+
+# 🧪 TRAP[TEST] · 2026-09-01 · P0 (F-01) · file-mode: _reexec_argv сохраняет argv[0] (abs-путь скрипта)
+# · Scenario: канонический запуск node-lifecycle.sh (`python3 cli.py --mode init --node x`) +
+# ·   __main__.__package__='' → argv = [target, abspath(script), *args] — интерпретатор НЕ
+# ·   получает --mode как СВОЙ опцион ("Unknown option: --mode" фикс)
+# · Last fail: 2026-09-01 P0 cold bootstrap asi-team-vps (φ1 complete → φ2 died)
+# · Remove if: механика re-exec argv (F-01) изменится
+@ldd_trajectory
+def test_file_mode_reexec_argv(caplog, monkeypatch) -> None:
+    """_reexec_argv: file-запуск → [target, abspath(cli.py), *args] (argv[0] восстановлен)."""
+    caplog.set_level(logging.INFO)
+    monkeypatch.setattr(
+        cli.sys,
+        "argv",
+        ["/opt/platform/core/internal/bootstrap/lifecycle/cli.py", "--mode", "init", "--node", "x"],
+    )
+    monkeypatch.setattr(sys.modules["__main__"], "__package__", "")
+
+    argv = cli._reexec_argv("/usr/local/bin/python3")
+
+    assert argv == [
+        "/usr/local/bin/python3",
+        "/opt/platform/core/internal/bootstrap/lifecycle/cli.py",
+        "--mode",
+        "init",
+        "--node",
+        "x",
+    ], f"file-mode argv обязан сохранять argv[0]=скрипт (иначе --mode — опцион интерпретатора), got {argv}"
+    logger.critical("[IMP:9][test] _reexec_argv file-mode: argv[0]=скрипт, CLI-args сохранены — OK (F-01)")
+
+
+# 🧪 TRAP[TEST] · 2026-09-01 · P0 (F-01) · package-mode: _reexec_argv → [target, -m, pkg.cli, *args]
+# · Scenario: запуск `python3 -m core.internal.bootstrap.lifecycle.cli --mode init --node x` +
+# ·   __main__.__package__='core.internal.bootstrap.lifecycle' → argv = [target, "-m", "<pkg>.cli", *args]
+# · Last fail: N/A (new — package-режим, F-01 argv fix)
+# · Remove if: механика re-exec argv (F-01) изменится
+@ldd_trajectory
+def test_package_mode_reexec_argv(caplog, monkeypatch) -> None:
+    """_reexec_argv: package-запуск → [target, '-m', '<pkg>.cli', *args]."""
+    caplog.set_level(logging.INFO)
+    monkeypatch.setattr(
+        cli.sys,
+        "argv",
+        ["/opt/platform/core/internal/bootstrap/lifecycle/cli.py", "--mode", "init", "--node", "x"],
+    )
+    monkeypatch.setattr(sys.modules["__main__"], "__package__", "core.internal.bootstrap.lifecycle")
+
+    argv = cli._reexec_argv("/usr/local/bin/python3")
+
+    assert argv == [
+        "/usr/local/bin/python3",
+        "-m",
+        "core.internal.bootstrap.lifecycle.cli",
+        "--mode",
+        "init",
+        "--node",
+        "x",
+    ], f"package-mode argv обязан использовать -m <pkg>.cli, got {argv}"
+    logger.critical("[IMP:9][test] _reexec_argv package-mode: -m core.internal.bootstrap.lifecycle.cli — OK (F-01)")
 
 
 # endregion Tests: re-exec на Python 3.14 (P0 F-01, 2026-08-31)

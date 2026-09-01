@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: docker-ops, shared, ps, inspect, exec, stop, rm, tag, image-inspect, manifest-inspect, network, volume, stats, info, sole-path, cli-shell, runner-param, DI, W4d
-# STRUCTURE: ▶ ┌cmd builder┐ → _run_docker (subprocess.run capture+text, non-fatal; W4d runner-параметр) → ◇ docker_ps/ps_container_names → ◇ docker_inspect/inspect_state_health → ◇ docker_exec → ◇ docker_stop/rm/tag → ◇ docker_image_inspect(_many) → ◇ docker_manifest_inspect(_raw) → ◇ docker_network_inspect/create → ◇ docker_volume_inspect → ◇ docker_info/stats → ◇ CLI --shell (ps|inspect|exec) → ⎋ exit 0|1
+# GREP_SUMMARY: docker-ops, shared, ps, inspect, exec, stop, rm, tag, image-inspect, image-exists, nginx-t, manifest-inspect, network, volume, stats, info, sole-path, cli-shell, runner-param, DI, W4d
+# STRUCTURE: ▶ ┌cmd builder┐ → _run_docker (subprocess.run capture+text, non-fatal; W4d runner-параметр) → ◇ docker_ps/ps_container_names → ◇ docker_inspect/inspect_state_health → ◇ docker_exec → ◇ docker_stop/rm/tag → ◇ docker_image_inspect(_many) → ◇ docker_image_exists/docker_run_nginx_t (nginx_harness, P1 429-фикс) → ◇ docker_manifest_inspect(_raw) → ◇ docker_network_inspect/create → ◇ docker_volume_inspect → ◇ docker_info/stats → ◇ CLI --shell (ps|inspect|exec) → ⎋ exit 0|1
 # region MODULE_CONTRACT
 ## @purpose  Единый слой низкоуровневых docker-операций (DevPlan 128 W1, P2-5/D6).
 ##           docker ps/inspect/exec/stop/rm/tag/image/network/volume/stats/info/manifest/pull —
@@ -42,6 +42,9 @@
 ##            (fake-раннер с ассертами вместо патчей пол-ОС).
 ## @changes  2026-08-04 | DevPlan 128 W1 — Created (P2-5/D6)
 ## @changes  2026-08-13 | DevPlan 160 W4d — +runner: CommandRunner | None (DI, все публичные)
+## @changes  2026-09-01 | P1 (asi-team-vps D-фаза) — +docker_image_exists/docker_run_nginx_t
+##            (nginx_harness docker-sole-path: image inspect pre-flight + docker run nginx -t
+##            перенесены из scaffold/nginx_harness.py в единственный слой; гейт allowlist пуст)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -55,6 +58,7 @@ from typing import cast
 
 from core.internal.shared.subprocess_io import CommandRunner
 from core.internal.shared.timeouts import (
+    COMPOSE_UP_TIMEOUT,
     DOCKER_CMD_TIMEOUT,
     DOCKER_STOP_TIMEOUT,
     IMAGE_CHECK_TIMEOUT,
@@ -437,7 +441,7 @@ def docker_stop(container: str, timeout: int = DOCKER_STOP_TIMEOUT, runner: Comm
 
 # region FUNC_docker_rm
 def docker_rm(
-    container: str, force: bool = False, timeout: int = DOCKER_STOP_TIMEOUT, runner: CommandRunner | None = None
+    container: str, *, force: bool = False, timeout: int = DOCKER_STOP_TIMEOUT, runner: CommandRunner | None = None
 ) -> bool:
     """Remove a container (docker rm [-f]).
 
@@ -550,6 +554,73 @@ def docker_image_inspect_many(
 
 
 # endregion FUNC_docker_image_inspect_many
+
+
+# ── docker image exists / nginx -t (nginx_harness, P1 429-фикс) ───────────────
+
+
+# region FUNC_docker_image_exists
+def docker_image_exists(
+    image_ref: str,
+    timeout: int = IMAGE_CHECK_TIMEOUT,
+    runner: CommandRunner | None = None,
+) -> bool:
+    """Check whether an image is present in the local docker store (docker image inspect ref).
+
+    ▶ ┌image_ref, timeout, runner┐ → _run_docker(["docker","image","inspect",ref]) → ◇ rc==0? → ⎋ bool
+
+    ## @purpose — Единая точка `docker image inspect <ref>` БЕЗ --format — проверка локального
+    ##            наличия digest-pin образа (nginx_harness pre-flight, P1 asi-team-vps 429-фикс):
+    ##            локальный inspect избегает ненужного docker.io anonymous pull на нодах.
+    ## @io — ⇥ image_ref: str — полный image ref (tag@digest), timeout: int,
+    ##       runner: CommandRunner | None → ⎋ bool (True = image present locally)
+    ## @complexity — O(1) + docker image inspect I/O
+    ## @invariants — Non-fatal: False на сбое/таймауте (caller деградирует в pull-путь docker run)
+    """
+    cmd = ["docker", "image", "inspect", image_ref]
+    result = _run_docker(cmd, timeout=timeout, runner=runner)
+    if result is not None and result.returncode == 0:
+        logger.info("[IMP:9][docker_image_exists] Image present locally: %s", image_ref)
+        return True
+    logger.info("[IMP:7][docker_image_exists] Image NOT found locally: %s", image_ref)
+    return False
+
+
+# endregion FUNC_docker_image_exists
+
+
+# region FUNC_docker_run_nginx_t
+def docker_run_nginx_t(
+    mounts: list[str],
+    image: str,
+    timeout: int = COMPOSE_UP_TIMEOUT,
+    runner: CommandRunner | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run `docker run --rm -v <mount>... <image> nginx -t` (nginx_harness validation).
+
+    ▶ ┌mounts, image, timeout, runner┐ → _run_docker(["docker","run","--rm",(-v M)*, image, "nginx","-t"]) → ⎋ CompletedProcess
+
+    ## @purpose — Единая точка `docker run ... nginx -t` для nginx_t_harness (vhost validation
+    ##            harness): монтирует rendered vhosts + dev-certs в изолированный --rm контейнер.
+    ##            Non-fatal: caller классифицирует stderr (config-error vs image-pull failure).
+    ## @io — ⇥ mounts: list[str] — "src:dst:ro" mount-спеки, image: str — полный image ref,
+    ##       timeout: int, runner: CommandRunner | None → ⎋ CompletedProcess[str]
+    ## @complexity — O(1) + docker run I/O
+    ## @invariants — Non-fatal (never raise); `--rm`; порядок: docker run --rm (-v M)* image nginx -t
+    """
+    cmd = ["docker", "run", "--rm"]
+    for mount in mounts:
+        cmd.extend(["-v", mount])
+    cmd.extend([image, "nginx", "-t"])
+    result = _run_docker(cmd, timeout=timeout, runner=runner)
+    if result is None:
+        return _failed_process(cmd)
+    if result.returncode == 0:
+        logger.info("[IMP:9][docker_run_nginx_t] nginx -t succeeded (%d mount(s))", len(mounts))
+    return result
+
+
+# endregion FUNC_docker_run_nginx_t
 
 
 # ── docker manifest inspect ───────────────────────────────────────────────────────

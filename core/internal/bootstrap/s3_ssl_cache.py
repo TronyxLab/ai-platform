@@ -14,6 +14,8 @@
 ## @output   Each function returns bool (success/failure) — non-fatal, never raises.
 ## @invariants
 ##   - Non-fatal: all exceptions caught, logged as warnings, return False
+##   - 403 (AccessDenied/InvalidAccessKeyId/SignatureDoesNotMatch) ≠ cache-miss: WARN
+##     «access denied» (проверь creds/bucket permissions); 404/NoSuchKey = cache-miss (INFO)
 ##   - Uses boto3 client with retries (max_attempts=3, mode='standard')
 ##   - Direct os.environ access — no subshell, no credential propagation bug
 ##   - uploaded files: fullchain.pem, privkey.pem, chain.pem (opt), account.tar.gz, cert.pem (opt)
@@ -34,6 +36,10 @@
 ## @changes   2026-08-27 | DevPlan 015 F-08 — lazy boto3/botocore: top-level импорты убраны,
 ##            _boto3_available() + _get_s3_client→None + локальные exception-классы (S3-кеш
 ##            грузится и деградирует точным диагнозом при отсутствии boto3)
+## @changes   2026-09-01 | Observability (launch-validation asi-team) — 403 ≠ cache-miss:
+##            _download_s3_file/_upload_s3_file WARN «access denied» при
+##            AccessDenied/InvalidAccessKeyId/SignatureDoesNotMatch/HTTP 403; 404 остаётся
+##            INFO cache-miss; non-fatal семантика и публичный API НЕ меняются
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -96,6 +102,11 @@ DEFAULT_SSL_CACHE_PREFIX = "platform/ssl-certs"
 # DEFAULT_S3_REGION removed — use platform_config.default_s3_region() instead
 # OPENSSL_TIMEOUT / CHECKEND_THRESHOLD → shared/ssl_certs (DevPlan 117 D21):
 #   DEFAULT_OPENSSL_TIMEOUT / DEFAULT_EXPIRY_THRESHOLD (единый источник openssl-примитивов)
+# S3 error classification (Observability 2026-09-01): 403 ≠ 404 — access-denied семейство
+# отделяется от NoSuchKey (cache-miss). Общий набор для _download_s3_file/_upload_s3_file.
+_S3_NOT_FOUND_CODES = {"NoSuchKey", "404"}
+_S3_ACCESS_DENIED_CODES = {"AccessDenied", "InvalidAccessKeyId", "SignatureDoesNotMatch", "403"}
+_HTTP_STATUS_FORBIDDEN = 403
 
 
 # region INTERNAL HELPERS
@@ -213,7 +224,9 @@ def _validate_cert(cert_path: str, domain: str, check_expiry: bool = True, *, ke
 ##          → ⎋ bool
 ## @complexity — O(1) network call
 ## @invariants
-##   - Returns False on ClientError (404/NoSuchKey = cache miss, logged at INFO)
+##   - Returns False on ClientError — 404/NoSuchKey = cache miss (INFO);
+##     403/AccessDenied/InvalidAccessKeyId/SignatureDoesNotMatch = access denied (WARN
+##     «проверь S3 creds/bucket permissions»); остальные коды — generic WARN ClientError
 ##   - Returns False on any other exception (network error, logged at WARN)
 ##   - Never raises
 ##   - s3_client параметром (W4b): ленивый default = _get_s3_client() (ровно текущее)
@@ -256,8 +269,26 @@ def _download_s3_file(
             BotoClientError = ()  # boto3 отсутствует — классификация не нужна (guard не пустил бы сюда)
         if isinstance(e, BotoClientError):
             code = e.response.get("Error", {}).get("Code", "Unknown")
-            if code in {"NoSuchKey", "404"}:
+            http_status = e.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+            if code in _S3_NOT_FOUND_CODES:
                 logger.info("[IMP:8][s3_ssl_cache] S3 key not found (cache miss): %s", s3_key)
+            elif code in _S3_ACCESS_DENIED_CODES or http_status == _HTTP_STATUS_FORBIDDEN:
+                # ⚠️ TRAP[BUG] · 2026-09-01 · P2 · 403 маскировался под cache-miss
+                # · Symptom: при невалидных S3-кредах (InvalidAccessKeyId/AccessDenied) оператор
+                # ·   видел WARN «S3 ClientError (code=403)» + INFO «No cert in S3 — cache miss» и
+                # ·   принимал проблему прав за пустой кеш (asi-team: SSL-кеш «пуст» при живых объектах)
+                # · Root: классификация ClientError различала только 404/NoSuchKey; 403 уходил в
+                # ·   generic-WARN и не отделялся от «объекта нет» на уровне кода ошибки
+                # · Fix: отдельная ветка 403 (AccessDenied/InvalidAccessKeyId/SignatureDoesNotMatch/
+                # ·   HTTP 403) с явным WARN «access denied»; возврат False (non-fatal) НЕ меняется
+                # · Prevention: 403 ≠ 404 в любой S3-обёртке — auth-failure не может выглядеть как miss
+                logger.warning(
+                    "[IMP:7][s3_ssl_cache] S3 access denied (code=%s) for key %s — "
+                    "проверь S3 creds/bucket permissions (несуществующий объект = 404; "
+                    "403 = доступ запрещён)",
+                    code,
+                    s3_key,
+                )
             else:
                 logger.warning(
                     "[IMP:7][s3_ssl_cache] S3 ClientError (code=%s) for key %s: %s",
@@ -282,8 +313,9 @@ def _download_s3_file(
 ##          → ⎋ bool
 ## @complexity — O(1) network call
 ## @invariants
-##   - Returns False silently on failure (non-fatal)
-##   - Never raises
+##   - Returns False on failure (non-fatal), never raises
+##   - ClientError 403 (AccessDenied/InvalidAccessKeyId/SignatureDoesNotMatch) → WARN
+##     «S3 upload denied» (кеш не обновлён — проверь creds); прочие ошибки → generic WARN
 def _upload_s3_file(
     local_path: str,
     s3_key: str,
@@ -315,12 +347,39 @@ def _upload_s3_file(
     except Exception as e:  # noqa: EXC — best-effort (non-fatal контракт s3_ssl_cache: never raise, return False; F-08: top-level boto3-импорты убраны)
         # Прежний (ClientError, S3UploadFailedError, FileNotFoundError, OSError) → единый WARN;
         # except Exception покрывает тот же набор + любые boto3-сбои (контракт инварианта non-fatal).
-        logger.warning(
-            "[IMP:7][s3_ssl_cache] S3 upload failed for %s → %s: %s",
-            local_path,
-            s3_key,
-            e,
-        )
+        # Observability: ClientError 403 (AccessDenied/InvalidAccessKeyId/SignatureDoesNotMatch)
+        # — явный WARN «upload denied» (кеш не обновлён), НЕ маскируется под generic-сбой.
+        try:
+            from botocore.exceptions import (
+                ClientError as BotoClientError,  # type: ignore[import-untyped]  # lazy (F-08)
+            )
+        except ImportError:
+            BotoClientError = ()  # boto3 отсутствует — классификация не нужна (guard не пустил бы сюда)
+        if isinstance(e, BotoClientError):
+            code = e.response.get("Error", {}).get("Code", "Unknown")
+            http_status = e.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+            if code in _S3_ACCESS_DENIED_CODES or http_status == _HTTP_STATUS_FORBIDDEN:
+                logger.warning(
+                    "[IMP:7][s3_ssl_cache] S3 upload denied (code=%s) for %s → %s — "
+                    "кеш не обновлён; проверь S3 creds/bucket permissions",
+                    code,
+                    local_path,
+                    s3_key,
+                )
+            else:
+                logger.warning(
+                    "[IMP:7][s3_ssl_cache] S3 upload failed for %s → %s: %s",
+                    local_path,
+                    s3_key,
+                    e,
+                )
+        else:
+            logger.warning(
+                "[IMP:7][s3_ssl_cache] S3 upload failed for %s → %s: %s",
+                local_path,
+                s3_key,
+                e,
+            )
         return False
     else:
         return True
@@ -741,6 +800,9 @@ def download_cert(
 ## @io       ⇥ domain, s3_prefix, tmp_cert_path, tmp_key_path, bucket: str|None (None=env) → ⎋ bool (True = валидная пара в S3)
 ## @io       · bucket propaged to helpers (2026-08-27 fix)
 ## @complexity O(1) + 2 S3 download + 4 openssl subprocess
+## @invariants
+##   - 403/404 различение эмитится в _download_s3_file (единственный источник): 403 →
+##     WARN «access denied» ПЕРЕД INFO cache-miss здесь; 404 → только INFO cache-miss
 def _check_pair_body(
     domain: str,
     s3_prefix: str,

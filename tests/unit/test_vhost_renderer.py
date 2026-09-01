@@ -544,15 +544,13 @@ class TestNginxTHarness:
         caplog.set_level(0)
         mock_which.return_value = "/usr/bin/docker"
 
-        call_count = [0]
-
         def mock_subprocess_side_effect(cmd, *args, **kwargs):
-            call_count[0] += 1
             m = mock.MagicMock()
-            # First call is openssl (return 0), second is docker (return 1)
-            if call_count[0] == 1:
+            if cmd[0] == "openssl":
                 m.returncode = 0
-            else:
+            elif cmd[0] == "docker" and cmd[1] == "image":
+                m.returncode = 0  # pinned image present locally (digest-pin pre-flight)
+            else:  # docker run nginx -t
                 m.returncode = 1
                 m.stderr = b"nginx: [emerg] unknown directive"
                 m.stdout = b""

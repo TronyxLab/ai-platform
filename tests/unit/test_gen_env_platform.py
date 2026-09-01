@@ -1,13 +1,15 @@
 """
-# GREP_SUMMARY: test_gen_env_platform, generate, validate_provides, argparse, platform-env, provides, profiles, credentials, password-injection, DSN
-# STRUCTURE: ▶ generate 1× (provides→PLATFORM_* vars) → ▶ password-injection (DSN *** → реальный пароль) ×3 → ▶ argparse CLI args 2× → ⎋ LDD trajectory
+# GREP_SUMMARY: test_gen_env_platform, generate, validate_provides, argparse, platform-env, provides, profiles, credentials, password-injection, DSN, enabled-modules, NODE_YAML, phantom-services
+# STRUCTURE: ▶ generate 1× (provides→PLATFORM_* vars) → ▶ password-injection (DSN *** → реальный пароль) ×3 → ▶ argparse CLI args 2× → ▶ enabled_modules filter (NODE_YAML, P2 D6) ×5 → ⎋ LDD trajectory
 # region MODULE_CONTRACT
 ## @purpose  Unit tests for gen_env_platform.py — generate(), validate_provides(), CLI arg parsing,
-##           and DevPlan 133 W2.3 password-injection (credentials → DSN '***' → реальный пароль).
+##           DevPlan 133 W2.3 password-injection (credentials → DSN '***' → реальный пароль),
+##           and P2 D6 enabled_modules filter (фантомные сервисы ноды, launch-validation asi-team-vps).
 ##           No subprocess calls. Direct Python imports (strangler tier-1 Python module).
 ## @scope    Tests output structure contract (header, PLATFORM_DOMAIN, PLATFORM_PROVIDES,
 ##           PLATFORM_*_HOST/PORT/DSN/URL, PLATFORM_NO_PROXY), CLI argument parsing,
-##           and credentials injection (DSN with *** / with password / without file).
+##           credentials injection (DSN with *** / with password / without file),
+##           and enabled_modules provides-filter (NODE_YAML-резолв в main, legacy без NODE_YAML).
 ## @invariants
 ##   - All tests import the module directly via sys.path.insert
 ##   - Each test is decorated with @ldd_trajectory and asserts IMP:9 log presence
@@ -16,8 +18,11 @@
 ## @rationale DevPlan 082 §9: Unit coverage for gen_env_platform.py per F3 (VerificationReport 082).
 ##            DevPlan 133 W2.4: password-injection coverage (AC 4 — .env.platform (пере)генерация
 ##            подставляет реальный пароль роли в DSN при наличии .platform-db.env).
+##            P2 D6 (launch-validation): нода без postgres/litellm НЕ информирует о них как
+##            available — negative-тесты (NODE_YAML filter) + legacy-тест (без NODE_YAML).
 ## @changes 2026-07-26 | Created (VerificationReport 082 F3)
 ## @changes 2026-08-03 | DevPlan 133 W2 — +password-injection tests (credentials param)
+## @changes 2026-09-01 | P2 D6 — +enabled_modules filter tests (NODE_YAML, phantom-services)
 # endregion MODULE_CONTRACT
 """
 
@@ -394,3 +399,183 @@ def test_sot_platform_infra_redis_template_is_credentialed():
 
 
 # endregion Tests: DR-H3 credentialed PLATFORM_REDIS_URL
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region Tests: enabled_modules filter (P2 D6 — фантомные сервисы)
+# ═══════════════════════════════════════════════════════════════════
+
+# Полный provides-каталог (как core/platform-infra.yaml): postgres, redis, litellm, nginx.
+# Нода контура asi-group содержит enabled=[nginx, platform-secrets, logging, status-page] —
+# пересечение с каталогом = {nginx}.
+_FULL_CATALOG_DATA = {
+    "profiles": ["postgres", "redis", "litellm", "nginx"],
+    "provides": {
+        "postgres": {
+            "host": "pgbouncer",
+            "port": 6432,
+            "dsn_template": "postgresql://${NAME}_user:***@pgbouncer:6432/${NAME}_db",
+        },
+        "redis": {
+            "host": "redis",
+            "port": 6379,
+            "url_template": "redis://redis:6379/0",
+        },
+        "litellm": {
+            "host": "litellm",
+            "port": 4000,
+            "url_template": "https://${DOMAIN}/litellm",
+        },
+        "nginx": {"host": "nginx", "port": 443},
+    },
+    "proxy": {},
+}
+
+
+# 🧪 TRAP[TEST] · Regression (P2 D6) · generate() фильтрует provides по enabled_modules
+# · Scenario: enabled_modules=["nginx"] → PLATFORM_PROVIDES=nginx, НЕТ postgres/redis/litellm
+# ·   per-service линий (фантомные сервисы не эмитятся); сети/volumes НЕ трогаются
+# · Last fail: N/A — новая регрессия (launch-validation asi-team-vps, D6 sync-env)
+# · Remove if: enabled_modules-фильтр в generate() изменится
+@ldd_trajectory
+def test_generate_filters_provides_by_enabled_modules(caplog):
+    """enabled_modules=["nginx"] → PLATFORM_PROVIDES=nginx и только nginx per-service эмиссия."""
+    lines = gep.generate(_FULL_CATALOG_DATA, domain="test.local", project_name="myapp", enabled_modules=["nginx"])
+
+    provides_line = next(line for line in lines if line.startswith("PLATFORM_PROVIDES="))
+    assert provides_line == "PLATFORM_PROVIDES=nginx", f"ожидался только nginx, got: {provides_line}"
+
+    assert any(line.startswith("PLATFORM_NGINX_") for line in lines), "nginx (ingress) должен эмититься"
+    assert not any(line.startswith("PLATFORM_POSTGRES_") for line in lines), "postgres — фантомный сервис"
+    assert not any(line.startswith("PLATFORM_REDIS_") for line in lines), "redis — фантомный сервис"
+    assert not any(line.startswith("PLATFORM_LITELLM_") for line in lines), "litellm — фантомный сервис"
+
+    logger.critical("[IMP:9][test] enabled_modules filter OK — PLATFORM_PROVIDES=%s", "nginx")
+
+
+# 🧪 TRAP[TEST] · Regression (P2 D6) · nginx НЕ эмитится принудительно вне пересечения
+# · Scenario: enabled_modules содержит ТОЛЬКО platform-secrets (нет в provides-каталоге) →
+# ·   PLATFORM_PROVIDES пустой; nginx НЕ форсится (пересечение, а не allowlist+nginx)
+# · Last fail: N/A — новая регрессия (уточнение FIX P2: «если nginx есть в enabled_modules,
+# ·   оставить только пересечение»)
+# · Remove if: enabled_modules-семантика пересечения изменится
+@ldd_trajectory
+def test_generate_no_forced_nginx_outside_intersection(caplog):
+    """enabled_modules без nginx → nginx НЕ эмитится (чистое пересечение, без форса)."""
+    lines = gep.generate(
+        _FULL_CATALOG_DATA, domain="test.local", project_name="myapp", enabled_modules=["platform-secrets"]
+    )
+
+    provides_line = next(line for line in lines if line.startswith("PLATFORM_PROVIDES="))
+    assert provides_line == "PLATFORM_PROVIDES=", f"пересечение пусто, got: {provides_line}"
+    assert not any(line.startswith("PLATFORM_NGINX_") for line in lines), "nginx вне пересечения — не эмитится"
+
+    logger.critical("[IMP:9][test] no-force nginx OK — intersection semantics, PLATFORM_PROVIDES пуст")
+
+
+# 🧪 TRAP[TEST] · Regression (P2 D6) · main() резолвит enabled-модули из NODE_YAML
+# · Scenario: NODE_YAML=tmp node.yaml (enabled=[nginx, platform-secrets, logging, status-page]) +
+# ·   --project-dir → PLATFORM_PROVIDES=nginx, НЕ postgres/litellm (фантомов нет)
+# · Last fail: N/A — новая регрессия (D6: нода без сервисов информировала о всех)
+# · Remove if: main() NODE_YAML-резолв enabled_modules изменится
+@ldd_trajectory
+def test_main_filters_provides_by_node_yaml_enabled_modules(caplog, tmp_path, monkeypatch):
+    """CLI --project-dir + NODE_YAML → PLATFORM_PROVIDES фильтруется по enabled-модулям ноды."""
+    yaml_path = tmp_path / "platform-env.yaml"
+    with Path(str(yaml_path)).open("w", encoding="utf-8") as f:
+        yaml.dump(_FULL_CATALOG_DATA, f)
+
+    node_yaml = tmp_path / "node.yaml"
+    node_yaml.write_text(
+        "modules:\n"
+        "  - name: nginx\n    enabled: true\n"
+        "  - name: platform-secrets\n    enabled: true\n"
+        "  - name: logging\n    enabled: true\n"
+        "  - name: status-page\n    enabled: true\n",
+        encoding="utf-8",
+    )
+    proj_dir = tmp_path / "proj"
+    proj_dir.mkdir()
+    (proj_dir / "ai-platform.yaml").write_text("name: myapp\n", encoding="utf-8")
+    monkeypatch.setenv("NODE_YAML", str(node_yaml))
+
+    out_file = tmp_path / "out.env"
+    rc = gep.main([
+        "--project-dir",
+        str(proj_dir),
+        "--yaml",
+        str(yaml_path),
+        "--domain",
+        "test.local",
+        "--output",
+        str(out_file),
+    ])
+
+    assert rc == 0, f"main должен вернуть 0, got {rc}"
+    content = out_file.read_text(encoding="utf-8")
+    provides_line = next(line for line in content.splitlines() if line.startswith("PLATFORM_PROVIDES="))
+    assert provides_line == "PLATFORM_PROVIDES=nginx", f"ожидался только nginx (из каталога), got: {provides_line}"
+    assert "PLATFORM_POSTGRES" not in content, "postgres — фантомный сервис (не enabled на ноде)"
+    assert "PLATFORM_LITELLM" not in content, "litellm — фантомный сервис (не enabled на ноде)"
+
+    logger.critical("[IMP:9][test] main NODE_YAML filter OK — PLATFORM_PROVIDES=nginx")
+
+
+# 🧪 TRAP[TEST] · Regression (P2 D6) · legacy: NODE_YAML отсутствует → полный каталог
+# · Scenario: NODE_YAML не задан (monkeypatch.delenv) → PLATFORM_PROVIDES=полный sorted-каталог,
+# ·   postgres/litellm эмитятся (обратная совместимость, байт-идентично легаси)
+# · Last fail: N/A — новая регрессия (backward-compat гарантия P2 FIX)
+# · Remove if: main() NODE_YAML-резолв enabled_modules изменится
+@ldd_trajectory
+def test_main_without_node_yaml_full_catalog_legacy(caplog, tmp_path, monkeypatch):
+    """Без NODE_YAML → legacy-путь: PLATFORM_PROVIDES = полный provides-каталог (сорт.)."""
+    monkeypatch.delenv("NODE_YAML", raising=False)
+    yaml_path = tmp_path / "platform-env.yaml"
+    with Path(str(yaml_path)).open("w", encoding="utf-8") as f:
+        yaml.dump(_FULL_CATALOG_DATA, f)
+    proj_dir = tmp_path / "proj"
+    proj_dir.mkdir()
+    (proj_dir / "ai-platform.yaml").write_text("name: myapp\n", encoding="utf-8")
+
+    out_file = tmp_path / "out.env"
+    rc = gep.main([
+        "--project-dir",
+        str(proj_dir),
+        "--yaml",
+        str(yaml_path),
+        "--domain",
+        "test.local",
+        "--output",
+        str(out_file),
+    ])
+
+    assert rc == 0, f"main должен вернуть 0, got {rc}"
+    content = out_file.read_text(encoding="utf-8")
+    provides_line = next(line for line in content.splitlines() if line.startswith("PLATFORM_PROVIDES="))
+    expected = "litellm,nginx,postgres,redis"
+    assert provides_line == f"PLATFORM_PROVIDES={expected}", (
+        f"legacy должен эмитить полный каталог, got: {provides_line}"
+    )
+    assert "PLATFORM_POSTGRES_DSN=" in content, "legacy: postgres DSN должен эмититься"
+    assert "PLATFORM_LITELLM_URL=" in content, "legacy: litellm URL должен эмититься"
+
+    logger.critical("[IMP:9][test] legacy no-NODE_YAML OK — PLATFORM_PROVIDES=%s", expected)
+
+
+# 🧪 TRAP[TEST] · Regression (P2 D6) · generate(): пустой enabled_modules = legacy
+# · Scenario: enabled_modules=[] (пустой, не None) → полный каталог (байт-идентично None)
+# · Last fail: N/A — новая регрессия (FIX: «задан И непустой → фильтровать»)
+# · Remove if: enabled_modules-семантика пустого списка изменится
+@ldd_trajectory
+def test_generate_empty_enabled_modules_is_legacy(caplog):
+    """enabled_modules=[] (пустой) → legacy-путь: полный каталог, как при None."""
+    lines = gep.generate(_FULL_CATALOG_DATA, domain="test.local", project_name="myapp", enabled_modules=[])
+
+    provides_line = next(line for line in lines if line.startswith("PLATFORM_PROVIDES="))
+    assert provides_line == "PLATFORM_PROVIDES=litellm,nginx,postgres,redis", f"empty → legacy, got: {provides_line}"
+    assert any(line.startswith("PLATFORM_POSTGRES_") for line in lines)
+
+    logger.critical("[IMP:9][test] empty enabled_modules == legacy OK — полный каталог")
+
+
+# endregion Tests: enabled_modules filter (P2 D6 — фантомные сервисы)

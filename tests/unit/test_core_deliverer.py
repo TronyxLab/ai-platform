@@ -13,6 +13,8 @@
 ## @invariants — Все тесты используют tmp_path — zero hardcoded paths
 ##              — FakeCommandRunner вместо патчей subprocess (no real SSH/rsync calls)
 ##              — Autouse env cleanup: PLATFORM_REMOTE_BASE/PLATFORM_ROOT/NODE_CONFIGS_REMOTE_BASE
+##                + hermetic AGE-цепочка (delenv AGE_SECRET_KEY/SOPS_AGE_KEY/AGE_SECRET_KEY_FILE,
+##                HOME→tmp_path, _ETC_AGE_KEY_FILE→tmp_path — 022-launch-validation)
 ##              — Exclude-паттерны assert'ятся точно (таблица AC7 DevPlan 108)
 ## @rationale Unit tests for new Python module core_deliverer.py. Покрытие AC1/AC5/AC6/AC7:
 ##            точные rsync-команды, fail-fast, dry-run (0 subprocess-вызовов), IMP:9 на успехе.
@@ -69,11 +71,32 @@ def _ok_runner() -> FakeCommandRunner:
 
 
 @pytest.fixture(autouse=True)
-def _clean_delivery_env(monkeypatch):
-    """Deterministic default remote bases: /opt/platform + /opt/node-configs."""
-    monkeypatch.delenv("PLATFORM_REMOTE_BASE", raising=False)
-    monkeypatch.delenv("PLATFORM_ROOT", raising=False)
-    monkeypatch.delenv("NODE_CONFIGS_REMOTE_BASE", raising=False)
+def _clean_delivery_env(monkeypatch, tmp_path):
+    """Deterministic remote bases + hermetic AGE/CI-секреты (022-launch-validation).
+
+    Детерминизм remote-баз: /opt/platform + /opt/node-configs.
+    Hermeticity AGE (022): сессия оператора может нести РЕАЛЬНЫЙ AGE_SECRET_KEY (env)
+    и ~/.config/age/keys.txt (файл). Тесты кладут НЕканонические fake-ключи (напр.
+    AGE-SECRET-KEY-123) — _canonical_age_key() их отвергает, и цепочка detect_age_key()
+    проваливается в реальный default-file → тест видит настоящий ключ оператора
+    (маскированный префикс утекал в caplog). Изоляция: delenv всех env-звеньев +
+    HOME→tmp_path (default-file probe недостижим) + _ETC_AGE_KEY_FILE→tmp_path
+    (restore-first fallback).
+    """
+    for var in (
+        "AGE_SECRET_KEY",
+        "SOPS_AGE_KEY",
+        "AGE_SECRET_KEY_FILE",
+        "PLATFORM_CI_DEPLOY_KEY",
+        "PLATFORM_CI_ROOT_KEY",
+        "PLATFORM_OWNER_KEY",
+        "PLATFORM_REMOTE_BASE",
+        "PLATFORM_ROOT",
+        "NODE_CONFIGS_REMOTE_BASE",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr("core.internal.shared.node_detect._ETC_AGE_KEY_FILE", str(tmp_path / "etc-age-key.txt"))
 
 
 @pytest.fixture
@@ -665,7 +688,7 @@ def test_fallback_deliver_success(delivery_tree, caplog, monkeypatch: pytest.Mon
     logger.info("[IMP:7][test_fallback_deliver_success][start] BEGIN")
 
     # QA C5 (DevPlan 14 T1.4): ключ через env-цепочку node_detect (CLI-флаг удалён)
-    monkeypatch.setenv("AGE_SECRET_KEY", "AGE-KEY-123")
+    monkeypatch.setenv("AGE_SECRET_KEY", "AGE-SECRET-KEY-123")
     args = [
         "fallback-deliver",
         "--host",
@@ -688,8 +711,8 @@ def test_fallback_deliver_success(delivery_tree, caplog, monkeypatch: pytest.Mon
     )
     # REF-0007: ключ доставляется stdin-скриптом (export + make node-update)
     update_input = fake.kwargs[-1].get("input") or ""
-    assert "AGE-KEY-123" not in ssh_calls[2][-1], "REF-0007: AGE key must NOT be in argv"
-    assert "export AGE_SECRET_KEY=AGE-KEY-123" in update_input, "stdin script must carry the AGE export"
+    assert "AGE-SECRET-KEY-123" not in ssh_calls[2][-1], "REF-0007: AGE key must NOT be in argv"
+    assert "export AGE_SECRET_KEY=AGE-SECRET-KEY-123" in update_input, "stdin script must carry the AGE export"
     assert "DEPLOY_PARALLEL=true make node-update NODE=test-node" in update_input
     logger.info("[IMP:9][test_fallback_deliver_success][done] Success path: 5 rsync + 3 ssh (incl. F-07) verified")
     # 🧪 TRAP[TEST] · 2026-08-07 · 142 W5 — fallback-деплой: ssh-вызовы provision/node-update
@@ -711,7 +734,7 @@ def test_fallback_deliver_provision_fail(delivery_tree, caplog, monkeypatch: pyt
     logger.info("[IMP:7][test_fallback_deliver_provision_fail][start] BEGIN")
 
     # QA C5: без ключа deliver_fallback падает ДО provision — для сценария provision-fail даём ключ
-    monkeypatch.setenv("AGE_SECRET_KEY", "AGE-PROVISION-TEST-KEY")
+    monkeypatch.setenv("AGE_SECRET_KEY", "AGE-SECRET-KEY-PROVISION-TEST")
     args = [
         "fallback-deliver",
         "--host",
@@ -792,7 +815,7 @@ def test_fallback_deliver_redacts_key_from_stderr_logs(delivery_tree, caplog, mo
     caplog.set_level(logging.DEBUG)
     logger.info("[IMP:7][test_fallback_deliver_redacts][start] BEGIN")
     # QA C5 (T1.4): ключ через env (CLI-флаг --age-secret-key удалён)
-    monkeypatch.setenv("AGE_SECRET_KEY", "AGE-SUPERSECRET-VALUE-42")
+    monkeypatch.setenv("AGE_SECRET_KEY", "AGE-SECRET-KEY-SUPERSECRET-42")
     args = [
         "fallback-deliver",
         "--host",
@@ -811,16 +834,18 @@ def test_fallback_deliver_redacts_key_from_stderr_logs(delivery_tree, caplog, mo
             _proc(0),  # rsync platform-env.yaml
             _proc(0),  # rsync Makefile
             _proc(0),  # provision
-            _proc(1, stderr="fatal: cannot decrypt, key was AGE-SUPERSECRET-VALUE-42"),
+            _proc(1, stderr="fatal: cannot decrypt, key was AGE-SECRET-KEY-SUPERSECRET-42"),
         ]
     )
     assert cli(argv=args, runner=fake) == 1, "node-update failure must return 1"
     # argv ssh-вызова node-update БЕЗ ключа
     update_call = fake.calls[-1]
     assert update_call == ["ssh", *SSH_OPTS, "root@1.2.3.4", "bash -s"], f"unexpected cmd: {update_call}"
-    assert "AGE-SUPERSECRET-VALUE-42" not in " ".join(update_call)
+    assert "AGE-SECRET-KEY-SUPERSECRET-42" not in " ".join(update_call)
     # Ключ НИГДЕ в логах; redacted-маркер присутствует
-    assert "AGE-SUPERSECRET-VALUE-42" not in caplog.text, f"TEST-07 FAIL: key leaked into logs:\n{caplog.text[-2000:]}"
+    assert "AGE-SECRET-KEY-SUPERSECRET-42" not in caplog.text, (
+        f"TEST-07 FAIL: key leaked into logs:\n{caplog.text[-2000:]}"
+    )
     assert "***REDACTED***" in caplog.text, "redaction marker missing in failure log"
     logger.info("[IMP:9][test_fallback_deliver_redacts][done] Key redacted from stderr logs (TEST-07)")
 
@@ -838,7 +863,7 @@ def test_fallback_deliver_dry_run_no_key_in_output(delivery_tree, caplog, monkey
     caplog.set_level(logging.DEBUG)
     logger.info("[IMP:7][test_fallback_dryrun_nokey][start] BEGIN")
     # QA C5 (T1.4): ключ через env (CLI-флаг --age-secret-key удалён)
-    monkeypatch.setenv("AGE_SECRET_KEY", "AGE-DRYRUN-SECRET-99")
+    monkeypatch.setenv("AGE_SECRET_KEY", "AGE-SECRET-KEY-DRYRUN-99")
     args = [
         "fallback-deliver",
         "--host",
@@ -852,7 +877,7 @@ def test_fallback_deliver_dry_run_no_key_in_output(delivery_tree, caplog, monkey
     fake = _ok_runner()
     assert cli(argv=args, runner=fake) == 0
     assert len(fake.calls) == 0, "dry-run must issue ZERO runner calls"
-    assert "AGE-DRYRUN-SECRET-99" not in caplog.text, "TEST-07 FAIL: key leaked into dry-run output"
+    assert "AGE-SECRET-KEY-DRYRUN-99" not in caplog.text, "TEST-07 FAIL: key leaked into dry-run output"
     assert "[redacted]" in caplog.text, "dry-run должен помечать stdin-скрипт как [redacted]"
     logger.info("[IMP:9][test_fallback_dryrun_nokey][done] Dry-run output is key-free")
 
@@ -876,7 +901,7 @@ def test_redact_before_truncate_boundary(delivery_tree, caplog, monkeypatch: pyt
     """Ключ целиком внутри последних 500 символов stderr → в лог ни ключ, ни его суффикс."""
     caplog.set_level(logging.DEBUG)
     logger.info("[IMP:7][test_redact_boundary][start] BEGIN")
-    secret = "AGE-BOUNDARY-SUFFIX-7777"
+    secret = "AGE-SECRET-KEY-BOUNDARY-7777"
     monkeypatch.setenv("AGE_SECRET_KEY", secret)
     # Ключ начинается ~на границе окна [-500:] и продолжается за неё:
     # 600 filler + "key=" + secret + 40 filler → старый код брал последние 500 символов,
@@ -922,7 +947,7 @@ def test_redact_before_truncate_boundary(delivery_tree, caplog, monkeypatch: pyt
 def test_no_key_in_argv(delivery_tree, caplog, monkeypatch: pytest.MonkeyPatch) -> None:
     """Ни один runner-cmd не содержит значение ключа; флаг --age-secret-key отвергнут."""
     caplog.set_level(logging.DEBUG)
-    secret = "AGE-ARGV-PURITY-CHECK-42"
+    secret = "AGE-SECRET-KEY-ARGV-PURITY-42"
     monkeypatch.setenv("AGE_SECRET_KEY", secret)
     args = [
         "fallback-deliver",

@@ -1,5 +1,5 @@
 # GREP_SUMMARY: unit-test, node-detect, detect-age-key, auto-detect-node-name, AGE_SECRET_KEY, SOPS_AGE_KEY, AGE_SECRET_KEY_FILE, node-configs, NodeDetectionError, CLI, devplan-104
-# STRUCTURE: ▶ TestDetectAgeKey×5 (env→SOPS→file→none→default-file) → ▶ TestDetectAgeKeyNodePersistence×4 (restore-first fallback: present→absent→no-prefix→tmp-path W4) → ▶ TestAutoDetectNodeName×5 (single→multi→none→skip→app) → ▶ TestCLI×3 (age-key→node-name→not-found) → ⎋ 17 pass
+# STRUCTURE: ▶ TestDetectAgeKey×7 (env→SOPS→multiline-env→noncanonical-env→file→none→default-file) → ▶ TestDetectAgeKeyNodePersistence×4 (restore-first fallback: present→absent→no-prefix→tmp-path W4) → ▶ TestAutoDetectNodeName×8 (single→multi→none→skip→app→junk→two-valid→empty-yaml) → ▶ TestCLI×3 (age-key→node-name→not-found) → ⎋ 23 pass
 
 # region MODULE_CONTRACT
 ## @purpose  Unit tests for core/internal/shared/node_detect.py — detect_age_key(),
@@ -8,10 +8,14 @@
 ##           no Docker. monkeypatch for env manipulation, tmp_path for dirs/files.
 ## @invariants
 ##   - Detection chain: AGE_SECRET_KEY → SOPS_AGE_KEY → AGE_SECRET_KEY_FILE
+##   - Env checks (Check 1/2) normalize via _canonical_age_key (TRAP[BUG] 2026-09-01, P0):
+##     multi-line env → first AGE-SECRET-KEY- line; non-canonical → fallthrough to next chain link
 ##   - auto_detect_node_name skips scripts/ + secrets/; raises NodeDetectionError on 0 or >1 candidates
 ##   - Every test has real asserts (Test Honesty R1/R2) + TRAP[TEST] comment + IMP:9 LDD log
 ## @rationale DevPlan 104 §9 $TEST_SPEC: 11 tests — 4×detect_age_key, 4×auto_detect_node_name, 3×CLI
 ## @changes  2026-07-31 | DevPlan 104 — Created
+## @changes  2026-09-01 | P0 fix (asi-team-vps bootstrap φ4) — +2 negative-теста: multi-line /
+##            non-canonical env AGE_SECRET_KEY → _canonical_age_key normalization (R5)
 # endregion MODULE_CONTRACT
 
 import logging
@@ -62,6 +66,75 @@ class TestDetectAgeKey:
         logger.info("[IMP:9][test_node_detect] detect_age_key returned key from %s", env_var)
 
     # endregion FUNC_test_detect_age_key_from_env
+
+    # region FUNC_test_detect_age_key_env_multiline
+    ## @purpose — Verify env AGE_SECRET_KEY multi-line (age-keygen: комментарии + ключ-строка)
+    ##            нормализуется _canonical_age_key() → возвращается первая canonical-строка
+    ##            (P0 fix 2026-09-01 — multi-line env ломал ssh-stdin secret transport, φ4).
+    ## @io — ⇥ caplog, tmp_path → ⎋ None (asserts canonical key line)
+    ## @complexity — O(1)
+    @ldd_trajectory
+
+    # 🧪 TRAP[TEST] · 2026-09-01 · NEGATIVE (R5) · multi-line env AGE_SECRET_KEY (P0, asi-team-vps φ4)
+    # · Scenario: env AGE_SECRET_KEY = "# created…\n# public key…\nAGE-SECRET-KEY-…" →
+    # ·   _canonical_age_key возвращает ПЕРВУЮ строку с префиксом AGE-SECRET-KEY- (без комментариев)
+    # · Last fail: 2026-09-01 — multi-line env попадал в ssh-stdin as-is → «FATAL: stdin secret
+    # ·   transport: unexpected extra non-empty line(s)» → AGE_SECRET_KEY пуст на ноде → sops
+    # ·   «no identity matched» → φ4 FAILED (bootstrap asi-team-vps)
+    # · Remove if: _canonical_age_key / Check 1 normalization changes
+    def test_detect_age_key_env_multiline(
+        self,
+        caplog: pytest.LogCaptureFixture,
+        tmp_path: pytest.TempPathFactory,
+    ) -> None:
+        """detect_age_key normalizes multi-line env AGE_SECRET_KEY to canonical key line."""
+        caplog.set_level(logging.DEBUG)
+        multiline_env = f"# created: 2026-09-01T09:00:00+03:00\n# public key: age1public...\n{TEST_AGE_KEY}\n"
+
+        logger.info("[IMP:7][test_node_detect] Testing multi-line env AGE_SECRET_KEY normalization (P0)")
+        result = detect_age_key(
+            env={"AGE_SECRET_KEY": multiline_env},
+            home_dir=str(tmp_path),
+            etc_key_file=str(tmp_path / "no-etc-age-key.txt"),
+        )
+        assert result == TEST_AGE_KEY, f"Expected canonical key line, got {result!r}"
+        logger.info("[IMP:9][test_node_detect] multi-line env normalized to canonical key line")
+
+    # endregion FUNC_test_detect_age_key_env_multiline
+
+    # region FUNC_test_detect_age_key_env_noncanonical
+    ## @purpose — Verify non-canonical env AGE_SECRET_KEY (multi-line БЕЗ canonical-строки) →
+    ##            _canonical_age_key() → None → FALLTHROUGH к SOPS_AGE_KEY (валидный single-line)
+    ##            используется (P0 fix 2026-09-01 — цепочка не обрывается на операторской ошибке).
+    ## @io — ⇥ caplog, tmp_path → ⎋ None (asserts SOPS_AGE_KEY fallback + IMP:8 warning)
+    ## @complexity — O(1)
+    @ldd_trajectory
+
+    # 🧪 TRAP[TEST] · 2026-09-01 · NEGATIVE (R5) · non-canonical env AGE_SECRET_KEY → fallthrough
+    # · Scenario: env AGE_SECRET_KEY = комментарии без AGE-SECRET-KEY- строки → IMP:8 WARN +
+    # ·   fallthrough → SOPS_AGE_KEY (валидный single-line) используется
+    # · Last fail: 2026-09-01 — non-canonical env возвращался as-is и ломал ssh-stdin transport
+    # · Remove if: _canonical_age_key / Check 1 fallthrough semantics change
+    def test_detect_age_key_env_noncanonical(
+        self,
+        caplog: pytest.LogCaptureFixture,
+        tmp_path: pytest.TempPathFactory,
+    ) -> None:
+        """detect_age_key falls through to SOPS_AGE_KEY when env AGE_SECRET_KEY has no canonical line."""
+        caplog.set_level(logging.DEBUG)
+        comment_only_env = "# created: 2026-09-01T09:00:00+03:00\n# public key: age1public...\n"
+
+        logger.info("[IMP:7][test_node_detect] Testing non-canonical env fallthrough to SOPS_AGE_KEY (P0)")
+        result = detect_age_key(
+            env={"AGE_SECRET_KEY": comment_only_env, "SOPS_AGE_KEY": TEST_AGE_KEY},
+            home_dir=str(tmp_path),
+            etc_key_file=str(tmp_path / "no-etc-age-key.txt"),
+        )
+        assert result == TEST_AGE_KEY, f"Expected SOPS_AGE_KEY fallback, got {result!r}"
+        assert "is not canonical" in caplog.text, "Expected IMP:8 warning for non-canonical env value"
+        logger.info("[IMP:9][test_node_detect] non-canonical env skipped — SOPS_AGE_KEY fallback used")
+
+    # endregion FUNC_test_detect_age_key_env_noncanonical
 
     # region FUNC_test_from_file
     ## @purpose — Verify detect_age_key reads AGE_SECRET_KEY_FILE content (third chain link).
