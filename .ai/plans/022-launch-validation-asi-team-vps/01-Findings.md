@@ -102,6 +102,22 @@ $ARTIFACT_CONTRACT
 - Побочные находки: тесты core_deliverer/org_secrets weren't hermetic (сессионный AGE_SECRET_KEY=tronyx утекал в тестовые логи — тест-фикс: delenv+HOME-изоляция+canon fake-ключи); node-lifecycle.sh 83>80 LOC → 79 (diag-сжатие); docker_ops FBT (force keyword-only); RUF052 autofix.
 - Evidence: /tmp/d1-deploy-context.log; agent-check output в логах сессии
 
+### F-09 · 2026-09-01 · Фаза D · P2
+- Симптом: D6 `make project-sync-env` на roadmap: AI-PLATFORM.md фантомные сервисы («Enabled modules: litellm, logging, nginx, platform-secrets, postgres, status-page» — litellm/postgres НЕ в node.yaml контура; docker ps ноды: 5 контейнеров, без litellm/postgres).
+- Ожидалось / получено: provides только для enabled модулей ноды / полный платформенный catalog без фильтра.
+- Гипотеза причины: gen_env_platform.py:489 `PLATFORM_PROVIDES={provides_keys}` — data["provides"] без фильтра по enabled modules node.yaml; per-service HOST/PORT/DSN для каждого svc — фантомные строки и в .env.platform.
+- Фикс (Coder-субагент): generate() принимает enabled_modules (фильтр пересечением provides ∩ enabled); NODE_YAML env → NodeYaml.get_modules() enabled-семантика; legacy (NODE_YAML отсутствует/пуст) = байт-идентично; 5 negative-тестов.
+- Ре-верификация: make check rc=0 (полный батч); пер-файловые тесты 17/17; make check-diff GREEN.
+- Статус: fixed (коммит 4236960). NOTE: нодный .env.platform обновится при следующем converge/payload-delivery (фаза E).
+- Evidence: /Users/tronyx/projects/asi-group/roadmap/AI-PLATFORM.md diff; core/internal/scaffold/gen_env_platform.py
+
+### F-10 · 2026-09-01 · Фаза D · P2
+- Симптом: D4 `make deploy-project` аудит-след на ноде: tag=deploy:deploy, channel=LocalChannel — канонный маркер «DEPLOY-DIRECT» (root AGENTS.md Deploy-модель) в коде отсутствует (grep: 0 вхождений).
+- Ожидалось / получено: аудит-тег, различающий emergency-канал / единый deploy:deploy тег без семантики канала.
+- Гипотеза причины: канон AGENTS.md документирует «аудит DEPLOY-DIRECT», реализация — только channel-поле.
+- Фикс: НЕ выполнен (не блокирует валидацию: аудит-след существует и различим по channel=LocalChannel; добавление тега — P2-косметика) → фиксирую как расхождение канона/реализации. Основной модели: решение (либо править AGENTS.md-канон, либо добавить тег).
+- Статус: NOTE (не блокер)
+
 ### F-01 · 2026-09-01 · Фаза A · P1
 - Симптом: `make check` rc=2 — doxygen-check FAIL: 1 warning «core/internal/bootstrap/AGENTS.md:247: unable to resolve reference to '/Users/tronyx/projects/AGENTS.md' for \ref command».
 - Ожидалось / получено: zero-warnings invariant (DevPlan 097) / 1 warning, гейт красный. Регрессия существует и на main (test_journal 07:38: 5763 pass / 1 fail — тот же doxygen).
@@ -123,6 +139,14 @@ $ARTIFACT_CONTRACT
 - [ ] Фаза B: secrets-unlock → холодный bootstrap → идемпотентность → converge → check-security → sanity
 - [ ] Фаза C: TLS wildcard → cache drill → verify-domains → мониторинг TLS
 - [ ] Фаза D: deploy-context → render-vhosts/monitoring → project-list/status → deploy-project → CI-канал → sync-env → provision-llm → rollback
+  - D1 deploy-context: FAIL (F-08 vhost harness) → фикс → re-verify ✅ rc=0: vhosts 3 .conf rendered, deployed=0 skipped=1 failed=0, roadmap already-healthy skip (идемпотентность деплоя ✓); cert_orchestrator: issued=1 skipped=1 failed=0 (semantics fixed vs previous failed=1)
+  - D2 render-vhosts: ✅ rc=0 (3 conf); render-monitoring: ✅ rc=0 skip (monitoring-модуль не в node.yaml — корректный hook-skip)
+  - D3 project-list/status: ✅ (B5); exposed roadmap → HTTPS 200 (verify-domains)
+  - D4 deploy-project (прямой): ✅ DEPLOYED healthy 2.8s snapshot 20260901T134249-be2135a4; NOTE: PROJECT= требует абсолютного пути (относительное имя → «Project directory not found»); аудит-след есть (tag deploy:deploy, channel LocalChannel) — F-10 NOTE (маркер DEPLOY-DIRECT не реализован)
+  - D5 CI-канал: **BLOCKED by-design** — контур содержит ровно 1 проект (roadmap, expose:true); non-exposed проекта для CI-канала не существует (конфигурация контекста); push в чужой репо вне санкции сессии
+  - D6 sync-env: ✅ rc=0; фантомные hostname/services найдены → F-09 фикс (provides filter по enabled node.yaml)
+  - D7 provision-llm: **BLOCKED by-design** — litellm не в node.yaml минимального контура, Admin API connection refused; fail-loud поведение корректно (R4: NO_SERVICE = FAIL, не skip)
+  - D8 rollback: ✅ orchestrator_cli rollback --project roadmap → snapshot 20260901T134249 → Up (healthy), аудит tag deploy:rollback, внешний HTTPS 200; ROLLED_BACK → re-verify cycle OK
 - [ ] Фаза E: все модули healthy → вкл/выкл → overlays → node-update → converge → сети
 - [ ] Фаза F: DR (F1/F2/F4 by-design BLOCKED: нет postgres в контексте; F3 age-key-backup)
 - [ ] Фаза G: reboot → chaos (fast+night) → load-smoke → e2e-verify → test-node BLOCKED
