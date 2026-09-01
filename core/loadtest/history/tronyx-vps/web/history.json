@@ -1,1 +1,33 @@
-{"runs": []}
+{
+  "runs": [
+    {
+      "ts": "20260901T134559Z",
+      "host": "103.88.243.151",
+      "mode": "smoke",
+      "duration_s": 103.8,
+      "tasks": {
+        "/": {
+          "rps": 4.998944597469941,
+          "p95": 0.024,
+          "p99": 0.63,
+          "error_rate": 0.0
+        },
+        "/status": {
+          "rps": 5.226169351900393,
+          "p95": 0.023,
+          "p99": 0.62,
+          "error_rate": 0.0
+        }
+      },
+      "rps": 10.225113949370334,
+      "p50": null,
+      "p95": 0.023,
+      "p99": 0.63,
+      "error_rate": 0.0,
+      "max_rps": null,
+      "verdict": "WARN",
+      "delta_vs_prev": null,
+      "version": "unknown"
+    }
+  ]
+}

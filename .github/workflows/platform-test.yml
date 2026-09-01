@@ -109,6 +109,10 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
+          # G6 pin-freshness гейт (test_gate_workflow_sha_pins) требует полной git-истории:
+          # shallow clone делает last-touch = HEAD → ложный stale-pin violation (E2 валидации,
+          # контекстная org 2026-09-01)
+          fetch-depth: 0
 
       - name: Setup platform (composite — python + gitleaks)
         uses: ./.github/actions/setup-platform
