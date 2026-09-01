@@ -5,17 +5,17 @@
 ## @purpose  Python Strangler-Fig migration of context-init.sh (364 LOC shell).
 ##           Scaffolds a new deployment context: nested overlay directory structure
 ##           (platform/{node-configs,modules/hermes-agent,projects}), skeleton node.yaml,
-##           ONE GitHub overlay repo (<org>/<ctx>-overlay), and registration in platform node.yaml.
+##           ONE GitHub overlay repo (`<org>/<ctx>-overlay`), and registration in platform node.yaml.
 ## @scope    Developer machine only (local scaffold) — no SSH, no VPS operations.
 ##           Called from context-init.sh facade.
 ## @invariants
 ##   - Idempotent: if ~/projects/<name>/ exists → SKIP (exit 0)
-##   - Canonical layout (DevPlan 022): весь overlay — под <ctx>/platform/; сестринские
+##   - Canonical layout (DevPlan 022): весь overlay — под `<ctx>/platform/`; сестринские
 ##     hermes-agent/ + node-configs/ НЕ создаются
-##   - Один GitHub-репо <org>/<ctx>-overlay (private); <ctx>-node-configs / <ctx>-hermes-agent
+##   - Один GitHub-репо `<org>/<ctx>-overlay` (private); `<ctx>-node-configs` / `<ctx>-hermes-agent`
 ##     упразднены как отдельные репо (DevPlan 022 D3/D6)
 ##   - Skeleton node.yaml preserves GREP_SUMMARY/STRUCTURE semantic markup;
-##     repos.core = https://github.com/<org>/<ctx>-overlay.git
+##     repos.core = `https://github.com/<org>/<ctx>-overlay.git`
 ##   - GitHub repo creation is optional (--skip-gh-repo flag)
 ##   - Registration delegates to context_registry.py (105 LOC, stable)
 ##   - All steps are independent — continues on non-fatal gh failures
@@ -26,8 +26,8 @@
 ##           CALLS: context_registry.register_context()
 ##           DP-092 Wave 2; DevPlan 022 TASK-2 (nested layout + single overlay repo)
 ## @changes  2026-07-30 · Wave 2 — initial implementation
-## @changes  2026-09-01 · DevPlan 022 TASK-2 — nested platform/ layout, single <ctx>-overlay repo,
-##           skeleton repos.core, glob */platform/node-configs/<node>/node.yaml
+## @changes  2026-09-01 · DevPlan 022 TASK-2 — nested platform/ layout, single `<ctx>-overlay` repo,
+##           skeleton repos.core, glob `*/platform/node-configs/<node>/node.yaml`
 # endregion MODULE_CONTRACT
 
 # 🧐 TRAP[DECISION] · 2026-07-21 · — · secrets-init called at bootstrap, not context-init
@@ -197,17 +197,17 @@ def create_dirs(context_dir: Path) -> None:
 
 # region FUNC_create_skeleton_node_yaml
 ## @purpose  Generate a skeleton node.yaml file with GREP_SUMMARY/STRUCTURE markup preserved
-## @param path          Target path for node.yaml (canon: platform/node-configs/<node>/node.yaml)
+## @param path          Target path for node.yaml (canon: `platform/node-configs/<node>/node.yaml`)
 ## @param context_name  Context name for placeholder substitution
-## @param org           GitHub org for repos.core URL (<org>/<ctx>-overlay.git)
+## @param org           GitHub org for repos.core URL (`<org>/<ctx>-overlay.git`)
 ## @io        stdout: created/edited message; side-effect: writes file
 ## @complexity O(1)
 ## @invariants  org обязателен (fail-fast): пустой org дал бы malformed URL
-##              https://github.com//<ctx>-overlay.git в skeleton.
+##              `https://github.com//<ctx>-overlay.git` в skeleton.
 def create_skeleton_node_yaml(path: Path, context_name: str, org: str) -> None:
     """Create skeleton node.yaml for the new context.
 
-    ## @purpose  DevPlan 022 TASK-2: skeleton с repos.core = <org>/<ctx>-overlay.git.
+    ## @purpose  DevPlan 022 TASK-2: skeleton с repos.core = `<org>/<ctx>-overlay.git`.
     ##           Preserves GREP_SUMMARY/STRUCTURE comments per R7 (semantic markup).
     ## @io        ⇥ path, context_name, org → ⎋ None (writes file)
     ## @invariants  Overwrites existing skeleton (not idempotent in this function —
@@ -244,11 +244,11 @@ def create_skeleton_node_yaml(path: Path, context_name: str, org: str) -> None:
 ## @param git_runner   Injectable git callable (DI test seam; None → subprocess)
 ## @return   (overlay_repo: str | None, reserved: None, warnings: int)
 ##           Второй элемент зарезервирован под прежний контракт (hermes_agent_repo) —
-##           всегда None с DevPlan 022 (репо <ctx>-hermes-agent упразднён).
+##           всегда None с DevPlan 022 (репо `<ctx>-hermes-agent` упразднён).
 ## @complexity O(1) — subprocess calls
 ## @invariants
-##   - РОВНО ОДИН репо: <org>/<ctx>-overlay (private) — DevPlan 022 D3/D6;
-##     <ctx>-node-configs / <ctx>-hermes-agent упразднены
+##   - РОВНО ОДИН репо: `<org>/<ctx>-overlay` (private) — DevPlan 022 D3/D6;
+##     `<ctx>-node-configs` / `<ctx>-hermes-agent` упразднены
 ##   - Git init+push выполняется на context_dir/platform (весь overlay — один репо)
 ##   - Graceful degradation: gh not found → warn, continue (not fail)
 ##   - gh not authenticated → warn, continue
@@ -510,7 +510,7 @@ def report_summary(
 def _resolve_platform_node_yaml(projects_dir: Path, node: str, fallback: str = "") -> str:
     """Resolve platform node.yaml via glob (nested overlay pattern first).
 
-    ## @purpose  DevPlan 022 TASK-2: pattern 1 = */platform/node-configs/<node>/node.yaml;
+    ## @purpose  DevPlan 022 TASK-2: pattern 1 = `*/platform/node-configs/<node>/node.yaml`;
     ##           pattern 2 (ai-platform source fixture) сохранён.
     ## @io        ⇥ projects_dir, node, fallback → ⎋ str path
     """

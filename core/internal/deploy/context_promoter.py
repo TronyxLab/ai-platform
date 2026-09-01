@@ -70,9 +70,9 @@ _SSH_AUTH_MARKERS = ("successfully authenticated", "Hi ")
 ## @changes 2026-08-05 | DevPlan 139 W2 — _resolve_org → resolve_org (публичный контракт D9:
 ##            неотъемлемый бизнес-контракт резолва org, тестируется публичным путём; private
 ##            доступ из тестов запрещён — top-10 private-доступов закрыты)
-##           2026-09-01 | DevPlan 022 TASK-3 — legacy-кандидат <ctx>/context.yaml удалён:
+##           2026-09-01 | DevPlan 022 TASK-3 — legacy-кандидат `<ctx>/context.yaml` удалён:
 ##                       единственный кандидат-путь — platform/context.yaml (единый overlay
-##                       layout <ctx>-overlay, D2; зеркальный wipe больше не затрагивает org)
+##                       layout `<ctx>-overlay`, D2; зеркальный wipe больше не затрагивает org)
 def resolve_org(context: str, env: Mapping[str, str] | None = None) -> str:
     """Resolve GitHub org for a context: overlay context.yaml org field, else context name.
 
@@ -84,8 +84,8 @@ def resolve_org(context: str, env: Mapping[str, str] | None = None) -> str:
     ##            PROJECTS_BASE; None = os.environ) → ⎋ str (GitHub org name)
     ## @complexity — O(C) — C = кандидаты context.yaml (PROJECTS_BASE + ~/projects, ×1 путь)
     ## @invariants — org из context.yaml#org (если задан) ВСЕГДА приоритетнее имени контекста;
-    ##              единственный кандидат-путь — <base>/<ctx>/platform/context.yaml (DevPlan 022
-    ##              TASK-3: legacy <ctx>/context.yaml удалён — канонический layout контекстной
+    ##              единственный кандидат-путь — `<base>/<ctx>/platform/context.yaml` (DevPlan 022
+    ##              TASK-3: legacy `<ctx>/context.yaml` удалён — канонический layout контекстной
     ##              папки = overlay-контейнер platform/, D2); парсинг best-effort
     ##              (ошибка YAML → fallback, не raise)
     """
