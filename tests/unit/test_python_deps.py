@@ -479,3 +479,53 @@ def test_marker_invalidated_by_failed_import(caplog, tmp_path):
 
 
 # endregion FUNC_test_marker_invalidated_by_failed_import
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region FUNC_test_probe_critical_imports_contract
+# ═══════════════════════════════════════════════════════════════════
+# Контракт _probe_critical_imports, на который опирается φ1 self-heal rerun
+# (state_machine.phase_needs_rerun переиспользует ЭТОТ probe — список модулей НЕ дублируется).
+
+
+# 🧪 TRAP[TEST] · 2026-09-01 · Regression · F-019 — probe rc-контракт: rc==0 → ok, rc!=0 → fail
+# · Scenario: import-команда через runner → rc=0 → (True, []); rc=1 → (False, CRITICAL_IMPORT_PROBES)
+# · Last fail: N/A (контракт переиспользуемого probe для state_machine φ1)
+# · Remove if: _probe_critical_imports удалён/заменён другим механизмом
+@ldd_trajectory
+def test_probe_critical_imports_rc_contract(caplog):
+    """## @purpose Контракт probe: rc==0 → ok, rc!=0 → fail (список модулей — CRITICAL_IMPORT_PROBES)."""
+    ok_ok, failed_ok = python_deps._probe_critical_imports(runner=FakeCommandRunner(default=_proc(0)))
+    assert ok_ok is True, "rc=0 → все модули импортируются"
+    assert failed_ok == [], f"rc=0 → failed пуст, got {failed_ok}"
+
+    ok_fail, failed_fail = python_deps._probe_critical_imports(runner=FakeCommandRunner(default=_proc(1)))
+    assert ok_fail is False, "rc=1 → probe провален"
+    assert failed_fail == list(python_deps.CRITICAL_IMPORT_PROBES), (
+        f"rc=1 → failed = CRITICAL_IMPORT_PROBES, got {failed_fail}"
+    )
+    logger.critical("[IMP:9][test] probe rc-контракт: rc=0 ok / rc=1 fail — OK")
+
+
+# 🧪 TRAP[TEST] · 2026-09-01 · Regression · F-019 — probe НЕ падает фатально при отсутствии интерпретатора
+# · Scenario: runner raise FileNotFoundError (интерпретатор отсутствует) → (False, CRITICAL_IMPORT_PROBES),
+#             БЕЗ исключения (state_machine φ1 полагается на non-fatal: не роняет bootstrap)
+# · Last fail: N/A (голая нода до φ1 / /usr/local/bin/python3 удалён)
+# · Remove if: _probe_critical_imports удалён/заменён другим механизмом
+@ldd_trajectory
+def test_probe_critical_imports_interpreter_missing_non_fatal(caplog):
+    """## @purpose Интерпретатор отсутствует → probe возвращает fail-кортеж, НЕ raise (non-fatal)."""
+
+    class _RaisingRunner(FakeCommandRunner):
+        """Runner, симулирующий отсутствие интерпретатора (OSError на run)."""
+
+        def run(self, cmd, **_kwargs):
+            raise FileNotFoundError(cmd[0])
+
+    ok, failed = python_deps._probe_critical_imports(runner=_RaisingRunner())
+    assert ok is False, "отсутствующий интерпретатор → probe fail (не ok)"
+    assert failed == list(python_deps.CRITICAL_IMPORT_PROBES), f"failed = CRITICAL_IMPORT_PROBES, got {failed}"
+    logger.critical("[IMP:9][test] probe при отсутствующем интерпретаторе — non-fatal (False, %s)", failed)
+
+
+# endregion FUNC_test_probe_critical_imports_contract

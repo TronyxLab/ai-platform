@@ -1,5 +1,5 @@
 """
-# GREP_SUMMARY: test_context_deployer, project-deploy, ghcr-pull, build-fallback, idempotent, healthcheck-gate, audit-log, DI, runner, facts, fn-injection
+# GREP_SUMMARY: test_context_deployer, project-deploy, ghcr-pull, build-fallback, idempotent, healthcheck-gate, audit-log, DI, runner, facts, fn-injection, main-node-resolution, node-name
 # STRUCTURE: ▶ tmp_path + node.yaml + DI (deploy_projects_fn/certs_fn/health_fn/orchestrator_deploy_fn) → ◇ filter projects → ◇ ghcr pull → ◇ build fallback → ◇ idempotent skip → ⎋ LDD trajectory
 # region MODULE_CONTRACT
 ## @purpose  Unit tests for context_deployer.py — context project deploy orchestration.
@@ -889,3 +889,83 @@ def test_deploy_context_vhost_failure_sets_failed(caplog, tmp_path, monkeypatch)
 
 
 # endregion FUNC_test_deploy_context_vhost_failure_sets_failed
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region Tests: main() node resolution (cache-drill fix 2026-09-01)
+# ═══════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · Regression · main() resolves node from node.yaml#node.name when --node empty
+# · Scenario: --node не задан, NODE_NAME env пуст, node.yaml содержит node.name=test-node →
+# ·   deploy_context вызывается с node_name=test-node (реальный NodeYaml, tmp_path)
+# · Last fail: standalone deploy-context на VPS — node_name="" → vhost-рендер в
+# ·   {NODE_CONFIGS_DIR}/overlays/nginx без node-компонента (cache-drill прогон 2026-09-01)
+# · Remove if: main() перестаёт резолвить node из node.yaml
+@ldd_trajectory
+def test_main_resolves_node_from_node_yaml(caplog, node_yaml_file, monkeypatch):
+    """main(): --node empty → node.name resolved from node.yaml (real NodeYaml)."""
+    monkeypatch.delenv("NODE_NAME", raising=False)
+    monkeypatch.delenv("CONTEXT", raising=False)
+    captured: dict[str, str] = {}
+
+    def fake_deploy_context(**kwargs):
+        captured["node_name"] = kwargs["node_name"]
+        return cd.ContextDeployResult()
+
+    monkeypatch.setattr(cd, "deploy_context", fake_deploy_context)
+    monkeypatch.setattr(sys, "argv", ["context_deployer.py", "--node-yaml", node_yaml_file])
+    rc = cd.main()
+    assert rc == 0
+    assert captured["node_name"] == "test-node", (
+        f"node_name must resolve from node.yaml#node.name, got {captured['node_name']!r}"
+    )
+    logger.critical("[IMP:9][test] main() resolved node.name from node.yaml — OK")
+
+
+# 🧪 TRAP[TEST] · Regression · main() prefers explicit --node over node.yaml
+# · Scenario: --node cli-node задан → deploy_context получает node_name=cli-node
+# ·   (node.yaml#node.name не читается — explicit приоритетен)
+# · Last fail: N/A (new guard — цепочка резолва)
+# · Remove if: precedence chain changes
+@ldd_trajectory
+def test_main_explicit_node_wins(caplog, node_yaml_file, monkeypatch):
+    """main(): explicit --node → deploy_context node_name (no node.yaml resolution needed)."""
+    monkeypatch.delenv("NODE_NAME", raising=False)
+    monkeypatch.delenv("CONTEXT", raising=False)
+    captured: dict[str, str] = {}
+
+    def fake_deploy_context(**kwargs):
+        captured["node_name"] = kwargs["node_name"]
+        return cd.ContextDeployResult()
+
+    monkeypatch.setattr(cd, "deploy_context", fake_deploy_context)
+    monkeypatch.setattr(sys, "argv", ["context_deployer.py", "--node", "cli-node", "--node-yaml", node_yaml_file])
+    rc = cd.main()
+    assert rc == 0
+    assert captured["node_name"] == "cli-node", f"explicit --node must win, got {captured['node_name']!r}"
+    logger.critical("[IMP:9][test] main() explicit --node propagated — OK")
+
+
+# 🧪 TRAP[TEST] · Regression · main() fail-fast IMP:10 when node unresolvable
+# · Scenario: --node пуст, NODE_NAME пуст, node.yaml БЕЗ node.name → return 1 + IMP:10 log
+# ·   (node обязателен для _step_vhosts/_step_certs)
+# · Last fail: silent empty node → vhost-рендер в некорректный путь
+# · Remove if: fail-fast guard removed
+@ldd_trajectory
+def test_main_fail_fast_when_node_missing(caplog, tmp_path, monkeypatch):
+    """main(): --node empty + node.yaml без node.name → IMP:10 fail-fast (rc=1)."""
+    monkeypatch.delenv("NODE_NAME", raising=False)
+    monkeypatch.delenv("CONTEXT", raising=False)
+    yaml_path = tmp_path / "node.yaml"
+    yaml_path.write_text("contexts:\n  - name: test-ctx\n", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["context_deployer.py", "--node-yaml", str(yaml_path)])
+    rc = cd.main()
+    assert rc == 1, "unresolvable node must fail-fast (rc=1), not silently continue with ''"
+    assert any("[IMP:10]" in r.message and "node is required" in r.message for r in caplog.records), (
+        "expected IMP:10 node-required fail-fast log"
+    )
+    logger.critical("[IMP:9][test] main() fail-fast on missing node — OK")
+
+
+# endregion Tests: main() node resolution (cache-drill fix 2026-09-01)

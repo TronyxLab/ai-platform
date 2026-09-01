@@ -35,6 +35,10 @@
 ##                      nginx reload → shared/docker_compose.nginx_reload
 ##           2026-08-13 | DevPlan 160 E1 — +DI-параметры (runner/facts/функции-зависимости)
 ##           2026-08-14 | DevPlan 170 W1-A3 — LITELLM_BASE_URL порт из shared/platform_ports
+##           2026-09-01 | cache-drill fix — main(): --node аргумент + резолв node.name из
+##                      node.yaml (цепочка --node → NODE_NAME → node.yaml); пусто → IMP:10
+##                      fail-fast (standalone deploy-context терял node → vhost-рендер в
+##                      некорректный путь)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -1288,6 +1292,11 @@ def build_parser() -> argparse.ArgumentParser:
         description="Deploy all context projects from node.yaml (DevPlan 047)",
     )
     _ = parser.add_argument("--node-yaml", required=True, help="Path to node.yaml")
+    _ = parser.add_argument(
+        "--node",
+        default="",
+        help="Node name (auto-resolved from node.yaml#node.name if empty)",
+    )
     _ = parser.add_argument("--context", default="", help="Deployment context (auto-extracted if empty)")
     _ = parser.add_argument("--projects-base", default=DEFAULT_PROJECTS_BASE, help="Projects base directory")
     return parser
@@ -1307,6 +1316,7 @@ class _CliArgs(Protocol):
     """
 
     node_yaml: str
+    node: str
     context: str
     projects_base: str
 
@@ -1329,6 +1339,26 @@ def main() -> int:
         stream=sys.stderr,
     )
 
+    # Resolve node name (⚠️ TRAP[BUG] · 2026-09-01 · HI · standalone deploy-context терял node →
+    # vhost-рендер в некорректный путь; поймано cache-drill прогоном · Root: main() полагался
+    # только на NODE_NAME env (пуст на VPS) → node_name="" · Fix: цепочка --node → env NODE_NAME
+    # → node.yaml#node.name; пусто → fail-fast IMP:10 (node обязателен для _step_vhosts/_step_certs)
+    # · Prevention: vhost/cert шаги требуют node — CLI не стартует без него)
+    node_name = args.node or os.environ.get("NODE_NAME", "")
+    if not node_name:
+        try:
+            node_name = str(NodeYaml(args.node_yaml).get("node.name", default="") or "")
+        except (ConfigParseError, ConfigNotFoundError, ConfigValidationError) as exc:
+            logger.warning("[IMP:7][context_deployer] Cannot read node.name from %s: %s", args.node_yaml, exc)
+    if not node_name:
+        logger.error(
+            "[IMP:10][context_deployer] NODE not set and node.name missing from %s — "
+            "node is required for vhost render / cert steps",
+            args.node_yaml,
+        )
+        return 1
+    logger.info("[IMP:9][context_deployer] Using node=%s", node_name)
+
     # Extract context if not provided
     context = args.context
     if not context:
@@ -1347,7 +1377,7 @@ def main() -> int:
     # DevPlan 079: use unified deploy_context() instead of deploy_context_projects()
     deploy_result = deploy_context(
         core_dir=os.environ.get("CORE_DIR", f"{PLATFORM_ROOT}/core"),
-        node_name=os.environ.get("NODE_NAME", ""),
+        node_name=node_name,
         node_yaml=args.node_yaml,
         context=context,
     )

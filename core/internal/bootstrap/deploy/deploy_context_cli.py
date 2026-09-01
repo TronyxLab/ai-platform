@@ -15,6 +15,8 @@
 ##   - exit-коды НЕ меняются относительно deploy-context.sh (guardrail 173)
 ## @rationale Языковая политика: бизнес-логика (парсинг/детекция/резолв) → Python; entrypoint = exec.
 ## @changes  2026-08-16 | DevPlan 173 W2.1 — Created (порт deploy-context.sh)
+##           2026-09-01 | cache-drill fix — local cmd: +--node passthrough в context_deployer.py
+##                      (standalone deploy-context терял node → vhost-рендер в некорректный путь)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -117,7 +119,16 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     # ── Delegate to context_deployer.py ──
+    # ⚠️ TRAP[BUG] · 2026-09-01 · HI · standalone deploy-context терял node → vhost-рендер в
+    # некорректный путь; поймано cache-drill прогоном · Root: --node НЕ пробрасывался в
+    # subprocess context_deployer.py → node_name="" → _step_vhosts рендерил в
+    # {NODE_CONFIGS_DIR}/overlays/nginx (без node-компонента), cert_orchestrator получал
+    # node_yaml='' · Fix: +--node passthrough (контракт remote-пути: node обязателен для
+    # vhost/cert шагов) · Prevention: локальный subprocess cmd зеркалит все аргументы
+    # контекста — node.yaml-путь + node-имя + context (R5 negative: test_cli_local_passes_node)
     cmd = [sys.executable, str(_DEPLOYER), "--node-yaml", node_yaml]
+    if args.node:
+        cmd += ["--node", args.node]
     if args.context:
         cmd += ["--context", args.context]
     result = subprocess.run(cmd, check=False)

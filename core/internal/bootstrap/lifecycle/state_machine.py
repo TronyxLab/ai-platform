@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: state-machine, bootstrap, lifecycle, node-init, node-update, checkpoint-resume, phase-transitions, state-json, content-hash, BootstrapPhase, phase-dependency-graph, precondition-check, PhaseContext, PHASE_DISPATCH
-# STRUCTURE: ▶ [BootstrapPhase enum (14)] → ┌StepState + BootstrapState (re-export из state_store)┐ → ◇ PHASE_DISPATCH registry (14 фаз, статический импорт) → ○ execute_phase(phase, ctx) → ◇ statuses {done|done_with_warnings|...} → ⚡ save() → ⎋ compat CLI (lazy cli.py)
+# GREP_SUMMARY: state-machine, bootstrap, lifecycle, node-init, node-update, checkpoint-resume, phase-transitions, state-json, content-hash, BootstrapPhase, phase-dependency-graph, precondition-check, PhaseContext, PHASE_DISPATCH, python-deps-self-heal, import-probe, F-019
+# STRUCTURE: ▶ [BootstrapPhase enum (14)] → ┌StepState + BootstrapState (re-export из state_store)┐ → ◇ PHASE_DISPATCH registry (14 фаз, статический импорт) → ○ execute_phase(phase, ctx) → ◇ phase_needs_rerun (content-hash + φ1 import-probe self-heal) → ◇ statuses {done|done_with_warnings|...} → ⚡ save() → ⎋ compat CLI (lazy cli.py)
 # region MODULE_CONTRACT
 ## @purpose  Explicit state machine for node-lifecycle.sh bootstrap/update process.
 ##           Manages 14 consolidated phases (φ1-φ13 + φ8.5) via a JSON state file
@@ -75,6 +75,10 @@
 ##           статический импорт фаз (цикл state_machine→phases разорван — ignore-ребро удалено)
 ##           2026-08-16 | DevPlan 177 W3.1 — _call_with_retry → делегат shared/retry.py;
 ##           _should_retry удалён (retryable-предикат + backoff — в shared.retry, 1:1 семантика)
+##           2026-09-01 | F-019 self-heal — phase_needs_rerun(φ1): маркер python-deps совпадает,
+##           но критичный import-probe (boto3, переиспользует python_deps._probe_critical_imports)
+##           падает → rerun → ensure_python_deps переустанавливает. Чинит живой инцидент
+##           «pip rc=0 + маркер, boto3 отсутствует»: φ1 done → phase-level SKIP делал probe недостижимым.
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -131,6 +135,7 @@ from core.internal.bootstrap.lifecycle.state_store import (
 from core.internal.shared.deploy_paths import platform_remote_base
 from core.internal.shared.env_facts import EnvironmentFacts  # E3 (160): facts DI тип (TYPE-only)
 from core.internal.shared.exceptions import PlatformFatalError
+from core.internal.shared.subprocess_io import CommandRunner  # runner DI тип (W4b; stdlib-only, для probe-шва)
 
 logger = logging.getLogger(__name__)
 
@@ -633,17 +638,44 @@ class StateMachine:
     # region FUNC_phase_needs_rerun
     ## @purpose — True если фаза отмечена done, но её входы изменились (hash mismatch) —
     ##            content-hash инвалидация (T9.3, L-4/B-1). Участвуют deploy/converge-фазы;
-    ##            прочие фазы (φ1-φ7, φ9-φ10) не зависят от modules/services → False.
+    ##            прочие фазы (φ2-φ7, φ9-φ10) не зависят от modules/services → False.
+    ##            ИСКЛЮЧЕНИЕ φ1 (system_bootstrap): self-heal rerun-условие F-019 —
+    ##            маркер python-deps совпадает, но критичный import-probe (boto3) падает →
+    ##            True (перевыполнение ensure, который по F-019 переустановит deps).
     ## @io — ⇥ phase_value: str, env: Mapping | None = None (DI, W-H DevPlan 163 — override NODE_YAML
-    ##          для hash-инвалидации; None = os.environ) → ⎋ bool
-    ## @complexity O(N) где N = hash входов
+    ##          для hash-инвалидации; None = os.environ),
+    ##          probe_runner: CommandRunner | None (DI probe-шва: версия python + import-probe;
+    ##          None = реальный subprocess), facts: EnvironmentFacts | None (DI path_isfile;
+    ##          None = self._facts → default_env_facts), hash_file: str | None (DI маркера
+    ##          python-deps; None = python_deps.HASH_FILE) → ⎋ bool
+    ## @complexity O(N) где N = hash входов; φ1 — +O(1) subprocess (версия) + O(1) subprocess (probe)
     ## @invariants
     ##   - Только HASH_INVALIDATED_PHASES: deploy_services, deploy_update, registry_update,
     ##     converge_services, converge_update — фазы, потребляющие modules/services из node.yaml
+    ##   - φ1: маркер python-deps отсутствует/не совпадает → True (deps-состояние неизвестно);
+    ##     маркер совпадает + import-probe FAIL → True (self-heal F-019); probe OK → False (skip)
+    ##   - φ1 НЕ done (голая нода до φ1) → False — probe НЕ выполняется (интерпретатор может
+    ##     отсутствовать; «φ1 done + probe-fail» — единственный триггер)
+    ##   - probe недоступен (интерпретатор отсутствует) → False (нет evidence деградации, non-fatal)
     ##   - StepState без сохранённого hash → False (done сохраняется)
     ##   - mismatch → True (cli перевыполнит фазу, сбросив статус в pending)
-    def phase_needs_rerun(self, phase_value: str, *, env: Mapping[str, str] | None = None) -> bool:
-        """Return True if a done phase must re-run because its inputs changed (T9.3)."""
+    def phase_needs_rerun(
+        self,
+        phase_value: str,
+        *,
+        env: Mapping[str, str] | None = None,
+        probe_runner: CommandRunner | None = None,
+        facts: EnvironmentFacts | None = None,
+        hash_file: str | None = None,
+    ) -> bool:
+        """Return True if a done phase must re-run because its inputs changed (T9.3 / F-019 φ1)."""
+        # ⚠️ TRAP[BUG] · 2026-09-01 · HI · self-heal F-019 был недостижим: φ1 done → phase-level SKIP →
+        # ensure_python_deps (import-probe) не вызывался на повторных bootstrap · Root: φ1 вне hash-инвалидации ·
+        # Fix: φ1 rerun-условие — маркер-match + probe-fail → phase_needs_rerun=True · Prevention: probe при каждой проверке φ1
+        if phase_value == BootstrapPhase.SYSTEM_BOOTSTRAP:
+            return self._system_bootstrap_self_heal_rerun(
+                env=env, probe_runner=probe_runner, facts=facts, hash_file=hash_file
+            )
         if phase_value not in _HASH_INVALIDATED_PHASES:
             return False
         entry = self.state.steps.get(phase_value)
@@ -668,6 +700,79 @@ class StateMachine:
         return changed
 
     # endregion FUNC_phase_needs_rerun
+
+    # region FUNC__system_bootstrap_self_heal_rerun
+    ## @purpose — φ1 (system_bootstrap) self-heal rerun-предикат (F-019, live-node incident):
+    ##            маркер python-deps (requirements-hash + pyver) совпадает, НО критичный
+    ##            import-probe (boto3) падает → True → cli сбросит φ1 в pending → ensure
+    ##            переустановит deps (тот же _probe_critical_imports инвалидирует маркер).
+    ##            Без этого φ1 done → phase-level SKIP делал probe недостижимым на повторных
+    ##            bootstrap (деградация S3-cache/boto3 персистила через все прогоны).
+    ## @io — ⇥ env: Mapping | None, probe_runner: CommandRunner | None, facts: EnvironmentFacts | None,
+    ##          hash_file: str | None → ⎋ bool (True = φ1 требует перевыполнения)
+    ## @complexity O(1) файл-рид (sha256 requirements) + O(1) subprocess (версия python) +
+    ##             O(P) import-probe subprocess'ов (P = len(CRITICAL_IMPORT_PROBES), сейчас 1)
+    ## @invariants
+    ##   - Ленивый импорт python_deps (stdlib-only) — тяжёлых зависимостей на top-level НЕТ
+    ##   - probe выполняется ТОЛЬКО при φ1 done (голая нода до φ1 → False, без probe)
+    ##   - Список модулей НЕ дублируется: переиспользуется python_deps.CRITICAL_IMPORT_PROBES
+    ##   - Интерпретатор /usr/local/bin/python3 отсутствует → probe неприменим → False (non-fatal)
+    ##   - Маркер отсутствует/не совпадает (requirements изменился / маркер стёрт) → True
+    def _system_bootstrap_self_heal_rerun(
+        self,
+        *,
+        env: Mapping[str, str] | None,
+        probe_runner: CommandRunner | None,
+        facts: EnvironmentFacts | None,
+        hash_file: str | None,
+    ) -> bool:
+        """φ1 rerun-условие: python-deps маркер совпадает, но import-probe падает (F-019)."""
+        entry = self.state.steps.get(BootstrapPhase.SYSTEM_BOOTSTRAP)
+        if entry is None or not phase_is_done(entry):
+            # Голая нода до φ1: фаза не done → нет rerun-триггера; probe НЕ выполняется
+            # (интерпретатор может отсутствовать — probe не должен ронять bootstrap).
+            return False
+        # Ленивый импорт: python_deps — stdlib-only (hashlib/os/pathlib/re/subprocess/sys);
+        # тяжелее в state_machine на top-level не тащим (инструкция probe-шва).
+        from core.internal.bootstrap import python_deps
+        from core.internal.shared.env_facts import default_env_facts
+
+        source: Mapping[str, str] = os.environ if env is None else {**os.environ, **env}
+        core_dir = self.core_dir or source.get("CORE_DIR", str(platform_remote_base() / "core"))
+        req_path = python_deps._resolve_requirements_path(core_dir)
+        facts_resolved = facts if facts is not None else self._facts
+        if facts_resolved is None:
+            facts_resolved = default_env_facts()
+
+        # Маркер python-deps: отсутствует / requirements изменился / pyver дрейф → deps-состояние
+        # неизвестно → перевыполнить φ1 (hash-miss семантика — аналог T9.3 для python-deps).
+        if not python_deps._check_content_hash(req_path, runner=probe_runner, hash_file=hash_file):
+            logger.info(
+                "[IMP:9][phase_needs_rerun] φ1 done but python-deps marker mismatch — re-run required (self-heal F-019)"
+            )
+            return True
+
+        # Маркер совпадает: probe критичных импортов (boto3 минимум). Дешёвый (~1 subprocess) —
+        # выполняется при КАЖДОЙ проверке φ1 (инцидент: pip rc=0 + маркер, boto3 отсутствовал).
+        if not facts_resolved.path_isfile("/usr/local/bin/python3"):
+            # Интерпретатор недоступен → probe неприменим → не-rerun (нет evidence деградации;
+            # голый bootstrap до φ1 защищён веткой not-done выше). НЕ падает фатально.
+            logger.info(
+                "[IMP:7][phase_needs_rerun] φ1 done + marker match but interpreter absent — probe skipped, no re-run"
+            )
+            return False
+        ok_probe, failed_modules = python_deps._probe_critical_imports(facts=facts_resolved, runner=probe_runner)
+        if not ok_probe:
+            logger.warning(
+                "[IMP:9][phase_needs_rerun] φ1 done + marker match + import-probe FAILED %s — re-run required "
+                "(self-heal F-019: boto3 отсутствовал при ложном «match»)",
+                failed_modules,
+            )
+            return True
+        logger.info("[IMP:9][phase_needs_rerun] φ1 done + marker match + import-probe OK — no re-run")
+        return False
+
+    # endregion FUNC__system_bootstrap_self_heal_rerun
 
     # region FUNC_validate_bootstrap_env
     ## @purpose — Validate that required env vars are set for bootstrap.

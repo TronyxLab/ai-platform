@@ -37,6 +37,7 @@
 # endregion MODULE_CONTRACT
 """
 
+import hashlib
 import json
 import logging
 import sys
@@ -47,6 +48,8 @@ import pytest
 
 # Load the LDD trajectory decorator
 from tests._conftest.ldd import ldd_trajectory
+from tests.helpers.fakes import FakeCommandRunner
+from tests.helpers.fakes import make_proc as _proc
 
 logger = logging.getLogger(__name__)
 
@@ -1465,6 +1468,15 @@ def test_resume_missing_phase_executes(caplog, state_file):
             executed.append(phase_value)
             return True
 
+        def phase_needs_rerun(self, phase_value: str, *, env=None, **kwargs):
+            # F-019 (2026-09-01): φ1 self-heal rerun-условие (маркер python-deps + import-probe) —
+            # вне скоупа D8/T2.7 resume-теста (этот тест про resume-механику + StepState-фикс,
+            # не про probe). Оверрайд сохраняет легаси-семантику «done-фазы skip»; сам φ1
+            # self-heal покрыт отдельным регионом test_phi1_needs_rerun_*.
+            if phase_value == sm.BootstrapPhase.SYSTEM_BOOTSTRAP:
+                return False
+            return super().phase_needs_rerun(phase_value, env=env, **kwargs)
+
     # НЕ вызываем setup_state — resume-сценарий: загруженное состояние используется как есть
     m = _ResumeSM(state_file_path=str(state_file))
     assert m.state.current_step == 2, "resume: current_step загружен из state.json"
@@ -1813,3 +1825,232 @@ def test_post_bootstrap_report_no_node_yaml(caplog, state_file, monkeypatch):
         lifecycle_cli.post_bootstrap_report(sm)  # не должен raise
     assert not [r for r in caplog.records if "Traceback" in r.getMessage()], "report не должен ронять traceback"
     logger.info("[IMP:9][test][T17] report без node.yaml не raise PASS")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region Tests: φ1 python-deps self-heal rerun (F-019, 2026-09-01)
+# ═══════════════════════════════════════════════════════════════════
+# Живой инцидент: cold bootstrap φ1 → pip rc=0 + маркер python-deps записан, НО boto3
+# фактически отсутствовал; runs 2/3: φ1 done → phase-level SKIP → ensure_python_deps
+# (с _probe_critical_imports) не вызывался → probe недостижим → деградация персистила.
+# Фикс: phase_needs_rerun(φ1) = маркер-match + import-probe-fail → True (self-heal).
+
+
+def _py_version_proc(version: str):
+    """Version-probe результат: `/usr/local/bin/python3 --version` → "Python <version>"."""
+    return _proc(0, f"Python {version}\n", "")
+
+
+def _phi1_done_state(tmp_path, state_file, *, marker: bool = True):
+    """φ1 done state.json + tmp requirements.txt + python-deps маркер.
+
+    Возвращает (core_dir, hash_file). Маркер (marker=False → отсутствует) —
+    диктуется сценарием: probe достижим только при marker-match.
+    """
+    core_dir = tmp_path / "core"
+    core_dir.mkdir()
+    req_file = core_dir / "requirements.txt"
+    req_file.write_text("requests==2.31.0\nboto3==1.43.80\n")
+    h = hashlib.sha256()
+    h.update(req_file.read_bytes())
+    hash_dir = tmp_path / ".bootstrap"
+    hash_dir.mkdir()
+    hash_file = hash_dir / "python-deps.hash"
+    if marker:
+        hash_file.write_text(f"{h.hexdigest()}\n3.14.5\n")
+    initial_data = {
+        "mode": "init",
+        "node": "test-node",
+        "current_step": 1,
+        "steps": {"system_bootstrap": {"name": "system_bootstrap", "status": "done"}},
+        "errors": [],
+        "warnings": [],
+    }
+    state_file.write_text(json.dumps(initial_data))
+    return core_dir, hash_file
+
+
+class _ProbeFacts:
+    """Facts-fake: /usr/local/bin/python3 ПРИСУТСТВУЕТ (probe достижим, детерминизм)."""
+
+    def is_root(self) -> bool:
+        return True
+
+    def which(self, _binary) -> str | None:
+        return None
+
+    def path_isfile(self, _path) -> bool:
+        return True
+
+
+class _NoInterpreterFacts:
+    """Facts-fake: /usr/local/bin/python3 ОТСУТСТВУЕТ (probe неприменим → не-rerun)."""
+
+    def is_root(self) -> bool:
+        return True
+
+    def which(self, _binary) -> str | None:
+        return None
+
+    def path_isfile(self, _path) -> bool:
+        return False
+
+
+# 🧪 TRAP[TEST] · 2026-09-01 · REGRESSION (R5) · F-019 — φ1 done + маркер-match + probe-fail → rerun
+# · Scenario: φ1 done, маркер python-deps (hash+pyver) совпадает, import-probe boto3 FAIL →
+#             phase_needs_rerun(system_bootstrap) = True → cli сбросит φ1 в pending → ensure
+#             переустановит deps (self-heal достижим на повторных bootstrap)
+# · Last fail: живой инцидент — runs 2/3 φ1 done → SKIP целиком → probe недостижим, boto3 missing
+# · Remove if: φ1 self-heal rerun-условие удалено/заменено
+@ldd_trajectory
+def test_phi1_needs_rerun_probe_fail(caplog, state_file, tmp_path):
+    """φ1 done + маркер-match + import-probe FAIL → phase_needs_rerun=True (self-heal F-019)."""
+    core_dir, hash_file = _phi1_done_state(tmp_path, state_file)
+    m = sm.StateMachine(state_file_path=str(state_file))
+    m.core_dir = str(core_dir)
+    runner = FakeCommandRunner(default=_py_version_proc("3.14.5"))
+
+    with patch("core.internal.bootstrap.python_deps._probe_critical_imports", return_value=(False, ["boto3"])):
+        needs = m.phase_needs_rerun(
+            sm.BootstrapPhase.SYSTEM_BOOTSTRAP,
+            probe_runner=runner,
+            facts=_ProbeFacts(),
+            hash_file=str(hash_file),
+        )
+
+    assert needs is True, "φ1 done + marker match + probe-fail обязан требовать rerun (self-heal F-019)"
+    logger.critical("[IMP:9][test] φ1 done + marker match + probe-fail → rerun True (self-heal F-019)")
+
+
+# 🧪 TRAP[TEST] · 2026-09-01 · Regression · F-019 — φ1 done + probe-ok → False (skip сохраняется)
+# · Scenario: φ1 done, маркер совпадает, import-probe boto3 OK → phase_needs_rerun = False
+#             (нормальная идемпотентность: done-фаза пропускается)
+# · Last fail: N/A (happy-path нового предиката)
+# · Remove if: φ1 self-heal rerun-условие удалено/заменено
+@ldd_trajectory
+def test_phi1_needs_rerun_probe_ok(caplog, state_file, tmp_path):
+    """φ1 done + маркер-match + import-probe OK → phase_needs_rerun=False (skip сохранён)."""
+    core_dir, hash_file = _phi1_done_state(tmp_path, state_file)
+    m = sm.StateMachine(state_file_path=str(state_file))
+    m.core_dir = str(core_dir)
+    runner = FakeCommandRunner(default=_py_version_proc("3.14.5"))
+
+    with patch("core.internal.bootstrap.python_deps._probe_critical_imports", return_value=(True, [])):
+        needs = m.phase_needs_rerun(
+            sm.BootstrapPhase.SYSTEM_BOOTSTRAP,
+            probe_runner=runner,
+            facts=_ProbeFacts(),
+            hash_file=str(hash_file),
+        )
+
+    assert needs is False, "φ1 done + probe-ok обязан сохранять skip (идемпотентность)"
+    logger.critical("[IMP:9][test] φ1 done + marker match + probe-ok → no re-run (skip сохранён)")
+
+
+# 🧪 TRAP[TEST] · 2026-09-01 · Regression · F-019 — φ1 done + маркер отсутствует → True (hash-miss)
+# · Scenario: φ1 done, но python-deps маркер НЕ записан (стёрт/никогда) → deps-состояние
+#             неизвестно → phase_needs_rerun = True (аналог hash-miss T9.3 для python-deps)
+# · Last fail: N/A (маркер-miss ранее давал False — φ1 вне hash-инвалидации)
+# · Remove if: φ1 self-heal rerun-условие удалено/заменено
+@ldd_trajectory
+def test_phi1_needs_rerun_marker_missing(caplog, state_file, tmp_path):
+    """φ1 done + python-deps маркер отсутствует → phase_needs_rerun=True (hash-miss семантика)."""
+    core_dir, hash_file = _phi1_done_state(tmp_path, state_file, marker=False)
+    m = sm.StateMachine(state_file_path=str(state_file))
+    m.core_dir = str(core_dir)
+
+    needs = m.phase_needs_rerun(
+        sm.BootstrapPhase.SYSTEM_BOOTSTRAP,
+        facts=_ProbeFacts(),
+        hash_file=str(hash_file),
+    )
+
+    assert needs is True, "φ1 done + маркер отсутствует → rerun (deps-состояние неизвестно)"
+    logger.critical("[IMP:9][test] φ1 done + маркер отсутствует → rerun True (hash-miss)")
+
+
+# 🧪 TRAP[TEST] · 2026-09-01 · Regression · F-019 — probe не падает фатально при отсутствии интерпретатора
+# · Scenario: φ1 done + маркер-match, но /usr/local/bin/python3 ОТСУТСТВУЕТ → probe неприменим →
+#             phase_needs_rerun = False (не-rerun, non-fatal — bootstrap не роняется)
+# · Last fail: N/A (guard против probe на голой ноде)
+# · Remove if: φ1 self-heal rerun-условие удалено/заменено
+@ldd_trajectory
+def test_phi1_needs_rerun_interpreter_absent_non_fatal(caplog, state_file, tmp_path):
+    """φ1 done + интерпретатор отсутствует → probe пропущен, phase_needs_rerun=False (non-fatal)."""
+    core_dir, hash_file = _phi1_done_state(tmp_path, state_file)
+    m = sm.StateMachine(state_file_path=str(state_file))
+    m.core_dir = str(core_dir)
+    runner = FakeCommandRunner(default=_py_version_proc("3.14.5"))
+    probe_calls: list[object] = []
+
+    with patch(
+        "core.internal.bootstrap.python_deps._probe_critical_imports",
+        side_effect=lambda **_: probe_calls.append(1) or (True, []),
+    ):
+        needs = m.phase_needs_rerun(
+            sm.BootstrapPhase.SYSTEM_BOOTSTRAP,
+            probe_runner=runner,
+            facts=_NoInterpreterFacts(),
+            hash_file=str(hash_file),
+        )
+
+    assert needs is False, "интерпретатор отсутствует → не-rerun (нет evidence деградации)"
+    assert probe_calls == [], "probe НЕ должен выполняться при отсутствующем интерпретаторе"
+    logger.critical("[IMP:9][test] φ1 done + интерпретатор отсутствует → probe skipped, no re-run")
+
+
+# 🧪 TRAP[TEST] · 2026-09-01 · Regression · F-019 — φ1 НЕ done (голая нода) → False, probe не вызывается
+# · Scenario: system_bootstrap pending (bare VPS до φ1) → phase_needs_rerun = False;
+#             probe/маркер НЕ читаются (голая нода без python3.14 не роняет bootstrap)
+# · Last fail: N/A (guard «φ1 done + probe-fail» — единственный триггер)
+# · Remove if: φ1 self-heal rerun-условие удалено/заменено
+@ldd_trajectory
+def test_phi1_needs_rerun_not_done_no_probe(caplog, state_file, tmp_path):
+    """φ1 pending (голая нода до φ1) → phase_needs_rerun=False, probe не выполняется."""
+    core_dir, hash_file = _phi1_done_state(tmp_path, state_file)
+    # Переписываем state: φ1 НЕ done (pending) — сценарий bare VPS до первого bootstrap
+    state_data = json.loads(state_file.read_text())
+    state_data["steps"]["system_bootstrap"]["status"] = "pending"
+    state_file.write_text(json.dumps(state_data))
+    m = sm.StateMachine(state_file_path=str(state_file))
+    m.core_dir = str(core_dir)
+    probe_calls: list[object] = []
+
+    with patch(
+        "core.internal.bootstrap.python_deps._probe_critical_imports",
+        side_effect=lambda **_: probe_calls.append(1) or (True, []),
+    ):
+        needs = m.phase_needs_rerun(
+            sm.BootstrapPhase.SYSTEM_BOOTSTRAP,
+            facts=_ProbeFacts(),
+            hash_file=str(hash_file),
+        )
+
+    assert needs is False, "φ1 не done → нет rerun-триггера (голая нода до φ1)"
+    assert probe_calls == [], "probe не должен вызываться, пока φ1 не done"
+    logger.critical("[IMP:9][test] φ1 pending → no rerun, probe не выполнен (bare node guard)")
+
+
+# 🧪 TRAP[TEST] · 2026-09-01 · Regression · F-019 — не-φ1 фазы не затронуты φ1-спецветкой
+# · Scenario: φ2 (user_accounts) вне _HASH_INVALIDATED_PHASES и вне φ1-ветки →
+#             phase_needs_rerun = False (поведение не изменено)
+# · Last fail: N/A (регрессия невозможна)
+# · Remove if: φ1 self-heal rerun-условие удалено/заменено
+@ldd_trajectory
+def test_phi1_self_heal_does_not_affect_other_phases(caplog, state_file, tmp_path):
+    """Не-φ1 фазы: phase_needs_rerun(user_accounts) → False (спецветка только для φ1)."""
+    core_dir, hash_file = _phi1_done_state(tmp_path, state_file)
+    m = sm.StateMachine(state_file_path=str(state_file))
+    m.core_dir = str(core_dir)
+
+    needs = m.phase_needs_rerun(
+        sm.BootstrapPhase.USER_ACCOUNTS,
+        facts=_ProbeFacts(),
+        hash_file=str(hash_file),
+    )
+
+    assert needs is False, "φ2 не должна перевыполняться φ1-спецветкой (вне hash-множества)"
+    logger.critical("[IMP:9][test] φ2 phase_needs_rerun=False — φ1-спецветка не влияет на другие фазы")
+
+
+# endregion Tests: φ1 python-deps self-heal rerun (F-019, 2026-09-01)
