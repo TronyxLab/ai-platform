@@ -151,6 +151,11 @@ def parse_nginx_server_names(conf_text: str) -> list[str]:
     ##   - server_name_in_redirect НЕ матчится (\b-якорь, R5-negative тест T5)
     """
     names: list[str] = []
+    # 022-launch-validation F-12: comment-строки вырезаются ДО парсинга — иначе
+    # doc-строки вида «##   - Точный server_name login.asiteam.ru (overlay-правило
+    # платформы; НЕ default_server)» матчатся _SERVER_NAME_RE и порождают мусорные
+    # fqdn-токены («(overlay-правило», «платформы») → ложные FAIL в e2e-verify.
+    conf_text = "\n".join(line for line in conf_text.splitlines() if not line.lstrip().startswith("#"))
     # Сплит по server-блокам: блок = от «server {» до парного «}» (нестрогий рекурсивный
     # сплит не нужен — nginx-конфиги однострочные директивы, вложенных фигурных скобок
     # в server-блоках нет).

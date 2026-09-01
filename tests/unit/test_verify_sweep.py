@@ -633,3 +633,21 @@ def test_default_remote_conf_dir_resolves(caplog) -> None:
 
 
 # endregion FUNC_test_default_remote_conf_dir_resolves
+
+
+# ── F-12 (022-launch-validation): comment-строки с server_name-текстом не парсятся ──
+def test_parse_server_names_ignores_comment_lines() -> None:
+    """server_name-текст в comment-строках (## doc) не порождает мусорных fqdn (R5)."""
+    conf = (
+        "## doc: server_name login.asiteam.ru (overlay-правило платформы; НЕ default_server)\n"
+        "server {\n"
+        "    listen 443 ssl;\n"
+        "    server_name login.asiteam.ru;\n"
+        "}\n"
+        "server {\n"
+        "    listen 443 ssl;\n"
+        "    server_name asiteam.ru;\n"
+        "}\n"
+    )
+    parsed = parse_nginx_server_names(conf)
+    assert parsed == ["login.asiteam.ru", "asiteam.ru"], parsed
