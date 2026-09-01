@@ -167,7 +167,7 @@ orphan-реконсиляция и severity-based exit code {0,1,2} — в `depl
 | Путь | Содержимое | Доставка |
 |------|-----------|----------|
 | `/opt/platform/core/` | core/ файлы (entrypoints, internal, lib, modules) | SCP/rsync push (core-deploy CI) |
-| `/opt/\<context\>/platform/` | Context-overlay (ayaml, node-configs, кастомизации) | git clone/pull (ensure_context_repo()) |
+| `/opt/\<context\>/platform/` | Context-overlay — git-клон `repos.core` (репо `<ctx>-overlay`): `context.yaml` + `modules/` (hermes-agent) + `node-configs/` + `projects/` | git clone/pull (ensure_context_repo()) |
 | `/opt/platform/secrets/` | AGE-encrypted secrets | SCP (через decrypt-secrets.sh) |
 
 ---
