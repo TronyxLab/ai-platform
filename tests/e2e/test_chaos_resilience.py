@@ -1410,8 +1410,7 @@ def test_docker_daemon_restart_containers_kept(requires_node: str, node_ssh: Nod
         # hardcoded postgres/nginx/litellm/clickhouse — минимальные контуры валидны.
         names = " ".join(containers)
         res = ssh.ssh_read(
-            f'for c in {names}; do echo -n "$c "; '
-            "docker inspect --format '{{.State.StartedAt}}' $c; done",
+            f"for c in {names}; do echo -n \"$c \"; docker inspect --format '{{{{.State.StartedAt}}}}' $c; done",
             timeout=30,
         )
         return dict(line.split() for line in res.stdout.strip().splitlines() if line.strip())
