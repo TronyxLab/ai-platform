@@ -514,6 +514,84 @@ def test_upload_s3_file_nonfatal_on_client_error(caplog, tmp_path):
     logger.critical("[IMP:9][test] _upload_s3_file non-fatal on ClientError — returns False")
 
 
+# 🧪 TRAP[TEST] · 2026-09-01 · Observability (asi-team 403) · download 403 → WARN «access denied» + False
+# · Regression: InvalidAccessKeyId/AccessDenied логировались generic WARN «S3 ClientError (code=403)»
+# ·   + INFO «cache miss» — оператор принимал проблему кредов за пустой кеш (asi-team: SSL-кеш «пуст»
+# ·   при живых объектах, 403/InvalidAccessKeyId). R5: negative-тест для 403-классификации.
+# · Last fail: 2026-09-01 — launch-validation asi-team VPS
+# · Remove if: 403-классификация уберётся из _download_s3_file
+@ldd_trajectory
+def test_download_s3_file_403_access_denied_warn(caplog, tmp_path):
+    """_download_s3_file: ClientError 403 (InvalidAccessKeyId) → WARN «access denied» + False (не cache-miss)."""
+
+    from botocore.exceptions import ClientError as _BotoClientError  # lazy boto3 (F-08)
+
+    mock_client = MagicMock()
+    mock_client.download_file.side_effect = _BotoClientError({"Error": {"Code": "InvalidAccessKeyId"}}, "download_file")
+    with patch.object(s3_ssl_cache, "_get_s3_client", return_value=mock_client):
+        ok = s3_ssl_cache._download_s3_file(
+            "platform/ssl-certs/x/fullchain.pem", str(tmp_path / "dst.pem"), bucket="test-bucket"
+        )
+
+    assert ok is False, "403 обязан вернуть False (non-fatal семантика кеша сохраняется)"
+    denied = [r.message for r in caplog.records if "[IMP:7]" in r.message and "access denied" in r.message]
+    assert denied, "403 обязан логировать WARN «S3 access denied», а не маскироваться под miss"
+    assert "проверь S3 creds" in denied[0], f"WARN обязан подсказать проверку creds: {denied[0]}"
+    logger.critical("[IMP:9][test] _download_s3_file 403 — WARN access denied + False (не cache-miss)")
+
+
+# 🧪 TRAP[TEST] · 2026-09-01 · Observability (asi-team 403) · download 404 → INFO miss БЕЗ WARN access denied
+# · Regression: R5-пара к 403-тесту — 404/NoSuchKey НЕ должен поднимать WARN «access denied»
+# ·   (различение 403/404 работает в обе стороны)
+# · Last fail: N/A (negative-тест для 403-фикса)
+# · Remove if: 403/404-классификация уберётся из _download_s3_file
+@ldd_trajectory
+def test_download_s3_file_404_miss_no_denied_warn(caplog, tmp_path):
+    """_download_s3_file: ClientError 404 (NoSuchKey) → INFO cache-miss + False, БЕЗ WARN «access denied»."""
+
+    from botocore.exceptions import ClientError as _BotoClientError  # lazy boto3 (F-08)
+
+    mock_client = MagicMock()
+    mock_client.download_file.side_effect = _BotoClientError({"Error": {"Code": "NoSuchKey"}}, "download_file")
+    with patch.object(s3_ssl_cache, "_get_s3_client", return_value=mock_client):
+        ok = s3_ssl_cache._download_s3_file(
+            "platform/ssl-certs/x/fullchain.pem", str(tmp_path / "dst.pem"), bucket="test-bucket"
+        )
+
+    assert ok is False, "404 обязан вернуть False (non-fatal)"
+    assert any("cache miss" in r.message for r in caplog.records), "404 → INFO cache-miss обязателен"
+    assert not any("access denied" in r.message for r in caplog.records), (
+        "404 НЕ должен логировать WARN access denied (это признак 403)"
+    )
+    logger.critical("[IMP:9][test] _download_s3_file 404 — INFO miss, 0 WARN access denied")
+
+
+# 🧪 TRAP[TEST] · 2026-09-01 · Observability (asi-team 403) · upload 403 → WARN «upload denied» + False
+# · Regression: _upload_s3_file логировал единый WARN без различения кодов — 403-креды не
+# ·   отличались от сетевого сбоя (кеш молча не обновлялся). R5: negative-тест для 403-классификации.
+# · Last fail: 2026-09-01 — launch-validation asi-team VPS
+# · Remove if: 403-классификация уберётся из _upload_s3_file
+@ldd_trajectory
+def test_upload_s3_file_403_denied_warn(caplog, tmp_path):
+    """_upload_s3_file: ClientError 403 (AccessDenied) → WARN «S3 upload denied» + False."""
+
+    from botocore.exceptions import ClientError as _BotoClientError  # lazy boto3 (F-08)
+
+    src = tmp_path / "cert.pem"
+    src.write_text("content")
+
+    mock_client = MagicMock()
+    mock_client.upload_file.side_effect = _BotoClientError({"Error": {"Code": "AccessDenied"}}, "upload_file")
+    with patch.object(s3_ssl_cache, "_get_s3_client", return_value=mock_client):
+        ok = s3_ssl_cache._upload_s3_file(str(src), "platform/ssl-certs/x/fullchain.pem", bucket="test-bucket")
+
+    assert ok is False, "403 upload обязан вернуть False (non-fatal)"
+    denied = [r.message for r in caplog.records if "[IMP:7]" in r.message and "upload denied" in r.message]
+    assert denied, "403 upload обязан логировать WARN «S3 upload denied»"
+    assert "кеш не обновлён" in denied[0], f"WARN обязан сообщить о необновлённом кеше: {denied[0]}"
+    logger.critical("[IMP:9][test] _upload_s3_file 403 — WARN upload denied + False")
+
+
 # 🧪 TRAP[TEST] · 2026-08-13 · Regression · W4b — _download_s3_file через s3_client параметром (DI)
 # · Scenario: fake-клиент передаётся параметром — 0 патчей _get_s3_client (DevPlan 160 T4.2)
 # · Last fail: N/A (new — W4b factory injection)

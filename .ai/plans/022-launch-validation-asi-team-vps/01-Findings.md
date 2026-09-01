@@ -46,6 +46,11 @@ $ARTIFACT_CONTRACT
   - B4: ✅ converge FULLY CONVERGED; check-security WARN-only (S2: 22 security updates pending — свежая нода, unattended-upgrades active; NOTE не блокер)
   - B5: ✅ project-list (roadmap); project-status NAME=roadmap: Up (healthy)
   - NOTE: verb использует NAME= (не PROJECT=) для project-status — TASK-шаблон неточен, не баг
+- [ ] Фаза C: TLS wildcard → cache drill → verify-domains → мониторинг TLS
+  - C1: ✅ wildcard /etc/letsencrypt/live/asiteam.ru (CN=asiteam.ru, SAN *.asiteam.ru+asiteam.ru, LE, expiry 2026-11-30); acme.sh dns_regru, cron 4×/день; openssl: wildcard покрывает apex и под-домены
+  - C2: **BLOCKED** (внешняя инфраструктура): S3-креды контура невалидны для timeweb/bucket platform-asi-certs (403 → InvalidAccessKeyId, list_buckets тоже). Код канала кеша НЕ сломан (fallback endpoint s3.timeweb.cloud — канон shared/s3_client:47; check/upload исполняются). Live-серты НЕ тронуты (канон «кеш пуст → СТОП»). Мини-фикс наблюдаемости: F-07 (WARN при 403).
+  - C3: ✅ verify-domains ALL PASS — roadmap.asiteam.ru HTTPS 200, SAN wildcard match, TLS verify ok (внешний curl)
+  - C4: BLOCKED by-design — monitoring-модуль не в node.yaml минимального контура (prometheus-rules пусто, экспортёра service нет); код TLS-наблюдаемости в платформе есть (cert_collector + status-page enrich) — подхватится при добавлении monitoring-модуля
 
 ## Находки (F-NN · дата · фаза · severity)
 
