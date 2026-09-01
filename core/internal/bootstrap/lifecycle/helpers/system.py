@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: system-helpers, apt-packages, is-pkg-installed, install-apt-packages, ensure-sops, ghcr-auth, install-cron-metrics, cron, metrics, dpkg, idempotent, install-cron-watchdog, watchdog-cron, journald-persistent, install-zram, zram, swappiness, install-cron-prune, prune, retry, backoff, purge-cruft, cruft, purge-provider-repos, fstab, fstrim, defaults, DevPlan-162, DevPlan-164
-# STRUCTURE: ▶ is_pkg_installed ┌dpkg -s┐ → ◇ rc=0? → ⚡ install_apt_packages ┌_run_with_retry apt-get update+install┐ → ⚡ ensure_sops ┌GitHub release download┐ → ⚡ ghcr_auth ┌docker_auth.ghcr_login┐ → ⚡ install_cron_metrics ┌flock+timeout cron.d┐ → ⚡ install_cron_watchdog ┌flock+timeout watchdog.py┐ → ⚡ ensure_journald_persistent ┌Storage=persistent┐ → ⚡ install_zram ┌zram-tools + zramswap + sysctl┐ → ⚡ install_cron_prune ┌docker/apt monthly prune┐ → ⚡ purge_cruft ┌apt purge only-installed┐ → ⚡ purge_provider_repos ┌rm timeweb-* + apt update┐ → ⚡ ensure_fstab_policy ┌defaults + fstrim.timer┐ → ⎋
+# GREP_SUMMARY: system-helpers, apt-packages, is-pkg-installed, install-apt-packages, ensure-sops, ghcr-auth, install-cron-metrics, cron, metrics, dpkg, idempotent, install-cron-watchdog, watchdog-cron, journald-persistent, install-zram, zram, swappiness, zram-probe, kernel-module, graceful-skip, zramswap-disable, install-cron-prune, prune, retry, backoff, purge-cruft, cruft, purge-provider-repos, fstab, fstrim, defaults, DevPlan-162, DevPlan-164, 022
+# STRUCTURE: ▶ is_pkg_installed ┌dpkg -s┐ → ◇ rc=0? → ⚡ install_apt_packages ┌_run_with_retry apt-get update+install┐ → ⚡ ensure_sops ┌GitHub release download┐ → ⚡ ghcr_auth ┌docker_auth.ghcr_login┐ → ⚡ install_cron_metrics ┌flock+timeout cron.d┐ → ⚡ install_cron_watchdog ┌flock+timeout watchdog.py┐ → ⚡ ensure_journald_persistent ┌Storage=persistent┐ → ⚡ install_zram ┌modinfo-probe zram → ◇ skip (graceful)|zram-tools + zramswap + sysctl┐ → ⚡ install_cron_prune ┌docker/apt monthly prune┐ → ⚡ purge_cruft ┌apt purge only-installed┐ → ⚡ purge_provider_repos ┌rm timeweb-* + apt update┐ → ⚡ ensure_fstab_policy ┌defaults + fstrim.timer┐ → ⎋
 # region MODULE_CONTRACT
 ## @purpose  Системные I/O-хелперы bootstrap-фаз (apt/пакеты, sops, GHCR auth, metrics cron,
 ##           watchdog cron, journald persistent, zram, prune cron, cruft purge) — извлечены
@@ -22,7 +22,10 @@
 ##   - install_cron_watchdog: тот же паттерн (идемпотентен, атомарен, non-fatal) — DevPlan 132 W1
 ##   - ensure_journald_persistent: идемпотентен (Storage=persistent → no-op), атомарен (temp+mv),
 ##     non-fatal (False при сбое; systemctl restart best-effort) — DevPlan 132 W3, D6
-##   - install_zram (162 W4-1): non-fatal (False при сбое apt/записи, никогда не raise);
+##   - install_zram (162 W4-1 + 022 G1 probe): non-fatal (False при сбое apt/записи, никогда
+##     не raise); pre-flight modinfo-probe модуля zram (один non-fatal runner-вызов); probe-fail
+##     → zram пропускается (graceful skip, True — НЕ failure: локальная опция) + zramswap.service
+##     disable если zram-tools уже установлен; probe-ok → прежний путь 1:1;
 ##     файлы идемпотентны (content-match no-op), атомарны (temp+mv, 0644)
 ##   - install_cron_prune (162 W4-4): тот же паттерн (content-match no-op, атомарен, non-fatal);
 ##     CRON_PRUNE_LINES — monthly docker system prune (без volumes, until=720h) + apt-get clean
@@ -54,6 +57,12 @@
 ## @changes  2026-08-13 · DevPlan 164 — +purge_provider_repos (W0-3.2, ex-162 W2-6: timeweb-* репо),
 ##           +ensure_fstab_policy (W0-3.4, ex-162 W4-2: defaults + fstrim.timer); sysstat-комментарий
 ##           обновлён (Q5: не устанавливается, 0 потребителей)
+## @changes  2026-09-01 · 022 G1 (reboot-drill, нода asi-team-vps) — install_zram: +pre-flight
+##           modinfo-probe модуля zram (_zram_kernel_module_available); probe-fail → graceful skip
+##           (True, не failure) + systemctl disable zramswap.service если пакет установлен
+##           (_disable_zramswap_service, НЕ apt remove — Rev-комментарий) — Timeweb-ядро
+##           6.8.0-138-generic (linux-modules, БЕЗ linux-modules-extra) не содержит zram →
+##           zramswap.service FAILED на каждый boot → systemctl degraded (reboot-инвариант G1)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -649,13 +658,17 @@ def _write_content_if_changed(path: str, desired: str, mode: int = 0o644) -> boo
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# zram swap (DevPlan 162 W4-1) — install_zram
+# zram swap (DevPlan 162 W4-1 + 022 G1 probe) — install_zram
 # ═══════════════════════════════════════════════════════════════════════════
 
 # zram-tools пакет + конфиги: 4G (50% RAM 7.8G), zstd, priority 100, vm.swappiness=100.
 ZRAM_PACKAGE = "zram-tools"
 ZRAM_DEFAULT_FILE = "/etc/default/zramswap"
 ZRAM_SYSCTL_FILE = "/etc/sysctl.d/90-platform-zram.conf"
+# systemd-сервис zram-tools (enable-on-boot): на ядре БЕЗ модуля zram (linux-modules без
+# linux-modules-extra, напр. Timeweb 6.8.0-138-generic) FAILED на каждый boot → systemctl
+# degraded. Probe-фаза install_zram disable'ит его (не remove — Rev-комментарий ниже).
+ZRAM_SERVICE = "zramswap.service"
 ZRAM_DEFAULT_LINES = (
     "# Generated by ai-platform install_zram (DevPlan 162 W4-1) — DO NOT EDIT MANUALLY\n"
     "ALGO=zstd\n"
@@ -667,37 +680,131 @@ ZRAM_SYSCTL_LINES = (
 )
 
 
-# region FUNC_install_zram
-## @purpose  Установить zram swap (DevPlan 162 W4-1): zram-tools пакет + /etc/default/zramswap
-##           (ALGO=zstd, SIZE=4096 — 50% RAM, PRIORITY=100) + vm.swappiness=100 (sysctl.d).
-##           Идемпотентен (content-match no-op), атомарен (temp+mv, 0644), non-fatal.
-## @io       ⎋ bool: True = настроено/no-op, False = failure (non-fatal — never raises)
-## @complexity O(1) + apt-операции (install_apt_packages → _run_with_retry, W7-4)
+# region FUNC__zram_kernel_module_available
+## @purpose  Pre-flight probe (022 G1, reboot-drill asi-team-vps): доступен ли kernel-модуль zram
+##           на текущем ядре? ОДИН non-fatal runner-вызов `modinfo -F filename zram` — rc=0 →
+##           модуль есть, rc!=0 (включая 127 not-found / 124 timeout) → недоступен.
+## @io       ⇥ active: CommandRunner → ⎋ bool (True = модуль доступен)
+## @complexity O(1) — один subprocess-вызов
 ## @invariants
+##   - Ровно один runner-вызов (spec 022: «один вызов») — modinfo, НЕ modprobe: modinfo
+##     чисто read-only (не зависит от modprobe.d/root-прав), rc=1 при отсутствии модуля
+##   - check=False + timeout=SYSTEM_CMD_TIMEOUT (60s — канон system-команд, shared/timeouts) →
+##     НИКОГДА не raise (run_subprocess: FileNotFoundError→127, TimeoutExpired→124, graceful)
+##   - rc == 0 → доступен; любой другой rc → недоступен (install_zram делает graceful skip)
+def _zram_kernel_module_available(active: CommandRunner) -> bool:
+    """Return True if the zram kernel module is available (modinfo probe, non-fatal)."""
+    result = active.run(["modinfo", "-F", "filename", "zram"], check=False, timeout=SYSTEM_CMD_TIMEOUT)
+    return result.returncode == 0
+
+
+# endregion FUNC__zram_kernel_module_available
+
+
+# region FUNC__disable_zramswap_service
+## @purpose  Best-effort `systemctl disable zramswap.service`: zram-tools уже установлен (прошлый
+##           bootstrap на ядре С zram), но текущее ядро БЕЗ модуля → сервис падает на каждый boot
+##           (systemctl degraded — reboot-инвариант G1 нарушен). Disable убирает enable-симлинк —
+##           сервис не стартует на следующем boot. Non-fatal (никогда не raise).
+## @io       ⇥ active: CommandRunner → ⎋ None
+## @complexity O(1) — один systemctl-вызов
+## @invariants
+##   - disable, НЕ apt remove пакета — осознанно (TRAP[DECISION] Rev ниже)
+##   - Идемпотентен: systemctl disable уже-disabled → rc=0 no-op
+##   - check=False + try/except (PlatformError, FileNotFoundError) — best-effort (паттерн
+##     ensure_fstab_policy fstrim.timer; PlatformFatalError ⊂ PlatformError)
+## 🧐 TRAP[DECISION] · 2026-09-01 · — · zram probe-fail: disable zramswap.service, НЕ apt remove
+## · zram-tools · Rejected: apt-get remove zram-tools (полное удаление пакета) · Reason: apt
+## · remove может тянуть зависимости (auto-remove-каскад, вспомогательные lib) и усложняет
+## · повторный bootstrap; disable достаточно — сервис не стартует на boot, система не degraded ·
+## · Rev: если zram-tools сам начнёт тянуть заметные зависимости (>=1 случай на ноде) → remove
+def _disable_zramswap_service(active: CommandRunner) -> None:
+    """Best-effort disable of zramswap.service (non-fatal, idempotent)."""
+    try:
+        active.run(["systemctl", "disable", ZRAM_SERVICE], check=False, timeout=SYSTEM_CMD_TIMEOUT)
+        logger.info("[IMP:8][zram] %s disabled (zram module unavailable on this kernel)", ZRAM_SERVICE)
+    except (PlatformError, FileNotFoundError) as e:
+        logger.warning("[IMP:7][zram] %s disable failed (non-fatal): %s", ZRAM_SERVICE, e)
+
+
+# endregion FUNC__disable_zramswap_service
+
+
+# region FUNC_install_zram
+## @purpose  Установить zram swap (DevPlan 162 W4-1): pre-flight modinfo-probe модуля zram
+##           (022 G1 — graceful skip на ядрах без linux-modules-extra); при probe-ok —
+##           zram-tools пакет + /etc/default/zramswap (ALGO=zstd, SIZE=4096 — 50% RAM,
+##           PRIORITY=100) + vm.swappiness=100 (sysctl.d). Идемпотентен (content-match no-op),
+##           атомарен (temp+mv, 0644), non-fatal. Пропуск при недоступном модуле — НЕ failure:
+##           zram — локальная опция, нода без него полностью работоспособна.
+## @io       ⎋ bool: True = настроено/no-op/skip (graceful), False = failure (non-fatal — never raises)
+## @complexity O(1) + probe (1 subprocess) + apt-операции (install_apt_packages → _run_with_retry, W7-4)
+## @invariants
+##   - Pre-flight: _zram_kernel_module_available (один modinfo-вызов, non-fatal) ПЕРЕД apt —
+##     модуль недоступен → НЕ ставить пакет (сервис не должен создаваться на boot)
+##   - Re-идемпотентность: probe-fail + zram-tools уже установлен (прошлый bootstrap) →
+##     systemctl disable zramswap.service (НЕ remove пакета — Rev-комментарий), True
 ##   - Пакет: install_apt_packages (is_pkg_installed gate, APT_TIMEOUT канон)
 ##   - Конфиги: content-match no-op + атомарная запись 0644 (atomic_writer канон)
 ##   - Non-fatal: PlatformError (apt) / OSError (запись) → WARN + False — φ1 продолжается
 ##   - OOM-риск (суммарные лимиты контейнеров ~10.5G > 7.8G RAM): zram 4G — буфер пиков LLM-трафика
 ##   - DI (W-H, DevPlan 163): default_file/sysctl_file: str | None = None — пути конфигов
 ##     (None = канонические /etc/...) — тесты инжектят tmp_path вместо патча констант
-##   - DI (W-H, DevPlan 163): runner: CommandRunner | None = None — apt-канал
+##   - DI (W-H, DevPlan 163): runner: CommandRunner | None = None — apt/systemctl-канал
 ##     (None = default_command_runner); тесты передают fake-раннер вместо патча is_pkg_installed
 ## @rationale DevPlan 162 W4-1: swapon пуст, systemd-oomd не установлен — OOM-killer выбирает жертву
 ##            случайно (может убить postgres). zram-tools — Ubuntu-канон: modprobe zram + swap на boot.
+##            022 G1: zram-tools тянет enable-on-boot zramswap.service; на ядре БЕЗ модуля zram
+##            (провайдерские linux-modules без linux-modules-extra) сервис FAILED на каждый reboot →
+##            systemctl degraded → нода не достигает «running» (reboot-инвариант G1 нарушен).
 def install_zram(
     default_file: str | None = None,
     sysctl_file: str | None = None,
     *,
     runner: CommandRunner | None = None,
 ) -> bool:
-    """Install zram swap (4G, zstd, priority 100, swappiness=100). Returns True on success/no-op."""
+    """Install zram swap (4G, zstd, priority 100, swappiness=100). True = success/no-op/skip."""
     active = runner if runner is not None else default_command_runner()
     target_default = ZRAM_DEFAULT_FILE if default_file is None else default_file
     target_sysctl = ZRAM_SYSCTL_FILE if sysctl_file is None else sysctl_file
+
+    # ── Pre-flight probe (022 G1, reboot-drill asi-team-vps) ──
+    # ⚠️ TRAP[BUG] · 2026-09-01 · P1 · zramswap.service FAILED на каждый boot на ядре без модуля zram
+    # · Symptom: reboot-drill G1 (022-launch-validation-asi-team-vps, нода asi-team-vps) — после
+    # ·   reboot systemctl degraded: zramswap.service FAILED (zram-tools enable-on-boot, модуль
+    # ·   отсутствует). Контейнеры поднялись (healthcheck зелёный), но system-level degraded —
+    # ·   нода формально не «running» (self-healing reboot-инвариант нарушен).
+    # · Root: Timeweb VPS-ядро 6.8.0-138-generic — linux-modules БЕЗ linux-modules-extra → модуль
+    # ·   zram отсутствует (modprobe zram → FATAL, modinfo zram → not found); install_zram (162
+    # ·   W4-1) ставил zram-tools безусловно, пакет тянет zramswap.service с enable-on-boot.
+    # · Fix: pre-flight probe _zram_kernel_module_available (modinfo -F filename zram, один
+    # ·   non-fatal вызов) перед apt; probe-fail → graceful skip (True — НЕ failure) + disable
+    # ·   zramswap.service если пакет уже установлен (re-идемпотентность); probe-ok → 1:1.
+    # · Prevention: bootstrap-установка системных пакетов с enable-on-boot сервисами — всегда
+    # ·   probe kernel-возможностей перед установкой; reboot-drill G1 критерий — systemctl
+    # ·   is-system-running (не только контейнеры).
+    if not _zram_kernel_module_available(active):
+        if is_pkg_installed(ZRAM_PACKAGE, runner=active):
+            # Re-идемпотентность: пакет установлен прошлым bootstrap (ядро тогда имело zram) —
+            # disable сервиса, чтобы он не скакал на каждый boot (НЕ remove — см. Rev в хелпере).
+            _disable_zramswap_service(active)
+        logger.info(
+            "[IMP:7][zram] kernel module zram not available on this kernel (%s) — zram skipped "
+            "(graceful, provider kernel без modules-extra)",
+            os.uname().release,
+        )
+        return True
+
     try:
         if not is_pkg_installed(ZRAM_PACKAGE, runner=active):
             logger.info("[IMP:8][zram] Installing %s", ZRAM_PACKAGE)
             install_apt_packages([ZRAM_PACKAGE], runner=active)
+            # 📝 TRAP[DEBT] · 2026-09-01 · LO · zram-лог «already installed» пишется СРАЗУ после
+            # · реальной установки (ветка not-installed) — текст вводит в заблуждение
+            # · Observed: install_zram probe-ok ветка: install_apt_packages → лог «already installed»
+            # · Suspected: копипаст из is_pkg_installed-ветки (162 W4-1); должен быть «installed»
+            # · Impact: оператор/агент по логу не отличает свежую установку от no-op
+            # · When: 022 G1 probe-рефакторинг (1:1-перенос probe-ok ветки, спека не трогает)
             logger.info("[IMP:7][zram] %s already installed", ZRAM_PACKAGE)
     except PlatformError as e:
         logger.warning("[IMP:7][zram] %s install failed (non-fatal): %s", ZRAM_PACKAGE, e)
