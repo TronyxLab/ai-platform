@@ -42,6 +42,34 @@ $ARTIFACT_CONTRACT
 
 ## Находки (F-NN · дата · фаза · severity)
 
+### F-03 · 2026-09-01 · Фаза B · P0
+- Симптом: холодный bootstrap после φ1 complete упал на входе в φ2: `Unknown option: --mode` (python usage), процесс exit 2. Нода застряла с state.json (φ1 done).
+- Ожидалось / получено: re-exec lifecycle на python3.14 с сохранением всех CLI-аргументов / интерпретатор получил `--mode` как СВОЙ опцион.
+- Гипотеза причины: `_reexec_lifecycle` (core/internal/bootstrap/lifecycle/cli.py) строил `os.execv(target, [target, *sys.argv[1:]])` — терял argv[0] (путь cli.py при каноническом file-запуске node-lifecycle.sh:50 `python3 "${SM_SCRIPT}" "$@"`). Инвариант докстринга «сохраняет ВСЕ CLI-аргументы» — ложный.
+- Фикс (Coder-субагент): чистая функция `_reexec_argv(target)` — package-mode: `[target, "-m", f"{__main__.__package__}.cli", *args[1:]]`, file-mode: `[target, abspath(argv0), *args[1:]]`; docstring-инвариант исправлен; 2 negative-теста в test_lifecycle_cli_w5.py.
+- Ре-верификация: make check TEST_FILE=tests/unit/test_lifecycle_cli_w5.py 15/15 PASS; полный make check rc=0; повторный bootstrap: φ1 skipped (resume) → φ2/φ3 complete ✅ (коммит e0d0e09).
+- Статус: fixed
+- Evidence: /tmp/w5_check2_1788240340.log, logs/make/20260901-082653-bootstrap-node-asi-team-vps.log (φ2/φ3 complete после фикса)
+
+### F-04 · 2026-09-01 · Фаза B · P1 (операционная ловушка канона)
+- Симптом: φ4 secrets_provision FAILED на ноде: sops «no identity matched any of the recipients» (recipient = age-пубкей asi-контура), несмотря на prelude-доставку ключа (node_detect на ноде: «found in environment»).
+- Ожидалось / получено: расшифровка asi-team-vps.enc.yaml на ноде / mismatch identity.
+- Гипотеза причины: `~/.zshrc` владельца глобально экспортирует `AGE_SECRET_KEY` (tronyx master key). node_detect chain: check1 `AGE_SECRET_KEY` env → check2 `SOPS_AGE_KEY` env → ... — check1 перехватывает tronyx-ключ ДО моего `SOPS_AGE_KEY=asi`. Bootstrap передаёт tronyx-ключ на asi-ноду → sops отклоняет. Канон (root AGENTS.md): «AGE_SECRET_KEY env ПЕРЕКРЫВАЕТ файл; принудительный файл — unset AGE_SECRET_KEY» — ловушка документирована, но fail-вывод sops не указывает на неё оператору.
+- Фикс: операционный — запуск bootstrap с явным перекрытием: `AGE_SECRET_KEY="$(cat ~/.ssh/age-key-asi.txt)" make bootstrap-node NODE=asi-team-vps` (env assignment перебивает zshrc-значение; check1 теперь возвращает asi-ключ). Код не менялся: порядок канона заморожен (DEP-0017), двойная приоритизация сломала бы контуры tronyx.
+- Ре-верификация: повторный bootstrap (resume φ1-φ3 skipped) — φ4 в прогрессе (см. далее); sha-диагностика канала prelude: printf_q-экспорт сохраняет байты ключа 1:1 (канал чист).
+- Статус: fixed (операционно); 🧐 TRAP[DECISION]: глобальный AGE_SECRET_KEY в ~/.zshrc — источник коллизий мульти-контура; Rev: если второй инцидент → рассматривать node_detect warning при multi-key-env (env-ключ ≠ файловый ключ → IMP:7 warn)
+- Evidence: sha-сравнения в логах сессии; core/internal/shared/node_detect.py:119-132 (chain); logs/make/20260901-082653-bootstrap...log (sops fail)
+
+### F-05 · 2026-09-01 · Фаза B · P0
+- Симптом: повторная φ4 FAILED при запуске с явным `AGE_SECRET_KEY="$(cat ~/.ssh/age-key-asi.txt)"`: remote «FATAL: stdin secret transport: unexpected extra non-empty line(s) [4] beyond expected 3» → AGE_SECRET_KEY на ноде пуст (len=0) → step_10 sops «no identity matched».
+- Ожидалось / получено: канонический AGE-ключ одна строка через prelude / multi-line env-значение.
+- Гипотеза причины: detect_age_key() Check 1/2 (env) возвращают значение КАК ЕСТЬ — файл age-keygen содержит 3 строки (2 комментария + ключ), ключ-файл подставленный целиком в env проходит multi-line. Файловые чеки (3/4/5) санитизированы ранее (TRAP[BUG] 2026-08-12 — тот же класс), env-чеки пропущены. Протокол ssh-stdin prelude читает значения ПО СТРОКАМ — multi-line ломает транспорт.
+- Фикс (Coder-субагент): helper `_canonical_age_key()` в node_detect.py — нормализация env-значений Check 1/2 к канон-строке (первая строка с префиксом AGE-SECRET-KEY-), None → fallthrough по цепочке; TRAP[BUG] 2026-09-01; 2 negative-теста (test_node_detect.py: env_multiline, env_noncanonical fallthrough).
+- Ре-верификация: make check TEST_FILE=tests/unit/test_node_detect.py 23/23 PASS; ruff clean; smoke multi-line env → ровно 1 строка canonical.
+- Статус: fixed
+- ⚠️ SEC-note: при диагностике одноразовый вывод awk напечатал 3-строчный ключ-файл владельца в session output (локальный терминал). Ключ не попал в git/логи репо. Рекомендация владельцу: ротация asi-AGE-ключа после закрытия валидации (вне скоупа сессии).
+- Evidence: logs/make/20260901-084454-bootstrap...log (FATAL + sops fail); core/internal/shared/node_detect.py Check 1/2 + TRAP[BUG] 2026-09-01
+
 ### F-01 · 2026-09-01 · Фаза A · P1
 - Симптом: `make check` rc=2 — doxygen-check FAIL: 1 warning «core/internal/bootstrap/AGENTS.md:247: unable to resolve reference to '/Users/tronyx/projects/AGENTS.md' for \ref command».
 - Ожидалось / получено: zero-warnings invariant (DevPlan 097) / 1 warning, гейт красный. Регрессия существует и на main (test_journal 07:38: 5763 pass / 1 fail — тот же doxygen).
