@@ -28,9 +28,10 @@
 # (4e623c1, 2026-08-26); freshness-гейт G6 корректно RED'ил устаревший пин — это его работа.
 # 2026-08-31: re-pin 4e623c1 → 2419325 — DevPlan 18 W7 изменил deploy-project.yml;
 # freshness-гейт корректно RED'ил устаревший пин — это его работа.
-DEPLOY_CHANNEL_PIN = "24193251b0fb6f4acda0c29350cc42b3b5ba48a4"
+# 2026-09-01: re-pin 2419325 → e5d76fa — E2 валидация (план 020): CI-раннеры видели
+# last-touch=e5d76fa для deploy-project.yml (локальный полный клон — 2419325; расследование
+# в 02-StatusReport.md); re-pin на HEAD закрывает обе реальности — пин содержит всё до HEAD.
+DEPLOY_CHANNEL_PIN = "e5d76fa3080dcd4471bb40a5d7b5847d859d22e6"
 
 # Честный комментарий-снапшот (формат фиксируется freshness-гейтом: 'main snapshot YYYY-MM-DD …').
-PIN_COMMENT = (
-    "main snapshot 2026-08-31 — merge DevPlan 18 W7 (deploy-project.yml: job-level env without runner context)"
-)
+PIN_COMMENT = "main snapshot 2026-09-01 — E2 acceptance validation wave (bootstrap strict context-deploy, rollback contour, monitoring enabled-semantics)"
