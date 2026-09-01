@@ -20,7 +20,7 @@ from unittest import mock
 
 import pytest
 
-from core.internal.scaffold.nginx_harness import nginx_t_harness
+from core.internal.scaffold.nginx_harness import _is_nginx_image_unavailable, nginx_t_harness
 
 # ══════════════════════════════════════════════════════════════════════
 # TESTS: harness structure
@@ -168,6 +168,109 @@ class TestHarnessDockerRun:
 
         assert result is False
         assert any("nginx -t FAIL" in r.message for r in caplog.records)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# TESTS: digest-pin image pre-flight + pull-failure (P1 429-фикс)
+# ══════════════════════════════════════════════════════════════════════
+
+
+class TestHarnessImageAvailability:
+    """Tests for NGINX_T_IMAGE pre-flight (docker image inspect) + pull-failure non-blocking skip."""
+
+    # 🧪 TRAP[TEST] · Regression · Scenario: pinned image missing locally → WARN + docker run still attempted
+    # · Expect: returns True (docker run succeeds after pull on dev machine), WARN "not found locally"
+    # · Last fail: 2026-09-01 (P1 asi-team-vps — anonymous pull 429 → nginx -t FAIL → render_all abort)
+    # · Remove if: image pre-flight logic changes
+    @mock.patch("core.internal.scaffold.nginx_harness.shutil.which")
+    @mock.patch("core.internal.scaffold.nginx_harness.subprocess.run")
+    def test_harness_image_missing_local_warn_still_runs(
+        self, mock_run: mock.MagicMock, mock_which: mock.MagicMock, tmp_path: Path, caplog
+    ) -> None:
+        """image inspect → missing → WARN + docker run still attempted (pull may work on dev)."""
+        caplog.set_level(0)
+        mock_which.return_value = "/usr/bin/docker"
+
+        def mock_side_effect(cmd, *args, **kwargs):
+            if cmd[0] == "docker" and cmd[1] == "image":
+                return mock.MagicMock(returncode=1, stdout=b"", stderr=b"")  # not present locally
+            return mock.MagicMock(returncode=0, stdout=b"", stderr=b"")
+
+        mock_run.side_effect = mock_side_effect
+
+        (tmp_path / "test.example.com.conf").write_text("server { listen 80; }\n", encoding="utf-8")
+
+        result = nginx_t_harness(str(tmp_path))
+
+        assert result is True
+        assert any("not found locally" in r.message for r in caplog.records)
+        docker_run_calls = [c for c in mock_run.call_args_list if c[0][0][0] == "docker" and c[0][0][1] == "run"]
+        assert len(docker_run_calls) == 1, "docker run must still be attempted when image missing locally"
+
+    # 🧪 TRAP[TEST] · Regression · Scenario: docker.io 429 pull rate-limit on node (P1 root cause)
+    # · Expect: returns True (non-blocking), IMP:10 "недоступен и не найден локально" logged, no FAIL
+    # · Last fail: 2026-09-01 (P1 asi-team-vps — deploy-context D-фаза)
+    # · Remove if: pull-failure non-blocking semantics change
+    @mock.patch("core.internal.scaffold.nginx_harness.shutil.which")
+    @mock.patch("core.internal.scaffold.nginx_harness.subprocess.run")
+    def test_harness_image_pull_429_nonblocking(
+        self, mock_run: mock.MagicMock, mock_which: mock.MagicMock, tmp_path: Path, caplog
+    ) -> None:
+        """docker run pull fails with 429 Too Many Requests → True (WARN, NOT config FAIL)."""
+        caplog.set_level(0)
+        mock_which.return_value = "/usr/bin/docker"
+
+        def mock_side_effect(cmd, *args, **kwargs):
+            if cmd[0] == "docker" and cmd[1] == "image":
+                return mock.MagicMock(returncode=1, stdout=b"", stderr=b"")  # not present locally
+            if cmd[0] == "docker" and cmd[1] == "run":
+                return mock.MagicMock(
+                    returncode=1,
+                    stdout=b"",
+                    stderr=(
+                        b"docker: Error response from daemon: toomanyrequests: You have reached your pull rate limit."
+                    ),
+                )
+            return mock.MagicMock(returncode=0, stdout=b"", stderr=b"")
+
+        mock_run.side_effect = mock_side_effect
+
+        (tmp_path / "test.example.com.conf").write_text("server { listen 80; }\n", encoding="utf-8")
+
+        result = nginx_t_harness(str(tmp_path))
+
+        assert result is True
+        assert any("недоступен и не найден локально" in r.message for r in caplog.records)
+        assert any("pull rate limit" in r.message for r in caplog.records)
+        assert not any("nginx -t FAIL" in r.message for r in caplog.records)
+
+    # 🧪 TRAP[TEST] · Regression · Scenario: registry/daemon failure markers → image unavailable
+    # · Expect: helper True for 429/denied/manifest/unable-to-find/daemon-down
+    # · Last fail: None (new test for P1 429-фикс)
+    # · Remove if: _is_nginx_image_unavailable marker set changes
+    @pytest.mark.parametrize(
+        "stderr_text",
+        [
+            "toomanyrequests: You have reached your pull rate limit",
+            "Error response from daemon: pull access denied for nginx:...",
+            "manifest unknown: manifest unknown",
+            "Unable to find image 'nginx:1.30.4-alpine@sha256:...' locally",
+            "Cannot connect to the Docker daemon",
+        ],
+        ids=["429", "denied", "manifest", "unable-to-find", "daemon-down"],
+    )
+    def test_harness_image_unavailable_markers(self, stderr_text: str) -> None:
+        """Registry/daemon failure stderr → image unavailable (True)."""
+        assert _is_nginx_image_unavailable(stderr_text) is True
+
+    # 🧪 TRAP[TEST] · Regression · Scenario: real config syntax error must NOT be treated as pull failure
+    # · Expect: helper False for nginx: [emerg] runtime output (FAIL path preserved)
+    # · Last fail: None (new test for P1 429-фикс)
+    # · Remove if: _is_nginx_image_unavailable marker set changes
+    def test_harness_image_unavailable_false_for_config_error(self) -> None:
+        """nginx runtime config error → NOT image unavailable (False → config FAIL path)."""
+        stderr = b'nginx: [emerg] unknown directive "foo" in /etc/nginx/conf.d/overlay/test.example.com.conf:3\n'
+        assert _is_nginx_image_unavailable(stderr.decode("utf-8")) is False
 
 
 # ══════════════════════════════════════════════════════════════════════

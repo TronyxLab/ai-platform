@@ -286,6 +286,12 @@ def test_gate_vhost_nginx_t(tmp_path: Path) -> None:
     nginx_conf.write_text(NGINX_CONF)
 
     # Run nginx -t in Docker
+    # 📝 TRAP[DEBT] · 2026-09-01 · LO · Gate test тянет незапиненный nginx:alpine (docker.io
+    # · anonymous pull) — тот же 429-класс, что P1 nginx_t_harness (asi-team-vps)
+    # · Observed: docker run nginx:alpine без digest-pin в belt-and-suspenders валидации
+    # · Suspected: digest-pin канон (root AGENTS.md DevOps-политика) не покрывает gate-тесты
+    # · Impact: rate-limited dev/CI-машина → флаки gate
+    # · When: P1-фикс nginx_t_harness (NGINX_T_IMAGE), 2026-09-01
     print("--- Docker nginx -t validation ---")
     docker_result = subprocess.run(
         [

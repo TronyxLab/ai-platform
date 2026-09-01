@@ -859,26 +859,31 @@ def configure_vhost_for_project(
 # · Rev: if harness nginx.conf is changed to use a non-glob include pattern for vhosts
 
 
-def nginx_t_harness(temp_dir: str, nginx_version: str = "1.28-alpine") -> bool:
+def nginx_t_harness(temp_dir: str, nginx_image: str | None = None) -> bool:
     """Lazy facade for core.internal.scaffold.nginx_harness.nginx_t_harness.
 
-    ▶ ┌temp_dir + nginx_version┐ → ⊕ lazy import → ⎋ delegate → bool
+    ▶ ┌temp_dir + nginx_image┐ → ⊕ lazy import → ⎋ delegate → bool
 
     ## @purpose — Backward-compatible entry point retained in vhost_renderer so existing
     ##            callers (render_all, CLI, tests) keep the same import path. The
     ##            implementation moved verbatim to nginx_harness.py (DevPlan 117 G T53).
     ##            Lazy import keeps start-up time unchanged (AC-G5).
     ## @io — ⇥ temp_dir: str — directory with rendered vhost .conf files
-    ##       ⇥ nginx_version: str — nginx image tag (default: 1.28-alpine)
+    ##       ⇥ nginx_image: str | None — полный image ref nginx:<tag>@sha256:<digest>;
+    ##            None → канонический NGINX_T_IMAGE (digest-pin, SoT
+    ##            docker-compose.base.yml:41; P1 429-фикс, 2026-09-01)
     ##       → ⎋ bool — True if validation passes or docker unavailable
     ## @complexity — O(1) + delegate
     ## @invariants
     ##   - Does NOT import nginx_harness at module level (lazy, AC-G5)
     ##   - Signature and semantics identical to the pre-decomposition function
+    ##   - None-sentinel: дефолт НЕ дублируется литералом (drift-вектор) — резолвится
+    ##     из константы при вызове (parity с nginx_harness.NGINX_T_IMAGE)
     """
+    from core.internal.scaffold.nginx_harness import NGINX_T_IMAGE
     from core.internal.scaffold.nginx_harness import nginx_t_harness as _impl
 
-    return _impl(temp_dir, nginx_version)
+    return _impl(temp_dir, NGINX_T_IMAGE if nginx_image is None else nginx_image)
 
 
 # endregion FUNC_nginx_t_harness
@@ -887,6 +892,141 @@ def nginx_t_harness(temp_dir: str, nginx_version: str = "1.28-alpine") -> bool:
 # ─────────────────────────────────────────────────────────────────────
 # RENDER_ALL (batch pipeline)
 # ─────────────────────────────────────────────────────────────────────
+
+
+# region FUNC__render_vhosts_to_temp
+def _render_vhosts_to_temp(
+    entries: list[ProjectEntry],
+    node: str,
+    node_configs_dir: str,
+    platform_domain: str | None,
+    dev_domain_suffix: str | None,
+    temp_dir: Path,
+) -> list[VhostFile]:
+    """Render all expose-enabled vhosts into the temp dir (render_all step ❹).
+
+    ▶ ┌entries + node + configs + temp_dir┐ → ○ for entry: ◇ expose? → render_vhost
+    → ⊕ append → ⎋ list[VhostFile]
+
+    ## @purpose — Шаг 4 render_all: рендер каждого доменного проекта с expose-фильтром
+    ##            (plan 012 T15, F-034): vhost генерируется ТОЛЬКО для expose:true — паритет
+    ##            single-project пути configure_vhost→load_vhost_config (batch-путь ранее
+    ##            рассинхронизировался и публиковал неэкспонированные проекты).
+    ## @io — ⇥ entries: list[ProjectEntry], node: str, node_configs_dir: str,
+    ##       platform_domain: str | None, dev_domain_suffix: str | None, temp_dir: Path
+    ##       → ⎋ list[VhostFile] — отрендеренные vhost'ы (expose-enabled)
+    ## @complexity — O(P * S) — P проектов × размер шаблона
+    ## @invariants — expose=false → пропуск (vhost НЕ генерируется, R5-негатив F-034)
+    """
+    rendered_vhosts: list[VhostFile] = []
+    for entry in entries:
+        # plan 012 T15 (F-034): expose-фильтр — vhost только для expose:true (R5-негатив).
+        # Реальный источник «vhost для expose=false» — render_all БЕЗ сверки с ai-platform.yaml
+        # (в отличие от single-project configure_vhost). Закрыт фильтром здесь.
+        # ⚠️ TRAP[BUG] · 2026-08-26 · F-034 · vhost генерировался для expose=false проектов
+        # · Symptom: node.yaml#projects содержит домен, ai-platform.yaml проекта expose:false —
+        #   render-all создавал vhost (overlay-артефакт), nginx публиковал неэкспонированный проект
+        # · Root: render_all фильтровал ТОЛЬКО name+domain из node.yaml; expose проверялся
+        #   лишь в single-project пути configure_vhost→load_vhost_config — batch-путь рассинхронился
+        # · Fix: _project_expose_enabled() в render_all + remove stale GENERATED vhost ниже;
+        #   e2e-verify (verify_sweep) ожидает ответ только от exposed-доменов
+        # · Prevention: единый expose-контракт в обоих путях рендера; R5-негатив в тестах
+        if not _project_expose_enabled(entry):
+            continue
+        logger.info("[IMP:7][render_all] Rendering vhost for %s → %s", entry.name, entry.domain)
+        vhost = render_vhost(
+            entry=entry,
+            node=node,
+            node_configs_dir=node_configs_dir,
+            platform_domain=platform_domain,
+            output_dir=str(temp_dir),
+            dev_domain_suffix=dev_domain_suffix,
+        )
+        rendered_vhosts.append(vhost)
+        logger.info("[IMP:9][render_all] Rendered: %s.conf (hash=%s...)", entry.domain, vhost.body_hash[:12])
+
+    logger.info("[IMP:7][render_all] Rendered %d vhost(s) to temp dir", len(rendered_vhosts))
+    return rendered_vhosts
+
+
+# endregion FUNC__render_vhosts_to_temp
+
+
+# region FUNC__swap_rendered_vhosts
+def _swap_rendered_vhosts(overlay_dir: Path, temp_dir: Path) -> int:
+    """Remove existing GENERATED vhosts + move new ones (render_all step ❻ atomic swap).
+
+    ▶ ┌overlay_dir + temp_dir┐ → ○ mkdir overlay → ○ remove GENERATED *.conf → ○ mv temp *.conf
+    → ⎋ moved_count
+
+    ## @purpose — Атомарный swap: удаляет ТОЛЬКО файлы с # GENERATED маркером (F-034: stale
+    ##            vhost'ы expose=false проектов, отрендеренные до введения фильтра, исчезают),
+    ##            переносит свежеотрендеренные vhost'ы из temp_dir. Вызывается ТОЛЬКО после
+    ##            успешного nginx -t (all-or-nothing гарантируется caller'ом).
+    ## @io — ⇥ overlay_dir: Path, temp_dir: Path → ⎋ int (число перемещённых vhost'ов)
+    ## @complexity — O(F) — файлов в overlay_dir + temp_dir
+    ## @invariants — Hand-written .conf (без # GENERATED маркера) НЕ удаляются (I3: только
+    ##               GENERATED-артефакты); moved_count = итоговое число vhost'ов
+    """
+    overlay_dir.mkdir(parents=True, exist_ok=True)
+
+    # Remove existing GENERATED vhosts (files with GENERATED marker)
+    existing_count = 0
+    for gen_file in overlay_dir.glob("*.conf"):
+        if not gen_file.is_file():
+            continue
+        content = gen_file.read_text(encoding="utf-8")
+        if "# GENERATED" in content:
+            gen_file.unlink()
+            existing_count += 1
+
+    if existing_count > 0:
+        logger.info("[IMP:7][render_all] Removed %d existing GENERATED vhost(s)", existing_count)
+
+    # Move rendered files from temp_dir to overlay_dir
+    moved_count = 0
+    for vhost_file in temp_dir.glob("*.conf"):
+        if not vhost_file.is_file():
+            continue
+        dest = overlay_dir / vhost_file.name
+        shutil.move(str(vhost_file), str(dest))
+        moved_count += 1
+
+    logger.info("[IMP:9][render_all] Atomic mv complete: %d vhost(s) → %s", moved_count, overlay_dir)
+    return moved_count
+
+
+# endregion FUNC__swap_rendered_vhosts
+
+
+# region FUNC__validate_nginx_t
+def _validate_nginx_t(temp_dir: Path) -> None:
+    """Run nginx -t validation via harness; raise PlatformFatalError on FAIL (render_all step ❺).
+
+    ▶ ┌temp_dir┐ → ◇ nginx_t_harness pass? → ⎋ None | ⊕ raise PlatformFatalError
+
+    ## @purpose — Шаг 5 render_all: all-or-nothing gate — nginx -t FAIL → abort (ничего не
+    ##            перемещается). Вынесен из render_all (C901 13→<10: сокращает try-clause).
+    ## @io — ⇥ temp_dir: Path → ⎋ None (PASS) | ⊕ PlatformFatalError (FAIL)
+    ## @complexity — O(V * S) — делегирует nginx_t_harness
+    ## @invariants — FAIL → PlatformFatalError (exit 10); caller чистит temp_dir в except
+    """
+    if not nginx_t_harness(str(temp_dir)):
+        logger.error("[IMP:10][render_all] nginx -t validation FAILED — removing temp dir, aborting")
+        msg = "nginx -t validation failed — no files written (all-or-nothing)"
+        # 📝 TRAP[DEBT] · 2026-09-01 · LO · PlatformFatalError НЕ ловится except'ом render_all —
+        #   temp_dir НЕ чистится на nginx -t failure (leak)
+        # · Observed: raise PlatformFatalError здесь; render_all except ловит только
+        #   (DuplicateDomainError, RuntimeError, ConfigValidationError)
+        # · Suspected: автор подразумевал RuntimeError (docstring @throws), но PlatformFatalError
+        #   (PlatformError(Exception)) не является его подклассом → rmtree в except не выполняется
+        # · Impact: /tmp/vhost_render_* мусор на каждом nginx -t FAIL (редкий путь)
+        # · When: C901-декомпозиция render_all (вынос успех-баннера из try)
+        raise PlatformFatalError(msg)
+
+
+# endregion FUNC__validate_nginx_t
+
 
 # region FUNC_render_all
 
@@ -957,86 +1097,25 @@ def render_all(
     temp_dir = Path(tempfile.mkdtemp(prefix="vhost_render_"))
     logger.info("[IMP:7][render_all] Render temp dir: %s", temp_dir)
 
-    # ruff: ignore[PLW0717] — тело try присваивает имена, читаемые except/после — извлечение ломает видимость
     try:
         # ── Step 4: Render all vhosts to temp dir ─────────────────
-        rendered_vhosts: list[VhostFile] = []
-        for entry in entries:
-            # plan 012 T15 (F-034): expose-фильтр — vhost только для expose:true (R5-негатив).
-            # Реальный источник «vhost для expose=false» — render_all БЕЗ сверки с ai-platform.yaml
-            # (в отличие от single-project configure_vhost). Закрыт фильтром здесь.
-            # ⚠️ TRAP[BUG] · 2026-08-26 · F-034 · vhost генерировался для expose=false проектов
-            # · Symptom: node.yaml#projects содержит домен, ai-platform.yaml проекта expose:false —
-            #   render-all создавал vhost (overlay-артефакт), nginx публиковал неэкспонированный проект
-            # · Root: render_all фильтровал ТОЛЬКО name+domain из node.yaml; expose проверялся
-            #   лишь в single-project пути configure_vhost→load_vhost_config — batch-путь рассинхронился
-            # · Fix: _project_expose_enabled() в render_all + remove stale GENERATED vhost ниже;
-            #   e2e-verify (verify_sweep) ожидает ответ только от exposed-доменов
-            # · Prevention: единый expose-контракт в обоих путях рендера; R5-негатив в тестах
-            if not _project_expose_enabled(entry):
-                continue
-            logger.info("[IMP:7][render_all] Rendering vhost for %s → %s", entry.name, entry.domain)
-            vhost = render_vhost(
-                entry=entry,
-                node=node,
-                node_configs_dir=node_configs_dir,
-                platform_domain=platform_domain,
-                output_dir=str(temp_dir),
-                dev_domain_suffix=dev_domain_suffix,
-            )
-            rendered_vhosts.append(vhost)
-            logger.info("[IMP:9][render_all] Rendered: %s.conf (hash=%s...)", entry.domain, vhost.body_hash[:12])
-
-        logger.info("[IMP:7][render_all] Rendered %d vhost(s) to temp dir", len(rendered_vhosts))
+        # (expose-фильтр F-034 + TRAP[BUG] — в _render_vhosts_to_temp)
+        _render_vhosts_to_temp(
+            entries,
+            node,
+            node_configs_dir,
+            platform_domain,
+            dev_domain_suffix,
+            temp_dir,
+        )
 
         # ── Step 5: nginx -t validation ───────────────────────────
-        if not nginx_t_harness(str(temp_dir)):
-            logger.error("[IMP:10][render_all] nginx -t validation FAILED — removing temp dir, aborting")
-            msg = "nginx -t validation failed — no files written (all-or-nothing)"
-            raise PlatformFatalError(msg)
+        # (all-or-nothing gate + PlatformFatalError — в _validate_nginx_t)
+        _validate_nginx_t(temp_dir)
 
         # ── Step 6: Atomic mv to overlay dir ──────────────────────
-        overlay_dir.mkdir(parents=True, exist_ok=True)
-
-        # Remove existing GENERATED vhosts (files with GENERATED marker)
-        # plan 012 T15 (F-034): удаляются ВСЕ прежние GENERATED vhost'ы — устаревшие артефакты
-        # expose=false проектов (рендеренные ранее, до введения expose-фильтра) исчезают:
-        # mv ниже переносит только vhost'ы нового expose-отфильтрованного набора.
-        existing_count = 0
-        for gen_file in overlay_dir.glob("*.conf"):
-            if not gen_file.is_file():
-                continue
-            content = gen_file.read_text(encoding="utf-8")
-            if "# GENERATED" in content:
-                gen_file.unlink()
-                existing_count += 1
-
-        if existing_count > 0:
-            logger.info("[IMP:7][render_all] Removed %d existing GENERATED vhost(s)", existing_count)
-
-        # Move rendered files from temp_dir to overlay_dir
-        moved_count = 0
-        for vhost_file in temp_dir.glob("*.conf"):
-            if not vhost_file.is_file():
-                continue
-            dest = overlay_dir / vhost_file.name
-            shutil.move(str(vhost_file), str(dest))
-            moved_count += 1
-
-        logger.info("[IMP:9][render_all] Atomic mv complete: %d vhost(s) → %s", moved_count, overlay_dir)
-
-        print("")
-        print("──────────────────────────────────────────────────────")
-        print(f"  ✅ render-vhosts: {moved_count} vhost(s) generated")
-        print(f"     Node: {node}")
-        print(f"     Output: {overlay_dir}")
-        print("──────────────────────────────────────────────────────")
-        print("")
-
-        result = RenderResult(
-            rendered_count=moved_count,
-            harness_passed=True,
-        )
+        # (GENERATED-only cleanup F-034 + mv — в _swap_rendered_vhosts)
+        moved_count = _swap_rendered_vhosts(overlay_dir, temp_dir)
 
     except (DuplicateDomainError, RuntimeError, ConfigValidationError) as e:
         # Cleanup temp dir on failure
@@ -1048,6 +1127,20 @@ def render_all(
             harness_passed=False,
         )
         raise
+
+    # Success path — summary banner (except re-raises, сюда попадаем только при успехе)
+    print("")
+    print("──────────────────────────────────────────────────────")
+    print(f"  ✅ render-vhosts: {moved_count} vhost(s) generated")
+    print(f"     Node: {node}")
+    print(f"     Output: {overlay_dir}")
+    print("──────────────────────────────────────────────────────")
+    print("")
+
+    result = RenderResult(
+        rendered_count=moved_count,
+        harness_passed=True,
+    )
 
     # Cleanup temp dir on success
     shutil.rmtree(temp_dir, ignore_errors=True)
