@@ -1,10 +1,12 @@
-# GREP_SUMMARY: test-context-promoter context-promote git-mirror ssh audit mock-subprocess tmp-path caplog ldds
-# STRUCTURE: ┌mock subprocess.run┐ → ○ 3× check_ssh_available → ○ 2× promote_via_ssh → ○ 2× verify_mirror → ○ promote_context (FATAL / audit trail) → ⎋ 10 tests
+# GREP_SUMMARY: test-context-promoter context-promote git-mirror ssh audit mock-subprocess tmp-path caplog ldds resolve-org
+# STRUCTURE: ┌mock subprocess.run┐ → ○ 3× check_ssh_available → ○ 2× promote_via_ssh → ○ 2× verify_mirror → ○ promote_context (FATAL / audit trail) → ○ 5× resolve_org (platform positive / legacy negative / mixed-case / fallback) → ⎋ 15 tests
 # region MODULE_CONTRACT
-## @purpose  Unit tests for core/internal/deploy/context_promoter.py — DevPlan 103 §9 $TEST_SPEC.
+## @purpose  Unit tests for core/internal/deploy/context_promoter.py — DevPlan 103 §9 $TEST_SPEC
+##           + DevPlan 022 TASK-3 ($TEST_SPEC: platform positive + legacy-path negative).
 ##           Verifies the SSH availability probe (AC4), SSH mirror push (AC4),
 ##           mirror HEAD verification (AC6), fail-fast FATAL path (SSH-only, 177 W2.1),
-##           and the audit START/DONE trail (AC9).
+##           the audit START/DONE trail (AC9), and the single-candidate org resolution
+##           (DevPlan 022: platform/context.yaml — единственный путь, legacy игнорируется).
 ## @scope    Native imports only; all subprocess.run invocations mocked (no real git/ssh);
 ##           tmp_path for the audit log; caplog for LDD IMP:7-10 trajectory.
 ##           Test Honesty R1 (no pass-tests) / R2 (no unfalsifiable asserts) compliant.
@@ -426,3 +428,79 @@ def test_resolve_org_fallback_context_name(
 
 
 # endregion FUNC_test_resolve_org_fallback_context_name
+
+
+# ── resolve_org: single candidate (DevPlan 022 TASK-3) ────────────────────
+
+
+# region FUNC_test_resolve_org_platform_context_yaml_positive
+def test_resolve_org_platform_context_yaml_positive(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """DevPlan 022 TASK-3 positive: org из <base>/<ctx>/platform/context.yaml#org — единственный кандидат-путь."""
+    caplog.set_level(logging.INFO)
+
+    # Изоляция: второй base жёстко = Path.home()/"projects" — на dev-машине оператора
+    # ~/projects/<ctx>/platform/context.yaml существует → патчим Path.home на tmp_path.
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    ctx = "tronyx-lab"
+    platform_yaml = tmp_path / ctx / "platform" / "context.yaml"
+    platform_yaml.parent.mkdir(parents=True)
+    platform_yaml.write_text("org: TronyxLab\n", encoding="utf-8")
+    # DI (W-H): env= dict (0 setenv PROJECTS_BASE)
+
+    # 🧪 TRAP[TEST] · 2026-09-01 · Regression · DevPlan 022 TASK-3 — platform/context.yaml единственный кандидат
+    # · Scenario: PROJECTS_BASE/<ctx>/platform/context.yaml с org → resolve_org возвращает org
+    # · Last fail: N/A (positive-кейс; legacy-кандидат <ctx>/context.yaml удалён в этом же плане)
+    # · Remove if: resolve_org перестаёт читать platform/context.yaml#org
+    resolved = context_promoter.resolve_org(ctx, env={"PROJECTS_BASE": str(tmp_path)})
+    assert resolved == "TronyxLab", f"org обязан прийти из platform/context.yaml, got {resolved!r}"
+
+    logger.critical("[IMP:9][test] org из platform/context.yaml — единственный кандидат (DevPlan 022)")
+    found_imp9 = assert_ldd_imp9(caplog, require_imp9=False)
+    assert "[IMP:8][resolve_org] org=TronyxLab" in caplog.text
+    assert found_imp9, "Critical LDD Error: No IMP:9 log found in platform positive test"
+
+
+# endregion FUNC_test_resolve_org_platform_context_yaml_positive
+
+
+# region FUNC_test_resolve_org_legacy_path_ignored_negative
+def test_resolve_org_legacy_path_ignored_negative(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """DevPlan 022 TASK-3 negative (R5): legacy <ctx>/context.yaml в корне контекста игнорируется."""
+    caplog.set_level(logging.INFO)
+
+    # Изоляция: без патча fallback-база ~/projects достаёт РЕАЛЬНЫЙ platform/context.yaml
+    # dev-машины (~/projects/tronyx-lab/) — негатив-кейс теряет детерминизм. Обе базы → tmp_path.
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    ctx = "tronyx-lab"
+    # Точный вход старого бага: legacy-кандидат <ctx>/context.yaml (context_promoter.py:92
+    # до DevPlan 022) — сестринский файл вне overlay-контейнера platform/.
+    legacy = tmp_path / ctx / "context.yaml"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("org: LegacyOrg\n", encoding="utf-8")
+    # platform/context.yaml НЕ существует → fallback на имя контекста, НЕ LegacyOrg.
+
+    # 🧪 TRAP[TEST] · 2026-09-01 · NEGATIVE (R5) · DevPlan 022 TASK-3 — legacy-кандидат удалён
+    # · Scenario: <ctx>/context.yaml существует, platform/context.yaml нет → org = имя контекста
+    # · Last fail: на старом коде (кандидат <ctx>/context.yaml) тест вернул бы LegacyOrg
+    # · Remove if: resolve_org снова получает второй кандидат-путь context.yaml
+    resolved = context_promoter.resolve_org(ctx, env={"PROJECTS_BASE": str(tmp_path)})
+    assert resolved == ctx, f"Legacy <ctx>/context.yaml обязан игнорироваться, got {resolved!r}"
+    assert resolved != "LegacyOrg", "org из legacy-пути просочился (DevPlan 022 TASK-3 regression)"
+
+    logger.critical("[IMP:9][test] legacy <ctx>/context.yaml игнорируется (DevPlan 022 TASK-3)")
+    found_imp9 = assert_ldd_imp9(caplog, require_imp9=False)
+    assert "No context.yaml org found" in caplog.text
+    assert found_imp9, "Critical LDD Error: No IMP:9 log found in legacy-path negative test"
+
+
+# endregion FUNC_test_resolve_org_legacy_path_ignored_negative
