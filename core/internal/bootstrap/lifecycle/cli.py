@@ -445,8 +445,12 @@ def main(
     # DI (W-H DevPlan 163): env-дикт override (тесты без monkeypatch.setenv); None = os.environ
     source: Mapping[str, str] = os.environ if env is None else env
 
+    logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stderr)
+
     # φ4-диагностика (022-launch-validation): digest AGE-ключа в env на входе CLI
     # (НЕ содержимое) — трассировка «какой ключ дошёл до lifecycle» без раскрытия секрета.
+    # ВНИМАНИЕ: ПОСЛЕ logging.basicConfig — logger.info до basicConfig проглатывается
+    # (root-logger без handler'ов → effective level WARNING, 022-found).
     age_entry = source.get("AGE_SECRET_KEY", "")
     if age_entry:
         import hashlib
@@ -456,8 +460,6 @@ def main(
             len(age_entry),
             hashlib.sha256(age_entry.encode()).hexdigest()[:16],
         )
-
-    logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stderr)
     _inject_cli_env(args)
 
     # DI (W-H): фабрика StateMachine / runner-функции / audit-writer — для тестов (AF-4 паттерн)
