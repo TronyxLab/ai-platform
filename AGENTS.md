@@ -354,7 +354,7 @@ git pull; первым при подъёме находится AGENTS.md бли
 |------|---------|
 | `ai-platform/` | Платформа (source-репозиторий). Полные правила: `ai-platform/AGENTS.md` |
 | `<context>/<project>/` | Подключённый проект. **org = контекст** (отдельная GitHub-организация) |
-| `<context>/` | Служебная папка контекста (node-configs, hermes-agent) — создаётся `make new-context` |
+| `<context>/` | Контекстная папка: overlay-контейнер `platform/` = git-клон `<org>/<ctx>-overlay` — создаётся `make new-context` |
 
 **Размещение и имена проектов (строгий канон):** проект живёт ТОЛЬКО в
 `~/projects/<context>/<project>/` — путь определяет контекст (инвариант 3); имя kebab-case,
@@ -365,6 +365,52 @@ L2-оверрайды мониторинга (реестр без папки —
 `make new-project` — единственный канал подключения. Multi-component (future): суффиксы
 `-web`/`-api`/`-bot`. Исключения (вне lifecycle `~/projects/`, реестр не ведётся): `ai-instructions`
 и `ai-project` — отдельные инструменты платформы.
+
+### Каноническая структура контекстной папки
+
+Контекстная папка `~/projects/<context>/` содержит **один** overlay-контейнер `platform/` —
+git-клон репозитория `<org>/<ctx>-overlay` (создаётся `make new-context`; `context.yaml` +
+`node-configs/` + `projects/` + `modules/hermes-agent/` + контекстный
+`.github/workflows/deploy.yml`). Канонический layout (Option A, DevPlan 022):
+
+```
+~/projects/<context>/
+└── platform/                          # = <org>/<ctx>-overlay (контекстный overlay-репозиторий)
+    ├── context.yaml                   # org, default_node
+    ├── node-configs/                  # node-configs/<node>/node.yaml, secrets/*.enc.yaml (sops/age)
+    ├── modules/hermes-agent/          # контекстные кастомизации hermes
+    ├── projects/                      # реестр L2-оверрайдов мониторинга (*.yaml)
+    └── .github/workflows/deploy.yml   # контекстный CI-деплой проектов
+```
+
+`node.yaml#repos.core` указывает на `<org>/<ctx>-overlay`; VPS-клон `/opt/<context>/platform/` —
+тот же репо (`ensure_context_repo`). Сестринские папки (`<context>/node-configs/`,
+`<context>/hermes-agent/`) и symlink-хаки — legacy, в канон не входят. Source-копия
+`ai-platform/node-configs/` в исходнике — dev/test-фикстуры, канон = overlay.
+
+**Почему одна папка (слияние `node-configs/` + `platform/`):** фактические раскладки
+контекстов дрейфовали (DevPlan 022 §1.1) —
+
+| Контекст | Раскладка до канона |
+|----------|---------------------|
+| asi-group | `platform/` = полный клон исходника ai-platform + сестринский `node-configs/` |
+| tronyx-lab | `platform/` = overlay (context.yaml, modules/, node-configs/, projects/) + symlink `node-configs/` |
+
+**Две роли репозиториев контекста:**
+
+| Репозиторий | Роль | Кто пишет |
+|-------------|------|-----------|
+| `<org>/ai-platform` | Зеркало исходника + Context CI (reusable workflows) | `make context-promote` (`git push --mirror`) — wipe безвреден: контекстных данных в репо нет |
+| `<org>/<ctx>-overlay` | Контекстный overlay: `context.yaml` + `node-configs/` + `projects/` + `modules/hermes-agent/` + контекстный `.github/workflows/deploy.yml` | Оператор/агент локально, `git push` |
+| *(упразднены)* `<org>/<ctx>-node-configs`, `<org>/<ctx>-hermes-agent` | Отдельные репо ликвидированы | — |
+
+⚠️ TRAP[DECISION] · 2026-09-01 · — · Слияние `node-configs/` + `platform/` (Option A) + разделение ролей репо: контекстные данные живут ТОЛЬКО в `<org>/<ctx>-overlay`; `<org>/ai-platform` — только CI-зеркало · Rejected: единый репо для overlay + mirror (`context-promote` делает безусловный `git push --mirror` → force-update всех refs + удаление отсутствующих в source — контекстные коммиты стираются; wipe-цикл в tronyx-lab уже происходил, реконсиляция вручную) · Reason: `*.enc.yaml`-секреты нельзя хранить под mirror-wipe; VPS-пути `/opt/<context>/platform/` не меняются · Rev: если `context-promote` перестанет быть `--mirror` (ref-фильтр/отдельный refspace) — роли можно слить обратно
+
+📝 TRAP[DEBT] · 2026-09-01 · MED · Миграция asi-group на канонический overlay-layout — оператор (вне скоупа DevPlan 022)
+· Observed: `~/projects/asi-group/platform/` = полный клон исходника ai-platform + сестринский `node-configs/`; overlay-структуры нет
+· Suspected: причина известна — контекст создан до канона (миграция отложена осознанно)
+· Impact: раскладка расходится с каноном (scaffold порождает вложенный layout) — дрейф контекстов
+· When: обнаружено в DevPlan 022 TASK-1 · Rev: следующий деплой в контексте asi-group — миграция по канону TASK-1 (создать `<org>/asi-group-overlay`, снапшот `platform/` → push, `repos.core` → overlay)
 
 ### Контракт для работы в папке проекта
 
