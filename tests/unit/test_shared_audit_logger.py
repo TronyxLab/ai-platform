@@ -5,6 +5,8 @@
 ##           Verifies write_audit_entry() and read_audit_log() with JSON-lines format.
 ##           P1 fix 2026-08-27: пермишены — ensure_audit_writable (fallback 0660 под euid=0
 ##           без setfacl; non-root skip; primary setfacl ACL) вместо прежнего chmod 640.
+##           P1 fix 2026-09-01 (F-07): dir traversal — ensure_audit_writable даёт ci-deploy +x
+##           на КАТАЛОГ (access ACL u:ci-deploy:--x primary / chgrp ci-deploy + chmod 0710 fallback).
 ## @scope    Tests: file creation, JSON validity, read limit, empty log, multiple entries,
 ##           ISO8601 timestamp format with Z timezone, canonical permission convergence.
 ## @invariants
@@ -25,7 +27,7 @@ from unittest.mock import patch
 import pytest
 
 import core.internal.shared.audit_logger as _audit_logger
-from core.internal.shared.audit_logger import read_audit_log, write_audit_entry
+from core.internal.shared.audit_logger import ensure_audit_writable, read_audit_log, write_audit_entry
 
 pytestmark = pytest.mark.static_audit
 
@@ -557,17 +559,18 @@ def test_write_entry_permissions_nonroot_skip(caplog: pytest.LogCaptureFixture, 
 
 # region FUNC_test_write_entry_permissions_primary_acl
 ## @purpose — Primary-ветка (euid=0 + setfacl доступен): ensure_audit_writable выдаёт
-##            setfacl -m u:ci-deploy:rw,m::rw \\<file\\> + default ACL на dir.
+##            setfacl -m u:ci-deploy:rw,m::rw \\<file\\> + default ACL на dir +
+##            access ACL traversal u:ci-deploy:--x на КАТАЛОГ (P1 fix 2026-09-01, F-07).
 ## @io — ⇥ caplog, tmp_path, monkeypatch → ⎋ None
 ## @complexity — O(1)
 def test_write_entry_permissions_primary_acl(
     caplog: pytest.LogCaptureFixture, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Permissions: euid=0 + setfacl доступен → ACL-ветка (setfacl -m/-d, без chgrp)."""
+    """Permissions: euid=0 + setfacl доступен → ACL-ветка (setfacl -m/-d/-m dir traversal, без chgrp)."""
     caplog.set_level(logging.INFO)
 
-    # 🧪 TRAP[TEST] · Regression · P1 fix 2026-08-27 — primary-ветка (setfacl)
-    # · Scenario: первый write → ensure_audit_writable (setfacl u:ci-deploy:rw + default ACL)
+    # 🧪 TRAP[TEST] · Regression · P1 fix 2026-08-27 — primary-ветка (setfacl); P1 fix 2026-09-01 — dir traversal
+    # · Scenario: первый write → ensure_audit_writable (setfacl u:ci-deploy:rw + default ACL + dir --x)
     # · Last fail: N/A (новый целевой контракт)
     # · Remove if: permissions policy changed
 
@@ -587,10 +590,140 @@ def test_write_entry_permissions_primary_acl(
     with patch.object(subprocess, "run", side_effect=acl_mock):
         write_audit_entry("test:perm", "OK", "permissions check", log_file=str(log_file))
 
-    assert len(setfacl_called) == 2, f"ожидались -m и -d setfacl, получено {setfacl_called}"
+    assert len(setfacl_called) == 3, f"ожидались -m(файл) -d(dir) -m(dir traversal), получено {setfacl_called}"
     assert "u:ci-deploy:rw" in " ".join(setfacl_called[0])
     assert setfacl_called[0][1] == "-m" and setfacl_called[1][1] == "-d"
-    logger.info("[IMP:9][test][permissions] ✅ primary: setfacl -m/-d применены (ACL u:ci-deploy:rw)")
+    # P1 fix 2026-09-01: третий вызов — access ACL traversal на КАТАЛОГ (u:ci-deploy:--x, без r)
+    assert setfacl_called[2][1] == "-m"
+    assert "u:ci-deploy:--x" in " ".join(setfacl_called[2]), f"dir traversal должен быть --x: {setfacl_called[2]}"
+    assert setfacl_called[2][-1] == str(log_file.parent), f"traversal-ACL должен целиться в dir: {setfacl_called[2]}"
+    logger.info(
+        "[IMP:9][test][permissions] ✅ primary: setfacl -m/-d/-m(dir traversal) применены (ACL u:ci-deploy:rw + dir --x)"
+    )
 
 
 # endregion FUNC_test_write_entry_permissions_primary_acl
+
+
+# region FUNC_test_ensure_audit_writable_dir_traversal_acl
+## @purpose — P1 fix 2026-09-01 (F-07): root-запись под 700-каталогом → ensure_audit_writable
+##            даёт ci-deploy traversal на КАТАЛОГ (access ACL u:ci-deploy:--x, БЕЗ r) — без +x
+##            на родителе rw-ACL файла бесполезна (Errno 13 Permission denied). AC: файл
+##            сохраняет rw-ACL (без регрессии), каталог получает traversal-only entry.
+## @io — ⇥ caplog, tmp_path, monkeypatch → ⎋ None
+## @complexity — O(1)
+def test_ensure_audit_writable_dir_traversal_acl(
+    caplog: pytest.LogCaptureFixture, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P1 F-07: euid=0 + setfacl → dir access ACL u:ci-deploy:--x (traversal-only), file сохраняет rw."""
+    caplog.set_level(logging.INFO)
+
+    # 🧪 TRAP[TEST] · Regression · P1 fix 2026-09-01 (F-07) — dir traversal для ci-deploy
+    # · Scenario: /var/log/platform = 700 root:root → ci-deploy не может открыть audit.jsonl
+    # ·   даже с rw-ACL на файле; ensure_audit_writable обязан выдать +x на КАТАЛОГ
+    # · Last fail: 2026-08-31 — «Cannot write to /var/log/platform/audit.jsonl: [Errno 13]
+    # ·   Permission denied — audit entry dropped» (asi-team-vps, deploy/rollback via ci-deploy)
+    # · Remove if: ensure_audit_writable меняет механизм прав каталога
+
+    monkeypatch.setattr(_audit_logger.os, "geteuid", lambda: 0)  # симуляция root-ноды
+    monkeypatch.setattr(_audit_logger.shutil, "which", lambda _: "/usr/bin/setfacl")  # setfacl доступен
+
+    log_file = tmp_path / "audit.jsonl"
+    log_file.write_text("")  # файл существует (первый write уже прошёл)
+    log_dir = tmp_path
+    log_dir.chmod(0o700)  # P1-состояние каталога: drwx------ root:root
+
+    setfacl_called: list[list[str]] = []
+
+    def acl_mock(cmd, *args, **kwargs):
+        cmd_str = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
+        if "setfacl" in cmd_str:
+            setfacl_called.append(cmd)
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    with patch.object(subprocess, "run", side_effect=acl_mock):
+        status = ensure_audit_writable(str(log_file))
+
+    assert status == "acl"
+    # 3 вызова: файл rw + default ACL dir + ACCESS ACL traversal dir (P1 fix 2026-09-01)
+    assert len(setfacl_called) == 3, f"ожидались -m(файл) -d(dir) -m(dir traversal), получено {setfacl_called}"
+    # Файл: rw-ACL сохранена (без регрессии, требование задачи №4)
+    assert setfacl_called[0] == ["setfacl", "-m", "u:ci-deploy:rw", "m::rw", str(log_file)]
+    # Default ACL на dir (ротации) — сохранено
+    assert setfacl_called[1][1] == "-d"
+    # Traversal-only: --x БЕЗ r (чтение списка каталога ci-deploy не нужно — безопасность)
+    dir_acl = setfacl_called[2]
+    assert dir_acl[1] == "-m"
+    assert dir_acl[-1] == str(log_dir), f"traversal-ACL должен целиться в КАТАЛОГ, получено {dir_acl}"
+    assert "u:ci-deploy:--x" in dir_acl, f"ожидался traversal-only --x (без r), получено {dir_acl}"
+    assert "r" not in dir_acl[2].split(":")[2], f"каталог не должен давать чтение списка: {dir_acl}"
+    logger.info("[IMP:9][test][dir-traversal] ✅ dir access ACL u:ci-deploy:--x (traversal-only, file rw сохранён)")
+
+
+# endregion FUNC_test_ensure_audit_writable_dir_traversal_acl
+
+
+# region FUNC_test_ensure_audit_writable_dir_traversal_fallback
+## @purpose — P1 fix 2026-09-01 (F-07) fallback (без setfacl): chgrp ci-deploy + chmod 0710 на
+##            КАТАЛОГ — traversal для членов группы ci-deploy (group --x, other ---; НЕ o+x —
+##            world-traversal запрещён). Файл сохраняет 0660 (без регрессии).
+## @io — ⇥ caplog, tmp_path, monkeypatch → ⎋ None
+## @complexity — O(1)
+def test_ensure_audit_writable_dir_traversal_fallback(
+    caplog: pytest.LogCaptureFixture, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P1 F-07 fallback: euid=0 без setfacl → chgrp ci-deploy + chmod 0710 на dir (traversal-only)."""
+    caplog.set_level(logging.INFO)
+
+    # 🧪 TRAP[TEST] · Regression · P1 fix 2026-09-01 (F-07) — fallback-ветка traversal каталога
+    # · Scenario: setfacl недоступен на ноде → fallback chgrp ci-deploy + chmod 0710 на dir
+    # · Last fail: 2026-08-31 — fallback чинил только файл (0660), каталог оставался 700 → Errno 13
+    # · Remove if: ensure_audit_writable меняет fallback-механизм прав каталога
+
+    monkeypatch.setattr(_audit_logger.os, "geteuid", lambda: 0)  # симуляция root-ноды
+    monkeypatch.setattr(_audit_logger.shutil, "which", lambda _: None)  # setfacl недоступен
+    import pwd as _pwd
+    import types
+
+    # симуляция ноды: пользователь ci-deploy существует (на dev-машине его нет → KeyError)
+    monkeypatch.setattr(_pwd, "getpwnam", lambda name: types.SimpleNamespace(pw_name=name))
+
+    log_file = tmp_path / "audit.jsonl"
+    log_file.write_text("")  # файл существует
+    log_dir = tmp_path
+    log_dir.chmod(0o700)  # P1-состояние каталога: drwx------ root:root
+
+    chgrp_called: list[list[str]] = []
+    chmod_called: list[list[str]] = []
+
+    def fallback_mock(cmd, *args, **kwargs):
+        cmd_str = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
+        if "chgrp" in cmd_str:
+            chgrp_called.append(cmd)
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+        if "chmod" in cmd_str:
+            chmod_called.append(cmd)
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    with patch.object(subprocess, "run", side_effect=fallback_mock):
+        status = ensure_audit_writable(str(log_file))
+
+    assert status == "group"
+    # chgrp: файл + КАТАЛОГ (P1 fix 2026-09-01)
+    dir_chgrps = [c for c in chgrp_called if str(log_dir) in c]
+    file_chgrps = [c for c in chgrp_called if str(log_file) in c]
+    assert len(chgrp_called) == 2, f"ожидались chgrp file + dir, получено {chgrp_called}"
+    assert len(dir_chgrps) == 1 and "ci-deploy" in dir_chgrps[0], f"chgrp каталога обязателен: {chgrp_called}"
+    assert len(file_chgrps) == 1, f"chgrp файла сохранён (без регрессии): {chgrp_called}"
+    # chmod: dir 0710 (traversal-only, group --x other ---) + file 0660 (без регрессии)
+    dir_chmods = [c for c in chmod_called if str(log_dir) in c]
+    file_chmods = [c for c in chmod_called if str(log_file) in c]
+    assert len(chmod_called) == 2, f"ожидались chmod 0710 dir + 0660 file, получено {chmod_called}"
+    assert len(dir_chmods) == 1 and "0710" in dir_chmods[0], f"dir chmod 0710 обязателен: {chmod_called}"
+    assert len(file_chmods) == 1 and "0660" in file_chmods[0], f"file chmod 0660 сохранён: {chmod_called}"
+    logger.info("[IMP:9][test][dir-traversal-fallback] ✅ dir chgrp ci-deploy + chmod 0710 (traversal-only)")
+
+
+# endregion FUNC_test_ensure_audit_writable_dir_traversal_fallback

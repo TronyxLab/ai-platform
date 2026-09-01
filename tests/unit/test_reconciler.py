@@ -245,8 +245,8 @@ def test_reconcile_perms_dry_run(tmp_path, caplog):
 
 
 # region FUNC_test_reconcile_audit_log_idempotent_applied_noop
-## 🧪 TRAP[TEST] · R2 idempotent applied · Scenario: прогон 1 применяет фикс (state=none → ACL),
-##   прогон 2 на применённом target-состоянии (acl) → no-op, ноль новых мутаций
+## 🧪 TRAP[TEST] · R2 idempotent applied · Scenario: прогон 1 применяет фикс (state=none → ACL
+##   + dir traversal --x, F-07), прогон 2 на применённом target-состоянии (acl) → no-op, ноль новых мутаций
 ## · Regression: P1 fix 2026-08-27 — R2 идемпотентно доводит до acl|group и СХОДИТСЯ (повтор = no-op);
 ## ·   до фикса converge был антагонистом runtime (audit_logger chmod 640 ломал групповой write)
 ## · Last fail: никогда (новый целевой контракт; детектор состояния покрыт в test_converge_audit)
@@ -302,11 +302,13 @@ def test_reconcile_audit_log_idempotent_applied_noop(tmp_path, monkeypatch, capl
         second = reconciler.reconcile_audit_log(str(tmp_path), dry_run=False, report_only=False)
         setfacl_after_second = len(setfacl_called)
 
-    # Прогон 1: дрейф → фикс применён (primary: setfacl -m файл + -d default ACL на dir)
+    # Прогон 1: дрейф → фикс применён (primary: setfacl -m файл + -d default ACL на dir
+    #           + -m access ACL traversal на dir — P1 fix 2026-09-01 F-07)
     assert first_mutated, f"прогон 1 должен применить фикс (mutated), drifts={infra.drifts}"
-    assert setfacl_after_first == 2, (
-        f"прогон 1: ожидались setfacl -m/-d, получено {setfacl_called[:setfacl_after_first]}"
+    assert setfacl_after_first == 3, (
+        f"прогон 1: ожидались setfacl -m/-d/-m(dir traversal), получено {setfacl_called[:setfacl_after_first]}"
     )
+    assert "u:ci-deploy:--x" in " ".join(setfacl_called[-1]), f"dir traversal --x обязателен: {setfacl_called}"
     # Прогон 2: target-состояние (acl) → converged, НОЛЬ новых мутаций
     assert second["status"] == "converged"
     assert not infra.has_warnings, "повторный прогон на применённом состоянии — no-op (без мутаций)"
@@ -321,8 +323,9 @@ def test_reconcile_audit_log_idempotent_applied_noop(tmp_path, monkeypatch, capl
 
 # region FUNC_test_reconcile_audit_log_fallback_no_setfacl
 ## 🧪 TRAP[TEST] · R2 fallback no-setfacl · Scenario: setfacl отсутствует в PATH + euid=0 →
-##   chgrp ci-deploy + chmod 0660 (graceful fallback, честный trade-off — TRAP[DECISION])
-## · Regression: P1 fix 2026-08-27 — без setfacl целевое состояние достигается групповым каналом
+##   chgrp ci-deploy + chmod 0660 (файл) + chgrp ci-deploy + chmod 0710 (КАТАЛОГ — traversal, F-07)
+## · Regression: P1 fix 2026-08-27 — без setfacl целевое состояние достигается групповым каналом;
+## ·   P1 fix 2026-09-01 (F-07) — dir traversal fallback (chgrp + 0710, group --x other ---)
 ## · Last fail: никогда (новый целевой контракт)
 ## · Remove if: fallback-ветка заменена на иной механизм записи
 @pytest.mark.usefixtures("reset_state")
@@ -371,10 +374,21 @@ def test_reconcile_audit_log_fallback_no_setfacl(tmp_path, monkeypatch, caplog):
     assert infra.has_warnings, "мутация (set_exit(1)) должна выставить has_warnings"
     mutated = [d for d in infra.drifts if d["status"] == "mutated"]
     assert any("group" in d["detail"] for d in mutated), f"drift detail: {infra.drifts}"
-    assert len(chgrp_called) == 1, f"fallback обязан вызвать chgrp ci-deploy, получено {chgrp_called}"
+    # fallback: chgrp ci-deploy на ФАЙЛ + КАТАЛОГ (P1 fix 2026-09-01 F-07: dir traversal),
+    #           chmod 0660 на файл + 0710 на каталог (group --x other ---, traversal-only)
+    assert len(chgrp_called) == 2, f"fallback обязан вызвать chgrp ci-deploy (file + dir), получено {chgrp_called}"
     assert "ci-deploy" in chgrp_called[0]
-    assert len(chmod_called) == 1 and "0660" in chmod_called[0]
-    logger.info("[IMP:9][test] R2 fallback: chgrp ci-deploy + chmod 0660 применены (setfacl нет в PATH)")
+    assert str(log_dir) in chgrp_called[1], f"chgrp каталога обязателен: {chgrp_called}"
+    assert len(chmod_called) == 2, f"fallback обязан вызвать chmod 0660 (file) + 0710 (dir), получено {chmod_called}"
+    assert chmod_called[0] == ["chmod", "0710", str(log_dir)], (
+        f"dir chmod 0710 (traversal-only) обязателен: {chmod_called}"
+    )
+    assert chmod_called[1] == ["chmod", "0660", str(log_dir / "audit.jsonl")], (
+        f"file chmod 0660 сохранён: {chmod_called}"
+    )
+    logger.info(
+        "[IMP:9][test] R2 fallback: chgrp ci-deploy + chmod 0660 (file) / 0710 (dir) применены (setfacl нет в PATH)"
+    )
 
 
 # endregion FUNC_test_reconcile_audit_log_fallback_no_setfacl

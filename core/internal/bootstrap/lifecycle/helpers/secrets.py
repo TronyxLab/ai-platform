@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: secrets-helpers, decrypt-secrets, ensure-secrets-exist, age, sops, secrets-env, autogen-secrets, postcondition-required-sops
-# STRUCTURE: ▶ decrypt_secrets ┌lib/secrets.sh step_10_decrypt_secrets (FATAL)┐ → ⚡ ensure_secrets_exist ┌secrets.env check → source (file-wins) → autogen → postcondition required∧sops ⚡┐ → ⎋
+# GREP_SUMMARY: secrets-helpers, decrypt-secrets, ensure-secrets-exist, age, sops, secrets-env, autogen-secrets, postcondition-required-sops, module-aware
+# STRUCTURE: ▶ decrypt_secrets ┌lib/secrets.sh step_10_decrypt_secrets (FATAL)┐ → ⚡ ensure_secrets_exist ┌secrets.env check → source (file-wins) → autogen → postcondition required∧sops ∧ (∅ node.yaml | consumed-by-enabled) ⚡┐ → ⎋
 # region MODULE_CONTRACT
 ## @purpose  Secrets-provisioning I/O-хелперы bootstrap-фаз (decrypt + ensure/autogen) —
 ##           извлечены из state_machine (B9 T1, U-08). Все функции публичные.
@@ -24,6 +24,10 @@
 ## @changes  2026-08-01 · Extracted from state_machine (B9 T1)
 ## @changes  2026-08-24 · REF-0013 (Волна 0) — narrow excepts (wide Exception снят), file-wins
 ##             sourcing через apply_env_file_to_osenv, postcondition verify_required_sops_secrets
+## @changes  2026-08-31 · launch-validation asi-team-vps (P0) — postcondition module-aware:
+##             verify_required_sops_secrets получает enabled_modules (из node.yaml через
+##             shared/enabled_modules); required∧sops требуется только при consumers ∩
+##             enabled_modules ≠ ∅; пустой consumers → SKIP; None → легаси-глобальная проверка
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -39,7 +43,9 @@ from core.internal.shared.deploy_paths import node_configs_remote
 
 # 142 W2: secrets.env → persistent /var/lib/platform/run (резолвер shared/deploy_paths)
 from core.internal.shared.deploy_paths import secrets_env_file as _secrets_env_file
+from core.internal.shared.enabled_modules import resolve_enabled_modules
 from core.internal.shared.exceptions import ConfigNotFoundError, ConfigValidationError
+from core.internal.shared.secrets_manifest_reader import consumers as manifest_consumers
 from core.internal.shared.secrets_manifest_reader import iter_secrets
 from core.internal.shared.secrets_manifest_reader import tier as manifest_tier
 from core.internal.shared.subprocess_io import run_subprocess
@@ -152,10 +158,41 @@ def ensure_secrets_exist(core_dir: str, *, env: Mapping[str, str] | None = None)
         logger.info("[IMP:9][ensure_secrets] Generated %d secrets", len(generated))
 
     # Step 4: Postcondition (DATA-1006): parsed ⊇ {required ∧ source=sops} — REF-0013.
-    verify_required_sops_secrets(manifest_path=str(manifest_path), secrets_env=secrets_env, enc_file=str(enc_file))
+    # launch-validation asi-team-vps (P0): module-aware — при наличии node.yaml ноды
+    # required∧sops требуется только для enabled consumer-модулей; None → легаси-глобально.
+    enabled_modules = resolve_enabled_modules(node_name=node_name, env=source)
+    if enabled_modules is not None:
+        logger.info(
+            "[IMP:8][ensure_secrets] Module-aware postcondition for node=%s: %d enabled module(s)",
+            node_name,
+            len(enabled_modules),
+        )
+    verify_required_sops_secrets(
+        manifest_path=str(manifest_path),
+        secrets_env=secrets_env,
+        enc_file=str(enc_file),
+        enabled_modules=enabled_modules,
+    )
 
 
 # endregion FUNC_ensure_secrets_exist
+
+
+# region FUNC__consumed_by_enabled
+## @purpose  Module-aware предикат postcondition: манифестный секрет требуется если хотя бы
+##           один его consumer-модуль enabled в node.yaml. Пустой consumers → False (никто
+##           не потребляет — минимальному контексту не требуется).
+## @io       ⇥ entry: dict (запись манифеста), enabled: set[str] → ⎋ bool
+## @complexity O(C), C = число consumer-модулей записи
+def _consumed_by_enabled(entry: dict[str, object], enabled: set[str]) -> bool:
+    """True if the secret's consumer modules intersect the enabled module set."""
+    consumers = manifest_consumers(entry)  # typed accessor: [] if absent/non-list
+    if not consumers:
+        return False
+    return bool(enabled.intersection(consumers))
+
+
+# endregion FUNC__consumed_by_enabled
 
 
 # region FUNC_verify_required_sops_secrets
@@ -163,7 +200,11 @@ def ensure_secrets_exist(core_dir: str, *, env: Mapping[str, str] | None = None)
 ##           манифестный секрет tier=required ∧ source=sops обязан присутствовать с непустым
 ##           значением в secrets.env ИЛИ os.environ. Отсутствие → ConfigValidationError →
 ##           φ4 PlatformFatalError (fail-fast вместо отложенного взрыва на первом использовании).
-## @io       ⇥ manifest_path: str, secrets_env: str, enc_file: str → ⎋ None ⚡ ConfigValidationError
+##           launch-validation asi-team-vps (P0): module-aware — enabled_modules ≠ None →
+##           секрет требуется ТОЛЬКО если его consumer-модуль enabled (consumers из манифеста);
+##           пустой consumers → SKIP; None → легаси-глобальная проверка всех required∧sops.
+## @io       ⇥ manifest_path: str, secrets_env: str, enc_file: str,
+##             enabled_modules: set[str] | None (None = легаси) → ⎋ None ⚡ ConfigValidationError
 ## @complexity O(N) where N = entries in secrets-manifest.yaml
 ## @invariants
 ##   - Gated на существование enc-файла: нет enc → autogen-only нода → verifier no-op
@@ -171,8 +212,15 @@ def ensure_secrets_exist(core_dir: str, *, env: Mapping[str, str] | None = None)
 ##   - Проверка по объединению parsed(secrets.env) ∪ os.environ — autogen-значения,
 ##     попавшие только в os.environ, тоже засчитываются
 ##   - Манифест читается строгим ридером shared.secrets_manifest_reader (STRICT)
-def verify_required_sops_secrets(*, manifest_path: str, secrets_env: str, enc_file: str) -> None:
-    """Postcondition: every required∧sops manifest secret has a non-empty value."""
+##   - enabled_modules=None → прежняя глобальная проверка (обратная совместимость тестов)
+def verify_required_sops_secrets(
+    *,
+    manifest_path: str,
+    secrets_env: str,
+    enc_file: str,
+    enabled_modules: set[str] | None = None,
+) -> None:
+    """Postcondition: every required∧sops manifest secret (consumed by enabled module) has a value."""
     if not pathlib.Path(enc_file).is_file():
         logger.info(
             "[IMP:8][ensure_secrets] No encrypted secrets file (%s) — required∧sops postcondition skipped (autogen-only node)",
@@ -181,13 +229,23 @@ def verify_required_sops_secrets(*, manifest_path: str, secrets_env: str, enc_fi
         return
 
     entries = iter_secrets(manifest_path)
-    required = [
-        str(entry["name"])
-        for entry in entries
-        if entry.get("name") and manifest_tier(entry) == "required" and str(entry.get("source", "")) == "sops"
-    ]
+    required: list[str] = []
+    for entry in entries:
+        if not entry.get("name"):
+            continue
+        if manifest_tier(entry) != "required" or str(entry.get("source", "")) != "sops":
+            continue
+        if enabled_modules is not None and not _consumed_by_enabled(entry, enabled_modules):
+            logger.info(
+                "[IMP:7][ensure_secrets] SKIP postcondition %s: no enabled consumer module (module-aware minimal context)",
+                entry["name"],
+            )
+            continue
+        required.append(str(entry["name"]))
     if not required:
-        logger.info("[IMP:8][ensure_secrets] Manifest has no required∧sops secrets — postcondition trivially satisfied")
+        logger.info(
+            "[IMP:8][ensure_secrets] Manifest has no required∧sops secrets for enabled modules — postcondition trivially satisfied"
+        )
         return
 
     parsed: dict[str, str] = {}

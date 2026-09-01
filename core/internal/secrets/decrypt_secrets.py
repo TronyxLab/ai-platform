@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: sops, age, decrypt, secrets, env, temp-key, dd-wipe, cleanup, SOPS_AGE_KEY_FILE, fail-fast, ci_default, auto-inject, plan-012
-# STRUCTURE: ▶ main() [register handlers (TERM/INT/HUP+atexit) → sweep stale /dev/shm] → ◇ resolve_enc_path [path | NODE name | glob] → ◇ detect_age_key ⚡ → ◇ decrypt_sops_file [temp key 0600 → sops --decrypt → dd wipe] → ◇ empty-parse guard ⚡PlatformFatalError → ◇ apply_ci_default_injection [optional+ci_default → inject+WARN · required/generated missing ⚡fail-loud] → ◇ write_secrets_env [tempfile+rename atomic] → ⎋ exit 0|1|10
+# STRUCTURE: ▶ main() [register handlers (TERM/INT/HUP+atexit) → sweep stale /dev/shm] → ◇ resolve_enc_path [path | NODE name | glob] → ◇ detect_age_key ⚡ → ◇ decrypt_sops_file [temp key 0600 → sops --decrypt → dd wipe] → ◇ empty-parse guard ⚡PlatformFatalError → ◇ apply_ci_default_injection [optional+ci_default → inject+WARN · required/generated missing ∧ (∅ node.yaml | consumed-by-enabled) ⚡fail-loud] → ◇ write_secrets_env [tempfile+rename atomic] → ⎋ exit 0|1|10
 # region MODULE_CONTRACT
 ## @purpose  Python core for decrypting SOPS/age-encrypted secrets. Extracted from
 ##           core/internal/secrets/decrypt-secrets.sh. Manages temp age key file with
@@ -32,6 +32,11 @@
 ##          ci_default (plan 012)» + WARN; отсутствующий required/generated → PlatformFatalError
 ##          со списком имён ДО записи файла (fail-loud, полу-стек невозможен);
 ##          полная матрица → байт-идентичный вывод (регрессион-тест)
+##   launch-validation asi-team-vps (P0): fail-loud module-aware — при наличии node.yaml
+##          (NODE_NAME env или bare NODE positional) required∧sops секрет требуется ТОЛЬКО
+##          если его consumer-модуль enabled (consumers из GENERATED secrets-manifest.yaml);
+##          пустой consumers или все consumer-модули disabled → SKIP. Без node.yaml
+##          (standalone) — легаси-глобальная проверка (совместимо с unit-тестами).
 ## @rationale DevPlan Strangler-Fig — Python core extracted from 223-line shell script.
 ##            Security-critical operations (key handling, cleanup) must be auditable,
 ##            testable, and verifiable via unit tests. Shell trap pattern replaced with
@@ -51,6 +56,10 @@
 ##             optional+ci_default отсутствующий → inject + WARN; required/generated
 ##             отсутствующий → fail-loud со списком имён; SoT — core/secret-definitions.yaml
 ##             через shared/yaml_loader.load_secret_definitions
+## @changes  2026-08-31 | launch-validation asi-team-vps (P0) — fail-loud module-aware:
+##             apply_ci_default_injection получает enabled_modules (set enabled-модулей ноды
+##             из node.yaml через shared/enabled_modules); required∧sops требуется только при
+##             consumers ∩ enabled_modules ≠ ∅; None → легаси-глобальная проверка
 ## ⚠️ TRAP[DECISION] · 2026-07-30 · MED · Cleanup architecture migrated from shell (trap+cleanup_all) to Python (atexit+signal)
 ## · Rejected: Keeping cleanup in shell (risk: two parallel cleanup paradigms — shell trap AND Python atexit — creates ambiguity)
 ## · Reason: Python atexit+signal provides deterministic cleanup order, testability, and replaces shell trap EXIT INT TERM
@@ -98,6 +107,11 @@ if _PLATFORM_ROOT not in sys.path:
 
 # 142 W2: канонический резолвер run-артефактов (secrets.env → /var/lib/platform/run)
 from core.internal.shared import deploy_paths
+
+# launch-validation asi-team-vps (P0): module-aware fail-loud — enabled-модули ноды из
+# node.yaml решат, какие required∧sops секреты обязаны присутствовать (consumer-модуль
+# enabled). Единый shared-резолвер для decrypt и lifecycle-postcondition.
+from core.internal.shared.enabled_modules import resolve_enabled_modules
 from core.internal.shared.exceptions import PlatformError, PlatformFatalError
 
 # Детекция AGE-ключа делегируется в канонический node_detect.py.
@@ -583,28 +597,95 @@ def _definitions_path() -> pathlib.Path:
     return pathlib.Path(__file__).resolve().parents[2] / "secret-definitions.yaml"
 
 
+# region FUNC__manifest_consumers_map
+## @purpose  Построить {secret_name → set(consumer-modules)} из GENERATED secrets-manifest.yaml
+##           (sibling definitions). Consumers вычисляются generate_secrets_manifest.py из
+##           module.yaml#env_requires — в secret-definitions.yaml их НЕТ. None при недоступности
+##           манифеста → fail-closed (легаси-поведение: все required∧sops требуются).
+## @io       ⇥ manifest_path: Path → ⎋ dict[str, set[str]] | None
+## @complexity O(S), S = записи манифеста
+## @invariants
+##   - Манифест читается строгим ридером shared.secrets_manifest_reader (STRICT — raise при
+##     malformed; отсутствующий файл обрабатывается ДО вызова — None)
+##   - Пустой/отсутствующий consumers → пустое множество (никто не потребляет)
+def _manifest_consumers_map(manifest_path: pathlib.Path) -> dict[str, set[str]] | None:
+    """Build {secret_name → set(consumers)} from secrets-manifest.yaml; None if unavailable."""
+    if not manifest_path.is_file():
+        logger.warning(
+            "[IMP:7][ci_default_inject] Manifest %s not found — consumers unknown, fail-closed legacy check",
+            manifest_path,
+        )
+        return None
+    from core.internal.shared.secrets_manifest_reader import consumers, iter_secrets
+
+    result: dict[str, set[str]] = {}
+    for entry in iter_secrets(manifest_path):
+        name = str(entry.get("name", "")).strip()
+        if name:
+            result[name] = set(consumers(entry))
+    logger.info("[IMP:7][ci_default_inject] Loaded consumers for %d secret(s) from %s", len(result), manifest_path)
+    return result
+
+
+# endregion FUNC__manifest_consumers_map
+
+
+# region FUNC__required_for_enabled_modules
+## @purpose  Module-aware предикат fail-loud: секрет ОБЯЗАН быть в матрице если хотя бы один
+##           его consumer-модуль enabled в node.yaml. Пустой consumers → НЕ требуется
+##           (никто не потребляет). consumers-карта недоступна → fail-closed (True).
+## @io       ⇥ name: str, enabled_modules: set[str], consumers_by_name: dict | None → ⎋ bool
+## @complexity O(C), C = число consumer-модулей секрета
+def _required_for_enabled_modules(
+    name: str,
+    enabled_modules: set[str],
+    consumers_by_name: dict[str, set[str]] | None,
+) -> bool:
+    """True if a required∧sops secret must be present given the node's enabled modules."""
+    if consumers_by_name is None:
+        return True  # consumers неизвестны — fail-closed (легаси-глобальная проверка)
+    consumers = consumers_by_name.get(name, set())
+    if not consumers:
+        return False  # никто не потребляет → минимальному контексту не требуется
+    return bool(consumers & enabled_modules)
+
+
+# endregion FUNC__required_for_enabled_modules
+
+
 def apply_ci_default_injection(
     env_content: str,
     definitions_path: str | pathlib.Path | None = None,
+    *,
+    enabled_modules: set[str] | None = None,
 ) -> tuple[str, list[str]]:
     """Auto-inject tier=optional+ci_default keys missing from the decrypted matrix (plan 012 T3).
 
     ▶ ┌env_content + secret-definitions┐ → ○ scan defs →
       ◇ optional ∧ ci_default ∧ missing → ⊕ append marker+KEY ·
-      ◇ required|generated ∧ missing → collect → ⚡ PlatformFatalError (fail-loud список) →
-      ⎋ (new_content, injected_names)
+      ◇ required|generated ∧ missing ∧ (∅ enabled | consumed-by-enabled) → collect ·
+      ◇ required|generated ∧ missing ∧ НЕ consumed-by-enabled → skip (module-aware) →
+      ⚡ PlatformFatalError (fail-loud список) → ⎋ (new_content, injected_names)
 
     ## @purpose — Лечение класса ошибок «ключ есть в compose, отсутствует в матрице»
     ##            (прецедент DEEPSEEK/ZAI, F-014): отсутствующий optional-ключ с ci_default
     ##            дописывается автоматически; отсутствующий required/generated — fail-loud
-    ##            ДО записи secrets.env. Полная матрица → байт-идентичный вывод.
+    ##            ДО записи secrets.env. launch-validation asi-team-vps (P0): при наличии
+    ##            node.yaml (enabled_modules ≠ None) fail-loud применяется ТОЛЬКО к секретам,
+    ##            чей consumer-модуль enabled — минимальный контекст не блокируется чужими
+    ##            секретами (postgres/minio/hermes/monitoring не включены → их ключи не нужны).
     ## @io — ⇥ env_content: str (KEY='value' строки), definitions_path: путь SoT-реестра
-    ##          (None = канонический core/secret-definitions.yaml) → ⎋ tuple (контент, имена)
+    ##          (None = канонический core/secret-definitions.yaml),
+    ##          enabled_modules: set enabled-модулей ноды (None = standalone → ЛЕГАСИ-глобальная
+    ##          проверка, совместимо с unit-тестами без node.yaml) → ⎋ tuple (контент, имена)
     ## @complexity — O(D + K), D = записи реестра, K = строки env_content
     ## @invariants
     ##   - Inject ТОЛЬКО tier=optional с непустым ci_default (test-only значения)
     ##   - required/generated missing → PlatformFatalError СО СПИСКОМ имён за один проход,
     ##     ДО записи файла (полу-стек невозможен как «success», D3)
+    ##   - enabled_modules=None → все missing required/generated fail-loud (легаси)
+    ##   - enabled_modules≠None → fail-loud только при consumers ∩ enabled_modules ≠ ∅;
+    ##     пустой consumers или все consumer-модули disabled → SKIP (module-aware)
     ##   - Пустой/отсутствующий реестр → контент без изменений (валидация невозможна —
     ##     легаси-поведение сохранено, byte-identical)
     ##   - Формат KEY='value' сохранён (потребители парсинга совместимы — Change Impact T3)
@@ -621,6 +702,17 @@ def apply_ci_default_injection(
         logger.info("[IMP:8][ci_default_inject] No secret definitions at %s — injection/validation skipped", path)
         return env_content, []
 
+    # Module-aware: consumers берутся из GENERATED secrets-manifest.yaml (sibling definitions);
+    # при недоступности манифеста — fail-closed (все required∧sops требуются).
+    consumers_by_name: dict[str, set[str]] | None = None
+    if enabled_modules is not None:
+        consumers_by_name = _manifest_consumers_map(path.parent / "secrets-manifest.yaml")
+        logger.info(
+            "[IMP:8][ci_default_inject] Module-aware fail-loud: %d enabled module(s): %s",
+            len(enabled_modules),
+            ", ".join(sorted(enabled_modules)),
+        )
+
     injected: list[str] = []
     missing: list[str] = []
     extra_lines: list[str] = []
@@ -635,6 +727,14 @@ def apply_ci_default_injection(
             extra_lines.extend((_CI_DEFAULT_MARKER, f"{name}='{escaped}'"))
             injected.append(name)
         elif tier in _FAIL_LOUD_TIERS and definition.get("source") == "sops":
+            if enabled_modules is not None and not _required_for_enabled_modules(
+                name, enabled_modules, consumers_by_name
+            ):
+                logger.info(
+                    "[IMP:7][ci_default_inject] SKIP fail-loud %s: no enabled consumer module (module-aware minimal context)",
+                    name,
+                )
+                continue
             missing.append(name)
 
     if missing:
@@ -688,6 +788,25 @@ class _DecryptArgs(argparse.Namespace):
 ##            SECRETS_ENV_FILE (alternative to positional output_path arg, default /var/lib/platform/run/secrets.env)
 ##            173 W1.3: enc_path резолв (env → точный путь → /opt/node-configs/secrets/*.enc.yaml
 ##            glob) перенесён из decrypt-secrets.sh в resolve_enc_path().
+# region FUNC__node_name_from_context
+## @purpose  Имя ноды для module-aware fail-loud: NODE_NAME env приоритетен; иначе bare
+##           positional enc_path (make secrets-unlock NODE=NAME — одиночный токен без
+##           разделителей пути и без .yaml-суффикса, тот же признак что resolve_enc_path).
+## @io       ⇥ enc_path: str | None → ⎋ str (пусто = standalone без имени ноды)
+## @complexity O(1)
+def _node_name_from_context(enc_path: str | None) -> str:
+    """Derive the node name from NODE_NAME env or a bare positional enc-path (no path separators)."""
+    from_env = os.environ.get("NODE_NAME", "").strip()
+    if from_env:
+        return from_env
+    if enc_path and "/" not in enc_path and os.sep not in enc_path and not enc_path.endswith(".yaml"):
+        return enc_path.strip()
+    return ""
+
+
+# endregion FUNC__node_name_from_context
+
+
 # region FUNC__plw_body_main
 ## @purpose  Тело try-блока (PLW0717 extraction из main) — семантика except не меняется.
 ## @io       ⇥ args (output_path), enc_path (резолвленный входной файл) → ⎋ результат try-тела
@@ -742,9 +861,21 @@ def _plw_body_main(args: _DecryptArgs, enc_path: str) -> None:
         max(unparsed_lines, 0),
     )
 
+    # launch-validation asi-team-vps (P0): module-aware fail-loud — enabled-модули ноды из
+    # node.yaml (NODE_NAME env или bare positional). None (standalone) → легаси-глобальная
+    # проверка всех required∧sops.
+    node_name = _node_name_from_context(args.enc_path)
+    enabled_modules = resolve_enabled_modules(node_name=node_name)
+    if enabled_modules is not None:
+        logger.info(
+            "[IMP:8][main] Module-aware secrets validation for node=%s: %d enabled module(s)",
+            node_name,
+            len(enabled_modules),
+        )
+
     # Plan 012 T3 (D3/F-014): ci_default auto-inject (optional) + fail-loud required/generated —
     # вызов ДО write_secrets_env: частичный secrets.env невозможен.
-    env_content, injected = apply_ci_default_injection(env_content)
+    env_content, injected = apply_ci_default_injection(env_content, enabled_modules=enabled_modules)
 
     write_secrets_env(env_content, args.output_path)
     logger.info(

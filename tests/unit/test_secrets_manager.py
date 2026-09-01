@@ -954,3 +954,119 @@ def test_cli_standalone_without_pythonpath(tmp_path):
 
 
 # endregion Tests: standalone CLI (TRAP[DEBT] 2026-08-12)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region Tests: reboot-path ensure over partial secrets.env (launch-validation asi-team-vps P0)
+# ═══════════════════════════════════════════════════════════════════
+
+# Decrypt-вывод (reboot-путь platform-secrets.service): sops-ключи + 2 optional ci_default
+# (GHCR_PUSH_TOKEN, ZAI_API_KEY) — tier=generated/source=autogen секреты ОТСУТСТВУЮТ (P0-симптом).
+# Значения — test-only заглушки (не реальные секреты; формат KEY=VALUE идентичен write_secrets_env).
+_REBOOT_PARTIAL_SOPS: dict[str, str] = {
+    "POSTGRES_PASSWORD": "sops-pg-pwd",
+    "POSTGRES_USER": "sops-pg-user",
+    "CLICKHOUSE_PASSWORD": "sops-ch-pwd",
+    "MINIO_ROOT_USER": "sops-minio-user",
+    "MINIO_ROOT_PASSWORD": "sops-minio-pwd",
+    "HERMES_DASHBOARD_PASSWORD": "sops-hermes-pwd",
+    "GF_SECURITY_ADMIN_PASSWORD": "sops-gf-pwd",
+    "S3_BUCKET": "sops-bucket",
+    "S3_ACCESS_KEY": "sops-access-key",
+    "S3_SECRET_KEY": "sops-secret-key",
+    "GHCR_PULL_TOKEN": "sops-ghcr-pull",
+    "TELEGRAM_BOT_TOKEN": "sops-tg-bot",
+    "WEBNAMES_API_KEY": "sops-webnames",
+    "PLATFORM_MASTER_EMAIL": "admin@asiteam.ru",
+    "PLATFORM_MASTER_PASSWORD": "sops-master-pwd",
+    "GHCR_PUSH_TOKEN": "ci-ghcr-push",
+    "ZAI_API_KEY": "ci-zai-key",
+}
+
+# tier=generated/source=autogen (core/secrets-manifest.yaml) — генерируются ensure (reboot-путь)
+_REBOOT_AUTOGEN_NAMES: tuple[str, ...] = (
+    "LITELLM_MASTER_KEY",
+    "NEXTAUTH_SECRET",
+    "REDIS_PASSWORD",
+    "SALT",
+    "ENCRYPTION_KEY",
+    "LANGFUSE_INIT_ORG_ID",
+    "LANGFUSE_INIT_PROJECT_ID",
+    "LANGFUSE_PUBLIC_KEY",
+    "LANGFUSE_SECRET_KEY",
+    "LANGFUSE_INIT_USER_PASSWORD",
+    "API_SERVER_KEY",
+)
+
+
+# 🧪 TRAP[TEST] · REGRESSION · P0 reboot asi-team-vps · ensure генерирует autogen поверх decrypt-вывода
+# · Scenario: secrets.env содержит ТОЛЬКО decrypt-вывод (sops + ci_default, без autogen) — reboot-путь
+# ·   platform-secrets.service (16 ключей). ensure_secrets с РЕАЛЬНЫМ core/secrets-manifest.yaml
+# ·   генерирует 11 tier=generated/source=autogen (ENCRYPTION_KEY и др.), НЕ трогает sops/ci_default;
+# ·   повторный вызов с ЧИСТЫМ env (свежий boot-процесс) = byte-identical no-op
+# · Last fail: 2026-08-31 (asi-team-vps: после reboot secrets.env=16 ключей →
+# ·   φ8 deploy_services "ENCRYPTION_KEY is missing a value: ENCRYPTION_KEY_REQUIRED")
+# · Remove if: reboot-путь перестаёт вызывать ensure_secrets (другой механизм autogen)
+@ldd_trajectory
+def test_ensure_secrets_reboot_path_over_partial_env(caplog, tmp_path, monkeypatch):
+    """Reboot path: ensure над partial (decrypt-only) secrets.env → autogen дополнен, повтор = no-op.
+
+    ## @purpose  P0-доказательство: reboot-путь (decrypt только) даёт partial secrets.env;
+    ##            повторный ensure_secrets (как в новом ExecStartPost юнита platform-secrets.service)
+    ##            генерирует missing autogen поверх decrypt-вывода, сохраняет sops/ci_default
+    ##            и идемпотентен (второй вызов не меняет файл).
+    ## @io — ⇥ caplog, tmp_path, monkeypatch → ⎋ None (asserts autogen fill + idempotence)
+    ## @complexity — O(N) где N = autogen-секреты манифеста (реальные gen_command subprocess)
+    """
+    manifest = Path(__file__).resolve().parent.parent.parent / "core" / "secrets-manifest.yaml"
+    assert manifest.is_file(), f"real secrets-manifest.yaml missing: {manifest}"
+
+    secrets_env = tmp_path / "secrets.env"
+    secrets_env.write_text(
+        "".join(f"{k}={v}\n" for k, v in _REBOOT_PARTIAL_SOPS.items()),
+        encoding="utf-8",
+    )
+    all_keys = [*_REBOOT_PARTIAL_SOPS.keys(), *_REBOOT_AUTOGEN_NAMES]
+    for key in all_keys:
+        monkeypatch.delenv(key, raising=False)
+
+    # ── Первый вызов (reboot-путь): реальные gen_command (openssl/echo) — честный assert R1 ──
+    with patch.object(sm, "_ensure_htpasswd", return_value=False):
+        generated = sm.ensure_secrets(str(manifest), str(secrets_env), persist_to_sops=False)
+
+    assert len(generated) == len(_REBOOT_AUTOGEN_NAMES), (
+        f"P0 FAIL: expected {len(_REBOOT_AUTOGEN_NAMES)} autogen secrets generated, got {len(generated)}: {generated}"
+    )
+    assert "ENCRYPTION_KEY" in generated, f"P0 FAIL: ENCRYPTION_KEY not generated: {generated}"
+
+    parsed = sm.source_secrets_env(str(secrets_env))
+    for name in _REBOOT_AUTOGEN_NAMES:
+        assert (parsed.get(name, "") or "").strip(), (
+            f"P0 FAIL: {name} missing in secrets.env after reboot-path ensure:\n{parsed}"
+        )
+    for key, value in _REBOOT_PARTIAL_SOPS.items():
+        assert parsed.get(key) == value, (
+            f"P0 FAIL: {key} overwritten by ensure ({parsed.get(key)!r} != {value!r}) — decrypt-вывод повреждён"
+        )
+
+    # ── Второй вызов: свежий процесс (ЧИСТЫЙ env, файл на диске) — idempotence, byte-identical ──
+    for key in all_keys:
+        monkeypatch.delenv(key, raising=False)
+    first_content = secrets_env.read_text(encoding="utf-8")
+    with patch.object(sm, "_ensure_htpasswd", return_value=False):
+        generated2 = sm.ensure_secrets(str(manifest), str(secrets_env), persist_to_sops=False)
+    assert generated2 == [], f"P0 FAIL: second call regenerated secrets: {generated2}"
+    assert secrets_env.read_text(encoding="utf-8") == first_content, (
+        "P0 FAIL: second call changed secrets.env — ensure не идемпотентен"
+    )
+
+    for key in all_keys:
+        monkeypatch.delenv(key, raising=False)
+
+    logger.critical(
+        "[IMP:9][test] reboot-path ensure: %d autogen поверх decrypt-вывода + idempotent 2-й вызов — OK",
+        len(generated),
+    )
+
+
+# endregion Tests: reboot-path ensure over partial secrets.env (launch-validation asi-team-vps P0)

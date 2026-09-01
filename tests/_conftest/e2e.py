@@ -43,6 +43,16 @@ except ImportError:
 # Early load: загружаем .env на уровне модуля, чтобы os.environ был доступен
 # при импорте тестовых файлов (HERMES_PASS и др. модульные константы).
 # Это ДО выполнения session fixtures.
+# 📝 TRAP[DEBT] · 2026-08-31 · MED · gitignored hermes .env (полный smoke-env) инжектится в os.environ
+# · Observed: core/modules/hermes-agent/.env содержит ВЕСЬ smoke-env (POSTGRES_USER/MINIO_ROOT_USER/
+# ·   TELEGRAM_BOT_TOKEN/PLATFORM_MASTER_*/...); ранний load_dotenv делает их глобально видимыми
+# ·   во ВСЕХ pytest-сессиях (launch-validation asi-team-vps: POSTGRES_USER ложно закрыл
+# ·   module-aware postcondition-verifier)
+# · Suspected: .env создан локальным bootstrap-шагом (gitignored) как полный smoke-фикстурный env,
+# ·   но ранняя безусловная загрузка не ограничена маркером e2e (в отличие от _load_test_env)
+# · Impact: любой тест, ассертящий ОТСУТСТВИЕ переменной из smoke-env, флапает; verifier'ы
+# ·   с os.environ-fallback получают ложно-положительные значения
+# · When: реализация module-aware secrets fail-loud (P0 asi-team-vps)
 if _DOTENV_AVAILABLE:
     _early_dotenv_path = Path(__file__).parent / ".." / ".." / "core" / "modules" / "hermes-agent" / ".env"
     if pathlib.Path(_early_dotenv_path).is_file():

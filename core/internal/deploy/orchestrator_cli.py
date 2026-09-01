@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: orchestrator-cli, cli, dispatch, receive, deliver, deploy-many, status, remove, verify, ping, health, entrypoint, SSH_ORIGINAL_COMMAND, verb-registry, handlers
-# STRUCTURE: ▶ main() → argparse → thin dispatch ┌dispatch → _VERB_HANDLERS[verb] (реестр: ping|exit|status|health|verify|remove|receive) | deliver | deploy | deploy-many | rollback | status | remove | health┐ → sys.exit(0|1)
+# GREP_SUMMARY: orchestrator-cli, cli, dispatch, receive, deliver, deploy-many, status, remove, verify, ping, health, rollback, entrypoint, SSH_ORIGINAL_COMMAND, verb-registry, handlers
+# STRUCTURE: ▶ main() → argparse → thin dispatch ┌dispatch → _VERB_HANDLERS[verb] (реестр: ping|exit|status|health|verify|remove|receive|rollback) | deliver | deploy | deploy-many | rollback | status | remove | health┐ → sys.exit(0|1)
 """
 CLI entrypoint for DeployOrchestrator. Commands: dispatch, deliver, receive, deploy, deploy-many, rollback, status, remove, health.
 
@@ -10,7 +10,8 @@ CLI entrypoint for DeployOrchestrator. Commands: dispatch, deliver, receive, dep
   ping → "pong"; exit → 0; status → ProjectStatus JSON (exit 0/1); health → docker inspect
   State.Health.Status (read-only слово-контракт: healthy|starting|unhealthy|missing|error);
   verify → мост на core.internal.verify.domain_verifier + verify_contracts;
-  remove → DeployOrchestrator.remove(); receive → tar из stdin + DeployOrchestrator.receive().
+  remove → DeployOrchestrator.remove(); receive → tar из stdin + DeployOrchestrator.receive();
+  rollback → DeployOrchestrator.rollback() (snapshot-based, D8 launch-validation).
 
 `deliver` — операторская сторона (T5): ассемблирует payload, доставляет через
   ForcedCommandChannel (remote_cmd "receive <project> <version>"), печатает JSON с VPS,
@@ -30,7 +31,7 @@ Usage:
 ## @purpose  CLI entrypoint for DeployOrchestrator. Replaces the shell deploy pipeline and provides
 ##           direct access to all orchestrator operations from command line.
 ##           Command `dispatch` — VPS-side forced-command dispatcher по SSH_ORIGINAL_COMMAND (DevPlan 116
-##           B1 T2, U-04): receive/status/health/verify/remove/ping/exit через реестр verb→handler
+##           B1 T2, U-04): receive/status/health/verify/remove/rollback/ping/exit через реестр verb→handler
 ##           (_VERB_HANDLERS, 170 W4-B3 — декомпозиция _dispatch 163 LOC).
 ##           Command `receive` — читает Payload из stdin (tar) + версию из аргументов (D5), вызывает
 ##           DeployOrchestrator.receive().
@@ -48,7 +49,7 @@ Usage:
 ##   6. PlatformError → return e.exit_code (B4-контракт: sys.exit только в main())
 ##   7. Channel selection: --scp для SCPChannel, --forced-command для ForcedCommandChannel,
 ##      дефолт — LocalChannel при отсутствии host (D7, T6)
-##   8. 170 W4-B3: реестр _VERB_HANDLERS — ровно CANONICAL_VERBS (7); handler'ы приватные,
+##   8. 170 W4-B3: реестр _VERB_HANDLERS — ровно CANONICAL_VERBS (8); handler'ы приватные,
 ##      семантика 1:1 (dispatch-ветки вынесены из _dispatch); main() тонкий, DeployOrchestrator
 ##      создаётся лениво (не для dispatch/deliver)
 ##   9. B3 fix-forward (health): read-only verb `health <project> [<service>]` — docker inspect
@@ -58,6 +59,9 @@ Usage:
 ##      ошибке инспекта (daemon недоступен/нет docker/timeout). НЕ пишет audit-записей.
 ##      Потребитель: project_payload_delivery B3-предпробка «уже live» (ci-deploy
 ##      forced-command-restricted — произвольный docker inspect невозможен).
+##   10. D8 launch-validation (rollback): forced-command `rollback <project> [<snapshot-id>]` —
+##      тот же handler, что main-CLI rollback (унифицированная сигнатура (args, ctx), паттерн
+##      status/remove/health); per-project flock (REF-0011), snapshot_id="" → latest snapshot
 ## @rationale DevPlan 089 T6.6: единый CLI entrypoint заменяет shell deploy pipeline.
 ##            DevPlan 116 B1 T2 (U-04): receive игнорировал SSH_ORIGINAL_COMMAND — CI-верификация
 ##            была фиктивна; dispatch диспетчеризует SSH_ORIGINAL_COMMAND (receive|status|verify|
@@ -74,6 +78,11 @@ Usage:
 ##                       stdout healthy|starting|unhealthy|missing|error, rc 0/1); +health в
 ##                       _VERB_HANDLERS/parse-args; +main-alias `health --project [--service]`;
 ##                       +docker_runner DI (W4d, _DispatchContext) — тесты 0 патчей
+##           2026-09-01 | launch-validation D8 — +rollback в dispatch-контур: 8-й verb
+##                       (forced-command `rollback <project> [<snapshot-id>]`); _handle_rollback
+##                       унифицирован до (args: str, ctx: _DispatchContext) — тот же handler
+##                       для main-CLI и dispatch (паттерн status/remove/health); +rollback в
+##                       T9.7-валидацию project-name; _VERB_HANDLERS = CANONICAL_VERBS (8)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -590,6 +599,51 @@ def _handle_receive(args: str, ctx: _DispatchContext) -> int:
 # endregion FUNC__handle_receive
 
 
+# region FUNC__handle_rollback
+## @purpose  Rollback handler (dispatch verb + main-команда, D8 launch-validation):
+##           DeployOrchestrator.rollback() (snapshot-based), JSON → stdout. Единая сигнатура
+##           (args: str, ctx: _DispatchContext) — паттерн status/remove/health: dispatch
+##           (args = строка после verb) и main (args = "project [snapshot-id]") — ОДИН handler.
+## @io       ⇥ args: str ("project [snapshot-id]"), ctx: _DispatchContext → ⎋ int exit code
+## @complexity — O(1) — snapshot read + compose rollback
+## @invariants
+##   - project = первый токен; snapshot_id = второй токен (опционален)
+##   - snapshot_id="" → latest snapshot (rollback(project, None))
+##   - project обязателен → иначе JSON ERROR + exit 1 (fail-fast, паттерн health)
+##   - per-project flock (REF-0011) — тот же лок, что receive/remove
+def _handle_rollback(args: str, ctx: _DispatchContext) -> int:
+    """Rollback a project (dispatch verb + main-команда, JSON результат)."""
+    tokens = (args or "").split()
+    project = tokens[0] if tokens else ""
+    snapshot_id = tokens[1] if len(tokens) > 1 else ""
+    if not project:
+        print(json.dumps({"status": "ERROR", "error": "rollback requires <project>"}))
+        return 1
+    # REF-0011 (11-DevPlan W1): rollback под тем же per-project локом, что и receive/remove —
+    # гонка «rollback vs параллельный receive» ломала payload/state. Reentrant per-project.
+    from core.internal.shared.file_lock import FileLock, FileLockError, platform_lock_path
+
+    try:
+        lock = FileLock(platform_lock_path(project), timeout=float(DEPLOY_TIMEOUT), poll_interval=0.5)
+        lock.acquire()
+    except FileLockError as e:
+        print(json.dumps({"status": "FAILED", "error": f"Concurrent deploy blocked: {e}"}))
+        return 1
+    try:
+        result = ctx.orchestrator.rollback(
+            project_name=project,
+            snapshot_id=snapshot_id or None,
+        )
+    finally:
+        with contextlib.suppress(Exception):
+            lock.release()
+    print(json.dumps(result.to_dict()))
+    return 0 if result.is_success() else 1
+
+
+# endregion FUNC__handle_rollback
+
+
 # region FUNC__VERB_HANDLERS (реестр verb→handler, CANONICAL_VERBS)
 # 170 W4-B3: таблица {verb: handler-функция} — ровно CANONICAL_VERBS (shared/verbs.py, U-56).
 # Единая сигнатура dispatch-handler'а: (args: str, ctx: _DispatchContext) → int.
@@ -601,6 +655,7 @@ _VERB_HANDLERS: dict[str, Callable[[str, _DispatchContext], int]] = {
     "verify": _handle_verify,
     "remove": _handle_remove,
     "receive": _handle_receive,
+    "rollback": _handle_rollback,
 }
 # Runtime-парити: реестр = канонический verb-словарь (U-56, gate test_cli_subcommands_cover_verb_dictionary).
 # Добавление verb в CANONICAL_VERBS без handler'а → AssertionError при импорте (fail-fast, D2).
@@ -634,7 +689,8 @@ assert set(_VERB_HANDLERS) == set(CANONICAL_VERBS), (
 ##   - DI-параметры (None → канонические os.environ/sys.stdin/DeployOrchestrator/subprocess.run) —
 ##     поведение по умолчанию неизменно; тесты передают fake-каналы (0 патчей, W-H)
 ##   - 170 W4-B3: verb ∉ _VERB_HANDLERS недостижим (parse_ssh_command — только CANONICAL_VERBS);
-##     ветки ping/exit/status/health/verify/remove/receive вынесены в handler'ы (реестр — единственный маршрут)
+##     ветки ping/exit/status/health/verify/remove/receive/rollback вынесены в handler'ы
+##     (реестр — единственный маршрут)
 def _dispatch(
     argv: list[str],
     *,
@@ -681,7 +737,8 @@ def _dispatch(
     # Инъекция `;`/`../` в project_name (SSH_ORIGINAL_COMMAND) отсекается здесь — проект
     # не должен влиять на path-резолв/команды. Канон — shared/project_registry (U-56).
     # health — read-only verb, но тот же guard: первый токен = project (паттерн status/remove).
-    if verb in {"status", "remove", "receive", "health"}:
+    # rollback (D8) — тот же guard: первый токен = project (первый токен args).
+    if verb in {"status", "remove", "receive", "health", "rollback"}:
         project_token = (args or "").split()[0] if (args or "").split() else ""
         if project_token and not _validate_project_name(project_token):
             logger.error("[IMP:10][dispatch][invalid_project] Invalid/reserved project name: %r (T9.7)", project_token)
@@ -873,39 +930,6 @@ def _handle_deploy_many(args: _CliArgs, orchestrator: DeployOrchestrator) -> int
 # endregion FUNC__handle_deploy_many
 
 
-# region FUNC__handle_rollback
-## @purpose  main-команда rollback: orchestrator.rollback() (snapshot-based), JSON → stdout.
-## @io       ⇥ args: argparse.Namespace (--project/--snapshot-id), orchestrator: DeployOrchestrator → ⎋ int
-## @complexity — O(1) — snapshot read + compose deploy
-## @invariants
-##   - snapshot_id="" → latest snapshot (rollback(project, None))
-def _handle_rollback(args: _CliArgs, orchestrator: DeployOrchestrator) -> int:
-    """Rollback a project (main-команда, JSON результат)."""
-    # REF-0011 (11-DevPlan W1): rollback под тем же per-project локом, что и receive/remove —
-    # гонка «rollback vs параллельный receive» ломала payload/state. Reentrant per-project.
-    from core.internal.shared.file_lock import FileLock, FileLockError, platform_lock_path
-
-    try:
-        lock = FileLock(platform_lock_path(args.project), timeout=float(DEPLOY_TIMEOUT), poll_interval=0.5)
-        lock.acquire()
-    except FileLockError as e:
-        print(json.dumps({"status": "FAILED", "error": f"Concurrent deploy blocked: {e}"}))
-        return 1
-    try:
-        result = orchestrator.rollback(
-            project_name=args.project,
-            snapshot_id=args.snapshot_id or None,
-        )
-    finally:
-        with contextlib.suppress(Exception):
-            lock.release()
-    print(json.dumps(result.to_dict()))
-    return 0 if result.is_success() else 1
-
-
-# endregion FUNC__handle_rollback
-
-
 # region FUNC_main
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point.
@@ -945,7 +969,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "deploy-many":
             return _handle_deploy_many(args, orchestrator)
         if args.command == "rollback":
-            return _handle_rollback(args, orchestrator)
+            # D8: единый handler (args: str, ctx) — main-путь собирает строку "project [snapshot-id]"
+            return _handle_rollback(
+                f"{args.project} {args.snapshot_id}".strip(),
+                _DispatchContext(orchestrator=orchestrator),
+            )
         if args.command == "status":
             return _handle_status(args.project, _DispatchContext(orchestrator=orchestrator))
         if args.command == "health":

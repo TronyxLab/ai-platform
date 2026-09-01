@@ -135,6 +135,7 @@ def test_strip_plain_variants(raw: str, expected: str) -> None:
         ("status project1", "status"),
         ("health project1", "health"),
         ("verify node1", "verify"),
+        ("rollback project1", "rollback"),
         ("status", "status"),  # bare verb → verb, НЕ проект (U-56)
     ],
 )
@@ -172,7 +173,7 @@ def test_classify_unknown() -> None:
 # · Last fail: N/A (new test)
 # · Remove if: verb-множество меняется
 def test_classify_all_canonical() -> None:
-    """Все 7 verb'ов классифицируются и в голой, и в prefix-форме."""
+    """Все 8 verb'ов классифицируются и в голой, и в prefix-форме."""
     from core.internal.shared.verbs import CANONICAL_VERBS
 
     for verb in CANONICAL_VERBS:
@@ -319,6 +320,28 @@ def test_parse_status() -> None:
 
 
 # endregion FUNC_test_parse_status
+
+
+# region FUNC_test_parse_rollback
+## @purpose — "rollback project1 [snapshot-id]" → verb="rollback", args="project1 [snapshot-id]"
+##            (snapshot опционален — дефолт latest в handler'е, D8 launch-validation).
+# 🧪 TRAP[TEST] · 2026-09-01 · D8 launch-validation · rollback verb (dispatch forced-command)
+# · Scenario: rollback my-project → verb=rollback, args="my-project";
+# ·   rollback my-project snap-123 → args="my-project snap-123" (snapshot вторым токеном)
+# · Last fail: — rollback НЕ распознавался dispatch (unknown verb exit 4)
+# · Remove if: parse_ssh_command rollback handling меняется
+def test_parse_rollback() -> None:
+    """Rollback command extracts args (project [snapshot-id])."""
+    result = parse_ssh_command("rollback my-project")
+    assert result["verb"] == "rollback"
+    assert result["args"] == "my-project"
+
+    with_snapshot = parse_ssh_command("rollback my-project snap-123")
+    assert with_snapshot["verb"] == "rollback"
+    assert with_snapshot["args"] == "my-project snap-123"
+
+
+# endregion FUNC_test_parse_rollback
 
 
 # region FUNC_test_parse_health

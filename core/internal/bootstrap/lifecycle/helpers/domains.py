@@ -13,10 +13,15 @@
 ##     ssl_provision_via_orchestrator (P0 2026-08-27: тихий skip маскировал отказ φ7)
 ##   - ssl_provision_via_orchestrator возвращает СТАТУС: provisioned|converged|skipped_import|error
 ##     (фаза интерпретирует: skipped_import/error → done_with_warnings → resume перевыполнит)
+##   - extract_domains_for_context None (F-01, 2026-08-31) → skipped_import ДО extract_domains():
+##     домены НЕОПРЕДЕЛИМЫ ≠ «доменов нет»; ПУСТОЙ список (экстрактор доступен) → converged
 ##   - importlib by-path (spec_from_file_location + sys.modules-регистрация) — ЗАПРЕЩЁН
 ##     (DEP-0018); модули загружаются ТОЛЬКО системой импорта — единая идентичность модуля
 ##   - extract_domains использует ПУБЛИЧНУЮ extract_domains_for_context (T3, CS-1)
 ##   - ssl_provision_via_orchestrator: context="" = все домены (platform + projects)
+## @changes  2026-08-31 · P0 (F-01, asi-team-vps cold bootstrap) — extractor-unavailable НЕ
+##           трактуется как converged: extract_domains_for_context is None → skipped_import
+##           (ложный success φ7 → nginx crash-loop; B1 re-exec/B2 lazy-import — связанные фиксы)
 ## @changes  2026-08-27 · P0 (маскирование отказа φ7) — ssl_provision_via_orchestrator → статус
 ##           provisioned|converged|skipped_import|error; import-скип → IMP:10 + skipped_import;
 ##           converged-проверка по диску (fullchain.pem, letsencrypt_live()); per-module
@@ -264,6 +269,32 @@ def ssl_provision_via_orchestrator(core_dir: str, node_yaml: str) -> str:
         # (серты НЕ на диске) → skipped_import: фаза вернёт done_with_warnings → перевыполнится
         # на резюме, когда core доедет целиком и импорт заработает.
         return "skipped_import"
+
+    # ── P0 (F-01, 2026-08-31): экстрактор НЕ доступен → домены НЕОПРЕДЕЛИМЫ, не «пусто» ──
+    # orchestrate_certs импортировался, но context_deployer НЕ (pydantic-цепочка deploy/__init__ →
+    # llm/__init__ → policy_schema на системном python3 3.12) → extract_domains() вернула бы []
+    # и ветка ниже трактовала бы это как «доменов нет → converged» (ЛОЖНЫЙ success φ7: серты НЕ
+    # выпущены → nginx crash-loop «cannot load certificate»). Консервативно: skipped_import →
+    # фаза done_with_warnings → resume перевыполнит, когда импорт заработает (B1/B2, F-01).
+    # ⚠️ TRAP[BUG] · 2026-08-31 · P0 · extractor-unavailable трактовался как converged (F-01)
+    # · Symptom: orchestrate_certs импортируется, context_deployer НЕТ (ModuleNotFoundError:
+    # ·   No module named 'pydantic' на системном python3 3.12) → extract_domains() → [] →
+    # ·   return "converged" → φ7 «SSL certificates provisioned for all domains» (done) →
+    # ·   серты НЕ выпущены → nginx crash-loop (cannot load certificate .../fullchain.pem).
+    # · Root: ПУСТОЙ список доменов трактовался как «доменов нет (выпускать нечего)» вместо
+    # ·   «домены НЕОПРЕДЕЛИМЫ» — helper не различал конфиг без доменов и недоступный экстрактор.
+    # · Fix: явная проверка extract_domains_for_context is None ДО extract_domains() →
+    # ·   "skipped_import" (не converged, не provisioned); различие сохранено: экстрактор доступен
+    # ·   + доменов нет → converged (легитимный no-op, тест test_ssl_provision_no_domains_converged).
+    # · Prevention: I/O-хелпер сигнализирует «не могу определить» отдельным статусом (skipped_import);
+    # ·   фаза не делает вид «сделано» при неопределимом входе (контракт @purpose, P0 2026-08-27).
+    if extract_domains_for_context is None:
+        logger.critical(
+            "[IMP:10][ssl_provision] context_deployer NOT importable — domains UNDETERMINABLE "
+            "(phase must NOT report done)"
+        )
+        return "skipped_import"
+
     bootstrap_dir = Path(core_dir) / "internal" / "bootstrap"
 
     # Extract ALL domains (platform + all projects, no context filter) via context_deployer

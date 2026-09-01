@@ -1,5 +1,5 @@
-# GREP_SUMMARY: test-decrypt-secrets, sops, age, decrypt, temp-key, dd-wipe, cleanup, ldd, unit-test, ci_default, auto-inject, plan-012
-# STRUCTURE: ▶ 4 tests → ◇ decrypt_success → ◇ decrypt_fail → ◇ dd_wiped → ◇ no_secret_logged → ⊕ 3 ci_default tests (inject/fail-loud/unchanged) → ⎋ pass|fail
+# GREP_SUMMARY: test-decrypt-secrets, sops, age, decrypt, temp-key, dd-wipe, cleanup, ldd, unit-test, ci_default, auto-inject, plan-012, module-aware, minimal-context
+# STRUCTURE: ▶ 4 tests → ◇ decrypt_success → ◇ decrypt_fail → ◇ dd_wiped → ◇ no_secret_logged → ⊕ 3 ci_default tests (inject/fail-loud/unchanged) → ⊕ 2 module-aware tests (fail-loud/ pass) → ⎋ pass|fail
 # region MODULE_CONTRACT
 ## @purpose  Unit tests for core/internal/secrets/decrypt_secrets.py.
 ##           Verifies decrypt_sops_file() with mocked subprocess calls for sops --decrypt
@@ -30,6 +30,7 @@ from core.internal.secrets.decrypt_secrets import (
     decrypt_sops_file,
     resolve_enc_path,
 )
+from core.internal.shared.enabled_modules import resolve_enabled_modules
 from core.internal.shared.exceptions import PlatformFatalError
 from tests.conftest import ldd_trajectory
 
@@ -425,3 +426,229 @@ def test_complete_matrix_unchanged(caplog: pytest.LogCaptureFixture, tmp_path: p
 
 
 # endregion FUNC_test_complete_matrix_unchanged
+
+
+# ── launch-validation asi-team-vps (P0): module-aware fail-loud ─────────────────
+
+
+def _write_node_yaml(node_configs_dir: pathlib.Path, node_name: str, modules: list[tuple[str, bool]]) -> None:
+    """Write node.yaml with a list-format modules section (name, enabled)."""
+    node_dir = node_configs_dir / node_name
+    node_dir.mkdir(parents=True, exist_ok=True)
+    lines = ["modules:"]
+    for name, enabled in modules:
+        lines.append(f"  - name: {name}\n    enabled: {'true' if enabled else 'false'}")
+    (node_dir / "node.yaml").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _write_manifest_with_consumers(tmp_path: pathlib.Path, entries: str) -> str:
+    """Write secrets-manifest.yaml (sibling of definitions) with consumers; return its path."""
+    man_path = tmp_path / "secrets-manifest.yaml"
+    man_path.write_text(f"version: 1\nsecrets:\n{entries}", encoding="utf-8")
+    return str(man_path)
+
+
+# region FUNC_test_module_aware_fail_loud_minimal_context
+## @purpose  P0-фикс (launch-validation asi-team-vps): минимальный контекст с node.yaml, где
+##           postgres/minio/hermes-agent/monitoring НЕ enabled → их required∧sops секреты НЕ
+##           требуются (fail-loud их не перечисляет); required∧sops секрет enabled-модуля
+##           (nginx → PLATFORM_MASTER_PASSWORD) отсутствует → fail-loud с его именем.
+## @io       ⇥ caplog, tmp_path → ⎋ None (asserts имя enabled-модуля в ошибке, чужих — нет)
+## @complexity O(1)
+@ldd_trajectory
+def test_module_aware_fail_loud_minimal_context(caplog: pytest.LogCaptureFixture, tmp_path: pathlib.Path) -> None:
+    """Minimal context: disabled-module secrets NOT required; enabled-module secret IS."""
+    # 🧪 TRAP[TEST] · 2026-08-31 · REGRESSION · P0 asi-team-vps module-aware fail-loud
+    # · Scenario: node.yaml с nginx+platform-secrets enabled; постгрес-секерты/минio/hermes/grafana
+    #             не потребляются → отсутствие их ключей НЕ блокирует; отсутствие
+    #             PLATFORM_MASTER_PASSWORD (consumer nginx, enabled) → fail-loud
+    # · Last fail: make secrets-unlock NODE=asi-team-vps exit 10 (7 чужих ключей блокировали
+    #              холодный bootstrap минимального контекста)
+    # · Remove if: fail-loud валидация перенесена в другой слой
+    node_configs_dir = tmp_path / "node-configs"
+    _write_node_yaml(
+        node_configs_dir,
+        "mini",
+        [
+            ("nginx", True),
+            ("platform-secrets", True),
+            ("postgres", False),
+            ("minio", False),
+            ("hermes-agent", False),
+            ("monitoring", False),
+        ],
+    )
+
+    defs_path = _write_definitions(
+        tmp_path,
+        "  - name: POSTGRES_USER\n    tier: required\n    source: sops\n"
+        "  - name: MINIO_ROOT_USER\n    tier: required\n    source: sops\n"
+        "  - name: HERMES_DASHBOARD_PASSWORD\n    tier: required\n    source: sops\n"
+        "  - name: GF_SECURITY_ADMIN_PASSWORD\n    tier: required\n    source: sops\n"
+        "  - name: TELEGRAM_BOT_TOKEN\n    tier: required\n    source: sops\n"
+        "  - name: WEBNAMES_API_KEY\n    tier: required\n    source: sops\n"
+        "  - name: PLATFORM_MASTER_PASSWORD\n    tier: required\n    source: sops\n"
+        "  - name: PRESENT_KEY\n    tier: required\n    source: sops\n",
+    )
+    # Consumers — только в GENERATED манифесте (sibling definitions), как в реальном дереве
+    _write_manifest_with_consumers(
+        tmp_path,
+        "  - name: POSTGRES_USER\n    consumers: [postgres, service-exporters]\n"
+        "  - name: MINIO_ROOT_USER\n    consumers: [minio]\n"
+        "  - name: HERMES_DASHBOARD_PASSWORD\n    consumers: [hermes-agent]\n"
+        "  - name: GF_SECURITY_ADMIN_PASSWORD\n    consumers: [monitoring]\n"
+        "  - name: TELEGRAM_BOT_TOKEN\n    consumers: []\n"
+        "  - name: WEBNAMES_API_KEY\n    consumers: []\n"
+        "  - name: PLATFORM_MASTER_PASSWORD\n    consumers: [nginx]\n"
+        "  - name: PRESENT_KEY\n    consumers: [nginx]\n",
+    )
+
+    env = {"NODE_NAME": "mini", "NODE_CONFIGS_DIR": str(node_configs_dir)}
+    enabled = resolve_enabled_modules(node_name="mini", env=env)
+    assert enabled == {"nginx", "platform-secrets"}, f"Unexpected enabled modules: {enabled}"
+
+    env_content = "PRESENT_KEY='x'\n"
+    with pytest.raises(PlatformFatalError) as exc_info:
+        apply_ci_default_injection(env_content, definitions_path=defs_path, enabled_modules=enabled)
+
+    message = str(exc_info.value)
+    assert "PLATFORM_MASTER_PASSWORD" in message, f"Enabled-module secret must fail-loud, got: {message}"
+    for foreign in (
+        "POSTGRES_USER",
+        "MINIO_ROOT_USER",
+        "HERMES_DASHBOARD_PASSWORD",
+        "GF_SECURITY_ADMIN_PASSWORD",
+        "TELEGRAM_BOT_TOKEN",
+        "WEBNAMES_API_KEY",
+    ):
+        assert foreign not in message, f"Disabled/empty-consumer secret {foreign} must NOT fail-loud: {message}"
+    assert "PRESENT_KEY" not in message, "Present key must not be reported as missing"
+    logger.critical("[IMP:9][test] Module-aware fail-loud: только enabled-consumer секрет блокирует")
+
+
+# endregion FUNC_test_module_aware_fail_loud_minimal_context
+
+
+# region FUNC_test_module_aware_minimal_context_pass
+## @purpose  P0-фикс green-path: минимальный контекст, где ВСЕ required∧sops секреты
+##           enabled-модулей присутствуют → fail-loud НЕ срабатывает (никаких исключений,
+##           никаких инъекций) — доказательство, что минимальный контекст bootstrap'ится.
+## @io       ⇥ caplog, tmp_path → ⎋ None (asserts no-raise + no injection)
+## @complexity O(1)
+@ldd_trajectory
+def test_module_aware_minimal_context_pass(caplog: pytest.LogCaptureFixture, tmp_path: pathlib.Path) -> None:
+    """Minimal context with enabled-module secrets present → no fail-loud, no injection."""
+    # 🧪 TRAP[TEST] · 2026-08-31 · REGRESSION · P0 asi-team-vps module-aware green-path
+    # · Scenario: PLATFORM_MASTER_PASSWORD + PLATFORM_MASTER_EMAIL (consumer nginx, enabled)
+    #             присутствуют; чужие секреты disabled-модулей отсутствуют → pass
+    # · Last fail: минимальный контекст не мог расшифроваться (exit 10) даже с полными
+    #              операторскими секретами — чужие ключи блокировали
+    # · Remove if: module-aware фильтр удалён
+    node_configs_dir = tmp_path / "node-configs"
+    _write_node_yaml(
+        node_configs_dir,
+        "mini",
+        [("nginx", True), ("platform-secrets", True), ("postgres", False), ("minio", False)],
+    )
+
+    defs_path = _write_definitions(
+        tmp_path,
+        "  - name: POSTGRES_USER\n    tier: required\n    source: sops\n"
+        "  - name: MINIO_ROOT_USER\n    tier: required\n    source: sops\n"
+        "  - name: PLATFORM_MASTER_PASSWORD\n    tier: required\n    source: sops\n"
+        "  - name: PLATFORM_MASTER_EMAIL\n    tier: required\n    source: sops\n",
+    )
+    _write_manifest_with_consumers(
+        tmp_path,
+        "  - name: POSTGRES_USER\n    consumers: [postgres]\n"
+        "  - name: MINIO_ROOT_USER\n    consumers: [minio]\n"
+        "  - name: PLATFORM_MASTER_PASSWORD\n    consumers: [nginx]\n"
+        "  - name: PLATFORM_MASTER_EMAIL\n    consumers: [nginx]\n",
+    )
+
+    env = {"NODE_NAME": "mini", "NODE_CONFIGS_DIR": str(node_configs_dir)}
+    enabled = resolve_enabled_modules(node_name="mini", env=env)
+    assert enabled == {"nginx", "platform-secrets"}
+
+    env_content = "PLATFORM_MASTER_PASSWORD='p'\nPLATFORM_MASTER_EMAIL='a@b.c'\n"
+    new_content, injected = apply_ci_default_injection(env_content, definitions_path=defs_path, enabled_modules=enabled)
+    assert new_content == env_content, "Minimal context with complete enabled-secrets → byte-identical"
+    assert injected == [], "No ci_default injections expected"
+    logger.critical("[IMP:9][test] Module-aware minimal context green-path: pass без fail-loud")
+
+
+# endregion FUNC_test_module_aware_minimal_context_pass
+
+
+# ── launch-validation asi-team-vps (P0): reboot-путь — auto-detect ноды при пустом node_name ──
+# platform-secrets.service (systemd, ДО docker.service) запускает decrypt_secrets.py БЕЗ
+# NODE_NAME и NODE_CONFIGS_DIR → _node_name_from_context → "" → resolve_enabled_modules(node_name="")
+# обязана auto-detect единственную ноду в node-configs (иначе legacy fail-loud всех required∧sops
+# → exit 10 → docker.service не стартует).
+
+
+# region FUNC_test_resolve_enabled_modules_autodetect_single_node
+## @purpose  P0 reboot-фикс: пустое node_name (platform-secrets.service БЕЗ NODE_NAME) + node-configs
+##           с РОВНО ОДНОЙ нодой → resolve_enabled_modules возвращает enabled-модули этой ноды
+##           (НЕ None) — reboot-путь не падает в legacy fail-loud всех required∧sops.
+## @io       ⇥ caplog, tmp_path → ⎋ None (asserts enabled-set + IMP:8 auto-detect success лог)
+## @complexity O(1)
+@ldd_trajectory
+def test_resolve_enabled_modules_autodetect_single_node(
+    caplog: pytest.LogCaptureFixture, tmp_path: pathlib.Path
+) -> None:
+    """Empty node_name + single node in node-configs → its enabled modules (not None)."""
+    # 🧪 TRAP[TEST] · 2026-09-01 · REGRESSION · P0 reboot asi-team-vps platform-secrets.service
+    # · Scenario: systemd-юнит запускает decrypt_secrets.py БЕЗ NODE_NAME/NODE_CONFIGS_DIR;
+    # ·   node-configs содержит одну ноду → auto-detect обязан вернуть её enabled-модули
+    # · Last fail: resolve_enabled_modules("") → None → legacy fail-loud всех required∧sops →
+    # ·   decrypt exit 10 → platform-secrets.service failed → docker.service не стартует
+    # · Remove if: auto-detect из resolve_enabled_modules удалён (возврат к NODE_NAME-only)
+    node_configs_dir = tmp_path / "node-configs"
+    _write_node_yaml(
+        node_configs_dir,
+        "asi-team-vps",
+        [("nginx", True), ("platform-secrets", True), ("postgres", False), ("minio", False)],
+    )
+
+    env = {"NODE_CONFIGS_DIR": str(node_configs_dir)}
+    enabled = resolve_enabled_modules(node_name="", env=env)
+    assert enabled == {"nginx", "platform-secrets"}, f"auto-detected enabled modules, got {enabled}"
+    assert any("[IMP:8]" in r.message and "auto-detected node=asi-team-vps" in r.message for r in caplog.records), (
+        "IMP:8 auto-detect success log expected (semantic trace)"
+    )
+    logger.critical("[IMP:9][test] Auto-detect single node → enabled modules (reboot-путь починен)")
+
+
+# endregion FUNC_test_resolve_enabled_modules_autodetect_single_node
+
+
+# region FUNC_test_resolve_enabled_modules_autodetect_ambiguous_returns_none
+## @purpose  P0 reboot-фикс negative: пустое node_name + ДВЕ ноды в node-configs → auto-detect
+##           неоднозначен (NodeDetectionError) → resolve_enabled_modules возвращает None (легаси
+##           global) с WARN-логом, отличающим «нода не определима» от «node.yaml отсутствует».
+## @io       ⇥ caplog, tmp_path → ⎋ None (asserts None + WARN с причиной Multiple directories)
+## @complexity O(1)
+@ldd_trajectory
+def test_resolve_enabled_modules_autodetect_ambiguous_returns_none(
+    caplog: pytest.LogCaptureFixture, tmp_path: pathlib.Path
+) -> None:
+    """Empty node_name + two nodes → None (legacy) + WARN with the ambiguity reason."""
+    # 🧪 TRAP[TEST] · 2026-09-01 · REGRESSION · P0 reboot — многодозовая неоднозначность
+    # · Scenario: >1 ноды в node-configs — auto-detect обязан НЕ угадывать, а вернуть None (легаси)
+    # · Last fail: (нет — поведение зафиксировано контрактом, регрессия не наблюдалась)
+    # · Remove if: auto-detect из resolve_enabled_modules удалён (возврат к NODE_NAME-only)
+    node_configs_dir = tmp_path / "node-configs"
+    _write_node_yaml(node_configs_dir, "node-a", [("nginx", True)])
+    _write_node_yaml(node_configs_dir, "node-b", [("postgres", True)])
+
+    env = {"NODE_CONFIGS_DIR": str(node_configs_dir)}
+    enabled = resolve_enabled_modules(node_name="", env=env)
+    assert enabled is None, f"ambiguous auto-detect must fall back to legacy None, got {enabled}"
+    assert any("auto-detection failed" in r.message and "Multiple directories" in r.message for r in caplog.records), (
+        "WARN с причиной неоднозначности ожидается (нода не определима)"
+    )
+    logger.critical("[IMP:9][test] Ambiguous auto-detect → None (legacy) + WARN: fail-safe корректен")
+
+
+# endregion FUNC_test_resolve_enabled_modules_autodetect_ambiguous_returns_none

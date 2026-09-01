@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: audit-logger, json-lines, write-audit-entry, read-audit-log, platform-audit, extra-fields, permissions, ensure-audit-writable, setfacl, acl, ci-deploy, fallback, 0660
-# STRUCTURE: ▶ write_audit_entry(tag, status, msg, **extra) → ◇ mkdir -p → ◇ ensure_audit_writable ┌setfacl u:ci-deploy:rw + mask rw (primary) │ chgrp ci-deploy + chmod 0660 (fallback)┐ → ◇ JSON-lines append + fsync → ⊕ read_audit_log(limit) → ⊕ audit_permissions_status (acl|group|none) → ⊕ CLI → ⎋
+# GREP_SUMMARY: audit-logger, json-lines, write-audit-entry, read-audit-log, platform-audit, extra-fields, permissions, ensure-audit-writable, setfacl, acl, ci-deploy, fallback, 0660, dir-traversal, 0710
+# STRUCTURE: ▶ write_audit_entry(tag, status, msg, **extra) → ◇ mkdir -p → ◇ ensure_audit_writable ┌setfacl u:ci-deploy:rw + mask rw (primary) │ chgrp ci-deploy + chmod 0660 (fallback)┐ → ◇ dir traversal ┌setfacl u:ci-deploy:--x <dir> (primary) │ chgrp ci-deploy + chmod 0710 <dir> (fallback)┐ → ◇ JSON-lines append + fsync → ⊕ read_audit_log(limit) → ⊕ audit_permissions_status (acl|group|none) → ⊕ CLI → ⎋
 # region MODULE_CONTRACT
 ## @purpose  Unified audit logger with JSON-lines format — ЕДИНСТВЕННЫЙ writer платформы (D1, DevPlan 116 B11 T2):
 ##           заменяет прямой file.write, deploy/audit_logger.py (удалён) и reporting.py free-text pipe.
@@ -10,6 +10,10 @@
 ##           P1 fix 2026-08-27: права аудит-файла — канонический SoT ensure_audit_writable()
 ##           (POSIX ACL u:ci-deploy:rw primary / chgrp ci-deploy + chmod 0660 fallback);
 ##           converge R2 (audit.py) сходится к ТОМУ ЖЕ состоянию — антагонизм R2↔logger устранён.
+##           P1 fix 2026-09-01 (F-07 asi-team-vps): КАТАЛОГ /var/log/platform — ci-deploy получает
+##           traversal (+x, БЕЗ чтения списка): access ACL u:ci-deploy:--x на dir (primary) /
+##           chgrp ci-deploy + chmod 0710 (fallback). Без +x на родителе rw-ACL файла бесполезна
+##           (700-каталог root:root → Errno 13 Permission denied → audit entry dropped).
 ##           DevPlan 136 W10 T10.5 (S-6/S-15): fsync после append (аудит не теряется при краше);
 ##           CLI write exit≠0 при OSError (fail, не silent-drop); ALERT при malformed JSON в read;
 ##           source-поле (UID/process) в схеме — атрибуция каждой записи.
@@ -24,11 +28,16 @@
 ##   4. fsync после append — запись дюрабельна до возврата (W10 T10.5)
 ##   5. Default log file is /var/log/platform/audit.jsonl (единый файл — deploy-записи тоже сюда, D1)
 ##   6. Timestamp in ISO8601 UTC format via datetime.now(timezone.utc).strftime
-##   7. Целевые права (P1 fix 2026-08-27): владелец root, запись разрешена root И главному
-##      писателю (ci-deploy). PRIMARY — POSIX ACL: setfacl -m u:ci-deploy:rw,m::rw <file> +
-##      default ACL на dir (setfacl -d -m u:ci-deploy:rw,m::rw <dir>) для ротаций.
-##      FALLBACK без setfacl — chgrp ci-deploy + chmod 0660 (honest trade-off: adm-читатели
-##      теряют group-read → sudo/root-канон; TRAP[DECISION]). Non-root (dev/receive) → no-op.
+##   7. Целевые права (P1 fix 2026-08-27 + dir-traversal 2026-09-01): владелец root, запись
+##      разрешена root И главному писателю (ci-deploy). PRIMARY — POSIX ACL: setfacl -m
+##      u:ci-deploy:rw,m::rw \\<file\\> + default ACL на dir (setfacl -d -m u:ci-deploy:rw,m::rw \\<dir\\>)
+##      для ротаций + access ACL traversal на dir (setfacl -m u:ci-deploy:--x \\<dir\\> — +x БЕЗ r,
+##      mask НЕ задаётся явно: setfacl пересчитывает её как union(group::, named) и не затирает
+##      group:: (0750 root:adm от R2 сохраняет adm-чтение)).
+##      FALLBACK без setfacl — chgrp ci-deploy + chmod 0660 на файл + chgrp ci-deploy + chmod 0710
+##      на dir (group --x, other ---: члены группы ci-deploy получают traversal; НЕ o+x — world-
+##      травера нет; honest trade-off: adm-читатели теряют group-read → sudo/root-канон;
+##      TRAP[DECISION]). Non-root (dev/receive) → no-op.
 ##   8. Extended schema: write_audit_entry(..., **extra) — extra-поля сериализуются в ту же JSON-строку;
 ##      base-схема всегда содержит source {"uid": euid, "proc": basename(argv[0])} (W10 T10.5)
 ##   9. write_audit_entry возвращает bool (True=записано); OSError → False + raise_on_error=True → проброс
@@ -48,6 +57,9 @@
 ##           2026-08-27 | P1 fix — ensure_audit_writable (setfacl primary / chgrp+0660 fallback),
 ##                      audit_permissions_status, _set_audit_permissions делегирует SoT;
 ##                      прежний chmod 640 (антагонист R2) удалён
+##           2026-09-01 | P1 fix (F-07 asi-team-vps) — dir traversal для ci-deploy: access ACL
+##                      u:ci-deploy:--x на /var/log/platform (primary) / chgrp ci-deploy + chmod
+##                      0710 (fallback); 700-каталог блокировал открытие audit.jsonl (Errno 13)
 # endregion MODULE_CONTRACT
 
 import argparse
@@ -233,21 +245,24 @@ _PERMISSIONS_SET: set[str] = set()
 # · Root: литералы setfacl-синтаксиса (u:<writer>:rw <file>/<dir>) в doxygen-док-комментариях без esc
 # · Fix: экранирование \\<…\\> по канону (образец project_payload_delivery.py) — 6 точек → 0 warnings
 # · Prevention: литералы <> в ## @purpose/@io — только с экранированием \\<…\\>; doxygen-check ловит
-## @purpose  КАНОНИЧЕСКИЙ SoT прав аудит-файла (P1 fix 2026-08-27). Целевое состояние:
-##           владелец root, запись разрешена root И главному писателю (ci-deploy).
+## @purpose  КАНОНИЧЕСКИЙ SoT прав аудит-файла И его каталога (P1 fix 2026-08-27 + dir 2026-09-01).
+##           Целевое состояние: владелец root, запись разрешена root И главному писателю
+##           (ci-deploy), ci-deploy имеет traversal (+x) на родительский каталог.
 ##           PRIMARY (setfacl доступен + euid=0): POSIX ACL
-##             setfacl -m u:\\<writer\\>:rw,m::rw \\<file\\>          — named user + mask rw
+##             setfacl -m u:\\<writer\\>:rw,m::rw \\<file\\>          — named user + mask rw (файл)
 ##             setfacl -d -m u:\\<writer\\>:rw,m::rw \\<dir\\>        — default ACL на dir (ротации)
-##           FALLBACK (без setfacl + euid=0): chgrp \\<writer\\> + chmod 0660
-##             (группа-владелец = primary-группа писателя; adm-читатели — sudo/root-канон,
-##              TRAP[DECISION] ниже). Non-root → no-op ("skip").
+##             setfacl -m u:\\<writer\\>:--x \\<dir\\>               — access ACL traversal (dir, F-07)
+##           FALLBACK (без setfacl + euid=0): chgrp \\<writer\\> + chmod 0660 (файл)
+##           и на КАТАЛОГ: chgrp \\<writer\\> + chmod 0710 (dir, group --x other --- — traversal
+##           для группы, TRAP[DECISION] ниже). Non-root → no-op ("skip").
 ##           Идемпотентна (setfacl -m / chmod — повторный вызов no-op). Никогда не raise.
 ## @io       ⇥ log_file: str, writer_user: str = CI_DEPLOY_USER → ⎋ str ("acl"|"group"|"skip")
-## @complexity O(1) — 2-4 subprocess вызова
+## @complexity O(1) — 2-5 subprocess вызова
 ## @invariants
 ##   - euid!=0 → "skip" (dev/receive: доступ уже есть через owner/ACL; chown чужого файла невозможен)
 ##   - setfacl доступен, но rc!=0 (ФС без ACL) → graceful fallback в group-ветку
-##   - writer_user не существует (dev) → chmod 0660 best-effort, WARN
+##   - writer_user не существует (dev) → chmod 0660 best-effort, WARN (dir не трогается)
+##   - dir traversal — non-fatal: failure логируется WARNING, статус возврата не меняется
 ##   - НИКОГДА не raise (run_subprocess check=False канон converge)
 def ensure_audit_writable(log_file: str = DEFAULT_LOG_FILE, writer_user: str = CI_DEPLOY_USER) -> str:
     """Converge audit log permissions to the canonical target state (ACL/0660) — P1 fix 2026-08-27."""
@@ -277,9 +292,30 @@ def ensure_audit_writable(log_file: str = DEFAULT_LOG_FILE, writer_user: str = C
                     ["setfacl", "-d", "-m", f"u:{writer_user}:rw", "m::rw", str(log_dir)],
                     timeout=FILE_OP_TIMEOUT,
                 )
+                # P1 fix 2026-09-01 (F-07): access ACL traversal на КАТАЛОГ. Без +x на родителе
+                # rw-ACL файла бесполезна — 700-каталог root:root давал ci-deploy Errno 13.
+                # Только +x (--x, БЕЗ r — чтение списка каталога ci-deploy не нужно). mask НЕ
+                # задаём явно: setfacl пересчитает её как union(group::, named) и НЕ затрёт
+                # group:: (0750 root:adm от R2 сохраняет adm-чтение каталога). Идемпотентно.
+                # ⚠️ TRAP[BUG] · 2026-09-01 · P1 · dir traversal (700-каталог блокировал audit)
+                # · Symptom: «Cannot write to /var/log/platform/audit.jsonl: [Errno 13] Permission
+                #   denied — audit entry dropped» при deploy/rollback через ci-deploy (forced-command receive)
+                # · Root: ensure_audit_writable чинил ТОЛЬКО файл (chgrp+0660 / ACL rw), но не КАТАЛОГ —
+                #   ci-deploy не имел traversal (+x) через drwx------ root:root, созданный mkdir -p
+                #   под umask 077 → открыть файл невозможно несмотря на rw-права самого файла
+                # · Fix: при root-записи давать ci-deploy traversal на родителя audit.jsonl —
+                #   setfacl -m u:ci-deploy:--x \\<dir\\> (primary) / chgrp ci-deploy + chmod 0710 (fallback)
+                # · Prevention: права каталога и файла сходятся в ЕДИНОМ SoT ensure_audit_writable
+                _ = run_subprocess(
+                    ["setfacl", "-m", f"u:{writer_user}:--x", str(log_dir)],
+                    timeout=FILE_OP_TIMEOUT,
+                )
             logger.info(
-                "[IMP:9][ensure_audit_writable] %s → ACL u:%s:rw + mask rw (setfacl primary)",
+                "[IMP:9][ensure_audit_writable] %s → ACL u:%s:rw + mask rw (setfacl primary); "
+                "dir %s → traversal u:%s:--x",
                 log_file,
+                writer_user,
+                log_dir,
                 writer_user,
             )
             return "acl"
@@ -290,23 +326,17 @@ def ensure_audit_writable(log_file: str = DEFAULT_LOG_FILE, writer_user: str = C
         )
 
     # ── FALLBACK: без setfacl — групповая запись через primary-группу писателя ──
-    # 🧐 TRAP[DECISION] · 2026-08-27 · — · Fallback без setfacl: chgrp ci-deploy + chmod 0660
+    # 🧐 TRAP[DECISION] · 2026-08-27 · — · Fallback без setfacl: chgrp ci-deploy + chmod 0660 (файл)
+    # ·   + chgrp ci-deploy + chmod 0710 (КАТАЛОГ, P1 fix 2026-09-01 — traversal для группы)
     # · Rejected: прежний 0664 root:adm (P1 root cause — групповой write зависел от adm-членства
-    # ·   и ломался chmod 0640 от audit_logger при root-записи; adm-читатели теряют group-read)
-    # · Reason: honest trade-off — ci-deploy получает запись через группу-владельца, adm-читатели
+    # ·   и ломался chmod 0640 от audit_logger при root-записи; adm-читатели теряют group-read);
+    # ·   для каталога отвергнут o+x (world-traversal — ослабление безопасности, F-07)
+    # · Reason: honest trade-off — ci-deploy получает запись через группу-владельца (файл 0660)
+    # ·   и traversal через группу-владельца (каталог 0710, group --x other ---), adm-читатели
     # ·   читают через sudo/root-канон (read-контракт сужен сознательно в fallback)
     # · Rev: если на ноде появится setfacl (пакет acl) — primary-ветка активируется автоматически
     try:
-        import pwd
-
-        _ = pwd.getpwnam(writer_user)
-        chgrp_r = run_subprocess(["chgrp", writer_user, str(log_path)], timeout=FILE_OP_TIMEOUT)
-        if chgrp_r.returncode != 0:
-            logger.warning(
-                "[IMP:8][ensure_audit_writable] chgrp %s failed (rc=%d) — chmod 0660 only",
-                writer_user,
-                chgrp_r.returncode,
-            )
+        _ensure_audit_fallback_group(log_path, log_dir, writer_user)
     except (KeyError, ImportError):
         logger.warning(
             "[IMP:7][ensure_audit_writable] writer %r unknown (dev) — chmod 0660 best-effort only",
@@ -314,14 +344,45 @@ def ensure_audit_writable(log_file: str = DEFAULT_LOG_FILE, writer_user: str = C
         )
     _ = run_subprocess(["chmod", f"{_FALLBACK_MODE:04o}", str(log_path)], timeout=FILE_OP_TIMEOUT)
     logger.info(
-        "[IMP:9][ensure_audit_writable] %s → 0660 %s (fallback, no setfacl)",
+        "[IMP:9][ensure_audit_writable] %s → 0660 %s (fallback, no setfacl); dir %s → 0710 %s",
         log_file,
+        writer_user,
+        log_dir,
         writer_user,
     )
     return "group"
 
 
 # endregion FUNC_ensure_audit_writable
+
+
+# region FUNC__ensure_audit_fallback_group
+## @purpose  P1 fix 2026-08-27 + 09-01 (F-07): fallback-ветка без setfacl — групповая запись через
+##           primary-группу писателя. Файл: chgrp \\<writer\\> (chmod 0660 — единый, в вызывающем
+##           после try). КАТАЛОГ: chgrp \\<writer\\> + chmod 0710 (owner rwx, group --x, other ---) —
+##           члены группы писателя проходят +x без чтения списка; world-травера НЕТ (не o+x).
+##           Non-fatal: rc игнорируется; каталог может отсутствовать (skip). Идемпотентно.
+## @io       ⇥ log_path: pathlib.Path, log_dir: pathlib.Path, writer_user: str → ⎋ None
+##           ⚡ KeyError/ImportError — writer не существует (dev) → вызывающий логирует WARN
+## @complexity O(1) — 2-4 subprocess вызова
+def _ensure_audit_fallback_group(log_path: pathlib.Path, log_dir: pathlib.Path, writer_user: str) -> None:
+    """Apply group-channel fallback perms (file chgrp + dir traversal chgrp/chmod 0710)."""
+    import pwd
+
+    _ = pwd.getpwnam(writer_user)
+    chgrp_r = run_subprocess(["chgrp", writer_user, str(log_path)], timeout=FILE_OP_TIMEOUT)
+    if chgrp_r.returncode != 0:
+        logger.warning(
+            "[IMP:8][ensure_audit_writable] chgrp %s failed (rc=%d) — chmod 0660 only",
+            writer_user,
+            chgrp_r.returncode,
+        )
+    if log_dir.is_dir():
+        _ = run_subprocess(["chgrp", writer_user, str(log_dir)], timeout=FILE_OP_TIMEOUT)
+        _ = run_subprocess(["chmod", "0710", str(log_dir)], timeout=FILE_OP_TIMEOUT)
+
+
+# endregion FUNC__ensure_audit_fallback_group
 
 
 # region FUNC_audit_permissions_status
