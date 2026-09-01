@@ -70,18 +70,24 @@ _SSH_AUTH_MARKERS = ("successfully authenticated", "Hi ")
 ## @changes 2026-08-05 | DevPlan 139 W2 — _resolve_org → resolve_org (публичный контракт D9:
 ##            неотъемлемый бизнес-контракт резолва org, тестируется публичным путём; private
 ##            доступ из тестов запрещён — top-10 private-доступов закрыты)
+##           2026-09-01 | DevPlan 022 TASK-3 — legacy-кандидат <ctx>/context.yaml удалён:
+##                       единственный кандидат-путь — platform/context.yaml (единый overlay
+##                       layout <ctx>-overlay, D2; зеркальный wipe больше не затрагивает org)
 def resolve_org(context: str, env: Mapping[str, str] | None = None) -> str:
     """Resolve GitHub org for a context: overlay context.yaml org field, else context name.
 
-    ▶ ┌context┐ → ◇ PROJECTS_BASE/<ctx>/platform/context.yaml#org? → ⎋ org │ ◇ ~/projects/<ctx>/... → ⎋ org │ ⎋ context-name
+    ▶ ┌context┐ → ○ base ∈ {PROJECTS_BASE, ~/projects} → ◇ <base>/<ctx>/platform/context.yaml#org? → ⎋ org │ ⎋ context-name
 
     ## @purpose — Публичный контракт: org из overlay context.yaml (SoT,
     ##            точный регистр); fallback — имя контекста (историческое поведение).
     ## @io — ⇥ context: str, env: Mapping | None = None (DI, W-H DevPlan 163 — override
     ##            PROJECTS_BASE; None = os.environ) → ⎋ str (GitHub org name)
-    ## @complexity — O(C) — C = кандидаты context.yaml (PROJECTS_BASE + ~/projects, ×2 пути)
+    ## @complexity — O(C) — C = кандидаты context.yaml (PROJECTS_BASE + ~/projects, ×1 путь)
     ## @invariants — org из context.yaml#org (если задан) ВСЕГДА приоритетнее имени контекста;
-    ##              парсинг best-effort (ошибка YAML → fallback, не raise)
+    ##              единственный кандидат-путь — <base>/<ctx>/platform/context.yaml (DevPlan 022
+    ##              TASK-3: legacy <ctx>/context.yaml удалён — канонический layout контекстной
+    ##              папки = overlay-контейнер platform/, D2); парсинг best-effort
+    ##              (ошибка YAML → fallback, не raise)
     """
     source: Mapping[str, str] = os.environ if env is None else env
     candidates: list[Path] = []
@@ -89,7 +95,6 @@ def resolve_org(context: str, env: Mapping[str, str] | None = None) -> str:
         if not base:
             continue
         candidates.append(Path(base) / context / "platform" / "context.yaml")
-        candidates.append(Path(base) / context / "context.yaml")
     for ctx_yaml in candidates:
         if not ctx_yaml.is_file():
             continue
@@ -154,6 +159,15 @@ def check_ssh_available() -> bool:
 
 
 # region FUNC_promote_via_ssh
+# 🧐 TRAP[DECISION] · 2026-09-01 · — · Роли репо разделены (DevPlan 022 D3): target <org>/ai-platform
+# ·   = CI-зеркало исходника; контекстное состояние (context.yaml, node-configs, projects) живёт
+# ·   в отдельном overlay-репо <org>/<ctx>-overlay
+# · Rejected: хранить context.yaml/node-configs в зеркальном репо (Option A из 01-DevPlan)
+# · Reason: `git push --mirror` force-update'ит все refs и удаляет отсутствующие в source —
+#   контекстные коммиты wipe'ились (прецедент tronyx-lab, squash-реконсиляция 4868320);
+#   отдельный overlay-репо делает wipe безвредным, promote_via_ssh не меняется ни строкой
+# · Rev: если context-promote перестанет быть mirror-push (или появится второй writer
+#   в <org>/ai-platform) → пересмотреть разделение ролей репо
 def promote_via_ssh(context: str) -> str:
     """Mirror all refs to <context>/ai-platform via SSH; return remote HEAD sha.
 
