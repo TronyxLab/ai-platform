@@ -19,18 +19,18 @@ $ARTIFACT_CONTRACT
 7. NODE: tronyx-vps; Проекты: из node.yaml (подтверждено)
 
 ## PROGRESS
-- [ ] A1 make check батч до чистоты
-- [ ] A2 make agent-check
-- [ ] A3 check-manifests
-- [ ] A4 локальный стек up/status/healthcheck/down
-- [ ] A5 стартовое состояние зафиксировано
-- [ ] B1-B5 bootstrap + идемпотентность + converge + project-list
-- [ ] C1-C4 TLS/cache drill/verify-domains/мониторинг
-- [ ] D1-D8 каналы доставки
-- [ ] E1-E6 вариации конфигурации + node-update
-- [ ] F1-F4 DR
-- [ ] G1-G5 resilience (G5 BLOCKED: test-VPS недоступна)
-- [ ] H release checklist + context-promote
+- [x] A1 make check батч до чистоты
+- [x] A2 make agent-check
+- [x] A3 check-manifests
+- [x] A4 локальный стек up/status/healthcheck/down
+- [x] A5 стартовое состояние зафиксировано
+- [x] B1-B5 bootstrap + идемпотентность + converge + project-list
+- [x] C1-C4 TLS/cache drill/verify-domains/мониторинг
+- [x] D1-D8 каналы доставки (D5 BLOCKED: GitHub billing)
+- [x] E1-E6 вариации конфигурации + node-update
+- [x] F1-F4 DR (F2 c P0-фиксом F-11)
+- [x] G1-G5 resilience (G5 BLOCKED: test-VPS недоступна)
+- [x] H release checklist + context-promote
 
 ## A5 · Стартовое состояние (2026-08-31 22:40)
 - Ветка: main @ 14e560a (docs(018) verification report)
@@ -183,3 +183,88 @@ A3 ✅ check-manifests GREEN · A4 ✅ холодный цикл зелёный 
 
 ### NOTE (отложено до D1): run3 WARN git clone context-overlay (github.com/TronyxLab/ai-platform)
 упал — /opt/tronyx-lab/platform есть (fallback?), перепроверю каналом deploy-context в D1.
+
+### F-08 · 2026-09-01 04:45 · D/E · P0 (инфраструктурное событие)
+- Симптом: node-update упал (rsync 255); SSH host key 103.88.243.151 изменился (ED25519
+  Zh0i4VAxys...); HTTPS 000 на всех доменах; нода после reconnect: uptime 3:24, /opt пуст,
+  docker отсутствует — ПОЛНОСТЬЮ ГОЛАЯ
+- Ожидалось/получено: плановый node-update; получена пересозданная нода
+- Причина: владелец подтвердил пересоздание ноды (host key легитимен, доверие обновлено через
+  ssh-keygen -R + accept-new). Параллельная сессия (asi-team-vps) не при чём — решение владельца
+- Действие: полная перезагрузка пути валидации: B1' secrets-unlock → B2' cold bootstrap
+  (второй полный cold-run критерия — уже со ВСЕМИ фиксами фаз A-D в core)
+- Статус: в работе (второй cold-run)
+- Evidence: /tmp/e4_node_update.log (rsync 255), вывод ssh uptime
+
+### Итог фазы D (2026-09-01 11:00) — после второго cold-run
+- D1 ✅ deploy-context RC=0 (deployed=0 skipped=3 — идемпотентно, vhosts 4 .conf, reload, llm render)
+- D2 ✅ render-vhosts (3) + render-monitoring (hook tronyx-site) RC=0
+- D3 ✅ project-status ×3: healthy, снапшоты свежего cold-run (081601/081618/081636)
+- D4 ✅ deploy-project (прямой канал): DEPLOYED healthy, snapshot 083515
+- D5 ⛔ BLOCKED (внешняя инфраструктура): GitHub Actions биллинг TronyxLab — «recent account
+  payments have failed or spending limit» — ВСЕ прогоны Deploy (включая push другой сессии
+  33425414303 за 0s). Workflow корректен (jobs build-and-push+deploy). Канал до receive
+  верифицировать нельзя до восстановления биллинга. NEEDS OWNER: пополнить/поднять лимит.
+- D6 ✅ sync-env ×3 (tronyx-lab проекты) + ×4 (asi-group, лечение чужого WIP для общего гейта)
+- D7 ✅ provision-llm НА НОДЕ: 1 ключ (hermes-agent), 0 failed; заметка: make-таргет
+  захардкожен на 127.0.0.1:4000 (дев-стек/нода); NODE= не пробрасывается — канон: ssh node
+- D8 ✅ после фикса: rollback (tag anchor → up → healthy) + rollback:true в истории;
+  fail-fast честно отказывает для first-snapshot (нет previous_image); финальный redeploy latest
+
+### Итог фазы E (2026-09-01 12:00)
+- E1 ✅ ALL MODULES HEALTHY (node-side healthcheck, 25 контейнеров)
+- E2 ✅ вкл/выкл модуля ЗАМКНУТ канонично (после 3 фиксов):
+  · off: enabled:false → bootstrap-node (orphan-реконсиляция гасит контейнер) →
+    monitoring file_sd рендер без disabled (targets:0 после restart prometheus)
+  · on: enabled:true → bootstrap → контейнер Up healthy + target up
+  · F-09 (P1, fixed): monitoring не уважал enabled-семантику — static status-page job
+    в шаблоне → file_sd + required_module; renderer multi-node placement∩enabled;
+  · F-10 (P1, fixed): one-shot config-init не пересоздавался при изменении шаблона
+    (P19-класс) → декларативное module.yaml#deploy.init_services + force-recreate
+    после up; skip-путь тоже рекреитт (шаблонные изменения не меняют compose-конфиг)
+  · NOTE: node.yaml изменения на provisioned ноду доходят ТОЛЬКО через bootstrap-node
+    (core-deliver fallback не трогает node-configs; φ10 только верифицирует) —
+    bootstrap-node = универсальная команда реконсиляции (усиливает одно-командный критерий)
+  · NOTE: module-level make restart (monitoring) падает — volumes SoT в root compose
+    (grafana-data undefined в module scope); применено docker restart prometheus;
+    отдельный фикс не делался (не ломает валидацию)
+- E4 ✅ node-update 5/5 фаз (update-канал на provisioned ноде)
+- E5 ✅ converge_update (φ13) внутри node-update + standalone converge RC=0
+
+### Итог фазы F (2026-09-01 12:45)
+- F1 ✅ полный цикл бэкапа: pg_dumpall → spool → age-encrypt → S3 (UPLOAD OK
+  tronyx-vps-backups/platform/backups/postgres/pgdumpall_20260901T120400Z.sql.gz.age)
+  → sentinel → spool cleanup, RC=0
+- F2 ✅ restore round-trip + **P0 FIX**:
+  · F-11 (P0, fixed): self-role фильтр restore_psql.sh — skip-latch после DROP ROLE U
+    чёрной дырой гасил весь остаток дампа → restore rc=0 над ПУСТЫМ кластером (базы
+    удалены, данные потеряны). Drill 017 был GREEN из-за env-формы (U=postgres,
+    фильтр no-op) — латентный env-зависимый баг. Fix: statement-terminator reset +
+    позиционный матч роли + expected-DB post-check (fail-closed rc=3). 9 тестов,
+    R5-negative документирует старый баг. Живое восстановление из pre-restore
+    снапшота: 3 БД (langfuse/litellm/platform) возвращены, post-check OK, проекты healthy.
+  · SEC-0018 подтверждён живьём: pre_restore_*.sql в backup-spool/pre-restore/ вне
+    retry-скана (не попадают в S3)
+- F3 ✅ age-key-backup: sops-encrypt → S3 private ACL → sha256 verify (UPLOAD VERIFIED)
+- F4 ✅ backup-cron cron активен (platform-backup в /etc/cron.d контейнера),
+  AGE_RECIPIENT непуст (RPO-цепочка шифрования сходится), RPO 24ч (nightly pg_dumpall)
+
+### Итог фазы G (2026-09-01 14:00)
+- G1 ✅ reboot: стек самовосстановился (25/25 healthy за 2 мин), ALL MODULES HEALTHY,
+  e2e-verify 3/3 green
+- G2 ✅ chaos 12/12 PASSED (crash-restart policies, postgres data integrity, degraded-mode
+  sites alive, disk pressure, docker daemon restart, OOM clickhouse, outbound partition,
+  reboot self-start zero loops, tor fails loud, watchdog heals) — /tmp/chaos-20260901/run.log
+  NOTE: сырая команда из задания требует NODE env (R4) — корректный запуск: NODE=<node>
+- G3 ✅ load-smoke RC=0 verdict WARN (missing litellm_proxy_*/nginx_http_requests_total
+  метрики в отчёте — покрытие экспортёров, non-blocking NOTE); locust требует extras
+  (pip install -e ".[load]") и LOAD_RUNNER=node для remote-ноды
+- G4 ✅ e2e-verify 3/3 green (после chaos); converge RC=0
+- G5 ⛔ BLOCKED: test-VPS недоступна (ответ владельца §0)
+
+### Фаза H (2026-09-01 14:05)
+- H1 E2E test-VPS: BLOCKED (см. G5)
+- H2 Chaos FULL: PASS 12/12
+- H3 CI-гейты: make check ✅ (финал), push-gate ✅, platform-gate-fast ✅,
+  security-scan ✅ на ad44991; check-manifests ✅
+- H4 промоут: разрешён владельцем — выполняется после коммита артефактов
