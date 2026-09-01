@@ -1,6 +1,6 @@
 """
 # GREP_SUMMARY: test-docker-orchestrator, deploy-docker, pre-pull, image-check, wait-readiness, healthcheck, compose-up, init-services, force-recreate
-# STRUCTURE: ▶ mock subprocess.run → ◇ test_check_image_exists [found|not_found] → ◇ test_resolve_compose_file [found|missing] → ◇ test_deploy_docker_module [basic|hermes|orphan] → ◇ test_init_services [force-recreate|no-init|read] → ◇ test_wait_for_readiness [pass|timeout] → ◇ test_run_healthcheck [pass|fail] → ◇ test_prunner_pull_images [skip-build|pull] → ◇ test_pre_pull_images [single] → ◇ test_deploy_docker_group [single] → ⎋ LDD trajectory assert
+# STRUCTURE: ▶ mock subprocess.run → ◇ test_check_image_exists [found|not_found] → ◇ test_resolve_compose_file [found|missing] → ◇ test_deploy_docker_module [basic|hermes|orphan] → ◇ test_init_services [force-recreate|skip-recreate|no-init|read] → ◇ test_wait_for_readiness [pass|timeout] → ◇ test_run_healthcheck [pass|fail] → ◇ test_prunner_pull_images [skip-build|pull] → ◇ test_pre_pull_images [single] → ◇ test_deploy_docker_group [single] → ⎋ LDD trajectory assert
 # region MODULE_CONTRACT
 ## @purpose  Unit tests for docker_orchestrator.py — mock subprocess.run for docker CLI calls
 ## @scope    Tests all public and internal functions except parallel forking paths (which
@@ -711,6 +711,81 @@ def test_deploy_docker_module_no_init_services_no_force_recreate(mock_subprocess
     ]
     assert len(force_calls) == 0, f"unexpected --force-recreate calls: {force_calls}"
     logger.info("[IMP:9][test] module without init_services — no force-recreate (guard OK)")
+
+
+# 🧪 TRAP[TEST] · Regression · D8/P19 — SKIP-путь (up-to-date, up no-op) ВСЁ РАВНО force-recreate init
+# · Last fail: tronyx-vps φ12 второй прогон — изменение prometheus.yml.tmpl НЕ меняет compose-конфиг
+# ·   → модульный up уходит в no-op SKIP (deployed-путь не активен), exited prometheus-config-init
+# ·   не пересоздаётся, generated prometheus.yml (volume) остаётся stale (static status-page job).
+# · Remove if: one-shot init-сервисы перестанут требовать force-recreate при изменении шаблона
+def test_deploy_docker_module_recreates_init_services_on_skip(mock_subprocess, module_dir, monkeypatch):
+    """SKIP-сценарий (D8/P19): модуль up-to-date — up no-op, init force-recreate ВСЁ РАВНО выполняется."""
+    _write_module_yaml(Path(module_dir) / "test_mod", ["prometheus-config-init"])
+
+    real_up = dorch._shared_docker_compose_up
+    up_skipped = False
+
+    def _fake_compose_up(compose_dir, timeout, compose_args=None, service=None, flags=None):
+        # Модульный up (service=None, флагов нет) — skip-исход: docker compose up -d НЕ вызывается
+        # (модуль up-to-date, compose-конфиг не изменился). Init-recreate (service задан) — реальный
+        # вызов (subprocess mocked) — единственный способ поймать вызов в call_args_list.
+        if service is None and not flags:
+            nonlocal up_skipped
+            up_skipped = True
+            return True
+        return real_up(compose_dir, timeout=timeout, compose_args=compose_args, service=service, flags=flags)
+
+    monkeypatch.setattr(dorch, "_shared_docker_compose_up", _fake_compose_up)
+
+    result = dorch.deploy_docker_module(module_name="test_mod", modules_dir=module_dir)
+
+    assert result is True
+    assert up_skipped, "модульный up обязан уйти в SKIP (up-to-date) — иначе сценарий не воспроизведён"
+    recreate_calls = [
+        c
+        for c in mock_subprocess.call_args_list
+        if isinstance(c.args[0], list)
+        and "up" in c.args[0]
+        and "-d" in c.args[0]
+        and "--force-recreate" in c.args[0]
+        and "prometheus-config-init" in c.args[0]
+    ]
+    assert len(recreate_calls) == 1, f"SKIP-путь: init force-recreate не выполнен: {mock_subprocess.call_args_list}"
+    args = recreate_calls[0].args[0]
+    # Тот же собранный env (compose_args): --profile module для профилированного init-сервиса
+    assert "--profile" in args and "test_mod" in args
+    assert args[-1] == "prometheus-config-init"
+    logger.info("[IMP:9][test] SKIP-путь: init force-recreate выполнен несмотря на up-to-date (D8/P19)")
+
+
+# 🧪 TRAP[TEST] · Regression · D8/P19 — SKIP-путь без init_services → 0 --force-recreate
+# · Last fail: N/A (guard — механизм не должен регрессировать остальные модули)
+# · Remove if: generic init-recreation механика удалена
+def test_deploy_docker_module_skip_no_init_services_no_force_recreate(mock_subprocess, module_dir, monkeypatch):
+    """SKIP-сценарий без deploy.init_services → 0 вызовов --force-recreate."""
+    _write_module_yaml(Path(module_dir) / "test_mod", None)
+
+    real_up = dorch._shared_docker_compose_up
+    up_skipped = False
+
+    def _fake_compose_up(compose_dir, timeout, compose_args=None, service=None, flags=None):
+        if service is None and not flags:
+            nonlocal up_skipped
+            up_skipped = True
+            return True
+        return real_up(compose_dir, timeout=timeout, compose_args=compose_args, service=service, flags=flags)
+
+    monkeypatch.setattr(dorch, "_shared_docker_compose_up", _fake_compose_up)
+
+    result = dorch.deploy_docker_module(module_name="test_mod", modules_dir=module_dir)
+
+    assert result is True
+    assert up_skipped, "модульный up обязан уйти в SKIP (up-to-date) — иначе сценарий не воспроизведён"
+    force_calls = [
+        c for c in mock_subprocess.call_args_list if isinstance(c.args[0], list) and "--force-recreate" in c.args[0]
+    ]
+    assert len(force_calls) == 0, f"unexpected --force-recreate calls: {force_calls}"
+    logger.info("[IMP:9][test] SKIP-путь без init_services — 0 force-recreate (guard OK)")
 
 
 # 🧪 TRAP[TEST] · Regression · _read_init_services — декларативное чтение + graceful fallback
