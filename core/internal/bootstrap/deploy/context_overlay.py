@@ -239,6 +239,14 @@ def _pull_with_cache(context_path: str) -> int:
 ##   - If repos.core is absent/empty → log WARN, return 0 (no-op)
 ##   - git clone failure → log WARN with remediation instructions, return 1
 ##   - Clone timeout = 120s (typically larger repos)
+# 🧐 TRAP[DECISION] · 2026-09-01 · — · Доступ VPS к приватному overlay-репо — read-only deploy key
+# ·   + SSH-алиас (DevPlan 022 TASK-5; repos.core = `git@github.com-overlay:<org>/<ctx>-overlay.git`)
+# · Rejected: (1) публичный overlay-репо (нулевая настройка, но публичный IP ноды + домены в репо);
+#   (2) token в HTTPS URL (токен в node.yaml → sprawl в /opt/node-configs) · Решение пользователя
+#   2026-09-01 · Reason: старое зеркало `<org>/ai-platform` было PUBLIC — канал клона был
+#   unauthenticated HTTPS; приватный overlay требует auth, deploy key scoped на один репо,
+#   приватный ключ живёт ТОЛЬКО на ноде (~/.ssh/id_ed25519_github_overlay, вне git) ·
+# · Rev: если появится >1 приватный git-канал с ноды — вынести в общий git credential helper
 def _clone_context_repo(node_yaml_path: str, context_path: str) -> int:
     """Clone context overlay repo from repos.core URL.
 

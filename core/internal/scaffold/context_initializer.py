@@ -250,6 +250,15 @@ def create_skeleton_node_yaml(path: Path, context_name: str, org: str) -> None:
 ##   - РОВНО ОДИН репо: `<org>/<ctx>-overlay` (private) — DevPlan 022 D3/D6;
 ##     `<ctx>-node-configs` / `<ctx>-hermes-agent` упразднены
 ##   - Git init+push выполняется на context_dir/platform (весь overlay — один репо)
+# 📝 TRAP[DEBT] · 2026-09-01 · MED · scaffold не провижинит deploy key для VPS-клона приватного overlay
+# · Observed: миграция tronyx-lab (022 TASK-5) — приватный `<ctx>-overlay` недоступен с VPS по
+#   unauthenticated HTTPS (нужен read-only deploy key + SSH-алиас в repos.core, см.
+#   TRAP[DECISION] в deploy/context_overlay.py); skeleton здесь пишет HTTPS-URL в repos.core
+# · Suspected: new-context должен генерировать deploy key (gh repo deploy-key add) и
+#   SSH-алиасный repos.core — иначе первый деплой проекта контекста упадёт на clone
+# · Impact: новый контекст = ручной шаг deploy key после scaffold
+# · When: обнаружено при миграции tronyx-lab (DevPlan 022 TASK-5, вне скоупа плана)
+# · Rev: первый new-context после 022 → добавить deploy-key шаг в gh_repo_create + тест
 ##   - Graceful degradation: gh not found → warn, continue (not fail)
 ##   - gh not authenticated → warn, continue
 ##   - Repo exists → treat as success (reuse)

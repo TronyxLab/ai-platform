@@ -106,6 +106,19 @@ class ResolveMixin:
         candidates.extend(
             sorted(glob_module.glob(os.path.join(projects_dir, "*", "node-configs", node_name, "node.yaml")))
         )
+        # 📝 TRAP[DEBT] · 2026-09-01 · MED · Glob не покрывает канонический вложенный layout
+        #   `~/projects/*/platform/node-configs/{node}/node.yaml` (DevPlan 022 Option A —
+        #   overlay-контейнер platform/) · Observed: миграция tronyx-lab (022 TASK-5) — node-update
+        #   для NODE=tronyx-vps резолвит legacy-фикстуру ~/projects/ai-platform/node-configs/…, а не
+        #   overlay ~/projects/tronyx-lab/platform/node-configs/… (glob сортирует ai-platform первым);
+        #   repos.core доставляется из фикстуры, содержимое overlay node.yaml (projects, monitoring,
+        #   postgres_init_databases) до VPS не доходит · Suspected: нужен кандидат
+        #   `projects/*/platform/node-configs/` ПЕРЕД legacy sibling-путём (канон overlay = единственный
+        #   источник контекстных данных) · Impact: расхождение desired-state фиксстура↔overlay
+        #   сохраняется; после full-миграции контекстов резолв контекстных нод останется legacy ·
+        # · When: обнаружено при миграции tronyx-lab (DevPlan 022 TASK-5, вне скоупа плана)
+        # · Rev: первый сбой доставки node.yaml контекстной ноды → добавить platform/-кандидат
+        #   с тестами резолва (fixture↔overlay сверка)
 
         # Path 3: /opt/node-configs/{node_name}/node.yaml
         candidates.append(f"/opt/node-configs/{node_name}/node.yaml")
