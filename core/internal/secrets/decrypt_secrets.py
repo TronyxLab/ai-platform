@@ -270,7 +270,7 @@ def detect_age_key() -> str:
         msg = "AGE_SECRET_KEY not found. Set AGE_SECRET_KEY, SOPS_AGE_KEY, or AGE_SECRET_KEY_FILE environment variable."
         raise PlatformFatalError(msg)
     masked = key[:_AGE_KEY_PREVIEW_LEN] if len(key) >= _AGE_KEY_PREVIEW_LEN else key
-    logger.info("[IMP:8][detect_age_key] AGE key found (%s...)", masked)
+    logger.info("[IMP:8][detect_age_key] AGE key found (%s..., len=%d)", masked, len(key))
     return key
 
 
@@ -361,6 +361,7 @@ def decrypt_sops_file(age_key: str, enc_path: str) -> str:
 
         masked_key = age_key[:_AGE_KEY_PREVIEW_LEN] if len(age_key) >= _AGE_KEY_PREVIEW_LEN else age_key
         logger.info("[IMP:8][decrypt_sops] Running sops --decrypt with key (%s...)", masked_key)
+        logger.info("[IMP:8][decrypt_sops] key length=%d (canonical AGE-SECRET-KEY-1 = 74)", len(age_key))
 
         result = subprocess.run(
             ["sops", "--decrypt", enc_path],
@@ -384,6 +385,22 @@ def decrypt_sops_file(age_key: str, enc_path: str) -> str:
                 "[IMP:9][decrypt_sops] FAILED: sops --decrypt returned %d: %s",
                 result.returncode,
                 stderr_clean,
+            )
+            # FAIL-DIAG (φ4): длина ключа + сверка первой строки tmp-файла с age_key
+            # ДО dd-wipe (файл ещё существует в этой точке; wipe — в finally). Не печатаем
+            # содержимое ключа — только длину и булево сравнение. Выявляет искажение ключа
+            # между env (AGE_SECRET_KEY) и tmp-файлом (SOPS_AGE_KEY_FILE): canonical
+            # AGE = 74 символа, multi-line file-форма = ~180+, первая строка ≠ ключу.
+            first_line = ""
+            try:
+                with pathlib.Path(tmp_key_path).open("r", encoding="utf-8") as f:
+                    first_line = f.readline().rstrip("\n")
+            except OSError:
+                first_line = ""  # tmp-файл недоступен — сравнение даст False
+            logger.error(
+                "[IMP:9][decrypt_sops] FAIL-DIAG: age_key length=%d, tmp_key_file first-line startswith AGE-SECRET-KEY-: %s",
+                len(age_key),
+                first_line == age_key.rstrip("\n"),
             )
             msg = f"sops decryption failed: {stderr_clean}"
             raise PlatformFatalError(msg)
