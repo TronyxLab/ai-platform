@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: node-resolver resolve-node-yaml extract-node-host 3-path-search node-yaml-facade resolve host CLI exit-contract shared
+# GREP_SUMMARY: node-resolver resolve-node-yaml extract-node-host 4-path-search node-yaml-facade resolve host CLI exit-contract shared
 # STRUCTURE: ▶ resolve_node_yaml(node_name, platform_root?, projects_dir?) → NodeYaml.resolve (env PLATFORM_ROOT/HOME) → ◇ ConfigNotFoundError → ⎋ path | raise → ▶ extract_node_host(yaml_path) → NodeYaml.get(node.host) → ⎋ str → ◇ CLI: resolve | host → ⎋ exit 0|1
 # region MODULE_CONTRACT
 ## @purpose  Python-резолв node.yaml (DevPlan 127 W2, S8/P2-1): чистые функции
 ##           resolve_node_yaml()/extract_node_host() поверх NodeYaml-фасада (node_yaml/
-##           resolve.py, 3-path search) + CLI для shell-фасада core/lib/node-resolver.sh
+##           resolve.py, 4-path search) + CLI для shell-фасада core/lib/node-resolver.sh
 ##           (<100 LOC). Перенос логики из shell-библиотеки node-resolver.sh (215 LOC,
 ##           из них ~130 LOC документация) — резолв и LDD-логи теперь в Python, тестируемы
 ##           native pytest без subprocess.
@@ -13,8 +13,11 @@
 ##           функций. Потребители node-resolver.sh: bootstrap.sh, node-update.sh,
 ##           node-lifecycle.sh, converge.sh, deploy-context.sh, makefiles/deploy.mk.
 ## @invariants
-##   - 3-path search (порядок канона NodeYaml.resolve): {platform_root}/node-configs/{n}/node.yaml
-##     → $HOME/projects/*/node-configs/{n}/node.yaml (glob) → /opt/node-configs/{n}/node.yaml
+##   - 4-path search (порядок канона NodeYaml.resolve, DevPlan 024 TASK-1):
+##     {platform_root}/node-configs/{n}/node.yaml
+##     → $HOME/projects/*/platform/node-configs/{n}/node.yaml (overlay-канон glob)
+##     → $HOME/projects/*/node-configs/{n}/node.yaml (legacy sibling glob, IMP:7 WARN)
+##     → /opt/node-configs/{n}/node.yaml
 ##   - platform_root: аргумент → config_dir (hermetic DI); None → env PLATFORM_ROOT → platform_remote_base()
 ##   - projects_dir: vestigial (сигнатура-совместимость с прежней shell-библиотекой; glob
 ##     управляется env $HOME — как было в node_yaml --resolve, byte-compat)
@@ -98,12 +101,12 @@ def resolve_node_yaml(
     platform_root: str | None = None,
     env: Mapping[str, str] | None = None,
 ) -> str:
-    """Резолв node.yaml через 3-path search (NodeYaml.resolve) → абсолютный путь.
+    """Резолв node.yaml через 4-path search (NodeYaml.resolve) → абсолютный путь.
 
     ▶ ┌node_name, platform_root?, projects_dir?┐ → NodeYaml.resolve (env PLATFORM_ROOT/HOME/NODE_NAME)
       → ◇ ConfigNotFoundError → ⎋ path | raise
 
-    ## @purpose  resolve_node_yaml() из node-resolver.sh — 3-path search делегируется
+    ## @purpose  resolve_node_yaml() из node-resolver.sh — 4-path search делегируется
     ##            NodeYaml.resolve (node_yaml/resolve.py, единая точка чтения node.yaml).
     ##            Чистая функция (no subprocess) — native pytest без bash.
     ## @io — ⇥ node_name: Optional[str] (None → env NODE_NAME → hostname, как NodeYaml.resolve);
@@ -112,10 +115,11 @@ def resolve_node_yaml(
     ##         env: Mapping | None (DI, W-H DevPlan 163 — override NODE_NAME/PLATFORM_ROOT;
     ##              None = os.environ)
     ##       → ⎋ str — абсолютный путь найденного node.yaml
-    ## @complexity — O(P + N) — P=кандидаты 3-path, N=YAML parse (NodeYaml)
+    ## @complexity — O(P + N) — P=кандидаты 4-path, N=YAML parse (NodeYaml)
     ## @raises — ConfigNotFoundError: node.yaml не найден ни в одном пути (читаемое сообщение)
     ## @invariants
-    ##   - Порядок поиска: platform_root → ~/projects glob → /opt (канон NodeYaml.resolve)
+    ##   - Порядок поиска: platform_root → ~/projects/*/platform glob → ~/projects legacy glob → /opt
+    ##     (канон NodeYaml.resolve, DevPlan 024 TASK-1)
     ##   - platform_root передан → env PLATFORM_ROOT ИГНОРИРУЕТСЯ (hermetic DI);
     ##     None → env PLATFORM_ROOT → platform_remote_base() (byte-compat с shell)
     ##   - projects_dir принимается для сигнатурной совместимости, НЕ участвует в поиске
@@ -192,7 +196,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="NodeYaml resolver CLI (DevPlan 127 W2)")
     sub = parser.add_subparsers(dest="action", required=True)
 
-    p_resolve = sub.add_parser("resolve", help="Resolve node.yaml via 3-path search")
+    p_resolve = sub.add_parser("resolve", help="Resolve node.yaml via 4-path search")
     p_resolve.add_argument("--node", required=True, help="Node name")
     p_resolve.add_argument(
         "--platform-root",
