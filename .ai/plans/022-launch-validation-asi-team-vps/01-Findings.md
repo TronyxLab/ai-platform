@@ -92,6 +92,16 @@ $ARTIFACT_CONTRACT
 - Evidence: digest-сравнения: asi=d638a9ad (dry-run), tronyx=704eae69 (live-фейл); logs/make/20260901-151610-bootstrap...log (полный success)
 - Коммиты диагностики: 41ddd6c (decrypt len), 3358f98 (prelude digest), 9852633+081ffe6 (CLI-entry digest), fc515c1 (shell-entry digest)
 
+### F-08 · 2026-09-01 · Фаза D · P1
+- Симптом: `make deploy-context NODE=asi-team-vps CONTEXT=asi-group` rc=2 — vhost render FAILED (nginx -t harness: docker.io анонимный pull `nginx:1.28-alpine` → 429 Too Many Requests) → render_all abort (all-or-nothing) → deployed=0 skipped=1 failed=1.
+- Ожидалось / получено: nginx -t валидация рендеренных vhost через digest-pinned образ / harness тянул незапиненный тег, нода не имеет docker.io pull.
+- Гипотеза причины: harness-дефолт `nginx:1.28-alpine` вне канона digest-pin (root AGENTS.md DevOps-политика); канон nginx-модуля: `nginx:1.30.4-alpine@sha256:8a4f4b94...` (docker-compose.base.yml:41) — образ уже на ноде.
+- Фикс (Coder-субагент): NGINX_T_IMAGE digest-pin константа (TRAP[DECISION], SoT-ссылка); pre-flight `docker image inspect`; pull-failure → non-blocking True + IMP:10 чёткая причина; docker-вызовы вынесены в shared/docker_ops (docker_image_exists/docker_run_nginx_t — docker-sole-path канон); C901 разрулен декомпозицией (_create_harness_layout/_copy_dev_vhosts/_stderr_text; _render_vhosts_to_temp/_swap_rendered_vhosts/_validate_nginx_t).
+- Ре-верификация: make agent-check clean=True; make check rc=0 (5432 total).
+- Статус: fixed (коммит baa748d)
+- Побочные находки: тесты core_deliverer/org_secrets weren't hermetic (сессионный AGE_SECRET_KEY=tronyx утекал в тестовые логи — тест-фикс: delenv+HOME-изоляция+canon fake-ключи); node-lifecycle.sh 83>80 LOC → 79 (diag-сжатие); docker_ops FBT (force keyword-only); RUF052 autofix.
+- Evidence: /tmp/d1-deploy-context.log; agent-check output в логах сессии
+
 ### F-01 · 2026-09-01 · Фаза A · P1
 - Симптом: `make check` rc=2 — doxygen-check FAIL: 1 warning «core/internal/bootstrap/AGENTS.md:247: unable to resolve reference to '/Users/tronyx/projects/AGENTS.md' for \ref command».
 - Ожидалось / получено: zero-warnings invariant (DevPlan 097) / 1 warning, гейт красный. Регрессия существует и на main (test_journal 07:38: 5763 pass / 1 fail — тот же doxygen).
