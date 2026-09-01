@@ -88,8 +88,11 @@ $ARTIFACT_CONTRACT
 
 ## 7. Финальный промоут (выполнение)
 
-- Push main (merge-commit + docs 022 параллельной сессии) → CI push-gate зелёный → `make context-promote CONTEXT=asi-group` → SUCCESS → `make e2e-verify NODE=asi-team-vps` → PASS 3/3.
-- (Заполняется фактом ниже по ходу выполнения.)
+- Push main `f86b17a` (merge 9411143 + docs 022 + docs 023) → pre-push quick check Passed.
+- CI на f86b17a: push-gate **success**, platform-gate-fast **success**, security-scan (gitleaks+trivy+pip-audit) **success**, core-deploy **success**; `platform-test` (ci-docker) — **failure по внешней причине**: langfuse-test clickhouse-миграции «Cannot reserve 1.00 MiB, not enough space» (дисковое исчерпание GitHub-runner). Подтверждён хроническим характером: platform-test красный на всех 8 последних прогонов main ДО мерджа (2526b39…688055c) — не регрессия ветки/мерджа; локальные эквиваленты (make check, predeploy-классы) зелёные. Классификация: внешний инфра-блок (R4/R5-журнал), аналогично G5.
+- `make context-promote CONTEXT=asi-group` → **SUCCESS** («platform promoted to asi-group/ai-platform», audit tag=context-promote:asi-group status=DONE, org-secrets настроены, rc=0).
+- `make e2e-verify NODE=asi-team-vps` пост-деплой → **PASS 3/3** (asiteam.ru 301, login.asiteam.ru 404, roadmap.asiteam.ru 200; TLS ok на всех, wildcard до 2026-11-30).
+- Ветка `launch-validation/asi-team-vps` сохранена (удаление — только после подтверждения владельца).
 
 ## 8. Evidence
 
