@@ -155,6 +155,7 @@ def test_tmpl_ref0010_jobs_match_renderer(caplog) -> None:
         "pgbouncer-exporter": "pgbouncer-exporter.json",
         "langfuse-redis-exporter": "langfuse-redis-exporter.json",
         "minio": "minio.json",
+        "status-page": "status-page.json",  # E2: static→file_sd (enabled-семантика node.yaml)
     }
     renderer_by_file = {j.file_name: j for j in _NODE_TARGET_JOBS}
 
@@ -176,6 +177,7 @@ def test_tmpl_ref0010_jobs_match_renderer(caplog) -> None:
     assert renderer_by_file["minio.json"].required_module == "minio"
     assert renderer_by_file["langfuse-redis-exporter.json"].required_module == "langfuse"
     assert renderer_by_file["pgbouncer-exporter.json"].required_module == "postgres"
+    assert renderer_by_file["status-page.json"].required_module == "status-page"
 
     # alloy — static (all-nodes, порт не публикуется наружу)
     alloy = jobs.get("alloy")
@@ -187,7 +189,7 @@ def test_tmpl_ref0010_jobs_match_renderer(caplog) -> None:
         "minio job обязан скрейпить /minio/v2/metrics/cluster"
     )
 
-    logger.info("[IMP:9][test_ref0010] tmpl/renderer triad OK: 3 file_sd jobs + alloy static")
+    logger.info("[IMP:9][test_ref0010] tmpl/renderer triad OK: 4 file_sd jobs + alloy static")
 
 
 # 🧪 TRAP[TEST] · Regression · Scenario: exporter-сервисы в compose с digest-pin и сетями

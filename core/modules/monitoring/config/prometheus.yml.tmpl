@@ -128,14 +128,16 @@ scrape_configs:
 
   # ── Status-page /metrics (platform SLO: deploy success/duration, image sizes,
   #    backup freshness; 170 W12 C5) — status-page на observability-net, порт 8080 ──
+  # E2-фикс (2026-09-01): static → file_sd (required_module="status-page", рендер
+  #   generate_node_targets). Статус модуля — из node.yaml enabled-семантики:
+  #   enabled:false → targets=[] → up-серии нет → тишина (паттерн REF-0010 honesty-jobs);
+  #   включён и упал → up==0 → алерт. Прежний static target оставался в конфиге при
+  #   выключенном модуле → вечный DOWN-таргет (E2 валидации).
   - job_name: "status-page"
     scrape_interval: 1m
-    static_configs:
-      - targets:
-          - "status-page:8080"
-        labels:
-          service: "status-page"
-          component: "platform-slo"
+    file_sd_configs:
+      - files: ["/prometheus-targets/nodes/status-page.json"]
+        refresh_interval: 30s
 
   # ── Redis Exporter (cache metrics via redis-exporter) ─────────────────────
   # Added per owner verdict wave-redis 2026-07-15: monitor redis cache hit ratio,

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: monitoring prometheus-targets file-sd target-json metrics-enabled labels node-targets node-exporter cadvisor exporters multi-node placement di-seam
 # STRUCTURE: ▶ generate_prometheus_target(config) → ◇ metrics_enabled? → ⊕ {targets,labels} JSON → ⎋ RenderResult
-#           ▶ generate_node_targets(nodes, output_dir) → ◇ placement data? → ⊕ nodes/*.json (8 file_sd jobs, job_name 1:1) → ⎋ RenderResult
+#           ▶ generate_node_targets(nodes, output_dir) → ◇ placement data? → ⊕ nodes/*.json (9 file_sd jobs, job_name 1:1) → ⎋ RenderResult
 # region MODULE_CONTRACT
 ## @purpose  Prometheus file-based service discovery target generator — extracted from
 ##           monitoring_config_renderer.py (DevPlan 117 G T54). + DevPlan 010 T3.3:
@@ -81,6 +81,7 @@ from core.internal.shared.platform_ports import (
     NODE_EXPORTER,
     PGBOUNCER_EXPORTER,
     PLATFORM_PORT_MINIO,
+    PLATFORM_PORT_STATUS_PAGE,
     POSTGRES_EXPORTER,
     REDIS_EXPORTER,
 )
@@ -190,6 +191,19 @@ _NODE_TARGET_JOBS: tuple[_NodeTargetJob, ...] = (
         labels={"service": "minio", "component": "object-storage"},
         required_module="minio",  # опциональный модуль: выключен → targets=[] → тишина
         local_target="minio:9000",
+    ),
+    # ── E2 (2026-09-01): status-page — static→file_sd (enabled-семантика node.yaml) ──
+    # Прежний static_configs job в prometheus.yml.tmpl рендерился безусловно: модуль
+    # выключен (enabled:false в node.yaml, доставлен bootstrap'ом) → контейнер погашен
+    # orphan-реконсиляцией, но target оставался в scrape-конфиге → вечный DOWN-таргет
+    # (alert-шум, E2 валидации). file_sd + required_module="status-page": выключен →
+    # targets=[] → up-серии нет → тишина; включён и упал → up==0 → алерт (REF-0010 паттерн).
+    _NodeTargetJob(
+        file_name="status-page.json",
+        port=PLATFORM_PORT_STATUS_PAGE,
+        labels={"service": "status-page", "component": "platform-slo"},
+        required_module="status-page",
+        local_target="status-page:8080",
     ),
 )
 # endregion CONSTANTS_NODE_TARGET_JOBS

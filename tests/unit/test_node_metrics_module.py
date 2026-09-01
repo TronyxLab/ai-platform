@@ -23,6 +23,7 @@ _NEW_MODULES: tuple[str, ...] = ("log-collector", "node-metrics", "service-expor
 # Канонические job_name (прежние static_configs): переименование = silent break дашбордов/алертов
 # REF-0010 (Волна 0, 2026-08-24): +pgbouncer-exporter, +langfuse-redis-exporter, +minio —
 # легитимное расширение канона (новые scrape-цели); rename существующих по-прежнему запрещён.
+# E2 (2026-09-01): +status-page — static→file_sd (enabled-семантика node.yaml, DOWN-таргет fix).
 _CANONICAL_JOB_NAMES: frozenset[str] = frozenset({
     "node-exporter",
     "cadvisor",
@@ -32,6 +33,7 @@ _CANONICAL_JOB_NAMES: frozenset[str] = frozenset({
     "pgbouncer-exporter",
     "langfuse-redis-exporter",
     "minio",
+    "status-page",
 })
 
 

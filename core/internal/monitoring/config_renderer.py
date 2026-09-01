@@ -656,6 +656,9 @@ def _render_step(step_name: str, fn: Callable[..., object], *args: object) -> No
 ##   - NODE_YAML недоступен → IMP:8 skip, 0 файлов (dev/no-context запуск)
 ##   - Single-node (нет context ИЛИ нет placement.yaml) → fallback Docker-DNS target'ы
 ##     (байт-паритет прежней статике prometheus.yml.tmpl — контракт 010 T3.3)
+##   - E2 enabled-семантика: modules из node.yaml (enabled:false) НЕ попадают в таргеты —
+##     multi-node пересечением placement-модулей с включёнными, single-node honesty-гейтингом
+##     (deployed_modules). modules key отсутствует/нечитаем → placement без фильтра (fallback)
 ##   - Non-fatal по контракту render-шагов: OSError → WARN, деплой не блокируется
 # ⚠️ TRAP[BUG] · 2026-08-29 · P1 · single-node node-jobs молча выпали из скрейпа
 # · Symptom: F8 disk-pressure — PromQL node_filesystem_*{mountpoint='/'} пуст в prometheus
@@ -699,10 +702,12 @@ def render_node_targets_if_placement(platform_root: Path, node_yaml_path: str | 
     # И bare-string (D4 compat) — включённые имена для required_module-фильтра fallback'а.
     try:
         modules_raw = ny.get_modules()
+        modules_readable = True
     # ruff: ignore[BLE001] — best-effort render step
     except Exception as exc:  # noqa: EXC — best-effort: modules unreadable → honesty-гейтинг недоступен
         logger.warning("[IMP:7][node_targets] node.yaml modules unreadable: %s", exc)
         modules_raw = []
+        modules_readable = False
     deployed: set[str] = set()
     for entry in modules_raw:
         if isinstance(entry, dict):
@@ -713,13 +718,37 @@ def render_node_targets_if_placement(platform_root: Path, node_yaml_path: str | 
         elif isinstance(entry, str):
             deployed.add(entry)
 
+    # E2 enabled-семантика (2026-09-01): модуль с enabled:false НЕ попадает в скрейп-таргеты —
+    # и в single-node fallback, и в multi-node placement. Источник истины — node.yaml
+    # (доставляется bootstrap'ом), не реестр/placement: реестр — производная и может быть
+    # stale после toggle. modules key отсутствует (старый формат node.yaml) ИЛИ modules
+    # нечитаемы → enabled-данных нет → placement рендерится БЕЗ фильтра (прежнее поведение),
+    # WARN выше. Single-node fallback сохраняет REF-0010 honesty-гейтинг (fail-closed).
+    # 🧐 TRAP[DECISION] · 2026-09-01 · — · Источник истины enabled — node.yaml, не реестр модулей
+    # · Rejected: синхронизация реестра при toggle — второй источник истины, race
+    # · Reason: node.yaml доставляется bootstrap'ом, реестр — производная
+    # · Rev: если появится runtime-toggle без правки node.yaml — ре-дизайн
+    modules_declared = "modules" in ny.load()
+    enabled_modules: frozenset[str] | None = frozenset(deployed) if (modules_readable and modules_declared) else None
+
     placement = load_placement(placement_node_relative_path(node_yaml, context)) if context else None
     if placement is not None:
+        if enabled_modules is not None:
+            logger.info(
+                "[IMP:8][node_targets] enabled-filter по node.yaml активен: %d включённых модулей",
+                len(enabled_modules),
+            )
         nodes = [
             NodeInfo(
                 name=node_name,
                 host=host,
-                modules=tuple(sorted(resolve_node_modules(placement, node_name))),
+                modules=tuple(
+                    sorted(
+                        m
+                        for m in resolve_node_modules(placement, node_name)
+                        if enabled_modules is None or m in enabled_modules
+                    )
+                ),
             )
             for node_name, host in sorted(placement.nodes.items())
         ]

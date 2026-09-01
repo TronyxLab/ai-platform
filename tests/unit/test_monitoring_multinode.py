@@ -216,7 +216,7 @@ def test_render_idempotent_second_pass_noop(tmp_path: Path, caplog) -> None:
 # · Last fail: None (new test for DevPlan 010 T3.3)
 # · Remove if: file_sd-механизм нодовых target'ов меняется
 def test_tmpl_node_jobs_file_sd_job_name_preserved(caplog) -> None:
-    """prometheus.yml.tmpl: 5 нодовых jobs — file_sd с путём nodes/<job_name>.json (job_name 1:1)."""
+    """prometheus.yml.tmpl: 6 нодовых jobs — file_sd с путём nodes/<job_name>.json (job_name 1:1)."""
     caplog.set_level(0)
 
     with _PROMETHEUS_TMPL.open(encoding="utf-8") as fh:
@@ -229,6 +229,7 @@ def test_tmpl_node_jobs_file_sd_job_name_preserved(caplog) -> None:
         "nginx-exporter": "nginx-exporter.json",
         "redis-exporter": "redis-exporter.json",
         "postgres-exporter": "postgres-exporter.json",
+        "status-page": "status-page.json",  # E2 (2026-09-01): static→file_sd
     }
 
     for job_name, file_name in node_jobs.items():
@@ -241,7 +242,7 @@ def test_tmpl_node_jobs_file_sd_job_name_preserved(caplog) -> None:
             f"tmpl: job '{job_name}' file_sd не указывает на nodes/{file_name}"
         )
 
-    logger.info("[IMP:9][test_multinode] tmpl: 5 node jobs file_sd, job_name 1:1 сохранён")
+    logger.info("[IMP:9][test_multinode] tmpl: 6 node jobs file_sd, job_name 1:1 сохранён")
 
 
 # 🧪 TRAP[TEST] · Regression · Scenario: platform-alerts.yml валиден + RemoteNodeDown (T3.4)

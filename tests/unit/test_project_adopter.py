@@ -209,6 +209,134 @@ def test_generate_minimal_yaml_type_detection(caplog: pytest.LogCaptureFixture, 
     assert found_imp9
 
 
+# 🧪 TRAP[TEST] · Regression · ai-project (DevPlan 019): minimal yaml генерируется с type=ai-project
+# · Scenario: adopt каталога kernel-бота @ai-project/* (template-ai-project W3 D9) без ai-platform.yaml
+# ·   → единая эвристика _guess_project_type_from_dirs резолвит ai-project (НЕ backend)
+# · Last fail: generate_minimal_ai_platform_yaml знал только frontend/backend — adopt ai-project
+# ·   без yaml писал type: backend (неверный template-фильтр instructions sync)
+# · Remove if: эвристика типа adopt заменена явным параметром
+@ldd_trajectory
+def test_generate_minimal_yaml_ai_project(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> None:
+    """ai-project: minimal yaml → type=ai-project (пакет @ai-project/* как маркер)."""
+    caplog.set_level(logging.INFO)
+    adopter = _make_adopter(tmp_path / "ai-project", name="ai-project")
+    (adopter.project_dir / "src").mkdir(parents=True, exist_ok=True)
+    (adopter.project_dir / "src" / "index.ts").write_text(
+        "import { createKernel } from '@ai-project/kernel';\n", encoding="utf-8"
+    )
+    (adopter.project_dir / "package.json").write_text(
+        '{"name": "ai-project", "dependencies": {"@ai-project/kernel": "^0.1.0"}}', encoding="utf-8"
+    )
+
+    result = adopter.generate_minimal_ai_platform_yaml()
+
+    assert result == "generated"
+    import yaml
+
+    with Path(adopter.yaml_file).open(encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    assert data["type"] == "ai-project", f"Expected ai-project, got {data['type']}"
+
+    found_imp9 = False
+    logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
+    for record in list(caplog.records):
+        if "[IMP:" in record.message:
+            imp_level = int(record.message.split("[IMP:")[1].split("]")[0])
+            if imp_level >= 7:
+                logger.info("%s", record.message)
+            if imp_level >= 9:
+                found_imp9 = True
+    logger.info("--- END LDD TRAJECTORY ---")
+    assert found_imp9
+
+
+# 🧪 TRAP[TEST] · SCENARIO · _detect_project_type: yaml#type=ai-project → ai-project (instructions sync)
+# · Scenario: ai-platform.yaml с type: ai-project (создан make new-project TEMPLATE=ai-project) →
+# ·   _detect_project_type возвращает ai-project → scaffold_instructions template=ai-project
+# · Last fail: _detect_project_type принимал только backend|frontend — valid-set и падал на эвристику
+# · Remove if: adopt-тип резолвится иным механизмом
+@ldd_trajectory
+def test_detect_project_type_from_yaml_ai_project(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> None:
+    """_detect_project_type: yaml#type=ai-project → 'ai-project' (без эвристики)."""
+    caplog.set_level(logging.INFO)
+    adopter = _make_adopter(tmp_path, name="bot")
+    adopter.yaml_file.write_text("name: bot\ntype: ai-project\ntarget_node: tronyx-vps\n", encoding="utf-8")
+
+    assert adopter._detect_project_type() == "ai-project"
+    logger.info("[IMP:9][test][detect] _detect_project_type → ai-project (from yaml#type) — OK")
+
+    found_imp9 = False
+    logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
+    for record in list(caplog.records):
+        if "[IMP:" in record.message:
+            imp_level = int(record.message.split("[IMP:")[1].split("]")[0])
+            if imp_level >= 7:
+                logger.info("%s", record.message)
+            if imp_level >= 9:
+                found_imp9 = True
+    logger.info("--- END LDD TRAJECTORY ---")
+    assert found_imp9
+
+
+# 🧪 TRAP[TEST] · SCENARIO · _detect_project_type: эвристика каталогов ai-project (конвенционные папки)
+# · Scenario: без yaml, src/{capabilities,roles} (validateStartup conventionDirs template-ai-project) →
+# ·   _detect_project_type → ai-project (НЕ backend)
+# · Last fail: fallback-эвристика знала только frontend/backend — kernel-бот угадывался как backend
+# · Remove if: эвристика типа adopt заменена явным параметром
+@ldd_trajectory
+def test_detect_project_type_convention_dirs_ai_project(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> None:
+    """_detect_project_type: конвенционные папки src/capabilities → 'ai-project'."""
+    caplog.set_level(logging.INFO)
+    adopter = _make_adopter(tmp_path, name="bot")
+    (adopter.project_dir / "src" / "capabilities").mkdir(parents=True, exist_ok=True)
+    (adopter.project_dir / "src" / "roles").mkdir(parents=True, exist_ok=True)
+
+    assert adopter._detect_project_type() == "ai-project"
+    logger.info("[IMP:9][test][detect] _detect_project_type → ai-project (convention dirs) — OK")
+
+    found_imp9 = False
+    logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
+    for record in list(caplog.records):
+        if "[IMP:" in record.message:
+            imp_level = int(record.message.split("[IMP:")[1].split("]")[0])
+            if imp_level >= 7:
+                logger.info("%s", record.message)
+            if imp_level >= 9:
+                found_imp9 = True
+    logger.info("--- END LDD TRAJECTORY ---")
+    assert found_imp9
+
+
+# 🧪 TRAP[TEST] · SCENARIO · _detect_project_type: пакет @ai-project/ в package.json без yaml
+# · Scenario: backend-структура без конвенционных папок, НО package.json декларирует @ai-project/* →
+# ·   тип ai-project по маркеру пакета (самый специфичный сигнал)
+# · Last fail: пакетный маркер не учитывался — kernel-бот без conventionDirs угадывался как backend
+# · Remove if: эвристика типа adopt заменена явным параметром
+@ldd_trajectory
+def test_detect_project_type_package_marker_ai_project(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> None:
+    """_detect_project_type: package.json с @ai-project/ → 'ai-project' без конвенционных папок."""
+    caplog.set_level(logging.INFO)
+    adopter = _make_adopter(tmp_path, name="bot")
+    (adopter.project_dir / "package.json").write_text(
+        '{"dependencies": {"@ai-project/cap-llm": "^0.1.0", "zod": "^3.0.0"}}', encoding="utf-8"
+    )
+
+    assert adopter._detect_project_type() == "ai-project"
+    logger.info("[IMP:9][test][detect] _detect_project_type → ai-project (package.json marker) — OK")
+
+    found_imp9 = False
+    logger.info("--- LDD TRAJECTORY (IMP:7-10) ---")
+    for record in list(caplog.records):
+        if "[IMP:" in record.message:
+            imp_level = int(record.message.split("[IMP:")[1].split("]")[0])
+            if imp_level >= 7:
+                logger.info("%s", record.message)
+            if imp_level >= 9:
+                found_imp9 = True
+    logger.info("--- END LDD TRAJECTORY ---")
+    assert found_imp9
+
+
 # endregion Test 1-3: generate_minimal_ai_platform_yaml
 
 

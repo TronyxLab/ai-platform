@@ -560,3 +560,184 @@ def test_single_node_writes_fallback_node_targets(tmp_path, monkeypatch, caplog)
 
     mode = (nodes_dir / "node-exporter.json").stat().st_mode
     assert mode & _stat.S_IROTH, f"file_sd файл должен быть others-readable (umask-077-рендер давал 0600): {oct(mode)}"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# E2 (2026-09-01): enabled-семантика node.yaml в рендере таргетов
+# ═══════════════════════════════════════════════════════════════════
+
+
+def _make_node_tree_modules(
+    tmp_path: pathlib.Path,
+    ctx: str = "wired",
+    *,
+    modules_text: str,
+    with_placement: bool = True,
+) -> pathlib.Path:
+    """node.yaml с modules-секцией (enabled-семантика); placement (опц.) несёт postgres+status-page.
+
+    Контракт резолвера: placement.yaml в parent.parent/<ctx>/placement.yaml.
+    """
+    nc_root = tmp_path / "nc"
+    node_dir = nc_root / "data-1"
+    node_dir.mkdir(parents=True)
+    (node_dir / "node.yaml").write_text(
+        f"node:\n  name: data-1\ncontexts: [{{name: {ctx}}}]\nmodules:\n{modules_text}",
+        encoding="utf-8",
+    )
+    if not with_placement:
+        return node_dir / "node.yaml"
+    placement_path = nc_root / ctx / "placement.yaml"
+    placement_path.parent.mkdir()
+    placement_path.write_text(
+        f"context: {ctx}\nvpn_enforced: true\n"
+        f"nodes: [{{name: data-1, host: 10.8.0.11}}]\n"
+        f"modules:\n  postgres: {{node: data-1}}\n  status-page: {{node: data-1}}\n",
+        encoding="utf-8",
+    )
+    return node_dir / "node.yaml"
+
+
+def _targets_of(nodes_dir: pathlib.Path, file_name: str) -> list[object]:
+    """file_sd targets: список групп (prometheus []*targetgroup.Group) → плоские targets."""
+    import json as _json
+
+    data = _json.loads((nodes_dir / file_name).read_text())
+    if isinstance(data, list):
+        return [t for g in data for t in g.get("targets", [])]
+    return list(data.get("targets", []))
+
+
+# 🧪 TRAP[TEST] · SCENARIO · E2 · (a) модуль enabled:false → таргета НЕТ (single-node fallback)
+# · Scenario: node.yaml modules: status-page {enabled:false}; placement отсутствует →
+# ·   render_node_targets_if_placement пишет status-page.json с targets=[] (honesty REF-0010:
+# ·   up-серии нет → вечный DOWN-таргет E2 исчезает)
+# · Last fail: 2026-09-01 (E2, tronyx-vps) — static job status-page в prometheus.yml.tmpl
+# ·   рендерился безусловно → activeTargets содержал status-page при enabled:false
+# · Remove if: node targets снова станут статикой в prometheus.yml.tmpl
+def test_disabled_module_no_target_single_node(tmp_path, monkeypatch, caplog) -> None:
+    import logging as _logging
+
+    caplog.set_level(_logging.INFO)
+    node_yaml = _make_node_tree_modules(
+        tmp_path,
+        with_placement=False,
+        modules_text="  - name: status-page\n    enabled: false\n",
+    )
+    monkeypatch.setenv("NODE_YAML", str(node_yaml))
+    platform_root = tmp_path / "platform"
+    platform_root.mkdir()
+
+    mcr.render_node_targets_if_placement(platform_root)
+
+    nodes_dir = platform_root / "prometheus-targets" / "nodes"
+    assert nodes_dir.is_dir(), f"single-node обязан писать fallback targets: {nodes_dir}"
+    assert _targets_of(nodes_dir, "status-page.json") == [], (
+        "enabled:false модуль обязан давать targets=[] (E2: нет вечного DOWN-таргета)"
+    )
+    logger.info("[IMP:9][node_targets][assert] status-page enabled:false → targets=[] (single-node)")
+
+
+# 🧪 TRAP[TEST] · SCENARIO · E2 · (b) модуль enabled:true → таргет ЕСТЬ (single-node fallback)
+# · Scenario: node.yaml modules: status-page {enabled:true} → status-page.json → ["status-page:8080"]
+# ·   (Docker-DNS fallback, байт-паритет прежнему static target'у)
+# · Last fail: None (new for E2)
+# · Remove if: node targets снова станут статикой в prometheus.yml.tmpl
+def test_enabled_module_has_target_single_node(tmp_path, monkeypatch, caplog) -> None:
+    import logging as _logging
+
+    caplog.set_level(_logging.INFO)
+    node_yaml = _make_node_tree_modules(
+        tmp_path,
+        with_placement=False,
+        modules_text="  - name: status-page\n    enabled: true\n",
+    )
+    monkeypatch.setenv("NODE_YAML", str(node_yaml))
+    platform_root = tmp_path / "platform"
+    platform_root.mkdir()
+
+    mcr.render_node_targets_if_placement(platform_root)
+
+    nodes_dir = platform_root / "prometheus-targets" / "nodes"
+    assert _targets_of(nodes_dir, "status-page.json") == ["status-page:8080"], (
+        "enabled:true модуль обязан скрейпиться (Docker-DNS target, паритет static'у)"
+    )
+    logger.info("[IMP:9][node_targets][assert] status-page enabled:true → target status-page:8080")
+
+
+# 🧪 TRAP[TEST] · SCENARIO · E2 · (c) node.yaml недоступен → прежний fallback (no-op)
+# · Scenario: NODE_YAML env не задан → render_node_targets_if_placement no-op (0 файлов) —
+# ·   текущее поведение без изменений
+# · Last fail: None (new for E2; контракт render-цепочки: dev/no-context = skip)
+# · Remove if: NODE_YAML-резолв render-цепочки меняется
+def test_node_yaml_unavailable_noop(tmp_path, monkeypatch, caplog) -> None:
+    import logging as _logging
+
+    caplog.set_level(_logging.INFO)
+    monkeypatch.delenv("NODE_YAML", raising=False)
+    platform_root = tmp_path / "platform"
+    platform_root.mkdir()
+
+    mcr.render_node_targets_if_placement(platform_root)
+
+    assert not (platform_root / "prometheus-targets" / "nodes").exists(), (
+        "NODE_YAML недоступен → no-op: ни одного target-файла (dev/no-context контракт)"
+    )
+    assert "skip" in caplog.text, "no-op обязан логироваться как skip (IMP:8)"
+    logger.info("[IMP:9][node_targets][assert] NODE_YAML недоступен → no-op, 0 файлов")
+
+
+# 🧪 TRAP[TEST] · SCENARIO · E2 · (d) multi-node placement ∩ enabled (node.yaml — источник истины)
+# · Scenario: placement несёт postgres+status-page на data-1; node.yaml modules: postgres
+# ·   enabled:true, status-page enabled:false → status-page.json targets=[] (пересечение),
+# ·   postgres-exporter.json → 10.8.0.11:9187 (включён)
+# · Last fail: 2026-09-01 (E2) — multi-node путь рендерил placement-модули БЕЗ enabled-фильтра
+# · Remove if: node targets снова станут статикой в prometheus.yml.tmpl
+def test_multi_node_placement_respects_enabled(tmp_path, monkeypatch, caplog) -> None:
+    import logging as _logging
+
+    caplog.set_level(_logging.INFO)
+    node_yaml = _make_node_tree_modules(
+        tmp_path,
+        modules_text=("  - name: postgres\n    enabled: true\n  - name: status-page\n    enabled: false\n"),
+    )
+    monkeypatch.setenv("NODE_YAML", str(node_yaml))
+    platform_root = tmp_path / "platform"
+    platform_root.mkdir()
+
+    mcr.render_node_targets_if_placement(platform_root)
+
+    nodes_dir = platform_root / "prometheus-targets" / "nodes"
+    assert nodes_dir.is_dir(), f"multi-node обязан писать nodes/*.json: {nodes_dir}"
+    assert _targets_of(nodes_dir, "status-page.json") == [], (
+        "E2: enabled:false модуль обязан быть отфильтрован из placement-таргетов"
+    )
+    assert "10.8.0.11:9187" in [str(t) for t in _targets_of(nodes_dir, "postgres-exporter.json")], (
+        "E2: включённый модуль обязан остаться в таргетах (пересечение placement ∩ enabled)"
+    )
+    logger.info("[IMP:9][node_targets][assert] multi-node: placement ∩ enabled = {postgres}")
+
+
+# 🧪 TRAP[TEST] · SCENARIO · E2 · (e) modules key отсутствует (старый формат) → placement БЕЗ фильтра
+# · Scenario: node.yaml без modules-секции + placement → рендер placement как есть (прежнее
+# ·   поведение); status-page.json → 10.8.0.11:8080 — фильтр НЕ активен (enabled-данных нет)
+# · Last fail: None (new for E2; back-compat старого формата node.yaml)
+# · Remove if: node.yaml без modules станет невалидным конфигом
+def test_multi_node_no_modules_key_unfiltered(tmp_path, monkeypatch, caplog) -> None:
+    import logging as _logging
+
+    caplog.set_level(_logging.INFO)
+    node_yaml, _placement = _make_node_tree(tmp_path)  # node.yaml БЕЗ modules (легаси-формат)
+    monkeypatch.setenv("NODE_YAML", str(node_yaml))
+    platform_root = tmp_path / "platform"
+    platform_root.mkdir()
+
+    mcr.render_node_targets_if_placement(platform_root)
+
+    nodes_dir = platform_root / "prometheus-targets" / "nodes"
+    assert nodes_dir.is_dir(), f"multi-node обязан писать nodes/*.json: {nodes_dir}"
+    # placement несёт postgres+log-collector (фикстура _make_node_tree) — оба в таргетах
+    assert "10.8.0.11:9187" in [str(t) for t in _targets_of(nodes_dir, "postgres-exporter.json")], (
+        "modules key отсутствует → placement рендерится без enabled-фильтра (back-compat)"
+    )
+    logger.info("[IMP:9][node_targets][assert] no modules key → placement unfiltered (back-compat)")
