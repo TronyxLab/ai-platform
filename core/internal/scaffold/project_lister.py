@@ -14,7 +14,7 @@
 ##   - 0 inline python3 blocks — pure Python
 ##   - JSON output is valid JSON array
 ##   - find_project_node: проект в >1 node.yaml на РАЗНЫХ узлах → ProjectAmbiguityError
-##     (fail-fast, NODE=⟨node⟩); все совпадения на одном узле → первый (прежнее поведение)
+##     (fail-fast, NODE=\<node\>); все совпадения на одном узле → первый (прежнее поведение)
 ## @rationale Completes Strangler-Fig for project-list: removes 7 inline python3 blocks.
 ##            NodeYaml.get_projects() covers 90% of logic. Simplest wave — warm-up.
 ## @links    CALLED_BY: project-list.sh (facade)
@@ -32,7 +32,7 @@
 # ⚠️ TRAP[BUG] · 2026-09-01 · MED · Silent wrong-node resolution: проект в >1 node.yaml → молча
 # · первый host (test-node/localhost) вместо цели → SSH fail · Root: find_project_node возвращал
 # · первый match, узлы не сравнивались · Fix: ensure_same_node_or_raise — разные узлы →
-# · ProjectAmbiguityError (перечень кандидатов + NODE=⟨node⟩) · Prevention: тест 2 node.yaml разных узлов
+# · ProjectAmbiguityError (перечень кандидатов + NODE=<node>) · Prevention: тест 2 node.yaml разных узлов
 
 from __future__ import annotations
 
@@ -77,7 +77,7 @@ _DEFAULT_SSH_HOST = os.environ.get("DEFAULT_SSH_HOST", "")
 # region CLS_ProjectAmbiguityError
 ## @purpose  Проект найден в НЕСКОЛЬКИХ node.yaml на РАЗНЫХ узлах — молчаливый выбор первого
 ##           файла запрещён (silent wrong-node resolution → SSH/операция к неверному host).
-##           Пользователь обязан указать NODE=⟨node⟩. exit_code=1 (generic error,
+##           Пользователь обязан указать NODE=\<node\>. exit_code=1 (generic error,
 ##           контракт exit-кодов core/AGENTS.md: 1 = PlatformError base).
 ## @io       carries project + candidates [(node_name, host, node_yaml_path)] →
 ##           человекочитаемое многострочное сообщение (перечень + подсказка NODE)
@@ -97,7 +97,7 @@ class ProjectAmbiguityError(PlatformError):
         lines = [f"Project '{project}' found in multiple node.yaml files on DIFFERENT nodes:"]
         for node_name, host, ny_path in candidates:
             lines.append(f"  - node '{node_name}' (host={host or '<unknown>'}) → {ny_path}")
-        lines.append("Refusing to pick one silently. Specify the target node: NODE=⟨node⟩")
+        lines.append("Refusing to pick one silently. Specify the target node: NODE=<node>")
         super().__init__("\n".join(lines))
 
 
@@ -265,7 +265,7 @@ def list_projects_offline(
     all_projects: list[dict[str, object]] = []
 
     for ny in yaml_files:
-        # Derive node name from path: .../node-configs/⟨node⟩/node.yaml
+        # Derive node name from path: .../node-configs/<node>/node.yaml
         node_name = ny.parent.name
         node_host = ""
 
@@ -323,7 +323,7 @@ def list_projects_offline(
 ## @purpose  Find the node.yaml containing a specific project, and extract SSH host.
 ##           FIX (дизамбигуация): при совпадениях в НЕСКОЛЬКИХ node.yaml на РАЗНЫХ узлах —
 ##           НЕ брать первый молча: ensure_same_node_or_raise → ProjectAmbiguityError
-##           (fail-fast, перечень кандидатов + NODE=⟨node⟩). Все совпадения на ОДНОМ узле —
+##           (fail-fast, перечень кандидатов + NODE=\<node\>). Все совпадения на ОДНОМ узле —
 ##           использовать его (прежнее поведение).
 ## @param name           Project name to search for
 ## @param projects_root  Base directory
@@ -623,7 +623,7 @@ def main(argv: list[str] | None = None) -> int:
         if not args.project_name:
             logger.info("[IMP:10][list][main] FAIL-FAST: --status requires --name <project>")
             print("ERROR: --status requires --name <project>")
-            print("Usage: project-list.sh --status --name <project> [--node ⟨node⟩]")
+            print("Usage: project-list.sh --status --name <project> [--node <node>]")
             return 1
 
         try:

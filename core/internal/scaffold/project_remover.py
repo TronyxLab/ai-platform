@@ -31,7 +31,7 @@
 # ⚠️ TRAP[BUG] · 2026-09-01 · MED · Silent wrong-node resolution: проект в >1 node.yaml → молча
 # · первый (unregister + compose down на неверном узле) · Root: find_project_in_node_yaml возвращал
 # · первый match без сравнения узлов · Fix: ensure_same_node_or_raise (общий с project_lister) —
-# · разные узлы → ProjectAmbiguityError + NODE=⟨node⟩ · Prevention: тест 2 node.yaml разных узлов
+# · разные узлы → ProjectAmbiguityError + NODE=<node> · Prevention: тест 2 node.yaml разных узлов
 
 # 💼 TRAP[BUSINESS] · 2026-07-17 · HI · remove = disconnect, данные не удаляются автоматически
 # · Source: owner
@@ -97,7 +97,7 @@ _DEFAULT_PROJECTS_ROOT = os.environ.get(
 ##           Otherwise search all node-configs/*/node.yaml.
 ##           FIX (дизамбигуация, общее с project_lister): при совпадениях в НЕСКОЛЬКИХ node.yaml
 ##           на РАЗНЫХ узлах — НЕ брать первый молча (silent wrong-node unregister/compose-down):
-##           ensure_same_node_or_raise → ProjectAmbiguityError (fail-fast, NODE=⟨node⟩).
+##           ensure_same_node_or_raise → ProjectAmbiguityError (fail-fast, NODE=\<node\>).
 ##           Все совпадения на ОДНОМ узле → первый (прежнее поведение).
 ## @param name           Project name
 ## @param projects_root  Base directory
@@ -163,7 +163,7 @@ def find_project_in_node_yaml(
             # (rg "node\._data" core/ → 0). node.get("node.host", default="") — НЕ get_node_info().fqdn
             # (тот читает node.fqdn, а в образцах только node.host — не эквивалентно).
             node_host = node.get("node.host", default="")
-            node_configs_dir = str(ny.parent.parent)  # .../node-configs/⟨node⟩/node.yaml → .../node-configs/
+            node_configs_dir = str(ny.parent.parent)  # .../node-configs/<node>/node.yaml → .../node-configs/
 
             matches.append((ny.parent.name, node_host, str(ny)))
             if not found:

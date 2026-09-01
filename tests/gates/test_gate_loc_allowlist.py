@@ -59,7 +59,7 @@ ALLOWLIST: dict[str, int] = {
 TEST_ALLOWLIST: dict[str, int] = {
     "tests/e2e/test_chaos_resilience.py": 1900,  # T1-T12 chaos-сьют (DevPlan 165)
     "tests/unit/test_module_domains_static.py": 1750,  # 49 тестов × 7+ доменов
-    "tests/unit/test_state_machine.py": 1850,  # characterization state_machine (B9) + 017: dependency-satisfaction {done,warnings} и ssl-status контракт (+136, осознанно)
+    "tests/unit/test_state_machine.py": 2100,  # characterization state_machine (B9) + 017: dependency-satisfaction {done,warnings} и ssl-status контракт (+136) + self-heal φ1 rerun tests (F-019)
     "tests/unit/test_no_hardcoded_credentials.py": 1450,  # predeploy regex-sweep
     "tests/gates/test_gate_manifest_integrity.py": 1250,  # manifest trinity integrity
     # 1250 → 1300 (DevPlan 006 W4/W5, 2026-08-17): +run_subprocess_streaming-миграция

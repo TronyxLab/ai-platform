@@ -1,5 +1,5 @@
 # GREP_SUMMARY: python-deps, python3.14, deadsnakes, pip, apt, requirements, content-hash, idempotent, ensurepip, symlink, DI, runner-param, facts-param, CommandRunner, EnvironmentFacts, import-probe, canonical-path, F-019
-# STRUCTURE: ▶ ensure_python_deps → _resolve_requirements_path(canonical+F-019 self-heal) → _check_content_hash(hash+pyver) → ◇ match → _probe_critical_imports(boto3) ⚡ fail→reinstall / ok→no-op → _install_python314(PPA) → _install_requirements(/usr/local/bin/python3 -m pip) → ⎋ CLI
+# STRUCTURE: ▶ ensure_python_deps → resolve_requirements_path(canonical+F-019 self-heal) → check_content_hash(hash+pyver) → ◇ match → probe_critical_imports(boto3) ⚡ fail→reinstall / ok→no-op → _install_python314(PPA) → _install_requirements(/usr/local/bin/python3 -m pip) → ⎋ CLI
 
 # region MODULE_CONTRACT
 ## @purpose  Idempotent install of Python 3.14 (deadsnakes PPA) + platform Python
@@ -93,7 +93,7 @@ HASH_DIR = "/var/lib/platform/.bootstrap"
 HASH_FILE = os.path.join(HASH_DIR, "python-deps.hash")
 
 
-# region FUNC__resolve_requirements_path
+# region FUNC_resolve_requirements_path
 ## @purpose  Каноническое разрешение requirements.txt: ТОЛЬКО `core_dir`/requirements.txt
 ##           (канон доставки core на ноду). Самолечение F-019: если caller передал корень
 ##           платформы вместо core/ — WARN с точным диагнозом + канонический путь.
@@ -102,15 +102,15 @@ HASH_FILE = os.path.join(HASH_DIR, "python-deps.hash")
 ## @invariants
 ##   - Файл берётся ИЗ каталога core (канон доставки), никогда не из корня платформы
 ## @changes 2026-08-26 | Plan 012 T2 (F-019) — created
-def _resolve_requirements_path(core_dir: str) -> str:
-    # endregion FUNC__resolve_requirements_path
+def resolve_requirements_path(core_dir: str) -> str:
+    # endregion FUNC_resolve_requirements_path
     # abspath (лексическая нормализация «..») БЕЗ resolve(): resolve() трогает симлинки
     # (/var → /private/var на macOS) и ломает сравнение путей в тестах/логах.
     # ruff: ignore[PTH100] — намеренный lexical-normalize без симлинк-резолва
     core = pathlib.Path(os.path.abspath(core_dir))
     req = core / "requirements.txt"
     if req.is_file():
-        logger.info("[IMP:9][_resolve_requirements_path] Canonical requirements: %s", req)
+        logger.info("[IMP:9][resolve_requirements_path] Canonical requirements: %s", req)
         return str(req)
 
     # F-019 self-heal: caller передал КОРЕНЬ платформы (root без /core).
@@ -118,7 +118,7 @@ def _resolve_requirements_path(core_dir: str) -> str:
     healed = candidate_core / "requirements.txt"
     if healed.is_file():
         logger.warning(
-            "[IMP:9][_resolve_requirements_path] requirements.txt НЕ найден в %s, но найден в %s "
+            "[IMP:9][resolve_requirements_path] requirements.txt НЕ найден в %s, но найден в %s "
             "— в core_dir передан КОРЕНЬ платформы вместо core/ (инцидент F-019). "
             "Использую канонический путь; почини вызывающего (CORE_DIR должен указывать на core/).",
             req,
@@ -126,7 +126,7 @@ def _resolve_requirements_path(core_dir: str) -> str:
         )
         return str(healed)
 
-    logger.warning("[IMP:7][_resolve_requirements_path] requirements.txt not found at canonical path %s", req)
+    logger.warning("[IMP:7][resolve_requirements_path] requirements.txt not found at canonical path %s", req)
     return str(req)
 
 
@@ -148,7 +148,7 @@ def _probe_one(module: str, python_bin: str, *, runner: CommandRunner | None = N
     return rc == 0
 
 
-# region FUNC__probe_critical_imports
+# region FUNC_probe_critical_imports
 ## @purpose  Import-probe критичных модулей (boto3 минимум) в АКТИВНОМ интерпретаторе
 ##           платформы. Инвалидатор маркера: marker-match + проваленный probe → reinstall.
 ## @io       facts/runner DI → tuple[bool, list[str]] — (все ок, список проваленных модулей)
@@ -157,20 +157,20 @@ def _probe_one(module: str, python_bin: str, *, runner: CommandRunner | None = N
 ##            интерпретатор /usr/local/bin/python3 (3.14), а сам python_deps может исполняться
 ##            другим python — probe через целевой бинарь честнее in-process find_spec.
 ## @changes 2026-08-26 | Plan 012 T2 (F-019) — created
-def _probe_critical_imports(
+def probe_critical_imports(
     *,
     facts: EnvironmentFacts | None = None,
     runner: CommandRunner | None = None,
 ) -> tuple[bool, list[str]]:
-    # endregion FUNC__probe_critical_imports
+    # endregion FUNC_probe_critical_imports
     python_bin = _resolve_python_bin(facts=facts)
     failed: list[str] = []
     for module in CRITICAL_IMPORT_PROBES:
         if _probe_one(module, python_bin, runner=runner):
-            logger.info("[IMP:8][_probe_critical_imports] Import-probe ok: %s (%s)", module, python_bin)
+            logger.info("[IMP:8][probe_critical_imports] Import-probe ok: %s (%s)", module, python_bin)
         else:
             failed.append(module)
-            logger.warning("[IMP:7][_probe_critical_imports] Import-probe FAILED for %r via %s", module, python_bin)
+            logger.warning("[IMP:7][probe_critical_imports] Import-probe FAILED for %r via %s", module, python_bin)
     return (not failed, failed)
 
 
@@ -295,30 +295,30 @@ def _detect_ubuntu_version(os_release_path: str | None = None) -> str | None:
     return None
 
 
-# region FUNC__check_content_hash
+# region FUNC_check_content_hash
 ## @purpose  Compare (requirements.txt hash + python version) against saved marker.
 ##           Old-format markers (hash only, pre-3.14 era) are treated as mismatch →
 ##           forces reinstall, which is the correct transition for 3.12→3.14.
 ## @io       req_path → bool (True=matches, skip install)
 ## @complexity O(n) file read + hexdigest + version probe
 ## @changes 2026-08-13 | E1 (160): +runner/hash_file DI (threads to _compute_python_version/_load_saved_hash)
-def _check_content_hash(
+def check_content_hash(
     req_path: str,
     *,
     runner: CommandRunner | None = None,
     hash_file: str | None = None,
 ) -> bool:
-    # endregion FUNC__check_content_hash
+    # endregion FUNC_check_content_hash
     saved = _load_saved_hash(hash_file)
     if saved is None:
-        logger.info("[IMP:9][_check_content_hash] No saved marker — install required")
+        logger.info("[IMP:9][check_content_hash] No saved marker — install required")
         return False
 
     # New marker format: "<sha256>\n<python_version>". Old format = hash only → mismatch.
     parts = saved.split("\n")
     if len(parts) != _MARKER_PARTS or not parts[0] or not parts[1]:
         logger.info(
-            "[IMP:9][_check_content_hash] Old-format marker (no python version) — reinstall required (3.12→3.14)"
+            "[IMP:9][check_content_hash] Old-format marker (no python version) — reinstall required (3.12→3.14)"
         )
         return False
 
@@ -326,16 +326,16 @@ def _check_content_hash(
 
     current = _compute_content_hash(req_path)
     if current is None:
-        logger.info("[IMP:9][_check_content_hash] Cannot compute hash — install required")
+        logger.info("[IMP:9][check_content_hash] Cannot compute hash — install required")
         return False
 
     current_pyver = _compute_python_version(runner=runner)
     if saved_hash == current and saved_pyver == current_pyver:
-        logger.info("[IMP:9][_check_content_hash] Hash + python version match — skipping pip install")
+        logger.info("[IMP:9][check_content_hash] Hash + python version match — skipping pip install")
         return True
 
     logger.info(
-        "[IMP:9][_check_content_hash] Hash or python version mismatch (saved=%s, current=%s) — install required",
+        "[IMP:9][check_content_hash] Hash or python version mismatch (saved=%s, current=%s) — install required",
         saved_pyver,
         current_pyver,
     )
@@ -681,12 +681,12 @@ def ensure_python_deps(
     # endregion FUNC_ensure_python_deps
 
     # Plan 012 T2 (F-019): каноническое разрешение requirements (core-dir, не корень платформы)
-    req_path = _resolve_requirements_path(core_dir)
+    req_path = resolve_requirements_path(core_dir)
     logger.info("[IMP:9][ensure_python_deps] Start — core_dir=%s req=%s", core_dir, req_path)
 
     # ── Content-hash guard (requirements hash + python version + import-probe) ──
-    if _check_content_hash(req_path, runner=runner, hash_file=hash_file):
-        ok_probe, failed_modules = _probe_critical_imports(facts=facts, runner=runner)
+    if check_content_hash(req_path, runner=runner, hash_file=hash_file):
+        ok_probe, failed_modules = probe_critical_imports(facts=facts, runner=runner)
         if ok_probe:
             logger.info(
                 "[IMP:9][ensure_python_deps] Hash + python version match + import-probe OK — deps already up to date"

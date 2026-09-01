@@ -67,7 +67,7 @@ def _make_hash_dir(tmp_path) -> tuple[Path, Path]:
 
 # 🧪 TRAP[TEST] · Regression · Content hash + python version match → skip install
 # · Scenario: saved marker (hash + version) matches requirements.txt content and active
-#             interpreter version → _check_content_hash returns True → ensure_python_deps
+#             interpreter version → check_content_hash returns True → ensure_python_deps
 #             returns True immediately, _install_python314 NOT called
 # · Last fail: N/A (new test)
 # · Remove if: content-hash guard logic changes
@@ -302,7 +302,7 @@ def test_python_deps_python314_deadsnakes_install(caplog, tmp_path):
 # · Scenario B: marker hash matches but saved version (3.14.0) != current (3.14.1) → mismatch
 # · Scenario C: hash + version both match → skip (True)
 # · Last fail: N/A (new test)
-# · Remove if: marker format / _check_content_hash comparison logic changes
+# · Remove if: marker format / check_content_hash comparison logic changes
 @ldd_trajectory
 def test_python_deps_marker_hash_version(caplog, tmp_path):
     """## @purpose Marker format changed compatibly: old-format and version drift force reinstall."""
@@ -321,19 +321,19 @@ def test_python_deps_marker_hash_version(caplog, tmp_path):
 
     # ── Scenario A: old-format marker (hash only) → mismatch ──
     hash_file.write_text(expected_hash + "\n")
-    assert python_deps._check_content_hash(str(req_file), runner=runner, hash_file=str(hash_file)) is False, (
+    assert python_deps.check_content_hash(str(req_file), runner=runner, hash_file=str(hash_file)) is False, (
         "Old-format marker must force reinstall"
     )
 
     # ── Scenario B: hash matches but python version drifted → mismatch ──
     hash_file.write_text(f"{expected_hash}\n3.14.0\n")
-    assert python_deps._check_content_hash(str(req_file), runner=runner, hash_file=str(hash_file)) is False, (
+    assert python_deps.check_content_hash(str(req_file), runner=runner, hash_file=str(hash_file)) is False, (
         "Version drift must force reinstall"
     )
 
     # ── Scenario C: hash + version both match → skip ──
     hash_file.write_text(f"{expected_hash}\n3.14.1\n")
-    assert python_deps._check_content_hash(str(req_file), runner=runner, hash_file=str(hash_file)) is True, (
+    assert python_deps.check_content_hash(str(req_file), runner=runner, hash_file=str(hash_file)) is True, (
         "Matching hash + version must skip"
     )
 
@@ -404,7 +404,7 @@ def test_requirements_canonical_path(caplog, tmp_path):
     req_file = core_dir / "requirements.txt"
     req_file.write_text("requests==2.31.0\n")
 
-    resolved = python_deps._resolve_requirements_path(str(core_dir))
+    resolved = python_deps.resolve_requirements_path(str(core_dir))
     assert Path(resolved) == req_file, f"Canonical path expected, got {resolved}"
     logger.critical("[IMP:9][test] Canonical resolution from <core_dir>/requirements.txt OK")
 
@@ -416,7 +416,7 @@ def test_requirements_canonical_path(caplog, tmp_path):
     canon_req = canon_dir / "requirements.txt"
     canon_req.write_text("requests==2.31.0\n")
 
-    resolved_healed = python_deps._resolve_requirements_path(str(platform_root))
+    resolved_healed = python_deps.resolve_requirements_path(str(platform_root))
     assert Path(resolved_healed) == canon_req, f"Self-healed canonical path expected, got {resolved_healed}"
     warn_messages = [r.getMessage() for r in caplog.records if "F-019" in r.getMessage() or "КОРЕНЬ" in r.getMessage()]
     assert warn_messages, "Expected loud WARN about platform-root mis-call (F-019 diagnosis)"
@@ -454,7 +454,7 @@ def test_marker_invalidated_by_failed_import(caplog, tmp_path):
     # ── Case 1: probe FAILED (import boto3 → rc=1) → reinstall despite valid marker ──
     runner_fail = FakeCommandRunner(default=_proc(1))
     with (
-        patch.object(python_deps, "_probe_critical_imports", return_value=(False, ["boto3"])),
+        patch.object(python_deps, "probe_critical_imports", return_value=(False, ["boto3"])),
         patch.object(python_deps, "_install_python314", return_value=True) as mock_inst,
         patch.object(python_deps, "_install_requirements", return_value=True) as mock_reqs,
     ):
@@ -467,7 +467,7 @@ def test_marker_invalidated_by_failed_import(caplog, tmp_path):
 
     # ── Case 2: probe OK → идемпотентный no-op сохранён (AC c) ──
     with (
-        patch.object(python_deps, "_probe_critical_imports", return_value=(True, [])),
+        patch.object(python_deps, "probe_critical_imports", return_value=(True, [])),
         patch.object(python_deps, "_install_python314", return_value=True) as mock_inst_ok,
     ):
         result_ok = python_deps.ensure_python_deps(
@@ -484,22 +484,22 @@ def test_marker_invalidated_by_failed_import(caplog, tmp_path):
 # ═══════════════════════════════════════════════════════════════════
 # region FUNC_test_probe_critical_imports_contract
 # ═══════════════════════════════════════════════════════════════════
-# Контракт _probe_critical_imports, на который опирается φ1 self-heal rerun
+# Контракт probe_critical_imports, на который опирается φ1 self-heal rerun
 # (state_machine.phase_needs_rerun переиспользует ЭТОТ probe — список модулей НЕ дублируется).
 
 
 # 🧪 TRAP[TEST] · 2026-09-01 · Regression · F-019 — probe rc-контракт: rc==0 → ok, rc!=0 → fail
 # · Scenario: import-команда через runner → rc=0 → (True, []); rc=1 → (False, CRITICAL_IMPORT_PROBES)
 # · Last fail: N/A (контракт переиспользуемого probe для state_machine φ1)
-# · Remove if: _probe_critical_imports удалён/заменён другим механизмом
+# · Remove if: probe_critical_imports удалён/заменён другим механизмом
 @ldd_trajectory
 def test_probe_critical_imports_rc_contract(caplog):
     """## @purpose Контракт probe: rc==0 → ok, rc!=0 → fail (список модулей — CRITICAL_IMPORT_PROBES)."""
-    ok_ok, failed_ok = python_deps._probe_critical_imports(runner=FakeCommandRunner(default=_proc(0)))
+    ok_ok, failed_ok = python_deps.probe_critical_imports(runner=FakeCommandRunner(default=_proc(0)))
     assert ok_ok is True, "rc=0 → все модули импортируются"
     assert failed_ok == [], f"rc=0 → failed пуст, got {failed_ok}"
 
-    ok_fail, failed_fail = python_deps._probe_critical_imports(runner=FakeCommandRunner(default=_proc(1)))
+    ok_fail, failed_fail = python_deps.probe_critical_imports(runner=FakeCommandRunner(default=_proc(1)))
     assert ok_fail is False, "rc=1 → probe провален"
     assert failed_fail == list(python_deps.CRITICAL_IMPORT_PROBES), (
         f"rc=1 → failed = CRITICAL_IMPORT_PROBES, got {failed_fail}"
@@ -511,7 +511,7 @@ def test_probe_critical_imports_rc_contract(caplog):
 # · Scenario: runner raise FileNotFoundError (интерпретатор отсутствует) → (False, CRITICAL_IMPORT_PROBES),
 #             БЕЗ исключения (state_machine φ1 полагается на non-fatal: не роняет bootstrap)
 # · Last fail: N/A (голая нода до φ1 / /usr/local/bin/python3 удалён)
-# · Remove if: _probe_critical_imports удалён/заменён другим механизмом
+# · Remove if: probe_critical_imports удалён/заменён другим механизмом
 @ldd_trajectory
 def test_probe_critical_imports_interpreter_missing_non_fatal(caplog):
     """## @purpose Интерпретатор отсутствует → probe возвращает fail-кортеж, НЕ raise (non-fatal)."""
@@ -522,7 +522,7 @@ def test_probe_critical_imports_interpreter_missing_non_fatal(caplog):
         def run(self, cmd, **_kwargs):
             raise FileNotFoundError(cmd[0])
 
-    ok, failed = python_deps._probe_critical_imports(runner=_RaisingRunner())
+    ok, failed = python_deps.probe_critical_imports(runner=_RaisingRunner())
     assert ok is False, "отсутствующий интерпретатор → probe fail (не ok)"
     assert failed == list(python_deps.CRITICAL_IMPORT_PROBES), f"failed = CRITICAL_IMPORT_PROBES, got {failed}"
     logger.critical("[IMP:9][test] probe при отсутствующем интерпретаторе — non-fatal (False, %s)", failed)

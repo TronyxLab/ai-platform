@@ -1832,7 +1832,7 @@ def test_post_bootstrap_report_no_node_yaml(caplog, state_file, monkeypatch):
 # ═══════════════════════════════════════════════════════════════════
 # Живой инцидент: cold bootstrap φ1 → pip rc=0 + маркер python-deps записан, НО boto3
 # фактически отсутствовал; runs 2/3: φ1 done → phase-level SKIP → ensure_python_deps
-# (с _probe_critical_imports) не вызывался → probe недостижим → деградация персистила.
+# (с probe_critical_imports) не вызывался → probe недостижим → деградация персистила.
 # Фикс: phase_needs_rerun(φ1) = маркер-match + import-probe-fail → True (self-heal).
 
 
@@ -1910,7 +1910,7 @@ def test_phi1_needs_rerun_probe_fail(caplog, state_file, tmp_path):
     m.core_dir = str(core_dir)
     runner = FakeCommandRunner(default=_py_version_proc("3.14.5"))
 
-    with patch("core.internal.bootstrap.python_deps._probe_critical_imports", return_value=(False, ["boto3"])):
+    with patch("core.internal.bootstrap.python_deps.probe_critical_imports", return_value=(False, ["boto3"])):
         needs = m.phase_needs_rerun(
             sm.BootstrapPhase.SYSTEM_BOOTSTRAP,
             probe_runner=runner,
@@ -1935,7 +1935,7 @@ def test_phi1_needs_rerun_probe_ok(caplog, state_file, tmp_path):
     m.core_dir = str(core_dir)
     runner = FakeCommandRunner(default=_py_version_proc("3.14.5"))
 
-    with patch("core.internal.bootstrap.python_deps._probe_critical_imports", return_value=(True, [])):
+    with patch("core.internal.bootstrap.python_deps.probe_critical_imports", return_value=(True, [])):
         needs = m.phase_needs_rerun(
             sm.BootstrapPhase.SYSTEM_BOOTSTRAP,
             probe_runner=runner,
@@ -1984,7 +1984,7 @@ def test_phi1_needs_rerun_interpreter_absent_non_fatal(caplog, state_file, tmp_p
     probe_calls: list[object] = []
 
     with patch(
-        "core.internal.bootstrap.python_deps._probe_critical_imports",
+        "core.internal.bootstrap.python_deps.probe_critical_imports",
         side_effect=lambda **_: probe_calls.append(1) or (True, []),
     ):
         needs = m.phase_needs_rerun(
@@ -2017,7 +2017,7 @@ def test_phi1_needs_rerun_not_done_no_probe(caplog, state_file, tmp_path):
     probe_calls: list[object] = []
 
     with patch(
-        "core.internal.bootstrap.python_deps._probe_critical_imports",
+        "core.internal.bootstrap.python_deps.probe_critical_imports",
         side_effect=lambda **_: probe_calls.append(1) or (True, []),
     ):
         needs = m.phase_needs_rerun(

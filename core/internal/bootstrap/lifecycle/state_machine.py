@@ -76,7 +76,7 @@
 ##           2026-08-16 | DevPlan 177 W3.1 — _call_with_retry → делегат shared/retry.py;
 ##           _should_retry удалён (retryable-предикат + backoff — в shared.retry, 1:1 семантика)
 ##           2026-09-01 | F-019 self-heal — phase_needs_rerun(φ1): маркер python-deps совпадает,
-##           но критичный import-probe (boto3, переиспользует python_deps._probe_critical_imports)
+##           но критичный import-probe (boto3, переиспользует python_deps.probe_critical_imports)
 ##           падает → rerun → ensure_python_deps переустанавливает. Чинит живой инцидент
 ##           «pip rc=0 + маркер, boto3 отсутствует»: φ1 done → phase-level SKIP делал probe недостижимым.
 # endregion MODULE_CONTRACT
@@ -705,7 +705,7 @@ class StateMachine:
     ## @purpose — φ1 (system_bootstrap) self-heal rerun-предикат (F-019, live-node incident):
     ##            маркер python-deps (requirements-hash + pyver) совпадает, НО критичный
     ##            import-probe (boto3) падает → True → cli сбросит φ1 в pending → ensure
-    ##            переустановит deps (тот же _probe_critical_imports инвалидирует маркер).
+    ##            переустановит deps (тот же probe_critical_imports инвалидирует маркер).
     ##            Без этого φ1 done → phase-level SKIP делал probe недостижимым на повторных
     ##            bootstrap (деградация S3-cache/boto3 персистила через все прогоны).
     ## @io — ⇥ env: Mapping | None, probe_runner: CommandRunner | None, facts: EnvironmentFacts | None,
@@ -739,14 +739,14 @@ class StateMachine:
 
         source: Mapping[str, str] = os.environ if env is None else {**os.environ, **env}
         core_dir = self.core_dir or source.get("CORE_DIR", str(platform_remote_base() / "core"))
-        req_path = python_deps._resolve_requirements_path(core_dir)
+        req_path = python_deps.resolve_requirements_path(core_dir)
         facts_resolved = facts if facts is not None else self._facts
         if facts_resolved is None:
             facts_resolved = default_env_facts()
 
         # Маркер python-deps: отсутствует / requirements изменился / pyver дрейф → deps-состояние
         # неизвестно → перевыполнить φ1 (hash-miss семантика — аналог T9.3 для python-deps).
-        if not python_deps._check_content_hash(req_path, runner=probe_runner, hash_file=hash_file):
+        if not python_deps.check_content_hash(req_path, runner=probe_runner, hash_file=hash_file):
             logger.info(
                 "[IMP:9][phase_needs_rerun] φ1 done but python-deps marker mismatch — re-run required (self-heal F-019)"
             )
@@ -761,7 +761,7 @@ class StateMachine:
                 "[IMP:7][phase_needs_rerun] φ1 done + marker match but interpreter absent — probe skipped, no re-run"
             )
             return False
-        ok_probe, failed_modules = python_deps._probe_critical_imports(facts=facts_resolved, runner=probe_runner)
+        ok_probe, failed_modules = python_deps.probe_critical_imports(facts=facts_resolved, runner=probe_runner)
         if not ok_probe:
             logger.warning(
                 "[IMP:9][phase_needs_rerun] φ1 done + marker match + import-probe FAILED %s — re-run required "
