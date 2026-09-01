@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: context-deployer, project-deploy, ghcr-pull, build-fallback, healthcheck-gate, idempotent, node-yaml-projects, audit-log, DI, runner, facts
+# GREP_SUMMARY: context-deployer, project-deploy, ghcr-pull, build-fallback, healthcheck-gate, idempotent, node-yaml-projects, audit-log, DI, runner, facts, vhost-count-guard, exposed-projects
 # STRUCTURE: ▶ ┌node.yaml + context┐ → ◇ filter projects[context] → ○ for each: healthcheck? → ghcr pull → (fail?) build → up -d → ⊕ ProjectDeployResult │ ▶ deploy_context → _step_certs → _step_deploy_projects → _step_vhosts → _step_nginx_reload → _step_verify (D6) → ⎋ ContextDeployResult
 # region MODULE_CONTRACT
 ## @purpose  Deploy all projects of a context from node.yaml after bootstrap.
@@ -39,6 +39,10 @@
 ##                      node.yaml (цепочка --node → NODE_NAME → node.yaml); пусто → IMP:10
 ##                      fail-fast (standalone deploy-context терял node → vhost-рендер в
 ##                      некорректный путь)
+##           2026-09-01 | silent-0 success-путь: _step_vhosts — stdout tail скрипта ВСЕГДА
+##                      (IMP:8, transient «0 rendered» виден в bootstrap-логе) + guard
+##                      rendered_count (stdout-паттерн «N vhost(s) generated») < expected
+##                      (exposed-проекты node.yaml) → НЕ успех; overlay-файлы НЕ «rendered»
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -47,6 +51,7 @@ import argparse
 import logging
 import os
 import pathlib
+import re
 import subprocess
 import sys
 from collections.abc import Callable
@@ -970,7 +975,8 @@ def deploy_context(
     # ── Step 4: Render vhosts (typed-шаг D6) ──
     # Холодный bootstrap R6: rc-capture + retry + файл-верификация внутри шага; False →
     # агрегация в result.failed (деплой-фаза не отчитывается успехом при пустом overlay).
-    vhosts_ok = _step_vhosts(core_dir, node_name, runner=runner, facts=facts)
+    # silent-0 (2026-09-01): node_yaml пробрасывается в шаг для expected-счётчика (exposed).
+    vhosts_ok = _step_vhosts(core_dir, node_name, runner=runner, facts=facts, node_yaml=node_yaml)
 
     # ── Step 5: Reload nginx (typed-шаг D6, shared/docker_compose.nginx_reload) ──
     _step_nginx_reload(nginx_reload_fn=nginx_reload_fn)
@@ -1111,28 +1117,91 @@ def _tail_output(output: str | bytes, limit: int = 5) -> str:
 # endregion FUNC__tail_output
 
 
+# Паттерн stdout vhost_renderer.py (add-vhost.sh --render-all):
+#   print(f"  ✅ render-vhosts: {moved_count} vhost(s) generated")
+_RENDERED_COUNT_RE = re.compile(r"(\d+)\s+vhost\(s\)\s+generated")
+
+
+# region FUNC__parse_rendered_count
+## @purpose — Извлечь rendered-счётчик из stdout add-vhost.sh (паттерн «N vhost(s) generated»).
+##            ЕДИНСТВЕННЫЙ источник факта «rendered» — overlay-файлы НЕ считаются
+##            (silent-0 инцидент 2026-09-01: rc=0 + 0 rendered, guard «≥1 *.conf» обходился
+##            посторонним статическим nginx.conf в overlay).
+## @io — ⇥ stdout: str | None → ⎋ int | None (None = паттерн не найден / stdout пуст)
+## @complexity — O(L) где L = длина stdout
+## @invariants — Совпадает с форматом vhost_renderer.py render_all (цифра + «vhost(s) generated»)
+def _parse_rendered_count(stdout: str | None) -> int | None:
+    """Extract rendered vhost count from add-vhost.sh stdout ('N vhost(s) generated')."""
+    if not stdout:
+        return None
+    match = _RENDERED_COUNT_RE.search(stdout)
+    if match is None:
+        return None
+    return int(match.group(1))
+
+
+# endregion FUNC__parse_rendered_count
+
+
+# region FUNC__count_exposed_projects
+## @purpose — Ожидаемое число vhost = число exposed-проектов в node.yaml узла (expose:true).
+##            Читает node.yaml напрямую через канонический NodeYaml — НЕ дублирует логику
+##            vhost_renderer (там expose-фильтр по ai-platform.yaml проекта; здесь — грубая
+##            верхняя граница «exposed-проекты узла» из node.yaml, 3-5 строк).
+## @io — ⇥ node_yaml_path: str → ⎋ int | None (None = node.yaml недоступен/не парсится)
+## @complexity — O(P) где P = проектов в node.yaml
+## @invariants — node.yaml недоступен/malformed → None (guard откатывается на файл-верификацию)
+def _count_exposed_projects(node_yaml_path: str) -> int | None:
+    """Expected vhost count = node.yaml#projects with expose:true (None if node.yaml unreadable)."""
+    try:
+        node = NodeYaml(node_yaml_path)
+        projects = node.get_projects()
+    except (ConfigNotFoundError, ConfigParseError, ConfigValidationError, OSError) as e:
+        logger.warning(
+            "[IMP:7][_step_vhosts] Cannot read node.yaml for expected vhost count (%s): %s",
+            node_yaml_path,
+            e,
+        )
+        return None
+    exposed = sum(1 for p in projects if isinstance(p, dict) and p.get("expose"))
+    logger.info("[IMP:8][_step_vhosts] Expected vhost count (exposed projects in node.yaml): %d", exposed)
+    return exposed
+
+
+# endregion FUNC__count_exposed_projects
+
+
 # region FUNC__step_vhosts
 ## @purpose — Typed-шаг D6: рендер vhost-конфигов nginx. НЕуспех после retry пропагируется
 ##            в ContextDeployResult.failed (exit deploy-context ≠ 0) — «лог success без файлов
 ##            на диске» исключён (холодный bootstrap R6-инцидент: render-all ТИХО падал,
 ##            exposed-проекты оставались без vhost, converge R6 FAIL ×3).
+##            silent-0 (2026-09-01): rc=0 + «0 vhost(s) generated» при 3 exposed больше не
+##            маскируется — success-путь логирует stdout tail (IMP:8) и сверяет
+##            stdout-счётчик с expected (exposed в node.yaml); overlay-файлы НЕ «rendered».
 ## @io — ⇥ core_dir: str, node_name: str, runner: CommandRunner | None,
-##       facts: EnvironmentFacts | None → ⎋ bool (True = отрендерено ≥1 .conf; False = неуспех)
-## @complexity — O(V) где V = vhost'ов
+##       facts: EnvironmentFacts | None, node_yaml: str | None (None = derive
+##       {node_configs_dir}/⟨node⟩/node.yaml — renderer-механика) → ⎋ bool
+##       (True = отрендерено ожидаемое число vhost; False = неуспех)
+## @complexity — O(V + P) где V = vhost'ов, P = проектов node.yaml
 ## @invariants
 ##   - Вызывает add-vhost.sh --render-all --node (subprocess, 60s timeout), rc/stdout/stderr захватываются
 ##   - rc!=0 → ОДИН retry; второй rc!=0 → IMP:10 + return False
-##   - rc==0 → верификация ≥1 *.conf в {node_configs_dir}/⟨node⟩/overlays/nginx; пусто → тот же
-##     неуспех-путь (retry → IMP:10 + False)
+##   - rc==0 → stdout tail ВСЕГДА логируется (IMP:8); guard: rendered_count (stdout-паттерн
+##     «N vhost(s) generated») < expected (exposed-проекты node.yaml) → НЕ успех
+##     (retry → IMP:10 + False); паттерн не найден → fallback на старый guard (≥1 *.conf на диске)
+##   - Существующие .conf в overlay НЕ считаются «rendered» — только вывод скрипта
 ##   - Отсутствие скрипта → True (нечего рендерить — skip не является неуспехом)
 ## @changes 2026-08-13 | E1 (160): +runner/facts DI (subprocess + os.path.isfile)
 ## @changes 2026-08-31 | Холодный bootstrap: rc-capture + tail + retry + файл-верификация + bool-пропагация
+## @changes 2026-09-01 | silent-0 success-путь: stdout tail (IMP:8) + guard rendered < expected
 def _step_vhosts(
     core_dir: str,
     node_name: str,
     *,
     runner: CommandRunner | None = None,
     facts: EnvironmentFacts | None = None,
+    node_yaml: str | None = None,
 ) -> bool:
     """Vhost render step (D6) — generate nginx vhost configs; False after retry = phase failure."""
     vhost_script = os.path.join(core_dir, "internal", "scaffold", "add-vhost.sh")
@@ -1142,9 +1211,21 @@ def _step_vhosts(
         return True
     node_configs_dir = os.environ.get("NODE_CONFIGS_DIR", str(deploy_paths.node_configs_remote()))
     overlay_dir = pathlib.Path(node_configs_dir) / node_name / "overlays" / "nginx"
+    # Ожидаемый счётчик vhost = exposed-проекты node.yaml узла (renderer-механика:
+    # node_configs_dir/⟨node⟩/node.yaml; deploy_context пробрасывает реальный node_yaml CLI).
+    node_yaml_path = node_yaml or str(pathlib.Path(node_configs_dir) / node_name / "node.yaml")
     cmd = ["bash", vhost_script, "--render-all", "--node", node_name, "--node-configs-dir", node_configs_dir]
-    # rc-capture + stderr/stdout tail + ОДИН retry (транзиентный отказ холодного bootstrap);
-    # второй rc!=0 или rc==0 без файлов → IMP:10 + False — фаза НЕ отчитывается успехом.
+    # rc-capture + stdout tail (ВСЕГДА на success-пути, IMP:8) + ОДИН retry (транзиентный
+    # отказ холодного bootstrap); второй rc!=0 или rc==0 при rendered < expected → IMP:10 + False.
+    # ⚠️ TRAP[BUG] · 2026-09-01 · P1 · Silent-0 на success-пути: rc=0 + «0 vhost(s) generated»
+    # · Symptom: «Vhosts rendered (1 .conf)» при 3 exposed — 0 новых vhost (transient), guard
+    # ·   «≥1 *.conf» обходился посторонним статическим nginx.conf в overlay; ловится только
+    # ·   по следствию в converge R6
+    # · Root: success-путь выбрасывал вывод скрипта; rendered-факт брался из overlay-файлов,
+    # ·   не из stdout (тот же silent-success класс, что F-06, теперь на success-пути)
+    # · Fix: stdout tail ВСЕГДА (IMP:8) + guard rendered_count < expected (exposed в node.yaml);
+    # ·   паттерн не найден → fallback на файл-верификацию
+    # · Prevention: rendered-факт — из вывода скрипта, не из overlay-файлов
     last_err = ""
     for attempt in (1, 2):
         try:
@@ -1167,6 +1248,32 @@ def _step_vhosts(
                 last_err,
             )
             continue
+        # Success-путь: tail stdout/stderr ВСЕГДА — transient «0 rendered» виден в bootstrap-логе
+        # (одна-две строки: «render-vhosts: N vhost(s) generated» / «Output: <dir>»).
+        logger.info(
+            "[IMP:8][_step_vhosts] Vhost render rc=0 (attempt %d) stdout tail: %s",
+            attempt,
+            _tail_output(result.stdout or result.stderr, limit=4),
+        )
+        rendered_count = _parse_rendered_count(result.stdout)
+        expected = _count_exposed_projects(node_yaml_path)
+        # Guard: rendered (из stdout-паттерна) < expected → НЕ успех (retry ×1 → IMP:10 False).
+        # Overlay-файлы (в т.ч. посторонний статический nginx.conf) НЕ считаются «rendered».
+        if rendered_count is not None and expected is not None and rendered_count < expected:
+            last_err = (
+                f"rc=0 but rendered {rendered_count}/{expected} vhost(s) "
+                f"(expected {expected} exposed projects in node.yaml)"
+            )
+            logger.warning("[IMP:7][_step_vhosts] Vhost render attempt %d: %s", attempt, last_err)
+            continue
+        if rendered_count is not None:
+            logger.info(
+                "[IMP:9][_step_vhosts] Vhosts rendered for node=%s (%d vhost(s) generated)",
+                node_name,
+                rendered_count,
+            )
+            return True
+        # Паттерн «N vhost(s) generated» не найден в stdout → fallback на старый guard: ≥1 *.conf
         rendered = list(overlay_dir.glob("*.conf"))
         if rendered:
             logger.info(

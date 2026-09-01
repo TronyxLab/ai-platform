@@ -1,5 +1,5 @@
 """
-# GREP_SUMMARY: test_context_deployer, project-deploy, ghcr-pull, build-fallback, idempotent, healthcheck-gate, audit-log, DI, runner, facts, fn-injection, main-node-resolution, node-name
+# GREP_SUMMARY: test_context_deployer, project-deploy, ghcr-pull, build-fallback, idempotent, healthcheck-gate, audit-log, DI, runner, facts, fn-injection, main-node-resolution, node-name, vhost-count-guard, silent-zero, exposed-projects
 # STRUCTURE: ▶ tmp_path + node.yaml + DI (deploy_projects_fn/certs_fn/health_fn/orchestrator_deploy_fn) → ◇ filter projects → ◇ ghcr pull → ◇ build fallback → ◇ idempotent skip → ⎋ LDD trajectory
 # region MODULE_CONTRACT
 ## @purpose  Unit tests for context_deployer.py — context project deploy orchestration.
@@ -668,23 +668,25 @@ def test_deploy_gate_uses_single_shot_by_default(caplog, tmp_path):
 
 
 class _VhostRunner:
-    """Scripted CommandRunner для _step_vhosts: rc-последовательность + stderr.
+    """Scripted CommandRunner для _step_vhosts: rc-последовательность + stdout/stderr.
 
     ## @purpose — DI-канал runner (W4b): _step_vhosts вызывает runner.run(cmd, timeout=60,
     ##            check=False) — fake возвращает CompletedProcess по заданной rc-последовательности.
-    ## @io — ⇥ rc_sequence: list[int], stderr: str → ⎋ CompletedProcess (scripted)
+    ##            stdout — вывод add-vhost.sh (паттерн «N vhost(s) generated» для count-guard).
+    ## @io — ⇥ rc_sequence: list[int], stderr: str, stdout: str → ⎋ CompletedProcess (scripted)
     ## @complexity — O(1)
     """
 
-    def __init__(self, rc_sequence: list[int], stderr: str = "") -> None:
+    def __init__(self, rc_sequence: list[int], stderr: str = "", stdout: str = "") -> None:
         self.calls = 0
         self._rcs = list(rc_sequence)
         self._stderr = stderr
+        self._stdout = stdout
 
     def run(self, cmd, *, timeout=60, check=False, non_fatal=False, fatal_rc=()):  # ruff: ignore[ARG002]
         self.calls += 1
         rc = self._rcs.pop(0) if self._rcs else 0
-        return subprocess.CompletedProcess(list(cmd), rc, "", self._stderr)
+        return subprocess.CompletedProcess(list(cmd), rc, self._stdout, self._stderr)
 
 
 class _VhostFacts:
@@ -700,6 +702,26 @@ class _VhostFacts:
 
     def path_isfile(self, path) -> bool:
         return self._script_exists and str(path).endswith("internal/scaffold/add-vhost.sh")
+
+
+def _write_node_yaml_with_exposed(tmp_path, *, exposed: int, total: int) -> str:
+    """Create node-configs/⟨node⟩/node.yaml (renderer-механика) с exposed-проектами.
+
+    ## @purpose — Фикстура silent-0 тестов: node.yaml в {NODE_CONFIGS_DIR}/⟨node⟩/node.yaml
+    ##            (путь, который _step_vhosts деривирует при node_yaml=None); первые `exposed`
+    ##            проектов имеют expose:true, остальные — expose:false.
+    ## @io — ⇥ tmp_path, exposed: int, total: int → ⎋ str (путь к node.yaml)
+    ## @complexity — O(total)
+    """
+    yaml_path = tmp_path / "node-configs" / "test-node" / "node.yaml"
+    yaml_path.parent.mkdir(parents=True, exist_ok=True)
+    lines = ["node:", "  name: test-node", "projects:"]
+    for i in range(total):
+        lines.append(f"  - name: proj{i}")
+        lines.append(f"    domain: proj{i}.example.com")
+        lines.append(f"    expose: {'true' if i < exposed else 'false'}")
+    yaml_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return str(yaml_path)
 
 
 # region FUNC_test_step_vhosts_rc_fail_twice_returns_false
@@ -820,6 +842,144 @@ def test_step_vhosts_rc_ok_with_files_returns_true(caplog, tmp_path, monkeypatch
 
 
 # endregion FUNC_test_step_vhosts_rc_ok_with_files_returns_true
+
+
+# region FUNC_test_step_vhosts_stdout_matches_expected_true
+## @purpose — silent-0 фикс (2026-09-01): success-путь — stdout «3 vhost(s) generated» при
+##            expected=3 (3 exposed в node.yaml) → True; успех по счётчику скрипта, НЕ по
+##            overlay-файлам. Ожидаемый счётчик деривируется из {NODE_CONFIGS_DIR}/⟨node⟩/node.yaml.
+## @io — ⇥ caplog, tmp_path, monkeypatch → ⎋ None (asserts True + 1 вызов + IMP:9 с числом)
+## @complexity — O(1)
+## @invariants — rendered_count (stdout) >= expected → success, retry не нужен
+# 🧪 TRAP[TEST] · Regression · _step_vhosts rc=0 + stdout «3 vhost(s) generated» == expected → True
+# · Scenario: node.yaml 3 exposed; add-vhost.sh rc=0, stdout «render-vhosts: 3 vhost(s) generated»
+# ·   → True, 1 вызов, IMP:9 с числом из stdout (не из overlay-файлов)
+# · Last fail: 2026-09-01 холодный bootstrap — «Vhosts rendered (1 .conf)» при 3 exposed
+# ·   (0 новых vhost, rc=0; guard «≥1 *.conf» обходился посторонним nginx.conf в overlay)
+# · Remove if: success-критерий vhost-рендера перестаёт опираться на stdout-счётчик
+def test_step_vhosts_stdout_matches_expected_true(caplog, tmp_path, monkeypatch) -> None:
+    """_step_vhosts: stdout 3/3 vhost(s) == expected (3 exposed) → True, без retry."""
+    monkeypatch.setenv("NODE_CONFIGS_DIR", str(tmp_path / "node-configs"))
+    caplog.set_level(logging.DEBUG)
+    _write_node_yaml_with_exposed(tmp_path, exposed=3, total=3)
+    runner = _VhostRunner(
+        [0],
+        stdout=(
+            "  ✅ render-vhosts: 3 vhost(s) generated\n"
+            "     Node: test-node\n"
+            "     Output: /x/node-configs/test-node/overlays/nginx\n"
+        ),
+    )
+    ok = cd._step_vhosts(str(tmp_path / "core"), "test-node", runner=runner, facts=_VhostFacts())
+    assert ok is True
+    assert runner.calls == 1, "rendered == expected → без retry"
+    assert any("3 vhost(s) generated" in r.message for r in caplog.records), (
+        "IMP:9 success-лог обязан нести stdout-счётчик (3 vhost(s) generated)"
+    )
+    for record in list(caplog.records):
+        if "[IMP:" in record.message:
+            logger.info("%s", record.message)
+    logger.info("[IMP:9][test] _step_vhosts stdout 3/3 == expected → True — count-guard OK")
+
+
+# endregion FUNC_test_step_vhosts_stdout_matches_expected_true
+
+
+# region FUNC_test_step_vhosts_stdout_zero_below_expected_false
+## @purpose — silent-0 фикс (2026-09-01): rc=0 + stdout «0 vhost(s) generated» при expected=3
+##            → НЕ успех (retry ×1 → IMP:10 + False). Посторонний nginx.conf в overlay НЕ
+##            маскирует 0 — «rendered» считается ТОЛЬКО по выводу скрипта.
+## @io — ⇥ caplog, tmp_path, monkeypatch → ⎋ None (asserts False + 2 вызова + IMP:10)
+## @complexity — O(1)
+## @invariants — rendered (stdout) < expected → retry; второй такой же → IMP:10 + False
+# 🧪 TRAP[TEST] · Regression · _step_vhosts rc=0 + stdout «0 vhost(s) generated» < expected 3 → False
+# · Scenario: node.yaml 3 exposed; rc=0 дважды, stdout «0 vhost(s) generated» → False после
+# ·   retry (2 вызова) + IMP:10 — даже при постороннем статическом nginx.conf в overlay
+# · Last fail: 2026-09-01 холодный bootstrap — «Vhosts rendered (1 .conf)» при 0 новых vhost
+# · Remove if: stdout-счётчик guard убирается
+def test_step_vhosts_stdout_zero_below_expected_false(caplog, tmp_path, monkeypatch) -> None:
+    """_step_vhosts: rc=0 + stdout 0 < expected 3 → False после retry (overlay не маскирует)."""
+    monkeypatch.setenv("NODE_CONFIGS_DIR", str(tmp_path / "node-configs"))
+    caplog.set_level(logging.DEBUG)
+    _write_node_yaml_with_exposed(tmp_path, exposed=3, total=3)
+    # Посторонний статический nginx.conf в overlay — НЕ «rendered» (guard по stdout-счётчику)
+    overlay = tmp_path / "node-configs" / "test-node" / "overlays" / "nginx"
+    overlay.mkdir(parents=True, exist_ok=True)
+    (overlay / "nginx.conf").write_text("# static nginx config, not a rendered vhost\n", encoding="utf-8")
+    runner = _VhostRunner([0, 0], stdout="  ✅ render-vhosts: 0 vhost(s) generated\n")
+    ok = cd._step_vhosts(str(tmp_path / "core"), "test-node", runner=runner, facts=_VhostFacts())
+    assert ok is False
+    assert runner.calls == 2, "rendered(0) < expected(3) → retry тоже не успех"
+    assert any("[IMP:10]" in r.message for r in caplog.records), "после retry обязан быть IMP:10"
+    for record in list(caplog.records):
+        if "[IMP:" in record.message:
+            logger.info("%s", record.message)
+    logger.info("[IMP:9][test] _step_vhosts stdout 0/3 → False после retry — guard OK")
+
+
+# endregion FUNC_test_step_vhosts_stdout_zero_below_expected_false
+
+
+# region FUNC_test_step_vhosts_no_pattern_files_fallback_true
+## @purpose — silent-0 фикс (2026-09-01): паттерн «N vhost(s) generated» отсутствует в stdout
+##            → fallback на старый guard: ≥1 *.conf на диске → True (обратная совместимость
+##            со скриптами/обёртками, не печатающими счётчик).
+## @io — ⇥ caplog, tmp_path, monkeypatch → ⎋ None (asserts True + 1 вызов)
+## @complexity — O(1)
+## @invariants — stdout без паттерна + файлы на диске есть → успех по файл-guard'у
+# 🧪 TRAP[TEST] · Regression · _step_vhosts rc=0 без паттерна + файлы на диске → True (fallback)
+# · Scenario: stdout «nginx config test failed» (без счётчика), overlay содержит webapp.conf
+# ·   → True, 1 вызов (fallback-семантика сохранена)
+# · Last fail: N/A (new test — fallback-путь count-guard'а)
+# · Remove if: файл-fallback убирается
+def test_step_vhosts_no_pattern_files_fallback_true(caplog, tmp_path, monkeypatch) -> None:
+    """_step_vhosts: stdout без «N vhost(s) generated» + файлы на диске → True (fallback)."""
+    monkeypatch.setenv("NODE_CONFIGS_DIR", str(tmp_path / "node-configs"))
+    caplog.set_level(logging.DEBUG)
+    overlay = tmp_path / "node-configs" / "test-node" / "overlays" / "nginx"
+    overlay.mkdir(parents=True)
+    (overlay / "webapp.example.com.conf").write_text("# GENERATED by vhost_renderer.py\n", encoding="utf-8")
+    runner = _VhostRunner([0], stdout="nginx: configuration file /etc/nginx/nginx.conf test failed\n")
+    ok = cd._step_vhosts(str(tmp_path / "core"), "test-node", runner=runner, facts=_VhostFacts())
+    assert ok is True
+    assert runner.calls == 1, "fallback-путь — без retry"
+    for record in list(caplog.records):
+        if "[IMP:" in record.message:
+            logger.info("%s", record.message)
+    logger.info("[IMP:9][test] _step_vhosts без паттерна + файлы → True (fallback)")
+
+
+# endregion FUNC_test_step_vhosts_no_pattern_files_fallback_true
+
+
+# region FUNC_test_step_vhosts_no_exposed_projects_true
+## @purpose — silent-0 фикс (2026-09-01): expected=0 (нет exposed-проектов в node.yaml) +
+##            stdout «0 vhost(s) generated» → True (0 < 0 не выполняется — нечего рендерить,
+##            не является неуспехом).
+## @io — ⇥ caplog, tmp_path, monkeypatch → ⎋ None (asserts True + 1 вызов)
+## @complexity — O(1)
+## @invariants — expected=0 → любой rendered >= 0 успех
+# 🧪 TRAP[TEST] · Regression · _step_vhosts expected=0 (нет exposed) + stdout 0 → True
+# · Scenario: node.yaml 3 проекта БЕЗ expose:true → expected=0; rc=0, stdout
+# ·   «0 vhost(s) generated» → True (нечего рендерить — не неуспех)
+# · Last fail: N/A (new test — edge expected=0)
+# · Remove if: expected-семантика count-guard'а меняется
+def test_step_vhosts_no_exposed_projects_true(caplog, tmp_path, monkeypatch) -> None:
+    """_step_vhosts: expected=0 (нет exposed) + stdout 0 → True (нечего рендерить)."""
+    monkeypatch.setenv("NODE_CONFIGS_DIR", str(tmp_path / "node-configs"))
+    caplog.set_level(logging.DEBUG)
+    _write_node_yaml_with_exposed(tmp_path, exposed=0, total=3)
+    runner = _VhostRunner([0], stdout="  ✅ render-vhosts: 0 vhost(s) generated\n")
+    ok = cd._step_vhosts(str(tmp_path / "core"), "test-node", runner=runner, facts=_VhostFacts())
+    assert ok is True
+    assert runner.calls == 1, "expected=0 → успех без retry"
+    for record in list(caplog.records):
+        if "[IMP:" in record.message:
+            logger.info("%s", record.message)
+    logger.info("[IMP:9][test] _step_vhosts expected=0 + stdout 0 → True")
+
+
+# endregion FUNC_test_step_vhosts_no_exposed_projects_true
 
 
 # region FUNC_test_step_vhosts_script_missing_returns_true
