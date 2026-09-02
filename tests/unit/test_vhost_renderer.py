@@ -25,6 +25,7 @@ from core.internal.scaffold.vhost_renderer import (
     DuplicateDomainError,
     ProjectEntry,
     VhostFile,
+    _project_expose_enabled,
     check_duplicate_domains,
     compute_body_hash,
     generate_vhost_body,
@@ -1218,3 +1219,117 @@ def test_render_all_expose_true_generates_vhost(
     overlay_dir = node_dir / "overlays" / "nginx"
     assert (overlay_dir / "open.example.com.conf").exists(), "vhost для expose=true не сгенерирован"
     logger.info("[IMP:9][test][F-034] expose=true → vhost generated PASS")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# F-01 (приёмо-сдаточная валидация): GENERATED-STUB ai-platform.yaml
+# = «конфиг отсутствует» → expose True; F-034 (real expose:false) не сломан
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestProjectExposeEnabled:
+    """F-01: stub ai-platform.yaml (converge R3) = «конфиг отсутствует» → True (node.yaml авторитетен)."""
+
+    # 🧪 TRAP[TEST] · REGRESSION · F-01 · stub ai-platform.yaml → expose True (return True)
+    # · Scenario: холодный bootstrap — converge создал GENERATED-STUB, проект ещё awaiting_deploy
+    # · Expect: _project_expose_enabled → True (vhost рендерится; node.yaml авторитетен для expose)
+    # · Last fail: F-01 — stub парсился как валидный dict без expose → False → 0 vhost'ов →
+    #   _step_vhosts strict-guard FAIL (exit 10) → проекты не доставлялись (курица-яйцо)
+    # · Remove if: stub-семантика перенесена в другой слой (expose-фильтр)
+
+    def test_stub_config_returns_true(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        """F-01 (a): GENERATED-STUB ai-platform.yaml → True (конфиг отсутствует семантически)."""
+        caplog.set_level(0)
+        proj_dir = tmp_path / "ctx-a" / "app-stub"
+        proj_dir.mkdir(parents=True)
+        (proj_dir / "ai-platform.yaml").write_text(
+            "# GENERATED-STUB by converge — overwritten by CI deliver\n"
+            "# This is a placeholder created during node convergence.\n"
+            "project: app-stub\nservice: app-stub\n",
+            encoding="utf-8",
+        )
+        entry = ProjectEntry(name="app-stub", context="ctx-a", domain="stub.example.com")
+
+        result = _project_expose_enabled(entry, projects_base_dir=str(tmp_path))
+
+        assert result is True, "F-01 FAIL: stub ai-platform.yaml должен трактоваться как конфиг отсутствует"
+        assert any("GENERATED-STUB" in record.message for record in caplog.records), (
+            "F-01 FAIL: WARN-лог о stub отсутствует (траектория не видна)"
+        )
+        logger.info("[IMP:9][test][F-01] stub ai-platform.yaml → expose True PASS")
+
+    # 🧪 TRAP[TEST] · REGRESSION · F-01 · stub ai-platform.yaml → render-all генерирует vhost
+    # · Scenario: render_all (batch) на холодном bootstrap — exposed-проекты в node.yaml,
+    #   их ai-platform.yaml ещё GENERATED-STUB (awaiting CI deliver)
+    # · Expect: rendered_count == 1, <fqdn>.conf существует (render_vhost вызван — курица-яйцо закрыта)
+    # · Last fail: F-01 — render-all давал 0 vhost'ов → _step_vhosts strict-guard FAIL (exit 10)
+    # · Remove if: stub-семантика перенесена в другой слой (expose-фильтр)
+
+    @mock.patch("core.internal.scaffold.vhost_renderer.nginx_t_harness")
+    def test_render_all_stub_config_generates_vhost(
+        self,
+        mock_harness: mock.MagicMock,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """F-01 (a): render_all со stub ai-platform.yaml → vhost генерируется (render_vhost вызван)."""
+        caplog.set_level(0)
+        mock_harness.return_value = True
+        monkeypatch.setenv("PROJECTS_BASE", str(tmp_path / "projects"))
+        projects_base = Path(os.environ["PROJECTS_BASE"])
+        proj_dir = projects_base / "ctx-a" / "app-stub"
+        proj_dir.mkdir(parents=True)
+        (proj_dir / "ai-platform.yaml").write_text(
+            "# GENERATED-STUB by converge — overwritten by CI deliver\n"
+            "# This is a placeholder created during node convergence.\n"
+            "project: app-stub\nservice: app-stub\n",
+            encoding="utf-8",
+        )
+
+        node_configs = tmp_path / "node-configs"
+        node_dir = node_configs / "test-node"
+        node_dir.mkdir(parents=True)
+        node_yaml_path = node_dir / "node.yaml"
+        node_yaml_path.write_text(
+            "projects:\n  - name: app-stub\n    context: ctx-a\n    domain: stub.example.com\n",
+            encoding="utf-8",
+        )
+
+        result = render_all(
+            node_yaml_path=str(node_yaml_path),
+            node_configs_dir=str(node_configs),
+            node="test-node",
+            platform_domain="example.com",
+        )
+
+        assert result.rendered_count == 1, (
+            f"F-01 FAIL: stub-проект должен рендериться (batch), got {result.rendered_count}"
+        )
+        vhost = node_dir / "overlays" / "nginx" / "stub.example.com.conf"
+        assert vhost.exists(), "F-01 FAIL: vhost для stub-проекта не сгенерирован (render_vhost не вызван)"
+        logger.info("[IMP:9][test][F-01] render_all + stub → vhost generated PASS")
+
+    # 🧪 TRAP[TEST] · REGRESSION · F-01 guard · реальный (non-stub) expose:false → False
+    # · Scenario: реальный ai-platform.yaml проекта с expose:false (конфиг доставлен CI deliver)
+    # · Expect: _project_expose_enabled → False (vhost НЕ рендерится — F-034-фильтр сохранён)
+    # · Last fail: F-01 — если бы фикс трактовал expose:false как stub (R5-негатив)
+    # · Remove if: expose-фильтр перенесён в другой слой
+
+    def test_real_config_expose_false_returns_false(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        """F-01 (b): реальный конфиг expose:false → False (F-034 не сломан)."""
+        caplog.set_level(0)
+        proj_dir = tmp_path / "ctx-a" / "app-hidden"
+        proj_dir.mkdir(parents=True)
+        (proj_dir / "ai-platform.yaml").write_text(
+            "name: app-hidden\nneeds:\n  domain: hidden.example.com\nexpose: false\n", encoding="utf-8"
+        )
+        entry = ProjectEntry(name="app-hidden", context="ctx-a", domain="hidden.example.com")
+
+        result = _project_expose_enabled(entry, projects_base_dir=str(tmp_path))
+
+        assert result is False, "F-034 FAIL: реальный expose:false конфиг должен давать False"
+        assert any("expose=false" in record.message for record in caplog.records), (
+            "F-034 FAIL: лог expose=false отсутствует (F-034-фильтр не сработал)"
+        )
+        logger.info("[IMP:9][test][F-01] реальный expose:false → False (F-034 сохранён) PASS")

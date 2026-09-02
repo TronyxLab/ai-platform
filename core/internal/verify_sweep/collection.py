@@ -373,6 +373,16 @@ def _resolve_node_host(node: str, node_yaml_path: str) -> str:
 ##   - Тот же контракт, что vhost_renderer._project_expose_enabled (единый expose-смысл)
 ##   - project dir: `{projects_base}/{context}/{name}` (fallback name-only)
 ##   - ai-platform.yaml отсутствует → True (не блокировать развёрнутые домены)
+# 📝 TRAP[DEBT] · 2026-09-02 · LO · verify_sweep._endpoint_expose_enabled не трактует
+# GENERATED-STUB ai-platform.yaml (converge R3) как «конфиг отсутствует» — в отличие от
+# vhost_renderer._project_expose_enabled (F-01 fix 2026-09-02)
+# · Observed: stub парсится как валидный dict без expose → get_expose → False → endpoint исключается
+# · Suspected: тот же класс бага F-01 (холодный bootstrap, проект awaiting_deploy); e2e-verify против
+#   частично забутстрапленной ноды даст ложное исключение exposed-домена
+# · Impact: на холодном bootstrap sweep пропустит exposed-проекты (ложный «не exposed»); деградация
+#   верификации после F-01-фикса vhost-пути (expose-смысл двух путей расходится)
+# · When: F-01 fix (vhost_renderer stub→True); verify_sweep остался со старой семантикой
+# · Rev: следующий трогающий verify_sweep фикс — применить ту же stub-детекцию (is_stub_ai_platform_yaml)
 def _endpoint_expose_enabled(entry: ProjectEntry) -> bool:
     """Return True if project ai-platform.yaml has expose:true (or config absent — keep)."""
     from core.internal.shared import project_yaml as shared_project_yaml

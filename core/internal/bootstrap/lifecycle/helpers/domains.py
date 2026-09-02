@@ -361,3 +361,24 @@ def _certs_converged_on_disk(core_dir: str, node_yaml: str) -> bool | None:
 
 
 # endregion FUNC__certs_converged_on_disk
+
+
+# region FUNC_ssl_certs_converged_on_disk
+## @purpose  Публичная обёртка над _certs_converged_on_disk для НЕ-мутирующего preview-режима
+##           (converge R-ssl dry_run/report_only): конвергенция проверяется по диску БЕЗ вызова
+##           ssl_provision_via_orchestrator — mode-контракт reconciler «--dry-run/--report-only:
+##           no mutations» (F-02, cache-drill C2). Вся логика остаётся в приватной функции
+##           (DRY — одна точка истины по on-disk конвергенции).
+## @io       ⇥ core_dir: str, node_yaml: str → ⎋ bool | None
+##              (True = все серты на диске / доменов нет; False = есть домены без сертов;
+##               None = домены неопределимы — extract_domains_for_context недоступен)
+## @complexity O(D) — D = число доменов (делегирование)
+## @invariants
+##   - Делегирует в _certs_converged_on_disk (единый канон on-disk проверки)
+##   - Сам вызов НЕ мутирует — только isfile-проверки
+def ssl_certs_converged_on_disk(core_dir: str, node_yaml: str) -> bool | None:
+    """Public non-mutating convergence check — preview mode (converge R-ssl dry-run/report-only)."""
+    return _certs_converged_on_disk(core_dir, node_yaml)
+
+
+# endregion FUNC_ssl_certs_converged_on_disk

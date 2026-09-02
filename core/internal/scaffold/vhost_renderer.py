@@ -60,6 +60,7 @@ from core.internal.shared.exceptions import (
     PlatformFatalError,
 )
 from core.internal.shared.node_yaml import NodeYaml, ProjectEntry
+from core.internal.shared.stub_detection import is_stub_ai_platform_yaml
 
 logger = logging.getLogger(__name__)
 
@@ -251,18 +252,46 @@ def read_node_yaml_projects(node_yaml_path: str) -> list[ProjectEntry]:
 ##           для проектов с expose:true в ai-platform.yaml. Root-cause F-034: render_all (batch)
 ##           рендерил vhost для ЛЮБОГО доменного проекта node.yaml, НЕ сверяясь с expose —
 ##           рассинхрон с single-project путём configure_vhost → load_vhost_config.
+##           F-01 (2026-09-02): GENERATED-STUB ai-platform.yaml от converge (R3) трактуется как
+##           «конфиг отсутствует» → WARN + True — node.yaml авторитетен для expose (курица-яйцо
+##           холодного bootstrap закрыта).
 ## @io       ⇥ entry: ProjectEntry, projects_base_dir: str | None (DI) → ⎋ bool (True = expose)
 ## @complexity O(1) — resolve project dir + read ai-platform.yaml
 ## @invariants
 ##   - Project dir резолвится как `{projects_base}/{context}/{name}` (контекст из entry.context;
 ##     fallback: базовая директория проекта = name)
-##   - ai-platform.yaml отсутствует → WARN + True (не блокировать легитимные домены без конфига)
-##   - expose != true → False (vhost НЕ генерируется — R5-негатив F-034)
+##   - ai-platform.yaml отсутствует ИЛИ является GENERATED-STUB (converge R3, awaiting CI deliver)
+##     → WARN + True (не блокировать легитимные домены без конфига; stub = конфиг отсутствует)
+##   - expose != true в РЕАЛЬНОМ (non-stub) конфиге → False (vhost НЕ генерируется — R5-негатив F-034)
+## @changes 2026-09-02 · F-01 (приёмо-сдаточная валидация) — stub ai-platform.yaml = «конфиг
+##           отсутствует» (is_stub_ai_platform_yaml) → WARN + True; холодный bootstrap: 0 vhost'ов
+##           → _step_vhosts strict-guard FAIL (exit 10) → проекты не доставлялись (курица-яйцо)
 def _project_expose_enabled(entry: ProjectEntry, projects_base_dir: str | None = None) -> bool:
-    """Return True if project ai-platform.yaml has expose:true (or config absent — keep)."""
+    """Return True if project ai-platform.yaml has expose:true (or config absent/stub — keep)."""
     base = Path(projects_base_dir) if projects_base_dir else projects_base()
     # Орг/контекст: entry.context если задан; иначе parent-резолв невозможен — пробуем name-каталог
     project_dir = base / entry.context / entry.name if entry.context else base / entry.name
+
+    # F-01: GENERATED-STUB ai-platform.yaml (converge R3, awaiting CI deliver) парсится как валидный
+    # dict без expose → get_expose → False → vhost НЕ генерировался → render-all давал 0 vhost'ов →
+    # _step_vhosts strict-guard FAIL (exit 10) на холодном bootstrap ДО delivery проектов. Семантика
+    # фикса: stub = конфиг отсутствует → тот же путь, что и «файла нет» (WARN + True, node.yaml
+    # авторитетен для expose). Реальный конфиг с expose:false НЕ затрагивается (F-034 сохраняется).
+    # ⚠️ TRAP[BUG] · 2026-09-02 · P1 · F-01 — GENERATED-STUB ai-platform.yaml давал 0 vhost'ов на холодном bootstrap
+    # · Symptom: bootstrap прерывался на _step_vhosts strict-guard (exit 10) при 3 exposed-проектах
+    #   в node.yaml; проекты никогда не доставлялись (курица-яйцо)
+    # · Root: stub (converge R3) парсится как валидный dict без expose → _project_expose_enabled
+    #   → False → render-all 0 vhost'ов; node.yaml был авторитетен, но проигрывал stub-парсеру
+    # · Fix: is_stub_ai_platform_yaml() перед парсингом — stub = «конфиг отсутствует» → WARN + True
+    #   (тот же путь, что и data пустой); F-034-фильтр для реальных конфигов сохранён
+    # · Prevention: единая stub-детекция (shared/stub_detection) в expose-путях; R5-негатив в тестах
+    if is_stub_ai_platform_yaml(project_dir / "ai-platform.yaml"):
+        logger.warning(
+            "[IMP:7][_project_expose_enabled] %s: ai-platform.yaml is a GENERATED-STUB (awaiting "
+            "CI deliver) — treat as config absent, keep vhost (node.yaml authoritative for expose)",
+            entry.name,
+        )
+        return True
 
     data = shared_project_yaml.load_project_yaml(project_dir)
     if not data:

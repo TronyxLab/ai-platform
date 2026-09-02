@@ -314,10 +314,26 @@ jobs:
           VERSION="8.30.1"   # pin канона practices_manifest.yaml#pins.gitleaks (паритет setup-gitleaks)
           ASSET="gitleaks_${VERSION}_linux_x64.tar.gz"
           BASE_URL="https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}"
-          curl -sL -o "/tmp/${ASSET}" "${BASE_URL}/${ASSET}"
+          # ⚠️ TRAP[BUG] · 2026-09-02 · F-05 · checksums-ассет переименован upstream
+          # · Symptom: шаг Gitleaks scan (L1) падал молча (0 строк вывода, exit 1 за 0.3s) — CI-деплой ВСЕХ проектов заблокирован
+          # · Root: upstream gitleaks v8.30.1 переименовал checksums.txt → gitleaks_<ver>_checksums.txt;
+          #   curl (bash -e) сохранял «Not Found» → grep пуст → abort ДО echo-сообщений об ошибке
+          # · Fix: версия-префиксный ассет + fallback на старое имя (совместимость) + curl --fail
+          #   (404 → явный nonzero rc с диагностикой, не молчаливый Not Found)
+          CHECKSUMS_ASSET="gitleaks_${VERSION}_checksums.txt"
+          if ! curl -sfL -o /tmp/gitleaks-checksums.txt "${BASE_URL}/${CHECKSUMS_ASSET}"; then
+            echo "::warn::[gitleaks-l1] versioned checksums asset not found — falling back to legacy checksums.txt"
+            curl -sfL -o /tmp/gitleaks-checksums.txt "${BASE_URL}/checksums.txt" || {
+              echo "::error::[IMP:10][gitleaks-l1] cannot download checksums (neither ${CHECKSUMS_ASSET} nor checksums.txt) for v${VERSION}"
+              exit 1
+            }
+          fi
+          curl -sfL -o "/tmp/${ASSET}" "${BASE_URL}/${ASSET}" || {
+            echo "::error::[IMP:10][gitleaks-l1] cannot download binary asset ${ASSET} for v${VERSION}"
+            exit 1
+          }
           # REF-0012 (SEC-0039): sha256-верификация скачанного бинарника по checksums.txt
           # релиза ДО распаковки — trojaned scanner отключил бы leak-детект деплоя.
-          curl -sL -o /tmp/gitleaks-checksums.txt "${BASE_URL}/checksums.txt"
           EXPECTED=$(grep " ${ASSET}$" /tmp/gitleaks-checksums.txt | awk '{print $1}')
           ACTUAL=$(sha256sum "/tmp/${ASSET}" | awk '{print $1}')
           if [ -z "${EXPECTED}" ]; then

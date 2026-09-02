@@ -53,9 +53,19 @@ runs:
           VERSION="${{ inputs.version }}"
           ASSET="gitleaks_${VERSION}_linux_x64.tar.gz"
           BASE_URL="https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}"
-          curl -sL -o /tmp/gitleaks.tar.gz "${BASE_URL}/${ASSET}"
-          # REF-0012 (SEC-0039): сверка sha256 с checksums.txt релиза ДО распаковки
-          curl -sL -o /tmp/gitleaks.checksums.txt "${BASE_URL}/checksums.txt"
+          # ⚠️ TRAP[BUG] · 2026-09-02 · F-05 · checksums-ассет переименован upstream (см. deploy-project.yml)
+          CHECKSUMS_ASSET="gitleaks_${VERSION}_checksums.txt"
+          if ! curl -sfL -o /tmp/gitleaks.checksums.txt "${BASE_URL}/${CHECKSUMS_ASSET}"; then
+            echo "::warn::[setup-gitleaks] versioned checksums not found — legacy checksums.txt fallback"
+            curl -sfL -o /tmp/gitleaks.checksums.txt "${BASE_URL}/checksums.txt" || {
+              echo "::error::[IMP:10][setup-gitleaks] cannot download checksums for v${VERSION} — refusing install"
+              exit 1
+            }
+          fi
+          curl -sfL -o /tmp/gitleaks.tar.gz "${BASE_URL}/${ASSET}" || {
+            echo "::error::[IMP:10][setup-gitleaks] cannot download ${ASSET} for v${VERSION} — refusing install"
+            exit 1
+          }
           EXPECTED=$(grep "${ASSET}" /tmp/gitleaks.checksums.txt | awk '{print $1}')
           ACTUAL=$(sha256sum /tmp/gitleaks.tar.gz | awk '{print $1}')
           if [ -z "${EXPECTED}" ]; then

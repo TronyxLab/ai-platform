@@ -2,14 +2,15 @@
 # GREP_SUMMARY: reconciler, converge, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, reconcile-perms, reconcile-audit-log, reconcile-projects, reconcile-networks, detect-hosts-drift, verify-vhosts, reconcile-volumes, reconcile-sudoers, reconcile-runtime, reconcile-prometheus-tsdb, orchestrator, exit-code, json-report, data-driven, unit-actions
 # STRUCTURE: ▶ argparse ┌--node-yaml --node-name --core-dir --templates-dir --modules-dir --dry-run --report-only --units┐ → ▶ data-driven unit dispatch ┌_unit_actions R1→R11: (unit_id, action)┐ → ○ for loop ∋ unit: ◇ infra.unit_enabled? → action() | ⎋ SKIP log → ⊕ aggregate exit_code {0,1,2} → ⎋ JSON report stdout
 # region MODULE_CONTRACT
-## @purpose  Оркестратор desired-state reconciler (R1-R9) — депеширует доменным модулям
-##           converge/ пакета (perms/audit/projects/networks/vhosts/volumes/sudoers/runtime).
+## @purpose  Оркестратор desired-state reconciler (R1-R9, R-ssl) — депеширует доменным модулям
+##           converge/ пакета (perms/audit/projects/networks/vhosts/volumes/sudoers/runtime/ssl).
 ##           Инфраструктура (report/exit/subprocess/глобалы) — в converge/infra.py (B9 T2, U-31).
 ## @scope    R1 reconcile_perms — executable-bit fix (converge/perms.py)
 ##           R2 reconcile_audit_log — audit.jsonl writable by root + ci-deploy (ACL/0660, converge/audit.py)
 ##           R3 reconcile_projects — per-project directory + stub + .env.platform (converge/projects.py)
 ##           R4 reconcile_networks — proxy-net + container connectivity (converge/networks.py)
 ##           R5 detect_hosts_drift — /etc/hosts stale entries (converge/vhosts.py)
+##           R-ssl reconcile_ssl_certs — restore-first SSL cert convergence ПЕРЕД R6 (converge/ssl_certs.py — имя НЕ ssl: затеняет stdlib)
 ##           R6 verify_vhosts — nginx vhost integrity + orphans + nginx -t (converge/vhosts.py)
 ##           R7 reconcile_volumes — detect-only named volumes O7 (converge/volumes.py)
 ##           R8 reconcile_sudoers — sudoers.d drift + self-heal (converge/sudoers.py)
@@ -36,6 +37,9 @@
 ##              networks,vhosts,volumes,sudoers,runtime}.py, инфраструктура — в converge/infra.py
 ##   2026-08-22 · T2.17 — data-driven dispatch: 10 однотипных if-блоков (R1-R10) → таблица
 ##              _unit_actions (unit_id → action) + единый цикл (предикат/SKIP-лог сохранены 1:1)
+##   2026-09-02 · F-02 (cache-drill C2) — добавлен R-ssl reconcile_ssl_certs ПЕРЕД R6: converge
+##              самолечит отсутствующие сертификаты (restore-first disk → S3 → issue),
+##              R6 verify_vhosts больше не падает на «cannot load certificate» (converge/ssl_certs.py — имя НЕ ssl: затеняет stdlib)
 # endregion MODULE_CONTRACT
 
 import argparse
@@ -53,6 +57,7 @@ from core.internal.bootstrap.converge.perms import reconcile_perms
 from core.internal.bootstrap.converge.projects import reconcile_projects
 from core.internal.bootstrap.converge.prometheus_tsdb import reconcile_prometheus_tsdb
 from core.internal.bootstrap.converge.runtime import reconcile_runtime_state
+from core.internal.bootstrap.converge.ssl_certs import reconcile_ssl_certs
 from core.internal.bootstrap.converge.sudoers import reconcile_sudoers
 from core.internal.bootstrap.converge.vhosts import detect_hosts_drift, verify_vhosts
 from core.internal.bootstrap.converge.volumes import reconcile_volumes
@@ -200,7 +205,7 @@ def main() -> int:
 
     # ── Dispatch R-units with --units filter (data-driven: unit_id → action, T2.17) ──
     # Предикат (infra.unit_enabled) и SKIP-лог единообразны для всех юнитов; различается
-    # только action (сигнатуры доменных функций). Порядок R1→R11 — канонический.
+    # только action (сигнатуры доменных функций). Порядок R1→R11 (+R-ssl ПЕРЕД R6) — канонический.
     # Действия возвращают разные типы (dict-отчёты/None) — результат игнорируется
     # (вердикты пишут доменные функции сами); Callable[[], object] — честная верхняя граница.
     unit_actions: list[tuple[str, Callable[[], object]]] = [
@@ -209,6 +214,20 @@ def main() -> int:
         ("R3", lambda: reconcile_projects(infra.node_yaml_path, dry_run=infra.dry_run, report_only=infra.report_only)),
         ("R4", lambda: reconcile_networks(infra.node_yaml_path, dry_run=infra.dry_run, report_only=infra.report_only)),
         ("R5", lambda: detect_hosts_drift(infra.node_yaml_path)),
+        # R-ssl: reconcile_ssl_certs (F-02, cache-drill C2) — restore-first самолечение
+        # отсутствующих сертификатов (disk → S3 → issue) СТРОГО ПЕРЕД R6: nginx -t (R6) падал
+        # на «cannot load certificate .../fullchain.pem» без попытки восстановления из S3-кеша.
+        # Идемпотентен: живые серты → domains "converged" → no-op. Import-направление
+        # converge → lifecycle.helpers.domains (оба bootstrap-слой) — цикла нет.
+        (
+            "R-ssl",
+            lambda: reconcile_ssl_certs(
+                infra.core_dir,
+                infra.node_yaml_path,
+                dry_run=infra.dry_run,
+                report_only=infra.report_only,
+            ),
+        ),
         (
             "R6",
             lambda: verify_vhosts(
