@@ -219,11 +219,20 @@ jobs:
       # Fix: docker system prune -af ПЕРЕД pre-pull — удаляет ВСЕ неиспользуемые образы
       # (в т.ч. preinstalled-мусор раннера), pre-pull потом тянет ровно нужные.
       # Buildx-builder (running) и GHA cache backend (внешний) не затрагиваются.
+      # ⚠️ TRAP[BUG] · 2026-09-02 · P2 · рецидив 243 при живом prune (run 33604972863) ·
+      # · Symptom: после prune свободно 14G, но образы стека выросли (hermes L2 и др.) —
+      # ·   к моменту старта langfuse <1GB → CH reserve 1MiB fail → R4-каскад.
+      # · Fix: + rm host-тулкитов раннера (android ~10G, dotnet, ghc/ghcup, CodeQL,
+      # ·   boost, jvm) + apt clean — hostedtoolcache НЕ трогаем (нужен setup-python).
+      # · Rev: если и этого станет мало — вынести smoke-стек в swappable data-root.
       - name: Free disk space — remove preinstalled runner images (DevPlan 007 W2)
         run: |
           echo "=== Disk before cleanup ==="
           df -h /
           docker system df
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost /usr/lib/jvm 2>/dev/null || true
+          sudo apt-get clean || true
           docker system prune -af 2>&1 | tail -3 || true
           echo "=== Disk after cleanup ==="
           df -h /
