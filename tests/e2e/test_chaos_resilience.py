@@ -904,7 +904,17 @@ def test_oom_clickhouse_kernel_kill(requires_node: str, node_ssh: NodeSSHClient,
     )
     ssh.ssh_exec(allocator, timeout=300)
 
-    kernel_oom_pattern = rf"docker-{re.escape(ch_short)}\.scope|docker/{re.escape(ch_id)}|clickhouse"
+    # ⚠️ TRAP[BUG] · 2026-09-02 · P2 · F7 OOM-evidence grep не матчит systemd cgroup scope ·
+    # · Symptom: kernel OOM убивал bomb (journalctl строки есть), но evidence=None → FAIL.
+    # · Root: паттерн `docker-<short12>\.scope` предполагает скоуп docker-<12hex>.scope,
+    # ·   а systemd cgroup-driver называет скоуп docker-<полный 64hex>.scope; вариант
+    # ·   docker/<id> — cgroupfs-драйвер; имени clickhouse ядро не знает вовсе.
+    # · Fix: добавить альтернативу docker-<full-id>.scope (первым — самый частый формат).
+    # · Prevention: e2e-паттерны на journal — сверять с фактическим форматом cgroup-драйвера ноды.
+    kernel_oom_pattern = (
+        rf"docker-{re.escape(ch_id)}\.scope|docker-{re.escape(ch_short)}\.scope"
+        rf"|docker/{re.escape(ch_id)}|clickhouse"
+    )
 
     def _oom_victim_named() -> str | None:
         res = ssh.ssh_read(
@@ -1360,7 +1370,18 @@ def test_outbound_partition_inbound_alive(requires_node: str, node_ssh: NodeSSHC
         _outbound_restored, timeout_s=90, description="outbound connectivity restored"
     )
     ttr = int(time.monotonic() - t0)
-    codes_after = probe_sites_local(ssh, urls)
+    # ⚠️ TRAP[BUG] · 2026-09-02 · P3 · post-revert sites probe — один сэмпл сразу после
+    # · conntrack -F + iptables-restore даёт транзиентный 000 (наблюдение N2/027: все 3 сайта
+    # · 000 на ~20s после revert, <1 мин, само-heal, изолированно не воспроизводится).
+    # · Fix: bounded settle-retry (3×/10s) — инвариант «сайты живы после revert» проверяется
+    # ·   в settled-состоянии; финальное состояние по-прежнему assert'ится жёстко (не маскируем).
+    codes_after: dict[str, str] = {}
+    for attempt in range(3):
+        codes_after = probe_sites_local(ssh, urls)
+        if sites_ok(codes_after):
+            break
+        logger.warning("[IMP:7][N2][settle] sites probe attempt %d/3 not ok: %s", attempt + 1, codes_after)
+        time.sleep(10)
     try:
         assert sites_ok(codes_inbound), f"N2 FAIL: inbound DOWN during partition: {codes_inbound}"
         assert outbound_blocked, f"N2 FAIL: outbound NOT blocked during partition: {outbound_probe.stdout}"
