@@ -672,6 +672,9 @@ def probe_sops_enc_file(*, node_yaml: str, node_name: str, env: Mapping[str, str
     if node_yaml:
         yaml_dir = pathlib.Path(node_yaml).parent.parent  # <configs>/<node>/node.yaml
         candidates.append(str(yaml_dir / "secrets" / f"{node_name}.enc.yaml"))
+        # plan 012 T18/F-013: per-node dev-machine/legacy layout — <configs>/<node>/secrets/<node>.enc.yaml
+        node_dir = pathlib.Path(node_yaml).parent
+        candidates.append(str(node_dir / "secrets" / f"{node_name}.enc.yaml"))
     from core.internal.shared.deploy_paths import node_configs_remote
 
     candidates.append(str(node_configs_remote(env=source) / "secrets" / f"{node_name}.enc.yaml"))

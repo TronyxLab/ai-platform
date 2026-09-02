@@ -271,6 +271,23 @@ def test_input_scope_sops_enc_allow_autogen_warns(tmp_path) -> None:
 # endregion FUNC_test_input_scope_sops_enc_allow_autogen_warns
 
 
+# region FUNC_test_input_scope_sops_enc_per_node_layout_ok
+def test_input_scope_sops_enc_per_node_layout_ok(tmp_path) -> None:
+    """T7/plan 012 T18 F-013: per-node layout <configs>/<node>/secrets/<node>.enc.yaml найден → ok."""
+    node_dir = tmp_path / "tronyx-vps"
+    (node_dir / "secrets").mkdir(parents=True)
+    node_yaml = node_dir / "node.yaml"
+    node_yaml.write_text("node:\n  name: tronyx-vps\n", encoding="utf-8")
+    (node_dir / "secrets" / "tronyx-vps.enc.yaml").write_text("dummy enc\n", encoding="utf-8")
+    result = probe_sops_enc_file(node_yaml=str(node_yaml), node_name="tronyx-vps", env={})
+    assert result.status == "ok", f"per-node enc найден → ok: {result}"
+    assert "present" in result.detail
+    logger.critical("[IMP:9][test_input_scope_sops_enc_per_node_layout_ok] PASS: per-node enc → ok")
+
+
+# endregion FUNC_test_input_scope_sops_enc_per_node_layout_ok
+
+
 # region FUNC_test_input_scope_required_keys_missing_fails
 def test_input_scope_required_keys_missing_fails(tmp_path) -> None:
     """T7: required env-ключ из node.yaml#secrets.required не задан → fatal."""

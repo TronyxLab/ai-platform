@@ -204,7 +204,7 @@ def _pull_with_cache(context_path: str) -> int:
     logger.info("[IMP:8][_pull_with_cache][pull] git pull --ff-only at %s", context_path)
     try:
         result = subprocess.run(
-            ["git", "-C", context_path, "pull", "--ff-only"],
+            ["git", "-C", context_path, "-c", "http.version=HTTP/1.1", "pull", "--ff-only"],
             capture_output=True,
             text=True,
             timeout=SYSTEM_CMD_TIMEOUT,
@@ -277,7 +277,7 @@ def _clone_context_repo(node_yaml_path: str, context_path: str) -> int:
     logger.info("[IMP:8][_clone_context_repo][clone] git clone %s → %s", repo_url, context_path)
     try:
         result = subprocess.run(
-            ["git", "clone", repo_url, context_path],
+            ["git", "-c", "http.version=HTTP/1.1", "clone", repo_url, context_path],
             capture_output=True,
             text=True,
             timeout=LIFECYCLE_CMD_TIMEOUT,

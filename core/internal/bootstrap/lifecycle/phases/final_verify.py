@@ -246,6 +246,12 @@ def _assert_ghcr_not_skipped(env: Mapping[str, str], node_yaml: str) -> None:
     """(d) GHCR_PULL_TOKEN present when the node pulls private GHCR images — else exit-10 fail."""
     source: Mapping[str, str] = os.environ if env is None else env
     token = (source.get("GHCR_PULL_TOKEN", "") or "").strip()
+    if not token:
+        # F12: token lives in secrets.env file, not necessarily os.environ at φf
+        from core.internal.bootstrap.lifecycle.secrets_manager import source_secrets_env
+
+        secrets_env_path = source.get("SECRETS_ENV_FILE", str(secrets_env_file()))
+        token = (source_secrets_env(secrets_env_path).get("GHCR_PULL_TOKEN", "") or "").strip()
 
     needs_ghcr = _node_requires_ghcr(node_yaml)
     if needs_ghcr is None:

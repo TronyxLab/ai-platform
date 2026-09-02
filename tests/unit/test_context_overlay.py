@@ -163,7 +163,7 @@ def test_ensure_context_pull_executed(
 
     # Mock successful git pull
     mock_run.return_value = subprocess.CompletedProcess(
-        args=["git", "-C", "/opt/testctx/platform", "pull", "--ff-only"],
+        args=["git", "-C", "/opt/testctx/platform", "-c", "http.version=HTTP/1.1", "pull", "--ff-only"],
         returncode=0,
         stdout="Already up to date.",
         stderr="",
@@ -177,6 +177,15 @@ def test_ensure_context_pull_executed(
     call_args = mock_run.call_args[0][0]
     assert "pull" in call_args, "Expected git pull command"
     assert "--ff-only" in call_args, "Expected --ff-only flag"
+    assert call_args == [
+        "git",
+        "-C",
+        "/opt/testctx/platform",
+        "-c",
+        "http.version=HTTP/1.1",
+        "pull",
+        "--ff-only",
+    ], "Expected git pull with -c http.version=HTTP/1.1"
     assert "git pull successful" in caplog.text, "Expected success log for git pull"
     logger.info("[IMP:9][test][pull_ok] ensure_context_repo returned %d — verified git pull executed", result)
 
@@ -204,7 +213,14 @@ def test_ensure_context_clone(
 
     # Mock successful git clone
     mock_run.return_value = subprocess.CompletedProcess(
-        args=["git", "clone", "https://github.com/org/test-context.git", "/opt/testctx/platform"],
+        args=[
+            "git",
+            "-c",
+            "http.version=HTTP/1.1",
+            "clone",
+            "https://github.com/org/test-context.git",
+            "/opt/testctx/platform",
+        ],
         returncode=0,
         stdout="Cloning into '/opt/testctx/platform'...",
         stderr="",
@@ -217,6 +233,14 @@ def test_ensure_context_clone(
     call_args = mock_run.call_args[0][0]
     assert "clone" in call_args, "Expected git clone command"
     assert "https://github.com/org/test-context.git" in call_args, "Expected repo URL in clone command"
+    assert call_args == [
+        "git",
+        "-c",
+        "http.version=HTTP/1.1",
+        "clone",
+        "https://github.com/org/test-context.git",
+        "/opt/testctx/platform",
+    ], "Expected clone with -c http.version=HTTP/1.1"
     assert "Context repo cloned" in caplog.text, "Expected success log for git clone"
     logger.info("[IMP:9][test][clone] ensure_context_repo returned %d — verified git clone executed", result)
 
