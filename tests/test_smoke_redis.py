@@ -24,6 +24,7 @@
 
 import json
 import logging
+import shlex
 import subprocess
 
 import pytest
@@ -329,7 +330,10 @@ def redis_compose(platform_services: dict[str, list[str]]) -> dict:
 ## @invariants
 ##   - All tests depend on redis_compose fixture (session-scoped with foreign reuse)
 ##   - Tests use docker compose exec for in-container redis-cli commands
-##   - Port check uses docker container inspect (not compose)
+##   - redis-cli авторизуется -a "$REDIS_PASSWORD" из container env (T2.0a requirepass
+##     обязателен; пароль не в argv теста — раскрывается шеллом внутри контейнера)
+##   - Port check uses docker container inspect: НЕ-loopback публикация запрещена
+##     (T2.0a: loopback-only фасад 127.0.0.1 разрешён для local dev)
 ##   - Each test asserts IMP:9 presence via ldd pattern in caplog
 
 # ── Helper ────────────────────────────────────────────────────────────────────
@@ -341,7 +345,20 @@ def _compose_exec(redis_compose: dict, cmd: list[str], timeout: int = _EXEC_TIME
     ## @purpose — Centralised subprocess runner for compose exec commands.
     ## @io — ⇥ redis_compose fixture dict, cmd list → ⎋ CompletedProcess
     ## @complexity — O(1)
+
+    ⚠️ TRAP[BUG] · 2026-09-02 · P2 · smoke-redis NOAUTH после T2.0a ·
+    · Root: DevPlan 010 T2.0a сделал requirepass ОБЯЗАТЕЛЬНЫМ (compose command
+    ·   --requirepass "$REDIS_PASSWORD"), а smoke-тест звал redis-cli без аутентификации
+    ·   → все 4 cli-теста падали NOAUTH (platform-test красный с 2026-09-01).
+    · Fix: redis-cli оборачивается в sh -c с -a "$REDIS_PASSWORD" — пароль читается
+    ·   из container env ВНУТРИ контейнера (не в argv теста, не в docker inspect —
+    ·   тот же канал, что и compose-command; TRAP[DECISION] 2026-08-22 соблюдён).
     """
+    exec_cmd: list[str] = list(cmd)
+    if exec_cmd and exec_cmd[0] == "redis-cli":
+        rest = exec_cmd[1:]
+        inner = f'redis-cli --no-auth-warning -a "$REDIS_PASSWORD" {shlex.join(rest)}'
+        exec_cmd = ["sh", "-c", inner]
     exec_args = [
         "docker",
         "compose",
@@ -354,7 +371,7 @@ def _compose_exec(redis_compose: dict, cmd: list[str], timeout: int = _EXEC_TIME
         "exec",
         "-T",
         "redis",
-        *cmd,
+        *exec_cmd,
     ]
     env = {**subprocess.os.environ, **get_smoke_env(), "COMPOSE_PROFILES": "redis"}
     return subprocess.run(exec_args, capture_output=True, text=True, timeout=timeout, env=env, check=False)
@@ -577,13 +594,16 @@ def test_redis_no_host_ports(redis_compose, caplog):
             )
             pytest.fail(f"Failed to parse docker inspect Ports JSON: {exc}")
 
-        # Check that 6379/tcp has no host port mappings
+        # T2.0a (DevPlan 010): loopback-only фасад разрешён (127.0.0.1:6379 для local dev);
+        # НЕ-loopback публикация (0.0.0.0 / ::) — нарушение (кросс-нодово — только пирам, ufw T2.3).
         tcp_6379 = ports_dict.get("6379/tcp")
-        port_published = tcp_6379 is not None and len(tcp_6379) > 0
+        published = tcp_6379 or []
+        non_loopback = [b for b in published if b.get("HostIp") not in {"127.0.0.1", ""}]
 
         logger.critical(
-            "[IMP:9][test_redis][no_host_ports] ASSERT: port 6379 published to host=%s (ports=%s)",
-            port_published,
+            "[IMP:9][test_redis][no_host_ports] ASSERT: published=%s non_loopback=%s (ports=%s)",
+            len(published),
+            len(non_loopback),
             ports_dict,
         )
 
@@ -591,10 +611,10 @@ def test_redis_no_host_ports(redis_compose, caplog):
         found_imp9 = _print_ldd_trajectory(caplog)
         assert found_imp9, "Critical LDD Error: No IMP:9 log found in no_host_ports"
 
-        assert not port_published, (
-            f"Redis port 6379 must NOT be published to host. "
+        assert not non_loopback, (
+            f"Redis port 6379 must NOT be published on non-loopback interfaces. "
             f"Found: {ports_dict}. "
-            f"Cache-only redis must be internal network only."
+            f"T2.0a: loopback-only facade (127.0.0.1) allowed; cross-node — peers via ufw (T2.3)."
         )
 
 

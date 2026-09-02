@@ -299,23 +299,31 @@ def test_loki_ready(caplog, logging_compose) -> None:
         # · Symptom: transient ConnectionError when Loki container is still starting up
         # · Root: no retry logic — single attempt fails on any transient failure
         # · Fix: exponential backoff retry (3 attempts, 1s/2s/4s)
-        for attempt in range(3):
+        # ⚠️ TRAP[BUG] · 2026-09-02 · P2 · 503 «Query Frontend not ready: schedulers 0»
+        # · Symptom: platform-test CI — /ready 503, тогда как buildinfo 200 (Loki жив).
+        # · Root: container liveness = процесс (ready-check в compose НЕ /ready, см.
+        # ·   compose-комментарий) — frontend-worker коннектится к in-process scheduler
+        # ·   позже под CI-нагрузкой; 3×~7s транспорт-retry не покрывает app-level 503.
+        # · Fix: единый poll-цикл 30s: ретраятся И транспорт-ошибки, И 503 (readiness —
+        # ·   это состояние, которое ДОЛЖНО наступить; инвариант «Loki становится ready»
+        # ·   сохранён, окно явное и ограниченное).
+        r: requests.Response | None = None
+        last_detail = "no attempt completed"
+        deadline = time.monotonic() + 30.0
+        while time.monotonic() < deadline:
             try:
                 r = requests.get(_LOKI_READY_URL, timeout=_HTTP_TIMEOUT)
-                break
+                if r.status_code == 200:
+                    break
+                last_detail = f"HTTP {r.status_code}: {r.text.strip()[:120]}"
+                logger.warning("[IMP:7][test_loki_ready] not ready yet (%s), retrying...", last_detail)
             except requests.RequestException as exc:
-                if attempt < 2:
-                    wait_s = 2**attempt
-                    logger.warning(
-                        "[IMP:7][test_loki_ready] Attempt %d failed (%s), retrying in %ds...",
-                        attempt + 1,
-                        exc,
-                        wait_s,
-                    )
-                    time.sleep(wait_s)
-                else:
-                    logger.error("[IMP:9][test_loki_ready] All 3 attempts failed: %s", exc)
-                    pytest.fail(f"Loki ready endpoint unreachable after 3 retries: {exc}")
+                last_detail = f"{type(exc).__name__}: {exc}"
+                logger.warning("[IMP:7][test_loki_ready] transport error (%s), retrying...", last_detail)
+            time.sleep(3)
+
+        if r is None:
+            pytest.fail(f"Loki /ready unreachable within 30s: {last_detail}")
 
         logger.info("[IMP:8][test_loki_ready] HTTP %d: %s", r.status_code, r.text.strip()[:100])
 
