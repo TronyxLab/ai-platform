@@ -9,16 +9,19 @@
 ##           resumable); UPDATE (φ12) сохраняет best-effort (DEPLOY_BEST_EFFORT, D2 — WARN→0).
 ## @scope    lifecycle/helpers/domains.py::import_deploy_context + lifecycle/phases/docker.py
 ##           (phase_deploy_services φ8 / phase_deploy_update φ12). Без Docker (unit, tmp_path).
+##           F-10 (027): + ssl_provision_via_orchestrator трёхветочный маппинг статуса.
 ## @invariants
 ##   - deploy_context патчится моком (никаких реальных вызовов context_deployer)
 ##   - strict=False + failed≠∅ → НЕ исключение (текущее поведение сохранено, D2)
 ##   - strict=True + failed≠∅ → PlatformFatalError с именем failed-проекта + IMP:10 лог
 ##   - strict=True + исключение → PlatformFatalError (from e)
 ##   - φ8 вызывает import_deploy_context(strict=True); φ12 — strict=False (параметр-проброс)
+##   - ssl_provision: failed>0 → error; issued/restored>0 → provisioned; иначе converged (F-10)
 ##   - Каждый тест валидирует IMP:9+ через ldd_trajectory (Anti-Illusion)
 ## @rationale Failed-проекты в INIT больше не маскируются non-fatal (гейт «все проекты live»);
 ##           UPDATE не ломается (D2-контракт WARN→0). Паттерн мока — follow test_phases_docker.py.
 ## @changes  2026-09-01 · Created (strict-семантика INIT / best-effort UPDATE)
+## @changes  2026-09-02 · F-10 tests (ssl_provision mapping: converged на no-op)
 # endregion MODULE_CONTRACT
 """
 
@@ -28,6 +31,7 @@ from unittest.mock import patch
 
 import pytest
 
+from core.internal.bootstrap.cert_orchestrator import CertResult, DomainCertResult
 from core.internal.bootstrap.deploy.context_deployer import ContextDeployResult, ProjectDeployResult
 from core.internal.bootstrap.lifecycle.helpers import domains as domains_mod
 from core.internal.bootstrap.lifecycle.phases import docker as docker_mod
@@ -196,4 +200,96 @@ def test_phase_deploy_update_passes_strict_false(caplog: pytest.LogCaptureFixtur
     m_import.assert_called_once()
     assert m_import.call_args.kwargs.get("strict") is False, (
         f"φ12 (UPDATE) обязан передавать strict=False, got kwargs={m_import.call_args.kwargs}"
+    )
+
+
+# ── F-10 (027): трёхветочный маппинг ssl_provision_via_orchestrator ─────────────
+
+
+def _cert_result(*domains: tuple[str, str]) -> CertResult:
+    """Build CertResult из (domain, status)-пар — как orchestrate_certs."""
+    result = CertResult()
+    for domain, status in domains:
+        result.add(DomainCertResult(domain=domain, status=status))
+    return result
+
+
+def _ssl_ctx(tmp_path: Path) -> tuple[str, str]:
+    """tmp core_dir + node.yaml — аргументы ssl_provision_via_orchestrator (моками не читаются)."""
+    return str(tmp_path / "core"), str(tmp_path / "node.yaml")
+
+
+# 🧪 TRAP[TEST] · 2026-09-02 · F-10 NEGATIVE (R5) · all-skipped → converged (не provisioned)
+# · Last fail: node-update на уже provisioned ноде — orchestrate_certs вернул
+# ·   restored=3/issued=0/skipped=0, helper отвечал "provisioned" → R-ssl mutated на
+# ·   КАЖДОМ no-op converge → converge_update done_with_warnings (rc=1, E4-шум)
+# · Remove if: безусловный "provisioned" возвращён намеренно
+@ldd_trajectory
+def test_ssl_provision_all_skipped_returns_converged(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> None:
+    """F-10: issued=0/restored=0/failed=0 (все skipped) → converged — no-op, R-ssl не mutated."""
+    core_dir, node_yaml = _ssl_ctx(tmp_path)
+    with (
+        patch.object(domains_mod, "extract_domains", return_value=["a.example.com", "b.example.com"]),
+        patch.object(
+            domains_mod,
+            "orchestrate_certs",
+            return_value=_cert_result(("a.example.com", "skipped"), ("b.example.com", "skipped")),
+        ),
+    ):
+        status = domains_mod.ssl_provision_via_orchestrator(core_dir, node_yaml)
+
+    assert status == "converged", f"no-op оркестрация обязана давать converged, got {status!r}"
+
+
+@ldd_trajectory
+def test_ssl_provision_issued_returns_provisioned(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> None:
+    """Реальная мутация (issued>0) → provisioned — R-ssl честно репортует mutated."""
+    core_dir, node_yaml = _ssl_ctx(tmp_path)
+    with (
+        patch.object(domains_mod, "extract_domains", return_value=["a.example.com"]),
+        patch.object(
+            domains_mod,
+            "orchestrate_certs",
+            return_value=_cert_result(("a.example.com", "issued")),
+        ),
+    ):
+        status = domains_mod.ssl_provision_via_orchestrator(core_dir, node_yaml)
+
+    assert status == "provisioned", f"issued>0 обязан давать provisioned, got {status!r}"
+
+
+@ldd_trajectory
+def test_ssl_provision_restored_returns_provisioned(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> None:
+    """Restore из S3-кэша (restored>0) — тоже реальная мутация → provisioned."""
+    core_dir, node_yaml = _ssl_ctx(tmp_path)
+    with (
+        patch.object(domains_mod, "extract_domains", return_value=["a.example.com"]),
+        patch.object(
+            domains_mod,
+            "orchestrate_certs",
+            return_value=_cert_result(("a.example.com", "restored")),
+        ),
+    ):
+        status = domains_mod.ssl_provision_via_orchestrator(core_dir, node_yaml)
+
+    assert status == "provisioned", f"restored>0 обязан давать provisioned, got {status!r}"
+
+
+@ldd_trajectory
+def test_ssl_provision_failed_returns_error(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> None:
+    """failed>0 → error — фаза даёт done_with_warnings, resume перевыполнит (не тихий success)."""
+    core_dir, node_yaml = _ssl_ctx(tmp_path)
+    with (
+        patch.object(domains_mod, "extract_domains", return_value=["a.example.com", "b.example.com"]),
+        patch.object(
+            domains_mod,
+            "orchestrate_certs",
+            return_value=_cert_result(("a.example.com", "issued"), ("b.example.com", "failed")),
+        ),
+    ):
+        status = domains_mod.ssl_provision_via_orchestrator(core_dir, node_yaml)
+
+    assert status == "error", f"failed>0 обязан давать error, got {status!r}"
+    assert any("failed during orchestration" in r.message for r in caplog.records), (
+        "IMP:7 warning о failed-доменах обязан присутствовать в логе"
     )

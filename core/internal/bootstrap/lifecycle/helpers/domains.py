@@ -222,13 +222,14 @@ def extract_domains(core_dir: str, node_yaml: str, context: str) -> list[str]:
 # region FUNC_ssl_provision_via_orchestrator
 ## @purpose  Unified cert orchestration via cert_orchestrator.orchestrate_certs().
 ##           Контракт возврата (P0-честность, 2026-08-27 — маскирование отказа φ7):
-##           "provisioned"     — оркестрация выполнена (orchestrate_certs отработал без исключений);
-##           "converged"       — выпуск НЕ выполнялся, но состояние сходится: серты уже на диске
-##                               для всех доменов ИЛИ доменов нет (выпускать нечего);
+##           "provisioned"     — реальная мутация: issued>0 ИЛИ restored>0 (серт выпущен/восстановлен);
+##           "converged"       — состояние сходится БЕЗ мутации: все домены skipped (уже валидны),
+##                               серты уже на диске для всех доменов ИЛИ доменов нет;
 ##           "skipped_import"  — orchestrate_certs недоступен (guarded-import) и серты НЕ на диске
 ##                               (или домены неопределимы) → фаза должна вернуть done_with_warnings,
 ##                               чтобы перевыполниться на резюме;
-##           "error"           — оркестрация упала (best-effort: non-fatal, фаза — done_with_warnings).
+##           "error"           — оркестрация упала ИЛИ failed>0 (best-effort: non-fatal,
+##                               фаза — done_with_warnings; F-10: failed-домены больше не маскируются).
 ## ⚠️ TRAP[BUG] · 2026-08-27 · P0 · тихий import-skip маскировал отказ φ7 certificates
 ## · Symptom: cert_orchestrator not importable при холодном bootstrap → WARN + return None →
 ## ·   фаза логировала «SSL certificates provisioned for all domains» и mark DONE — провижининга
@@ -320,7 +321,23 @@ def ssl_provision_via_orchestrator(core_dir: str, node_yaml: str) -> str:
         logger.warning("[IMP:7][ssl_provision] Cert orchestration failed (non-fatal): %s", e)
         return "error"
     else:
-        return "provisioned"
+        # F-10 (027): трёхветочный маппинг вместо безусловного "provisioned" —
+        # безусловный статус рендерил R-ssl как mutated на КАЖДОМ no-op converge
+        # (повторный node-update → converge_update done_with_warnings, rc=1).
+        # ⚠️ TRAP[BUG] · 2026-09-02 · P2 · R-ssl always-mutated on no-op converge ·
+        # Root: helper возвращал "provisioned" при любом успехе orchestrate_certs ·
+        # Fix: failed>0 → error (честный warning, resume перевыполнит);
+        # issued/restored>0 → provisioned (реальная мутация); иначе converged (no-op).
+        if cert_result.failed > 0:
+            logger.warning(
+                "[IMP:7][ssl_provision] %d domain(s) failed during orchestration — reporting error",
+                cert_result.failed,
+            )
+            return "error"
+        if cert_result.issued > 0 or cert_result.restored > 0:
+            return "provisioned"
+        logger.info("[IMP:8][ssl_provision] All %d domain(s) already valid — converged (no-op)", len(domains))
+        return "converged"
 
 
 # endregion FUNC_ssl_provision_via_orchestrator
