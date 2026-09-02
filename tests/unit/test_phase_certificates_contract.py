@@ -302,13 +302,14 @@ def test_ssl_provision_import_available_provisioned(tmp_path, caplog, monkeypatc
 
     calls: list[tuple] = []
 
-    class _FakeCertResult:
-        def to_dict(self) -> dict[str, object]:
-            return {"domains": {}, "summary": {"restored": 0, "issued": 1, "skipped": 0, "failed": 0}}
-
+    # 2026-09-02 (F-10): helper маппит по счётчикам CertResult — фейк несёт реальные counters.
     def _fake_orchestrate(domains, issue_cert_script, secrets_env, migrate_cron=False):
+        from core.internal.bootstrap.cert_orchestrator import CertResult, DomainCertResult
+
         calls.append((list(domains), str(issue_cert_script)))
-        return _FakeCertResult()
+        result = CertResult()
+        result.add(DomainCertResult(domain="example.com", status="issued"))
+        return result
 
     monkeypatch.setattr(domains_helpers, "orchestrate_certs", _fake_orchestrate)
     monkeypatch.setattr(domains_helpers, "extract_domains_for_context", lambda _yaml, _ctx: ["example.com"])

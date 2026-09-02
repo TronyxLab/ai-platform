@@ -1037,12 +1037,15 @@ def test_phase_certificates_import_unavailable_certs_present_success(
 # 🧪 TRAP[TEST] · 2026-08-27 · Regression (c) · импорт доступен → прежнее поведение (issuance → done)
 # · Scenario: orchestrate_certs доступен и выдаёт серты → фаза True; тихий skip невозможен.
 # · Last fail: N/A (эталонное поведение — регрессионный щит для нового контракта)
+# · 2026-09-02 (F-10): helper маппит по счётчикам CertResult — фейк должен нести
+# ·   реальные counters (issued=1), не bare to_dict().
 # · Remove if: orchestration-контракт изменится
 @ldd_trajectory
 def test_phase_certificates_import_available_previous_behavior(
     caplog: pytest.LogCaptureFixture, tmp_path: Path, monkeypatch
 ) -> None:
     """P0 (c): импорт доступен → прежнее поведение: issuance выполняется, фаза True."""
+    from core.internal.bootstrap.cert_orchestrator import CertResult, DomainCertResult
     from core.internal.bootstrap.lifecycle.helpers import domains as domains_helpers
     from core.internal.bootstrap.lifecycle.phases import certs as certs_mod
 
@@ -1052,13 +1055,11 @@ def test_phase_certificates_import_available_previous_behavior(
 
     calls: list[tuple] = []
 
-    class _FakeCertResult:
-        def to_dict(self) -> dict[str, object]:
-            return {"domains": {}, "summary": {"restored": 0, "issued": 1, "skipped": 0, "failed": 0}}
-
     def _fake_orchestrate(domains, issue_cert_script, secrets_env, migrate_cron=False):
         calls.append((list(domains), str(issue_cert_script)))
-        return _FakeCertResult()
+        result = CertResult()
+        result.add(DomainCertResult(domain="example.com", status="issued"))
+        return result
 
     monkeypatch.setattr(certs_mod, "_install_acme", lambda _core_dir: True)
     monkeypatch.setattr(domains_helpers, "orchestrate_certs", _fake_orchestrate)
