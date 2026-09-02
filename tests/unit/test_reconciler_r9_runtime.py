@@ -1,6 +1,6 @@
 """
-# GREP_SUMMARY: test-reconciler, r9-runtime, reconcile-runtime, docker-inspect, compose-up, self-heal, cooldown
-# STRUCTURE: ▶ tmp_path + monkeypatch + mock subprocess → ◇ R9 reconcile_runtime_state 3× (running/exited/cooldown) → ⊕ compose-up verify → ⊕ cooldown verify → ⎋ LDD trajectory
+# GREP_SUMMARY: test-reconciler, r9-runtime, reconcile-runtime, docker-inspect, compose-up, self-heal, cooldown, f-09, module-absent, absent-deploy, empty-node
+# STRUCTURE: ▶ tmp_path + monkeypatch + mock subprocess → ◇ R9 reconcile_runtime_state 3× (running/exited/cooldown) → ⊕ compose-up verify → ⊕ cooldown verify → ◇ F-09 absent-deploy (enabled-модуль 0 контейнеров → compose up; report_only → WOULD) → ⎋ LDD trajectory
 # region MODULE_CONTRACT
 ## @purpose  Unit tests for R9 reconcile_runtime_state in reconciler.py — docker container runtime state reconciliation
 ## @scope    Tests docker container state inspection and self-heal via docker compose up -d, with cooldown tracking
@@ -9,6 +9,8 @@
 ##   - File operations use tmp_path exclusively
 ##   - Each test validates IMP:9 business logic log presence via LDD trajectory
 ##   - Self-heal uses `docker compose up -d`, NOT `docker restart`
+##   - F-09 (2026-09-02): enabled-модуль без контейнеров (unlabeled нет) = module absent → deploy
+##     via compose up -d (НЕ converged); unlabeled-ветка (QA R4) и DISABLED-FLOW не изменены
 ## @rationale Direct function testing with mock subprocess.run for docker inspect/compose commands
 # endregion MODULE_CONTRACT
 """
@@ -504,8 +506,13 @@ def test_r9_compose_argv_module_fallback_without_root(tmp_path, caplog, monkeypa
 # ═══════════════════════════════════════════════════════════════════
 
 
-def _r9_mock_run(ps_rc: int = 0, ps_out: str = "", diag_out: str = ""):
-    """Mock subprocess.run: docker info / ps --filter (label) / ps label-column / inspect."""
+def _r9_mock_run(ps_rc: int = 0, ps_out: str = "", diag_out: str = "", compose_up_calls: list | None = None):
+    """Mock subprocess.run: docker info / ps --filter (label) / ps label-column / inspect.
+
+    ## @purpose — QA R4/T2.D fake docker runner. F-09 (2026-09-02): +compose_up_calls capture —
+    ##            unlabeled/empty-ветки обязаны НЕ вызывать compose up (ассерт в тестах).
+    ## @invariants — rc по умолчанию 0 (успех docker-запросов); compose up → cp(0) (deploy успешен).
+    """
 
     def mock_run(cmd, *args, **kwargs):
         cmd_str = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
@@ -521,6 +528,10 @@ def _r9_mock_run(ps_rc: int = 0, ps_out: str = "", diag_out: str = ""):
             return cp(0, diag_out)
         if "docker inspect" in cmd_str:
             return cp(0, "running")
+        if "compose" in cmd_str and "up" in cmd_str and "-d" in cmd_str:
+            if compose_up_calls is not None:
+                compose_up_calls.append(list(cmd))
+            return cp(0)
         return cp(0)
 
     return mock_run
@@ -557,15 +568,22 @@ def test_ps_failure_not_converged(tmp_path, caplog, node_yaml_with_modules, mock
 #   label-filtered детекция их не видит; прежний код молча говорил «No running containers»
 # · Last fail: 2026-08-25 — допрос всех контейнеров с label-колонкой отсутствовал
 # · Remove if: R9 мигрирует на не-label механизм детекции проектов
+# · F-09 guard (2026-09-02): unlabeled-ветка НЕ изменена — unlabeled НЕ трактуется как
+#   module-absent → compose up НЕ вызывается (R5-negative против деплоя на unlabeled-guard)
 @pytest.mark.usefixtures("reset_state")
 @ldd_trajectory
 def test_unlabeled_warn(tmp_path, caplog, node_yaml_with_modules, mock_modules_dir):
-    """Пустой label-set + unlabeled контейнеры на ноде → report-warn + exit 1."""
+    """Пустой label-set + unlabeled контейнеры на ноде → report-warn + exit 1, БЕЗ compose up."""
     caplog.set_level(logging.DEBUG)
     cooldown_file = tmp_path / ".converge_cooldown.json"
     diag = "orphan-one\t\norphan-two\t\n"  # 2 строки с пустым label
+    compose_up_calls: list[list[str]] = []
 
-    with patch.object(subprocess, "run", side_effect=_r9_mock_run(ps_rc=0, ps_out="", diag_out=diag)):
+    with patch.object(
+        subprocess,
+        "run",
+        side_effect=_r9_mock_run(ps_rc=0, ps_out="", diag_out=diag, compose_up_calls=compose_up_calls),
+    ):
         entry = reconciler.reconcile_runtime_state(
             node_yaml_path=node_yaml_with_modules,
             modules_dir=mock_modules_dir,
@@ -574,30 +592,41 @@ def test_unlabeled_warn(tmp_path, caplog, node_yaml_with_modules, mock_modules_d
 
     assert infra.exit_code == 1, f"R4 FAIL: unlabeled обязан давать exit 1, получен {infra.exit_code}"
     assert any("without compose-label" in d.get("detail", "") for d in infra.drifts), infra.drifts
+    assert compose_up_calls == [], (
+        f"F-09 FAIL: unlabeled-ветка не должна деплоить модуль (compose up вызван): {compose_up_calls}"
+    )
     logger.info("[IMP:9][test] R4 OK: unlabeled detected → warn report (unit status=%s)", entry["status"])
 
 
-# 🧪 TRAP[TEST] · 2026-08-25 · POSITIVE · QA R4/T2.D — пустая нода остаётся зелёной
-# · Regression: защита от false-positive legacy-guard'а (diag вернул 0 строк → зелёный)
-# · Last fail: N/A (preventive)
-# · Remove if: вместе с legacy-guard'ом
+# 🧪 TRAP[TEST] · 2026-08-25/2026-09-02 · POSITIVE (R4) · QA R4/T2.D legacy-guard + F-09
+# · Regression: diag вернул 0 строк → НЕ ложный unlabeled-warn (guard не false-positive)
+# · Last fail: 2026-09-02 (F-09, E2 toggle-drill) — enabled docker-модули на пустой ноде
+# ·   молча считались converged; по канону владельца absent-модуль = дрейф → needs deploy
+# · Remove if: legacy-guard удалён ИЛИ R9 перестанет деплоить enabled-модули без контейнеров
 @pytest.mark.usefixtures("reset_state")
 @ldd_trajectory
-def test_empty_node_green(tmp_path, caplog, node_yaml_with_modules, mock_modules_dir):
-    """rc==0, 0 labeled, 0 всего контейнеров на ноде → converged, exit 0."""
+def test_empty_node_absent_modules_deploy(tmp_path, caplog, node_yaml_with_modules, mock_modules_dir):
+    """rc==0, 0 labeled, 0 всего контейнеров → enabled docker-модули absent → compose up ×N (mutated)."""
     caplog.set_level(logging.DEBUG)
     cooldown_file = tmp_path / ".converge_cooldown.json"
+    compose_up_calls: list[list[str]] = []
 
-    with patch.object(subprocess, "run", side_effect=_r9_mock_run(ps_rc=0, ps_out="", diag_out="")):
+    with patch.object(
+        subprocess, "run", side_effect=_r9_mock_run(ps_rc=0, ps_out="", diag_out="", compose_up_calls=compose_up_calls)
+    ):
         entry = reconciler.reconcile_runtime_state(
             node_yaml_path=node_yaml_with_modules,
             modules_dir=mock_modules_dir,
             cooldown_file=str(cooldown_file),
         )
 
-    assert entry["status"] == "converged", f"пустая нода обязана быть зелёной: {entry!r}"
-    assert infra.exit_code == 0, f"пустая нода обязана держать exit 0, получен {infra.exit_code}"
-    logger.info("[IMP:9][test] R4 OK: truly empty node stays green")
+    # R4: diag пуст → никакого ложного unlabeled-warn (legacy-guard не false-positive)
+    assert not any("without compose-label" in d.get("detail", "") for d in infra.drifts), infra.drifts
+    # F-09: 3 enabled docker-модуля на пустой ноде = module absent → deploy каждого
+    assert entry["status"] == "mutated", f"absent-модули обязаны быть задеплоены (mutated): {entry!r}"
+    assert len(compose_up_calls) == 3, f"по одному compose up на enabled docker-модуль: {compose_up_calls}"
+    assert infra.exit_code == 1, f"deploy-мутации обязаны давать exit 1, получен {infra.exit_code}"
+    logger.info("[IMP:9][test] R4+R9 OK: diag-empty без ложного warn; absent-модули задеплоены")
 
 
 # endregion QA_R4_T2D
@@ -835,6 +864,8 @@ def test_r9_disabled_module_stops_running_container(tmp_path, caplog):
 # · Scenario: enabled:false, контейнеров нет (label И name-fallback пусты) → converged, 0 мутаций
 # · Last fail: N/A (preventive — идемпотентность disabled-flow после успешного down)
 # · Remove if: R9 начнёт что-то делать с disabled-модулями без контейнеров
+# · F-09 guard (2026-09-02): граница с absent-deploy — 0 контейнеров у DISABLED-модуля НЕ
+# ·   триггерит module-absent compose up (disabled-flow остаётся no-op; up НЕ вызывается)
 @pytest.mark.usefixtures("reset_state")
 @ldd_trajectory
 def test_r9_disabled_module_no_containers_noop(tmp_path, caplog):
@@ -868,5 +899,114 @@ def test_r9_disabled_module_no_containers_noop(tmp_path, caplog):
     assert entry["unit"] == "R9"
     assert entry["status"] == "converged", f"disabled-модуль без контейнеров обязан быть converged: {entry}"
     assert compose_down_calls == [], "down не должен вызываться без контейнеров"
-    assert compose_up_calls == [], "up не должен вызываться для disabled-модуля"
+    assert compose_up_calls == [], (
+        "up не должен вызываться для disabled-модуля (F-09 граница: disabled ≠ absent-deploy)"
+    )
     logger.info("[IMP:9][test] E017 disabled noop verified: 0 мутаций, status=converged")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# F-09 (E2 toggle-drill 2026-09-02) — enabled-модуль absent → needs deploy
+# ═══════════════════════════════════════════════════════════════════
+
+
+# region F09_MODULE_ABSENT_DEPLOY
+
+
+# 🧪 TRAP[TEST] · F-09 (E2 toggle-drill) · POSITIVE · enabled-модуль absent → compose up -d
+# · Scenario: status-page enabled:true, 0 контейнеров (label И name-fallback пусты), unlabeled
+# ·   на ноде нет (diag пуст) — контейнеры были downed в период enabled:false → converge обязан
+# ·   вернуть модуль (критерий владельца E2: вернуть enabled:true → converge → снова healthy)
+# · Last fail: 2026-09-02 (живая нода tronyx-vps, E2 toggle-drill) — «No running containers
+# ·   for module status-page» → continue → модуль не деплоился (status converged, exit 0)
+# · Remove if: R9 вернётся к трактовке «0 контейнеров = converged» для enabled-модулей
+@pytest.mark.usefixtures("reset_state")
+@ldd_trajectory
+def test_r9_enabled_module_absent_deploys(tmp_path, caplog):
+    """F-09: enabled-модуль без контейнеров (unlabeled нет) → compose up -d, mutated, exit 1."""
+    caplog.set_level(logging.INFO)
+    logger.info("[IMP:9][test] F-09 absent-deploy — enabled-модуль без контейнеров деплоится compose up -d")
+
+    node_yaml, modules_dir, _compose = _e017_env(tmp_path, enabled=True)
+    cooldown_file = tmp_path / ".converge_cooldown.json"
+    compose_up_calls: list[list[str]] = []
+    compose_down_calls: list[list[str]] = []
+
+    with patch.object(
+        subprocess,
+        "run",
+        side_effect=_e017_mock_run(
+            label_out="",  # label=project=status-page → 0 рядов (U-49-совместимый запрос)
+            name_out="",  # name-fallback (canonical status-page) → 0 рядов (модуль downed)
+            diag_out="",  # на ноде unlabeled контейнеров НЕТ → module-absent канал
+            config_json=_e017_config_json(),
+            compose_up_calls=compose_up_calls,
+            compose_down_calls=compose_down_calls,
+        ),
+    ):
+        entry = reconciler.reconcile_runtime_state(
+            node_yaml_path=node_yaml,
+            modules_dir=modules_dir,
+            cooldown_file=str(cooldown_file),
+        )
+
+    assert entry["unit"] == "R9"
+    assert entry["status"] == "mutated", f"absent-модуль обязан быть задеплоен (mutated): {entry}"
+    assert len(compose_up_calls) == 1, f"ровно один compose up -d для absent-модуля: {compose_up_calls}"
+    up_cmd = compose_up_calls[0]
+    assert "up" in up_cmd and "-d" in up_cmd, f"up -d не вызван: {up_cmd}"
+    assert "--profile" in up_cmd, f"канон build_compose_args требует --profile: {up_cmd}"
+    assert not any(tok in {"-v", "--volumes"} for tok in up_cmd), f"deploy не должен трогать volumes: {up_cmd}"
+    assert compose_down_calls == [], "enabled-модуль не должен вызывать down"
+    assert infra.exit_code == 1, f"успешный deploy обязан дать exit 1 (mutated), получен {infra.exit_code}"
+    assert any("status-page" in d.get("detail", "") for d in infra.drifts), infra.drifts
+    logger.info("[IMP:9][test] F-09 verified: absent enabled-модуль задеплоен compose up -d (mutated, exit 1)")
+
+
+# 🧪 TRAP[TEST] · F-09 (E2 toggle-drill) · NEGATIVE-mutation · report_only: absent-модуль → WOULD
+# · Scenario: report_only=true (audit/check-only) — module-absent детектируется, но compose up -d
+# ·   НЕ выполняется; отчёт несёт mutated (would be deployed) + exit 1 (план-мутация)
+# · Last fail: N/A (preventive — report_only контракт R9: никаких мутаций в check-режиме)
+# · Remove if: R9 перестанет поддерживать report_only в absent-deploy пути
+@pytest.mark.usefixtures("reset_state")
+@ldd_trajectory
+def test_r9_enabled_module_absent_report_only(tmp_path, caplog):
+    """F-09: report_only → WOULD deploy (mutated, exit 1), compose up -d НЕ вызывается."""
+    caplog.set_level(logging.INFO)
+    logger.info("[IMP:9][test] F-09 absent report_only — WOULD без фактического compose up")
+
+    node_yaml, modules_dir, _compose = _e017_env(tmp_path, enabled=True)
+    cooldown_file = tmp_path / ".converge_cooldown.json"
+    compose_up_calls: list[list[str]] = []
+    compose_down_calls: list[list[str]] = []
+
+    with patch.object(
+        subprocess,
+        "run",
+        side_effect=_e017_mock_run(
+            label_out="",
+            name_out="",
+            diag_out="",
+            config_json=_e017_config_json(),
+            compose_up_calls=compose_up_calls,
+            compose_down_calls=compose_down_calls,
+        ),
+    ):
+        entry = reconciler.reconcile_runtime_state(
+            node_yaml_path=node_yaml,
+            modules_dir=modules_dir,
+            report_only=True,
+            cooldown_file=str(cooldown_file),
+        )
+
+    assert entry["unit"] == "R9"
+    assert entry["status"] == "mutated", f"report_only: absent-модуль обязан дать mutated (WOULD): {entry}"
+    assert compose_up_calls == [], f"report_only: compose up -d НЕ выполняется: {compose_up_calls}"
+    assert compose_down_calls == [], "enabled-модуль не должен вызывать down"
+    assert infra.exit_code == 1, f"WOULD-мутация обязана давать exit 1, получен {infra.exit_code}"
+    assert "WOULD" in caplog.text, "report_only обязан логировать WOULD (план мутации)"
+    assert any("would be deployed" in d.get("detail", "") for d in infra.drifts), infra.drifts
+    logger.info("[IMP:9][test] F-09 report_only verified: WOULD deploy, 0 фактических мутаций")
+
+
+# endregion F09_MODULE_ABSENT_DEPLOY

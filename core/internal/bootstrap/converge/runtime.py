@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: converge-runtime, reconcile-runtime-state, r9, container-state, compose-up, compose-down, self-heal, disabled-flow, cooldown, compose-project-label, compose-defined-containers, name-fallback, build-compose-args
-# STRUCTURE: ▶ docker info → ▶ DISABLED-FLOW (enabled:false модули: ⚡ resolve_container_name → ◇ найдены? → ⚡ compose down <service> БЕЗ -v) → ◇ global cooldown (last_healed < 3 runs)? → ○ for each enabled docker module: ⚡ resolve_container_name [label=com.docker.compose.project=<module> → fallback: compose_defined_containers + docker ps --filter name=] → ⚡ get_container_state → ◇ in BAD_DOCKER_STATES? → ⚡ build_compose_args (root-first/env-file/profile) + compose up -d (shared, COMPOSE_UP_TIMEOUT) → ⊕ cooldown record → ⎋ drift entry {R9}
+# GREP_SUMMARY: converge-runtime, reconcile-runtime-state, r9, container-state, compose-up, compose-down, self-heal, disabled-flow, cooldown, compose-project-label, compose-defined-containers, name-fallback, build-compose-args, f-09, module-absent, absent-deploy
+# STRUCTURE: ▶ docker info → ▶ DISABLED-FLOW (enabled:false модули: ⚡ resolve_container_name → ◇ найдены? → ⚡ compose down <service> БЕЗ -v) → ◇ global cooldown (last_healed < 3 runs)? → ○ for each enabled docker module: ⚡ resolve_container_name [label=com.docker.compose.project=<module> → fallback: compose_defined_containers + docker ps --filter name=] → ◇ 0 контейнеров? → ◇ unlabeled на ноде? → warn (QA R4) | ⚡ module-absent deploy (F-09) → ⚡ get_container_state → ◇ in BAD_DOCKER_STATES? → ⚡ build_compose_args (root-first/env-file/profile) + compose up -d (shared, COMPOSE_UP_TIMEOUT) → ⊕ cooldown record → ⎋ drift entry {R9}
 # region MODULE_CONTRACT
 ## @purpose  R9 reconcile_runtime_state — Docker container state check + compose up -d self-heal +
 ##           cooldown tracking (flapping-защита) + DISABLED-FLOW (Phase E 017): модули с
@@ -24,6 +24,12 @@
 ##     O7/DD10) per service; контейнеров нет → converged (no-op). Выполняется ДО cooldown-шортката:
 ##     stop отключённого модуля — детерминированная коррекция дрифта (не heal), не обязан ждать
 ##     cooldown чужого heal (TRAP[DECISION] ниже). Cooldown-машинерия НЕ изменена.
+##   - F-09 (module-absent deploy): enabled docker-модуль с 0 контейнеров (label И name-fallback
+##     пусты) и БЕЗ unlabeled на ноде (legacy-guard diag пуст) = «модуля нет» — дрейф, НЕ converged:
+##     needs deploy через тот же self-heal путь compose up -d (идемпотентен для уже-запущенного).
+##     dry_run/report_only → WOULD + report mutated + set_exit(1); успех → report mutated +
+##     set_exit(1) + healed += 1; неудача → report fail + set_exit(2). unlabeled-ветка (QA R4/T2.D
+##     guard) и DISABLED-FLOW НЕ изменены — unlabeled ≠ отсутствие модуля (никакого deploy).
 ##   - Cooldown: контейнер, вылеченный в течение 3 последних run'ов → global cooldown (skip healing)
 ##   - BAD_DOCKER_STATES: exited/restarting/dead/unhealthy/paused
 ##   - Runbook scheduled converge: автоматического таймера НЕТ (FAIL-0900; systemd timer —
@@ -38,6 +44,10 @@
 ##           substring name=; argv через канонический build_compose_args (паритет с deploy/R7)
 ##           2026-08-27 · Phase E 017 (F-017) — name-fallback резолва контейнеров (label-miss на
 ##           U-49) + DISABLED-FLOW (compose down БЕЗ -v для enabled:false модулей)
+##           2026-09-02 · F-09 (E2 toggle-drill) — enabled-модуль с 0 контейнеров (label И
+##           name-fallback пусты, unlabeled на ноде нет) = module absent → needs deploy через
+##           общий self-heal путь compose up -d (было: «No running containers» → continue →
+##           модуль не возвращался в строй после периода enabled:false)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -338,6 +348,9 @@ def _count_unlabeled_containers(cache: dict[str, object], unit: str) -> int:
 ##   - Container in cooldown (healed within last 3 runs) → skip self-heal
 ##   - Disabled module (enabled:false) с живыми контейнерами → compose down `<service>` БЕЗ -v
 ##   - Disabled module без контейнеров → converged (no-op)
+##   - Enabled module absent (0 контейнеров по label И name-fallback, unlabeled на ноде нет) →
+##     needs deploy via compose up -d (F-09) — не converged
+##   - Enabled module absent + unlabeled на ноде → QA R4/T2.D warn (guard не изменён, без deploy)
 ##   - Cooldown активен + disabled-stop произошёл → status=mutated (cooldown не маскирует)
 def reconcile_runtime_state(
     node_yaml_path: str,
@@ -602,55 +615,87 @@ def reconcile_runtime_state(
         if not containers:
             # QA R4/T2.D legacy-guard: rc==0, но 0 рядов (label И name-fallback пусты) —
             # однократный допрос всех контейнеров ноды: строки с пустым compose-label R9
-            # не видит ни по label, ни по каноническому имени → warn; действительно пустая
-            # нода (0 строк) остаётся зелёной.
+            # не видит ни по label, ни по каноническому имени → warn (диагностика честности
+            # вердикта); действительно пустая нода (0 строк) НЕ рождает ложного warn.
             unlabeled_count = _count_unlabeled_containers(unlabeled_cache, unit)
             if unlabeled_count:
                 logger.info(
                     "[IMP:8][converge][%s] Module %s → 0 labeled containers (unlabeled present)", unit, mod_name
                 )
-            else:
-                logger.info("[IMP:7][converge][%s] No running containers for module %s", unit, mod_name)
-            continue
-
-        needs_heal = False
-        for cname in containers:
-            state = get_container_state(cname)
-            if state in BAD_DOCKER_STATES:
-                # 142 B28a: exited-oneshot (init/createbuckets, RestartPolicy=no) — штатное
-                # состояние, НЕ self-heal (compose up -d вернёт fail без env-секретов → ложный
-                # exit 2 на каждой converge). Сервисы с restart:unless-stopped в exited — реальная
-                # проблема → heal.
-                if state == "exited" and get_container_restart_policy(cname) == "no":
-                    logger.info(
-                        "[IMP:7][converge][%s] Container %s state=exited — oneshot (RestartPolicy=no), skip self-heal",
+                # QA R4/T2.D guard НЕ изменён (F-09): unlabeled-контейнеры — чужой runtime-факт,
+                # невидимый R9, а НЕ отсутствие модуля → warn выше + continue, никакого compose up.
+                continue
+            # ⚠️ TRAP[BUG] · 2026-09-02 · HI · F-09 (E2 toggle-drill): enabled-модуль с 0
+            # · контейнеров (после периода enabled:false → converge сделал compose down) молча
+            # · считался converged — «No running containers for module X» → continue → модуль
+            # · НЕ возвращался в строй при повторном enabled:true.
+            # · Symptom: status-page enabled:true, контейнеров нет → R9 лог «No running containers
+            # ·   for module status-page» → continue → модуль не деплоится (status converged).
+            # · Root: ветка `not containers` трактовала «контейнеров нет» как здоровое состояние
+            # ·   enabled-модуля, хотя отсутствие контейнеров у enabled = дрейф (module absent).
+            # · Fix: unlabeled на ноде нет (0 контейнеров по label И name-fallback + diag пуст) →
+            # ·   «module absent — needs deploy» → общий self-heal путь compose up -d ниже
+            # ·   (идемпотентен для уже-запущенного); dry_run/report_only → WOULD; неудача → fail.
+            # · Prevention: test_r9_enabled_module_absent_deploys /
+            # ·   test_r9_enabled_module_absent_report_only (unit R9)
+            logger.info(
+                "[IMP:9][converge][%s] Module %s has 0 containers (module absent) — needs deploy via compose up -d",
+                unit,
+                mod_name,
+            )
+            absent = True
+            needs_heal = True
+        else:
+            absent = False
+            needs_heal = False
+            for cname in containers:
+                state = get_container_state(cname)
+                if state in BAD_DOCKER_STATES:
+                    # 142 B28a: exited-oneshot (init/createbuckets, RestartPolicy=no) — штатное
+                    # состояние, НЕ self-heal (compose up -d вернёт fail без env-секретов → ложный
+                    # exit 2 на каждой converge). Сервисы с restart:unless-stopped в exited — реальная
+                    # проблема → heal.
+                    if state == "exited" and get_container_restart_policy(cname) == "no":
+                        logger.info(
+                            "[IMP:7][converge][%s] Container %s state=exited — oneshot (RestartPolicy=no), skip self-heal",
+                            unit,
+                            cname,
+                        )
+                        continue
+                    logger.warning(
+                        "[IMP:9][converge][%s] Container %s state=%s — needs self-heal",
                         unit,
                         cname,
+                        state,
                     )
-                    continue
-                logger.warning(
-                    "[IMP:9][converge][%s] Container %s state=%s — needs self-heal",
-                    unit,
-                    cname,
-                    state,
-                )
-                needs_heal = True
-            elif state == "running":
-                logger.info("[IMP:7][converge][%s] Container %s OK (running)", unit, cname)
+                    needs_heal = True
+                elif state == "running":
+                    logger.info("[IMP:7][converge][%s] Container %s OK (running)", unit, cname)
 
         if not needs_heal:
             logger.info("[IMP:9][converge][%s] Module %s all containers OK", unit, mod_name)
             continue
 
-        # ── Self-heal via docker compose up -d ──
+        # ── Self-heal via docker compose up -d (shared: bad-state heal + F-09 absent-deploy) ──
+        # Семантика 1:1 для обоих триггеров: compose up -d (shared docker_compose_up, timeout
+        # COMPOSE_UP_TIMEOUT), dry_run/report_only → WOULD, healed += 1 / set_exit(1) на успех,
+        # errors += 1 / set_exit(2) на неудачу, cooldown-record на успех. Различается только
+        # wording (deploy = модуль отсутствовал; heal = контейнер в bad-state).
+        heal_word = "deploy" if absent else "heal"
+        result_word = "deployed" if absent else "restarted"
         if dry_run or report_only:
-            logger.info("[IMP:9][converge][%s] WOULD heal module %s via docker compose up -d", unit, mod_name)
-            report_add(unit, "mutated", f"{mod_name}: would be restarted via compose up -d")
+            logger.info("[IMP:9][converge][%s] WOULD %s module %s via docker compose up -d", unit, heal_word, mod_name)
+            report_add(unit, "mutated", f"{mod_name}: would be {result_word} via compose up -d")
             healed += 1
             set_exit(1)
             continue
 
-        logger.info("[IMP:8][converge][%s] Self-healing module %s via docker compose up -d", unit, mod_name)
+        logger.info(
+            "[IMP:8][converge][%s] %s module %s via docker compose up -d",
+            unit,
+            "Deploying" if absent else "Self-healing",
+            mod_name,
+        )
         # T6 (DevPlan 116 B5, D8): shared docker_compose_up — sole path; timeout COMPOSE_UP_TIMEOUT=180
         # (DOCKER_TIMEOUT=30 был занижен для up с пуллом образов — стандартизация на канон).
         # REF-0014 (BUG-0701): argv через канонический build_compose_args — root-compose-first +
@@ -663,14 +708,14 @@ def reconcile_runtime_state(
             module_name=mod_name,
         )
         if _shared_docker_compose_up(str(compose_file.parent), timeout=COMPOSE_UP_TIMEOUT, compose_args=compose_args):
-            logger.info("[IMP:9][converge][%s] Module %s healed successfully", unit, mod_name)
-            report_add(unit, "mutated", f"{mod_name}: restarted via compose up -d")
+            logger.info("[IMP:9][converge][%s] Module %s %s successfully", unit, mod_name, result_word)
+            report_add(unit, "mutated", f"{mod_name}: {result_word} via compose up -d")
             healed += 1
             set_exit(1)
             # Record heal in cooldown
             containers_map[mod_name] = {"last_healed_run": current_run}
         else:
-            logger.error("[IMP:10][converge][%s] Failed to heal module %s via compose up -d", unit, mod_name)
+            logger.error("[IMP:10][converge][%s] Failed to %s module %s via compose up -d", unit, heal_word, mod_name)
             report_add(unit, "fail", f"{mod_name}: compose up -d failed")
             errors += 1
             set_exit(2)
@@ -682,7 +727,8 @@ def reconcile_runtime_state(
     # QA R4/T2.D: приоритет агрегата — errors(fail) > ps_unverified(warn) > mutations(mutated)
     # > converged. UNVERIFIED НИКОГДА не схлопывается в converged: транзиентный сбой docker ps
     # после успешного docker_info не даёт ложного «FULLY CONVERGED».
-    # Phase E 017: mutations = healed (compose up) + stopped (disabled compose down).
+    # Phase E 017 + F-09: mutations = healed (compose up: bad-state heal + module-absent deploy)
+    # + stopped (disabled compose down).
     if errors > 0:
         status = "fail"
         detail = f"{errors} module(s) had errors"

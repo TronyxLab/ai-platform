@@ -664,6 +664,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--project-yaml", type=str, default="", help="Path to ai-platform.yaml (default: project dir)")
     parser.add_argument("--force", action="store_true", default=False, help="Overwrite existing file without markers")
     parser.add_argument("--domain", type=str, default="", help="Node domain fallback for ${DOMAIN} substitution")
+    # F-08 (2026-09-02): make project-sync-env NAME=<n> PROJECT_DIR=<dir> пробрасывает --name
+    # в ОБА генератора (scaffold.sh:55 forwards "$@"); имя здесь выводится из ai-platform.yaml
+    # project-dir'а — аргумент принимается и игнорируется (паритет gen_env_platform.py).
+    parser.add_argument(
+        "--name", type=str, default="", help="Ignored (parity with gen_env_platform.py; name derives from project yaml)"
+    )
     args = parser.parse_args(argv, namespace=_GenPlatformMdArgs())
 
     project_dir = args.project_dir
