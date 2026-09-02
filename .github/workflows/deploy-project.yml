@@ -108,23 +108,12 @@ jobs:
     # ·   паритет; единственное осознанное отклонение карточки REF-0012.
     # · Rev: появление не-Python канала дистрибуции флагов (practices.lock#pins.ssh_flags или
     # ·   org-variable NODE_HOST_MAP-стиля) → заменить inline-набор на него.
-    # T2.15: SSH-флаги хойстнуты в job-level env — повторяющийся набор из 3 SSH-шагов
-    # (preflight / receive / verify) определён ОДИН раз. Флаги — существующий набор
-    # (BatchMode/StrictHostKeyChecking=accept-new/ServerAlive*) БЕЗ ConnectTimeout —
-    # канон флагов проекта core/internal/shared/ssh_opts.py (гейт ssh_opts_sole_path d:
-    # ConnectTimeout в CI → RED). Пути ключа детерминированы шагом Setup SSH key
-    # ($RUNNER_TEMP/deploy_key + $RUNNER_TEMP/known_hosts) — $RUNNER_TEMP раскрывается
-    # шеллом шага в момент использования (`ssh ${SSH_OPTS}` — bash-расширение).
-    # ⚠️ TRAP[BUG] · 2026-08-31 · P1 · job-level env с ${{ runner.temp }} = невалидный workflow
-    # · Symptom: все project-deploy ранфы в TronyxLab падали 0s «workflow file issue»
-    # ·   (Unrecognized named-value: 'runner' at line 120) — контекст `runner` недоступен
-    # ·   в job-level env (доступен только в step-level).
-    # · Root: T2.15 хойстинг использовал ${{ runner.temp }} в job-level env.
-    # · Fix: литеральный $RUNNER_TEMP (env-переменная раннера) — раскрывается bash'ом
-    # ·   внутри шага при `ssh ${SSH_OPTS}`; семантика идентична.
-    # · Prevention: change-check workflow-файлов гоняет actionlint (поймал бы named-value).
-    env:
-      SSH_OPTS: "-i $RUNNER_TEMP/deploy_key -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o UserKnownHostsFile=$RUNNER_TEMP/known_hosts"
+    # T2.15 (rev F-06, 2026-09-02): SSH-флаги (3 шага: preflight / receive / verify) определены
+    # в step-level env КАЖДОГО SSH-шага — с ${{ runner.temp }} (контекст runner в job-level env
+    # недоступен — TRAP[BUG] 2026-08-31, а литеральный $RUNNER_TEMP в job-level env НЕ
+    # раскрывается bash'ом при `ssh ${SSH_OPTS}` — F-06). Флаги — канон ssh_opts.py МИТУС
+    # ConnectTimeout (гейт ssh_opts_sole_path d: ConnectTimeout в CI → RED). Пути ключа
+    # детерминированы шагом Setup SSH key ($RUNNER_TEMP/deploy_key + known_hosts).
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -434,7 +423,18 @@ jobs:
           echo "ssh-known-hosts-path=$RUNNER_TEMP/known_hosts" >> "$GITHUB_OUTPUT"
 
       # ─── SSH pre-flight — честный ping (без || true) ────────────────────
+      # ⚠️ TRAP[BUG] · 2026-09-02 · F-06 · job-level env $RUNNER_TEMP не раскрывается bash'ом
+      # · Symptom: preflight «Identity file $RUNNER_TEMP/deploy_key not accessible» (литерал!)
+      #   → Permission denied (publickey) — CI-деплой всех проектов заблокирован (первый
+      #   реальный ран после биллинг-блока; TRAP[BUG] 2026-08-31 был неверен: bash НЕ делает
+      #   рекурсивного расширения переменных при `ssh ${SSH_OPTS}` word-splitting, без eval).
+      # · Root: env-значения GitHub Actions — литеральные строки; $RUNNER_TEMP внутри значения
+      #   не расширяется ни runtime'ом, ни шеллом-потребителем.
+      # · Fix: SSH_OPTS определён в step-level env КАЖДОГО SSH-шага с ${{ runner.temp }}
+      #   (контекст runner доступен в step-level env; в job-level — нет, TRAP 2026-08-31).
       - name: SSH pre-flight check
+        env:
+          SSH_OPTS: "-i ${{ runner.temp }}/deploy_key -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o UserKnownHostsFile=${{ runner.temp }}/known_hosts"
         run: |
           set -euo pipefail
           PONG=$(ssh ${SSH_OPTS} ci-deploy@"${{ env.ssh_host }}" "ping")
@@ -449,6 +449,7 @@ jobs:
       - name: Deliver + deploy (one-shot receive)
         env:
           PROJECT_REF: ${{ inputs.project_name }}
+          SSH_OPTS: "-i ${{ runner.temp }}/deploy_key -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o UserKnownHostsFile=${{ runner.temp }}/known_hosts"
         run: |
           set -euo pipefail
           FILES="ai-platform.yaml"
@@ -469,6 +470,7 @@ jobs:
       - name: Post-deploy verify
         env:
           PROJECT_REF: ${{ inputs.project_name }}
+          SSH_OPTS: "-i ${{ runner.temp }}/deploy_key -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o UserKnownHostsFile=${{ runner.temp }}/known_hosts"
         run: |
           set -euo pipefail
           ssh ${SSH_OPTS} ci-deploy@"${{ env.ssh_host }}" "verify ${{ env.target_node }} \"${PROJECT_REF}\""
