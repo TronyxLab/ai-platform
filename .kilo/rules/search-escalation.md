@@ -19,4 +19,4 @@
     3. **LIMITS:** max 2 `websearch` queries, max 2 `webfetch` calls; queries must be specific
        (exact error text, library name, version); prefer official docs over blogs, source over tutorials.
 
-<!-- ai-instructions:0.7.0 -->
+<!-- ai-instructions:0.7.1 -->

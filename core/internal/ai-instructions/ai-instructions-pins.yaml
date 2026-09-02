@@ -15,7 +15,7 @@
 # endregion MODULE_CONTRACT
 
 canon:
-  tag: v0.7.0
+  tag: v0.7.1
   # digest: sha256:<64 hex> — финализируется после первого успешного ORAS-push в ghcr.io
   # (org-конфигурация пакетов заблокировала push 2026-08-16: permission_denied — см.
   # TRAP[DECISION] в ai-instructions-pins.yaml; workflow oci-release.yml готов и запустится
@@ -29,7 +29,7 @@ hermes:
   emit_dir: core/modules/hermes-agent/build/templates/profiles
 
 templates:
-  requires_instructions_version: 0.7.0
+  requires_instructions_version: 0.7.1
 
 # 🧐 TRAP[DECISION] · 2026-08-16 · — · OCI-артефакт ghcr.io/ai-instructions отложен —
 # org ghcr-конфигурация (Package creation) · Rejected: локальный ORAS-push и GITHUB_TOKEN

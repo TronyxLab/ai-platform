@@ -469,4 +469,4 @@ description: Architecture Forensics — Staff Software Architect Pattern. Recove
   ...
   ```
 
-<!-- ai-instructions:0.7.0 -->
+<!-- ai-instructions:0.7.1 -->

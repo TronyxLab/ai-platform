@@ -36,4 +36,4 @@
 
     **QA Integration:** QA Phase 4 (Test Quality Deep Audit) checks R1-R5. R1/R3/R4 violation → DEGRADED verdict. R2/R5 violations → documented in report, contribute to test health score.
 
-<!-- ai-instructions:0.7.0 -->
+<!-- ai-instructions:0.7.1 -->

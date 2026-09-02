@@ -19,4 +19,4 @@
     - Language adaptation: ## @tags for Python, /** @tags */ for TypeScript, -- @tags for SQL
     - `$ARTIFACT_CONTRACT` with 7 mandatory fields on all management artifacts
 
-<!-- ai-instructions:0.7.0 -->
+<!-- ai-instructions:0.7.1 -->

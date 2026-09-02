@@ -30,6 +30,8 @@ description: Python Doxygen Markup Template — Doxygen-style contract tags for 
   ## @changes — LAST_CHANGE: version + description
   ## @modulemap — all functions/classes with [Weight] descriptions
   ## @usecases — Actor → Action → Goal
+  def _module_contract():
+      pass
   # endregion MODULE_CONTRACT
   # GREP_SUMMARY: comma, separated, keywords
   # STRUCTURE: ▶ main → ○ step → ◇ decision → ⊕ result → ⎋ return
@@ -63,4 +65,4 @@ description: Python Doxygen Markup Template — Doxygen-style contract tags for 
   ### Doxygen ALIASES
   In Doxyfile, include: purpose, invariants, rationale, io, modulemap, complexity, uses, scope, input, output, links, modulecontract, changes, usecases.
 
-<!-- ai-instructions:0.7.0 -->
+<!-- ai-instructions:0.7.1 -->

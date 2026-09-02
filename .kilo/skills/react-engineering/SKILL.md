@@ -61,4 +61,4 @@ description: React Engineering Rules — function components and hooks, local an
   ### Change Discipline
   - Before modifying a component, trace its data flow, state ownership and side effects; do not reason from the component file alone.
 
-<!-- ai-instructions:0.7.0 -->
+<!-- ai-instructions:0.7.1 -->

@@ -28,4 +28,4 @@
 
     Adapt the specific syntax (// vs # vs -- vs /* */) to the target language while preserving the semantic structure.
 
-<!-- ai-instructions:0.7.0 -->
+<!-- ai-instructions:0.7.1 -->

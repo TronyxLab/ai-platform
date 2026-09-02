@@ -45,4 +45,4 @@ description: AI-First Architectural Principles — lightweight DDD, simplified o
 
   Note: testing patterns (DI > mocks, headless UI) live in §TESTING — single source of truth.
 
-<!-- ai-instructions:0.7.0 -->
+<!-- ai-instructions:0.7.1 -->

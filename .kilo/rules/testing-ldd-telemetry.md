@@ -38,4 +38,4 @@
 
     This demonstrates the real execution context and AI Belief State to QA agents, rather than just a successful assert.
 
-<!-- ai-instructions:0.7.0 -->
+<!-- ai-instructions:0.7.1 -->

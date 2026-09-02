@@ -44,4 +44,4 @@
     - The full gate runs exactly once, at the end, when the batched command is clean.
 
 
-<!-- ai-instructions:0.7.0 -->
+<!-- ai-instructions:0.7.1 -->

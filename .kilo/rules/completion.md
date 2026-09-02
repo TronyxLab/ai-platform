@@ -57,4 +57,4 @@
     Sysadmin runs mutating commands, QA runs tests, Architect plans).
 
 
-<!-- ai-instructions:0.7.0 -->
+<!-- ai-instructions:0.7.1 -->

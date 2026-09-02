@@ -63,4 +63,4 @@
     - Readers resolve "the DevPlan" as the highest-NN `*-DevPlan*.md` (R1)
 
 
-<!-- ai-instructions:0.7.0 -->
+<!-- ai-instructions:0.7.1 -->

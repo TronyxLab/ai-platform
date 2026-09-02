@@ -264,4 +264,4 @@ description: Design architecture, decompose into atomic verifiable tasks, and pr
     - Doxyfile with ALIASES for all ## @ tags used in the project
     - TRAP[ARCHIVED] in `# region TRAP_ARCHIVE` at bottom of files for stale traps
 
-<!-- ai-instructions:0.7.0 -->
+<!-- ai-instructions:0.7.1 -->

@@ -18,4 +18,4 @@
     6. On ambiguity: use superposition protocol — not open-ended questions.
      7. Language: reply in {{variables.language}}.
 
-<!-- ai-instructions:0.7.0 -->
+<!-- ai-instructions:0.7.1 -->

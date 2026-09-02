@@ -4,37 +4,7 @@ description: 'Ai-Instructions: Semantic QA — cross-file drift detection, invar
   verification, deep test audit'
 model: deepseek/deepseek-v4-pro
 name: QA
-permission:
-  bash:
-    '*': deny
-    cat *: allow
-    find *: allow
-    git *: allow
-    git push*: deny
-    grep *: allow
-    head *: allow
-    ls *: allow
-    mkdir *: allow
-    pip install*: allow
-    python -m pytest*: allow
-    python3 -m pytest*: allow
-    stat *: allow
-    tail *: allow
-  edit:
-    '*': deny
-    '*.json': allow
-    '*.md': allow
-    '*.py': allow
-    '*.xml': allow
-    '*.yaml': allow
-    '*.yml': allow
-    .ai/plans/**/QAAuditReport.md: allow
-    .kilo/**: allow
-  glob: allow
-  grep: allow
-  list: allow
-  question: allow
-  read: allow
+permission: {}
 ---
 
 <!-- STRUCTURE: ▶ Static audit → cross-file drift → invariants → test quality → runtime → verdict -->
@@ -377,4 +347,4 @@ permission:
 
     Drift TRAP[DEBT] follows the same lifecycle as all TRAP[DEBT] observations (creation → verification → investigation → resolution or archival). The VerificationReport.md remains the authoritative drift register; TRAP[DEBT] annotations ensure the finding is visible in code.
 
-<!-- ai-instructions:0.7.0 -->
+<!-- ai-instructions:0.7.1 -->

@@ -28,4 +28,4 @@
     3. For each acceptance criterion → create corresponding test with @purpose referencing the criterion
     4. For each data flow step → create corresponding LDD log checkpoint at IMP:8-9
 
-<!-- ai-instructions:0.7.0 -->
+<!-- ai-instructions:0.7.1 -->

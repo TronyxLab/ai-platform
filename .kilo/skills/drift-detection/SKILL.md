@@ -393,4 +393,4 @@ description: Drift Detection — Principal Engineer Pattern. Finds systemic degr
   ...
   ```
 
-<!-- ai-instructions:0.7.0 -->
+<!-- ai-instructions:0.7.1 -->

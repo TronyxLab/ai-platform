@@ -344,4 +344,4 @@ description: "Semantic quality assurance \u2014 cross-file drift detection, inva
 
     Drift TRAP[DEBT] follows the same lifecycle as all TRAP[DEBT] observations (creation → verification → investigation → resolution or archival). The VerificationReport.md remains the authoritative drift register; TRAP[DEBT] annotations ensure the finding is visible in code.
 
-<!-- ai-instructions:0.7.0 -->
+<!-- ai-instructions:0.7.1 -->

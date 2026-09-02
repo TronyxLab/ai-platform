@@ -23,4 +23,4 @@
     **Do NOT add for:** requirements already documented in the spec, personal opinions not validated
     with the owner, hypothetical future requirements, undocumented assumptions.
 
-<!-- ai-instructions:0.7.0 -->
+<!-- ai-instructions:0.7.1 -->

@@ -56,4 +56,4 @@ description: TypeScript/JSDoc Semantic Markup Adaptation — JSDoc-style Doxygen
   ### LDD adaptation for TypeScript
   Use `console.log` with `[IMP:X][FUNC][BLOCK]` format. IMP:9-10 for business logic.
 
-<!-- ai-instructions:0.7.0 -->
+<!-- ai-instructions:0.7.1 -->

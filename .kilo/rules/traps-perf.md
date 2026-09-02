@@ -23,4 +23,4 @@
     **Do NOT add for:** speculative concerns without data, micro-optimizations (<1% impact), issues
     fixed by scaling infrastructure only, routine query optimization.
 
-<!-- ai-instructions:0.7.0 -->
+<!-- ai-instructions:0.7.1 -->

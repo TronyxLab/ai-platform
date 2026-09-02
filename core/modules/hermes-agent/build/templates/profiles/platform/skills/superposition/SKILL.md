@@ -64,4 +64,4 @@ description: Superposition Protocol — 5 decision modes (FULL, BINARY, GUIDED, 
   ### Mode 5: AUTO-COLLAPSE (autonomous mode)
   When no user response is expected within current session. Announce: "Auto-collapsing to Option {X} (score {Y}/10) — autonomous mode. Override with option name if different choice needed."
 
-<!-- ai-instructions:0.7.0 -->
+<!-- ai-instructions:0.7.1 -->

@@ -239,4 +239,4 @@ permission:
 
     See RULES.md §SYADMIN §Secrets Audit & Sanitization for automated scan patterns, pre-output sanitization checklist, audit trail format, and privilege escalation log template.
 
-<!-- ai-instructions:0.7.0 -->
+<!-- ai-instructions:0.7.1 -->

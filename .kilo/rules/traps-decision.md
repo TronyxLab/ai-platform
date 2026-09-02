@@ -29,4 +29,4 @@
     preferences without technical rationale, decisions already covered by ADR/design doc, trivial
     choices between equivalent options, unknown proper fix (needs investigation first).
 
-<!-- ai-instructions:0.7.0 -->
+<!-- ai-instructions:0.7.1 -->

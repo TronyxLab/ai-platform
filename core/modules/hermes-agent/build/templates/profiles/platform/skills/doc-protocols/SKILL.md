@@ -104,4 +104,4 @@ description: Documentation Protocols for AI-Friendly Artifacts — $DOCUMENT_PLA
   | FAIL | Blocking issues, cannot proceed |
   | BLOCKED | Environmental (permission denied, command not found, etc.) |
 
-<!-- ai-instructions:0.7.0 -->
+<!-- ai-instructions:0.7.1 -->

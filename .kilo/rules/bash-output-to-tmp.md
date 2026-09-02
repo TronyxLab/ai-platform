@@ -21,4 +21,4 @@
     If the command times out — grep/read the temp file for results instead
     of re-running. The `OUTPUT_FILE=` line tells you the exact path.
 
-<!-- ai-instructions:0.7.0 -->
+<!-- ai-instructions:0.7.1 -->

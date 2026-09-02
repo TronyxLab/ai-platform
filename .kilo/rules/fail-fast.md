@@ -24,4 +24,4 @@
 
     **Batch-level:** After batch mutations (replaceAll, multi-file refactoring), validate with a verification grep. Never assume batch operations succeeded uniformly — non-standard formatting variants may be silently skipped.
 
-<!-- ai-instructions:0.7.0 -->
+<!-- ai-instructions:0.7.1 -->

@@ -28,4 +28,4 @@
         (.ai/plans/*/*-Debt.md), VerificationReports from prior waves. Knowledge
         recorded but not read is wasted.
 
-<!-- ai-instructions:0.7.0 -->
+<!-- ai-instructions:0.7.1 -->

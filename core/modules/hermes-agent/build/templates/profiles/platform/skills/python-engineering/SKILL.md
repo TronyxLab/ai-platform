@@ -59,4 +59,4 @@ description: Python Engineering Rules — modern Python 3.14+, Pyright strict, t
   ### Change Discipline
   - Before changing async, concurrency, lifecycle, imports or dependency boundaries, inspect the existing execution model.
 
-<!-- ai-instructions:0.7.0 -->
+<!-- ai-instructions:0.7.1 -->

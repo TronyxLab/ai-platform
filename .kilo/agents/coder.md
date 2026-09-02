@@ -174,4 +174,4 @@ permission:
     - Consistency report verifies: GREP_SUMMARY uniqueness, STRUCTURE accuracy, LDD format consistency
     - Legacy migration: old→new mapping from RULES.md §MARKUP when GREP_SUMMARY absent
 
-<!-- ai-instructions:0.7.0 -->
+<!-- ai-instructions:0.7.1 -->

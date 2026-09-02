@@ -73,4 +73,4 @@
 
     See RULES.md §SYADMIN §State Snapshot Automation for batch snapshot scripts, JSON bundle format, diff output template, and rollback execution protocol.
 
-<!-- ai-instructions:0.7.0 -->
+<!-- ai-instructions:0.7.1 -->

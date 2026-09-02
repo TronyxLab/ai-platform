@@ -27,4 +27,4 @@
     **Do NOT add for:** minor incidents with obvious root cause, routine bug fixes, non-production
     issues, incidents already documented in an external system.
 
-<!-- ai-instructions:0.7.0 -->
+<!-- ai-instructions:0.7.1 -->

@@ -31,4 +31,4 @@
     - Invariant Testing (ETL): verify logical invariants
     - SWE Heuristics: isolate parsing logic, test with static Data-Driven Fixtures
 
-<!-- ai-instructions:0.7.0 -->
+<!-- ai-instructions:0.7.1 -->

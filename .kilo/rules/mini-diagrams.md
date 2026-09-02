@@ -21,4 +21,4 @@
 
     The module-level # STRUCTURE: line already provides the algorithmic overview for the entire file.
 
-<!-- ai-instructions:0.7.0 -->
+<!-- ai-instructions:0.7.1 -->

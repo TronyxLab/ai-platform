@@ -36,4 +36,4 @@
     / update Observed+Suspected (confirmed, fix unknown) / TRAP[ARCHIVED] (false positive or
     prevented architecturally).
 
-<!-- ai-instructions:0.7.0 -->
+<!-- ai-instructions:0.7.1 -->

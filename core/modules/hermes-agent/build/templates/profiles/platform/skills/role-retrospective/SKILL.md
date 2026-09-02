@@ -151,4 +151,4 @@ description: Role Retrospective — critical analysis of agent logic after an in
   6. **Self-criticism** — check for repetitions, redundancy, new exceptions
   7. **Architect review** — independent verification by architect (Part B)
 
-<!-- ai-instructions:0.7.0 -->
+<!-- ai-instructions:0.7.1 -->

@@ -50,4 +50,4 @@ description: Development Pipeline — full Brief → Architect → Coder → QA 
   Output artifact paths (DevPlan, VerificationReport), final verdict, test summary.
   Then STOP (§COMPLETION_PROTOCOL).
 
-<!-- ai-instructions:0.7.0 -->
+<!-- ai-instructions:0.7.1 -->

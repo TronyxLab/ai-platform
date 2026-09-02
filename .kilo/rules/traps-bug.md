@@ -26,4 +26,4 @@
     but incorrect, or the bug was intermittent/environment-specific.
     **Do NOT add for:** typos, formatting, simple syntax errors, trivial one-line changes.
 
-<!-- ai-instructions:0.7.0 -->
+<!-- ai-instructions:0.7.1 -->
