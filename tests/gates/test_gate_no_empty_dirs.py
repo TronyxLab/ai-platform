@@ -37,6 +37,11 @@ _SKIP_PARTS = {
     ".kilo",
     "load-results",
     ".worktrees",
+    # F-04 (2026-09-02): .local — gitignored dev-runtime зона (PROMETHEUS_TARGETS_DIR
+    # dev-default <root>/.local/prometheus-targets; docker bind-mount автосоздаёт
+    # каталог при `make up` — пустым, fresh-checkout его не имеет). Тот же класс,
+    # что load-results/.kilo (177 W1.7).
+    ".local",
     # 2026-08-27: projects/ — gitignored операторская зона контекстов (~/projects
     # канон живёт вне репо, но на dev-машинах scaffolder'ы создают projects/<ctx>/
     # внутри дерева); внешний процесс может пересоздавать каталоги в этой зоне
