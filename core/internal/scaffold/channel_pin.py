@@ -31,7 +31,7 @@
 # 2026-09-01: re-pin 2419325 → e5d76fa — E2 валидация (план 020): CI-раннеры видели
 # last-touch=e5d76fa для deploy-project.yml (локальный полный клон — 2419325; расследование
 # в 02-StatusReport.md); re-pin на HEAD закрывает обе реальности — пин содержит всё до HEAD.
-DEPLOY_CHANNEL_PIN = "e5d76fa3080dcd4471bb40a5d7b5847d859d22e6"
+DEPLOY_CHANNEL_PIN = "acf4b971d89397f08d06c700ec896f277f78193c"
 
 # Честный комментарий-снапшот (формат фиксируется freshness-гейтом: 'main snapshot YYYY-MM-DD …').
-PIN_COMMENT = "main snapshot 2026-09-01 — E2 acceptance validation wave (bootstrap strict context-deploy, rollback contour, monitoring enabled-semantics)"
+PIN_COMMENT = "main snapshot 2026-09-02 — E2 acceptance validation wave (bootstrap strict context-deploy, rollback contour, monitoring enabled-semantics)"

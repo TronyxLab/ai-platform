@@ -83,6 +83,11 @@ Usage:
 ##                       унифицирован до (args: str, ctx: _DispatchContext) — тот же handler
 ##                       для main-CLI и dispatch (паттерн status/remove/health); +rollback в
 ##                       T9.7-валидацию project-name; _VERB_HANDLERS = CANONICAL_VERBS (8)
+##           2026-09-02 | F-07 (CI-deploy канал) — +_parse_tokens (shlex.split + fallback на
+##                       naive split при unmatched quote); заменён наивный (args or "").split()
+##                       во ВСЕХ verb-handler'ах (status/remove/health/verify/receive/rollback)
+##                       и в T9.7 dispatch-валидации — CI-канал (литеральные кавычки из
+##                       deploy-project.yml) и локальный канал (shlex.quote) оба принимаются
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -92,6 +97,7 @@ import contextlib
 import json
 import logging
 import os
+import shlex
 import subprocess
 import sys
 from collections.abc import Callable, Mapping
@@ -315,6 +321,61 @@ def build_channel(args: _CliArgs) -> SCPChannel | ForcedCommandChannel | LocalCh
 # endregion FUNC_build_channel
 
 
+# region FUNC__parse_tokens
+## @purpose  Единый токенизатор аргументов verb-handler'ов (dispatch): shlex.split(args) с
+##           fallback на args.split() при unmatched quote. Устойчив к ОБОИМ форматам
+##           доставки: локальный канал (ForcedCommandChannel, shlex.quote — без кавычек для
+##           имён без спецсимволов) и CI-канал (reusable workflow deploy-project.yml шлёт
+##           литеральные кавычки: receive "PROJECT_REF" + SHA, оба в кавычках).
+##           F-07: наивный (args or "").split() оставлял кавычки в токене → project
+##           получался '"dance-site"' (с литеральными кавычками) → validate_project_name
+##           отвергал → CI-деплой сломан.
+## @io       ⇥ args: str (строка аргументов после verb; "" / None-safe) → ⎋ list[str]
+## @complexity — O(N) где N = длина строки (shlex-скан)
+## @invariants
+##   - shlex.split (posix) снимает парные кавычки: '"dance-site" abc123' → ["dance-site", "abc123"]
+##   - ValueError (unmatched quote) → НЕ роняем dispatch: fallback args.split() (прежнее
+##     поведение); T9.7 fail-closed (validate_project_name) остаётся в validate_project_name —
+##     токен с литеральной кавычкой невалиден → JSON ERROR + exit 1 (инъекция отсекается)
+##   - args="" / None → [] (идентично "".split())
+##   - shell-injection исключён: токены не исполняются, только валидируются/используются
+##     как имена; инъекция через экранирование shlex (\\; touch /tmp/x) даёт токен, который
+##     не проходит validate_project_name (T9.7) — канон U-56
+##   - Фолбэк логируется [IMP:7] (наблюдаемость деградации формата)
+# ⚠️ TRAP[BUG] · 2026-09-02 · P1 · F-07 — CI-канал шлёт quoted-аргументы, наивный split ломал receive/verify
+# · Symptom: прод-лог CI (run 33591414425, TronyxLab/dance-site): forced-command
+# ·   `receive "dance-site" fed3794...` → сервер: Invalid or reserved project name:
+# ·   '"dance-site"' (литеральные кавычки в токене) → CI-деплой сломан ПОЛНОСТЬЮ;
+# ·   verify с теми же кавычками (`verify "tronyx-vps" "dance-site"`)
+# · Root: reusable workflow .github/workflows/deploy-project.yml оборачивает аргументы в
+# ·   кавычки (ssh ... "receive PROJECT_REF SHA" — оба в кавычках), а сервер-сайд
+# ·   `_handle_receive` парсил args наивным (args or "").split() — кавычки оставались
+# ·   литеральными в токене; локальный канал (shlex.quote) кавычек не добавлял — расхождение
+# ·   форматов двух отправителей одного verb-контракта
+# · Fix: _parse_tokens(args) — shlex.split с fallback на args.split() при unmatched quote;
+# ·   применён во ВСЕХ verb-handler'ах + T9.7 dispatch-валидации (сервер принимает оба
+# ·   формата; workflow НЕ меняется)
+# · Prevention: тесты quoted receive/verify/unmatched-quote fallback (F-07 regression suite)
+def _parse_tokens(args: str) -> list[str]:
+    """Parse verb-args строку в токены: shlex.split, fallback на naive split (F-07).
+
+    ▶ ┌args┐ → ◇ empty? → ⎋ [] → ◇ shlex.split(args) → ⎋ tokens
+    │                → ✗ ValueError (unmatched quote) → ⎋ args.split() (fallback)
+    """
+    if not args:
+        return []
+    try:
+        return shlex.split(args)
+    except ValueError as e:
+        # F-07: unmatched quote не роняет dispatch — naive split (прежнее поведение);
+        # fail-closed T9.7 (validate_project_name) отсечёт токен с литеральной кавычкой.
+        logger.warning("[IMP:7][parse_tokens][fallback] shlex.split failed (%s) — naive split", e)
+        return args.split()
+
+
+# endregion FUNC__parse_tokens
+
+
 # ── Dispatch verb handlers (реестр _VERB_HANDLERS, CANONICAL_VERBS) ─────────────
 
 
@@ -360,7 +421,9 @@ def _handle_exit(
 ##   - dispatch: args = вся строка после verb; main: args = args.project
 def _handle_status(args: str, ctx: _DispatchContext) -> int:
     """ProjectStatus JSON (found/stub → 0, not_found/error → 1, D6)."""
-    project = args or ""
+    # F-07: quoted-аргументы CI (`status "dance-site"`) → _parse_tokens снимает кавычки
+    tokens = _parse_tokens(args)
+    project = tokens[0] if tokens else (args or "")
     status = ctx.orchestrator.status(project_name=project)
     print(json.dumps(status.to_dict()))
     return 0 if status.status in {"found", "stub"} else 1
@@ -401,7 +464,7 @@ _DOCKER_NO_SUCH_OBJECT = "No such object"
 ##     валидируются dispatch T9.7-блоком ДО handler'а (тот же паттерн, что status/remove)
 def _handle_health(args: str, ctx: _DispatchContext) -> int:
     """Read-only verb: docker inspect State.Health.Status → слово-контракт (B3 fix-forward)."""
-    tokens = (args or "").split()
+    tokens = _parse_tokens(args)
     project = tokens[0] if tokens else ""
     service = tokens[1] if len(tokens) > 1 else project
     if not project:
@@ -450,7 +513,9 @@ def _handle_health(args: str, ctx: _DispatchContext) -> int:
 ##   - purge (down -v) доступен ТОЛЬКО из main-пути (dispatch-верб remove не имеет purge-флага)
 def _handle_remove(args: str, ctx: _DispatchContext) -> int:
     """DeployOrchestrator.remove() JSON (exit 0/1)."""
-    project = args or ""
+    # F-07: quoted-аргументы CI (`remove "dance-site"`) → _parse_tokens снимает кавычки
+    tokens = _parse_tokens(args)
+    project = tokens[0] if tokens else (args or "")
     # REF-0011 (11-DevPlan W1): rollback/remove под тем же per-project локом, что и receive —
     # гонка «remove vs параллельный receive» ломала payload/state. Reentrant: вложенный
     # orchestrator-путь возьмёт тот же лок без дедлока.
@@ -490,7 +555,8 @@ def _handle_remove(args: str, ctx: _DispatchContext) -> int:
 ##   - verify_contracts: has_blocking_violation → [PRACTICES:BLOCK] + exit 1; warnings → exit 0
 def _handle_verify(args: str, ctx: _DispatchContext) -> int:
     """HTTPS-верификация доменов + контракты проекта (K3) — мост на verify_contracts."""
-    parts = (args or "").split()
+    # F-07: CI-канал шлёт `verify "tronyx-vps" "dance-site"` — _parse_tokens снимает кавычки
+    parts = _parse_tokens(args)
     node = parts[0] if parts else ""
     project = parts[1] if len(parts) > 1 else ""
     if not node:
@@ -585,7 +651,8 @@ def _handle_verify(args: str, ctx: _DispatchContext) -> int:
 ##   - project = tokens[0] или None (фолбэк на ai-platform.yaml name в ReceiveFlow)
 def _handle_receive(args: str, ctx: _DispatchContext) -> int:
     """Receive tar из stdin + version из аргументов (D5)."""
-    tokens = (args or "").split()
+    # F-07: CI-канал шлёт `receive "dance-site" [sha]` — _parse_tokens снимает кавычки
+    tokens = _parse_tokens(args)
     project = tokens[0] if tokens else None
     version = tokens[1] if len(tokens) > 1 else "latest"
     return ctx.orchestrator.receive(
@@ -613,7 +680,8 @@ def _handle_receive(args: str, ctx: _DispatchContext) -> int:
 ##   - per-project flock (REF-0011) — тот же лок, что receive/remove
 def _handle_rollback(args: str, ctx: _DispatchContext) -> int:
     """Rollback a project (dispatch verb + main-команда, JSON результат)."""
-    tokens = (args or "").split()
+    # F-07: quoted-аргументы CI (`rollback "dance-site"`) → _parse_tokens снимает кавычки
+    tokens = _parse_tokens(args)
     project = tokens[0] if tokens else ""
     snapshot_id = tokens[1] if len(tokens) > 1 else ""
     if not project:
@@ -739,7 +807,11 @@ def _dispatch(
     # health — read-only verb, но тот же guard: первый токен = project (паттерн status/remove).
     # rollback (D8) — тот же guard: первый токен = project (первый токен args).
     if verb in {"status", "remove", "receive", "health", "rollback"}:
-        project_token = (args or "").split()[0] if (args or "").split() else ""
+        # F-07: quoted-аргументы CI (`receive "dance-site" ...`) — shlex-токенизация до
+        # валидации; иначе T9.7 отвергал бы валидный проект с литеральными кавычками.
+        # args: str | None (ping/exit — None) → "" (типобезопасно для _parse_tokens)
+        tokens = _parse_tokens(args or "")
+        project_token = tokens[0] if tokens else ""
         if project_token and not _validate_project_name(project_token):
             logger.error("[IMP:10][dispatch][invalid_project] Invalid/reserved project name: %r (T9.7)", project_token)
             print(json.dumps({"status": "ERROR", "error": f"Invalid or reserved project name: {project_token}"}))

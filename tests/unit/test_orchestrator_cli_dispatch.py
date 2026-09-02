@@ -16,6 +16,10 @@
 ## @changes    2026-08-13 | DevPlan 160 W6 T6.1 — test_dispatch_receive_version: мок
 ##              DeployOrchestrator._deploy_compose + HealthcheckPoller.poll_until_healthy на КЛАССЕ
 ##              (ReceiveFlow создаёт свой DeployOrchestrator внутри — 75.8s → <1s).
+## @changes    2026-09-02 | F-07 — quoted-аргументы CI-канала: +_parse_tokens unit-тесты
+##              (quoted/unmatched-quote fallback), +receive quoted/unquoted через SSH_ORIGINAL_COMMAND,
+##              +quoted-инъекция negative (T9.7 после снятия кавычек), +verify quoted node/project;
+##              _receive_ok_factory вынесен в модульный хелпер (DRY с receive_version)
 # endregion MODULE_CONTRACT
 
 import io
@@ -27,7 +31,7 @@ import tarfile
 import pytest
 
 from core.internal.deploy.orchestrator import DeployOrchestrator as _RealDeployOrchestrator
-from core.internal.deploy.orchestrator_cli import _dispatch
+from core.internal.deploy.orchestrator_cli import _dispatch, _parse_tokens
 from core.internal.shared.exceptions import ConfigValidationError
 from tests.helpers.gate_helpers import assert_ldd_imp9
 
@@ -44,6 +48,35 @@ def _orchestrator_factory(projects_base: str):
     def _factory(*args, **kwargs):
         kwargs.setdefault("projects_base", projects_base)
         return _RealDeployOrchestrator(*args, **kwargs)
+
+    return _factory
+
+
+def _receive_ok_factory(projects_base: str):
+    """DI-фабрика DeployOrchestrator для receive-тестов (T6.1, DevPlan 160 W6 — 0 патчей).
+
+    ## @purpose — ReceiveFlow создаёт свой DeployOrchestrator внутри: субкласс с OK-_deploy_compose
+    ##            + фейк-healthcheck-poller → детерминированный DEPLOYED (unit-среда без Docker,
+    ##            <1s). Общий для quoted/unquoted receive-тестов (F-07).
+    """
+
+    class _DeployOKOrch(_RealDeployOrchestrator):
+        def _deploy_compose(self, _project_dir, _service, _version):
+            return True
+
+        def _run_post_deploy_chain(self, _project, _version, _status, _project_dir=None, _node_name=""):
+            return None
+
+    class _FakePoller:
+        def poll_until_healthy(self, _project_name, _project_dir):
+            return type("H", (), {"status": "healthy"})()
+
+    def _factory(*args, **kwargs):
+        if not args and "projects_base" not in kwargs:
+            kwargs["projects_base"] = projects_base
+        if "healthcheck_poller" not in kwargs:
+            kwargs["healthcheck_poller"] = _FakePoller()
+        return _DeployOKOrch(*args, **kwargs)
 
     return _factory
 
@@ -252,31 +285,14 @@ def test_dispatch_receive_version(capsys, tmp_path, caplog: pytest.LogCaptureFix
     caplog.set_level(logging.INFO)
 
     # DI (W-H): stdin_stream= io.BytesIO + orchestrator_factory с субклассом
-    # (0 патчей _deploy_compose/poll_until_healthy/class-level, T6.1 160)
-    class _DeployOKOrch(_RealDeployOrchestrator):
-        def _deploy_compose(self, _project_dir, _service, _version):
-            return True
-
-        def _run_post_deploy_chain(self, _project, _version, _status, _project_dir=None, _node_name=""):
-            return None
-
-    class _FakePoller:
-        def poll_until_healthy(self, _project_name, _project_dir):
-            return type("H", (), {"status": "healthy"})()
-
-    def _factory(*args, **kwargs):
-        if not args and "projects_base" not in kwargs:
-            kwargs["projects_base"] = str(tmp_path)
-        if "healthcheck_poller" not in kwargs:
-            kwargs["healthcheck_poller"] = _FakePoller()
-        return _DeployOKOrch(*args, **kwargs)
-
+    # (0 патчей _deploy_compose/poll_until_healthy/class-level, T6.1 160) — общий
+    # _receive_ok_factory (F-07: переиспользуется quoted/unquoted receive-тестами)
     tar_bytes = _make_payload_tar(tmp_path)
     rc = _dispatch(
         ["receive", "testproj", "abc123"],
         env={},
         stdin_stream=io.BytesIO(tar_bytes),
-        orchestrator_factory=_factory,
+        orchestrator_factory=_receive_ok_factory(str(tmp_path)),
     )
 
     out = capsys.readouterr().out
@@ -964,3 +980,239 @@ def test_dispatch_traversal_negatives_receive_remove(
 
 
 # endregion FUNC_test_dispatch_traversal_negatives_receive_remove
+
+
+# ── F-07 (2026-09-02): CI-канал шлёт quoted-аргументы — _parse_tokens (shlex) ──────
+# Прод-лог CI run 33591414425 (TronyxLab/dance-site): reusable workflow deploy-project.yml
+# шлёт `receive "dance-site" fed3794...` (литеральные кавычки) → наивный split давал
+# project '"dance-site"' → validate_project_name отвергал → CI-деплой сломан полностью.
+# Фикс: _parse_tokens(args) — shlex.split с fallback на naive split при unmatched quote
+# (T9.7 fail-closed остаётся в validate_project_name). Сервер принимает ОБА формата.
+
+
+# region FUNC_test_parse_tokens_quoted_args
+## @purpose — _parse_tokens: shlex снимает парные кавычки (формат CI-канала) → чистые токены.
+# 🧪 TRAP[TEST] · 2026-09-02 · Regression · F-07 — quoted-аргументы токенизируются
+# · Regression: naive split оставлял кавычки → project '"dance-site"' → "Invalid or reserved project name"
+# · Scenario: '"dance-site" abc123' → ["dance-site", "abc123"]; 'tronyx-vps "dance-site"' →
+# ·   ["tronyx-vps", "dance-site"]; "" → []; без кавычек — прежние токены
+# · Last fail: CI run 33591414425 (receive "dance-site" → rejected)
+# · Remove if: _parse_tokens заменяется иным токенизатором
+def test_parse_tokens_quoted_args() -> None:
+    """_parse_tokens: shlex снимает кавычки (CI-формат), пустой ввод → []."""
+    assert _parse_tokens('"dance-site" abc123') == ["dance-site", "abc123"]
+    assert _parse_tokens('tronyx-vps "dance-site"') == ["tronyx-vps", "dance-site"]
+    assert _parse_tokens("single-token") == ["single-token"]
+    assert _parse_tokens("") == []
+
+
+# endregion FUNC_test_parse_tokens_quoted_args
+
+
+# region FUNC_test_parse_tokens_unmatched_quote_fallback
+## @purpose — _parse_tokens: unmatched quote → ValueError shlex → fallback naive split
+##            (НЕ exception — dispatch не роняется; fail-closed остаётся в T9.7).
+# 🧪 TRAP[TEST] · 2026-09-02 · Regression · F-07 — unmatched quote → fallback split
+# · Scenario: '"dance-site abc123' (незакрытая кавычка) → ['"dance-site', 'abc123'] (naive split)
+# · Last fail: N/A (новый fallback-контракт)
+# · Remove if: fallback-семантика _parse_tokens меняется
+def test_parse_tokens_unmatched_quote_fallback() -> None:
+    """_parse_tokens: unmatched quote → naive split fallback (без исключения)."""
+    assert _parse_tokens('"dance-site abc123') == ['"dance-site', "abc123"]
+    assert _parse_tokens("'partial") == ["'partial"]
+
+
+# endregion FUNC_test_parse_tokens_unmatched_quote_fallback
+
+
+# region FUNC_test_dispatch_receive_quoted_args
+## @purpose — dispatch receive с quoted-аргументами CI-формата (SSH_ORIGINAL_COMMAND) →
+##            project/version корректные: '"testproj" abc123' → project="testproj",
+##            version="abc123" (F-07: точный прод-вход receive "dance-site" [sha]).
+# 🧪 TRAP[TEST] · 2026-09-02 · Regression · F-07 — quoted receive через dispatch
+# · Scenario: SSH_ORIGINAL_COMMAND='receive "testproj" abc123' + OK-фабрика → DEPLOYED,
+# ·   JSON.project == "testproj", JSON.version == "abc123", rc 0
+# · Last fail: CI run 33591414425 — project '"dance-site"' rejected (rc 1, JSON ERROR)
+# · Remove if: receive перестаёт принимать quoted-аргументы
+def test_dispatch_receive_quoted_args(capsys, tmp_path, caplog: pytest.LogCaptureFixture) -> None:
+    """dispatch receive "project" sha (CI-формат) → project/version без кавычек."""
+    caplog.set_level(logging.INFO)
+
+    tar_bytes = _make_payload_tar(tmp_path)
+    rc = _dispatch(
+        [],
+        env={"SSH_ORIGINAL_COMMAND": 'receive "testproj" abc123'},
+        stdin_stream=io.BytesIO(tar_bytes),
+        orchestrator_factory=_receive_ok_factory(str(tmp_path)),
+    )
+
+    out = capsys.readouterr().out
+    assert_ldd_imp9(caplog)
+    payload = json.loads(out.strip().splitlines()[-1])
+    assert payload["project"] == "testproj", f"F-07: кавычки обязаны сниматься, got {payload['project']!r}"
+    assert payload["version"] == "abc123", f"F-07: version из аргументов, got {payload['version']!r}"
+    assert payload["status"] == "DEPLOYED"
+    assert rc == 0
+    logger.critical(
+        "[IMP:9][test] F-07 — quoted receive OK (project=%s version=%s)", payload["project"], payload["version"]
+    )
+
+
+# endregion FUNC_test_dispatch_receive_quoted_args
+
+
+# region FUNC_test_dispatch_receive_unquoted_preserved
+## @purpose — dispatch receive БЕЗ кавычек (локальный канал ForcedCommandChannel/shlex.quote)
+##            → прежнее поведение не изменилось (b, unquoted — прежнее поведение).
+# 🧪 TRAP[TEST] · 2026-09-02 · Regression · F-07 — unquoted receive без регрессии
+# · Scenario: SSH_ORIGINAL_COMMAND='receive testproj abc123' → project="testproj", version="abc123"
+# · Last fail: N/A (прежнее поведение обязано сохраниться)
+# · Remove if: receive-арность меняется
+def test_dispatch_receive_unquoted_preserved(capsys, tmp_path, caplog: pytest.LogCaptureFixture) -> None:
+    """dispatch receive project sha (без кавычек) → прежнее поведение (b)."""
+    caplog.set_level(logging.INFO)
+
+    tar_bytes = _make_payload_tar(tmp_path)
+    rc = _dispatch(
+        [],
+        env={"SSH_ORIGINAL_COMMAND": "receive testproj abc123"},
+        stdin_stream=io.BytesIO(tar_bytes),
+        orchestrator_factory=_receive_ok_factory(str(tmp_path)),
+    )
+
+    out = capsys.readouterr().out
+    assert_ldd_imp9(caplog)
+    payload = json.loads(out.strip().splitlines()[-1])
+    assert payload["project"] == "testproj"
+    assert payload["version"] == "abc123"
+    assert payload["status"] == "DEPLOYED"
+    assert rc == 0
+
+
+# endregion FUNC_test_dispatch_receive_unquoted_preserved
+
+
+# region FUNC_test_dispatch_receive_unmatched_quote_fail_closed
+## @purpose — dispatch receive с unmatched quote → fallback naive split (НЕ exception):
+##            токен '"testproj' невалиден → T9.7 fail-closed JSON ERROR + rc 1
+##            (никакого деплоя под битым именем, никакого traceback).
+# 🧪 TRAP[TEST] · 2026-09-02 · NEGATIVE (R5) · F-07 — unmatched quote fail-closed
+# · Scenario: SSH_ORIGINAL_COMMAND='receive "testproj abc123' → rc 1, JSON {"status":"ERROR"},
+# ·   "Invalid or reserved project name" (receive НЕ вызывается)
+# · Last fail: N/A (новый negative — фиксирует fallback-контракт)
+# · Remove if: unmatched-quote семантика меняется
+def test_dispatch_receive_unmatched_quote_fail_closed(capsys, caplog: pytest.LogCaptureFixture) -> None:
+    """dispatch receive с незакрытой кавычкой → fallback split + T9.7 fail-closed (rc 1)."""
+    caplog.set_level(logging.INFO)
+    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    class _RecordingOrch:
+        _MSG = "receive не должен вызываться при unmatched quote"
+
+        def receive(self, *args, **kwargs):
+            calls.append((args, kwargs))
+            raise AssertionError(self._MSG)
+
+    def _factory(*args, **kwargs):
+        return _RecordingOrch()
+
+    rc = _dispatch(
+        [],
+        env={"SSH_ORIGINAL_COMMAND": 'receive "testproj abc123'},
+        stdin_stream=io.BytesIO(b""),
+        orchestrator_factory=_factory,
+    )
+
+    out = capsys.readouterr().out
+    payload = json.loads(out)
+    assert rc == 1, "unmatched quote → fail-closed rc 1 (не exception)"
+    assert payload["status"] == "ERROR"
+    assert "Invalid or reserved project name" in payload["error"]
+    assert calls == [], "receive handler не должен вызываться для невалидного токена"
+    assert_ldd_imp9(caplog)
+
+
+# endregion FUNC_test_dispatch_receive_unmatched_quote_fail_closed
+
+
+# region FUNC_test_dispatch_receive_quoted_injection_negative
+## @purpose — R5 negative (F-07): quoted path-traversal (кавычки СНЯТЫ, затем валидация) →
+##            инъекция НЕ проходит через кавычки (a: «инъекция-кейс не ломается»).
+# 🧪 TRAP[TEST] · 2026-09-02 · NEGATIVE (R5) · F-07 — quoted инъекция блокируется
+# · Scenario: SSH_ORIGINAL_COMMAND='receive "../../etc" deadbeef' → rc 1, JSON ERROR,
+# ·   receive НЕ вызывается (T9.7 после shlex-токенизации)
+# · Last fail: N/A (новый negative — кавычки не ослабляют валидацию)
+# · Remove if: dispatch перестаёт валидировать project-name
+def test_dispatch_receive_quoted_injection_negative(capsys, caplog: pytest.LogCaptureFixture) -> None:
+    """dispatch receive с quoted-инъекцией → T9.7 блокирует после снятия кавычек (rc 1)."""
+    caplog.set_level(logging.INFO)
+    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    class _RecordingOrch:
+        _MSG = "receive не должен вызываться для quoted-инъекции"
+
+        def receive(self, *args, **kwargs):
+            calls.append((args, kwargs))
+            raise AssertionError(self._MSG)
+
+    def _factory(*args, **kwargs):
+        return _RecordingOrch()
+
+    rc = _dispatch(
+        [],
+        env={"SSH_ORIGINAL_COMMAND": 'receive "../../etc" deadbeef'},
+        stdin_stream=io.BytesIO(b""),
+        orchestrator_factory=_factory,
+    )
+
+    out = capsys.readouterr().out
+    payload = json.loads(out)
+    assert rc == 1, "quoted traversal обязан блокироваться (T9.7 после снятия кавычек)"
+    assert payload["status"] == "ERROR"
+    assert "Invalid or reserved project name" in payload["error"]
+    assert calls == [], "receive handler не должен вызываться для quoted-инъекции"
+    assert_ldd_imp9(caplog)
+
+
+# endregion FUNC_test_dispatch_receive_quoted_injection_negative
+
+
+# region FUNC_test_dispatch_verify_quoted_node_project
+## @purpose — dispatch verify с quoted node+project (CI-формат `verify "tronyx-vps" "dance-site"`)
+##            → --node tronyx-vps, --project dance-site (d: quoted verify не ломается).
+# 🧪 TRAP[TEST] · 2026-09-02 · Regression · F-07 — quoted verify node/project
+# · Regression: naive split давал node '"tronyx-vps"' → domain_verifier не резолвил ноду
+# · Scenario: SSH_ORIGINAL_COMMAND='verify "tronyx-vps" "dance-site"' → verify_cmd:
+# ·   --node tronyx-vps --project dance-site, rc 0
+# · Last fail: CI run 33591414425 — verify с кавычками (тот же workflow)
+# · Remove if: verify verb разбирает аргументы иначе
+def test_dispatch_verify_quoted_node_project(capsys, caplog: pytest.LogCaptureFixture) -> None:
+    """dispatch verify "node" "project" (CI-формат) → --node/--project без кавычек."""
+    caplog.set_level(logging.INFO)
+    captured: dict = {}
+
+    def _fake_run(cmd, **kwargs):
+        captured["cmd"] = list(cmd)
+        return type("P", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    rc = _dispatch(
+        [],
+        env={"SSH_ORIGINAL_COMMAND": 'verify "tronyx-vps" "dance-site"'},
+        orchestrator_factory=_orchestrator_factory("/tmp/f07-verify-projects"),
+        run_cmd=_fake_run,
+    )
+
+    cmd = captured.get("cmd")
+    assert cmd is not None, "F-07: verify обязан вызвать subprocess.run с verify_cmd"
+    assert cmd[cmd.index("--node") + 1] == "tronyx-vps", (
+        f"F-07 regression: node обязан быть 'tronyx-vps' (кавычки сняты), got {cmd[cmd.index('--node') + 1]!r}"
+    )
+    assert cmd[cmd.index("--project") + 1] == "dance-site", (
+        f"F-07 regression: project обязан быть 'dance-site' (кавычки сняты), got {cmd[cmd.index('--project') + 1]!r}"
+    )
+    assert rc == 0
+    assert_ldd_imp9(caplog)
+    logger.critical("[IMP:9][test] F-07 — quoted verify OK (node=%s project=%s)", "tronyx-vps", "dance-site")
+
+
+# endregion FUNC_test_dispatch_verify_quoted_node_project

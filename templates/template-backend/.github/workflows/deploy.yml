@@ -81,7 +81,7 @@ jobs:
 
   deploy:
     needs: [build-and-push]
-    uses: {{ORG_NAME}}/ai-platform/.github/workflows/deploy-project.yml@e5d76fa3080dcd4471bb40a5d7b5847d859d22e6 # main snapshot 2026-09-01 — E2 acceptance validation wave (bootstrap strict context-deploy, rollback contour, monitoring enabled-semantics)
+    uses: {{ORG_NAME}}/ai-platform/.github/workflows/deploy-project.yml@acf4b971d89397f08d06c700ec896f277f78193c # main snapshot 2026-09-02 — E2 acceptance validation wave (bootstrap strict context-deploy, rollback contour, monitoring enabled-semantics)
     with:
       project_name: {{PROJECT_NAME}}
     secrets: inherit
