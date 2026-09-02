@@ -1,5 +1,5 @@
-# GREP_SUMMARY: test context_initializer scaffold context overlay platform node-configs skeleton deploy-key idempotent registration
-# STRUCTURE: ┌fixture setup┐ → ○ 16 tests (nested layout + single overlay repo + read-only deploy key) → ⊕ LDD trajectory (IMP:9) → ⚡ anti-loop counter
+# GREP_SUMMARY: test context_initializer scaffold context overlay platform node-configs skeleton deploy-key idempotent registration node-side-overlay-key-install
+# STRUCTURE: ┌fixture setup┐ → ○ 20 tests (nested layout + single overlay repo + read-only deploy key + node-side overlay key install T6) → ⊕ LDD trajectory (IMP:9) → ⚡ anti-loop counter
 # region MODULE_CONTRACT
 ## @purpose  Unit-тесты context_initializer.py: вложенный overlay-layout (platform/{node-configs,
 ##           modules/hermes-agent,projects} — DevPlan 022 TASK-2), skeleton node.yaml с repos.core
@@ -29,6 +29,8 @@
 ## · Reason: корневая версия каноническая; уникальный сценарий
 ##   test_register_in_platform_yaml (реальная регистрация, не mock) перенесён сюда.
 ## · Rev: если unit-директория вернётся к полному покрытию — ресинхронизировать inventory.
+## @changes 2026-09-02 · DevPlan 029 T6 — 4 install_overlay_deploy_key_node_side теста
+##           (skip-no-alias, missing-dev-key-warn, installs-ssh-alias, ssh-failure-fatal)
 ## @changes 2026-09-01 · DevPlan 024 TASK-2 — SSH-алиасный skeleton URL, 5 deploy-key тестов
 ##           (happy-path, gh-unavailable, duplicate-tolerated, idempotent-keypair, skeleton-URL)
 ## @changes 2026-07-31 · DevPlan 092 AC4 — initial implementation
@@ -55,6 +57,7 @@ from core.internal.scaffold.context_initializer import (
     create_dirs,
     create_skeleton_node_yaml,
     gh_repo_create,
+    install_overlay_deploy_key_node_side,
     main,
     provision_deploy_key,
     register_in_platform_yaml,
@@ -602,3 +605,193 @@ def test_validate_name_invalid(caplog) -> None:
     with pytest.raises(ConfigValidationError) as exc_info:
         validate_name("bad name!@#")
     assert exc_info.value.exit_code == 4, f"Expected exit code 4 for invalid name, got {exc_info.value.exit_code}"
+
+
+# ── DevPlan 029 T6: install_overlay_deploy_key_node_side ──────────────────────
+# Node-side установка overlay deploy key + SSH-алиаса github.com-overlay по
+# SSH/core-каналу (operator bootstrap). DI ssh_runner — (cmd, stdin_text) → (rc, out, err).
+
+
+# region FUNC_test_install_node_key_skips_when_no_alias_repo
+# 🧪 TRAP[TEST] · 2026-09-02 · SCENARIO · DevPlan 029 T6: skip без alias repos.core
+# · Scenario: node.yaml без git@github.com-overlay: repos.core → exit 0, ssh НЕ вызывается
+# · Last fail: N/A (preventive — skip-ветка 029 T6)
+# · Remove if: skip-семантика install_overlay_deploy_key_node_side изменена
+@ldd_trajectory
+def test_install_node_key_skips_when_no_alias_repo(tmp_path: pathlib.Path, caplog) -> None:
+    node_yaml_path = tmp_path / "node.yaml"
+    node_yaml_path.write_text(
+        yaml.dump(
+            {
+                "contexts": [{"name": "plain-ctx"}],
+                "repos": {"core": "git@github.com:org/plain-repo.git"},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    calls: list[list[str]] = []
+
+    def fail_ssh(cmd: list[str], stdin_text: str) -> tuple[int, str, str]:
+        calls.append(cmd)
+        msg = "ssh must NOT be invoked without github.com-overlay alias repos.core"
+        raise AssertionError(msg)
+
+    logger.info("[IMP:9][test][overlay-key] test_install_node_key_skips_when_no_alias_repo")
+    rc = install_overlay_deploy_key_node_side(
+        node_yaml=str(node_yaml_path),
+        ssh_host="10.0.0.5",
+        projects_root=tmp_path,
+        ssh_runner=fail_ssh,
+    )
+    assert rc == 0, f"Expected skip exit 0 without alias repos.core, got {rc}"
+    assert calls == [], f"ssh must not be invoked, got calls: {calls}"
+
+
+# endregion FUNC_test_install_node_key_skips_when_no_alias_repo
+
+
+# region FUNC_test_install_node_key_missing_dev_key_warns
+# 🧪 TRAP[TEST] · 2026-09-02 · SCENARIO · DevPlan 029 T6: missing dev key → WARN
+# · Scenario: alias repo present + ssh_host, но dev-ключа в projects_root/<ctx>/.secrets/
+# ·           нет → exit 0 и WARN про id_ed25519_github_overlay/manual (ретро-контекст)
+# · Last fail: N/A (preventive — warn-ветка 029 T6)
+# · Remove if: warn-семантика отсутствующего dev-ключа изменена
+@ldd_trajectory
+def test_install_node_key_missing_dev_key_warns(tmp_path: pathlib.Path, caplog) -> None:
+    node_yaml_path = tmp_path / "node.yaml"
+    node_yaml_path.write_text(
+        yaml.dump(
+            {
+                "contexts": [{"name": "retro-ctx"}],
+                "repos": {"core": "git@github.com-overlay:myorg/retro-ctx-overlay.git"},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    calls: list[list[str]] = []
+
+    def fail_ssh(cmd: list[str], stdin_text: str) -> tuple[int, str, str]:
+        calls.append(cmd)
+        msg = "ssh must NOT be invoked when the dev overlay deploy key is missing"
+        raise AssertionError(msg)
+
+    logger.info("[IMP:9][test][overlay-key] test_install_node_key_missing_dev_key_warns")
+    rc = install_overlay_deploy_key_node_side(
+        node_yaml=str(node_yaml_path),
+        ssh_host="10.0.0.5",
+        projects_root=tmp_path,
+        ssh_runner=fail_ssh,
+    )
+    assert rc == 0, f"Expected skip exit 0 when dev key missing, got {rc}"
+    assert calls == [], f"ssh must not be invoked, got calls: {calls}"
+    warn_records = [
+        r for r in caplog.records if r.levelno == logging.WARNING and "id_ed25519_github_overlay" in r.message
+    ]
+    assert len(warn_records) >= 1, "Expected a WARNING mentioning id_ed25519_github_overlay"
+    assert "manual" in warn_records[0].message, f"WARN must mention manual node install: {warn_records[0].message}"
+
+
+# endregion FUNC_test_install_node_key_missing_dev_key_warns
+
+
+# region FUNC_test_install_node_key_installs_ssh_alias
+# 🧪 TRAP[TEST] · 2026-09-02 · REGRESSION · DevPlan 029 T6: happy-path установки
+# · Scenario: dev-ключ есть → ssh_runner вызван ровно 1 раз с root@<host> bash -s;
+# ·           stdin несёт и remote-скрипт (github.com-overlay + id_ed25519_github_overlay),
+# ·           и контент ключа (ключ НЕ в argv)
+# · Last fail: N/A — T6 fresh (анти-survivorship: падает, если ssh не вызывается/ключ мимо stdin)
+# · Remove if: контракт install_overlay_deploy_key_node_side изменён (канал/путь/heredoc)
+@ldd_trajectory
+def test_install_node_key_installs_ssh_alias(tmp_path: pathlib.Path, caplog) -> None:
+    ctx = "install-ctx"
+    secrets_dir = tmp_path / ctx / ".secrets"
+    secrets_dir.mkdir(parents=True)
+    key_path = secrets_dir / f"{ctx}-overlay-deploy-key"
+    dev_key = "-----BEGIN OPENSSH PRIVATE-KEY-----\nFAKE-INSTALL-SECRET\n-----END OPENSSH PRIVATE-KEY-----"
+    key_path.write_text(dev_key + "\n", encoding="utf-8")
+
+    node_yaml_path = tmp_path / "node.yaml"
+    node_yaml_path.write_text(
+        yaml.dump(
+            {
+                "contexts": [{"name": ctx}],
+                "repos": {"core": f"git@github.com-overlay:myorg/{ctx}-overlay.git"},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    calls: list[tuple[list[str], str]] = []
+
+    def fake_ssh(cmd: list[str], stdin_text: str) -> tuple[int, str, str]:
+        calls.append((cmd, stdin_text))
+        return 0, "", ""
+
+    logger.info("[IMP:9][test][overlay-key] test_install_node_key_installs_ssh_alias")
+    rc = install_overlay_deploy_key_node_side(
+        node_yaml=str(node_yaml_path),
+        ssh_host="node.example",
+        projects_root=tmp_path,
+        ssh_runner=fake_ssh,
+    )
+    assert rc == 0, f"Expected install exit 0, got {rc}"
+    assert len(calls) == 1, f"Expected ssh_runner called once, got {len(calls)}: {calls}"
+    cmd, stdin_text = calls[0]
+    joined_cmd = " ".join(cmd)
+    assert "root@node.example" in joined_cmd, f"cmd must target root@node.example: {joined_cmd}"
+    assert "bash -s" in joined_cmd, f"cmd must run bash -s on the node: {joined_cmd}"
+    assert dev_key in stdin_text, "stdin must carry the dev key content (never argv)"
+    assert "github.com-overlay" in stdin_text, "remote script must add the github.com-overlay ssh alias"
+    assert "id_ed25519_github_overlay" in stdin_text, "remote script must reference ~/.ssh/id_ed25519_github_overlay"
+
+
+# endregion FUNC_test_install_node_key_installs_ssh_alias
+
+
+# region FUNC_test_install_node_key_ssh_failure_fatal
+# 🧪 TRAP[TEST] · 2026-09-02 · REGRESSION · DevPlan 029 T6: ssh rc != 0 → FATAL (exit 10)
+# · Scenario: ssh_runner возвращает (255, '', 'denied') → PlatformFatalError c exit_code 10
+# · Last fail: N/A — T6 fresh (анти-survivorship: падает, если ssh-ошибка не становится FATAL)
+# · Remove if: контракт exit-кодов install_overlay_deploy_key_node_side изменён
+@ldd_trajectory
+def test_install_node_key_ssh_failure_fatal(tmp_path: pathlib.Path, caplog) -> None:
+    from core.internal.shared.exceptions import PlatformFatalError
+
+    ctx = "fail-ctx"
+    secrets_dir = tmp_path / ctx / ".secrets"
+    secrets_dir.mkdir(parents=True)
+    key_path = secrets_dir / f"{ctx}-overlay-deploy-key"
+    key_path.write_text(
+        "-----BEGIN OPENSSH PRIVATE-KEY-----\nFAKE\n-----END OPENSSH PRIVATE-KEY-----\n", encoding="utf-8"
+    )
+
+    node_yaml_path = tmp_path / "node.yaml"
+    node_yaml_path.write_text(
+        yaml.dump(
+            {
+                "contexts": [{"name": ctx}],
+                "repos": {"core": f"git@github.com-overlay:myorg/{ctx}-overlay.git"},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    def denied_ssh(cmd: list[str], stdin_text: str) -> tuple[int, str, str]:
+        return 255, "", "Permission denied (publickey)"
+
+    logger.info("[IMP:9][test][overlay-key] test_install_node_key_ssh_failure_fatal")
+    with pytest.raises(PlatformFatalError) as exc_info:
+        install_overlay_deploy_key_node_side(
+            node_yaml=str(node_yaml_path),
+            ssh_host="node.example",
+            projects_root=tmp_path,
+            ssh_runner=denied_ssh,
+        )
+    assert exc_info.value.exit_code == 10, f"PlatformFatalError must carry exit_code 10, got {exc_info.value.exit_code}"
+    assert "Permission denied" in str(exc_info.value), f"FATAL message must include ssh stderr: {exc_info.value}"
+
+
+# endregion FUNC_test_install_node_key_ssh_failure_fatal

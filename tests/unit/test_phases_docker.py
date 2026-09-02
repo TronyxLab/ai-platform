@@ -42,6 +42,7 @@ _ALL_PHASES = [
     "phase_certificates",
     "phase_deploy_services",
     "phase_converge_services",
+    "phase_final_verify",
     "phase_secrets_update",
     "phase_node_config_update",
     "phase_registry_update",

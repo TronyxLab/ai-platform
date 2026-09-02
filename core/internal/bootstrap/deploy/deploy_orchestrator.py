@@ -332,9 +332,13 @@ def orchestrate(
 def _preflight(core_dir: str, node_yaml: str, modules_dir: str) -> None:
     """Run non-fatal preflight steps (`|| true` semantics preserved)."""
     # ── context overlay ensure (clone/pull with S9 cache) ──
+    # DevPlan 029 T2: clone-fail / нет repos.core / invalid context → PlatformFatalError (exit 10)
+    # ПРОПАГИРУЕТСЯ (не best-effort): нода без контекстного overlay НЕ должна репортить READY.
     try:
         rc = context_overlay.ensure_context_repo(node_yaml)
         logger.info("[IMP:8][_preflight][context_overlay] ensure_context_repo rc=%d", rc)
+    except PlatformFatalError:
+        raise
     # ruff: ignore[BLE001] — DEPLOY_BEST_EFFORT: широкий спектр helper-API (git/yaml/jinja/subprocess/docker)
     except Exception as exc:  # noqa: EXC — non-fatal preflight step (best-effort: DEPLOY_BEST_EFFORT policy)
         logger.warning("[IMP:5][_preflight][context_overlay] error (non-fatal): %s", exc)

@@ -11,7 +11,7 @@
 ##   - Резолв полей + owner_key-валидация + host — bootstrap_resolver (exit 0/1/2, single source)
 ## @rationale Thin-wrapper per DevPlan 020 T4+T15; secrets/passthrough решения — DevPlan 118 B6 (закрыты).
 ## ⚠️ TRAP[KEEP] · 173 W2.5 · bootstrap.sh НЕ переписывается: SCP/SSH exec + age-chain — легитимная shell-оркестрация; бизнес-логика уже в bootstrap_resolver.py/node_detect.py/build-ssh-cmd · Rev: при остаточном парсинге вне resolver — извлечь.
-## @changes 2026-08-15 170 W9-F1 — tab-парсинг → bootstrap_resolver.py (<100 LOC); 2026-08-03 RC 121; 2026-08-01 B3 T5/T6; 2026-07-31 DevPlan 104; 2026-07-21 W4; 2026-08-24 REF-0007 — ключи вне argv: ssh 'bash -s' + stdin prelude (masking-код dry-run удалён)
+## @changes 2026-08-15 170 W9-F1 — tab-парсинг → bootstrap_resolver.py (<100 LOC); 2026-08-03 RC 121; 2026-08-01 B3 T5/T6; 2026-07-31 DevPlan 104; 2026-07-21 W4; 2026-08-24 REF-0007 — ключи вне argv: ssh 'bash -s' + stdin prelude (masking-код dry-run удалён); 2026-09-02 DevPlan 029 T6 — overlay-key step: install-node-deploy-key (context_initializer) после SCP-фазы
 # endregion MODULE_CONTRACT
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -49,7 +49,6 @@ main() {
     if [[ -z "$NODE_NAME" ]]; then
         echo "[IMP:8][bootstrap][entrypoint] Auto-detecting node name"
         NODE_NAME=$(python3 -m core.internal.shared.node_detect --detect-node-name 2>/dev/null) || { echo "[IMP:10][bootstrap][entrypoint] FATAL: Cannot detect node — use make bootstrap-node NODE=<name>" >&2; exit 1; }
-        echo "[IMP:9][bootstrap][entrypoint] Auto-detected NODE_NAME=${NODE_NAME}"
     fi
     echo "[IMP:8][bootstrap][entrypoint] Resolving node.yaml + fields via bootstrap_resolver (node=${NODE_NAME})"
     RESOLVE_OUTPUT="$(python3 -m core.internal.bootstrap.bootstrap_resolver resolve --node "${NODE_NAME}" --platform-root "${PLATFORM_ROOT}")" || {
@@ -63,11 +62,9 @@ main() {
     done <<< "${RESOLVE_OUTPUT}"
     [[ -n "$CI_DEPLOY_KEY" ]] && echo "[IMP:9][bootstrap][entrypoint] ci_deploy_key resolved" || echo "[IMP:8][bootstrap][entrypoint] ci_deploy_key not set — ci-deploy restricted key setup skipped"
     [[ -n "$CI_ROOT_KEY" ]] && echo "[IMP:9][bootstrap][entrypoint] ci_root_key resolved" || echo "[IMP:7][bootstrap][entrypoint] ci_root_key not set — CI root-shell канал (core-deploy) недоступен" # 142 W1 (A1)
-    [[ -n "$PLATFORM_DOMAIN" ]] && echo "[IMP:9][bootstrap][entrypoint] PLATFORM_DOMAIN=${PLATFORM_DOMAIN}"
     # node_detect exit contract (104 D3): 0=key found, 3=module OK+key absent (non-fatal), other=FATAL
     DETECTED_AGE_KEY="$(python3 -m core.internal.shared.node_detect --detect-age-key 2>/dev/null)" || { _detect_rc=$?; [[ ${_detect_rc} -eq 3 ]] && DETECTED_AGE_KEY="" || { echo "[IMP:10][bootstrap][entrypoint] FATAL: node_detect unavailable" >&2; exit 1; }; }
     if [[ -z "${SSH_HOST}" ]]; then
-        echo "[IMP:9][bootstrap][entrypoint] No SSH host — executing node-lifecycle.sh --mode init LOCALLY"
         local a=(--node-name "$NODE_NAME" --node-yaml "$NODE_YAML" --owner-key "$OWNER_KEY" --resume)
         [[ -n "${DETECTED_AGE_KEY}" ]] && a+=(--age-secret-key "${DETECTED_AGE_KEY}"); [[ -n "${CI_DEPLOY_KEY}" ]] && a+=(--ci-deploy-key "${CI_DEPLOY_KEY}")
         [[ -n "${CI_ROOT_KEY}" ]] && a+=(--ci-root-key "${CI_ROOT_KEY}"); [[ -n "${PLATFORM_DOMAIN:-}" ]] && a+=(--platform-domain "${PLATFORM_DOMAIN}")
@@ -76,15 +73,19 @@ main() {
         $DRY_RUN && { echo "[IMP:8][bootstrap][dry-run] DRY-RUN: ${NODE_LIFECYCLE} ${a[*]}" >&2; exit 0; }
         exec "${NODE_LIFECYCLE}" "--mode" "init" "${a[@]}"
     fi
-    echo "[IMP:9][bootstrap][entrypoint] SSH host: ${SSH_HOST} — REMOTE bootstrap"
     NODE_CONFIGS_DIR="$(dirname "$(dirname "${NODE_YAML}")")"
     if $DRY_RUN; then
         echo "[IMP:8][bootstrap][dry-run] DRY-RUN: Would rsync core/ + platform-env.yaml + Makefile + node-configs/ → ${SSH_HOST}"
         [[ -d "${NODE_CONFIGS_DIR}/${NODE_NAME}/secrets" ]] && echo "[IMP:8][bootstrap][dry-run] DRY-RUN: Would rsync secrets/"
+        echo "[IMP:8][bootstrap][dry-run] DRY-RUN: Would install context overlay deploy key + github.com-overlay ssh alias on node (T6)"
     else
         prepare_ssh_opts "${SSH_HOST}" "init"
         scp_to_server "${SSH_HOST}" "${NODE_NAME}" "${NODE_CONFIGS_DIR}" "${CORE_DIR}" || { echo "[IMP:10][bootstrap][entrypoint] FATAL: SCP phase failed" >&2; exit 1; }
         echo "[IMP:9][bootstrap][scp] SCP phase complete"
+        # DevPlan 029 T6 (AC5): node-side overlay deploy key + ssh-алиас github.com-overlay
+        # по SSH/core-каналу — нода достижима именно здесь (после SCP-фазы). Контексты без
+        # alias repos.core или без dev-ключа → python exit 0 (skip, без шума).
+        python3 -m core.internal.scaffold.context_initializer install-node-deploy-key --node-yaml "${NODE_YAML}" --ssh-host "${SSH_HOST}" || { echo "[IMP:10][bootstrap][overlay-key] FATAL: overlay deploy-key install failed" >&2; exit 1; }
     fi
     # 🧐 TRAP[DECISION] · 2026-08-24 · stdin→bash -s вместо SCP 0600 root-file+unset · Rejected: prelude-файл на ноде · Reason: crash между scp и rm оставляет plaintext-ключ на диске (SEC-0015 класс), stdin не оставляет артефактов · Rev: потоковый канал >1MB prelude (не ожидается) — пересмотреть
     REMOTE_CMD="$(build_ssh_cmd "${NODE_NAME}" "${OWNER_KEY}" "${CI_DEPLOY_KEY}" "${DETECTED_AGE_KEY}" "${CI_ROOT_KEY}" "${PASSTHROUGH_ARGS[@]}")"; SECRET_PRELUDE="$(build_init_secret_prelude "${CI_DEPLOY_KEY}" "${DETECTED_AGE_KEY}" "${CI_ROOT_KEY}")"

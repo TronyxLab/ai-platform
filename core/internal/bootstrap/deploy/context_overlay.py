@@ -47,7 +47,7 @@ from pathlib import Path
 from typing import Protocol, cast
 
 from core.internal.shared.deploy_paths import context_pull_ts_path
-from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError
+from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError, PlatformFatalError
 from core.internal.shared.node_yaml import NodeYaml
 
 # W1-A1 (план 170): литералы таймаутов → канон SoT (AMBER-зачистка research-D §D1).
@@ -84,14 +84,19 @@ _CONTEXT_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")
 ##   - If context path already exists → pull with S9 cache check
 ##   - If context path does NOT exist → clone from repos.core URL
 ##   - Git pull failure is non-fatal (return 0, log WARN)
-##   - Git clone failure returns 1 (log WARN)
+##   - Git clone failure / нет repos.core при отсутствующем path / invalid context name →
+##     PlatformFatalError(10) — fail-loud (DevPlan 029 T2): нода НЕ репортит READY при
+##     отсутствующем контексте (postmortem-класс silent-success)
 ## @rationale Extracted directly from deploy-modules.sh (lines 219-269).
 ##            Uses NodeYaml facade instead of inline python3 -c or direct yaml.safe_load.
 ##            See TRAP[DECISION] on CONTEXT_PULL_CACHE_SECONDS for caching rationale.
+## @changes  2026-09-02 | DevPlan 029 T2 — clone-fail/no-repo/invalid-name: return 1/WARN →
+##            PlatformFatalError (exit 10); pull-branch остаётся non-fatal (S9-cache канон)
 def ensure_context_repo(node_yaml_path: str) -> int:
     """Clone or pull the context overlay git repo with 5-minute pull caching.
 
-    Returns 0 on success/skip, 1 on clone failure.
+    Returns 0 on success/skip; raises PlatformFatalError (exit 10) on clone failure,
+    missing repos.core with absent path, or invalid context name (T2 fail-loud).
     """
     logger.info("[IMP:7][ensure_context_repo][start] node_yaml=%s", node_yaml_path)
 
@@ -105,7 +110,8 @@ def ensure_context_repo(node_yaml_path: str) -> int:
     # и git clone — защита от path traversal/инжекции через node.yaml#context.
     if not _CONTEXT_NAME_RE.match(context_name):
         logger.error("[IMP:10][ensure_context_repo][invalid] Invalid context name: %r (M13a)", context_name)
-        return 1
+        msg = f"Invalid context name in node.yaml: {context_name!r} — cannot build overlay path /opt/{context_name}/platform (M13a)"
+        raise PlatformFatalError(msg)
 
     # 3. Context path = /opt/{context_name}/platform
     context_path = f"/opt/{context_name}/platform"
@@ -253,18 +259,20 @@ def _pull_with_cache(context_path: str) -> int:
 def _clone_context_repo(node_yaml_path: str, context_path: str) -> int:
     """Clone context overlay repo from repos.core URL.
 
-    If repo URL is missing from node.yaml, logs a WARN and returns 0.
-    If clone fails, logs WARN with remediation and returns 1.
+    repo URL missing (context present + path absent) → PlatformFatalError (T2: нода без
+    контекста не должна молча репортить READY); clone failure → PlatformFatalError (exit 10).
+    Returns 0 on success.
     """
     repo_url = _read_repo_url(node_yaml_path)
 
     if not repo_url:
-        logger.warning("[IMP:7][_clone_context_repo][warn] No repos.core in node.yaml")
-        logger.warning(
-            "[IMP:7][_clone_context_repo][warn] Create %s manually or add repos.core to node.yaml",
-            context_path,
+        logger.error("[IMP:10][_clone_context_repo][fatal] No repos.core in node.yaml (context present)")
+        msg = (
+            f"Context overlay clone required for {context_path}, but node.yaml has no repos.core. "
+            "Add repos.core (git@github.com-overlay:<org>/<ctx>-overlay.git) or create the "
+            "overlay path manually"
         )
-        return 0
+        raise PlatformFatalError(msg)
 
     logger.info("[IMP:8][_clone_context_repo][clone] git clone %s → %s", repo_url, context_path)
     try:
@@ -275,24 +283,29 @@ def _clone_context_repo(node_yaml_path: str, context_path: str) -> int:
             timeout=LIFECYCLE_CMD_TIMEOUT,
             check=False,
         )
-    except subprocess.TimeoutExpired:
-        logger.warning("[IMP:7][_clone_context_repo][warn] git clone timed out (120s): %s", repo_url)
-        return 1
-    except FileNotFoundError:
-        logger.warning("[IMP:7][_clone_context_repo][warn] git binary not found — cannot clone")
-        return 1
+    except subprocess.TimeoutExpired as exc:
+        # DevPlan 029 T2: clone-fail → fail-loud (exit 10), НЕ WARN+return 1 — нода без
+        # контекстного overlay репортила бы READY при отсутствующем контексте (postmortem 028).
+        logger.error("[IMP:10][_clone_context_repo][fatal] git clone timed out (120s): %s", repo_url)
+        msg = f"git clone timed out for {repo_url} (overlay {context_path})"
+        raise PlatformFatalError(msg) from exc
+    except FileNotFoundError as exc:
+        logger.error("[IMP:10][_clone_context_repo][fatal] git binary not found — cannot clone")
+        msg = f"git binary not found — cannot clone overlay {repo_url}"
+        raise PlatformFatalError(msg) from exc
 
     if result.returncode != 0:
-        logger.warning(
-            "[IMP:7][_clone_context_repo][warn] git clone failed: %s — stderr: %s",
+        logger.error(
+            "[IMP:10][_clone_context_repo][fatal] git clone failed: %s — stderr: %s",
             repo_url,
             result.stderr.strip(),
         )
-        logger.warning(
-            "[IMP:7][_clone_context_repo][warn] Create %s manually or add repos.core to node.yaml",
-            context_path,
+        msg = (
+            f"git clone failed for context overlay: {repo_url} (stderr: {result.stderr.strip()}) — "
+            "check the overlay deploy key on the node (~/.ssh/id_ed25519_github_overlay) and "
+            "github.com-overlay SSH alias"
         )
-        return 1
+        raise PlatformFatalError(msg)
 
     logger.info("[IMP:9][_clone_context_repo][done] Context repo cloned: %s", context_path)
     return 0
@@ -402,7 +415,11 @@ def main() -> int:
     logger.info("[IMP:7][main][start] action=%s, node_yaml=%s", args.action, args.node_yaml)
 
     if args.action == "ensure":
-        exit_code = ensure_context_repo(args.node_yaml)
+        try:
+            exit_code = ensure_context_repo(args.node_yaml)
+        except PlatformFatalError as e:
+            logger.error("[IMP:10][main][fatal] ensure_context_repo: %s", e)
+            return e.exit_code
         logger.info("[IMP:9][main][exit] ensure_context_repo returned %d", exit_code)
         return exit_code
     return 0

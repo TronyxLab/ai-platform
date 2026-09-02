@@ -142,11 +142,11 @@ class _FakeFacts:
 def test_bootstrap_phase_enum_has_14_values(caplog) -> None:
     """BootstrapPhase should define exactly 14 consolidated phases."""
     count = BootstrapPhase.phase_count()
-    assert count == 14, f"Expected 14 phases, got {count}"
-    assert len(BootstrapPhase.ALL_PHASES) == 14
-    assert len(BootstrapPhase.INIT_PHASES) == 9
+    assert count == 15, f"Expected 15 phases, got {count}"
+    assert len(BootstrapPhase.ALL_PHASES) == 15
+    assert len(BootstrapPhase.INIT_PHASES) == 10
     assert len(BootstrapPhase.UPDATE_PHASES) == 5
-    logger.critical("[IMP:9][test] BootstrapPhase.phase_count() = 14 — OK")
+    logger.critical("[IMP:9][test] BootstrapPhase.phase_count() = 15 — OK")
 
 
 # endregion FUNC_test_bootstrap_phase_enum_has_14_values
@@ -170,6 +170,7 @@ def test_bootstrap_phase_enum_values(caplog) -> None:
         "certificates",
         "deploy_services",
         "converge_services",
+        "final_verify",
     })
     expected_update = frozenset({
         "secrets_update",
@@ -186,8 +187,8 @@ def test_bootstrap_phase_enum_values(caplog) -> None:
         f"UPDATE_PHASES mismatch: {BootstrapPhase.UPDATE_PHASES - expected_update} extra, "
         f"{expected_update - BootstrapPhase.UPDATE_PHASES} missing"
     )
-    assert len(BootstrapPhase.ALL_PHASES) == 14
-    logger.critical("[IMP:9][test] All 14 BootstrapPhase values verified — OK")
+    assert len(BootstrapPhase.ALL_PHASES) == 15
+    logger.critical("[IMP:9][test] All 15 BootstrapPhase values verified — OK")
 
 
 # endregion FUNC_test_bootstrap_phase_enum_values
@@ -225,8 +226,8 @@ def test_phase_dependency_graph_has_all_phases(caplog) -> None:
     assert BootstrapPhase.SYSTEM_BOOTSTRAP not in graph_phases, (
         "φ1 (system_bootstrap) should NOT be in graph — it is the root entry point"
     )
-    assert len(graph_phases) == 13, f"Expected 13 explicit phases in graph, got {len(graph_phases)}"
-    logger.critical("[IMP:9][test] _phase_dependency_graph has all 14 phases (13 keys + φ1 root) — OK")
+    assert len(graph_phases) == 14, f"Expected 14 explicit phases in graph, got {len(graph_phases)}"
+    logger.critical("[IMP:9][test] _phase_dependency_graph has all 15 phases (14 keys + φ1 root) — OK")
 
 
 # endregion FUNC_test_phase_dependency_graph_has_all_phases

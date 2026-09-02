@@ -148,6 +148,7 @@
 | ✅ | `test-node` | E2E pipeline тесты на test-VPS |
 | ✅ | `up` | Запуск compose-стека |
 | ⚙️ | `validate-modules` (internal) | Валидация module.yaml |
+| ✅ | `validate-node-input` | Локальная проверка входного контракта ноды (AGE/sops/required) |
 | ✅ | `verify-domains` | HTTPS-верификация доменов |
 <!-- GENERATED:END:glossary -->
 

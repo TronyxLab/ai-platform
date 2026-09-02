@@ -31,15 +31,16 @@ bootstrap:
   mechanism: ssh+rsync
   delegates_to: core/entrypoints/bootstrap.sh → core/internal/bootstrap/preflight.py
     → core/internal/bootstrap/node-lifecycle.sh --mode init → core/internal/bootstrap/lifecycle/cli.py
-    → core/internal/bootstrap/lifecycle/state_machine.py (B9 state machine — 14 фаз
-    — 9 INIT — φ1 system_bootstrap → core/internal/bootstrap/install-docker.sh → core/internal/bootstrap/install-tor-proxy.sh
+    → core/internal/bootstrap/lifecycle/state_machine.py (B9 state machine — 15 фаз
+    — 10 INIT (φ1-φ8.5 + φ-final-verify) — φ1 system_bootstrap → core/internal/bootstrap/install-docker.sh → core/internal/bootstrap/install-tor-proxy.sh
     → core/internal/bootstrap/firewall.sh · φ2 user_accounts · φ3 platform_setup →
     core/internal/bootstrap/docker_registry_auth.py → core/internal/bootstrap/setup-node.sh
     · φ4 secrets_provision · φ5 node_configuration · φ6 registry_auth · φ7 certificates
     → core/internal/bootstrap/install-acme.sh · φ8 deploy_services → core/internal/bootstrap/deploy-modules.sh
     → core/internal/bootstrap/cert_orchestrator.py → core/internal/bootstrap/deploy/context_deployer.py
-    · φ8.5 converge_services — 5 UPDATE — φ9 secrets_update · φ10 node_config_update
-    · φ11 registry_update · φ12 deploy_update · φ13 converge_update)
+    · φ8.5 converge_services · φ-final-verify final_verify (DevPlan 029 T5, end-state assertions
+    — 5 UPDATE — φ9 secrets_update · φ10 node_config_update · φ11 registry_update
+    · φ12 deploy_update · φ13 converge_update)
   signature: make bootstrap-node NODE=<name>
   operation_ru: Идемпотентный bootstrap ноды
   description: Idempotent bootstrap of a new node to FULL readiness (infra + context
@@ -67,6 +68,19 @@ bootstrap:
     как в workflow (TRAP[BUG] 125 T4); AGE_SECRET_KEY — локальная цепочка node_detect
     (env-only, W4 DevPlan 140). Rev: если локальная доставка не используется 3 квартала
     подряд — удалить core-deliver'
+- make_target: validate-node-input
+  visibility: public
+  mechanism: python-module
+  delegates_to: core/entrypoints/validate-node-input.sh → python3 -m core.internal.bootstrap.preflight
+    --scope input (AGE-форма single-line, env-vs-file приоритет, SOPS enc-file наличие,
+    required-ключи; 0 remote — входной контракт ДО любого SSH, DevPlan 029 T7)
+  signature: make validate-node-input NODE=<name> [NODE_CONFIGS_DIR=<dir>]
+  operation_ru: Локальная проверка входного контракта ноды (AGE/sops/required)
+  description: 'Локальный input-contract ноды (DevPlan 029 T7, DD-4): тот же preflight.py, что
+    первый шаг bootstrap.sh — --scope input прогоняет AGE-форму (single-line), env-vs-file
+    приоритет (REF-0007), SOPS enc-file наличие (allow_autogen-gate) и required-ключи — exit 1
+    с причиной ДО любого SSH. Dual-mechanism дрейфа нет: один входной контракт, две точки
+    входа (bootstrap.sh + operator verb)'
 deploy:
 - make_target: deploy
   visibility: public
@@ -986,6 +1000,7 @@ allowed_verbs:
 - test-node
 - up
 - validate-modules
+- validate-node-input
 - verify-domains
 gates:
   test_gate_ai_instructions_pins.py:
@@ -1083,6 +1098,10 @@ gates:
   - test_workflow_platform_dependencies_negative
   - test_workflow_uses_only_channel_verbs
   - test_workflow_verb_not_in_dictionary_negative
+  test_gate_deploy_honesty.py:
+  - test_deploy_honesty_negative_count_zero
+  - test_deploy_honesty_negative_f01
+  - test_deploy_honesty_tree_clean
   test_gate_deploy_paths.py:
   - test_canonical_paths_registered
   - test_deprecated_have_removal_plan

@@ -455,6 +455,9 @@ def test_init_flow_all_phases(caplog, state_file, mock_subprocess, monkeypatch):
     # (node.yaml без contexts[]) не может реально задеплоить проекты; strict-семантика покрыта
     # отдельно (test_domains_import_deploy_context.py + passthrough-тесты φ8/φ12).
     monkeypatch.setattr(domains_helpers, "import_deploy_context", lambda *_args, **_kwargs: None)
+    # φ-final-verify (DevPlan 029 T5): end-state cert assertion в flow-тесте — on-disk
+    # convergence мокается (реального /etc/letsencrypt в тест-среде нет).
+    monkeypatch.setattr(domains_helpers, "ssl_certs_converged_on_disk", lambda _core_dir, _node_yaml: True)
 
     exit_code = cli.run_init_mode(m)
     assert exit_code == 0
@@ -482,12 +485,12 @@ def test_init_flow_all_phases(caplog, state_file, mock_subprocess, monkeypatch):
 @ldd_trajectory
 def test_init_phase_count_devplan_087(caplog):
     """BootstrapPhase.INIT_PHASE_ORDER should have 9 phases after DevPlan 087 consolidation."""
-    assert len(sm.BootstrapPhase.INIT_PHASE_ORDER) == 9, (
-        f"Expected 9 init phases, got {len(sm.BootstrapPhase.INIT_PHASE_ORDER)}"
+    assert len(sm.BootstrapPhase.INIT_PHASE_ORDER) == 10, (
+        f"Expected 10 init phases, got {len(sm.BootstrapPhase.INIT_PHASE_ORDER)}"
     )
     assert sm.BootstrapPhase.INIT_PHASE_ORDER[0] == "system_bootstrap"
-    assert sm.BootstrapPhase.INIT_PHASE_ORDER[-1] == "converge_services"
-    logger.critical("[IMP:9][test] INIT_PHASE_ORDER count=9 (DevPlan 087) — OK")
+    assert sm.BootstrapPhase.INIT_PHASE_ORDER[-1] == "final_verify"
+    logger.critical("[IMP:9][test] INIT_PHASE_ORDER count=10 (10 init + 5 update) — OK")
 
 
 # 🧪 TRAP[TEST] · Regression · UPDATE_PHASE_ORDER has 5 phases (DevPlan 087)
@@ -817,6 +820,9 @@ def test_tor_conditional_runs(caplog, state_file, mock_subprocess, monkeypatch):
     # (node.yaml без contexts[]) вернул бы failed=1 → PlatformFatalError. Flow-тест —
     # про TOR-ветвление, не про деплой контекста (покрыт test_domains_import_deploy_context.py).
     monkeypatch.setattr(domains_helpers, "import_deploy_context", lambda *_args, **_kwargs: None)
+    # φ-final-verify (DevPlan 029 T5): end-state cert assertion в flow-тесте — on-disk
+    # convergence мокается (реального /etc/letsencrypt в тест-среде нет).
+    monkeypatch.setattr(domains_helpers, "ssl_certs_converged_on_disk", lambda _core_dir, _node_yaml: True)
 
     exit_code = cli.run_init_mode(m)
     assert exit_code == 0
@@ -1104,6 +1110,9 @@ def test_phase_with_warnings_not_done(caplog, state_file, mock_subprocess, monke
     # strict-семантика INIT (2026-09-01): real import_deploy_context в тест-среде вернул бы
     # failed=1 → PlatformFatalError; тест — про WARN-семантику φ1, не про деплой контекста.
     monkeypatch.setattr(domains_helpers, "import_deploy_context", lambda *_args, **_kwargs: None)
+    # φ-final-verify (DevPlan 029 T5): end-state cert assertion в flow-тесте — on-disk
+    # convergence мокается (реального /etc/letsencrypt в тест-среде нет).
+    monkeypatch.setattr(domains_helpers, "ssl_certs_converged_on_disk", lambda _core_dir, _node_yaml: True)
 
     # drill C2 (2026-08-27): φ1 → done_with_warnings; φ2 (зависит от φ1) — dependency
     # УДОВЛЕТВОРЕНА (НЕ PhaseDependencyError): warning-фаза перевыполняется САМА, но
@@ -1674,6 +1683,9 @@ def test_init_strict_exit_on_failed(caplog, state_file, mock_subprocess, monkeyp
     # контекста — не предмет этого теста (F-015b про модули); strict-семантика покрыта
     # test_domains_import_deploy_context.py.
     monkeypatch.setattr(domains_helpers, "import_deploy_context", lambda *_args, **_kwargs: None)
+    # φ-final-verify (DevPlan 029 T5): end-state cert assertion в flow-тесте — on-disk
+    # convergence мокается (реального /etc/letsencrypt в тест-среде нет).
+    monkeypatch.setattr(domains_helpers, "ssl_certs_converged_on_disk", lambda _core_dir, _node_yaml: True)
 
     m = sm.StateMachine(
         state_file_path=str(state_file),

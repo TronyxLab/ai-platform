@@ -42,6 +42,7 @@ Escalation levels (peчатаются root session.py при не-PYTEST_NO_ESCA
   Attempt 5+:  CRITICAL ERROR: agent looping detected — STOP
 """
 
+# ── T9 (DevPlan 029): env-hermeticity для gate-слоя (детерминированный слой) ──
 # ── Единый counter-модуль (T12.1: dual counter удалён) ──────────────────────
 from _conftest.counter import (  # ruff: ignore[F401]
     _increment_counter,
@@ -51,6 +52,7 @@ from _conftest.counter import (  # ruff: ignore[F401]
     _reset_counter,
     _write_counter,
 )
+from _conftest.env import hermetic_platform_env  # ruff: ignore[F401] — autouse-регистрация (T9)
 
 # ⚠️ TRAP[DECISION] · 2026-08-05 · — · gates/conftest — тонкий ре-экспорт, без session-хуков
 # · Rejected: оставить собственные pytest_sessionstart/finish + tests/gates/.test_counter.json

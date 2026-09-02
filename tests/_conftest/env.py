@@ -253,3 +253,68 @@ def platform_env() -> dict[str, str]:
         else:
             os.environ[key] = env_value
     logger.info("[IMP:7][env][platform_env] Environment restored")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# T9 (DevPlan 029, deploy-integrity): env-hermeticity autouse fixture
+# ═══════════════════════════════════════════════════════════════════
+
+# Платформенные env-ключи, которые могут ПРОТЕКАТЬ в os.environ сессии и давать
+# ложные вердикты unit/gate-тестов (класс «NODE_NAME-утечка → ложный зелёный
+# DR-restore», T9 rationale; POSTGRES_PASSWORD-инжект через _conftest/e2e.py
+# early-dotenv-load — test_secrets_postcondition autouse-чистка):
+#   - идентичность ноды/конфигов: NODE_NAME, NODE_YAML, NODE_CONFIGS_DIR, CORE_DIR,
+#     SECRETS_ENV_FILE, PLATFORM_ROOT
+#   - AGE/sops master-ключ (env-канон): AGE_SECRET_KEY, AGE_SECRET_KEY_FILE, SOPS_AGE_KEY
+#   - manifest-секреты platform/модулей (tier=required/generated, source=sops/autogen):
+#     GHCR_PULL_TOKEN, POSTGRES_PASSWORD, POSTGRES_USER, CLICKHOUSE_PASSWORD,
+#     REDIS_PASSWORD, MINIO_ROOT_USER, MINIO_ROOT_PASSWORD, LITELLM_MASTER_KEY,
+#     PLATFORM_MASTER_EMAIL, PLATFORM_MASTER_PASSWORD, S3_ACCESS_KEY, S3_SECRET_KEY
+# Расширение списка — с ревью (связка с secret-definitions.yaml/secret-манифестом);
+# ключи, которые тест задаёт САМ через monkeypatch.setenv, остаются видимы телу теста
+# (fixture удаляет ТОЛЬКО пред-существующий «фон»).
+PLATFORM_ENV_LEAK_KEYS: tuple[str, ...] = (
+    "NODE_NAME",
+    "NODE_YAML",
+    "NODE_CONFIGS_DIR",
+    "CORE_DIR",
+    "SECRETS_ENV_FILE",
+    "PLATFORM_ROOT",
+    "AGE_SECRET_KEY",
+    "AGE_SECRET_KEY_FILE",
+    "SOPS_AGE_KEY",
+    "GHCR_PULL_TOKEN",
+    "POSTGRES_PASSWORD",
+    "POSTGRES_USER",
+    "CLICKHOUSE_PASSWORD",
+    "REDIS_PASSWORD",
+    "MINIO_ROOT_USER",
+    "MINIO_ROOT_PASSWORD",
+    "LITELLM_MASTER_KEY",
+    "PLATFORM_MASTER_EMAIL",
+    "PLATFORM_MASTER_PASSWORD",
+    "S3_ACCESS_KEY",
+    "S3_SECRET_KEY",
+)
+
+
+@pytest.fixture(autouse=True)
+def hermetic_platform_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """T9 (DevPlan 029): strip leaked platform env keys before every unit/gate test.
+
+    ## @purpose — Hermeticity: никакой платформенный env-ключ не должен переживать
+    ##            import/collection и попадать в os.environ следующего детерминированного
+    ##            теста (NODE_NAME-утечка дала ложный зелёный DR-restore; e2e-early-dotenv
+    ##            инжектил POSTGRES_* в unit-сессии). Тест, которому ключ нужен, ставит его
+    ##            через monkeypatch.setenv — env-контракт явный.
+    ## @io — ⇥ monkeypatch → ⎋ None (delenv на каждый ключ, restore в teardown)
+    ## @complexity — O(K), K = len(PLATFORM_ENV_LEAK_KEYS)
+    ## @invariants
+    ##   - autouse: применяется ко ВСЕМ тестам тестам-директорий, регистрирующим fixture
+    ##     (tests/unit/conftest.py + tests/gates/conftest.py — детерминированные слои;
+    ##     docker/смоук-слои env-зависимы по дизайну и НЕ регистрируют)
+    ##   - monkeypatch.delenv(raising=False) — restore в teardown (после теста env вернётся)
+    ##   - setenv в теле теста побеждает (fixture отработал ДО тела)
+    """
+    for key in PLATFORM_ENV_LEAK_KEYS:
+        monkeypatch.delenv(key, raising=False)

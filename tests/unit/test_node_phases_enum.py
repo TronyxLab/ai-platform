@@ -38,8 +38,8 @@ def test_init_phases_match_enum() -> None:
     assert expected == INIT_PHASES, (
         f"INIT_PHASES drifted from BootstrapPhase.INIT_PHASE_ORDER:\n  node.py: {INIT_PHASES}\n  enum:    {expected}"
     )
-    assert len(INIT_PHASES) == 9, f"Expected 9 init phases, got {len(INIT_PHASES)}"
-    logger.critical("[IMP:9][test] INIT_PHASES == BootstrapPhase.INIT_PHASE_ORDER (9 keys) — OK")
+    assert len(INIT_PHASES) == 10, f"Expected 10 init phases, got {len(INIT_PHASES)}"
+    logger.critical("[IMP:9][test] INIT_PHASES == BootstrapPhase.INIT_PHASE_ORDER (10 keys) — OK")
 
 
 # 🧪 TRAP[TEST] · 2026-08-01 · B10 T6 · UPDATE_PHASES parity with enum
@@ -64,7 +64,7 @@ def test_enum_values_are_state_json_keys() -> None:
     """Every BootstrapPhase value is a str — the canonical state.json key format."""
     for phase in sorted(BootstrapPhase.ALL_PHASES):
         assert isinstance(phase, str), f"BootstrapPhase value must be a str (state.json key), got {phase!r}"
-    assert len(BootstrapPhase.ALL_PHASES) == 14, (
-        f"BootstrapPhase must have 14 values (9 init + 5 update), got {len(BootstrapPhase.ALL_PHASES)}"
+    assert len(BootstrapPhase.ALL_PHASES) == 15, (
+        f"BootstrapPhase must have 15 values (10 init + 5 update), got {len(BootstrapPhase.ALL_PHASES)}"
     )
-    logger.critical("[IMP:9][test] BootstrapPhase: 14 str values, state.json keys — OK")
+    logger.critical("[IMP:9][test] BootstrapPhase: 15 str values, state.json keys — OK")

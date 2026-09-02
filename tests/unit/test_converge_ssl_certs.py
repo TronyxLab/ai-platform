@@ -382,3 +382,32 @@ def test_ssl_dispatch_converged_noop(tmp_path, monkeypatch, caplog):
 
 
 # endregion FUNC_test_ssl_dispatch_converged_noop
+
+
+# ═══════════════════════════════════════════════════════════════════
+# T3 (DevPlan 029): fail-closed на None extractor — undeterminable ≠ converged
+# ═══════════════════════════════════════════════════════════════════
+
+
+# region FUNC_test_ssl_preview_extractor_none_not_converged
+## @purpose  T3 (DevPlan 029): domains.ssl_certs_converged_on_disk возвращает None (экстрактор
+##           сертов недоступен) → preview обязан НЕ рапортовать converged (честный статус warn +
+##           exit 1). Ложное «converged» на undeterminable = silent-success класс (RC2).
+## · Regression: F-02-класс — undeterminable трактовался как подтверждённое отсутствие дрейфа
+## · Remove if: превью-ветка R-ssl меняет контракт None-обработки
+@pytest.mark.usefixtures("reset_state")
+def test_ssl_preview_extractor_none_not_converged(tmp_path, monkeypatch) -> None:
+    """R-ssl preview: extractor None → status warn (НЕ converged) + exit 1."""
+    monkeypatch.setattr(domains, "ssl_provision_via_orchestrator", lambda *_a, **_k: "converged")
+    infra.reset_state()
+    monkeypatch.setattr(domains, "ssl_certs_converged_on_disk", lambda _c, _n: None)
+
+    entry = _converge_ssl.reconcile_ssl_certs(str(tmp_path), str(tmp_path / "node.yaml"), report_only=True)
+
+    assert entry["status"] == "warn", f"None-экстрактор НЕ даёт converged: {entry}"
+    assert entry["status"] != "converged", "undeterminable ≠ converged (fail-closed T3)"
+    assert infra.has_warnings and not infra.has_errors, "None → warn + exit 1 (не ошибка, не converged)"
+    logger.info("[IMP:9][test_ssl_preview_extractor_none_not_converged] PASS: None → warn, честный статус")
+
+
+# endregion FUNC_test_ssl_preview_extractor_none_not_converged

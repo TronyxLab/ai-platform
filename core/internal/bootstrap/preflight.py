@@ -576,6 +576,178 @@ def _extract_domain_from_node_yaml(node_yaml_path: str) -> str:
 # endregion FUNC_extract_domain_from_node_yaml
 
 
+# ═══════════════════════════════════════════════════════════════════
+# DevPlan 029 T7 — input-contract scope (--scope input): AGE-форма /
+# env-vs-file приоритет / sops-наличие / required-ключи — ЛОКАЛЬНО, 0 remote.
+# Двойная точка входа: bootstrap.sh первый шаг + operator verb validate-node-input
+# (DD-4: расширение preflight, не параллельный механизм).
+# ═══════════════════════════════════════════════════════════════════
+
+
+# region FUNC_probe_age_key_shape
+## @purpose — T7 input-probe: AGE-ключ найден (цепочка node_detect) И env-форма single-line
+##            (многострочный AGE_SECRET_KEY env = операторская ошибка — fail до SSH, AC6).
+## @io — ⇥ env: Mapping | None (DI; None = os.environ) → ⎋ CheckResult (fatal при отсутствии/кривой форме)
+## @complexity — O(1) + чтение файлов цепочки node_detect
+def probe_age_key_shape(*, env: Mapping[str, str] | None = None) -> CheckResult:
+    """Validate AGE key presence + single-line shape (input contract, T7)."""
+    from core.internal.shared.node_detect import detect_age_key
+
+    source: Mapping[str, str] = os.environ if env is None else env
+    raw_env = (source.get("AGE_SECRET_KEY", "") or "").strip()
+    # Shape-check ТОЛЬКО для env-значения (AGE_SECRET_KEY_FILE — файл, comment-scan каноничен).
+    if raw_env and ("\n" in raw_env or not raw_env.startswith("AGE-SECRET-KEY-")):
+        return CheckResult(
+            status="fatal",
+            detail="AGE_SECRET_KEY env не single-line/не AGE-SECRET-KEY-… — задайте "
+            "AGE_SECRET_KEY_FILE или single-line значение (age-keygen value)",
+        )
+    key = detect_age_key(env=source)
+    if not key:
+        return CheckResult(
+            status="fatal",
+            detail="AGE_SECRET_KEY не найден (цепочка: env → SOPS_AGE_KEY → AGE_SECRET_KEY_FILE "
+            "→ ~/.config/age/keys.txt → /etc/age/key.txt)",
+        )
+    return CheckResult(status="ok", detail="AGE key found, single-line canonical form")
+
+
+# endregion FUNC_probe_age_key_shape
+
+
+# region FUNC_probe_env_file_priority
+## @purpose — T7 input-probe (WARN): REF-0007 env-перекрытие — AGE_SECRET_KEY env задан
+##            И AGE_SECRET_KEY_FILE задан с ДРУГИМ ключом → WARN оператору
+##            («unset AGE_SECRET_KEY» — канон core/AGENTS.md §Hook-окружение).
+## @io — ⇥ env: Mapping | None (DI) → ⎋ CheckResult (warn при конфликте env-vs-file)
+## @complexity — O(1) + чтение первой AGE-строки файла
+def probe_env_file_priority(*, env: Mapping[str, str] | None = None) -> CheckResult:
+    """Env-vs-file priority conflict detection (input contract, T7)."""
+    source: Mapping[str, str] = os.environ if env is None else env
+    env_key = (source.get("AGE_SECRET_KEY", "") or "").strip()
+    file_path = (source.get("AGE_SECRET_KEY_FILE", "") or "").strip()
+    if not env_key or not file_path:
+        return CheckResult(status="ok", detail="no env/file conflict (один источник AGE)")
+    try:
+        with pathlib.Path(file_path).open(encoding="utf-8") as key_fh:
+            file_key = next(
+                (ln.strip() for ln in key_fh if ln.strip().startswith("AGE-SECRET-KEY-")),
+                "",
+            )
+    except OSError as e:
+        return CheckResult(status="warn", detail=f"AGE_SECRET_KEY_FILE unreadable: {e}")
+    env_canon = next((ln.strip() for ln in env_key.splitlines() if ln.strip().startswith("AGE-SECRET-KEY-")), env_key)
+    if file_key and file_key != env_canon:
+        return CheckResult(
+            status="warn",
+            detail="AGE_SECRET_KEY env ПЕРЕКРЫВАЕТ AGE_SECRET_KEY_FILE с другим ключом — предпочтительнее файл (unset AGE_SECRET_KEY)",
+        )
+    return CheckResult(status="ok", detail="env/file источники согласованы")
+
+
+# endregion FUNC_probe_env_file_priority
+
+
+# region FUNC_probe_sops_enc_file
+## @purpose — T7 input-probe: sops-наличие — enc-файл ноды (configs_dir/secrets/{node}.enc.yaml)
+##            существует; отсутствие допустимо ТОЛЬКО с node.yaml#secrets.allow_autogen=true.
+## @io — ⇥ node_yaml: str, node_name: str, env: Mapping | None (DI) → ⎋ CheckResult
+## @complexity — O(1) + isfile (кандидаты configs_dir/env/remote)
+def probe_sops_enc_file(*, node_yaml: str, node_name: str, env: Mapping[str, str] | None = None) -> CheckResult:
+    """Check SOPS/age enc-file presence for the node (input contract, T7)."""
+    source: Mapping[str, str] = os.environ if env is None else env
+    allow_autogen = False
+    if node_yaml and pathlib.Path(node_yaml).is_file():
+        try:
+            raw = NodeYaml(node_yaml).get("secrets.allow_autogen", default=False)
+            allow_autogen = bool(raw) if isinstance(raw, bool) else str(raw).strip().lower() == "true"
+        except (ConfigNotFoundError, ConfigParseError, OSError) as exc:
+            logger.warning("[IMP:7][preflight][input] allow_autogen unreadable from %s: %s", node_yaml, exc)
+
+    # configs_dir: NODE_CONFIGS_DIR env → канон /opt/node-configs → рядом с node.yaml (repo)
+    configs_dir = (source.get("NODE_CONFIGS_DIR", "") or "").strip()
+    candidates: list[str] = []
+    if configs_dir:
+        candidates.append(str(pathlib.Path(configs_dir) / "secrets" / f"{node_name}.enc.yaml"))
+    if node_yaml:
+        yaml_dir = pathlib.Path(node_yaml).parent.parent  # <configs>/<node>/node.yaml
+        candidates.append(str(yaml_dir / "secrets" / f"{node_name}.enc.yaml"))
+    from core.internal.shared.deploy_paths import node_configs_remote
+
+    candidates.append(str(node_configs_remote(env=source) / "secrets" / f"{node_name}.enc.yaml"))
+    enc = next((c for c in candidates if pathlib.Path(c).is_file()), None)
+    if enc is not None:
+        return CheckResult(status="ok", detail=f"SOPS enc-file present: {enc}")
+    if allow_autogen:
+        return CheckResult(status="warn", detail="enc-file отсутствует — autogen-only нода (allow_autogen=true)")
+    return CheckResult(
+        status="fatal",
+        detail=f"SOPS/age enc-file не найден для node={node_name} (искал: {', '.join(candidates)}). "
+        "Предоставьте enc-файл или установите node.yaml#secrets.allow_autogen: true",
+    )
+
+
+# endregion FUNC_probe_sops_enc_file
+
+
+# region FUNC_probe_required_keys
+## @purpose — T7 input-probe: required-ключи node.yaml#secrets.required[] — каждый env_var
+##            обязан резолвиться в непустое значение ЛОКАЛЬНО (0 remote).
+## @io — ⇥ node_yaml: str, env: Mapping | None (DI) → ⎋ CheckResult (fatal при missing)
+## @complexity — O(R) — R = required записей node.yaml
+def probe_required_keys(*, node_yaml: str, env: Mapping[str, str] | None = None) -> CheckResult:
+    """Check required secret env_vars from node.yaml resolve locally (input contract, T7)."""
+    source: Mapping[str, str] = os.environ if env is None else env
+    if not node_yaml or not pathlib.Path(node_yaml).is_file():
+        return CheckResult(status="ok", detail="node.yaml не задан — required-ключи не проверяемы")
+    try:
+        required = NodeYaml(node_yaml).get("secrets.required", default=[])
+    except (ConfigNotFoundError, ConfigParseError, OSError) as exc:
+        return CheckResult(status="warn", detail=f"secrets.required unreadable: {exc}")
+    if not isinstance(required, list) or not required:
+        return CheckResult(status="ok", detail="node.yaml не объявляет secrets.required")
+    missing: list[str] = []
+    required_entries: list[object] = list(required)
+    for entry_raw in required_entries:
+        if not isinstance(entry_raw, dict):
+            continue
+        entry_map = cast("dict[str, object]", entry_raw)
+        env_var = str(entry_map.get("env_var", "") or "")
+        if env_var and not (source.get(env_var, "") or "").strip():
+            missing.append(env_var)
+    if missing:
+        return CheckResult(status="fatal", detail=f"required env-ключи не заданы: {', '.join(missing)}")
+    return CheckResult(status="ok", detail=f"{len(required)} required env-ключ(а) присутствуют")
+
+
+# endregion FUNC_probe_required_keys
+
+
+# region FUNC_run_input_preflight
+## @purpose — T7: прогон input-scope проб (локальные входные контракты, 0 remote).
+## @io — ⇥ node_yaml/node_name + env DI → ⎋ PreflightResult
+## @complexity — O(1) + 4 локальные пробы
+def run_input_preflight(
+    *,
+    node_yaml: str = "",
+    node_name: str = "",
+    env: Mapping[str, str] | None = None,
+) -> PreflightResult:
+    """Run local input-contract probes (AGE/sops/required) — before ANY SSH (T7)."""
+    result = PreflightResult()
+    result.add("age_key_shape", probe_age_key_shape(env=env))
+    result.add("sops_enc_file", probe_sops_enc_file(node_yaml=node_yaml, node_name=node_name, env=env))
+    result.add("env_file_priority", probe_env_file_priority(env=env))
+    result.add("required_keys", probe_required_keys(node_yaml=node_yaml, env=env))
+    if result.has_fatals():
+        logger.error("[IMP:10][preflight][input] FATAL input-contract checks: %s", result.fatals)
+    else:
+        logger.info("[IMP:9][preflight][input] input-contract passed (warnings: %s)", len(result.warnings))
+    return result
+
+
+# endregion FUNC_run_input_preflight
+
 # endregion RUN_ALL_CHECKS
 
 
@@ -594,6 +766,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--node-yaml", help="Path to node.yaml")
     parser.add_argument("--context", default="", help="Deployment context name")
     parser.add_argument("--node-name", default="", help="Node name")
+    parser.add_argument(
+        "--scope",
+        default="full",
+        choices=["full", "input"],
+        help="full = SSH/disk/S3/GHCR/dockerhub/DNS пробы; input = локальный входной контракт "
+        "(AGE-форма/sops/required, 0 remote, DevPlan 029 T7)",
+    )
     parser.add_argument("--parse-warnings", action="store_true", help="Read JSON from stdin, output warnings to stderr")
     return parser
 
@@ -613,6 +792,7 @@ class _CliArgs(argparse.Namespace):
         self.node_yaml: str | None
         self.context: str
         self.node_name: str
+        self.scope: str
         self.parse_warnings: bool
 
 
@@ -631,11 +811,17 @@ def main(argv: list[str] | None = None) -> int:
         stream=sys.stderr,
     )
 
-    result = run_preflight(
-        node_yaml=args.node_yaml or "",
-        context=args.context,
-        node_name=args.node_name,
-    )
+    # DevPlan 029 T7: --scope input — локальный входной контракт (0 remote), прогоняется
+    # ПЕРЕД любым SSH: make validate-node-input / bootstrap.sh первый шаг. Default full —
+    # существующие 6 проб (поведение неизменно).
+    if args.scope == "input":
+        result = run_input_preflight(node_yaml=args.node_yaml or "", node_name=args.node_name)
+    else:
+        result = run_preflight(
+            node_yaml=args.node_yaml or "",
+            context=args.context,
+            node_name=args.node_name,
+        )
 
     # Output JSON to stdout (consumed by node-lifecycle.sh)
     print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))

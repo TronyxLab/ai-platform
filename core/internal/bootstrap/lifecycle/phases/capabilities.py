@@ -36,6 +36,7 @@ ENV_AWARE_PHASES = frozenset({
     "registry_auth",  # φ6: GHCR_PULL_TOKEN (W-H 163: env-дикт вместо os.environ)
     "secrets_update",  # φ9: SECRETS_ENV_FILE (через helpers_secrets.ensure_secrets_exist)
     "node_configuration",  # φ5: NODE_CONFIGS_REMOTE_BASE (167 D5, path-injection node_configs_dir)
+    "final_verify",  # φ-final-verify (DevPlan 029 T5): SECRETS_ENV_FILE/NODE_CONFIGS_DIR/GHCR_PULL_TOKEN
 })
 
 # ── Фазы, принимающие facts= EnvironmentFacts (E3, DevPlan 160) ───────────────────────

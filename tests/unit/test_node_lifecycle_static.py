@@ -893,9 +893,9 @@ def test_init_has_more_steps_than_update(caplog) -> None:
         ", ".join(phase_names),
     )
 
-    # ── Check 1: total phases = 14 ──
-    assert total_count == 14, f"FAIL: expected 14 total phases, got {total_count}"
-    logger.info("[IMP:8][test_init_has_more_steps] Check 1 PASS: 14 total phases")
+    # ── Check 1: total phases = 15 (10 init + 5 update, +final_verify DevPlan 029 T5) ──
+    assert total_count == 15, f"FAIL: expected 15 total phases, got {total_count}"
+    logger.info("[IMP:8][test_init_has_more_steps] Check 1 PASS: 15 total phases")
 
     # ── Count init vs update phases ──
     # Check the known sets: INIT mode has SYSTEM_BOOTSTRAP through CONVERGE_SERVICES
@@ -921,9 +921,9 @@ def test_init_has_more_steps_than_update(caplog) -> None:
     assert init_count > update_count, f"FAIL: init ({init_count}) must have MORE phases than update ({update_count})"
     logger.info("[IMP:8][test_init_has_more_steps] Check 2 PASS: init(%d) > update(%d)", init_count, update_count)
 
-    # ── Check 3: init has 9 phases ──
-    assert init_count == 9, f"FAIL: expected 9 init phases, got {init_count}"
-    logger.info("[IMP:8][test_init_has_more_steps] Check 3 PASS: init has 9 phases")
+    # ── Check 3: init has 10 phases (incl. φ-final-verify) ──
+    assert init_count == 10, f"FAIL: expected 10 init phases, got {init_count}"
+    logger.info("[IMP:8][test_init_has_more_steps] Check 3 PASS: init has 10 phases")
 
     # ── Check 4: update has 5 phases ──
     assert update_count == 5, f"FAIL: expected 5 update phases, got {update_count}"

@@ -113,6 +113,7 @@ from core.internal.bootstrap.lifecycle.phases import (
     phase_converge_update,
     phase_deploy_services,
     phase_deploy_update,
+    phase_final_verify,
     phase_node_config_update,
     phase_node_configuration,
     phase_platform_setup,
@@ -152,15 +153,16 @@ from core.internal.bootstrap.lifecycle.run_context import (  # ruff: ignore[F401
 
 # ── BootstrapPhase enum (14 consolidated phases per DevPlan 087) ──
 class BootstrapPhase:
-    """Consolidated bootstrap phases — 14 values (9 init + 5 update).
+    """Consolidated bootstrap phases — 15 values (10 init + 5 update).
 
-    φ1-φ8.5 = INIT mode phases
-    φ9-φ13  = UPDATE mode phases
+    φ1-φ8.5-φf = INIT mode phases (φf = final_verify, DevPlan 029 T5)
+    φ9-φ13     = UPDATE mode phases
 
     ## @purpose — Canonical phase names replacing 23+ old step names.
     ##             Each phase maps to a function in phases.py.
     ## @invariants
-    ##   - 14 values total (len(list(BootstrapPhase.init_phases()) + list(update_phases())) == 14)
+    ##   - 15 values total (10 INIT + 5 UPDATE); final_verify — init-only
+    ##     (честный exit 0 bootstrap: end-state assertions после converge, T5)
     ##   - Value string is the canonical state.json key for the phase
     ##   - converge_services (φ8.5) and converge_update (φ13) are separate for clear init/update separation
     """
@@ -175,6 +177,7 @@ class BootstrapPhase:
     CERTIFICATES = "certificates"  # φ7: acme.sh, ssl provision
     DEPLOY_SERVICES = "deploy_services"  # φ8: deploy modules, deploy context
     CONVERGE_SERVICES = "converge_services"  # φ8.5: converge
+    FINAL_VERIFY = "final_verify"  # φ-final-verify (DevPlan 029 T5): end-state assertions после φ8.5
 
     # ── UPDATE mode phases (φ9-φ13) ──
     SECRETS_UPDATE = "secrets_update"  # φ9: decrypt secrets
@@ -194,6 +197,7 @@ class BootstrapPhase:
         CERTIFICATES,
         DEPLOY_SERVICES,
         CONVERGE_SERVICES,
+        FINAL_VERIFY,
     })
 
     UPDATE_PHASES = frozenset({
@@ -217,6 +221,7 @@ class BootstrapPhase:
         CERTIFICATES,
         DEPLOY_SERVICES,
         CONVERGE_SERVICES,
+        FINAL_VERIFY,
     ]
 
     UPDATE_PHASE_ORDER: ClassVar[list[str]] = [
@@ -256,6 +261,7 @@ _phase_dependency_graph: dict[str, set[str]] = {
         BootstrapPhase.CERTIFICATES,
     },  # φ8 ← φ4, φ6, φ7
     BootstrapPhase.CONVERGE_SERVICES: {BootstrapPhase.DEPLOY_SERVICES},  # φ8.5 ← φ8
+    BootstrapPhase.FINAL_VERIFY: {BootstrapPhase.CONVERGE_SERVICES},  # φ-final-verify ← φ8.5 (T5)
     # UPDATE mode
     BootstrapPhase.SECRETS_UPDATE: set(),  # φ9 (no deps — entry point)
     BootstrapPhase.NODE_CONFIG_UPDATE: set(),  # φ10 (no deps)
@@ -292,6 +298,7 @@ PHASE_STATUS_SATISFIES_DEPENDENCY = frozenset({PHASE_STATUS_DONE, PHASE_STATUS_D
 _HASH_INVALIDATED_PHASES = frozenset({
     BootstrapPhase.DEPLOY_SERVICES,  # φ8 deploy-modules (modules/services)
     BootstrapPhase.CONVERGE_SERVICES,  # φ8.5 converge
+    BootstrapPhase.FINAL_VERIFY,  # φ-final-verify: входы изменились → re-verify (T5)
     BootstrapPhase.REGISTRY_UPDATE,  # φ11 provision/overlays/healthcheck
     BootstrapPhase.DEPLOY_UPDATE,  # φ12 deploy-modules
     BootstrapPhase.CONVERGE_UPDATE,  # φ13 converge
@@ -314,6 +321,7 @@ PHASE_DISPATCH: dict[str, Callable[..., object]] = {
     BootstrapPhase.CERTIFICATES: phase_certificates,  # φ7
     BootstrapPhase.DEPLOY_SERVICES: phase_deploy_services,  # φ8
     BootstrapPhase.CONVERGE_SERVICES: phase_converge_services,  # φ8.5
+    BootstrapPhase.FINAL_VERIFY: phase_final_verify,  # φ-final-verify (T5)
     BootstrapPhase.SECRETS_UPDATE: phase_secrets_update,  # φ9
     BootstrapPhase.NODE_CONFIG_UPDATE: phase_node_config_update,  # φ10
     BootstrapPhase.REGISTRY_UPDATE: phase_registry_update,  # φ11

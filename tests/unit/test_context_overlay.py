@@ -9,9 +9,9 @@
 ##   - Context path exists + cached (<300s) → SKIP (return 0, no git pull)
 ##   - Context path exists + cache expired (>=300s) → git pull --ff-only (return 0)
 ##   - Context path absent + repo URL present → git clone (return 0)
-##   - Context path absent + no repo URL → WARN (return 0, no git clone)
+##   - Context path absent + no repo URL → PlatformFatalError (T2 fail-loud)
 ##   - Git pull failure is non-fatal → WARN (return 0)
-##   - Git clone failure → WARN (return 1)
+##   - Git clone failure / invalid context name → PlatformFatalError (T2 fail-loud, exit 10)
 ## @rationale Ensures the Strangler-extracted Python module preserves all shell behavior.
 ##            Uses tmp_path for real YAML file I/O; mocks for git subprocess and filesystem paths.
 ## @changes
@@ -37,6 +37,8 @@ sys.path.insert(
     str(Path(__file__).resolve().parent.parent.parent / "core" / "internal" / "bootstrap" / "deploy"),
 )
 from context_overlay import ensure_context_repo
+
+from core.internal.shared.exceptions import PlatformFatalError
 
 pytestmark = pytest.mark.static_audit
 
@@ -223,31 +225,30 @@ def test_ensure_context_clone(
 
 
 # region FUNC_test_ensure_context_no_repo_url
-## @purpose  Context path absent + no repos.core → WARN (return 0)
-## @io       node_yaml_with_context_no_repo + mocks → assert 0 + WARN log
+## @purpose  T2 (DevPlan 029): context present + path absent + no repos.core → hard error
+##           (PlatformFatalError exit 10), НЕ тихий no-op — контекст обязан клонироваться.
+## @io       node_yaml_with_context_no_repo + mocks → assert PlatformFatalError + no clone call
 ## @complexity 1
-# 🧪 TRAP[TEST] · Regression · Scenario: Context absent + no repo URL → WARN · Last fail: N/A · Remove if: _clone_context_repo missing-repo handling changed
-@ldd_trajectory
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · T2 — no repos.core при context → hard error
+# · Last fail: silent no-op — overlay отсутствовал, нода репортила READY
+# · Remove if: missing-repo handling снова становится no-op
 @patch("context_overlay.subprocess.run")
 @patch("context_overlay.os.path.isdir")
 def test_ensure_context_no_repo_url(
     mock_isdir,
     mock_run,
     node_yaml_with_context_no_repo,
-    caplog,
 ):
-    """Context path absent, no repos.core: should WARN and return 0 without cloning."""
+    """Context present, path absent, no repos.core → PlatformFatalError (no silent no-op)."""
     mock_isdir.return_value = False
 
-    result = ensure_context_repo(node_yaml_with_context_no_repo)
+    with pytest.raises(PlatformFatalError) as exc_info:
+        ensure_context_repo(node_yaml_with_context_no_repo)
 
-    assert result == 0, "Expected 0 when repo URL is missing (no-op warning)"
+    assert exc_info.value.exit_code == 10, f"no repos.core при context → exit 10, получено {exc_info.value.exit_code}"
+    assert "repos.core" in str(exc_info.value)
     mock_run.assert_not_called(), "git clone should NOT be called without repo URL"
-    assert "No repos.core" in caplog.text, "Expected WARN about missing repos.core"
-    logger.info(
-        "[IMP:9][test][no_repo] ensure_context_repo returned %d — verified WARN + no clone",
-        result,
-    )
+    logger.info("[IMP:9][test][no_repo] ensure_context_repo no-repos.core → PlatformFatalError(10) — OK")
 
 
 # endregion FUNC_test_ensure_context_no_repo_url
@@ -303,20 +304,21 @@ def test_ensure_context_pull_fail_nonfatal(
 
 
 # region FUNC_test_ensure_context_clone_fail
-## @purpose  Context path absent, clone fails → WARN (return 1)
-## @io       node_yaml_with_context + mocks → assert 1 + WARN log
+## @purpose  T2 (DevPlan 029): Context path absent, clone fails → PlatformFatalError(10),
+##           НЕ WARN+return 1 — нода без контекстного overlay не репортит READY.
+## @io       node_yaml_with_context + mocks → assert PlatformFatalError (exit 10) + no-op
 ## @complexity 2
-# 🧪 TRAP[TEST] · Regression · Scenario: git clone fails → WARN + return 1 · Last fail: N/A · Remove if: _clone_context_repo failure handling changed
-@ldd_trajectory
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · T2 — git clone fails → fail-loud exit 10
+# · Last fail: F-01/F-02 постмортем-класс — clone-fail глотился WARN, нода репортила READY
+# · Remove if: clone-failure снова становится non-fatal
 @patch("context_overlay.subprocess.run")
 @patch("context_overlay.os.path.isdir")
 def test_ensure_context_clone_fail(
     mock_isdir,
     mock_run,
     node_yaml_with_context,
-    caplog,
 ):
-    """Context path absent, git clone fails: should WARN and return 1."""
+    """Context path absent, git clone fails → PlatformFatalError (exit 10)."""
     mock_isdir.return_value = False
 
     # Mock failed git clone
@@ -327,15 +329,12 @@ def test_ensure_context_clone_fail(
         stderr="fatal: repository not found",
     )
 
-    result = ensure_context_repo(node_yaml_with_context)
+    with pytest.raises(PlatformFatalError) as exc_info:
+        ensure_context_repo(node_yaml_with_context)
 
-    assert result == 1, "Expected 1 when clone fails"
-    mock_run.assert_called_once()
-    assert "git clone failed" in caplog.text, "Expected WARN log for failed git clone"
-    logger.info(
-        "[IMP:9][test][clone_fail] ensure_context_repo returned %d — verified clone failure returns 1",
-        result,
-    )
+    assert exc_info.value.exit_code == 10, f"clone-fail обязан дать exit 10, получено {exc_info.value.exit_code}"
+    assert "git clone failed" in str(exc_info.value), "Причина fail-loud должна быть в сообщении"
+    logger.info("[IMP:9][test][clone_fail] ensure_context_repo clone-fail → PlatformFatalError(10) — OK")
 
 
 # endregion FUNC_test_ensure_context_clone_fail
@@ -399,14 +398,15 @@ def test_ensure_context_pull_timestamp_update(
 # · Last fail: N/A (new security validation, аудит 2026-08-15 M13a)
 # · Remove if: context_name перестаёт валидироваться
 @patch("context_overlay.subprocess.run")
-def test_ensure_context_invalid_name_negative(mock_run, tmp_path, caplog):
-    """R5 negative (M13a): context_name с `../` → return 1, БЕЗ git clone."""
+def test_ensure_context_invalid_name_negative(mock_run, tmp_path):
+    """R5 negative (M13a): context_name с `../` → PlatformFatalError(10), БЕЗ git clone."""
     path = tmp_path / "node.yaml"
     path.write_text("contexts:\n  - name: ../../etc\nrepos:\n  core: https://github.com/org/x.git\n")
 
-    result = ensure_context_repo(str(path))
+    with pytest.raises(PlatformFatalError) as exc_info:
+        ensure_context_repo(str(path))
 
-    assert result == 1, "M13a: невалидный context_name должен вернуть 1"
+    assert exc_info.value.exit_code == 10, f"invalid context_name → exit 10, получено {exc_info.value.exit_code}"
     mock_run.assert_not_called()
 
 

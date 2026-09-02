@@ -130,6 +130,11 @@
       "additionalProperties": false,
       "description": "Secrets configuration — references to encrypted files and required API keys sourced from env vars at runtime",
       "properties": {
+        "allow_autogen": {
+          "type": "boolean",
+          "default": false,
+          "description": "Permit autogen-only secrets bootstrap (DevPlan 029 T1): when this node has NO SOPS/age enc-file yet required∧sops secrets are declared (consumed by enabled modules), generate them instead of failing. Absent/false → φ4 secrets_provision fails loud (exit 10) — the enc-file contract is violated. Flag lives in node.yaml (config SoT, gate-visible), NOT env (RC6)"
+        },
         "enc_file": {
           "type": "string",
           "description": "Path to SOPS/age encrypted secrets file relative to node-configs repo"

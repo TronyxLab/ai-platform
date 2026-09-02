@@ -1,32 +1,32 @@
 <!-- GREP_SUMMARY: AGENTS.md, bootstrap, deploy-modules, orchestration, system, docker, idempotent -->
 
 # GREP_SUMMARY: AGENTS.md, bootstrap, deploy-modules, orchestration, phases, 14-phases, state-machine, runbook, new-vps
-# STRUCTURE: ┌14 consolidated phases┐ → ◇ BootstrapPhase enum → ◇ _phase_dependency_graph → ◇ precondition_check → ◇ grouped-phases (выполняются целиком) → ◇ deploy-modules (system|docker) → ◇ idempotence (state.json status + phase-input hash) → ◇ artifact paths → ⎋ cross-refs
+# STRUCTURE: ┌15 consolidated phases (14 canonical + φ-final-verify, DevPlan 029 T5)┐ → ◇ BootstrapPhase enum → ◇ _phase_dependency_graph → ◇ precondition_check → ◇ grouped-phases (выполняются целиком) → ◇ deploy-modules (system|docker) → ◇ idempotence (state.json status + phase-input hash) → ◇ artifact paths → ⎋ cross-refs
 # region MODULE_CONTRACT
-## @purpose  Bootstrap pipeline orchestration: 14 consolidated phases, node setup, module deployment, healthcheck execution, idempotent state machine
+## @purpose  Bootstrap pipeline orchestration: 15 consolidated phases (14 canonical + φ-final-verify, DevPlan 029 T5), node setup, module deployment, healthcheck execution, idempotent state machine
 ## @scope    All scripts under core/internal/bootstrap/ — node-lifecycle.sh (thin facade),
-##           lifecycle/state_machine.py (BootstrapPhase enum, _phase_dependency_graph,
+##           lifecycle/state_machine.py (BootstrapPhase enum (15), _phase_dependency_graph,
 ##           precondition_check — оркестрация), lifecycle/state_store.py (persistence),
 ##           lifecycle/cli.py (CLI/main), lifecycle/helpers/ (7 I/O-модулей),
-##           lifecycle/phases/ (14 phase implementations — пакет),
+##           lifecycle/phases/ (15 phase implementations (10 init + 5 update) — пакет),
 ##           deploy-modules, setup-node, install-docker, install-tor-proxy, firewall,
 ##           topo_sort, discover_modules, remote-cmd, scp-deliver,
 ##           core_deliverer.py (Python Core-канал: mkdir + 5 rsync фаз)
 ## @invariants
-##   1. node-lifecycle.sh — тонкий фасад (<80 LOC), делегирует всё lifecycle/cli.py. Режимы: --mode init (9 INIT фаз) и --mode update (5 UPDATE фаз).
+##   1. node-lifecycle.sh — тонкий фасад (<80 LOC), делегирует всё lifecycle/cli.py. Режимы: --mode init (10 INIT фаз: φ1-φ8.5 + φ-final-verify) и --mode update (5 UPDATE фаз).
 ##   2. state_machine.py — оркестрация: BootstrapPhase enum, _phase_dependency_graph, precondition_check(), execute_phase()
 ##      (execute_grouped_phase удалён — sub-step resume вне скоупа)
-##   3. phases/ — business logic: 14 phase_*() функций в доменных модулях (system/docker/secrets/certs),
+##   3. phases/ — business logic: 15 phase_*() функций (10 init + 5 update + final_verify) в доменных модулях (system/docker/secrets/certs),
 ##      вызываемых из state_machine.py; агрегатор phases/__init__.py re-export'ит API;
 ##      I/O-хелперы — lifecycle/helpers/ (односторонняя зависимость state_machine → phases → helpers)
 ##   4. checkpoint_migration.py — удалён. Все чекпоинты через state.json напрямую.
-##      (23→14 key migration — cold start only.)
-##   5. Идемпотентность: state.json с 14 phase-ключами (StepState: status + phase-input hash)
+##      (23→15 key migration — cold start only.)
+##   5. Идемпотентность: state.json с 15 phase-ключами (StepState: status + phase-input hash)
 ##   6. Persistence (StepState/BootstrapState + state.json I/O) — lifecycle/state_store.py;
 ##      CLI (build_parser/main/run_init_mode/run_update_mode) — lifecycle/cli.py
 ##   7. Артефакты: /opt/platform/core/ (core), /opt/\<context\>/platform/ (context-overlay)
 ##   8. Никаких git-операций в bootstrap — только SCP/rsync для core; git clone/pull только через ensure_context_repo() для context-overlay
-## @rationale Consolidate 32+ steps → 14 phases with explicit dependency graph. Eliminates 8 silent
+## @rationale Consolidate 32+ steps → 15 phases (14 canonical + φ-final-verify) with explicit dependency graph. Eliminates 8 silent
 ##            failure propagation points via precondition BLOCKS. Sub-checkpoints удалены — фазы
 ##            выполняются ЦЕЛИКОМ; частичный отказ даёт done_with_warnings (≠ done → фаза
 ##            перевыполняется при следующем run). SRP-декомпозиция state_machine.
@@ -36,7 +36,7 @@
 
 ---
 
-## Bootstrap pipeline (14 consolidated phases)
+## Bootstrap pipeline (15 consolidated phases (14 canonical + φ-final-verify, DevPlan 029 T5))
 
 ```
 node-lifecycle.sh --mode init  →  lifecycle/cli.py → state_machine.py (BootstrapPhase enum)
@@ -50,6 +50,7 @@ node-lifecycle.sh --mode init  →  lifecycle/cli.py → state_machine.py (Boots
   φ7  certificates         # install-acme, ssl-provision
   φ8  deploy-services      # deploy-modules, deploy-context
   φ8.5 converge-services   # converge (explicit separate phase)
+  φf  final-verify          # end-state assertions после converge (DevPlan 029 T5)
 
 node-lifecycle.sh --mode update → lifecycle/cli.py → state_machine.py
 
@@ -87,7 +88,7 @@ node-lifecycle.sh --mode update → lifecycle/cli.py → state_machine.py
 
 ### `--mode init` — полный bootstrap
 
-Выполняет 9 фаз инициализации bare VPS: φ1 system-bootstrap (root, apt, Python 3.14, Docker, Tor, firewall) → φ2 user-accounts (platform/ci-deploy users, SSH keys) → φ3 platform-setup (Docker Hub auth, setup-node/sudoers, metrics-cron → /etc/cron.d/platform-metrics) → φ4 secrets-provision (decrypt, ensure-secrets + autogen master-кредов при первом bootstrap + htpasswd) → φ5 node-configuration (node.yaml validation, core verification) → φ6 registry-auth (ghcr.io, Docker auth) → φ7 certificates (acme.sh, SSL) → φ8 deploy-services (deploy-modules, deploy-context) → φ8.5 converge-services (converge). Идемпотентен: done-фазы пропускаются по status в state.json; content-hash инвалидация на уровне фазы. Вызывается из `make bootstrap-node` через `core/entrypoints/bootstrap.sh`.
+Выполняет 10 фаз инициализации bare VPS (φ1-φ8.5 + φ-final-verify): φ1 system-bootstrap (root, apt, Python 3.14, Docker, Tor, firewall) → φ2 user-accounts (platform/ci-deploy users, SSH keys) → φ3 platform-setup (Docker Hub auth, setup-node/sudoers, metrics-cron → /etc/cron.d/platform-metrics) → φ4 secrets-provision (decrypt, ensure-secrets + autogen master-кредов при первом bootstrap + htpasswd) → φ5 node-configuration (node.yaml validation, core verification) → φ6 registry-auth (ghcr.io, Docker auth) → φ7 certificates (acme.sh, SSL) → φ8 deploy-services (deploy-modules, deploy-context) → φ8.5 converge-services (converge) → φ-final-verify (end-state assertions, T5). Идемпотентен: done-фазы пропускаются по status в state.json; content-hash инвалидация на уровне фазы. Вызывается из `make bootstrap-node` через `core/entrypoints/bootstrap.sh`.
 
 ### Python runtime на ноде
 
@@ -146,7 +147,7 @@ orphan-реконсиляция и severity-based exit code {0,1,2} — в `depl
 
 | Механизм | Где | Что делает |
 |----------|-----|------------|
-| `state.json` (phase keys) | `/var/lib/platform/.bootstrap/state.json` | Единый source of truth для checkpoint'ов. Ключи — имена фаз BootstrapPhase enum. 14 ключей: system_bootstrap, user_accounts, platform_setup, secrets_provision, node_configuration, registry_auth, certificates, deploy_services, converge_services, secrets_update, node_config_update, registry_update, deploy_update, converge_update. |
+| `state.json` (phase keys) | `/var/lib/platform/.bootstrap/state.json` | Единый source of truth для checkpoint'ов. Ключи — имена фаз BootstrapPhase enum. 15 ключей: system_bootstrap, user_accounts, platform_setup, secrets_provision, node_configuration, registry_auth, certificates, deploy_services, converge_services, final_verify, secrets_update, node_config_update, registry_update, deploy_update, converge_update. |
 | content-hash | `state_machine._phase_input_hash()` + `phase_needs_rerun()` | Phase-input hash для hash-инвалидации (deploy/converge-фазы; фазы без hash — done сохраняется). Фазы выполняются целиком; идемпотентность через phase-статусы (done / done_with_warnings ≠ done → перевыполнение). |
 
 **Пример:** `system_bootstrap` в state.json:
@@ -217,7 +218,7 @@ Dev-машина без /opt: bare-NODE резолвится в репо `node-c
 (plan 012 T18/F-013).
 
 **4. Bootstrap (one-command, plan 012):** `make bootstrap-node NODE=<NODE> AGE_SECRET_KEY_FILE=~/.config/age/keys.txt`
-(dry-run: DRY_RUN=1). 9 INIT фаз (~30 мин), идемпотентен (повтор = no-op). Python 3.14 на ноде —
+(dry-run: DRY_RUN=1). 10 INIT фаз (~30 мин), идемпотентен (повтор = no-op). Python 3.14 на ноде —
 deadsnakes PPA (φ1, FATAL); системный /usr/bin/python3 НЕ трогается. Без единого ручного обхода:
 - **strict-init (T9)**: init-режим failed≠∅/crit>0 → exit 2 + state=failed (resumable — повтор доводит);
   update-режим (φ12) сохраняет WARN→0 (DEPLOY_BEST_EFFORT, D2).
@@ -247,8 +248,24 @@ checksum-сверка); chaos-сьют T1-T12 — только test-node
 `repos.core = git@github.com-overlay:<org>/<ctx>-overlay.git`. Приватный ключ живёт ТОЛЬКО
 на ноде (`~/.ssh/id_ed25519_github_overlay`); dev-копия — `~/projects/<ctx>/.secrets/` (0600,
 вне platform/-репо — каталог контекста не git-репо). `make new-context` провижинит repo-side
-автоматически (`context_initializer.provision_deploy_key`: keygen + `gh repo deploy-key add`);
-node-side шаги ниже — ручные (fresh-context-first: нода может не существовать в момент scaffold).
+автоматически (`context_initializer.provision_deploy_key`: keygen + `gh repo deploy-key add`).
+
+**Node-side — автоматизирован (DevPlan 029 T6, AC5):** ручной scp/chmod/ssh-config исключён.
+`core/entrypoints/bootstrap.sh` (operator-side bootstrap, remote path) сразу после SCP-фазы
+вызывает `python3 -m core.internal.scaffold.context_initializer install-node-deploy-key`
+(функция `install_overlay_deploy_key_node_side`): читает `contexts[0].name` + `repos.core` из
+node.yaml и одним `ssh root@<node> bash -s` ставит на ноде ключ и SSH-алиас — ключ едет через
+ssh-stdin heredoc (НЕ в argv), ssh-флаги — из SoT `shared/ssh_opts.py`:
+`install -d -m 0700 ~/.ssh` → ключ `~/.ssh/id_ed25519_github_overlay` (0600) → append
+`Host github.com-overlay`-блока в `~/.ssh/config`, если отсутствует (grep-идемпотентность;
+0600). Fresh-context-first закрыт: установка происходит, когда нода реально достижима —
+то есть во время bootstrap (AC5). Skip без шума (exit 0): контексты без
+`git@github.com-overlay:` repos.core; ретро-контекст без dev-ключа в
+`~/projects/<ctx>/.secrets/` → WARN (ручная установка на ноде могла уже состояться).
+`DRY_RUN` bootstrap печатает «would install overlay deploy key + alias» и SSH не выполняет.
+
+Ручные шаги ниже — ТОЛЬКО fallback (ретро-контекст без dev-ключа; bootstrap без SSH_HOST,
+когда overlay-key шаг не выполняется — напр. локальный node-lifecycle `--mode init`):
 
 1. **Keypair** (scaffold уже создал → пропустить): `ssh-keygen -t ed25519 -N "" -q -C "overlay-deploy-<ctx>" -f ~/projects/<ctx>/.secrets/<ctx>-overlay-deploy-key`
 2. **Repo-side (read-only):** `gh repo deploy-key add ~/projects/<ctx>/.secrets/<ctx>-overlay-deploy-key.pub --repo <org>/<ctx>-overlay --title "vps-<ctx>-readonly"` — БЕЗ `--allow-write`; ответ «already exists» = reuse (безопасно).
@@ -263,9 +280,11 @@ node-side шаги ниже — ручные (fresh-context-first: нода мо
 5. **Верификация с ноды:** `git ls-remote git@github.com-overlay:<org>/<ctx>-overlay.git` → список refs = доступен; после — `ensure_context_repo` клонирует без ручных шагов.
 
 **Ретро-контексты (созданы до DevPlan 024, напр. tronyx-lab) и skip-gh-case:** ключа в
-`~/projects/<ctx>/.secrets/` нет — выполнить шаги 1-2 вручную (идемпотентно: дубликат
-deploy key = «already exists»). Skeleton `repos.core` уже SSH-алиасный → после шагов 3-4
-клон работает. Ротация: новый keypair → шаг 2 → шаг 3 → удалить старый ключ из repo deploy keys.
+`~/projects/<ctx>/.secrets/` нет — bootstrap-шаг T6 пропускается с WARN (exit 0); выполнить
+шаги 1-2 вручную (идемпотентно: дубликат deploy key = «already exists») и повторить
+`make bootstrap-node` — или выполнить fallback-шаги 3-5 напрямую. Skeleton `repos.core` уже
+SSH-алиасный → после установки ключ+алиас клон работает. Ротация: новый keypair → шаг 2 →
+шаг 3 → удалить старый ключ из repo deploy keys.
 
 ## Cross-references
 
@@ -275,7 +294,7 @@ deploy key = «already exists»). Skeleton `repos.core` уже SSH-алиасн�
 | `../../../AGENTS.md` (root) | Архитектурные инварианты, модель деплоя, dual delivery |
 | [`core/entrypoint-manifest.yaml`](core/entrypoint-manifest.yaml) | YAML-реестр операций (bootstrap-node в секции bootstrap) |
 | `core/AGENTS.md` §«DR мастер-ключа AGE» | AGE master key DR (цепочка детекции, off-node backup, restore) |
-| `lifecycle/state_machine.py` | 14 фаз, dependency graph, precondition_check |
+| `lifecycle/state_machine.py` | 15 фаз, dependency graph, precondition_check |
 | `lifecycle/phases/system.py` | φ1 timezone, zram |
 | `core/internal/shared/docker_auth.py` | GHCR/Docker Hub auth |
 | `core/schemas/node.schema.json` | node.yaml schema |

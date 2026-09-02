@@ -427,3 +427,61 @@ projects:
 
 
 # endregion FUNC_test_add_vhost_marker_still_ok
+# ═══════════════════════════════════════════════════════════════════
+# T4 (DevPlan 029): verify-desired-state postcondition — rendered < exposed = drift
+# ═══════════════════════════════════════════════════════════════════
+
+
+# region FUNC_test_verify_vhosts_missing_conf_is_drift
+## @purpose  T4 (DevPlan 029): удалённый vhost-конфиг exposed-проекта (rendered < exposed) —
+##           R6 обязан рапортовать drift (fail + exit 2), НЕ «no action»/converged.
+##           AC3-drill: удаление артефакта → converge fail-loud (vhost не чинится verify-юнитом).
+## · Regression: F-01-класс (silent success: rendered при 0 проектах репортил success)
+## · Remove if: R6 перестанет проверять per-domain vhost file presence
+@pytest.mark.usefixtures("reset_state")
+def test_verify_vhosts_missing_conf_is_drift(tmp_path, caplog):
+    """R6: project with domain but vhost conf deleted → drift entry fail + exit 2."""
+    caplog.set_level(logging.INFO)
+
+    yaml_path = tmp_path / "node.yaml"
+    yaml_path.write_text(
+        """
+contexts:
+  - name: test-context
+projects:
+  - name: myapp
+    domain: myapp.example.com
+"""
+    )
+
+    # nginx overlay существует, но vhost-конфиг НЕ создан (rendered=0 < exposed=1)
+    overlay_dir = tmp_path / "opt" / "test-context" / "platform" / "modules" / "nginx"
+    overlay_dir.mkdir(parents=True)
+
+    def mock_run(cmd, *args, **kwargs):
+        cmd_str = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
+        if "docker ps" in cmd_str:
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="nginx\n", stderr="")
+        if "nginx -t" in cmd_str:
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="syntax is ok", stderr="")
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    with patch.object(subprocess, "run", side_effect=mock_run):
+        entry = reconciler.verify_vhosts(
+            str(yaml_path),
+            converge_node="test-node",
+            core_dir=str(tmp_path),
+            dry_run=False,
+            report_only=False,
+            overlay_base=str(tmp_path / "opt"),
+        )
+
+    assert entry["unit"] == "R6"
+    assert entry["status"] == "fail", f"missing vhost conf обязан быть drift/fail: {entry}"
+    assert infra.has_errors, "R6 fail-loud: отсутствующий vhost → exit 2"
+    fails = [d for d in infra.drifts if d.get("status") == "fail" and "conf not found" in d.get("detail", "")]
+    assert fails, f"drift entry с причиной отсутствует: {infra.drifts}"
+    logger.info("[IMP:9][test_verify_vhosts_missing_conf_is_drift] PASS: rendered<exposed → fail-loud drift")
+
+
+# endregion FUNC_test_verify_vhosts_missing_conf_is_drift

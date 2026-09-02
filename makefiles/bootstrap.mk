@@ -14,7 +14,7 @@
 ##            DevPlan 142 W5: +core-deliver (fallback при GitHub Outage, A6).
 # endregion MODULE_CONTRACT
 
-.PHONY: bootstrap-node node-update converge render-vhosts deploy-context check-security core-deliver
+.PHONY: bootstrap-node node-update converge render-vhosts deploy-context check-security core-deliver validate-node-input
 
 ## bootstrap-node: Idempotent node bootstrap
 ##   Usage: make bootstrap-node [NODE=<name>] [AGE_SECRET_KEY_FILE=<file>] [DRY_RUN=1] [AUTO_RECONCILE=1]
@@ -158,3 +158,17 @@ core-deliver:
 		$(if $(AGE_SECRET_KEY_FILE),--age-secret-key-file '$(AGE_SECRET_KEY_FILE)') \
 		$(if $(filter 1,$(DRY_RUN)),--dry-run)
 	@echo "[IMP:9][make][core-deliver] Core delivery complete"
+
+## validate-node-input: Локальная проверка входного контракта ноды ДО любого SSH (DevPlan 029 T7)
+##   Usage: make validate-node-input NODE=<name>
+##   Delegates to core/entrypoints/validate-node-input.sh → preflight.py --scope input
+##     (AGE-форма single-line, env-vs-file приоритет, SOPS enc-file наличие, required-ключи;
+##     0 remote — exit 1 с причиной до SSH, DD-4: фасад над preflight, не новый механизм)
+validate-node-input:
+	@echo "[IMP:8][make][validate-node-input] Validating node input contract (node=$(NODE))..."
+	@if [[ -z "$(NODE)" ]]; then \
+		echo "[IMP:10][make][validate-node-input] ERROR: NODE not set — usage: make validate-node-input NODE=<name>" >&2; \
+		exit 1; \
+	fi
+	@PLATFORM_ROOT="$(_platform_root)" $(_platform_root)/core/entrypoints/validate-node-input.sh --node "$(NODE)"
+	@echo "[IMP:9][make][validate-node-input] Input contract OK (0 remote)"

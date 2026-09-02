@@ -52,6 +52,7 @@ from core.internal.bootstrap.lifecycle.phases.docker import (
     phase_registry_auth,
     phase_registry_update,
 )
+from core.internal.bootstrap.lifecycle.phases.final_verify import phase_final_verify
 from core.internal.bootstrap.lifecycle.phases.secrets import phase_secrets_provision, phase_secrets_update
 from core.internal.bootstrap.lifecycle.phases.system import (
     phase_converge_services,
@@ -83,6 +84,7 @@ __all__ = [
     "phase_converge_update",
     "phase_deploy_services",
     "phase_deploy_update",
+    "phase_final_verify",
     "phase_node_config_update",
     "phase_node_configuration",
     "phase_platform_setup",

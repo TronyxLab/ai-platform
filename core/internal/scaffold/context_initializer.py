@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: context_initializer scaffold context overlay platform node-configs gh-repo deploy-key registration idempotent skeleton
-# STRUCTURE: ▶ validate_name → ⚡ check_idempotent ─┬─ create_dirs(platform/{node-configs,modules/hermes-agent,projects}) ─┬─ create_skeleton_node_yaml ── gh_repo_create(<ctx>-overlay) ──◇ provision_deploy_key(read-only) ── register_in_platform_yaml ── report_summary(+node-side install runbook)
+# GREP_SUMMARY: context_initializer scaffold context overlay platform node-configs gh-repo deploy-key registration idempotent skeleton overlay-deploy-key-install node-side
+# STRUCTURE: ▶ validate_name → ⚡ check_idempotent ─┬─ create_dirs(platform/{node-configs,modules/hermes-agent,projects}) ─┬─ create_skeleton_node_yaml ── gh_repo_create(<ctx>-overlay) ──◇ provision_deploy_key(read-only) ── register_in_platform_yaml ── report_summary(+node-side install runbook) ── ◇ CLI install-node-deploy-key → install_overlay_deploy_key_node_side (node-side key+alias via SSH/core channel)
 # region MODULE_CONTRACT
 ## @purpose  Python Strangler-Fig migration of context-init.sh (364 LOC shell).
 ##           Scaffolds a new deployment context: nested overlay directory structure
 ##           (platform/{node-configs,modules/hermes-agent,projects}), skeleton node.yaml,
 ##           ONE GitHub overlay repo (`<org>/<ctx>-overlay`) with read-only deploy key,
-##           and registration in platform node.yaml.
-## @scope    Developer machine only (local scaffold) — no SSH, no VPS operations.
-##           Called from context-init.sh facade.
+##           and registration in platform node.yaml. Plus (DevPlan 029 T6)
+##           install_overlay_deploy_key_node_side — node-side установка overlay deploy key
+##           + SSH-алиаса github.com-overlay по SSH/core-каналу во время operator bootstrap.
+## @scope    Developer/operator machine: context-init scaffold — локальный (no SSH/VPS);
+##           install-node-deploy-key subcommand выполняется на машине оператора в
+##           bootstrap.sh (после SCP-фазы) и ходит на ноду по SSH (ключ — через stdin).
+##           Called from context-init.sh facade / bootstrap.sh overlay-key step.
 ## @invariants
 ##   - Idempotent: if ~/projects/<name>/ exists → SKIP (exit 0)
 ##   - Canonical layout (DevPlan 022): весь overlay — под `<ctx>/platform/`; сестринские
@@ -28,13 +32,13 @@
 ##   - Exit codes: 0=success/skip, 1=validation error, 2=registration error
 ## @rationale Step 1 of Scaffold → Declare → Apply workflow. Zero inline python3.
 ##            context_registry.py already exists — delegates, doesn't reimplement.
-## @links    CALLED_BY: context-init.sh (facade)
-##           CALLS: context_registry.register_context()
+## @links    CALLED_BY: context-init.sh (facade); bootstrap.sh overlay-key step (T6)
+##           CALLS: context_registry.register_context(); NodeYaml; shared.ssh_opts.SSH_OPTS
 ##           DP-092 Wave 2; DevPlan 022 TASK-2 (nested layout + single overlay repo);
-##           DevPlan 024 TASK-2 (deploy key + SSH-алиасный repos.core)
-## @changes  2026-09-01 · DevPlan 024 TASK-2 — provision_deploy_key (read-only deploy key,
-##           `<ctx>/.secrets/`), skeleton repos.core → git@github.com-overlay:,
-##           node-side install-инструкция в summary
+##           DevPlan 024 TASK-2 (deploy key + SSH-алиасный repos.core);
+##           DevPlan 029 TASK-6 (node-side overlay deploy key via core/SSH channel)
+## @changes  2026-09-02 · DevPlan 029 T6 — install_overlay_deploy_key_node_side (node-side
+##           overlay deploy key via core/SSH channel) + CLI subcommand install-node-deploy-key
 ## @changes  2026-07-30 · Wave 2 — initial implementation
 ## @changes  2026-09-01 · DevPlan 022 TASK-2 — nested platform/ layout, single `<ctx>-overlay` repo,
 ##           skeleton repos.core, glob `*/platform/node-configs/<node>/node.yaml`
@@ -66,6 +70,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import ClassVar, cast
 
+from core.internal.shared.deploy_paths import projects_base  # canonical PROJECTS_BASE resolver (F-017)
 from core.internal.shared.exceptions import (
     PlatformError,  # hoisted — except-ветка main() читает имя (reportPossiblyUnboundVariable)
 )
@@ -76,6 +81,14 @@ logger = logging.getLogger(__name__)
 _DEFAULT_PROJECTS_DIR = Path(os.environ.get("HOME", "/"), "projects")
 _DEFAULT_NODE = os.environ.get("NODE", "tronyx-vps")
 _DEFAULT_ORG = os.environ.get("NODE_ORG", "tronyx-lab")
+
+# Operator-side projects root for the overlay dev key (DevPlan 029 T6):
+#   <projects_root>/<ctx>/.secrets/<ctx>-overlay-deploy-key
+# canonical location per root AGENTS.md «Корневой контракт ~/projects/» (dev key —
+# ~/projects/<ctx>/.secrets/, runbook core/internal/bootstrap/AGENTS.md). shared/deploy_paths
+# already defines the canonical PROJECTS_BASE resolver (env → /opt/projects → dev-fallback
+# ~/projects on the operator machine, plan 012 T18/F-017) — reuse it instead of a new literal.
+DEFAULT_PROJECTS_ROOT: Path = projects_base()
 
 # ── Skeleton node.yaml template (preserve GREP_SUMMARY/STRUCTURE) ─────
 _SKELETON_TEMPLATE = """# GREP_SUMMARY: {context_name} node context declarative apply declarative-deploy
@@ -264,6 +277,37 @@ def _default_subprocess_runner(cmd: list[str]) -> tuple[int, str, str]:
 # endregion FUNC__default_subprocess_runner
 
 
+# region FUNC__default_ssh_runner
+def _default_ssh_runner(cmd: list[str], stdin_text: str) -> tuple[int, str, str]:
+    """Run ssh via subprocess with the secret payload on stdin (default DI runner, T6).
+
+    ## @purpose  Default for install_overlay_deploy_key_node_side. KEY CONTENT rides on
+    ##            stdin (subprocess input) — NEVER in argv (no ps/process-list leak).
+    ## @io        ⇥ cmd, stdin_text → ⎋ (returncode, stdout, stderr);
+    ##            FileNotFoundError → (-1, "", "<bin>: command not found");
+    ##            TimeoutExpired → (-1, "", "ssh timed out after 60s")
+    ## @complexity O(1) — single subprocess.run (timeout 60)
+    """
+    try:
+        result = subprocess.run(
+            cmd,
+            input=stdin_text,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+    except FileNotFoundError:
+        return -1, "", f"{cmd[0]}: command not found"
+    except subprocess.TimeoutExpired:
+        return -1, "", "ssh timed out after 60s"
+    else:
+        return result.returncode, result.stdout, result.stderr
+
+
+# endregion FUNC__default_ssh_runner
+
+
 # region FUNC_provision_deploy_key
 ## @purpose  Provision read-only deploy key for VPS access to the private `<ctx>`-overlay repo
 ##           (DevPlan 024 TASK-2, D2/D3).
@@ -384,6 +428,155 @@ def provision_deploy_key(
 
 
 # endregion FUNC_provision_deploy_key
+
+
+# region FUNC_install_overlay_deploy_key_node_side
+## @purpose  Install the context overlay deploy key + github.com-overlay SSH alias ON the node
+##           over the SSH/core channel during operator-side bootstrap (DevPlan 029 T6, AC5).
+##           Automates the manual node-side runbook steps (scp + chmod 600 + ~/.ssh/config
+##           Host github.com-overlay block) of core/internal/bootstrap/AGENTS.md
+##           section 'VPS-доступ к приватному overlay (deploy key)'.
+## @param node_yaml     Path to node.yaml — contexts[0].name (get_context) + repos.core
+## @param ssh_host      SSH host of the node; ssh runs as root@<ssh_host>
+## @param projects_root Operator projects base; dev key at
+##                      {projects_root}/{ctx}/.secrets/{ctx}-overlay-deploy-key
+##                      (None -> DEFAULT_PROJECTS_ROOT = deploy_paths.projects_base())
+## @param ssh_runner    Injectable (cmd, stdin_text) -> (rc, stdout, stderr) runner (DI seam)
+## @param dry_run       Print the install plan and return 0 (no SSH)
+## @return   0 — installed / skipped (no alias repos.core, no dev key, dry-run)
+## @raises   PlatformFatalError (exit 10) — ssh rc != 0 (manual remediation required)
+## @complexity O(1) — one ssh call (remote script via bash -s, key on stdin)
+## @invariants
+##   - Key content NEVER in argv: ssh stdin carries remote-script + key (quoted heredoc);
+##     cmd list — ssh flags from shared.ssh_opts.SSH_OPTS (SoT — no flag duplication)
+##   - Skip semantics (exit 0, no noise): no contexts[0].name / repos.core does not start
+##     with git@github.com-overlay: / dev key missing (retro context -> WARN: a manual node
+##     install may already exist)
+##   - Fresh-context-first closed: install runs during bootstrap — node IS reachable
+##     (SSH_HOST), so the key is installed right away (AC5)
+##   - Remote script is idempotent: grep 'Host github.com-overlay' -> append only if absent
+def install_overlay_deploy_key_node_side(
+    *,
+    node_yaml: str,
+    ssh_host: str,
+    projects_root: Path | None = None,
+    ssh_runner: Callable[[list[str], str], tuple[int, str, str]] | None = None,
+    dry_run: bool = False,
+) -> int:
+    """Install overlay deploy key + ssh alias on the node (DevPlan 029 T6).
+
+    ## @purpose  AC5: bootstrap clones the private overlay without manual scp/chmod/ssh-config —
+    ##            the key is installed over the SSH/core channel during operator bootstrap.
+    ## @io        ⇥ node_yaml, ssh_host, projects_root, ssh_runner, dry_run → ⎋ int (0 | raise 10)
+    ## @complexity O(1)
+    """
+    from core.internal.shared.exceptions import PlatformFatalError
+    from core.internal.shared.node_yaml import NodeYaml
+    from core.internal.shared.ssh_opts import SSH_OPTS
+
+    node = NodeYaml(node_yaml)
+    ctx = node.get_context()
+    repo_val = node.get("repos.core", default="")
+    repo = repo_val if isinstance(repo_val, str) else ""
+
+    overlay_prefix = "git@github.com-overlay:"
+    if not ctx or not repo.startswith(overlay_prefix):
+        logger.info(
+            "[IMP:9][context][overlay-key][skip] node.yaml has no SSH-alias repos.core "
+            "(context=%r, repos.core=%r) — node-side overlay key install skipped (exit 0)",
+            ctx,
+            repo,
+        )
+        return 0
+
+    base = DEFAULT_PROJECTS_ROOT if projects_root is None else projects_root
+    key_path = base / ctx / ".secrets" / f"{ctx}-overlay-deploy-key"
+    org = repo[len(overlay_prefix) :].split("/", 1)[0]
+
+    if not key_path.is_file():
+        logger.warning(
+            "[IMP:9][context][overlay-key][warn] dev overlay deploy key missing: %s — automated "
+            "node-side install skipped (exit 0); a manual node install "
+            "(~/.ssh/id_ed25519_github_overlay) may already exist for retro contexts — see "
+            "runbook bootstrap/AGENTS.md 'VPS-доступ к приватному overlay (deploy key)'",
+            key_path,
+        )
+        return 0
+
+    if dry_run:
+        logger.info(
+            "[IMP:9][context][overlay-key][dry-run] WOULD install overlay deploy key %s + "
+            "github.com-overlay ssh alias on root@%s (ctx=%s)",
+            key_path,
+            ssh_host,
+            ctx,
+        )
+        return 0
+
+    key_text = key_path.read_text(encoding="utf-8").strip()
+    if not key_text:
+        logger.warning(
+            "[IMP:9][context][overlay-key][warn] dev overlay deploy key empty: %s — node-side install skipped (exit 0)",
+            key_path,
+        )
+        return 0
+
+    # Remote script executed as root via 'ssh root@<host> bash -s'. The key rides on stdin
+    # INSIDE a quoted heredoc: bash parses heredocs deterministically (no read-ahead race) and
+    # the key content is present ONLY on the ssh channel — never in argv/process list.
+    remote_lines = [
+        "set -euo pipefail",
+        'install -d -m 0700 "$HOME/.ssh"',
+        "cat > \"$HOME/.ssh/id_ed25519_github_overlay\" <<'__OVERLAY_DEPLOY_KEY_EOF__'",
+        key_text,
+        "__OVERLAY_DEPLOY_KEY_EOF__",
+        'chmod 600 "$HOME/.ssh/id_ed25519_github_overlay"',
+        "if ! grep -q 'Host github.com-overlay' \"$HOME/.ssh/config\" 2>/dev/null; then",
+        "  cat >> \"$HOME/.ssh/config\" <<'__OVERLAY_SSH_ALIAS_EOF__'",
+        "Host github.com-overlay",
+        "  HostName github.com",
+        "  IdentityFile ~/.ssh/id_ed25519_github_overlay",
+        "  IdentitiesOnly yes",
+        "__OVERLAY_SSH_ALIAS_EOF__",
+        "fi",
+        'chmod 600 "$HOME/.ssh/config"',
+        "",
+    ]
+    remote_script = "\n".join(remote_lines)
+
+    cmd = ["ssh", *SSH_OPTS, f"root@{ssh_host}", "bash", "-s"]
+    if ssh_runner is None:
+        ssh_runner = _default_ssh_runner
+    rc, stdout, stderr = ssh_runner(cmd, remote_script)
+
+    if rc != 0:
+        detail = (stderr.strip() or stdout.strip()) or "unknown ssh error"
+        logger.error(
+            "[IMP:10][context][overlay-key][install] ssh overlay deploy-key install failed on root@%s (rc=%s): %s",
+            ssh_host,
+            rc,
+            detail,
+        )
+        msg = (
+            f"Overlay deploy-key install on root@{ssh_host} failed (ssh rc={rc}): {detail} — "
+            f"fix SSH access to the node and rerun bootstrap, or install the key manually per "
+            f"runbook bootstrap/AGENTS.md 'VPS-доступ к приватному overlay (deploy key)' "
+            f"(scp {key_path} <node>:~/.ssh/id_ed25519_github_overlay + chmod 600 + "
+            f"ssh-config Host github.com-overlay)"
+        )
+        raise PlatformFatalError(msg)
+
+    logger.info(
+        "[IMP:9][context][overlay-key][install] Overlay deploy key + github.com-overlay alias "
+        "installed on root@%s (ctx=%s, org=%s)",
+        ssh_host,
+        ctx,
+        org,
+    )
+    return 0
+
+
+# endregion FUNC_install_overlay_deploy_key_node_side
 
 
 # region FUNC_gh_repo_create
@@ -727,16 +920,80 @@ class _ContextInitArgs(argparse.Namespace):
     projects_dir: ClassVar[Path]
 
 
+class _InstallNodeDeployKeyArgs(argparse.Namespace):
+    """Typed argparse namespace for the install-node-deploy-key subcommand (W11).
+
+    ClassVar-аннотации БЕЗ значений (только типы) — значения ломают hasattr/parser-дефолты.
+    """
+
+    node_yaml: ClassVar[str]
+    ssh_host: ClassVar[str]
+    projects_root: ClassVar[Path]
+    dry_run: ClassVar[bool]
+
+
+## @purpose  CLI for the install-node-deploy-key subcommand (DevPlan 029 T6): delegates to
+##           install_overlay_deploy_key_node_side; catches PlatformError → exit code contract.
+## @io        ⇥ rest_argv (после первого токена install-node-deploy-key) → ⎋ int
+## @complexity O(1)
+def _main_install_node_deploy_key(rest_argv: list[str]) -> int:
+    """CLI body for 'context_initializer install-node-deploy-key' (T6).
+
+    ## @purpose  Operator bootstrap hook: установка overlay deploy key + SSH-алиаса на ноде
+    ##            по SSH/core-каналу. Exit-коды: 0 = ok/skip, e.exit_code на PlatformError.
+    ## @io        ⇥ rest_argv → ⎋ int (contract T4: main() -> int)
+    """
+    parser = argparse.ArgumentParser(
+        prog="context_initializer install-node-deploy-key",
+        description=(
+            "Install the context overlay deploy key + github.com-overlay ssh alias on the node "
+            "over the SSH/core channel (DevPlan 029 T6). Skipped (exit 0) when node.yaml has no "
+            "git@github.com-overlay: repos.core or the dev key is missing."
+        ),
+    )
+    parser.add_argument("--node-yaml", required=True, help="Path to node.yaml (contexts[] + repos.core)")
+    parser.add_argument("--ssh-host", required=True, help="SSH host of the node (installed as root@<host>)")
+    parser.add_argument(
+        "--projects-root",
+        default=DEFAULT_PROJECTS_ROOT,
+        help=f"Operator projects root (default: {DEFAULT_PROJECTS_ROOT})",
+    )
+    parser.add_argument("--dry-run", action="store_true", default=False, help="Print the install plan (no SSH)")
+
+    args = parser.parse_args(rest_argv, namespace=_InstallNodeDeployKeyArgs())
+
+    try:
+        return install_overlay_deploy_key_node_side(
+            node_yaml=args.node_yaml,
+            ssh_host=args.ssh_host,
+            projects_root=Path(args.projects_root),
+            dry_run=args.dry_run,
+        )
+    except PlatformError as e:
+        logger.critical(
+            "[IMP:10][overlay-key][cli] FATAL: overlay deploy-key install failed (exit=%d): %s", e.exit_code, e
+        )
+        return e.exit_code
+
+
 ## @purpose  CLI entry point — full context scaffold orchestration
 ## @io        stdout: progress messages; exit 0 on success, 1 on validation error, 2 on registration error
 ## @complexity O(1) (subprocess calls for gh, otherwise pure Python)
 def main(argv: list[str] | None = None) -> int:
     """CLI dispatcher for context initializer.
 
-    ## @purpose  Parse args, orchestrate full context-init flow.
+    ## @purpose  Parse args, orchestrate full context-init flow. Первый токен
+    ##            'install-node-deploy-key' делегируется в _main_install_node_deploy_key
+    ##            (DevPlan 029 T6) — остальной контракт main() неизменен.
     ## @io        ⇥ argv → ⎋ int exit code (contract T4: main() -> int)
     ## @complexity O(1)
     """
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+
+    # Subcommand dispatch (DevPlan 029 T6): operator bootstrap overlay-key step.
+    if raw_argv and raw_argv[0] == "install-node-deploy-key":
+        return _main_install_node_deploy_key(raw_argv[1:])
+
     parser = argparse.ArgumentParser(
         description="Scaffold a new deployment context: create dirs, skeleton node.yaml, GitHub repos, register.",
     )
@@ -749,7 +1006,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--skip-gh-repo", action="store_true", default=False, help="Skip GitHub repository creation")
     parser.add_argument("--projects-dir", default=_DEFAULT_PROJECTS_DIR, help="Projects directory")
 
-    args = parser.parse_args(argv, namespace=_ContextInitArgs())
+    args = parser.parse_args(raw_argv, namespace=_ContextInitArgs())
 
     # Resolve context name (positional or --name)
     context_name = args.name or args.name_opt

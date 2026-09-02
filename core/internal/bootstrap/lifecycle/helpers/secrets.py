@@ -28,6 +28,12 @@
 ##             verify_required_sops_secrets получает enabled_modules (из node.yaml через
 ##             shared/enabled_modules); required∧sops требуется только при consumers ∩
 ##             enabled_modules ≠ ∅; пустой consumers → SKIP; None → легаси-глобальная проверка
+## @changes  2026-09-02 · DevPlan 029 T1 (deploy-integrity) — allow_autogen gate: чистая нода
+##             без enc-файла с required∧sops (для enabled модулей) fail-loud (ConfigValidationError
+##             → φ4 PlatformFatalError exit 10), ЕСЛИ node.yaml не разрешает autogen
+##             (secrets.allow_autogen: true — lab/arena, D2). Резолв флага — ОДНА точка чтения
+##             _resolve_allow_autogen (NodeYaml.get("secrets.allow_autogen", default=False));
+##             None (node.yaml недоступен) → легаси-skip (обратная совместимость тестов/reboot)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -44,7 +50,7 @@ from core.internal.shared.deploy_paths import node_configs_remote
 # 142 W2: secrets.env → persistent /var/lib/platform/run (резолвер shared/deploy_paths)
 from core.internal.shared.deploy_paths import secrets_env_file as _secrets_env_file
 from core.internal.shared.enabled_modules import resolve_enabled_modules
-from core.internal.shared.exceptions import ConfigNotFoundError, ConfigValidationError
+from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError, ConfigValidationError
 from core.internal.shared.secrets_manifest_reader import consumers as manifest_consumers
 from core.internal.shared.secrets_manifest_reader import iter_secrets
 from core.internal.shared.secrets_manifest_reader import tier as manifest_tier
@@ -117,8 +123,18 @@ def decrypt_secrets(core_dir: str) -> None:
 ##   · Fix: env отсутствует + НЕТ enc-файла → нода без операторских секретов → SKIP до autogen.
 ##   · Prevention: no-secrets нода (modules=[], без secrets/) — валидное состояние; FATAL только
 ##   ·   при реальном сбое расшифровки. Postcondition (REF-0013) уважает этот кейс: gated на enc.
-def ensure_secrets_exist(core_dir: str, *, env: Mapping[str, str] | None = None) -> None:
-    """Ensure secrets.env exists AND all autogen secrets are generated."""
+def ensure_secrets_exist(
+    core_dir: str,
+    *,
+    env: Mapping[str, str] | None = None,
+    allow_autogen: bool | None = None,
+) -> None:
+    """Ensure secrets.env exists AND all autogen secrets are generated.
+
+    allow_autogen: явное значение node.yaml#secrets.allow_autogen (DevPlan 029 T1);
+    None → резолв из node.yaml ноды (см. _resolve_allow_autogen); node.yaml недоступен →
+    легаси-поведение (verifier skip на autogen-only ноде).
+    """
     source: Mapping[str, str] = os.environ if env is None else env
     secrets_env = source.get("SECRETS_ENV_FILE", str(_secrets_env_file()))
     node_name = source.get("NODE_NAME", "")
@@ -167,11 +183,17 @@ def ensure_secrets_exist(core_dir: str, *, env: Mapping[str, str] | None = None)
             node_name,
             len(enabled_modules),
         )
+    # DevPlan 029 T1 (allow_autogen gate): ОДНА точка чтения флага — резолв из node.yaml
+    # ноды, если вызывающий не передал явное значение (тесты/обёртки). Флаг решает,
+    # разрешён ли autogen-only бутстрап (нет enc-файла) при объявленных required∧sops.
+    if allow_autogen is None:
+        allow_autogen = _resolve_allow_autogen(node_name=node_name, env=source)
     verify_required_sops_secrets(
         manifest_path=str(manifest_path),
         secrets_env=secrets_env,
         enc_file=str(enc_file),
         enabled_modules=enabled_modules,
+        allow_autogen=allow_autogen,
     )
 
 
@@ -193,6 +215,58 @@ def _consumed_by_enabled(entry: dict[str, object], enabled: set[str]) -> bool:
 
 
 # endregion FUNC__consumed_by_enabled
+
+
+# region FUNC__resolve_allow_autogen
+## @purpose  ЕДИНСТВЕННАЯ точка чтения node.yaml#secrets.allow_autogen (DD-1, DevPlan 029 T1):
+##           резолвит node.yaml ноды (resolve_node_yaml_path — тот же канон, что у
+##           resolve_enabled_modules) и читает флаг через NodeYaml.get(default=False).
+##           Возвращает True/False (флаг задан/прочитан) или None (node.yaml недоступен —
+##           reboot/standalone/битый файл → легаси-политика verifier'а без fail-loud).
+## @io       ⇥ node_name: str, env: Mapping[str, str] (источник NODE_CONFIGS_DIR/NODE_YAML)
+##           → ⎋ bool | None
+## @complexity O(1) файл-резолв + O(1) YAML-чтение
+## @invariants
+##   - NodeYaml.get("secrets.allow_autogen", default=False) — schema-гейтнутый bool;
+##     строка-фолбэк нормализуется по lowercase "true" (не-schema файл не роняет резолв)
+##   - Любая ошибка чтения → None + WARN (НЕ raise): раз node.yaml нечитаем, флаг
+##     неразрешим — φ4 сохраняет легаси-поведение (сломанный node.yaml ловится φ5)
+def _resolve_allow_autogen(*, node_name: str, env: Mapping[str, str]) -> bool | None:
+    """Read node.yaml#secrets.allow_autogen for the node (single read point, DD-1)."""
+    path = _resolve_allow_autogen_path(node_name=node_name, env=env)
+    if path is None:
+        logger.info(
+            "[IMP:8][ensure_secrets] node.yaml unavailable for node=%r — legacy autogen policy (no fail-loud)",
+            node_name,
+        )
+        return None
+    try:
+        # Ленивый импорт NodeYaml (зеркало enabled_modules) — тяжёлых top-level нет
+        from core.internal.shared.node_yaml import NodeYaml
+
+        raw: object = NodeYaml(str(path)).get("secrets.allow_autogen", default=False)
+    except (ConfigNotFoundError, ConfigParseError, ConfigValidationError, OSError) as exc:
+        logger.warning(
+            "[IMP:7][ensure_secrets] Cannot read secrets.allow_autogen from node.yaml: %s — legacy policy", exc
+        )
+        return None
+    value = raw if isinstance(raw, bool) else str(raw).strip().lower() == "true"
+    logger.info("[IMP:8][ensure_secrets] node=%s secrets.allow_autogen=%s", node_name, value)
+    return value
+
+
+def _resolve_allow_autogen_path(*, node_name: str, env: Mapping[str, str]) -> pathlib.Path | None:
+    """Resolve the node.yaml path for allow_autogen reads (isolated try-body, PLW0717-free)."""
+    try:
+        from core.internal.shared.enabled_modules import resolve_node_yaml_path
+
+        return resolve_node_yaml_path(node_name=node_name, env=env)
+    except (ConfigNotFoundError, ConfigParseError, ConfigValidationError, OSError) as exc:
+        logger.warning("[IMP:7][ensure_secrets] Cannot resolve node.yaml for allow_autogen: %s", exc)
+        return None
+
+
+# endregion FUNC__resolve_allow_autogen
 
 
 # region FUNC_verify_required_sops_secrets
@@ -219,15 +293,15 @@ def verify_required_sops_secrets(
     secrets_env: str,
     enc_file: str,
     enabled_modules: set[str] | None = None,
+    allow_autogen: bool | None = None,
 ) -> None:
-    """Postcondition: every required∧sops manifest secret (consumed by enabled module) has a value."""
-    if not pathlib.Path(enc_file).is_file():
-        logger.info(
-            "[IMP:8][ensure_secrets] No encrypted secrets file (%s) — required∧sops postcondition skipped (autogen-only node)",
-            enc_file,
-        )
-        return
+    """Postcondition: every required∧sops manifest secret (consumed by enabled module) has a value.
 
+    allow_autogen (DevPlan 029 T1): None → легаси (нет enc → skip, autogen-only нода валидна);
+    True → autogen-only бутстрап разрешён (node.yaml#secrets.allow_autogen, lab/arena);
+    False → node.yaml доступен и флага НЕТ → required∧sops без enc-файла = нарушение
+    контракта → ConfigValidationError (φ4 оборачивает в PlatformFatalError, exit 10).
+    """
     entries = iter_secrets(manifest_path)
     required: list[str] = []
     for entry in entries:
@@ -245,6 +319,37 @@ def verify_required_sops_secrets(
     if not required:
         logger.info(
             "[IMP:8][ensure_secrets] Manifest has no required∧sops secrets for enabled modules — postcondition trivially satisfied"
+        )
+        return
+
+    # ── Enc-файл отсутствует → autogen-only путь (DevPlan 029 T1 allow_autogen gate) ──
+    # Чистая нода без операторских секретов валидна (TRAP[BUG] 2026-07-31) ТОЛЬКО когда
+    # autogen разрешён (флаг true) или node.yaml недоступен (None → легаси). Флаг НЕ задан
+    # (False) при объявленных required∧sops = нарушение входного контракта → fail-loud:
+    # φ4 не должен молча деградировать до сгенерированных значений (RC2, D2).
+    if not pathlib.Path(enc_file).is_file():
+        if allow_autogen is True:
+            logger.info(
+                "[IMP:8][ensure_secrets] No encrypted secrets file (%s) — required∧sops postcondition skipped "
+                "(secrets.allow_autogen=true, autogen-only node)",
+                enc_file,
+            )
+            return
+        if allow_autogen is False:
+            logger.error(
+                "[IMP:10][ensure_secrets] CONTRACT FAILED: no enc-file %s for required∧sops secrets: %s",
+                enc_file,
+                ", ".join(required),
+            )
+            msg = (
+                f"Encrypted secrets file not found: {enc_file} — required∧sops secrets cannot be supplied: "
+                f"{', '.join(required)}. Provide the SOPS/age enc-file for node or set "
+                "node.yaml#secrets.allow_autogen: true to permit autogen-only bootstrap (degraded)"
+            )
+            raise ConfigValidationError(msg)
+        logger.info(
+            "[IMP:8][ensure_secrets] No encrypted secrets file (%s) — required∧sops postcondition skipped (autogen-only node)",
+            enc_file,
         )
         return
 

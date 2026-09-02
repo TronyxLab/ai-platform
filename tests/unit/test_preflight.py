@@ -28,7 +28,13 @@
 import logging
 import subprocess
 
-from core.internal.bootstrap.preflight import probe_ghcr_auth
+from core.internal.bootstrap.preflight import (
+    probe_env_file_priority,
+    probe_ghcr_auth,
+    probe_required_keys,
+    probe_sops_enc_file,
+    run_input_preflight,
+)
 from tests._conftest.ldd import ldd_trajectory
 
 logger = logging.getLogger(__name__)
@@ -201,3 +207,98 @@ def test_probe_ghcr_auth_timeout_warns(caplog) -> None:
 
 
 # endregion TESTS
+
+# ═══════════════════════════════════════════════════════════════════
+# DevPlan 029 T7 — input-contract scope (0 remote, ДО любого SSH)
+# ═══════════════════════════════════════════════════════════════════
+
+
+# region FUNC_test_input_scope_multiline_age_fails
+def test_input_scope_multiline_age_fails() -> None:
+    """T7 AC6: многострочный AGE_SECRET_KEY env (cat age-key.txt инжект) → fatal (0 remote)."""
+    result = run_input_preflight(env={"AGE_SECRET_KEY": "line1\n# created: x\nAGE-SECRET-KEY-0123456789abcdef0123"})
+    check = result.checks["age_key_shape"]
+    assert check.status == "fatal", f"multiline AGE env обязан быть fatal: {check}"
+    assert "single-line" in check.detail
+    assert "age_key_shape" in result.fatals
+    logger.critical("[IMP:9][test_input_scope_multiline_age_fails] PASS: multiline AGE → fatal")
+
+
+# endregion FUNC_test_input_scope_multiline_age_fails
+
+
+# region FUNC_test_input_scope_priority_env_over_file
+def test_input_scope_priority_env_over_file(tmp_path) -> None:
+    """T7: AGE_SECRET_KEY env перекрывает AGE_SECRET_KEY_FILE с другим ключом → warn (REF-0007)."""
+    key_file = tmp_path / "key.txt"
+    key_file.write_text("# created: x\nAGE-SECRET-KEY-bbbbbbbbbbbbbbbbbbbbbbbbbb\n", encoding="utf-8")
+    result = probe_env_file_priority(
+        env={"AGE_SECRET_KEY": "AGE-SECRET-KEY-aaaaaaaaaaaaaaaaaaaaaaaaaaaa", "AGE_SECRET_KEY_FILE": str(key_file)}
+    )
+    assert result.status == "warn", f"env-vs-file конфликт → warn: {result}"
+    assert "перекрывает" in result.detail or "ПЕРЕКРЫВАЕТ" in result.detail
+    logger.critical("[IMP:9][test_input_scope_priority_env_over_file] PASS: env>file другой ключ → warn")
+
+
+# endregion FUNC_test_input_scope_priority_env_over_file
+
+
+# region FUNC_test_input_scope_sops_enc_missing_fails
+def test_input_scope_sops_enc_missing_fails(tmp_path) -> None:
+    """T7 AC6: enc-файл отсутствует и allow_autogen НЕ задан → fatal (sops-наличие)."""
+    node_yaml = tmp_path / "node.yaml"
+    node_yaml.write_text("contexts:\n  - name: c\nnode:\n  name: mynode\n", encoding="utf-8")
+    result = probe_sops_enc_file(node_yaml=str(node_yaml), node_name="mynode", env={"NODE_CONFIGS_DIR": str(tmp_path)})
+    assert result.status == "fatal", f"нет enc + нет allow_autogen → fatal: {result}"
+    assert "allow_autogen" in result.detail
+    logger.critical("[IMP:9][test_input_scope_sops_enc_missing_fails] PASS: no enc → fatal")
+
+
+# endregion FUNC_test_input_scope_sops_enc_missing_fails
+
+
+# region FUNC_test_input_scope_sops_enc_allow_autogen_warns
+def test_input_scope_sops_enc_allow_autogen_warns(tmp_path) -> None:
+    """T7: enc отсутствует + allow_autogen:true → warn (autogen-only допустим), не fatal."""
+    node_yaml = tmp_path / "node.yaml"
+    node_yaml.write_text("secrets:\n  allow_autogen: true\nnode:\n  name: mynode\n", encoding="utf-8")
+    result = probe_sops_enc_file(node_yaml=str(node_yaml), node_name="mynode", env={"NODE_CONFIGS_DIR": str(tmp_path)})
+    assert result.status == "warn", f"allow_autogen=true без enc → warn: {result}"
+    assert "allow_autogen" in result.detail
+    logger.critical("[IMP:9][test_input_scope_sops_enc_allow_autogen_warns] PASS: allow_autogen → warn")
+
+
+# endregion FUNC_test_input_scope_sops_enc_allow_autogen_warns
+
+
+# region FUNC_test_input_scope_required_keys_missing_fails
+def test_input_scope_required_keys_missing_fails(tmp_path) -> None:
+    """T7: required env-ключ из node.yaml#secrets.required не задан → fatal."""
+    node_yaml = tmp_path / "node.yaml"
+    node_yaml.write_text(
+        "secrets:\n  required:\n    - name: webnames\n      env_var: WEBNAMES_API_KEY\n",
+        encoding="utf-8",
+    )
+    result = probe_required_keys(node_yaml=str(node_yaml), env={})
+    assert result.status == "fatal", f"missing required env-ключ → fatal: {result}"
+    assert "WEBNAMES_API_KEY" in result.detail
+    logger.critical("[IMP:9][test_input_scope_required_keys_missing_fails] PASS: required missing → fatal")
+
+
+# endregion FUNC_test_input_scope_required_keys_missing_fails
+
+
+# region FUNC_test_input_scope_required_keys_present_ok
+def test_input_scope_required_keys_present_ok(tmp_path) -> None:
+    """T7: все required env-ключи заданы → ok."""
+    node_yaml = tmp_path / "node.yaml"
+    node_yaml.write_text(
+        "secrets:\n  required:\n    - name: webnames\n      env_var: WEBNAMES_API_KEY\n",
+        encoding="utf-8",
+    )
+    result = probe_required_keys(node_yaml=str(node_yaml), env={"WEBNAMES_API_KEY": "secret"})
+    assert result.status == "ok", f"required присутствуют → ok: {result}"
+    logger.critical("[IMP:9][test_input_scope_required_keys_present_ok] PASS: required present → ok")
+
+
+# endregion FUNC_test_input_scope_required_keys_present_ok
