@@ -28,6 +28,7 @@
 
 import logging
 import os
+import time
 
 import pytest
 import requests
@@ -210,9 +211,32 @@ def _assert_chat_completion(url: str, payload: dict, headers: dict) -> None:
     """POST chat/completions: 200 + non-empty choices[0].content (PLW0717-хелпер).
 
     ## @io — ⇥ url, payload, headers → ⎋ None (asserts)
-    ## @complexity O(1) — один HTTP запрос
+    ## @complexity O(1) — один HTTP запрос (3 попытки на транспорт-сбой)
+
+    ⚠️ TRAP[BUG] · 2026-09-02 · P2 · hermes API ConnectionReset на прогреве (CI) ·
+    · Symptom: platform-test — ConnectionResetError(104) mid-response при первом
+    ·   chat-completions (API-сервер/LiteLLM-роутинг ещё прогреваются после старта стека).
+    · Fix: 3 попытки на RequestException (только транспорт; контентные ассерты НЕ
+    ·   ретраятся — контентный фейл честен). Финальный RequestException эскалируется
+    ·   вызывающему в _handle_e2e_error (R4-маршрутизация сохранена).
     """
-    r = requests.post(url, json=payload, headers=headers, timeout=60)
+    last_exc: requests.RequestException | None = None
+    for attempt in range(3):
+        try:
+            r = requests.post(url, json=payload, headers=headers, timeout=60)
+            break
+        except requests.RequestException as exc:
+            last_exc = exc
+            if attempt < 2:
+                logger.warning(
+                    "[IMP:7][test_hermes_api_completions] transport attempt %d failed (%s), retrying in 10s...",
+                    attempt + 1,
+                    exc,
+                )
+                time.sleep(10)
+    else:
+        raise last_exc if last_exc is not None else RuntimeError("unreachable: no attempt made")
+
     logger.info("[IMP:8][test_hermes_api_completions] API returned HTTP %s", r.status_code)
 
     assert r.status_code == 200, f"API returned HTTP {r.status_code}: {r.text[:300]}"
