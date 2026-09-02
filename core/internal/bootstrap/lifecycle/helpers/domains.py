@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: domains-helpers, import-deploy-context, extract-domains, ssl-provision, cert-orchestrator, direct-import, context-deployer
+# GREP_SUMMARY: domains-helpers, import-deploy-context, extract-domains, ssl-provision, cert-orchestrator, direct-import, context-deployer, wildcard-coverage, cert-covers-domain, converged-on-disk
 # STRUCTURE: ▶ import_deploy_context ┌direct-import context_deployer.deploy_context (non-fatal)┐ → ⚡ extract_domains ┌extract_domains_for_context (public, CS-1)┐ → ⚡ ssl_provision_via_orchestrator ┌cert_orchestrator.orchestrate_certs│skipped_import│converged-check disk┐ → ⎋ str (provisioned|converged|skipped_import|error)
 # region MODULE_CONTRACT
 ## @purpose  Domain/deploy-context I/O-хелперы bootstrap-фаз — извлечены из state_machine
@@ -38,6 +38,10 @@
 ##           публичная extract_domains_for_context (CS-1)
 ## @changes  2026-08-22 · T3.5 — importlib-обход удалён → обычные guarded-импорты
 ##           (spec_from_file_location/sys.modules убраны, −40 LOC; прецедент — A5 в context_deployer)
+## @changes  2026-09-02 · DevPlan 030 TASK-1 (F14) — _certs_converged_on_disk wildcard-aware:
+##           покрытие через shared ssl_certs.cert_covers_domain (direct live/{domain}/ ИЛИ
+##           wildcard-родитель live/{parent}/ CN=*.parent) — assertion (a) больше не даёт ложный
+##           FAIL «no certificate on disk» для roadmap.asiteam.ru под *.asiteam.ru
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -50,6 +54,7 @@ from pathlib import Path
 # 142 W2: secrets.env → persistent /var/lib/platform/run (резолвер shared/deploy_paths)
 from core.internal.shared import deploy_paths
 from core.internal.shared.exceptions import PlatformFatalError
+from core.internal.shared.ssl_certs import cert_covers_domain
 
 logger = logging.getLogger(__name__)
 
@@ -248,8 +253,8 @@ def extract_domains(core_dir: str, node_yaml: str, context: str) -> list[str]:
 ##   - context="" means ALL domains (no filtering)
 ##   - orchestrate_certs — обычный guarded-импорт (T3.5), единый module-инстанс
 ##   - Import-скип БОЛЬШЕ НЕ тихий: IMP:10 критический лог (см. _import_fail_ctx)
-##   - Converged-проверка: /etc/letsencrypt/live/{domain}/fullchain.pem через канонический
-##     резолвер deploy_paths.letsencrypt_live() (C7), не литерал
+##   - Converged-проверка: on-disk покрытие через cert_covers_domain (direct live/{domain}/
+##     ИЛИ wildcard-родитель live/{parent}/, F14) на базе резолвера deploy_paths.letsencrypt_live() (C7)
 ## @rationale DevPlan 052 §4.1: Replace _ssl_provision() with cert_orchestrator
 ##           to fix subshell credential loss and handle all domains (not just platform).
 def ssl_provision_via_orchestrator(core_dir: str, node_yaml: str) -> str:
@@ -345,20 +350,23 @@ def ssl_provision_via_orchestrator(core_dir: str, node_yaml: str) -> str:
 
 # region FUNC__certs_converged_on_disk
 ## @purpose  Проверка конвергенции при недоступном orchestrate_certs: каждый домен из node.yaml
-##           уже имеет fullchain.pem на диске (/etc/letsencrypt/live/{domain}/fullchain.pem) —
-##           дёшево (один isfile на домен), не наказывает повторным issuance'ом уже выпущенные
-##           серты (P0-семантика восстановления: resume НЕ должен перевыпускать готовое).
+##           уже покрыт on-disk сертом (direct live/{domain}/ ИЛИ wildcard-родитель live/{parent}/,
+##           F14/DevPlan 030 TASK-1) — дёшево (isfile + subject-проверка на домен), не наказывает
+##           повторным issuance'ом уже выпущенные серты (P0-семантика восстановления: resume НЕ
+##           должен перевыпускать готовое). Единый канон покрытия — shared ssl_certs.cert_covers_domain.
 ## @io       ⇥ core_dir: str, node_yaml: str → ⎋ bool | None
-##              (True = все серты на диске / доменов нет; False = есть домены без сертов;
+##              (True = все домены покрыты сертами / доменов нет; False = есть домены без сертов;
 ##               None = домены неопределимы — extract_domains_for_context недоступен)
-## @complexity O(D) — D = число доменов (по одному isfile на домен)
+## @complexity O(D) — D = число доменов (по одному isfile+subject на домен; делегирование cert_covers_domain)
 ## @invariants
 ##   - Пустой список доменов → True (выпускать нечего — состояние сходится)
 ##   - extract_domains_for_context None → None (нельзя ни подтвердить, ни опровергнуть —
 ##     консервативно; фаза перевыполнится на резюме)
+##   - Wildcard-aware (F14): *.asiteam.ru (live/asiteam.ru/fullchain.pem) покрывает
+##     roadmap.asiteam.ru — НЕ «no certificate on disk» (раньше проверялся только direct-каталог)
 ##   - LE live dir — канонический резолвер deploy_paths.letsencrypt_live() (C7), не литерал
 def _certs_converged_on_disk(core_dir: str, node_yaml: str) -> bool | None:
-    """Return True if every node.yaml domain already has fullchain.pem on disk (converged)."""
+    """Return True if every node.yaml domain is covered by an on-disk cert (direct or wildcard)."""
     if extract_domains_for_context is None:
         logger.warning("[IMP:7][ssl_provision] context_deployer unavailable — convergence cannot be verified")
         return None
@@ -366,12 +374,15 @@ def _certs_converged_on_disk(core_dir: str, node_yaml: str) -> bool | None:
     if not domains:
         return True  # no domains → nothing to issue → converged
     le_live = deploy_paths.letsencrypt_live()
-    missing = [d for d in domains if not (le_live / d / "fullchain.pem").is_file()]
+    # F14 (DevPlan 030 TASK-1): wildcard-aware — домен покрыт direct live/{domain}/ ИЛИ
+    # wildcard-родителем live/{parent}/ (CN=*.parent). Старый isfile(live/{domain}/) давал
+    # ложный FAIL «no certificate on disk» для *.asiteam.ru → roadmap.asiteam.ru (серт на диске).
+    missing = [d for d in domains if not cert_covers_domain(le_live, d)]
     if missing:
         logger.info("[IMP:8][ssl_provision] Certificates missing on disk for: %s", ", ".join(missing))
         return False
     logger.info(
-        "[IMP:9][ssl_provision] All %d domain(s) already have fullchain.pem on disk — converged",
+        "[IMP:9][ssl_provision] All %d domain(s) covered by on-disk certs (direct or wildcard) — converged",
         len(domains),
     )
     return True

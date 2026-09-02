@@ -1,4 +1,4 @@
-# GREP_SUMMARY: test-shared-ssl-certs openssl x509 parseable expiry issuer lets-encrypt checkend constants san wildcard cn-fallback
+# GREP_SUMMARY: test-shared-ssl-certs openssl x509 parseable expiry issuer lets-encrypt checkend constants san wildcard cn-fallback on-disk-coverage wildcard-parent
 # STRUCTURE: ▶ test_parseable [ok|fail|timeout] → test_expiry [ok|expired] → test_issuer [le|non-le|fail] → test_constants
 #            → ▶ REAL-openssl certs (tmp_path): san-only → wildcard → cn-fallback → san-no-cn-fallback → R5-original-bug
 # region MODULE_CONTRACT
@@ -18,6 +18,8 @@
 ## @changes 2026-08-16 | DevPlan 004 W2 — +SAN-aware секция: _make_cert helper (openssl в tmp_path),
 ##           test_cert_is_valid_san_only_cert / _san_wildcard / _cn_fallback / _san_present_no_cn_fallback /
 ##           _san_only_original_bug (R5), параметризованные subject-паттерны cert_subject_matches_domain
+## @changes 2026-09-02 | DevPlan 030 TASK-1 — +TEST_CERT_COVERS_DOMAIN секция (cert_covers_domain
+##           direct|wildcard-parent|none, F14; 0 subprocess — cert_get_subject мокается monkeypatch)
 # endregion MODULE_CONTRACT
 
 import logging
@@ -32,6 +34,7 @@ from core.internal.shared.ssl_certs import (
     DEFAULT_EXPIRY_THRESHOLD,
     DEFAULT_OPENSSL_TIMEOUT,
     cert_check_expiry,
+    cert_covers_domain,
     cert_get_issuer,
     cert_get_san_list,
     cert_is_le_issuer,
@@ -456,6 +459,63 @@ def test_cert_is_valid_san_only_original_bug(
 
 
 # endregion TEST_SAN_AWARE
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# region TEST_CERT_COVERS_DOMAIN (DevPlan 030 TASK-1 — F14 on-disk coverage)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · 2026-09-02 · Regression · cert_covers_domain — wildcard-parent покрытие (F14)
+# · Scenario: roadmap.asiteam.ru покрыт *.asiteam.ru (live/asiteam.ru/fullchain.pem CN=*.asiteam.ru);
+#   assertion (a) φ-final-verify падал на ложном «no certificate on disk» (проверял только
+#   direct-каталог live/{domain}/).
+# · Last fail: asi-team-vps cold bootstrap — wildcard *.asiteam.ru реально выпущен, но direct-каталог
+#   отсутствовал → exit 10.
+# · Remove if: on-disk coverage перестаёт учитывать wildcard-родителя
+# GUARD-PRESERVE (168): единственное покрытие on-disk direct|wildcard-parent веток cert_covers_domain
+# (F14) — дедупликация _log_post_issue_coverage в shared.
+def test_cert_covers_domain_direct(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Direct: live/{domain}/fullchain.pem с CN=domain → True (0 subprocess)."""
+    caplog.set_level(logging.INFO)
+    le_live = tmp_path / "live"
+    cert_dir = le_live / "app.example.com"
+    cert_dir.mkdir(parents=True)
+    (cert_dir / "fullchain.pem").write_text("dummy", encoding="utf-8")
+    monkeypatch.setattr(ssl_certs_module, "cert_get_subject", lambda _p: "subject=CN = app.example.com")
+
+    assert cert_covers_domain(le_live, "app.example.com") is True
+    logger.info("[IMP:9][test][cert_covers_domain] direct coverage OK")
+
+
+def test_cert_covers_domain_wildcard_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Wildcard: live/example.com/fullchain.pem с CN=*.example.com покрывает roadmap.example.com (F14)."""
+    caplog.set_level(logging.INFO)
+    le_live = tmp_path / "live"
+    parent_dir = le_live / "example.com"
+    parent_dir.mkdir(parents=True)
+    (parent_dir / "fullchain.pem").write_text("dummy", encoding="utf-8")
+    monkeypatch.setattr(ssl_certs_module, "cert_get_subject", lambda _p: "subject=CN = *.example.com")
+
+    assert cert_covers_domain(le_live, "roadmap.example.com") is True
+    logger.info("[IMP:9][test][cert_covers_domain] wildcard parent coverage OK")
+
+
+def test_cert_covers_domain_none(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Ни direct, ни wildcard → False (fail-closed, R3 — не маскирует реальный missing-cert)."""
+    caplog.set_level(logging.INFO)
+    le_live = tmp_path / "live"
+    le_live.mkdir(parents=True)  # пустая live-директория — ни direct, ни wildcard-родителя
+
+    assert cert_covers_domain(le_live, "roadmap.example.com") is False
+    logger.info("[IMP:9][test][cert_covers_domain] no coverage → False")
+
+
+# endregion TEST_CERT_COVERS_DOMAIN
 
 
 # ═══════════════════════════════════════════════════════════════════════════

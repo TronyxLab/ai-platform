@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: ssl-certs, openssl, x509, expiry, issuer, lets-encrypt, parseable, shared, checkend, san, wildcard, run-openssl, pubkey-match, pair-match, fqdn-validation
+# GREP_SUMMARY: ssl-certs, openssl, x509, expiry, issuer, lets-encrypt, parseable, shared, checkend, san, wildcard, on-disk-coverage, wildcard-parent, le-live, run-openssl, pubkey-match, pair-match, fqdn-validation
 # STRUCTURE: ▶ _run_openssl ┌args,cert,timeout,op┐ → ◇ openssl x509 -in cert … → ⎋ CompletedProcess|None (5 блоков дедуплицированы)
 #            → ▶ cert_is_parseable ┌cert┐ → ◇ openssl x509 -noout → ⎋ bool → ▶ cert_check_expiry ┌cert,threshold┐ → ◇ openssl x509 -checkend → ⎋ bool
 #            → ▶ cert_get_issuer ┌cert┐ → ◇ openssl x509 -issuer → ⎋ str|None → ▶ cert_is_le_issuer ┌cert┐ → ◇ issuer contains "Let's Encrypt" → ⎋ bool
 #            → ▶ cert_get_san_list ┌cert┐ → ◇ openssl x509 -ext subjectAltName → ⊕ DNS-entries → ⎋ list[str]
 #            → ▶ _cert_covers_domain ┌cert,domain┐ → ◇ SAN? (exact|wildcard одноуровневый) : CN-fallback → ⎋ bool
+#            → ▶ cert_covers_domain ┌le_live,domain┐ → ◇ direct live/{domain} | wildcard live/{parent} (CN=*.parent) → ⎋ bool [F14]
 #            → ▶ cert_key_pair_matches ┌cert,key┐ → ◇ openssl pubkey(cert) == pkey pubout(key) (whitespace-normalized) → ⎋ bool [REF-0008]
 #            → ▶ validate_cert_domain_fqdn ┌fqdn┐ → ◇ labels(≥2,RFC,TLD) → ⊕ ConfigValidationError | ⎋ None [REF-0008]
 # region MODULE_CONTRACT
@@ -61,6 +62,7 @@
 ##                      cert↔key), +key_path в cert_is_valid (pair-check), +validate_cert_domain_fqdn
 ##                      (fail-fast FQDN-валидатор для cert-pipeline; дублирует правила
 ##                      vhost_renderer.validate_vhost_identifiers — см. TRAP[DECISION] у функции)
+##           2026-09-02 | DevPlan 030 TASK-1 — +cert_covers_domain (on-disk coverage direct|wildcard-parent, F14)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -71,6 +73,7 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import cast
 
 from core.internal.shared.exceptions import ConfigValidationError
@@ -265,6 +268,49 @@ def cert_subject_matches_domain(subject: str, domain: str) -> bool:
 
 
 # endregion FUNC_cert_subject_matches_domain
+
+
+# region FUNC_cert_covers_domain
+## @purpose  Проверить on-disk покрытие домена сертификатом Let's Encrypt (DevPlan 030 TASK-1,
+##           F14): direct-каталог live/{domain}/fullchain.pem с subject, покрывающим domain
+##           (exact CN), ИЛИ wildcard-родитель live/{parent}/fullchain.pem с CN = *.parent
+##           (семантика cert_orchestrator._log_post_issue_coverage FL15: issue-cert SKIP'ает
+##           поддомены wildcard'а — *.asiteam.ru покрывает roadmap.asiteam.ru). Единый канон
+##           on-disk converged-проверки для domains._certs_converged_on_disk (φ7/φ-final-verify
+##           assertion (a)) — раньше assertion знал только direct-каталог → ложный FAIL «no cert
+##           on disk» при реально выпущенном wildcard (F14).
+## @io       ⇥ le_live: Path (резолв deploy_paths.letsencrypt_live()), domain: str → ⎋ bool
+## @complexity O(A) — A = число родительских суффиксов (≤2 openssl subject-проверок)
+## @invariants
+##   - direct: live/{domain}/fullchain.pem существует И subject покрывает domain (exact CN)
+##   - wildcard: для i in range(1, len(labels)-1): parent = labels[i:]; live/{parent}/
+##     fullchain.pem существует И subject покрывает "*.{parent}" (ТОЛЬКО настоящий wildcard —
+##     direct-серт родителя НЕ проходит, B12 TRAP[BUG])
+##   - Отсутствие ЛЮБОГО покрытия (direct И wildcard) → False (fail-closed, R3)
+##   - Non-fatal: never raise — isfile/subject-ошибки → False (graceful degradation)
+def cert_covers_domain(le_live: Path, domain: str) -> bool:
+    """Check domain is covered by an on-disk LE cert (direct or wildcard parent, F14)."""
+    # 1. Direct: сертификат самого домена live/{domain}/fullchain.pem
+    direct = le_live / domain / "fullchain.pem"
+    if direct.is_file():
+        subject = cert_get_subject(str(direct))
+        if subject and cert_subject_matches_domain(subject, domain):
+            return True
+
+    # 2. Wildcard: *.parent покрывает поддомен (только для subdomains — parent != domain)
+    labels = domain.split(".")
+    for i in range(1, len(labels) - 1):
+        parent = ".".join(labels[i:])
+        wildcard_path = le_live / parent / "fullchain.pem"
+        if not wildcard_path.is_file():
+            continue
+        subject = cert_get_subject(str(wildcard_path))
+        if subject and cert_subject_matches_domain(subject, f"*.{parent}"):
+            return True
+    return False
+
+
+# endregion FUNC_cert_covers_domain
 
 
 # region FUNC_cert_get_san_list
