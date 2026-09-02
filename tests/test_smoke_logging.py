@@ -304,26 +304,30 @@ def test_loki_ready(caplog, logging_compose) -> None:
         # · Root: container liveness = процесс (ready-check в compose НЕ /ready, см.
         # ·   compose-комментарий) — frontend-worker коннектится к in-process scheduler
         # ·   позже под CI-нагрузкой; 3×~7s транспорт-retry не покрывает app-level 503.
-        # · Fix: единый poll-цикл 30s: ретраятся И транспорт-ошибки, И 503 (readiness —
+        # · Fix: poll-цикл 10×3s (~30s): ретраятся И транспорт-ошибки, И 503 (readiness —
         # ·   это состояние, которое ДОЛЖНО наступить; инвариант «Loki становится ready»
-        # ·   сохранён, окно явное и ограниченное).
+        # ·   сохранён, окно явное и ограниченное). Паттерн for-range — контракт гейта
+        # ·   test_gate_http_retry_policy (распознанный retry-протективный вид).
         r: requests.Response | None = None
         last_detail = "no attempt completed"
-        deadline = time.monotonic() + 30.0
-        while time.monotonic() < deadline:
+        for attempt in range(10):
             try:
                 r = requests.get(_LOKI_READY_URL, timeout=_HTTP_TIMEOUT)
                 if r.status_code == 200:
                     break
                 last_detail = f"HTTP {r.status_code}: {r.text.strip()[:120]}"
-                logger.warning("[IMP:7][test_loki_ready] not ready yet (%s), retrying...", last_detail)
+                logger.warning(
+                    "[IMP:7][test_loki_ready] attempt %d not ready (%s), retrying...", attempt + 1, last_detail
+                )
             except requests.RequestException as exc:
                 last_detail = f"{type(exc).__name__}: {exc}"
-                logger.warning("[IMP:7][test_loki_ready] transport error (%s), retrying...", last_detail)
+                logger.warning(
+                    "[IMP:7][test_loki_ready] attempt %d transport error (%s), retrying...", attempt + 1, last_detail
+                )
             time.sleep(3)
 
         if r is None:
-            pytest.fail(f"Loki /ready unreachable within 30s: {last_detail}")
+            pytest.fail(f"Loki /ready unreachable after 10 attempts (~30s): {last_detail}")
 
         logger.info("[IMP:8][test_loki_ready] HTTP %d: %s", r.status_code, r.text.strip()[:100])
 
