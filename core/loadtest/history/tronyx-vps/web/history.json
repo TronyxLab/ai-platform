@@ -28,6 +28,38 @@
       "verdict": "WARN",
       "delta_vs_prev": null,
       "version": "unknown"
+    },
+    {
+      "ts": "20260902T073152Z",
+      "host": "103.88.243.151",
+      "mode": "smoke",
+      "duration_s": 103.5,
+      "tasks": {
+        "/": {
+          "rps": 5.123748390776436,
+          "p95": 0.023,
+          "p99": 0.71,
+          "error_rate": 0.0
+        },
+        "/status": {
+          "rps": 5.10102666842266,
+          "p95": 0.027,
+          "p99": 0.73,
+          "error_rate": 0.0
+        }
+      },
+      "rps": 10.224775059199096,
+      "p50": null,
+      "p95": 0.025,
+      "p99": 0.73,
+      "error_rate": 0.0,
+      "max_rps": null,
+      "verdict": "WARN",
+      "delta_vs_prev": {
+        "delta_p95": 1.0869565217391306,
+        "delta_error_pp": 0.0
+      },
+      "version": "unknown"
     }
   ]
 }

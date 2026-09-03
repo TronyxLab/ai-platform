@@ -1,0 +1,123 @@
+{
+  "schema_version": 1,
+  "objective": "overnight green: tronyx-vps + asi-team-vps (DevPlan 029 + postmortems)",
+  "created_at": "2026-09-02T18:40:00.000Z",
+  "updated_at": "2026-09-02T17:36:36.161Z",
+  "decisions": {
+    "q1_scope": "both nodes (tronyx-vps + asi-team-vps)",
+    "q2_age_keys": {
+      "tronyx-vps": "~/.config/sops/age/keys.txt",
+      "asi-team-vps": "~/.ssh/age-key-asi.txt"
+    },
+    "q3_external": "none",
+    "q4_drills": "yes, both nodes",
+    "q5_budget": "whole night ~10h, retries/restarts allowed"
+  },
+  "phases": {
+    "p0_local_baseline": "done",
+    "p1_preflight": "done",
+    "p2_bring_green": "done",
+    "p3_idempotency_drills": "done",
+    "p4_ci_sanity": "done",
+    "p5_report": "done"
+  },
+  "steps": [
+    {
+      "id": "p0.agent-check",
+      "node": null,
+      "status": "done",
+      "ts": "2026-09-02T16:12:45.655Z",
+      "command": "make agent-check",
+      "exit_code": 0,
+      "evidence": "exit 0, 0 blocking / 0 advisory",
+      "retries": 0
+    },
+    {
+      "id": "p0.make-check",
+      "node": null,
+      "status": "done",
+      "ts": "2026-09-02T16:12:45.655Z",
+      "command": "make check",
+      "exit_code": 1,
+      "evidence": "18/20 checks green. F1/F2/F3 CLOSED. 2 environmental failures: (1) pre-commit uv audit sandbox ~/.cache/uv EPERM, (2) static_audit 3 tests: setgid-2775 macOS semantics + sudo x2 sandbox EPERM. NOT 029 regressions.",
+      "retries": 0,
+      "findings": [
+        "E1 uv-audit sandbox cache",
+        "E2 setgid macOS",
+        "E3 sudo sandbox"
+      ]
+    },
+    {
+      "id": "p1.tronyx.validate-node-input",
+      "node": "tronyx-vps",
+      "status": "failed",
+      "ts": "2026-09-02T16:12:45.655Z",
+      "command": "AGE_SECRET_KEY_FILE=~/.config/sops/age/keys.txt make validate-node-input NODE=tronyx-vps",
+      "exit_code": 1,
+      "evidence": "sops_enc_file FATAL: probe missing per-node candidate node-configs/<node>/secrets/<node>.enc.yaml (plan 012 T18/F-013). Fix delegated to coder.",
+      "retries": 0
+    },
+    {
+      "id": "p1.asi.validate-node-input",
+      "node": "asi-team-vps",
+      "status": "failed",
+      "ts": "2026-09-02T16:12:45.655Z",
+      "command": "AGE_SECRET_KEY_FILE=~/.ssh/age-key-asi.txt make validate-node-input NODE=asi-team-vps",
+      "exit_code": 1,
+      "evidence": "sops_enc_file FATAL: same probe path-mismatch (asi legacy per-node layout).",
+      "retries": 0
+    },
+    {
+      "id": "p1.fix.probe-per-node",
+      "node": null,
+      "status": "done",
+      "ts": "2026-09-02T16:33:05.601Z",
+      "command": "coder subagent: probe_sops_enc_file per-node candidate",
+      "exit_code": 0,
+      "evidence": "validate-node-input sops_enc_file=ok both nodes; +unit test",
+      "retries": 0
+    },
+    {
+      "id": "p1.ssh.known-hosts",
+      "node": null,
+      "status": "done",
+      "ts": "2026-09-02T16:33:05.601Z",
+      "command": "ssh-keygen -R (esc. danger-full-access)",
+      "exit_code": 0,
+      "evidence": "stale ECDSA host keys removed (F7), ED25519 re-added, SSH OK both nodes",
+      "retries": 0
+    },
+    {
+      "id": "p2.tronyx.bootstrap",
+      "node": "tronyx-vps",
+      "status": "done",
+      "ts": "2026-09-02T16:33:05.601Z",
+      "command": "subagent 31b0bf30: bootstrap→converge→node-update→healthcheck→status→e2e-verify",
+      "exit_code": 0,
+      "evidence": "GREEN: bootstrap+converge+node-update+healthcheck+status+e2e PASS; 3 projects deployed",
+      "retries": 1
+    },
+    {
+      "id": "p2.asi.bootstrap",
+      "node": "asi-team-vps",
+      "status": "blocked",
+      "ts": "2026-09-02T16:33:05.601Z",
+      "command": "subagent 74b687f5: same 6-gate sequence",
+      "exit_code": 10,
+      "evidence": "φ8 modules done; φf assertion(a) fail; roadmap 502; 0 project containers",
+      "retries": 0,
+      "blocked_reason": "F14 roadmap cert false-issued (final-verify a) + F15 roadmap project not deployed (legacy-layout mirror has no projects/)"
+    },
+    {
+      "id": "p2.fix.f12-ghcr",
+      "node": null,
+      "status": "done",
+      "ts": "2026-09-02T17:00:34.022Z",
+      "command": "coder f9e576fd: final_verify GHCR secrets.env fallback",
+      "exit_code": 0,
+      "evidence": "6 tests passed, agent-check exit 0",
+      "retries": 0
+    }
+  ],
+  "verdict": "PARTIAL (1 blocked: asi-team-vps)"
+}
