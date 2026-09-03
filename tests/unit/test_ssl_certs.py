@@ -41,6 +41,7 @@ from core.internal.shared.ssl_certs import (
     cert_is_parseable,
     cert_is_valid,
     cert_subject_matches_domain,
+    cert_wildcard_covers_domain,
 )
 from core.internal.shared.ssl_certs import (
     main as ssl_certs_cli_main,
@@ -534,6 +535,73 @@ def test_cert_covers_domain_san_wildcard(tmp_path: Path, caplog: pytest.LogCaptu
 
     assert cert_covers_domain(le_live, "roadmap.example.com") is True
     logger.info("[IMP:9][test][cert_covers_domain] SAN-only wildcard coverage OK")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# region TEST_CERT_WILDCARD_COVERS_DOMAIN (DevPlan 031 T4 — F5 skip-детектор)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · 2026-09-03 · Regression · F5 — wildcard-parent покрытие детектируется
+# · Scenario: live/example.com/fullchain.pem + _cert_covers_domain(*.example.com) → True для
+#   roadmap.example.com. cert_orchestrator Step 1b использует ЭТОТ предикат для skip выпуска.
+# · Last fail: N/A (new — F5/DevPlan 031 T4, DRY-рефакторинг cert_covers_domain)
+# · Remove if: wildcard-parent skip удалён из orchestration
+def test_cert_wildcard_covers_domain_true(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Wildcard-родитель live/{parent}/ покрывает поддомен → True (только wildcard-ветка)."""
+    caplog.set_level(logging.INFO)
+    le_live = tmp_path / "live"
+    parent_dir = le_live / "example.com"
+    parent_dir.mkdir(parents=True)
+    (parent_dir / "fullchain.pem").write_text("dummy", encoding="utf-8")
+    monkeypatch.setattr(ssl_certs_module, "_cert_covers_domain", lambda _c, d: d == "*.example.com")
+
+    assert cert_wildcard_covers_domain(le_live, "roadmap.example.com") is True
+    logger.info("[IMP:9][test][cert_wildcard_covers_domain] wildcard-parent coverage OK")
+
+
+# 🧪 TRAP[TEST] · 2026-09-03 · NEGATIVE (R5) · F5 — direct self-signed junk НЕ маскирует выпуск
+# · Scenario: live/roadmap.example.com/fullchain.pem СУЩЕСТВУЕТ (битый self-signed CN=roadmap),
+#   но wildcard-родителя НЕТ → cert_wildcard_covers_domain == False. Это анти-survivorship к
+#   основной F5-ловушке: cert_covers_domain (direct-ветка по subject) вернула бы True →
+#   cert_orchestrator заскипал бы выпуск сломанного direct-серта (регрессия TLS).
+# · Last fail: F5-дизайн — прямой cert_covers_domain в skip-предикате неверен (2026-09-03)
+# · Remove if: skip-предикат orchestration перестаёт различать direct/wildcard-покрытие
+def test_cert_wildcard_covers_domain_ignores_direct_junk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Direct-файл домена (даже subject-матчащий) НЕ считается wildcard-покрытием (R5)."""
+    caplog.set_level(logging.INFO)
+    le_live = tmp_path / "live"
+    direct_dir = le_live / "roadmap.example.com"
+    direct_dir.mkdir(parents=True)
+    (direct_dir / "fullchain.pem").write_text("dummy", encoding="utf-8")
+    monkeypatch.setattr(ssl_certs_module, "_cert_covers_domain", lambda _c, d: d == "roadmap.example.com")
+
+    assert cert_wildcard_covers_domain(le_live, "roadmap.example.com") is False
+    logger.info("[IMP:9][test][cert_wildcard_covers_domain] direct junk excluded (R5)")
+
+
+# 🧪 TRAP[TEST] · 2026-09-03 · Regression · F5 — apex-домен без родителя → False
+# · Scenario: example.com (apex) — range(1, len(labels)-1) пуст → False всегда
+#   (wildcard-родитель у apex не существует; direct-выпуск apex не затрагивается)
+# · Last fail: N/A (new)
+# · Remove if: wildcard-parent семантика изменена
+def test_cert_wildcard_covers_domain_apex_no_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Apex-домен не имеет wildcard-родителя → False (skip неприменим)."""
+    caplog.set_level(logging.INFO)
+    le_live = tmp_path / "live"
+    le_live.mkdir(parents=True)
+
+    assert cert_wildcard_covers_domain(le_live, "example.com") is False
+    logger.info("[IMP:9][test][cert_wildcard_covers_domain] apex → False")
+
+
+# endregion TEST_CERT_WILDCARD_COVERS_DOMAIN
 
 
 # endregion TEST_CERT_COVERS_DOMAIN

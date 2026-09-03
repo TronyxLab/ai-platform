@@ -1,5 +1,5 @@
 # GREP_SUMMARY: test context_initializer scaffold context overlay platform node-configs skeleton deploy-key idempotent registration node-side-overlay-key-install
-# STRUCTURE: ┌fixture setup┐ → ○ 20 tests (nested layout + single overlay repo + read-only deploy key + node-side overlay key install T6) → ⊕ LDD trajectory (IMP:9) → ⚡ anti-loop counter
+# STRUCTURE: ┌fixture setup┐ → ○ 21 tests (nested layout + single overlay repo + read-only deploy key + node-side overlay key install T6) → ⊕ LDD trajectory (IMP:9) → ⚡ anti-loop counter
 # region MODULE_CONTRACT
 ## @purpose  Unit-тесты context_initializer.py: вложенный overlay-layout (platform/{node-configs,
 ##           modules/hermes-agent,projects} — DevPlan 022 TASK-2), skeleton node.yaml с repos.core
@@ -29,6 +29,12 @@
 ## · Reason: корневая версия каноническая; уникальный сценарий
 ##   test_register_in_platform_yaml (реальная регистрация, не mock) перенесён сюда.
 ## · Rev: если unit-директория вернётся к полному покрытию — ресинхронизировать inventory.
+## @changes 2026-09-03 · F2 fail-loud (DevPlan 031 T2) — missing-dev-key-warn тест → FAIL-LOUD:
+##           +test_install_node_key_missing_dev_key_fails_loud (R5: exit 10, remediation, no ssh)
+##           +test_install_node_key_empty_dev_key_fails_loud (пустой key-файл = отсутствующему)
+## @changes 2026-09-03 · Live-node fix — install_overlay_deploy_key_node_side known_hosts TOFU pin:
+##           happy-path asserts ssh-keyscan/ssh-keygen -F guard;
+##           + test_overlay_key_install_pins_github_host_keys (guard+keyscan, order, R5 negative)
 ## @changes 2026-09-02 · DevPlan 029 T6 — 4 install_overlay_deploy_key_node_side теста
 ##           (skip-no-alias, missing-dev-key-warn, installs-ssh-alias, ssh-failure-fatal)
 ## @changes 2026-09-01 · DevPlan 024 TASK-2 — SSH-алиасный skeleton URL, 5 deploy-key тестов
@@ -651,14 +657,18 @@ def test_install_node_key_skips_when_no_alias_repo(tmp_path: pathlib.Path, caplo
 # endregion FUNC_test_install_node_key_skips_when_no_alias_repo
 
 
-# region FUNC_test_install_node_key_missing_dev_key_warns
-# 🧪 TRAP[TEST] · 2026-09-02 · SCENARIO · DevPlan 029 T6: missing dev key → WARN
-# · Scenario: alias repo present + ssh_host, но dev-ключа в projects_root/<ctx>/.secrets/
-# ·           нет → exit 0 и WARN про id_ed25519_github_overlay/manual (ретро-контекст)
-# · Last fail: N/A (preventive — warn-ветка 029 T6)
-# · Remove if: warn-семантика отсутствующего dev-ключа изменена
+# region FUNC_test_install_node_key_missing_dev_key_fails_loud
+# 🧪 TRAP[TEST] · 2026-09-03 · REGRESSION (R5) · DevPlan 031 T2 / F2: missing dev key → FAIL-LOUD
+# · Scenario: repos.core SSH-алисаный (git@github.com-overlay:) + dev-ключа НЕТ в
+# ·           projects_root/<ctx>/.secrets/ → PlatformFatalError (exit 10) с remediation;
+# ·           ssh НЕ вызывается. Оригинальный вход: asi «ключ вне канона» → WARN-skip exit 0 →
+# ·           alias на ноде не установлен → clone fail «Could not resolve hostname» (outage).
+# · Last fail: 2026-09-03 production-outage asi (F2 amplifier — silent WARN-skip)
+# · Remove if: fail-loud семантика отсутствующего dev-ключа изменена
 @ldd_trajectory
-def test_install_node_key_missing_dev_key_warns(tmp_path: pathlib.Path, caplog) -> None:
+def test_install_node_key_missing_dev_key_fails_loud(tmp_path: pathlib.Path, caplog) -> None:
+    from core.internal.shared.exceptions import PlatformFatalError
+
     node_yaml_path = tmp_path / "node.yaml"
     node_yaml_path.write_text(
         yaml.dump(
@@ -677,29 +687,79 @@ def test_install_node_key_missing_dev_key_warns(tmp_path: pathlib.Path, caplog) 
         msg = "ssh must NOT be invoked when the dev overlay deploy key is missing"
         raise AssertionError(msg)
 
-    logger.info("[IMP:9][test][overlay-key] test_install_node_key_missing_dev_key_warns")
-    rc = install_overlay_deploy_key_node_side(
-        node_yaml=str(node_yaml_path),
-        ssh_host="10.0.0.5",
-        projects_root=tmp_path,
-        ssh_runner=fail_ssh,
-    )
-    assert rc == 0, f"Expected skip exit 0 when dev key missing, got {rc}"
+    logger.info("[IMP:9][test][overlay-key] test_install_node_key_missing_dev_key_fails_loud")
+    with pytest.raises(PlatformFatalError) as exc_info:
+        install_overlay_deploy_key_node_side(
+            node_yaml=str(node_yaml_path),
+            ssh_host="10.0.0.5",
+            projects_root=tmp_path,
+            ssh_runner=fail_ssh,
+        )
+    assert exc_info.value.exit_code == 10, f"F2: missing dev key must be exit 10, got {exc_info.value.exit_code}"
     assert calls == [], f"ssh must not be invoked, got calls: {calls}"
-    warn_records = [
-        r for r in caplog.records if r.levelno == logging.WARNING and "id_ed25519_github_overlay" in r.message
-    ]
-    assert len(warn_records) >= 1, "Expected a WARNING mentioning id_ed25519_github_overlay"
-    assert "manual" in warn_records[0].message, f"WARN must mention manual node install: {warn_records[0].message}"
+    err_text = str(exc_info.value)
+    assert "git@github.com-overlay" in err_text, f"remediation must name the alias repos.core: {err_text}"
+    assert ".secrets" in err_text, f"remediation must name the canonical key location: {err_text}"
 
 
-# endregion FUNC_test_install_node_key_missing_dev_key_warns
+# endregion FUNC_test_install_node_key_missing_dev_key_fails_loud
+
+
+# region FUNC_test_install_node_key_empty_dev_key_fails_loud
+# 🧪 TRAP[TEST] · 2026-09-03 · SCENARIO · DevPlan 031 T2 / F2: пустой dev-ключ → FAIL-LOUD
+# · Scenario: alias repos.core + key-файл существует, но ПУСТ → PlatformFatalError exit 10
+# ·           (пустой файл = отсутствующему: нода не получит рабочий ключ)
+# · Last fail: N/A (preventive — пустой-key-файл ранее WARN-skip exit 0)
+# · Remove if: fail-loud семантика пустого dev-ключа изменена
+@ldd_trajectory
+def test_install_node_key_empty_dev_key_fails_loud(tmp_path: pathlib.Path, caplog) -> None:
+    from core.internal.shared.exceptions import PlatformFatalError
+
+    ctx = "empty-key-ctx"
+    secrets_dir = tmp_path / ctx / ".secrets"
+    secrets_dir.mkdir(parents=True)
+    key_path = secrets_dir / f"{ctx}-overlay-deploy-key"
+    key_path.write_text("", encoding="utf-8")
+
+    node_yaml_path = tmp_path / "node.yaml"
+    node_yaml_path.write_text(
+        yaml.dump(
+            {
+                "contexts": [{"name": ctx}],
+                "repos": {"core": f"git@github.com-overlay:myorg/{ctx}-overlay.git"},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    calls: list[list[str]] = []
+    no_ssh_msg = "ssh must NOT be invoked with an empty dev overlay deploy key"
+
+    def fail_ssh(cmd: list[str], stdin_text: str) -> tuple[int, str, str]:
+        calls.append(cmd)
+        raise AssertionError(no_ssh_msg)
+
+    logger.info("[IMP:9][test][overlay-key] test_install_node_key_empty_dev_key_fails_loud")
+    with pytest.raises(PlatformFatalError) as exc_info:
+        install_overlay_deploy_key_node_side(
+            node_yaml=str(node_yaml_path),
+            ssh_host="10.0.0.5",
+            projects_root=tmp_path,
+            ssh_runner=fail_ssh,
+        )
+    assert exc_info.value.exit_code == 10, f"F2: empty dev key must be exit 10, got {exc_info.value.exit_code}"
+    assert calls == [], f"ssh must not be invoked, got calls: {calls}"
+    assert "empty" in str(exc_info.value).lower(), f"error must name empty key: {exc_info.value}"
+
+
+# endregion FUNC_test_install_node_key_empty_dev_key_fails_loud
 
 
 # region FUNC_test_install_node_key_installs_ssh_alias
 # 🧪 TRAP[TEST] · 2026-09-02 · REGRESSION · DevPlan 029 T6: happy-path установки
 # · Scenario: dev-ключ есть → ssh_runner вызван ровно 1 раз с root@<host> bash -s;
-# ·           stdin несёт и remote-скрипт (github.com-overlay + id_ed25519_github_overlay),
+# ·           stdin несёт и remote-скрипт (github.com-overlay + id_ed25519_github_overlay +
+# ·           github.com host-key TOFU pin: ssh-keygen -F guard + ssh-keyscan),
 # ·           и контент ключа (ключ НЕ в argv)
 # · Last fail: N/A — T6 fresh (анти-survivorship: падает, если ssh не вызывается/ключ мимо stdin)
 # · Remove if: контракт install_overlay_deploy_key_node_side изменён (канал/путь/heredoc)
@@ -745,9 +805,95 @@ def test_install_node_key_installs_ssh_alias(tmp_path: pathlib.Path, caplog) -> 
     assert dev_key in stdin_text, "stdin must carry the dev key content (never argv)"
     assert "github.com-overlay" in stdin_text, "remote script must add the github.com-overlay ssh alias"
     assert "id_ed25519_github_overlay" in stdin_text, "remote script must reference ~/.ssh/id_ed25519_github_overlay"
+    assert "ssh-keygen -F github.com" in stdin_text, (
+        "remote script must guard github.com host-key pinning with ssh-keygen -F (idempotent TOFU)"
+    )
+    assert "ssh-keyscan -t rsa,ecdsa,ed25519 github.com" in stdin_text, (
+        "remote script must pin github.com host keys before any overlay clone via the alias"
+    )
 
 
 # endregion FUNC_test_install_node_key_installs_ssh_alias
+
+
+# region FUNC_test_overlay_key_install_pins_github_host_keys
+# 🧪 TRAP[TEST] · 2026-09-03 · REGRESSION · node recovery: github.com host-key TOFU pin
+# · Scenario: repos.core = git@github.com-overlay:... → remote script несёт идемпотентный guard
+# ·           ssh-keygen -F github.com + ssh-keyscan github.com; порядок key → pin → alias;
+# ·           keyscan НЕ безусловный (guard на том же conditional — анти-survivorship R5)
+# · Last fail: 2026-09-03 live nodes — VPS re-provision/wipe (known_hosts утерян) → overlay
+# ·            clone "Host key verification failed" при живых key+alias; bootstrap φ8 exit 10
+# · Remove if: TOFU pin удалён из remote script install_overlay_deploy_key_node_side
+@ldd_trajectory
+def test_overlay_key_install_pins_github_host_keys(tmp_path: pathlib.Path, caplog) -> None:
+    ctx = "pin-ctx"
+    secrets_dir = tmp_path / ctx / ".secrets"
+    secrets_dir.mkdir(parents=True)
+    key_path = secrets_dir / f"{ctx}-overlay-deploy-key"
+    key_path.write_text(
+        "-----BEGIN OPENSSH PRIVATE-KEY-----\nFAKE-PIN-SECRET\n-----END OPENSSH PRIVATE-KEY-----\n",
+        encoding="utf-8",
+    )
+
+    node_yaml_path = tmp_path / "node.yaml"
+    node_yaml_path.write_text(
+        yaml.dump(
+            {
+                "contexts": [{"name": ctx}],
+                "repos": {"core": f"git@github.com-overlay:myorg/{ctx}-overlay.git"},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    calls: list[tuple[list[str], str]] = []
+
+    def fake_ssh(cmd: list[str], stdin_text: str) -> tuple[int, str, str]:
+        calls.append((cmd, stdin_text))
+        return 0, "", ""
+
+    logger.info("[IMP:9][test][overlay-key] test_overlay_key_install_pins_github_host_keys")
+    rc = install_overlay_deploy_key_node_side(
+        node_yaml=str(node_yaml_path),
+        ssh_host="node.example",
+        projects_root=tmp_path,
+        ssh_runner=fake_ssh,
+    )
+    assert rc == 0, f"Expected install exit 0, got {rc}"
+    assert len(calls) == 1, f"Expected ssh_runner called once, got {len(calls)}: {calls}"
+    _, stdin_text = calls[0]
+    lines = stdin_text.splitlines()
+
+    guard = 'if ! ssh-keygen -F github.com -f "$HOME/.ssh/known_hosts" >/dev/null 2>&1; then'
+    keyscan = '  ssh-keyscan -t rsa,ecdsa,ed25519 github.com >> "$HOME/.ssh/known_hosts" 2>/dev/null'
+    assert guard in lines, "remote script must guard github.com pinning with ssh-keygen -F"
+    assert keyscan in lines, "remote script must run ssh-keyscan for github.com host keys"
+    guard_idx = lines.index(guard)
+    keyscan_idx = lines.index(keyscan)
+    # Anti-survivorship (R5): keyscan must sit INSIDE the -F conditional — a regression that
+    # drops the guard and runs keyscan unconditionally fails here.
+    assert keyscan_idx == guard_idx + 1, (
+        f"keyscan must be the guard body right after the -F opener (guard={guard_idx}, "
+        f"keyscan={keyscan_idx}) — unconditional keyscan = RED"
+    )
+    assert guard_idx + 2 < len(lines) and lines[guard_idx + 2] == "fi", (
+        "guard block must close with fi immediately after keyscan"
+    )
+    # Semantic order: key installed → known_hosts pinned → alias appended, so any later overlay
+    # clone via the alias (ensure_context_repo) finds github.com already in known_hosts.
+    chmod_idx = next(
+        (i for i, line in enumerate(lines) if "chmod 600" in line and "id_ed25519_github_overlay" in line),
+        -1,
+    )
+    alias_idx = next((i for i, line in enumerate(lines) if line == "Host github.com-overlay"), -1)
+    assert chmod_idx != -1, "key chmod line missing in remote script"
+    assert alias_idx != -1, "ssh alias Host block missing in remote script"
+    assert chmod_idx < guard_idx < alias_idx, (
+        f"expected key → pin → alias order in remote script (chmod={chmod_idx}, guard={guard_idx}, alias={alias_idx})"
+    )
+
+
+# endregion FUNC_test_overlay_key_install_pins_github_host_keys
 
 
 # region FUNC_test_install_node_key_ssh_failure_fatal

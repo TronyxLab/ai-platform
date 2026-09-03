@@ -22,8 +22,10 @@
 # endregion MODULE_CONTRACT
 """
 
+import io
 import json
 import logging
+import sys
 from pathlib import Path
 
 import pytest
@@ -142,6 +144,110 @@ def test_report_filters_stale_phase_error_after_success(caplog, state_file, tmp_
     assert "Phase secrets_provision failed: AGE key missing" in combined, "актуальная ошибка failed-фазы скрыта"
     assert "Warnings: 0" in combined, f"stale-warning done-фазы не отфильтрован: {combined}"
     logger.info("[IMP:9][test][stale] отчёт фильтрует stale-ошибки done-фаз — PASS")
+
+
+# 🧪 TRAP[TEST] · REGRESSION · live-drill 2026-09-03 — cross-mode запись ≠ live FAIL текущего run
+# · Scenario: update-run N failed в φ12 deploy_update → "Phase deploy_update failed ... exit=10"
+#   в state.errors (status=failed) + φ13 converge_update done_with_warnings-warning; run N+1
+#   (init-mode) успешен — update-фазы вне INIT_PHASES, init'ом не перевыполняются, done-фильтр
+#   их не трогает. Отчёт ОБЯЗАН показать записи под секцией "Stale previous-run records
+#   (not from this run):" с аннотацией [STALE previous-run · phase=deploy_update status=failed],
+#   а НЕ в live "Failed:"/"Warnings:". JSON: parallel field stale_previous_run, failed пуст.
+# · Last fail: live prod — ≈90 мин ложных разбирательств phantom overlay-clone failure
+#   (deploy_update failure из прошлого update-run печатался как live FAIL успешного init-run)
+# · Remove if: state.errors разделены по прогонам структурно (per-run namespace)
+@ldd_trajectory
+def test_report_annotates_cross_mode_phase_record_as_stale(caplog, state_file, tmp_path, monkeypatch):
+    """Cross-mode (update) records in an init run are annotated STALE, not mixed into live Failed."""
+    from core.internal.bootstrap.lifecycle.state_machine import BootstrapPhase
+
+    steps = {p: StepState(name=p, status="done") for p in BootstrapPhase.INIT_PHASE_ORDER}
+    steps["deploy_update"] = StepState(name="deploy_update", status="failed")  # φ12 из прошлого update-run
+    steps["converge_update"] = StepState(name="converge_update", status="done_with_warnings")  # φ13
+    sm = _make_sm(state_file, steps=steps)
+    sm.state.errors = ["Phase deploy_update failed: overlay clone failed (exit=10)"]
+    sm.state.warnings = [
+        "Phase converge_update completed with non-fatal issues (returned False) — will be re-executed on next run"
+    ]
+    node_yaml_path = tmp_path / "node.yaml"
+    node_yaml_path.write_text("projects: []\n", encoding="utf-8")
+    monkeypatch.setenv("NODE_YAML", str(node_yaml_path))
+    monkeypatch.setenv("NODE_NAME", "test-node")
+
+    lifecycle_cli.post_bootstrap_report(
+        sm,
+        projects_base=str(tmp_path / "projects"),
+        docker_check_fn=lambda _name: False,
+    )
+
+    combined = "\n".join(r.getMessage() for r in caplog.records)
+    assert "Failed: (none)" in combined, f"cross-mode ошибка показана как live FAIL: {combined}"
+    assert "Warnings: 0" in combined, f"cross-mode warning учтён в live Warnings: {combined}"
+    assert "Stale previous-run records (not from this run):" in combined, (
+        f"секция Stale previous-run records отсутствует: {combined}"
+    )
+    assert "[STALE previous-run · phase=deploy_update status=failed]" in combined, (
+        f"deploy_update-запись не аннотирована STALE: {combined}"
+    )
+    assert "[STALE previous-run · phase=converge_update status=done_with_warnings]" in combined, (
+        f"converge_update-warning не аннотирован STALE: {combined}"
+    )
+    assert "overlay clone failed (exit=10)" in combined, "текст stale-ошибки потерян при аннотации"
+
+    # JSON-вариант: parallel field stale_previous_run; failed/warnings — live-only
+    # (stdout через monkeypatch StringIO — runner гоняет pytest без capture, capsys пуст)
+    monkeypatch.setenv("REPORT_JSON", "1")
+    json_buf = io.StringIO()
+    monkeypatch.setattr(sys, "stdout", json_buf)
+    lifecycle_cli.post_bootstrap_report(
+        sm,
+        projects_base=str(tmp_path / "projects"),
+        docker_check_fn=lambda _name: False,
+    )
+    payload = json.loads(json_buf.getvalue())
+    assert payload["failed"] == [], f"JSON failed должен быть live-only, got: {payload['failed']}"
+    assert payload["warnings"] == 0, f"JSON warnings должен быть live-only, got: {payload['warnings']}"
+    assert len(payload["stale_previous_run"]) == 2, f"stale_previous_run неполон: {payload['stale_previous_run']}"
+    assert "phase=deploy_update" in payload["stale_previous_run"][0], (
+        f"JSON stale_previous_run не аннотирован: {payload['stale_previous_run']}"
+    )
+    logger.info("[IMP:9][test][stale-scope] cross-mode записи аннотированы STALE отдельной секцией — PASS")
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · live-drill 2026-09-03 — live init-фаза НЕ аннотируется STALE
+# · Scenario: init-фаза deploy_services (∈ INIT_PHASES) failed в ТЕКУЩЕМ init-run → запись
+#   показывается как live "Failed:" БЕЗ аннотации [STALE previous-run] — доказывает, что
+#   аннотация не blanket (анти-survivorship: не прячет настоящие фейлы текущего run)
+# · Last fail: исходный live-инцидент T17-fix (run 3 — "Failed: Phase deploy_services ... exit=10")
+# · Remove if: аннотация STALE удалена/заменена структурным разделением записей по прогонам
+@ldd_trajectory
+def test_report_shows_current_run_init_phase_failure_as_live(caplog, state_file, tmp_path, monkeypatch):
+    """Init-scope failed phase in the current run → live failure WITHOUT STALE annotation."""
+    sm = _make_sm(
+        state_file,
+        steps={"deploy_services": StepState(name="deploy_services", status="failed")},
+    )
+    sm.state.errors = ["Phase deploy_services failed: Module deployment failed (exit=10)"]
+    node_yaml_path = tmp_path / "node.yaml"
+    node_yaml_path.write_text("projects: []\n", encoding="utf-8")
+    monkeypatch.setenv("NODE_YAML", str(node_yaml_path))
+    monkeypatch.setenv("NODE_NAME", "test-node")
+
+    lifecycle_cli.post_bootstrap_report(
+        sm,
+        projects_base=str(tmp_path / "projects"),
+        docker_check_fn=lambda _name: False,
+    )
+
+    combined = "\n".join(r.getMessage() for r in caplog.records)
+    assert "Failed: Phase deploy_services failed: Module deployment failed (exit=10)" in combined, (
+        f"live init-фейл текущего run скрыт/не в Failed: {combined}"
+    )
+    assert "[STALE previous-run" not in combined, f"live init-фейл ложно аннотирован STALE: {combined}"
+    assert "Stale previous-run records (not from this run):" not in combined, (
+        f"stale-секция напечатана без stale-записей: {combined}"
+    )
+    logger.info("[IMP:9][test][stale-scope] live init-фейл без STALE-аннотации — PASS")
 
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -65,6 +65,11 @@ events:
     context: watchdog
     throttle_min: 60
     action: "Investigate crash loop (docker logs) — watchdog не рестарчит при RestartCount>5"
+  - id: watchdog.wipe
+    severity: critical
+    context: watchdog
+    throttle_min: 360
+    action: "Docker-state WIPE: нода потеряла named volumes + /opt/platform/core при здоровом baseline (DevPlan 031 F8) — проверить provider console (reinstall/reboot/migration), НЕ пере-бутстрапить молча"
 
   # ── Maintenance (platform-reboot.service, нода) ──────────────────────
   - id: cert.expiry

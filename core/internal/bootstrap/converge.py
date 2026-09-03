@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: converge reconciler flock fcntl-lock orchestration R1-R10 dry-run report-only reconcile exit-mapping python-facade W3.5-1
-# STRUCTURE: ▶ argparse ┌--node --dry-run --report-only --units --reconcile┐ → ⚡ resolve_node_yaml (3-path, node_resolver) → ⚡ flock(fcntl LOCK_EX|NB, skip dry/report) → ▶ subprocess reconciler.py R1-R10 → ◇ --reconcile? → subprocess reconciler_projects.py → ⊕ exit {0,1,2} +3 lock-conflict → ⎋ exit
+# GREP_SUMMARY: converge reconciler flock fcntl-lock orchestration R1-R10 dry-run report-only reconcile exit-mapping python-facade W3.5-1 post-reconcile-nginx-reload F6 reload-reorder
+# STRUCTURE: ▶ argparse ┌--node --dry-run --report-only --units --reconcile┐ → ⚡ resolve_node_yaml (3-path, node_resolver) → ⚡ flock(fcntl LOCK_EX|NB, skip dry/report) → ▶ subprocess reconciler.py R1-R10 → ◇ --reconcile? → subprocess reconciler_projects.py → ◇ converge ∧ rc≠2 → ⚡ post-reconcile nginx reload (F6) → ⊕ exit {0,1,2} +3 lock-conflict → ⎋ exit
 # region MODULE_CONTRACT
 ## @purpose  Python-оркестратор converge (DevPlan 164 W3.5-1, SH→Python) — прямое замещение
 ##           shell core/internal/bootstrap/converge.sh (147 LOC). Вся оркестрация: arg-парсинг,
@@ -42,6 +42,9 @@
 ##            пакетный __init__.py (docstring-only no-op). Script-path + PYTHONPATH-экспорт —
 ##            канонический паттерн (TRAP[BUG] 2026-07-31 в прежнем converge.sh, add-vhost.sh:34).
 ## @changes 2026-08-14 | DevPlan 164 W3.5-1 — Created (SH→Python converge.sh 147 LOC → фасад <100)
+## @changes 2026-09-03 | F6 (DevPlan 031 T5) — post-reconcile nginx reload (после всех R-units,
+##            converge mode + recon_rc≠2; +post_reconcile_nginx_reload/_default_nginx_reload, DI reload_fn).
+##            Деfer reload закрывает mid-run downtime window FINDING-p3-3 (reload до R6-верификации)
 ## ⚠️ TRAP[DECISION] · 2026-08-14 · HI · flock переехал в Python (fcntl.flock) — Rev сработал
 ## · (мигрирован из шапки прежнего converge.sh, TRAP[DECISION] 2026-07-22)
 ## · Rejected: оставить flock в shell (риск: две подсистемы лока — shell и Python, дрейф семантики)
@@ -73,8 +76,10 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 from core.internal.shared.contracts import EXIT_CONFIG_NOT_FOUND, EXIT_GENERIC
+from core.internal.shared.docker_ops import docker_exec  # F6 (031 T5): post-reconcile nginx reload
 from core.internal.shared.exceptions import ConfigNotFoundError
 from core.internal.shared.node_resolver import resolve_node_yaml
+from core.internal.shared.timeouts import CONVERGE_DOCKER_TIMEOUT as DOCKER_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +94,80 @@ LOCK_CONFLICT_EXIT: int = 3
 DispatchFn = Callable[[Sequence[str]], int]
 ResolveFn = Callable[[str], str]
 LockFn = Callable[[], int]
+ReloadFn = Callable[[], object]
+
+
+# region FUNC_post_reconcile_nginx_reload
+## @purpose  Post-reconcile nginx reload (F6/DevPlan 031 T5): ЕДИНСТВЕННЫЙ nginx-reload в
+##           converge-цикле, исполняется ПОСЛЕ всех R-units (reconciler.py) и ТОЛЬКО когда
+##           R-юниты не сообщили ошибок (recon_rc != 2 → R6 nginx -t прошёл/не падал).
+##           Деfer reload закрывает mid-run downtime window (FINDING-p3-3, ночной прогон
+##           2026-09-03): серт, выпущенный/восстановленный R-ssl'ом mid-cycle, НЕ должен
+##           перечитывать overlay до того, как R6 проверил целостность vhost'ов — при
+##           временно-несогласованном overlay (дрилл: vhost .conf удалён) reload до R6
+##           сбросил бы живой vhost из running-конфига. Gate recon_rc != 2 = R6 не падал →
+##           конфиг валиден → reload безопасен и подхватывает восстановленные серты
+##           (docker-nginx: issue_cert systemctl reload — no-op, см. TRAP ниже).
+## @io       ⇥ recon_rc: int (итог reconciler), reload_fn: ReloadFn | None (DI) → ⎋ None
+## @complexity O(1) — один docker exec nginx -s reload
+## @invariants
+##   - Вызывается ТОЛЬКО в converge mode (не dry-run/report-only) — preview не мутирует
+##   - recon_rc == 2 (errors: R6 vhost fail и т.п.) → reload НЕ выполняется (running-конфиг
+##     nginx остаётся нетронутым — ни downtime, ни применение несогласованного overlay)
+##   - reload failure (nginx container отсутствует/rc!=0) → WARN, exit-код НЕ меняется
+##     (best-effort: конфиг-валидность уже подтвердил R6; reload — подхват сертов)
+## @rationale Q: Почему reload в converge.py (оркестратор), а не в R-ssl?
+##            A: reorder-контракт «reload после ВСЕХ R-units» — оркестратор единственный
+##            слой, видящий итог всех юнитов (R6 vhost-верификацию включительно); R-ssl
+##            (cert-unit) не знает, пройдёт ли R6. Пост-хук в оркестраторе делает окно
+##            «reload до верификации» невозможным по построению.
+## 🧐 TRAP[DECISION] · 2026-09-03 · — · docker-nginx reload канал (F6)
+## · Rejected: systemctl reload nginx (reloadcmd issue_cert) как канон reload'а
+## · Reason: nginx — Docker-модуль (module.yaml install_type: docker, НЕ systemd); системного
+## ·   юнита nginx.service на ноде нет → systemctl reload в acme.sh reloadcmd — тихий no-op
+## ·   (rc!=0 терпится `;`-цепочкой). Канон нодового reload'а — docker exec nginx nginx -s
+## ·   reload (shared/docker_ops, R6-паттерн, nginx_reload_hook.sh). Post-reconcile reload
+## ·   использует docker-канал → восстановленные R-ssl'ом серты реально подхватываются.
+## · Rev: если nginx-модуль вернётся к systemd-управлению — синхронизировать reload-канал
+def post_reconcile_nginx_reload(*, recon_rc: int, reload_fn: ReloadFn | None = None) -> None:
+    """Run the single converge-cycle nginx reload AFTER all R-units when no R-errors occurred."""
+    if recon_rc == EXIT_CONFIG_NOT_FOUND:
+        logger.info(
+            "[IMP:8][converge][reload] SKIP: R-units reported errors (rc=%d) — running nginx config "
+            "left untouched (no mid-run reload, F6/DevPlan 031 T5)",
+            recon_rc,
+        )
+        return
+    impl = reload_fn if reload_fn is not None else _default_nginx_reload
+    logger.info("[IMP:8][converge][reload] Post-reconcile nginx reload (after all R-units, rc=%d)", recon_rc)
+    # docker_exec — non-fatal контракт (никогда не raise; rc!=0 логируется в _default_nginx_reload),
+    # поэтому try/except не требуется — reload не может изменить exit-код converge.
+    impl()
+
+
+# endregion FUNC_post_reconcile_nginx_reload
+
+
+# region FUNC_default_nginx_reload
+## @purpose  Default-реализация post-reconcile reload: docker exec nginx nginx -s reload
+##           (shared/docker_ops, non-fatal — rc!=0 логируется, не raise).
+## @io       ⇥ — → ⎋ None (side-effect: reload)
+## @complexity O(1)
+## @invariants
+##   - nginx container отсутствует/rc!=0 → WARN (R6 уже предупредил «nginx not running»)
+##   - Никогда не raise (docker_ops non-fatal контракт)
+def _default_nginx_reload() -> None:
+    """Reload the nginx container via docker exec (canonical docker-channel reload)."""
+    result = docker_exec("nginx", ["nginx", "-s", "reload"], timeout=DOCKER_TIMEOUT)
+    if result.returncode == 0:
+        logger.info("[IMP:9][converge][reload] nginx reloaded after reconcile (docker exec)")
+    else:
+        logger.warning(
+            "[IMP:7][converge][reload] nginx reload rc=%d (container absent?) — non-fatal", result.returncode
+        )
+
+
+# endregion FUNC_default_nginx_reload
 
 
 # region EXCEPTION_LockConflictError
@@ -358,19 +437,22 @@ def main(
     dispatch_fn: DispatchFn | None = None,
     resolve_fn: ResolveFn | None = None,
     lock_fn: LockFn | None = None,
+    reload_fn: ReloadFn | None = None,
     python_exe: str | None = None,
 ) -> int:
-    """Entry point: parse args → resolve node.yaml → flock → reconciler.py → --reconcile → exit.
+    """Entry point: parse args → resolve node.yaml → flock → reconciler.py → --reconcile → reload → exit.
 
-    ▶ ┌argv, env?, dispatch_fn?, resolve_fn?, lock_fn?, python_exe?┐ → ◇ --node? exit 2
+    ▶ ┌argv, env?, dispatch_fn?, resolve_fn?, lock_fn?, reload_fn?, python_exe?┐ → ◇ --node? exit 2
       → ⚡ resolve node.yaml (ConfigNotFound → exit 2) → ◇ is_file? exit 2
       → ◇ should_acquire_lock? → ⚡ flock (conflict → exit 3) → ▶ dispatch reconciler.py → rc
       → ◇ --reconcile? → dispatch reconciler_projects.py (fail → rc=max(rc,2))
+      → ◇ converge mode ∧ rc≠2? → ⚡ post-reconcile nginx reload (F6/031 T5)
       → ⊕ summary {0,1,2} → ⎋ exit rc
 
     ## @purpose — main()-канон (core/AGENTS.md: business-функции без sys.exit; sys.exit в __main__).
     ##            Все DI-каналы инъектируемы (W4c): dispatch_fn (subprocess), resolve_fn (node.yaml),
-    ##            lock_fn (flock), env (os.environ), python_exe (CONVERGE_PYTHON|sys.executable).
+    ##            lock_fn (flock), reload_fn (post-reconcile nginx reload), env (os.environ),
+    ##            python_exe (CONVERGE_PYTHON|sys.executable).
     ## @io — ⇥ argv: Optional[Sequence[str]]; DI-каналы → ⎋ int exit {0,1,2,3}
     ## @complexity — O(R) — R = суммарное время R-юнитов reconciler
     ## @invariants
@@ -382,6 +464,8 @@ def main(
     ##   - node.yaml резолв: ConfigNotFoundError → FATAL exit 2; is_file guard сохраняется
     ##   - lock_fd держится до выхода main (close при return/exit — flock снимается автоматически)
     ##   - stdio диспатча НЕ захватывается (default_dispatch) — JSON-report passthrough
+    ##   - F6/031 T5: converge mode (не dry/report) ∧ recon_rc≠2 → post-reconcile nginx reload
+    ##     (после ВСЕХ R-units; R6 не падал → конфиг валиден → reload безопасен)
     """
     args = parse_args(argv if argv is not None else sys.argv[1:])
     if args.node is None:
@@ -395,6 +479,7 @@ def main(
     resolver: ResolveFn = resolve_fn if resolve_fn is not None else _default_resolver(env_map)
     dispatcher: DispatchFn = dispatch_fn if dispatch_fn is not None else default_dispatch
     lock_acquirer: LockFn = lock_fn if lock_fn is not None else acquire_flock
+    reloader: ReloadFn = reload_fn if reload_fn is not None else _default_nginx_reload
     py_exe: str = python_exe or env_map.get("CONVERGE_PYTHON") or sys.executable
 
     # ── Resolve node.yaml (3-path канон; shell setup_environment parity) ──
@@ -465,6 +550,14 @@ def main(
             logger.error("[IMP:10][converge][main] Reconcile step failed (rc=%d)", rec_rc)
             # shell `[[ 2 -gt $recon_rc ]] && recon_rc=2` parity — любой reconcile-fail → exit 2
             recon_rc = max(recon_rc, EXIT_CONFIG_NOT_FOUND)
+
+    # ── F6 (DevPlan 031 T5): post-reconcile nginx reload — ПОСЛЕ всех R-units ──
+    # Defer-контракт: reload не выполняется mid-run (R-ssl/иной юнит не перечитывает overlay
+    # до верификации R6); единственный reload цикла — здесь, и ТОЛЬКО если R-юниты не
+    # сообщили ошибок (recon_rc != 2: R6 nginx -t не падал → конфиг валиден). dry-run/
+    # report-only → reload SKIP (mode-контракт «no mutations»).
+    if not args.dry_run and not args.report_only:
+        post_reconcile_nginx_reload(recon_rc=recon_rc, reload_fn=reloader)
 
     # ── Final summary and exit (shell parity) ──
     logger.info("[IMP:9][converge][main] ==============================")

@@ -485,3 +485,97 @@ def test_post_issue_coverage_none(caplog, tmp_path) -> None:
 
 
 # endregion FL15 (DevPlan 125 T5): wildcard-покрытие после issue
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# region F5 (DevPlan 031 T4): wildcard-parent skip в _process_single_domain
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+# region FUNC_test_process_single_domain_wildcard_covered_skips_issue
+# 🧪 TRAP[TEST] · 2026-09-03 · REGRESSION (R5) · F5 — домен под wildcard родителя → skip, НЕ issue
+# · Scenario: на диске wildcard *.parent покрывает домен (cert_wildcard_covers_domain → True),
+#   direct-серт невалиден → _process_single_domain возвращает skipped/wildcard_covered БЕЗ
+#   обращения к S3 и issue (S3-кэш с битым self-signed + acme-попытка + self-signed fallback +
+#   TG-алерт впустую — исходный churn asi roadmap.asiteam.ru, FINDING-p3-2 ночного прогона).
+# · Last fail: 2026-09-03 — converge R-ssl пере-выпускал roadmap.asiteam.ru под *.asiteam.ru
+# · Remove if: wildcard-parent skip удалён из _process_single_domain
+@ldd_trajectory
+def test_process_single_domain_wildcard_covered_skips_issue(
+    caplog, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F5: wildcard-parent покрытие → skipped/wildcard_covered, S3+issue НЕ вызываются."""
+    caplog.set_level(logging.INFO)
+    monkeypatch.setattr(cert, "cert_wildcard_covers_domain", lambda _le_live, _domain: True)
+
+    mock_s3 = MagicMock()
+    issue_script = str(tmp_path / "issue-cert.sh")
+    Path(issue_script).touch()
+
+    result = cert._process_single_domain(
+        "roadmap.example.com",
+        issue_script,
+        cert_validity_fn=lambda *_, **__: False,
+        validity_path=str(tmp_path / "live"),
+        s3_cache=mock_s3,
+        facts=_FakeFacts(),
+        environ={"S3_BUCKET": "test-bucket"},
+    )
+
+    assert result.status == "skipped", f"F5: ожидался skip, got {result.status}"
+    assert result.source == "wildcard_covered", f"F5: source должен быть wildcard_covered, got {result.source}"
+    mock_s3.check_cert.assert_not_called()
+    mock_s3.download_cert.assert_not_called()
+    assert any("covered by on-disk wildcard parent" in r.message for r in caplog.records), (
+        "должен быть IMP:9-лог wildcard-parent skip"
+    )
+    logger.critical("[IMP:9][test] F5: wildcard-covered домен заскипан (no S3/issue churn)")
+
+
+# endregion FUNC_test_process_single_domain_wildcard_covered_skips_issue
+
+
+# region FUNC_test_process_single_domain_no_wildcard_proceeds_to_issue
+# 🧪 TRAP[TEST] · 2026-09-03 · NEGATIVE (R5) · F5 — без wildcard-покрытия issue-путь сохраняется
+# · Scenario: cert_wildcard_covers_domain → False (direct junk есть, wildcard-родителя НЕТ) →
+#   _process_single_domain идёт в S3/issue как раньше (сломанный direct-серт ОБЯЗАН
+#   перевыпускаться). Падает, если skip-предикат начнёт маскировать выпуск direct-сертов.
+# · Last fail: F5-дизайн — cert_covers_domain в skip-предикате замаскировал бы direct-выпуск
+# · Remove if: skip-семантика F5 изменена
+@ldd_trajectory
+def test_process_single_domain_no_wildcard_proceeds_to_issue(
+    caplog, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F5 negative: без wildcard-покрытия S3-miss → issue-cert.sh вызывается (прежний путь)."""
+    caplog.set_level(logging.INFO)
+    monkeypatch.setattr(cert, "cert_wildcard_covers_domain", lambda _le_live, _domain: False)
+
+    mock_s3 = MagicMock()
+    mock_s3.check_cert.return_value = False
+    issue_script = str(tmp_path / "issue-cert.sh")
+    Path(issue_script).touch()
+    runner = _ok_runner()
+
+    result = cert._process_single_domain(
+        "broken.example.com",
+        issue_script,
+        cert_validity_fn=lambda *_, **__: False,
+        validity_path=str(tmp_path / "live"),
+        s3_cache=mock_s3,
+        runner=runner,
+        facts=_FakeFacts(),
+        environ={"S3_BUCKET": "test-bucket"},
+    )
+
+    mock_s3.check_cert.assert_called_once()
+    assert any(c[0] == "bash" and str(issue_script) in c for c in runner.calls), (
+        f"F5 negative: issue-cert.sh должен быть вызван: {runner.calls}"
+    )
+    assert result.status in {"issued", "failed"}, f"F5 negative: статус issue-пути, got {result.status}"
+    logger.critical("[IMP:9][test] F5 negative: без wildcard-покрытия issue-путь жив")
+
+
+# endregion FUNC_test_process_single_domain_no_wildcard_proceeds_to_issue
+
+
+# endregion F5 (DevPlan 031 T4)

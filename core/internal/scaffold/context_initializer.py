@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: context_initializer scaffold context overlay platform node-configs gh-repo deploy-key registration idempotent skeleton overlay-deploy-key-install node-side
-# STRUCTURE: ▶ validate_name → ⚡ check_idempotent ─┬─ create_dirs(platform/{node-configs,modules/hermes-agent,projects}) ─┬─ create_skeleton_node_yaml ── gh_repo_create(<ctx>-overlay) ──◇ provision_deploy_key(read-only) ── register_in_platform_yaml ── report_summary(+node-side install runbook) ── ◇ CLI install-node-deploy-key → install_overlay_deploy_key_node_side (node-side key+alias via SSH/core channel)
+# STRUCTURE: ▶ validate_name → ⚡ check_idempotent ─┬─ create_dirs(platform/{node-configs,modules/hermes-agent,projects}) ─┬─ create_skeleton_node_yaml ── gh_repo_create(<ctx>-overlay) ──◇ provision_deploy_key(read-only) ── register_in_platform_yaml ── report_summary(+node-side install runbook) ── ◇ CLI install-node-deploy-key → install_overlay_deploy_key_node_side (node-side key+known_hosts TOFU pin+alias via SSH/core channel)
 # region MODULE_CONTRACT
 ## @purpose  Python Strangler-Fig migration of context-init.sh (364 LOC shell).
 ##           Scaffolds a new deployment context: nested overlay directory structure
@@ -37,6 +37,13 @@
 ##           DP-092 Wave 2; DevPlan 022 TASK-2 (nested layout + single overlay repo);
 ##           DevPlan 024 TASK-2 (deploy key + SSH-алиасный repos.core);
 ##           DevPlan 029 TASK-6 (node-side overlay deploy key via core/SSH channel)
+## @changes  2026-09-03 · Live-node fix — install_overlay_deploy_key_node_side remote script:
+##           github.com host-key TOFU pin (ssh-keygen -F guard + ssh-keyscan) between key install
+##           and alias block — wiped known_hosts (VPS re-provision) broke overlay clone
+##           ("Host key verification failed", bootstrap exit 10)
+## @changes  2026-09-03 · F2 amplifier fix (DevPlan 031 T2) — missing/empty dev overlay key при
+##           SSH-алиасном repos.core: WARN-skip (exit 0) → FAIL-LOUD (PlatformFatalError exit 10);
+##           ретро-контекст БЕЗ git@github.com-overlay: repos.core — по-прежнему exit 0 skip
 ## @changes  2026-09-02 · DevPlan 029 T6 — install_overlay_deploy_key_node_side (node-side
 ##           overlay deploy key via core/SSH channel) + CLI subcommand install-node-deploy-key
 ## @changes  2026-07-30 · Wave 2 — initial implementation
@@ -433,8 +440,9 @@ def provision_deploy_key(
 # region FUNC_install_overlay_deploy_key_node_side
 ## @purpose  Install the context overlay deploy key + github.com-overlay SSH alias ON the node
 ##           over the SSH/core channel during operator-side bootstrap (DevPlan 029 T6, AC5).
-##           Automates the manual node-side runbook steps (scp + chmod 600 + ~/.ssh/config
-##           Host github.com-overlay block) of core/internal/bootstrap/AGENTS.md
+##           Automates the manual node-side runbook steps (scp + chmod 600 + github.com
+##           host-key TOFU pin + ~/.ssh/config Host github.com-overlay block) of
+##           core/internal/bootstrap/AGENTS.md
 ##           section 'VPS-доступ к приватному overlay (deploy key)'.
 ## @param node_yaml     Path to node.yaml — contexts[0].name (get_context) + repos.core
 ## @param ssh_host      SSH host of the node; ssh runs as root@<ssh_host>
@@ -443,18 +451,27 @@ def provision_deploy_key(
 ##                      (None -> DEFAULT_PROJECTS_ROOT = deploy_paths.projects_base())
 ## @param ssh_runner    Injectable (cmd, stdin_text) -> (rc, stdout, stderr) runner (DI seam)
 ## @param dry_run       Print the install plan and return 0 (no SSH)
-## @return   0 — installed / skipped (no alias repos.core, no dev key, dry-run)
-## @raises   PlatformFatalError (exit 10) — ssh rc != 0 (manual remediation required)
+## @return   0 — installed / skipped (no alias repos.core, dry-run)
+## @raises   PlatformFatalError (exit 10) — dev overlay deploy key missing at canonical
+##           location (F2 fail-loud, DevPlan 031 T2) ИЛИ ssh rc != 0 (manual remediation)
 ## @complexity O(1) — one ssh call (remote script via bash -s, key on stdin)
 ## @invariants
 ##   - Key content NEVER in argv: ssh stdin carries remote-script + key (quoted heredoc);
 ##     cmd list — ssh flags from shared.ssh_opts.SSH_OPTS (SoT — no flag duplication)
 ##   - Skip semantics (exit 0, no noise): no contexts[0].name / repos.core does not start
-##     with git@github.com-overlay: / dev key missing (retro context -> WARN: a manual node
-##     install may already exist)
+##     with git@github.com-overlay: (не-алиасный контекст — ретро без overlay-ключа не в
+##     скоупе автоматизации, см. runbook)
+##   - F2 fail-loud (DevPlan 031 T2): repos.core SSH-алиасный + dev-ключ ОТСУТСТВУЕТ в
+##     {projects_root}/{ctx}/.secrets/{ctx}-overlay-deploy-key (или файл пуст) → exit 10
+##     с remediation, НЕ молчаливый WARN-skip: без ключа нода НЕ получит ключ+алиас →
+##     overlay-clone гарантированно упадёт (production-outage amplifier 2026-09-03,
+##     asi "Could not resolve hostname"); silent WARN превращал «забыли ключ» в outage без сигнала
 ##   - Fresh-context-first closed: install runs during bootstrap — node IS reachable
 ##     (SSH_HOST), so the key is installed right away (AC5)
-##   - Remote script is idempotent: grep 'Host github.com-overlay' -> append only if absent
+##   - Remote script is idempotent: grep 'Host github.com-overlay' -> append only if absent;
+##     github.com host key pinned TOFU (ssh-keygen -F guard -> ssh-keyscan only when absent)
+##     so a wiped ~/.ssh/known_hosts (VPS re-provision) cannot fail the overlay clone
+##     (live-node blocker 2026-09-03)
 def install_overlay_deploy_key_node_side(
     *,
     node_yaml: str,
@@ -463,7 +480,7 @@ def install_overlay_deploy_key_node_side(
     ssh_runner: Callable[[list[str], str], tuple[int, str, str]] | None = None,
     dry_run: bool = False,
 ) -> int:
-    """Install overlay deploy key + ssh alias on the node (DevPlan 029 T6).
+    """Install overlay deploy key + known_hosts TOFU pin + ssh alias on the node (DevPlan 029 T6).
 
     ## @purpose  AC5: bootstrap clones the private overlay without manual scp/chmod/ssh-config —
     ##            the key is installed over the SSH/core channel during operator bootstrap.
@@ -494,14 +511,32 @@ def install_overlay_deploy_key_node_side(
     org = repo[len(overlay_prefix) :].split("/", 1)[0]
 
     if not key_path.is_file():
-        logger.warning(
-            "[IMP:9][context][overlay-key][warn] dev overlay deploy key missing: %s — automated "
-            "node-side install skipped (exit 0); a manual node install "
-            "(~/.ssh/id_ed25519_github_overlay) may already exist for retro contexts — see "
-            "runbook bootstrap/AGENTS.md 'VPS-доступ к приватному overlay (deploy key)'",
+        # ⚠️ TRAP[BUG] · 2026-09-03 · P1 · F2 silent-skip amplifier (DevPlan 031 T2)
+        # · Symptom: asi overlay-clone production-outage «Could not resolve hostname» — инсталлер
+        # ·   НЕ установил ключ+алиас на ноду, clone упал, сигнала на этапе установки не было.
+        # · Root: repos.core SSH-алисаный + dev-ключа нет в ~/projects/<ctx>/.secrets/ → WARN +
+        # ·   exit 0 («ретро-контекст, ручная установка могла состояться»). Silent-skip превращал
+        # ·   «забыли положить ключ» в outage БЕЗ сигнала — отказ проявлялся только на ноде (clone).
+        # · Fix: alias repos.core + отсутствующий/пустой dev-ключ → fail-loud PlatformFatalError
+        # ·   (exit 10) с remediation на КАНОНИЧЕСКУЮ локацию; не-алисаный repos.core — exit 0 skip.
+        # · Prevention: любой bootstrap-шаг, без которого гарантированно упадёт следующий шаг,
+        # ·   обязан сигнализировать loud-отказом на этапе установки, а не exit 0.
+        logger.error(
+            "[IMP:10][context][overlay-key][fatal] dev overlay deploy key MISSING: %s — repos.core "
+            "uses git@github.com-overlay: alias, node-side key install is REQUIRED for overlay clone",
             key_path,
         )
-        return 0
+        msg = (
+            f"Overlay deploy key not found at canonical location: {key_path} — repos.core of "
+            f"context {ctx!r} uses the SSH alias git@github.com-overlay:, so the node CANNOT clone "
+            f"the private overlay without this key (F2 silent-skip amplifier, DevPlan 031 T2). "
+            f"Remediation: place the read-only keypair at {key_path} (0600) and rerun bootstrap — "
+            f"see runbook core/internal/bootstrap/AGENTS.md 'VPS-доступ к приватному overlay "
+            f"(deploy key)' steps 1-2 (keygen + gh repo deploy-key add). "
+            f"If the node already has a manually installed key, copy THAT keypair here (canonical "
+            f"location is the single source of truth for re-runs)."
+        )
+        raise PlatformFatalError(msg)
 
     if dry_run:
         logger.info(
@@ -515,11 +550,20 @@ def install_overlay_deploy_key_node_side(
 
     key_text = key_path.read_text(encoding="utf-8").strip()
     if not key_text:
-        logger.warning(
-            "[IMP:9][context][overlay-key][warn] dev overlay deploy key empty: %s — node-side install skipped (exit 0)",
+        # F2 fail-loud (DevPlan 031 T2): пустой key-файл семантически = отсутствующему —
+        # нода не получит рабочий ключ, overlay-clone упадёт. Не WARN-skip (см. TRAP[BUG] выше).
+        logger.error(
+            "[IMP:10][context][overlay-key][fatal] dev overlay deploy key EMPTY: %s — repos.core "
+            "uses git@github.com-overlay: alias, node-side key install is REQUIRED for overlay clone",
             key_path,
         )
-        return 0
+        msg = (
+            f"Overlay deploy key file is empty: {key_path} — repos.core of context {ctx!r} uses the "
+            f"SSH alias git@github.com-overlay:, so the node CANNOT clone the private overlay (F2 "
+            f"fail-loud, DevPlan 031 T2). Remediation: replace with the real read-only keypair "
+            f"(0600) and rerun bootstrap."
+        )
+        raise PlatformFatalError(msg)
 
     # Remote script executed as root via 'ssh root@<host> bash -s'. The key rides on stdin
     # INSIDE a quoted heredoc: bash parses heredocs deterministically (no read-ahead race) and
@@ -531,6 +575,14 @@ def install_overlay_deploy_key_node_side(
         key_text,
         "__OVERLAY_DEPLOY_KEY_EOF__",
         'chmod 600 "$HOME/.ssh/id_ed25519_github_overlay"',
+        # TOFU host-key pin for github.com: a wiped ~/.ssh/known_hosts (VPS re-provision/wipe)
+        # otherwise fails the overlay clone with "Host key verification failed" even though
+        # key+alias are installed (live-node blocker 2026-09-03, bootstrap exit 10).
+        # Guard = idempotent (already-pinned nodes untouched); keyscan failure must abort
+        # (set -euo pipefail, NO || true) — unreachable GitHub is a loud install failure.
+        'if ! ssh-keygen -F github.com -f "$HOME/.ssh/known_hosts" >/dev/null 2>&1; then',
+        '  ssh-keyscan -t rsa,ecdsa,ed25519 github.com >> "$HOME/.ssh/known_hosts" 2>/dev/null',
+        "fi",
         "if ! grep -q 'Host github.com-overlay' \"$HOME/.ssh/config\" 2>/dev/null; then",
         "  cat >> \"$HOME/.ssh/config\" <<'__OVERLAY_SSH_ALIAS_EOF__'",
         "Host github.com-overlay",

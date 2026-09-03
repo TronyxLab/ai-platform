@@ -1,6 +1,6 @@
 """
-# GREP_SUMMARY: test-converge flock fcntl lock reconciler-dispatch reconcile-dispatch exit-codes dry-run no-mutate node-yaml-resolve W3.5-1
-# STRUCTURE: ▶ importlib load converge.py (shadowed by converge/ package) → FakeDispatch/FakeLock/FakeResolve → ◇ parse_args → ◇ build_*_cmd (argv) → ◇ main (exit 0/1/2/3, dry-run no-lock, reconcile upgrade) → ◇ acquire_flock (real fcntl conflict) → ⊕ LDD IMP:9 → ⎋ verdict
+# GREP_SUMMARY: test-converge flock fcntl lock reconciler-dispatch reconcile-dispatch exit-codes dry-run no-mutate node-yaml-resolve W3.5-1 post-reconcile-reload F6
+# STRUCTURE: ▶ importlib load converge.py (shadowed by converge/ package) → FakeDispatch/FakeLock/FakeResolve/FakeReload → ◇ parse_args → ◇ build_*_cmd (argv) → ◇ main (exit 0/1/2/3, dry-run no-lock, reconcile upgrade, F6 post-reconcile reload) → ◇ acquire_flock (real fcntl conflict) → ⊕ LDD IMP:9 → ⎋ verdict
 # region MODULE_CONTRACT
 ## @purpose  Unit-тесты converge.py (DevPlan 164 W3.5-1, SH→Python converge.sh): парсинг аргументов,
 ##           резолв node.yaml (FakeResolve), flock-семантика (dry-run/report-only SKIP; конфликт → 3),
@@ -19,6 +19,8 @@
 ##            через DI без Docker и без ноды; flock — реальный syscall на tmp_path (точная
 ##            семантика конфликта двух fd в одном процессе).
 ## @changes 2026-08-14 · DevPlan 164 W3.5-1 — Created
+## @changes 2026-09-03 · F6 (DevPlan 031 T5) — +FakeReload +3 теста post-reconcile nginx reload
+##           (rc=0 → reload 1×; rc=2 → reload SKIP — NEGATIVE R5 FINDING-p3-3; dry-run → SKIP)
 ## @links   core/internal/bootstrap/converge.py, converge/reconciler.py,
 ##          core/internal/reconciler_projects.py, tests/test_project_scaffold.py (subprocess-контур)
 # endregion MODULE_CONTRACT
@@ -92,6 +94,16 @@ class FakeLock:
             msg = "Another converge or node-update is already running (lock: /x)"
             raise converge.LockConflictError(msg)
         return 42  # fake fd
+
+
+class FakeReload:
+    """ReloadFn fake (F6/DevPlan 031 T5): запись вызова post-reconcile reload (0 docker)."""
+
+    def __init__(self) -> None:
+        self.calls: int = 0
+
+    def __call__(self) -> None:
+        self.calls += 1
 
 
 def _make_resolver(node_yaml_path: str) -> Callable[[str], str]:
@@ -261,12 +273,14 @@ def test_dispatch_to_reconciler_success(tmp_path, caplog) -> None:
     node_yaml = _write_node_yaml(tmp_path)
     dispatch = FakeDispatch(0)
     lock = FakeLock()
+    reload_ = FakeReload()
     rc = converge.main(
         ["--node", "node-a"],
         env={},
         dispatch_fn=dispatch,
         resolve_fn=_make_resolver(str(node_yaml)),
         lock_fn=lock,
+        reload_fn=reload_,
         python_exe="python3",
     )
     assert rc == 0
@@ -290,6 +304,7 @@ def test_exit_code_1_warnings(tmp_path, caplog) -> None:
         dispatch_fn=FakeDispatch(1),
         resolve_fn=_make_resolver(str(node_yaml)),
         lock_fn=FakeLock(),
+        reload_fn=FakeReload(),
         python_exe="python3",
     )
     assert rc == 1
@@ -310,6 +325,7 @@ def test_exit_code_2_errors(tmp_path, caplog) -> None:
         dispatch_fn=FakeDispatch(2),
         resolve_fn=_make_resolver(str(node_yaml)),
         lock_fn=FakeLock(),
+        reload_fn=FakeReload(),
         python_exe="python3",
     )
     assert rc == 2
@@ -377,6 +393,7 @@ def test_reconcile_dispatched_after_reconciler(tmp_path, caplog) -> None:
         dispatch_fn=dispatch,
         resolve_fn=_make_resolver(str(node_yaml)),
         lock_fn=FakeLock(),
+        reload_fn=FakeReload(),
         python_exe="python3",
     )
     assert rc == 0
@@ -401,6 +418,7 @@ def test_reconcile_failure_upgrades_to_2(tmp_path, caplog) -> None:
         dispatch_fn=FakeDispatch(0, 1),
         resolve_fn=_make_resolver(str(node_yaml)),
         lock_fn=FakeLock(),
+        reload_fn=FakeReload(),
         python_exe="python3",
     )
     assert rc == 2, "reconcile rc=1 при recon rc=0 → exit 2 (upgrade)"
@@ -444,6 +462,7 @@ def test_units_passthrough_to_reconciler(tmp_path, caplog) -> None:
         dispatch_fn=dispatch,
         resolve_fn=_make_resolver(str(node_yaml)),
         lock_fn=FakeLock(),
+        reload_fn=FakeReload(),
         python_exe="python3",
     )
     assert rc == 0
@@ -489,3 +508,81 @@ def test_should_acquire_lock_logic(caplog) -> None:
     assert converge.should_acquire_lock(dry_run=False, report_only=True) is False
     assert converge.should_acquire_lock(dry_run=True, report_only=True) is False
     logger.critical("[IMP:9][test][lock] should_acquire_lock: dry/report → False, converge → True")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# F6 (DevPlan 031 T5): post-reconcile nginx reload
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@ldd_trajectory
+def test_post_reconcile_reload_on_clean_converge(tmp_path, caplog) -> None:
+    """F6: converge rc=0 → post-reconcile nginx reload выполнен ровно 1 раз (после всех R-units)."""
+    # 🧪 TRAP[TEST] · 2026-09-03 · REGRESSION (R5) · F6/DevPlan 031 T5 — reload ПОСЛЕ всех R-units
+    # · Scenario: серт восстановлен/выпущен R-ssl'ом mid-cycle → nginx обязан подхватить его
+    #   reload'ом ПОСЛЕ верификации R6 (rc=0 = конфиг валиден). Без post-reconcile reload
+    #   docker-nginx продолжал бы сервить старый серт (issue_cert systemctl reload — no-op).
+    # · Last fail: FINDING-p3-3 (ночной прогон 2026-09-03) — reload mid-run до R6-верификации
+    # · Remove if: converge перестаёт reload'ить nginx после R-units
+    node_yaml = _write_node_yaml(tmp_path)
+    reload_ = FakeReload()
+    rc = converge.main(
+        ["--node", "node-a"],
+        env={},
+        dispatch_fn=FakeDispatch(0),
+        resolve_fn=_make_resolver(str(node_yaml)),
+        lock_fn=FakeLock(),
+        reload_fn=reload_,
+        python_exe="python3",
+    )
+    assert rc == 0
+    assert reload_.calls == 1, f"F6: post-reconcile reload должен выполниться 1 раз, got {reload_.calls}"
+    logger.critical("[IMP:9][test][F6] rc=0 → post-reconcile nginx reload выполнен")
+
+
+@ldd_trajectory
+def test_post_reconcile_reload_skipped_on_r_errors(tmp_path, caplog) -> None:
+    """F6: R-юниты сообщили ошибки (rc=2, напр. R6 vhost fail) → reload НЕ выполняется."""
+    # 🧪 TRAP[TEST] · 2026-09-03 · NEGATIVE (R5) · F6 — reload при ошибках = downtime window
+    # · Scenario: дрилл (vhost .conf удалён) → R6 fail → converge rc=2. Reload в этом состоянии
+    #   перечитал бы overlay и сбросил живой vhost из running-конфига (FINDING-p3-3). НЕ reload'им:
+    #   running-конфиг nginx остаётся нетронутым до ручного восстановления оператором.
+    # · Last fail: FINDING-p3-3 — converge reload'ил nginx даже когда R6 позже падал
+    # · Remove if: reload-гейт по ошибкам R-юнитов изменён
+    node_yaml = _write_node_yaml(tmp_path)
+    reload_ = FakeReload()
+    rc = converge.main(
+        ["--node", "node-a"],
+        env={},
+        dispatch_fn=FakeDispatch(2),
+        resolve_fn=_make_resolver(str(node_yaml)),
+        lock_fn=FakeLock(),
+        reload_fn=reload_,
+        python_exe="python3",
+    )
+    assert rc == 2
+    assert reload_.calls == 0, f"F6: при rc=2 reload запрещён, got {reload_.calls}"
+    logger.critical("[IMP:9][test][F6] rc=2 → reload SKIP (running-конфиг нетронут)")
+
+
+@ldd_trajectory
+def test_post_reconcile_reload_skipped_dry_run(tmp_path, caplog) -> None:
+    """F6: --dry-run → reload НЕ выполняется (mode-контракт «no mutations»)."""
+    # 🧪 TRAP[TEST] · 2026-09-03 · SCENARIO · F6 — preview не мутирует
+    # · Scenario: dry-run/report-only converge не должен reload'ить nginx (никаких side-effects)
+    # · Last fail: N/A (preventive — mode-контракт reconciler)
+    # · Remove if: dry-run получает reload-семантику
+    node_yaml = _write_node_yaml(tmp_path)
+    reload_ = FakeReload()
+    rc = converge.main(
+        ["--node", "node-a", "--dry-run"],
+        env={},
+        dispatch_fn=FakeDispatch(0),
+        resolve_fn=_make_resolver(str(node_yaml)),
+        lock_fn=FakeLock(),
+        reload_fn=reload_,
+        python_exe="python3",
+    )
+    assert rc == 0
+    assert reload_.calls == 0, f"F6: dry-run не должен reload'ить nginx, got {reload_.calls}"
+    logger.critical("[IMP:9][test][F6] dry-run → reload SKIP")

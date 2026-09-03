@@ -128,6 +128,13 @@ from core.internal.shared.timeouts import (
 )
 
 HEALTH_GATE_TIMEOUT = HEALTHCHECK_POLL_TIMEOUT  # seconds per project
+# F7 (DevPlan 031 T7, FINDING-p3-1): cold-skip gate attempts. REF-0103 ввёл attempts=1 —
+# отсутствующий проект не сжигает полное окно поллинга. НО 1 попытка классифицирует
+# ПРИСУТСТВУЮЩИЙ контейнер в транзиентном "starting"/флак docker-инспекции как not-live →
+# fail-safe re-delivery (asi roadmap re-delivered=1 в no-op bootstrap). Компромисс: bounded
+# retry (3 × ~3s ≈ ≤9s) — транзиент поглощается, отсутствующий проект всё ещё дешевле
+# полного 60s-окна. Полный deadline-поллинг после деплоя — в DeployOrchestrator (не меняется).
+SINGLE_SHOT_GATE_ATTEMPTS = 3
 # B2/B3: канонические дефолты путей — shared/deploy_paths (литералы /opt/* удалены)
 DEFAULT_PROJECTS_BASE = deploy_paths.DEFAULT_PROJECTS_BASE
 PLATFORM_ROOT = str(deploy_paths.platform_remote_base())
@@ -382,9 +389,11 @@ def _deploy_single_project_via_orchestrator(
     )
     facts_obj = facts or default_env_facts()
 
-    # REF-0103: cold-skip gate — single-shot probe (attempts=1). Отсутствующий/стартующий
-    # проект не должен сжигать полное окно поллинга в idempotent-проверке; полный
-    # deadline-driven поллинг остаётся в DeployOrchestrator после деплоя.
+    # REF-0103: cold-skip gate — bounded probe (SINGLE_SHOT_GATE_ATTEMPTS=3, ~≤9s).
+    # Отсутствующий/стартующий проект не должен сжигать полное окно поллинга в
+    # idempotent-проверке; полный deadline-driven поллинг остаётся в DeployOrchestrator
+    # после деплоя. F7 (DevPlan 031 T7): attempts=1 давал ложный not-live на транзиентном
+    # "starting" → fail-safe re-delivery в no-op bootstrap (asi roadmap delivered=1).
     def _gate_single_shot(name: str) -> bool:
         return _is_project_healthy(name, single_shot=True)
 
@@ -697,10 +706,12 @@ def _is_bootstrap_stub_compose(project_dir: str) -> bool:
 ##   - Uses shared healthcheck_poll for health status
 ##   - Stub guard: is_stub_container() → False (stub никогда не «здоров» для skip)
 ##   - Non-fatal: if docker unavailable, returns False
-##   - REF-0103 single_shot=True: ОДНА проверка (attempts=1) — idempotent-skip gate на
-##     отсутствующем проекте не сжигает полное окно поллинга (до фикса 60s на cold-проект)
+##   - REF-0103 single_shot=True: bounded retry (attempts=SINGLE_SHOT_GATE_ATTEMPTS=3, ~≤9s) —
+##     idempotent-skip gate на отсутствующем проекте не сжигает полное окно поллинга
+##     (до фикса 60s на cold-проект); транзиентный "starting" не даёт ложный not-live (F7/031)
 ## @changes 2026-08-13 | E1 (160): +stub_detector_fn/healthcheck_poll_fn DI (тесты без monkeypatch)
 ## @changes 2026-08-25 | REF-0103: +single_shot kwarg (cold-skip gate — одна проверка, не окно)
+## @changes 2026-09-03 | F7 (DevPlan 031 T7): single_shot attempts 1 → SINGLE_SHOT_GATE_ATTEMPTS=3
 def _is_project_healthy(
     project_name: str,
     *,
@@ -733,15 +744,18 @@ def _is_project_healthy(
             project_name,
         )
         return False
-    # REF-0103 single-shot: одна проверка (attempts=1) — skip-gate не должен поллить полное
-    # окно на отсутствующем контейнере; полный deadline-driven режим — только default-путь.
+    # REF-0103 single-shot: bounded retry (attempts=SINGLE_SHOT_GATE_ATTEMPTS) — skip-gate не
+    # должен поллить полное окно на отсутствующем контейнере, НО транзиентный "starting"/
+    # флак docker-инспекции не должен давать ложный not-live (F7/DevPlan 031 T7: attempts=1 →
+    # asi roadmap re-delivered=1 в no-op bootstrap); полный deadline-driven режим — только
+    # default-путь.
     if single_shot:
         return (
             healthcheck_poll(
                 project_name,
                 timeout=HEALTHCHECK_POLL_TIMEOUT,
                 interval=HEALTHCHECK_POLL_INTERVAL,
-                attempts=1,
+                attempts=SINGLE_SHOT_GATE_ATTEMPTS,
             )
             == "healthy"
         )

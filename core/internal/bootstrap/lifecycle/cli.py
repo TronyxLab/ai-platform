@@ -39,6 +39,12 @@
 ## @changes  2026-09-01 · P0 (F-01 fix, asi-team-vps cold bootstrap) — re-exec argv fix:
 ##           +_reexec_argv (argv[0] восстановлен: file-путь/-m spec; [target, *sys.argv[1:]]
 ##           давал интерпретатору "--mode" как СВОЙ опцион — "Unknown option: --mode", φ2 died)
+## @changes  2026-09-03 · live-drill (prod, ~90 мин ложных разбирательств) — post_bootstrap_report:
+##           +STALE-scope split — записи state.errors/warnings фаз ВНЕ mode-scope текущего run
+##           (update-фаза deploy_update из прошлого update-run при успешном init-run) печатаются
+##           отдельной секцией "Stale previous-run records" с аннотацией [STALE previous-run ·
+##           phase=.. status=..], не смешиваясь с live Failed/Warnings; JSON +stale_previous_run
+##           (parallel field). +_message_phase/_record_outside_phase_scope/_annotate_stale_record
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -701,29 +707,49 @@ def _final_verification_pass(core_dir: str) -> None:
 # endregion FUNC_final_verification_pass
 
 
-# region FUNC__is_stale_phase_message
-## @purpose  Stale-детектор записей state.errors/warnings (plan 012 T17-fix): сообщение вида
-##           "Phase <phase> failed: ..." / "Phase <phase> completed with non-fatal issues ..."
-##           ассоциируется с фазой; если фаза СЕЙЧАС done (успешно перевыполнена в этом или
-##           прошлом прогоне) — запись stale (ошибка прошлого run) и не показывается в отчёте.
-## @io       ⇥ msg: str, done_phases: set[str] → ⎋ bool (True = stale)
-## @complexity O(1)
+# region FUNC__message_phase / _is_stale_phase_message / _record_outside_phase_scope / _annotate_stale_record
+## @purpose  Фазовый парсинг/классификация записей state.errors/warnings (plan 012 T17-fix +
+##           live-drill 2026-09-03): единый парсер канонического префикса "Phase <name>",
+##           stale-детектор по done-фазам (_is_stale_phase_message), mode-scope детектор
+##           (_record_outside_phase_scope — фаза ВНЕ набора фаз текущего run) и построитель
+##           аннотации [STALE previous-run · phase=.. status=..] (_annotate_stale_record).
+## @complexity O(1) — парсинг первого токена / membership / getattr статуса фазы
 ## @invariants
 ##   - Матч ТОЛЬКО по каноническому префиксу "Phase <name>" (единый формат писателей:
 ##     _audit_failed / _mark_phase_with_warnings) — детерминированный, без ложных срабатываний
-##   - Записи БЕЗ фазового префикса (легаси/внешние) НИКОГДА не считаются stale (показываются)
+##   - Записи БЕЗ фазового префикса (легаси/внешние) НИКОГДА не считаются stale/вне-scope
 ##   - done_phases — множество фаз со статусом done (phase_is_done; done_with_warnings ≠ done)
-def _is_stale_phase_message(msg: str, done_phases: set[str]) -> bool:
-    """Return True if a state error/warning references a phase that is currently done (T17-fix)."""
+##   - phase_scope — BootstrapPhase.INIT_PHASES | UPDATE_PHASES (набор фаз текущего run/mode)
+def _message_phase(msg: str) -> str | None:
+    """Extract the phase name from a canonical "Phase <name> ..." record (T17-fix)."""
     if not msg.startswith("Phase "):
-        return False
+        return None
     # "Phase <phase> failed: ..." / "Phase <phase> completed with non-fatal issues ..." →
     # первый токен после префикса = имя фазы (snake_case ключи steps — без пробелов).
-    phase = msg[len("Phase ") :].split(" ", 1)[0]
-    return phase in done_phases
+    return msg[len("Phase ") :].split(" ", 1)[0]
 
 
-# endregion FUNC__is_stale_phase_message
+def _is_stale_phase_message(msg: str, done_phases: set[str]) -> bool:
+    """Return True if a state error/warning references a phase that is currently done (T17-fix)."""
+    phase = _message_phase(msg)
+    return phase is not None and phase in done_phases
+
+
+def _record_outside_phase_scope(msg: str, phase_scope: frozenset[str]) -> bool:
+    """Return True if a state record references a phase OUTSIDE the current run's mode scope."""
+    phase = _message_phase(msg)
+    return phase is not None and phase not in phase_scope
+
+
+def _annotate_stale_record(state_steps: Mapping[str, StepState], msg: str) -> str:
+    """Prefix a stale cross-mode record with phase + current status for one-glance readability."""
+    phase = _message_phase(msg) or "?"
+    # step отсутствует/raw-dict → "unknown" (getattr default; никогда не raise — report best-effort)
+    status = str(getattr(state_steps.get(phase), "status", "unknown") or "unknown")
+    return f"[STALE previous-run · phase={phase} status={status}] {msg}"
+
+
+# endregion FUNC__message_phase / _is_stale_phase_message / _record_outside_phase_scope / _annotate_stale_record
 
 
 # region FUNC__prune_phase_records
@@ -863,6 +889,11 @@ def _classify_projects(
 ##   - Stale-фильтр (T17-fix): ошибки/варнинги state, ассоциированные с фазами, которые
 ##     СЕЙЧАС done, НЕ показываются (аккумуляция state.errors между прогонами устранена) —
 ##     back-compatible, структура state.json не меняется (list[str] сохранён)
+##   - STALE-scope (live-drill 2026-09-03): записи, пережившие done-фильтр, НО относящиеся
+##     к фазам ВНЕ набора фаз текущего run (mode init=INIT_PHASES/update=UPDATE_PHASES из
+##     sm.state.mode), печатаются отдельной секцией "Stale previous-run records" с аннотацией
+##     "[STALE previous-run · phase=<name> status=<status>]" — НЕ смешиваются с live Failed/
+##     Warnings; JSON: параллельное поле "stale_previous_run" (failed/warnings — live-only)
 ##   - Awaiting-классификация (T17-fix): проект = deployed если на ноде есть
 ##     /opt/projects/⟨name⟩/docker-compose.yml ИЛИ live-контейнер (docker ps best-effort);
 ##     docker недоступен → "(unavailable)" (по образцу best-effort контракта, никогда не raise)
@@ -887,9 +918,29 @@ def post_bootstrap_report(
     # из run 1 при 9/9 успешных фазах в run 3) устранена.
     deployed_phases = [p for p in sm.state.steps if phase_is_done(sm.state.steps.get(p))]
     done_phases = set(deployed_phases)
-    failed_msgs = [m for m in (sm.state.errors or []) if not _is_stale_phase_message(m, done_phases)]
-    warning_msgs = [w for w in (sm.state.warnings or []) if not _is_stale_phase_message(w, done_phases)]
+    surviving_errors = [m for m in (sm.state.errors or []) if not _is_stale_phase_message(m, done_phases)]
+    surviving_warnings = [w for w in (sm.state.warnings or []) if not _is_stale_phase_message(w, done_phases)]
+
+    # ── STALE-scope split (live-drill 2026-09-03) ──
+    # Записи, ПЕРЕЖИВШИЕ done-фильтр, но относящиеся к фазам ВНЕ набора фаз текущего run
+    # (mode: init = INIT_PHASES, update = UPDATE_PHASES), — это ошибки ПРОШЛОГО run другого
+    # режима. Live-кейс: update-run N failed в φ12 deploy_update → "Phase deploy_update failed
+    # ... exit=10" в state; init-run N+1 успешен — deploy_update вне INIT_PHASES, init'ом не
+    # перевыполняется → done-фильтр её не трогает, а отчёт печатал её как live FAIL (≈90 мин
+    # ложных разбирательств на prod, phantom overlay-clone failure). Такие записи печатаются
+    # ОТДЕЛЬНОЙ секцией с аннотацией "[STALE previous-run · phase=<name> status=<status>]" —
+    # live vs stale различимо с первого взгляда. Фазы В текущем mode-scope (failed/не-done) —
+    # live-фейлы текущего run, без аннотации (не-blanket: live-фейлы не прячутся).
+    current_mode = sm.state.mode or "init"
+    run_phase_scope = BootstrapPhase.INIT_PHASES if current_mode == "init" else BootstrapPhase.UPDATE_PHASES
+    failed_msgs = [m for m in surviving_errors if not _record_outside_phase_scope(m, run_phase_scope)]
+    warning_msgs = [w for w in surviving_warnings if not _record_outside_phase_scope(w, run_phase_scope)]
     warning_count = len(warning_msgs)
+    stale_records = [
+        _annotate_stale_record(sm.state.steps, m)
+        for m in [*surviving_errors, *surviving_warnings]
+        if _record_outside_phase_scope(m, run_phase_scope)
+    ]
 
     # ── Projects awaiting deploy (честный статус на ноде, T17-fix) ──
     # Классификация: deployed = /opt/projects/⟨name⟩/docker-compose.yml есть ИЛИ live-контейнер;
@@ -935,6 +986,13 @@ def post_bootstrap_report(
         "  LLM keys: provisioned in φ8/φ12 (make provision-llm для ручного повтора)",
         f"  Warnings: {warning_count}",
         f"  Failed: {', '.join(failed_msgs) if failed_msgs else '(none)'}",
+    ]
+    # live-drill 2026-09-03: записи фаз ДРУГОГО режима (прошлый run) — отдельная секция с
+    # аннотацией, НЕ смешиваются с live Failed/Warnings текущего run.
+    if stale_records:
+        report_lines.append("  Stale previous-run records (not from this run):")
+        report_lines.extend(f"    {record}" for record in stale_records)
+    report_lines += [
         "  Next commands:",
         f"    make check-security NODE={node_name}",
         f"    make e2e-verify NODE={node_name}",
@@ -953,6 +1011,12 @@ def post_bootstrap_report(
             "projects_unavailable": not projects_known,
             "docker_available": not docker_unavailable,
             "warnings": warning_count,
+            # live-drill 2026-09-03: "failed"/"warnings" несут ТОЛЬКО live-записи текущего run;
+            # пережившие done-фильтр записи фаз ДРУГОГО режима — в ПАРАЛЛЕЛЬНОМ поле
+            # stale_previous_run (аннотированные строки [STALE previous-run · phase=.. status=..]),
+            # чтобы machine-readable разделение live/stale сохранялось (выбор: parallel field,
+            # а не аннотация внутри "failed" — потребители JSON не ломаются о новом префиксе).
+            "stale_previous_run": stale_records,
             "failed": failed_msgs,
             "next_commands": [
                 f"make check-security NODE={node_name}",

@@ -260,12 +260,16 @@ ssh-stdin heredoc (НЕ в argv), ssh-флаги — из SoT `shared/ssh_opts.p
 `Host github.com-overlay`-блока в `~/.ssh/config`, если отсутствует (grep-идемпотентность;
 0600). Fresh-context-first закрыт: установка происходит, когда нода реально достижима —
 то есть во время bootstrap (AC5). Skip без шума (exit 0): контексты без
-`git@github.com-overlay:` repos.core; ретро-контекст без dev-ключа в
-`~/projects/<ctx>/.secrets/` → WARN (ручная установка на ноде могла уже состояться).
+`git@github.com-overlay:` repos.core (не-алиасный core — вне автоматизации). F2 fail-loud
+(DevPlan 031 T2): ретро-контекст/любой контекст с АЛИАСНЫМ repos.core, но БЕЗ dev-ключа в
+`~/projects/<ctx>/.secrets/` → bootstrap-шаг T6 падает с exit 10 и remediation (не молчаливый
+WARN-skip: без ключа нода не получит ключ+алиас → overlay-clone гарантированно упадёт — asi
+production-outage 2026-09-03).
 `DRY_RUN` bootstrap печатает «would install overlay deploy key + alias» и SSH не выполняет.
 
-Ручные шаги ниже — ТОЛЬКО fallback (ретро-контекст без dev-ключа; bootstrap без SSH_HOST,
-когда overlay-key шаг не выполняется — напр. локальный node-lifecycle `--mode init`):
+Ручные шаги ниже — ТОЛЬКО fallback (bootstrap без SSH_HOST, когда overlay-key шаг не
+выполняется — напр. локальный node-lifecycle `--mode init`; после fail-loud F2 ретро-контекст
+сначала кладёт ключ в каноническую локацию, а не идёт вручную мимо шага T6):
 
 1. **Keypair** (scaffold уже создал → пропустить): `ssh-keygen -t ed25519 -N "" -q -C "overlay-deploy-<ctx>" -f ~/projects/<ctx>/.secrets/<ctx>-overlay-deploy-key`
 2. **Repo-side (read-only):** `gh repo deploy-key add ~/projects/<ctx>/.secrets/<ctx>-overlay-deploy-key.pub --repo <org>/<ctx>-overlay --title "vps-<ctx>-readonly"` — БЕЗ `--allow-write`; ответ «already exists» = reuse (безопасно).
@@ -279,11 +283,13 @@ ssh-stdin heredoc (НЕ в argv), ssh-флаги — из SoT `shared/ssh_opts.p
    ```
 5. **Верификация с ноды:** `git ls-remote git@github.com-overlay:<org>/<ctx>-overlay.git` → список refs = доступен; после — `ensure_context_repo` клонирует без ручных шагов.
 
-**Ретро-контексты (созданы до DevPlan 024, напр. tronyx-lab) и skip-gh-case:** ключа в
-`~/projects/<ctx>/.secrets/` нет — bootstrap-шаг T6 пропускается с WARN (exit 0); выполнить
-шаги 1-2 вручную (идемпотентно: дубликат deploy key = «already exists») и повторить
-`make bootstrap-node` — или выполнить fallback-шаги 3-5 напрямую. Skeleton `repos.core` уже
-SSH-алиасный → после установки ключ+алиас клон работает. Ротация: новый keypair → шаг 2 →
+**Ретро-контексты (созданы до DevPlan 024, напр. tronyx-lab):** для прохождения bootstrap-шага T6
+нужен dev-ключ в `~/projects/<ctx>/.secrets/` (F2 fail-loud, exit 10 при его отсутствии для
+алиасного repos.core). Если ключ не сохранился: выполнить шаги 1-2 вручную (идемпотентно:
+дубликат deploy key = «already exists») → ключ ляжет в каноническую локацию → повторить
+`make bootstrap-node` — или, при уже установленном вручную ключе на ноде (шаги 3-5 выполнены),
+скопировать ТОТ ЖЕ keypair в каноническую локацию (0600). Skeleton `repos.core` уже
+SSH-алисаный → после установки ключ+алиас клон работает. Ротация: новый keypair → шаг 2 →
 шаг 3 → удалить старый ключ из repo deploy keys.
 
 ## Cross-references

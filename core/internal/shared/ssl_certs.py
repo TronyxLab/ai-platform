@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: ssl-certs, openssl, x509, expiry, issuer, lets-encrypt, parseable, shared, checkend, san, wildcard, on-disk-coverage, wildcard-parent, le-live, run-openssl, pubkey-match, pair-match, fqdn-validation
+# GREP_SUMMARY: ssl-certs, openssl, x509, expiry, issuer, lets-encrypt, parseable, shared, checkend, san, wildcard, on-disk-coverage, wildcard-parent, wildcard-covers, le-live, run-openssl, pubkey-match, pair-match, fqdn-validation
 # STRUCTURE: ▶ _run_openssl ┌args,cert,timeout,op┐ → ◇ openssl x509 -in cert … → ⎋ CompletedProcess|None (5 блоков дедуплицированы)
 #            → ▶ cert_is_parseable ┌cert┐ → ◇ openssl x509 -noout → ⎋ bool → ▶ cert_check_expiry ┌cert,threshold┐ → ◇ openssl x509 -checkend → ⎋ bool
 #            → ▶ cert_get_issuer ┌cert┐ → ◇ openssl x509 -issuer → ⎋ str|None → ▶ cert_is_le_issuer ┌cert┐ → ◇ issuer contains "Let's Encrypt" → ⎋ bool
@@ -296,6 +296,36 @@ def cert_covers_domain(le_live: Path, domain: str) -> bool:
         return True
 
     # 2. Wildcard: *.parent покрывает поддомен (только для subdomains — parent != domain)
+    return cert_wildcard_covers_domain(le_live, domain)
+
+
+# endregion FUNC_cert_covers_domain
+
+
+# region FUNC_cert_wildcard_covers_domain
+## @purpose  Проверить on-disk WILDCARD-PARENT покрытие домена (DevPlan 031 T4 / F5):
+##           walk родительских суффиксов домена (subdomain → apex), live/{parent}/fullchain.pem
+##           существует И покрывает "*.{parent}" (SAN primary / CN fallback через _cert_covers_domain).
+##           НЕ включает direct-покрытие (live/{domain}/) — в отличие от cert_covers_domain.
+##           Выделен из cert_covers_domain (DRY): F5-скрипт оркестрации сертификатов обязан
+##           отличать «покрыт валидным wildcard-родителем» (выпуск direct-серта НЕ нужен —
+##           vhost серверит wildcard) от «на диске лежит битый direct self-signed» (выпуск НУЖЕН).
+##           Прямое использование cert_covers_domain для skip было бы неверно: direct-ветка
+##           матчит по subject и вернула бы True для invalid self-signed CN=domain, замаскировав
+##           сломанный direct-серт (регрессия выпуска).
+## @io       ⇥ le_live: Path (letsencrypt_live()), domain: str → ⎋ bool
+## @complexity O(A) — A = число родительских суффиксов (≤2 openssl SAN+CN проверок)
+## @invariants
+##   - Только subdomains: parent != domain (range(1, len(labels)-1) — apex не имеет родителя)
+##   - ТОЛЬКО настоящий wildcard: direct-серт родителя НЕ проходит (B12 TRAP[BUG] —
+##     _cert_covers_domain(cert, "*.{parent}") требует wildcard-SAN/CN)
+##   - Отсутствие покрытия → False (fail-closed); never raise (isfile/SAN/CN-ошибки → False)
+## @rationale Q: Почему отдельная функция, а не флаг в cert_covers_domain?
+##            A: у двух потребителей РАЗНАЯ семантика: domains.py (F14, on-disk convergence) —
+##            «любое покрытие достаточно»; cert_orchestrator (F5, skip выпуска) — «только
+##            wildcard-родитель отменяет direct-выпуск». Общий флаг размыл бы оба контракта.
+def cert_wildcard_covers_domain(le_live: Path, domain: str) -> bool:
+    """Check an on-disk LE WILDCARD PARENT covers the domain (no direct check, F5)."""
     labels = domain.split(".")
     for i in range(1, len(labels) - 1):
         parent = ".".join(labels[i:])
@@ -305,7 +335,7 @@ def cert_covers_domain(le_live: Path, domain: str) -> bool:
     return False
 
 
-# endregion FUNC_cert_covers_domain
+# endregion FUNC_cert_wildcard_covers_domain
 
 
 # region FUNC_cert_get_san_list

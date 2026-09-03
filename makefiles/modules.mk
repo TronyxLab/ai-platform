@@ -1,5 +1,5 @@
-# GREP_SUMMARY: modules.mk, up, down, restart, status, healthcheck, backup, restore, discover-modules, validate-modules
-# STRUCTURE: ┌compose helpers┐ → ◇ up (preflight+provision+compose) → ◇ down → ◇ restart → ◇ status → ◇ healthcheck → ◇ backup → ◇ restore → ◇ discover-modules → ◇ validate-modules
+# GREP_SUMMARY: modules.mk, up, down, down-volumes, restart, status, healthcheck, backup, restore, discover-modules, validate-modules, NODE-guard, fail-loud
+# STRUCTURE: ┌compose helpers┐ → ◇ up (preflight+provision+compose) → ◇ down → ◇ restart → ◇ status (NODE-guard F9) → ◇ healthcheck → ◇ backup → ◇ restore → ◇ discover-modules → ◇ validate-modules
 # region MODULE_CONTRACT
 ## @purpose  Module lifecycle targets — compose up/down/restart/status, healthcheck, backup/restore, discover-modules, validate-modules
 ## @scope    Included from root Makefile; operates on local docker compose stack
@@ -9,8 +9,12 @@
 ##     SKIP_PREFLIGHT=1 — осознанный обход (План 175 W4.2 — up-safe слит в up)
 ##   - restart uses soft restart (stop + start), never down && up -d
 ##   - healthcheck exits 0 only if all modules pass
+##   - status NODE-guard (DevPlan 031 T6 / F9): NODE≠local → fail-loud (как healthcheck F-016) —
+##     локальный docker compose ps не выдаётся за состояние удалённой ноды
 ## @rationale Makefile include-split W4-E4: module targets isolated from bootstrap/CI
 ## @changes 2026-08-16 | План 175 W4.2 — up-safe слит в up (preflight первым шагом)
+## @changes 2026-09-03 | DevPlan 031 T6 (F9) — status: NODE-guard fail-loud (пустая локальная
+##           таблица больше не молчит вместо состояния ноды)
 # endregion MODULE_CONTRACT
 
 .PHONY: up down down-volumes restart status healthcheck backup restore discover-modules validate-modules
@@ -70,7 +74,18 @@ restart:
 	@echo "[IMP:9][make][restart] All services soft restarted"
 
 ## status: Show running Docker compose services status
+##   NODE-guard (DevPlan 031 T6 / F9): status смотрит ЛОКАЛЬНЫЙ docker compose. Операторская
+##   машина с NODE=<remote> НЕ должна молча получать пустую таблицу локального стека вместо
+##   состояния ноды (F9: NODE молча игнорировался → пустая таблица ≠ нода) — fail-loud,
+##   зеркало healthcheck-контракта (F-016). Состояние удалённой ноды: project-status/e2e-verify.
 status:
+	@if [[ -n "$(NODE)" && "$(NODE)" != "local" ]]; then \
+		echo "[IMP:10][make][status] ERROR: NODE=$(NODE) задан, но status показывает ЛОКАЛЬНЫЙ docker compose." >&2; \
+		echo "  Для удалённой ноды используйте: make project-status NAME=<project> NODE=$(NODE)" >&2; \
+		echo "  или make e2e-verify NODE=$(NODE) (HTTP+TLS sweep) / make healthcheck NODE=$(NODE)." >&2; \
+		echo "  NODE=local / без NODE → локальная проверка стека." >&2; \
+		exit 1; \
+	fi
 	@echo "[IMP:7][make][status] Displaying running services..."
 	@docker compose $(COMPOSE_BASE_FILES) ps
 	@echo "[IMP:9][make][status] Status displayed"

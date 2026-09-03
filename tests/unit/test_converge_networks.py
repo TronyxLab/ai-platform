@@ -13,6 +13,8 @@
 ## @rationale Direct function testing with mock subprocess.run for docker-dependent units.
 ##   Вынесен из монолита test_reconciler.py (DevPlan 118 F6).
 ## @changes 2026-08-02 · F6 split — R4 networks (DevPlan 118)
+## @changes 2026-09-03 · live-drill (prod) — +deployed-проект с 0 контейнеров → WARN (R3-consistent
+##           deployed-детекция: real vs GENERATED-STUB ai-platform.yaml); stub → NO warn
 # endregion MODULE_CONTRACT
 """
 
@@ -185,3 +187,142 @@ def test_reconcile_networks_exists(tmp_path, caplog):
 
 
 # endregion FUNC_test_reconcile_networks_exists
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region R4-honesty (live-drill 2026-09-03): deployed-проект с 0 running-контейнеров
+# ═══════════════════════════════════════════════════════════════════
+# Live: docker rm контейнера проекта → converge "FULLY CONVERGED" (exit 0), контейнер
+# отсутствует. Deployed-детекция — ТОТ ЖЕ источник, что R3: ai-platform.yaml real-vs-STUB.
+
+
+def _r4_networks_mock_run(cmd, *args, **kwargs):
+    """subprocess.run mock: docker info OK, proxy-net exists (bridge), docker ps empty."""
+    cmd_str = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
+    if "docker info" in cmd_str:
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+    if "network inspect" in cmd_str:
+        inspect_json = json.dumps([{"Name": "proxy-net", "Driver": "bridge"}])
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=inspect_json, stderr="")
+    if "docker ps" in cmd_str:
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+    return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+
+def _write_project_yaml(tmp_path, *names):
+    """Write node.yaml with given project names."""
+    yaml_path = tmp_path / "node.yaml"
+    body = "contexts:\n  - name: test-context\nprojects:\n"
+    for n in names:
+        body += f"  - name: {n}\n    domain: {n}.example.com\n"
+    yaml_path.write_text(body, encoding="utf-8")
+    return yaml_path
+
+
+# 🧪 TRAP[TEST] · REGRESSION · R4-honesty live-drill 2026-09-03 — deployed + 0 контейнеров → WARN
+# · Scenario: node.yaml проект myapp DEPLOYED (real ai-platform.yaml, не GENERATED-STUB),
+#   docker ps → 0 running-контейнеров → R4 ОБЯЗАН добавить warn-drift с точным текстом
+#   "deployed but no running containers"; exit-код НЕ меняется (reconcile контейнеров —
+#   deploy-project канал по дизайну)
+# · Last fail: live prod — docker rm контейнера → converge "FULLY CONVERGED" exit 0
+# · Remove if: warn-детекция перенесена в deploy-project/R9 (иной канал поверх R4)
+@pytest.mark.usefixtures("reset_state")
+@ldd_trajectory
+def test_proxy_connectivity_warns_deployed_project_no_containers(tmp_path, caplog, monkeypatch):
+    """R4-honesty: deployed-проект с 0 running-контейнеров → warn-drift, exit-код не меняется."""
+    caplog.set_level(logging.INFO)
+    yaml_path = _write_project_yaml(tmp_path, "myapp")
+    projects_dir = tmp_path / "projects"
+    app_dir = projects_dir / "myapp"
+    app_dir.mkdir(parents=True)
+    (app_dir / "ai-platform.yaml").write_text("project: myapp\nservice: myapp\n", encoding="utf-8")
+    monkeypatch.setattr(_converge_networks, "PROJECTS_BASE", str(projects_dir))
+
+    with patch.object(subprocess, "run", side_effect=_r4_networks_mock_run):
+        entry = reconciler.reconcile_networks(str(yaml_path), dry_run=False, report_only=False)
+
+    assert entry["unit"] == "R4"
+    warns = [d for d in infra.drifts if d["status"] == "warn"]
+    assert len(warns) == 1, f"ожидался ровно 1 warn-drift для deployed-проекта, got: {infra.drifts}"
+    assert "deployed but no running containers" in warns[0]["detail"], (
+        f"warn-текст не точен (R5 anti-survivorship wording): {warns[0]['detail']}"
+    )
+    assert "myapp" in warns[0]["detail"]
+    # warn НЕ эскалирует exit: converge остаётся 0 (контейнер-reconcile — канал deploy-project)
+    assert infra.exit_code == 0, f"warn-drift изменил exit-код: {infra.exit_code}"
+    assert not infra.has_errors and not infra.has_warnings
+    logger.info("[IMP:9][test][r4-honesty] deployed + 0 контейнеров → warn (exit 0) — PASS")
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · R4-honesty live-drill 2026-09-03 — stub/awaiting НЕ warn
+# · Scenario: проект myapp ожидает деплой (ai-platform.yaml = GENERATED-STUB), docker ps → 0
+#   контейнеров → R4 НЕ должен warn (deployed-гейт R3: stub ≠ deployed; false-warn ожидающих
+#   CI-deploy проектов исключён)
+# · Last fail: исходный live-drill вход (0 контейнеров) — доказывает, что warn не blanket
+# · Remove if: deployed-детекция R4 заменена на иной источник классификации
+@pytest.mark.usefixtures("reset_state")
+@ldd_trajectory
+def test_proxy_connectivity_no_warn_for_stub_project_no_containers(tmp_path, caplog, monkeypatch):
+    """R4-honesty negative: stub/awaiting-проект с 0 контейнеров → NO warn (deployed-гейт)."""
+    caplog.set_level(logging.INFO)
+    yaml_path = _write_project_yaml(tmp_path, "myapp")
+    projects_dir = tmp_path / "projects"
+    app_dir = projects_dir / "myapp"
+    app_dir.mkdir(parents=True)
+    (app_dir / "ai-platform.yaml").write_text(
+        "# GENERATED-STUB by converge — overwritten by CI deliver\nproject: myapp\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(_converge_networks, "PROJECTS_BASE", str(projects_dir))
+
+    with patch.object(subprocess, "run", side_effect=_r4_networks_mock_run):
+        entry = reconciler.reconcile_networks(str(yaml_path), dry_run=False, report_only=False)
+
+    assert entry["unit"] == "R4"
+    warns = [d for d in infra.drifts if d["status"] == "warn"]
+    assert warns == [], f"stub/awaiting-проект дал ложный warn: {infra.drifts}"
+    assert infra.exit_code == 0
+    logger.info("[IMP:9][test][r4-honesty] stub + 0 контейнеров → NO warn (deployed-гейт) — PASS")
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · R4-honesty live-drill 2026-09-03 — running-контейнер на
+# proxy-net → NO warn (поведение не изменено)
+# · Scenario: deployed-проект myapp с running-контейнером myapp-1, подключённым к proxy-net →
+#   R4 не warn (0-контейнерная ветка не затронута)
+# · Last fail: исходный live-drill вход (deployed-проект) — доказывает, что warn ТОЛЬКО для 0
+# · Remove if: R4 connectivity-проверка заменена
+@pytest.mark.usefixtures("reset_state")
+@ldd_trajectory
+def test_proxy_connectivity_no_warn_for_running_container_on_proxy_net(tmp_path, caplog, monkeypatch):
+    """R4-honesty negative: running-контейнер на proxy-net → NO warn, поведение неизменно."""
+    caplog.set_level(logging.INFO)
+    yaml_path = _write_project_yaml(tmp_path, "myapp")
+    projects_dir = tmp_path / "projects"
+    app_dir = projects_dir / "myapp"
+    app_dir.mkdir(parents=True)
+    (app_dir / "ai-platform.yaml").write_text("project: myapp\nservice: myapp\n", encoding="utf-8")
+    monkeypatch.setattr(_converge_networks, "PROJECTS_BASE", str(projects_dir))
+
+    def mock_run(cmd, *args, **kwargs):
+        cmd_str = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
+        if "docker info" in cmd_str:
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+        if "network inspect" in cmd_str:
+            inspect_json = json.dumps([{"Name": "proxy-net", "Driver": "bridge"}])
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=inspect_json, stderr="")
+        if "docker ps" in cmd_str:
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="myapp-1\n", stderr="")
+        if "docker inspect" in cmd_str:
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="proxy-net \n", stderr="")
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    with patch.object(subprocess, "run", side_effect=mock_run):
+        entry = reconciler.reconcile_networks(str(yaml_path), dry_run=False, report_only=False)
+
+    assert entry["unit"] == "R4"
+    warns = [d for d in infra.drifts if d["status"] == "warn"]
+    assert warns == [], f"running-контейнер на proxy-net дал ложный warn: {infra.drifts}"
+    assert infra.exit_code == 0
+    logger.info("[IMP:9][test][r4-honesty] running-контейнер на proxy-net → NO warn — PASS")
+
+
+# endregion R4-honesty (live-drill 2026-09-03)

@@ -34,6 +34,9 @@
 ## @changes  2026-08-24 | REF-0008 (meta-refactoring В2) — fail-fast fqdn-gate на entry
 ##            orchestrate_certs (SEC-0026); _generate_self_signed: LE-preserve guard (BUG-0606)
 ##            + TG-alert cert.self_signed (FAIL-0300: fallback молчал ~76 дней)
+## @changes  2026-09-03 | F5 (DevPlan 031 T4) — _process_single_domain Step 1b wildcard-parent
+##            skip (cert_wildcard_covers_domain): домен под on-disk wildcard родителя НЕ идёт
+##            в S3/issue/self-signed (converge churn roadmap.asiteam.ru под *.asiteam.ru — FINDING-p3-2)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -66,6 +69,7 @@ from core.internal.shared.ssl_certs import (
     cert_is_le_issuer,  # REF-0008 (BUG-0606): self-signed не перезаписывает LE-сертификат
     cert_is_valid,  # C9: единая комбинация «cert валиден» (DevPlan 118 C9); _is_cert_valid удалён
     cert_subject_matches_domain,  # FL15 (DevPlan 125 T5): CN-матчинг direct/wildcard
+    cert_wildcard_covers_domain,  # F5 (DevPlan 031 T4): wildcard-parent skip в _process_single_domain
     validate_cert_domain_fqdn,  # REF-0008 (SEC-0026): fail-fast fqdn на entry orchestrate_certs
 )
 from core.internal.shared.subprocess_io import CommandRunner
@@ -456,11 +460,14 @@ def _finalize_orchestration(result: CertResult, *, migrate_cron: bool) -> None:
 ## @complexity — O(T) where T = timeout per operation
 ## @invariants
 ##   - Step 1: Check if valid cert already exists on disk (skip + upload to S3)
+##   - Step 1b (F5/031 T4): домен покрыт on-disk wildcard-сертом РОДИТЕЛЯ → skip
+##     (source="wildcard_covered"), НЕ идёт в S3/issue/self-signed (churn-класс FINDING-p3-2)
 ##   - Step 2: Try S3 restore (check + download via direct import)
 ##   - Step 3: Fall back to issue_cert if S3 miss/unavailable (provider-driven env)
 ##   - After successful issue, upload to S3
 ##   - Non-fatal: any failure returns DomainCertResult(status="failed")
 ## @changes 2026-08-13 | E1 (160): +DI threading (facts/validity_path/cert_validity_fn/s3_cache/runner/environ)
+## @changes 2026-09-03 | F5 (DevPlan 031 T4) — Step 1b wildcard-parent skip (см. MODULE_CONTRACT)
 def _process_single_domain(
     domain: str,
     issue_cert_script: str,
@@ -495,6 +502,24 @@ def _process_single_domain(
             domain, validity_path=vpath, s3_cache=s3_cache, environ=env
         )  # Always sync to S3 (052 §4.5)
         return DomainCertResult(domain=domain, status="skipped", source="disk_synced")
+
+    # ── Step 1b (F5, DevPlan 031 T4): wildcard-parent skip ──
+    # Домен покрыт на диске WILDCARD-сертом РОДИТЕЛЯ (live/{parent}/fullchain.pem,
+    # *.{parent} в SAN/CN) → direct-выпуск НЕ нужен: vhost серверит wildcard (VHOST_CONTRACT
+    # 1.4: «wildcard для поддоменов PLATFORM_DOMAIN»). Без этого скипа каждый converge
+    # (R-ssl → orchestrate_certs) гонял бы поддомен в S3/issue-путь: S3-cache держит битый
+    # self-signed → acme-попытка (жжёт quota) → self-signed fallback + TG-алерт ВПУСТУЮ
+    # (asi roadmap.asiteam.ru под *.asiteam.ru — FINDING-p3-2, ночной прогон 2026-09-03).
+    # ⚠️ Используется ИМЕННО cert_wildcard_covers_domain (не cert_covers_domain): direct-ветка
+    # последнего матчит по subject и вернула бы True для invalid self-signed CN=domain —
+    # замаскировала бы сломанный direct-серт, который ОБЯЗАН перевыпускаться.
+    if cert_wildcard_covers_domain(pathlib.Path(vpath), domain):
+        logger.info(
+            "[IMP:9][cert_orchestrator] %s — covered by on-disk wildcard parent cert — direct "
+            "issuance skipped (F5, no S3/issue/self-signed churn)",
+            domain,
+        )
+        return DomainCertResult(domain=domain, status="skipped", source="wildcard_covered")
 
     # ── Step 2: Try S3 restore via direct import (no subprocess) ──
     cache = s3_ssl_cache if s3_cache is None else s3_cache

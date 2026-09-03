@@ -571,22 +571,25 @@ def test_real_compose_deploys(caplog, tmp_path):
 
 
 # region FUNC_test_cold_skip_gate_single_shot
-# 🧪 TRAP[TEST] · Regression · REF-0103 · cold-skip gate = ОДНА проверка (attempts=1)
-# · Scenario: _is_project_healthy(single_shot=True) → healthcheck_poll получает attempts=1
-# ·   (отсутствующий проект не сжигает полное окно поллинга в idempotent-skip проверке);
-# ·   default-вызов сохраняет deadline-driven режим (attempts не передаётся).
-# · Last fail: REF-0103 — skip-gate поллил 60s на каждый cold-проект контекста.
+# 🧪 TRAP[TEST] · Regression · REF-0103 + F7 (DevPlan 031 T7) · cold-skip gate = bounded probe
+# · Scenario: _is_project_healthy(single_shot=True) → healthcheck_poll получает
+# ·   attempts=SINGLE_SHOT_GATE_ATTEMPTS (3, ~≤9s) — отсутствующий проект не сжигает полное окно
+# ·   поллинга, НО транзиентный "starting" не даёт ложный not-live (F7: asi roadmap re-delivered=1
+# ·   в no-op bootstrap при attempts=1); default-вызов сохраняет deadline-driven режим
+# ·   (attempts не передаётся).
+# · Last fail: REF-0103 — skip-gate поллил 60s на каждый cold-проект контекста;
+# ·            F7 (2026-09-03) — attempts=1 → ложный not-live на транзиентном старте
 # · Remove if: single-shot семантика gate меняется
 @ldd_trajectory
 @pytest.mark.parametrize(
     ("single_shot", "expected_attempts_kwarg"),
     [
-        pytest.param(True, 1, id="single-shot-gate"),
+        pytest.param(True, cd.SINGLE_SHOT_GATE_ATTEMPTS, id="single-shot-gate-bounded"),
         pytest.param(False, None, id="default-deadline-driven"),
     ],
 )
 def test_is_project_healthy_single_shot_attempts(caplog, single_shot, expected_attempts_kwarg):
-    """single_shot=True → healthcheck_poll(attempts=1); default → прежнее поведение."""
+    """single_shot=True → healthcheck_poll(attempts=SINGLE_SHOT_GATE_ATTEMPTS); default → прежнее."""
     captured: dict = {}
 
     def _poll(name, **kwargs):

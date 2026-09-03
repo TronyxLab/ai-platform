@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: watchdog, unhealthy-restart, docker-restart, cooldown, dry-run, stdlib-only, host-cron, is-n-loop, state-json, crashloop-notify, stamp-after-success
-# STRUCTURE: ▶ scan_containers ┌docker ps -q + inspect┐ → ◇ filters (health?+restart!=no+RestartCount<=5) → ○ unhealthy_since state → ◇ unhealthy>=10min ∧ cooldown 30min? → ⚡ docker restart → ⊕ stamp last_restart ПОСЛЕ успеха + re-save per-action → ⚡ TG notify │ ◇ RestartCount>5? → ⚡ TG «crash-loop detected, не рестарчу» → ⎋ exit 0|1
+# GREP_SUMMARY: watchdog, unhealthy-restart, docker-restart, cooldown, dry-run, stdlib-only, host-cron, is-n-loop, state-json, crashloop-notify, stamp-after-success, wipe-guard, state-loss, F8, boot-id, named-volumes
+# STRUCTURE: ▶ scan_containers ┌docker ps -q + inspect┐ → ◇ filters (health?+restart!=no+RestartCount<=5) → ○ unhealthy_since state → ◇ unhealthy>=10min ∧ cooldown 30min? → ⚡ docker restart → ⊕ stamp last_restart ПОСЛЕ успеха + re-save per-action → ⚡ TG notify │ ◇ RestartCount>5? → ⚡ TG «crash-loop detected, не рестарчу» │ ◇ F8 wipe-guard (boot_id+volumes+marker vs baseline → TG watchdog.wipe) → ⎋ exit 0|1
 # region MODULE_CONTRACT
 ## @purpose  Host-side watchdog (DevPlan 132 W1): auto-restart of unhealthy containers that
 ##           survive their restart policy — «живой, но unhealthy» висит вечно без рестарта.
@@ -31,6 +31,10 @@
 ##           точечное расширение без новой архитектуры; stdlib-only исключает PYTHONPATH-зависимость.
 ## @changes 2026-08-04 | DevPlan 132 W1 — создан
 ## @changes 2026-08-24 | REF-0014 (DevPlan meta-refactoring В1) — stamp-after-success + re-save
+## @changes 2026-09-03 | F8 prevention (DevPlan 031 T3) — +wipe-guard (check_wipe_signature/
+##           notify_wipe/_wipe_*): state-loss детектор (boot_id + named volumes + /opt/platform/core
+##           маркер vs persistent baseline → TG watchdog.wipe) — tronyx-vps терял ВСЁ docker-
+##           состояние за ночь (provider-level reset 2026-09-03, journald = 1 boot)
 ##           per-action (state-commit транзакционен с действием); failed restart не блокирует
 ##           остальные действия (exit 1 в конце прохода); crash-loop skip-path → TG-нотификация
 ## @modulemap
@@ -757,6 +761,285 @@ def notify_crashloop(name: str, *, dry_run: bool = False, run_cmd: RunCmd | None
 # endregion FUNC_notify_crashloop
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# Wipe-guard (F8 prevention, DevPlan 031 T3) — state-loss detector
+# ═══════════════════════════════════════════════════════════════════════
+# Контекст: tronyx-vps терял ВСЁ docker-состояние за ночь (named volumes + payload +
+# /opt/<ctx>/platform + known_hosts) — journald reset = полный root-fs сброс ноды
+# (2026-09-03: единственный boot в journald, /var/log/journal создан на boot, volumes
+# пересозданы 12:42-12:47 UTC оператором). Кандидат-крон docker system prune (день 1, 04:00,
+# БЕЗ --volumes) НЕ объясняет потерю known_hosts/journald//opt — причина на уровне провайдера
+# (provider console — owner-gated). Prevention (on-node, 5-мин watchdog): сигнал на ПАДЕНИЕ
+# числа named volumes / смену boot_id между прогонами. Ограничение честное: watchdog живёт в
+# /opt/platform/core — полный root-fs сброс уносит и его (детекция такого класса — только
+# offsite/provider console); on-node guard ловит docker-data reset и «ребут с потерей состояния».
+# 📝 TRAP[DEBT] · 2026-09-03 · MED · Полный root-fs reset ноды недетектируем on-node
+# · Observed: journald = 1 boot после wipe tronyx-vps (2026-09-03) — watchdog/cron в
+# ·   /opt/platform/core унесены сбросом; on-node wipe-guard после re-bootstrap видит только
+# ·   свежий baseline (первый прогон), алерта нет.
+# · Suspected: единственный надёжный сигнал полного сброса — offsite (S3-marker heartbeat или
+# ·   provider API/console); on-node мониторинг физически слеп к собственному исчезновению.
+# · Impact: класс «нода пересоздана провайдером» остаётся на ручном контроле оператора
+# · When: DevPlan 031 T3 (F8 форензика) · Rev: первый повторный wipe после внедрения guard —
+# ·   завести offsite heartbeat (S3 upload раз в N минут из backup-cron/метрик) + алерт на отсутствие
+
+
+# region DATA_WipeState
+class WipeState(TypedDict):
+    """Персистентный baseline wipe-guard (state-файл, граница JSON).
+
+    ## @purpose  {boot_id, volumes} — здоровый baseline ноды между прогонами watchdog;
+    ##            alerted_at — suppress-штамп последнего TG watchdog.wipe.
+    """
+
+    boot_id: str
+    volumes: int
+    alerted_at: float
+
+
+# endregion DATA_WipeState
+
+WIPE_GUARD_STATE_DEFAULT: str = "/var/lib/platform/run/wipe-guard-state.json"
+# Порог здорового baseline: нода с ≥WIPE_MIN_BASELINE_VOLUMES named volumes считается
+# «имеющей docker-состояние» — его схлопывание к 0 = wipe-сигнатура.
+WIPE_MIN_BASELINE_VOLUMES: int = 3
+# Повторный алерт watchdog.wipe не чаще раза в 6 часов (после алерта baseline = текущее
+# пустое состояние; следующий wipe после восстановления даст новый baseline → новый алерт).
+WIPE_ALERT_COOLDOWN_SEC: float = 6 * 3600.0
+
+
+# region FUNC_wipe_helpers
+## @purpose  Чтение boot_id (Linux /proc/sys/kernel/random/boot_id — инвариант на время boot;
+##           перезагрузка = смена id) и подсчёт named volumes (docker volume ls -q).
+##           None на ошибку — guard graceful-skip (не ложный алерт).
+def _wipe_read_boot_id() -> str | None:
+    """Return current boot id from /proc, or None on non-Linux/unreadable (skip guard)."""
+    try:
+        raw = pathlib.Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return raw or None
+
+
+def _wipe_count_volumes(run_cmd: RunCmd | None) -> int | None:
+    """Count named docker volumes (docker volume ls -q); None on daemon/CLI failure (skip)."""
+    run_impl = run_cmd if run_cmd is not None else _run_cmd
+    try:
+        result = run_impl(["docker", "volume", "ls", "-q"], timeout=DOCKER_TIMEOUT)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    return len([line for line in result.stdout.splitlines() if line.strip()])
+
+
+def _wipe_state_path() -> str:
+    """Wipe-guard state file: env WIPE_GUARD_STATE_FILE > default /var/lib/platform/run/..."""
+    return os.environ.get("WIPE_GUARD_STATE_FILE", WIPE_GUARD_STATE_DEFAULT)
+
+
+def _wipe_load_state(path: str) -> WipeState | None:
+    """Load wipe-guard baseline; None on missing/corrupt state (first run → baseline)."""
+    try:
+        data: object = cast("object", json.loads(pathlib.Path(path).read_text(encoding="utf-8")))
+    except (OSError, json.JSONDecodeError):
+        return None
+    data_dict = cast("dict[str, object]", data) if isinstance(data, dict) else None
+    if data_dict is None:
+        return None
+    boot_id = data_dict.get("boot_id")
+    volumes = data_dict.get("volumes")
+    alerted_raw = data_dict.get("alerted_at", 0.0)
+    # W11-строгая типизация: json.loads → Any; isinstance-сужение до конкретных скаляров
+    if not isinstance(boot_id, str) or not isinstance(volumes, int):
+        return None
+    alerted_at: float = float(alerted_raw) if isinstance(alerted_raw, (int, float)) else 0.0
+    return WipeState(boot_id=boot_id, volumes=volumes, alerted_at=alerted_at)
+
+
+def _wipe_save_state(path: str, state: WipeState) -> None:
+    """Atomically persist wipe-guard baseline (tmp + os.replace канон atomic_writer-паттерна)."""
+    pathlib.Path(path).parent.mkdir(parents=True, exist_ok=True)
+    tmp = f"{path}.tmp"
+    with pathlib.Path(tmp).open("w", encoding="utf-8") as fh:
+        json.dump(dict(state), fh, sort_keys=True)
+        fh.flush()
+        os.fsync(fh.fileno())
+    pathlib.Path(tmp).replace(path)
+
+
+# endregion FUNC_wipe_helpers
+
+
+# region FUNC_notify_wipe
+## @purpose  TG-алерт watchdog.wipe (F8 prevention, DevPlan 031 T3): нода потеряла docker-
+##           состояние (named volumes схлопнулись к 0 при здоровом baseline) — сигнал оператору
+##           проверить provider-консоль (reinstall/reboot/migration), а не молча пере-бутстрапить.
+##           Единый notifier-контракт (как notify_crashloop); event watchdog.wipe — каталог.
+## @io       ⇥ baseline: WipeState, current_volumes: int, dry_run: bool, run_cmd → ⎋ bool
+## @complexity O(1) — один subprocess
+## @invariants
+##   - PYTHONPATH={core_dir} в env дочернего процесса (cron без PYTHONPATH)
+##   - Failure → IMP:7 warning, False — best-effort, НЕ блокирует проход watchdog
+def notify_wipe(
+    baseline: WipeState,
+    current_volumes: int,
+    *,
+    dry_run: bool = False,
+    run_cmd: RunCmd | None = None,
+) -> bool:
+    """Send a non-blocking Telegram WIPE alert (best-effort)."""
+    if dry_run:
+        logger.info(
+            "[IMP:9][watchdog][wipe][dry-run] WOULD notify Telegram: docker-state WIPE "
+            "(baseline volumes=%d boot=%s → current volumes=%d)",
+            baseline["volumes"],
+            baseline["boot_id"][:12],
+            current_volumes,
+        )
+        return True
+    env = os.environ.copy()
+    core_dir = _core_dir()
+    env["PYTHONPATH"] = core_dir + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    cmd = [
+        "python3",
+        "-m",
+        "core.internal.shared.notifications",
+        "notify",
+        "--severity",
+        "critical",
+        "--context",
+        "watchdog",
+        "--event",
+        "watchdog.wipe",
+        "--corr-id",
+        f"watchdog-wipe-{baseline['boot_id'][:12]}",
+        "🧹",
+        (
+            f"DOCKER-STATE WIPE: нода потеряла docker-состояние (baseline volumes="
+            f"{baseline['volumes']} boot={baseline['boot_id'][:12]} → now volumes="
+            f"{current_volumes}). Проверь provider console: reinstall/reboot/migration — "
+            f"не пере-бутстрапи молча (DevPlan 031 F8)"
+        ),
+    ]
+    run_impl = run_cmd if run_cmd is not None else _run_cmd
+    try:
+        result = run_impl(cmd, timeout=DOCKER_TIMEOUT, env=env)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        logger.warning("[IMP:7][watchdog][wipe] wipe notify failed (non-fatal): %s", exc)
+        return False
+    if result.returncode != 0:
+        logger.warning(
+            "[IMP:7][watchdog][wipe] wipe notify rc=%d (non-fatal): %s",
+            result.returncode,
+            (result.stderr or result.stdout).strip()[:200],
+        )
+        return False
+    logger.info("[IMP:9][watchdog][wipe] WIPE NOTIFY sent (baseline volumes=%d)", baseline["volumes"])
+    return True
+
+
+# endregion FUNC_notify_wipe
+
+
+# region FUNC_check_wipe_signature
+## @purpose  Wipe-guard проверка (F8 prevention, DevPlan 031 T3): сравнение текущего состояния
+##           ноды (boot_id + число named volumes) с персистентным здоровым baseline.
+##           Wipe-сигнатура: здоровый baseline (≥3 named volumes) → ТЕКУЩЕЕ volumes=0
+##           (docker-data reset / «ребут с потерей состояния»). Первый прогон = baseline
+##           (без алерта); перезагрузка с восстановленным состоянием = re-baseline (без алерта);
+##           dry-run = план без мутаций. Ограничение (TRAP[DEBT] выше): полный root-fs reset
+##           уносит сам watchdog — этот класс детектируется только offsite/provider console.
+## @io       ⇥ dry_run/state_file/now/run_cmd/boot_id_fn (DI) → ⎋ int (0 = ok/skip)
+## @complexity O(1) — чтение boot_id + один docker volume ls
+## @invariants
+##   - boot_id недоступен (non-Linux) ИЛИ docker volume ls rc≠0 → skip (0), НЕ ложный алерт
+##   - Без baseline (первый прогон) → сохранить baseline, без алерта
+##   - Wipe-алерт — только из здорового baseline (volumes ≥ WIPE_MIN_BASELINE_VOLUMES) в volumes=0;
+##     подавлен WIPE_ALERT_COOLDOWN_SEC (после алерта baseline = текущее)
+##   - Перезагрузка (boot_id сменился) с восстановленным состоянием → re-baseline БЕЗ алерта
+##   - dry-run: 0 мутаций (state не пишется, TG не вызывается)
+def check_wipe_signature(
+    *,
+    dry_run: bool = False,
+    state_file: str | None = None,
+    now: float | None = None,
+    run_cmd: RunCmd | None = None,
+    boot_id_fn: Callable[[], str | None] | None = None,
+) -> int:
+    """Run the wipe-guard state-loss check; returns 0 (ok/skip) — watchdog проход не блокирует."""
+    ts = now if now is not None else time.time()
+    boot_id = (boot_id_fn if boot_id_fn is not None else _wipe_read_boot_id)()
+    if boot_id is None:
+        logger.info("[IMP:7][watchdog][wipe] boot_id unavailable (non-Linux?) — wipe-guard skipped")
+        return 0
+    volumes = _wipe_count_volumes(run_cmd)
+    if volumes is None:
+        logger.info("[IMP:7][watchdog][wipe] docker volume ls failed/unavailable — wipe-guard skipped")
+        return 0
+    path = state_file or _wipe_state_path()
+
+    baseline = _wipe_load_state(path)
+    if baseline is None:
+        logger.info(
+            "[IMP:8][watchdog][wipe] First run — baseline saved (boot=%s volumes=%d)",
+            boot_id[:12],
+            volumes,
+        )
+        if not dry_run:
+            _wipe_save_state(path, WipeState(boot_id=boot_id, volumes=volumes, alerted_at=0.0))
+        return 0
+
+    healthy_baseline = baseline["volumes"] >= WIPE_MIN_BASELINE_VOLUMES
+    rebooted = baseline["boot_id"] != boot_id
+    wipe_signature = healthy_baseline and volumes == 0
+
+    if wipe_signature:
+        logger.error(
+            "[IMP:10][watchdog][wipe] WIPE SIGNATURE: baseline volumes=%d boot=%s → now volumes=0 "
+            "(docker-state reset?)",
+            baseline["volumes"],
+            baseline["boot_id"][:12],
+        )
+        if not dry_run:
+            notified = False
+            if ts - baseline["alerted_at"] >= WIPE_ALERT_COOLDOWN_SEC:
+                notified = notify_wipe(baseline, volumes, dry_run=False, run_cmd=run_cmd)
+            # baseline = текущее (пустое) состояние — без перезаписи alerted_at алерт бы
+            # повторялся каждые 5 минут; следующий здоровый прогон даст свежий baseline.
+            _wipe_save_state(
+                path,
+                WipeState(
+                    boot_id=boot_id,
+                    volumes=volumes,
+                    alerted_at=ts if notified else baseline["alerted_at"],
+                ),
+            )
+        return 0
+    if rebooted:
+        logger.info(
+            "[IMP:8][watchdog][wipe] Boot changed %s → %s (volumes=%d) — re-baseline",
+            baseline["boot_id"][:12],
+            boot_id[:12],
+            volumes,
+        )
+        if not dry_run:
+            _wipe_save_state(path, WipeState(boot_id=boot_id, volumes=volumes, alerted_at=0.0))
+        return 0
+    if healthy_baseline and volumes < baseline["volumes"]:
+        logger.warning(
+            "[IMP:8][watchdog][wipe] Named volume count dropped %d → %d (no reboot) — watch",
+            baseline["volumes"],
+            volumes,
+        )
+    if not dry_run and volumes != baseline["volumes"]:
+        _wipe_save_state(path, WipeState(boot_id=boot_id, volumes=volumes, alerted_at=baseline["alerted_at"]))
+    return 0
+
+
+# endregion FUNC_check_wipe_signature
+
+
 # region FUNC__notify_crashloops_with_suppress
 ## @purpose  Crash-loop TG-нотификации с per-container suppress через state (REF-0014):
 ##           окно CRASHLOOP_NOTIFY_COOLDOWN_MIN; штамп ТОЛЬКО после успешной отправки
@@ -968,6 +1251,13 @@ def main(facts: EnvironmentFacts | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true", help="Print planned actions without restart/notify")
     parser.add_argument("--state-file", default=None, help=f"State file path (default: {DEFAULT_STATE_FILE})")
     args = parser.parse_args(namespace=CliArgs())  # W11: типизированный namespace (без class-value дефолтов)
+
+    # ── F8 wipe-guard (DevPlan 031 T3): state-loss детектор ПЕРЕД контейнерным проходом ──
+    # Отдельная проверка: при wipe контейнеров 0 → run_watchdog вышел бы на раннем return 0,
+    # а baseline wipe-guard обязан фиксироваться и в пустом состоянии. Ошибка guard (≠0) НЕ
+    # блокирует контейнерный watchdog (detector best-effort, алерт — TG).
+    _ = check_wipe_signature(dry_run=args.dry_run, run_cmd=None)
+
     return run_watchdog(dry_run=args.dry_run, state_file=args.state_file, facts=facts)
 
 
