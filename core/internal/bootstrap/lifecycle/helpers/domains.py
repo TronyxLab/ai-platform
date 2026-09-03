@@ -40,7 +40,7 @@
 ##           (spec_from_file_location/sys.modules убраны, −40 LOC; прецедент — A5 в context_deployer)
 ## @changes  2026-09-02 · DevPlan 030 TASK-1 (F14) — _certs_converged_on_disk wildcard-aware:
 ##           покрытие через shared ssl_certs.cert_covers_domain (direct live/{domain}/ ИЛИ
-##           wildcard-родитель live/{parent}/ CN=*.parent) — assertion (a) больше не даёт ложный
+##           wildcard-родитель live/{parent}/ SAN/CN) — assertion (a) больше не даёт ложный
 ##           FAIL «no certificate on disk» для roadmap.asiteam.ru под *.asiteam.ru
 # endregion MODULE_CONTRACT
 
@@ -375,7 +375,7 @@ def _certs_converged_on_disk(core_dir: str, node_yaml: str) -> bool | None:
         return True  # no domains → nothing to issue → converged
     le_live = deploy_paths.letsencrypt_live()
     # F14 (DevPlan 030 TASK-1): wildcard-aware — домен покрыт direct live/{domain}/ ИЛИ
-    # wildcard-родителем live/{parent}/ (CN=*.parent). Старый isfile(live/{domain}/) давал
+    # wildcard-родителем live/{parent}/ (SAN primary / CN fallback). Старый isfile(live/{domain}/) давал
     # ложный FAIL «no certificate on disk» для *.asiteam.ru → roadmap.asiteam.ru (серт на диске).
     missing = [d for d in domains if not cert_covers_domain(le_live, d)]
     if missing:

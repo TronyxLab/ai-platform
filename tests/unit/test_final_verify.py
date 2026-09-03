@@ -212,7 +212,8 @@ def test_assert_a_accepts_wildcard(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setattr(domains, "extract_domains_for_context", lambda _n, _c: ["roadmap.asiteam.ru"])
     monkeypatch.setattr(dp, "letsencrypt_live", lambda: le_live)
-    monkeypatch.setattr(ssl_certs_module, "cert_get_subject", lambda _p: "subject=CN = *.asiteam.ru")
+    # F14: SAN-aware — mock single-cert primitive (direct/wildcard ветки cert_covers_domain обходят openssl)
+    monkeypatch.setattr(ssl_certs_module, "_cert_covers_domain", lambda _c, d: d == "*.asiteam.ru")
     monkeypatch.setattr(fv_module, "_resolve_nginx_overlay_dir", lambda _n, _nm: str(overlay_dir))
 
     # (d) GHCR token present (project ⇒ _node_requires_ghcr() True)

@@ -467,24 +467,24 @@ def test_cert_is_valid_san_only_original_bug(
 
 
 # 🧪 TRAP[TEST] · 2026-09-02 · Regression · cert_covers_domain — wildcard-parent покрытие (F14)
-# · Scenario: roadmap.asiteam.ru покрыт *.asiteam.ru (live/asiteam.ru/fullchain.pem CN=*.asiteam.ru);
-#   assertion (a) φ-final-verify падал на ложном «no certificate on disk» (проверял только
-#   direct-каталог live/{domain}/).
-# · Last fail: asi-team-vps cold bootstrap — wildcard *.asiteam.ru реально выпущен, но direct-каталог
-#   отсутствовал → exit 10.
+# · Scenario: roadmap.asiteam.ru покрыт *.asiteam.ru (live/asiteam.ru/fullchain.pem). assertion (a)
+#   φ-final-verify падал на ложном «no certificate on disk» (проверял только direct-каталог live/{domain}/).
+# · Last fail: asi-team-vps re-bootstrap — wildcard *.asiteam.ru на диске, но direct-каталог отсутствовал
+#   → exit 10. Доп. факт: wildcard-серт acme.sh имеет CN=apex (asiteam.ru) + SAN=*.asiteam.ru —
+#   матчинг обязан быть SAN-aware (_cert_covers_domain); CN-only не видит wildcard в SAN.
 # · Remove if: on-disk coverage перестаёт учитывать wildcard-родителя
 # GUARD-PRESERVE (168): единственное покрытие on-disk direct|wildcard-parent веток cert_covers_domain
 # (F14) — дедупликация _log_post_issue_coverage в shared.
 def test_cert_covers_domain_direct(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Direct: live/{domain}/fullchain.pem с CN=domain → True (0 subprocess)."""
+    """Direct: live/{domain}/fullchain.pem + _cert_covers_domain(domain) → True (0 subprocess)."""
     caplog.set_level(logging.INFO)
     le_live = tmp_path / "live"
     cert_dir = le_live / "app.example.com"
     cert_dir.mkdir(parents=True)
     (cert_dir / "fullchain.pem").write_text("dummy", encoding="utf-8")
-    monkeypatch.setattr(ssl_certs_module, "cert_get_subject", lambda _p: "subject=CN = app.example.com")
+    monkeypatch.setattr(ssl_certs_module, "_cert_covers_domain", lambda _c, d: d == "app.example.com")
 
     assert cert_covers_domain(le_live, "app.example.com") is True
     logger.info("[IMP:9][test][cert_covers_domain] direct coverage OK")
@@ -493,13 +493,13 @@ def test_cert_covers_domain_direct(
 def test_cert_covers_domain_wildcard_parent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Wildcard: live/example.com/fullchain.pem с CN=*.example.com покрывает roadmap.example.com (F14)."""
+    """Wildcard: live/example.com/fullchain.pem + _cert_covers_domain(*.example.com) покрывает roadmap.example.com (F14)."""
     caplog.set_level(logging.INFO)
     le_live = tmp_path / "live"
     parent_dir = le_live / "example.com"
     parent_dir.mkdir(parents=True)
     (parent_dir / "fullchain.pem").write_text("dummy", encoding="utf-8")
-    monkeypatch.setattr(ssl_certs_module, "cert_get_subject", lambda _p: "subject=CN = *.example.com")
+    monkeypatch.setattr(ssl_certs_module, "_cert_covers_domain", lambda _c, d: d == "*.example.com")
 
     assert cert_covers_domain(le_live, "roadmap.example.com") is True
     logger.info("[IMP:9][test][cert_covers_domain] wildcard parent coverage OK")
@@ -513,6 +513,27 @@ def test_cert_covers_domain_none(tmp_path: Path, caplog: pytest.LogCaptureFixtur
 
     assert cert_covers_domain(le_live, "roadmap.example.com") is False
     logger.info("[IMP:9][test][cert_covers_domain] no coverage → False")
+
+
+# 🧪 TRAP[TEST] · 2026-09-03 · NEGATIVE (R5) · cert_covers_domain — SAN-only wildcard (F14)
+# · Scenario: реальный wildcard-серт acme.sh: CN=apex (example.com) + SAN=*.example.com. CN-only
+#   матчинг (cert_subject_matches_domain) НЕ видит wildcard → «no certificate on disk». SAN-aware
+#   _cert_covers_domain находит *.example.com в SAN → covered.
+# · Last fail: asi-team-vps re-bootstrap 2026-09-03 — cert CN=asiteam.ru + SAN=*.asiteam.ru,
+#   assertion (a) снова FAIL (a) при CN-only матчинге.
+# · Remove if: cert_covers_domain перестаёт делегировать в SAN-aware _cert_covers_domain
+def test_cert_covers_domain_san_wildcard(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """SAN-only wildcard: CN=example.com + SAN=*.example.com покрывает roadmap.example.com (F14)."""
+    caplog.set_level(logging.INFO)
+    le_live = tmp_path / "live"
+    parent_dir = le_live / "example.com"
+    parent_dir.mkdir(parents=True)
+    # Реальный wildcard-серт acme.sh: CN=apex + SAN=*.example.com
+    cert = _make_cert(tmp_path, subject="/CN=example.com", san="*.example.com")
+    (parent_dir / "fullchain.pem").write_bytes(cert.read_bytes())
+
+    assert cert_covers_domain(le_live, "roadmap.example.com") is True
+    logger.info("[IMP:9][test][cert_covers_domain] SAN-only wildcard coverage OK")
 
 
 # endregion TEST_CERT_COVERS_DOMAIN

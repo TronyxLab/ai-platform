@@ -272,40 +272,35 @@ def cert_subject_matches_domain(subject: str, domain: str) -> bool:
 
 # region FUNC_cert_covers_domain
 ## @purpose  Проверить on-disk покрытие домена сертификатом Let's Encrypt (DevPlan 030 TASK-1,
-##           F14): direct-каталог live/{domain}/fullchain.pem с subject, покрывающим domain
-##           (exact CN), ИЛИ wildcard-родитель live/{parent}/fullchain.pem с CN = *.parent
-##           (семантика cert_orchestrator._log_post_issue_coverage FL15: issue-cert SKIP'ает
-##           поддомены wildcard'а — *.asiteam.ru покрывает roadmap.asiteam.ru). Единый канон
-##           on-disk converged-проверки для domains._certs_converged_on_disk (φ7/φ-final-verify
-##           assertion (a)) — раньше assertion знал только direct-каталог → ложный FAIL «no cert
-##           on disk» при реально выпущенном wildcard (F14).
+##           F14): direct-каталог live/{domain}/fullchain.pem ИЛИ wildcard-родитель
+##           live/{parent}/fullchain.pem, где серт покрывает домен по SAN (primary) или CN
+##           (fallback) через единый канон _cert_covers_domain. Раньше assertion (a) проверял
+##           только direct-каталог (isfile) → ложный FAIL «no cert on disk» для wildcard
+##           *.asiteam.ru → roadmap.asiteam.ru (серт реально на диске).
+##           ⚠️ F14-факт: wildcard-серт acme.sh имеет CN=apex (asiteam.ru) + SAN=*.asiteam.ru —
+##           матчинг ОБЯЗАН быть SAN-aware (_cert_covers_domain); CN-only не видит wildcard в SAN.
 ## @io       ⇥ le_live: Path (резолв deploy_paths.letsencrypt_live()), domain: str → ⎋ bool
-## @complexity O(A) — A = число родительских суффиксов (≤2 openssl subject-проверок)
+## @complexity O(A) — A = число родительских суффиксов (≤2 openssl SAN+CN проверок)
 ## @invariants
-##   - direct: live/{domain}/fullchain.pem существует И subject покрывает domain (exact CN)
+##   - direct: live/{domain}/fullchain.pem существует И _cert_covers_domain(cert, domain)
 ##   - wildcard: для i in range(1, len(labels)-1): parent = labels[i:]; live/{parent}/
-##     fullchain.pem существует И subject покрывает "*.{parent}" (ТОЛЬКО настоящий wildcard —
-##     direct-серт родителя НЕ проходит, B12 TRAP[BUG])
+##     fullchain.pem существует И _cert_covers_domain(cert, "*.{parent}") (SAN primary / CN fallback;
+##     ТОЛЬКО настоящий wildcard — direct-серт родителя НЕ проходит, B12 TRAP[BUG])
 ##   - Отсутствие ЛЮБОГО покрытия (direct И wildcard) → False (fail-closed, R3)
-##   - Non-fatal: never raise — isfile/subject-ошибки → False (graceful degradation)
+##   - Non-fatal: never raise — isfile/SAN/CN-ошибки → False (graceful degradation)
 def cert_covers_domain(le_live: Path, domain: str) -> bool:
     """Check domain is covered by an on-disk LE cert (direct or wildcard parent, F14)."""
-    # 1. Direct: сертификат самого домена live/{domain}/fullchain.pem
+    # 1. Direct: сертификат самого домена live/{domain}/fullchain.pem (SAN primary / CN fallback)
     direct = le_live / domain / "fullchain.pem"
-    if direct.is_file():
-        subject = cert_get_subject(str(direct))
-        if subject and cert_subject_matches_domain(subject, domain):
-            return True
+    if direct.is_file() and _cert_covers_domain(str(direct), domain):
+        return True
 
     # 2. Wildcard: *.parent покрывает поддомен (только для subdomains — parent != domain)
     labels = domain.split(".")
     for i in range(1, len(labels) - 1):
         parent = ".".join(labels[i:])
         wildcard_path = le_live / parent / "fullchain.pem"
-        if not wildcard_path.is_file():
-            continue
-        subject = cert_get_subject(str(wildcard_path))
-        if subject and cert_subject_matches_domain(subject, f"*.{parent}"):
+        if wildcard_path.is_file() and _cert_covers_domain(str(wildcard_path), f"*.{parent}"):
             return True
     return False
 
