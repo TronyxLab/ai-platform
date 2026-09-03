@@ -101,6 +101,10 @@ tests/gates/.test_counter.json
 .mypy_cache/
 .docker-mounts/
 .ai/server-state.json
+# Context-overlay snapshot fixtures (DevPlan 030 T4 evidence): приватный git-клон
+# <org>/<ctx>-overlay (node-configs, nested .git) — НЕ контент ai-platform; канон —
+# сам overlay-репозиторий. Исключено из коммитов (031 T1: nested .git/ = gitlink-мусор).
+.ai/plans/*/overlay-snapshot/
 
 # Make output logs (root Makefile logging shell — scripts/make-log-shell.sh)
 logs/

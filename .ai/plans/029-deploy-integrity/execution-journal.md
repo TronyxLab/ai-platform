@@ -1,350 +1,348 @@
-# Execution Journal — 029-deploy-integrity overnight run
-
-> Append-only. Resume point for re-runs. Machine state: execution-state.json
-
-## DECISIONS (startup round, 2026-09-02T15:40:00.680Z)
-
-- **Q1 scope:** both nodes (tronyx-vps + asi-team-vps)
-- **Q2 AGE keys:** tronyx-vps → `~/.config/sops/age/keys.txt`; asi-team-vps → `~/.ssh/age-key-asi.txt` (two DIFFERENT files, isolated contours; recipients verified against .sops.yaml)
-- **Q3 external changes:** none
-- **Q4 drift drills:** yes, both nodes
-- **Q5 budget/timeout:** whole night (~10h), retries/restarts allowed without asking
-
----
-
-## Timeline
-
-- `2026-09-02T15:40:00.680Z` — Session start: fresh run (no prior journal). Git tree = baseline (only core/loadtest/history modified + untracked .ai/plans/{deploy-postmortem,028-deploy-postmortem,029-…}). HEAD=6260754, 029 commit a54c7e2 present. AGE keys detected & mapped. Goal created, journal initialized.
-
-## Phase 0 — local baseline (2026-09-02T16:12:45.655Z)
-
-- `make agent-check` → **exit 0** (0 blocking / 0 advisory).
-- `make check` → 18/20 checks green, 2 failures — BOTH environmental, NOT code regressions:
-  - **E1**: `pre-commit-run` → `uv audit` fails to init cache `~/.cache/uv` (sandbox EPERM, os error 1).
-  - **E2**: `tests/unit/test_platform_secrets_installer.py::test_ensure_platform_dirs_creates_2775` — macOS setgid semantics (`got 0o40775`, wants `0o2775`).
-  - **E3**: `tests/unit/test_project_scaffold.py::test_converge_r3_idempotent` + `test_converge_r3_scaffold` — `PermissionError: Operation not permitted: 'sudo'` (sandbox blocks sudo).
-- **029 QA findings F1/F2/F3 CONFIRMED CLOSED** (bootstrap.sh LOC, R1 pass-test assertion, generated-files commit): none appear in the failure list; gates+contract+ai-instructions+static_audit(unit)+predeploy suites green.
-- Verdict: baseline green modulo 2 documented environmental failures (macOS+sandbox; CI/Linux unaffected). F1/F2/F3 = closed.
-
-## Phase 1 — preflight input contract (2026-09-02T16:12:45.655Z)
-
-- `validate-node-input` FAILS on `sops_enc_file` for BOTH nodes (rc=1).
-- Root cause: 029 T7 `probe_sops_enc_file` (core/internal/bootstrap/preflight.py) searches ONLY shared layout `<configs>/secrets/<node>.enc.yaml`, but the repo fixture + asi legacy layout are per-node `<configs>/<node>/secrets/<node>.enc.yaml`. The real decrypt path `decrypt_secrets.py` already supports the per-node F-013 fallback — the probe is missing it.
-- Evidence: enc files exist at `node-configs/tronyx-vps/secrets/tronyx-vps.enc.yaml` and `node-configs/asi-team-vps/secrets/asi-team-vps.enc.yaml`.
-- **Finding F6 (029 T7 probe parity gap)**: probe_sops_enc_file missing per-node candidate. Fix delegated to coder subagent.
-
-
-## Phase 1 — RESOLVED: probe fix verified (2026-09-02T16:18:49.222Z)
-
-- Coder subagent fixed `probe_sops_enc_file` (core/internal/bootstrap/preflight.py) — added per-node candidate `<configs>/<node>/secrets/<node>.enc.yaml` (plan 012 T18/F-013), + unit test `test_input_scope_sops_enc_per_node_layout_ok`.
-- Independently re-verified: `validate-node-input` → `sops_enc_file` status **ok** for BOTH tronyx-vps and asi-team-vps.
-- Uncommitted working-tree changes: preflight.py + tests/unit/test_preflight.py (to be committed with the wave).
-
-## Finding F7 [SECURITY-RELEVANT] — SSH host keys changed on BOTH nodes (2026-09-02T16:18:49.222Z)
-
-- `ssh` → "REMOTE HOST IDENTIFICATION HAS CHANGED" for `103.88.243.151` (tronyx-vps) and `77.233.221.129` (asi-team-vps).
-- known_hosts holds stale **ECDSA** keys; remote now presents **ED25519** (tronyx SHA256:ruLpGn2+utG7DrAO/MA46B3hMxdhRTTPtzfWyVcA81g; asi SHA256:mO8xphLWY3m8HEPQWpbtMK8ubOKi2psT+ero2bH+ZfI).
-- **Explanation**: postmortems (028 §Timeline, deploy-postmortem §Timeline) document that BOTH VPS nodes were **recreated multiple times** during validation campaigns (tronyx-vps "пересоздана 5-й раз" 09-02; asi recreated 08-31). Host-key regeneration is the expected consequence. node.yaml owner_key is ed25519 (matches new-key era).
-- **Action**: standard `ssh-keygen -R` cleanup + reconnect (accept-new). Requires writing ~/.ssh/known_hosts (outside workspace) → sandbox escalation.
-
-
-## Finding F8 — BOTH nodes are BARE (fresh re-provision, not post-027 green) (2026-09-02T16:32:27.296Z)
-
-- SSH now works (host keys updated). Reconnect inspection:
-  - tronyx-vps: `docker: command not found`, no /opt/platform, no /opt/node-configs, no state.json, uptime 46 min, Ubuntu 24.04, 77G disk, 7.8G RAM, 4 CPU.
-  - asi-team-vps: same bare state, Ubuntu 24.04, 48G disk, 3.8G RAM, 2 CPU.
-- **Interpretation**: the post-027 "green" state was wiped — both VPS were re-provisioned again (host key change + bare state + fresh uptime are consistent). Phase 2 is therefore a **full cold bootstrap** (not idempotent converge), which is the ultimate 029 clean-server test.
-- OS meets φ1 (Ubuntu 24.04). Local `dig` is sandbox-blocked (outbound DNS) — not a node issue; cert issuance uses DNS-provider API (webnames/regru).
-
-## Phase 2 — cold bootstrap (launching per-node subagents) (2026-09-02T16:32:27.296Z)
-
-- Launching 2 background subagents (tronyx-vps + asi-team-vps) for: bootstrap-node → converge → node-update → healthcheck → status → e2e-verify.
-
-
-## tronyx-vps — bootstrap-node (2026-09-02T16:37:15.530Z)
-STARTED as background job bash-12 (cold bootstrap, ~30 min expected).
-
-
-## Phase 2 — tronyx-vps subagent watchdog (2026-09-02T16:37:18.161Z)
-
-- tronyx subagent 31b0bf30 made ZERO progress in ~4 min (no log/SCP//opt/platform) while asi was already in φ1. Watchdog action per §7.3: interrupt_agent → relaunch with same prompt.
-- Relaunched tronyx subagent as d0b983d3-4559-43bc-b178-65e620b20431.
-
-
-## asi-team-vps — bootstrap-node (2026-09-02T16:41:22Z) — ATTEMPT 1/3 — FAILED
-
-- Command: `AGE_SECRET_KEY_FILE=/Users/tronyx/.ssh/age-key-asi.txt make bootstrap-node NODE=asi-team-vps` (background job bash-11)
-- Exit code: rc=2 (make) / recipe exit 10 (PlatformFatalError), phase deploy_services (φ8)
-- Key output:
-  - φ1-φ7 completed OK (system_bootstrap, user_accounts, platform_setup, secrets_provision, node_configuration, registry_auth, certificates)
-  - `ensure_context_repo`: git clone https://github.com/asi-group/ai-platform.git → /opt/asi-group/platform
-  - `fatal: could not read Username for 'https://github.com': No such device or address`
-  - `fatal: expected flush after ref listing`
-  - `make: *** [bootstrap-node] Error 10`
-- ROOT CAUSE (diagnosed via SSH to 77.233.221.129):
-  - Repo `asi-group/ai-platform` is PUBLIC (GitHub API: private=false); local `git ls-remote` works.
-  - VPS git 2.43 (libcurl-gnutls) defaults to HTTP/2 + git protocol v2. GitHub edge returns HTTP/2 401 (`www-authenticate: Basic realm="GitHub"`) on the anonymous POST /git-upload-pack, while GET /info/refs returns 200.
-  - Reproducible on known-public repo: `git ls-remote https://github.com/git/git.git HEAD` → same 401.
-  - Workarounds confirmed: `-c http.version=HTTP/1.1` OK; `-c protocol.version=1` OK; `-c protocol.version=0` OK.
-  - Platform `_clone_context_repo` runs bare `git clone <url>` with no protocol/http-version pinning → deterministic failure.
-- Failure detail: legacy https-mirror layout (TRAP[DEBT]) hits a git/HTTP2+protocol-v2 401 that is NOT repo-auth and NOT the overlay deploy-key path.
-
-
-## asi-team-vps — bootstrap-node (2026-09-02T16:43:22Z) — ATTEMPT 2/3 — FAILED (identical)
-
-- Exit code: make rc=2 / recipe exit 10, phase deploy_services (φ8)
-- Same failure: `git clone https://github.com/asi-group/ai-platform.git` → `could not read Username` + `expected flush after ref listing`; `make: *** [bootstrap-node] Error 10`
-- Deterministic (skips φ1-φ7 as done, re-fails at φ8 clone).
-
-## asi-team-vps — bootstrap-node (2026-09-02T16:43:22Z) — ATTEMPT 3/3 — FAILED (identical)
-
-- Exit code: MAKE_RC=2 (make) / recipe exit 10, phase deploy_services (φ8)
-- Same clone 401. 3/3 identical → STOP per retry policy. No workaround applied (out of scope for node-operator).
-
-
-## tronyx-vps — bootstrap-node (2026-09-02T16:44:01.685Z) — RESULT: FAILED exit=10 (first attempt)
-exit code: 10 (make: *** [bootstrap-node] Error 10)
-key output: φ1-φ7 completed (system_bootstrap, user_accounts, platform_setup, secrets_provision,
-  node_configuration, registry_auth, certificates). φ7 certificates: restored=3 (tronyx.ru,
-  sexydancerostov.ru, botanika.tronyx.ru) from S3. φ8 deploy_services FAILED.
-failure detail: _clone_context_repo fatal — git clone failed for overlay
-  git@github.com-overlay:TronyxLab/tronyx-lab-overlay.git:
-  "ssh: Could not resolve hostname github.com-overlay: Name or service not known".
-  Root cause: retro-context tronyx-lab has NO dev overlay deploy key at
-  ~/projects/tronyx-lab/.secrets/ → bootstrap T6 install-node-deploy-key skipped (exit 0),
-  so node lacked ~/.ssh/id_ed25519_github_overlay + github.com-overlay SSH alias.
-
-## tronyx-vps — fix: overlay deploy key (2026-09-02T16:44:01.685Z) — RESULT: OK
-- Generated keypair ~/projects/tronyx-lab/.secrets/tronyx-lab-overlay-deploy-key (ed25519, comment overlay-deploy-tronyx-lab).
-- Added repo-side read-only deploy key to TronyxLab/tronyx-lab-overlay: id=162089173 title=vps-tronyx-lab-readonly.
-- Installed node-side via canonical CLI: context_initializer install-node-deploy-key --node-yaml node-configs/tronyx-vps/node.yaml --ssh-host 103.88.243.151 --projects-root /Users/tronyx/projects → RC=0.
-- Verified from node: git ls-remote git@github.com-overlay:TronyxLab/tronyx-lab-overlay.git HEAD → 03786568f9a48ba6aa4ecac723e8e10c60ff6877.
-- NOTE: pre-existing orphaned repo deploy key id=161981920 title="tronyx-vps (read-only)" has no
-  recoverable private key on the dev machine — LEFT IN PLACE (cleanup deferred to operator).
-
-
-## Finding F9 — asi-team-vps φ8 clone failure was TRANSIENT (2026-09-02T16:44:40.791Z)
-
-- asi bootstrap φ8 (deploy_services) FAILED: `ensure_context_repo` → `git clone https://github.com/asi-group/ai-platform.git` → "could not read Username ... expected flush after ref listing" (2 attempts).
-- Diagnosis: repo is PUBLIC (curl 200); `git ls-remote` works from the node; the failure was the POST /git-upload-pack phase (GitHub smart-HTTP rate-limit/transient network).
-- **Verified recovery**: re-tested `git clone --depth 1` from the node (both HTTP/1.1 and default) → SUCCESS. The φ8 clone is transient, NOT a credential/legacy-layout blocker.
-- The asi subagent retry (attempt 2/3) re-runs bootstrap-node → φ1-φ7 skip (done), φ8 re-attempts clone → should now succeed.
-
-
-## Finding F10 [HIGH] — git clone HTTP/2 401 on anonymous GitHub clone (asi φ8) (2026-09-02T16:47:45.070Z)
-
-- asi-team-vps bootstrap φ8 (deploy_services) fails deterministically: `ensure_context_repo` → `git clone https://github.com/asi-group/ai-platform.git` → "could not read Username" + "expected flush after ref listing".
-- **Root cause** (verified by asi subagent): node git 2.43.0 + libcurl-gnutls defaults to HTTP/2 + git protocol v2; GitHub's edge returns anonymous POST /git-upload-pack = HTTP/2 401 while GET /info/refs = 200. Repo is PUBLIC (GitHub API private:false; local git ls-remote returns HEAD f86b17a). Failure is repo-agnostic (git/git.git also 401).
-- **Workarounds confirmed**: `git -c http.version=HTTP/1.1`, `-c protocol.version=1`, `-c protocol.version=0` all fix it.
-- **Fix**: pin `-c http.version=HTTP/1.1` in `core/internal/bootstrap/deploy/context_overlay.py` `_clone_context_repo` (clone) + `_pull_with_cache` (pull). Coder fix → re-deliver core (re-run bootstrap) → φ8 re-attempt.
-- **asi status**: BLOCKED pending this code fix (7/10 phases done; φ8 clone fails).
-
-## asi-team-vps subagent BLOCKED report (2026-09-02T16:47:45.070Z)
-
-- bootstrap-node exit 10 ×3 (φ8 clone). converge/node-update/healthcheck/status/e2e-verify NOT RUN. Verdict: asi-team-vps BLOCKED (deterministic φ8 git-clone HTTP/2 401).
-
-
-## Finding F11 [HIGH] — tronyx-vps φ8 clone: github.com-overlay deploy key missing (retro context) (2026-09-02T16:50:06.379Z)
-
-- tronyx-vps bootstrap φ8 (deploy_services) FAILED: `git clone git@github.com-overlay:TronyxLab/tronyx-lab-overlay.git` → "ssh: Could not resolve hostname github.com-overlay" (SSH alias not configured on bare node).
-- **Root cause**: tronyx-lab is a RETRO context (created before DevPlan 024) — the dev deploy-key was NOT in ~/projects/tronyx-lab/.secrets/, so bootstrap T6 (install-node-deploy-key) SKIPPED with WARN. Bare node → no ~/.ssh/id_ed25519_github_overlay + no alias → SSH clone fails.
-- **Fix applied (tronyx subagent)**: runbook retro-context fallback — ssh-keygen → `gh repo deploy-key add` (repo TronyxLab/tronyx-lab-overlay, key "vps-tronyx-lab-readonly" read-only, 2026-09-02T16:43:32Z) → install node key + github.com-overlay alias. Re-running bootstrap (attempt 2).
-- **Note**: an older deploy key "tronyx-vps (read-only)" (2026-09-01) also exists on the repo — stale but harmless (read-only).
-
-## Phase 2 status (2026-09-02T16:50:06.379Z)
-
-- tronyx-vps: retrying bootstrap after deploy-key fix (subagent d0b983d3, attempt 2).
-- asi-team-vps: BLOCKED on φ8 HTTP/2 clone; coder subagent a342f0c3 fixing context_overlay.py (pin http.version=HTTP/1.1).
-
-
-## F10 FIX APPLIED + asi relaunch (2026-09-02T16:51:01.904Z)
-
-- Coder subagent a342f0c3 applied HTTP/1.1 pin to context_overlay.py (clone + pull) + updated test_context_overlay.py (9 passed) + agent-check exit 0.
-- Relaunching asi-team-vps bootstrap (fix now in core, SCP delivers it on re-run).
-
-## tronyx-vps φ8 progress (2026-09-02T16:51:01.904Z)
-
-- Deploy-key fix worked: /opt/tronyx-lab/platform now exists (overlay cloned). Retry (attempt 2) is in φ8 deploy-modules (timeout 900s). φ1-φ7 skip; φ8 running.
-
-
-## tronyx-vps — bootstrap-node (2026-09-02T16:56:27.268Z) — RESULT: FAILED exit=10 (second attempt, resumed)
-exit code: 10 (make: *** [bootstrap-node] Error 10)
-key output: φ1-φ7 SKIPPED (done). φ8 deploy_services SUCCEEDED (modules deployed + converge).
-  φ-final-verify (b) secrets.env OK (15/15 required∧sops), (c) vhosts OK (3 confs).
-  φ-final-verify (d) FAILED: "GHCR_PULL_TOKEN missing, но нода тянет приватные GHCR-образы
-  (hermes-agent и/или проекты)".
-failure detail: RESUME-ONLY false-negative. φ4 (secrets_provision) sources secrets.env into
-  os.environ via apply_env_file_to_osenv, but φ4 was SKIPPED on the resumed run (already done),
-  so os.environ had no GHCR_PULL_TOKEN at final_verify time. Verified truth on node:
-  /var/lib/platform/run/secrets.env line 4 = GHCR_PULL_TOKEN (present); ci-deploy
-  ~/.docker/config.json has ghcr.io auth. Local decrypt also shows GHCR_PULL_TOKEN (len=40).
-  Fix: canonical state reset (rm /var/lib/platform/.bootstrap/state.json) + full idempotent
-  re-run so φ4→φf execute in one process.
-
-
-## Finding F12 [HIGH] — final-verify assertion (d) false-positive: GHCR_PULL_TOKEN read from os.environ, not secrets.env (2026-09-02T16:56:27.832Z)
-
-- tronyx-vps bootstrap φ-final-verify FAIL (d): "GHCR_PULL_TOKEN missing, но нода тянет приватные GHCR-образы". But GHCR_PULL_TOKEN IS in secrets.env (len=40, parsed by assertion b "59 entries"), and φ6 registry-auth succeeded (ghcr login OK).
-- **Root cause**: `_assert_ghcr_not_skipped` (final_verify.py) reads token from `source.get("GHCR_PULL_TOKEN")` where source = os.environ-merge; the token is only in the secrets.env FILE (assertion b reads the file, assertion d reads env). φ4 apply_env_file_to_osenv does NOT persist to the φf process env (or the value is not in os.environ at φf). False-positive.
-- **Fix**: `_assert_ghcr_not_skipped` must read GHCR_PULL_TOKEN from the secrets.env file (source_secrets_env) as the authoritative source (fallback to env). Coder fix → re-deliver core → re-run φf.
-
-
-## Phase 2 watchdog — interrupt both node subagents (2026-09-02T16:58:08.334Z)
-
-- F12 (final-verify GHCR false-positive) discovered; fix in progress (coder f9e576fd). Both node subagents were retrying against the UNFIXED assertion (would hit φf wall). Interrupted tronyx (d0b983d3) + asi (1b02a435) to avoid wasted retries. Will relaunch fresh subagents once F12 fix lands in core.
-
-
-## F12 FIX APPLIED + verified (2026-09-02T17:00:34.022Z)
-
-- Coder f9e576fd: `_assert_ghcr_not_skipped` now resolves GHCR_PULL_TOKEN from secrets.env file (source_secrets_env fallback). + test_ghcr_token_from_secrets_env_file. make check TEST_FILE 6 passed, agent-check exit 0.
-- ALL code fixes now in working tree: F6 (preflight.py), F10 (context_overlay.py), F12 (final_verify.py) + their tests.
-
-## Phase 2 coordination (2026-09-02T17:00:34.022Z)
-
-- Interrupted subagents' background bootstrap jobs are STILL running (trronyx re-running φ7→φ8, asi in φ8). They were SCP'd BEFORE F12 fix, so they will complete φ8/φ8.5 then fail φf (F12 wall). Plan: let them finish φ8/φ8.5 (useful), then re-run bootstrap (SCP fixed core → φ1-φ8.5 skip → φf re-verify PASS).
-
-
-## Finding F13 [HIGH] — asi-team-vps φ8 partial: nginx compose up fails (ssl-params.conf include) (2026-09-02T17:08:28.045Z)
-
-- asi φ8 (deploy_services) partial: deployed=1 (logging/loki), failed=['nginx','status-page','platform-secrets'] crit=2 → strict-init exit 2 (resumable).
-- **nginx root cause**: `nginx -t` fails — `open() "/etc/nginx/conf.d/ssl-params.conf" failed ... in asiteam.ru.conf:32`. The asi overlay vhosts (asiteam.ru.conf/login.asiteam.ru.conf/roadmap.asiteam.ru.conf) `include /etc/nginx/conf.d/ssl-params.conf`, but that file is not produced. The nginx module mounts `ssl-params.conf.template` → /etc/nginx/templates/ (envsubst → conf.d), but the generated file is absent in the deployed container (template/mount mismatch). tronyx vhosts use `/etc/nginx/includes/security-headers.conf` (different convention) — tronyx nginx is UP (22 containers).
-- **Note**: cert is fine (wildcard *.asiteam.ru covers roadmap); image pull fine; clone fixed (F10). This is an overlay-vhost include-path drift / template-mount issue. Resumable — re-run re-attempts φ8.
-
-
-## tronyx-vps GREEN — bootstrap complete (2026-09-02T17:11:45.361Z)
-
-- All 10 phases done (state.json 20:01). End-state verified directly: (a) certs on disk (tronyx.ru/sexydancerostov.ru/botanika.tronyx.ru) ✓, (b) secrets.env 60 entries ✓, (c) 3 vhosts rendered ✓, (d) GHCR_PULL_TOKEN present ✓. nginx config test OK. 22 containers running (full stack).
-- Remaining: converge → node-update → healthcheck → status → e2e-verify.
-
-## Relaunching node subagents (2026-09-02T17:11:45.361Z)
-
-- tronyx: follow-ups (converge → e2e-verify) — bootstrap already green.
-- asi: bootstrap re-run (re-attempt φ8 nginx F13 + φf F12) → converge → e2e-verify.
-
-
-## asi-team-vps — bootstrap-node (2026-09-02T17:14:22.199Z)
-
-- exit code: 10 (make: *** [bootstrap-node] Error 10)
-- φ1-φ7 skipped (done). φ8 deploy_services **SUCCEEDED** (F13 nginx FIXED — deploy-modules.sh --strict-init exit 0; nginx reload OK; 1 vhost rendered).
-- φ9 converge_services rc=1 (done_with_warnings, re-run required).
-- φf final_verify **FAIL (a)**: "one or more node.yaml domains have NO certificate on disk" → roadmap.asiteam.ru.
-  - Cert orchestration: asiteam.ru valid on disk (uploaded to S3). roadmap.asiteam.ru: S3 cache cert is NOT Let's Encrypt (issuer=CN=roadmap.asiteam.ru → self-signed) → invalid → fell back to issue via acme.sh (regru DNS). "cert issued successfully" BUT files missing at /etc/letsencrypt/live/roadmap.asiteam.ru/{fullchain,privkey}.pem.
-  - Also: "acme.sh not found at /opt/acme.sh/acme.sh — skipping cron install".
-  - "roadmap.asiteam.ru — NO cert coverage after issue (ни direct, ни wildcard родителя)".
-- Next: investigate cert-on-disk for roadmap.asiteam.ru.
-
-
-
-## tronyx-vps — converge (2026-09-02T17:16:51.3NZ)
-
-- exit code: 0
-- key output: FULLY CONVERGED — all R-units converged (exit 0); healed=0 stopped=0 errors=0 ps_unverified=0; R10 no TSDB corruption markers (no-op); R11 node targets converged; remote_executor rc=0.
-
-## tronyx-vps — node-update (2026-09-02T17:16:51.3NZ)
-
-- exit code: 0
-- key output: All 5 update phases completed successfully (φ12 complete — services and SSL deployed; converge_update rc=0). bootstrap:update audit DONE, 0 warnings, 0 errors. remote_executor rc=0. Telegram notify sent (bootstrap.report).
-
-
-## Finding F14 [HIGH] — asi roadmap.asiteam.ru cert "issued" but missing on disk (2026-09-02T17:18:04.860Z)
-
-- φ7 cert orchestration processed roadmap.asiteam.ru as a separate project domain: S3 cache held a SELF-SIGNED cert (issuer=CN=roadmap.asiteam.ru) → validation failed → fallback acme.sh issue (DNS-01 regru) → logged "cert issued successfully" BUT no cert file at /etc/letsencrypt/live/roadmap.asiteam.ru/.
-- Meanwhile the roadmap vhost actually references the wildcard /etc/letsencrypt/live/asiteam.ru/ (SAN *.asiteam.ru covers roadmap). So cert orchestration (issues separate roadmap cert) is INCONSISTENT with vhost rendering (uses wildcard) — final-verify assertion (a) then fails (no roadmap-specific cert dir).
-
-## Finding F15 [HIGH] — asi roadmap project NOT deployed (legacy-layout debt) (2026-09-02T17:18:04.860Z)
-
-- /opt/asi-group/platform/ is a FULL SOURCE CLONE of ai-platform (AGENTS.md/Makefile/core/docker-compose.yml/pyproject.toml), NOT a context overlay — NO projects/ dir. So deploy-context has no roadmap project config → roadmap2 container never deployed (0 project containers) → roadmap.asiteam.ru returns HTTP 502.
-- This is the documented TRAP[DEBT] (root AGENTS.md): asi-group repos.core = https mirror, migration to canonical overlay deferred.
-
-## asi-team-vps — BLOCKED (2026-09-02T17:18:04.860Z)
-
-- bootstrap φf fails assertion (a) (roadmap cert missing) + roadmap project not deployed (502). Root = legacy-layout (F15) + cert-orchestration/wildcard inconsistency (F14). Per master prompt §3 inv.8: record BLOCKED, continue tronyx. Owner action: migrate asi to canonical overlay (asi-group-overlay with projects/ + node-configs/) + reconcile roadmap cert (wildcard vs per-project).
-
-
-
-## tronyx-vps — healthcheck (2026-09-02T17:18:35.3NZ)
-
-- exit code: 0
-- note: `make healthcheck NODE=tronyx-vps` из операторской машины отклонён по дизайну (F-016 fail-loud: healthcheck проверяет ЛОКАЛЬНЫЙ docker; remote-здоровье ноды — e2e-verify или healthcheck на самой ноде). Выполнен healthcheck НА НОДЕ: `ssh root@103.88.243.151 'cd /opt/platform && make healthcheck'` (NODE_NAME авто-детект → tronyx-vps).
-- key output: ALL MODULES HEALTHY (liveness PASS по всем enabled-модулям: nginx, node-metrics, platform-secrets, postgres, redis, service-exporters, status-page, ...).
-
-
-## Finding F16 [MED] — tronyx projects are STUB after cold bootstrap (expected; need deploy) (2026-09-02T17:22:11.658Z)
-
-- φ8 deploy-context (context_deployer) generated GENERATED-STUB compose for all 4 projects (tronyx-site/dance-site/botanika/oldapp): "awaiting real payload delivery, receive-канал" → deploy complete: deployed=0 skipped=0 failed=0.
-- **This is expected cold-bootstrap behavior**: projects are deployed via CI (git push → deploy-project.yml → receive forced-command), NOT by bootstrap. Re-provisioned node → no project payload yet → STUB placeholders.
-- Project status confirms: oldapp = "stub / GENERATED-STUB / no containers". Exposed vhosts are rendered (tronyx.ru/sexydancerostov.ru/botanika.tronyx.ru) but the project containers are absent.
-- **Action needed**: deploy projects via `make deploy-project PROJECT=<dir> NODE=tronyx-vps` (direct/emergency channel) — tronyx-site, dance-site, botanika (oldapp = adopted, no domain → explicit stub status is acceptable). CI (git push) = N/A (no project code changes).
-
-## tronyx-vps status (2026-09-02T17:22:11.658Z)
-
-- Platform GREEN (bootstrap 10 phases + converge FULLY CONVERGED + node-update 5 phases + healthcheck ALL MODULES HEALTHY). Projects STUB (awaiting deploy).
-
-
-
-## tronyx-vps — status (2026-09-02T17:22:26.3NZ)
-
-- exit code: 0 (per-project project-status queries)
-- note: `make status` = локальный `docker compose ps` (NODE не поддерживается, как и healthcheck F-016). Канонический remote-статус проектов — `make project-status NAME=<name> NODE=tronyx-vps` (SSH forced-command `status <project>` как ci-deploy@103.88.243.151).
-- key output: tronyx-site, dance-site, botanika, oldapp — ВСЕ 4 = "stub" (last_deploy: "Project directory exists but ai-platform.yaml is a GENERATED-STUB"; "No running containers"). Проекты НЕ live — зарегистрированы (vhost'ы отрендерены, серты на диске), но не задеплоены (awaiting-CI).
-
-## tronyx-vps — e2e-verify (2026-09-02T17:22:26.3NZ)
-
-- exit code: 2 (FAIL — make: *** [e2e-verify] Error 1)
-- key output: 3 endpoint(s) FAIL: tronyx.ru HTTP 502, sexydancerostov.ru HTTP 502, botanika.tronyx.ru HTTP 502 (все TLS ok, certs LE valid 59/83 days). 502 = nginx vhost есть, upstream-контейнеры проектов отсутствуют (проекты stub).
-- verdict: НЕ PASS — причина: проекты не задеплоены (stub).
-
-
-## tronyx-vps — projects deployed + e2e PASS (2026-09-02T17:25:08.461Z)
-
-- Deployed 3 exposed projects via `make deploy-project` (direct/emergency channel):
-  - tronyx-site → DEPLOYED healthy (13.4s)
-  - dance-site → DEPLOYED healthy (15.3s)
-  - botanika → DEPLOYED healthy (11.9s)
-- oldapp: adopted, no domain/expose, no local source (test-org/oldapp) → left as explicit STUB (correct: no real payload).
-- Re-ran e2e-verify: **PASS** — tronyx.ru, sexydancerostov.ru, botanika.tronyx.ru all HTTP 200 + TLS ok.
-
-## ✅ tronyx-vps FULLY GREEN (2026-09-02T17:25:08.461Z)
-
-- bootstrap (10 phases) ✓ · converge FULLY CONVERGED ✓ · node-update (5 phases) ✓ · healthcheck ALL MODULES HEALTHY ✓ · status projects live ✓ · e2e-verify PASS ✓.
-- 3 exposed projects live (HTTP 200); oldapp explicit stub (adopted, no domain).
-
-## Phase 3 — idempotency + honesty drills (starting, tronyx) (2026-09-02T17:25:08.461Z)
-
-
-## Phase 3 — re-bootstrap no-op PASS (tronyx) (2026-09-02T17:29:57.009Z)
-
-- `make bootstrap-node NODE=tronyx-vps` (re-run) → rc=0, no-op: all 10 phases skip (done), "All 10 init phases completed", projects delivered=0 skipped=4 (tronyx-site/dance-site/botanika skip-health=healthy; oldapp no_local_source explicit), audit DONE 0 warnings/0 errors.
-
-## Phase 3 — drift drill 1: delete live cert (2026-09-02T17:29:57.009Z)
-
-
-## Phase 3 — drill 1 PASS: delete cert → converge HEALS (restore from S3) (2026-09-02T17:31:04.265Z)
-
-- Deleted /etc/letsencrypt/live/botanika.tronyx.ru. `make converge` → R-ssl "mutated": restored fullchain.pem+privkey.pem+chain.pem from S3 (restored=1), NOT "no action". Converge reported "WARNINGS non-critical drift (exit 1)" (honest mutated-signal; make rc=0 non-fatal). ✅ heal-not-silent verified.
-
-## Phase 3 — drift drill 2: stop module container (2026-09-02T17:31:04.265Z)
-
-
-## Phase 3 — drill 2 PASS: stop container → converge RESTORES (2026-09-02T17:32:01.742Z)
-
-- Stopped status-page (Exited 137). `make converge` → R9 "mutated": status-page restarted via compose up -d (healed=1 stopped=0 errors=0). Honest "WARNINGS drift (exit 1)". ✅ restore-not-silent verified.
-
-## Phase 3 — drift drill 3: delete vhost (2026-09-02T17:32:01.742Z)
-
-
-## Phase 3 — drill 3 PASS: delete vhost → converge FAIL-LOUD (exit 2) (2026-09-02T17:33:20.514Z)
-
-- Deleted botanika.tronyx.ru.conf. `make converge` → R6 verify_vhosts: "FAIL: Vhost file not found ... botanika.tronyx.ru.conf" → report_add "fail" → "DONE: 3 vhost(s), 1 error(s)" → ERRORS DETECTED (exit 2). ✅ fail-loud (NOT "no action") — exact 029 AC3 contract.
-
-
-## Phase 3 — drills COMPLETE (tronyx) (2026-09-02T17:35:11.740Z)
-
-- **Drill 1** (delete cert): converge HEALS (restore fullchain/privkey/chain from S3) → R-ssl "mutated" + WARNINGS. ✅
-- **Drill 2** (stop container): converge RESTORES (status-page compose up -d) → R9 "mutated" healed=1. ✅
-- **Drill 3** (delete vhost): converge FAIL-LOUD (R6 "fail: botanika.tronyx.ru.conf not found", exit 2) — NOT "no action". ✅
-- **Recovery**: render-vhosts (local) + SCP botanika vhost to node → converge FULLY CONVERGED (exit 0). Node returned to green.
-- Re-bootstrap no-op: rc=0, delivered=0 skipped=4 (already healthy). ✅
-
-## Phase 3 verdict (tronyx): ALL drills heal-or-fail-loud, no silent-green. ✅
-
+# Execution Journal — Overnight Run 2026-09-03
+
+Append-only human log. Machine state: `execution-state.json`.
+Prior run (2026-09-02, PARTIAL: tronyx green / asi blocked F14-F15) archived in `files/run-2026-09-02/`.
+
+## DECISIONS (Q-round, 2026-09-03)
+
+- Q1: обе ноды авторизованы (bootstrap/converge/node-update/дриллы) — «Да, обе ноды».
+- Q2: AGE-ключи — tronyx-vps → `~/.config/sops/age/keys.txt`; asi-team-vps → `~/.ssh/age-key-asi.txt` (изолированный контур). Подтверждено владельцем.
+- Q3: pending внешних изменений нет.
+- Q4: дрейф-дриллы — да, на обеих нодах.
+- Q5: бюджет — вся ночь, ретраи/перезапуски без спроса; вопрос только при BLOCKED.
+
+## Pre-start context (fresh start, чтение источников истины)
+
+- 029/030 и постмортемы прочитаны (§1): DevPlan 029 T1–T9 закоммичены; F6/F10/F12 закоммичены; Plan 030 TASK-1/2/3 закоммичены (wildcard+SAN-aware final-verify assertion a, module-aware b, roadmap identity).
+- Plan 030 TASK-4: `asi-group/asi-group-overlay` (private) создан и запушен (2026-09-02T20:25Z), snapshot закоммичен локально (da9ea1f), deploy key `vps-asi-group-readonly` зарегистрирован на GH 2026-09-03T10:20Z.
+- Сегодня утром (13:22–13:43 MSK) зафиксированы прогоны: bootstrap asi ×3 попытки + e2e-verify asi-team-vps PASS (roadmap.asiteam.ru HTTP 200, wildcard TLS ok, 88 дней до expiry) — runs.jsonl + logs/make/.
+- git: HEAD 9345f0e, дерево чистое кроме untracked `.ai/plans/030-.../overlay-snapshot/` (вложенный git-клон overlay — не трогаем).
+- node.yaml: tronyx-vps (overlay TronyxLab/tronyx-lab-overlay), asi-team-vps (overlay asi-group/asi-group-overlay, repos.core = SSH-алиас) — канон соблюдён.
+
+## Phase 0 (started 2026-09-03 ~12:45Z)
+
+- [x] `git status --porcelain` — чистое дерево, только untracked overlay-snapshot (вложенный git-клон, не трогаем).
+- [x] `git log --oneline -8` — HEAD 9345f0e; 029 (a54c7e2) + F6/F10/F12 (91ed43c) + 030 fixes закоммичены. Подтверждено: реализация НЕ дублируется, только прогоны.
+- [x] `make agent-check` → exit 0, blocking=0 advisory=0.
+- [~] `make check` — запущен в фоне (лог /tmp/kilo/overnight_p0_makecheck.log; фоновый процесс bgp_0673f369b001nx5Zsg86CUmKHc). Вчера 22:52 имел 7 failed — перепроверяем.
+- ВНИМАНИЕ (RC4 trap): в shell-сессии экспортирован `AGE_SECRET_KEY` (tronyx-контур) — ПЕРЕКРЫВАЕТ per-node файл. Все node-команды гонять как `env -u AGE_SECRET_KEY AGE_SECRET_KEY_FILE=<per-node> make ...`.
+
+## Phase 1 (validate-node-input, 0 remote)
+
+- [x] tronyx-vps: PASS (exit 0) — enc-file present, env/file согласованы, required-keys ok.
+- [x] asi-team-vps: PASS (exit 0) — но WARN: AGE_SECRET_KEY env перекрывает файл → подтверждает RC4 trap; компенсация — env -u на всех прогонах.
+### p2.asi.1-bootstrap-attempt1 — 2026-09-03T12:36Z
+- cmd: env -u AGE_SECRET_KEY AGE_SECRET_KEY_FILE=$HOME/.ssh/age-key-asi.txt make bootstrap-node NODE=asi-team-vps
+- exit: 2 (internal exit=10) (attempt 1/3)
+- evidence: phases system_bootstrap/user_accounts/secrets/node_config/registry_auth/certificates OK (asiteam.ru restored, roadmap.asiteam.ru issued via ACME dns); deploy_services FAILED: _clone_context_repo git clone git@github.com-overlay:asi-group/asi-group-overlay.git → "ssh: Could not resolve hostname github.com-overlay: Name or service not known"
+- finding: node-side SSH alias github.com-overlay missing (deploy-key runbook step not applied on node); overlay clone blocked
+### p2.asi.1-bootstrap-attempts2-3 — 2026-09-03T12:45Z
+- cmd: retry make bootstrap-node NODE=asi-team-vps (2x, idempotent)
+- exit: 2 (internal exit=10) both (attempts 2-3/3) — identical blocker
+- evidence: deterministic failure "Could not resolve hostname github.com-overlay" (15 occurrences each); deploy_services phase never completes; φ-final-verify never reached
+- finding: STEP 1 BLOCKED — node-side github.com-overlay SSH alias/deploy-key runbook step absent on asi-team-vps; repo-side deploy key exists (plan 030) but node-side install missing; not fixing (direct ssh mutations forbidden)
+
+### p2.tronyx.bootstrap — 2026-09-03T12:45:20Z
+- cmd: env -u AGE_SECRET_KEY AGE_SECRET_KEY_FILE=$HOME/.config/sops/age/keys.txt make bootstrap-node NODE=tronyx-vps
+- exit: 2 (retry 3: 3 attempts total, all exit=2)
+- evidence: φ1 (re-ran via self-heal F-019: boto3 import-probe) — φ7 all complete; φ4 secrets 59 entries parsed, 8/8 required∧sops present, 11 generated OK; φ7 certs OK; FAILED at φ8 deploy_services: ensure_context_repo → "Context path absent — clone branch" /opt/tronyx-lab/platform → git clone git@github.com-overlay:TronyxLab/tronyx-lab-overlay.git → "Host key verification failed." (exit_code=10, 15 occurrences); audit bootstrap:init FAILED
+- finding: BLOCKED — deterministic SSH "Host key verification failed" for github.com-overlay alias on node (overlay deploy key/known_hosts issue: ~/.ssh/id_ed25519_github_overlay + github.com-overlay alias cannot verify host key); /opt/tronyx-lab/platform absent on node (was present yesterday); logs: /tmp/kilo/p2_tronyx_bootstrap_89653.log, _try2_95681.log, _try3_96987.log
+### p2.asi.2-converge — 2026-09-03T12:50Z
+- cmd: env -u AGE_SECRET_KEY AGE_SECRET_KEY_FILE=$HOME/.ssh/age-key-asi.txt make converge NODE=asi-team-vps
+- exit: 0 (attempt 1; remote rc=1 warnings→non-fatal)
+- evidence: R9 healed=3 (nginx/logging/status-page had 0 containers after failed bootstrap strict-init → redeployed via compose up -d, errors=0); R8 mutated=4 (sudoers self-heal); certs asiteam.ru skipped(disk_synced)/roadmap issued(self_signed); warnings: orphan vhosts asiteam.ru.conf+login.asiteam.ru.conf "no matching project in node.yaml", "Context overlay not found: /opt/asi-group/platform/modules/nginx"
+- finding: none (blocking) — but orphan-vhost warnings are overlay-missing side-effect; node re-warmed by converge
+### p2.asi.3-node-update — 2026-09-03T13:05Z
+- cmd: env -u AGE_SECRET_KEY AGE_SECRET_KEY_FILE=$HOME/.ssh/age-key-asi.txt make node-update NODE=asi-team-vps (+2 retries)
+- exit: 2 (internal exit=10) x3 attempts — identical blocker
+- evidence: φ9 secrets complete; φ10 node-config validated; φ11 registry_update "Complete with non-fatal issues" (GHCR auth OK, nginx reloaded with overlays, LiteLLM rendered; llm_provision: LiteLLM Admin API connection refused — non-fatal, minimal node); deploy_update FAILED: same _clone_context_repo github.com-overlay unresolvable (internal retry 2x exhausted per invocation)
+- finding: STEP 3 BLOCKED — same root blocker as step 1 (node-side github.com-overlay SSH alias absent); φ12/φ13 never reached
+### p2.asi.4-healthcheck — 2026-09-03T13:47Z
+- cmd: env -u AGE_SECRET_KEY AGE_SECRET_KEY_FILE=$HOME/.ssh/age-key-asi.txt make healthcheck NODE=asi-team-vps
+- exit: 1 (attempt 1; deterministic make-contract guard, retries not applicable)
+- evidence: fail-fast: "NODE=asi-team-vps задан, но healthcheck проверяет ЛОКАЛЬНЫЙ docker. Для удалённой ноды используйте: make e2e-verify NODE=asi-team-vps (HTTP+TLS sweep)"
+- finding: remote healthcheck by design = e2e-verify; container-level health evidence collected via step 5 (status) instead
+### p2.asi.5-status-project-list — 2026-09-03T13:55Z
+- cmd: make status NODE=asi-team-vps; then make project-list
+- exit: 0 / 0
+- evidence: status NODE= is LOCAL-ONLY (makefiles/modules.mk:73-76 docker compose ps locally; NODE silently ignored) → empty table = local dev Mac, not node. project-list: roadmap | asi-team-vps | roadmap.asiteam.ru | frontend | asi-group/roadmap (9 projects total, offline listing)
+- finding: [HONESTY] status rc=0 empty = local-only contract, NOT node state; roadmap project present in registry ✓; container-running evidence deferred to e2e-verify (roadmap HTTP 200)
+
+### p2.tronyx.converge — 2026-09-03T12:52:40Z
+- cmd: env -u AGE_SECRET_KEY AGE_SECRET_KEY_FILE=$HOME/.config/sops/age/keys.txt make converge NODE=tronyx-vps
+- exit: 0 (retry 1) — remote rc=1 "WARNINGS DETECTED — non-critical drift", make maps to non-fatal exit 0
+- evidence: R1 skipped (scripts executable); R2 converged; R3 4× awaiting_deploy "stub present, awaiting CI deploy" (tronyx-site, dance-site, botanika, oldapp); R4 proxy-net converged, "No running containers" for all 4 projects; certs restored=0 issued=0 skipped=3 (disk_synced) failed=0; R6 warn "nginx container not running — nginx -t skipped"; R7 warn "12 named volume(s) missing: [wal-archive, postgres-data, clickhouse-data, langfuse-redis-data, prometheus-data, prometheus-config-gen, grafana-data, loki-data, wal-archive, backup-logs, backup-spool, hermes-data]"; R8 14 sudoers files updated; R9 all 14 modules "deployed via compose up -d"; R10 no TSDB corruption; R11 prometheus node targets 9 files created
+- finding: verdict NOT "FULLY CONVERGED" — non-critical warnings; node diverged from yesterday-green state: all project payloads replaced by GENERATED-STUB, 0 running project containers, 12 docker named volumes missing, /opt/tronyx-lab/platform absent → suspected docker-level reset/wipe overnight (bind dirs /var/lib/platform + /opt/projects/.env.platform survived). Log: /tmp/kilo/p2_tronyx_converge_98644.log
+### p2.asi.6-e2e-verify — 2026-09-03T14:05Z
+- cmd: env -u AGE_SECRET_KEY AGE_SECRET_KEY_FILE=$HOME/.ssh/age-key-asi.txt make e2e-verify NODE=asi-team-vps (+2 retries)
+- exit: 2 x3 attempts — identical sweep result
+- evidence: asiteam.ru HTTP 301 TLS ok → OK; login.asiteam.ru HTTP 404 (by-design) TLS ok → OK; roadmap.asiteam.ru HTTP 502 TLS ok → FAIL. TLS wildcard *.asiteam.ru + SAN asiteam.ru, chain=4, LE, 87 days left, cross_check ok
+- finding: STEP 6 FAIL — roadmap project container down (nginx up, upstream 502). Root chain: bootstrap/node-update deploy_services/deploy_update fail at overlay clone (github.com-overlay unresolvable) → project stack not redeployed after strict-init teardown. Morning 13:43 MSK PASS was on warm node pre-teardown. Platform module layer (nginx/logging/status-page) healthy post-converge.
+
+### p2.tronyx.node-update — 2026-09-03T13:02:30Z
+- cmd: env -u AGE_SECRET_KEY AGE_SECRET_KEY_FILE=$HOME/.config/sops/age/keys.txt make node-update NODE=tronyx-vps
+- exit: 2 (retry 3: 3 attempts total, all exit=2; internal retry also exhausted 2 attempts per run)
+- evidence: φ9 secrets_update complete; φ10 node_config_update complete; φ11 registry_update complete; φ12 deploy_update FAILED — deploy-modules.sh --skip-provision exit=10, same deterministic blocker: ensure_context_repo "Context path absent — clone branch" → git clone git@github.com-overlay:TronyxLab/tronyx-lab-overlay.git → "Host key verification failed." (15 hits); φ13 never reached; audit bootstrap:update FAILED (4 errors)
+- finding: BLOCKED at φ12/φ13 — identical root cause as bootstrap (overlay SSH alias host-key verification on node); module re-deploy/update cannot complete until node-side github.com-overlay known_hosts/deploy key is repaired. Logs: /tmp/kilo/p2_tronyx_nodeupdate_9028.log, _try2_10113.log, _try3_10761.log
+
+### p2.tronyx.healthcheck — 2026-09-03T13:05:30Z
+- cmd: env -u AGE_SECRET_KEY AGE_SECRET_KEY_FILE=$HOME/.config/sops/age/keys.txt make healthcheck NODE=tronyx-vps
+- exit: 2 (retry 1 — deterministic usage-contract error, retry not meaningful)
+- evidence: verbatim — "[IMP:10][healthcheck] ERROR: NODE=tronyx-vps задан, но healthcheck проверяет ЛОКАЛЬНЫЙ docker. Для удалённой ноды используйте: make e2e-verify NODE=tronyx-vps (HTTP+TLS sweep) или выполните healthcheck НА САМОЙ НОДЕ ... NODE=local / без NODE → локальная проверка стека."
+- finding: healthcheck is local-only by make-contract; remote-node healthcheck equivalent = e2e-verify (step 6). No module list obtainable via this verb for tronyx-vps. Local variant (no NODE) not run — would check dev machine, not the node. Log: /tmp/kilo/p2_tronyx_healthcheck_11573.log
+
+### p2.tronyx.status — 2026-09-03T13:12:50Z
+- cmd: make status NODE=tronyx-vps (local-only, empty) → make project-list NODE=tronyx-vps → make project-status NAME=<p> NODE=tronyx-vps ×4
+- exit: 0 (status/project-list/project-status all rc=0; note: project-status without NODE fail-fasts internally but make facade still exits 0)
+- evidence: project-list (offline registry): tronyx-site (tronyx.ru, frontend), dance-site (sexydancerostov.ru, adopted), botanika (botanika.tronyx.ru, adopted), oldapp (no domain, adopted). LIVE status per project (SSH to 103.88.243.151): ALL FOUR → "Status: stub / Last deploy: {'message': 'Project directory exists but ai-platform.yaml is a GENERATED-STUB'} / No running containers". make status NODE= is local-only (no NODE param in contract) — empty local docker-ps table, not node data
+- finding: MAJOR — expected-live projects tronyx-site/dance-site/botanika are NOT live (stub + 0 containers); oldapp verbatim: "Status: stub, No running containers, ai-platform.yaml is a GENERATED-STUB" (acceptable per task, not deploying). Node lost all project payloads since yesterday-green
+
+### p2.tronyx.e2e-verify — 2026-09-03T13:16:40Z
+- cmd: env -u AGE_SECRET_KEY AGE_SECRET_KEY_FILE=$HOME/.config/sops/age/keys.txt make e2e-verify NODE=tronyx-vps
+- exit: 2 (retry 2: 2 runs — second run confirmed deterministic, not transient)
+- evidence: endpoints=3 (mode=remote via SSH conf.d read): botanika.tronyx.ru HTTP 502 TLS ok FAIL · tronyx.ru HTTP 502 TLS ok FAIL · sexydancerostov.ru HTTP 502 TLS ok FAIL; cert chain/SAN/expiry ok (82 days left); verdict "❌ e2e-verify FAIL — 3 endpoint(s)"
+- finding: 502 on all 3 = nginx up (TLS terminates) but zero upstream project containers — consistent with all-projects-stub finding; endpoints verified count = 3, not empty (honest count)
+
+## Phase 0/1 result (2026-09-03 ~13:10Z)
+
+- [x] Phase 0 GREEN: `make check` → "All checks PASS" exit 0 (yesterday's 7 fails — не воспроизвелись; было 5889 pass / 0 fail). agent-check exit 0. git tree чистый.
+- [x] Phase 1 GREEN: validate-node-input tronyx-vps PASS, asi-team-vps PASS (WARN: env AGE_SECRET_KEY перекрывает файл — компенсация env -u на всех node-командах).
+
+## Phase 2 attempt 1 (2026-09-03 ~14:00-15:30Z) — NOT GREEN, диагностика
+
+- tronyx-vps: bootstrap exit 10 @ φ8 (deploy-context clone fail: "Host key verification failed"); node-update exit 10 @ φ12 (тот же клон); converge = WARNINGS (R9 поднял 14 модулей, 12 named volumes отсутствовали, проекты — все 4 GENERATED-STUB, 0 контейнеров); e2e 502 ×3 endpoints (TLS ok).
+- asi-team-vps: bootstrap exit 10 @ φ8 (clone fail: "Could not resolve hostname github.com-overlay"); converge GREEN (R9 self-heal 3 модулей); e2e: roadmap 502 (контейнер снесён strict-init при упавшем deploy-services).
+- НАХОДКА-БЛОКЕР (общая, класс RC3): `install_overlay_deploy_key_node_side` ставит ключ+алиас, но НЕ пиннит github.com в known_hosts → на ноде с потерянным known_hosts клон fail. tronyx: алиас есть, GH known_hosts нет (проверено ssh read-only). asi: алиаса нет вообще — dev-ключ лежал в `.ai/plans/030-*/.secrets/`, не в каноне `~/projects/asi-group/.secrets/` → installer WARN-skip (exit 0, silent-ish) → алиас не установлен.
+- НАХОДКА: tronyx-vps потерял за ночь named volumes (postgres-data, grafana-data, loki-data и др.) + проектные payload'ы (все 4 = GENERATED-STUB) при живых bind-dirs — паттерн docker-level wipe / re-provision. Канон восстановления (как вчера, F8/F16): cold bootstrap + deploy-project ×3.
+- Ключи верифицированы против GH: tronyx pub == `vps-tronyx-lab-readonly` (TronyxLab/tronyx-lab-overlay); asi pub == `vps-asi-group-readonly` (asi-group/asi-group-overlay). FINGERPRINT_MATCH=yes.
+
+## Фиксы (2026-09-03 ~16:00Z)
+
+- [x] Конфиг: asi dev-ключ скопирован в канон `~/projects/asi-group/.secrets/asi-group-overlay-deploy-key` (0600, fingerprint совпадает с GH).
+- [x] Код (coder): `context_initializer.install_overlay_deploy_key_node_side` — idempotent TOFU-pin github.com в known_hosts через `ssh-keygen -F` guard + `ssh-keyscan` (fail-loud без `|| true`); +21-й unit-тест (guard в conditional, порядок key→pin→alias). Верификация: TEST_FILE 21/21 PASS, agent-check exit 0, полный `make check` exit 0. Незакоммичено (коммит после зелёной волны по commit policy).
+
+## Phase 2 attempt 2 — запуск recovery-последовательностей (параллельно, 2 субагента)
+
+### p2b.asi.1-bootstrap — 2026-09-03T13:17Z
+- cmd: env -u AGE_SECRET_KEY AGE_SECRET_KEY_FILE=$HOME/.ssh/age-key-asi.txt make bootstrap-node NODE=asi-team-vps
+- exit: 0 (retry 0)
+- evidence: overlay-key install line present ("[IMP:9][context][overlay-key][install] Overlay deploy key + github.com-overlay alias installed on root@77.233.221.129"); final-verify 4/4 PASS ((a) certs OK 2 domains, (b) secrets.env OK required∧sops, (c) vhosts OK 1 conf, (d) GHCR token present); roadmap delivered healthy (delivered=1 skipped=0 failed=0, healthcheck_status=healthy); φ8.5 converge rc=1 done_with_warnings
+- finding: HONESTY — rc=0 but phase deploy_update FAILED 3× (exit=10): git clone git@github.com-overlay:asi-group/asi-group-overlay.git → /opt/asi-group/platform = "ssh: Could not resolve hostname github.com-overlay" — /tmp/kilo/p2b_asi_bootstrap_44659.log:448; diagnostic (1 read-only SSH): root HAS alias+key+TOFU pin, root git ls-remote OK (HEAD=da9ea1f) — but ci-deploy has NO ~/.ssh/config/overlay key, and deploy-modules.sh (clone runner) executes as ci-deploy → installer installs alias for root only = deterministic BLOCKER, retries futile. State machine printed "All 10 init phases completed successfully" despite Failed: deploy_update in report (rc=0 vs failed phase = second honesty finding)
+### p2b.asi.2-converge — 2026-09-03T13:20Z
+- cmd: env -u AGE_SECRET_KEY AGE_SECRET_KEY_FILE=$HOME/.ssh/age-key-asi.txt make converge NODE=asi-team-vps
+- exit: 0 (retry 0; remote reconcile rc=1 → "Warnings (rc=1) — non-fatal drift, exit 0")
+- evidence: R1-R11 converged; all 4 modules converged (platform-nginx/-platform-secrets/-logging/-status-page); warnings verbatim: "WARN: Orphan vhost detected — asiteam.ru.conf has no matching project in node.yaml" + "WARN: Orphan vhost detected — login.asiteam.ru.conf has no matching project in node.yaml" (R6 | warn); asiteam.ru cert valid LE, synced to S3
+- finding: roadmap.asiteam.ru cert regressed to SELF-SIGNED: converge cert_orchestrator took "issue path (no registry) — issue-cert.sh reads NODE_YAML" (vs bootstrap "registry-driven regru") → acme.sh re-issue failed exit=1 → "SELF-SIGNED cert generated (browsers will warn). Fix: ensure DNS-01 credentials in secrets.env or wait for acme.sh retry" — /tmp/kilo/p2b_asi_converge_49888.log:166-188
+### p2b.asi.3-node-update — 2026-09-03T13:24Z
+- cmd: env -u AGE_SECRET_KEY AGE_SECRET_KEY_FILE=$HOME/.ssh/age-key-asi.txt make node-update NODE=asi-team-vps
+- exit: 0 (retry 0)
+- evidence: "All 5 update phases completed successfully"; φ11 known warning verbatim: "llm_provision: failed_consumers=unknown — [IMP:10][main] Provisioning failed with exit=1: LLM Admin API listing failed (transport): GET /key/info page=1 failed: ConnectError: [Errno 111] Connection refused — phase NOT done; generate suppressed to avoid duplicate keys"; context deployer deployed=0 skipped=1 (warm-node); φ12 "deploy_update completed: success"
+- finding: none (registry_update marked done_with_warnings = known LiteLLM-absent; ssl_provision re-issued roadmap.asiteam.ru source=acme challenge=dns → converge self-signed regression self-healed)
+### p2b.asi.4-deploy-project — 2026-09-03T13:26Z
+- cmd: env -u AGE_SECRET_KEY AGE_SECRET_KEY_FILE=$HOME/.ssh/age-key-asi.txt make deploy-project PROJECT=$HOME/projects/asi-group/roadmap NODE=asi-team-vps
+- exit: 0 (retry 0)
+- evidence: "Deliver SUCCESS for roadmap"; {"status": "DEPLOYED", "healthcheck_status": "healthy", "snapshot_id": "20260903T132125-b6892b70", "duration_s": 2.779, "rollback_verified": false}
+- finding: cosmetic — JSON status field says "channel": "LocalChannel" while delivery log lines show ForcedCommandChannel (labeling inconsistency only)
+### p2b.asi.5-project-status — 2026-09-03T13:28Z
+- cmd: env -u AGE_SECRET_KEY AGE_SECRET_KEY_FILE=$HOME/.ssh/age-key-asi.txt make project-status NAME=roadmap NODE=asi-team-vps
+- exit: 0 (retry 0)
+- evidence: live SSH query to 77.233.221.129: Status=found; "roadmap-roadmap-1  Up 7 minutes (healthy)  80/tcp"; last deploy snapshot 20260903T132125-b6892b70 health_status=healthy
+- finding: none
+### p2b.asi.6-e2e-verify — 2026-09-03T13:30Z
+- cmd: env -u AGE_SECRET_KEY AGE_SECRET_KEY_FILE=$HOME/.ssh/age-key-asi.txt make e2e-verify NODE=asi-team-vps
+- exit: 0 (retry 0)
+- evidence: "✅ e2e-verify PASS — 3 endpoint(s) all green"; asiteam.ru HTTP 301 TLS ok; login.asiteam.ru HTTP 404 TLS ok; roadmap.asiteam.ru HTTP 200 TLS ok (le=True, SANs *.asiteam.ru+asiteam.ru, 87d left)
+- finding: none
+
+### p2b.tronyx.bootstrap.attempt1 — 2026-09-03T13:25Z
+- cmd: env -u AGE_SECRET_KEY AGE_SECRET_KEY_FILE=$HOME/.config/sops/age/keys.txt make bootstrap-node NODE=tronyx-vps
+- exit: 0 (retry 1)
+- evidence: φ8 complete — all services deployed; φ8.5 converge_services rc=0 "Converge clean"; φ-final-verify PASS (certs: 3 domains covered on-disk; secrets.env: 59 entries; vhosts: 3 generated; GHCR token present); projects delivered=3 skipped=1 failed=0 (tronyx-site/dance-site/botanika DEPLOYED healthy; oldapp no_local_source); S1..S9 8 PASS/0 FAIL/1 WARN. FINDING: φ12 deploy-context clone FAILED ×6 "Host key verification failed." despite overlay-key install logging success (line 29) — Phase deploy_update failed, tolerated non-fatal (rc=0 = partial, honesty predicate). Read-only diagnostic after run: `ssh-keygen -F github.com` → "Host github.com found: line 1"; `git ls-remote git@github.com-overlay:TronyxLab/tronyx-lab-overlay.git HEAD` → 03786568f9a48ba6aa4ecac723e8e10c60ff6877 (node state NOW correct; divergence clone-in-run vs manual unexplained)
+- finding: rc=0 but /opt/tronyx-lab/platform NOT cloned — φ8/φ12 clone objective unmet; node state currently verified good (pin+ls-remote OK) → retry bootstrap
+
+### p2b.tronyx.bootstrap.attempt2+forensics — 2026-09-03T14:05Z
+- cmd: make bootstrap-node NODE=tronyx-vps (run 2, rc=0) + make deploy-context NODE=tronyx-vps (rc=0, deployed=0 skipped=3) + read-only diagnostics (ls-remote batteries, state.json dump)
+- exit: 0 (retry 2 of 3)
+- evidence: RESOLVED — /opt/tronyx-lab/platform EXISTS and is a COMPLETE valid clone (git status clean, commit 0378656 "chore: initial overlay snapshot for tronyx-lab" == origin HEAD from ls-remote; origin=git@github.com-overlay:TronyxLab/tronyx-lab-overlay.git; dir mtime 13:13 UTC = run-1 φ8 window, same minute as known_hosts pin 13:13:09). Run-1 φ8 re-ran (core hash changed post-fix) → deploy-modules --strict-init preflight → ensure_context_repo → clone SUCCEEDED (success output swallowed by run_subprocess capture). state.json: all 10 INIT phases done; φ9/φ10/φ11 done; deploy_update=failed, converge_update=pending (residual from attempt-1, pre-fix). The "Host key verification failed" blocks in both run logs (6 per run) are STALE REPLAYS of 3 stored error records × 2 reports — NOT live failures (reports print them before their log position; no live phase:deploy_update lines exist in either run). Read-only batteries: pin present (3 entries rsa/ecdsa/ed25519), single clean alias block, ls-remote works in every context (plain, stdin=/dev/null, bash -s+umask 077, full SSH_OPTS+prelude shape, full secrets.env loaded incl. HTTP_PROXY/HTTPS_PROXY, python3.14 subprocess capture_output)
+- finding: FINDING-1 (report honesty bug): post-bootstrap report re-prints stored error records without timestamps/markers — indistinguishable from live failures; cost ~90 min false-negative forensics; recommend coder add ts + "STALE-RECORD" marker to report error section. FINDING-2: state.json deploy_update=failed/converge_update=pending residual — expected heal path = node-update re-running failed≠done phases (φ12 pull branch, path now exists)
+
+### p2b.tronyx.converge.pre — 2026-09-03T14:06Z
+- cmd: env -u AGE_SECRET_KEY AGE_SECRET_KEY_FILE=$HOME/.config/sops/age/keys.txt make converge NODE=tronyx-vps
+- exit: (running)
+- evidence: pending
+- finding: none
+
+### p2b.tronyx.converge.pre — 2026-09-03T14:07Z
+- cmd: env -u AGE_SECRET_KEY AGE_SECRET_KEY_FILE=$HOME/.config/sops/age/keys.txt make converge NODE=tronyx-vps
+- exit: 0 (retry 1)
+- evidence: "FULLY CONVERGED — all R-units converged (exit 0)"; R5 hosts drift check ran; R8 sudoers 14× CONVERGED (nginx, platform-secrets, postgres, redis, clickhouse, litellm, langfuse, monitoring, logging, node-metrics, service-exporters, backup-cron, status-page, hermes-agent); R10 no TSDB corruption. No stub-project drift warnings in output
+- finding: none
+
+### p2b.tronyx.node-update — 2026-09-03T14:12Z
+- cmd: env -u AGE_SECRET_KEY AGE_SECRET_KEY_FILE=$HOME/.config/sops/age/keys.txt make node-update NODE=tronyx-vps
+- exit: 0 (retry 1)
+- evidence: φ9/φ10/φ11 skipped (done); φ12 deploy_update RE-RAN failed→done: "Modules deployed successfully", SSL restored=0 issued=0 skipped=3 failed=0 (tronyx.ru, sexydancerostov.ru, botanika.tronyx.ru — disk_synced), context projects incremental deployed=0 skipped=3 failed=0, "φ12 complete — services and SSL deployed", stale deploy_update error records pruned (errors=0); φ13 converge_update: "Converge clean (rc=0) — update mode", marked done. All 5 update phases now pass (state.json residual healed)
+- finding: none
+
+### p2b.tronyx.deploy.tronyx-site — 2026-09-03T14:13Z
+- cmd: env -u AGE_SECRET_KEY AGE_SECRET_KEY_FILE=$HOME/.config/sops/age/keys.txt make deploy-project PROJECT=$HOME/projects/tronyx-lab/tronyx-site NODE=tronyx-vps
+- exit: (running)
+- evidence: pending
+- finding: none
+
+### p2b.tronyx.deploy.tronyx-site — 2026-09-03T14:05Z
+- cmd: env -u AGE_SECRET_KEY AGE_SECRET_KEY_FILE=$HOME/.config/sops/age/keys.txt make deploy-project PROJECT=$HOME/projects/tronyx-lab/tronyx-site NODE=tronyx-vps
+- exit: 0 (retry 1)
+- evidence: status=DEPLOYED, healthcheck_status=healthy, duration_s=2.924, snapshot_id=20260903T140410-dc74c226, deploy_time=2026-09-03T14:04:10Z
+- finding: none
+
+### p2b.tronyx.deploy.dance-site — 2026-09-03T14:05Z
+- cmd: env -u AGE_SECRET_KEY AGE_SECRET_KEY_FILE=$HOME/.config/sops/age/keys.txt make deploy-project PROJECT=$HOME/projects/tronyx-lab/dance-site NODE=tronyx-vps
+- exit: 0 (retry 1)
+- evidence: status=DEPLOYED, healthcheck_status=healthy, duration_s=2.703, snapshot_id=20260903T140438-cdaf65a9, deploy_time=2026-09-03T14:04:38Z
+- finding: none
+
+### p2b.tronyx.deploy.botanika — 2026-09-03T14:05Z
+- cmd: env -u AGE_SECRET_KEY AGE_SECRET_KEY_FILE=$HOME/.config/sops/age/keys.txt make deploy-project PROJECT=$HOME/projects/tronyx-lab/botanika NODE=tronyx-vps
+- exit: 0 (retry 1)
+- evidence: status=DEPLOYED, healthcheck_status=healthy, duration_s=2.699, snapshot_id=20260903T140450-ff6f2da7, deploy_time=2026-09-03T14:04:50Z
+- finding: none
+
+### p2b.tronyx.converge.post — 2026-09-03T14:06Z
+- cmd: env -u AGE_SECRET_KEY AGE_SECRET_KEY_FILE=$HOME/.config/sops/age/keys.txt make converge NODE=tronyx-vps
+- exit: (running)
+- evidence: pending
+- finding: none
+
+### p2b.tronyx.converge.post — 2026-09-03T14:08Z
+- cmd: env -u AGE_SECRET_KEY AGE_SECRET_KEY_FILE=$HOME/.config/sops/age/keys.txt make converge NODE=tronyx-vps
+- exit: 0 (retry 1)
+- evidence: "FULLY CONVERGED — all R-units converged (exit 0)" — same clean verdict as pre-deploy run; R8 sudoers all converged, R10 TSDB ok
+- finding: none
+
+### p2b.tronyx.project-status — 2026-09-03T14:09Z
+- cmd: make project-status NAME=<p> NODE=tronyx-vps ×4 (tronyx-site, dance-site, botanika, oldapp)
+- exit: 0 ×4 (retry 1 each)
+- evidence: tronyx-site status=found — container "Up 48 minutes (healthy)" 80/tcp, last deploy snapshot 20260903T140410-dc74c226 health=healthy; dance-site status=found — "Up 48 minutes (healthy)" 80/tcp; botanika status=found — "Up 48 minutes (healthy)" 80/tcp; oldapp status=stub, containers=[], last_deploy={'message': 'Project directory exists but ai-platform.yaml is a GENERATED-STUB'} (acceptable, not deployed per instructions)
+- finding: none
+
+### p2b.tronyx.e2e-verify — 2026-09-03T14:10Z
+- cmd: env -u AGE_SECRET_KEY AGE_SECRET_KEY_FILE=$HOME/.config/sops/age/keys.txt make e2e-verify NODE=tronyx-vps
+- exit: (running)
+- evidence: pending
+- finding: none
+
+### p2b.tronyx.e2e-verify — 2026-09-03T14:12Z
+- cmd: env -u AGE_SECRET_KEY AGE_SECRET_KEY_FILE=$HOME/.config/sops/age/keys.txt make e2e-verify NODE=tronyx-vps
+- exit: 0 (retry 1)
+- evidence: tronyx.ru HTTP 200 TLS ok (chain=4 san_ok LE 58d); sexydancerostov.ru HTTP 200 TLS ok (82d); botanika.tronyx.ru HTTP 200 TLS ok (58d) — "e2e-verify PASS — 3 endpoint(s) all green", zero non-200/301, zero 502
+- finding: none
+
+### p2b.tronyx.summary — 2026-09-03T14:13Z
+- cmd: (sequence complete: bootstrap×2 + deploy-context, converge×2, node-update, deploy-project×3, project-status×4, e2e-verify)
+- exit: overall GREEN
+- evidence: node tronyx-vps fully recovered; state.json all 15 phases done (φ12/φ13 healed by node-update); overlay /opt/tronyx-lab/platform valid clone @ 0378656; 3 projects live+healthy; e2e 3/3 green
+- finding: FINDING-1 (report honesty): post-bootstrap report re-prints stale state.json error records (attempt-1 pre-fix failures) without timestamps/markers — indistinguishable from live failures, caused ~90 min false-negative forensics; recommend ts + STALE marker. FINDING-2 (runbook note): bootstrap INIT-mode φ8 preflight clone success output is swallowed by run_subprocess capture (success path) — overlay clone evidence only visible via node state, not logs. FINDING-3 (minor): secrets.env contains 2 malformed entries parsed as key "data" (valueless lines) — cosmetic parser noise, no impact observed
+
+### p3.tronyx.s1-idempotency — 2026-09-03T14:20Z
+- cmd: env -u AGE_SECRET_KEY AGE_SECRET_KEY_FILE=~/.config/sops/age/keys.txt make bootstrap-node NODE=tronyx-vps
+- exit: 0 (retry 0)
+- evidence: all 10 init phases "already done — skipping"; "φ1 done + marker match + import-probe OK — no re-run"; liveness probe OK — no-op; projects delivered=0 skipped=4 failed=0 (tronyx-site/dance-site/botanika skip-health:healthy, oldapp no_local_source); report "Failed: (none)"; post state.json: all done, errors=[], warnings=[]
+- finding: none
+
+### p3.asi.bootstrap-idem — 2026-09-03T14:2xZ
+- cmd: env -u AGE_SECRET_KEY AGE_SECRET_KEY_FILE=~/.ssh/age-key-asi.txt make bootstrap-node NODE=asi-team-vps (repeat)
+- exit: 0 (retry 0)
+- evidence: "All 10 init phases completed successfully"; φ1 "done + marker match + import-probe OK — no re-run"; "Phase final_verify already done — skipping" (no-op); audit DONE 7 warnings/0 errors. BUT projects: "roadmap — probe error (rc=1) — treated as not-live" → delivered=1 skipped=0 (re-delivered, healthcheck healthy, DEPLOYED rc=0)
+- finding: FINDING-p3-1: idempotency no-op incomplete on project channel — liveness probe rc=1 → roadmap re-delivered instead of skipped (expected delivered=0/skipped=N); fail-safe direction, node stays green
+
+### p3.tronyx.drillA-rm — 2026-09-03T14:24Z
+- cmd: ssh root@103.88.243.151 "docker rm -f botanika" (after read-only identify: container name `botanika`)
+- exit: 0 (retry 0)
+- evidence: RM_OK; CONFIRMED_ABSENT (docker ps -a grep botanika → nothing)
+- finding: none (authorized destructive step)
+
+### p3.tronyx.drillA-converge — 2026-09-03T14:26Z
+- cmd: env -u AGE_SECRET_KEY AGE_SECRET_KEY_FILE=$HOME/.config/sops/age/keys.txt make converge NODE=tronyx-vps
+- exit: 0 (retry 0)
+- evidence: "R4 INFO: No running containers for project botanika" (line 125) — observe-only, NO heal/recreate action; "FULLY CONVERGED — all R-units converged (exit 0)"; post-check docker ps -a: botanika ABSENT (24 other containers Up)
+- finding: FINDING-A (HONESTY PREDICATE): converge rc=0 over missing project container — R4 "No running containers for project botanika" logged as INFO, no reconcile/heal action, exit 0 "FULLY CONVERGED". Verbatim: "[IMP:7][converge][R4] INFO: No running containers for project botanika". Scope boundary: converge reconciles networks/perms/vhosts/certs/volumes but NOT project container lifecycle (that is CI deploy / deploy-project scope). Node left with missing container → heal required.
+
+### p3.asi.drillA-vhost — 2026-09-03T14:20Z
+- cmd: mv roadmap.asiteam.ru.conf → .drill-bak; make converge NODE=asi-team-vps; restore: mv back + docker exec nginx nginx -t && nginx -s reload
+- exit: 2 converge (retry 0); restore rc=0
+- evidence: "[IMP:9][converge][R6] FAIL: Vhost file not found: /opt/node-configs/asi-team-vps/overlays/nginx/roadmap.asiteam.ru.conf"; report "R6 | fail | roadmap.asiteam.ru.conf not found"; "ERRORS DETECTED — some R-units failed (exit 2)"; NO auto-heal/re-render. Post-restore: nginx -t ok, reload ok, roadmap vhost loaded (count=2), curl https://roadmap.asiteam.ru → HTTP 200, LE wildcard verify ok
+- finding: FINDING-p3-2: converge cert-unit side effect — per-domain check for roadmap.asiteam.ru regenerated UNUSED self-signed cert (/etc/letsencrypt/live/roadmap.asiteam.ru/, mtime 17:17; vhost actually uses wildcard asiteam.ru) + attempted acme.sh issue (failed on local validation, no ACME quota burn); S3 ssl-cache entry for roadmap.asiteam.ru holds invalid (self-signed) cert. FINDING-p3-3: during converge the running nginx lost the vhost (cert-unit reload re-read overlay dir mid-drill) — converge reloads nginx even when R6 later fails
+
+### p3.tronyx.drillA-heal — 2026-09-03T14:29Z
+- cmd: env -u AGE_SECRET_KEY AGE_SECRET_KEY_FILE=$HOME/.config/sops/age/keys.txt make deploy-project PROJECT=$HOME/projects/tronyx-lab/botanika NODE=tronyx-vps
+- exit: 0 (retry 0)
+- evidence: status=DEPLOYED healthcheck_status=healthy duration_s=9.1; docker ps: "botanika Up (healthy)"; node GREEN again
+- finding: none (heal path per canon: deploy-project = emergency container heal; converge does NOT heal containers — see FINDING-A)
+
+### p3.tronyx.drillB — 2026-09-03T14:32Z
+- cmd: mv /etc/letsencrypt/live/botanika.tronyx.ru /etc/letsencrypt/live/.botanika.drill-bak; make converge NODE=tronyx-vps; then rm -rf .botanika.drill-bak
+- exit: 0 (retry 0)
+- evidence: R-ssl restore-first: "Checking S3 cache for botanika.tronyx.ru" → "Cert validated OK (LE, domain match, expiry OK)" → "Cert pair restored for botanika.tronyx.ru (fullchain+privkey, pair matched)" → "cert restored from S3"; "Done: restored=1 issued=0 skipped=2 failed=0"; disk: live/botanika.tronyx.ru/ recreated 17:20, openssl CN=botanika.tronyx.ru notAfter=Nov 4 2026; nginx -t passed; bak removed after heal
+- finding: none — S3 restore path WORKS (converge scope includes certs; contrast FINDING-A)
+
+### p3.asi.drillB-container — 2026-09-03T14:2xZ
+- cmd: docker rm -f roadmap-roadmap-1; make converge NODE=asi-team-vps
+- exit: 0 make-level (remote rc=1 warnings-only) (retry 0) — container NOT restored
+- evidence: docker ps roadmap → empty after converge; "[R3] SKIP: ai-platform.yaml already exists (real config — deployed)" → "R3 | converged | Project roadmap: deployed"; "[R4] INFO: No running containers for project roadmap" — no fail, no heal, no warn on missing container; warnings in report were cert/orphan-vhost only
+- finding: FINDING-p3-4 (honesty predicate): converge rc=0 over empty result — converge does NOT manage project containers (scope boundary: project heals via deploy-project channel) AND reports "Project roadmap: deployed" while its container is down. Recurring side effect: cert-unit re-issued UNUSED self-signed roadmap.asiteam.ru cert + TG alert on EVERY converge run (wildcard asiteam.ru untouched: status skipped/disk_synced)
+
+### p3.asi.drillB-heal — 2026-09-03T14:22Z
+- cmd: env -u AGE_SECRET_KEY AGE_SECRET_KEY_FILE=~/.ssh/age-key-asi.txt make deploy-project PROJECT=~/projects/asi-group/roadmap NODE=asi-team-vps
+- exit: 0 (retry 0)
+- evidence: "deliver done project=roadmap status=DEPLOYED rc=0"; healthcheck_status=healthy, duration 9.3s, snapshot 20260903T142214-83503487; docker ps → roadmap-roadmap-1 Up (healthy)
+- finding: none — deploy-project channel heals project container loss; converge deliberately does not (scope boundary)
+
+### p3.asi.final-green — 2026-09-03T14:23Z
+- cmd: make e2e-verify NODE=asi-team-vps; make project-status NAME=roadmap NODE=asi-team-vps
+- exit: 0 / 0 (retry 0)
+- evidence: "e2e-verify PASS — 3 endpoint(s) all green" (asiteam.ru 301+TLS ok LE wildcard 87d; login 404-by-design+TLS ok; roadmap 200+TLS ok); project-status roadmap: health_status=healthy, roadmap-roadmap-1 Up (healthy), snapshot 20260903T142214
+- finding: none — node returned GREEN after every drill
+
+### p3.tronyx.drillC — 2026-09-03T14:38Z
+- cmd: mv /opt/node-configs/tronyx-vps/overlays/nginx/botanika.tronyx.ru.conf{,.drill-bak}; make converge NODE=tronyx-vps
+- exit: 2 (fail-loud, retry 0)
+- evidence: "[IMP:9][converge][R6] FAIL: Vhost file not found: /opt/node-configs/tronyx-vps/overlays/nginx/botanika.tronyx.ru.conf"; "report_add R6 | fail | botanika.tronyx.ru.conf not found"; "R6 DONE: 3 vhost(s), 1 error(s)"; "ERRORS DETECTED — some R-units failed (exit 2)"; "remote converge returned rc=2 — forwarding, NO local fallback"; make: *** [converge] Error 2
+- finding: none — fail-loud semantics WORK as designed (exit 2, "<domain>.conf not found"; NOT rc=0-no-action)
+
+### p3.tronyx.drillC-restore — 2026-09-03T14:40Z
+- cmd: mv .botanika.tronyx.ru.conf.drill-bak → botanika.tronyx.ru.conf; make converge NODE=tronyx-vps
+- exit: 0 (retry 0)
+- evidence: "R6 OK: botanika.tronyx.ru.conf has GENERATED marker"; "nginx -t passed"; "3 vhost(s) verified — all OK"; "FULLY CONVERGED — all R-units converged (exit 0)"
+- finding: none — node back to green after Drill C
+
+### p3.tronyx.final-green — 2026-09-03T14:47Z
+- cmd: make e2e-verify NODE=tronyx-vps; make project-status NAME=botanika NODE=tronyx-vps
+- exit: 0 / 0 (retry 0)
+- evidence: e2e table — botanika.tronyx.ru HTTP 200 TLS ok OK; tronyx.ru HTTP 200 TLS ok OK; sexydancerostov.ru HTTP 200 TLS ok OK; "e2e-verify PASS — 3 endpoint(s) all green"; project-status botanika: health_status=healthy, "botanika Up 7 minutes (healthy)", snapshot 20260903T141920-b98d5786 (drill-A heal deploy)
+- finding: none — node GREEN (final)
+
+## Phase 3 result (2026-09-03 ~16:50Z) — GREEN обе ноды
+
+- tronyx: bootstrap no-op ✓ (10/10 SKIP, delivered=0/skipped=4); drill A container → NO-ACTION (FINDING-A: converge R4 INFO-only при 0 контейнеров задеплоенного проекта — rc=0 FULLY CONVERGED над отсутствующим контейнером) → heal через deploy-project; drill B cert → HEAL (S3 restore, restored=1); drill C vhost → FAIL-LOUD (exit 2, "conf not found") → restore → green. Final e2e 3/3 PASS.
+- asi: bootstrap no-op частично ✓ (φ1+final_verify SKIP; FINDING-p3-1: roadmap re-delivered delivered=1 — liveness probe rc=1 → not-live → re-delivery, fail-safe но нарушает delivered=0); drill A vhost roadmap → FAIL-LOUD (exit 2) → restore → nginx reload → green; drill B container → no-action (scope boundary) → heal deploy-project; FINDING-p3-2: converge cert-unit churnит неиспользуемый self-signed roadmap.asiteam.ru каждый прогон (S3-cache держит invalid self-signed; vhost серверит wildcard asiteam.ru); FINDING-p3-3: nginx reload внутри cert-unit до R6 fail → mid-run downtime window; FINDING-p3-4 = FINDING-A (R3 "deployed" + R4 INFO при 0 контейнеров). Final e2e 3/3 PASS.
+
+## Фикс-волна 2 (honesty-класс, один батч)
+
+- [x] Coder: (A) cli.py post-bootstrap report — stale previous-run records вынесены в `Stale previous-run records (not from this run):` с аннотацией `[STALE previous-run · phase=<n> status=<s>]` (scope по sm.state.mode; JSON: parallel field stale_previous_run); (B) converge/networks.py R4 — deployed-проект с 0 контейнеров → report_add warn + logger.warning IMP:8 (exit code не меняется, deployed-gate через is_stub_ai_platform_yaml, TRAP[BUG] inline).
+- Верификация: TEST_FILE report 6/6, networks 6/6, смежные state_machine/converge_dry_run PASS; agent-check exit 0 (0 blocking); полный make check GREEN 20/20 (132.9s). Незакоммичено.
+
+## Финальная волна — доставка фиксов на ноды (node-update) + re-verify
+
+
+## Финальная волна — результат (2026-09-03 ~17:35Z)
+
+- [x] node-update tronyx-vps rc=0 (All 5 update phases completed) — фиксы F1/F3/F4 доставлены на ноду
+- [x] node-update asi-team-vps rc=0 (All 5 update phases completed)
+- [x] e2e-verify tronyx-vps PASS 3/3 (tronyx.ru 200, sexydancerostov.ru 200, botanika.tronyx.ru 200, TLS ok)
+- [x] e2e-verify asi-team-vps PASS 3/3 (asiteam.ru 301, login.asiteam.ru 404 by-design, roadmap.asiteam.ru 200, wildcard TLS ok)
+- [x] make agent-check exit 0 (blocking=0); make check GREEN 20/20 (после фикс-волны 2)
+- [x] Phase 4 CI sanity: N/A — код проектов не менялся
+- [x] Отчёт: .ai/plans/029-deploy-integrity/06-overnight-report.md — **Verdict: DONE** (0 blocked; 10 findings: 4 FIXED, 6 RECORDED)
+
+## VERDICT: DONE — обе ноды зелёные, локальный baseline зелёный, находки зафиксированы честно.
