@@ -25,6 +25,10 @@
 ##            и exit 10 через существующую state machine без ре-ордеринга φ8 (readiness-гонки
 ##            старта остаются P2 — start_period). P0-честность exit 0.
 ## @changes  2026-09-02 · DevPlan 029 T5 — created
+## @changes  2026-09-03 · DevPlan 030 — assertion (b) module-aware: _assert_secrets_env резолвит
+##           enabled_modules (resolve_enabled_modules, тот же канон φ4) и передаёт в
+##           verify_required_sops_secrets — minimal-контекст (asi-group без postgres/minio/
+##           telegram) больше не фейлит на required∧sops чужих модулей
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -133,11 +137,19 @@ def _assert_secrets_env(core_dir: str, node_name: str, node_yaml: str, env: Mapp
         logger.warning("[IMP:7][final_verify] cannot resolve allow_autogen from %s: %s", node_yaml, exc)
         allow_autogen = None
 
+    # F15/module-aware (DevPlan 030): minimal-контекст (asi-group: nginx/logging/status-page,
+    # БЕЗ postgres/minio/telegram) не должен фейлить на required∧sops чужих модулей — тот же
+    # module-aware резолв, что φ4 (resolve_enabled_modules → SKIP «no enabled consumer module»).
+    from core.internal.shared.enabled_modules import resolve_enabled_modules
+
+    enabled_modules = resolve_enabled_modules(node_name=node_name, env=source)
+
     try:
         secrets_helpers.verify_required_sops_secrets(
             manifest_path=manifest_path,
             secrets_env=secrets_env,
             enc_file=enc_file,
+            enabled_modules=enabled_modules,
             allow_autogen=allow_autogen,
         )
     except PlatformError as exc:
