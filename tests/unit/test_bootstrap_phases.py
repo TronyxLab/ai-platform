@@ -1026,9 +1026,9 @@ def test_phase_certificates_import_unavailable_certs_present_success(
     monkeypatch.setattr(domains_helpers, "orchestrate_certs", None)
     monkeypatch.setattr(domains_helpers, "extract_domains_for_context", lambda _yaml, _ctx: ["example.com"])
     monkeypatch.setattr(deploy_paths, "letsencrypt_live", lambda: tmp_path)
-    # F14 (DevPlan 030): converged-проверка теперь wildcard-aware (cert_covers_domain → subject match);
-    # FAKE-CERT не парсится openssl — мокаем subject, чтобы on-disk покрытие подтвердилось.
-    monkeypatch.setattr(ssl_certs_module, "cert_get_subject", lambda _p: "subject=CN = example.com")
+    # F14 (DevPlan 030): converged-проверка wildcard-aware (cert_covers_domain → _cert_covers_domain);
+    # FAKE-CERT не парсится openssl — мокаем single-cert primitive, чтобы on-disk покрытие подтвердилось.
+    monkeypatch.setattr(ssl_certs_module, "_cert_covers_domain", lambda _c, _d: True)
 
     result = certs_mod.phase_certificates(str(tmp_path), "tronyx-vps", str(node_yaml))
 
