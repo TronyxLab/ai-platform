@@ -764,15 +764,20 @@ def notify_crashloop(name: str, *, dry_run: bool = False, run_cmd: RunCmd | None
 # ═══════════════════════════════════════════════════════════════════════
 # Wipe-guard (F8 prevention, DevPlan 031 T3) — state-loss detector
 # ═══════════════════════════════════════════════════════════════════════
-# Контекст: tronyx-vps терял ВСЁ docker-состояние за ночь (named volumes + payload +
-# /opt/<ctx>/platform + known_hosts) — journald reset = полный root-fs сброс ноды
-# (2026-09-03: единственный boot в journald, /var/log/journal создан на boot, volumes
-# пересозданы 12:42-12:47 UTC оператором). Кандидат-крон docker system prune (день 1, 04:00,
-# БЕЗ --volumes) НЕ объясняет потерю known_hosts/journald//opt — причина на уровне провайдера
-# (provider console — owner-gated). Prevention (on-node, 5-мин watchdog): сигнал на ПАДЕНИЕ
-# числа named volumes / смену boot_id между прогонами. Ограничение честное: watchdog живёт в
-# /opt/platform/core — полный root-fs сброс уносит и его (детекция такого класса — только
-# offsite/provider console); on-node guard ловит docker-data reset и «ребут с потерей состояния».
+# 🔴 TRAP[INCIDENT] · 2026-09-03 · P1 · tronyx-vps: повторный docker-state wipe за ночь
+# · Symptom: нода потеряла named volumes (12) + 4 проектных payload + /opt/<ctx>/platform +
+# ·   /root/.ssh/known_hosts; НЕ затронуто... journald сброшен — root-fs reset, не docker prune.
+# · Root: форензика 031 T3 (read-only): journalctl --list-boots = ОДИН boot (15:18 MSK), каталог
+# ·   /var/log/journal создан на этом boot; volumes пересозданы оператором 12:42-12:47 UTC;
+# ·   /etc/cron.d/platform-prune (docker system prune -af --filter until=720h, день 1 04:00,
+# ·   БЕЗ --volumes) НЕ объясняет потерю known_hosts/journald//opt. Класс: provider-level node
+# ·   reset (reinstall/reboot/migration/snapshot) ИЛИ операторский re-provision. Точная причина —
+# ·   в provider console (биллинг/события), owner-only — ЭСКАЛАЦИЯ владельцу (DevPlan 031 T3).
+# · Fix: канон восстановления (cold bootstrap + deploy-project ×N) применён; prevention —
+# ·   on-node wipe-guard ниже (TG watchdog.wipe на схлопывание volumes/смену boot) + TRAP[DEBT]
+# ·   на offsite heartbeat (on-node монитор слеп к собственному root-fs сбросу).
+# · Prevention: повторный wipe → НЕ молча пере-бутстрапить — сначала provider console +
+# ·   watchdog.wipe-алерт; полный класс — offsite heartbeat (Rev в TRAP[DEBT] ниже).
 # 📝 TRAP[DEBT] · 2026-09-03 · MED · Полный root-fs reset ноды недетектируем on-node
 # · Observed: journald = 1 boot после wipe tronyx-vps (2026-09-03) — watchdog/cron в
 # ·   /opt/platform/core унесены сбросом; on-node wipe-guard после re-bootstrap видит только
